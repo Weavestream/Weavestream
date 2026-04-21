@@ -2,20 +2,19 @@
 # apps/web — Next.js 15 (App Router), non-root runner
 # ───────────────────────────────────────────────────────────────────────
 FROM node:20-alpine AS base
-# Next.js 16 lists `sharp` as an optional dependency (used to prerender
-# icon / opengraph-image routes at build time). Under pnpm 9 on
-# Alpine (musl libc) the prebuilt `@img/sharp-linuxmusl-*` packages
-# aren't always hydrated, so sharp falls back to a node-gyp source
-# build. The build-base + python3 + vips-dev + node-gyp toolchain is
-# only present in this stage so the compile succeeds; the runner
-# stage below installs just `vips` and stays slim.
-RUN apk add --no-cache \
-      libc6-compat tini \
-      vips vips-dev build-base python3
+# Only `libc6-compat` + `tini` are needed here. Sharp (pulled in
+# transitively via Next.js) ships prebuilt musl binaries that pnpm
+# hydrates from its store — see @img/sharp-linuxmusl-* in pnpm-lock.
+# Intentionally NOT installing `vips-dev` / `build-base` / `python3`:
+# their presence makes sharp's install/check.js think a global libvips
+# is available and triggers a from-source rebuild via node-gyp, which
+# fails because `node-addon-api` isn't in our dep tree. With only the
+# runtime `libc6-compat`, sharp uses its vendored libvips and succeeds.
+RUN apk add --no-cache libc6-compat tini
 ENV PNPM_HOME="/pnpm" \
     PATH="/pnpm:$PATH" \
     COREPACK_ENABLE_DOWNLOAD_PROMPT=0
-RUN corepack enable && npm install -g node-gyp
+RUN corepack enable
 WORKDIR /repo
 
 # ───── deps ─────
