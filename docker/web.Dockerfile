@@ -2,11 +2,20 @@
 # apps/web — Next.js 15 (App Router), non-root runner
 # ───────────────────────────────────────────────────────────────────────
 FROM node:20-alpine AS base
-RUN apk add --no-cache libc6-compat tini
+# Next.js 16 lists `sharp` as an optional dependency (used to prerender
+# icon / opengraph-image routes at build time). Under pnpm 9 on
+# Alpine (musl libc) the prebuilt `@img/sharp-linuxmusl-*` packages
+# aren't always hydrated, so sharp falls back to a node-gyp source
+# build. The build-base + python3 + vips-dev + node-gyp toolchain is
+# only present in this stage so the compile succeeds; the runner
+# stage below installs just `vips` and stays slim.
+RUN apk add --no-cache \
+      libc6-compat tini \
+      vips vips-dev build-base python3
 ENV PNPM_HOME="/pnpm" \
     PATH="/pnpm:$PATH" \
     COREPACK_ENABLE_DOWNLOAD_PROMPT=0
-RUN corepack enable
+RUN corepack enable && npm install -g node-gyp
 WORKDIR /repo
 
 # ───── deps ─────
