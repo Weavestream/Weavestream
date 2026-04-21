@@ -129,22 +129,26 @@ presigned URLs point at the right hostname.
 
 ## Backups
 
-Two volumes hold state you care about:
+Persistent data lives in real host folders under `$DATA_DIR`
+(default: `./data` next to `compose.yml`). Override `DATA_DIR` in
+`.env` to relocate — e.g. `DATA_DIR=/volume1/docker/weavestream` on a
+Synology/UGREEN NAS.
 
-- `pg_data` — Postgres
-- `minio_data` — object storage (uploaded images, attachments)
-
-Redis data (`redis_data`) is a cache/queue backing store; BullMQ jobs
-are replayable, so snapshotting is optional.
+| Folder           | Purpose                                   | Back up? |
+| ---------------- | ----------------------------------------- | -------- |
+| `$DATA_DIR/postgres` | Postgres data dir                     | **Yes**  |
+| `$DATA_DIR/minio`    | Uploaded images, attachments          | **Yes**  |
+| `$DATA_DIR/redis`    | Cache + BullMQ queue (replayable)     | Optional |
 
 A simple nightly routine:
 
 ```bash
-# Postgres dump
+# Postgres dump (recommended — always point-in-time consistent)
 docker compose exec -T postgres pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB" \
   | gzip > "backup-$(date +%F).sql.gz"
 
-# MinIO mirror (run from anywhere with mc installed)
+# Object storage — either rsync the folder while MinIO is stopped,
+# or use mc mirror against a running instance:
 mc mirror myalias/weavestream-* ./minio-backup/
 ```
 

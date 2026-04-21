@@ -14,11 +14,33 @@ this project adheres to [Semantic Versioning](https://semver.org/).
   This removes the exit-0 `migrate` container that some Docker UIs
   (UGREEN, Portainer, Docker Desktop) were flagging as a project
   error.
+- Persistent data now lives in bind-mounted host folders under
+  `$DATA_DIR` (defaults to `./data` next to `compose.yml`) instead of
+  named Docker volumes. Lets you `ls`, rsync, and back up with
+  standard filesystem tools — and lets NAS users point at a specific
+  share (e.g. `/volume1/docker/weavestream`) without involving Docker
+  volume plumbing.
 
 ### Upgrading from 1.0.0
 
-- Re-download `compose.yml` from the tag you're moving to and
-  `docker compose up -d`. No schema or env changes required.
+- Re-download `compose.yml` and `.env.example` from the tag you're
+  moving to.
+- Add `DATA_DIR=...` to your `.env` (or accept the `./data` default).
+- **Migrate existing data** from the named volumes to the new folders
+  before the first `up`, otherwise the stack will boot against empty
+  databases. One-liner per volume:
+
+  ```bash
+  # Run AFTER `docker compose down`, BEFORE `docker compose up -d`
+  mkdir -p ./data/postgres ./data/redis ./data/minio
+  docker run --rm -v weavestream_pg_data:/src -v "$PWD/data/postgres":/dst \
+    alpine sh -c 'cp -a /src/. /dst/'
+  docker run --rm -v weavestream_redis_data:/src -v "$PWD/data/redis":/dst \
+    alpine sh -c 'cp -a /src/. /dst/'
+  docker run --rm -v weavestream_minio_data:/src -v "$PWD/data/minio":/dst \
+    alpine sh -c 'cp -a /src/. /dst/'
+  docker volume rm weavestream_pg_data weavestream_redis_data weavestream_minio_data
+  ```
 
 ## [1.0.0] - 2026-04-21
 
