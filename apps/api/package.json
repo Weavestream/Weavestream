@@ -29,7 +29,7 @@
     "compression": "^1.7.5",
     "cookie-parser": "^1.4.7",
     "dotenv": "^17.4.2",
-    "file-type": "^21.3.4",
+    "file-type": "^22.0.1",
     "helmet": "^8.0.0",
     "ioredis": "^5.4.1",
     "jose": "^5.9.6",
