@@ -4,20 +4,17 @@
 # node:20-alpine with a non-root user.
 # ───────────────────────────────────────────────────────────────────────
 FROM node:20-alpine AS base
-# `vips` is sharp's runtime dependency. `vips-dev` + `build-base` +
-# `python3` + `node-gyp` are only needed at build time so sharp can
-# compile its native bindings from source when pnpm's prebuilt binary
-# resolution skips the current arch (the current lockfile, generated
-# on darwin-arm64, does not always hydrate @img/sharp-linuxmusl-*
-# under pnpm 9's optional-dep filtering). The runner stage installs
-# just `vips` so the final image stays slim.
-RUN apk add --no-cache \
-      libc6-compat openssl tini \
-      vips vips-dev build-base python3
+# Only runtime packages here. Sharp ships prebuilt musl binaries that
+# pnpm hydrates from its store (@img/sharp-linuxmusl-*). Intentionally
+# NOT installing vips-dev / build-base / python3: their presence makes
+# sharp's install/check.js see a "global libvips" and attempt a source
+# rebuild via node-gyp, which fails because node-addon-api isn't in
+# our dep tree. Omitting them lets sharp use its vendored libvips.
+RUN apk add --no-cache libc6-compat openssl tini
 ENV PNPM_HOME="/pnpm" \
     PATH="/pnpm:$PATH" \
     COREPACK_ENABLE_DOWNLOAD_PROMPT=0
-RUN corepack enable && npm install -g node-gyp
+RUN corepack enable
 
 WORKDIR /repo
 
@@ -47,9 +44,9 @@ RUN --mount=type=cache,id=pnpm,target=/pnpm/store \
 
 # ───── runner ─────
 FROM node:20-alpine AS runner
-# `vips` (not `vips-dev`) — runtime only. sharp's compiled bindings
-# come over from the build stage via node_modules.
-RUN apk add --no-cache libc6-compat openssl tini curl vips \
+# Sharp's prebuilt binary bundles its own libvips, so no system `vips`
+# package is needed at runtime — just libc6-compat + openssl + tini.
+RUN apk add --no-cache libc6-compat openssl tini curl \
  && addgroup -S app && adduser -S app -G app
 
 ARG WEAVESTREAM_VERSION=dev
