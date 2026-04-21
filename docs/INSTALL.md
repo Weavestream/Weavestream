@@ -61,7 +61,23 @@ Browse published tags at <https://github.com/Weavestream/Weavestream/pkgs/contai
 Using `latest` is fine for evaluation but can surface breaking changes
 without warning.
 
-## 4. Start the stack
+## 4. Choose where data lives (optional)
+
+By default Weavestream stores persistent data under `./data/` next to
+`compose.yml`. To relocate — e.g. onto a dedicated NAS share — set
+`DATA_DIR` in `.env` to an **absolute path**:
+
+```bash
+DATA_DIR=/volume1/docker/weavestream     # Synology / UGREEN
+DATA_DIR=/srv/weavestream                # plain Linux
+```
+
+You don't need to pre-create the folder. Docker auto-creates
+`$DATA_DIR/{postgres,redis,minio}` on the first `up`, and each
+container fixes its own ownership on first boot. Pre-create them
+only if you want to lock down permissions ahead of time.
+
+## 5. Start the stack
 
 ```bash
 docker compose up -d
@@ -86,7 +102,7 @@ docker compose logs -f api   # tail API logs
 The web UI is available at <http://localhost:3000>. The API's
 `/health` endpoint reports the running version.
 
-## 5. Create the first admin
+## 6. Create the first admin
 
 ```bash
 docker compose exec api node dist/cli.js create-admin
@@ -96,7 +112,7 @@ You'll be prompted for an email and a temporary password. Weavestream
 enforces TOTP MFA, so the first login walks you through registering an
 authenticator app.
 
-## 6. Set your workspace name
+## 7. Set your workspace name
 
 Sign in as `SUPER_ADMIN` and visit **Admin → Settings** to set your
 workspace name and choose the term you want to use for tenants
