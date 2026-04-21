@@ -82,7 +82,7 @@ pnpm test               # Jest (api) + placeholder passes elsewhere
 pnpm audit              # prod-only, high-severity
 
 pnpm prisma:migrate     # prisma migrate dev (generates + applies)
-pnpm prisma:deploy      # production migrate (what the `migrate` service runs)
+pnpm prisma:deploy      # production migrate (what the api container runs on startup)
 pnpm prisma:generate    # regenerate @prisma/client only
 ```
 

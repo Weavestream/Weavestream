@@ -82,24 +82,6 @@ services:
       retries: 5
       start_period: 10s
 
-  # ─── One-shot schema migration ──────────────────────────────────────────
-  # Runs `prisma migrate deploy` once per `docker compose up` and exits.
-  # api/worker wait for this to complete successfully before starting,
-  # so every `up -d` after an image bump applies pending migrations
-  # automatically and exactly once.
-  migrate:
-    image: ghcr.io/weavestream/weavestream-api:${WEAVESTREAM_VERSION:-latest}
-    restart: "no"
-    networks: [weavestream-net]
-    env_file: .env
-    environment:
-      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
-    working_dir: /app/packages/db
-    command: ["node_modules/.bin/prisma", "migrate", "deploy"]
-    depends_on:
-      postgres:
-        condition: service_healthy
-
   api:
     image: ghcr.io/weavestream/weavestream-api:${WEAVESTREAM_VERSION:-latest}
     restart: unless-stopped
@@ -113,9 +95,18 @@ services:
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
       MINIO_ENDPOINT: minio
       MINIO_PORT: "9000"
+    # `prisma migrate deploy` is idempotent and protected by a Postgres
+    # advisory lock, so running it on every api start is safe and lets
+    # us avoid a short-lived one-shot `migrate` container (which some
+    # Docker UIs — UGREEN, Portainer, Docker Desktop — flag as a
+    # project-level error even when it exits 0 on purpose).
+    command:
+      - "sh"
+      - "-c"
+      - "cd /app/packages/db && ./node_modules/.bin/prisma migrate deploy && cd /app/apps/api && exec node dist/main.js"
     depends_on:
-      migrate:
-        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
       redis:
         condition: service_healthy
       minio:
@@ -125,7 +116,9 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
-      start_period: 20s
+      # start_period covers worst-case migration time on a slow NAS
+      # before the healthcheck starts counting failures.
+      start_period: 120s
 
   worker:
     image: ghcr.io/weavestream/weavestream-worker:${WEAVESTREAM_VERSION:-latest}
@@ -138,8 +131,6 @@ services:
       MINIO_ENDPOINT: minio
       MINIO_PORT: "9000"
     depends_on:
-      migrate:
-        condition: service_completed_successfully
       redis:
         condition: service_healthy
       api:
