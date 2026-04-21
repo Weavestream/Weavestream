@@ -1,0 +1,537 @@
+/*
+ * Tiptap ProseMirror styles for the article + field editors.
+ * Tokens come from /src/styles/tokens.css; every rule here is theme-aware.
+ */
+
+.sd-editor {
+  outline: none;
+  color: var(--text-2);
+  font-size: 14px;
+  line-height: 1.75;
+  font-family: var(--font-sans);
+}
+
+.sd-editor.sd-editor-article {
+  font-size: 15px;
+  line-height: 1.8;
+}
+
+/* NOTE on selectors:
+ * Tiptap v3's `EditorContent` puts both `.sd-editor` (our class via
+ * editorProps.attributes) and `.ProseMirror` on the same contenteditable
+ * element — they are NOT in an ancestor/descendant relationship. Selectors
+ * like `.sd-editor .ProseMirror h1` will therefore never match. Because
+ * Tailwind's preflight resets heading/paragraph/list defaults, the editor
+ * would render H1, bullet lists, etc. identically to plain paragraphs. We
+ * must style children of `.sd-editor` directly.
+ */
+
+.sd-editor {
+  outline: none;
+  min-height: 120px;
+}
+
+.sd-editor.sd-editor-field {
+  min-height: 80px;
+}
+
+.sd-editor > p,
+.sd-editor p {
+  margin: 0 0 0.9em;
+}
+
+.sd-editor p:last-child {
+  margin-bottom: 0;
+}
+
+.sd-editor h1 {
+  font-size: 28px;
+  font-weight: 600;
+  letter-spacing: -0.6px;
+  color: var(--text);
+  margin: 1.6em 0 0.4em;
+  line-height: 1.15;
+}
+
+.sd-editor h2 {
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: -0.3px;
+  color: var(--text);
+  margin: 1.5em 0 0.4em;
+  line-height: 1.2;
+}
+
+.sd-editor h3 {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text);
+  margin: 1.3em 0 0.4em;
+  line-height: 1.25;
+}
+
+.sd-editor > h1:first-child,
+.sd-editor > h2:first-child,
+.sd-editor > h3:first-child {
+  margin-top: 0;
+}
+
+.sd-editor ul,
+.sd-editor ol {
+  padding-left: 22px;
+  margin: 0 0 0.9em;
+  list-style: revert;
+}
+
+.sd-editor ul {
+  list-style-type: disc;
+}
+
+.sd-editor ol {
+  list-style-type: decimal;
+}
+
+.sd-editor li {
+  margin: 0.15em 0;
+}
+
+.sd-editor ul[data-type='taskList'] {
+  list-style: none;
+  padding-left: 4px;
+}
+
+.sd-editor ul[data-type='taskList'] li {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.sd-editor ul[data-type='taskList'] li > label {
+  flex-shrink: 0;
+  padding-top: 2px;
+}
+
+.sd-editor ul[data-type='taskList'] li > label input[type='checkbox'] {
+  accent-color: var(--accent);
+}
+
+.sd-editor ul[data-type='taskList'] li > div {
+  flex: 1;
+}
+
+.sd-editor a {
+  color: var(--accent);
+  text-decoration: none;
+  border-bottom: 1px solid var(--accent-line);
+}
+
+.sd-editor a:hover {
+  border-bottom-color: var(--accent);
+}
+
+.sd-editor blockquote {
+  margin: 1em 0;
+  padding: 0.4em 1em;
+  border-left: 2px solid var(--accent);
+  background: var(--accent-soft);
+  border-radius: 0 5px 5px 0;
+  color: var(--text-2);
+}
+
+.sd-editor code {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  padding: 1px 5px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  color: var(--text);
+}
+
+.sd-editor pre {
+  margin: 1em 0;
+  padding: 12px 14px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  color: var(--text-2);
+  line-height: 1.6;
+  overflow-x: auto;
+}
+
+.sd-editor pre code {
+  background: transparent;
+  border: none;
+  padding: 0;
+  color: inherit;
+  font-size: inherit;
+}
+
+/* Images live inside a .sd-img-wrap rendered by the ResizableImage
+ * NodeView. The wrap carries the user-chosen width; the handle is
+ * absolutely positioned on the bottom-right corner and only revealed
+ * on hover or selection so it never competes with the prose. */
+.sd-img-wrap {
+  position: relative;
+  display: inline-block;
+  max-width: 100%;
+  margin: 0.5em 0;
+  line-height: 0;
+  vertical-align: top;
+}
+
+.sd-img-wrap img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border-radius: 5px;
+  border: 1px solid var(--line);
+}
+
+.sd-img-wrap.ProseMirror-selectednode img {
+  outline: 2px solid var(--accent);
+  outline-offset: 0;
+}
+
+.sd-img-handle {
+  position: absolute;
+  right: -5px;
+  bottom: -5px;
+  width: 12px;
+  height: 12px;
+  background: var(--accent);
+  border: 2px solid var(--panel);
+  border-radius: 50%;
+  cursor: se-resize;
+  opacity: 0;
+  transition: opacity 120ms ease;
+  z-index: 2;
+  touch-action: none;
+}
+
+.sd-img-wrap:hover .sd-img-handle,
+.sd-img-wrap.ProseMirror-selectednode .sd-img-handle {
+  opacity: 1;
+}
+
+/* Legacy fallback: any bare <img> rendered outside a NodeView (e.g. an
+ * older doc saved before the wrapper existed) still gets reasonable
+ * defaults so it doesn't blow out of the column. */
+.sd-editor img:not(.sd-img-wrap img) {
+  max-width: 100%;
+  height: auto;
+  border-radius: 5px;
+  border: 1px solid var(--line);
+  margin: 0.5em 0;
+}
+
+.sd-editor hr {
+  border: none;
+  border-top: 1px solid var(--line);
+  margin: 2em 0;
+}
+
+/* Tables
+ * Tiptap wraps `<table>` inside `<div class="tableWrapper">` so column
+ * resizing can scroll horizontally without tearing the surrounding prose.
+ * We render subtle borders matching --line and a soft header fill so the
+ * structure is readable in both light and dark themes. The .column-resize-handle
+ * and .selectedCell rules come from the ProseMirror tables plugin and must
+ * stay styled to get a native-feeling resize affordance.
+ */
+
+.sd-editor .tableWrapper {
+  margin: 1.2em 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  border-radius: 5px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+}
+
+.sd-editor table,
+.sd-editor .sd-table {
+  border-collapse: collapse;
+  table-layout: fixed;
+  width: 100%;
+  margin: 0;
+  overflow: hidden;
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.sd-editor table td,
+.sd-editor table th {
+  border: 1px solid var(--line);
+  padding: 6px 10px;
+  vertical-align: top;
+  position: relative;
+  box-sizing: border-box;
+  min-width: 80px;
+}
+
+.sd-editor table th {
+  background: var(--panel-2);
+  font-weight: 600;
+  color: var(--text);
+  text-align: left;
+}
+
+.sd-editor table td > p,
+.sd-editor table th > p {
+  margin: 0;
+}
+
+.sd-editor table td > p + p,
+.sd-editor table th > p + p {
+  margin-top: 0.4em;
+}
+
+/* Column-resize handle rendered by prosemirror-tables when
+ * `Table.configure({ resizable: true })`. Positioned on the right edge of
+ * the cell; we reveal a hairline on hover and a full-height accent while
+ * dragging. */
+.sd-editor .column-resize-handle {
+  position: absolute;
+  right: -2px;
+  top: 0;
+  bottom: 0;
+  width: 4px;
+  background: transparent;
+  pointer-events: none;
+  z-index: 20;
+}
+
+.sd-editor table:hover .column-resize-handle {
+  background: var(--line-2);
+}
+
+.sd-editor.resize-cursor {
+  cursor: col-resize;
+}
+
+.sd-editor.resize-cursor .column-resize-handle {
+  background: var(--accent);
+}
+
+/* Cell-selection highlight (drag-select across cells). */
+.sd-editor table .selectedCell {
+  background: var(--accent-soft);
+}
+
+.sd-editor table .selectedCell::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border: 1px solid var(--accent-line);
+  pointer-events: none;
+}
+
+/* Read-only view: mirror editor styles but drop the resize affordances
+ * (`.tableWrapper` is also produced by the viewer when tables are loaded,
+ * so the selectors above already cover it within .sd-editor; these rules
+ * tune spacing for the narrower article column). */
+.sd-richtext-view .tableWrapper {
+  margin: 1.4em 0;
+}
+
+.sd-editor p.is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  color: var(--dim);
+  pointer-events: none;
+  float: left;
+  height: 0;
+}
+
+.sd-editor .sd-mention {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-line);
+  color: var(--accent);
+  font-size: 0.92em;
+  text-decoration: none;
+  line-height: 1.4;
+}
+
+.sd-editor .sd-mention:hover {
+  filter: brightness(1.08);
+}
+
+/* Toolbar */
+
+.sd-editor-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 12px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+
+.sd-editor-toolbar-group {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  padding: 0 4px;
+  border-right: 1px solid var(--line);
+  height: 30px;
+}
+
+.sd-editor-toolbar-group:last-child {
+  border-right: none;
+}
+
+.sd-editor-btn {
+  height: 26px;
+  min-width: 26px;
+  padding: 0 7px;
+  font-size: 12px;
+  font-weight: 500;
+  background: transparent;
+  color: var(--muted);
+  border: none;
+  border-radius: 3px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.sd-editor-btn:hover:not([disabled]) {
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+.sd-editor-btn[data-active='true'] {
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+.sd-editor-btn[disabled] {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* Bubble menu */
+
+.sd-bubble {
+  display: inline-flex;
+  gap: 1px;
+  padding: 3px;
+  background: var(--panel);
+  border: 1px solid var(--line-2);
+  border-radius: 5px;
+  box-shadow: var(--shadow-2);
+}
+
+.sd-bubble-sep {
+  width: 1px;
+  background: var(--line);
+  margin: 2px 3px;
+}
+
+/* Slash / mention popover */
+
+.sd-popover {
+  background: var(--panel);
+  border: 1px solid var(--line-2);
+  border-radius: 6px;
+  box-shadow: var(--shadow-2);
+  padding: 4px;
+  width: 280px;
+  max-height: 320px;
+  overflow: auto;
+  font-family: var(--font-sans);
+}
+
+.sd-popover-head {
+  padding: 4px 10px;
+  font-size: 10.5px;
+  color: var(--dim);
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.sd-popover-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-2);
+  font-size: 12.5px;
+  cursor: pointer;
+  border: none;
+  width: 100%;
+  text-align: left;
+  font-family: inherit;
+}
+
+.sd-popover-item[data-active='true'] {
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+.sd-popover-item-icon {
+  width: 20px;
+  height: 20px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  display: grid;
+  place-items: center;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--text-2);
+  flex-shrink: 0;
+}
+
+.sd-popover-item-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sd-popover-item-hint {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--dim);
+  flex-shrink: 0;
+}
+
+/* Read-only rendered view shares the same body typography. */
+.sd-richtext-view {
+  color: var(--text-2);
+  font-size: 15px;
+  line-height: 1.8;
+  font-family: var(--font-sans);
+}
+.sd-richtext-view > :first-child {
+  margin-top: 0 !important;
+}
+.sd-richtext-view .sd-mention {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-line);
+  color: var(--accent);
+  font-size: 0.92em;
+  text-decoration: none;
+}

@@ -1,0 +1,228 @@
+@import '../styles/tokens.css';
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Reset Tailwind preflight overrides that would shadow token-driven
+ * defaults. Tailwind sets html { line-height: 1.5 } which is fine;
+ * explicit background + color have to come after preflight. */
+@layer base {
+  html,
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-sans);
+  }
+
+  /* Dim placeholders so operators can tell them apart from real values.
+   * Without this rule browsers inherit the input's `color: var(--text)`
+   * via Tailwind preflight and the placeholder looks like committed text. */
+  input::placeholder,
+  textarea::placeholder {
+    color: var(--dim);
+    opacity: 1; /* Firefox defaults to 0.54 */
+  }
+
+  input:-webkit-autofill,
+  input:-webkit-autofill:hover,
+  input:-webkit-autofill:focus,
+  textarea:-webkit-autofill {
+    -webkit-text-fill-color: var(--text);
+    -webkit-box-shadow: 0 0 0 1000px var(--panel-2) inset;
+    caret-color: var(--text);
+    transition: background-color 5000s ease-in-out 0s;
+  }
+}
+
+/* Phase 9c mobile helpers. Many shell primitives style themselves with
+ * inline `style` attributes instead of Tailwind classes, so a handful
+ * of responsive utilities in plain CSS is the cheapest way to let them
+ * participate in the mobile audit without a global refactor. Breakpoint
+ * is paired with Tailwind's `md` (768 px) via 767.98 to dodge the
+ * off-by-0.02 gap matchMedia uses.
+ *
+ * The `.mobile-only` rule has to use `!important` on desktop because
+ * every element that opts in carries its own inline `display: flex`
+ * (for the mobile card layout). Without `!important` the inline style
+ * would win and the element would stay visible on desktop — the
+ * mobile top-bar and responsive table fallbacks would leak into the
+ * desktop viewport. We scope the hide under `min-width: 768px` rather
+ * than making it a global base rule so the natural inline `display`
+ * continues to work on mobile viewports. */
+.hide-on-mobile {
+  /* no-op on desktop */
+}
+@media (min-width: 768px) {
+  .mobile-only {
+    display: none !important;
+  }
+}
+@media (max-width: 767.98px) {
+  .hide-on-mobile {
+    display: none !important;
+  }
+  /* Page padding is tight on phones; 20 -> 16 recovers ~8% of the
+   * viewport width without crowding touch targets. Applied opt-in
+   * via the class so desktop scoping is unchanged. */
+  .page-body-tight {
+    padding: 16px !important;
+  }
+  /* Sub-row under the TopBar (title + actions) stacks on mobile so
+   * action buttons drop below the heading instead of wrapping a
+   * half-squashed row. Used by `PageHeader`. */
+  .page-header-sub {
+    flex-direction: column !important;
+    align-items: stretch !important;
+  }
+  .page-header-sub .page-header-actions {
+    flex-wrap: wrap !important;
+  }
+  /* Forms that use a 2-column grid (asset-form, login) collapse to a
+   * single stacked column on phones. Opt-in via `form-grid-2col` so
+   * we don't clobber unrelated grids. */
+  .form-grid-2col {
+    grid-template-columns: 1fr !important;
+  }
+  /* Detail pages that put a sticky right-rail aside next to main
+   * content (admin asset detail = `1fr 320px`) stack into a single
+   * column on phones so the 320 px aside doesn't overlap the main
+   * panel. */
+  .detail-grid-main-aside {
+    grid-template-columns: 1fr !important;
+  }
+  /* Admin article read view uses a 3-column layout (nav + content +
+   * aside). On phones we collapse it to a single column: hide the
+   * folder nav and the TOC, let the article body claim the viewport,
+   * and drop the LinkedItemsPanel inline below the article so it's
+   * still reachable without an edit-mode round-trip. */
+  .article-read-grid {
+    grid-template-columns: 1fr !important;
+    flex: 0 0 auto !important;
+    min-height: 0 !important;
+  }
+  .article-read-grid > .article-read-sidenav {
+    display: none !important;
+  }
+  .article-read-grid .article-read-toc {
+    display: none !important;
+  }
+  .article-read-grid > .article-read-main {
+    overflow: visible !important;
+    min-height: 0 !important;
+  }
+  .article-read-grid > .article-read-aside {
+    border-left: none !important;
+    border-top: 1px solid var(--line) !important;
+    padding: 20px 16px 20px !important;
+    overflow: visible !important;
+    min-height: 0 !important;
+  }
+  .article-read-grid .article-read-body {
+    padding: 24px 16px 32px !important;
+  }
+  /* Portal knowledge-base browser (folder tree + article list) stacks
+   * the folder nav above the article list on phones instead of locking
+   * to a `240px 1fr` split that clips the list. Aside keeps its scroll
+   * but caps at ~240px so the list stays reachable without a long
+   * swipe past every folder. */
+  .articles-browser-grid {
+    grid-template-columns: 1fr !important;
+  }
+  .articles-browser-grid > .articles-browser-aside {
+    border-right: none !important;
+    border-bottom: 1px solid var(--line) !important;
+    min-height: 0 !important;
+    max-height: 240px;
+    overflow: auto;
+    padding: 8px 8px !important;
+  }
+  /* Command palette goes full-screen on phones so the search input and
+   * result list get the whole viewport. The overlay loses its top
+   * offset + padding and the shell drops its rounded corners and max
+   * dimensions. */
+  .search-palette-overlay {
+    padding: 0 !important;
+    align-items: stretch !important;
+  }
+  .search-palette-shell {
+    max-width: none !important;
+    max-height: none !important;
+    height: 100dvh !important;
+    border-radius: 0 !important;
+    border: none !important;
+  }
+  /* Login / setup cards lose their desktop side-padding so they hug
+   * the viewport with a predictable 16px gutter. The card itself also
+   * shrinks from 28px inset to 20px on phones so form controls get
+   * more horizontal breathing room. */
+  .auth-shell-main {
+    padding: 16px !important;
+  }
+  .auth-shell-card {
+    padding: 20px !important;
+  }
+}
+
+/* Hide the WebKit-only horizontal scrollbar on the breadcrumb trail
+ * and similar scroll strips. `scrollbar-width: none` covers Firefox;
+ * WebKit needs the pseudo-element rule. Opt-in via class so we don't
+ * accidentally nuke scrollbars on scroll containers the user needs to
+ * see (e.g. the sidebar `.scroll`). */
+.no-scrollbar {
+  scrollbar-width: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+/* Sidebar header affordances. The logo link and the title-block link
+ * are independent controls (leave scope vs. switch workspace), so we
+ * hint at that separately with two subtle hover states. */
+.sidebar-home:hover {
+  background: var(--panel-2);
+}
+.sidebar-title-link {
+  transition: background 140ms ease;
+}
+.sidebar-title-link:hover {
+  background: var(--panel-2);
+}
+/* Entries in the tenant switcher popover. Same subtle hover as the
+ * surrounding sidebar nav items so the picker feels continuous with
+ * the rest of the aside. */
+.sidebar-switcher-entry {
+  transition: background 120ms ease;
+}
+.sidebar-switcher-entry:hover {
+  background: var(--panel-2);
+}
+
+/* Phase 6 command palette. `cmdk` tags the currently-highlighted
+ * row (via keyboard nav or hover) with `aria-selected="true"` and
+ * puts `cmdk-*` data attributes on its primitives. We lean on both
+ * to style highlights and group headings without pulling in cmdk's
+ * optional CSS file. Keep these rules scoped to `[cmdk-root]` so
+ * they can't leak into the rest of the app. */
+[cmdk-root] [cmdk-group-heading] {
+  padding: 6px 14px;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.7px;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+[cmdk-root] [cmdk-item] {
+  border-left: 2px solid transparent;
+}
+[cmdk-root] [cmdk-item][data-selected='true'] {
+  background: color-mix(in oklab, var(--accent) 14%, transparent);
+  border-left-color: var(--accent);
+}
+[cmdk-root] [cmdk-item] mark {
+  background: color-mix(in oklab, var(--accent) 28%, transparent);
+  color: var(--text);
+  padding: 0 2px;
+  border-radius: 2px;
+}
+

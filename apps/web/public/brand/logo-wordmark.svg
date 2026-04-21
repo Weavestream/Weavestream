@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 144" role="img" aria-label="Weavestream">
+  <!--
+    Phase 9b.1 placeholder wordmark. AppLogo falls back to a typographic
+    treatment if this asset is missing, so swapping this file is safe at
+    any time. Intrinsic width:height ratio is 5:1; keep replacements
+    within that aspect to avoid layout shifts.
+  -->
+  <title>Weavestream</title>
+  <g font-family="Inter Tight, Inter, system-ui, sans-serif" font-size="108" font-weight="700" dominant-baseline="middle">
+    <text x="0" y="78" fill="currentColor" font-style="italic">Weave</text>
+    <text x="332" y="78" fill="currentColor" opacity="0.55" font-family="JetBrains Mono, ui-monospace, monospace" font-weight="400" font-size="98">stream</text>
+  </g>
+</svg>

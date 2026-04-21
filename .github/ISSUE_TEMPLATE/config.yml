@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/Weavestream/Weavestream/security/advisories/new
+    about: Report a security issue privately via GitHub's vulnerability reporting.
+  - name: Question or discussion
+    url: https://github.com/Weavestream/Weavestream/discussions
+    about: Design questions, deployment help, and feature brainstorming.

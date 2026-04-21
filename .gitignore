@@ -1,0 +1,43 @@
+node_modules/
+.pnpm-store/
+dist/
+build/
+.next/
+out/
+coverage/
+*.tsbuildinfo
+
+.env
+.env.local
+.env.*.local
+
+# Prisma generated
+packages/db/src/generated/
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors
+.idea/
+.vscode/
+!.vscode/extensions.json
+!.vscode/settings.json.example
+
+# Docker local data
+.docker/
+
+# Private project artifacts — never publish
+Build_Plan/
+DECISIONS.md
+.claude/
+docs/PHASE_*.md
+docs/PHASE_*_NOTE.md
+docs/permissions.md

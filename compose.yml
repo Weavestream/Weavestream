@@ -1,0 +1,167 @@
+name: weavestream
+
+# ─────────────────────────────────────────────────────────────────────────
+# Weavestream — end-user compose file
+#
+# This file pulls published images from GitHub Container Registry. You
+# don't need the source tree to run Weavestream; the three commands below
+# are enough:
+#
+#   curl -O https://raw.githubusercontent.com/Weavestream/Weavestream/main/compose.yml
+#   curl -O https://raw.githubusercontent.com/Weavestream/Weavestream/main/.env.example
+#   mv .env.example .env
+#   # edit .env — fill in passwords/keys (see scripts/keygen.sh / keygen.ps1)
+#   docker compose up -d
+#
+# Pin a specific release by exporting WEAVESTREAM_VERSION=1.0.0 (or adding
+# it to .env). Leave unset to track :latest.
+#
+# Contributors building from source should layer in compose.build.yml:
+#   docker compose -f compose.yml -f compose.build.yml up -d --build
+# ─────────────────────────────────────────────────────────────────────────
+
+networks:
+  weavestream-net:
+    driver: bridge
+
+volumes:
+  pg_data:
+  redis_data:
+  minio_data:
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    networks: [weavestream-net]
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    networks: [weavestream-net]
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD}", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    networks: [weavestream-net]
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY}
+      MINIO_BROWSER_REDIRECT_URL: ${MINIO_PUBLIC_URL}
+    volumes:
+      - minio_data:/data
+    # 9000 = S3 API, 9001 = console. Published so browsers fetching
+    # presigned URLs can reach the same host the API signed against.
+    ports:
+      - "${MINIO_HOST_PORT:-9100}:9000"
+      - "${MINIO_CONSOLE_HOST_PORT:-9101}:9001"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:9000/minio/health/live"]
+      interval: 15s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
+  # ─── One-shot schema migration ──────────────────────────────────────────
+  # Runs `prisma migrate deploy` once per `docker compose up` and exits.
+  # api/worker wait for this to complete successfully before starting,
+  # so every `up -d` after an image bump applies pending migrations
+  # automatically and exactly once.
+  migrate:
+    image: ghcr.io/weavestream/weavestream-api:${WEAVESTREAM_VERSION:-latest}
+    restart: "no"
+    networks: [weavestream-net]
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+    working_dir: /app/packages/db
+    command: ["node_modules/.bin/prisma", "migrate", "deploy"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    image: ghcr.io/weavestream/weavestream-api:${WEAVESTREAM_VERSION:-latest}
+    restart: unless-stopped
+    networks: [weavestream-net]
+    env_file: .env
+    # Inside the compose network the api reaches postgres/redis/minio by
+    # service name. These overrides take precedence over any localhost
+    # URLs a contributor left in .env for host-side `pnpm dev`.
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      MINIO_ENDPOINT: minio
+      MINIO_PORT: "9000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:4000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  worker:
+    image: ghcr.io/weavestream/weavestream-worker:${WEAVESTREAM_VERSION:-latest}
+    restart: unless-stopped
+    networks: [weavestream-net]
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      MINIO_ENDPOINT: minio
+      MINIO_PORT: "9000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    healthcheck:
+      # Liveness only — the worker has no HTTP listener; BullMQ queue
+      # health is probed from the api side (/health/queues).
+      test: ["CMD", "node", "-e", "process.exit(0)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  web:
+    image: ghcr.io/weavestream/weavestream-web:${WEAVESTREAM_VERSION:-latest}
+    restart: unless-stopped
+    networks: [weavestream-net]
+    env_file: .env
+    environment:
+      API_INTERNAL_URL: http://api:4000
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "${WEB_HOST_PORT:-3000}:3000"

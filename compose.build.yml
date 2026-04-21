@@ -1,0 +1,55 @@
+# ─────────────────────────────────────────────────────────────────────────
+# Weavestream — contributor overrides
+#
+# Layer this on top of compose.yml to build images from local source
+# instead of pulling from GHCR, and to expose Postgres/Redis/MinIO host
+# ports so `pnpm dev` on the workstation can reach them.
+#
+#   docker compose -f compose.yml -f compose.build.yml up -d --build
+#
+# End users should never need this file.
+# ─────────────────────────────────────────────────────────────────────────
+
+services:
+  postgres:
+    # 5432 is commonly claimed by other local stacks; 5434 is the
+    # Weavestream dev port so `pnpm dev` on the host can reach Postgres.
+    ports:
+      - "5434:5432"
+
+  redis:
+    # 6379/6380 are typically in use by other local stacks.
+    ports:
+      - "6381:6379"
+
+  migrate:
+    image: weavestream-api:dev
+    build:
+      context: .
+      dockerfile: docker/api.Dockerfile
+      args:
+        WEAVESTREAM_VERSION: dev
+
+  api:
+    image: weavestream-api:dev
+    build:
+      context: .
+      dockerfile: docker/api.Dockerfile
+      args:
+        WEAVESTREAM_VERSION: dev
+
+  worker:
+    image: weavestream-worker:dev
+    build:
+      context: .
+      dockerfile: docker/worker.Dockerfile
+      args:
+        WEAVESTREAM_VERSION: dev
+
+  web:
+    image: weavestream-web:dev
+    build:
+      context: .
+      dockerfile: docker/web.Dockerfile
+      args:
+        WEAVESTREAM_VERSION: dev

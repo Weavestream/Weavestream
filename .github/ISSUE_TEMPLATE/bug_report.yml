@@ -1,0 +1,66 @@
+name: Bug report
+description: Something is broken or not behaving as documented
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug report. Before submitting,
+        please check that your issue isn't already covered by an existing
+        [issue](https://github.com/Weavestream/Weavestream/issues) or
+        [discussion](https://github.com/Weavestream/Weavestream/discussions).
+
+        **Security issues must not be reported here.** See
+        [SECURITY.md](https://github.com/Weavestream/Weavestream/blob/main/SECURITY.md).
+  - type: input
+    id: version
+    attributes:
+      label: Weavestream version
+      description: Value of `WEAVESTREAM_VERSION` in your `.env` (or `latest` if unpinned).
+      placeholder: 1.0.0
+    validations:
+      required: true
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: Deployment
+      options:
+        - Docker Compose (published images)
+        - Docker Compose (local build)
+        - Local pnpm dev
+        - Other (please describe below)
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: Describe the actual behavior and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: Minimal steps that let a maintainer reproduce the issue.
+      placeholder: |
+        1. Deploy with the default compose.yml
+        2. Log in as SUPER_ADMIN
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: Paste API, web, or worker container logs. Redact anything sensitive.
+      render: shell
+  - type: checkboxes
+    id: terms
+    attributes:
+      label: Confirmation
+      options:
+        - label: I have searched existing issues and this is not a duplicate
+          required: true
+        - label: This is not a security issue (security issues go through SECURITY.md)
+          required: true
