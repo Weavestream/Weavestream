@@ -43,6 +43,7 @@ Before opening a PR, please make sure:
 - [ ] `pnpm lint` passes.
 - [ ] `pnpm typecheck` passes.
 - [ ] `pnpm test` passes (or you've added tests covering the new behavior).
+- [ ] `pnpm install --frozen-lockfile` passes (if you changed any `package.json`, commit the updated `pnpm-lock.yaml`).
 - [ ] If you added or changed environment variables, both `.env.example`
       and [docs/CONFIGURATION.md](docs/CONFIGURATION.md) are updated.
 - [ ] If you added a new Prisma migration, it's included and CI's

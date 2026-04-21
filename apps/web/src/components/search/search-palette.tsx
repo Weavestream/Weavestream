@@ -108,11 +108,12 @@ export function SearchPalette({
   // items disappear, clear the selection so stale highlights don't
   // linger across queries.
   useEffect(() => {
-    if (items.length === 0) {
+    const firstHit = items[0];
+    if (!firstHit) {
       setSelected('');
       return;
     }
-    const first = `${items[0].kind}:${items[0].id}`;
+    const first = `${firstHit.kind}:${firstHit.id}`;
     setSelected((current) => {
       if (current && items.some((h) => `${h.kind}:${h.id}` === current)) {
         return current;
@@ -242,7 +243,8 @@ export function SearchPalette({
               // field and suggesting SMS verification codes (the
               // annoying "from Messages" prompt every time ⌘K opens).
               // Belt-and-braces across browsers + password managers.
-              type="text"
+              // cmdk's Command.Input omits the `type` prop (it's always
+              // type=text internally) and `onChange` (we use onValueChange).
               role="searchbox"
               name="global-search"
               autoComplete="off"
