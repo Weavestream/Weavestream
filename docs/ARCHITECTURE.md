@@ -35,8 +35,10 @@ threat model the implementation is written against.
 - **worker** — NestJS BullMQ consumer. No HTTP listener. Runs the same
   domain services as the API for search indexing, domain/SSL polling,
   thumbnail generation, etc.
-- **migrate** — one-shot container that runs `prisma migrate deploy`
-  before api/worker start, every `docker compose up`.
+- **Schema migrations** — `api` runs `prisma migrate deploy` on every
+  startup before binding its HTTP listener. `prisma migrate deploy` is
+  idempotent and guarded by a Postgres advisory lock, so it's safe to
+  run on every boot and on every node when scaling horizontally.
 
 ## Tenant & terminology model
 

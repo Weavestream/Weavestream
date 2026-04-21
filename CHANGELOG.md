@@ -6,6 +6,20 @@ this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- `prisma migrate deploy` now runs inside the `api` container on
+  startup instead of as a separate one-shot `migrate` service. Prisma
+  takes an advisory lock so concurrent api replicas are still safe.
+  This removes the exit-0 `migrate` container that some Docker UIs
+  (UGREEN, Portainer, Docker Desktop) were flagging as a project
+  error.
+
+### Upgrading from 1.0.0
+
+- Re-download `compose.yml` from the tag you're moving to and
+  `docker compose up -d`. No schema or env changes required.
+
 ## [1.0.0] - 2026-04-21
 
 Initial public release.

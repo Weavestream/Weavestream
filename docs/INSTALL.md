@@ -71,10 +71,10 @@ This:
 
 1. Pulls `ghcr.io/weavestream/weavestream-{api,web,worker}:${WEAVESTREAM_VERSION}`
    plus Postgres, Redis, and MinIO.
-2. Runs the one-shot `migrate` service (`prisma migrate deploy`). It
-   exits `0` when the schema is up to date.
-3. Starts `api`, `worker`, and `web` once `migrate` is done and the
-   datastores report healthy.
+2. The `api` container runs `prisma migrate deploy` on startup before
+   serving traffic. It's idempotent, so re-runs on every `up` are a
+   no-op once the schema is current.
+3. `worker` and `web` start once `api` reports healthy.
 
 Check status:
 
@@ -114,10 +114,10 @@ docker compose pull
 docker compose up -d
 ```
 
-The `migrate` service runs automatically on every `up` and is safe to
-re-run — it's a no-op when the schema is already current. Check the
-[CHANGELOG](../CHANGELOG.md) for any manual upgrade steps before
-bumping across minor versions.
+The `api` container re-runs `prisma migrate deploy` on every start
+and is safe to re-run — it's a no-op when the schema is already
+current. Check the [CHANGELOG](../CHANGELOG.md) for any manual
+upgrade steps before bumping across minor versions.
 
 ## Reverse proxy & TLS
 
@@ -152,7 +152,7 @@ mc mirror myalias/weavestream-* ./minio-backup/
 
 | Symptom                                          | Check                                                                             |
 | ------------------------------------------------ | --------------------------------------------------------------------------------- |
-| `migrate` service fails with `P1000` or `P1001`  | Wrong `DATABASE_URL` or Postgres not healthy yet. Check `docker compose logs postgres`. |
+| `api` fails at startup with `P1000` or `P1001`   | Migration step can't reach Postgres. Check `DATABASE_URL` and `docker compose logs postgres`. |
 | Web UI loads but API calls 502                   | `api` probably unhealthy; `docker compose logs api`. Confirm Redis password matches. |
 | Image uploads fail with CORS / CSP errors        | `NEXT_PUBLIC_MINIO_ORIGINS` must include the hostname your browser actually uses. |
 | Login says "Invalid credentials" after reset     | `POSTGRES_PASSWORD` changed but `DATABASE_URL` still points at the old password.  |
