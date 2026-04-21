@@ -22,6 +22,7 @@ FROM base AS deps
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml* ./
 COPY apps/web/package.json ./apps/web/
 COPY packages/config/package.json ./packages/config/
+COPY packages/shared/package.json ./packages/shared/
 RUN --mount=type=cache,id=pnpm,target=/pnpm/store \
     pnpm install --frozen-lockfile --prod=false
 
@@ -29,6 +30,7 @@ RUN --mount=type=cache,id=pnpm,target=/pnpm/store \
 FROM deps AS build
 COPY tsconfig.base.json tsconfig.json ./
 COPY packages/config ./packages/config
+COPY packages/shared ./packages/shared
 COPY apps/web ./apps/web
 # NEXT_PUBLIC_* is baked at build time, so the version must flow into
 # this stage — not just the runner.
@@ -36,7 +38,11 @@ ARG WEAVESTREAM_VERSION=dev
 ENV NEXT_TELEMETRY_DISABLED=1 \
     WEAVESTREAM_VERSION=${WEAVESTREAM_VERSION} \
     NEXT_PUBLIC_APP_VERSION=${WEAVESTREAM_VERSION}
-RUN pnpm --filter @weavestream/web build
+# @weavestream/shared is a workspace dep whose package.json points to
+# `dist/index.js`, so it must be compiled before `next build` can
+# resolve its exports.
+RUN pnpm --filter @weavestream/shared build \
+ && pnpm --filter @weavestream/web build
 
 # ───── runner ─────
 FROM node:20-alpine AS runner
