@@ -22,14 +22,6 @@ services:
     ports:
       - "6381:6379"
 
-  migrate:
-    image: weavestream-api:dev
-    build:
-      context: .
-      dockerfile: docker/api.Dockerfile
-      args:
-        WEAVESTREAM_VERSION: dev
-
   api:
     image: weavestream-api:dev
     build:

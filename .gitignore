@@ -33,6 +33,7 @@ Thumbs.db
 
 # Docker local data
 .docker/
+data/
 
 # Private project artifacts — never publish
 Build_Plan/
