@@ -1,5 +1,3 @@
-name: weavestream
-
 # ─────────────────────────────────────────────────────────────────────────
 # Weavestream — end-user compose file
 #
@@ -18,6 +16,12 @@ name: weavestream
 #
 # Contributors building from source should layer in compose.build.yml:
 #   docker compose -f compose.yml -f compose.build.yml up -d --build
+#
+# The compose *project name* defaults to the parent folder (so
+# `/volume1/docker/weavestream-prod` → project `weavestream-prod`).
+# Keep each Weavestream instance in its own folder, or override with
+# COMPOSE_PROJECT_NAME= in .env (or -p on the CLI) if you need two
+# instances side by side under the same folder name.
 # ─────────────────────────────────────────────────────────────────────────
 
 networks:
