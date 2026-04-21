@@ -1,0 +1,37 @@
+name: Feature request
+description: Suggest an enhancement or new capability
+labels: ["enhancement", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to suggest a feature. Larger ideas are
+        often better started in a
+        [Discussion](https://github.com/Weavestream/Weavestream/discussions)
+        so we can talk through the shape before committing to a scope.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: Describe the user or operator pain point. What is awkward, slow, or impossible today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: A rough sketch of what the feature looks like from a user's perspective.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Workarounds you've tried or other designs you considered.
+  - type: checkboxes
+    id: terms
+    attributes:
+      label: Confirmation
+      options:
+        - label: I have searched existing issues and discussions and this is not a duplicate
+          required: true

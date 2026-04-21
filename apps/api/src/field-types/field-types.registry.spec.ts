@@ -1,0 +1,296 @@
+import { FieldTypeValues } from '@weavestream/shared';
+import { FieldTypesRegistry } from './field-types.registry.js';
+
+describe('FieldTypesRegistry (exhaustive)', () => {
+  const registry = new FieldTypesRegistry();
+
+  it('has a strategy for every FieldType enum value', () => {
+    for (const kind of FieldTypeValues) {
+      expect(registry.get(kind).kind).toBe(kind);
+    }
+    expect(registry.all().length).toBe(FieldTypeValues.length);
+  });
+});
+
+describe('TextStrategy', () => {
+  const registry = new FieldTypesRegistry();
+
+  it('trims and stores null on empty', () => {
+    const s = registry.get('TEXT');
+    expect(s.normalize('  hello  ', {})).toBe('hello');
+    expect(s.normalize('', {})).toBeNull();
+  });
+
+  it('rejects oversize strings via valueSchema', () => {
+    const s = registry.get('TEXT');
+    const schema = s.valueSchema({});
+    const big = 'x'.repeat(10_001);
+    expect(schema.safeParse(big).success).toBe(false);
+    expect(schema.safeParse('ok').success).toBe(true);
+  });
+});
+
+describe('EmailStrategy', () => {
+  const registry = new FieldTypesRegistry();
+
+  it('lowercases on normalize', () => {
+    expect(registry.get('EMAIL').normalize('Hannah@Northwind.COM', {})).toBe(
+      'hannah@northwind.com',
+    );
+  });
+
+  it('rejects invalid email via valueSchema', () => {
+    const s = registry.get('EMAIL');
+    const ok = s.valueSchema({});
+    expect(ok.safeParse('hannah@northwind.com').success).toBe(true);
+    expect(ok.safeParse('not-an-email').success).toBe(false);
+  });
+});
+
+describe('PhoneStrategy', () => {
+  const registry = new FieldTypesRegistry();
+  it('canonicalises 10-digit US numbers to E.164', () => {
+    expect(registry.get('PHONE').normalize('(555) 123-4567', {})).toBe('+15551234567');
+  });
+  it('keeps already-prefixed numbers', () => {
+    expect(registry.get('PHONE').normalize('+442079460000', {})).toBe('+442079460000');
+  });
+});
+
+describe('DateStrategy', () => {
+  const registry = new FieldTypesRegistry();
+  it('truncates datetimes to the date part', () => {
+    expect(registry.get('DATE').normalize('2026-06-30T12:00:00Z', {})).toBe('2026-06-30');
+  });
+  it('accepts ISO dates via valueSchema', () => {
+    expect(registry.get('DATE').valueSchema({}).safeParse('2026-06-30').success).toBe(true);
+    expect(registry.get('DATE').valueSchema({}).safeParse('06/30/26').success).toBe(false);
+  });
+});
+
+describe('DropdownStrategy', () => {
+  const registry = new FieldTypesRegistry();
+  const options = {
+    choices: [
+      { label: 'Windows 11', slug: 'windows_11' },
+      { label: 'Ubuntu 24.04', slug: 'ubuntu_24_04' },
+    ],
+    allowOther: false,
+  };
+
+  it('restricts to declared slugs', () => {
+    const schema = registry.get('DROPDOWN').valueSchema(options);
+    expect(schema.safeParse('windows_11').success).toBe(true);
+    expect(schema.safeParse('macos').success).toBe(false);
+    expect(schema.safeParse(null).success).toBe(true);
+  });
+
+  it('round-trips to plaintext labels', () => {
+    expect(registry.get('DROPDOWN').toPlaintext('windows_11', options)).toBe('Windows 11');
+  });
+});
+
+describe('MultiselectStrategy', () => {
+  const registry = new FieldTypesRegistry();
+  const opts = {
+    choices: [
+      { label: 'Clinical', slug: 'clinical' },
+      { label: 'Imaging', slug: 'imaging' },
+    ],
+  };
+  it('deduplicates inputs in normalize', () => {
+    expect(
+      registry.get('MULTISELECT').normalize(['clinical', 'clinical', 'imaging'], opts),
+    ).toEqual(['clinical', 'imaging']);
+  });
+  it('rejects unknown slugs via valueSchema', () => {
+    const schema = registry.get('MULTISELECT').valueSchema(opts);
+    expect(schema.safeParse(['clinical']).success).toBe(true);
+    expect(schema.safeParse(['nope']).success).toBe(false);
+  });
+});
+
+describe('BooleanStrategy', () => {
+  const registry = new FieldTypesRegistry();
+  it("coerces 'true' / 'false' strings", () => {
+    expect(registry.get('BOOLEAN').normalize('true', {})).toBe(true);
+    expect(registry.get('BOOLEAN').normalize('false', {})).toBe(false);
+  });
+});
+
+describe('NumberStrategy', () => {
+  const registry = new FieldTypesRegistry();
+  it('rejects infinities', () => {
+    expect(registry.get('NUMBER').valueSchema({}).safeParse(Infinity).success).toBe(false);
+  });
+  it('parses numeric strings', () => {
+    expect(registry.get('NUMBER').normalize('42', {})).toBe(42);
+  });
+});
+
+describe('AssetReferenceStrategy', () => {
+  const registry = new FieldTypesRegistry();
+
+  it('widens a single uuid to a 1-element array', () => {
+    const id = '00000000-0000-0000-0000-000000000001';
+    expect(registry.get('ASSET_REFERENCE').normalize(id, {})).toEqual([id]);
+  });
+
+  it('deduplicates target ids', () => {
+    const id = '00000000-0000-0000-0000-000000000001';
+    expect(
+      registry.get('ASSET_REFERENCE').normalize([id, id, id], {}),
+    ).toEqual([id]);
+  });
+
+  it('rejects multi-valued inputs when multiple=false', () => {
+    const id1 = '00000000-0000-0000-0000-000000000001';
+    const id2 = '00000000-0000-0000-0000-000000000002';
+    const schema = registry.get('ASSET_REFERENCE').valueSchema({ multiple: false });
+    expect(schema.safeParse([id1]).success).toBe(true);
+    expect(schema.safeParse([id1, id2]).success).toBe(false);
+  });
+
+  it('calls replaceForField inside onRelate with dedup ids', async () => {
+    const calls: unknown[] = [];
+    const relations = {
+      async replaceForField(args: unknown) {
+        calls.push(args);
+      },
+    };
+    const strategy = registry.get('ASSET_REFERENCE');
+    const id = '00000000-0000-0000-0000-000000000001';
+    await strategy.onRelate?.([id, id], {
+      companyId: 'c-1',
+      assetId: 'a-1',
+      actorId: 'u-1',
+      field: { id: 'f-1', slug: 'primary_user', options: { relationType: 'primary_user' } },
+      tx: {} as never,
+      relations,
+    });
+    expect(calls).toHaveLength(1);
+    const first = calls[0] as { targetIds: string[]; relationType: string };
+    expect(first.targetIds).toEqual([id, id]);
+    expect(first.relationType).toBe('primary_user');
+  });
+});
+
+describe('RichTextStrategy', () => {
+  const registry = new FieldTypesRegistry();
+  const strat = registry.get('RICH_TEXT');
+
+  it('lifts a plain string into a Tiptap doc', () => {
+    const v = strat.normalize('Hello world', {}) as {
+      type: string;
+      content: Array<{ type: string }>;
+    };
+    expect(v.type).toBe('doc');
+    expect(Array.isArray(v.content)).toBe(true);
+  });
+
+  it('passes a raw Tiptap doc (with headings + lists) through valueSchema', () => {
+    const doc = {
+      type: 'doc',
+      content: [
+        { type: 'heading', attrs: { level: 2 }, content: [{ type: 'text', text: 'Title' }] },
+        {
+          type: 'bulletList',
+          content: [
+            {
+              type: 'listItem',
+              content: [
+                { type: 'paragraph', content: [{ type: 'text', text: 'one' }] },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+    expect(strat.valueSchema({}).safeParse(doc).success).toBe(true);
+    expect(strat.normalize(doc, {})).toEqual(doc);
+  });
+
+  it('rejects non-doc objects', () => {
+    expect(strat.valueSchema({}).safeParse({ type: 'paragraph' }).success).toBe(false);
+    expect(strat.valueSchema({}).safeParse({ foo: 'bar' }).success).toBe(false);
+  });
+
+  it('unwraps the legacy {v, plain} shape on normalize', () => {
+    const wrapped = {
+      v: { type: 'doc', content: [{ type: 'paragraph' }] },
+      plain: 'Hi',
+    };
+    const v = strat.normalize(wrapped, {}) as { type: string };
+    expect(v.type).toBe('doc');
+  });
+
+  it('toPlaintext walks the Tiptap doc for search', () => {
+    const doc = {
+      type: 'doc',
+      content: [
+        { type: 'paragraph', content: [{ type: 'text', text: 'one' }] },
+        { type: 'paragraph', content: [{ type: 'text', text: 'two' }] },
+      ],
+    };
+    expect(strat.toPlaintext(doc, {})).toContain('one');
+    expect(strat.toPlaintext(doc, {})).toContain('two');
+  });
+
+  it('toPlaintext still honours the legacy plain field when present', () => {
+    expect(
+      strat.toPlaintext(
+        { v: { type: 'doc', content: [] }, plain: 'Hi' },
+        {},
+      ),
+    ).toBe('Hi');
+  });
+});
+
+describe('TagsStrategy', () => {
+  const registry = new FieldTypesRegistry();
+  it('lowercases and deduplicates tags', () => {
+    expect(registry.get('TAGS').normalize(['Clinical', 'clinical', ' IMAGING '], {})).toEqual([
+      'clinical',
+      'imaging',
+    ]);
+  });
+});
+
+describe('IpAddressStrategy', () => {
+  const registry = new FieldTypesRegistry();
+  const any = { version: 'any', allowCidr: false };
+  const v4Only = { version: 'v4', allowCidr: false };
+  const withCidr = { version: 'any', allowCidr: true };
+
+  it('accepts IPv4 host addresses', () => {
+    expect(registry.get('IP_ADDRESS').valueSchema(any).safeParse('10.0.0.5').success).toBe(true);
+    expect(registry.get('IP_ADDRESS').valueSchema(any).safeParse('999.0.0.1').success).toBe(false);
+  });
+
+  it('accepts IPv6 and lowercases on normalize', () => {
+    const s = registry.get('IP_ADDRESS');
+    expect(s.valueSchema(any).safeParse('2001:DB8::1').success).toBe(true);
+    expect(s.normalize('2001:DB8::1', any)).toBe('2001:db8::1');
+  });
+
+  it('trims whitespace and nulls empty input', () => {
+    const s = registry.get('IP_ADDRESS');
+    expect(s.normalize('  192.168.1.1  ', any)).toBe('192.168.1.1');
+    expect(s.normalize('', any)).toBeNull();
+  });
+
+  it('respects the version restriction', () => {
+    const schema = registry.get('IP_ADDRESS').valueSchema(v4Only);
+    expect(schema.safeParse('10.0.0.1').success).toBe(true);
+    expect(schema.safeParse('2001:db8::1').success).toBe(false);
+  });
+
+  it('accepts CIDR only when allowCidr is true', () => {
+    const s = registry.get('IP_ADDRESS');
+    expect(s.valueSchema(any).safeParse('10.0.0.0/24').success).toBe(false);
+    expect(s.valueSchema(withCidr).safeParse('10.0.0.0/24').success).toBe(true);
+    expect(s.valueSchema(withCidr).safeParse('10.0.0.0/33').success).toBe(false);
+    expect(s.valueSchema(withCidr).safeParse('2001:db8::/129').success).toBe(false);
+    expect(s.valueSchema(withCidr).safeParse('2001:db8::/48').success).toBe(true);
+  });
+});

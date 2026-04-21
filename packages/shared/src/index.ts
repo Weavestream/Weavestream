@@ -1,0 +1,18 @@
+/**
+ * Client-safe barrel for `@weavestream/shared`.
+ *
+ * Only exports modules that are isomorphic between browser and Node (Zod
+ * schemas, role enums, and plain types). Anything that touches a Node-only
+ * API — `node:async_hooks`, `Buffer`, `process.env` validation — lives in
+ * `@weavestream/shared/server` and MUST NOT be re-exported from here, otherwise
+ * bundling a React Client Component will pull Node built-ins into the
+ * browser chunk and explode at runtime.
+ *
+ * Type-only re-exports (e.g. `TenantContext`) are safe here because they
+ * are erased by TypeScript before any bundler sees them.
+ */
+export * from './roles.js';
+export * from './schemas/index.js';
+export * from './queues/index.js';
+export * from './tiptap.js';
+export type { TenantContext } from './tenant-context.js';

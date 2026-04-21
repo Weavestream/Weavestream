@@ -1,0 +1,26 @@
+{
+  "name": "weavestream",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@9.12.0",
+  "engines": {
+    "node": ">=20.11.0"
+  },
+  "scripts": {
+    "build": "pnpm -r --filter './packages/*' build && pnpm -r --filter './apps/*' build",
+    "dev": "pnpm -r --parallel --filter './apps/*' dev",
+    "lint": "pnpm -r lint",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test",
+    "audit": "pnpm audit --prod --audit-level=high",
+    "keygen": "node scripts/keygen.mjs",
+    "prisma:generate": "pnpm --filter @weavestream/db prisma:generate",
+    "prisma:migrate": "pnpm --filter @weavestream/db prisma:migrate",
+    "prisma:deploy": "pnpm --filter @weavestream/db prisma:deploy"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "prettier": "^3.3.3",
+    "typescript": "^5.6.2"
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "extends": "../../packages/config/tsconfig.node.json",
+  "compilerOptions": {
+    "rootDir": "./src",
+    "outDir": "./dist",
+    "baseUrl": ".",
+    "types": ["node", "jest"],
+    "paths": {
+      "@weavestream/shared": ["../../packages/shared/dist/index.d.ts"],
+      "@weavestream/shared/server": ["../../packages/shared/dist/server.d.ts"]
+    }
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["dist", "node_modules"]
+}

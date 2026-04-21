@@ -1,0 +1,210 @@
+import type { Metadata } from 'next';
+import Link from 'next/link';
+import { notFound } from 'next/navigation';
+import {
+  getArticle,
+  getMe,
+  getSettings,
+  listArticles,
+  listCompanyMemberships,
+  listFolderTree,
+  serverApiFetch,
+  type CompanyDetail,
+  type CompanyMembership,
+} from '../../../../../../lib/server-api';
+import { canManage } from '../../../../../../lib/roles';
+import { TopBar } from '../../../../../../components/shell/top-bar';
+import { Icon, Tag } from '../../../../../../components/ui';
+import { buildTerm } from '../../../../../../lib/term';
+import { companyCrumbs } from '../../../../../../lib/company-crumbs';
+import { RichTextView } from '../../../../../../components/editor/rich-text-view';
+import { ArticleSideNav } from '../../../../../../components/editor/article-side-nav';
+import { ArticleToc } from '../../../../../../components/editor/article-toc';
+import { LinkedItemsPanel } from '../../../../../../components/relations';
+import { AttachmentsPanel } from '../../../../../../components/upload/attachments-panel';
+
+export async function generateMetadata({
+  params,
+}: {
+  params: Promise<{ id: string; articleId: string }>;
+}): Promise<Metadata> {
+  const { id, articleId } = await params;
+  const article = await getArticle(id, articleId);
+  return article ? { title: article.title } : {};
+}
+
+export default async function ArticleReadPage({
+  params,
+}: {
+  params: Promise<{ id: string; articleId: string }>;
+}) {
+  const { id: companyId, articleId } = await params;
+  const me = (await getMe())!;
+  const term = buildTerm(await getSettings());
+
+  const [companyRes, article, folders, articleList, memberships] = await Promise.all([
+    serverApiFetch<CompanyDetail>(`/companies/${companyId}`),
+    getArticle(companyId, articleId),
+    listFolderTree(companyId),
+    listArticles(companyId, { includeArchived: false, limit: 500 }),
+    listCompanyMemberships(companyId),
+  ]);
+  if (!companyRes.ok || !companyRes.data) notFound();
+  if (!article) notFound();
+  const company = companyRes.data;
+  const manage = canManage(me.role);
+
+  const createdBy = resolvePerson(memberships, article.createdBy);
+  const updatedBy = resolvePerson(memberships, article.updatedBy);
+
+  return (
+    <>
+      <TopBar
+        crumbs={companyCrumbs(
+          term,
+          company,
+          { label: 'Articles', href: `/admin/companies/${companyId}/articles` },
+          { label: article.title },
+        )}
+        right={
+          <>
+            {!article.visibleToClients && <Tag tone="outline">internal</Tag>}
+            {article.archivedAt && <Tag tone="warn">archived</Tag>}
+            {manage && (
+              <Link
+                href={`/admin/companies/${companyId}/articles/${article.id}/edit`}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  height: 28,
+                  padding: '0 10px',
+                  background: 'var(--accent)',
+                  color: 'var(--accent-ink)',
+                  borderRadius: 5,
+                  fontSize: 12.5,
+                  fontWeight: 600,
+                }}
+              >
+                <Icon.edit size={12} />
+                Edit
+              </Link>
+            )}
+          </>
+        }
+      />
+
+      <div
+        className="article-read-grid"
+        style={{
+          display: 'grid',
+          gridTemplateColumns: '240px 1fr 320px',
+          flex: 1,
+          minHeight: 0,
+        }}
+      >
+        <div
+          className="article-read-sidenav"
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            minHeight: 0,
+            minWidth: 0,
+          }}
+        >
+          <ArticleSideNav
+            companyId={companyId}
+            folders={folders}
+            articles={articleList.items}
+            activeArticleId={article.id}
+          />
+        </div>
+
+        <div className="scroll article-read-main" style={{ overflow: 'auto', minWidth: 0 }}>
+          <article
+            className="article-read-body"
+            style={{
+              maxWidth: 1000,
+              margin: '0 auto',
+              padding: '40px 40px 80px',
+            }}
+          >
+            <h1
+              style={{
+                fontFamily: 'var(--font-display)',
+                fontSize: 34,
+                fontWeight: 600,
+                letterSpacing: -0.8,
+                margin: '0 0 12px',
+                lineHeight: 1.1,
+              }}
+            >
+              {article.title}
+            </h1>
+            {article.excerpt && (
+              <p
+                style={{
+                  fontSize: 15,
+                  color: 'var(--muted)',
+                  marginBottom: 24,
+                  lineHeight: 1.55,
+                }}
+              >
+                {article.excerpt}
+              </p>
+            )}
+            <RichTextView value={article.content} />
+          </article>
+        </div>
+
+        <aside
+          className="scroll article-read-aside"
+          style={{
+            borderLeft: '1px solid var(--line)',
+            padding: '24px 18px',
+            overflow: 'auto',
+            minHeight: 0,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 20,
+          }}
+        >
+          <div className="article-read-toc" style={{ display: 'contents' }}>
+            <ArticleToc
+              articleId={article.id}
+              articleUpdatedAt={article.updatedAt}
+              createdBy={createdBy}
+              createdAt={article.createdAt}
+              updatedBy={updatedBy}
+              updatedAt={article.updatedAt}
+            />
+          </div>
+          <LinkedItemsPanel
+            companyId={companyId}
+            entityType="article"
+            entityId={article.id}
+            editable={manage && !article.archivedAt}
+          />
+          <AttachmentsPanel
+            companyId={companyId}
+            entityType="article"
+            entityId={article.id}
+            editable={manage && !article.archivedAt}
+          />
+        </aside>
+      </div>
+    </>
+  );
+}
+
+function resolvePerson(
+  memberships: CompanyMembership[],
+  userId: string | null,
+): { id: string; displayName: string } | null {
+  if (!userId) return null;
+  const hit = memberships.find((m) => m.user.id === userId);
+  if (hit) {
+    return { id: hit.user.id, displayName: hit.user.name || hit.user.email };
+  }
+  return null;
+}

@@ -1,0 +1,493 @@
+import type { Metadata } from 'next';
+import Link from 'next/link';
+import { notFound } from 'next/navigation';
+import { Fragment } from 'react';
+import {
+  getAsset,
+  getMe,
+  type AssetSummary,
+} from '../../../../../lib/server-api';
+import {
+  PageBody,
+  PageHeader,
+} from '../../../../../components/shell/page-header';
+import { Icon, LayoutSwatch, Panel, Tag } from '../../../../../components/ui';
+import { RichTextView } from '../../../../../components/editor/rich-text-view';
+import { AttachmentsPanel } from '../../../../../components/upload/attachments-panel';
+
+/**
+ * Portal asset detail (read-only mirror of the admin page).
+ *
+ * The API already enforces `asset.read` at the membership boundary
+ * and strips `visibleToClients=false` fields before the payload
+ * leaves the service, so this page only has to render what it's
+ * given. Differences vs. the admin detail page:
+ *
+ * - no `AssetActions` (clients can't edit/archive/delete),
+ * - no `LinkedItemsPanel` (backend emits admin-scoped hrefs that
+ *   would 404 for clients) and no Timing panel.
+ * - read-only Attachments panel (download-only for clients).
+ * - ASSET_REFERENCE chips link to the portal path
+ *   (`/portal/<slug>/assets/<id>`), never the admin one.
+ */
+export async function generateMetadata({
+  params,
+}: {
+  params: Promise<{ companySlug: string; assetId: string }>;
+}): Promise<Metadata> {
+  const { companySlug, assetId } = await params;
+  const me = await getMe();
+  const membership = me?.memberships.find((m) => m.company.slug === companySlug);
+  if (!membership) return {};
+  const asset = await getAsset(membership.company.id, assetId);
+  return asset ? { title: asset.name } : {};
+}
+
+export default async function PortalAssetDetailPage({
+  params,
+}: {
+  params: Promise<{ companySlug: string; assetId: string }>;
+}) {
+  const { companySlug, assetId } = await params;
+  const me = (await getMe())!;
+  const membership = me.memberships.find((m) => m.company.slug === companySlug);
+  if (!membership) notFound();
+
+  const asset = await getAsset(membership.company.id, assetId);
+  if (!asset) notFound();
+
+  const portalBase = `/portal/${companySlug}`;
+
+  const primaryField = asset.fields.find((f) => f.isPrimary);
+  const noteField = asset.fields.find(
+    (f) => f.fieldType === 'RICH_TEXT' || f.fieldType === 'TEXTAREA',
+  );
+
+  return (
+    <>
+      <PageHeader
+        crumbs={[
+          { label: membership.company.name, href: portalBase },
+          {
+            label: asset.layoutName,
+            href: `${portalBase}/layouts/${asset.layoutSlug}`,
+            mono: true,
+          },
+          { label: asset.name },
+        ]}
+        title={asset.name}
+        description={`${asset.layoutName} · updated ${new Date(asset.updatedAt).toLocaleDateString()}`}
+      />
+      <PageBody>
+        <div
+          className="detail-grid-main-aside"
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'minmax(0, 1fr) 300px',
+            gap: 16,
+            alignItems: 'start',
+          }}
+        >
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          <Panel>
+              <div
+                style={{
+                  display: 'flex',
+                  gap: 14,
+                  alignItems: 'flex-start',
+                }}
+              >
+                <LayoutSwatch
+                  icon={asset.layoutIcon}
+                  color={asset.layoutColor}
+                  size={44}
+                />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div
+                    style={{
+                      display: 'flex',
+                      gap: 8,
+                      alignItems: 'center',
+                      flexWrap: 'wrap',
+                    }}
+                  >
+                    <Tag tone="info" dot>
+                      {asset.layoutName}
+                    </Tag>
+                    {asset.externalId && (
+                      <span
+                        style={{
+                          fontFamily: 'var(--font-mono)',
+                          fontSize: 10.5,
+                          color: 'var(--dim)',
+                        }}
+                      >
+                        {asset.externalId}
+                      </span>
+                    )}
+                    {asset.archivedAt && <Tag tone="warn">archived</Tag>}
+                  </div>
+                  <h2
+                    style={{
+                      fontSize: 22,
+                      fontWeight: 550,
+                      margin: '6px 0 3px',
+                      letterSpacing: -0.3,
+                    }}
+                  >
+                    {asset.name}
+                  </h2>
+                  <div
+                    style={{
+                      fontSize: 12,
+                      color: 'var(--muted)',
+                      fontFamily: 'var(--font-mono)',
+                    }}
+                  >
+                    updated {relative(new Date(asset.updatedAt))}
+                  </div>
+                </div>
+              </div>
+
+              <div
+                style={{
+                  marginTop: 20,
+                  display: 'grid',
+                  gridTemplateColumns: '140px 1fr',
+                  gap: '10px 20px',
+                }}
+              >
+                {asset.fields
+                  .filter((f) => f.slug !== noteField?.slug)
+                  .map((f) => (
+                    <Fragment key={f.id}>
+                      <div
+                        style={{
+                          fontSize: 11.5,
+                          color: 'var(--muted)',
+                          fontFamily: 'var(--font-mono)',
+                          textTransform: 'uppercase',
+                          letterSpacing: 0.3,
+                          paddingTop: 2,
+                        }}
+                      >
+                        {f.name}
+                        {primaryField?.id === f.id && (
+                          <Tag tone="accent" style={{ marginLeft: 6 }}>
+                            primary
+                          </Tag>
+                        )}
+                      </div>
+                      <div style={{ fontSize: 13, color: 'var(--text)' }}>
+                        {renderValue(
+                          f,
+                          asset.fieldValues[f.slug],
+                          asset.references,
+                          portalBase,
+                        )}
+                      </div>
+                    </Fragment>
+                  ))}
+              </div>
+            </Panel>
+
+            {noteField && !!asset.fieldValues[noteField.slug] && (
+              <Panel title={noteField.name}>
+                {noteField.fieldType === 'RICH_TEXT' ? (
+                  <RichTextView value={asset.fieldValues[noteField.slug]} />
+                ) : (
+                  <div
+                    style={{
+                      fontSize: 13.5,
+                      lineHeight: 1.6,
+                      color: 'var(--text-2)',
+                      whiteSpace: 'pre-wrap',
+                    }}
+                  >
+                    {String(asset.fieldValues[noteField.slug] ?? '')}
+                  </div>
+                )}
+              </Panel>
+            )}
+          </div>
+
+          <aside style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <AttachmentsPanel
+              companyId={membership.company.id}
+              entityType="asset"
+              entityId={asset.id}
+              editable={false}
+            />
+          </aside>
+        </div>
+      </PageBody>
+    </>
+  );
+}
+
+/**
+ * Renders a single stored field value. Mirrors the admin detail
+ * page's switch but routes ASSET_REFERENCE chips through the
+ * portal path instead of the admin one — passing `portalBase`
+ * (`/portal/<slug>`) keeps that decision at the caller.
+ */
+function renderValue(
+  field: AssetSummary['fields'][number],
+  value: unknown,
+  references: AssetSummary['references'],
+  portalBase: string,
+): React.ReactNode {
+  if (value === null || value === undefined || value === '') {
+    return <span style={{ color: 'var(--dim)' }}>—</span>;
+  }
+  switch (field.fieldType) {
+    case 'BOOLEAN':
+      return (
+        <Tag tone={value ? 'ok' : 'outline'} dot>
+          {value ? 'true' : 'false'}
+        </Tag>
+      );
+    case 'DROPDOWN': {
+      const choices = ((field.options as { choices?: Array<{ slug: string; label: string }> })
+        .choices ?? []) as Array<{ slug: string; label: string }>;
+      const match = choices.find((c) => c.slug === value);
+      return match?.label ?? String(value);
+    }
+    case 'MULTISELECT': {
+      if (!Array.isArray(value)) return String(value);
+      const choices = ((field.options as { choices?: Array<{ slug: string; label: string }> })
+        .choices ?? []) as Array<{ slug: string; label: string }>;
+      const byName = new Map(choices.map((c) => [c.slug, c.label]));
+      return (
+        <span style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+          {value.map((v) => (
+            <Tag key={String(v)} tone="outline">
+              {byName.get(String(v)) ?? String(v)}
+            </Tag>
+          ))}
+        </span>
+      );
+    }
+    case 'TAGS':
+      if (!Array.isArray(value)) return String(value);
+      return (
+        <span style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+          {value.map((v) => (
+            <Tag key={String(v)} tone="outline">
+              {String(v)}
+            </Tag>
+          ))}
+        </span>
+      );
+    case 'URL':
+    case 'VAULTWARDEN_LINK':
+      return (
+        <a
+          href={String(value)}
+          target="_blank"
+          rel="noreferrer"
+          style={{
+            color: 'var(--accent)',
+            fontFamily: 'var(--font-mono)',
+            fontSize: 12.5,
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 4,
+          }}
+        >
+          {String(value)}
+          <Icon.ext size={11} />
+        </a>
+      );
+    case 'EMAIL':
+      return (
+        <a
+          href={`mailto:${value}`}
+          style={{ color: 'var(--accent)', fontFamily: 'var(--font-mono)' }}
+        >
+          {String(value)}
+        </a>
+      );
+    case 'IP_ADDRESS':
+      return (
+        <span
+          style={{
+            fontFamily: 'var(--font-mono)',
+            fontSize: 12.5,
+            color: 'var(--text)',
+          }}
+        >
+          {String(value)}
+        </span>
+      );
+    case 'ASSET_REFERENCE': {
+      const ids = Array.isArray(value) ? value : [value];
+      return (
+        <span style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+          {ids.map((v) => {
+            const id = String(v);
+            const hit = references[id];
+            if (!hit) {
+              return (
+                <span
+                  key={id}
+                  title="Referenced asset is no longer available"
+                  style={{ display: 'inline-flex' }}
+                >
+                  <Tag tone="outline">{id.slice(0, 8)}… (missing)</Tag>
+                </span>
+              );
+            }
+            return (
+              <Link
+                key={id}
+                href={`${portalBase}/assets/${id}`}
+                style={{ textDecoration: 'none' }}
+              >
+                <Tag
+                  tone="info"
+                  dot
+                  style={
+                    hit.archivedAt
+                      ? { textDecoration: 'line-through', opacity: 0.75 }
+                      : undefined
+                  }
+                >
+                  {hit.name}
+                </Tag>
+              </Link>
+            );
+          })}
+        </span>
+      );
+    }
+    case 'DATE':
+    case 'DATETIME':
+      return (
+        <span
+          style={{
+            fontFamily: 'var(--font-mono)',
+            fontSize: 12.5,
+          }}
+        >
+          {typeof value === 'string' ? value : String(value)}
+        </span>
+      );
+    case 'RICH_TEXT':
+      return <RichTextView value={value} />;
+    case 'FILE': {
+      const entries = Array.isArray(value) ? (value as FileFieldValue[]) : [];
+      if (entries.length === 0) return <span style={{ color: 'var(--dim)' }}>—</span>;
+      return <FileTileRow entries={entries} />;
+    }
+    default:
+      return <span>{String(value)}</span>;
+  }
+}
+
+type FileFieldValue = {
+  uploadId: string;
+  filename: string;
+  mimeType: string;
+  sizeBytes: number;
+  isImage?: boolean;
+  thumbnailUrl?: string | null;
+  downloadUrl?: string | null;
+};
+
+function FileTileRow({ entries }: { entries: FileFieldValue[] }) {
+  return (
+    <div
+      style={{
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fill, minmax(120px, 1fr))',
+        gap: 8,
+      }}
+    >
+      {entries.map((entry) => {
+        const isImage = entry.isImage ?? entry.mimeType?.startsWith('image/');
+        return (
+          <a
+            key={entry.uploadId}
+            href={entry.downloadUrl ?? '#'}
+            target="_blank"
+            rel="noreferrer"
+            style={{
+              border: '1px solid var(--line)',
+              borderRadius: 5,
+              background: 'var(--panel-2)',
+              overflow: 'hidden',
+              display: 'flex',
+              flexDirection: 'column',
+              textDecoration: 'none',
+              color: 'inherit',
+            }}
+          >
+            <div
+              style={{
+                aspectRatio: '1 / 1',
+                background: 'var(--panel)',
+                display: 'grid',
+                placeItems: 'center',
+                color: 'var(--dim)',
+              }}
+            >
+              {isImage && entry.thumbnailUrl ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={entry.thumbnailUrl}
+                  alt={entry.filename}
+                  style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                />
+              ) : (
+                <Icon.doc size={22} />
+              )}
+            </div>
+            <div style={{ padding: '6px 8px' }}>
+              <div
+                title={entry.filename}
+                style={{
+                  fontSize: 11.5,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {entry.filename}
+              </div>
+              <div
+                style={{
+                  fontSize: 10,
+                  color: 'var(--dim)',
+                  fontFamily: 'var(--font-mono)',
+                  marginTop: 2,
+                }}
+              >
+                {humanSize(entry.sizeBytes)}
+              </div>
+            </div>
+          </a>
+        );
+      })}
+    </div>
+  );
+}
+
+function humanSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
+}
+
+function relative(d: Date): string {
+  const diff = Date.now() - d.getTime();
+  const minute = 60_000;
+  const hour = 60 * minute;
+  const day = 24 * hour;
+  if (diff < minute) return 'just now';
+  if (diff < hour) return `${Math.floor(diff / minute)}m ago`;
+  if (diff < day) return `${Math.floor(diff / hour)}h ago`;
+  if (diff < 7 * day) return `${Math.floor(diff / day)}d ago`;
+  return d.toLocaleDateString();
+}

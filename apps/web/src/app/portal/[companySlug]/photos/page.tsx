@@ -1,0 +1,377 @@
+import Link from 'next/link';
+import { notFound } from 'next/navigation';
+import {
+  getMe,
+  listPhotos,
+  type UploadSummary,
+} from '../../../../lib/server-api';
+import { PageBody, PageHeader } from '../../../../components/shell/page-header';
+import { Icon, Panel, Tag } from '../../../../components/ui';
+
+/**
+ * Portal photos gallery — read-only view of the company's image
+ * uploads. Filters mirror the admin page so a client admin can drill
+ * into attachments for a specific asset or article. CLIENT_USER still
+ * has `upload.read` so it remains accessible to all portal members.
+ */
+export default async function PortalPhotosPage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ companySlug: string }>;
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
+  const { companySlug } = await params;
+  const sp = await searchParams;
+  const me = (await getMe())!;
+  const membership = me.memberships.find((m) => m.company.slug === companySlug);
+  if (!membership) notFound();
+  const companyId = membership.company.id;
+
+  const attachedToType = readString(sp.attachedToType);
+  const attachedToId = readString(sp.attachedToId);
+  const cursor = readString(sp.cursor);
+
+  const page = await listPhotos(companyId, {
+    attachedToType,
+    attachedToId,
+    limit: 48,
+    cursor,
+  });
+
+  const basePath = `/portal/${companySlug}/photos`;
+
+  return (
+    <>
+      <PageHeader
+        crumbs={[
+          { label: membership.company.name },
+          { label: 'Photos' },
+        ]}
+        title="Photos"
+        description="Images stored against this workspace's assets and articles."
+      />
+      <PageBody>
+        <Panel noPad>
+          <FilterBar
+            basePath={basePath}
+            attachedToType={attachedToType}
+            attachedToId={attachedToId}
+            count={page.items.length}
+          />
+          {page.items.length === 0 ? (
+            <EmptyState />
+          ) : (
+            <PhotoGrid items={page.items} />
+          )}
+          <Pagination
+            basePath={basePath}
+            nextCursor={page.nextCursor}
+            attachedToType={attachedToType}
+            attachedToId={attachedToId}
+          />
+        </Panel>
+      </PageBody>
+    </>
+  );
+}
+
+function readString(v: string | string[] | undefined): string | undefined {
+  if (typeof v !== 'string') return undefined;
+  return v.length > 0 ? v : undefined;
+}
+
+function FilterBar({
+  basePath,
+  attachedToType,
+  attachedToId,
+  count,
+}: {
+  basePath: string;
+  attachedToType?: string;
+  attachedToId?: string;
+  count: number;
+}) {
+  const kinds: Array<{ value?: string; label: string }> = [
+    { value: undefined, label: 'All' },
+    { value: 'asset', label: 'Attachments' },
+    { value: 'article', label: 'Articles' },
+    { value: 'asset_field', label: 'Assets' },
+  ];
+  return (
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        flexWrap: 'wrap',
+        gap: 8,
+        padding: '10px 14px',
+        borderBottom: '1px solid var(--line)',
+        fontSize: 12,
+      }}
+    >
+      <div
+        style={{
+          display: 'flex',
+          flexWrap: 'wrap',
+          gap: 4,
+          minWidth: 0,
+        }}
+      >
+        {kinds.map((k) => {
+          const active = (attachedToType ?? '') === (k.value ?? '');
+          const href = k.value
+            ? `${basePath}?attachedToType=${k.value}${attachedToId ? `&attachedToId=${attachedToId}` : ''}`
+            : basePath;
+          return (
+            <Link
+              key={k.label}
+              href={href}
+              style={{
+                padding: '4px 10px',
+                borderRadius: 4,
+                fontSize: 11.5,
+                fontFamily: 'var(--font-mono)',
+                whiteSpace: 'nowrap',
+                background: active ? 'var(--accent-soft)' : 'transparent',
+                color: active ? 'var(--accent)' : 'var(--muted)',
+                border: `1px solid ${active ? 'var(--accent-line)' : 'var(--line)'}`,
+              }}
+            >
+              {k.label}
+            </Link>
+          );
+        })}
+      </div>
+      {attachedToId && (
+        <div
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 6,
+            padding: '3px 8px',
+            borderRadius: 4,
+            background: 'var(--panel-2)',
+            border: '1px solid var(--line)',
+            fontSize: 11,
+            fontFamily: 'var(--font-mono)',
+            color: 'var(--muted)',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          <span>
+            id:{' '}
+            <span style={{ color: 'var(--text-2)' }}>
+              {attachedToId.slice(0, 8)}…
+            </span>
+          </span>
+          <Link
+            href={
+              attachedToType
+                ? `${basePath}?attachedToType=${attachedToType}`
+                : basePath
+            }
+            style={{ color: 'var(--dim)' }}
+            title="Clear id filter"
+          >
+            <Icon.x size={10} />
+          </Link>
+        </div>
+      )}
+      <div style={{ flex: 1, minWidth: 8 }} />
+      <span
+        style={{
+          fontFamily: 'var(--font-mono)',
+          fontSize: 11,
+          color: 'var(--muted)',
+          whiteSpace: 'nowrap',
+          marginLeft: 'auto',
+        }}
+      >
+        {count} photo{count === 1 ? '' : 's'}
+      </span>
+    </div>
+  );
+}
+
+function PhotoGrid({ items }: { items: UploadSummary[] }) {
+  return (
+    <div
+      style={{
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))',
+        gap: 10,
+        padding: 14,
+      }}
+    >
+      {items.map((photo) => (
+        <PhotoTile key={photo.id} photo={photo} />
+      ))}
+    </div>
+  );
+}
+
+function PhotoTile({ photo }: { photo: UploadSummary }) {
+  const kindLabel = photo.attachedToType
+    ? attachmentLabel(photo.attachedToType)
+    : 'detached';
+  return (
+    <div
+      style={{
+        border: '1px solid var(--line)',
+        borderRadius: 6,
+        background: 'var(--panel-2)',
+        overflow: 'hidden',
+        display: 'flex',
+        flexDirection: 'column',
+      }}
+    >
+      <a
+        href={photo.downloadUrl ?? '#'}
+        target="_blank"
+        rel="noreferrer"
+        style={{
+          aspectRatio: '1 / 1',
+          background: 'var(--panel)',
+          display: 'block',
+          overflow: 'hidden',
+        }}
+        title={photo.filename}
+      >
+        {photo.thumbnailUrl ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={photo.thumbnailUrl}
+            alt={photo.filename}
+            style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+          />
+        ) : (
+          <div
+            style={{
+              width: '100%',
+              height: '100%',
+              display: 'grid',
+              placeItems: 'center',
+              color: 'var(--dim)',
+            }}
+          >
+            <Icon.doc size={22} />
+          </div>
+        )}
+      </a>
+      <div
+        style={{
+          padding: '8px 10px',
+          borderTop: '1px solid var(--line)',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 4,
+        }}
+      >
+        <div
+          title={photo.filename}
+          style={{
+            fontSize: 12,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          {photo.filename}
+        </div>
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 6,
+            fontSize: 10.5,
+            fontFamily: 'var(--font-mono)',
+            color: 'var(--dim)',
+          }}
+        >
+          <Tag tone="outline">{kindLabel}</Tag>
+          {photo.width && photo.height && (
+            <span>
+              {photo.width}×{photo.height}
+            </span>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Human-facing label for an upload's `attachedToType`. Kept in sync
+ * with the admin photos page so the filter pills and the tile badge
+ * use the same vocabulary.
+ */
+function attachmentLabel(attachedToType: string): string {
+  switch (attachedToType) {
+    case 'asset':
+      return 'Attachment';
+    case 'asset_field':
+      return 'Asset';
+    case 'article':
+      return 'Article';
+    default:
+      return attachedToType.replace('_', ' ');
+  }
+}
+
+function EmptyState() {
+  return (
+    <div
+      style={{
+        padding: 48,
+        textAlign: 'center',
+        color: 'var(--muted)',
+        fontSize: 13,
+      }}
+    >
+      <div style={{ fontSize: 24, marginBottom: 8 }}>
+        <Icon.doc size={24} />
+      </div>
+      <div>No photos shared with your workspace yet.</div>
+    </div>
+  );
+}
+
+function Pagination({
+  basePath,
+  nextCursor,
+  attachedToType,
+  attachedToId,
+}: {
+  basePath: string;
+  nextCursor: string | null;
+  attachedToType?: string;
+  attachedToId?: string;
+}) {
+  if (!nextCursor) return null;
+  const params = new URLSearchParams();
+  if (attachedToType) params.set('attachedToType', attachedToType);
+  if (attachedToId) params.set('attachedToId', attachedToId);
+  params.set('cursor', nextCursor);
+  return (
+    <div
+      style={{
+        padding: '10px 14px',
+        borderTop: '1px solid var(--line)',
+        display: 'flex',
+        justifyContent: 'flex-end',
+      }}
+    >
+      <Link
+        href={`${basePath}?${params.toString()}`}
+        style={{
+          fontSize: 11.5,
+          fontFamily: 'var(--font-mono)',
+          color: 'var(--accent)',
+        }}
+      >
+        Load more →
+      </Link>
+    </div>
+  );
+}

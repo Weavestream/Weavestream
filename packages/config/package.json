@@ -1,0 +1,18 @@
+{
+  "name": "@weavestream/config",
+  "version": "0.0.1",
+  "private": true,
+  "main": "index.js",
+  "files": [
+    "tsconfig.base.json",
+    "tsconfig.node.json",
+    "tsconfig.nextjs.json",
+    "index.js"
+  ],
+  "scripts": {
+    "build": "echo 'no build'",
+    "lint": "echo 'no lint'",
+    "typecheck": "echo 'no typecheck'",
+    "test": "echo 'no test'"
+  }
+}

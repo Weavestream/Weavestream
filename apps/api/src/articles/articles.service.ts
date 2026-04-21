@@ -1,0 +1,433 @@
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
+import type { Article, Prisma } from '@prisma/client';
+import {
+  tiptapExcerpt,
+  tiptapToPlaintext,
+  isValidTiptapDoc,
+  type CreateArticleInput,
+  type MoveArticleInput,
+  type UpdateArticleInput,
+  type UserRole,
+} from '@weavestream/shared';
+import { PrismaService } from '../prisma/prisma.service.js';
+import { AuditLogService } from '../audit/audit.service.js';
+import type { AuthedUser } from '../common/current-user.decorator.js';
+
+export interface AuditMeta {
+  ip: string;
+  userAgent: string;
+}
+
+export interface SerializedArticle {
+  id: string;
+  companyId: string;
+  folderId: string | null;
+  title: string;
+  slug: string;
+  content: Prisma.JsonValue;
+  contentPlaintext: string;
+  excerpt: string | null;
+  visibleToClients: boolean;
+  archivedAt: Date | null;
+  createdBy: string | null;
+  updatedBy: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface ArticleListOptions {
+  folderId?: string | 'root' | null;
+  q?: string;
+  includeArchived?: boolean;
+  limit?: number;
+  cursor?: string;
+}
+
+@Injectable()
+export class ArticlesService {
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly audit: AuditLogService,
+  ) {}
+
+  // ------------------------------------------------------------------
+  // Read
+  // ------------------------------------------------------------------
+
+  async list(
+    actor: AuthedUser,
+    companyId: string,
+    options: ArticleListOptions = {},
+  ): Promise<{ items: SerializedArticle[]; nextCursor: string | null }> {
+    const limit = Math.min(Math.max(options.limit ?? 50, 1), 200);
+    const where: Prisma.ArticleWhereInput = { companyId };
+    if (!options.includeArchived) where.archivedAt = null;
+    if (options.folderId === 'root') where.folderId = null;
+    else if (options.folderId) where.folderId = options.folderId;
+    if (options.q) where.title = { contains: options.q, mode: 'insensitive' };
+    if (actor.role === 'CLIENT_USER') where.visibleToClients = true;
+
+    const rows = await this.prisma.article.findMany({
+      where,
+      orderBy: [{ archivedAt: 'asc' }, { updatedAt: 'desc' }],
+      take: limit + 1,
+      ...(options.cursor ? { cursor: { id: options.cursor }, skip: 1 } : {}),
+    });
+    const hasMore = rows.length > limit;
+    const slice = hasMore ? rows.slice(0, limit) : rows;
+    return {
+      items: slice.map((r) => this.serialize(r, actor.role)),
+      nextCursor: hasMore ? slice[slice.length - 1]!.id : null,
+    };
+  }
+
+  async getById(
+    actor: AuthedUser,
+    companyId: string,
+    id: string,
+  ): Promise<SerializedArticle> {
+    const row = await this.prisma.article.findFirst({ where: { id, companyId } });
+    if (!row) throw new NotFoundException();
+    if (actor.role === 'CLIENT_USER' && !row.visibleToClients) {
+      throw new NotFoundException();
+    }
+    return this.serialize(row, actor.role);
+  }
+
+  async getBySlug(
+    actor: AuthedUser,
+    companyId: string,
+    slug: string,
+  ): Promise<SerializedArticle> {
+    const row = await this.prisma.article.findFirst({
+      where: { companyId, slug, archivedAt: null },
+    });
+    if (!row) throw new NotFoundException();
+    if (actor.role === 'CLIENT_USER' && !row.visibleToClients) {
+      throw new NotFoundException();
+    }
+    return this.serialize(row, actor.role);
+  }
+
+  // ------------------------------------------------------------------
+  // Write
+  // ------------------------------------------------------------------
+
+  async create(
+    actor: AuthedUser,
+    companyId: string,
+    input: CreateArticleInput,
+    meta: AuditMeta,
+  ): Promise<SerializedArticle> {
+    if (!isValidTiptapDoc(input.content)) {
+      throw new BadRequestException({
+        error: 'InvalidArticleContent',
+        message: 'content must be a Tiptap doc node.',
+      });
+    }
+
+    if (input.folderId) {
+      await this.assertFolderInCompany(companyId, input.folderId);
+    }
+
+    const slug = input.slug ?? this.slugifyTitle(input.title);
+    await this.assertSlugFree(companyId, slug, null);
+
+    const plaintext = tiptapToPlaintext(input.content);
+    const excerpt = input.excerpt ?? tiptapExcerpt(input.content);
+
+    const created = await this.prisma.article.create({
+      data: {
+        companyId,
+        folderId: input.folderId ?? null,
+        title: input.title,
+        slug,
+        content: input.content as unknown as Prisma.InputJsonValue,
+        contentPlaintext: plaintext,
+        excerpt,
+        visibleToClients: input.visibleToClients ?? true,
+        createdBy: actor.id,
+        updatedBy: actor.id,
+      },
+    });
+
+    await this.audit.log({
+      actorId: actor.id,
+      action: 'article.create',
+      entityType: 'Article',
+      entityId: created.id,
+      companyId,
+      ip: meta.ip,
+      userAgent: meta.userAgent,
+      before: null,
+      after: {
+        title: created.title,
+        slug: created.slug,
+        folderId: created.folderId,
+        visibleToClients: created.visibleToClients,
+      },
+    });
+    return this.serialize(created, actor.role);
+  }
+
+  async update(
+    actor: AuthedUser,
+    companyId: string,
+    id: string,
+    input: UpdateArticleInput,
+    meta: AuditMeta,
+  ): Promise<SerializedArticle> {
+    const existing = await this.prisma.article.findFirst({ where: { id, companyId } });
+    if (!existing) throw new NotFoundException();
+    if (existing.archivedAt) {
+      throw new BadRequestException('Cannot edit an archived article — restore it first.');
+    }
+
+    if (input.folderId !== undefined && input.folderId !== null) {
+      await this.assertFolderInCompany(companyId, input.folderId);
+    }
+
+    if (input.content !== undefined && !isValidTiptapDoc(input.content)) {
+      throw new BadRequestException({
+        error: 'InvalidArticleContent',
+        message: 'content must be a Tiptap doc node.',
+      });
+    }
+
+    if (input.slug !== undefined && input.slug !== existing.slug) {
+      await this.assertSlugFree(companyId, input.slug, id);
+    }
+
+    // NOTE: `updateMany` accepts scalar field writes only — no relation
+    // operations like `folder: { connect | disconnect }`. We therefore
+    // write the scalar FK `folderId` directly. See the `move` method for
+    // the same idiom.
+    const data: Prisma.ArticleUncheckedUpdateManyInput = { updatedBy: actor.id };
+    if (input.title !== undefined) data.title = input.title;
+    if (input.slug !== undefined) data.slug = input.slug;
+    if (input.folderId !== undefined) {
+      data.folderId = input.folderId ?? null;
+    }
+    if (input.content !== undefined) {
+      data.content = input.content as unknown as Prisma.InputJsonValue;
+      data.contentPlaintext = tiptapToPlaintext(input.content);
+      if (input.excerpt === undefined) {
+        data.excerpt = tiptapExcerpt(input.content);
+      }
+    }
+    if (input.excerpt !== undefined) data.excerpt = input.excerpt;
+    if (input.visibleToClients !== undefined) data.visibleToClients = input.visibleToClients;
+
+    // `updateMany` + refetch so the tenant-scope middleware sees a
+    // `companyId` filter in the `where` clause. Plain `update` only
+    // accepts unique keys in `where` (i.e. `id`), which would miss the
+    // scope guard. See assets.service for the same idiom.
+    await this.prisma.article.updateMany({ where: { id, companyId }, data });
+    const updated = await this.prisma.article.findFirstOrThrow({
+      where: { id, companyId },
+    });
+
+    await this.audit.log({
+      actorId: actor.id,
+      action: 'article.update',
+      entityType: 'Article',
+      entityId: id,
+      companyId,
+      ip: meta.ip,
+      userAgent: meta.userAgent,
+      before: {
+        title: existing.title,
+        slug: existing.slug,
+        folderId: existing.folderId,
+        visibleToClients: existing.visibleToClients,
+      },
+      after: {
+        title: updated.title,
+        slug: updated.slug,
+        folderId: updated.folderId,
+        visibleToClients: updated.visibleToClients,
+      },
+    });
+    return this.serialize(updated, actor.role);
+  }
+
+  async move(
+    actor: AuthedUser,
+    companyId: string,
+    id: string,
+    input: MoveArticleInput,
+    meta: AuditMeta,
+  ): Promise<SerializedArticle> {
+    const existing = await this.prisma.article.findFirst({ where: { id, companyId } });
+    if (!existing) throw new NotFoundException();
+    if (existing.archivedAt) {
+      throw new BadRequestException('Cannot move an archived article — restore it first.');
+    }
+    if (input.folderId) {
+      await this.assertFolderInCompany(companyId, input.folderId);
+    }
+    await this.prisma.article.updateMany({
+      where: { id, companyId },
+      data: { folderId: input.folderId, updatedBy: actor.id },
+    });
+    const updated = await this.prisma.article.findFirstOrThrow({
+      where: { id, companyId },
+    });
+    await this.audit.log({
+      actorId: actor.id,
+      action: 'article.move',
+      entityType: 'Article',
+      entityId: id,
+      companyId,
+      ip: meta.ip,
+      userAgent: meta.userAgent,
+      before: { folderId: existing.folderId },
+      after: { folderId: updated.folderId },
+    });
+    return this.serialize(updated, actor.role);
+  }
+
+  async archive(
+    actor: AuthedUser,
+    companyId: string,
+    id: string,
+    meta: AuditMeta,
+  ): Promise<SerializedArticle> {
+    const existing = await this.prisma.article.findFirst({ where: { id, companyId } });
+    if (!existing) throw new NotFoundException();
+    if (existing.archivedAt) throw new BadRequestException('Already archived');
+
+    await this.prisma.article.updateMany({
+      where: { id, companyId },
+      data: { archivedAt: new Date(), updatedBy: actor.id },
+    });
+    const updated = await this.prisma.article.findFirstOrThrow({
+      where: { id, companyId },
+    });
+    await this.audit.log({
+      actorId: actor.id,
+      action: 'article.archive',
+      entityType: 'Article',
+      entityId: id,
+      companyId,
+      ip: meta.ip,
+      userAgent: meta.userAgent,
+      before: { archivedAt: null },
+      after: { archivedAt: updated.archivedAt },
+    });
+    return this.serialize(updated, actor.role);
+  }
+
+  async restore(
+    actor: AuthedUser,
+    companyId: string,
+    id: string,
+    meta: AuditMeta,
+  ): Promise<SerializedArticle> {
+    const existing = await this.prisma.article.findFirst({ where: { id, companyId } });
+    if (!existing) throw new NotFoundException();
+    if (!existing.archivedAt) throw new BadRequestException('Not archived');
+
+    await this.assertSlugFree(companyId, existing.slug, id);
+    await this.prisma.article.updateMany({
+      where: { id, companyId },
+      data: { archivedAt: null, updatedBy: actor.id },
+    });
+    const updated = await this.prisma.article.findFirstOrThrow({
+      where: { id, companyId },
+    });
+    await this.audit.log({
+      actorId: actor.id,
+      action: 'article.restore',
+      entityType: 'Article',
+      entityId: id,
+      companyId,
+      ip: meta.ip,
+      userAgent: meta.userAgent,
+      before: { archivedAt: existing.archivedAt },
+      after: { archivedAt: null },
+    });
+    return this.serialize(updated, actor.role);
+  }
+
+  // ------------------------------------------------------------------
+  // Helpers
+  // ------------------------------------------------------------------
+
+  private async assertFolderInCompany(companyId: string, folderId: string): Promise<void> {
+    const folder = await this.prisma.folder.findFirst({
+      where: { id: folderId, companyId, archivedAt: null },
+      select: { id: true },
+    });
+    if (!folder) {
+      throw new BadRequestException({
+        error: 'FolderNotFound',
+        folderId,
+        message: 'Target folder does not exist in this company (or is archived).',
+      });
+    }
+  }
+
+  private async assertSlugFree(
+    companyId: string,
+    slug: string,
+    excludeId: string | null,
+  ): Promise<void> {
+    const clash = await this.prisma.article.findFirst({
+      where: {
+        companyId,
+        slug,
+        archivedAt: null,
+        ...(excludeId ? { NOT: { id: excludeId } } : {}),
+      },
+      select: { id: true },
+    });
+    if (clash) {
+      throw new ConflictException({
+        error: 'SlugTaken',
+        slug,
+        message: `Another active article already uses slug "${slug}".`,
+      });
+    }
+  }
+
+  private slugifyTitle(title: string): string {
+    return (
+      title
+        .toLowerCase()
+        .normalize('NFKD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/(^-|-$)/g, '')
+        .slice(0, 80) || 'untitled'
+    );
+  }
+
+  private serialize(row: Article, role: UserRole): SerializedArticle {
+    // Client users never see the raw authoring doc for hidden articles —
+    // the list/get filters catch that before we get here. We still scrub
+    // the `updatedBy` field for symmetry with Asset serialization.
+    const _ = role;
+    return {
+      id: row.id,
+      companyId: row.companyId,
+      folderId: row.folderId,
+      title: row.title,
+      slug: row.slug,
+      content: row.content,
+      contentPlaintext: row.contentPlaintext,
+      excerpt: row.excerpt,
+      visibleToClients: row.visibleToClients,
+      archivedAt: row.archivedAt,
+      createdBy: row.createdBy,
+      updatedBy: row.updatedBy,
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
+    };
+  }
+}

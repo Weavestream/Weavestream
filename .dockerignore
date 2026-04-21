@@ -1,0 +1,22 @@
+node_modules
+**/node_modules
+**/dist
+**/.next
+**/coverage
+**/*.tsbuildinfo
+.git
+.github
+.env
+.env.*
+!.env.example
+packages/db/.env
+*.log
+.DS_Store
+
+# Private project artifacts — keep out of image build context
+Build_Plan
+DECISIONS.md
+.claude
+docs/PHASE_*.md
+docs/PHASE_*_NOTE.md
+docs/permissions.md

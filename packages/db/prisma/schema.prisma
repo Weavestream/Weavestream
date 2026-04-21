@@ -1,0 +1,652 @@
+// Weavestream — schema.
+// Phase 1 auth models + Phase 2 RBAC/invite additions + Phase 3 asset layout
+// and asset data plane + Phase 4 documentation plane (Article, Folder,
+// Upload) + Phase 5 SystemSetting singleton (workspace branding + tenant
+// term) + Phase 6 SearchIndex (full-text search) + Phase 8 MonitoredDomain
+// / DomainCheck (domain & SSL monitor).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  SUPER_ADMIN
+  OPERATOR
+  CONTRACTOR
+  CLIENT_USER
+}
+
+enum MembershipRole {
+  OPERATOR_FULL
+  OPERATOR_READONLY
+  CLIENT_ADMIN
+  CLIENT_VIEWER
+}
+
+// Phase 3: every AssetField has exactly one FieldType. The type is immutable
+// after creation because changing it would invalidate the JSONB shape of
+// every stored AssetFieldValue — the builder UI shows "Remove + add new"
+// as the only path to reshape a field. `RICH_TEXT` and `FILE` are
+// first-class in the enum but their editors are stubbed in Phase 3 and
+// fully implemented in Phase 4.
+// Phase 8 domain monitor. Aggregated per-sub-check result:
+//   OK   – check succeeded, no action needed
+//   WARN – soft warning (e.g. cert valid but chain shorter than
+//          expected, or close to expiry but not yet within threshold)
+//   FAIL – check failed (network error, invalid cert, missing records)
+//   SKIP – the operator disabled this sub-check on the domain
+enum CheckResult {
+  OK
+  WARN
+  FAIL
+  SKIP
+}
+
+// Phase 8: denormalised latest status. Listed here so the list view
+// doesn't need to join DomainCheck for every row — the processor
+// writes both the child DomainCheck row and the parent's
+// `latestStatus` in the same transaction.
+enum DomainStatus {
+  OK
+  EXPIRING
+  EXPIRED
+  FAIL
+  UNKNOWN
+}
+
+// Phase 9a: coarse classification for a Company row. Kept as a fixed enum
+// (rather than a free-form string or a lookup table) so the list/table
+// renderers can style each type consistently without another round-trip
+// to the DB. New values are cheap to add later via a follow-up migration
+// if operators request more granularity.
+enum CompanyType {
+  CLIENT
+  PROSPECT
+  VENDOR
+  INTERNAL
+  PARTNER
+  OTHER
+}
+
+// Phase 9b.1: per-user UI preferences. `SYSTEM` defers to the browser's
+// `prefers-color-scheme` media query at paint time (via a nonced inline
+// script in the root layout) so returning users never see a wrong-theme
+// flash before hydration.
+enum UiTheme {
+  DARK
+  LIGHT
+  SYSTEM
+}
+
+// Phase 9b.1: accent palette. Mirrors the five [data-accent="…"] swatches
+// in apps/web/src/styles/tokens.css. Keep this enum in lock-step with that
+// file — adding an accent requires both a CSS block and a migration.
+enum UiAccent {
+  LIME
+  AMBER
+  IRIS
+  CORAL
+  TEAL
+}
+
+enum FieldType {
+  TEXT
+  TEXTAREA
+  RICH_TEXT
+  NUMBER
+  DATE
+  DATETIME
+  BOOLEAN
+  DROPDOWN
+  MULTISELECT
+  EMAIL
+  PHONE
+  URL
+  ASSET_REFERENCE
+  VAULTWARDEN_LINK
+  FILE
+  TAGS
+  IP_ADDRESS
+}
+
+model User {
+  id                        String    @id @default(uuid()) @db.Uuid
+  email                     String    @unique
+  name                      String
+  passwordHash              String?   @map("password_hash")
+  role                      UserRole  @default(OPERATOR)
+  isActive                  Boolean   @default(true) @map("is_active")
+  mfaEnabled                Boolean   @default(false) @map("mfa_enabled")
+  mfaSecretEncrypted        String?   @map("mfa_secret_encrypted")
+  mfaEnforcementCompletedAt DateTime? @map("mfa_enforcement_completed_at")
+  deactivatedAt             DateTime? @map("deactivated_at")
+  timezone                  String?
+  // Phase 6: per-user defaults for the command palette. Shape:
+  // { defaultComprehensive: boolean, defaultGlobal: boolean }.
+  // NULL = both toggles off. Validated by userSearchDefaultsSchema.
+  searchDefaults            Json?     @map("search_defaults")
+  // Phase 9b.1: appearance preferences. Server-persisted so the choice
+  // follows a user across devices. The auth layer mirrors both values
+  // into the non-HttpOnly `ws_ui` cookie so the root layout can paint
+  // the correct theme on the very first byte without calling /auth/me.
+  uiTheme                   UiTheme   @default(SYSTEM) @map("ui_theme")
+  uiAccent                  UiAccent  @default(LIME) @map("ui_accent")
+  createdAt                 DateTime  @default(now()) @map("created_at")
+  updatedAt                 DateTime  @updatedAt @map("updated_at")
+  lastLoginAt               DateTime? @map("last_login_at")
+
+  memberships       Membership[]
+  sessions          Session[]
+  auditLogs         AuditLog[]       @relation("AuditActor")
+  setupTokens       UserSetupToken[] @relation("SetupTokenOwner")
+  issuedSetupTokens UserSetupToken[] @relation("SetupTokenCreator")
+  starredCompanies  StarredCompany[]
+
+  @@map("users")
+}
+
+model Company {
+  id         String    @id @default(uuid()) @db.Uuid
+  name       String
+  slug       String    @unique
+  isActive   Boolean   @default(true) @map("is_active")
+  notes      String?
+  archivedAt DateTime? @map("archived_at")
+  createdBy  String?   @map("created_by") @db.Uuid
+  createdAt  DateTime  @default(now()) @map("created_at")
+  updatedAt  DateTime  @updatedAt @map("updated_at")
+
+  // Phase 9a: expanded info. Every new column is optional (except `type`
+  // which defaults to CLIENT) so existing rows need no backfill.
+  type            CompanyType @default(CLIENT)
+  quickNotes      String?     @map("quick_notes")
+  // Self-FK for parent organisations. Cycle prevention lives in the
+  // service layer (`ensureNoParentCycle`) — Postgres has no native
+  // support for cyclic-check constraints on a graph like this.
+  parentCompanyId String?     @map("parent_company_id") @db.Uuid
+  parent          Company?    @relation("CompanyHierarchy", fields: [parentCompanyId], references: [id], onDelete: SetNull)
+  children        Company[]   @relation("CompanyHierarchy")
+
+  // Primary contact — a lightweight inline snapshot rather than a full
+  // Contacts table. Phase 9a scope is explicitly one contact per
+  // company; promote to a real model if operators later ask for more.
+  contactName  String? @map("contact_name")
+  contactTitle String? @map("contact_title")
+  contactEmail String? @map("contact_email")
+  contactPhone String? @map("contact_phone")
+
+  generalEmail String? @map("general_email")
+  phone        String?
+  fax          String?
+  website      String?
+
+  addressLine1 String? @map("address_line1")
+  addressLine2 String? @map("address_line2")
+  city         String?
+  region       String?
+  postalCode   String? @map("postal_code")
+  country      String?
+
+  // Reuses the existing `Upload` system — one company owns at most one
+  // logo, one upload backs at most one company.
+  logoUploadId String? @unique @map("logo_upload_id") @db.Uuid
+  logoUpload   Upload? @relation("CompanyLogo", fields: [logoUploadId], references: [id], onDelete: SetNull)
+
+  memberships Membership[]
+  starredBy   StarredCompany[]
+
+  @@index([type])
+  @@index([parentCompanyId])
+  @@map("companies")
+}
+
+model Membership {
+  id        String         @id @default(uuid()) @db.Uuid
+  userId    String         @map("user_id") @db.Uuid
+  companyId String         @map("company_id") @db.Uuid
+  role      MembershipRole
+  expiresAt DateTime?      @map("expires_at")
+  createdBy String?        @map("created_by") @db.Uuid
+  createdAt DateTime       @default(now()) @map("created_at")
+  updatedAt DateTime       @updatedAt @map("updated_at")
+  revokedAt DateTime?      @map("revoked_at")
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  // Active uniqueness is enforced by a partial unique index on
+  // (user_id, company_id) WHERE revoked_at IS NULL, added in the
+  // phase2_companies_users_memberships migration. Historical revoked
+  // rows are allowed so revocation never blocks re-adding a user.
+  @@index([userId])
+  @@index([companyId])
+  @@map("memberships")
+}
+
+// Phase 9b.3: per-user "starred" companies — pins a company to the
+// operator dashboard's Starred panel. Separate from Membership so a
+// SUPER_ADMIN can star a company without also taking a per-company
+// role (useful when monitoring an account without being on the hook
+// to edit it). Cascade-on-delete so removing either side cleans up.
+model StarredCompany {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  companyId String   @map("company_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, companyId])
+  @@index([userId, createdAt])
+  @@map("starred_companies")
+}
+
+model Session {
+  id               String    @id @default(uuid()) @db.Uuid
+  userId           String    @map("user_id") @db.Uuid
+  refreshTokenHash String    @unique @map("refresh_token_hash")
+  mfaPending       Boolean   @default(false) @map("mfa_pending")
+  ip               String
+  userAgent        String    @map("user_agent")
+  createdAt        DateTime  @default(now()) @map("created_at")
+  expiresAt        DateTime  @map("expires_at")
+  revokedAt        DateTime? @map("revoked_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("sessions")
+}
+
+model UserSetupToken {
+  id         String    @id @default(uuid()) @db.Uuid
+  userId     String    @map("user_id") @db.Uuid
+  tokenHash  String    @unique @map("token_hash")
+  expiresAt  DateTime  @map("expires_at")
+  consumedAt DateTime? @map("consumed_at")
+  createdBy  String?   @map("created_by") @db.Uuid
+  createdAt  DateTime  @default(now()) @map("created_at")
+
+  user    User  @relation("SetupTokenOwner", fields: [userId], references: [id], onDelete: Cascade)
+  creator User? @relation("SetupTokenCreator", fields: [createdBy], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@map("user_setup_tokens")
+}
+
+model AuditLog {
+  id         String   @id @default(uuid()) @db.Uuid
+  actorId    String?  @map("actor_id") @db.Uuid
+  action     String
+  entityType String   @map("entity_type")
+  entityId   String?  @map("entity_id")
+  companyId  String?  @map("company_id") @db.Uuid
+  ip         String?
+  userAgent  String?  @map("user_agent")
+  before     Json?
+  after      Json?
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  actor User? @relation("AuditActor", fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([companyId, createdAt])
+  @@index([actorId, createdAt])
+  @@index([entityType, entityId])
+  @@map("audit_log")
+}
+
+// Phase 3: AssetLayout is *global* — every company uses the exact same
+// catalog. There is deliberately no `companyId` column (see DECISIONS.md
+// D-007 layouts-are-global). Only SUPER_ADMIN can mutate layouts; every
+// other role has read access via `GET /layouts` so they can render forms
+// and lists.
+model AssetLayout {
+  id         String    @id @default(uuid()) @db.Uuid
+  name       String
+  slug       String
+  icon       String
+  color      String
+  isActive   Boolean   @default(true) @map("is_active")
+  // Operator-curated ordering. Drives the company-scoped sidebar's
+  // Layouts section so related categories can be grouped together
+  // (e.g. Workstations / Servers / Network gear). Tie-breaks
+  // alphabetically on `name`.
+  position   Int       @default(0)
+  version    Int       @default(1)
+  archivedAt DateTime? @map("archived_at")
+  createdBy  String?   @map("created_by") @db.Uuid
+  createdAt  DateTime  @default(now()) @map("created_at")
+  updatedAt  DateTime  @updatedAt @map("updated_at")
+
+  fields AssetField[]
+  assets Asset[]
+
+  // Active-slug uniqueness enforced by a partial unique index on
+  // (slug) WHERE archived_at IS NULL, added in the Phase 3 migration.
+  @@index([isActive, archivedAt, position])
+  @@map("asset_layouts")
+}
+
+// Phase 3: fields of an AssetLayout. `options` is a JSONB blob whose shape
+// depends on `fieldType` — validated at write time by FieldTypeStrategy
+// registry on the API. For DATE/DATETIME, `options.isExpiry` drives the
+// warranty-countdown chip in the mock's AssetDetail header and the
+// colour-coded warranty cell in AssetList.
+model AssetField {
+  id                 String    @id @default(uuid()) @db.Uuid
+  assetLayoutId      String    @map("asset_layout_id") @db.Uuid
+  name               String
+  slug               String
+  fieldType          FieldType @map("field_type")
+  position           Int
+  isRequired         Boolean   @default(false) @map("is_required")
+  isUniquePerCompany Boolean   @default(false) @map("is_unique_per_company")
+  visibleToClients   Boolean   @default(true) @map("visible_to_clients")
+  isPrimary          Boolean   @default(false) @map("is_primary")
+  // When true, the field is rendered as a column in the per-layout
+  // asset table view. The primary field is always shown regardless —
+  // the table renderer treats `isPrimary || showInTable` as the
+  // column-inclusion predicate, so this flag is effectively a no-op
+  // on the primary and the builder UI locks the toggle there.
+  // RICH_TEXT and FILE are rejected at the API layer because their
+  // cell representations are unreadable in a table.
+  showInTable        Boolean   @default(false) @map("show_in_table")
+  options            Json      @default("{}")
+  archivedAt         DateTime? @map("archived_at")
+  createdAt          DateTime  @default(now()) @map("created_at")
+  updatedAt          DateTime  @updatedAt @map("updated_at")
+
+  assetLayout AssetLayout       @relation(fields: [assetLayoutId], references: [id], onDelete: Cascade)
+  values      AssetFieldValue[]
+
+  // (assetLayoutId, slug) WHERE archived_at IS NULL and "at most one primary
+  // per layout" are both enforced by partial unique indexes in the migration.
+  @@index([assetLayoutId, position])
+  @@map("asset_fields")
+}
+
+model Asset {
+  id             String    @id @default(uuid()) @db.Uuid
+  companyId      String    @map("company_id") @db.Uuid
+  assetLayoutId  String    @map("asset_layout_id") @db.Uuid
+  name           String
+  externalId     String?   @map("external_id")
+  externalSource String?   @map("external_source")
+  archivedAt     DateTime? @map("archived_at")
+  createdBy      String?   @map("created_by") @db.Uuid
+  updatedBy      String?   @map("updated_by") @db.Uuid
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  // `onDelete: Restrict` — a layout with any asset cannot be hard-deleted,
+  // only archived. This matches the builder's "archive" affordance.
+  assetLayout AssetLayout       @relation(fields: [assetLayoutId], references: [id], onDelete: Restrict)
+  fieldValues AssetFieldValue[]
+
+  @@index([companyId, assetLayoutId, archivedAt])
+  @@index([companyId, name])
+  @@index([companyId, updatedAt])
+  @@map("assets")
+}
+
+// `companyId` is denormalized from Asset so the tenant middleware (see
+// apps/api/src/prisma/tenant-scoped-models.ts) can enforce scope on
+// bulk writes and on upserts keyed by the (assetId, assetFieldId)
+// composite — neither of which can carry a relational filter. The
+// column is kept in sync by the service layer (always set from the
+// parent asset on create) and enforced by the FK below; since an
+// asset's company never changes, it can be treated as immutable.
+model AssetFieldValue {
+  id           String   @id @default(uuid()) @db.Uuid
+  companyId    String   @map("company_id") @db.Uuid
+  assetId      String   @map("asset_id") @db.Uuid
+  assetFieldId String   @map("asset_field_id") @db.Uuid
+  value        Json
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  asset      Asset      @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  assetField AssetField @relation(fields: [assetFieldId], references: [id], onDelete: Cascade)
+
+  @@unique([assetId, assetFieldId])
+  @@index([assetFieldId])
+  @@index([companyId, assetFieldId])
+  @@map("asset_field_values")
+}
+
+// Phase 4: nested folder tree scoped per company. There is no "global"
+// folder — an operator who wants a workspace for MSP-internal docs
+// creates a regular Company tenant and its folders live under that
+// company's id (see DECISIONS.md D-010).
+model Folder {
+  id         String    @id @default(uuid()) @db.Uuid
+  companyId  String    @map("company_id") @db.Uuid
+  parentId   String?   @map("parent_id") @db.Uuid
+  name       String
+  slug       String
+  icon       String?
+  position   Int       @default(0)
+  archivedAt DateTime? @map("archived_at")
+  createdBy  String?   @map("created_by") @db.Uuid
+  createdAt  DateTime  @default(now()) @map("created_at")
+  updatedAt  DateTime  @updatedAt @map("updated_at")
+
+  parent   Folder?   @relation("FolderTree", fields: [parentId], references: [id], onDelete: Restrict)
+  children Folder[]  @relation("FolderTree")
+  articles Article[]
+
+  // Active-slug uniqueness per parent enforced by a partial unique index
+  // (company_id, COALESCE(parent_id, '00000000-...'), slug) WHERE archived_at IS NULL.
+  @@index([companyId, parentId, position])
+  @@map("folders")
+}
+
+// Phase 4: article content. All articles carry a required companyId — no
+// nullable escape hatch. "Internal" docs are just articles inside a
+// company tenant (see DECISIONS.md D-010).
+model Article {
+  id               String    @id @default(uuid()) @db.Uuid
+  companyId        String    @map("company_id") @db.Uuid
+  folderId         String?   @map("folder_id") @db.Uuid
+  title            String
+  slug             String
+  content          Json
+  contentPlaintext String    @map("content_plaintext")
+  excerpt          String?
+  visibleToClients Boolean   @default(true) @map("visible_to_clients")
+  archivedAt       DateTime? @map("archived_at")
+  createdBy        String?   @map("created_by") @db.Uuid
+  updatedBy        String?   @map("updated_by") @db.Uuid
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
+
+  folder Folder? @relation(fields: [folderId], references: [id], onDelete: SetNull)
+
+  // Active-slug uniqueness per company enforced by a partial unique index
+  // (company_id, slug) WHERE archived_at IS NULL.
+  @@index([companyId, folderId])
+  @@index([companyId, updatedAt])
+  @@map("articles")
+}
+
+// Phase 4: every Upload is hard-scoped to a company (D-012). Storage keys
+// always start with `company/<companyId>/…`. `attachedToType` /
+// `attachedToId` are denormalised so the photos gallery can filter
+// without scanning JSON.
+model Upload {
+  id             String    @id @default(uuid()) @db.Uuid
+  companyId      String    @map("company_id") @db.Uuid
+  uploaderId     String?   @map("uploader_id") @db.Uuid
+  filename       String
+  mimeType       String    @map("mime_type")
+  sizeBytes      Int       @map("size_bytes")
+  storageKey     String    @unique @map("storage_key")
+  sha256         String
+  isImage        Boolean   @default(false) @map("is_image")
+  width          Int?
+  height         Int?
+  thumbnailKey   String?   @map("thumbnail_key")
+  attachedToType String?   @map("attached_to_type")
+  attachedToId   String?   @map("attached_to_id") @db.Uuid
+  deletedAt      DateTime? @map("deleted_at")
+  createdAt      DateTime  @default(now()) @map("created_at")
+
+  // Phase 9a back-reference. Populated only when an operator sets this
+  // upload as a company logo; otherwise null.
+  companyLogo Company? @relation("CompanyLogo")
+
+  @@index([companyId, isImage, createdAt])
+  @@index([attachedToType, attachedToId])
+  @@index([companyId, deletedAt])
+  @@map("uploads")
+}
+
+// Phase 3: polymorphic link table. Scaffolded + auto-populated from
+// ASSET_REFERENCE field writes only. No Relation API/UI ships yet —
+// that lands in Phase 5.
+model Relation {
+  id           String   @id @default(uuid()) @db.Uuid
+  companyId    String   @map("company_id") @db.Uuid
+  sourceType   String   @map("source_type")
+  sourceId     String   @map("source_id") @db.Uuid
+  targetType   String   @map("target_type")
+  targetId     String   @map("target_id") @db.Uuid
+  relationType String   @map("relation_type")
+  createdBy    String?  @map("created_by") @db.Uuid
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  @@unique([sourceType, sourceId, targetType, targetId, relationType])
+  @@index([companyId, sourceType, sourceId])
+  @@index([companyId, targetType, targetId])
+  @@map("relations")
+}
+
+// Phase 6: denormalised full-text search index across Asset, Article,
+// and Upload rows. One table rather than generated columns on each
+// source model because asset bodies are assembled from many
+// AssetFieldValue rows at the API layer (see SearchIndexService), and
+// because a single table simplifies ranking/querying across kinds.
+//
+// `body_public_tsv` and `body_internal_tsv` are `GENERATED ALWAYS AS
+// (setweight(to_tsvector('english', coalesce(title, '')), 'A') ||
+//  setweight(to_tsvector('english', coalesce(body_*, '')), 'B')) STORED`.
+// Prisma models them as `Unsupported("tsvector")` because it has no
+// first-class generated-column support; raw SQL owns the definition
+// (see packages/db/prisma/migrations/0009_phase6_search_index).
+//
+// Article + Upload rows are maintained by DB triggers (their plaintext
+// representation already lives in a column); Asset rows are maintained
+// by the API's SearchIndexService because per-field visibility and the
+// FieldTypeStrategy.toPlaintext logic live in TypeScript.
+model SearchIndex {
+  entityType       String    @map("entity_type")
+  entityId         String    @map("entity_id") @db.Uuid
+  companyId        String    @map("company_id") @db.Uuid
+  title            String
+  bodyPublic       String    @map("body_public")
+  bodyInternal     String    @map("body_internal")
+  visibleToClients Boolean   @default(true) @map("visible_to_clients")
+  layoutId         String?   @map("layout_id") @db.Uuid
+  archivedAt       DateTime? @map("archived_at")
+  updatedAt        DateTime  @map("updated_at")
+
+  bodyPublicTsv   Unsupported("tsvector") @map("body_public_tsv")
+  bodyInternalTsv Unsupported("tsvector") @map("body_internal_tsv")
+
+  @@id([entityType, entityId])
+  @@index([companyId, updatedAt(sort: Desc)])
+  @@index([companyId, entityType, archivedAt])
+  @@map("search_index")
+}
+
+// Phase 5: instance-wide branding + tenant terminology. Singleton row
+// (id = 'singleton') seeded in the migration so callers never have to
+// create it. Edited only via SUPER_ADMIN through the /admin/settings
+// page; see DECISIONS.md D-014 (branding-is-a-setting-not-a-build-flag).
+//
+// `workspace*` drives the sidebar workspace chip. `tenantTerm*` is the
+// noun used everywhere the UI would otherwise say "Company/Companies"
+// — Hudu-style configurable (Client, Department, Tenant, Site, etc.).
+// Stored as free-form strings so an operator can type a custom term;
+// the settings form offers a preset dropdown for the common cases.
+model SystemSetting {
+  id                   String   @id @default("singleton")
+  workspaceName        String   @default("My Company") @map("workspace_name")
+  workspaceSubtitle    String   @default("workspace") @map("workspace_subtitle")
+  tenantTermSingular   String   @default("Company") @map("tenant_term_singular")
+  tenantTermPlural     String   @default("Companies") @map("tenant_term_plural")
+  tenantTermPossessive String?  @map("tenant_term_possessive")
+  updatedAt            DateTime @updatedAt @map("updated_at")
+  updatedBy            String?  @map("updated_by") @db.Uuid
+
+  @@map("system_settings")
+}
+
+// Phase 8: tenant-scoped "watch this domain" record. One row per
+// hostname the MSP wants monitored. Check toggles + threshold are
+// operator-editable; `visibleToClients` controls whether CLIENT_*
+// roles can see the row on the portal (default false — MSP-internal).
+//
+// The denormalised expiry + latestStatus columns let the list view
+// render without joining DomainCheck; the processor updates them
+// inside the same transaction that writes a new DomainCheck.
+//
+// Active uniqueness on (company_id, hostname) is enforced by a partial
+// unique index in raw SQL — see migration 0011_phase8_domain_monitor —
+// so an archived row doesn't block re-adding a hostname, mirroring the
+// article/folder pattern.
+model MonitoredDomain {
+  id                 String       @id @default(uuid()) @db.Uuid
+  companyId          String       @map("company_id") @db.Uuid
+  hostname           String
+  checkWhois         Boolean      @default(true) @map("check_whois")
+  checkDns           Boolean      @default(true) @map("check_dns")
+  checkTls           Boolean      @default(true) @map("check_tls")
+  alertThresholdDays Int          @default(30) @map("alert_threshold_days")
+  // D-020: per-domain client visibility. Default false → MSP-internal.
+  visibleToClients   Boolean      @default(false) @map("visible_to_clients")
+  // Denormalised latest-run summary, updated by DomainChecksProcessor.
+  lastCheckedAt      DateTime?    @map("last_checked_at")
+  whoisExpiresAt     DateTime?    @map("whois_expires_at")
+  tlsExpiresAt       DateTime?    @map("tls_expires_at")
+  latestStatus       DomainStatus @default(UNKNOWN) @map("latest_status")
+  archivedAt         DateTime?    @map("archived_at")
+  createdBy          String?      @map("created_by") @db.Uuid
+  createdAt          DateTime     @default(now()) @map("created_at")
+  updatedAt          DateTime     @updatedAt @map("updated_at")
+
+  checks DomainCheck[]
+
+  @@index([companyId, archivedAt])
+  @@index([companyId, latestStatus])
+  @@map("monitored_domains")
+}
+
+// Phase 8: append-only history of every check run. Kept forever — the
+// UI only renders the last 30 per domain but audit / debugging wants
+// the full trail. `details` holds the structured payload (see
+// `packages/shared/src/schemas/domain.ts#domainCheckDetailsSchema`).
+model DomainCheck {
+  id                String       @id @default(uuid()) @db.Uuid
+  monitoredDomainId String       @map("monitored_domain_id") @db.Uuid
+  companyId         String       @map("company_id") @db.Uuid
+  checkedAt         DateTime     @default(now()) @map("checked_at")
+  whoisStatus       CheckResult? @map("whois_status")
+  dnsStatus         CheckResult? @map("dns_status")
+  tlsStatus         CheckResult? @map("tls_status")
+  whoisExpiresAt    DateTime?    @map("whois_expires_at")
+  tlsExpiresAt      DateTime?    @map("tls_expires_at")
+  details           Json
+  error             String?
+
+  domain MonitoredDomain @relation(fields: [monitoredDomainId], references: [id], onDelete: Cascade)
+
+  @@index([monitoredDomainId, checkedAt(sort: Desc)])
+  @@index([companyId, checkedAt(sort: Desc)])
+  @@map("domain_checks")
+}
