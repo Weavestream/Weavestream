@@ -4,15 +4,20 @@
 # node:20-alpine with a non-root user.
 # ───────────────────────────────────────────────────────────────────────
 FROM node:20-alpine AS base
-# libvips + vips-dev are the native backend for `sharp` used by the
-# Phase 4 inline thumbnailer (see DECISIONS.md D-011). vips-dev is only
-# needed at build time to compile sharp's bindings; the runner stage
-# installs just the runtime libs.
-RUN apk add --no-cache libc6-compat openssl tini vips vips-dev
+# `vips` is sharp's runtime dependency. `vips-dev` + `build-base` +
+# `python3` + `node-gyp` are only needed at build time so sharp can
+# compile its native bindings from source when pnpm's prebuilt binary
+# resolution skips the current arch (the current lockfile, generated
+# on darwin-arm64, does not always hydrate @img/sharp-linuxmusl-*
+# under pnpm 9's optional-dep filtering). The runner stage installs
+# just `vips` so the final image stays slim.
+RUN apk add --no-cache \
+      libc6-compat openssl tini \
+      vips vips-dev build-base python3
 ENV PNPM_HOME="/pnpm" \
     PATH="/pnpm:$PATH" \
     COREPACK_ENABLE_DOWNLOAD_PROMPT=0
-RUN corepack enable
+RUN corepack enable && npm install -g node-gyp
 
 WORKDIR /repo
 
