@@ -7,18 +7,46 @@ updates:
       day: "monday"
     open-pull-requests-limit: 10
     groups:
+      # Prisma CLI + client must be on the same major — grouping them
+      # prevents dependabot from opening a PR that bumps one and leaves
+      # the other pinned on the old major (incompatible ABI).
+      prisma:
+        patterns:
+          - "prisma"
+          - "@prisma/client"
       nest:
         patterns:
           - "@nestjs/*"
+      next:
+        patterns:
+          - "next"
+          - "eslint-config-next"
+          - "@next/*"
       tiptap:
         patterns:
           - "@tiptap/*"
       aws-sdk:
         patterns:
           - "@aws-sdk/*"
+      zxcvbn:
+        patterns:
+          - "@zxcvbn-ts/*"
       types:
         patterns:
           - "@types/*"
+    # Major-version bumps on these packages are always planned upgrade
+    # projects, not drive-by PRs. Ignore them at the dependabot level
+    # and re-enable (by removing the entry) when we're ready to take
+    # the upgrade on intentionally. Patch + minor updates still flow.
+    ignore:
+      - dependency-name: "prisma"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@prisma/client"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "next"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@nestjs/*"
+        update-types: ["version-update:semver-major"]
     labels:
       - "dependencies"
 
