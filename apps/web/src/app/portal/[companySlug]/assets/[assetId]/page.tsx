@@ -14,6 +14,7 @@ import {
 import { Icon, LayoutSwatch, Panel, Tag } from '../../../../../components/ui';
 import { RichTextView } from '../../../../../components/editor/rich-text-view';
 import { AttachmentsPanel } from '../../../../../components/upload/attachments-panel';
+import { CredentialsPanel } from '../../../../../components/passwords/credentials-panel';
 
 /**
  * Portal asset detail (read-only mirror of the admin page).
@@ -212,6 +213,12 @@ export default async function PortalAssetDetailPage({
           </div>
 
           <aside style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <CredentialsPanel
+              companyId={membership.company.id}
+              assetId={asset.id}
+              mode="portal"
+              companySlug={companySlug}
+            />
             <AttachmentsPanel
               companyId={membership.company.id}
               entityType="asset"

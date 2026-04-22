@@ -13,6 +13,7 @@ import {
 import type { Term } from '../../lib/term';
 import { LayoutSwatch } from '../ui';
 import { SidebarActions } from './sidebar-actions';
+import { SidebarToolbar } from './sidebar-toolbar';
 import {
   Sidebar,
   type SidebarSection,
@@ -60,6 +61,9 @@ export function CompanyShell({
   domainCount,
   domainBadge,
   portalHasDomains = true,
+  passwordCount,
+  passwordStaleBadge,
+  portalHasPasswords = true,
 }: {
   me: Me;
   company: Pick<CompanyListItem, 'id' | 'name' | 'slug'>;
@@ -87,6 +91,21 @@ export function CompanyShell({
    * dead link. Defaults to true so admin pages don't need to set it.
    */
   portalHasDomains?: boolean;
+  /**
+   * Total number of active (non-archived) passwords visible to the
+   * current viewer. Renders as a dim count on the Passwords entry.
+   */
+  passwordCount?: number;
+  /**
+   * Number of passwords flagged as stale (rotation reminder elapsed or
+   * `expires_at` in the past). Renders as a warning-toned badge.
+   */
+  passwordStaleBadge?: number;
+  /**
+   * Portal-only toggle — hide the Passwords entry entirely when the
+   * tenant has no client-visible credentials. Defaults to true.
+   */
+  portalHasPasswords?: boolean;
 }) {
   const isAdmin = mode === 'admin';
   const base = isAdmin
@@ -111,6 +130,7 @@ export function CompanyShell({
         .filter((l) => (counts[l.id] ?? 0) > 0);
 
   const showDomains = isAdmin || portalHasDomains;
+  const showPasswords = isAdmin || portalHasPasswords;
   // Portal nav is intentionally a subset: no Photos, no All-assets
   // catch-all. Each content surface shows up only when the tenant
   // actually has something in it (layouts are filtered by count above,
@@ -148,6 +168,21 @@ export function CompanyShell({
                 badge:
                   domainBadge && domainBadge > 0
                     ? String(domainBadge)
+                    : undefined,
+              },
+            ]
+          : []),
+        ...(showPasswords
+          ? [
+              {
+                id: 'passwords',
+                label: 'Passwords',
+                icon: 'lock' as const,
+                href: `${base}/passwords`,
+                count: passwordCount,
+                badge:
+                  passwordStaleBadge && passwordStaleBadge > 0
+                    ? String(passwordStaleBadge)
                     : undefined,
               },
             ]
@@ -282,6 +317,7 @@ export function CompanyShell({
           user={sidebarUser}
           activeId={activeId}
           footerAction={<SidebarActions />}
+          footerToolbar={<SidebarToolbar companyId={company.id} />}
           className="hide-on-mobile"
         />
         <main
@@ -303,6 +339,7 @@ export function CompanyShell({
                 user={sidebarUser}
                 activeId={activeId}
                 footerAction={<SidebarActions />}
+                footerToolbar={<SidebarToolbar companyId={company.id} />}
                 variant="drawer"
               />
             }

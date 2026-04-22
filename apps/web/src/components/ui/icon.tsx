@@ -157,6 +157,29 @@ export const Icon = {
       <path d="M7 9l6-6M11 5l2 2" />
     </IconBase>
   ),
+  lock: (p: IconProps) => (
+    <IconBase {...p}>
+      <rect x="3" y="7" width="10" height="7" rx="1" />
+      <path d="M5 7V5a3 3 0 0 1 6 0v2" />
+    </IconBase>
+  ),
+  lockOpen: (p: IconProps) => (
+    <IconBase {...p}>
+      <rect x="3" y="7" width="10" height="7" rx="1" />
+      <path d="M5 7V5a3 3 0 0 1 6 0" />
+    </IconBase>
+  ),
+  eye: (p: IconProps) => (
+    <IconBase {...p}>
+      <path d="M1 8s2.5-4.5 7-4.5S15 8 15 8s-2.5 4.5-7 4.5S1 8 1 8z" />
+      <circle cx="8" cy="8" r="2" />
+    </IconBase>
+  ),
+  eyeOff: (p: IconProps) => (
+    <IconBase {...p}>
+      <path d="M3 3l10 10M1 8s2.5-4.5 7-4.5c1.4 0 2.6.4 3.6 1M15 8s-2.5 4.5-7 4.5c-1.4 0-2.6-.4-3.6-1" />
+    </IconBase>
+  ),
   tag: (p: IconProps) => (
     <IconBase {...p}>
       <path d="M2 2h5l7 7-5 5-7-7V2z" />
@@ -290,6 +313,18 @@ export const Icon = {
       <rect x="2" y="3" width="12" height="10" rx="0.5" />
       <circle cx="6" cy="7" r="1" />
       <path d="M2 11l3-3 3 3 2-2 4 4" />
+    </IconBase>
+  ),
+  sparkles: (p: IconProps) => (
+    <IconBase {...p}>
+      <path d="M6 2l1 3 3 1-3 1-1 3-1-3-3-1 3-1 1-3z" />
+      <path d="M11 8l0.6 1.8 1.8 0.6-1.8 0.6L11 12.8l-0.6-1.8-1.8-0.6 1.8-0.6L11 8z" />
+    </IconBase>
+  ),
+  refresh: (p: IconProps) => (
+    <IconBase {...p}>
+      <path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9" />
+      <path d="M13.5 2v3.5H10" />
     </IconBase>
   ),
 };

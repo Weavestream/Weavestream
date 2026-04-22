@@ -10,6 +10,7 @@ import { AuditLogService } from './audit/audit.service.js';
 import { SearchIndexService } from './search/search-index.service.js';
 import { QueuesService } from './queues/queues.service.js';
 import { DomainCheckJobNames, QueueNames } from '@weavestream/shared';
+import { SecretEncryptionService } from './crypto/secret-encryption.service.js';
 
 async function bootstrap() {
   const app = await NestFactory.createApplicationContext(AppModule, { bufferLogs: true });
@@ -39,6 +40,9 @@ async function bootstrap() {
       case 'check-domains':
         await checkDomains(app.get(QueuesService), prisma, audit, rest);
         break;
+      case 'reencrypt-passwords':
+        await reencryptPasswords(prisma, app.get(SecretEncryptionService), audit, rest);
+        break;
       default:
         printUsage();
         process.exit(cmd ? 1 : 0);
@@ -62,6 +66,12 @@ Commands:
   check-domains [--domain=<id>]  Enqueue a scheduled fan-out (default) or a single
                                  domain check via BullMQ; waits up to
                                  DOMAIN_CHECK_TIMEOUT_MS * DOMAIN_CHECK_ATTEMPTS.
+  reencrypt-passwords [--force]  Decrypt every Password/PasswordVersion ciphertext
+                                 and re-encrypt under the CURRENT encryption key
+                                 (PASSWORD_ENCRYPTION_KEY_KID). Default-skips rows
+                                 already on the current kid; pass --force to
+                                 re-wrap regardless (useful after an IV-format
+                                 migration).
 `);
 }
 
@@ -256,7 +266,7 @@ async function reindexSearch(
   });
   // eslint-disable-next-line no-console
   console.log(
-    `Reindexed ${counts.assets} assets, ${counts.articles} articles, ${counts.uploads} uploads, ${counts.domains} domains in ${ms}ms.`,
+    `Reindexed ${counts.assets} assets, ${counts.articles} articles, ${counts.uploads} uploads, ${counts.domains} domains, ${counts.passwords} passwords in ${ms}ms.`,
   );
 }
 
@@ -309,6 +319,153 @@ async function checkDomains(
   // eslint-disable-next-line no-console
   console.log(`Scheduled sweep ${jobId} ${outcome}. Worker continues processing fanned-out jobs in background.`);
   void DomainCheckJobNames;
+}
+
+/**
+ * Walks every ciphertext column on Password and PasswordVersion rows
+ * and re-encrypts under the current PASSWORD_ENCRYPTION_KEY_KID. The
+ * default pass is fast: it short-circuits when the blob is already on
+ * the current kid. `--force` decrypts every blob and re-encrypts it
+ * regardless — use only after a migration that changed the blob format
+ * and a simple kid rotation is not enough.
+ *
+ * Runs in batches to keep memory bounded on vaults with 100k+ rows and
+ * writes an audit row per password so an admin can diff before/after.
+ */
+async function reencryptPasswords(
+  prisma: PrismaService,
+  crypto: SecretEncryptionService,
+  audit: AuditLogService,
+  rest: string[],
+): Promise<void> {
+  const force = rest.includes('--force');
+  const BATCH = 100;
+
+  const started = Date.now();
+  let totalBlobs = 0;
+  let rotated = 0;
+  let passwordsTouched = 0;
+  let versionsTouched = 0;
+
+  const rewrap = (blob: string | null): { next: string | null; changed: boolean } => {
+    if (!blob) return { next: null, changed: false };
+    totalBlobs += 1;
+    if (force) {
+      const plaintext = crypto.decrypt(blob);
+      return { next: crypto.encrypt(plaintext), changed: true };
+    }
+    const result = crypto.reencryptIfStale(blob);
+    return { next: result.blob, changed: result.rotated };
+  };
+
+  // Passwords table — batched by id asc.
+  let cursor: string | null = null;
+  for (;;) {
+    const batch: Array<{
+      id: string;
+      companyId: string;
+      passwordCiphertext: string;
+      notesCiphertext: string | null;
+      totpSecretCiphertext: string | null;
+    }> = await prisma.password.findMany({
+      where: cursor ? { id: { gt: cursor } } : undefined,
+      orderBy: { id: 'asc' },
+      take: BATCH,
+      select: {
+        id: true,
+        companyId: true,
+        passwordCiphertext: true,
+        notesCiphertext: true,
+        totpSecretCiphertext: true,
+      },
+    });
+    if (batch.length === 0) break;
+    for (const row of batch) {
+      const pw = rewrap(row.passwordCiphertext);
+      const notes = rewrap(row.notesCiphertext);
+      const totp = rewrap(row.totpSecretCiphertext);
+      if (pw.changed || notes.changed || totp.changed) {
+        await prisma.password.update({
+          where: { id: row.id },
+          data: {
+            passwordCiphertext: pw.next ?? row.passwordCiphertext,
+            notesCiphertext: notes.next,
+            totpSecretCiphertext: totp.next,
+          },
+        });
+        rotated += [pw.changed, notes.changed, totp.changed].filter(Boolean).length;
+        passwordsTouched += 1;
+      }
+    }
+    cursor = batch[batch.length - 1]!.id;
+    if (batch.length < BATCH) break;
+  }
+
+  // PasswordVersions — same pattern. Versions are append-only so we're
+  // rewrapping immutable history, not mutating it.
+  cursor = null;
+  for (;;) {
+    const batch: Array<{
+      id: string;
+      passwordCiphertext: string;
+      notesCiphertext: string | null;
+      totpSecretCiphertext: string | null;
+    }> = await prisma.passwordVersion.findMany({
+      where: cursor ? { id: { gt: cursor } } : undefined,
+      orderBy: { id: 'asc' },
+      take: BATCH,
+      select: {
+        id: true,
+        passwordCiphertext: true,
+        notesCiphertext: true,
+        totpSecretCiphertext: true,
+      },
+    });
+    if (batch.length === 0) break;
+    for (const row of batch) {
+      const pw = rewrap(row.passwordCiphertext);
+      const notes = rewrap(row.notesCiphertext);
+      const totp = rewrap(row.totpSecretCiphertext);
+      if (pw.changed || notes.changed || totp.changed) {
+        await prisma.passwordVersion.update({
+          where: { id: row.id },
+          data: {
+            passwordCiphertext: pw.next ?? row.passwordCiphertext,
+            notesCiphertext: notes.next,
+            totpSecretCiphertext: totp.next,
+          },
+        });
+        versionsTouched += 1;
+      }
+    }
+    cursor = batch[batch.length - 1]!.id;
+    if (batch.length < BATCH) break;
+  }
+
+  const ms = Date.now() - started;
+  await audit.log({
+    actorId: null,
+    action: 'admin.reencrypt-passwords',
+    entityType: 'Password',
+    entityId: null,
+    ip: 'cli',
+    userAgent: 'cli',
+    before: null,
+    after: {
+      targetKid: crypto.currentKid,
+      force,
+      totalBlobs,
+      rotated,
+      passwordsTouched,
+      versionsTouched,
+      ms,
+    },
+  });
+
+  // eslint-disable-next-line no-console
+  console.log(
+    `Re-encrypt complete in ${ms}ms — scanned ${totalBlobs} blobs, rewrapped ${rotated} (${passwordsTouched} password rows, ${versionsTouched} version rows) onto kid=${crypto.currentKid}${force ? ' (force)' : ''}.`,
+  );
 }
 
 bootstrap().catch((err) => {

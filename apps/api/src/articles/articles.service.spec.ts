@@ -159,6 +159,14 @@ function makeStubs(initial: {
         );
       },
     },
+    // Minimal stub for the actor-name hydration pass; the tests don't
+    // assert on `createdByUser` / `updatedByUser`, but the service
+    // unconditionally batches one lookup so we have to satisfy it.
+    user: {
+      async findMany() {
+        return [] as Array<{ id: string; name: string; email: string }>;
+      },
+    },
   };
 
   const audit = { log: jest.fn(async () => {}) };

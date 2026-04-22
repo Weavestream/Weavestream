@@ -48,6 +48,20 @@ export const envSchema = z.object({
   COOKIE_SIGNING_KEY: base64Key(32),
   CSRF_SIGNING_KEY: base64Key(32),
 
+  // Phase 10: password vault encryption. AES-256-GCM key material for
+  // encrypting `passwords.password_ciphertext`, `notes_ciphertext`, and
+  // `totp_secret_ciphertext`. Supports rotation via the same
+  // `kid`-tagged scheme used by JWT: new key becomes
+  // PASSWORD_ENCRYPTION_KEY / _KID, the old pair is moved to
+  // PASSWORD_PREVIOUS_KEYS (comma-separated `kid:base64key`). Records
+  // written under an old kid decrypt seamlessly and are re-encrypted
+  // under the current kid on next update, or eagerly via
+  // `cli reencrypt-passwords`.
+  PASSWORD_ENCRYPTION_KEY: base64Key(32),
+  PASSWORD_ENCRYPTION_KEY_KID: z.string().min(1).max(32),
+  PASSWORD_PREVIOUS_KEYS: z.string().optional().default(''),
+  HIBP_ENABLED: boolish.default(true),
+
   ARGON2_MEMORY_KB: intFromString(16384, 1048576).default(65536),
   ARGON2_ITERATIONS: intFromString(1, 20).default(3),
   ARGON2_PARALLELISM: intFromString(1, 16).default(4),
@@ -153,7 +167,10 @@ export function loadEnv(raw: NodeJS.ProcessEnv = process.env): Env {
   return result.data;
 }
 
-export function parsePreviousKeys(v: string): Array<{ kid: string; key: Buffer }> {
+export function parsePreviousKeys(
+  v: string,
+  label = 'PREVIOUS_KEYS',
+): Array<{ kid: string; key: Buffer }> {
   if (!v) return [];
   return v
     .split(',')
@@ -162,7 +179,7 @@ export function parsePreviousKeys(v: string): Array<{ kid: string; key: Buffer }
     .map((pair) => {
       const [kid, key] = pair.split(':');
       if (!kid || !key) {
-        throw new Error(`JWT_PREVIOUS_KEYS entry must be "kid:base64key", got "${pair}"`);
+        throw new Error(`${label} entry must be "kid:base64key", got "${pair}"`);
       }
       return { kid, key: Buffer.from(key, 'base64') };
     });

@@ -197,6 +197,18 @@
 .sidebar-switcher-entry:hover {
   background: var(--panel-2);
 }
+/* Thin icon-strip tray pinned above the user block. Each shortcut is
+ * a 26px tappable target, so hover needs a clear-but-quiet state that
+ * doesn't flash when skimming across the row. Active state comes from
+ * the component itself (`var(--panel-2)` background), so hover must
+ * be a touch lighter than that to read as a distinct affordance. */
+.sidebar-toolbar-icon {
+  transition: background 120ms ease, color 120ms ease;
+}
+.sidebar-toolbar-icon:hover {
+  background: var(--panel-2);
+  color: var(--text);
+}
 
 /* Phase 6 command palette. `cmdk` tags the currently-highlighted
  * row (via keyboard nav or hover) with `aria-selected="true"` and

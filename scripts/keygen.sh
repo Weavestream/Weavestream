@@ -28,6 +28,7 @@ urlsafe_b64() {
 cat <<EOF
 JWT_SIGNING_KEY=$(openssl rand -base64 32)
 MFA_ENCRYPTION_KEY=$(openssl rand -base64 32)
+PASSWORD_ENCRYPTION_KEY=$(openssl rand -base64 32)
 COOKIE_SIGNING_KEY=$(openssl rand -base64 32)
 CSRF_SIGNING_KEY=$(openssl rand -base64 32)
 POSTGRES_PASSWORD=$(urlsafe_b64 24)

@@ -18,6 +18,7 @@ import { companyCrumbs } from '../../../../../../lib/company-crumbs';
 import { RichTextView } from '../../../../../../components/editor/rich-text-view';
 import { LinkedItemsPanel } from '../../../../../../components/relations';
 import { AttachmentsPanel } from '../../../../../../components/upload/attachments-panel';
+import { CredentialsPanel } from '../../../../../../components/passwords/credentials-panel';
 import { AssetActions } from './asset-actions';
 
 export async function generateMetadata({
@@ -31,10 +32,10 @@ export async function generateMetadata({
 }
 
 /**
- * Phase 3 asset detail. Mirrors the design template: header chip strip +
- * layout swatch, two-column key/value grid of stored field values,
- * freeform notes block (if the layout carries a RICH_TEXT/TEXTAREA
- * field), and a right rail placeholder for Phase 5 linked items.
+ * Asset detail. Mirrors the design template: header chip strip + layout
+ * swatch, two-column key/value grid of stored field values, freeform
+ * notes block (if the layout carries a RICH_TEXT/TEXTAREA field), and a
+ * right rail with the Linked items panel backed by the Relation table.
  */
 export default async function AssetDetailPage({
   params,
@@ -51,6 +52,9 @@ export default async function AssetDetailPage({
   if (!companyRes.ok || !companyRes.data || !asset) notFound();
   const company = companyRes.data;
   const manage = canManage(me.role);
+
+  const createdBy = asset.createdByUser;
+  const updatedBy = asset.updatedByUser;
 
   const primaryField = asset.fields.find((f) => f.isPrimary);
   const noteField = asset.fields.find(
@@ -150,7 +154,7 @@ export default async function AssetDetailPage({
                     }}
                   >
                     updated {relative(new Date(asset.updatedAt))}
-                    {asset.updatedBy ? ` · by ${asset.updatedBy.slice(0, 8)}` : ''}
+                    {updatedBy ? ` · by ${updatedBy.name}` : ''}
                   </div>
                 </div>
               </div>
@@ -225,6 +229,12 @@ export default async function AssetDetailPage({
               editable={manage && !asset.archivedAt}
             />
 
+            <CredentialsPanel
+              companyId={companyId}
+              assetId={asset.id}
+              mode="admin"
+            />
+
             <AttachmentsPanel
               companyId={companyId}
               entityType="asset"
@@ -234,7 +244,9 @@ export default async function AssetDetailPage({
 
             <Panel title="Timing">
               <Row label="Created" value={new Date(asset.createdAt).toLocaleString()} />
+              {createdBy && <Row label="Created by" value={createdBy.name} />}
               <Row label="Updated" value={new Date(asset.updatedAt).toLocaleString()} />
+              {updatedBy && <Row label="Updated by" value={updatedBy.name} />}
               {asset.archivedAt && (
                 <Row
                   label="Archived"

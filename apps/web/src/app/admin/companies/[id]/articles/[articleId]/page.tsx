@@ -6,11 +6,10 @@ import {
   getMe,
   getSettings,
   listArticles,
-  listCompanyMemberships,
   listFolderTree,
   serverApiFetch,
+  type ActorRef,
   type CompanyDetail,
-  type CompanyMembership,
 } from '../../../../../../lib/server-api';
 import { canManage } from '../../../../../../lib/roles';
 import { TopBar } from '../../../../../../components/shell/top-bar';
@@ -42,20 +41,19 @@ export default async function ArticleReadPage({
   const me = (await getMe())!;
   const term = buildTerm(await getSettings());
 
-  const [companyRes, article, folders, articleList, memberships] = await Promise.all([
+  const [companyRes, article, folders, articleList] = await Promise.all([
     serverApiFetch<CompanyDetail>(`/companies/${companyId}`),
     getArticle(companyId, articleId),
     listFolderTree(companyId),
     listArticles(companyId, { includeArchived: false, limit: 500 }),
-    listCompanyMemberships(companyId),
   ]);
   if (!companyRes.ok || !companyRes.data) notFound();
   if (!article) notFound();
   const company = companyRes.data;
   const manage = canManage(me.role);
 
-  const createdBy = resolvePerson(memberships, article.createdBy);
-  const updatedBy = resolvePerson(memberships, article.updatedBy);
+  const createdBy = toTocPerson(article.createdByUser);
+  const updatedBy = toTocPerson(article.updatedByUser);
 
   return (
     <>
@@ -197,14 +195,9 @@ export default async function ArticleReadPage({
   );
 }
 
-function resolvePerson(
-  memberships: CompanyMembership[],
-  userId: string | null,
+function toTocPerson(
+  ref: ActorRef | null,
 ): { id: string; displayName: string } | null {
-  if (!userId) return null;
-  const hit = memberships.find((m) => m.user.id === userId);
-  if (hit) {
-    return { id: hit.user.id, displayName: hit.user.name || hit.user.email };
-  }
-  return null;
+  if (!ref) return null;
+  return { id: ref.id, displayName: ref.name };
 }

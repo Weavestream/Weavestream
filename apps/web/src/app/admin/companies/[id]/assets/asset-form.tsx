@@ -36,12 +36,10 @@ const RichTextEditor = dynamic(
 );
 
 /**
- * Phase 3 dynamic asset form. Renders one input per active field in the
- * given layout, following the two-column grid defined in the design
- * template (`FieldTypeMeta.width`). `RICH_TEXT` is stubbed to a textarea
- * and `FILE` to a disabled drop target until Phase 4 ships the upload
- * pipeline — both strategies accept plain string/array values so a
- * user's existing content is preserved without friction.
+ * Dynamic asset form. Renders one input per active field in the given
+ * layout, following the two-column grid defined in the design template
+ * (`FieldTypeMeta.width`). `RICH_TEXT` mounts the Tiptap editor and
+ * `FILE` mounts the MinIO-backed upload control.
  */
 
 type Mode = 'create' | 'edit';

@@ -1,11 +1,20 @@
 'use client';
 
-import { useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import {
+  PASSWORD_GENERATOR_PRESET_DEFAULTS,
+  passwordGeneratorPresetValues,
+  passwordGeneratorSeparatorValues,
+  type PasswordGeneratorDefaults,
+  type PasswordGeneratorPreset,
+  type PasswordGeneratorSeparator,
+} from '@weavestream/shared';
 import { apiFetch } from '../../../../lib/api';
 import {
   Btn,
   Field,
+  Icon,
   Input,
   Select,
   Tag,
@@ -19,6 +28,7 @@ import {
   type TermPresetId,
 } from '../../../../lib/term';
 import type { Settings } from '../../../../lib/server-api';
+import { generatePassword } from '../../../../lib/password-generator';
 
 /**
  * Settings form — one source of truth for `system_settings`. The preset
@@ -50,6 +60,10 @@ export function SettingsForm({ initial }: { initial: Settings }) {
     initial.tenantTermPossessive ?? '',
   );
 
+  const [generator, setGenerator] = useState<PasswordGeneratorDefaults>(
+    initial.passwordGeneratorDefaults,
+  );
+
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -68,13 +82,23 @@ export function SettingsForm({ initial }: { initial: Settings }) {
     [one, other, possessive],
   );
 
+  const generatorDirty = useMemo(
+    () =>
+      !shallowEqualGenerator(
+        generator,
+        baseline.current.passwordGeneratorDefaults,
+      ),
+    [generator],
+  );
+
   const dirty =
     workspaceName.trim() !== baseline.current.workspaceName ||
     workspaceSubtitle.trim() !== baseline.current.workspaceSubtitle ||
     one.trim() !== baseline.current.tenantTermSingular ||
     other.trim() !== baseline.current.tenantTermPlural ||
     (possessive.trim() || null) !==
-      (baseline.current.tenantTermPossessive ?? null);
+      (baseline.current.tenantTermPossessive ?? null) ||
+    generatorDirty;
 
   function applyPreset(id: TermPresetId) {
     setPresetId(id);
@@ -101,13 +125,14 @@ export function SettingsForm({ initial }: { initial: Settings }) {
   async function submit() {
     setError(null);
     setPending(true);
-    const payload: Record<string, string | null> = {
+    const payload: Record<string, unknown> = {
       workspaceName: workspaceName.trim(),
       workspaceSubtitle: workspaceSubtitle.trim(),
       tenantTermSingular: one.trim(),
       tenantTermPlural: other.trim(),
       tenantTermPossessive: possessive.trim() === '' ? null : possessive.trim(),
     };
+    if (generatorDirty) payload.passwordGeneratorDefaults = generator;
     const res = await apiFetch<Settings>('/settings', {
       method: 'PATCH',
       body: JSON.stringify(payload),
@@ -137,6 +162,7 @@ export function SettingsForm({ initial }: { initial: Settings }) {
         b.tenantTermPossessive,
       ),
     );
+    setGenerator(b.passwordGeneratorDefaults);
     setError(null);
   }
 
@@ -237,6 +263,14 @@ export function SettingsForm({ initial }: { initial: Settings }) {
             maxLength={40}
           />
         </Field>
+      </section>
+
+      <section style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <SectionHeader
+          label="Password generator defaults"
+          help="Applied when operators open the generator inside the password dialog. Presets seed the knobs below; individual knobs can still be tweaked before saving."
+        />
+        <GeneratorEditor value={generator} onChange={setGenerator} />
       </section>
 
       <section style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -349,4 +383,280 @@ function detectPreset(
       (possessive === null || p.possessive === possessive),
   );
   return match ? match.id : 'custom';
+}
+
+function shallowEqualGenerator(
+  a: PasswordGeneratorDefaults,
+  b: PasswordGeneratorDefaults,
+): boolean {
+  return (
+    a.preset === b.preset &&
+    a.length === b.length &&
+    a.words === b.words &&
+    a.separator === b.separator &&
+    a.alternateCase === b.alternateCase &&
+    a.includeNumber === b.includeNumber
+  );
+}
+
+const GENERATOR_PRESET_LABELS: Record<PasswordGeneratorPreset, string> = {
+  say: 'Easier to say',
+  read: 'Easier to read',
+  remember: 'Easier to remember',
+};
+
+const GENERATOR_SEPARATOR_LABELS: Record<PasswordGeneratorSeparator, string> = {
+  space: 'space',
+  hyphen: '-',
+  underscore: '_',
+  dot: '.',
+  none: 'none',
+};
+
+/**
+ * Admin editor for the workspace-wide password generator defaults.
+ *
+ * Mirrors the popover UX so admins see exactly what operators will get:
+ * a segmented preset picker, the five shared knobs, and a live-regenerating
+ * preview using `generatePassword`. Changing a preset re-seeds the knobs
+ * from `PASSWORD_GENERATOR_PRESET_DEFAULTS`; tweaking a knob manually
+ * keeps the preset label — it just means "this is the baseline preset
+ * with these overrides".
+ */
+function GeneratorEditor({
+  value,
+  onChange,
+}: {
+  value: PasswordGeneratorDefaults;
+  onChange: (next: PasswordGeneratorDefaults) => void;
+}) {
+  const [preview, setPreview] = useState<string>('');
+
+  const regenerate = useCallback(() => {
+    setPreview(generatePassword(value));
+  }, [value]);
+
+  useEffect(() => {
+    regenerate();
+  }, [regenerate]);
+
+  const setField = <K extends keyof PasswordGeneratorDefaults>(
+    k: K,
+    v: PasswordGeneratorDefaults[K],
+  ) => onChange({ ...value, [k]: v });
+
+  const applyPreset = (preset: PasswordGeneratorPreset) =>
+    onChange({ preset, ...PASSWORD_GENERATOR_PRESET_DEFAULTS[preset] });
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <div
+        role="radiogroup"
+        aria-label="Generator preset"
+        style={{
+          display: 'inline-flex',
+          padding: 3,
+          gap: 2,
+          background: 'var(--panel-2)',
+          border: '1px solid var(--line-2)',
+          borderRadius: 8,
+          alignSelf: 'flex-start',
+        }}
+      >
+        {passwordGeneratorPresetValues.map((p) => {
+          const active = p === value.preset;
+          return (
+            <button
+              key={p}
+              type="button"
+              role="radio"
+              aria-checked={active}
+              onClick={() => applyPreset(p)}
+              style={{
+                padding: '6px 12px',
+                borderRadius: 5,
+                fontSize: 12,
+                fontWeight: 500,
+                color: active ? 'var(--text)' : 'var(--muted)',
+                background: active ? 'var(--elev)' : 'transparent',
+                border: '1px solid',
+                borderColor: active ? 'var(--line-3)' : 'transparent',
+                cursor: 'pointer',
+                transition:
+                  'background 120ms ease, color 120ms ease, border-color 120ms ease',
+              }}
+            >
+              {GENERATOR_PRESET_LABELS[p]}
+            </button>
+          );
+        })}
+      </div>
+
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: '1fr 1fr',
+          gap: 16,
+        }}
+      >
+        <Field
+          label="Minimum length"
+          help={`Current floor: ${value.length} chars.`}
+        >
+          <input
+            type="range"
+            min={8}
+            max={48}
+            value={value.length}
+            onChange={(e) => setField('length', Number(e.target.value))}
+            style={{ width: '100%', accentColor: 'var(--accent)' }}
+          />
+        </Field>
+        <Field
+          label="Number of words"
+          help={`Current: ${value.words} words.`}
+        >
+          <input
+            type="range"
+            min={2}
+            max={8}
+            value={value.words}
+            onChange={(e) => setField('words', Number(e.target.value))}
+            style={{ width: '100%', accentColor: 'var(--accent)' }}
+          />
+        </Field>
+      </div>
+
+      <Field label="Separator">
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+          {passwordGeneratorSeparatorValues.map((s) => {
+            const active = s === value.separator;
+            return (
+              <button
+                key={s}
+                type="button"
+                onClick={() => setField('separator', s)}
+                style={{
+                  padding: '5px 12px',
+                  borderRadius: 16,
+                  fontSize: 12,
+                  fontFamily:
+                    s === 'none' || s === 'space'
+                      ? 'var(--font-sans)'
+                      : 'var(--font-mono)',
+                  color: active ? 'var(--accent-ink)' : 'var(--muted)',
+                  background: active ? 'var(--accent)' : 'var(--panel-2)',
+                  border: '1px solid',
+                  borderColor: active ? 'var(--accent)' : 'var(--line-2)',
+                  cursor: 'pointer',
+                  minWidth: 36,
+                  textAlign: 'center',
+                }}
+              >
+                {GENERATOR_SEPARATOR_LABELS[s]}
+              </button>
+            );
+          })}
+        </div>
+      </Field>
+
+      <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap' }}>
+        <label
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            fontSize: 13,
+            color: 'var(--text)',
+            cursor: 'pointer',
+            userSelect: 'none',
+          }}
+        >
+          <input
+            type="checkbox"
+            checked={value.alternateCase}
+            onChange={(e) => setField('alternateCase', e.target.checked)}
+          />
+          Alternate case
+        </label>
+        <label
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            fontSize: 13,
+            color: 'var(--text)',
+            cursor: 'pointer',
+            userSelect: 'none',
+          }}
+        >
+          <input
+            type="checkbox"
+            checked={value.includeNumber}
+            onChange={(e) => setField('includeNumber', e.target.checked)}
+          />
+          Include a number
+        </label>
+      </div>
+
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 10,
+          padding: 12,
+          background: 'var(--panel-2)',
+          border: '1px solid var(--line-2)',
+          borderRadius: 6,
+        }}
+      >
+        <span
+          style={{
+            fontFamily: 'var(--font-mono)',
+            fontSize: 10,
+            color: 'var(--muted)',
+            letterSpacing: 0.6,
+            textTransform: 'uppercase',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          Sample
+        </span>
+        <span
+          style={{
+            flex: 1,
+            fontFamily:
+              'ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, monospace',
+            fontSize: 13,
+            color: 'var(--text)',
+            overflowX: 'auto',
+            whiteSpace: 'nowrap',
+            userSelect: 'all',
+          }}
+        >
+          {preview || '\u00a0'}
+        </span>
+        <button
+          type="button"
+          onClick={regenerate}
+          title="Regenerate sample"
+          aria-label="Regenerate sample"
+          style={{
+            width: 28,
+            height: 28,
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            border: '1px solid var(--line-2)',
+            background: 'var(--elev)',
+            borderRadius: 5,
+            color: 'var(--muted)',
+            cursor: 'pointer',
+          }}
+        >
+          <Icon.refresh size={14} />
+        </button>
+      </div>
+    </div>
+  );
 }

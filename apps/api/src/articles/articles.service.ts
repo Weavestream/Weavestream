@@ -23,6 +23,11 @@ export interface AuditMeta {
   userAgent: string;
 }
 
+export interface ActorRef {
+  id: string;
+  name: string;
+}
+
 export interface SerializedArticle {
   id: string;
   companyId: string;
@@ -36,6 +41,8 @@ export interface SerializedArticle {
   archivedAt: Date | null;
   createdBy: string | null;
   updatedBy: string | null;
+  createdByUser: ActorRef | null;
+  updatedByUser: ActorRef | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -80,8 +87,10 @@ export class ArticlesService {
     });
     const hasMore = rows.length > limit;
     const slice = hasMore ? rows.slice(0, limit) : rows;
+    const items = slice.map((r) => this.serialize(r, actor.role));
+    await this.hydrateActors(items);
     return {
-      items: slice.map((r) => this.serialize(r, actor.role)),
+      items,
       nextCursor: hasMore ? slice[slice.length - 1]!.id : null,
     };
   }
@@ -96,7 +105,9 @@ export class ArticlesService {
     if (actor.role === 'CLIENT_USER' && !row.visibleToClients) {
       throw new NotFoundException();
     }
-    return this.serialize(row, actor.role);
+    const out = this.serialize(row, actor.role);
+    await this.hydrateActors([out]);
+    return out;
   }
 
   async getBySlug(
@@ -111,7 +122,9 @@ export class ArticlesService {
     if (actor.role === 'CLIENT_USER' && !row.visibleToClients) {
       throw new NotFoundException();
     }
-    return this.serialize(row, actor.role);
+    const out = this.serialize(row, actor.role);
+    await this.hydrateActors([out]);
+    return out;
   }
 
   // ------------------------------------------------------------------
@@ -172,7 +185,9 @@ export class ArticlesService {
         visibleToClients: created.visibleToClients,
       },
     });
-    return this.serialize(created, actor.role);
+    const out = this.serialize(created, actor.role);
+    await this.hydrateActors([out]);
+    return out;
   }
 
   async update(
@@ -253,7 +268,9 @@ export class ArticlesService {
         visibleToClients: updated.visibleToClients,
       },
     });
-    return this.serialize(updated, actor.role);
+    const out = this.serialize(updated, actor.role);
+    await this.hydrateActors([out]);
+    return out;
   }
 
   async move(
@@ -289,7 +306,9 @@ export class ArticlesService {
       before: { folderId: existing.folderId },
       after: { folderId: updated.folderId },
     });
-    return this.serialize(updated, actor.role);
+    const out = this.serialize(updated, actor.role);
+    await this.hydrateActors([out]);
+    return out;
   }
 
   async archive(
@@ -320,7 +339,9 @@ export class ArticlesService {
       before: { archivedAt: null },
       after: { archivedAt: updated.archivedAt },
     });
-    return this.serialize(updated, actor.role);
+    const out = this.serialize(updated, actor.role);
+    await this.hydrateActors([out]);
+    return out;
   }
 
   async restore(
@@ -352,7 +373,9 @@ export class ArticlesService {
       before: { archivedAt: existing.archivedAt },
       after: { archivedAt: null },
     });
-    return this.serialize(updated, actor.role);
+    const out = this.serialize(updated, actor.role);
+    await this.hydrateActors([out]);
+    return out;
   }
 
   // ------------------------------------------------------------------
@@ -426,8 +449,38 @@ export class ArticlesService {
       archivedAt: row.archivedAt,
       createdBy: row.createdBy,
       updatedBy: row.updatedBy,
+      createdByUser: null,
+      updatedByUser: null,
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
     };
+  }
+
+  /**
+   * Resolve `createdBy` / `updatedBy` user ids into `{ id, name }` stubs
+   * so the UI can render "updated by Jane" without the caller having to
+   * hold `membership.manage`. This is a post-pass over already-serialized
+   * rows so the sync `serialize()` path stays simple; one Prisma query
+   * covers any number of articles in a list.
+   */
+  private async hydrateActors(articles: SerializedArticle[]): Promise<void> {
+    if (articles.length === 0) return;
+    const ids = new Set<string>();
+    for (const a of articles) {
+      if (a.createdBy) ids.add(a.createdBy);
+      if (a.updatedBy) ids.add(a.updatedBy);
+    }
+    if (ids.size === 0) return;
+    const users = await this.prisma.user.findMany({
+      where: { id: { in: Array.from(ids) } },
+      select: { id: true, name: true, email: true },
+    });
+    const byId = new Map(
+      users.map((u) => [u.id, { id: u.id, name: u.name || u.email }] as const),
+    );
+    for (const a of articles) {
+      if (a.createdBy) a.createdByUser = byId.get(a.createdBy) ?? null;
+      if (a.updatedBy) a.updatedByUser = byId.get(a.updatedBy) ?? null;
+    }
   }
 }

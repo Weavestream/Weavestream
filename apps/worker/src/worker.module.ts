@@ -8,6 +8,7 @@ import { RedisModule } from '../../api/src/redis/redis.module.js';
 import { AuditModule } from '../../api/src/audit/audit.module.js';
 import { DomainsModule } from '../../api/src/domains/domains.module.js';
 import { DomainChecksWorker } from './domain-checks/domain-checks.processor.js';
+import { PwnedCheckWorker } from './pwned-check/pwned-check.processor.js';
 
 /**
  * Worker-side composition root. Imports only the service-only shared
@@ -54,6 +55,6 @@ import { DomainChecksWorker } from './domain-checks/domain-checks.processor.js';
     AuditModule,
     DomainsModule,
   ],
-  providers: [DomainChecksWorker],
+  providers: [DomainChecksWorker, PwnedCheckWorker],
 })
 export class WorkerModule {}

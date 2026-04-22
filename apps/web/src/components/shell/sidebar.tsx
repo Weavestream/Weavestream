@@ -99,6 +99,7 @@ export function Sidebar({
   activeId,
   onSearch,
   footerAction,
+  footerToolbar,
   variant = 'fixed',
   onNavigate,
   className,
@@ -121,6 +122,14 @@ export function Sidebar({
    */
   onSearch?: () => void;
   footerAction?: ReactNode;
+  /**
+   * Thin icon strip rendered just above the user block, inside the
+   * same footer cluster. Used for quick-access glyph links like the
+   * "Expiring soon" shortcut — a scope-aware toolbar row that sits
+   * outside the main nav sections so it doesn't clutter navigation
+   * but is always visible regardless of scroll position.
+   */
+  footerToolbar?: ReactNode;
   /**
    * `fixed` — the traditional 232 px aside that sits beside the main
    * content. Used on desktop.
@@ -231,6 +240,20 @@ export function Sidebar({
           </div>
         ))}
       </div>
+
+      {footerToolbar && (
+        <div
+          style={{
+            borderTop: '1px solid var(--line)',
+            padding: '6px 8px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 4,
+          }}
+        >
+          {footerToolbar}
+        </div>
+      )}
 
       <div
         style={{

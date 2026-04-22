@@ -15,6 +15,7 @@ export const searchEntityKinds = [
   'article',
   'upload',
   'domain',
+  'password',
 ] as const;
 export type SearchEntityKind = (typeof searchEntityKinds)[number];
 export const searchEntityKindSchema = z.enum(searchEntityKinds);

@@ -491,6 +491,13 @@ function KindGlyph({ hit }: { hit: SearchHit }) {
       </Glyph>
     );
   }
+  if (hit.kind === 'password') {
+    return (
+      <Glyph>
+        <Icon.key size={16} />
+      </Glyph>
+    );
+  }
   return (
     <Glyph>
       <Icon.image size={16} />
@@ -574,7 +581,7 @@ function EmptyState({
           ? `Search in ${scopedCompany.name}`
           : 'Search every company'}
       </div>
-      Start typing to find assets, articles, files, and domains.
+      Start typing to find assets, articles, passwords, files, and domains.
       <div style={{ marginTop: 12, display: 'flex', gap: 14, flexWrap: 'wrap' }}>
         <span>
           <Kbd>"quoted phrase"</Kbd>&nbsp; match exact
@@ -610,7 +617,13 @@ function Dot() {
 // ─────────────────────────────────────────────────────────────────────────
 
 function groupHits(items: SearchHit[]): Array<[SearchHit['kind'], SearchHit[]]> {
-  const order: SearchHit['kind'][] = ['asset', 'article', 'upload', 'domain'];
+  const order: SearchHit['kind'][] = [
+    'asset',
+    'article',
+    'password',
+    'upload',
+    'domain',
+  ];
   const buckets = new Map<SearchHit['kind'], SearchHit[]>();
   for (const h of items) {
     const arr = buckets.get(h.kind) ?? [];
@@ -632,6 +645,8 @@ function groupLabel(kind: SearchHit['kind']): string {
       return 'Files';
     case 'domain':
       return 'Domains';
+    case 'password':
+      return 'Passwords';
   }
 }
 

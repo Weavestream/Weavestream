@@ -7,8 +7,10 @@ import {
 import { Queue, QueueEvents, type JobsOptions } from 'bullmq';
 import {
   DomainCheckJobNames,
+  PwnedCheckJobNames,
   QueueNames,
   type DomainCheckJob,
+  type PwnedCheckJob,
   type QueueName,
 } from '@weavestream/shared';
 import { EnvService } from '../config/env.service.js';
@@ -141,6 +143,26 @@ export class QueuesService implements OnModuleInit, OnModuleDestroy {
       setTimeout(() => resolve('timeout'), timeoutMs),
     );
     return Promise.race([completed, failed, timeout]);
+  }
+
+  /**
+   * Enqueue a HIBP k-anonymity check for a password. Called from the
+   * API's PasswordsService after a successful create/update. The
+   * payload carries the full SHA-1 hex of the plaintext so the worker
+   * can split into prefix (sent to hibp) + suffix (local compare);
+   * retained only long enough for the worker to consume it, with an
+   * aggressive removeOnComplete so Redis snapshots don't keep it
+   * around. HIBP rate limits are gentle but we keep attempts modest.
+   */
+  async enqueuePwnedCheck(payload: PwnedCheckJob): Promise<string> {
+    const queue = this.get(QueueNames.pwnedCheck);
+    const job = await queue.add(PwnedCheckJobNames.password, payload, {
+      attempts: 3,
+      backoff: { type: 'exponential', delay: 30_000 },
+      removeOnComplete: { age: 60 * 60, count: 100 },
+      removeOnFail: { age: 24 * 60 * 60 },
+    });
+    return job.id ?? '';
   }
 
   /** Counts per lane — used by the `/health/queues` probe. */

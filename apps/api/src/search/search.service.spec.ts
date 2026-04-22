@@ -19,7 +19,7 @@ describe('SearchService helpers', () => {
     sanitiseSnippet: (raw: string) => string;
     hrefFor: (
       row: {
-        entity_type: 'asset' | 'article' | 'upload';
+        entity_type: 'asset' | 'article' | 'upload' | 'domain' | 'password';
         entity_id: string;
         company_id: string;
       },
@@ -57,6 +57,7 @@ describe('SearchService helpers', () => {
     };
     const articleRow = { ...assetRow, entity_type: 'article' as const };
     const uploadRow = { ...assetRow, entity_type: 'upload' as const };
+    const passwordRow = { ...assetRow, entity_type: 'password' as const };
 
     it('routes operators to admin asset detail URL', () => {
       const href = svc.hrefFor(assetRow, {
@@ -109,6 +110,30 @@ describe('SearchService helpers', () => {
           isClient: true,
         }),
       ).toBe('/portal/acme/photos');
+    });
+
+    it('routes passwords to admin detail URL for operators', () => {
+      const href = svc.hrefFor(passwordRow, {
+        companySlug: 'acme',
+        layoutSlug: null,
+        articleSlug: null,
+        isClient: false,
+      });
+      expect(href).toBe(
+        '/admin/companies/22222222-2222-2222-2222-222222222222/passwords/11111111-1111-1111-1111-111111111111',
+      );
+    });
+
+    it('routes passwords to portal detail URL for clients', () => {
+      const href = svc.hrefFor(passwordRow, {
+        companySlug: 'acme',
+        layoutSlug: null,
+        articleSlug: null,
+        isClient: true,
+      });
+      expect(href).toBe(
+        '/portal/acme/passwords/11111111-1111-1111-1111-111111111111',
+      );
     });
   });
 

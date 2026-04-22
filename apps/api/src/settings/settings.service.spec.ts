@@ -1,3 +1,4 @@
+import { DEFAULT_PASSWORD_GENERATOR_DEFAULTS } from '@weavestream/shared';
 import { SettingsService } from './settings.service.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
 
@@ -63,6 +64,7 @@ describe('SettingsService.get', () => {
       tenantTermSingular: 'Company',
       tenantTermPlural: 'Companies',
       tenantTermPossessive: null,
+      passwordGeneratorDefaults: DEFAULT_PASSWORD_GENERATOR_DEFAULTS,
       updatedAt: NOW.toISOString(),
     });
     expect(prisma.systemSetting.findUnique).toHaveBeenCalledTimes(1);

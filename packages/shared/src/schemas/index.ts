@@ -14,3 +14,6 @@ export * from './relation.js';
 export * from './search.js';
 export * from './domain.js';
 export * from './ui-preferences.js';
+export * from './password.js';
+export * from './password-folder.js';
+export * from './password-generator.js';

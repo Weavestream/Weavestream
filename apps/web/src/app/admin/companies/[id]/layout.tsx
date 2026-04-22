@@ -8,6 +8,7 @@ import {
   getSettings,
   listDomains,
   listLayouts,
+  listPasswords,
   serverApiFetch,
   type CompanyDetail,
 } from '../../../../lib/server-api';
@@ -53,7 +54,7 @@ export default async function CompanyScopedLayout({
 }) {
   const { id } = await params;
 
-  const [me, settings, companyRes, layouts, counts, domainList] =
+  const [me, settings, companyRes, layouts, counts, domainList, passwordList] =
     await Promise.all([
       getMe(),
       getSettings(),
@@ -65,6 +66,8 @@ export default async function CompanyScopedLayout({
       // for the alerting badge (any customer with more than 200
       // expiring domains has bigger problems than a sidebar count).
       listDomains(id, { limit: 200 }),
+      // Active passwords for the sidebar count + stale badge.
+      listPasswords(id),
     ]);
   if (!me) notFound();
   if (!companyRes.ok || !companyRes.data) notFound();
@@ -78,6 +81,20 @@ export default async function CompanyScopedLayout({
     d.latestStatus === 'FAIL'
   ).length;
 
+  const now = Date.now();
+  const passwordCount = passwordList.length;
+  const passwordStaleBadge = passwordList.filter((p) => {
+    if (p.archivedAt) return false;
+    if (p.expiresAt && Date.parse(p.expiresAt) <= now) return true;
+    if (p.lastRotatedAt && p.rotationReminderDays) {
+      const due =
+        Date.parse(p.lastRotatedAt) + p.rotationReminderDays * 86_400_000;
+      if (due <= now) return true;
+    }
+    if ((p.pwnedCount ?? 0) > 0) return true;
+    return false;
+  }).length;
+
   return (
     <CompanyShell
       me={me}
@@ -87,6 +104,8 @@ export default async function CompanyScopedLayout({
       term={term}
       domainCount={domainCount}
       domainBadge={domainBadge}
+      passwordCount={passwordCount}
+      passwordStaleBadge={passwordStaleBadge}
     >
       {children}
     </CompanyShell>

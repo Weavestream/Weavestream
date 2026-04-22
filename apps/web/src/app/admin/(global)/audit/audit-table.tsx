@@ -9,6 +9,7 @@ import {
   Icon,
   Input,
   MobileCardRow,
+  Pagination,
   Select,
   Tag,
   type DataColumn,
@@ -28,6 +29,7 @@ const ACTION_PREFIXES = [
   { value: 'asset', label: 'asset.*' },
   { value: 'article', label: 'article.*' },
   { value: 'folder', label: 'folder.*' },
+  { value: 'password', label: 'password.*' },
   { value: 'upload', label: 'upload.*' },
   { value: 'domain', label: 'domain.*' },
   { value: 'settings', label: 'settings.*' },
@@ -41,11 +43,19 @@ const ACTION_PREFIXES = [
 export function AuditTable({
   rows,
   filters,
+  page,
+  pageSize,
+  total,
+  pageSizeOptions,
   companies,
   requireCompany,
 }: {
   rows: AuditEntry[];
   filters: { companyId?: string; action?: string; from?: string; to?: string };
+  page: number;
+  pageSize: number;
+  total: number;
+  pageSizeOptions: number[];
   companies: Array<{ id: string; name: string; slug: string }>;
   requireCompany: boolean;
 }) {
@@ -156,7 +166,16 @@ export function AuditTable({
   function setParams(mutate: (params: URLSearchParams) => void) {
     const next = new URLSearchParams(sp.toString());
     mutate(next);
+    next.delete('page');
     router.replace(`/admin/audit?${next.toString()}`);
+  }
+
+  function buildAuditHref(nextPage: number, nextPageSize: number) {
+    const q = new URLSearchParams(sp.toString());
+    if (nextPage <= 1) q.delete('page');
+    else q.set('page', String(nextPage));
+    q.set('pageSize', String(nextPageSize));
+    return `/admin/audit?${q.toString()}`;
   }
 
   return (
@@ -334,6 +353,19 @@ export function AuditTable({
           </div>
         )}
       />
+      <Pagination
+        page={page}
+        pageSize={pageSize}
+        total={total}
+        buildHref={buildAuditHref}
+        onPageSizeChange={(next) => {
+          const q = new URLSearchParams(sp.toString());
+          q.set('pageSize', String(next));
+          q.delete('page');
+          router.replace(`/admin/audit?${q.toString()}`);
+        }}
+        pageSizeOptions={pageSizeOptions}
+      />
       <AuditDetailDrawer
         entry={selected}
         onClose={() => setSelected(null)}
@@ -418,12 +450,27 @@ function MetaGrid({ entry }: { entry: AuditEntry }) {
       {entry.entityType && (
         <>
           <MetaLabel>Entity</MetaLabel>
-          <span>
-            {entry.entityType}
+          <span
+            style={{
+              display: 'inline-flex',
+              alignItems: 'baseline',
+              gap: 8,
+              flexWrap: 'wrap',
+            }}
+          >
+            {entry.entityName ? (
+              <>
+                <span style={{ fontWeight: 500 }}>{entry.entityName}</span>
+                <span style={{ color: 'var(--dim)', fontSize: 12 }}>
+                  {entry.entityType}
+                </span>
+              </>
+            ) : (
+              <span>{entry.entityType}</span>
+            )}
             {entry.entityId && (
               <code
                 style={{
-                  marginLeft: 8,
                   fontFamily: 'var(--font-mono)',
                   fontSize: 11,
                   color: 'var(--dim)',

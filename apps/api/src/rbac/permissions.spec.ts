@@ -216,6 +216,79 @@ describe('PermissionService.evaluate', () => {
     ).toBe(true);
   });
 
+  // ------------------------------------------------------------------
+  // Phase 10 — password vault action set
+  // ------------------------------------------------------------------
+
+  it('password.read allows CLIENT_* (per-row visibleToClients filter done in service)', () => {
+    for (const role of ['OPERATOR_FULL', 'OPERATOR_READONLY', 'CLIENT_ADMIN', 'CLIENT_VIEWER'] as MembershipRole[]) {
+      const m: MembershipSnapshot = { companyId: THE_COMPANY, role, expiresAt: null, revokedAt: null };
+      expect(
+        PermissionService.evaluate(user('CLIENT_USER'), 'password.read', [m], {
+          companyId: THE_COMPANY,
+        }).allowed,
+      ).toBe(true);
+    }
+  });
+
+  it('password.write denies OPERATOR_READONLY and CLIENT_*', () => {
+    for (const role of ['OPERATOR_READONLY', 'CLIENT_ADMIN', 'CLIENT_VIEWER'] as MembershipRole[]) {
+      const m: MembershipSnapshot = { companyId: THE_COMPANY, role, expiresAt: null, revokedAt: null };
+      expect(
+        PermissionService.evaluate(user('OPERATOR'), 'password.write', [m], {
+          companyId: THE_COMPANY,
+        }).allowed,
+      ).toBe(false);
+    }
+    const full: MembershipSnapshot = {
+      companyId: THE_COMPANY,
+      role: 'OPERATOR_FULL',
+      expiresAt: null,
+      revokedAt: null,
+    };
+    expect(
+      PermissionService.evaluate(user('OPERATOR'), 'password.write', [full], {
+        companyId: THE_COMPANY,
+      }).allowed,
+    ).toBe(true);
+  });
+
+  it('password.reveal allows CLIENT_ADMIN but not CLIENT_VIEWER (service still enforces visibleToClients)', () => {
+    const admin: MembershipSnapshot = {
+      companyId: THE_COMPANY,
+      role: 'CLIENT_ADMIN',
+      expiresAt: null,
+      revokedAt: null,
+    };
+    const viewer: MembershipSnapshot = {
+      companyId: THE_COMPANY,
+      role: 'CLIENT_VIEWER',
+      expiresAt: null,
+      revokedAt: null,
+    };
+    expect(
+      PermissionService.evaluate(user('CLIENT_USER'), 'password.reveal', [admin], {
+        companyId: THE_COMPANY,
+      }).allowed,
+    ).toBe(true);
+    expect(
+      PermissionService.evaluate(user('CLIENT_USER'), 'password.reveal', [viewer], {
+        companyId: THE_COMPANY,
+      }).allowed,
+    ).toBe(false);
+  });
+
+  it('password.archive is OPERATOR_FULL only', () => {
+    for (const role of ['OPERATOR_READONLY', 'CLIENT_ADMIN', 'CLIENT_VIEWER'] as MembershipRole[]) {
+      const m: MembershipSnapshot = { companyId: THE_COMPANY, role, expiresAt: null, revokedAt: null };
+      expect(
+        PermissionService.evaluate(user('OPERATOR'), 'password.archive', [m], {
+          companyId: THE_COMPANY,
+        }).allowed,
+      ).toBe(false);
+    }
+  });
+
   it('settings.manage is a global SUPER_ADMIN-only action', () => {
     for (const role of ['OPERATOR', 'CONTRACTOR', 'CLIENT_USER'] as UserRole[]) {
       // Even a rich membership set should not help — the scope is global.

@@ -5,6 +5,7 @@ import { NestFactory } from '@nestjs/core';
 import { Logger } from 'nestjs-pino';
 import { WorkerModule } from './worker.module.js';
 import { DomainChecksWorker } from './domain-checks/domain-checks.processor.js';
+import { PwnedCheckWorker } from './pwned-check/pwned-check.processor.js';
 
 /**
  * apps/worker bootstrap.
@@ -33,6 +34,9 @@ async function bootstrap(): Promise<void> {
 
   const domainChecks = app.get(DomainChecksWorker);
   await domainChecks.start();
+
+  const pwnedCheck = app.get(PwnedCheckWorker);
+  await pwnedCheck.start();
 
   logger.log('Worker online — bullmq consumers started', 'WorkerBootstrap');
 
