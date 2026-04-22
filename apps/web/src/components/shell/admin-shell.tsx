@@ -4,6 +4,7 @@ import { canManage, initialsFromName, roleLabel } from '../../lib/roles';
 import type { Term } from '../../lib/term';
 import { Sidebar, type SidebarSection } from './sidebar';
 import { SidebarActions } from './sidebar-actions';
+import { SidebarToolbar } from './sidebar-toolbar';
 import { MobileShellChrome } from './mobile-nav';
 import { SearchPaletteProvider } from '../search/search-palette-provider';
 
@@ -109,6 +110,7 @@ export function AdminShell({
           user={sidebarUser}
           activeId={activeId}
           footerAction={<SidebarActions />}
+          footerToolbar={<SidebarToolbar />}
           className="hide-on-mobile"
         />
         <main
@@ -130,6 +132,7 @@ export function AdminShell({
                 user={sidebarUser}
                 activeId={activeId}
                 footerAction={<SidebarActions />}
+                footerToolbar={<SidebarToolbar />}
                 variant="drawer"
               />
             }

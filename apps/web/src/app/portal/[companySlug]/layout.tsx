@@ -9,6 +9,7 @@ import {
   getSettings,
   listDomains,
   listLayouts,
+  listPasswords,
 } from '../../../lib/server-api';
 import { buildTerm } from '../../../lib/term';
 
@@ -99,17 +100,23 @@ export default async function PortalLayout({
     );
   }
 
-  const [settings, layouts, counts, domainList] = await Promise.all([
-    getSettings(),
-    listLayouts(),
-    getAssetCountsByLayout(membership.company.id),
-    // The API already filters out non-`visibleToClients` rows for
-    // client users, so every item returned here is portal-eligible.
-    // We only need to know "are there any?" to decide whether to
-    // show the sidebar entry.
-    listDomains(membership.company.id, { limit: 1 }),
-  ]);
+  const [settings, layouts, counts, domainList, passwordList] =
+    await Promise.all([
+      getSettings(),
+      listLayouts(),
+      getAssetCountsByLayout(membership.company.id),
+      // The API already filters out non-`visibleToClients` rows for
+      // client users, so every item returned here is portal-eligible.
+      // We only need to know "are there any?" to decide whether to
+      // show the sidebar entry.
+      listDomains(membership.company.id, { limit: 1 }),
+      // Same logic for passwords — portal users only see client-
+      // visible rows, so the count directly reflects what the sidebar
+      // entry would land on.
+      listPasswords(membership.company.id),
+    ]);
   const term = buildTerm(settings);
+  const passwordCount = passwordList.filter((p) => !p.archivedAt).length;
 
   return (
     <CompanyShell
@@ -120,6 +127,8 @@ export default async function PortalLayout({
       term={term}
       mode="portal"
       portalHasDomains={domainList.items.length > 0}
+      portalHasPasswords={passwordCount > 0}
+      passwordCount={passwordCount}
     >
       {children}
     </CompanyShell>

@@ -114,6 +114,14 @@ enum FieldType {
   IP_ADDRESS
 }
 
+// Phase 10: password vault. TOTP algorithm options match RFC 6238 +
+// otplib — SHA1 is the default for broad authenticator-app compatibility.
+enum TotpAlgo {
+  SHA1
+  SHA256
+  SHA512
+}
+
 model User {
   id                        String    @id @default(uuid()) @db.Uuid
   email                     String    @unique
@@ -197,8 +205,10 @@ model Company {
   logoUploadId String? @unique @map("logo_upload_id") @db.Uuid
   logoUpload   Upload? @relation("CompanyLogo", fields: [logoUploadId], references: [id], onDelete: SetNull)
 
-  memberships Membership[]
-  starredBy   StarredCompany[]
+  memberships     Membership[]
+  starredBy       StarredCompany[]
+  passwords       Password[]
+  passwordFolders PasswordFolder[]
 
   @@index([type])
   @@index([parentCompanyId])
@@ -388,6 +398,7 @@ model Asset {
   // only archived. This matches the builder's "archive" affordance.
   assetLayout AssetLayout       @relation(fields: [assetLayoutId], references: [id], onDelete: Restrict)
   fieldValues AssetFieldValue[]
+  passwords   Password[]
 
   @@index([companyId, assetLayoutId, archivedAt])
   @@index([companyId, name])
@@ -581,6 +592,10 @@ model SystemSetting {
   tenantTermSingular   String   @default("Company") @map("tenant_term_singular")
   tenantTermPlural     String   @default("Companies") @map("tenant_term_plural")
   tenantTermPossessive String?  @map("tenant_term_possessive")
+  // Phase 10: workspace-wide defaults for the client-side password
+  // generator. Shape validated by passwordGeneratorDefaultsSchema —
+  // NULL falls back to DEFAULT_PASSWORD_GENERATOR_DEFAULTS on read.
+  passwordGeneratorDefaults Json? @map("password_generator_defaults")
   updatedAt            DateTime @updatedAt @map("updated_at")
   updatedBy            String?  @map("updated_by") @db.Uuid
 
@@ -649,4 +664,121 @@ model DomainCheck {
   @@index([monitoredDomainId, checkedAt(sort: Desc)])
   @@index([companyId, checkedAt(sort: Desc)])
   @@map("domain_checks")
+}
+
+// Phase 10: password vault. Company-scoped credentials with optional
+// folder grouping and an optional `assetId` back-link for embedded
+// credentials (archiving the parent asset cascades a soft-archive here
+// — see AssetsService.archive). Every secret column (password, TOTP
+// secret, notes) is AES-256-GCM encrypted at rest via the API's
+// SecretEncryptionService; the ciphertext blob embeds a short `kid`
+// so keys can be rotated via PASSWORD_PREVIOUS_KEYS lazily.
+//
+// List endpoints strip `passwordCiphertext`, `totpSecretCiphertext`
+// and `notesCiphertext`. Detail GETs decrypt notes inline (they are
+// authorized metadata). Password + TOTP secret are only returned via
+// the explicit, audited, rate-limited POST /passwords/:id/reveal
+// endpoint.
+model Password {
+  id                   String    @id @default(uuid()) @db.Uuid
+  companyId            String    @map("company_id") @db.Uuid
+  folderId             String?   @map("folder_id") @db.Uuid
+  assetId              String?   @map("asset_id") @db.Uuid
+  name                 String
+  username             String?
+  url                  String?
+  notesCiphertext      String?   @map("notes_ciphertext")
+  passwordCiphertext   String    @map("password_ciphertext")
+  totpSecretCiphertext String?   @map("totp_secret_ciphertext")
+  totpAlgorithm        TotpAlgo  @default(SHA1) @map("totp_algorithm")
+  totpDigits           Int       @default(6) @map("totp_digits")
+  totpPeriod           Int       @default(30) @map("totp_period")
+  passwordStrength     Int?      @map("password_strength")
+  pwnedCount           Int?      @map("pwned_count")
+  pwnedCheckedAt       DateTime? @map("pwned_checked_at")
+  lastRotatedAt        DateTime? @map("last_rotated_at")
+  rotationReminderDays Int?      @map("rotation_reminder_days")
+  expiresAt            DateTime? @map("expires_at")
+  color                String?
+  tags                 String[]  @default([])
+  visibleToClients     Boolean   @default(false) @map("visible_to_clients")
+  requireReasonToView  Boolean   @default(false) @map("require_reason_to_view")
+  restrictedToUserIds  String[]  @default([]) @map("restricted_to_user_ids") @db.Uuid
+  createdBy            String    @map("created_by") @db.Uuid
+  updatedBy            String    @map("updated_by") @db.Uuid
+  archivedAt           DateTime? @map("archived_at")
+  createdAt            DateTime  @default(now()) @map("created_at")
+  updatedAt            DateTime  @updatedAt @map("updated_at")
+
+  company  Company           @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  folder   PasswordFolder?   @relation(fields: [folderId], references: [id], onDelete: SetNull)
+  asset    Asset?            @relation(fields: [assetId], references: [id], onDelete: SetNull)
+  versions PasswordVersion[]
+
+  @@index([companyId, archivedAt])
+  @@index([companyId, folderId])
+  @@index([companyId, assetId])
+  @@index([assetId])
+  @@map("passwords")
+}
+
+// Phase 10: immutable, append-only history of every credential-field
+// change on a Password. `companyId` is denormalised (same pattern as
+// AssetFieldValue) so the tenant-middleware can enforce scope on
+// versions without a relational filter. Tracked fields: name,
+// username, url, password ciphertext, notes ciphertext, TOTP block.
+// Lifecycle metadata (archivedAt, visibleToClients, tags, folderId,
+// colour, restrictedToUserIds, reminder days, expiry) is NOT
+// versioned — it flows through AuditLog only.
+model PasswordVersion {
+  id                   String   @id @default(uuid()) @db.Uuid
+  passwordId           String   @map("password_id") @db.Uuid
+  companyId            String   @map("company_id") @db.Uuid
+  version              Int
+  name                 String
+  username             String?
+  url                  String?
+  notesCiphertext      String?  @map("notes_ciphertext")
+  passwordCiphertext   String   @map("password_ciphertext")
+  totpSecretCiphertext String?  @map("totp_secret_ciphertext")
+  totpAlgorithm        TotpAlgo @default(SHA1) @map("totp_algorithm")
+  totpDigits           Int      @default(6) @map("totp_digits")
+  totpPeriod           Int      @default(30) @map("totp_period")
+  changedFields        String[] @default([]) @map("changed_fields")
+  changedBy            String   @map("changed_by") @db.Uuid
+  changeReason         String?  @map("change_reason")
+  createdAt            DateTime @default(now()) @map("created_at")
+
+  password Password @relation(fields: [passwordId], references: [id], onDelete: Cascade)
+
+  @@unique([passwordId, version])
+  @@index([passwordId, createdAt])
+  @@index([companyId, createdAt])
+  @@map("password_versions")
+}
+
+// Phase 10: per-company folder tree for Passwords. Separate from the
+// Article `Folder` model — different permission surface and keeps the
+// archive-cascade logic independent from docs.
+model PasswordFolder {
+  id         String    @id @default(uuid()) @db.Uuid
+  companyId  String    @map("company_id") @db.Uuid
+  parentId   String?   @map("parent_id") @db.Uuid
+  name       String
+  icon       String?
+  color      String?
+  position   Int       @default(0)
+  archivedAt DateTime? @map("archived_at")
+  createdBy  String?   @map("created_by") @db.Uuid
+  createdAt  DateTime  @default(now()) @map("created_at")
+  updatedAt  DateTime  @updatedAt @map("updated_at")
+
+  company   Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  parent    PasswordFolder?  @relation("PasswordFolderTree", fields: [parentId], references: [id], onDelete: Restrict)
+  children  PasswordFolder[] @relation("PasswordFolderTree")
+  passwords Password[]
+
+  @@index([companyId, archivedAt])
+  @@index([companyId, parentId, position])
+  @@map("password_folders")
 }

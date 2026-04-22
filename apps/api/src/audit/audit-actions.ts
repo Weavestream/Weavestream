@@ -47,6 +47,28 @@ export const AUDIT_ACTIONS = {
     restore: 'domain.restore',
     check: 'domain.check',
   },
+  // Phase 10 — password vault. `revealed` rows always carry `actorId`,
+  // `ip`, `userAgent`, and the optional `reason`; historical reveals
+  // additionally record the `version` in the row's `after` JSON.
+  // `versionRestored` captures the forward-only restore —
+  // `after.fromVersion` names the source, the write itself is also
+  // emitted as a regular `password.updated`. TOTP code generation is
+  // intentionally NOT audited (the UI polls it every ~30s per visible
+  // row); copying/revealing the underlying secret still routes through
+  // `/reveal`, which is.
+  password: {
+    create: 'password.created',
+    update: 'password.updated',
+    revealed: 'password.revealed',
+    archive: 'password.archived',
+    restore: 'password.restored',
+    versionRestored: 'password.version.restored',
+    pwnedChecked: 'password.pwned.checked',
+    folderCreate: 'password.folder.created',
+    folderUpdate: 'password.folder.updated',
+    folderArchive: 'password.folder.archived',
+    folderRestore: 'password.folder.restored',
+  },
 } as const;
 
 export const ALL_AUDIT_ACTIONS: string[] = [
@@ -56,4 +78,5 @@ export const ALL_AUDIT_ACTIONS: string[] = [
   ...Object.values(AUDIT_ACTIONS.membership),
   ...Object.values(AUDIT_ACTIONS.settings),
   ...Object.values(AUDIT_ACTIONS.domain),
+  ...Object.values(AUDIT_ACTIONS.password),
 ];

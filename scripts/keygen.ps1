@@ -32,6 +32,7 @@ function New-Key {
 # 32-byte signing keys — standard base64.
 "JWT_SIGNING_KEY=$(New-Key 32)"
 "MFA_ENCRYPTION_KEY=$(New-Key 32)"
+"PASSWORD_ENCRYPTION_KEY=$(New-Key 32)"
 "COOKIE_SIGNING_KEY=$(New-Key 32)"
 "CSRF_SIGNING_KEY=$(New-Key 32)"
 

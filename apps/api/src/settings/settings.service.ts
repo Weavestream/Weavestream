@@ -1,5 +1,12 @@
 import { Injectable } from '@nestjs/common';
-import type { UpdateSettingsInput } from '@weavestream/shared';
+import type {
+  PasswordGeneratorDefaults,
+  UpdateSettingsInput,
+} from '@weavestream/shared';
+import {
+  DEFAULT_PASSWORD_GENERATOR_DEFAULTS,
+  passwordGeneratorDefaultsSchema,
+} from '@weavestream/shared';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { AuditLogService } from '../audit/audit.service.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
@@ -15,6 +22,7 @@ export interface SystemSettingsDTO {
   tenantTermSingular: string;
   tenantTermPlural: string;
   tenantTermPossessive: string | null;
+  passwordGeneratorDefaults: PasswordGeneratorDefaults;
   updatedAt: string;
 }
 
@@ -63,6 +71,8 @@ export class SettingsService {
       data.tenantTermPlural = input.tenantTermPlural;
     if (input.tenantTermPossessive !== undefined)
       data.tenantTermPossessive = input.tenantTermPossessive;
+    if (input.passwordGeneratorDefaults !== undefined)
+      data.passwordGeneratorDefaults = input.passwordGeneratorDefaults;
 
     const after = await this.prisma.systemSetting.update({
       where: { id: SINGLETON_ID },
@@ -106,36 +116,51 @@ export class SettingsService {
   }
 }
 
-function toDto(row: {
+type SystemSettingRow = {
   workspaceName: string;
   workspaceSubtitle: string;
   tenantTermSingular: string;
   tenantTermPlural: string;
   tenantTermPossessive: string | null;
+  passwordGeneratorDefaults?: unknown;
   updatedAt: Date;
-}): SystemSettingsDTO {
+};
+
+/**
+ * Reads the JSONB column through the zod schema and falls back to the
+ * static default if the value is null or malformed. Matches the pattern
+ * `MeService` uses for `searchDefaults` — a stale/partial row can never
+ * leak into the UI as an invalid object.
+ */
+function readGeneratorDefaults(value: unknown): PasswordGeneratorDefaults {
+  if (value == null) return DEFAULT_PASSWORD_GENERATOR_DEFAULTS;
+  const parsed = passwordGeneratorDefaultsSchema.safeParse(value);
+  return parsed.success ? parsed.data : DEFAULT_PASSWORD_GENERATOR_DEFAULTS;
+}
+
+function toDto(row: SystemSettingRow): SystemSettingsDTO {
   return {
     workspaceName: row.workspaceName,
     workspaceSubtitle: row.workspaceSubtitle,
     tenantTermSingular: row.tenantTermSingular,
     tenantTermPlural: row.tenantTermPlural,
     tenantTermPossessive: row.tenantTermPossessive,
+    passwordGeneratorDefaults: readGeneratorDefaults(
+      row.passwordGeneratorDefaults,
+    ),
     updatedAt: row.updatedAt.toISOString(),
   };
 }
 
-function stripForAudit(row: {
-  workspaceName: string;
-  workspaceSubtitle: string;
-  tenantTermSingular: string;
-  tenantTermPlural: string;
-  tenantTermPossessive: string | null;
-}) {
+function stripForAudit(row: SystemSettingRow) {
   return {
     workspaceName: row.workspaceName,
     workspaceSubtitle: row.workspaceSubtitle,
     tenantTermSingular: row.tenantTermSingular,
     tenantTermPlural: row.tenantTermPlural,
     tenantTermPossessive: row.tenantTermPossessive,
+    passwordGeneratorDefaults: readGeneratorDefaults(
+      row.passwordGeneratorDefaults,
+    ),
   };
 }

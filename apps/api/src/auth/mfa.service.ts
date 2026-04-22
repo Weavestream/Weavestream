@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { authenticator } from 'otplib';
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
+import QRCode from 'qrcode';
 import { EnvService } from '../config/env.service.js';
 
 const ALGO = 'aes-256-gcm';
@@ -17,6 +18,15 @@ export class MfaService {
 
   otpauthUrl(email: string, secret: string): string {
     return authenticator.keyuri(email, 'Weavestream', secret);
+  }
+
+  async qrDataUrl(otpauthUrl: string): Promise<string> {
+    return QRCode.toDataURL(otpauthUrl, {
+      errorCorrectionLevel: 'M',
+      margin: 1,
+      width: 256,
+      color: { dark: '#000000', light: '#ffffff' },
+    });
   }
 
   verify(token: string, plaintextSecret: string): boolean {

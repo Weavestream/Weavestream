@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { passwordGeneratorDefaultsSchema } from './password-generator.js';
 
 /**
  * Workspace + tenant-term schema for the instance-wide singleton settings
@@ -24,6 +25,7 @@ export const systemSettingsSchema = z.object({
   tenantTermSingular: z.string().min(1).max(40),
   tenantTermPlural: z.string().min(1).max(40),
   tenantTermPossessive: z.string().min(1).max(40).nullable(),
+  passwordGeneratorDefaults: passwordGeneratorDefaultsSchema,
   updatedAt: z.string(),
 });
 
@@ -38,6 +40,7 @@ export const updateSettingsSchema = z
     tenantTermPossessive: z
       .union([trimmedString(1, 40, 'Possessive term'), z.null()])
       .optional(),
+    passwordGeneratorDefaults: passwordGeneratorDefaultsSchema.optional(),
   })
   .refine((v) => Object.keys(v).length > 0, 'At least one field must be provided');
 

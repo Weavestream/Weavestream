@@ -12,6 +12,7 @@ export { Stat } from './stat';
 export { ThemeToggle } from './theme-toggle';
 export { Field, Input, Textarea, Select } from './form';
 export { DataTable, MobileCardRow, type DataColumn } from './data-table';
+export { Pagination, type PaginationProps } from './pagination';
 export { Dialog } from './dialog';
 export { Sheet, type SheetSide } from './sheet';
 export { StarButton } from './star-button';

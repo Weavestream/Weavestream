@@ -28,6 +28,13 @@ export const TENANT_SCOPED_MODELS = new Set<string>([
   // its parent monitored_domain's tenant.
   'MonitoredDomain',
   'DomainCheck',
+  // Phase 10: password vault. `Password` and `PasswordFolder` have
+  // direct `companyId` columns. `PasswordVersion` denormalises the
+  // parent's companyId so the tenant middleware can enforce scope
+  // without traversing a relation (same pattern as AssetFieldValue).
+  'Password',
+  'PasswordVersion',
+  'PasswordFolder',
   // Phase 1: AuditLog can be cross-tenant (`companyId` is nullable for
   // system events), so it is excluded by design.
   //

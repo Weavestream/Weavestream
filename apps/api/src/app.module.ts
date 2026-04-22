@@ -36,7 +36,14 @@ import {
   DomainsAlertsController,
   DomainsController,
 } from './domains/domains.controller.js';
+import { PasswordsModule } from './passwords/passwords.module.js';
+import {
+  PasswordFoldersController,
+  PasswordsController,
+} from './passwords/passwords.controller.js';
+import { ExpirationsModule } from './expirations/expirations.module.js';
 import { UiModule } from './ui/ui.module.js';
+import { CryptoModule } from './crypto/crypto.module.js';
 import { AuthGuard } from './auth/guards/auth.guard.js';
 import { MfaEnrollmentGuard } from './auth/guards/mfa-enrollment.guard.js';
 import { CsrfGuard } from './auth/guards/csrf.guard.js';
@@ -96,6 +103,7 @@ import { RedisThrottlerStorage } from './redis/redis-throttler.storage.js';
     RedisModule,
     PrismaModule,
     CacheModule,
+    CryptoModule,
     AuditModule,
     RbacModule,
     AuthModule,
@@ -117,10 +125,18 @@ import { RedisThrottlerStorage } from './redis/redis-throttler.storage.js';
     SettingsModule,
     QueuesModule,
     DomainsModule,
+    PasswordsModule,
+    ExpirationsModule,
     UiModule,
     HealthModule,
   ],
-  controllers: [AuditController, DomainsController, DomainsAlertsController],
+  controllers: [
+    AuditController,
+    DomainsController,
+    DomainsAlertsController,
+    PasswordsController,
+    PasswordFoldersController,
+  ],
   providers: [
     { provide: APP_GUARD, useClass: ThrottlerGuard },
     { provide: APP_GUARD, useClass: AuthGuard },

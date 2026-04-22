@@ -60,6 +60,12 @@ export const ActionValues = [
   'domain.read',
   'domain.manage',
 
+  // Passwords (Phase 10 — encrypted credential vault)
+  'password.read',
+  'password.write',
+  'password.reveal',
+  'password.archive',
+
   // Audit
   'audit.read',
 
@@ -202,6 +208,39 @@ export const PERMISSIONS: Record<Action, PermissionRule> = {
     note: 'Covers create / update / archive / restore and flipping visibleToClients, plus the manual "Check now" enqueue.',
   },
 
+  // Password vault — Phase 10. Read/reveal split is enforced by the
+  // service (`password.read` only ever returns metadata + decrypted
+  // notes, never the password/TOTP secret). `password.reveal` is the
+  // separate, audited + rate-limited gate on plaintext. Write/archive
+  // are OPERATOR_FULL only — CLIENT_* never mutates credentials.
+  'password.read': {
+    scope: 'company',
+    allowGlobal: ['SUPER_ADMIN', 'CONTRACTOR'],
+    allowMembership: [...M_OP_ANY, ...M_CLIENT_ANY],
+    requireNonExpiredMembership: false,
+    note: 'CLIENT_* sees only rows where visibleToClients=true. Per-row filter applied by PasswordsService (mirrors the article/domain pattern).',
+  },
+  'password.write': {
+    scope: 'company',
+    allowGlobal: ['SUPER_ADMIN', 'CONTRACTOR'],
+    allowMembership: M_OP_FULL,
+    requireNonExpiredMembership: true,
+    note: 'Covers create/update + version restore. CLIENT_* never writes credentials.',
+  },
+  'password.reveal': {
+    scope: 'company',
+    allowGlobal: ['SUPER_ADMIN', 'CONTRACTOR'],
+    allowMembership: ['OPERATOR_FULL', 'OPERATOR_READONLY', 'CLIENT_ADMIN'],
+    requireNonExpiredMembership: true,
+    note: 'CLIENT_ADMIN may reveal only passwords flagged visibleToClients=true. `restrictedToUserIds` and `requireReasonToView` are enforced inside PasswordsService, which also writes the password.revealed audit row.',
+  },
+  'password.archive': {
+    scope: 'company',
+    allowGlobal: ['SUPER_ADMIN', 'CONTRACTOR'],
+    allowMembership: M_OP_FULL,
+    requireNonExpiredMembership: true,
+  },
+
   'audit.read': {
     scope: 'company',
     allowGlobal: G_ADMIN,
@@ -236,6 +275,10 @@ export const ACTION_HUMAN_LABELS: Record<Action, string> = {
   'relation.write': 'Link / unlink items',
   'domain.read': 'View monitored domains',
   'domain.manage': 'Add / edit / archive monitored domains',
+  'password.read': 'View saved passwords (metadata + notes)',
+  'password.write': 'Create / edit / restore saved passwords',
+  'password.reveal': 'Reveal a saved password or TOTP secret',
+  'password.archive': 'Archive / restore saved passwords',
   'audit.read': 'View audit log',
   'settings.manage': 'Edit workspace branding and tenant terminology',
 };

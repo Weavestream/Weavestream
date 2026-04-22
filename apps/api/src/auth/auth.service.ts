@@ -164,9 +164,12 @@ export class AuthService {
       before: null,
       after: null,
     });
+    const otpauthUrl = this.mfa.otpauthUrl(user.email, secret);
+    const qrDataUrl = await this.mfa.qrDataUrl(otpauthUrl);
     return {
       secret,
-      otpauthUrl: this.mfa.otpauthUrl(user.email, secret),
+      otpauthUrl,
+      qrDataUrl,
     };
   }
 

@@ -4,6 +4,7 @@ import { randomBytes } from "node:crypto";
 const keys = [
   "JWT_SIGNING_KEY",
   "MFA_ENCRYPTION_KEY",
+  "PASSWORD_ENCRYPTION_KEY",
   "COOKIE_SIGNING_KEY",
   "CSRF_SIGNING_KEY",
   "POSTGRES_PASSWORD",

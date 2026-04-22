@@ -158,8 +158,15 @@ export class SearchIndexService {
     articles: number;
     uploads: number;
     domains: number;
+    passwords: number;
   }> {
-    const counts = { assets: 0, articles: 0, uploads: 0, domains: 0 };
+    const counts = {
+      assets: 0,
+      articles: 0,
+      uploads: 0,
+      domains: 0,
+      passwords: 0,
+    };
 
     const assetIds = await this.prisma.asset.findMany({
       orderBy: { id: 'asc' },
@@ -186,12 +193,19 @@ export class SearchIndexService {
     const domainCount = await this.prisma.$executeRaw`
       UPDATE "monitored_domains" SET "updated_at" = "updated_at";
     `;
+    // Passwords: trigger-maintained since migration 0017. Searchable
+    // body is non-secret metadata only (name/username/url/tags); the
+    // ciphertext columns are never fed into the tsvector.
+    const passwordCount = await this.prisma.$executeRaw`
+      UPDATE "passwords" SET "updated_at" = "updated_at";
+    `;
     counts.articles = Number(articleCount ?? 0);
     counts.uploads = Number(uploadCount ?? 0);
     counts.domains = Number(domainCount ?? 0);
+    counts.passwords = Number(passwordCount ?? 0);
 
     this.logger.log(
-      `reindex-search: ${counts.assets} assets, ${counts.articles} articles, ${counts.uploads} uploads, ${counts.domains} domains`,
+      `reindex-search: ${counts.assets} assets, ${counts.articles} articles, ${counts.uploads} uploads, ${counts.domains} domains, ${counts.passwords} passwords`,
     );
     return counts;
   }

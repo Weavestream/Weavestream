@@ -85,8 +85,6 @@ export interface FieldTypeMeta {
    * inspector. Drives whether the inspector shows the "Options" sub-section.
    */
   hasOptions: boolean;
-  /** Phase-3 UI affordance stub flag — used to render "Available in Phase X" hints. */
-  phaseStub?: 'phase-4' | 'phase-5';
   /** Notes surfaced in the inspector hint row (optional). */
   hint?: string;
 }
@@ -125,8 +123,7 @@ export const FIELD_TYPE_CATALOG: readonly FieldTypeMeta[] = [
     composite: true,
     filterable: false,
     hasOptions: false,
-    phaseStub: 'phase-4',
-    hint: 'Editor lands in Phase 4 — Phase 3 accepts plain text.',
+    hint: 'Tiptap editor with slash commands for blocks and @ to link assets or articles.',
   },
   {
     kind: 'NUMBER',
@@ -228,7 +225,7 @@ export const FIELD_TYPE_CATALOG: readonly FieldTypeMeta[] = [
     composite: true,
     filterable: false,
     hasOptions: true,
-    hint: 'Populates the polymorphic Relation table; Linked items UI lands in Phase 5.',
+    hint: 'Populates the polymorphic Relation table so picks appear in the Linked items rail.',
   },
   {
     kind: 'VAULTWARDEN_LINK',
@@ -249,8 +246,7 @@ export const FIELD_TYPE_CATALOG: readonly FieldTypeMeta[] = [
     composite: true,
     filterable: false,
     hasOptions: true,
-    phaseStub: 'phase-4',
-    hint: 'Upload pipeline lands in Phase 4 — the chooser is disabled.',
+    hint: 'Uploads go through MinIO; cap per-field size via the Max size option.',
   },
   {
     kind: 'TAGS',

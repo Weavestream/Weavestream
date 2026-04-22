@@ -32,6 +32,8 @@ export class AuditController {
     @Query('to') to?: string,
     @Query('limit') limit?: string,
     @Query('cursor') cursor?: string,
+    @Query('page') page?: string,
+    @Query('pageSize') pageSize?: string,
   ) {
     if (actor.role !== 'SUPER_ADMIN') {
       if (!companyId) {
@@ -41,7 +43,6 @@ export class AuditController {
       if (!decision.allowed) throw new ForbiddenException(decision.reason);
     }
 
-    const take = Math.min(Math.max(limit ? parseInt(limit, 10) : 100, 1), 500);
     const where: Record<string, unknown> = {};
     if (companyId) where.companyId = companyId;
     if (action) where.action = { startsWith: action };
@@ -53,36 +54,86 @@ export class AuditController {
       };
     }
 
+    const select = {
+      id: true,
+      action: true,
+      entityType: true,
+      entityId: true,
+      companyId: true,
+      actorId: true,
+      ip: true,
+      userAgent: true,
+      createdAt: true,
+      before: true,
+      after: true,
+      actor: { select: { id: true, email: true, name: true } },
+    } as const;
+
+    // Cursor path (back-compat for any existing callers). Preserves
+    // the old `take + 1 / hasMore` trick and does not compute total.
+    if (cursor) {
+      const take = Math.min(Math.max(limit ? parseInt(limit, 10) : 100, 1), 500);
+      const rows = await this.prisma.auditLog.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        take: take + 1,
+        cursor: { id: cursor },
+        skip: 1,
+        select,
+      });
+      const hasMore = rows.length > take;
+      const slice = hasMore ? rows.slice(0, take) : rows;
+      const [entityNames, companyNames] = await Promise.all([
+        resolveEntityNames(this.prisma, slice),
+        resolveCompanyNames(this.prisma, slice),
+      ]);
+      return {
+        items: slice.map((row) => ({
+          ...row,
+          entityName:
+            row.entityType && row.entityId
+              ? (entityNames.get(`${row.entityType}:${row.entityId}`) ??
+                fallbackEntityName(row))
+              : null,
+          companyName: row.companyId ? (companyNames.get(row.companyId) ?? null) : null,
+        })),
+        total: null,
+        page: null,
+        pageSize: take,
+        nextCursor: hasMore ? slice[slice.length - 1]!.id : null,
+      };
+    }
+
+    // Offset path. `page` is 1-based. `pageSize` defaults to 50 and is
+    // clamped to [1, 200].
+    const parsedSize = pageSize ? parseInt(pageSize, 10) : 50;
+    const take = Math.min(
+      Math.max(Number.isFinite(parsedSize) ? parsedSize : 50, 1),
+      200,
+    );
+    const parsedPage = page ? parseInt(page, 10) : 1;
+    const safePage = Math.max(Number.isFinite(parsedPage) ? parsedPage : 1, 1);
+
+    const total = await this.prisma.auditLog.count({ where });
+    const totalPages = Math.max(Math.ceil(total / take), 1);
+    const clampedPage = Math.min(safePage, totalPages);
+    const skip = (clampedPage - 1) * take;
+
     const rows = await this.prisma.auditLog.findMany({
       where,
       orderBy: { createdAt: 'desc' },
-      take: take + 1,
-      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
-      select: {
-        id: true,
-        action: true,
-        entityType: true,
-        entityId: true,
-        companyId: true,
-        actorId: true,
-        ip: true,
-        userAgent: true,
-        createdAt: true,
-        before: true,
-        after: true,
-        actor: { select: { id: true, email: true, name: true } },
-      },
+      take,
+      skip,
+      select,
     });
-    const hasMore = rows.length > take;
-    const slice = hasMore ? rows.slice(0, take) : rows;
 
     const [entityNames, companyNames] = await Promise.all([
-      resolveEntityNames(this.prisma, slice),
-      resolveCompanyNames(this.prisma, slice),
+      resolveEntityNames(this.prisma, rows),
+      resolveCompanyNames(this.prisma, rows),
     ]);
 
     return {
-      items: slice.map((row) => ({
+      items: rows.map((row) => ({
         ...row,
         entityName:
           row.entityType && row.entityId
@@ -91,7 +142,10 @@ export class AuditController {
             : null,
         companyName: row.companyId ? (companyNames.get(row.companyId) ?? null) : null,
       })),
-      nextCursor: hasMore ? slice[slice.length - 1]!.id : null,
+      total,
+      page: clampedPage,
+      pageSize: take,
+      nextCursor: null,
     };
   }
 }
@@ -191,6 +245,23 @@ const ENTITY_NAME_LOADERS: Record<string, NameLoader> = {
     (await prisma.upload.findMany({ where: { id: { in: ids } }, select: { id: true, filename: true } })).map(
       (r) => [r.id, r.filename] as [string, string],
     ),
+  Password: async (prisma, ids) =>
+    (
+      await prisma.password.findMany({
+        where: { id: { in: ids } },
+        select: { id: true, name: true, username: true },
+      })
+    ).map(
+      (r) =>
+        [r.id, r.username ? `${r.name} · ${r.username}` : r.name] as [string, string],
+    ),
+  PasswordFolder: async (prisma, ids) =>
+    (
+      await prisma.passwordFolder.findMany({
+        where: { id: { in: ids } },
+        select: { id: true, name: true },
+      })
+    ).map((r) => [r.id, r.name] as [string, string]),
 };
 
 async function resolveCompanyNames(

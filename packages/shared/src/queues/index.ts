@@ -22,6 +22,7 @@ import { z } from 'zod';
  */
 export const QueueNames = {
   domainChecks: 'domain-checks',
+  pwnedCheck: 'pwned-check',
 } as const;
 
 export type QueueName = (typeof QueueNames)[keyof typeof QueueNames];
@@ -69,3 +70,38 @@ export const DomainCheckJobNames = {
 
 export type DomainCheckJobName =
   (typeof DomainCheckJobNames)[keyof typeof DomainCheckJobNames];
+
+// ---------------------------------------------------------------------
+// pwned-check queue (Phase 10 — password vault)
+// ---------------------------------------------------------------------
+//
+// The API enqueues a job whenever a password's ciphertext changes. The
+// worker fetches the (already-decrypted-at-enqueue-time) SHA-1 prefix +
+// suffix via k-anonymity, queries HaveIBeenPwned's /range/ endpoint,
+// and writes `pwned_count` + `pwned_checked_at` back to the row.
+//
+// The plaintext never leaves the API — only the 5-char hex prefix
+// travels over the wire to HIBP, and neither that prefix nor the full
+// hash is stored in the queue payload. We persist the FULL sha-1
+// (40-char hex) in the job body strictly for the HTTP comparison; the
+// API is responsible for NOT logging it and for TTL'ing the job
+// aggressively so it doesn't linger in Redis dumps.
+
+export const pwnedCheckJobSchema = z.object({
+  kind: z.literal('password'),
+  passwordId: z.string().uuid(),
+  companyId: z.string().uuid(),
+  /**
+   * Uppercase hex SHA-1 (40 chars) of the plaintext, computed in the
+   * API at enqueue time. The worker splits this into prefix[0..5]
+   * (sent to hibp) + suffix[5..] (compared locally).
+   */
+  sha1Hex: z.string().regex(/^[0-9A-F]{40}$/),
+});
+export type PwnedCheckJob = z.infer<typeof pwnedCheckJobSchema>;
+
+export const PwnedCheckJobNames = {
+  password: 'password',
+} as const;
+export type PwnedCheckJobName =
+  (typeof PwnedCheckJobNames)[keyof typeof PwnedCheckJobNames];

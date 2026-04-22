@@ -3,14 +3,17 @@ import { cookies } from 'next/headers';
 import type {
   FieldType,
   MembershipRole,
+  PasswordGeneratorDefaults,
   UserRole,
   UserSearchDefaults,
   UserUiPreferences,
 } from '@weavestream/shared';
+import { DEFAULT_PASSWORD_GENERATOR_DEFAULTS } from '@weavestream/shared';
 
 export type {
   FieldType,
   MembershipRole,
+  PasswordGeneratorDefaults,
   UserRole,
   UserSearchDefaults,
   UserUiPreferences,
@@ -207,6 +210,7 @@ export type Settings = {
   tenantTermSingular: string;
   tenantTermPlural: string;
   tenantTermPossessive: string | null;
+  passwordGeneratorDefaults: PasswordGeneratorDefaults;
   updatedAt: string;
 };
 
@@ -222,6 +226,7 @@ export const DEFAULT_SETTINGS: Settings = {
   tenantTermSingular: 'Company',
   tenantTermPlural: 'Companies',
   tenantTermPossessive: null,
+  passwordGeneratorDefaults: DEFAULT_PASSWORD_GENERATOR_DEFAULTS,
   updatedAt: new Date(0).toISOString(),
 };
 
@@ -367,7 +372,13 @@ export type AuditEntry = {
   after: Record<string, unknown> | null;
 };
 
-export type AuditPage = { items: AuditEntry[]; nextCursor: string | null };
+export type AuditPage = {
+  items: AuditEntry[];
+  total: number | null;
+  page: number | null;
+  pageSize: number;
+  nextCursor: string | null;
+};
 
 // ───────────────────────────────────────────────────────────────────
 // Phase 3: asset layouts + assets
@@ -434,6 +445,8 @@ export async function getLayout(
   return res.data;
 }
 
+export type ActorRef = { id: string; name: string };
+
 export type AssetSummary = {
   id: string;
   companyId: string;
@@ -448,6 +461,8 @@ export type AssetSummary = {
   archivedAt: string | null;
   createdBy: string | null;
   updatedBy: string | null;
+  createdByUser: ActorRef | null;
+  updatedByUser: ActorRef | null;
   createdAt: string;
   updatedAt: string;
   fieldValues: Record<string, unknown>;
@@ -561,6 +576,8 @@ export type ArticleSummary = {
   archivedAt: string | null;
   createdBy: string | null;
   updatedBy: string | null;
+  createdByUser: ActorRef | null;
+  updatedByUser: ActorRef | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -776,6 +793,65 @@ export async function listDomainAlerts(
   return res.data?.items ?? [];
 }
 
+// ---------------------------------------------------------------------
+// Expirations — unified feed across asset-field (isExpiry) dates and
+// domain (registrar/TLS) expiries. Read-only; no mutating endpoints.
+// ---------------------------------------------------------------------
+
+export type ExpirationStatus = 'EXPIRED' | 'WARNING';
+
+export type AssetFieldExpiration = {
+  kind: 'asset-field';
+  companyId: string;
+  companyName: string;
+  companySlug: string;
+  assetId: string;
+  assetName: string;
+  layoutId: string;
+  layoutName: string;
+  layoutIcon: string;
+  layoutColor: string;
+  fieldId: string;
+  fieldSlug: string;
+  fieldLabel: string;
+  fieldType: 'DATE' | 'DATETIME';
+  expiresAt: string;
+  daysUntil: number;
+  status: ExpirationStatus;
+  warnWithinDays: number;
+};
+
+export type DomainExpiration = {
+  kind: 'domain';
+  companyId: string;
+  companyName: string;
+  companySlug: string;
+  domainId: string;
+  hostname: string;
+  source: 'registrar' | 'tls';
+  expiresAt: string;
+  daysUntil: number;
+  status: ExpirationStatus;
+};
+
+export type ExpirationRow = AssetFieldExpiration | DomainExpiration;
+
+/**
+ * Fetch the unified expiring-soon feed. Pass `companyId` for a
+ * tenant-scoped list, omit for the global (SUPER_ADMIN) cross-tenant
+ * feed. Returns an empty list on 403 so callers can use the result to
+ * decide whether to render the link at all.
+ */
+export async function listExpirations(
+  companyId?: string,
+): Promise<ExpirationRow[]> {
+  const path = companyId
+    ? `/companies/${companyId}/expirations`
+    : '/expirations';
+  const res = await serverApiFetch<{ items: ExpirationRow[] }>(path);
+  return res.data?.items ?? [];
+}
+
 export type StarredCompany = {
   id: string;
   name: string;
@@ -813,6 +889,119 @@ export async function listRecentActivity(
 ): Promise<RecentActivityItem[]> {
   const res = await serverApiFetch<{ items: RecentActivityItem[] }>(
     `/activity/recent?limit=${limit}`,
+  );
+  return res.data?.items ?? [];
+}
+
+// ---------------------------------------------------------------------
+// Passwords (Phase 10 — vault)
+// ---------------------------------------------------------------------
+
+export type PasswordSummary = {
+  id: string;
+  companyId: string;
+  folderId: string | null;
+  assetId: string | null;
+  name: string;
+  username: string | null;
+  url: string | null;
+  color: string | null;
+  tags: string[];
+  hasTotp: boolean;
+  passwordStrength: number | null;
+  pwnedCount: number | null;
+  lastRotatedAt: string | null;
+  rotationReminderDays: number | null;
+  expiresAt: string | null;
+  visibleToClients: boolean;
+  requireReasonToView: boolean;
+  restrictedToUserIds: string[];
+  archivedAt: string | null;
+  createdBy: string;
+  updatedBy: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type PasswordDetail = PasswordSummary & {
+  notes: unknown | null;
+  totpAlgorithm: 'SHA1' | 'SHA256' | 'SHA512';
+  totpDigits: number;
+  totpPeriod: number;
+};
+
+export type PasswordFolderRow = {
+  id: string;
+  companyId: string;
+  parentId: string | null;
+  name: string;
+  icon: string | null;
+  color: string | null;
+  position: number;
+  archivedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type PasswordVersionRow = {
+  version: number;
+  changedFields: string[];
+  changedBy: string;
+  changedByName: string | null;
+  changeReason: string | null;
+  createdAt: string;
+};
+
+export async function listPasswords(
+  companyId: string,
+  params: {
+    q?: string;
+    folderId?: string;
+    assetId?: string;
+    tag?: string;
+    archived?: boolean;
+    stale?: boolean;
+  } = {},
+): Promise<PasswordSummary[]> {
+  const q = new URLSearchParams();
+  if (params.q) q.set('q', params.q);
+  if (params.folderId) q.set('folderId', params.folderId);
+  if (params.assetId) q.set('assetId', params.assetId);
+  if (params.tag) q.set('tag', params.tag);
+  if (params.archived) q.set('archived', 'true');
+  if (params.stale) q.set('stale', 'true');
+  const res = await serverApiFetch<{ items: PasswordSummary[] }>(
+    `/companies/${companyId}/passwords${q.toString() ? `?${q.toString()}` : ''}`,
+  );
+  return res.data?.items ?? [];
+}
+
+export async function getPasswordDetail(
+  companyId: string,
+  id: string,
+): Promise<PasswordDetail | null> {
+  const res = await serverApiFetch<PasswordDetail>(
+    `/companies/${companyId}/passwords/${id}`,
+  );
+  if (!res.ok || !res.data) return null;
+  return res.data;
+}
+
+export async function listPasswordFolders(
+  companyId: string,
+): Promise<PasswordFolderRow[]> {
+  const res = await serverApiFetch<{ items: PasswordFolderRow[] }>(
+    `/companies/${companyId}/password-folders`,
+  );
+  return res.data?.items ?? [];
+}
+
+export async function listPasswordVersions(
+  companyId: string,
+  id: string,
+): Promise<PasswordVersionRow[]> {
+  const res = await serverApiFetch<{ items: PasswordVersionRow[] }>(
+    `/companies/${companyId}/passwords/${id}/versions`,
   );
   return res.data?.items ?? [];
 }

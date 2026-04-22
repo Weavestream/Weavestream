@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { lower } from '../../../../../../lib/term';
 import { useTerm } from '../../../../../../lib/term-context';
 import {
@@ -31,6 +31,7 @@ import {
   type FieldTypeMeta,
   canShowInTable,
   fieldOptionsSchemaFor,
+  getLayoutTemplate,
   saveAssetFieldsSchema,
 } from '@weavestream/shared';
 import type { LayoutStats, LayoutSummary, LayoutFieldSummary } from '../../../../../../lib/server-api';
@@ -131,6 +132,8 @@ export function LayoutBuilder({
   allLayouts: LayoutSummary[];
 }) {
   const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
   const toast = useToast();
   const term = useTerm();
   const isMobile = useIsMobile();
@@ -175,6 +178,64 @@ export function LayoutBuilder({
       setBaseline(fresh);
     }
   }, [layout.version, activeFields]);
+
+  // Starter-template seeding: when the builder is opened with
+  // `?template=<id>` (set by the create-layout dialog) AND the layout
+  // has no persisted fields yet AND the viewer can edit, pre-populate
+  // the local field list from the template catalog. Fields are left
+  // without an `id` so the save diff treats them as brand-new rows,
+  // and `baseline` is intentionally not updated so the "unsaved" chip
+  // lights up immediately. The query param is stripped after the
+  // seed so a refresh doesn't clobber in-progress edits with the
+  // original template fields.
+  const seededRef = useRef(false);
+  useEffect(() => {
+    if (seededRef.current) return;
+    const templateId = searchParams.get('template');
+    if (!templateId) return;
+    // Mark before any early return so the effect only ever fires once
+    // per mount — even if the template is invalid or the layout
+    // already has fields, the URL gets cleaned up on the same pass.
+    seededRef.current = true;
+    const stripParam = () => {
+      const next = new URLSearchParams(searchParams.toString());
+      next.delete('template');
+      const qs = next.toString();
+      router.replace(qs ? `${pathname}?${qs}` : pathname);
+    };
+    if (!canEdit || activeFields.length > 0) {
+      stripParam();
+      return;
+    }
+    const template = getLayoutTemplate(templateId);
+    if (!template) {
+      stripParam();
+      return;
+    }
+    const hasPrimary = template.fields.some((f) => f.isPrimary === true);
+    const seeded: BuilderField[] = template.fields.map((f, idx) => ({
+      key: newKey(),
+      name: f.name,
+      slug: f.slug,
+      fieldType: f.fieldType,
+      isRequired: f.isRequired ?? false,
+      isUniquePerCompany: false,
+      visibleToClients: f.visibleToClients ?? true,
+      // Templates should always mark a primary, but fall back to the
+      // first field if one is missing so the Save validator (which
+      // requires exactly one primary) doesn't reject on load.
+      isPrimary: f.isPrimary === true || (!hasPrimary && idx === 0),
+      showInTable:
+        (f.showInTable ?? false) && canShowInTable(f.fieldType),
+      // Merge template-supplied options on top of the kind's default
+      // skeleton so DROPDOWN/IP_ADDRESS/DATE keep all required keys
+      // even if the template only overrides a subset.
+      options: { ...defaultOptionsFor(f.fieldType), ...(f.options ?? {}) },
+    }));
+    setFields(seeded);
+    setSelectedKey(seeded[0]?.key ?? null);
+    stripParam();
+  }, [searchParams, pathname, router, canEdit, activeFields.length]);
 
   const dirty = useMemo(() => {
     if (fields.length !== baseline.length) return true;
@@ -706,7 +767,6 @@ export function LayoutBuilder({
                       selected={selectedKey === f.key}
                       onSelect={() => setSelectedKey(f.key)}
                       onRemove={() => removeField(f.key)}
-                      onPrimary={() => setPrimary(f.key)}
                       canEdit={canEdit}
                     />
                   ))}
@@ -917,14 +977,12 @@ function SortableFieldRow({
   selected,
   onSelect,
   onRemove,
-  onPrimary,
   canEdit,
 }: {
   field: BuilderField;
   selected: boolean;
   onSelect: () => void;
   onRemove: () => void;
-  onPrimary: () => void;
   canEdit: boolean;
 }) {
   const {
@@ -985,9 +1043,6 @@ function SortableFieldRow({
         {!field.isPrimary &&
           field.showInTable &&
           canShowInTable(field.fieldType) && <Tag tone="outline">column</Tag>}
-        {meta.phaseStub && (
-          <Tag tone="outline">available in {meta.phaseStub.replace('phase-', 'phase ')}</Tag>
-        )}
       </div>
       <span
         style={{
@@ -1008,18 +1063,6 @@ function SortableFieldRow({
         {field.slug}
       </span>
       <div style={{ display: 'flex', gap: 4, justifyContent: 'flex-end' }}>
-        {!field.isPrimary && canEdit && (
-          <Btn
-            size="sm"
-            kind="ghost"
-            icon={Icon.star}
-            onClick={(e) => {
-              e.stopPropagation();
-              onPrimary();
-            }}
-            title="Make primary"
-          />
-        )}
         {canEdit && (
           <Btn
             size="sm"
@@ -1657,10 +1700,7 @@ function OptionsEditor({
       );
     case 'FILE':
       return (
-        <InspectorField
-          label="Upload"
-          hint={meta.phaseStub === 'phase-4' ? 'Upload pipeline lands in Phase 4.' : undefined}
-        >
+        <InspectorField label="Upload">
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             <InspectorInput
               label="Max size (MB)"

@@ -25,6 +25,7 @@ import { FieldTypesRegistry } from '../field-types/field-types.registry.js';
 import { RelationsService } from '../relations/relations.service.js';
 import { UploadsService } from '../uploads/uploads.service.js';
 import { SearchIndexService } from '../search/search-index.service.js';
+import { PasswordsService } from '../passwords/passwords.service.js';
 import { buildAssetZodSchema } from './build-asset-schema.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
 
@@ -43,6 +44,11 @@ export interface AssetListOptions {
   cursor?: string;
 }
 
+export interface ActorRef {
+  id: string;
+  name: string;
+}
+
 export interface SerializedAsset {
   id: string;
   companyId: string;
@@ -57,6 +63,8 @@ export interface SerializedAsset {
   archivedAt: Date | null;
   createdBy: string | null;
   updatedBy: string | null;
+  createdByUser: ActorRef | null;
+  updatedByUser: ActorRef | null;
   createdAt: Date;
   updatedAt: Date;
   fieldValues: Record<string, unknown>;
@@ -94,6 +102,7 @@ export class AssetsService {
     private readonly relations: RelationsService,
     private readonly uploads: UploadsService,
     private readonly searchIndex: SearchIndexService,
+    private readonly passwords: PasswordsService,
   ) {}
 
   // --------------------------------------------------------------------
@@ -190,6 +199,7 @@ export class AssetsService {
     );
     await this.hydrateFileFields(companyId, serialized);
     await this.hydrateAssetReferences(companyId, serialized);
+    await this.hydrateActors(serialized);
     return {
       items: serialized,
       nextCursor: hasMore ? slice[slice.length - 1]!.id : null,
@@ -233,6 +243,7 @@ export class AssetsService {
     const serialized = this.serialize(asset, asset.assetLayout, asset.fieldValues, actor.role);
     await this.hydrateFileFields(companyId, [serialized]);
     await this.hydrateAssetReferences(companyId, [serialized]);
+    await this.hydrateActors([serialized]);
     return serialized;
   }
 
@@ -423,15 +434,26 @@ export class AssetsService {
     if (!existing) throw new NotFoundException();
     if (existing.archivedAt) throw new BadRequestException('Already archived');
 
+    const archivedAt = new Date();
     await this.prisma.$transaction(async (tx) => {
       await tx.asset.updateMany({
         where: { id, companyId },
-        data: { archivedAt: new Date(), updatedBy: actor.id },
+        data: { archivedAt, updatedBy: actor.id },
       });
       // Phase 6: mirror `archived_at` into `search_index` so the default
       // query filter (`archived_at IS NULL`) hides the row immediately.
       await this.searchIndex.upsertAsset(tx, id);
     });
+
+    // Phase 10: cascade archive to embedded credentials. Runs outside
+    // the asset transaction so a partial password write doesn't roll
+    // back the asset archive — the cascade is purely additive (sets
+    // `archivedAt` on passwords that were active) and is safe to retry.
+    const cascade = await this.passwords.cascadeArchiveFromAsset(
+      companyId,
+      id,
+      archivedAt,
+    );
 
     await this.audit.log({
       actorId: actor.id,
@@ -442,7 +464,7 @@ export class AssetsService {
       ip: meta.ip,
       userAgent: meta.userAgent,
       before: { archivedAt: null },
-      after: { archivedAt: new Date() },
+      after: { archivedAt, cascadedPasswords: cascade.archived },
     });
     return this.get(actor, companyId, id);
   }
@@ -465,6 +487,11 @@ export class AssetsService {
       await this.searchIndex.upsertAsset(tx, id);
     });
 
+    // Phase 10: mirror the restore onto embedded credentials the asset
+    // cascade previously archived. Only archived rows flip — any
+    // password that was archived on its own remains archived.
+    const cascade = await this.passwords.cascadeRestoreFromAsset(companyId, id);
+
     await this.audit.log({
       actorId: actor.id,
       action: 'asset.restore',
@@ -474,7 +501,7 @@ export class AssetsService {
       ip: meta.ip,
       userAgent: meta.userAgent,
       before: { archivedAt: existing.archivedAt },
-      after: { archivedAt: null },
+      after: { archivedAt: null, cascadedPasswords: cascade.restored },
     });
     return this.get(actor, companyId, id);
   }
@@ -790,6 +817,34 @@ export class AssetsService {
     }
   }
 
+  /**
+   * Resolve `createdBy` / `updatedBy` user ids into `{ id, name }` stubs
+   * so the UI can render "updated by Jane" without the caller having to
+   * hold `membership.manage`. This is a post-pass over already-serialized
+   * rows so the sync `serialize()` path stays simple; one Prisma query
+   * covers any number of assets in a list.
+   */
+  private async hydrateActors(assets: SerializedAsset[]): Promise<void> {
+    if (assets.length === 0) return;
+    const ids = new Set<string>();
+    for (const a of assets) {
+      if (a.createdBy) ids.add(a.createdBy);
+      if (a.updatedBy) ids.add(a.updatedBy);
+    }
+    if (ids.size === 0) return;
+    const users = await this.prisma.user.findMany({
+      where: { id: { in: Array.from(ids) } },
+      select: { id: true, name: true, email: true },
+    });
+    const byId = new Map(
+      users.map((u) => [u.id, { id: u.id, name: u.name || u.email }] as const),
+    );
+    for (const a of assets) {
+      if (a.createdBy) a.createdByUser = byId.get(a.createdBy) ?? null;
+      if (a.updatedBy) a.updatedByUser = byId.get(a.updatedBy) ?? null;
+    }
+  }
+
   private serialize(
     asset: Asset,
     layout: LayoutWithFields,
@@ -820,6 +875,8 @@ export class AssetsService {
       archivedAt: asset.archivedAt,
       createdBy: asset.createdBy,
       updatedBy: asset.updatedBy,
+      createdByUser: null,
+      updatedByUser: null,
       createdAt: asset.createdAt,
       updatedAt: asset.updatedAt,
       fieldValues,

@@ -16,6 +16,8 @@ function validEnv(): NodeJS.ProcessEnv {
     MINIO_ACCESS_KEY: 'test-access',
     MINIO_SECRET_KEY: 'test-secret',
     MINIO_PUBLIC_URL: 'http://localhost:9100',
+    PASSWORD_ENCRYPTION_KEY: key,
+    PASSWORD_ENCRYPTION_KEY_KID: 'pk-1',
   };
 }
 

@@ -1,7 +1,11 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { requireTenantContext } from '@weavestream/shared/server';
-import type { SearchEntityKind, SearchHit } from '@weavestream/shared';
+import {
+  searchEntityKinds,
+  type SearchEntityKind,
+  type SearchHit,
+} from '@weavestream/shared';
 import { PrismaService } from '../prisma/prisma.service.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
 
@@ -126,7 +130,7 @@ export class SearchService {
     const kinds: SearchEntityKind[] =
       req.types && req.types.length > 0
         ? req.types
-        : ['asset', 'article', 'upload', 'domain'];
+        : [...searchEntityKinds];
 
     // ---- tsquery ----
     //
@@ -156,7 +160,7 @@ export class SearchService {
     // ---- WHERE ----
     const whereParts: Prisma.Sql[] = [Prisma.sql`si.${tsvectorCol} @@ ${tsq}`];
 
-    if (kinds.length < 4) {
+    if (kinds.length < searchEntityKinds.length) {
       whereParts.push(
         Prisma.sql`si.entity_type IN (${Prisma.join(kinds)})`,
       );
@@ -178,11 +182,12 @@ export class SearchService {
       // Defence in depth: even though `body_public` already omits
       // hidden field text on assets and is empty for hidden articles,
       // we refuse to match any row whose entire source record was
-      // marked `visible_to_clients = false`. This applies to Article
-      // and MonitoredDomain rows; Upload + Asset rows are always
-      // visible (with per-field redaction on assets via body_public).
+      // marked `visible_to_clients = false`. This applies to Article,
+      // MonitoredDomain, and Password rows; Upload + Asset rows are
+      // always visible (with per-field redaction on assets via
+      // body_public).
       whereParts.push(
-        Prisma.sql`(si.entity_type NOT IN ('article', 'domain') OR si.visible_to_clients = true)`,
+        Prisma.sql`(si.entity_type NOT IN ('article', 'domain', 'password') OR si.visible_to_clients = true)`,
       );
     }
 
@@ -384,6 +389,10 @@ export class SearchService {
         // a detail page. Both live under `/domains/:id` so the same
         // route works in either role.
         return `${base}/domains/${row.entity_id}`;
+      case 'password':
+        // Same path shape in admin + portal — the password detail page
+        // exists in both routers and enforces its own visibility rules.
+        return `${base}/passwords/${row.entity_id}`;
     }
   }
 
