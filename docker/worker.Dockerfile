@@ -6,7 +6,7 @@
 # only consumes Redis queues and talks to Postgres + MinIO via the
 # internal compose network.
 # ───────────────────────────────────────────────────────────────────────
-FROM node:20-alpine AS base
+FROM node:24-alpine AS base
 RUN apk add --no-cache libc6-compat openssl tini
 ENV PNPM_HOME="/pnpm" \
     PATH="/pnpm:$PATH" \
@@ -41,7 +41,7 @@ RUN --mount=type=cache,id=pnpm,target=/pnpm/store \
     pnpm install --frozen-lockfile --prod
 
 # ───── runner ─────
-FROM node:20-alpine AS runner
+FROM node:24-alpine AS runner
 RUN apk add --no-cache libc6-compat openssl tini \
  && addgroup -S app && adduser -S app -G app
 

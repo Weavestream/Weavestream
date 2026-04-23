@@ -1,7 +1,7 @@
 # ───────────────────────────────────────────────────────────────────────
 # apps/web — Next.js 15 (App Router), non-root runner
 # ───────────────────────────────────────────────────────────────────────
-FROM node:20-alpine AS base
+FROM node:24-alpine AS base
 # Only `libc6-compat` + `tini` are needed here. Sharp (pulled in
 # transitively via Next.js) ships prebuilt musl binaries that pnpm
 # hydrates from its store — see @img/sharp-linuxmusl-* in pnpm-lock.
@@ -45,7 +45,7 @@ RUN pnpm --filter @weavestream/shared build \
  && pnpm --filter @weavestream/web build
 
 # ───── runner ─────
-FROM node:20-alpine AS runner
+FROM node:24-alpine AS runner
 RUN apk add --no-cache tini curl \
  && addgroup -S app && adduser -S app -G app
 

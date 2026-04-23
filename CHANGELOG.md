@@ -6,6 +6,15 @@ this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- **Node.js 24 is now the minimum supported runtime.** Node 20
+  maintenance LTS reaches end of life on 2026-04-30. All Docker images
+  (`api`, `web`, `worker`) now build on `node:24-alpine`, `engines.node`
+  is `>=24.0.0`, and CI runs on Node 24. `@types/node` is pinned to
+  `^24.0.0` across the workspace. Self-hosted deployments should
+  confirm their host runtime is on Node 24 before upgrading.
+
 ## [1.1.3] - 2026-04-23
 ### Fixed
 
