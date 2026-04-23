@@ -29,6 +29,16 @@ this project adheres to [Semantic Versioning](https://semver.org/).
   No test or jest config changes were required. A separate future PR
   will handle the TypeScript 5.x -> 6.x jump, which has real breaking
   changes (new `strict` / `types` / `rootDir` defaults).
+- **Zod floor raised from `^3.23.8` to `^3.25.0`.** Resolves to
+  `zod@3.25.76`, the latest of the actively-maintained 3.x line. That
+  version also ships the Zod 4 preview under `zod/v4`, so individual
+  schemas can migrate incrementally. A full workspace-wide bump to
+  Zod 4.x is deferred: v4.3.x has a known `z.enum` overload-resolution
+  regression that pollutes the inferred enum output with
+  `Array.prototype` members whenever the input is an array literal,
+  forcing every `z.enum(...)` call site to either use object form or
+  explicit casts — that's a dedicated PR and probably a wait for
+  upstream to fix the inference bug.
 
 ## [1.1.3] - 2026-04-23
 ### Fixed
