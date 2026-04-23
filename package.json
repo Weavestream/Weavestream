@@ -2,7 +2,7 @@
   "name": "weavestream",
   "version": "0.1.0",
   "private": true,
-  "packageManager": "pnpm@9.12.0",
+  "packageManager": "pnpm@10.33.2",
   "engines": {
     "node": ">=24.0.0"
   },
@@ -38,6 +38,16 @@
         "musl",
         "glibc"
       ]
-    }
+    },
+    "onlyBuiltDependencies": [
+      "@nestjs/core",
+      "@prisma/client",
+      "@prisma/engines",
+      "argon2",
+      "msgpackr-extract",
+      "prisma",
+      "sharp",
+      "unrs-resolver"
+    ]
   }
 }

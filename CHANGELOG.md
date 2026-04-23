@@ -14,6 +14,14 @@ this project adheres to [Semantic Versioning](https://semver.org/).
   is `>=24.0.0`, and CI runs on Node 24. `@types/node` is pinned to
   `^24.0.0` across the workspace. Self-hosted deployments should
   confirm their host runtime is on Node 24 before upgrading.
+- **pnpm 10 is now the workspace package manager.** `packageManager`
+  in root `package.json` is pinned to `pnpm@10.33.2` and CI runs the
+  same version. pnpm 10 no longer runs install scripts by default; the
+  allow-list is declared in `pnpm.onlyBuiltDependencies` (prisma,
+  @prisma/client, @prisma/engines, @nestjs/core, argon2, sharp,
+  msgpackr-extract, unrs-resolver). Contributors should run
+  `corepack enable` once; subsequent `pnpm` invocations inside the
+  repo will auto-use the declared version.
 
 ## [1.1.3] - 2026-04-23
 ### Fixed
