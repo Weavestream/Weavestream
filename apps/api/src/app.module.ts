@@ -3,6 +3,7 @@ import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { LoggerModule } from 'nestjs-pino';
 import { randomUUID } from 'node:crypto';
+import type { IncomingMessage, ServerResponse } from 'node:http';
 import { ConfigModule } from './config/config.module.js';
 import { EnvService } from './config/env.service.js';
 import { PrismaModule } from './prisma/prisma.module.js';
@@ -54,6 +55,15 @@ import { AuditInterceptor } from './audit/audit.interceptor.js';
 import { ProblemExceptionFilter } from './common/problem-exception.filter.js';
 import { RedisThrottlerStorage } from './redis/redis-throttler.storage.js';
 
+/** Compact access logs: avoid logging full req/res headers on every line. */
+const httpSerializers = {
+  req: (req: IncomingMessage) => {
+    const id = (req as IncomingMessage & { id?: string }).id;
+    return { id, method: req.method, url: req.url };
+  },
+  res: (res: ServerResponse) => ({ statusCode: res.statusCode }),
+};
+
 @Module({
   imports: [
     ConfigModule,
@@ -63,6 +73,7 @@ import { RedisThrottlerStorage } from './redis/redis-throttler.storage.js';
       useFactory: (env: EnvService) => ({
         pinoHttp: {
           level: env.values.LOG_LEVEL,
+          serializers: httpSerializers,
           genReqId: (req) =>
             (req.headers['x-request-id'] as string | undefined) ?? randomUUID(),
           customProps: (req) => ({ requestId: (req as { id?: string }).id }),
