@@ -329,7 +329,7 @@ export function PasswordInlineActions({
             gap: 6,
             padding: '2px 8px',
             borderRadius: 4,
-            background: 'var(--bg-accent, #fef3c7)',
+            background: 'var(--warn-soft)',
             fontFamily: 'var(--font-mono)',
             fontSize: 12,
             color: 'var(--text)',

@@ -245,7 +245,7 @@ export function PasswordRevealField(props: PasswordRevealFieldProps) {
               border: '1px solid var(--border)',
               borderRadius: 6,
               fontSize: 13,
-              background: 'var(--bg-elev)',
+              background: 'var(--elev)',
               color: 'var(--fg)',
             }}
           />
@@ -284,9 +284,9 @@ export function PasswordRevealField(props: PasswordRevealFieldProps) {
           style={{
             flex: 1,
             padding: compact ? '4px 8px' : '8px 10px',
-            border: '1px solid var(--border)',
+            border: '1px solid var(--line)',
             borderRadius: 6,
-            background: plaintext ? 'var(--bg-accent, #fef3c7)' : 'var(--bg-elev, #f9fafb)',
+            background: plaintext ? 'var(--warn-soft)' : 'var(--elev)',
             userSelect: plaintext ? 'none' : 'auto',
             overflowX: 'auto',
             whiteSpace: 'nowrap',

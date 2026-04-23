@@ -6,6 +6,31 @@ this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.1.2] - 2026-04-23
+### Fixed
+
+- **Client viewers can reveal permitted client-visible passwords again.**
+  `CLIENT_VIEWER` memberships are now included in `password.reveal`
+  authorization, with existing visibility and restriction checks still
+  enforced inside the passwords service.
+- **Article excerpts no longer render twice on read pages.** The
+  dedicated excerpt block was removed from both admin and portal article
+  read views to avoid duplicate summary text when content already
+  includes the same intro.
+- **Article edit pages now expose file attachments.** The attachments
+  panel is available in the article form sidebar/sheet so operators can
+  manage uploads without leaving the edit flow.
+- **Article browser layout now shrinks correctly in split panes.**
+  Applied a missing `min-width: 0` constraint so the browser content no
+  longer overflows in constrained admin layouts.
+- **Password detail pages now show the linked asset name.** The page
+  resolves the linked asset and labels the outbound link with the asset
+  title instead of generic copy.
+- **Password reveal and inline warning surfaces use valid theme tokens.**
+  Updated stale CSS vars (`--bg-elev`, fallback accent colors) to
+  supported tokens so warnings and reveal fields render consistently
+  across themes.
+
 ## [1.1.1] - 2026-04-23
 
 ### Added

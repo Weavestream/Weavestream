@@ -23,17 +23,9 @@ import { useEffect, useState } from 'react';
 export function ArticleToc({
   articleId,
   articleUpdatedAt,
-  createdBy,
-  createdAt,
-  updatedBy,
-  updatedAt,
 }: {
   articleId: string;
   articleUpdatedAt: string;
-  createdBy: { id: string; displayName: string } | null;
-  createdAt: string;
-  updatedBy: { id: string; displayName: string } | null;
-  updatedAt: string;
 }) {
   type Heading = { id: string; text: string; level: 1 | 2 | 3 };
   const [headings, setHeadings] = useState<Heading[]>([]);
@@ -135,8 +127,6 @@ export function ArticleToc({
     return () => observer.disconnect();
   }, [headings]);
 
-  const hasActivity = createdBy || updatedBy;
-
   return (
     <div style={{ display: 'flex', flexDirection: 'column' }}>
       <SectionLabel>On this page</SectionLabel>
@@ -199,43 +189,6 @@ export function ArticleToc({
         </div>
       )}
 
-      {hasActivity && (
-        <div
-          style={{
-            marginTop: 24,
-            paddingTop: 18,
-            borderTop: '1px solid var(--line)',
-          }}
-        >
-          <SectionLabel>Last activity</SectionLabel>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 10 }}>
-            {createdBy && (
-              <PersonRow
-                name={createdBy.displayName}
-                role={`created ${timeAgo(createdAt)}`}
-              />
-            )}
-            {updatedBy && updatedBy.id !== createdBy?.id && (
-              <PersonRow
-                name={updatedBy.displayName}
-                role={`updated ${timeAgo(updatedAt)}`}
-              />
-            )}
-            {updatedBy && createdBy && updatedBy.id === createdBy.id && (
-              <div
-                style={{
-                  fontSize: 11,
-                  color: 'var(--dim)',
-                  fontFamily: 'var(--font-mono)',
-                  paddingLeft: 30,
-                }}
-              >
-                also last edit · {timeAgo(updatedAt)}
-              </div>
-            )}
-          </div>
-        </div>
-      )}
     </div>
   );
 }
@@ -257,59 +210,6 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
   );
 }
 
-function PersonRow({ name, role }: { name: string; role: string }) {
-  return (
-    <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-      <div
-        style={{
-          width: 22,
-          height: 22,
-          borderRadius: '50%',
-          background: 'var(--panel-2)',
-          border: '1px solid var(--line-2)',
-          fontSize: 10,
-          fontWeight: 600,
-          display: 'grid',
-          placeItems: 'center',
-          color: 'var(--text)',
-          flexShrink: 0,
-        }}
-      >
-        {initials(name)}
-      </div>
-      <div style={{ minWidth: 0 }}>
-        <div
-          style={{
-            fontSize: 12,
-            color: 'var(--text)',
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            whiteSpace: 'nowrap',
-          }}
-        >
-          {name}
-        </div>
-        <div
-          style={{
-            fontSize: 10.5,
-            color: 'var(--dim)',
-            fontFamily: 'var(--font-mono)',
-          }}
-        >
-          {role}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function initials(name: string): string {
-  const parts = name.trim().split(/\s+/).filter(Boolean);
-  if (parts.length === 0) return '?';
-  if (parts.length === 1) return parts[0]!.slice(0, 2).toUpperCase();
-  return (parts[0]![0]! + parts[parts.length - 1]![0]!).toUpperCase();
-}
-
 function slugify(s: string): string {
   return (
     s
@@ -322,15 +222,3 @@ function slugify(s: string): string {
   );
 }
 
-function timeAgo(iso: string): string {
-  const d = new Date(iso);
-  const sec = Math.max(1, Math.round((Date.now() - d.getTime()) / 1000));
-  if (sec < 60) return `${sec}s ago`;
-  const min = Math.round(sec / 60);
-  if (min < 60) return `${min}m ago`;
-  const h = Math.round(min / 60);
-  if (h < 24) return `${h}h ago`;
-  const days = Math.round(h / 24);
-  if (days < 14) return `${days}d ago`;
-  return d.toLocaleDateString();
-}

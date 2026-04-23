@@ -35,6 +35,7 @@ interface Props {
   folders: PasswordFolderRow[];
   canManage: boolean;
   folderName: string | null;
+  assetName: string | null;
   me: { id: string; role: string };
   generatorDefaults: PasswordGeneratorDefaults;
 }
@@ -55,6 +56,7 @@ export function PasswordDetailClient({
   folders,
   canManage,
   folderName,
+  assetName,
   me,
   generatorDefaults,
 }: Props) {
@@ -328,7 +330,7 @@ export function PasswordDetailClient({
                 href={`/admin/companies/${companyId}/assets/${password.assetId}`}
                 style={{ color: 'var(--accent)', fontSize: 13 }}
               >
-                View linked asset →
+                {assetName ?? 'View asset'} →
               </Link>
               <p
                 style={{

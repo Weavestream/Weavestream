@@ -11,6 +11,7 @@ import { Btn, Icon, Sheet, Tag, useToast } from '../../../../../components/ui';
 import { TopBar } from '../../../../../components/shell/top-bar';
 import { RichTextEditor } from '../../../../../components/editor/rich-text-editor';
 import { LinkedItemsPanel } from '../../../../../components/relations';
+import { AttachmentsPanel } from '../../../../../components/upload/attachments-panel';
 import { useTerm } from '../../../../../lib/term-context';
 import { companyCrumbs } from '../../../../../lib/company-crumbs';
 import { useIsMobile } from '../../../../../lib/hooks/use-is-mobile';
@@ -379,6 +380,12 @@ export function ArticleForm({
               entityId={article.id}
               editable={!article.archivedAt}
             />
+            <AttachmentsPanel
+              companyId={companyId}
+              entityType="article"
+              entityId={article.id}
+              editable={!article.archivedAt}
+            />
           </aside>
         )}
       </div>
@@ -429,6 +436,12 @@ export function ArticleForm({
               }}
             >
               <LinkedItemsPanel
+                companyId={companyId}
+                entityType="article"
+                entityId={article.id}
+                editable={!article.archivedAt}
+              />
+              <AttachmentsPanel
                 companyId={companyId}
                 entityType="article"
                 entityId={article.id}

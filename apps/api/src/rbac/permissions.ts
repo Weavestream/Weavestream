@@ -230,9 +230,9 @@ export const PERMISSIONS: Record<Action, PermissionRule> = {
   'password.reveal': {
     scope: 'company',
     allowGlobal: ['SUPER_ADMIN', 'CONTRACTOR'],
-    allowMembership: ['OPERATOR_FULL', 'OPERATOR_READONLY', 'CLIENT_ADMIN'],
+    allowMembership: ['OPERATOR_FULL', 'OPERATOR_READONLY', 'CLIENT_ADMIN', 'CLIENT_VIEWER'],
     requireNonExpiredMembership: true,
-    note: 'CLIENT_ADMIN may reveal only passwords flagged visibleToClients=true. `restrictedToUserIds` and `requireReasonToView` are enforced inside PasswordsService, which also writes the password.revealed audit row.',
+    note: 'CLIENT_ADMIN/CLIENT_VIEWER may reveal only passwords flagged visibleToClients=true. `restrictedToUserIds` and `requireReasonToView` are enforced inside PasswordsService, which also writes the password.revealed audit row.',
   },
   'password.archive': {
     scope: 'company',
