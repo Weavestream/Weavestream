@@ -40,6 +40,21 @@ this project adheres to [Semantic Versioning](https://semver.org/).
   explicit casts — that's a dedicated PR and probably a wait for
   upstream to fix the inference bug.
 
+### Deferred (for future PRs)
+
+- **Prisma 5 -> 6+.** Prisma 6 removes the `$use` middleware hook in
+  favour of Client Extensions (`$extends`). Our `PrismaService`
+  middleware enforces tenant isolation on every query — security-
+  critical code that deserves its own dedicated migration PR with
+  focused review (the refactor either returns a replacement instance
+  from the constructor, which breaks NestJS lifecycle hooks, or
+  changes the shape of `PrismaService` across ~35 consumer files).
+- **TypeScript 5 -> 6.** New defaults (`strict: true`,
+  `types: []`, inferred `rootDir`) require a workspace-wide
+  `tsconfig.json` audit; not a drop-in bump.
+- **Zod 3.25 -> 4.x** (see above — blocked on upstream inference fix
+  for `z.enum(array)`).
+
 ## [1.1.3] - 2026-04-23
 ### Fixed
 
