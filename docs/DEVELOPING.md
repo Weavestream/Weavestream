@@ -5,7 +5,7 @@ deploying with published images want [INSTALL.md](INSTALL.md) instead.
 
 ## Prerequisites
 
-- **Node.js 20.11+** (managed with [nvm](https://github.com/nvm-sh/nvm)
+- **Node.js 24+** (managed with [nvm](https://github.com/nvm-sh/nvm)
   / [fnm](https://github.com/Schniz/fnm) / [Volta](https://volta.sh)).
 - **pnpm 9.12+** — install with `corepack enable` then `corepack prepare pnpm@9.12.0 --activate`.
 - **Docker Engine 24+** with Compose v2.
