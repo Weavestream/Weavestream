@@ -7,7 +7,9 @@ deploying with published images want [INSTALL.md](INSTALL.md) instead.
 
 - **Node.js 24+** (managed with [nvm](https://github.com/nvm-sh/nvm)
   / [fnm](https://github.com/Schniz/fnm) / [Volta](https://volta.sh)).
-- **pnpm 9.12+** — install with `corepack enable` then `corepack prepare pnpm@9.12.0 --activate`.
+- **pnpm 10+** — enabled automatically via Corepack; run
+  `corepack enable` once and subsequent `pnpm` invocations in this repo
+  will pick up the version declared in root `package.json#packageManager`.
 - **Docker Engine 24+** with Compose v2.
 - **openssl** (pre-installed on macOS / most Linux distros) or the
   PowerShell keygen for Windows.
