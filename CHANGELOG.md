@@ -6,6 +6,8 @@ this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.1.4] - 2026-04-23
+
 ### Changed
 
 - **Node.js 24 is now the minimum supported runtime.** Node 20
@@ -39,6 +41,26 @@ this project adheres to [Semantic Versioning](https://semver.org/).
   forcing every `z.enum(...)` call site to either use object form or
   explicit casts — that's a dedicated PR and probably a wait for
   upstream to fix the inference bug.
+
+### Fixed
+
+- **Release workflow no longer hangs for 40+ minutes on worker
+  `linux/arm64`.** The previous single-job matrix built both
+  architectures on an `amd64` runner using QEMU emulation, and the
+  worker's pnpm install reliably crashed under qemu with
+  `qemu: uncaught target signal 4 (Illegal instruction)`. The release
+  pipeline now builds each architecture on its native runner
+  (`ubuntu-24.04` for `amd64`, `ubuntu-24.04-arm` for `arm64`) and a
+  subsequent `manifest` job stitches them into a multi-arch image —
+  no more emulation, and worker builds complete in minutes.
+- **pnpm 10 prod-prune step failed inside Docker with
+  `ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY`.** pnpm 10 added a
+  safety rail that refuses to remove/recreate `node_modules`
+  non-interactively unless it detects it's running in CI. GitHub
+  Actions sets `CI=true` on the runner host, but Docker `RUN` steps
+  don't inherit host env vars. The api/worker Dockerfiles now prefix
+  the prune step with `CI=true` so the runtime image can be built
+  correctly.
 
 ### Deferred (for future PRs)
 
