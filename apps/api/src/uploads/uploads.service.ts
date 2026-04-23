@@ -42,6 +42,7 @@ import { RedisService } from '../redis/redis.service.js';
 import { EnvService } from '../config/env.service.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
 import { mimesAreCompatible } from './mime-compat.js';
+import { startsWithTextBom } from './text-bom.js';
 
 export interface AuditMeta {
   ip: string;
@@ -219,35 +220,47 @@ export class UploadsService {
 
     const body = await this.storage.getObjectBody(companyId, pending.storageKey);
 
-    const detected = await fileTypeFromBuffer(body);
     const declaredMime = pending.mimeType.toLowerCase();
     const isTextDeclared = declaredMime.startsWith('text/');
 
     let finalMime = declaredMime;
-    if (detected) {
-      if (detected.mime === declaredMime) {
-        finalMime = detected.mime;
-      } else if (mimesAreCompatible(detected.mime, declaredMime)) {
-        // e.g. docx/xlsx detect as application/zip; keep the declared
-        // MIME so downstream consumers can render the file correctly.
-        finalMime = declaredMime;
-      } else {
+
+    // Fast path: a declared text/* upload that begins with a recognised
+    // Unicode BOM is authoritatively text. We skip `file-type` here to
+    // avoid known false positives — notably UTF-16 LE's `FF FE` prefix
+    // matching the MPEG audio frame-sync pattern, which made Windows-
+    // exported BitLocker Recovery Key `.txt` files fail as `audio/mpeg`.
+    // The allowlist check below still runs, so only declared text MIMEs
+    // already in `ALLOWED_UPLOAD_MIME` can take this path.
+    if (isTextDeclared && startsWithTextBom(body)) {
+      // finalMime already === declaredMime; fall through to allowlist.
+    } else {
+      const detected = await fileTypeFromBuffer(body);
+      if (detected) {
+        if (detected.mime === declaredMime) {
+          finalMime = detected.mime;
+        } else if (mimesAreCompatible(detected.mime, declaredMime)) {
+          // e.g. docx/xlsx detect as application/zip; keep the declared
+          // MIME so downstream consumers can render the file correctly.
+          finalMime = declaredMime;
+        } else {
+          await this.storage.deleteObject(companyId, pending.storageKey).catch(() => undefined);
+          throw new BadRequestException({
+            error: 'MimeMismatch',
+            declared: declaredMime,
+            detected: detected.mime,
+            message: `File magic bytes (${detected.mime}) do not match declared Content-Type (${declaredMime}).`,
+          });
+        }
+      } else if (!isTextDeclared) {
         await this.storage.deleteObject(companyId, pending.storageKey).catch(() => undefined);
         throw new BadRequestException({
-          error: 'MimeMismatch',
+          error: 'MimeUndetectable',
           declared: declaredMime,
-          detected: detected.mime,
-          message: `File magic bytes (${detected.mime}) do not match declared Content-Type (${declaredMime}).`,
+          message:
+            'Could not detect a magic-bytes signature for this file. Only text/* uploads are allowed without a signature.',
         });
       }
-    } else if (!isTextDeclared) {
-      await this.storage.deleteObject(companyId, pending.storageKey).catch(() => undefined);
-      throw new BadRequestException({
-        error: 'MimeUndetectable',
-        declared: declaredMime,
-        message:
-          'Could not detect a magic-bytes signature for this file. Only text/* uploads are allowed without a signature.',
-      });
     }
 
     if (!this.allowedMimes.has(finalMime)) {
