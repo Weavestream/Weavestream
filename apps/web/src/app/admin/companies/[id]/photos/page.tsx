@@ -1,14 +1,13 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
-import { notFound } from 'next/navigation';
 
 export const metadata: Metadata = { title: 'Photos' };
 import {
+  getCompanyDetail,
   getMe,
   getSettings,
   listPhotos,
-  serverApiFetch,
-  type CompanyDetail,
+  throwUnlessFound,
   type UploadSummary,
 } from '../../../../../lib/server-api';
 import { PageBody, PageHeader } from '../../../../../components/shell/page-header';
@@ -34,11 +33,8 @@ export default async function CompanyPhotosPage({
   await getMe();
   const term = buildTerm(await getSettings());
 
-  const companyRes = await serverApiFetch<CompanyDetail>(
-    `/companies/${companyId}`,
-  );
-  if (!companyRes.ok || !companyRes.data) notFound();
-  const company = companyRes.data;
+  const companyRes = await getCompanyDetail(companyId);
+  const company = throwUnlessFound(companyRes, `/companies/${companyId}`);
 
   const attachedToType = readString(sp.attachedToType);
   const attachedToId = readString(sp.attachedToId);

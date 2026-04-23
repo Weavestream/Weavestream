@@ -1,5 +1,6 @@
 import { cache } from 'react';
-import { cookies } from 'next/headers';
+import { cookies, headers } from 'next/headers';
+import { notFound } from 'next/navigation';
 import type {
   FieldType,
   MembershipRole,
@@ -49,6 +50,52 @@ export class ApiUnavailableError extends Error {
 }
 
 /**
+ * Thrown when a server component's read hits the API-level rate
+ * limiter (HTTP 429). Separated from generic 4xx / 5xx failures so
+ * the nearest `error.tsx` boundary can render a dedicated "please
+ * slow down" banner instead of the misleading 404 the old "return
+ * `notFound()` on any non-OK" pattern used to produce.
+ *
+ * `retryAfterSeconds` is the honoured cooldown — the server-side
+ * throttler returns it in the `retry-after` header (per-bucket) and
+ * in a `retry-after-global` header for the app-wide limit; we pick
+ * the larger of the two so the UI countdown actually matches what
+ * the next request will see.
+ */
+/**
+ * Magic prefix on `error.digest` that the top-level `error.tsx`
+ * client boundary matches against to render a retry banner instead of
+ * the generic "Something went wrong" page. We encode the retry
+ * cooldown into the digest because Next.js App Router only forwards
+ * `message` and `digest` across the RSC → client boundary in
+ * production (everything else on the `Error` instance is stripped as
+ * sensitive), so digest is the only channel for out-of-band state.
+ * Keep the format in sync with `app/error.tsx`'s parser.
+ */
+export const RATE_LIMIT_DIGEST_PREFIX = 'WS_RATE_LIMITED:';
+
+export class RateLimitedError extends Error {
+  readonly path: string;
+  readonly method: string;
+  readonly retryAfterSeconds: number;
+  /** Read by Next's error boundary; see `RATE_LIMIT_DIGEST_PREFIX`. */
+  readonly digest: string;
+  constructor(
+    path: string,
+    method: string,
+    retryAfterSeconds: number,
+    message = 'Rate limited',
+  ) {
+    super(`${message} — ${method} ${path} (retry in ${retryAfterSeconds}s)`);
+    this.name = 'RateLimitedError';
+    this.path = path;
+    this.method = method;
+    this.retryAfterSeconds = retryAfterSeconds;
+    this.digest = `${RATE_LIMIT_DIGEST_PREFIX}${retryAfterSeconds}`;
+  }
+}
+
+/**
  * Recognizes the handful of Node `fetch` / undici errors that indicate the
  * API container simply isn't reachable yet (or was just restarted). These
  * are transient during `pnpm dev` cold-boot: tsc-watch finishes building
@@ -72,6 +119,25 @@ function isTransientNetworkError(err: unknown): boolean {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/**
+ * Parse an HTTP `Retry-After` / `retry-after-global` header value.
+ * Throttler emits raw seconds (e.g. `"59841"` ms from `@nestjs/throttler`'s
+ * debug variant, or `"60"` from the standard one) so we only need to
+ * handle the numeric form — HTTP-date variants are not produced by our
+ * stack. Returns seconds ≥ 0 or `undefined` when the header is absent
+ * or unparseable.
+ */
+function parseRetryAfter(raw: string | null): number | undefined {
+  if (!raw) return undefined;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 0) return undefined;
+  // `@nestjs/throttler` emits milliseconds on the global header in some
+  // versions (5-digit values > 1000 are implausible as seconds — that's
+  // >16 minutes). If the value looks like a millisecond count convert it.
+  if (n > 1000) return Math.ceil(n / 1000);
+  return n;
+}
+
 export type ServerApiResponse<T> = {
   ok: boolean;
   status: number;
@@ -84,7 +150,81 @@ export type ServerApiResponse<T> = {
    * for 401/404 but need to hard-fail on a down backend branch on this.
    */
   networkError?: boolean;
+  /**
+   * Honoured cooldown in seconds when `status === 429`, derived from
+   * the `retry-after` and `retry-after-global` response headers
+   * (`@nestjs/throttler` emits both). Always ≥ 1 when present so the
+   * countdown UI never renders "retry in 0s". `undefined` for every
+   * non-429 response.
+   */
+  retryAfterSeconds?: number;
 };
+
+/**
+ * Canonical helper for "I expect a resource, show the right error
+ * otherwise" branches in RSC pages. Call it with a `ServerApiResponse`
+ * that should have a non-null `data` and it:
+ *
+ *   - returns the unwrapped `data` when the call succeeded,
+ *   - renders the Next.js 404 page for genuine `404` and other client-
+ *     meaningful not-found states (no `data` on a 2xx),
+ *   - throws `RateLimitedError` on HTTP 429 so the nearest `error.tsx`
+ *     boundary can render a cool-down banner (the old pattern masked
+ *     these as 404s, which is why the Docker debug chase was so
+ *     confusing),
+ *   - throws `ApiUnavailableError` on network-level failures so the
+ *     same boundary can render "backend unreachable" instead of a
+ *     misleading empty page.
+ *
+ * Authentication (401) is intentionally left to the outer layout
+ * guards: by the time an inner page calls this helper, those have
+ * already redirected to `/login` on null `me`, so a 401 here almost
+ * always means "session dropped mid-render" and mapping it to
+ * `notFound()` is fine.
+ */
+export function throwUnlessFound<T>(
+  res: ServerApiResponse<T>,
+  path: string,
+): T {
+  if (res.ok && res.data != null) return res.data;
+  if (res.status === 429) {
+    // We let Next's error boundary render this — matches the UX
+    // pattern we use for `ApiUnavailableError` today.
+    throw new RateLimitedError(
+      path,
+      'GET',
+      res.retryAfterSeconds ?? 30,
+      extractProblemTitle(res.problem) ?? 'Rate limited',
+    );
+  }
+  if (res.networkError) {
+    throw new ApiUnavailableError(
+      path,
+      'GET',
+      extractProblemDetail(res.problem) ?? `HTTP ${res.status}`,
+    );
+  }
+  // Anything else — 404, 403, a 2xx with an empty body — is rendered
+  // as the Next.js 404 page. `notFound()` throws a tagged error that
+  // Next's router uses to render `not-found.tsx`.
+  notFound();
+}
+
+function extractProblemTitle(problem: unknown): string | undefined {
+  if (problem && typeof problem === 'object' && 'title' in problem) {
+    const t = (problem as { title?: unknown }).title;
+    if (typeof t === 'string' && t.length > 0) return t;
+  }
+  return undefined;
+}
+
+function extractProblemDetail(problem: unknown): string | undefined {
+  if (problem && typeof problem === 'object' && 'detail' in problem) {
+    const d = (problem as { detail?: unknown }).detail;
+    if (typeof d === 'string' && d.length > 0) return d;
+  }
+  return undefined;
+}
 
 export async function serverApiFetch<T>(
   path: string,
@@ -96,9 +236,36 @@ export async function serverApiFetch<T>(
     .map((c) => `${c.name}=${c.value}`)
     .join('; ');
 
-  const headers = new Headers(init.headers);
-  if (!headers.has('Accept')) headers.set('Accept', 'application/json');
-  if (cookieHeader) headers.set('cookie', cookieHeader);
+  const outgoing = new Headers(init.headers);
+  if (!outgoing.has('Accept')) outgoing.set('Accept', 'application/json');
+  if (cookieHeader) outgoing.set('cookie', cookieHeader);
+
+  // Forward the browser's identifying headers to the API so Express's
+  // `req.ip` reflects the real client rather than the `web` container's
+  // internal bridge address. Needed for correct per-IP throttling, audit
+  // logs, and any future IP-based policy. `app.set('trust proxy', 1)` on
+  // the API is the other half of this fix — it tells Express to honour
+  // these headers.
+  //
+  // We append rather than replace so chained proxies (e.g. Traefik →
+  // web → api) don't lose upstream hops. `headers()` throws outside a
+  // request scope (scripts / build), which we catch and ignore.
+  try {
+    const incoming = await headers();
+    const clientXff = incoming.get('x-forwarded-for');
+    const remoteIp = incoming.get('x-real-ip');
+    if (clientXff) {
+      outgoing.set('x-forwarded-for', clientXff);
+    } else if (remoteIp) {
+      outgoing.set('x-forwarded-for', remoteIp);
+    }
+    const proto = incoming.get('x-forwarded-proto');
+    if (proto) outgoing.set('x-forwarded-proto', proto);
+    const host = incoming.get('x-forwarded-host') ?? incoming.get('host');
+    if (host) outgoing.set('x-forwarded-host', host);
+  } catch {
+    // outside of a request context — nothing to forward
+  }
 
   // Retry schedule tuned to ride out a typical `pnpm dev` cold boot, where
   // the web server starts serving requests ~3-5s before `apps/api` binds
@@ -117,7 +284,7 @@ export async function serverApiFetch<T>(
     try {
       const res = await fetch(`${API_INTERNAL_URL}/api/v1${path}`, {
         ...init,
-        headers,
+        headers: outgoing,
         cache: 'no-store',
       });
       const contentType = res.headers.get('content-type') ?? '';
@@ -126,9 +293,38 @@ export async function serverApiFetch<T>(
       if (contentType.includes('problem+json')) {
         problem = await res.json().catch(() => null);
       } else if (contentType.includes('json')) {
-        data = (await res.json().catch(() => null)) as T | null;
+        // Successful responses carry the resource payload in the body.
+        // Non-OK responses with a plain `application/json` body (the
+        // NestJS default exception filter, not RFC7807) still contain
+        // useful context — surface it as `problem` instead of pinning
+        // it on `data`, where call-sites would try to type-cast it.
+        if (res.ok) {
+          data = (await res.json().catch(() => null)) as T | null;
+        } else {
+          problem = await res.json().catch(() => null);
+        }
       }
-      return { ok: res.ok, status: res.status, data, problem };
+      // `retry-after-global` is set by `@nestjs/throttler` when the
+      // app-wide limit is the one that tripped; the per-endpoint
+      // `retry-after` is set when a route-level throttler wins. We take
+      // the larger of the two because requesting again before the longer
+      // cooldown elapses will just bounce off the same 429 again.
+      let retryAfterSeconds: number | undefined;
+      if (res.status === 429) {
+        const perBucket = parseRetryAfter(res.headers.get('retry-after'));
+        const global = parseRetryAfter(
+          res.headers.get('retry-after-global'),
+        );
+        const longest = Math.max(perBucket ?? 0, global ?? 0);
+        retryAfterSeconds = longest > 0 ? Math.ceil(longest) : 30;
+      }
+      return {
+        ok: res.ok,
+        status: res.status,
+        data,
+        problem,
+        retryAfterSeconds,
+      };
     } catch (err) {
       lastError = err;
       if (!isTransientNetworkError(err) || attempt === maxAttempts - 1) break;
@@ -243,6 +439,90 @@ export const getSettings = cache(async (): Promise<Settings> => {
   if (!res.ok || !res.data) return DEFAULT_SETTINGS;
   return res.data;
 });
+
+// ───────────────────────────────────────────────────────────────────
+// Request-scoped memoized reads used by the company-scoped RSC tree.
+//
+// Every route under `/admin/companies/[id]/**` consists of three
+// server components stacked on top of each other: the company layout,
+// its `generateMetadata`, and the leaf page. Without memoization each
+// of them re-issues the same upstream call — `/companies/:id` alone
+// got fetched three times per render, and `/layouts`, `/companies/:id/
+// assets/counts-by-layout`, `/companies/:id/domains`, and `/companies/
+// :id/passwords` twice each. At ~10 extra API calls per navigation,
+// that was the dominant consumer of the throttle budget and directly
+// caused the 429-as-404 bug in Docker (see apps/api/src/auth/
+// user-throttler.guard.ts for the server-side half of the fix).
+//
+// Each helper below mirrors the un-cached list/fetch function it
+// wraps but normalises arguments into primitives so React's
+// `cache()` (which keys on `Object.is` equality) actually deduplicates
+// matching calls within a single request. Callers that need a non-
+// default variant (`includeArchived=true`, custom `q`, …) should stay
+// on the un-cached helpers since those are genuinely different reads.
+// ───────────────────────────────────────────────────────────────────
+
+/**
+ * `/companies/:id` — used by the shared company layout, its
+ * `generateMetadata`, and every nested page. Returns the raw
+ * `ServerApiResponse` so callers can still branch on 404 vs 401 vs
+ * 429 via the web UX helper (`throwUnlessFound`).
+ */
+export const getCompanyDetail = cache(
+  async (id: string): Promise<ServerApiResponse<CompanyDetail>> =>
+    serverApiFetch<CompanyDetail>(`/companies/${id}`),
+);
+
+/**
+ * `/layouts` — active layouts only. Shared by the company layout
+ * (sidebar counts), the assets index page, the layouts detail page,
+ * and the "new asset" page. Pages that need archived layouts should
+ * still call `listLayouts({ includeArchived: true })` directly.
+ */
+export const getActiveLayouts = cache(
+  async (): Promise<LayoutSummary[]> => listLayouts(),
+);
+
+export const getCompanyAssetCounts = cache(
+  async (companyId: string): Promise<Record<string, number>> =>
+    getAssetCountsByLayout(companyId),
+);
+
+/**
+ * `/companies/:id/domains` — the first 200 active-and-non-active rows.
+ * The shared layout pulls this for sidebar counts/alert badges and
+ * the company home page renders the same list for its "needs
+ * attention" banner. Pages that actually paginate (`domains/page.tsx`)
+ * stay on `listDomains` since they set custom filters.
+ */
+export const getCompanyDomainsBasic = cache(
+  async (
+    companyId: string,
+  ): Promise<{ items: MonitoredDomain[]; nextCursor: string | null }> =>
+    listDomains(companyId, { limit: 200 }),
+);
+
+/**
+ * `/companies/:id/passwords` — active only, no filters. The layout
+ * uses the full row set for count + stale-badge math and the
+ * passwords index page uses the same shape when it's showing the
+ * default "active" view. Callers that need archived rows keep
+ * `listPasswords(..., { archived: true })`.
+ */
+export const getCompanyActivePasswords = cache(
+  async (companyId: string): Promise<PasswordSummary[]> =>
+    listPasswords(companyId),
+);
+
+export const getCompanyFolderTree = cache(
+  async (companyId: string): Promise<FolderNode[]> =>
+    listFolderTree(companyId),
+);
+
+export const getCompanyPasswordFolders = cache(
+  async (companyId: string): Promise<PasswordFolderRow[]> =>
+    listPasswordFolders(companyId),
+);
 
 export type CompanyType =
   | 'CLIENT'

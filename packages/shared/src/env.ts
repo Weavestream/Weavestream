@@ -66,7 +66,7 @@ export const envSchema = z.object({
   ARGON2_ITERATIONS: intFromString(1, 20).default(3),
   ARGON2_PARALLELISM: intFromString(1, 16).default(4),
 
-  GLOBAL_RATE_LIMIT_PER_MIN: intFromString(1, 10000).default(100),
+  GLOBAL_RATE_LIMIT_PER_MIN: intFromString(1, 10000).default(600),
   AUTH_RATE_LIMIT_PER_MIN: intFromString(1, 1000).default(5),
   LOCKOUT_MAX_FAILURES: intFromString(1, 100).default(5),
   LOCKOUT_WINDOW_MIN: intFromString(1, 1440).default(15),

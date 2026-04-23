@@ -1,13 +1,14 @@
 import Link from 'next/link';
-import { notFound } from 'next/navigation';
 import type { ReactNode } from 'react';
 import type { MembershipRole } from '@weavestream/shared';
 import {
+  getCompanyDetail,
+  getCompanyDomainsBasic,
   getMe,
   getSettings,
   listAssets,
-  listDomains,
   serverApiFetch,
+  throwUnlessFound,
   type CompanyDetail,
   type MonitoredDomain,
 } from '../../../../lib/server-api';
@@ -73,13 +74,16 @@ export default async function CompanyDetailPage({
 
   const [companyRes, membershipsRes, assetsPage, domainPage] =
     await Promise.all([
-      serverApiFetch<CompanyDetail>(`/companies/${id}`),
+      // Deduped against the parent layout's `getCompanyDetail(id)` by
+      // React's per-request `cache()`. Same for `getCompanyDomainsBasic`
+      // below. See `lib/server-api.ts` for the full list of
+      // layout-shared cached reads.
+      getCompanyDetail(id),
       serverApiFetch<MembershipListing[]>(`/companies/${id}/memberships`),
       listAssets(id, { limit: 5 }),
-      listDomains(id, { limit: 200 }),
+      getCompanyDomainsBasic(id),
     ]);
-  if (!companyRes.ok || !companyRes.data) notFound();
-  const company = companyRes.data;
+  const company = throwUnlessFound(companyRes, `/companies/${id}`);
   const memberships = membershipsRes.data ?? [];
   const membershipsError = !membershipsRes.ok ? membershipsRes : null;
   const recentAssets = assetsPage.items;

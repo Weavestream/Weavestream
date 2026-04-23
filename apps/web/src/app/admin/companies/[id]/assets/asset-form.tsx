@@ -19,6 +19,7 @@ import {
   type FileFieldEntry,
 } from '../../../../../components/upload/file-dropzone';
 import { AssetReferencePicker } from './asset-reference-picker';
+import { DropdownPicker } from './dropdown-picker';
 
 // Lazy-load the Tiptap editor so its ~hundreds-of-KB bundle (and the
 // accompanying `editor.css`) is only fetched when a `RICH_TEXT` field is
@@ -601,20 +602,17 @@ function FieldInput({
     case 'DROPDOWN': {
       const choices = ((field.options as { choices?: Array<{ slug: string; label: string }> })
         .choices ?? []) as Array<{ slug: string; label: string }>;
+      const allowOther =
+        (field.options as { allowOther?: boolean }).allowOther === true;
       return (
-        <select
-          value={(value as string | null) ?? ''}
+        <DropdownPicker
+          choices={choices}
+          allowOther={allowOther}
+          value={(value as string | null) ?? null}
+          onChange={(next) => onChange(next)}
           disabled={disabled}
-          onChange={(e) => onChange(e.target.value || null)}
-          style={controlStyle}
-        >
-          <option value="">— select —</option>
-          {choices.map((c) => (
-            <option key={c.slug} value={c.slug}>
-              {c.label}
-            </option>
-          ))}
-        </select>
+          controlStyle={controlStyle}
+        />
       );
     }
     case 'MULTISELECT': {

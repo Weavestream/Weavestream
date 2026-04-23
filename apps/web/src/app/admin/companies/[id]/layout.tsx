@@ -3,14 +3,14 @@ import { notFound } from 'next/navigation';
 import type { ReactNode } from 'react';
 import { CompanyShell } from '../../../../components/shell/company-shell';
 import {
-  getAssetCountsByLayout,
+  getActiveLayouts,
+  getCompanyActivePasswords,
+  getCompanyAssetCounts,
+  getCompanyDetail,
+  getCompanyDomainsBasic,
   getMe,
   getSettings,
-  listDomains,
-  listLayouts,
-  listPasswords,
-  serverApiFetch,
-  type CompanyDetail,
+  throwUnlessFound,
 } from '../../../../lib/server-api';
 import { buildTerm } from '../../../../lib/term';
 
@@ -32,7 +32,7 @@ export async function generateMetadata({
   params: Promise<{ id: string }>;
 }): Promise<Metadata> {
   const { id } = await params;
-  const res = await serverApiFetch<CompanyDetail>(`/companies/${id}`);
+  const res = await getCompanyDetail(id);
   const name = res.data?.name;
   if (!name) return {};
   // "%s" is filled in by child `generateMetadata` calls. Leaf pages
@@ -58,20 +58,27 @@ export default async function CompanyScopedLayout({
     await Promise.all([
       getMe(),
       getSettings(),
-      serverApiFetch<CompanyDetail>(`/companies/${id}`),
-      listLayouts(),
-      getAssetCountsByLayout(id),
+      // Each of these is a cache()-wrapped read. The layout and the
+      // nested page both await the same helper, so the second caller
+      // gets the in-flight promise back and we issue exactly one
+      // upstream request per URL per render.
+      getCompanyDetail(id),
+      getActiveLayouts(),
+      getCompanyAssetCounts(id),
       // Just the first page — we only need a count of rows that
       // warrant attention, not the full list. `limit: 200` is plenty
       // for the alerting badge (any customer with more than 200
       // expiring domains has bigger problems than a sidebar count).
-      listDomains(id, { limit: 200 }),
-      // Active passwords for the sidebar count + stale badge.
-      listPasswords(id),
+      getCompanyDomainsBasic(id),
+      getCompanyActivePasswords(id),
     ]);
   if (!me) notFound();
-  if (!companyRes.ok || !companyRes.data) notFound();
-  const company = companyRes.data;
+  // `throwUnlessFound` maps 404s to `notFound()`, 429s to a dedicated
+  // `RateLimitedError` boundary, and network outages to
+  // `ApiUnavailableError` — replacing the old `if (!ok || !data) notFound()`
+  // catch-all that was surfacing 429s from the Docker throttler as a
+  // misleading 404 page.
+  const company = throwUnlessFound(companyRes, `/companies/${id}`);
   const term = buildTerm(settings);
 
   const domainCount = domainList.items.length;

@@ -7,6 +7,8 @@ import { apiFetch } from '../../../../lib/api';
 import type { LayoutSummary } from '../../../../lib/server-api';
 import { Btn, Icon, LayoutSwatch, Tag, useToast } from '../../../../components/ui';
 import { useIsMobile } from '../../../../lib/hooks/use-is-mobile';
+import { LayoutSettingsDialog } from './layout-settings-dialog';
+import { LayoutArchiveDialog } from './layout-archive-dialog';
 
 /**
  * Admin "Layouts" table rows. Presentation stays close to the original
@@ -33,6 +35,11 @@ export function LayoutsList({
   const toast = useToast();
   const [pending, startTransition] = useTransition();
   const isMobile = useIsMobile();
+  // Open-dialog state lives on the list so row-level clicks can hand a
+  // specific layout to a single shared dialog instance instead of each
+  // row mounting its own.
+  const [settingsFor, setSettingsFor] = useState<LayoutSummary | null>(null);
+  const [archiveFor, setArchiveFor] = useState<LayoutSummary | null>(null);
   // Local mirror so drag/up-down feels instant. Kept in sync with
   // `layouts` via the `useMemo` key below — when the server-component
   // reseeds us (after `router.refresh()`), this collapses back to the
@@ -90,25 +97,48 @@ export function LayoutsList({
     void reorder(next);
   }
 
+  const dialogs = canEdit ? (
+    <>
+      {settingsFor && (
+        <LayoutSettingsDialog
+          layout={settingsFor}
+          open
+          onClose={() => setSettingsFor(null)}
+        />
+      )}
+      {archiveFor && (
+        <LayoutArchiveDialog
+          layout={archiveFor}
+          open
+          onClose={() => setArchiveFor(null)}
+        />
+      )}
+    </>
+  ) : null;
+
   if (localOrder.length === 0) {
     return (
-      <div
-        style={{
-          padding: 32,
-          textAlign: 'center',
-          color: 'var(--muted)',
-          fontSize: 13,
-        }}
-      >
-        {canEdit
-          ? 'No layouts yet — create the first to give assets a schema.'
-          : 'No layouts defined yet. Ask a super-admin to create one.'}
-      </div>
+      <>
+        <div
+          style={{
+            padding: 32,
+            textAlign: 'center',
+            color: 'var(--muted)',
+            fontSize: 13,
+          }}
+        >
+          {canEdit
+            ? 'No layouts yet — create the first to give assets a schema.'
+            : 'No layouts defined yet. Ask a super-admin to create one.'}
+        </div>
+        {dialogs}
+      </>
     );
   }
 
   if (isMobile) {
     return (
+      <>
       <ul
         style={{
           listStyle: 'none',
@@ -198,43 +228,67 @@ export function LayoutsList({
                   {relative(l.updatedAt)}
                 </span>
               </div>
-              {canReorder && isActiveRow && (
+              {canEdit && (
                 <div
                   style={{
                     display: 'flex',
+                    flexWrap: 'wrap',
                     gap: 6,
                     borderTop: '1px solid var(--line)',
                     paddingTop: 8,
                   }}
                 >
-                  <Btn
-                    kind="outline"
-                    size="sm"
-                    onClick={() => move(l.id, -1)}
-                    disabled={activeIdx === 0 || pending}
-                    title="Move up"
-                    aria-label="Move up"
-                  >
-                    <span
-                      style={{
-                        display: 'inline-flex',
-                        transform: 'rotate(180deg)',
-                      }}
+                  {canReorder && isActiveRow && (
+                    <>
+                      <Btn
+                        kind="outline"
+                        size="sm"
+                        onClick={() => move(l.id, -1)}
+                        disabled={activeIdx === 0 || pending}
+                        title="Move up"
+                        aria-label="Move up"
+                      >
+                        <span
+                          style={{
+                            display: 'inline-flex',
+                            transform: 'rotate(180deg)',
+                          }}
+                        >
+                          <Icon.chevronD size={11} />
+                        </span>
+                        Up
+                      </Btn>
+                      <Btn
+                        kind="outline"
+                        size="sm"
+                        icon={Icon.chevronD}
+                        onClick={() => move(l.id, 1)}
+                        disabled={activeIdx === active.length - 1 || pending}
+                        title="Move down"
+                        aria-label="Move down"
+                      >
+                        Down
+                      </Btn>
+                    </>
+                  )}
+                  {!l.archivedAt && (
+                    <Btn
+                      kind="outline"
+                      size="sm"
+                      icon={Icon.edit}
+                      onClick={() => setSettingsFor(l)}
                     >
-                      <Icon.chevronD size={11} />
-                    </span>
-                    Up
-                  </Btn>
+                      Rename
+                    </Btn>
+                  )}
                   <Btn
-                    kind="outline"
+                    kind={l.archivedAt ? 'primary' : 'outline'}
                     size="sm"
-                    icon={Icon.chevronD}
-                    onClick={() => move(l.id, 1)}
-                    disabled={activeIdx === active.length - 1 || pending}
-                    title="Move down"
-                    aria-label="Move down"
+                    icon={l.archivedAt ? Icon.check : Icon.archive}
+                    onClick={() => setArchiveFor(l)}
+                    style={{ marginLeft: 'auto' }}
                   >
-                    Down
+                    {l.archivedAt ? 'Restore' : 'Archive'}
                   </Btn>
                 </div>
               )}
@@ -242,10 +296,13 @@ export function LayoutsList({
           );
         })}
       </ul>
+      {dialogs}
+      </>
     );
   }
 
   return (
+    <>
     <div style={{ overflowX: 'auto' }}>
     <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
       <thead>
@@ -405,21 +462,69 @@ export function LayoutsList({
               >
                 {relative(l.updatedAt)}
               </td>
-              <td style={{ padding: '0 12px', width: 80, textAlign: 'right' }}>
-                <Link
-                  href={`/admin/layouts/${l.id}/edit`}
-                  style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: 5,
-                    fontSize: 11.5,
-                    color: 'var(--accent)',
-                    fontFamily: 'var(--font-mono)',
-                  }}
-                >
-                  <Icon.edit size={11} />
-                  {canEdit ? 'Edit' : 'View'}
-                </Link>
+              <td
+                style={{
+                  padding: '0 12px',
+                  width: canEdit ? 260 : 80,
+                  textAlign: 'right',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {canEdit ? (
+                  <div
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 4,
+                    }}
+                  >
+                    <Btn
+                      kind="ghost"
+                      size="sm"
+                      icon={Icon.edit}
+                      onClick={() =>
+                        router.push(`/admin/layouts/${l.id}/edit`)
+                      }
+                      title="Open builder"
+                    >
+                      Edit
+                    </Btn>
+                    {!l.archivedAt && (
+                      <Btn
+                        kind="ghost"
+                        size="sm"
+                        onClick={() => setSettingsFor(l)}
+                        title="Rename layout or change icon/color"
+                      >
+                        Rename
+                      </Btn>
+                    )}
+                    <Btn
+                      kind="ghost"
+                      size="sm"
+                      icon={l.archivedAt ? Icon.check : Icon.archive}
+                      onClick={() => setArchiveFor(l)}
+                      title={l.archivedAt ? 'Restore layout' : 'Archive layout'}
+                    >
+                      {l.archivedAt ? 'Restore' : 'Archive'}
+                    </Btn>
+                  </div>
+                ) : (
+                  <Link
+                    href={`/admin/layouts/${l.id}/edit`}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 5,
+                      fontSize: 11.5,
+                      color: 'var(--accent)',
+                      fontFamily: 'var(--font-mono)',
+                    }}
+                  >
+                    <Icon.edit size={11} />
+                    View
+                  </Link>
+                )}
               </td>
             </tr>
           );
@@ -427,6 +532,8 @@ export function LayoutsList({
       </tbody>
     </table>
     </div>
+    {dialogs}
+    </>
   );
 }
 

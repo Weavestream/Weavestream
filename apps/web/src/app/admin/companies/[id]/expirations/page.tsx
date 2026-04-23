@@ -1,10 +1,9 @@
 import type { Metadata } from 'next';
-import { notFound } from 'next/navigation';
 import {
+  getCompanyDetail,
   getSettings,
   listExpirations,
-  serverApiFetch,
-  type CompanyDetail,
+  throwUnlessFound,
 } from '../../../../../lib/server-api';
 import { PageBody, PageHeader } from '../../../../../components/shell/page-header';
 import { Panel, Tag } from '../../../../../components/ui';
@@ -28,11 +27,8 @@ export default async function CompanyExpirationsPage({
   const { id: companyId } = await params;
   const term = buildTerm(await getSettings());
 
-  const companyRes = await serverApiFetch<CompanyDetail>(
-    `/companies/${companyId}`,
-  );
-  if (!companyRes.ok || !companyRes.data) notFound();
-  const company = companyRes.data;
+  const companyRes = await getCompanyDetail(companyId);
+  const company = throwUnlessFound(companyRes, `/companies/${companyId}`);
 
   const rows = await listExpirations(companyId);
   const expiredCount = rows.filter((r) => r.status === 'EXPIRED').length;

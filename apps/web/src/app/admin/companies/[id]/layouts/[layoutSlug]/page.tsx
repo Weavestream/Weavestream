@@ -2,12 +2,12 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import {
+  getActiveLayouts,
+  getCompanyDetail,
   getMe,
   getSettings,
   listAssets,
-  listLayouts,
-  serverApiFetch,
-  type CompanyDetail,
+  throwUnlessFound,
 } from '../../../../../../lib/server-api';
 import { canManage } from '../../../../../../lib/roles';
 import {
@@ -33,8 +33,8 @@ import { LayoutAssetsTable } from '../../../../../../components/layouts/layout-a
  */
 async function loadContext(companyId: string, layoutSlug: string) {
   const [companyRes, layouts] = await Promise.all([
-    serverApiFetch<CompanyDetail>(`/companies/${companyId}`),
-    listLayouts({ includeArchived: false }),
+    getCompanyDetail(companyId),
+    getActiveLayouts(),
   ]);
   if (!companyRes.ok || !companyRes.data) return null;
   const layout = layouts.find((l) => l.slug === layoutSlug);
@@ -67,9 +67,18 @@ export default async function LayoutAssetsPage({
   const term = buildTerm(await getSettings());
   const manage = canManage(me.role);
 
-  const ctx = await loadContext(companyId, layoutSlug);
-  if (!ctx) notFound();
-  const { company, layout } = ctx;
+  // For the page render we intentionally bypass `loadContext` so 429/
+  // network failures surface through `throwUnlessFound` instead of
+  // being swallowed as "not found". `generateMetadata` keeps the loose
+  // null-return path since it must never itself throw a rendering
+  // error — it just falls back to an empty title object.
+  const [companyRes, layouts] = await Promise.all([
+    getCompanyDetail(companyId),
+    getActiveLayouts(),
+  ]);
+  const company = throwUnlessFound(companyRes, `/companies/${companyId}`);
+  const layout = layouts.find((l) => l.slug === layoutSlug);
+  if (!layout) notFound();
 
   const q = typeof sp.q === 'string' ? sp.q : undefined;
   const includeArchived = sp.archived === '1';
