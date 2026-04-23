@@ -22,6 +22,13 @@ this project adheres to [Semantic Versioning](https://semver.org/).
   msgpackr-extract, unrs-resolver). Contributors should run
   `corepack enable` once; subsequent `pnpm` invocations inside the
   repo will auto-use the declared version.
+- **TypeScript, Jest, and ts-jest bumped to the latest 5.x / 30 lines.**
+  TypeScript 5.6 -> 5.9, Jest 29 -> 30.3, `@types/jest` 29 -> 30,
+  ts-jest floor raised to 29.4.9 (still the latest; ts-jest has not
+  cut a v30 but its 29.4.x line is officially compatible with Jest 30).
+  No test or jest config changes were required. A separate future PR
+  will handle the TypeScript 5.x -> 6.x jump, which has real breaking
+  changes (new `strict` / `types` / `rootDir` defaults).
 
 ## [1.1.3] - 2026-04-23
 ### Fixed
