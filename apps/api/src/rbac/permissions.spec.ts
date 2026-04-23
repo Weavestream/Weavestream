@@ -253,7 +253,7 @@ describe('PermissionService.evaluate', () => {
     ).toBe(true);
   });
 
-  it('password.reveal allows CLIENT_ADMIN but not CLIENT_VIEWER (service still enforces visibleToClients)', () => {
+  it('password.reveal allows CLIENT_ADMIN and CLIENT_VIEWER (service still enforces visibleToClients)', () => {
     const admin: MembershipSnapshot = {
       companyId: THE_COMPANY,
       role: 'CLIENT_ADMIN',
@@ -271,8 +271,16 @@ describe('PermissionService.evaluate', () => {
         companyId: THE_COMPANY,
       }).allowed,
     ).toBe(true);
+    // CLIENT_VIEWER is allowed at the RBAC layer; PasswordsService still
+    // gates on visibleToClients / restrictedToUserIds / requireReasonToView.
     expect(
       PermissionService.evaluate(user('CLIENT_USER'), 'password.reveal', [viewer], {
+        companyId: THE_COMPANY,
+      }).allowed,
+    ).toBe(true);
+    // A CLIENT_USER with no membership for the company is still denied.
+    expect(
+      PermissionService.evaluate(user('CLIENT_USER'), 'password.reveal', [], {
         companyId: THE_COMPANY,
       }).allowed,
     ).toBe(false);
