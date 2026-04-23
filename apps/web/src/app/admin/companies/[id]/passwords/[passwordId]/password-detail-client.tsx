@@ -668,11 +668,12 @@ function EditPasswordDialog({
         </div>
       }
     >
-      <form
-        autoComplete="off"
-        onSubmit={(e) => {
-          e.preventDefault();
-          if (!busy && name.trim().length > 0) void submit();
+      <div
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            if (!busy && name.trim().length > 0) void submit();
+          }
         }}
         style={{ display: 'flex', flexDirection: 'column', gap: 10 }}
       >
@@ -873,8 +874,7 @@ function EditPasswordDialog({
         {err && (
           <div style={{ fontSize: 12, color: 'var(--danger)' }}>{err}</div>
         )}
-        <button type="submit" style={{ display: 'none' }} tabIndex={-1} />
-      </form>
+      </div>
     </Dialog>
   );
 }
