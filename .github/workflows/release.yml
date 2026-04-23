@@ -1,5 +1,11 @@
 name: Release
 
+# Each arch builds on its own native runner (amd64 on ubuntu-latest, arm64
+# on ubuntu-24.04-arm), then a downstream `manifest` job stitches the two
+# per-arch digests into a single multi-arch tag. This avoids QEMU entirely
+# — previous runs hit `qemu: uncaught target signal 4 (Illegal instruction)`
+# during `pnpm install` on the arm64 shard and hung BuildKit for hours.
+
 on:
   push:
     tags:
@@ -13,8 +19,8 @@ on:
 
 jobs:
   images:
-    name: Build & push ${{ matrix.image }}
-    runs-on: ubuntu-latest
+    name: Build ${{ matrix.image }} (${{ matrix.platform.arch }})
+    runs-on: ${{ matrix.platform.runner }}
     permissions:
       contents: read
       packages: write
@@ -22,10 +28,11 @@ jobs:
       fail-fast: false
       matrix:
         image: [api, web, worker]
+        platform:
+          - { arch: amd64, runner: ubuntu-latest,    docker: linux/amd64 }
+          - { arch: arm64, runner: ubuntu-24.04-arm, docker: linux/arm64 }
     steps:
       - uses: actions/checkout@v4
-
-      - uses: docker/setup-qemu-action@v3
 
       - uses: docker/setup-buildx-action@v3
 
@@ -47,6 +54,65 @@ jobs:
             echo "value=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Build & push by digest
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/${{ matrix.image }}.Dockerfile
+          platforms: ${{ matrix.platform.docker }}
+          push: true
+          provenance: false
+          build-args: |
+            WEAVESTREAM_VERSION=${{ steps.version.outputs.value }}
+          # Push by digest only; the `manifest` job below stitches the
+          # per-arch digests into a single multi-arch tag.
+          outputs: type=image,name=ghcr.io/weavestream/weavestream-${{ matrix.image }},push-by-digest=true,name-canonical=true
+          cache-from: type=gha,scope=${{ matrix.image }}-${{ matrix.platform.arch }}
+          cache-to:   type=gha,scope=${{ matrix.image }}-${{ matrix.platform.arch }},mode=max
+
+      - name: Export digest
+        run: |
+          mkdir -p /tmp/digests
+          digest="${{ steps.build.outputs.digest }}"
+          touch "/tmp/digests/${digest#sha256:}"
+
+      - name: Upload digest
+        uses: actions/upload-artifact@v4
+        with:
+          name: digests-${{ matrix.image }}-${{ matrix.platform.arch }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  manifest:
+    name: Stitch manifest (${{ matrix.image }})
+    needs: images
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [api, web, worker]
+    steps:
+      - name: Download digests
+        uses: actions/download-artifact@v4
+        with:
+          pattern: digests-${{ matrix.image }}-*
+          path: /tmp/digests
+          merge-multiple: true
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Extract metadata
         id: meta
         uses: docker/metadata-action@v5
@@ -59,24 +125,22 @@ jobs:
             type=raw,value=latest,enable=${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
             type=raw,value=${{ inputs.version }},enable=${{ github.event_name == 'workflow_dispatch' }}
 
-      - name: Build & push
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: docker/${{ matrix.image }}.Dockerfile
-          platforms: linux/amd64,linux/arm64
-          push: true
-          build-args: |
-            WEAVESTREAM_VERSION=${{ steps.version.outputs.value }}
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha,scope=${{ matrix.image }}
-          cache-to: type=gha,scope=${{ matrix.image }},mode=max
+      - name: Create & push manifest
+        working-directory: /tmp/digests
+        run: |
+          TAGS=$(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON")
+          SOURCES=$(printf 'ghcr.io/weavestream/weavestream-${{ matrix.image }}@sha256:%s ' *)
+          docker buildx imagetools create $TAGS $SOURCES
+
+      - name: Inspect manifest
+        run: |
+          VERSION=$(jq -r '.labels["org.opencontainers.image.version"] // empty' <<< "$DOCKER_METADATA_OUTPUT_JSON")
+          docker buildx imagetools inspect ghcr.io/weavestream/weavestream-${{ matrix.image }}:${VERSION:-latest}
 
   release-notes:
     name: Publish GitHub Release
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: images
+    needs: manifest
     runs-on: ubuntu-latest
     permissions:
       contents: write
