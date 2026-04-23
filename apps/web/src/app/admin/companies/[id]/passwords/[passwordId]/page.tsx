@@ -2,13 +2,13 @@ import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
 import Link from 'next/link';
 import {
+  getCompanyDetail,
+  getCompanyPasswordFolders,
   getMe,
   getPasswordDetail,
   getSettings,
-  listPasswordFolders,
   listPasswordVersions,
-  serverApiFetch,
-  type CompanyDetail,
+  throwUnlessFound,
 } from '../../../../../../lib/server-api';
 import { canManage } from '../../../../../../lib/roles';
 import {
@@ -41,14 +41,13 @@ export default async function PasswordDetailPage({
   const term = buildTerm(settings);
 
   const [companyRes, password, folders, versions] = await Promise.all([
-    serverApiFetch<CompanyDetail>(`/companies/${companyId}`),
+    getCompanyDetail(companyId),
     getPasswordDetail(companyId, passwordId),
-    listPasswordFolders(companyId),
+    getCompanyPasswordFolders(companyId),
     listPasswordVersions(companyId, passwordId),
   ]);
-  if (!companyRes.ok || !companyRes.data) notFound();
+  const company = throwUnlessFound(companyRes, `/companies/${companyId}`);
   if (!password) notFound();
-  const company = companyRes.data;
 
   const manage = canManage(me.role);
   const folder = password.folderId

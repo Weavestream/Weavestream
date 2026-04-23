@@ -1,6 +1,6 @@
 import { Module } from '@nestjs/common';
 import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
-import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
+import { ThrottlerModule } from '@nestjs/throttler';
 import { LoggerModule } from 'nestjs-pino';
 import { randomUUID } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
@@ -48,6 +48,7 @@ import { CryptoModule } from './crypto/crypto.module.js';
 import { AuthGuard } from './auth/guards/auth.guard.js';
 import { MfaEnrollmentGuard } from './auth/guards/mfa-enrollment.guard.js';
 import { CsrfGuard } from './auth/guards/csrf.guard.js';
+import { UserThrottlerGuard } from './auth/guards/user-throttler.guard.js';
 import { PermissionGuard } from './rbac/permission.guard.js';
 import { ContractorAccessGuard } from './rbac/contractor-access.guard.js';
 import { TenantContextInterceptor } from './auth/interceptors/tenant-context.interceptor.js';
@@ -149,8 +150,14 @@ const httpSerializers = {
     PasswordFoldersController,
   ],
   providers: [
-    { provide: APP_GUARD, useClass: ThrottlerGuard },
+    // Guard ordering matters: Nest runs global guards in the order
+    // they're registered. `AuthGuard` must run before `UserThrottlerGuard`
+    // so the throttler can key on `req.user.id` instead of falling back
+    // to IP for every authenticated request. `CsrfGuard` runs after
+    // throttling so abusive clients can't burn CSRF budget by spamming
+    // invalid requests.
     { provide: APP_GUARD, useClass: AuthGuard },
+    { provide: APP_GUARD, useClass: UserThrottlerGuard },
     { provide: APP_GUARD, useClass: MfaEnrollmentGuard },
     { provide: APP_GUARD, useClass: CsrfGuard },
     { provide: APP_GUARD, useClass: PermissionGuard },

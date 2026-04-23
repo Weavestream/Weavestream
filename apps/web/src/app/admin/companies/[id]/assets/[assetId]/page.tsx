@@ -4,11 +4,11 @@ import { notFound } from 'next/navigation';
 import { Fragment } from 'react';
 import {
   getAsset,
+  getCompanyDetail,
   getMe,
   getSettings,
-  serverApiFetch,
+  throwUnlessFound,
   type AssetSummary,
-  type CompanyDetail,
 } from '../../../../../../lib/server-api';
 import { canManage } from '../../../../../../lib/roles';
 import { PageBody, PageHeader } from '../../../../../../components/shell/page-header';
@@ -46,11 +46,11 @@ export default async function AssetDetailPage({
   const me = (await getMe())!;
   const term = buildTerm(await getSettings());
   const [companyRes, asset] = await Promise.all([
-    serverApiFetch<CompanyDetail>(`/companies/${companyId}`),
+    getCompanyDetail(companyId),
     getAsset(companyId, assetId),
   ]);
-  if (!companyRes.ok || !companyRes.data || !asset) notFound();
-  const company = companyRes.data;
+  const company = throwUnlessFound(companyRes, `/companies/${companyId}`);
+  if (!asset) notFound();
   const manage = canManage(me.role);
 
   const createdBy = asset.createdByUser;

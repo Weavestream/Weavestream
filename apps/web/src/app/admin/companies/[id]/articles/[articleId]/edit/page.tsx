@@ -1,9 +1,9 @@
 import { notFound } from 'next/navigation';
 import {
   getArticle,
-  listFolderTree,
-  serverApiFetch,
-  type CompanyDetail,
+  getCompanyDetail,
+  getCompanyFolderTree,
+  throwUnlessFound,
 } from '../../../../../../../lib/server-api';
 import { ArticleForm } from '../../article-form';
 
@@ -15,17 +15,17 @@ export default async function EditArticlePage({
   const { id: companyId, articleId } = await params;
 
   const [companyRes, folders, article] = await Promise.all([
-    serverApiFetch<CompanyDetail>(`/companies/${companyId}`),
-    listFolderTree(companyId),
+    getCompanyDetail(companyId),
+    getCompanyFolderTree(companyId),
     getArticle(companyId, articleId),
   ]);
-  if (!companyRes.ok || !companyRes.data) notFound();
+  const company = throwUnlessFound(companyRes, `/companies/${companyId}`);
   if (!article) notFound();
 
   return (
     <ArticleForm
       companyId={companyId}
-      companyLabel={companyRes.data.name}
+      companyLabel={company.name}
       mode="edit"
       folders={folders}
       article={article}

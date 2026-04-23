@@ -74,6 +74,7 @@ function ToolbarIconLink({
       title={label}
       className="sidebar-toolbar-icon"
       style={style}
+      prefetch={false}
     >
       <IconCmp size={14} stroke={1.5} />
       {badge !== undefined && badge > 0 && <BadgeDot />}

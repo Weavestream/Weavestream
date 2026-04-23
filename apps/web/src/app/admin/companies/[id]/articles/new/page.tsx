@@ -1,8 +1,7 @@
-import { notFound } from 'next/navigation';
 import {
-  listFolderTree,
-  serverApiFetch,
-  type CompanyDetail,
+  getCompanyDetail,
+  getCompanyFolderTree,
+  throwUnlessFound,
 } from '../../../../../../lib/server-api';
 import { ArticleForm } from '../article-form';
 
@@ -17,10 +16,10 @@ export default async function NewArticlePage({
   const sp = await searchParams;
 
   const [companyRes, folders] = await Promise.all([
-    serverApiFetch<CompanyDetail>(`/companies/${companyId}`),
-    listFolderTree(companyId),
+    getCompanyDetail(companyId),
+    getCompanyFolderTree(companyId),
   ]);
-  if (!companyRes.ok || !companyRes.data) notFound();
+  const company = throwUnlessFound(companyRes, `/companies/${companyId}`);
 
   const initialFolderId =
     typeof sp.folderId === 'string' && sp.folderId !== 'root'
@@ -30,7 +29,7 @@ export default async function NewArticlePage({
   return (
     <ArticleForm
       companyId={companyId}
-      companyLabel={companyRes.data.name}
+      companyLabel={company.name}
       mode="create"
       folders={folders}
       initialFolderId={initialFolderId}
