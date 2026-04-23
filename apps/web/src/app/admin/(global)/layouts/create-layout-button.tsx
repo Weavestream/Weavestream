@@ -12,37 +12,11 @@ import { apiFetch } from '../../../../lib/api';
 import {
   Btn,
   Dialog,
-  Field,
   Icon,
-  Input,
   LayoutSwatch,
   useToast,
 } from '../../../../components/ui';
-import type { IconComponent, IconName } from '../../../../components/ui/icon';
-
-const ICON_CHOICES = [
-  'laptop',
-  'server',
-  'network',
-  'box',
-  'globe',
-  'person',
-  'building',
-  'key',
-  'doc',
-  'shield',
-];
-
-const COLOR_CHOICES = [
-  { label: 'Blue', value: 'var(--info)' },
-  { label: 'Amber', value: 'var(--warn)' },
-  { label: 'Purple', value: '#c084fc' },
-  { label: 'Green', value: 'var(--ok)' },
-  { label: 'Pink', value: '#f472b6' },
-  { label: 'Yellow', value: '#facc15' },
-  { label: 'Sky', value: '#60a5fa' },
-  { label: 'Slate', value: 'var(--muted)' },
-];
+import { LayoutFormFields, slugify } from './layout-form-fields';
 
 type Step = 'pick' | 'details';
 
@@ -52,15 +26,6 @@ type Step = 'pick' | 'details';
  * the picker step). `null` = nothing selected, `''` = scratch.
  */
 const SCRATCH: string = '';
-
-function slugify(s: string): string {
-  return s
-    .toLowerCase()
-    .replace(/[^a-z0-9\s_]/g, '')
-    .trim()
-    .replace(/\s+/g, '_')
-    .slice(0, 48);
-}
 
 export function CreateLayoutButton() {
   const router = useRouter();
@@ -196,17 +161,18 @@ export function CreateLayoutButton() {
             onPickScratch={chooseScratch}
           />
         ) : (
-          <DetailsForm
-            name={name}
-            slug={slug}
-            icon={icon}
-            color={color}
+          <LayoutFormFields
+            values={{ name, slug, icon, color }}
             error={error}
-            slugTouched={slugTouched}
-            selectedTemplateName={
-              templateId && templateId !== SCRATCH
-                ? getLayoutTemplate(templateId)?.name ?? null
-                : null
+            banner={
+              templateId && templateId !== SCRATCH ? (
+                <TemplateBanner
+                  templateName={
+                    getLayoutTemplate(templateId)?.name ?? null
+                  }
+                  color={color}
+                />
+              ) : null
             }
             onName={(v) => {
               setName(v);
@@ -222,6 +188,36 @@ export function CreateLayoutButton() {
         )}
       </Dialog>
     </>
+  );
+}
+
+function TemplateBanner({
+  templateName,
+  color,
+}: {
+  templateName: string | null;
+  color: string;
+}) {
+  if (!templateName) return null;
+  return (
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 8,
+        padding: '6px 10px',
+        background: `color-mix(in oklch, ${color} 8%, transparent)`,
+        border: `1px solid color-mix(in oklch, ${color} 35%, transparent)`,
+        borderRadius: 6,
+        fontSize: 11,
+        color: 'var(--muted)',
+      }}
+    >
+      <Icon.check size={12} style={{ color }} />
+      Starting from{' '}
+      <strong style={{ color: 'var(--text)' }}>{templateName}</strong>
+      <span style={{ color: 'var(--dim)' }}>— fields appear in the builder</span>
+    </div>
   );
 }
 
@@ -400,182 +396,3 @@ function TemplateCard({
   );
 }
 
-function DetailsForm({
-  name,
-  slug,
-  icon,
-  color,
-  error,
-  selectedTemplateName,
-  onName,
-  onSlug,
-  onIcon,
-  onColor,
-}: {
-  name: string;
-  slug: string;
-  icon: string;
-  color: string;
-  error: string | null;
-  slugTouched: boolean;
-  selectedTemplateName: string | null;
-  onName: (v: string) => void;
-  onSlug: (v: string) => void;
-  onIcon: (v: string) => void;
-  onColor: (v: string) => void;
-}) {
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-      {selectedTemplateName && (
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 8,
-            padding: '6px 10px',
-            background: `color-mix(in oklch, ${color} 8%, transparent)`,
-            border: `1px solid color-mix(in oklch, ${color} 35%, transparent)`,
-            borderRadius: 6,
-            fontSize: 11,
-            color: 'var(--muted)',
-          }}
-        >
-          <Icon.check size={12} style={{ color }} />
-          Starting from <strong style={{ color: 'var(--text)' }}>{selectedTemplateName}</strong>
-          <span style={{ color: 'var(--dim)' }}>— fields appear in the builder</span>
-        </div>
-      )}
-
-      <div
-        style={{
-          display: 'flex',
-          gap: 12,
-          alignItems: 'center',
-          padding: '10px 12px',
-          background: 'var(--panel-2)',
-          border: '1px solid var(--line)',
-          borderRadius: 6,
-        }}
-      >
-        <LayoutSwatch icon={icon} color={color} size={36} />
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: 13, fontWeight: 500 }}>
-            {name || 'Untitled layout'}
-          </div>
-          <div
-            style={{
-              fontFamily: 'var(--font-mono)',
-              fontSize: 11,
-              color: 'var(--dim)',
-            }}
-          >
-            /{slug || 'slug'}
-          </div>
-        </div>
-      </div>
-
-      <Field label="Name" htmlFor="layout-name">
-        <Input
-          id="layout-name"
-          autoFocus
-          value={name}
-          onChange={(e) => onName(e.target.value)}
-          placeholder="Workstation"
-        />
-      </Field>
-
-      <Field
-        label="Slug"
-        htmlFor="layout-slug"
-        help="Lowercase snake_case. Used in URLs and filter DSL."
-      >
-        <Input
-          id="layout-slug"
-          value={slug}
-          onChange={(e) => onSlug(e.target.value)}
-          style={{ fontFamily: 'var(--font-mono)' }}
-          placeholder="workstation"
-        />
-      </Field>
-
-      <Field label="Icon">
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          {ICON_CHOICES.map((k) => {
-            const selected = icon === k;
-            const IconCmp = Icon[k as IconName] as IconComponent | undefined;
-            if (!IconCmp) return null;
-            return (
-              <button
-                key={k}
-                type="button"
-                onClick={() => onIcon(k)}
-                aria-pressed={selected}
-                aria-label={k}
-                style={{
-                  width: 40,
-                  height: 40,
-                  borderRadius: 6,
-                  display: 'grid',
-                  placeItems: 'center',
-                  background: selected
-                    ? `color-mix(in oklch, ${color} 14%, transparent)`
-                    : 'var(--panel)',
-                  border: `1px solid ${
-                    selected
-                      ? `color-mix(in oklch, ${color} 55%, transparent)`
-                      : 'var(--line-2)'
-                  }`,
-                  color: selected ? color : 'var(--muted)',
-                  cursor: 'pointer',
-                  transition: 'background 120ms, border-color 120ms, color 120ms',
-                }}
-              >
-                <IconCmp size={18} />
-              </button>
-            );
-          })}
-        </div>
-      </Field>
-
-      <Field label="Color" error={error ?? undefined}>
-        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-          {COLOR_CHOICES.map((c) => {
-            const selected = color === c.value;
-            return (
-              <button
-                key={c.value}
-                type="button"
-                onClick={() => onColor(c.value)}
-                style={{
-                  height: 28,
-                  padding: '0 10px',
-                  borderRadius: 4,
-                  border: `1px solid ${selected ? c.value : 'var(--line-2)'}`,
-                  background: selected
-                    ? `color-mix(in oklch, ${c.value} 14%, transparent)`
-                    : 'var(--panel)',
-                  color: selected ? c.value : 'var(--muted)',
-                  fontSize: 12,
-                  cursor: 'pointer',
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: 6,
-                }}
-              >
-                <span
-                  style={{
-                    width: 10,
-                    height: 10,
-                    borderRadius: '50%',
-                    background: c.value,
-                  }}
-                />
-                {c.label}
-              </button>
-            );
-          })}
-        </div>
-      </Field>
-    </div>
-  );
-}
