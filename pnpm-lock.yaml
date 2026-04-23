@@ -120,7 +120,7 @@ importers:
         specifier: ^0.34.5
         version: 0.34.5
       zod:
-        specifier: ^3.23.8
+        specifier: ^3.25.0
         version: 3.25.76
     devDependencies:
       '@nestjs/cli':
@@ -332,7 +332,7 @@ importers:
         specifier: ^7.8.1
         version: 7.8.2
       zod:
-        specifier: ^3.23.8
+        specifier: ^3.25.0
         version: 3.25.76
     devDependencies:
       '@nestjs/cli':
@@ -384,7 +384,7 @@ importers:
   packages/shared:
     dependencies:
       zod:
-        specifier: ^3.23.8
+        specifier: ^3.25.0
         version: 3.25.76
     devDependencies:
       '@types/node':
