@@ -4,12 +4,12 @@ import { notFound } from 'next/navigation';
 export const metadata: Metadata = { title: 'Domain' };
 
 import {
+  getCompanyDetail,
   getDomain,
   getMe,
   getSettings,
   listDomainChecks,
-  serverApiFetch,
-  type CompanyDetail,
+  throwUnlessFound,
   type DomainCheck,
 } from '../../../../../../lib/server-api';
 import { canManage } from '../../../../../../lib/roles';
@@ -35,13 +35,12 @@ export default async function DomainDetailPage({
   const term = buildTerm(await getSettings());
 
   const [companyRes, domain, checks] = await Promise.all([
-    serverApiFetch<CompanyDetail>(`/companies/${companyId}`),
+    getCompanyDetail(companyId),
     getDomain(companyId, domainId),
     listDomainChecks(companyId, domainId, 30),
   ]);
-  if (!companyRes.ok || !companyRes.data) notFound();
+  const company = throwUnlessFound(companyRes, `/companies/${companyId}`);
   if (!domain) notFound();
-  const company = companyRes.data;
 
   const manage = canManage(me.role);
 

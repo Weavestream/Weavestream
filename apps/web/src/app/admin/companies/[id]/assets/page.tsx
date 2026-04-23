@@ -1,15 +1,14 @@
 import type { Metadata } from 'next';
-import { notFound } from 'next/navigation';
 import Link from 'next/link';
 
 export const metadata: Metadata = { title: 'Assets' };
 import {
+  getActiveLayouts,
+  getCompanyDetail,
   getMe,
   getSettings,
   listAssets,
-  listLayouts,
-  serverApiFetch,
-  type CompanyDetail,
+  throwUnlessFound,
 } from '../../../../../lib/server-api';
 import { canManage } from '../../../../../lib/roles';
 import { PageBody, PageHeader } from '../../../../../components/shell/page-header';
@@ -35,9 +34,8 @@ export default async function CompanyAssetsPage({
   const me = (await getMe())!;
   const term = buildTerm(await getSettings());
 
-  const companyRes = await serverApiFetch<CompanyDetail>(`/companies/${companyId}`);
-  if (!companyRes.ok || !companyRes.data) notFound();
-  const company = companyRes.data;
+  const companyRes = await getCompanyDetail(companyId);
+  const company = throwUnlessFound(companyRes, `/companies/${companyId}`);
 
   const layoutId = typeof sp.layout === 'string' ? sp.layout : undefined;
   const q = typeof sp.q === 'string' ? sp.q : undefined;
@@ -49,7 +47,7 @@ export default async function CompanyAssetsPage({
   }
 
   const [layouts, assets] = await Promise.all([
-    listLayouts({ includeArchived: false }),
+    getActiveLayouts(),
     listAssets(companyId, {
       layoutId,
       q,

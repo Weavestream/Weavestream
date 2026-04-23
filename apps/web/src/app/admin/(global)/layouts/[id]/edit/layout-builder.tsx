@@ -45,6 +45,8 @@ import {
 } from '../../../../../../components/ui';
 import { TopBar } from '../../../../../../components/shell/top-bar';
 import { useIsMobile } from '../../../../../../lib/hooks/use-is-mobile';
+import { LayoutSettingsDialog } from '../../layout-settings-dialog';
+import { LayoutArchiveDialog } from '../../layout-archive-dialog';
 
 type BuilderField = {
   /** Persisted id, or undefined for unsaved rows. */
@@ -164,6 +166,10 @@ export function LayoutBuilder({
     affectedAssetCount: number;
     affectedCompanyIds: string[];
   }>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [archiveOpen, setArchiveOpen] = useState(false);
+
+  const isArchived = layout.archivedAt !== null;
 
   // When the server component re-renders with a new layout version (after
   // `router.refresh()`), pull the fresh field list in as the new baseline
@@ -624,7 +630,8 @@ export function LayoutBuilder({
         right={
           canEdit ? (
             <>
-              {dirty && <Tag tone="warn">unsaved</Tag>}
+              {isArchived && <Tag tone="warn">archived</Tag>}
+              {!isArchived && dirty && <Tag tone="warn">unsaved</Tag>}
               <Btn
                 kind="outline"
                 size="md"
@@ -633,16 +640,18 @@ export function LayoutBuilder({
               >
                 Cancel
               </Btn>
-              <Btn
-                kind="primary"
-                size="md"
-                icon={Icon.check}
-                loading={saving}
-                disabled={!dirty || saving}
-                onClick={() => save(false)}
-              >
-                Save layout
-              </Btn>
+              {!isArchived && (
+                <Btn
+                  kind="primary"
+                  size="md"
+                  icon={Icon.check}
+                  loading={saving}
+                  disabled={!dirty || saving}
+                  onClick={() => save(false)}
+                >
+                  Save layout
+                </Btn>
+              )}
             </>
           ) : (
             <Tag tone="outline">read only</Tag>
@@ -662,6 +671,38 @@ export function LayoutBuilder({
           }}
         >
           {error}
+        </div>
+      )}
+
+      {isArchived && (
+        <div
+          role="note"
+          style={{
+            padding: '10px 20px',
+            background: 'var(--warn-soft)',
+            color: 'var(--warn)',
+            borderBottom: '1px solid var(--line)',
+            fontSize: 12.5,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 10,
+          }}
+        >
+          <Icon.archive size={13} />
+          <div style={{ flex: 1 }}>
+            This layout is archived — restore it to resume editing fields.
+            Existing assets linked to this layout continue to work.
+          </div>
+          {canEdit && (
+            <Btn
+              kind="primary"
+              size="sm"
+              icon={Icon.check}
+              onClick={() => setArchiveOpen(true)}
+            >
+              Restore
+            </Btn>
+          )}
         </div>
       )}
 
@@ -739,6 +780,9 @@ export function LayoutBuilder({
                       (f.showInTable && canShowInTable(f.fieldType)),
                   ).length
                 }
+                canEdit={canEdit}
+                onOpenSettings={() => setSettingsOpen(true)}
+                onOpenArchive={() => setArchiveOpen(true)}
               />
 
               <div
@@ -801,6 +845,22 @@ export function LayoutBuilder({
             : null}
         </DragOverlay>
       </DndContext>
+
+      {canEdit && (
+        <>
+          <LayoutSettingsDialog
+            layout={layout}
+            open={settingsOpen}
+            onClose={() => setSettingsOpen(false)}
+          />
+          <LayoutArchiveDialog
+            layout={layout}
+            stats={stats}
+            open={archiveOpen}
+            onClose={() => setArchiveOpen(false)}
+          />
+        </>
+      )}
     </div>
   );
 }
@@ -814,13 +874,20 @@ function LayoutMetaStrip({
   stats,
   fieldCount,
   columnCount,
+  canEdit,
+  onOpenSettings,
+  onOpenArchive,
 }: {
   layout: LayoutSummary;
   stats: LayoutStats | null;
   fieldCount: number;
   columnCount: number;
+  canEdit: boolean;
+  onOpenSettings: () => void;
+  onOpenArchive: () => void;
 }) {
   const term = useTerm();
+  const isArchived = layout.archivedAt !== null;
   return (
     <div
       style={{
@@ -840,7 +907,7 @@ function LayoutMetaStrip({
             {layout.name}
           </div>
           <Tag tone="accent">global template</Tag>
-          {layout.archivedAt && <Tag tone="warn">archived</Tag>}
+          {isArchived && <Tag tone="warn">archived</Tag>}
         </div>
         <div
           style={{
@@ -879,6 +946,34 @@ function LayoutMetaStrip({
           </div>
         )}
       </div>
+      {canEdit && (
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 6,
+            flexShrink: 0,
+          }}
+        >
+          <Btn
+            kind="outline"
+            size="sm"
+            icon={Icon.edit}
+            onClick={onOpenSettings}
+            title="Rename layout or change icon/color"
+          >
+            Settings
+          </Btn>
+          <Btn
+            kind={isArchived ? 'primary' : 'outline'}
+            size="sm"
+            icon={isArchived ? Icon.check : Icon.archive}
+            onClick={onOpenArchive}
+          >
+            {isArchived ? 'Restore' : 'Archive'}
+          </Btn>
+        </div>
+      )}
     </div>
   );
 }
@@ -1748,121 +1843,105 @@ function ChoicesEditor({
   allowAllowOther?: boolean;
   allowMax?: boolean;
 }) {
-  const choices = (options.choices ?? []) as Array<{ label: string; slug: string }>;
-  function mutate(next: typeof choices) {
+  const choices = (options.choices ?? []) as Array<{ label: string; slug: string; id: string }>;
+  const [activeId, setActiveId] = useState<string | null>(null);
+
+  // Ensure each choice has a stable id for drag-and-drop
+  const choicesWithIds = useMemo(() => {
+    return choices.map((c, i) => ({
+      ...c,
+      id: c.id || `choice-${i}-${Math.random().toString(36).slice(2, 9)}`,
+    }));
+  }, [choices]);
+
+  // Sync ids back to choices array when they change
+  useEffect(() => {
+    const needsUpdate = choices.some((c, i) => !c.id || c.id !== choicesWithIds[i]?.id);
+    if (needsUpdate) {
+      onChange({ ...options, choices: choicesWithIds });
+    }
+  }, [choicesWithIds, choices, options, onChange]);
+
+  function mutate(next: typeof choicesWithIds) {
     onChange({ ...options, choices: next });
   }
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  );
+
+  function handleDragStart(e: DragStartEvent) {
+    setActiveId(e.active.id.toString());
+  }
+
+  function handleDragEnd(e: DragEndEvent) {
+    const { active, over } = e;
+    setActiveId(null);
+    if (!over || active.id === over.id) return;
+
+    const oldIndex = choicesWithIds.findIndex((c) => c.id === active.id);
+    const newIndex = choicesWithIds.findIndex((c) => c.id === over.id);
+    if (oldIndex !== -1 && newIndex !== -1) {
+      mutate(arrayMove(choicesWithIds, oldIndex, newIndex));
+    }
+  }
+
   return (
     <InspectorField label="Options">
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-        {choices.map((c, i) => (
-          <div
-            key={`${c.slug}-${i}`}
-            style={{
-              padding: '6px 8px',
-              display: 'flex',
-              alignItems: 'center',
-              gap: 6,
-              background: 'var(--panel-2)',
-              border: '1px solid var(--line)',
-              borderRadius: 3,
-              fontSize: 12,
-              minWidth: 0,
-              overflow: 'hidden',
-              boxSizing: 'border-box',
-            }}
-          >
-            <Icon.grip size={10} style={{ color: 'var(--dim)', flexShrink: 0 }} />
-            <input
-              value={c.label}
-              readOnly={readOnly}
-              placeholder={`Option ${i + 1}`}
-              onChange={(e) => {
-                const next = [...choices];
-                next[i] = {
-                  label: e.target.value,
-                  slug: c.slug,
-                };
-                mutate(next);
-              }}
-              onBlur={(e) => {
-                if (!c.slug) {
-                  const next = [...choices];
-                  next[i] = { label: e.target.value, slug: slugify(e.target.value) };
+      <DndContext
+        sensors={sensors}
+        collisionDetection={closestCenter}
+        onDragStart={handleDragStart}
+        onDragEnd={handleDragEnd}
+      >
+        <SortableContext items={choicesWithIds.map((c) => c.id)} strategy={verticalListSortingStrategy}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            {choicesWithIds.map((c, i) => (
+              <SortableChoiceRow
+                key={c.id}
+                choice={c}
+                index={i}
+                readOnly={readOnly}
+                onChange={(updated) => {
+                  const next = [...choicesWithIds];
+                  next[i] = updated;
                   mutate(next);
-                }
-              }}
-              style={{
-                flex: 1,
-                minWidth: 0,
-                width: '100%',
-                background: 'transparent',
-                border: 'none',
-                outline: 'none',
-                color: 'var(--text)',
-                fontSize: 12,
-                fontFamily: 'inherit',
-              }}
-            />
-            <input
-              value={c.slug}
-              readOnly={readOnly}
-              placeholder={`option_${i + 1}`}
-              onChange={(e) => {
-                const next = [...choices];
-                next[i] = { label: c.label, slug: slugify(e.target.value) };
-                mutate(next);
-              }}
-              style={{
-                width: 80,
-                minWidth: 0,
-                flexShrink: 0,
-                background: 'transparent',
-                border: 'none',
-                outline: 'none',
-                color: 'var(--dim)',
-                fontSize: 11,
-                fontFamily: 'var(--font-mono)',
-                textAlign: 'right',
-              }}
-            />
-            {!readOnly && (
-              <button
-                type="button"
-                onClick={() => mutate(choices.filter((_, j) => j !== i))}
-                style={{
-                  background: 'transparent',
-                  border: 'none',
-                  color: 'var(--dim)',
-                  cursor: 'pointer',
                 }}
-                aria-label="Remove option"
-              >
-                <Icon.x size={10} />
-              </button>
-            )}
+                onRemove={() => mutate(choicesWithIds.filter((_, j) => j !== i))}
+              />
+            ))}
           </div>
-        ))}
-        {!readOnly && (
-          <button
-            type="button"
-            onClick={() => mutate([...choices, { label: '', slug: '' }])}
-            style={{
-              padding: '6px 8px',
-              border: '1px dashed var(--line-2)',
-              borderRadius: 3,
-              fontSize: 11.5,
-              fontFamily: 'var(--font-mono)',
-              color: 'var(--dim)',
-              textAlign: 'left',
-              background: 'transparent',
-              cursor: 'pointer',
-            }}
-          >
-            + add option
-          </button>
-        )}
-      </div>
+        </SortableContext>
+        <DragOverlay>
+          {activeId ? (
+            <ChoiceRowOverlay
+              choice={choicesWithIds.find((c) => c.id === activeId)!}
+              index={choicesWithIds.findIndex((c) => c.id === activeId)}
+            />
+          ) : null}
+        </DragOverlay>
+      </DndContext>
+      {!readOnly && (
+        <button
+          type="button"
+          onClick={() => mutate([...choicesWithIds, { label: '', slug: '', id: `new-${Date.now()}` }])}
+          style={{
+            padding: '6px 8px',
+            border: '1px dashed var(--line-2)',
+            borderRadius: 3,
+            fontSize: 11.5,
+            fontFamily: 'var(--font-mono)',
+            color: 'var(--dim)',
+            textAlign: 'left',
+            background: 'transparent',
+            cursor: 'pointer',
+            marginTop: 4,
+          }}
+        >
+          + add option
+        </button>
+      )}
       {allowAllowOther && (
         <div style={{ marginTop: 8 }}>
           <ToggleRow
@@ -1894,5 +1973,165 @@ function ChoicesEditor({
         </div>
       )}
     </InspectorField>
+  );
+}
+
+function SortableChoiceRow({
+  choice,
+  index,
+  readOnly,
+  onChange,
+  onRemove,
+}: {
+  choice: { label: string; slug: string; id: string };
+  index: number;
+  readOnly: boolean;
+  onChange: (c: { label: string; slug: string; id: string }) => void;
+  onRemove: () => void;
+}) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: choice.id, disabled: readOnly });
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.5 : 1,
+  };
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={{
+        ...style,
+        padding: '6px 8px',
+        display: 'flex',
+        alignItems: 'center',
+        gap: 6,
+        background: 'var(--panel-2)',
+        border: '1px solid var(--line)',
+        borderRadius: 3,
+        fontSize: 12,
+        minWidth: 0,
+        overflow: 'hidden',
+        boxSizing: 'border-box',
+      }}
+    >
+      <div
+        {...(readOnly ? {} : attributes)}
+        {...(readOnly ? {} : listeners)}
+        style={{ cursor: readOnly ? 'default' : 'grab', display: 'grid', placeItems: 'center', flexShrink: 0 }}
+        aria-label="Drag to reorder"
+      >
+        <Icon.grip size={10} style={{ color: 'var(--dim)' }} />
+      </div>
+      <input
+        value={choice.label}
+        readOnly={readOnly}
+        placeholder={`Option ${index + 1}`}
+        onChange={(e) => onChange({ ...choice, label: e.target.value })}
+        onBlur={(e) => {
+          if (!choice.slug) {
+            onChange({ ...choice, label: e.target.value, slug: slugify(e.target.value) });
+          }
+        }}
+        style={{
+          flex: 1,
+          minWidth: 0,
+          width: '100%',
+          background: 'transparent',
+          border: 'none',
+          outline: 'none',
+          color: 'var(--text)',
+          fontSize: 12,
+          fontFamily: 'inherit',
+        }}
+      />
+      <input
+        value={choice.slug}
+        readOnly={readOnly}
+        placeholder={`option_${index + 1}`}
+        onChange={(e) => onChange({ ...choice, slug: slugify(e.target.value) })}
+        style={{
+          width: 80,
+          minWidth: 0,
+          flexShrink: 0,
+          background: 'transparent',
+          border: 'none',
+          outline: 'none',
+          color: 'var(--dim)',
+          fontSize: 11,
+          fontFamily: 'var(--font-mono)',
+          textAlign: 'right',
+        }}
+      />
+      {!readOnly && (
+        <button
+          type="button"
+          onClick={onRemove}
+          style={{
+            background: 'transparent',
+            border: 'none',
+            color: 'var(--dim)',
+            cursor: 'pointer',
+          }}
+          aria-label="Remove option"
+        >
+          <Icon.x size={10} />
+        </button>
+      )}
+    </div>
+  );
+}
+
+function ChoiceRowOverlay({
+  choice,
+  index,
+}: {
+  choice: { label: string; slug: string; id: string };
+  index: number;
+}) {
+  return (
+    <div
+      style={{
+        padding: '6px 8px',
+        display: 'flex',
+        alignItems: 'center',
+        gap: 6,
+        background: 'var(--panel-2)',
+        border: '1px solid var(--accent-line)',
+        borderRadius: 3,
+        fontSize: 12,
+        minWidth: 0,
+        overflow: 'hidden',
+        boxSizing: 'border-box',
+        boxShadow: '0 8px 22px -6px color-mix(in oklch, var(--accent) 30%, transparent)',
+        opacity: 0.95,
+      }}
+    >
+      <Icon.grip size={10} style={{ color: 'var(--dim)', flexShrink: 0 }} />
+      <span style={{ flex: 1, minWidth: 0, fontSize: 12 }}>
+        {choice.label || `Option ${index + 1}`}
+      </span>
+      <span
+        style={{
+          width: 80,
+          minWidth: 0,
+          flexShrink: 0,
+          color: 'var(--dim)',
+          fontSize: 11,
+          fontFamily: 'var(--font-mono)',
+          textAlign: 'right',
+        }}
+      >
+        {choice.slug || `option_${index + 1}`}
+      </span>
+      <Icon.x size={10} style={{ color: 'var(--dim)' }} />
+    </div>
   );
 }

@@ -1,9 +1,8 @@
-import { notFound } from 'next/navigation';
 import {
+  getActiveLayouts,
+  getCompanyDetail,
   getLayout,
-  listLayouts,
-  serverApiFetch,
-  type CompanyDetail,
+  throwUnlessFound,
 } from '../../../../../../lib/server-api';
 import { NewAssetFlow } from './new-asset-flow';
 
@@ -23,18 +22,18 @@ export default async function NewAssetPage({
   const { id: companyId } = await params;
   const { layout: layoutId } = await searchParams;
 
-  const companyRes = await serverApiFetch<CompanyDetail>(`/companies/${companyId}`);
-  if (!companyRes.ok || !companyRes.data) notFound();
+  const companyRes = await getCompanyDetail(companyId);
+  const company = throwUnlessFound(companyRes, `/companies/${companyId}`);
 
   const [layouts, chosen] = await Promise.all([
-    listLayouts({ includeArchived: false }),
+    getActiveLayouts(),
     layoutId ? getLayout(layoutId) : Promise.resolve(null),
   ]);
 
   return (
     <NewAssetFlow
       companyId={companyId}
-      companyName={companyRes.data.name}
+      companyName={company.name}
       layouts={layouts}
       initialLayout={chosen?.layout ?? null}
     />

@@ -23,6 +23,10 @@ audience without code changes.
 
 - **Tenant documentation.** Rich-text articles (Tiptap), folders, photo
   galleries, and configurable asset layouts per organization.
+- **Password management.** Comprehensive credential storage with secure
+  sharing and role-based access control.
+- **Expiration tracking.** Monitor asset expiration dates (licenses,
+  warranties, SSL certificates) with visibility into upcoming renewals.
 - **Invite-only user management** with per-user setup tokens, forced
   TOTP MFA, and append-only audit logging across every mutation.
 - **Two-layer RBAC.** Global roles combined with per-tenant memberships

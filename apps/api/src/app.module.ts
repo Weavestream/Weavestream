@@ -1,8 +1,9 @@
 import { Module } from '@nestjs/common';
 import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
-import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
+import { ThrottlerModule } from '@nestjs/throttler';
 import { LoggerModule } from 'nestjs-pino';
 import { randomUUID } from 'node:crypto';
+import type { IncomingMessage, ServerResponse } from 'node:http';
 import { ConfigModule } from './config/config.module.js';
 import { EnvService } from './config/env.service.js';
 import { PrismaModule } from './prisma/prisma.module.js';
@@ -47,12 +48,22 @@ import { CryptoModule } from './crypto/crypto.module.js';
 import { AuthGuard } from './auth/guards/auth.guard.js';
 import { MfaEnrollmentGuard } from './auth/guards/mfa-enrollment.guard.js';
 import { CsrfGuard } from './auth/guards/csrf.guard.js';
+import { UserThrottlerGuard } from './auth/guards/user-throttler.guard.js';
 import { PermissionGuard } from './rbac/permission.guard.js';
 import { ContractorAccessGuard } from './rbac/contractor-access.guard.js';
 import { TenantContextInterceptor } from './auth/interceptors/tenant-context.interceptor.js';
 import { AuditInterceptor } from './audit/audit.interceptor.js';
 import { ProblemExceptionFilter } from './common/problem-exception.filter.js';
 import { RedisThrottlerStorage } from './redis/redis-throttler.storage.js';
+
+/** Compact access logs: avoid logging full req/res headers on every line. */
+const httpSerializers = {
+  req: (req: IncomingMessage) => {
+    const id = (req as IncomingMessage & { id?: string }).id;
+    return { id, method: req.method, url: req.url };
+  },
+  res: (res: ServerResponse) => ({ statusCode: res.statusCode }),
+};
 
 @Module({
   imports: [
@@ -63,6 +74,7 @@ import { RedisThrottlerStorage } from './redis/redis-throttler.storage.js';
       useFactory: (env: EnvService) => ({
         pinoHttp: {
           level: env.values.LOG_LEVEL,
+          serializers: httpSerializers,
           genReqId: (req) =>
             (req.headers['x-request-id'] as string | undefined) ?? randomUUID(),
           customProps: (req) => ({ requestId: (req as { id?: string }).id }),
@@ -138,8 +150,14 @@ import { RedisThrottlerStorage } from './redis/redis-throttler.storage.js';
     PasswordFoldersController,
   ],
   providers: [
-    { provide: APP_GUARD, useClass: ThrottlerGuard },
+    // Guard ordering matters: Nest runs global guards in the order
+    // they're registered. `AuthGuard` must run before `UserThrottlerGuard`
+    // so the throttler can key on `req.user.id` instead of falling back
+    // to IP for every authenticated request. `CsrfGuard` runs after
+    // throttling so abusive clients can't burn CSRF budget by spamming
+    // invalid requests.
     { provide: APP_GUARD, useClass: AuthGuard },
+    { provide: APP_GUARD, useClass: UserThrottlerGuard },
     { provide: APP_GUARD, useClass: MfaEnrollmentGuard },
     { provide: APP_GUARD, useClass: CsrfGuard },
     { provide: APP_GUARD, useClass: PermissionGuard },

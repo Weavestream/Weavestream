@@ -3,6 +3,7 @@ import './load-env.js';
 import 'reflect-metadata';
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe, VersioningType } from '@nestjs/common';
+import type { NestExpressApplication } from '@nestjs/platform-express';
 import { Logger } from 'nestjs-pino';
 import helmet from 'helmet';
 import cookieParser from 'cookie-parser';
@@ -12,10 +13,23 @@ import { ProblemExceptionFilter } from './common/problem-exception.filter.js';
 import { EnvService } from './config/env.service.js';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule, { bufferLogs: true });
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, {
+    bufferLogs: true,
+  });
   app.useLogger(app.get(Logger));
 
   const env = app.get(EnvService).values;
+
+  // Trust a single upstream hop (the Next.js `web` container acts as the
+  // reverse proxy for browser → API traffic; a Traefik/Caddy edge may
+  // sit in front of it in production). Without this Express returns its
+  // own socket peer (`192.168.160.x` in Docker) for `req.ip`, which
+  // collapses every SSR call into a single throttler bucket and was the
+  // root cause of the intermittent 429-as-404 bug. `1` is the safe
+  // default for our topology; bump to `2` behind a double-proxy setup.
+  // `X-Forwarded-Proto` is also respected so `req.secure` is correct
+  // when the edge terminates TLS.
+  app.set('trust proxy', 1);
 
   app.use(
     helmet({

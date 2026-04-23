@@ -25,12 +25,12 @@ export const FieldTypeValues = [
   'MULTISELECT',
   'EMAIL',
   'PHONE',
+  'IP_ADDRESS',
   'URL',
   'ASSET_REFERENCE',
   'VAULTWARDEN_LINK',
   'FILE',
   'TAGS',
-  'IP_ADDRESS',
 ] as const;
 
 export type FieldType = (typeof FieldTypeValues)[number];
@@ -48,12 +48,13 @@ export type FieldTypeIcon =
   | 'list'
   | 'mail'
   | 'phone'
+  | 'network'
   | 'globe'
   | 'link'
   | 'key'
   | 'box'
-  | 'tag'
-  | 'network';
+  | 'tag';
+
 
 export type FieldWidth = 'half' | 'full';
 
@@ -207,6 +208,17 @@ export const FIELD_TYPE_CATALOG: readonly FieldTypeMeta[] = [
     hasOptions: false,
   },
   {
+    kind: 'IP_ADDRESS',
+    label: 'IP address',
+    slug: 'ip_address',
+    icon: 'network',
+    width: 'half',
+    composite: false,
+    filterable: true,
+    hasOptions: true,
+    hint: 'Accepts IPv4 or IPv6. Enable CIDR to store subnets (e.g. 10.0.0.0/24). Powers the upcoming IPAM feature.',
+  },
+  {
     kind: 'URL',
     label: 'URL',
     slug: 'url',
@@ -218,7 +230,7 @@ export const FIELD_TYPE_CATALOG: readonly FieldTypeMeta[] = [
   },
   {
     kind: 'ASSET_REFERENCE',
-    label: 'Asset reference',
+    label: 'Asset',
     slug: 'asset_reference',
     icon: 'link',
     width: 'full',
@@ -257,17 +269,6 @@ export const FIELD_TYPE_CATALOG: readonly FieldTypeMeta[] = [
     composite: true,
     filterable: false,
     hasOptions: false,
-  },
-  {
-    kind: 'IP_ADDRESS',
-    label: 'IP address',
-    slug: 'ip_address',
-    icon: 'network',
-    width: 'half',
-    composite: false,
-    filterable: true,
-    hasOptions: true,
-    hint: 'Accepts IPv4 or IPv6. Enable CIDR to store subnets (e.g. 10.0.0.0/24). Powers the upcoming IPAM feature.',
   },
 ];
 

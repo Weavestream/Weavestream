@@ -1,14 +1,14 @@
 import type { Metadata } from 'next';
-import { notFound } from 'next/navigation';
 
 export const metadata: Metadata = { title: 'Domains' };
 
 import {
+  getCompanyDetail,
+  getCompanyDomainsBasic,
   getMe,
   getSettings,
   listDomains,
-  serverApiFetch,
-  type CompanyDetail,
+  throwUnlessFound,
 } from '../../../../../lib/server-api';
 import { canManage } from '../../../../../lib/roles';
 import { PageBody, PageHeader } from '../../../../../components/shell/page-header';
@@ -35,17 +35,16 @@ export default async function CompanyDomainsPage({
   const me = (await getMe())!;
   const term = buildTerm(await getSettings());
 
-  const companyRes = await serverApiFetch<CompanyDetail>(
-    `/companies/${companyId}`,
-  );
-  if (!companyRes.ok || !companyRes.data) notFound();
-  const company = companyRes.data;
+  const companyRes = await getCompanyDetail(companyId);
+  const company = throwUnlessFound(companyRes, `/companies/${companyId}`);
 
   const includeArchived = sp.archived === '1';
-  const page = await listDomains(companyId, {
-    includeArchived,
-    limit: 200,
-  });
+  // Default "active only" view reuses the cached list fetched by the
+  // layout. Opting in to archived rows hits the un-cached helper since
+  // that query is not layout-shared.
+  const page = includeArchived
+    ? await listDomains(companyId, { includeArchived: true, limit: 200 })
+    : await getCompanyDomainsBasic(companyId);
 
   const manage = canManage(me.role);
 

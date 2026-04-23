@@ -1,9 +1,9 @@
-import { notFound, redirect } from 'next/navigation';
+import { redirect } from 'next/navigation';
 import {
+  getCompanyDetail,
   getMe,
   getSettings,
-  serverApiFetch,
-  type CompanyDetail,
+  throwUnlessFound,
 } from '../../../../../lib/server-api';
 import { canManage } from '../../../../../lib/roles';
 import { PageBody, PageHeader } from '../../../../../components/shell/page-header';
@@ -21,9 +21,8 @@ export default async function CompanySettingsPage({
   if (!canManage(me.role)) redirect(`/admin/companies/${id}`);
 
   const term = buildTerm(await getSettings());
-  const companyRes = await serverApiFetch<CompanyDetail>(`/companies/${id}`);
-  if (!companyRes.ok || !companyRes.data) notFound();
-  const company = companyRes.data;
+  const companyRes = await getCompanyDetail(id);
+  const company = throwUnlessFound(companyRes, `/companies/${id}`);
 
   return (
     <>

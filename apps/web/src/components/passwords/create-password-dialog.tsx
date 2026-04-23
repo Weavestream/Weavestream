@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useState } from 'react';
+import { useCallback, useId, useState } from 'react';
 import type { PasswordGeneratorDefaults } from '@weavestream/shared';
 import {
   Btn,
@@ -62,6 +62,10 @@ export function CreatePasswordDialog({
   const [visibleToClients, setVisibleToClients] = useState(false);
   const [requireReason, setRequireReason] = useState(false);
   const [totpSecret, setTotpSecret] = useState('');
+  const fieldSeed = useId().replace(/:/g, '');
+  const accountFieldId = `ws-acct-${fieldSeed}`;
+  const accountFieldName = `ws-acct-${fieldSeed}`;
+  const secretFieldName = `ws-secret-${fieldSeed}`;
 
   const submit = useCallback(async () => {
     setErr(null);
@@ -137,13 +141,12 @@ export function CreatePasswordDialog({
       }
       width={480}
     >
-      {/* autoComplete="off" on the wrapping form suppresses Safari's
-          "save password" toast in nested fields. */}
-      <form
-        autoComplete="off"
-        onSubmit={(e) => {
-          e.preventDefault();
-          if (valid && !busy) void submit();
+      <div
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            if (valid && !busy) void submit();
+          }
         }}
         style={{ display: 'flex', flexDirection: 'column', gap: 10 }}
       >
@@ -171,26 +174,31 @@ export function CreatePasswordDialog({
           />
         </Field>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-          <Field label="Username">
+          <VaultField label="Account">
             <Input
+              id={accountFieldId}
+              name={accountFieldName}
+              aria-label="Account"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
               autoComplete="off"
             />
-          </Field>
+          </VaultField>
           <Field label="URL">
             <Input value={url} onChange={(e) => setUrl(e.target.value)} />
           </Field>
         </div>
-        <Field label="Password">
+        <VaultField label="Password">
           <SecretInput
+            name={secretFieldName}
+            aria-label="Secret"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             allowReveal
             generatorDefaults={generatorDefaults}
             onGenerate={setPassword}
           />
-        </Field>
+        </VaultField>
         <Field label="Notes">
           <Textarea
             value={notes}
@@ -239,10 +247,7 @@ export function CreatePasswordDialog({
         {err && (
           <div style={{ fontSize: 12, color: 'var(--danger)' }}>{err}</div>
         )}
-        {/* Hidden submit enables Enter-to-save from within inputs without
-            a visible button. */}
-        <button type="submit" style={{ display: 'none' }} tabIndex={-1} />
-      </form>
+      </div>
     </Dialog>
   );
 }
@@ -254,3 +259,31 @@ const checkboxLabel = {
   fontSize: 13,
   color: 'var(--text)',
 } as const;
+
+function VaultField({
+  label,
+  children,
+}: {
+  label: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column' }}>
+      <div
+        aria-hidden="true"
+        style={{
+          display: 'block',
+          fontSize: 11,
+          fontFamily: 'var(--font-mono)',
+          color: 'var(--muted)',
+          textTransform: 'uppercase',
+          letterSpacing: 0.6,
+          marginBottom: 6,
+        }}
+      >
+        {label}
+      </div>
+      {children}
+    </div>
+  );
+}

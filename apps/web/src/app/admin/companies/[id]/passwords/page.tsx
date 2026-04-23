@@ -1,11 +1,11 @@
 import type { Metadata } from 'next';
-import { notFound } from 'next/navigation';
 import {
+  getCompanyActivePasswords,
+  getCompanyDetail,
+  getCompanyPasswordFolders,
   getMe,
-  listPasswordFolders,
   listPasswords,
-  serverApiFetch,
-  type CompanyDetail,
+  throwUnlessFound,
 } from '../../../../../lib/server-api';
 import { canManage } from '../../../../../lib/roles';
 import { PageBody, PageHeader } from '../../../../../components/shell/page-header';
@@ -37,16 +37,19 @@ export default async function CompanyPasswordsPage({
   const settings = await getSettings();
   const term = buildTerm(settings);
 
-  const companyRes = await serverApiFetch<CompanyDetail>(
-    `/companies/${companyId}`,
-  );
-  if (!companyRes.ok || !companyRes.data) notFound();
-  const company = companyRes.data;
+  const companyRes = await getCompanyDetail(companyId);
+  const company = throwUnlessFound(companyRes, `/companies/${companyId}`);
 
   const archived = sp.archived === '1';
+  // When showing the default "active" view, reuse the cached list the
+  // layout already fetched. Falling back to `listPasswords` when the
+  // user toggles "include archived" keeps the archived-only query
+  // path untouched — that read is always fresh and not layout-shared.
   const [items, folders] = await Promise.all([
-    listPasswords(companyId, { archived }),
-    listPasswordFolders(companyId),
+    archived
+      ? listPasswords(companyId, { archived: true })
+      : getCompanyActivePasswords(companyId),
+    getCompanyPasswordFolders(companyId),
   ]);
 
   const manage = canManage(me.role);
