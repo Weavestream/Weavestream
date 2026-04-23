@@ -6,7 +6,7 @@ this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-## [1.1.2] - 2026-04-23
+## [1.1.3] - 2026-04-23
 ### Fixed
 
 - **Client viewers can reveal permitted client-visible passwords again.**
