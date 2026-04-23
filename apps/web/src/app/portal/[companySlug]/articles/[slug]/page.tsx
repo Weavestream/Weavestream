@@ -65,18 +65,6 @@ export default async function PortalArticleReadPage({
             >
               {article.title}
             </h1>
-            {article.excerpt && (
-              <p
-                style={{
-                  fontSize: 15,
-                  color: 'var(--muted)',
-                  marginBottom: 24,
-                  lineHeight: 1.55,
-                }}
-              >
-                {article.excerpt}
-              </p>
-            )}
             <div
               style={{
                 fontSize: 11,

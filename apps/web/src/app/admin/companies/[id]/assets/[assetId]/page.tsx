@@ -242,15 +242,22 @@ export default async function AssetDetailPage({
               editable={manage && !asset.archivedAt}
             />
 
-            <Panel title="Timing">
+            <Panel title="Last activity">
               <Row label="Created" value={new Date(asset.createdAt).toLocaleString()} />
               {createdBy && <Row label="Created by" value={createdBy.name} />}
-              <Row label="Updated" value={new Date(asset.updatedAt).toLocaleString()} />
-              {updatedBy && <Row label="Updated by" value={updatedBy.name} />}
+              <Row
+                label="Updated"
+                value={new Date(asset.updatedAt).toLocaleString()}
+                last={!updatedBy && !asset.archivedAt}
+              />
+              {updatedBy && (
+                <Row label="Updated by" value={updatedBy.name} last={!asset.archivedAt} />
+              )}
               {asset.archivedAt && (
                 <Row
                   label="Archived"
                   value={new Date(asset.archivedAt).toLocaleString()}
+                  last
                 />
               )}
             </Panel>
@@ -276,13 +283,13 @@ export default async function AssetDetailPage({
   );
 }
 
-function Row({ label, value }: { label: string; value: string }) {
+function Row({ label, value, last }: { label: string; value: string; last?: boolean }) {
   return (
     <div
       style={{
         display: 'flex',
         padding: '6px 0',
-        borderBottom: '1px solid var(--line)',
+        borderBottom: last ? 'none' : '1px solid var(--line)',
         fontSize: 12,
       }}
     >

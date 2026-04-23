@@ -9,11 +9,10 @@ import {
   getSettings,
   listArticles,
   throwUnlessFound,
-  type ActorRef,
 } from '../../../../../../lib/server-api';
 import { canManage } from '../../../../../../lib/roles';
 import { TopBar } from '../../../../../../components/shell/top-bar';
-import { Icon, Tag } from '../../../../../../components/ui';
+import { Icon, Panel, Tag } from '../../../../../../components/ui';
 import { buildTerm } from '../../../../../../lib/term';
 import { companyCrumbs } from '../../../../../../lib/company-crumbs';
 import { RichTextView } from '../../../../../../components/editor/rich-text-view';
@@ -50,9 +49,6 @@ export default async function ArticleReadPage({
   const company = throwUnlessFound(companyRes, `/companies/${companyId}`);
   if (!article) notFound();
   const manage = canManage(me.role);
-
-  const createdBy = toTocPerson(article.createdByUser);
-  const updatedBy = toTocPerson(article.updatedByUser);
 
   return (
     <>
@@ -138,18 +134,6 @@ export default async function ArticleReadPage({
             >
               {article.title}
             </h1>
-            {article.excerpt && (
-              <p
-                style={{
-                  fontSize: 15,
-                  color: 'var(--muted)',
-                  marginBottom: 24,
-                  lineHeight: 1.55,
-                }}
-              >
-                {article.excerpt}
-              </p>
-            )}
             <RichTextView value={article.content} />
           </article>
         </div>
@@ -170,10 +154,6 @@ export default async function ArticleReadPage({
             <ArticleToc
               articleId={article.id}
               articleUpdatedAt={article.updatedAt}
-              createdBy={createdBy}
-              createdAt={article.createdAt}
-              updatedBy={updatedBy}
-              updatedAt={article.updatedAt}
             />
           </div>
           <LinkedItemsPanel
@@ -188,15 +168,49 @@ export default async function ArticleReadPage({
             entityId={article.id}
             editable={manage && !article.archivedAt}
           />
+          <Panel title="Last activity">
+            <Row label="Created" value={new Date(article.createdAt).toLocaleString()} />
+            {article.createdByUser && (
+              <Row label="Created by" value={article.createdByUser.name} />
+            )}
+            <Row
+              label="Updated"
+              value={new Date(article.updatedAt).toLocaleString()}
+              last={!article.updatedByUser}
+            />
+            {article.updatedByUser && (
+              <Row label="Updated by" value={article.updatedByUser.name} last />
+            )}
+          </Panel>
         </aside>
       </div>
     </>
   );
 }
 
-function toTocPerson(
-  ref: ActorRef | null,
-): { id: string; displayName: string } | null {
-  if (!ref) return null;
-  return { id: ref.id, displayName: ref.name };
+function Row({ label, value, last }: { label: string; value: string; last?: boolean }) {
+  return (
+    <div
+      style={{
+        display: 'flex',
+        padding: '6px 0',
+        borderBottom: last ? 'none' : '1px solid var(--line)',
+        fontSize: 12,
+      }}
+    >
+      <span
+        style={{
+          flex: 1,
+          color: 'var(--muted)',
+          fontFamily: 'var(--font-mono)',
+          textTransform: 'uppercase',
+          letterSpacing: 0.4,
+          fontSize: 10.5,
+        }}
+      >
+        {label}
+      </span>
+      <span style={{ color: 'var(--text-2)' }}>{value}</span>
+    </div>
+  );
 }

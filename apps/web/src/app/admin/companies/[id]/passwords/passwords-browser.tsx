@@ -435,19 +435,9 @@ export function PasswordsBrowser({
                       marginTop: 4,
                     }}
                   >
-                    {p.requireReasonToView && (
-                      <Tag tone="warn" style={{ fontSize: 10 }}>
-                        reason req.
-                      </Tag>
-                    )}
                     {(p.pwnedCount ?? 0) > 0 && (
                       <Tag tone="danger" style={{ fontSize: 10 }}>
                         pwned ×{p.pwnedCount}
-                      </Tag>
-                    )}
-                    {p.assetId && (
-                      <Tag tone="accent" style={{ fontSize: 10 }}>
-                        asset-linked
                       </Tag>
                     )}
                     {p.archivedAt && (
@@ -671,10 +661,7 @@ function PasswordMobileCard({
         <Icon.chevron size={12} style={{ color: 'var(--dim)' }} />
       </Link>
 
-      {(row.requireReasonToView ||
-        (row.pwnedCount ?? 0) > 0 ||
-        row.assetId ||
-        row.archivedAt) && (
+      {((row.pwnedCount ?? 0) > 0 || row.archivedAt) && (
         <div
           style={{
             display: 'flex',
@@ -683,11 +670,9 @@ function PasswordMobileCard({
             alignItems: 'center',
           }}
         >
-          {row.requireReasonToView && <Tag tone="warn">reason req.</Tag>}
           {(row.pwnedCount ?? 0) > 0 && (
             <Tag tone="danger">pwned ×{row.pwnedCount}</Tag>
           )}
-          {row.assetId && <Tag tone="accent">asset-linked</Tag>}
           {row.archivedAt && <Tag tone="default">archived</Tag>}
         </div>
       )}

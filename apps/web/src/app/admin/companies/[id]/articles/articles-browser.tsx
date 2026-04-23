@@ -92,7 +92,7 @@ export function ArticlesBrowser({
   );
 
   const articlesPane = (
-    <div style={{ display: 'flex', flexDirection: 'column' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
         <div
           style={{
             display: 'flex',

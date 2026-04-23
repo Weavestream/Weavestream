@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
 import Link from 'next/link';
 import {
+  getAsset,
   getCompanyDetail,
   getCompanyPasswordFolders,
   getMe,
@@ -48,6 +49,10 @@ export default async function PasswordDetailPage({
   ]);
   const company = throwUnlessFound(companyRes, `/companies/${companyId}`);
   if (!password) notFound();
+
+  const linkedAsset = password.assetId
+    ? await getAsset(companyId, password.assetId)
+    : null;
 
   const manage = canManage(me.role);
   const folder = password.folderId
@@ -109,6 +114,7 @@ export default async function PasswordDetailPage({
           folders={folders}
           canManage={manage}
           folderName={folder?.name ?? null}
+          assetName={linkedAsset?.name ?? null}
           me={{ id: me.id, role: me.role }}
           generatorDefaults={settings.passwordGeneratorDefaults}
         />

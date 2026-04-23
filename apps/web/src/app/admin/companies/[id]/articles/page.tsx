@@ -63,7 +63,7 @@ export default async function CompanyArticlesPage({
     <>
       <PageHeader
         crumbs={companyCrumbs(term, company, { label: 'Articles' })}
-        title="Articles"
+        title="Knowledge base"
         description={`Runbooks, guides, and internal documentation scoped to this ${lower(
           term.one,
         )}.`}
