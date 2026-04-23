@@ -6,6 +6,51 @@ this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.1.1] - 2026-04-23
+
+### Added
+
+- **Asset layout rename & archive.** Global asset layouts can now be
+  renamed in place and archived (soft-deleted) from the layout list,
+  with a dedicated archive dialog that warns before removing a layout
+  still in use by existing assets. Archived layouts stop appearing in
+  the asset creation picker but remain viewable on historical assets.
+- **"Other" free-text option on dropdown fields.** Asset layout
+  dropdowns can opt in to an "Other…" escape hatch that lets users
+  enter a one-off value without polluting the shared option list.
+- **Reorderable dropdown & multiselect options.** Drag-and-drop
+  reordering of option lists in the asset layout builder, so the
+  option order shown to users no longer depends on creation order.
+- **IP address field type.** New first-class field kind for asset
+  layouts (IPv4/IPv6, optional CIDR). Lays the groundwork for the
+  upcoming IPAM feature.
+
+### Fixed
+
+- **Text file uploads rejected as `audio/mpeg`.** UTF-16 LE's `FF FE`
+  byte-order mark collides with the 11-bit MPEG frame-sync pattern
+  that `file-type` sniffs for, so BOM-prefixed `.txt` files (BitLocker
+  recovery keys, Notepad exports, Excel CSVs) were being rejected as
+  audio on upload confirmation. Uploads now peek for UTF-8/16/32 BOMs
+  before running `file-type` and short-circuit to `text/plain`.
+- **429 rate limits masquerading as 404s in SSR.** The global
+  throttler keyed every authenticated request on the Express socket
+  peer — which in Docker is the web container's internal bridge
+  address, shared by every operator. A single user refreshing a
+  company page could exhaust the 100 req/min quota for the whole
+  fleet, and the SSR layer would then surface the 429 as a generic
+  `notFound()`. Rate limiting is now keyed on `req.user.id` (falling
+  back to the real client IP once `trust proxy` is honoured), and
+  `serverApiFetch` forwards 429s to a dedicated route-segment error
+  panel that shows the honoured cooldown and an auto-enabling retry
+  button.
+- **Safari constantly prompting to save passwords.** The password
+  create/edit dialog's inputs looked like a login form to Safari's
+  built-in password manager, which kept interrupting admin workflows
+  with "Save Password?" prompts. Tweaked input naming, autocomplete
+  hints, and form semantics so Safari no longer intercepts the
+  vault's own fields.
+
 ## [1.1.0] - 2026-04-22
 
 ### Added
@@ -146,6 +191,7 @@ Initial public release.
   database-per-tenant.
 - English UI only.
 
-[Unreleased]: https://github.com/Weavestream/Weavestream/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/Weavestream/Weavestream/compare/v1.1.1...HEAD
+[1.1.1]: https://github.com/Weavestream/Weavestream/releases/tag/v1.1.1
 [1.1.0]: https://github.com/Weavestream/Weavestream/releases/tag/v1.1.0
 [1.0.0]: https://github.com/Weavestream/Weavestream/releases/tag/v1.0.0
