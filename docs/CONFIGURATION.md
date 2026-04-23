@@ -68,12 +68,19 @@ Signing keys are 32 random bytes in base64. Generate with
 
 ## Rate limiting
 
-| Variable                    | Default | Notes                                              |
-| --------------------------- | ------- | -------------------------------------------------- |
-| `GLOBAL_RATE_LIMIT_PER_MIN` | `100`   | Per-IP requests/minute across all routes.          |
-| `AUTH_RATE_LIMIT_PER_MIN`   | `5`     | Per-IP + per-email login attempts/minute.          |
-| `LOCKOUT_MAX_FAILURES`      | `5`     | Failed logins before account soft-lock.            |
-| `LOCKOUT_WINDOW_MIN`        | `15`    | Lock duration.                                     |
+| Variable                    | Default | Notes                                                                                 |
+| --------------------------- | ------- | ------------------------------------------------------------------------------------- |
+| `GLOBAL_RATE_LIMIT_PER_MIN` | `600`   | Requests/minute **per identity** (user id if authenticated, client IP otherwise).     |
+| `AUTH_RATE_LIMIT_PER_MIN`   | `5`     | Per-IP + per-email login attempts/minute.                                             |
+| `LOCKOUT_MAX_FAILURES`      | `5`     | Failed logins before account soft-lock.                                               |
+| `LOCKOUT_WINDOW_MIN`        | `15`    | Lock duration.                                                                        |
+
+The global throttler uses a per-user bucket so concurrent operators don't starve each
+other. The API trusts a single `X-Forwarded-For` hop (set by the Next.js `web` tier or
+an upstream Traefik/Caddy), which is what makes IP-based fallback meaningful inside
+Docker — without it every SSR request would share the internal bridge address and
+collapse into a single bucket. If you run behind a double-proxy (e.g. Cloudflare →
+Traefik → web → api) bump the trust-proxy hop count in `apps/api/src/main.ts`.
 
 ## Object storage (MinIO / S3-compatible)
 

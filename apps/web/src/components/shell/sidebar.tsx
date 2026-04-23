@@ -398,6 +398,16 @@ function SidebarHeader({
           aria-label="Go to home"
           title="Go to home"
           onClick={onNavigate}
+          // Shell links opt out of Next's viewport/hover prefetch: each
+          // prefetch of a dynamic `/admin/**` route triggers a full SSR
+          // render (8+ API calls for the company-scoped layout alone),
+          // and the sidebar is the omnipresent multiplier that was
+          // burning through the per-user throttle budget even for a
+          // single operator. First click still feels fast because Next
+          // streams RSC mid-navigation; the "instant" prefetch win on
+          // dynamic routes is marginal anyway. In-page content links
+          // (list rows, row-level actions) keep the default prefetch.
+          prefetch={false}
           style={{
             display: 'flex',
             alignItems: 'center',
@@ -427,6 +437,7 @@ function SidebarHeader({
           href={workspace.titleHref}
           title={`Switch from ${workspace.name}`}
           onClick={onNavigate}
+          prefetch={false}
           style={{
             display: 'flex',
             alignItems: 'center',
@@ -658,6 +669,7 @@ function SwitcherEntry({
       onClick={onSelect}
       style={rowStyle}
       className="sidebar-switcher-entry"
+      prefetch={false}
     >
       {body}
     </Link>
@@ -753,7 +765,12 @@ function NavItem({
   );
   if (item.href) {
     return (
-      <Link href={item.href} style={content} onClick={onNavigate}>
+      <Link
+        href={item.href}
+        style={content}
+        onClick={onNavigate}
+        prefetch={false}
+      >
         {inner}
       </Link>
     );

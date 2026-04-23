@@ -3,13 +3,13 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import {
   getArticle,
+  getCompanyDetail,
+  getCompanyFolderTree,
   getMe,
   getSettings,
   listArticles,
-  listFolderTree,
-  serverApiFetch,
+  throwUnlessFound,
   type ActorRef,
-  type CompanyDetail,
 } from '../../../../../../lib/server-api';
 import { canManage } from '../../../../../../lib/roles';
 import { TopBar } from '../../../../../../components/shell/top-bar';
@@ -42,14 +42,13 @@ export default async function ArticleReadPage({
   const term = buildTerm(await getSettings());
 
   const [companyRes, article, folders, articleList] = await Promise.all([
-    serverApiFetch<CompanyDetail>(`/companies/${companyId}`),
+    getCompanyDetail(companyId),
     getArticle(companyId, articleId),
-    listFolderTree(companyId),
+    getCompanyFolderTree(companyId),
     listArticles(companyId, { includeArchived: false, limit: 500 }),
   ]);
-  if (!companyRes.ok || !companyRes.data) notFound();
+  const company = throwUnlessFound(companyRes, `/companies/${companyId}`);
   if (!article) notFound();
-  const company = companyRes.data;
   const manage = canManage(me.role);
 
   const createdBy = toTocPerson(article.createdByUser);

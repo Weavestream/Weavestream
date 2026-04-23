@@ -1,9 +1,9 @@
 import { notFound } from 'next/navigation';
 import {
   getAsset,
+  getCompanyDetail,
   getLayout,
-  serverApiFetch,
-  type CompanyDetail,
+  throwUnlessFound,
 } from '../../../../../../../lib/server-api';
 import { AssetForm } from '../../asset-form';
 
@@ -13,8 +13,8 @@ export default async function EditAssetPage({
   params: Promise<{ id: string; assetId: string }>;
 }) {
   const { id: companyId, assetId } = await params;
-  const companyRes = await serverApiFetch<CompanyDetail>(`/companies/${companyId}`);
-  if (!companyRes.ok || !companyRes.data) notFound();
+  const companyRes = await getCompanyDetail(companyId);
+  const company = throwUnlessFound(companyRes, `/companies/${companyId}`);
 
   const asset = await getAsset(companyId, assetId);
   if (!asset) notFound();
@@ -25,7 +25,7 @@ export default async function EditAssetPage({
   return (
     <AssetForm
       companyId={companyId}
-      companyLabel={companyRes.data.name}
+      companyLabel={company.name}
       layout={layoutPayload.layout}
       mode="edit"
       assetId={asset.id}
