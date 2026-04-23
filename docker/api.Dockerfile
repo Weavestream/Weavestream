@@ -38,9 +38,11 @@ RUN pnpm --filter @weavestream/db prisma:generate \
  && pnpm --filter @weavestream/db build \
  && pnpm --filter @weavestream/api build
 
-# Prune dev deps for the runner.
+# Prune dev deps for the runner. CI=true tells pnpm 10 it's safe to
+# remove/recreate node_modules non-interactively (ERR_PNPM_ABORTED_REMOVE_
+# MODULES_DIR_NO_TTY otherwise).
 RUN --mount=type=cache,id=pnpm,target=/pnpm/store \
-    pnpm install --frozen-lockfile --prod
+    CI=true pnpm install --frozen-lockfile --prod
 
 # ───── runner ─────
 FROM node:24-alpine AS runner
