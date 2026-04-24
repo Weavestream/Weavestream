@@ -1,6 +1,10 @@
 <div align="center">
 
-<img src="apps/web/public/brand/logo-wordmark.svg" alt="Weavestream" height="72" />
+<img src="apps/web/public/brand/logo-mark.svg" alt="Weavestream" height="72" />
+
+</div>
+
+# Weavestream
 
 **A self-hosted documentation platform with a clean UI and Docker-first deployment.**
 _Your knowledge base, your infrastructure._
@@ -8,16 +12,21 @@ _Your knowledge base, your infrastructure._
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
 [![CI](https://github.com/Weavestream/Weavestream/actions/workflows/ci.yml/badge.svg)](https://github.com/Weavestream/Weavestream/actions/workflows/ci.yml)
 [![Release](https://github.com/Weavestream/Weavestream/actions/workflows/release.yml/badge.svg)](https://github.com/Weavestream/Weavestream/actions/workflows/release.yml)
+[![Website](https://img.shields.io/badge/Website-weavestream.io-blue)](https://weavestream.io)
 
-</div>
+
 
 ---
+
+→ **Full feature docs and guides at [weavestream.io](https://weavestream.io)**
 
 Weavestream is a Postgres-backed IT documentation platform designed for
 small teams, MSPs, and homelabs. One codebase, one distribution — the
 operator chooses what to call their tenants (companies, clients,
 departments, sites, …) from the admin UI, so the same build fits every
 audience without code changes.
+
+![Weavestream Tenant Dashboard](./weavestream-company-dashboard.png)
 
 ## Highlights
 
@@ -65,6 +74,8 @@ Open <http://localhost:3000/login> and sign in. On Windows, use
 Full walkthrough — pinning a version, upgrades, reverse-proxy/TLS,
 backups — in [docs/INSTALL.md](docs/INSTALL.md).
 
+Full guided walkthrough on the website: [weavestream.io/getting-started](https://weavestream.io/getting-started)
+
 ## Documentation
 
 | Guide                                         | Audience          |
@@ -75,6 +86,14 @@ backups — in [docs/INSTALL.md](docs/INSTALL.md).
 | [docs/DEVELOPING.md](docs/DEVELOPING.md)      | Contributors      |
 | [docs/RELEASING.md](docs/RELEASING.md)        | Maintainers       |
 | [CHANGELOG.md](CHANGELOG.md)                  | Everyone          |
+| [weavestream.io/getting-started](https://weavestream.io/getting-started) | New operators |
+| [weavestream.io/features/assets](https://weavestream.io/features/assets) | Everyone |
+| [weavestream.io/features/passwords](https://weavestream.io/features/passwords) | Everyone |
+| [weavestream.io/features/articles](https://weavestream.io/features/articles) | Everyone |
+| [weavestream.io/features/domains](https://weavestream.io/features/domains) | Everyone |
+| [weavestream.io/features/domains](https://weavestream.io/features/domains) | Everyone |
+| [weavestream.io/features/domains](https://weavestream.io/features/domains) | Everyone |
+| [weavestream.io/overview/changelog](https://weavestream.io/overview/changelog) | Everyone |
 
 ## Project status
 
@@ -91,6 +110,8 @@ contributions are accepted under the project's AGPL-3.0 license.
 
 Security issues go through [SECURITY.md](SECURITY.md), not the public
 issue tracker.
+
+See also [weavestream.io/security/disclosure](https://weavestream.io/security/disclosure).
 
 ## License
 
