@@ -70,6 +70,38 @@ const nextConfig = {
       },
     ];
   },
+  // Short-circuit the unauthenticated root hit at the routing layer instead
+  // of letting the root Server Component call `redirect('/login')`. An RSC
+  // redirect emits a 307 with an HTML/RSC payload body (ZAP flags this as
+  // "Big Redirect"); a config-level redirect emits a 307 with an empty body.
+  // Authenticated users fall through to page.tsx where role-based routing
+  // still runs.
+  async redirects() {
+    return [
+      {
+        source: '/',
+        missing: [{ type: 'cookie', key: 'ws_session' }],
+        destination: '/login',
+        permanent: false,
+      },
+    ];
+  },
+  // Security headers for `/_next/static/*`. The edge proxy (apps/web/src/proxy.ts)
+  // deliberately skips the `_next/*` tree so it doesn't intercept the HMR
+  // WebSocket, which means static assets would otherwise ship without CSP or
+  // nosniff. Add a minimal hardening pass here: these files can't execute as
+  // scripts, so `default-src 'none'` is the tightest safe policy.
+  async headers() {
+    return [
+      {
+        source: '/_next/static/:path*',
+        headers: [
+          { key: 'X-Content-Type-Options', value: 'nosniff' },
+          { key: 'Content-Security-Policy', value: "default-src 'none'" },
+        ],
+      },
+    ];
+  },
 };
 
 module.exports = nextConfig;

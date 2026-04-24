@@ -1,8 +1,10 @@
 import { Module } from '@nestjs/common';
 import { ArticlesController } from './articles.controller.js';
 import { ArticlesService } from './articles.service.js';
+import { StarsModule } from '../stars/stars.module.js';
 
 @Module({
+  imports: [StarsModule],
   controllers: [ArticlesController],
   providers: [ArticlesService],
   exports: [ArticlesService],

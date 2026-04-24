@@ -6,6 +6,33 @@ this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.1.5] - 2026-04-24
+
+### Added
+
+- **Starred items now cover passwords, assets, and articles in addition
+  to companies.** Operators can star or unstar each supported record
+  from its detail page, then reopen it from the admin dashboard or the
+  new sidebar starred drawer with type-specific icons, tenant context,
+  archived-state labels, and direct links.
+- **Per-user star storage now exists for every supported entity type.**
+  New Prisma models and migration tables track starred passwords,
+  assets, and articles with user/entity uniqueness and cascade cleanup.
+  The `/me/stars` API now returns a single mixed list and exposes
+  idempotent star/unstar routes for companies, passwords, assets, and
+  articles.
+
+### Fixed
+
+- **Unauthenticated visits to `/` no longer emit a large RSC redirect
+  body.** Next.js now handles the missing-session redirect to `/login`
+  at the routing layer, avoiding noisy "Big Redirect" findings while
+  preserving authenticated role-based routing.
+- **Next.js static assets now ship minimal security headers.** The
+  `/_next/static/*` tree gets `X-Content-Type-Options: nosniff` and a
+  restrictive `Content-Security-Policy` even though the edge proxy skips
+  Next internals for HMR compatibility.
+
 ## [1.1.4] - 2026-04-23
 
 ### Changed

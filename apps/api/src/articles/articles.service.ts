@@ -16,6 +16,7 @@ import {
 } from '@weavestream/shared';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { AuditLogService } from '../audit/audit.service.js';
+import { StarsService } from '../stars/stars.service.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
 
 export interface AuditMeta {
@@ -45,6 +46,10 @@ export interface SerializedArticle {
   updatedByUser: ActorRef | null;
   createdAt: Date;
   updatedAt: Date;
+  /**
+   * True if the signed-in user has starred this article.
+   */
+  isStarred: boolean;
 }
 
 export interface ArticleListOptions {
@@ -60,6 +65,7 @@ export class ArticlesService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditLogService,
+    private readonly stars: StarsService,
   ) {}
 
   // ------------------------------------------------------------------
@@ -106,6 +112,7 @@ export class ArticlesService {
       throw new NotFoundException();
     }
     const out = this.serialize(row, actor.role);
+    out.isStarred = await this.stars.isStarred(actor.id, 'article', id);
     await this.hydrateActors([out]);
     return out;
   }
@@ -123,6 +130,7 @@ export class ArticlesService {
       throw new NotFoundException();
     }
     const out = this.serialize(row, actor.role);
+    out.isStarred = await this.stars.isStarred(actor.id, 'article', row.id);
     await this.hydrateActors([out]);
     return out;
   }
@@ -453,6 +461,7 @@ export class ArticlesService {
       updatedByUser: null,
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
+      isStarred: false, // populated separately for detail
     };
   }
 

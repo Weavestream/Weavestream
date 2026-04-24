@@ -6,6 +6,7 @@ import { RelationsModule } from '../relations/relations.module.js';
 import { UploadsModule } from '../uploads/uploads.module.js';
 import { SearchModule } from '../search/search.module.js';
 import { PasswordsModule } from '../passwords/passwords.module.js';
+import { StarsModule } from '../stars/stars.module.js';
 
 @Module({
   imports: [
@@ -14,6 +15,7 @@ import { PasswordsModule } from '../passwords/passwords.module.js';
     UploadsModule,
     SearchModule,
     PasswordsModule,
+    StarsModule,
   ],
   controllers: [AssetsController],
   providers: [AssetsService],

@@ -242,6 +242,7 @@ function makeStubs(initial: { passwords?: StoredPassword[] } = {}) {
   };
   const env = { values: { HIBP_ENABLED: false } };
   const queues = { enqueuePwnedCheck: jest.fn().mockResolvedValue('job-1') };
+  const stars = { isStarred: jest.fn().mockResolvedValue(false) };
 
   const svc = new PasswordsService(
     prisma as never,
@@ -249,9 +250,10 @@ function makeStubs(initial: { passwords?: StoredPassword[] } = {}) {
     crypto as never,
     env as never,
     queues as never,
+    stars as never,
   );
 
-  return { svc, prisma, passwords, versions, audit, crypto, queues };
+  return { svc, prisma, passwords, versions, audit, crypto, queues, stars };
 }
 
 const META = { ip: '127.0.0.1', userAgent: 'jest' };

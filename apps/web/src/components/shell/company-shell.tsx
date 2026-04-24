@@ -317,7 +317,12 @@ export function CompanyShell({
           user={sidebarUser}
           activeId={activeId}
           footerAction={<SidebarActions />}
-          footerToolbar={<SidebarToolbar companyId={company.id} />}
+          footerToolbar={
+            <SidebarToolbar
+              companyId={company.id}
+              showStarred={isAdmin || operatorAccess}
+            />
+          }
           className="hide-on-mobile"
         />
         <main
@@ -339,7 +344,12 @@ export function CompanyShell({
                 user={sidebarUser}
                 activeId={activeId}
                 footerAction={<SidebarActions />}
-                footerToolbar={<SidebarToolbar companyId={company.id} />}
+                footerToolbar={
+                  <SidebarToolbar
+                    companyId={company.id}
+                    showStarred={isAdmin || operatorAccess}
+                  />
+                }
                 variant="drawer"
               />
             }

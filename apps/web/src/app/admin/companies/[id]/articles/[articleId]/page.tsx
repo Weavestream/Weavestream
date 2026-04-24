@@ -12,7 +12,7 @@ import {
 } from '../../../../../../lib/server-api';
 import { canManage } from '../../../../../../lib/roles';
 import { TopBar } from '../../../../../../components/shell/top-bar';
-import { Icon, Panel, Tag } from '../../../../../../components/ui';
+import { Icon, Panel, StarButton, Tag } from '../../../../../../components/ui';
 import { buildTerm } from '../../../../../../lib/term';
 import { companyCrumbs } from '../../../../../../lib/company-crumbs';
 import { RichTextView } from '../../../../../../components/editor/rich-text-view';
@@ -63,6 +63,13 @@ export default async function ArticleReadPage({
           <>
             {!article.visibleToClients && <Tag tone="outline">internal</Tag>}
             {article.archivedAt && <Tag tone="warn">archived</Tag>}
+            <StarButton
+              entityType="article"
+              entityId={article.id}
+              initialStarred={article.isStarred}
+              showLabel
+              iconSize={14}
+            />
             {manage && (
               <Link
                 href={`/admin/companies/${companyId}/articles/${article.id}/edit`}

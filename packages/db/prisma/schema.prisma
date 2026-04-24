@@ -154,6 +154,9 @@ model User {
   setupTokens       UserSetupToken[] @relation("SetupTokenOwner")
   issuedSetupTokens UserSetupToken[] @relation("SetupTokenCreator")
   starredCompanies  StarredCompany[]
+  starredPasswords  StarredPassword[]
+  starredAssets     StarredAsset[]
+  starredArticles   StarredArticle[]
 
   @@map("users")
 }
@@ -255,6 +258,48 @@ model StarredCompany {
   @@unique([userId, companyId])
   @@index([userId, createdAt])
   @@map("starred_companies")
+}
+
+model StarredPassword {
+  id         String   @id @default(uuid()) @db.Uuid
+  userId     String   @map("user_id") @db.Uuid
+  passwordId String   @map("password_id") @db.Uuid
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  password Password @relation(fields: [passwordId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, passwordId])
+  @@index([userId, createdAt])
+  @@map("starred_passwords")
+}
+
+model StarredAsset {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  assetId   String   @map("asset_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  asset Asset @relation(fields: [assetId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, assetId])
+  @@index([userId, createdAt])
+  @@map("starred_assets")
+}
+
+model StarredArticle {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  articleId String   @map("article_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  article Article @relation(fields: [articleId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, articleId])
+  @@index([userId, createdAt])
+  @@map("starred_articles")
 }
 
 model Session {
@@ -399,6 +444,7 @@ model Asset {
   assetLayout AssetLayout       @relation(fields: [assetLayoutId], references: [id], onDelete: Restrict)
   fieldValues AssetFieldValue[]
   passwords   Password[]
+  starredBy   StarredAsset[]
 
   @@index([companyId, assetLayoutId, archivedAt])
   @@index([companyId, name])
@@ -477,6 +523,7 @@ model Article {
   updatedAt        DateTime  @updatedAt @map("updated_at")
 
   folder Folder? @relation(fields: [folderId], references: [id], onDelete: SetNull)
+  starredBy StarredArticle[]
 
   // Active-slug uniqueness per company enforced by a partial unique index
   // (company_id, slug) WHERE archived_at IS NULL.
@@ -714,6 +761,7 @@ model Password {
   folder   PasswordFolder?   @relation(fields: [folderId], references: [id], onDelete: SetNull)
   asset    Asset?            @relation(fields: [assetId], references: [id], onDelete: SetNull)
   versions PasswordVersion[]
+  starredBy StarredPassword[]
 
   @@index([companyId, archivedAt])
   @@index([companyId, folderId])

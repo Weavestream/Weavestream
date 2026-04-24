@@ -7,6 +7,7 @@ import {
   Btn,
   Dialog,
   Icon,
+  StarButton,
   useToast,
 } from '../../../../../../components/ui';
 import type { AssetSummary } from '../../../../../../lib/server-api';
@@ -37,6 +38,13 @@ export function AssetActions({ asset }: { asset: AssetSummary }) {
 
   return (
     <>
+      <StarButton
+        entityType="asset"
+        entityId={asset.id}
+        initialStarred={asset.isStarred}
+        showLabel
+        iconSize={14}
+      />
       {!asset.archivedAt && (
         <Btn
           kind="outline"

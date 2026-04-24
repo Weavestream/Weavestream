@@ -1,0 +1,10 @@
+---
+description: Website docs are intentionally excluded from git
+alwaysApply: true
+---
+
+# Website Directory
+
+- `Website/` is intentionally excluded from git via `.gitignore`.
+- Do not treat ignored files under `Website/` as accidental, and do not suggest changing ignore rules or force-adding them unless the user explicitly asks.
+- It is still valid to edit `Website/` files when requested; just note that those edits are local/private unless the user handles them separately.

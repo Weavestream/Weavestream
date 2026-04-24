@@ -24,6 +24,7 @@ import { SecretEncryptionService } from '../crypto/secret-encryption.service.js'
 import type { AuthedUser } from '../common/current-user.decorator.js';
 import { EnvService } from '../config/env.service.js';
 import { QueuesService } from '../queues/queues.service.js';
+import { StarsService } from '../stars/stars.service.js';
 import { computePasswordStrength } from './password-strength.js';
 
 export interface AuditMeta {
@@ -82,6 +83,7 @@ export interface SerializedPasswordDetail extends SerializedPasswordSummary {
   totpAlgorithm: TotpAlgo;
   totpDigits: number;
   totpPeriod: number;
+  isStarred: boolean;
 }
 
 export interface PasswordRevealPayload {
@@ -143,6 +145,7 @@ export class PasswordsService {
     private readonly crypto: SecretEncryptionService,
     private readonly env: EnvService,
     private readonly queues: QueuesService,
+    private readonly stars: StarsService,
   ) {}
 
   // ------------------------------------------------------------------
@@ -195,12 +198,14 @@ export class PasswordsService {
     const notes = row.notesCiphertext
       ? this.safeDecryptNotes(row.notesCiphertext)
       : null;
+    const isStarred = await this.stars.isStarred(actor.id, 'password', id);
     return {
       ...this.toSummary(row),
       notes,
       totpAlgorithm: row.totpAlgorithm,
       totpDigits: row.totpDigits,
       totpPeriod: row.totpPeriod,
+      isStarred,
     };
   }
 
@@ -341,6 +346,7 @@ export class PasswordsService {
       totpAlgorithm: created.totpAlgorithm,
       totpDigits: created.totpDigits,
       totpPeriod: created.totpPeriod,
+      isStarred: false,
     };
   }
 
@@ -531,12 +537,14 @@ export class PasswordsService {
       this.enqueuePwnedCheck(id, companyId, input.password);
     }
 
+    const isStarred = await this.stars.isStarred(actor.id, 'password', id);
     return {
       ...this.toSummary(updated),
       notes: updated.notesCiphertext ? this.safeDecryptNotes(updated.notesCiphertext) : null,
       totpAlgorithm: updated.totpAlgorithm,
       totpDigits: updated.totpDigits,
       totpPeriod: updated.totpPeriod,
+      isStarred,
     };
   }
 

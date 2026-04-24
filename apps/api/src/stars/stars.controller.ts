@@ -10,17 +10,28 @@ import {
   Req,
 } from '@nestjs/common';
 import type { Request } from 'express';
-import { StarsService } from './stars.service.js';
+import { StarsService, type EntityType } from './stars.service.js';
 import { CurrentUser, type AuthedUser } from '../common/current-user.decorator.js';
 import { AuthedOnly } from '../rbac/require-permission.decorator.js';
 
 /**
- * Phase 9b.3 — star / unstar a company for the signed-in user.
+ * Phase 9b.3 — star / unstar entities for the signed-in user.
  *
  * Mounted under `/me/stars` so it reads naturally on the frontend and
  * sits alongside `/me` preferences. Uses `@AuthedOnly` because the
  * resource scope (stars for the caller) is implicit; the service
- * applies a per-company access check.
+ * applies a per-entity access check.
+ *
+ * Route shape:
+ *   GET    /me/stars                  → list starred companies (backward compat)
+ *   PUT    /me/stars/companies/:id    → star a company
+ *   DELETE /me/stars/companies/:id    → unstar a company
+ *   PUT    /me/stars/passwords/:id  → star a password
+ *   DELETE /me/stars/passwords/:id    → unstar a password
+ *   PUT    /me/stars/assets/:id       → star an asset
+ *   DELETE /me/stars/assets/:id       → unstar an asset
+ *   PUT    /me/stars/articles/:id     → star an article
+ *   DELETE /me/stars/articles/:id     → unstar an article
  */
 @Controller({ path: 'me/stars', version: '1' })
 @AuthedOnly()
@@ -32,31 +43,96 @@ export class StarsController {
     return this.stars.list(user);
   }
 
-  @Put(':companyId')
+  // Companies
+  @Put('companies/:id')
   @HttpCode(HttpStatus.OK)
-  async star(
+  async starCompany(
     @CurrentUser() user: AuthedUser,
-    @Param('companyId', new ParseUUIDPipe()) companyId: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
     @Req() req: Request,
   ) {
-    return this.stars.star(user, companyId, {
-      ip: ipOf(req),
-      userAgent: uaOf(req),
-    });
+    return this.stars.star(user, 'company', id, metaFrom(req));
   }
 
-  @Delete(':companyId')
+  @Delete('companies/:id')
   @HttpCode(HttpStatus.OK)
-  async unstar(
+  async unstarCompany(
     @CurrentUser() user: AuthedUser,
-    @Param('companyId', new ParseUUIDPipe()) companyId: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
     @Req() req: Request,
   ) {
-    return this.stars.unstar(user, companyId, {
-      ip: ipOf(req),
-      userAgent: uaOf(req),
-    });
+    return this.stars.unstar(user, 'company', id, metaFrom(req));
   }
+
+  // Passwords
+  @Put('passwords/:id')
+  @HttpCode(HttpStatus.OK)
+  async starPassword(
+    @CurrentUser() user: AuthedUser,
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Req() req: Request,
+  ) {
+    return this.stars.star(user, 'password', id, metaFrom(req));
+  }
+
+  @Delete('passwords/:id')
+  @HttpCode(HttpStatus.OK)
+  async unstarPassword(
+    @CurrentUser() user: AuthedUser,
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Req() req: Request,
+  ) {
+    return this.stars.unstar(user, 'password', id, metaFrom(req));
+  }
+
+  // Assets
+  @Put('assets/:id')
+  @HttpCode(HttpStatus.OK)
+  async starAsset(
+    @CurrentUser() user: AuthedUser,
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Req() req: Request,
+  ) {
+    return this.stars.star(user, 'asset', id, metaFrom(req));
+  }
+
+  @Delete('assets/:id')
+  @HttpCode(HttpStatus.OK)
+  async unstarAsset(
+    @CurrentUser() user: AuthedUser,
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Req() req: Request,
+  ) {
+    return this.stars.unstar(user, 'asset', id, metaFrom(req));
+  }
+
+  // Articles
+  @Put('articles/:id')
+  @HttpCode(HttpStatus.OK)
+  async starArticle(
+    @CurrentUser() user: AuthedUser,
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Req() req: Request,
+  ) {
+    return this.stars.star(user, 'article', id, metaFrom(req));
+  }
+
+  @Delete('articles/:id')
+  @HttpCode(HttpStatus.OK)
+  async unstarArticle(
+    @CurrentUser() user: AuthedUser,
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Req() req: Request,
+  ) {
+    return this.stars.unstar(user, 'article', id, metaFrom(req));
+  }
+}
+
+function metaFrom(req: Request): { ip: string; userAgent: string } {
+  return {
+    ip: ipOf(req),
+    userAgent: uaOf(req),
+  };
 }
 
 function ipOf(req: Request): string {

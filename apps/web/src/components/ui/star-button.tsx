@@ -7,15 +7,19 @@ import { Icon } from './icon';
 import { useToast } from './toast';
 
 /**
- * Phase 9b.3 — per-user star toggle for a company.
+ * Phase 9b.3 — per-user star toggle for companies, passwords, assets, and articles.
  *
  * Optimistic: flips local state immediately, reverts on API failure.
  * Exposed as a compact icon-only button so it can sit inline in a
  * table row without stealing room. `size="md"` + `label="Star"` are
- * used in the company header to match the rest of the action bar.
+ * used in the detail header to match the rest of the action bar.
  */
+
+export type EntityType = 'company' | 'password' | 'asset' | 'article';
+
 interface StarButtonProps {
-  companyId: string;
+  entityType: EntityType;
+  entityId: string;
   initialStarred: boolean;
   /**
    * Show a text label next to the icon. Defaults off (icon-only) for
@@ -36,8 +40,23 @@ interface StarButtonProps {
   className?: string;
 }
 
+const ENTITY_TYPE_TO_PATH: Record<EntityType, string> = {
+  company: 'companies',
+  password: 'passwords',
+  asset: 'assets',
+  article: 'articles',
+};
+
+const ENTITY_TYPE_TO_LABEL: Record<EntityType, string> = {
+  company: 'company',
+  password: 'password',
+  asset: 'asset',
+  article: 'article',
+};
+
 export function StarButton({
-  companyId,
+  entityType,
+  entityId,
   initialStarred,
   showLabel = false,
   iconSize = 14,
@@ -58,7 +77,8 @@ export function StarButton({
     const next = !starred;
     setStarred(next);
     setPending(true);
-    const res = await apiFetch(`/me/stars/${companyId}`, {
+    const pathSegment = ENTITY_TYPE_TO_PATH[entityType];
+    const res = await apiFetch(`/me/stars/${pathSegment}/${entityId}`, {
       method: next ? 'PUT' : 'DELETE',
     });
     setPending(false);
@@ -74,17 +94,20 @@ export function StarButton({
     }
     onToggled?.(next);
     // Keep server components (e.g. operator home's starred list) in
-    // sync — cheap because /companies and /me/stars are the only
+    // sync — cheap because detail endpoints and /me/stars are the only
     // endpoints that care.
     router.refresh();
   }
+
+  const entityLabel = ENTITY_TYPE_TO_LABEL[entityType];
+  const ariaLabel = starred ? `Unstar ${entityLabel}` : `Star ${entityLabel}`;
 
   return (
     <button
       type="button"
       onClick={toggle}
       aria-pressed={starred}
-      aria-label={starred ? 'Unstar company' : 'Star company'}
+      aria-label={ariaLabel}
       title={starred ? 'Unstar' : 'Star'}
       className={className}
       style={{
