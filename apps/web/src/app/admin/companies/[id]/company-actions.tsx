@@ -54,7 +54,8 @@ export function CompanyActions({ company }: { company: CompanyDetail }) {
   return (
     <>
       <StarButton
-        companyId={company.id}
+        entityType="company"
+        entityId={company.id}
         initialStarred={company.isStarred}
         showLabel
         iconSize={14}

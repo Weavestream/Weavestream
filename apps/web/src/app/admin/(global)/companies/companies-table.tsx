@@ -46,7 +46,8 @@ export function CompaniesTable({
         width: 36,
         render: (r) => (
           <StarButton
-            companyId={r.id}
+            entityType="company"
+            entityId={r.id}
             initialStarred={r.isStarred}
             iconSize={13}
           />
@@ -239,7 +240,8 @@ export function CompaniesTable({
                   </div>
                 </div>
                 <StarButton
-                  companyId={r.id}
+                  entityType="company"
+                  entityId={r.id}
                   initialStarred={r.isStarred}
                   iconSize={14}
                 />

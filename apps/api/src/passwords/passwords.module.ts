@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { QueuesModule } from '../queues/queues.module.js';
+import { StarsModule } from '../stars/stars.module.js';
 import { PasswordsService } from './passwords.service.js';
 
 /**
@@ -12,7 +13,7 @@ import { PasswordsService } from './passwords.service.js';
  * its DI graph — mirrors the DomainsModule pattern.
  */
 @Module({
-  imports: [QueuesModule],
+  imports: [QueuesModule, StarsModule],
   providers: [PasswordsService],
   exports: [PasswordsService],
 })

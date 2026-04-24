@@ -766,6 +766,10 @@ export type AssetSummary = {
     string,
     { id: string; name: string; archivedAt: string | null }
   >;
+  /**
+   * True if the signed-in user has starred this asset (detail only).
+   */
+  isStarred: boolean;
 };
 
 export type AssetPage = { items: AssetSummary[]; nextCursor: string | null };
@@ -865,6 +869,10 @@ export type ArticleSummary = {
 export type ArticleDetail = ArticleSummary & {
   content: unknown;
   contentPlaintext: string;
+  /**
+   * True if the signed-in user has starred this article.
+   */
+  isStarred: boolean;
 };
 
 export type ArticlePage = { items: ArticleSummary[]; nextCursor: string | null };
@@ -1132,24 +1140,61 @@ export async function listExpirations(
   return res.data?.items ?? [];
 }
 
-export type StarredCompany = {
-  id: string;
-  name: string;
-  slug: string;
-  archivedAt: string | null;
-  updatedAt: string;
-  type: CompanyType;
-  city: string | null;
-  region: string | null;
-  country: string | null;
-  website: string | null;
-  memberCount: number;
-  starredAt: string;
-  logo: CompanyLogo | null;
-};
+/**
+ * A single entry in the unified `GET /me/stars` response. Each
+ * variant is discriminated by `type` so callers can `switch` on it
+ * with full TypeScript narrowing — the dashboard panel uses this to
+ * pick the right icon, sub-line, and link target per entity.
+ */
+export type StarredItem =
+  | {
+      type: 'company';
+      id: string;
+      name: string;
+      slug: string;
+      archivedAt: string | null;
+      starredAt: string;
+      companyId: string;
+      companyName: string;
+      memberCount: number;
+      logo: CompanyLogo | null;
+    }
+  | {
+      type: 'password';
+      id: string;
+      name: string;
+      archivedAt: string | null;
+      starredAt: string;
+      companyId: string;
+      companyName: string;
+      companyArchivedAt: string | null;
+    }
+  | {
+      type: 'asset';
+      id: string;
+      name: string;
+      archivedAt: string | null;
+      starredAt: string;
+      companyId: string;
+      companyName: string;
+      companyArchivedAt: string | null;
+      layoutName: string | null;
+      layoutIcon: string | null;
+    }
+  | {
+      type: 'article';
+      id: string;
+      name: string;
+      slug: string;
+      archivedAt: string | null;
+      starredAt: string;
+      companyId: string;
+      companyName: string;
+      companyArchivedAt: string | null;
+    };
 
-export async function listStarredCompanies(): Promise<StarredCompany[]> {
-  const res = await serverApiFetch<{ items: StarredCompany[] }>('/me/stars');
+export async function listStarred(): Promise<StarredItem[]> {
+  const res = await serverApiFetch<{ items: StarredItem[] }>('/me/stars');
   return res.data?.items ?? [];
 }
 
@@ -1208,6 +1253,10 @@ export type PasswordDetail = PasswordSummary & {
   totpAlgorithm: 'SHA1' | 'SHA256' | 'SHA512';
   totpDigits: number;
   totpPeriod: number;
+  /**
+   * True if the signed-in user has starred this password.
+   */
+  isStarred: boolean;
 };
 
 export type PasswordFolderRow = {

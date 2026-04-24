@@ -24,9 +24,11 @@ type FolderRow = Folder;
 function makeStubs(initial: {
   articles?: ArticleRow[];
   folders?: FolderRow[];
+  starredArticleIds?: string[];
 } = {}) {
   const articles: ArticleRow[] = [...(initial.articles ?? [])];
   const folders: FolderRow[] = [...(initial.folders ?? [])];
+  const starredArticleIds: string[] = [...(initial.starredArticleIds ?? [])];
 
   function matchesWhere(row: ArticleRow, where: Prisma.ArticleWhereInput): boolean {
     if (where.id && where.id !== row.id) return false;
@@ -171,7 +173,13 @@ function makeStubs(initial: {
 
   const audit = { log: jest.fn(async () => {}) };
 
-  return { prisma, audit, articles, folders };
+  const stars = {
+    isStarred: jest.fn(async (_userId: string, _entityType: string, entityId: string) => {
+      return starredArticleIds.includes(entityId);
+    }),
+  };
+
+  return { prisma, audit, stars, articles, folders };
 }
 
 function actor(overrides: Partial<AuthedUser> = {}): AuthedUser {
@@ -199,9 +207,9 @@ function doc(text: string) {
 describe('ArticlesService', () => {
   describe('create', () => {
     it('rejects non-doc content', async () => {
-      const { prisma, audit } = makeStubs();
+      const { prisma, audit, stars } = makeStubs();
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const svc = new ArticlesService(prisma as any, audit as any);
+      const svc = new ArticlesService(prisma as any, audit as any, stars as any);
       await expect(
         svc.create(
           actor(),
@@ -216,9 +224,9 @@ describe('ArticlesService', () => {
     });
 
     it('slugifies the title when no slug is provided', async () => {
-      const { prisma, audit } = makeStubs();
+      const { prisma, audit, stars } = makeStubs();
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const svc = new ArticlesService(prisma as any, audit as any);
+      const svc = new ArticlesService(prisma as any, audit as any, stars as any);
       const created = await svc.create(
         actor(),
         'c-1',
@@ -246,9 +254,9 @@ describe('ArticlesService', () => {
         updatedBy: null,
         archivedAt: null,
       };
-      const { prisma, audit } = makeStubs({ articles: [existing] });
+      const { prisma, audit, stars } = makeStubs({ articles: [existing] });
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const svc = new ArticlesService(prisma as any, audit as any);
+      const svc = new ArticlesService(prisma as any, audit as any, stars as any);
       await expect(
         svc.create(
           actor(),
@@ -276,9 +284,9 @@ describe('ArticlesService', () => {
         updatedBy: null,
         archivedAt: null,
       };
-      const { prisma, audit } = makeStubs({ articles: [other] });
+      const { prisma, audit, stars } = makeStubs({ articles: [other] });
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const svc = new ArticlesService(prisma as any, audit as any);
+      const svc = new ArticlesService(prisma as any, audit as any, stars as any);
       const created = await svc.create(
         actor(),
         'c-1',
@@ -303,9 +311,9 @@ describe('ArticlesService', () => {
         updatedAt: new Date(),
         archivedAt: null,
       };
-      const { prisma, audit } = makeStubs({ folders: [folder] });
+      const { prisma, audit, stars } = makeStubs({ folders: [folder] });
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const svc = new ArticlesService(prisma as any, audit as any);
+      const svc = new ArticlesService(prisma as any, audit as any, stars as any);
       await expect(
         svc.create(
           actor(),
@@ -335,9 +343,9 @@ describe('ArticlesService', () => {
         updatedBy: null,
         archivedAt: null,
       };
-      const { prisma, audit } = makeStubs({ articles: [row] });
+      const { prisma, audit, stars } = makeStubs({ articles: [row] });
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const svc = new ArticlesService(prisma as any, audit as any);
+      const svc = new ArticlesService(prisma as any, audit as any, stars as any);
       await expect(svc.getById(actor(), 'c-1', 'art-1')).rejects.toBeInstanceOf(
         NotFoundException,
       );
@@ -360,9 +368,9 @@ describe('ArticlesService', () => {
         updatedBy: null,
         archivedAt: null,
       };
-      const { prisma, audit } = makeStubs({ articles: [row] });
+      const { prisma, audit, stars } = makeStubs({ articles: [row] });
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const svc = new ArticlesService(prisma as any, audit as any);
+      const svc = new ArticlesService(prisma as any, audit as any, stars as any);
       await expect(
         svc.getById(actor({ role: 'CLIENT_USER' }), 'c-1', 'art-1'),
       ).rejects.toBeInstanceOf(NotFoundException);
@@ -385,9 +393,9 @@ describe('ArticlesService', () => {
         updatedBy: null,
         archivedAt: null,
       };
-      const { prisma, audit } = makeStubs({ articles: [row] });
+      const { prisma, audit, stars } = makeStubs({ articles: [row] });
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const svc = new ArticlesService(prisma as any, audit as any);
+      const svc = new ArticlesService(prisma as any, audit as any, stars as any);
       const got = await svc.getById(actor(), 'c-1', 'art-1');
       expect(got.id).toBe('art-1');
     });
@@ -411,9 +419,9 @@ describe('ArticlesService', () => {
         updatedBy: null,
         archivedAt: null,
       };
-      const { prisma, audit } = makeStubs({ articles: [row] });
+      const { prisma, audit, stars } = makeStubs({ articles: [row] });
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const svc = new ArticlesService(prisma as any, audit as any);
+      const svc = new ArticlesService(prisma as any, audit as any, stars as any);
       const archived = await svc.archive(actor(), 'c-1', 'art-1', meta());
       expect(archived.archivedAt).toBeInstanceOf(Date);
 

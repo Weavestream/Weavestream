@@ -26,6 +26,7 @@ import { RelationsService } from '../relations/relations.service.js';
 import { UploadsService } from '../uploads/uploads.service.js';
 import { SearchIndexService } from '../search/search-index.service.js';
 import { PasswordsService } from '../passwords/passwords.service.js';
+import { StarsService } from '../stars/stars.service.js';
 import { buildAssetZodSchema } from './build-asset-schema.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
 
@@ -89,6 +90,10 @@ export interface SerializedAsset {
     string,
     { id: string; name: string; archivedAt: Date | null }
   >;
+  /**
+   * True if the signed-in user has starred this asset.
+   */
+  isStarred: boolean;
 }
 
 type LayoutWithFields = AssetLayout & { fields: AssetField[] };
@@ -103,6 +108,7 @@ export class AssetsService {
     private readonly uploads: UploadsService,
     private readonly searchIndex: SearchIndexService,
     private readonly passwords: PasswordsService,
+    private readonly stars: StarsService,
   ) {}
 
   // --------------------------------------------------------------------
@@ -241,6 +247,7 @@ export class AssetsService {
     });
     if (!asset) throw new NotFoundException();
     const serialized = this.serialize(asset, asset.assetLayout, asset.fieldValues, actor.role);
+    serialized.isStarred = await this.stars.isStarred(actor.id, 'asset', id);
     await this.hydrateFileFields(companyId, [serialized]);
     await this.hydrateAssetReferences(companyId, [serialized]);
     await this.hydrateActors([serialized]);
@@ -892,6 +899,7 @@ export class AssetsService {
           options: (f.options ?? {}) as Record<string, unknown>,
         })),
       references: {},
+      isStarred: false, // populated separately for detail
     };
   }
 }

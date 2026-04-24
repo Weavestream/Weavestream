@@ -3,23 +3,25 @@ import { PageBody, PageHeader } from '../../../components/shell/page-header';
 import {
   CompanyAvatar,
   Icon,
+  LayoutSwatch,
   Panel,
   StarButton,
   Stat,
   Tag,
 } from '../../../components/ui';
+import type { EntityType } from '../../../components/ui/star-button';
 import {
   getMe,
   getSettings,
   listDomainAlerts,
   listRecentActivity,
-  listStarredCompanies,
+  listStarred,
   serverApiFetch,
   type CompanyListItem,
   type CompanyPage,
   type DomainAlert,
   type RecentActivityItem,
-  type StarredCompany,
+  type StarredItem,
   type UserPage,
 } from '../../../lib/server-api';
 import { buildTerm, lower } from '../../../lib/term';
@@ -44,7 +46,7 @@ export default async function AdminDashboard() {
     // Phase 9b.3: "Recent companies" widget — six most recently
     // updated in the caller's scope, excluding archived.
     serverApiFetch<CompanyPage>('/companies?limit=6&sort=updatedAt&order=desc'),
-    listStarredCompanies(),
+    listStarred(),
     listDomainAlerts(30),
     listRecentActivity(10),
   ]);
@@ -151,19 +153,21 @@ export default async function AdminDashboard() {
 }
 
 // ───────────────────────────────────────────────────────────────────
-// Starred companies
+// Starred items (companies, passwords, assets, articles)
 // ───────────────────────────────────────────────────────────────────
 
 /**
- * Operator-pinned companies. Uses the same card shape as "Recent
- * companies" below so the two rows read as a pair — only the
- * surfacing rule differs (user-chosen vs. activity-driven).
+ * Operator-pinned items across every supported entity type. The list
+ * is returned already sorted by `starredAt` desc from the API, so
+ * users see the thing they pinned most recently at the top regardless
+ * of its type. Each row picks its own glyph, sub-line, and link target
+ * based on the discriminated `type`.
  */
 function StarredPanel({
   starred,
   termOne,
 }: {
-  starred: StarredCompany[];
+  starred: StarredItem[];
   termOne: string;
 }) {
   // Starred is uncapped (users curate their own list), so the panel
@@ -173,7 +177,23 @@ function StarredPanel({
   // inner `<div>` below then becomes the scroll container.
   return (
     <Panel
-      title="Starred"
+      title={
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+          Starred
+          {starred.length > 0 && (
+            <span
+              style={{
+                fontFamily: 'var(--font-mono)',
+                fontSize: 11,
+                color: 'var(--dim)',
+                fontWeight: 400,
+              }}
+            >
+              {starred.length}
+            </span>
+          )}
+        </span>
+      }
       style={{ display: 'flex', flexDirection: 'column' }}
       bodyStyle={{ flex: 1, minHeight: 0, display: 'flex' }}
     >
@@ -186,8 +206,8 @@ function StarredPanel({
             lineHeight: 1.5,
           }}
         >
-          Star a {lower(termOne)} from the list to pin it here for faster
-          access.
+          Star a {lower(termOne)}, password, asset, or article from its page to
+          pin it here for faster access.
         </div>
       ) : (
         <div
@@ -201,8 +221,8 @@ function StarredPanel({
             alignContent: 'start',
           }}
         >
-          {starred.map((c) => (
-            <StarredCard key={c.id} company={c} />
+          {starred.map((item) => (
+            <StarredCard key={`${item.type}:${item.id}`} item={item} />
           ))}
         </div>
       )}
@@ -210,8 +230,11 @@ function StarredPanel({
   );
 }
 
-function StarredCard({ company }: { company: StarredCompany }) {
-  const accent = companyAccent(company.id);
+function StarredCard({ item }: { item: StarredItem }) {
+  const href = starredHref(item);
+  const isArchived =
+    item.archivedAt !== null ||
+    (item.type !== 'company' && item.companyArchivedAt !== null);
   return (
     <div
       style={{
@@ -226,7 +249,7 @@ function StarredCard({ company }: { company: StarredCompany }) {
       }}
     >
       <Link
-        href={`/admin/companies/${company.id}`}
+        href={href}
         style={{
           display: 'flex',
           flex: 1,
@@ -237,12 +260,7 @@ function StarredCard({ company }: { company: StarredCompany }) {
           textDecoration: 'none',
         }}
       >
-        <CompanyAvatar
-          name={company.name}
-          color={accent}
-          size={28}
-          logoUrl={company.logo?.thumbnailUrl ?? company.logo?.url ?? null}
-        />
+        <StarredGlyph item={item} />
         <div style={{ flex: 1, minWidth: 0 }}>
           <div
             style={{
@@ -253,27 +271,119 @@ function StarredCard({ company }: { company: StarredCompany }) {
               whiteSpace: 'nowrap',
             }}
           >
-            {company.name}
+            {item.name}
           </div>
           <div
             style={{
               fontFamily: 'var(--font-mono)',
               fontSize: 10.5,
               color: 'var(--dim)',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
             }}
           >
-            {company.memberCount} member{company.memberCount === 1 ? '' : 's'}
-            {company.archivedAt ? ' · archived' : ''}
+            {starredSubline(item)}
+            {isArchived ? ' · archived' : ''}
           </div>
         </div>
       </Link>
       <StarButton
-        companyId={company.id}
+        entityType={item.type as EntityType}
+        entityId={item.id}
         initialStarred={true}
         iconSize={14}
       />
     </div>
   );
+}
+
+/**
+ * Type-appropriate glyph for each item. Companies use their avatar
+ * (with logo if uploaded); other entities get a tinted icon chip
+ * that matches the rest of the app's visual vocabulary (layout
+ * swatch for assets, info-tone chips for passwords & articles).
+ */
+function StarredGlyph({ item }: { item: StarredItem }) {
+  switch (item.type) {
+    case 'company': {
+      const accent = companyAccent(item.id);
+      return (
+        <CompanyAvatar
+          name={item.name}
+          color={accent}
+          size={28}
+          logoUrl={item.logo?.thumbnailUrl ?? item.logo?.url ?? null}
+        />
+      );
+    }
+    case 'asset':
+      return (
+        <LayoutSwatch
+          icon={item.layoutIcon ?? 'box'}
+          color="var(--info)"
+          size={28}
+        />
+      );
+    case 'password':
+      return <TypeChip icon={<Icon.key size={14} />} color="var(--warn)" />;
+    case 'article':
+      return <TypeChip icon={<Icon.doc size={14} />} color="var(--accent)" />;
+  }
+}
+
+function TypeChip({
+  icon,
+  color,
+}: {
+  icon: React.ReactNode;
+  color: string;
+}) {
+  return (
+    <div
+      style={{
+        width: 28,
+        height: 28,
+        borderRadius: 5,
+        display: 'grid',
+        placeItems: 'center',
+        background: `color-mix(in oklch, ${color} 14%, transparent)`,
+        color,
+        border: `1px solid color-mix(in oklch, ${color} 30%, transparent)`,
+        flexShrink: 0,
+      }}
+    >
+      {icon}
+    </div>
+  );
+}
+
+function starredHref(item: StarredItem): string {
+  switch (item.type) {
+    case 'company':
+      return `/admin/companies/${item.id}`;
+    case 'password':
+      return `/admin/companies/${item.companyId}/passwords/${item.id}`;
+    case 'asset':
+      return `/admin/companies/${item.companyId}/assets/${item.id}`;
+    case 'article':
+      return `/admin/companies/${item.companyId}/articles/${item.id}`;
+  }
+}
+
+function starredSubline(item: StarredItem): string {
+  switch (item.type) {
+    case 'company':
+      return `${item.memberCount} member${item.memberCount === 1 ? '' : 's'}`;
+    case 'asset':
+      return item.layoutName
+        ? `${item.layoutName} · ${item.companyName}`
+        : item.companyName;
+    case 'password':
+      return `Password · ${item.companyName}`;
+    case 'article':
+      return `Article · ${item.companyName}`;
+  }
 }
 
 // ───────────────────────────────────────────────────────────────────
