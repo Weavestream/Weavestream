@@ -16,4 +16,5 @@ export * from './schemas/index.js';
 export * from './queues/index.js';
 export * from './templates/index.js';
 export * from './tiptap.js';
+export * from './markdown.js';
 export type { TenantContext } from './tenant-context.js';

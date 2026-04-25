@@ -40,6 +40,16 @@ async function bootstrap() {
   app.use(cookieParser(env.COOKIE_SIGNING_KEY));
   app.use(compression());
 
+  // Express's default JSON body limit (100 KB) is too small for the kinds
+  // of payloads this API legitimately handles — e.g. a Tiptap article
+  // converted from a half-MB Markdown source easily clears that bound,
+  // and large rich-text asset fields hit it too. We cap at 2 MB which
+  // mirrors the `MAX_MARKDOWN_SOURCE` ceiling (500 KB) plus headroom for
+  // its verbose Tiptap representation, while still keeping the API
+  // safely bounded against unbounded payloads.
+  app.useBodyParser('json', { limit: '2mb' });
+  app.useBodyParser('urlencoded', { extended: true, limit: '2mb' });
+
   app.enableCors({
     origin: [env.APP_URL],
     credentials: true,

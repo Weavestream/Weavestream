@@ -512,7 +512,11 @@ model Article {
   folderId         String?   @map("folder_id") @db.Uuid
   title            String
   slug             String
-  content          Json
+  editorMode       String    @default("tiptap") @map("editor_mode")
+  /// Tiptap/ProseMirror JSON; null when `editorMode` is `markdown`.
+  content          Json?
+  /// Raw Markdown; null when `editorMode` is `tiptap`.
+  markdownSource String?   @map("markdown_source")
   contentPlaintext String    @map("content_plaintext")
   excerpt          String?
   visibleToClients Boolean   @default(true) @map("visible_to_clients")

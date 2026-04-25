@@ -867,7 +867,11 @@ export type ArticleSummary = {
 };
 
 export type ArticleDetail = ArticleSummary & {
-  content: unknown;
+  editorMode: 'tiptap' | 'markdown';
+  /** Tiptap JSON when `editorMode` is `tiptap`, else `null`. */
+  content: unknown | null;
+  /** Raw Markdown when `editorMode` is `markdown`, else `null`. */
+  markdownSource: string | null;
   contentPlaintext: string;
   /**
    * True if the signed-in user has starred this article.

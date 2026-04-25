@@ -2,26 +2,35 @@
 
 import { useRouter } from 'next/navigation';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import type { ArticleEditorMode } from '@weavestream/shared';
 import { apiFetch } from '../../../../../lib/api';
 import type {
   ArticleDetail,
   FolderNode,
 } from '../../../../../lib/server-api';
-import { Btn, Icon, Sheet, Tag, useToast } from '../../../../../components/ui';
+import { Btn, Dialog, Icon, Sheet, Tag, useToast } from '../../../../../components/ui';
 import { TopBar } from '../../../../../components/shell/top-bar';
 import { RichTextEditor } from '../../../../../components/editor/rich-text-editor';
+import { MarkdownEditor } from '../../../../../components/editor/markdown-editor';
 import { LinkedItemsPanel } from '../../../../../components/relations';
 import { AttachmentsPanel } from '../../../../../components/upload/attachments-panel';
 import { useTerm } from '../../../../../lib/term-context';
 import { companyCrumbs } from '../../../../../lib/company-crumbs';
 import { useIsMobile } from '../../../../../lib/hooks/use-is-mobile';
+import {
+  markdownToTiptapDoc,
+  tiptapDocToMarkdown,
+} from '../../../../../lib/article-format';
 
 /**
  * Shared create + edit form. A single client component handles both
  * modes; the editor auto-saves a draft every 4s after mutations quiet
- * down. Publishing = calling POST/PATCH with the current JSON document.
+ * down. Publishing = calling POST/PATCH with the current body
+ * (Tiptap doc or Markdown source) + `editorMode`.
  */
 type Mode = 'create' | 'edit';
+
+const emptyTiptap = { type: 'doc', content: [{ type: 'paragraph' }] } as const;
 
 export function ArticleForm({
   companyId,
@@ -48,8 +57,16 @@ export function ArticleForm({
   const [visibleToClients, setVisibleToClients] = useState(
     article?.visibleToClients ?? true,
   );
+  const [editorMode, setEditorMode] = useState<ArticleEditorMode>(
+    article?.editorMode ?? 'tiptap',
+  );
   const [doc, setDoc] = useState<unknown>(
-    article?.content ?? { type: 'doc', content: [{ type: 'paragraph' }] },
+    article?.editorMode === 'markdown'
+      ? emptyTiptap
+      : (article?.content ?? emptyTiptap),
+  );
+  const [markdownSource, setMarkdownSource] = useState(
+    article?.markdownSource ?? '',
   );
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -57,20 +74,18 @@ export function ArticleForm({
     article ? new Date(article.updatedAt) : null,
   );
   const [dirty, setDirty] = useState(false);
-  // The `<RichTextEditor>` portals its toolbar directly into the scroll
-  // container below, as a sibling of the centered body. That gives the
-  // toolbar two properties we need:
-  //   1. Full-viewport width (it's no longer constrained by the 1000px
-  //      centered column), and
-  //   2. A `position: sticky` containing block equal to the scroll
-  //      container — so the bar stays pinned throughout the scroll.
-  // CSS `order` below puts the body visually after the toolbar even
-  // though the portal appends the toolbar at the end of the DOM.
-  // `useState` instead of `useRef` so the editor re-renders once the
-  // container element is captured.
+  // Format switches are deliberate, potentially-lossy operations: the
+  // user should review the converted body and click Save explicitly
+  // rather than have autosave persist it 4s later. We still flip
+  // `dirty` so the "unsaved" tag appears; this flag tells the autosave
+  // effect to stand down until the user makes a regular edit (which
+  // implies they're satisfied with the conversion) or saves manually.
+  const [formatSwitchPending, setFormatSwitchPending] = useState(false);
   const [scrollEl, setScrollEl] = useState<HTMLDivElement | null>(null);
   const isMobile = useIsMobile();
   const [linksOpen, setLinksOpen] = useState(false);
+  const [switchOpen, setSwitchOpen] = useState(false);
+  const [pendingMode, setPendingMode] = useState<ArticleEditorMode | null>(null);
 
   const flatFolders = useMemo(() => flattenFolders(folders), [folders]);
 
@@ -78,6 +93,7 @@ export function ArticleForm({
   useEffect(() => {
     if (mode !== 'edit') return;
     if (!dirty) return;
+    if (formatSwitchPending) return;
     if (autoSaveTimer.current) clearTimeout(autoSaveTimer.current);
     autoSaveTimer.current = setTimeout(() => {
       submit('autosave');
@@ -86,7 +102,55 @@ export function ArticleForm({
       if (autoSaveTimer.current) clearTimeout(autoSaveTimer.current);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [title, folderId, visibleToClients, doc, dirty, mode]);
+  }, [
+    title,
+    folderId,
+    visibleToClients,
+    editorMode,
+    doc,
+    markdownSource,
+    dirty,
+    formatSwitchPending,
+    mode,
+  ]);
+
+  function canAutosaveBody(): boolean {
+    if (editorMode === 'markdown' && !markdownSource.trim()) return false;
+    return true;
+  }
+
+  /**
+   * Mark the form as dirty for a *regular* edit. Distinct from a format
+   * switch (which sets `dirty` directly without clearing the pending
+   * flag) — any normal edit clears the pending state so autosave can
+   * resume its usual 4 s debounce.
+   */
+  function markDirty() {
+    setDirty(true);
+    setFormatSwitchPending(false);
+  }
+
+  /**
+   * Build the create/patch payload. The two endpoints diverge only on
+   * how an unset `folderId` is encoded:
+   *   - POST: omit the key (`undefined` → JSON-stripped) so the server
+   *     uses its default;
+   *   - PATCH: send `null` to explicitly unfile the article.
+   * Returns `null` when the user is in Markdown mode with no body —
+   * autosave skips and publish surfaces a validation error.
+   */
+  function buildBody(forMode: Mode) {
+    const base = {
+      title: title.trim(),
+      folderId: forMode === 'create' ? (folderId ?? undefined) : folderId,
+      visibleToClients,
+    };
+    if (editorMode === 'tiptap') {
+      return { ...base, editorMode: 'tiptap' as const, content: doc };
+    }
+    if (!markdownSource.trim()) return null;
+    return { ...base, editorMode: 'markdown' as const, markdownSource };
+  }
 
   async function submit(kind: 'publish' | 'autosave') {
     setError(null);
@@ -95,18 +159,26 @@ export function ArticleForm({
       setError('Title is required.');
       return;
     }
+    if (editorMode === 'markdown' && !markdownSource.trim()) {
+      if (kind === 'publish') {
+        setError('Add some Markdown content before saving.');
+      }
+      return;
+    }
     if (mode === 'create') {
+      const body = buildBody('create');
+      if (!body) {
+        if (kind === 'publish') {
+          setError('Add some content before publishing.');
+        }
+        return;
+      }
       setSaving(true);
       const res = await apiFetch<{ id: string }>(
         `/companies/${companyId}/articles`,
         {
           method: 'POST',
-          body: JSON.stringify({
-            title: t,
-            folderId: folderId ?? undefined,
-            visibleToClients,
-            content: doc,
-          }),
+          body: JSON.stringify(body),
         },
       );
       setSaving(false);
@@ -121,17 +193,19 @@ export function ArticleForm({
     }
 
     if (!article) return;
+    if (kind === 'autosave' && !canAutosaveBody()) {
+      return;
+    }
+    const payload = buildBody('edit');
+    if (!payload) {
+      return;
+    }
     if (kind === 'publish') setSaving(true);
     const res = await apiFetch(
       `/companies/${companyId}/articles/${article.id}`,
       {
         method: 'PATCH',
-        body: JSON.stringify({
-          title: t,
-          folderId,
-          visibleToClients,
-          content: doc,
-        }),
+        body: JSON.stringify(payload),
       },
     );
     if (kind === 'publish') setSaving(false);
@@ -141,6 +215,7 @@ export function ArticleForm({
     }
     setLastSavedAt(new Date());
     setDirty(false);
+    setFormatSwitchPending(false);
     if (kind === 'publish') {
       toast.push('Article saved', 'ok');
       router.push(`/admin/companies/${companyId}/articles/${article.id}`);
@@ -150,7 +225,49 @@ export function ArticleForm({
 
   function onDocChange(next: unknown) {
     setDoc(next);
+    markDirty();
+  }
+
+  function onMarkdownChange(next: string) {
+    setMarkdownSource(next);
+    markDirty();
+  }
+
+  function startModeSwitch(next: ArticleEditorMode) {
+    if (next === editorMode) return;
+    if (mode === 'create') {
+      applyModeSwitch(next);
+      return;
+    }
+    setPendingMode(next);
+    setSwitchOpen(true);
+  }
+
+  function applyModeSwitch(next: ArticleEditorMode) {
+    if (next === editorMode) return;
+    try {
+      if (next === 'markdown') {
+        setMarkdownSource(tiptapDocToMarkdown(doc));
+      } else {
+        setDoc(
+          markdownToTiptapDoc(
+            markdownSource.trim().length > 0 ? markdownSource : '\n',
+          ),
+        );
+      }
+    } catch {
+      setError(
+        next === 'markdown'
+          ? 'Could not convert this article to Markdown. Try again or copy the content out manually.'
+          : 'Could not convert Markdown to the rich editor. Try again or paste into Tiptap manually.',
+      );
+      return;
+    }
+    setEditorMode(next);
     setDirty(true);
+    if (mode === 'edit') {
+      setFormatSwitchPending(true);
+    }
   }
 
   const autosaveLabel = lastSavedAt
@@ -268,7 +385,7 @@ export function ArticleForm({
               value={title}
               onChange={(e) => {
                 setTitle(e.target.value);
-                setDirty(true);
+                markDirty();
               }}
               placeholder="Article title…"
               style={{
@@ -296,12 +413,28 @@ export function ArticleForm({
                 color: 'var(--muted)',
               }}
             >
+              <MonoLabel>format</MonoLabel>
+              <Btn
+                type="button"
+                kind={editorMode === 'tiptap' ? 'primary' : 'outline'}
+                onClick={() => startModeSwitch('tiptap')}
+              >
+                WYSIWYG
+              </Btn>
+              <Btn
+                type="button"
+                kind={editorMode === 'markdown' ? 'primary' : 'outline'}
+                onClick={() => startModeSwitch('markdown')}
+              >
+                Markdown
+              </Btn>
+
               <MonoLabel>folder</MonoLabel>
               <select
                 value={folderId ?? ''}
                 onChange={(e) => {
                   setFolderId(e.target.value || null);
-                  setDirty(true);
+                  markDirty();
                 }}
                 style={selectStyle}
               >
@@ -328,7 +461,7 @@ export function ArticleForm({
                   checked={visibleToClients}
                   onChange={(e) => {
                     setVisibleToClients(e.target.checked);
-                    setDirty(true);
+                    markDirty();
                   }}
                   style={{ accentColor: 'var(--accent)' }}
                 />
@@ -349,14 +482,23 @@ export function ArticleForm({
           </div>
 
           <div style={{ padding: '0 40px 80px' }}>
-            <RichTextEditor
-              variant="article"
-              value={doc}
-              onChange={onDocChange}
-              companyId={companyId}
-              autoFocus={mode === 'create'}
-              toolbarPortalTarget={scrollEl}
-            />
+            {editorMode === 'tiptap' ? (
+              <RichTextEditor
+                variant="article"
+                value={doc}
+                onChange={onDocChange}
+                companyId={companyId}
+                autoFocus={mode === 'create'}
+                toolbarPortalTarget={scrollEl}
+              />
+            ) : (
+              <MarkdownEditor
+                value={markdownSource}
+                onChange={onMarkdownChange}
+                autoFocus={mode === 'create'}
+                toolbarPortalTarget={scrollEl}
+              />
+            )}
           </div>
         </div>
       </div>
@@ -451,6 +593,53 @@ export function ArticleForm({
           </Sheet>
         </>
       )}
+
+      <Dialog
+        open={switchOpen}
+        onClose={() => {
+          setSwitchOpen(false);
+          setPendingMode(null);
+        }}
+        title="Switch editor format?"
+        width={440}
+        footer={
+          <div
+            style={{
+              display: 'flex',
+              gap: 8,
+              justifyContent: 'flex-end',
+            }}
+          >
+            <Btn
+              kind="outline"
+              onClick={() => {
+                setSwitchOpen(false);
+                setPendingMode(null);
+              }}
+            >
+              Cancel
+            </Btn>
+            <Btn
+              kind="primary"
+              onClick={() => {
+                if (pendingMode) {
+                  applyModeSwitch(pendingMode);
+                }
+                setSwitchOpen(false);
+                setPendingMode(null);
+              }}
+            >
+              Switch
+            </Btn>
+          </div>
+        }
+      >
+        <p style={{ margin: 0, lineHeight: 1.5, color: 'var(--text)' }}>
+          Converting may change formatting. Mentions, custom image layout,
+          and complex tables can lose fidelity. You can still undo before
+          saving.
+        </p>
+      </Dialog>
     </>
   );
 }

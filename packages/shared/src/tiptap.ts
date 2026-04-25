@@ -16,6 +16,8 @@
  * collapsed, and the result is trimmed.
  */
 
+import { excerptFromPlaintext } from './markdown.js';
+
 export interface TiptapMark {
   type: string;
   attrs?: Record<string, unknown>;
@@ -120,11 +122,7 @@ export function stringToTiptapDoc(text: string): TiptapDoc {
 
 /** Crude character counter for excerpt generation. */
 export function tiptapExcerpt(input: unknown, maxChars = 280): string {
-  const full = tiptapToPlaintext(input);
-  if (full.length <= maxChars) return full;
-  const cut = full.slice(0, maxChars);
-  const lastSpace = cut.lastIndexOf(' ');
-  return (lastSpace > maxChars * 0.6 ? cut.slice(0, lastSpace) : cut).trimEnd() + '…';
+  return excerptFromPlaintext(tiptapToPlaintext(input), maxChars);
 }
 
 /**

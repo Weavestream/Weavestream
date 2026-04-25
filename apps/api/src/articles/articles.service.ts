@@ -4,8 +4,10 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import type { Article, Prisma } from '@prisma/client';
+import { Prisma, type Article } from '@prisma/client';
 import {
+  markdownExcerpt,
+  markdownToPlaintext,
   tiptapExcerpt,
   tiptapToPlaintext,
   isValidTiptapDoc,
@@ -35,7 +37,14 @@ export interface SerializedArticle {
   folderId: string | null;
   title: string;
   slug: string;
-  content: Prisma.JsonValue;
+  editorMode: 'tiptap' | 'markdown';
+  /**
+   * Tiptap JSON when `editorMode` is `tiptap`, otherwise `null` for
+   * Markdown articles.
+   */
+  content: Prisma.JsonValue | null;
+  /** Non-null for Markdown articles; Tiptap rows store the body in `content`. */
+  markdownSource: string | null;
   contentPlaintext: string;
   excerpt: string | null;
   visibleToClients: boolean;
@@ -145,37 +154,36 @@ export class ArticlesService {
     input: CreateArticleInput,
     meta: AuditMeta,
   ): Promise<SerializedArticle> {
-    if (!isValidTiptapDoc(input.content)) {
-      throw new BadRequestException({
-        error: 'InvalidArticleContent',
-        message: 'content must be a Tiptap doc node.',
-      });
+    // HTTP requests run through `createArticleSchema` (Zod) which
+    // rewrites legacy bodies without `editorMode` to Tiptap. Direct
+    // in-process calls (e.g. tests, CLI) may still omit it — match that
+    // behaviour here.
+    const normalized: CreateArticleInput =
+      (input as { editorMode?: string }).editorMode == null &&
+      (input as { content?: unknown }).content !== undefined
+        ? ({ ...(input as object), editorMode: 'tiptap' } as CreateArticleInput)
+        : input;
+
+    if (normalized.folderId) {
+      await this.assertFolderInCompany(companyId, normalized.folderId);
     }
 
-    if (input.folderId) {
-      await this.assertFolderInCompany(companyId, input.folderId);
-    }
-
-    const slug = input.slug ?? this.slugifyTitle(input.title);
+    const slug = normalized.slug ?? this.slugifyTitle(normalized.title);
     await this.assertSlugFree(companyId, slug, null);
 
-    const plaintext = tiptapToPlaintext(input.content);
-    const excerpt = input.excerpt ?? tiptapExcerpt(input.content);
+    const body = this.projectArticleBody(normalized, normalized.excerpt);
+    const data = {
+      companyId,
+      folderId: normalized.folderId ?? null,
+      title: normalized.title,
+      slug,
+      visibleToClients: normalized.visibleToClients ?? true,
+      createdBy: actor.id,
+      updatedBy: actor.id,
+      ...body,
+    };
 
-    const created = await this.prisma.article.create({
-      data: {
-        companyId,
-        folderId: input.folderId ?? null,
-        title: input.title,
-        slug,
-        content: input.content as unknown as Prisma.InputJsonValue,
-        contentPlaintext: plaintext,
-        excerpt,
-        visibleToClients: input.visibleToClients ?? true,
-        createdBy: actor.id,
-        updatedBy: actor.id,
-      },
-    });
+    const created = await this.prisma.article.create({ data });
 
     await this.audit.log({
       actorId: actor.id,
@@ -186,12 +194,7 @@ export class ArticlesService {
       ip: meta.ip,
       userAgent: meta.userAgent,
       before: null,
-      after: {
-        title: created.title,
-        slug: created.slug,
-        folderId: created.folderId,
-        visibleToClients: created.visibleToClients,
-      },
+      after: this.auditFields(created),
     });
     const out = this.serialize(created, actor.role);
     await this.hydrateActors([out]);
@@ -215,10 +218,29 @@ export class ArticlesService {
       await this.assertFolderInCompany(companyId, input.folderId);
     }
 
-    if (input.content !== undefined && !isValidTiptapDoc(input.content)) {
+    if (input.content !== undefined && existing.editorMode === 'markdown' && input.editorMode !== 'tiptap') {
       throw new BadRequestException({
         error: 'InvalidArticleContent',
-        message: 'content must be a Tiptap doc node.',
+        message:
+          'This article is in Markdown. Send editorMode: "tiptap" and content when switching to Tiptap, or update markdownSource.',
+      });
+    }
+    if (input.markdownSource !== undefined && existing.editorMode === 'tiptap' && input.editorMode !== 'markdown') {
+      throw new BadRequestException({
+        error: 'InvalidArticleContent',
+        message:
+          'This article uses Tiptap. Send editorMode: "markdown" and markdownSource when switching to Markdown, or update content.',
+      });
+    }
+    if (
+      input.editorMode !== undefined &&
+      input.content === undefined &&
+      input.markdownSource === undefined &&
+      input.editorMode !== existing.editorMode
+    ) {
+      throw new BadRequestException({
+        error: 'InvalidArticleContent',
+        message: 'Include content (Tiptap) or markdownSource when changing editorMode.',
       });
     }
 
@@ -237,11 +259,21 @@ export class ArticlesService {
       data.folderId = input.folderId ?? null;
     }
     if (input.content !== undefined) {
-      data.content = input.content as unknown as Prisma.InputJsonValue;
-      data.contentPlaintext = tiptapToPlaintext(input.content);
-      if (input.excerpt === undefined) {
-        data.excerpt = tiptapExcerpt(input.content);
-      }
+      Object.assign(
+        data,
+        this.projectArticleBody(
+          { editorMode: 'tiptap', content: input.content },
+          input.excerpt ?? undefined,
+        ),
+      );
+    } else if (input.markdownSource !== undefined) {
+      Object.assign(
+        data,
+        this.projectArticleBody(
+          { editorMode: 'markdown', markdownSource: input.markdownSource },
+          input.excerpt ?? undefined,
+        ),
+      );
     }
     if (input.excerpt !== undefined) data.excerpt = input.excerpt;
     if (input.visibleToClients !== undefined) data.visibleToClients = input.visibleToClients;
@@ -263,18 +295,8 @@ export class ArticlesService {
       companyId,
       ip: meta.ip,
       userAgent: meta.userAgent,
-      before: {
-        title: existing.title,
-        slug: existing.slug,
-        folderId: existing.folderId,
-        visibleToClients: existing.visibleToClients,
-      },
-      after: {
-        title: updated.title,
-        slug: updated.slug,
-        folderId: updated.folderId,
-        visibleToClients: updated.visibleToClients,
-      },
+      before: this.auditFields(existing),
+      after: this.auditFields(updated),
     });
     const out = this.serialize(updated, actor.role);
     await this.hydrateActors([out]);
@@ -427,6 +449,68 @@ export class ArticlesService {
     }
   }
 
+  /**
+   * Build the body-shaped subset of an article row (`editorMode`,
+   * `content`, `markdownSource`, `contentPlaintext`, `excerpt`) from a
+   * write input. Centralised here so `create` and `update` can share the
+   * exact same projection — including the "if the caller didn't supply
+   * an excerpt, derive one from the body" rule.
+   */
+  private projectArticleBody(
+    input:
+      | { editorMode: 'tiptap'; content: unknown }
+      | { editorMode: 'markdown'; markdownSource: string },
+    excerptOverride?: string,
+  ): {
+    editorMode: 'tiptap' | 'markdown';
+    content: Prisma.InputJsonValue | typeof Prisma.DbNull;
+    markdownSource: string | null;
+    contentPlaintext: string;
+    excerpt: string;
+  } {
+    if (input.editorMode === 'markdown') {
+      const md = input.markdownSource;
+      return {
+        editorMode: 'markdown',
+        content: Prisma.DbNull,
+        markdownSource: md,
+        contentPlaintext: markdownToPlaintext(md),
+        excerpt: excerptOverride ?? markdownExcerpt(md),
+      };
+    }
+
+    if (!isValidTiptapDoc(input.content)) {
+      throw new BadRequestException({
+        error: 'InvalidArticleContent',
+        message: 'content must be a Tiptap doc node.',
+      });
+    }
+    return {
+      editorMode: 'tiptap',
+      content: input.content as unknown as Prisma.InputJsonValue,
+      markdownSource: null,
+      contentPlaintext: tiptapToPlaintext(input.content),
+      excerpt: excerptOverride ?? tiptapExcerpt(input.content),
+    };
+  }
+
+  /** Subset of fields recorded in the audit log for create/update. */
+  private auditFields(row: Article): {
+    title: string;
+    slug: string;
+    folderId: string | null;
+    visibleToClients: boolean;
+    editorMode: string;
+  } {
+    return {
+      title: row.title,
+      slug: row.slug,
+      folderId: row.folderId,
+      visibleToClients: row.visibleToClients,
+      editorMode: row.editorMode,
+    };
+  }
+
   private slugifyTitle(title: string): string {
     return (
       title
@@ -450,7 +534,9 @@ export class ArticlesService {
       folderId: row.folderId,
       title: row.title,
       slug: row.slug,
+      editorMode: row.editorMode as 'tiptap' | 'markdown',
       content: row.content,
+      markdownSource: row.markdownSource,
       contentPlaintext: row.contentPlaintext,
       excerpt: row.excerpt,
       visibleToClients: row.visibleToClients,
