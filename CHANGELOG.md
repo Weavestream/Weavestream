@@ -6,6 +6,35 @@ this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **Articles can be authored as Markdown or Tiptap (per-article).**
+  Storage uses `editor_mode` plus either Tiptap JSON (`content`) or raw
+  Markdown (`markdown_source`); search continues to index
+  `content_plaintext` for both. The admin article form includes a format
+  toggle; switching formats on an existing article runs a one-time
+  conversion with a confirmation dialog.
+
+### Fixed
+
+- **API JSON body limit raised to 2 MB.** Express's default 100 KB cap
+  rejected legitimate article payloads — most visibly when converting a
+  larger Markdown article to Tiptap, since the JSON representation
+  expands past the threshold. The new limit comfortably covers the
+  500 KB `MAX_MARKDOWN_SOURCE` ceiling and its Tiptap projection while
+  staying bounded against unbounded payloads.
+- **Format switches no longer autosave.** Switching between Markdown
+  and WYSIWYG is a deliberate, potentially-lossy conversion, so the
+  form now waits for an explicit Save click rather than persisting the
+  converted body 4 s later. The "unsaved" tag still appears, and any
+  subsequent normal edit re-arms the autosave debounce.
+- **Tiptap → Markdown table conversion no longer drops to raw HTML.**
+  Tables without a `<th>` row are now promoted to a header row before
+  Turndown sees them (GFM Markdown requires one), and `<p>` wrappers
+  inside cells are unwrapped — joined with `<br>` for multi-paragraph
+  cells — so the output is a clean GFM table instead of leaking the
+  original `<table>` markup.
+
 ## [1.1.5] - 2026-04-24
 
 ### Added

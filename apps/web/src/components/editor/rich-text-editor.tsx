@@ -2,7 +2,7 @@
 
 import { useEditor, EditorContent, type Editor } from '@tiptap/react';
 import { BubbleMenu } from '@tiptap/react/menus';
-import type { JSONContent, Extensions } from '@tiptap/react';
+import type { Extensions } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import Link from '@tiptap/extension-link';
 import Placeholder from '@tiptap/extension-placeholder';
@@ -18,6 +18,7 @@ import { ResizableImage } from './image-extension';
 import { buildMentionExtension } from './mention-extension';
 import { SlashMenu } from './slash-menu';
 import { uploadFile } from '../../lib/upload-client';
+import { normaliseTiptapDoc } from '../../lib/tiptap-doc';
 import './editor.css';
 
 /**
@@ -123,7 +124,7 @@ export function RichTextEditor({
   const editor = useEditor(
     {
       extensions,
-      content: normaliseDoc(value),
+      content: normaliseTiptapDoc(value),
       editable,
       onUpdate: ({ editor: ed }) => {
         onChange(ed.getJSON());
@@ -151,7 +152,7 @@ export function RichTextEditor({
       lastExternalRef.current = incoming;
       return;
     }
-    editor.commands.setContent(normaliseDoc(value), { emitUpdate: false });
+    editor.commands.setContent(normaliseTiptapDoc(value), { emitUpdate: false });
     lastExternalRef.current = incoming;
   }, [value, editor]);
 
@@ -570,38 +571,3 @@ function promptLink(editor: Editor) {
     .run();
 }
 
-function normaliseDoc(value: unknown): JSONContent {
-  // Raw Tiptap doc — the shape emitted by `editor.getJSON()`.
-  if (
-    value &&
-    typeof value === 'object' &&
-    'type' in (value as Record<string, unknown>) &&
-    (value as { type?: unknown }).type === 'doc'
-  ) {
-    return value as JSONContent;
-  }
-  // Legacy Phase 3 wrapper `{ v: TiptapDoc, plain: string }`. Older rows
-  // were stored this way before the strategy was widened to accept raw
-  // docs; unwrap so existing content still hydrates in the editor.
-  if (
-    value &&
-    typeof value === 'object' &&
-    'v' in (value as Record<string, unknown>)
-  ) {
-    const inner = (value as { v: unknown }).v;
-    if (
-      inner &&
-      typeof inner === 'object' &&
-      'type' in (inner as Record<string, unknown>)
-    ) {
-      return inner as JSONContent;
-    }
-  }
-  if (typeof value === 'string' && value.trim().length > 0) {
-    return {
-      type: 'doc',
-      content: [{ type: 'paragraph', content: [{ type: 'text', text: value }] }],
-    };
-  }
-  return { type: 'doc', content: [{ type: 'paragraph' }] };
-}

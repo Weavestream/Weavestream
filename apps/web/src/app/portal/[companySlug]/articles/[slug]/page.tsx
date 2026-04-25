@@ -2,7 +2,7 @@ import { notFound } from 'next/navigation';
 import { getArticleBySlug, getMe } from '../../../../../lib/server-api';
 import { TopBar } from '../../../../../components/shell/top-bar';
 import { Tag } from '../../../../../components/ui';
-import { RichTextView } from '../../../../../components/editor/rich-text-view';
+import { ArticleBody } from '../../../../../components/editor/article-body';
 import { AttachmentsPanel } from '../../../../../components/upload/attachments-panel';
 
 /**
@@ -75,7 +75,11 @@ export default async function PortalArticleReadPage({
             >
               updated {new Date(article.updatedAt).toLocaleString()}
             </div>
-            <RichTextView value={article.content} />
+            <ArticleBody
+              editorMode={article.editorMode}
+              content={article.content}
+              markdownSource={article.markdownSource}
+            />
           </article>
         </div>
         <aside

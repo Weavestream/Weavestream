@@ -15,7 +15,7 @@ import { TopBar } from '../../../../../../components/shell/top-bar';
 import { Icon, Panel, StarButton, Tag } from '../../../../../../components/ui';
 import { buildTerm } from '../../../../../../lib/term';
 import { companyCrumbs } from '../../../../../../lib/company-crumbs';
-import { RichTextView } from '../../../../../../components/editor/rich-text-view';
+import { ArticleBody } from '../../../../../../components/editor/article-body';
 import { ArticleSideNav } from '../../../../../../components/editor/article-side-nav';
 import { ArticleToc } from '../../../../../../components/editor/article-toc';
 import { LinkedItemsPanel } from '../../../../../../components/relations';
@@ -141,7 +141,11 @@ export default async function ArticleReadPage({
             >
               {article.title}
             </h1>
-            <RichTextView value={article.content} />
+            <ArticleBody
+              editorMode={article.editorMode}
+              content={article.content}
+              markdownSource={article.markdownSource}
+            />
           </article>
         </div>
 

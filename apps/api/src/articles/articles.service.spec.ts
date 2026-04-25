@@ -3,7 +3,7 @@ import {
   ConflictException,
   NotFoundException,
 } from '@nestjs/common';
-import type { Article, Folder, Prisma } from '@prisma/client';
+import { Prisma, type Article, type Folder } from '@prisma/client';
 import { ArticlesService } from './articles.service.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
 
@@ -79,7 +79,12 @@ function makeStubs(initial: {
           folderId: (d.folderId as string | null) ?? null,
           title: d.title,
           slug: d.slug,
-          content: d.content as unknown as Prisma.JsonValue,
+          editorMode: (d.editorMode as string) ?? 'tiptap',
+          content:
+            d.content === Prisma.DbNull || d.content === null
+              ? null
+              : (d.content as unknown as Prisma.JsonValue),
+          markdownSource: (d.markdownSource as string | null) ?? null,
           contentPlaintext: d.contentPlaintext as string,
           excerpt: (d.excerpt as string | null) ?? null,
           visibleToClients: (d.visibleToClients as boolean) ?? true,
@@ -137,7 +142,15 @@ function makeStubs(initial: {
           if ('slug' in d) row.slug = d.slug as string;
           if ('folderId' in d) row.folderId = d.folderId as string | null;
           if ('archivedAt' in d) row.archivedAt = d.archivedAt as Date | null;
-          if ('content' in d) row.content = d.content as Prisma.JsonValue;
+          if ('editorMode' in d) row.editorMode = d.editorMode as string;
+          if ('markdownSource' in d)
+            row.markdownSource = d.markdownSource as string | null;
+          if ('content' in d) {
+            row.content =
+              d.content === Prisma.DbNull || d.content === null
+                ? null
+                : (d.content as Prisma.JsonValue);
+          }
           if ('contentPlaintext' in d)
             row.contentPlaintext = d.contentPlaintext as string;
           if ('excerpt' in d) row.excerpt = (d.excerpt as string) ?? null;
@@ -244,6 +257,8 @@ describe('ArticlesService', () => {
         folderId: null,
         title: 'Original',
         slug: 'howto',
+        editorMode: 'tiptap',
+        markdownSource: null,
         content: {} as Prisma.JsonValue,
         contentPlaintext: '',
         excerpt: null,
@@ -274,6 +289,8 @@ describe('ArticlesService', () => {
         folderId: null,
         title: 'Other co',
         slug: 'howto',
+        editorMode: 'tiptap',
+        markdownSource: null,
         content: {} as Prisma.JsonValue,
         contentPlaintext: '',
         excerpt: null,
@@ -323,6 +340,92 @@ describe('ArticlesService', () => {
         ),
       ).rejects.toBeInstanceOf(BadRequestException);
     });
+
+    it('persists Markdown and derives search plaintext without Markdown syntax', async () => {
+      const { prisma, audit, stars } = makeStubs();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const svc = new ArticlesService(prisma as any, audit as any, stars as any);
+      const created = await svc.create(
+        actor(),
+        'c-1',
+        {
+          editorMode: 'markdown',
+          title: 'MD post',
+          markdownSource: '# Heading\n\n**Body** keyword',
+        } as never,
+        meta(),
+      );
+      expect(created.editorMode).toBe('markdown');
+      expect(created.content).toBeNull();
+      expect(created.markdownSource).toContain('# Heading');
+      expect(created.contentPlaintext).toContain('keyword');
+      expect(created.contentPlaintext).not.toContain('**');
+    });
+  });
+
+  describe('update', () => {
+    it('recomputes contentPlaintext when Markdown body changes', async () => {
+      const row: ArticleRow = {
+        id: 'art-md',
+        companyId: 'c-1',
+        folderId: null,
+        title: 't',
+        slug: 't',
+        editorMode: 'markdown',
+        markdownSource: '# A',
+        content: null,
+        contentPlaintext: 'A',
+        excerpt: 'A',
+        visibleToClients: true,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        createdBy: null,
+        updatedBy: null,
+        archivedAt: null,
+      };
+      const { prisma, audit, stars } = makeStubs({ articles: [row] });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const svc = new ArticlesService(prisma as any, audit as any, stars as any);
+      const updated = await svc.update(
+        actor(),
+        'c-1',
+        'art-md',
+        {
+          editorMode: 'markdown',
+          markdownSource: '## B\n\n*x* found',
+        } as never,
+        meta(),
+      );
+      expect(updated.contentPlaintext.toLowerCase()).toContain('found');
+      expect(updated.contentPlaintext).not.toContain('*');
+    });
+
+    it('rejects a bare Tiptap content patch on a Markdown article', async () => {
+      const row: ArticleRow = {
+        id: 'art-md',
+        companyId: 'c-1',
+        folderId: null,
+        title: 't',
+        slug: 't',
+        editorMode: 'markdown',
+        markdownSource: 'x',
+        content: null,
+        contentPlaintext: 'x',
+        excerpt: null,
+        visibleToClients: true,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        createdBy: null,
+        updatedBy: null,
+        archivedAt: null,
+      };
+      const { prisma, audit, stars } = makeStubs({ articles: [row] });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const svc = new ArticlesService(prisma as any, audit as any, stars as any);
+      await expect(
+        svc.update(actor(), 'c-1', 'art-md', { content: doc('y') } as never, meta()),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    });
   });
 
   describe('read scoping', () => {
@@ -333,6 +436,8 @@ describe('ArticlesService', () => {
         folderId: null,
         title: 'x',
         slug: 'x',
+        editorMode: 'tiptap',
+        markdownSource: null,
         content: {} as Prisma.JsonValue,
         contentPlaintext: '',
         excerpt: null,
@@ -358,6 +463,8 @@ describe('ArticlesService', () => {
         folderId: null,
         title: 'Internal',
         slug: 'internal',
+        editorMode: 'tiptap',
+        markdownSource: null,
         content: {} as Prisma.JsonValue,
         contentPlaintext: '',
         excerpt: null,
@@ -383,6 +490,8 @@ describe('ArticlesService', () => {
         folderId: null,
         title: 'Internal',
         slug: 'internal',
+        editorMode: 'tiptap',
+        markdownSource: null,
         content: {} as Prisma.JsonValue,
         contentPlaintext: '',
         excerpt: null,
@@ -409,6 +518,8 @@ describe('ArticlesService', () => {
         folderId: null,
         title: 'x',
         slug: 'x',
+        editorMode: 'tiptap',
+        markdownSource: null,
         content: {} as Prisma.JsonValue,
         contentPlaintext: '',
         excerpt: null,

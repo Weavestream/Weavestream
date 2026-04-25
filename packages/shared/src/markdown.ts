@@ -1,0 +1,97 @@
+/**
+ * Plaintext extraction from Markdown for search indexing and excerpts.
+ * Conservative regex-based stripping — no full parser — so this stays
+ * dependency-free in `@weavestream/shared`.
+ */
+
+export const MAX_MARKDOWN_SOURCE = 500_000;
+
+/**
+ * Strip Markdown syntax to approximate visible text for full-text search
+ * and `ts_headline` snippets. Not a perfect renderer — good enough for
+ * indexing and matching user queries.
+ */
+export function markdownToPlaintext(src: string): string {
+  if (!src || typeof src !== 'string') return '';
+  let s = src.replace(/\r\n?/g, '\n');
+
+  // Fenced code blocks (non-greedy, multiline)
+  s = s.replace(/^```[\w-]*\n[\s\S]*?^```/gm, '\n');
+  s = s.replace(/```[^`]*```/g, ' ');
+
+  // Footnote / reference link definitions: [^id]: url
+  s = s.replace(/^\[[^\]]+\]:\s*.+$/gm, ' ');
+
+  // Link / image: keep visible label, drop URL
+  s = s.replace(/!\[([^\]]*)\]\s*\([^)]+\)/g, '$1');
+  s = s.replace(/\[([^\]]+)\]\s*\([^)]+\)/g, '$1');
+  s = s.replace(/!\[([^\]]*)\]\s*\[[^\]]*\]/g, '$1');
+  s = s.replace(/\[([^\]]+)\]\s*\[[^\]]*\]/g, '$1');
+
+  // Autolinks <https://...>
+  s = s.replace(/<https?:\/\/[^>\s]+>/gi, ' ');
+
+  // Setext underlines
+  s = s.replace(/^\s*(=+|-+)\s*$/gm, ' ');
+
+  // ATX headings
+  s = s.replace(/^#{1,6}\s+/gm, '');
+
+  // Blockquotes
+  s = s.replace(/^\s*>\s?/gm, '');
+
+  // Horizontal rules
+  s = s.replace(/^\s*(?:\*\s*){3,}|^\s*(?:-\s*){3,}|^_{3,}\s*$/gm, ' ');
+
+  // List markers
+  s = s.replace(/^\s*[-*+]\s+\[[ xX]\]\s+/gm, ' ');
+  s = s.replace(/^\s*[-*+]\s+/gm, '');
+  s = s.replace(/^\s*\d+\.\s+/gm, '');
+
+  // Table separator rows
+  s = s.replace(/^\s*\|?[\s:-]+\|[\s|:-]+\|?\s*$/gm, ' ');
+
+  // Remaining table pipes → spaces
+  s = s.replace(/^\s*\|/gm, '');
+  s = s.replace(/\|\s*$/gm, '');
+  s = s.replace(/\|/g, ' ');
+
+  // Emphasis / strikethrough (repeat for nested patterns)
+  for (let i = 0; i < 3; i++) {
+    s = s.replace(/~~([^~]+)~~/g, '$1');
+    s = s.replace(/\*\*([^*]+)\*\*/g, '$1');
+    s = s.replace(/\*([^*]+)\*/g, '$1');
+    s = s.replace(/__([^_]+)__/g, '$1');
+    s = s.replace(/_([^_]+)_/g, '$1');
+  }
+
+  // Inline code
+  s = s.replace(/`([^`]+)`/g, '$1');
+
+  // HTML tags
+  s = s.replace(/<[^>]+>/g, ' ');
+
+  s = s
+    .split('\n')
+    .map((line) => line.replace(/[ \t]+/g, ' ').trim())
+    .join('\n');
+  s = s.replace(/[ \t]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim();
+  return s;
+}
+
+/** Same semantics as `tiptapExcerpt` but for Markdown source. */
+export function markdownExcerpt(src: string, maxChars = 280): string {
+  return excerptFromPlaintext(markdownToPlaintext(src), maxChars);
+}
+
+/**
+ * Truncate already-extracted plaintext at a word boundary with an
+ * ellipsis. Shared by `tiptapExcerpt` and `markdownExcerpt` so the two
+ * formats produce identical-length card previews.
+ */
+export function excerptFromPlaintext(plain: string, maxChars = 280): string {
+  if (plain.length <= maxChars) return plain;
+  const cut = plain.slice(0, maxChars);
+  const lastSpace = cut.lastIndexOf(' ');
+  return (lastSpace > maxChars * 0.6 ? cut.slice(0, lastSpace) : cut).trimEnd() + '…';
+}
