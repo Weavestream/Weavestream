@@ -7,8 +7,12 @@ import { PrismaModule } from '../../api/src/prisma/prisma.module.js';
 import { RedisModule } from '../../api/src/redis/redis.module.js';
 import { AuditModule } from '../../api/src/audit/audit.module.js';
 import { DomainsModule } from '../../api/src/domains/domains.module.js';
+import { StorageModule } from '../../api/src/storage/storage.module.js';
+import { CryptoModule } from '../../api/src/crypto/crypto.module.js';
+import { ExportDataModule } from '../../api/src/exports/export-data.module.js';
 import { DomainChecksWorker } from './domain-checks/domain-checks.processor.js';
 import { PwnedCheckWorker } from './pwned-check/pwned-check.processor.js';
+import { CompanyPdfExportWorker } from './company-pdf-export/company-pdf-export.processor.js';
 
 /**
  * Worker-side composition root. Imports only the service-only shared
@@ -52,9 +56,12 @@ import { PwnedCheckWorker } from './pwned-check/pwned-check.processor.js';
     }),
     RedisModule,
     PrismaModule,
+    CryptoModule,
+    StorageModule,
     AuditModule,
     DomainsModule,
+    ExportDataModule,
   ],
-  providers: [DomainChecksWorker, PwnedCheckWorker],
+  providers: [DomainChecksWorker, PwnedCheckWorker, CompanyPdfExportWorker],
 })
 export class WorkerModule {}

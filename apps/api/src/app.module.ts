@@ -43,6 +43,7 @@ import {
   PasswordsController,
 } from './passwords/passwords.controller.js';
 import { ExpirationsModule } from './expirations/expirations.module.js';
+import { ExportsModule } from './exports/exports.module.js';
 import { UiModule } from './ui/ui.module.js';
 import { CryptoModule } from './crypto/crypto.module.js';
 import { AuthGuard } from './auth/guards/auth.guard.js';
@@ -139,6 +140,7 @@ const httpSerializers = {
     DomainsModule,
     PasswordsModule,
     ExpirationsModule,
+    ExportsModule,
     UiModule,
     HealthModule,
   ],

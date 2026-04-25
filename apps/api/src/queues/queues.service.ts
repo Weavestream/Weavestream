@@ -6,9 +6,11 @@ import {
 } from '@nestjs/common';
 import { Queue, QueueEvents, type JobsOptions } from 'bullmq';
 import {
+  CompanyExportJobNames,
   DomainCheckJobNames,
   PwnedCheckJobNames,
   QueueNames,
+  type CompanyExportJob,
   type DomainCheckJob,
   type PwnedCheckJob,
   type QueueName,
@@ -160,6 +162,28 @@ export class QueuesService implements OnModuleInit, OnModuleDestroy {
       attempts: 3,
       backoff: { type: 'exponential', delay: 30_000 },
       removeOnComplete: { age: 60 * 60, count: 100 },
+      removeOnFail: { age: 24 * 60 * 60 },
+    });
+    return job.id ?? '';
+  }
+
+  /**
+   * Enqueue a company PDF export job. The worker will gather all company
+   * data, build a PDFKit document, upload to MinIO, and store the
+   * storage key in the job return value for the API to presign on poll.
+   */
+  async enqueueCompanyExport(payload: CompanyExportJob): Promise<string> {
+    const queue = this.get(QueueNames.companyExport);
+    const jobName =
+      payload.kind === 'export'
+        ? CompanyExportJobNames.export
+        : CompanyExportJobNames.cleanup;
+    const job = await queue.add(jobName, payload, {
+      attempts: 2,
+      backoff: { type: 'exponential', delay: 10_000 },
+      // Keep completed jobs long enough for the 4-hour download window +
+      // buffer, then let Redis clean up automatically.
+      removeOnComplete: { age: 5 * 60 * 60 },
       removeOnFail: { age: 24 * 60 * 60 },
     });
     return job.id ?? '';
