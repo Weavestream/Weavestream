@@ -272,4 +272,13 @@ export class MinioService implements OnModuleInit {
   thumbnailKey(companyId: string, uploadId: string): string {
     return `company/${companyId}/thumbs/${uploadId}.webp`;
   }
+
+  /**
+   * Storage key for the company-export PDF feature. Lives under the
+   * tenant prefix so the convention "an object key alone identifies
+   * the tenant" is preserved alongside the per-bucket isolation.
+   */
+  exportKey(companyId: string, exportId: string): string {
+    return `company/${companyId}/exports/${exportId}.pdf`;
+  }
 }

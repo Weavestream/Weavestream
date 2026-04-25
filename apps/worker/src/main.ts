@@ -6,6 +6,7 @@ import { Logger } from 'nestjs-pino';
 import { WorkerModule } from './worker.module.js';
 import { DomainChecksWorker } from './domain-checks/domain-checks.processor.js';
 import { PwnedCheckWorker } from './pwned-check/pwned-check.processor.js';
+import { CompanyPdfExportWorker } from './company-pdf-export/company-pdf-export.processor.js';
 
 /**
  * apps/worker bootstrap.
@@ -37,6 +38,9 @@ async function bootstrap(): Promise<void> {
 
   const pwnedCheck = app.get(PwnedCheckWorker);
   await pwnedCheck.start();
+
+  const companyPdfExport = app.get(CompanyPdfExportWorker);
+  await companyPdfExport.start();
 
   logger.log('Worker online — bullmq consumers started', 'WorkerBootstrap');
 

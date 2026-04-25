@@ -72,6 +72,12 @@ export function AdminShell({
         icon: 'gear',
         href: '/admin/settings',
       });
+      adminItems.push({
+        id: 'export',
+        label: 'Export',
+        icon: 'archive',
+        href: '/admin/export',
+      });
     }
     sections.push({
       title: 'Admin',

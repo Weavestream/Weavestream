@@ -23,6 +23,7 @@ import { z } from 'zod';
 export const QueueNames = {
   domainChecks: 'domain-checks',
   pwnedCheck: 'pwned-check',
+  companyExport: 'company-export',
 } as const;
 
 export type QueueName = (typeof QueueNames)[keyof typeof QueueNames];
@@ -105,3 +106,69 @@ export const PwnedCheckJobNames = {
 } as const;
 export type PwnedCheckJobName =
   (typeof PwnedCheckJobNames)[keyof typeof PwnedCheckJobNames];
+
+// ---------------------------------------------------------------------
+// company-export queue (PDF vault archive)
+// ---------------------------------------------------------------------
+//
+// The API enqueues an `export` job when an admin requests a company PDF.
+// The worker gathers all company data, builds a PDFKit document, uploads
+// the buffer to MinIO, and stores the storage key in the job return value
+// so the API can re-mint a presigned URL on every status poll.
+//
+// After generating the PDF the worker also enqueues a `cleanup` job with
+// a 4-hour delay to delete the MinIO object — the PDF is ephemeral and
+// must not linger indefinitely since it may contain plaintext passwords.
+//
+// Sensitive fields in the payload (the optional user-supplied PDF
+// password) are NEVER stored as plaintext in Redis. The API encrypts
+// them via `SecretEncryptionService` (the same envelope used for
+// password-vault rows) before enqueueing, and the worker decrypts at
+// dispatch time. Even if a Redis dump leaks, the only thing recoverable
+// from a queued job is the encrypted blob — useless without the active
+// `PASSWORD_ENCRYPTION_KEY`.
+
+export const companyExportJobSchema = z.discriminatedUnion('kind', [
+  z.object({
+    kind: z.literal('export'),
+    exportId: z.string().uuid(),
+    companyId: z.string().uuid(),
+    includePasswords: z.boolean(),
+    /**
+     * Opaque ciphertext (base64) produced by `SecretEncryptionService.encrypt`.
+     * If absent, the resulting PDF is unencrypted. The worker decrypts
+     * this just before handing it to PDFKit; the plaintext lives in
+     * memory for milliseconds and is never logged.
+     */
+    pdfPasswordCiphertext: z.string().optional(),
+  }),
+  z.object({
+    kind: z.literal('cleanup'),
+    /** MinIO storage key to delete after the TTL window. */
+    storageKey: z.string(),
+    companyId: z.string().uuid(),
+  }),
+]);
+
+export type CompanyExportJob = z.infer<typeof companyExportJobSchema>;
+
+export const CompanyExportJobNames = {
+  export: 'export',
+  cleanup: 'cleanup',
+} as const;
+export type CompanyExportJobName =
+  (typeof CompanyExportJobNames)[keyof typeof CompanyExportJobNames];
+
+/**
+ * Stored as the BullMQ job's `returnvalue` when the worker successfully
+ * produces a PDF. The API reads this on every status poll and re-mints
+ * a presigned GET URL against MinIO. Lives here (instead of inside
+ * `apps/api`) so the worker can `import type { ExportJobResult }` from
+ * the shared package without reaching across the package boundary.
+ */
+export interface ExportJobResult {
+  companyId: string;
+  storageKey: string;
+  /** Bytes the rendered PDF occupies in MinIO. Surfaced in audit only. */
+  sizeBytes: number;
+}

@@ -72,6 +72,9 @@ export const ActionValues = [
   // Branding & terminology settings (instance-wide singleton row).
   // Read-only GET is @AuthedOnly; this action gates the PATCH.
   'settings.manage',
+
+  // Data export (SUPER_ADMIN only — PDF vault archive).
+  'export.create',
 ] as const;
 
 export type Action = (typeof ActionValues)[number];
@@ -255,6 +258,14 @@ export const PERMISSIONS: Record<Action, PermissionRule> = {
     requireNonExpiredMembership: false,
     note: 'Workspace name + tenant term live in a singleton `system_settings` row; only SUPER_ADMIN may mutate. Every authenticated user may read via @AuthedOnly GET /settings.',
   },
+
+  'export.create': {
+    scope: 'global',
+    allowGlobal: G_ADMIN,
+    allowMembership: [],
+    requireNonExpiredMembership: false,
+    note: 'Trigger a company vault-archive PDF export. SUPER_ADMIN only — the PDF may contain plaintext passwords.',
+  },
 };
 
 export const ACTION_HUMAN_LABELS: Record<Action, string> = {
@@ -281,4 +292,5 @@ export const ACTION_HUMAN_LABELS: Record<Action, string> = {
   'password.archive': 'Archive / restore saved passwords',
   'audit.read': 'View audit log',
   'settings.manage': 'Edit workspace branding and tenant terminology',
+  'export.create': 'Trigger a company vault-archive PDF export',
 };

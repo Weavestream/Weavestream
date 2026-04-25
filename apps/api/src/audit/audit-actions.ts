@@ -69,6 +69,18 @@ export const AUDIT_ACTIONS = {
     folderArchive: 'password.folder.archived',
     folderRestore: 'password.folder.restored',
   },
+  // Bulk PDF vault export. Triggered by SUPER_ADMIN only. The
+  // `triggered` row is written by the API the moment the job is
+  // enqueued so we have a record of intent even if the worker never
+  // produces a PDF; `completed` is written by the worker once the file
+  // is in MinIO and includes the byte size + whether plaintext
+  // passwords were embedded. Both rows carry the same `exportId` in
+  // `entityId` so the audit log groups them together.
+  export: {
+    triggered: 'export.triggered',
+    completed: 'export.completed',
+    failed: 'export.failed',
+  },
 } as const;
 
 export const ALL_AUDIT_ACTIONS: string[] = [
@@ -79,4 +91,5 @@ export const ALL_AUDIT_ACTIONS: string[] = [
   ...Object.values(AUDIT_ACTIONS.settings),
   ...Object.values(AUDIT_ACTIONS.domain),
   ...Object.values(AUDIT_ACTIONS.password),
+  ...Object.values(AUDIT_ACTIONS.export),
 ];
