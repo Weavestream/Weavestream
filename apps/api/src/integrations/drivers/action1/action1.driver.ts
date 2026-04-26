@@ -355,16 +355,19 @@ export class Action1Driver implements IntegrationDriver {
       ? raw.filter((e) => filter.groups!.includes(String(e.group ?? '')))
       : raw;
 
-    const records: DriverRecord[] = filtered.map((e) => ({
-      externalId: String(e.id),
-      // Action1's authoritative display label is `name` (the column
-      // their UI shows in the endpoints list). Older versions of this
-      // driver tried `hostname` first — that key isn't part of the
-      // Action1 schema, so it always fell through to `name` anyway.
-      displayName: e.name ? String(e.name) : null,
-      fields: { ...e } as Record<string, unknown>,
-      updatedAt: typeof e.last_seen === 'string' ? e.last_seen : null,
-    }));
+    const records: DriverRecord[] = filtered.map((e) => {
+      const fields = normalizeAction1RecordFields(e);
+      return {
+        externalId: String(e.id),
+        // Action1's authoritative display label is `name` (the column
+        // their UI shows in the endpoints list). Older versions of this
+        // driver tried `hostname` first — that key isn't part of the
+        // Action1 schema, so it always fell through to `name` anyway.
+        displayName: e.name ? String(e.name) : null,
+        fields,
+        updatedAt: typeof fields.last_seen === 'string' ? fields.last_seen : null,
+      };
+    });
 
     const fetchedSoFar = from + raw.length;
     const total = parseIntOrNull(body?.total_items) ?? fetchedSoFar;
@@ -557,6 +560,35 @@ function parseIntOrNull(raw: unknown): number | null {
   return null;
 }
 
+const ACTION1_DATETIME =
+  /^(\d{4})-(\d{2})-(\d{2})_(\d{2})-(\d{2})-(\d{2})$/;
+const ISO_DATETIME =
+  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})?$/;
+
+function normalizeAction1RecordFields(
+  record: Action1Endpoint,
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(record)) {
+    out[key] =
+      typeof value === 'string'
+        ? normalizeAction1DateTimeString(value) ?? value
+        : value;
+  }
+  return out;
+}
+
+function normalizeAction1DateTimeString(value: string): string | null {
+  const trimmed = value.trim();
+  if (ISO_DATETIME.test(trimmed)) return trimmed;
+
+  const match = ACTION1_DATETIME.exec(trimmed);
+  if (!match) return null;
+
+  const [, year, month, day, hour, minute, second] = match;
+  return `${year}-${month}-${day}T${hour}:${minute}:${second}Z`;
+}
+
 /**
  * Curated field catalogue for Action1 managed endpoints.
  *
@@ -614,7 +646,7 @@ function inferHintType(values: unknown[]): SourceFieldDto['hintType'] {
   if (typeof first === 'number') return 'NUMBER';
   if (typeof first === 'string') {
     const s = first;
-    if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(s)) return 'DATETIME';
+    if (normalizeAction1DateTimeString(s)) return 'DATETIME';
     if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return 'DATE';
     if (/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(s)) return 'EMAIL';
     if (/^https?:\/\/\S+$/i.test(s)) return 'URL';
