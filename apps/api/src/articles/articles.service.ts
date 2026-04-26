@@ -96,7 +96,7 @@ export class ArticlesService {
 
     const rows = await this.prisma.article.findMany({
       where,
-      orderBy: [{ archivedAt: 'asc' }, { updatedAt: 'desc' }],
+      orderBy: [{ archivedAt: 'asc' }, { title: 'asc' }],
       take: limit + 1,
       ...(options.cursor ? { cursor: { id: options.cursor }, skip: 1 } : {}),
     });

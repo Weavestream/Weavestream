@@ -218,7 +218,7 @@ export class AssetsService {
     await this.hydrateFileFields(companyId, serialized);
     await this.hydrateAssetReferences(companyId, serialized);
     await this.hydrateActors(serialized);
-    await this.hydrateSyncMetadata(serialized);
+    await this.hydrateSyncMetadata(companyId, serialized);
     return {
       items: serialized,
       nextCursor: hasMore ? slice[slice.length - 1]!.id : null,
@@ -264,7 +264,7 @@ export class AssetsService {
     await this.hydrateFileFields(companyId, [serialized]);
     await this.hydrateAssetReferences(companyId, [serialized]);
     await this.hydrateActors([serialized]);
-    await this.hydrateSyncMetadata([serialized]);
+    await this.hydrateSyncMetadata(companyId, [serialized]);
     return serialized;
   }
 
@@ -847,13 +847,14 @@ export class AssetsService {
    * ids that operators don't need.
    */
   private async hydrateSyncMetadata(
+    companyId: string,
     assets: SerializedAsset[],
   ): Promise<void> {
     if (assets.length === 0) return;
     const ids = assets.filter((a) => a.externalSource).map((a) => a.id);
     if (ids.length === 0) return;
     const rows = await this.prisma.integrationSyncRecord.findMany({
-      where: { assetId: { in: ids } },
+      where: { companyId, assetId: { in: ids } },
       select: {
         assetId: true,
         lastSyncedAt: true,
