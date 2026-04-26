@@ -31,6 +31,9 @@ export default async function EditAssetPage({
       assetId={asset.id}
       initialName={asset.name}
       initialValues={asset.fieldValues}
+      externalSource={asset.externalSource}
+      syncedFieldIds={asset.syncedFieldIds}
+      lastSyncedAt={asset.lastSyncedAt}
     />
   );
 }

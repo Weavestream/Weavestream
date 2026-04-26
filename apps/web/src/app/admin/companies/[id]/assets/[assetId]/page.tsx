@@ -130,9 +130,21 @@ export default async function AssetDetailPage({
                       </span>
                     )}
                     {asset.externalSource && (
-                      <Tag tone="outline">
-                        synced · {asset.externalSource.toLowerCase()}
-                      </Tag>
+                      <span
+                        title={
+                          asset.lastSyncedAt
+                            ? `Last synced ${new Date(asset.lastSyncedAt).toLocaleString()}`
+                            : `Linked to ${asset.externalSource}`
+                        }
+                        style={{ display: 'inline-flex' }}
+                      >
+                        <Tag tone="outline" dot>
+                          synced · {asset.externalSource.toLowerCase()}
+                          {asset.lastSyncedAt
+                            ? ` · ${relative(new Date(asset.lastSyncedAt))}`
+                            : ''}
+                        </Tag>
+                      </span>
                     )}
                     {asset.archivedAt && <Tag tone="warn">archived</Tag>}
                   </div>

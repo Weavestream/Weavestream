@@ -7,6 +7,8 @@ import { WorkerModule } from './worker.module.js';
 import { DomainChecksWorker } from './domain-checks/domain-checks.processor.js';
 import { PwnedCheckWorker } from './pwned-check/pwned-check.processor.js';
 import { CompanyPdfExportWorker } from './company-pdf-export/company-pdf-export.processor.js';
+import { IntegrationSyncOrchestratorWorker } from './integration-sync/integration-sync-orchestrator.processor.js';
+import { IntegrationSyncMappingWorker } from './integration-sync/integration-sync-mapping.processor.js';
 
 /**
  * apps/worker bootstrap.
@@ -41,6 +43,12 @@ async function bootstrap(): Promise<void> {
 
   const companyPdfExport = app.get(CompanyPdfExportWorker);
   await companyPdfExport.start();
+
+  const integrationSyncOrchestrator = app.get(IntegrationSyncOrchestratorWorker);
+  await integrationSyncOrchestrator.start();
+
+  const integrationSyncMapping = app.get(IntegrationSyncMappingWorker);
+  await integrationSyncMapping.start();
 
   logger.log('Worker online — bullmq consumers started', 'WorkerBootstrap');
 

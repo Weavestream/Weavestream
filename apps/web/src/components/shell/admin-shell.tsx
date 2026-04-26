@@ -67,6 +67,12 @@ export function AdminShell({
     // global singleton, not a per-company setting.
     if (isSuperAdmin) {
       adminItems.push({
+        id: 'integrations',
+        label: 'Integrations',
+        icon: 'plug',
+        href: '/admin/integrations',
+      });
+      adminItems.push({
         id: 'settings',
         label: 'Settings',
         icon: 'gear',

@@ -10,9 +10,12 @@ import { DomainsModule } from '../../api/src/domains/domains.module.js';
 import { StorageModule } from '../../api/src/storage/storage.module.js';
 import { CryptoModule } from '../../api/src/crypto/crypto.module.js';
 import { ExportDataModule } from '../../api/src/exports/export-data.module.js';
+import { IntegrationsCoreModule } from '../../api/src/integrations/integrations-core.module.js';
 import { DomainChecksWorker } from './domain-checks/domain-checks.processor.js';
 import { PwnedCheckWorker } from './pwned-check/pwned-check.processor.js';
 import { CompanyPdfExportWorker } from './company-pdf-export/company-pdf-export.processor.js';
+import { IntegrationSyncOrchestratorWorker } from './integration-sync/integration-sync-orchestrator.processor.js';
+import { IntegrationSyncMappingWorker } from './integration-sync/integration-sync-mapping.processor.js';
 
 /**
  * Worker-side composition root. Imports only the service-only shared
@@ -61,7 +64,14 @@ import { CompanyPdfExportWorker } from './company-pdf-export/company-pdf-export.
     AuditModule,
     DomainsModule,
     ExportDataModule,
+    IntegrationsCoreModule,
   ],
-  providers: [DomainChecksWorker, PwnedCheckWorker, CompanyPdfExportWorker],
+  providers: [
+    DomainChecksWorker,
+    PwnedCheckWorker,
+    CompanyPdfExportWorker,
+    IntegrationSyncOrchestratorWorker,
+    IntegrationSyncMappingWorker,
+  ],
 })
 export class WorkerModule {}

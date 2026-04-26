@@ -24,6 +24,12 @@ export const QueueNames = {
   domainChecks: 'domain-checks',
   pwnedCheck: 'pwned-check',
   companyExport: 'company-export',
+  // Phase 11 — integration framework. Two queues so the orchestrator
+  // job (which owns the `IntegrationSyncRun` row) and the per-mapping
+  // children (which fetch + upsert) have independent concurrency caps,
+  // retry policies, and BullMQ metrics.
+  integrationSyncOrchestrator: 'integration-sync-orchestrator',
+  integrationSyncMapping: 'integration-sync-mapping',
 } as const;
 
 export type QueueName = (typeof QueueNames)[keyof typeof QueueNames];
@@ -172,3 +178,69 @@ export interface ExportJobResult {
   /** Bytes the rendered PDF occupies in MinIO. Surfaced in audit only. */
   sizeBytes: number;
 }
+
+// ---------------------------------------------------------------------
+// integration-sync-orchestrator queue (Phase 11)
+// ---------------------------------------------------------------------
+//
+// One job per "go run a sync now" decision — either fired by the
+// scheduler (cron registrar) or by an operator pressing "Run sync"
+// in the admin UI. The orchestrator creates an `IntegrationSyncRun`
+// row, fans out one child job per enabled `IntegrationCompanyMapping`,
+// then aggregates totals into the parent run.
+//
+// Manual jobs carry the `triggeredBy` user id so the audit log can
+// attribute the run; scheduled jobs carry NULL.
+
+export const integrationSyncOrchestratorJobSchema = z.discriminatedUnion('kind', [
+  z.object({
+    kind: z.literal('scheduled'),
+    integrationId: z.string().uuid(),
+  }),
+  z.object({
+    kind: z.literal('manual'),
+    integrationId: z.string().uuid(),
+    triggeredBy: z.string().uuid(),
+    /**
+     * When true the worker computes every resolution but writes nothing
+     * — used by the admin UI's "Test sync" button to validate mappings.
+     */
+    dryRun: z.boolean().default(false),
+  }),
+]);
+
+export type IntegrationSyncOrchestratorJob = z.infer<
+  typeof integrationSyncOrchestratorJobSchema
+>;
+
+export const IntegrationSyncOrchestratorJobNames = {
+  scheduled: 'scheduled',
+  manual: 'manual',
+} as const;
+export type IntegrationSyncOrchestratorJobName =
+  (typeof IntegrationSyncOrchestratorJobNames)[keyof typeof IntegrationSyncOrchestratorJobNames];
+
+// ---------------------------------------------------------------------
+// integration-sync-mapping queue (Phase 11)
+// ---------------------------------------------------------------------
+//
+// One job per (sync_run, integration_company_mapping). The processor
+// loads the driver, walks paginated source records, runs match-by-key
+// resolution, upserts assets + AssetFieldValues inside a transaction,
+// and writes a row into `integration_sync_run_company_results`.
+
+export const integrationSyncMappingJobSchema = z.object({
+  syncRunId: z.string().uuid(),
+  integrationCompanyMappingId: z.string().uuid(),
+  dryRun: z.boolean().default(false),
+});
+
+export type IntegrationSyncMappingJob = z.infer<
+  typeof integrationSyncMappingJobSchema
+>;
+
+export const IntegrationSyncMappingJobNames = {
+  syncMapping: 'sync-mapping',
+} as const;
+export type IntegrationSyncMappingJobName =
+  (typeof IntegrationSyncMappingJobNames)[keyof typeof IntegrationSyncMappingJobNames];

@@ -473,25 +473,12 @@ function AssetRow({
           }}
         >
           <LayoutSwatch icon={row.layoutIcon} color={row.layoutColor} size={22} />
-          <div>
-            <div style={{ fontWeight: 500 }}>
-              {row.name}
-              {row.archivedAt && (
-                <Tag tone="warn" style={{ marginLeft: 8 }}>
-                  archived
-                </Tag>
-              )}
-            </div>
-            {row.externalId && (
-              <div
-                style={{
-                  fontFamily: 'var(--font-mono)',
-                  fontSize: 10.5,
-                  color: 'var(--dim)',
-                }}
-              >
-                {row.externalId}
-              </div>
+          <div style={{ fontWeight: 500 }}>
+            {row.name}
+            {row.archivedAt && (
+              <Tag tone="warn" style={{ marginLeft: 8 }}>
+                archived
+              </Tag>
             )}
           </div>
         </Link>

@@ -107,17 +107,25 @@ export const PERMISSIONS: Record<Action, PermissionRule> = {
     allowMembership: [],
     requireNonExpiredMembership: false,
   },
+  // Phase 11: integrations are GLOBAL — one Integration row drives sync
+  // across many companies via `IntegrationCompanyMapping`. Both creating
+  // / editing the connection and pressing "Run sync" are SUPER_ADMIN
+  // only. Per-tenant operators see synced asset indicators (driven by
+  // `Asset.externalSource` on the read DTO) but cannot mutate the
+  // upstream framework.
   'integration.manage': {
-    scope: 'company',
+    scope: 'global',
     allowGlobal: G_ADMIN,
-    allowMembership: M_OP_FULL,
-    requireNonExpiredMembership: true,
+    allowMembership: [],
+    requireNonExpiredMembership: false,
+    note: 'Global SUPER_ADMIN-only — credentials, org-to-company mappings, and field mappings.',
   },
   'sync.trigger': {
-    scope: 'company',
+    scope: 'global',
     allowGlobal: G_ADMIN,
-    allowMembership: M_OP_FULL,
-    requireNonExpiredMembership: true,
+    allowMembership: [],
+    requireNonExpiredMembership: false,
+    note: 'Global SUPER_ADMIN-only — manual + dry-run runs from /admin/integrations.',
   },
   'membership.manage': {
     scope: 'company',

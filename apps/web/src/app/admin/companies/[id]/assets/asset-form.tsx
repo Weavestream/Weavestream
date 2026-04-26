@@ -54,6 +54,9 @@ export function AssetForm({
   initialName,
   initialValues,
   onPickLayout,
+  externalSource,
+  syncedFieldIds,
+  lastSyncedAt,
 }: {
   companyId: string;
   companyLabel: string;
@@ -64,6 +67,16 @@ export function AssetForm({
   initialValues?: Record<string, unknown>;
   /** When provided (create mode), renders a "Change layout" affordance. */
   onPickLayout?: () => void;
+  /**
+   * Phase 11 — sync provenance. When set, the form decorates fields
+   * the integration is currently authoritative for so the operator
+   * knows their edits will likely be reverted at the next run (when
+   * `syncDirection === 'source_wins'`) or honoured (when
+   * `preserve_manual`). Drilled in from the edit page.
+   */
+  externalSource?: string | null;
+  syncedFieldIds?: string[];
+  lastSyncedAt?: string | null;
 }) {
   const router = useRouter();
   const toast = useToast();
@@ -323,9 +336,9 @@ export function AssetForm({
           >
             {activeFields.map((f) => {
               const meta = FIELD_TYPE_CATALOG.find((m) => m.kind === f.fieldType)!;
-              const isPrimary = primaryField?.id === f.id;
               const colSpan: CSSProperties =
                 meta.width === 'full' ? { gridColumn: '1 / -1' } : {};
+              const isSynced = (syncedFieldIds ?? []).includes(f.id);
               return (
                 <div key={f.id} style={colSpan}>
                   <FormField
@@ -333,6 +346,8 @@ export function AssetForm({
                     required={f.isRequired}
                     visibleToClients={f.visibleToClients}
                     error={issues[f.slug]}
+                    syncedFromSource={isSynced ? externalSource ?? null : null}
+                    lastSyncedAt={isSynced ? lastSyncedAt ?? null : null}
                   >
                     <FieldInput
                       field={f}
@@ -409,12 +424,21 @@ function FormField({
   required,
   visibleToClients,
   error,
+  syncedFromSource,
+  lastSyncedAt,
   children,
 }: {
   label: string;
   required?: boolean;
   visibleToClients?: boolean;
   error?: string;
+  /**
+   * Source name when the field was last written by an integration. Set
+   * to `null` for manual / unmapped fields. Renders a small "synced"
+   * tag so operators know an integration may overwrite their edit.
+   */
+  syncedFromSource?: string | null;
+  lastSyncedAt?: string | null;
   children: React.ReactNode;
 }) {
   return (
@@ -435,6 +459,18 @@ function FormField({
           <span style={{ color: 'var(--warn)', fontSize: 10 }}>required</span>
         )}
         {visibleToClients === false && <Tag tone="outline">internal</Tag>}
+        {syncedFromSource && (
+          <span
+            title={
+              lastSyncedAt
+                ? `Last synced from ${syncedFromSource} on ${new Date(lastSyncedAt).toLocaleString()}.\nDepending on the field-mapping direction, manual edits may be overwritten on the next sync.`
+                : `Last value came from ${syncedFromSource}. Manual edits may be overwritten on the next sync.`
+            }
+            style={{ display: 'inline-flex' }}
+          >
+            <Tag tone="info">synced</Tag>
+          </span>
+        )}
       </div>
       {children}
       {error ? (
