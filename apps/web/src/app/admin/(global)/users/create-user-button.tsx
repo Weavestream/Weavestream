@@ -45,6 +45,15 @@ const ROLES: UserRole[] = [
 const MEMBERSHIP_ROLES: MembershipRole[] = ['FULL', 'READONLY'];
 
 /**
+ * CLIENT_USER memberships are pinned to READONLY at the API tier
+ * (see memberships.service `CLIENT_USER memberships must be READONLY`).
+ * The other global roles can pick either.
+ */
+function membershipRolesFor(role: UserRole): MembershipRole[] {
+  return role === 'CLIENT_USER' ? ['READONLY'] : MEMBERSHIP_ROLES;
+}
+
+/**
  * Global roles that are meant to *need* a company assignment to do
  * anything useful. SUPER_ADMIN has global access and OPERATOR can rely
  * on `globalAccess`, so those don't auto-show the attach panel — the
@@ -410,6 +419,7 @@ export function CreateUserButton({
               expiresAt={attachExpiresAt}
               onExpiresAt={setAttachExpiresAt}
               term={term.one}
+              userRole={role}
             />
           </div>
         )}
@@ -429,6 +439,7 @@ function AttachPanel({
   expiresAt,
   onExpiresAt,
   term,
+  userRole,
 }: {
   open: boolean;
   onToggle: () => void;
@@ -440,7 +451,10 @@ function AttachPanel({
   expiresAt: string;
   onExpiresAt: (v: string) => void;
   term: string;
+  userRole: UserRole;
 }) {
+  const allowedRoles = membershipRolesFor(userRole);
+  const roleLocked = allowedRoles.length === 1;
   return (
     <div
       style={{
@@ -531,13 +545,22 @@ function AttachPanel({
               />
             )}
           </Field>
-          <Field label="Membership role" htmlFor="u-attach-role">
+          <Field
+            label="Membership role"
+            htmlFor="u-attach-role"
+            help={
+              roleLocked
+                ? 'Client users always join companies as read-only.'
+                : undefined
+            }
+          >
             <Select
               id="u-attach-role"
               value={role}
               onChange={(e) => onRole(e.target.value as MembershipRole)}
+              disabled={roleLocked}
             >
-              {MEMBERSHIP_ROLES.map((r) => (
+              {allowedRoles.map((r) => (
                 <option key={r} value={r}>
                   {membershipRoleLabel(r)}
                 </option>
