@@ -510,6 +510,23 @@ describe('ArticlesService', () => {
     });
   });
 
+  describe('list', () => {
+    it('orders by archivedAt (nulls first) then title alphabetically', async () => {
+      const { prisma, audit, stars } = makeStubs();
+      const findManySpy = jest.spyOn(prisma.article, 'findMany');
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const svc = new ArticlesService(prisma as any, audit as any, stars as any);
+
+      await svc.list(actor(), 'c-1');
+
+      expect(findManySpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          orderBy: [{ archivedAt: 'asc' }, { title: 'asc' }],
+        }),
+      );
+    });
+  });
+
   describe('archive / restore', () => {
     it('archives and prevents further edits until restored', async () => {
       const row: ArticleRow = {

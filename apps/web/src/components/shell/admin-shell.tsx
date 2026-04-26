@@ -56,16 +56,14 @@ export function AdminShell({
   if (manage) {
     const adminItems: SidebarSection['items'] = [
       { id: 'users', label: 'Users', icon: 'users', href: '/admin/users' },
-      {
+    ];
+    if (isSuperAdmin) {
+      adminItems.push({
         id: 'memberships',
         label: 'Memberships',
         icon: 'network',
         href: '/admin/memberships',
-      },
-    ];
-    // Branding + tenant-term configuration is super-admin-only — it's a
-    // global singleton, not a per-company setting.
-    if (isSuperAdmin) {
+      });
       adminItems.push({
         id: 'integrations',
         label: 'Integrations',
