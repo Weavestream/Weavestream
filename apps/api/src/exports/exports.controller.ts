@@ -14,7 +14,7 @@ import type { Request } from 'express';
 import { z } from 'zod';
 import { ExportsService } from './exports.service.js';
 import { RequirePermission } from '../rbac/require-permission.decorator.js';
-import { ZodBody } from '../common/zod-validation.pipe.js';
+import { ZodBody, ZodParam } from '../common/zod-validation.pipe.js';
 import { CurrentUser, type AuthedUser } from '../common/current-user.decorator.js';
 
 const triggerExportSchema = z.object({
@@ -22,6 +22,13 @@ const triggerExportSchema = z.object({
   pdfPassword: z.string().min(1).max(128).optional(),
 });
 type TriggerExportInput = z.infer<typeof triggerExportSchema>;
+
+/** BullMQ job ids are short opaque strings (default: numeric counters). */
+const jobIdSchema = z
+  .string()
+  .min(1)
+  .max(128)
+  .regex(/^[A-Za-z0-9_:-]+$/);
 
 /**
  * Bulk PDF vault export. Restricted to SUPER_ADMIN — see
@@ -49,7 +56,7 @@ export class ExportsController {
 
   @Get('job/:jobId')
   @RequirePermission('export.create')
-  async status(@Param('jobId') jobId: string) {
+  async status(@Param('jobId', new ZodParam(jobIdSchema)) jobId: string) {
     return this.exports.getJobStatus(jobId);
   }
 }
