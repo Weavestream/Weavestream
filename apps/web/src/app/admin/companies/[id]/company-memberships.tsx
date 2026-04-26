@@ -19,7 +19,7 @@ import {
   type DataColumn,
   type UserPickerValue,
 } from '../../../../components/ui';
-import { roleLabel } from '../../../../lib/roles';
+import { membershipRoleLabel, roleLabel } from '../../../../lib/roles';
 import { CreateUserButton } from '../../(global)/users/create-user-button';
 
 type Row = {
@@ -38,12 +38,13 @@ type Row = {
   };
 };
 
-const MEMBERSHIP_ROLES: MembershipRole[] = [
-  'OPERATOR_FULL',
-  'OPERATOR_READONLY',
-  'CLIENT_ADMIN',
-  'CLIENT_VIEWER',
-];
+// RBAC v2: every membership picker shows the same two values. The API
+// rejects FULL for CLIENT_USER targets — we trust the user-detail
+// surface to filter that case at the source. From the per-company
+// surface there's no easy way to filter without an extra round-trip
+// per row, so we surface both and rely on the API error toast if the
+// admin happens to set FULL on a CLIENT_USER's membership.
+const MEMBERSHIP_ROLES: MembershipRole[] = ['FULL', 'READONLY'];
 
 export function CompanyMemberships({
   companyId,
@@ -152,7 +153,7 @@ export function CompanyMemberships({
       id: 'role',
       header: 'Membership role',
       width: 170,
-      render: (r) => <Tag tone="accent">{roleLabel(r.role)}</Tag>,
+      render: (r) => <Tag tone="accent">{membershipRoleLabel(r.role)}</Tag>,
     },
     {
       id: 'userRole',
@@ -250,7 +251,7 @@ export function CompanyMemberships({
               </div>
             </div>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-              <Tag tone="accent">{roleLabel(r.role)}</Tag>
+              <Tag tone="accent">{membershipRoleLabel(r.role)}</Tag>
               <span
                 style={{
                   fontFamily: 'var(--font-mono)',
@@ -382,7 +383,7 @@ function AddDialog({
   }) => Promise<boolean>;
 }) {
   const [picked, setPicked] = useState<UserPickerValue | null>(null);
-  const [role, setRole] = useState<MembershipRole>('CLIENT_VIEWER');
+  const [role, setRole] = useState<MembershipRole>('READONLY');
   const [expiresAt, setExpiresAt] = useState('');
 
   // Reset local state when the dialog closes so re-opening starts
@@ -391,7 +392,7 @@ function AddDialog({
   useEffect(() => {
     if (!open) {
       setPicked(null);
-      setRole('CLIENT_VIEWER');
+      setRole('READONLY');
       setExpiresAt('');
     }
   }, [open]);
@@ -419,7 +420,7 @@ function AddDialog({
               });
               if (ok) {
                 setPicked(null);
-                setRole('CLIENT_VIEWER');
+                setRole('READONLY');
                 setExpiresAt('');
               }
             }}
@@ -451,7 +452,7 @@ function AddDialog({
           >
             {MEMBERSHIP_ROLES.map((r) => (
               <option key={r} value={r}>
-                {roleLabel(r)}
+                {membershipRoleLabel(r)}
               </option>
             ))}
           </Select>
@@ -487,7 +488,7 @@ function EditDialog({
     expiresAt: string | null;
   }) => Promise<boolean>;
 }) {
-  const [role, setRole] = useState<MembershipRole>('CLIENT_VIEWER');
+  const [role, setRole] = useState<MembershipRole>('READONLY');
   const [expiresAt, setExpiresAt] = useState('');
 
   // Re-sync local draft whenever the dialog reopens on a new row. The
@@ -545,7 +546,7 @@ function EditDialog({
           >
             {MEMBERSHIP_ROLES.map((r) => (
               <option key={r} value={r}>
-                {roleLabel(r)}
+                {membershipRoleLabel(r)}
               </option>
             ))}
           </Select>

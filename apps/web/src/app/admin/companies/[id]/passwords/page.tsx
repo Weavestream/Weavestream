@@ -7,7 +7,7 @@ import {
   listPasswords,
   throwUnlessFound,
 } from '../../../../../lib/server-api';
-import { canManage } from '../../../../../lib/roles';
+import { canWriteCompany } from '../../../../../lib/roles';
 import { PageBody, PageHeader } from '../../../../../components/shell/page-header';
 import { Panel, Tag } from '../../../../../components/ui';
 import { companyCrumbs } from '../../../../../lib/company-crumbs';
@@ -52,7 +52,7 @@ export default async function CompanyPasswordsPage({
     getCompanyPasswordFolders(companyId),
   ]);
 
-  const manage = canManage(me.role);
+  const manage = canWriteCompany(me, company.id);
   const prefillAssetId = typeof sp.assetId === 'string' ? sp.assetId : undefined;
   const openNew = sp.new === '1';
 

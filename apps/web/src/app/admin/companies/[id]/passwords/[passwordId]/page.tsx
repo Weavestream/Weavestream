@@ -11,7 +11,7 @@ import {
   listPasswordVersions,
   throwUnlessFound,
 } from '../../../../../../lib/server-api';
-import { canManage } from '../../../../../../lib/roles';
+import { canWriteCompany } from '../../../../../../lib/roles';
 import {
   PageBody,
   PageHeader,
@@ -54,7 +54,7 @@ export default async function PasswordDetailPage({
     ? await getAsset(companyId, password.assetId)
     : null;
 
-  const manage = canManage(me.role);
+  const manage = canWriteCompany(me, company.id);
   const folder = password.folderId
     ? folders.find((f) => f.id === password.folderId)
     : null;

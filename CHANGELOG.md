@@ -6,6 +6,33 @@ this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- **RBAC simplified to three orthogonal axes.** `Membership.role` is now
+  `FULL` or `READONLY` (down from four legacy variants). Per-user
+  defaults move to `User.globalAccess` (`FULL` / `READONLY` / `NONE`)
+  for operators, and platform-admin tasks are delegated through a new
+  `User.platformCapabilities` array (`COMPANY_MANAGE`,
+  `INTEGRATION_MANAGE`, `LAYOUT_MANAGE`, `USER_MANAGE`,
+  `MEMBERSHIP_MANAGE`, `AUDIT_READ`, `SETTINGS_MANAGE`,
+  `EXPORT_CREATE`). `SUPER_ADMIN` retains every capability implicitly;
+  this enables a "senior operator" tier without handing out super-admin.
+  See `docs/ARCHITECTURE.md` for the full resolution order.
+- **All admin and portal screens re-audited.** Sidebar entries, action
+  buttons, and route guards now derive from `hasCapability`,
+  `canWriteCompany`, and `canAccessAdminShell` helpers instead of
+  ad-hoc role comparisons.
+
+### Migration
+
+- `pnpm prisma:migrate` runs the data migration: every existing
+  `OPERATOR_FULL`/`OPERATOR_READONLY`/`CLIENT_ADMIN`/`CLIENT_VIEWER`
+  membership is rewritten to `FULL` or `READONLY`, and every existing
+  `OPERATOR` user is backfilled with `globalAccess=FULL` so behaviour
+  is preserved on upgrade. Adjust to `READONLY` or `NONE` (and grant
+  capabilities individually) afterwards if you want the new
+  delegated-admin tier.
+
 ## [1.2.1] - 2026-04-26
 
 ### Fixed

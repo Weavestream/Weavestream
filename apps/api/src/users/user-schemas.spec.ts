@@ -20,7 +20,7 @@ describe('createUserSchema — invite-with-company (Phase 9b.2)', () => {
       ...base,
       membership: {
         companyId: '00000000-0000-4000-8000-000000000001',
-        role: 'CLIENT_VIEWER',
+        role: 'READONLY',
         expiresAt: future,
       },
     });
@@ -38,7 +38,7 @@ describe('createUserSchema — invite-with-company (Phase 9b.2)', () => {
       ...base,
       membership: {
         companyId: '00000000-0000-4000-8000-000000000001',
-        role: 'CLIENT_VIEWER',
+        role: 'READONLY',
       },
     });
     expect(out.success).toBe(true);
@@ -52,7 +52,7 @@ describe('createUserSchema — invite-with-company (Phase 9b.2)', () => {
       ...base,
       membership: {
         companyId: 'not-a-uuid',
-        role: 'CLIENT_VIEWER',
+        role: 'READONLY',
       },
     });
     expect(out.success).toBe(false);
@@ -75,7 +75,7 @@ describe('createUserSchema — invite-with-company (Phase 9b.2)', () => {
       ...base,
       membership: {
         companyId: '00000000-0000-4000-8000-000000000001',
-        role: 'CLIENT_VIEWER',
+        role: 'READONLY',
         expiresAt: past,
       },
     });
@@ -87,7 +87,7 @@ describe('createUserSchema — invite-with-company (Phase 9b.2)', () => {
       ...base,
       membership: {
         companyId: '00000000-0000-4000-8000-000000000001',
-        role: 'CLIENT_VIEWER',
+        role: 'READONLY',
         expiresAt: null,
       },
     });

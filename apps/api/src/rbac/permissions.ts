@@ -1,79 +1,69 @@
-import type { MembershipRole, UserRole } from '@weavestream/shared';
+import type { GlobalAccess, MembershipRole, PlatformCapability } from '@weavestream/shared';
 
 /**
  * Single source of truth for every authorization decision in the system.
  *
- * This file encodes BUILD_PLAN Part 4 exactly. A unit test
- * (`permissions.spec.ts`) iterates the matrix and `docs/permissions.md`
- * is generated from this file so they can never drift.
+ * The model has two orthogonal axes for non-SUPER_ADMIN users:
  *
- * Authorization is two-layered:
- *   - `User.role` (global) governs what the caller can do outside company
- *     scope (SUPER_ADMIN) and grants CONTRACTOR their data plane rights.
- *   - `Membership.role` (per-company) governs what the caller can do
- *     inside a given company.
+ *   1. **Per-company access** (`Membership.role` ∪ `User.globalAccess`)
+ *      governs CRUD on company-scoped data (assets, articles,
+ *      passwords, domains, …). Resolution per (user, companyId):
+ *        - if a non-revoked, non-expired membership exists → use
+ *          `membership.role` (FULL or READONLY) — the explicit
+ *          per-tenant override always wins, even when more restrictive
+ *          than `globalAccess`.
+ *        - else if user is OPERATOR → use `globalAccess`
+ *          (FULL / READONLY / NONE). `NONE` always denies.
+ *        - else (CONTRACTOR, CLIENT_USER) → deny.
  *
- * For a permission rule with scope='company':
- *   - If the user's global role is in `allowGlobal`, they satisfy the
- *     rule *provided they have a matching membership for the company*
- *     (or are SUPER_ADMIN, which short-circuits).
- *   - Or, if their membership role for the company is in
- *     `allowMembership`, they satisfy regardless of global role.
- *   - `requireNonExpiredMembership` hard-filters expired memberships.
+ *   2. **Platform-admin capabilities** (`User.platformCapabilities`)
+ *      gate the operations that previously required SUPER_ADMIN
+ *      (managing companies, integrations, layouts, users, memberships,
+ *      audit, settings, exports). Each rule that is platform-admin
+ *      sets `requiredCapability`; SUPER_ADMIN implicitly satisfies
+ *      every capability.
  *
- * For scope='global', only `allowGlobal` is consulted.
- * For scope='self', the resource owner check happens inside the service.
+ * Promoting or demoting another user to/from `SUPER_ADMIN` remains a
+ * hard SUPER_ADMIN-only check inside `users.service.ts` regardless of
+ * `USER_MANAGE`.
  */
 
 export const ActionValues = [
-  // Global platform administration
   'user.manage',
+  'company.read',
   'company.manage',
-
-  // Per-company administration
   'integration.manage',
   'sync.trigger',
+  'membership.read',
   'membership.manage',
 
-  // Layouts — always global in v1 (see DECISIONS.md D-007 layouts-are-global).
-  // All companies share the same catalog and only SUPER_ADMIN may mutate.
   'layout.manage.global',
 
-  // Assets
   'asset.write',
   'asset.read',
   'asset.archive',
 
-  // Articles
   'article.write',
   'article.read',
 
-  // Uploads
   'upload.create',
   'upload.read',
 
-  // Relations (Phase 5)
   'relation.read',
   'relation.write',
 
-  // Domains (Phase 8)
   'domain.read',
   'domain.manage',
 
-  // Passwords (Phase 10 — encrypted credential vault)
   'password.read',
   'password.write',
   'password.reveal',
   'password.archive',
 
-  // Audit
   'audit.read',
 
-  // Branding & terminology settings (instance-wide singleton row).
-  // Read-only GET is @AuthedOnly; this action gates the PATCH.
   'settings.manage',
 
-  // Data export (SUPER_ADMIN only — PDF vault archive).
   'export.create',
 ] as const;
 
@@ -83,204 +73,226 @@ export type PermissionScope = 'global' | 'company' | 'self';
 
 export interface PermissionRule {
   scope: PermissionScope;
-  allowGlobal: UserRole[];
-  allowMembership: MembershipRole[];
+  /**
+   * Platform-admin gate. When set, the caller must hold this
+   * capability (SUPER_ADMIN implicitly holds all). For company-scoped
+   * rules with a `requiredCapability`, the capability is sufficient on
+   * its own — no additional FULL/READONLY membership check runs (so an
+   * elevated operator with `MEMBERSHIP_MANAGE` can administer any
+   * company's roster, just like SUPER_ADMIN used to).
+   */
+  requiredCapability?: PlatformCapability;
+  /** Company-scoped: does FULL effective access satisfy the rule? */
+  allowFull: boolean;
+  /** Company-scoped: does READONLY effective access satisfy the rule? */
+  allowReadonly: boolean;
   requireNonExpiredMembership: boolean;
   note?: string;
 }
 
-const G_ADMIN: UserRole[] = ['SUPER_ADMIN'];
-const M_OP_FULL: MembershipRole[] = ['OPERATOR_FULL'];
-const M_OP_ANY: MembershipRole[] = ['OPERATOR_FULL', 'OPERATOR_READONLY'];
-const M_CLIENT_ANY: MembershipRole[] = ['CLIENT_ADMIN', 'CLIENT_VIEWER'];
-
 export const PERMISSIONS: Record<Action, PermissionRule> = {
   'user.manage': {
     scope: 'global',
-    allowGlobal: G_ADMIN,
-    allowMembership: [],
+    requiredCapability: 'USER_MANAGE',
+    allowFull: false,
+    allowReadonly: false,
     requireNonExpiredMembership: false,
+    note: 'Promotion to/from SUPER_ADMIN is gated by an additional SA-only check inside UsersService.',
+  },
+  'company.read': {
+    scope: 'company',
+    allowFull: true,
+    allowReadonly: true,
+    requireNonExpiredMembership: false,
+    note: 'Read a single Company row. Any FULL/READONLY effective access (membership or operator globalAccess) is sufficient — managing the row still requires COMPANY_MANAGE.',
   },
   'company.manage': {
     scope: 'global',
-    allowGlobal: G_ADMIN,
-    allowMembership: [],
+    requiredCapability: 'COMPANY_MANAGE',
+    allowFull: false,
+    allowReadonly: false,
     requireNonExpiredMembership: false,
   },
   // Phase 11: integrations are GLOBAL — one Integration row drives sync
-  // across many companies via `IntegrationCompanyMapping`. Both creating
-  // / editing the connection and pressing "Run sync" are SUPER_ADMIN
-  // only. Per-tenant operators see synced asset indicators (driven by
-  // `Asset.externalSource` on the read DTO) but cannot mutate the
-  // upstream framework.
+  // across many companies via `IntegrationCompanyMapping`. Both
+  // creating / editing the connection and pressing "Run sync" are
+  // gated by INTEGRATION_MANAGE so a senior operator can be elevated
+  // without needing SUPER_ADMIN.
   'integration.manage': {
     scope: 'global',
-    allowGlobal: G_ADMIN,
-    allowMembership: [],
+    requiredCapability: 'INTEGRATION_MANAGE',
+    allowFull: false,
+    allowReadonly: false,
     requireNonExpiredMembership: false,
-    note: 'Global SUPER_ADMIN-only — credentials, org-to-company mappings, and field mappings.',
   },
   'sync.trigger': {
     scope: 'global',
-    allowGlobal: G_ADMIN,
-    allowMembership: [],
+    requiredCapability: 'INTEGRATION_MANAGE',
+    allowFull: false,
+    allowReadonly: false,
     requireNonExpiredMembership: false,
-    note: 'Global SUPER_ADMIN-only — manual + dry-run runs from /admin/integrations.',
+  },
+  'membership.read': {
+    scope: 'company',
+    allowFull: true,
+    allowReadonly: true,
+    requireNonExpiredMembership: false,
+    note: 'List the roster for a company. Anyone with FULL/READONLY effective access may see who else has access; only `membership.manage` can change it.',
   },
   'membership.manage': {
     scope: 'company',
-    allowGlobal: G_ADMIN,
-    allowMembership: M_OP_FULL,
-    requireNonExpiredMembership: true,
+    requiredCapability: 'MEMBERSHIP_MANAGE',
+    allowFull: false,
+    allowReadonly: false,
+    requireNonExpiredMembership: false,
+    note: 'Membership administration is platform-admin: a holder of MEMBERSHIP_MANAGE may manage any company roster.',
   },
 
   'layout.manage.global': {
     scope: 'global',
-    allowGlobal: G_ADMIN,
-    allowMembership: [],
+    requiredCapability: 'LAYOUT_MANAGE',
+    allowFull: false,
+    allowReadonly: false,
     requireNonExpiredMembership: false,
-    note: 'Layouts are global (D-007). Mutation is SUPER_ADMIN only; read is implicit for every authenticated role so forms and lists render.',
+    note: 'Layouts are global (D-007). Read is implicit for every authenticated user; mutation is gated.',
   },
 
   'asset.write': {
     scope: 'company',
-    allowGlobal: ['SUPER_ADMIN', 'CONTRACTOR'],
-    allowMembership: M_OP_FULL,
+    allowFull: true,
+    allowReadonly: false,
     requireNonExpiredMembership: true,
-    note: 'CONTRACTOR needs a non-expired membership; OPERATOR needs OPERATOR_FULL membership.',
   },
   'asset.read': {
     scope: 'company',
-    allowGlobal: ['SUPER_ADMIN', 'CONTRACTOR'],
-    allowMembership: [...M_OP_ANY, ...M_CLIENT_ANY],
+    allowFull: true,
+    allowReadonly: true,
     requireNonExpiredMembership: false,
-    note: 'CLIENT_* sees visible_to_clients only; per-row filter applied by asset service.',
+    note: 'CLIENT_USER sees visible_to_clients only; per-row filter applied by AssetsService.',
   },
   'asset.archive': {
     scope: 'company',
-    allowGlobal: ['SUPER_ADMIN', 'CONTRACTOR'],
-    allowMembership: M_OP_FULL,
+    allowFull: true,
+    allowReadonly: false,
     requireNonExpiredMembership: true,
   },
 
   'article.write': {
     scope: 'company',
-    allowGlobal: ['SUPER_ADMIN', 'CONTRACTOR'],
-    allowMembership: M_OP_FULL,
+    allowFull: true,
+    allowReadonly: false,
     requireNonExpiredMembership: true,
   },
   'article.read': {
     scope: 'company',
-    allowGlobal: ['SUPER_ADMIN', 'CONTRACTOR'],
-    allowMembership: [...M_OP_ANY, ...M_CLIENT_ANY],
+    allowFull: true,
+    allowReadonly: true,
     requireNonExpiredMembership: false,
   },
 
   'upload.create': {
     scope: 'company',
-    allowGlobal: ['SUPER_ADMIN', 'CONTRACTOR'],
-    allowMembership: ['OPERATOR_FULL', 'CLIENT_ADMIN'],
+    allowFull: true,
+    allowReadonly: false,
     requireNonExpiredMembership: true,
   },
   'upload.read': {
     scope: 'company',
-    allowGlobal: ['SUPER_ADMIN', 'CONTRACTOR'],
-    allowMembership: [...M_OP_ANY, ...M_CLIENT_ANY],
+    allowFull: true,
+    allowReadonly: true,
     requireNonExpiredMembership: false,
   },
 
   'relation.read': {
     scope: 'company',
-    allowGlobal: ['SUPER_ADMIN', 'CONTRACTOR'],
-    allowMembership: [...M_OP_ANY, ...M_CLIENT_ANY],
+    allowFull: true,
+    allowReadonly: true,
     requireNonExpiredMembership: false,
-    note: 'Linked-items list on asset and article detail pages. CLIENT_* sees only related articles whose visibleToClients=true; filter applied by RelationsService.listRelated.',
+    note: 'CLIENT_USER sees only related articles whose visibleToClients=true; filter applied by RelationsService.listRelated.',
   },
   'relation.write': {
     scope: 'company',
-    allowGlobal: ['SUPER_ADMIN', 'CONTRACTOR'],
-    allowMembership: M_OP_FULL,
+    allowFull: true,
+    allowReadonly: false,
     requireNonExpiredMembership: true,
-    note: 'Manual link/unlink of polymorphic relations. CLIENT_* cannot mutate; ASSET_REFERENCE field writes run through AssetsService (asset.write) and the RelationsService side-effect rather than this action.',
   },
 
   'domain.read': {
     scope: 'company',
-    allowGlobal: ['SUPER_ADMIN', 'CONTRACTOR'],
-    allowMembership: [...M_OP_ANY, ...M_CLIENT_ANY],
+    allowFull: true,
+    allowReadonly: true,
     requireNonExpiredMembership: false,
-    note: 'CLIENT_* sees only rows where visibleToClients=true. The per-row filter is applied by DomainsService, matching the article pattern.',
+    note: 'CLIENT_USER sees only rows where visibleToClients=true; per-row filter applied by DomainsService.',
   },
   'domain.manage': {
     scope: 'company',
-    allowGlobal: G_ADMIN,
-    allowMembership: M_OP_FULL,
+    allowFull: true,
+    allowReadonly: false,
     requireNonExpiredMembership: true,
-    note: 'Covers create / update / archive / restore and flipping visibleToClients, plus the manual "Check now" enqueue.',
   },
 
-  // Password vault — Phase 10. Read/reveal split is enforced by the
-  // service (`password.read` only ever returns metadata + decrypted
-  // notes, never the password/TOTP secret). `password.reveal` is the
-  // separate, audited + rate-limited gate on plaintext. Write/archive
-  // are OPERATOR_FULL only — CLIENT_* never mutates credentials.
   'password.read': {
     scope: 'company',
-    allowGlobal: ['SUPER_ADMIN', 'CONTRACTOR'],
-    allowMembership: [...M_OP_ANY, ...M_CLIENT_ANY],
+    allowFull: true,
+    allowReadonly: true,
     requireNonExpiredMembership: false,
-    note: 'CLIENT_* sees only rows where visibleToClients=true. Per-row filter applied by PasswordsService (mirrors the article/domain pattern).',
+    note: 'CLIENT_USER sees only rows where visibleToClients=true.',
   },
   'password.write': {
     scope: 'company',
-    allowGlobal: ['SUPER_ADMIN', 'CONTRACTOR'],
-    allowMembership: M_OP_FULL,
+    allowFull: true,
+    allowReadonly: false,
     requireNonExpiredMembership: true,
-    note: 'Covers create/update + version restore. CLIENT_* never writes credentials.',
   },
   'password.reveal': {
     scope: 'company',
-    allowGlobal: ['SUPER_ADMIN', 'CONTRACTOR'],
-    allowMembership: ['OPERATOR_FULL', 'OPERATOR_READONLY', 'CLIENT_ADMIN', 'CLIENT_VIEWER'],
+    allowFull: true,
+    allowReadonly: true,
     requireNonExpiredMembership: true,
-    note: 'CLIENT_ADMIN/CLIENT_VIEWER may reveal only passwords flagged visibleToClients=true. `restrictedToUserIds` and `requireReasonToView` are enforced inside PasswordsService, which also writes the password.revealed audit row.',
+    note: 'CLIENT_USER may reveal only passwords flagged visibleToClients=true. `restrictedToUserIds` and `requireReasonToView` are enforced inside PasswordsService.',
   },
   'password.archive': {
     scope: 'company',
-    allowGlobal: ['SUPER_ADMIN', 'CONTRACTOR'],
-    allowMembership: M_OP_FULL,
+    allowFull: true,
+    allowReadonly: false,
     requireNonExpiredMembership: true,
   },
 
   'audit.read': {
-    scope: 'company',
-    allowGlobal: G_ADMIN,
-    allowMembership: M_OP_FULL,
+    scope: 'global',
+    requiredCapability: 'AUDIT_READ',
+    allowFull: false,
+    allowReadonly: false,
     requireNonExpiredMembership: false,
+    note: 'Per the role policy, audit is platform-admin. AUDIT_READ holders may list the global audit feed and may filter by companyId — same surface SUPER_ADMIN gets.',
   },
 
   'settings.manage': {
     scope: 'global',
-    allowGlobal: G_ADMIN,
-    allowMembership: [],
+    requiredCapability: 'SETTINGS_MANAGE',
+    allowFull: false,
+    allowReadonly: false,
     requireNonExpiredMembership: false,
-    note: 'Workspace name + tenant term live in a singleton `system_settings` row; only SUPER_ADMIN may mutate. Every authenticated user may read via @AuthedOnly GET /settings.',
+    note: 'Workspace name + tenant term live in a singleton `system_settings` row. Read is @AuthedOnly; this gates the PATCH.',
   },
 
   'export.create': {
     scope: 'global',
-    allowGlobal: G_ADMIN,
-    allowMembership: [],
+    requiredCapability: 'EXPORT_CREATE',
+    allowFull: false,
+    allowReadonly: false,
     requireNonExpiredMembership: false,
-    note: 'Trigger a company vault-archive PDF export. SUPER_ADMIN only — the PDF may contain plaintext passwords.',
+    note: 'Trigger a company vault-archive PDF export. Sensitive — typically delegated only to trusted operators.',
   },
 };
 
 export const ACTION_HUMAN_LABELS: Record<Action, string> = {
   'user.manage': 'Manage users',
+  'company.read': 'View company',
   'company.manage': 'Manage companies',
   'integration.manage': 'Configure integrations',
   'sync.trigger': 'Trigger manual sync',
+  'membership.read': 'View memberships',
   'membership.manage': 'Manage memberships',
   'layout.manage.global': 'Create/edit asset layouts (global catalog)',
   'asset.write': 'Create/edit assets',
@@ -302,3 +314,7 @@ export const ACTION_HUMAN_LABELS: Record<Action, string> = {
   'settings.manage': 'Edit workspace branding and tenant terminology',
   'export.create': 'Trigger a company vault-archive PDF export',
 };
+
+// Re-exported for callers that previously consumed the unused
+// `PermissionRule.allowGlobal` / `allowMembership` arrays.
+export type { GlobalAccess, MembershipRole, PlatformCapability };

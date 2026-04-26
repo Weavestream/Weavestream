@@ -50,8 +50,17 @@ export class MembershipsController {
     @Query('limit') limit?: string,
     @Query('cursor') cursor?: string,
   ) {
-    if (user.role !== 'SUPER_ADMIN') {
-      throw new ForbiddenException();
+    // Cross-tenant roster view. SUPER_ADMIN sees everything implicitly;
+    // an OPERATOR with `MEMBERSHIP_MANAGE` is treated identically — that
+    // capability is the platform-admin gate for the whole memberships
+    // surface (matching the per-company controller's `membership.manage`).
+    if (
+      user.role !== 'SUPER_ADMIN' &&
+      !user.platformCapabilities.includes('MEMBERSHIP_MANAGE')
+    ) {
+      throw new ForbiddenException(
+        'missing capability MEMBERSHIP_MANAGE for membership.manage',
+      );
     }
     return this.memberships.listAll({
       q,

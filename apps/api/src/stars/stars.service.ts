@@ -10,7 +10,7 @@ import type { AuthedUser } from '../common/current-user.decorator.js';
  * Stars are independent of Membership: a SUPER_ADMIN may star any
  * entity, while everyone else may only star an entity they already
  * hold a non-revoked membership on. That keeps the client-portal
- * tenant isolation story unchanged — a CLIENT_VIEWER cannot surface
+ * tenant isolation story unchanged — a CLIENT_USER cannot surface
  * entities they otherwise can't see just by starring one.
  */
 
@@ -324,6 +324,14 @@ export class StarsService {
    */
   private async getAllowedCompanyIds(actor: AuthedUser): Promise<Set<string> | null> {
     if (actor.role === 'SUPER_ADMIN') return null;
+    // Operators with non-NONE globalAccess implicitly see every
+    // company, matching the tenant-scope guard in `prisma.service.ts`.
+    if (
+      actor.role === 'OPERATOR' &&
+      (actor.globalAccess === 'FULL' || actor.globalAccess === 'READONLY')
+    ) {
+      return null;
+    }
     const memberships = await this.prisma.membership.findMany({
       where: { userId: actor.id, revokedAt: null },
       select: { companyId: true },

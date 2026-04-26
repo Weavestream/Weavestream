@@ -30,7 +30,10 @@ export class MembershipsCompanyController {
   constructor(private readonly memberships: MembershipsService) {}
 
   @Get()
-  @RequirePermission('membership.manage', { companyIdFrom: 'params.id' })
+  // Reading the roster only requires FULL/READONLY effective access on
+  // the company — anyone who can see the company can see who else has
+  // access. Adding/removing members is gated on `membership.manage`.
+  @RequirePermission('membership.read', { companyIdFrom: 'params.id' })
   async list(@Param('id', new ParseUUIDPipe()) companyId: string) {
     return this.memberships.listForCompany(companyId);
   }

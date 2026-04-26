@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import type { Me } from '../../lib/server-api';
-import { canManage, initialsFromName, roleLabel } from '../../lib/roles';
+import { hasCapability, initialsFromName, roleLabel } from '../../lib/roles';
 import type { Term } from '../../lib/term';
 import { Sidebar, type SidebarSection } from './sidebar';
 import { SidebarActions } from './sidebar-actions';
@@ -27,66 +27,97 @@ export function AdminShell({
   activeId?: string;
   children: ReactNode;
 }) {
-  const manage = canManage(me.role);
-  const isSuperAdmin = me.role === 'SUPER_ADMIN';
+  // RBAC v2 — most admin sidebar entries are gated by a single
+  // `PlatformCapability`. SUPER_ADMIN holds them all implicitly; an
+  // OPERATOR sees only the entries matching the capabilities granted
+  // on `User.platformCapabilities`. CONTRACTOR/CLIENT_USER never reach
+  // this shell (the layout redirects them away first).
+  //
+  // Companies is special: the list page is a *read* surface (any
+  // OPERATOR with non-NONE `globalAccess`, or any user with at least
+  // one active membership, can list the companies they have access to)
+  // so we surface it whenever the user already passed the admin-shell
+  // gate. `COMPANY_MANAGE` is only enforced for create/update/archive
+  // inside that page.
+  const showCompanies = true;
+  const showLayouts = hasCapability(me, 'LAYOUT_MANAGE');
+  const showAudit = hasCapability(me, 'AUDIT_READ');
+  const showUsers = hasCapability(me, 'USER_MANAGE');
+  const showMemberships = hasCapability(me, 'MEMBERSHIP_MANAGE');
+  const showIntegrations = hasCapability(me, 'INTEGRATION_MANAGE');
+  const showSettings = hasCapability(me, 'SETTINGS_MANAGE');
+  const showExport = hasCapability(me, 'EXPORT_CREATE');
 
-  const sections: SidebarSection[] = [
-    {
-      items: [
-        { id: 'dashboard', label: 'Dashboard', icon: 'home', href: '/admin' },
-        {
-          // Internal sidebar id stays `companies` — it matches the route
-          // segment and the `activeId` strings used across admin pages.
-          id: 'companies',
-          label: term.other,
-          icon: 'building',
-          href: '/admin/companies',
-        },
-        {
-          id: 'layouts',
-          label: 'Asset Layouts',
-          icon: 'grid',
-          href: '/admin/layouts',
-        },
-        { id: 'audit', label: 'Audit log', icon: 'shield', href: '/admin/audit' },
-      ],
-    },
+  const primaryItems: SidebarSection['items'] = [
+    { id: 'dashboard', label: 'Dashboard', icon: 'home', href: '/admin' },
   ];
-
-  if (manage) {
-    const adminItems: SidebarSection['items'] = [
-      { id: 'users', label: 'Users', icon: 'users', href: '/admin/users' },
-    ];
-    if (isSuperAdmin) {
-      adminItems.push({
-        id: 'memberships',
-        label: 'Memberships',
-        icon: 'network',
-        href: '/admin/memberships',
-      });
-      adminItems.push({
-        id: 'integrations',
-        label: 'Integrations',
-        icon: 'plug',
-        href: '/admin/integrations',
-      });
-      adminItems.push({
-        id: 'settings',
-        label: 'Settings',
-        icon: 'gear',
-        href: '/admin/settings',
-      });
-      adminItems.push({
-        id: 'export',
-        label: 'Export',
-        icon: 'archive',
-        href: '/admin/export',
-      });
-    }
-    sections.push({
-      title: 'Admin',
-      items: adminItems,
+  if (showCompanies) {
+    primaryItems.push({
+      // Internal sidebar id stays `companies` — it matches the route
+      // segment and the `activeId` strings used across admin pages.
+      id: 'companies',
+      label: term.other,
+      icon: 'building',
+      href: '/admin/companies',
     });
+  }
+  if (showLayouts) {
+    primaryItems.push({
+      id: 'layouts',
+      label: 'Asset Layouts',
+      icon: 'grid',
+      href: '/admin/layouts',
+    });
+  }
+  if (showAudit) {
+    primaryItems.push({
+      id: 'audit',
+      label: 'Audit log',
+      icon: 'shield',
+      href: '/admin/audit',
+    });
+  }
+
+  const sections: SidebarSection[] = [{ items: primaryItems }];
+
+  const adminItems: SidebarSection['items'] = [];
+  if (showUsers) {
+    adminItems.push({ id: 'users', label: 'Users', icon: 'users', href: '/admin/users' });
+  }
+  if (showMemberships) {
+    adminItems.push({
+      id: 'memberships',
+      label: 'Memberships',
+      icon: 'network',
+      href: '/admin/memberships',
+    });
+  }
+  if (showIntegrations) {
+    adminItems.push({
+      id: 'integrations',
+      label: 'Integrations',
+      icon: 'plug',
+      href: '/admin/integrations',
+    });
+  }
+  if (showSettings) {
+    adminItems.push({
+      id: 'settings',
+      label: 'Settings',
+      icon: 'gear',
+      href: '/admin/settings',
+    });
+  }
+  if (showExport) {
+    adminItems.push({
+      id: 'export',
+      label: 'Export',
+      icon: 'archive',
+      href: '/admin/export',
+    });
+  }
+  if (adminItems.length > 0) {
+    sections.push({ title: 'Admin', items: adminItems });
   }
 
   sections.push({

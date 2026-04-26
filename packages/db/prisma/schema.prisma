@@ -21,11 +21,37 @@ enum UserRole {
   CLIENT_USER
 }
 
+// Per-company access level. FULL grants CRUD on company-scoped data,
+// READONLY grants read-only access. Used for both `Membership.role`
+// (the per-tenant override) and `User.globalAccess` (the OPERATOR
+// default for companies they don't have a membership for, where
+// `NONE` means "no access by default — only explicit memberships").
 enum MembershipRole {
-  OPERATOR_FULL
-  OPERATOR_READONLY
-  CLIENT_ADMIN
-  CLIENT_VIEWER
+  FULL
+  READONLY
+}
+
+enum GlobalAccess {
+  FULL
+  READONLY
+  NONE
+}
+
+// Granular platform-admin capabilities that previously required
+// SUPER_ADMIN. SUPER_ADMIN implicitly holds every capability;
+// OPERATORs can be granted any subset; CONTRACTOR/CLIENT_USER must
+// have an empty array (enforced by the service layer). Promoting or
+// demoting another user to/from SUPER_ADMIN is reserved for
+// SUPER_ADMINs regardless of `USER_MANAGE`.
+enum PlatformCapability {
+  COMPANY_MANAGE
+  INTEGRATION_MANAGE
+  LAYOUT_MANAGE
+  USER_MANAGE
+  MEMBERSHIP_MANAGE
+  AUDIT_READ
+  SETTINGS_MANAGE
+  EXPORT_CREATE
 }
 
 // Phase 3: every AssetField has exactly one FieldType. The type is immutable
@@ -128,6 +154,16 @@ model User {
   name                      String
   passwordHash              String?   @map("password_hash")
   role                      UserRole  @default(OPERATOR)
+  // Two-axis OPERATOR model. `globalAccess` governs company-scoped
+  // CRUD on companies the operator doesn't have an explicit membership
+  // for; memberships always override it per-company. Required for
+  // OPERATOR users (FULL/READONLY/NONE), null for everyone else
+  // (enforced in the service layer).
+  globalAccess              GlobalAccess? @map("global_access")
+  // Granular platform-admin capabilities. Empty for non-OPERATORs.
+  // SUPER_ADMIN implicitly holds every capability — this column is
+  // ignored for them and kept empty.
+  platformCapabilities      PlatformCapability[] @default([]) @map("platform_capabilities")
   isActive                  Boolean   @default(true) @map("is_active")
   mfaEnabled                Boolean   @default(false) @map("mfa_enabled")
   mfaSecretEncrypted        String?   @map("mfa_secret_encrypted")

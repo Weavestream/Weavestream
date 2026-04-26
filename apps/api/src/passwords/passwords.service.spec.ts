@@ -261,6 +261,8 @@ const OPERATOR: AuthedUser = {
   id: 'user-op',
   email: 'op@acme.test',
   role: 'OPERATOR',
+  globalAccess: 'FULL',
+  platformCapabilities: [],
   sessionId: 'sess-op',
   mfaEnforcementCompletedAt: new Date(),
   mfaPending: false,
@@ -275,12 +277,16 @@ const SUPER: AuthedUser = {
   ...OPERATOR,
   id: 'user-root',
   role: 'SUPER_ADMIN',
+  globalAccess: null,
+  platformCapabilities: [],
   sessionId: 'sess-root',
 };
 const CLIENT: AuthedUser = {
   ...OPERATOR,
   id: 'user-client',
   role: 'CLIENT_USER',
+  globalAccess: null,
+  platformCapabilities: [],
   sessionId: 'sess-client',
 };
 

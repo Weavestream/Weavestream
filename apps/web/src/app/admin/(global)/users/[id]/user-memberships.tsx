@@ -20,9 +20,8 @@ import {
   type DataColumn,
 } from '../../../../../components/ui';
 import {
-  canManage,
-  canManageCompanyMemberships,
-  roleLabel,
+  hasCapability,
+  membershipRoleLabel,
 } from '../../../../../lib/roles';
 import type { Me, UserDetail } from '../../../../../lib/server-api';
 import { lower } from '../../../../../lib/term';
@@ -32,22 +31,13 @@ type Row = UserDetail['memberships'][number];
 
 /**
  * Membership roles the picker offers, filtered by the target user's
- * global role. CLIENT_USER accounts can only hold CLIENT_* memberships;
- * offering OPERATOR_* on them would be a privilege-escalation footgun
- * (the API rejects it, but we hide it here so operators never see a
- * dead option).
+ * global role. RBAC v2 collapsed memberships to FULL / READONLY:
+ * CLIENT_USER accounts can only hold READONLY (the API hard-rejects
+ * FULL for that role), so we hide it client-side too. Every other
+ * role gets both options.
  */
-const ALL_MEMBERSHIP_ROLES: MembershipRole[] = [
-  'OPERATOR_FULL',
-  'OPERATOR_READONLY',
-  'CLIENT_ADMIN',
-  'CLIENT_VIEWER',
-];
-
-const CLIENT_MEMBERSHIP_ROLES: MembershipRole[] = [
-  'CLIENT_ADMIN',
-  'CLIENT_VIEWER',
-];
+const ALL_MEMBERSHIP_ROLES: MembershipRole[] = ['FULL', 'READONLY'];
+const CLIENT_MEMBERSHIP_ROLES: MembershipRole[] = ['READONLY'];
 
 function rolesForUser(userRole: UserRole): MembershipRole[] {
   return userRole === 'CLIENT_USER'
@@ -56,9 +46,9 @@ function rolesForUser(userRole: UserRole): MembershipRole[] {
 }
 
 function defaultRoleFor(userRole: UserRole): MembershipRole {
-  if (userRole === 'CLIENT_USER') return 'CLIENT_VIEWER';
-  if (userRole === 'CONTRACTOR') return 'CLIENT_VIEWER';
-  return 'OPERATOR_FULL';
+  if (userRole === 'CLIENT_USER') return 'READONLY';
+  if (userRole === 'CONTRACTOR') return 'READONLY';
+  return 'FULL';
 }
 
 export function UserMembershipsList({
@@ -73,11 +63,13 @@ export function UserMembershipsList({
    * "Attach to company" button gate. Matches server-side RBAC so we
    * never render a button that 403s on click.
    */
-  me: Pick<Me, 'role' | 'memberships'>;
+  me: Pick<Me, 'role' | 'memberships' | 'platformCapabilities'>;
   /**
-   * Global-role gate from the page: SUPER_ADMIN or OPERATOR. The
-   * per-company check for each action happens inside this component
-   * since it's stateful.
+   * Top-level USER_MANAGE gate from the page. The per-company
+   * MEMBERSHIP_MANAGE check for each action happens inside this
+   * component since it's stateful (and lets a senior operator who
+   * holds USER_MANAGE see the user but not edit memberships when
+   * MEMBERSHIP_MANAGE is missing).
    */
   canManageUser: boolean;
 }) {
@@ -203,7 +195,7 @@ export function UserMembershipsList({
       id: 'role',
       header: 'Role',
       width: 180,
-      render: (r) => <Tag tone="accent">{roleLabel(r.role)}</Tag>,
+      render: (r) => <Tag tone="accent">{membershipRoleLabel(r.role)}</Tag>,
     },
     {
       id: 'expires',
@@ -246,18 +238,19 @@ export function UserMembershipsList({
     },
   ];
 
-  if (canManageUser) {
+  // RBAC v2: membership writes are gated by the global
+  // `MEMBERSHIP_MANAGE` capability (SUPER_ADMIN holds it implicitly).
+  // The per-company `Membership` no longer grants self-service
+  // membership editing — that's exclusively a platform-admin concern.
+  const canManageMemberships = hasCapability(me, 'MEMBERSHIP_MANAGE');
+
+  if (canManageUser && canManageMemberships) {
     columns.push({
       id: 'actions',
       header: '',
       width: 180,
       align: 'right',
       render: (r) => {
-        // Per-company RBAC mirror: only show edit/revoke where this
-        // operator actually has OPERATOR_FULL on the target company
-        // (SUPER_ADMIN passes through). Otherwise the server would
-        // 403 on submit.
-        if (!canManageCompanyMemberships(me, r.company.id)) return null;
         return (
           <div
             style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}
@@ -291,19 +284,10 @@ export function UserMembershipsList({
     });
   }
 
-  // Whether this operator can attach the user to at least one more
-  // company. SUPER_ADMIN can always attach; a plain OPERATOR only sees
-  // the button if they have OPERATOR_FULL on *some* company (otherwise
-  // the picker would always end with a 403 — better to hide the entry
-  // point).
-  const canAttach =
-    canManageUser &&
-    (me.role === 'SUPER_ADMIN' ||
-      me.memberships.some(
-        (m) =>
-          m.role === 'OPERATOR_FULL' &&
-          (!m.expiresAt || new Date(m.expiresAt).getTime() > Date.now()),
-      ));
+  // RBAC v2: attaching = creating a Membership row, gated by
+  // MEMBERSHIP_MANAGE. Same gate as edit/revoke; per-company FULL
+  // membership no longer self-grants membership writes.
+  const canAttach = canManageUser && canManageMemberships;
 
   return (
     <div>
@@ -333,8 +317,7 @@ export function UserMembershipsList({
         rowHref={(r) => `/admin/companies/${r.company.id}`}
         empty={`This user has no ${lower(term.one)} memberships yet.`}
         renderMobileCard={(r) => {
-          const canEditRow = canManageUser &&
-            canManageCompanyMemberships(me, r.company.id);
+          const canEditRow = canManageUser && canManageMemberships;
           let expiresNode: React.ReactNode = (
             <span style={{ color: 'var(--dim)' }}>never</span>
           );
@@ -379,7 +362,7 @@ export function UserMembershipsList({
                 </div>
               </div>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                <Tag tone="accent">{roleLabel(r.role)}</Tag>
+                <Tag tone="accent">{membershipRoleLabel(r.role)}</Tag>
                 {r.company.archivedAt ? (
                   <Tag tone="warn" dot>
                     archived
@@ -581,7 +564,7 @@ function AttachDialog({
           >
             {availableRoles.map((r) => (
               <option key={r} value={r}>
-                {roleLabel(r)}
+                {membershipRoleLabel(r)}
               </option>
             ))}
           </Select>
@@ -678,7 +661,7 @@ function EditDialog({
           >
             {availableRoles.map((r) => (
               <option key={r} value={r}>
-                {roleLabel(r)}
+                {membershipRoleLabel(r)}
               </option>
             ))}
           </Select>

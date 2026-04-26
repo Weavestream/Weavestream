@@ -33,6 +33,7 @@ export class TenantContextInterceptor implements NestInterceptor {
       email: req.user.email,
       allowedCompanyIds,
       isSuperAdmin: req.user.role === 'SUPER_ADMIN',
+      globalAccess: req.user.globalAccess,
       requestId: (req.id as string | undefined) ?? 'unknown',
       ip: req.ip ?? '0.0.0.0',
       userAgent: (req.headers['user-agent'] ?? 'unknown').toString(),

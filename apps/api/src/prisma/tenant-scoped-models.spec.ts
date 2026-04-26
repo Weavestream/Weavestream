@@ -11,6 +11,7 @@ const baseCtx: TenantContext = {
   email: 'op@example.com',
   allowedCompanyIds: ['c-1', 'c-2'],
   isSuperAdmin: false,
+  globalAccess: 'NONE',
   requestId: 'req-1',
   ip: '127.0.0.1',
   userAgent: 'test',

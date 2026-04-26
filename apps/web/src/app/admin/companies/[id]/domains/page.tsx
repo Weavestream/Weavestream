@@ -10,7 +10,7 @@ import {
   listDomains,
   throwUnlessFound,
 } from '../../../../../lib/server-api';
-import { canManage } from '../../../../../lib/roles';
+import { canWriteCompany } from '../../../../../lib/roles';
 import { PageBody, PageHeader } from '../../../../../components/shell/page-header';
 import { Panel, Tag } from '../../../../../components/ui';
 import { buildTerm, lower } from '../../../../../lib/term';
@@ -46,7 +46,7 @@ export default async function CompanyDomainsPage({
     ? await listDomains(companyId, { includeArchived: true, limit: 200 })
     : await getCompanyDomainsBasic(companyId);
 
-  const manage = canManage(me.role);
+  const manage = canWriteCompany(me, company.id);
 
   return (
     <>

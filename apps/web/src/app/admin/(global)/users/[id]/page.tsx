@@ -4,7 +4,12 @@ import {
   serverApiFetch,
   type UserDetail,
 } from '../../../../../lib/server-api';
-import { canManage, roleLabel } from '../../../../../lib/roles';
+import {
+  capabilityLabel,
+  globalAccessLabel,
+  hasCapability,
+  roleLabel,
+} from '../../../../../lib/roles';
 import { PageBody, PageHeader } from '../../../../../components/shell/page-header';
 import { Panel, Tag } from '../../../../../components/ui';
 import { UserActions } from './user-actions';
@@ -20,7 +25,7 @@ export default async function UserDetailPage({
   const res = await serverApiFetch<UserDetail>(`/users/${id}`);
   if (!res.ok || !res.data) notFound();
   const user = res.data;
-  const manage = canManage(me.role);
+  const manage = hasCapability(me, 'USER_MANAGE');
   const isSelf = me.id === user.id;
 
   return (
@@ -92,6 +97,45 @@ export default async function UserDetailPage({
                 </span>
               }
             />
+            {user.role === 'OPERATOR' && user.globalAccess ? (
+              <Row
+                label="Default access"
+                value={
+                  <Tag tone={user.globalAccess === 'NONE' ? 'warn' : 'accent'}>
+                    {globalAccessLabel(user.globalAccess)}
+                  </Tag>
+                }
+              />
+            ) : null}
+            {user.role === 'SUPER_ADMIN' ? (
+              <Row
+                label="Platform capabilities"
+                value={<Tag tone="ok">all (super admin)</Tag>}
+              />
+            ) : user.role === 'OPERATOR' ? (
+              <Row
+                label="Platform capabilities"
+                value={
+                  user.platformCapabilities.length === 0 ? (
+                    <Tag tone="default">none</Tag>
+                  ) : (
+                    <div
+                      style={{
+                        display: 'flex',
+                        flexWrap: 'wrap',
+                        gap: 4,
+                      }}
+                    >
+                      {user.platformCapabilities.map((c) => (
+                        <Tag key={c} tone="info">
+                          {capabilityLabel(c)}
+                        </Tag>
+                      ))}
+                    </div>
+                  )
+                }
+              />
+            ) : null}
           </div>
         </Panel>
         <Panel title={`Memberships (${user.memberships.filter((m) => !m.revokedAt).length})`} noPad>

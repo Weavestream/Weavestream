@@ -12,6 +12,8 @@ import type { AuthedUser } from '../common/current-user.decorator.js';
 const ACTOR: AuthedUser = {
   id: 'actor-1',
   role: 'OPERATOR',
+  globalAccess: 'FULL',
+  platformCapabilities: [],
   email: 'a@x',
   sessionId: 's-1',
   mfaEnforcementCompletedAt: new Date(),

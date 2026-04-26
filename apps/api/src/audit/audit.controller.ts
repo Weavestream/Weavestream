@@ -5,9 +5,9 @@ import { PrismaService } from '../prisma/prisma.service.js';
 import { PermissionService } from '../rbac/permission.service.js';
 
 /**
- * Read-only audit log. SUPER_ADMIN sees everything; OPERATOR_FULL of a
- * company sees entries scoped to that company (must pass companyId
- * query param). Other roles are 403.
+ * Read-only audit log. SUPER_ADMIN and any user holding the
+ * `AUDIT_READ` platform capability see the global feed and may filter
+ * by `companyId`. Everyone else gets 403.
  *
  * Phase 9a: entries now include `before`/`after` payloads and
  * bulk-resolved `entityName` + `companyName` strings so the admin UI
@@ -35,13 +35,8 @@ export class AuditController {
     @Query('page') page?: string,
     @Query('pageSize') pageSize?: string,
   ) {
-    if (actor.role !== 'SUPER_ADMIN') {
-      if (!companyId) {
-        throw new ForbiddenException('companyId is required for non-admin audit reads');
-      }
-      const decision = await this.permissions.can(actor, 'audit.read', { companyId });
-      if (!decision.allowed) throw new ForbiddenException(decision.reason);
-    }
+    const decision = await this.permissions.can(actor, 'audit.read', { companyId });
+    if (!decision.allowed) throw new ForbiddenException(decision.reason);
 
     const where: Record<string, unknown> = {};
     if (companyId) where.companyId = companyId;

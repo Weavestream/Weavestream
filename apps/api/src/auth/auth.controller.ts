@@ -121,6 +121,12 @@ export class AuthController {
       id: payload.sub,
       email: '', // filled by service lookup
       role: payload.role as AuthedUser['role'],
+      // The MFA verify path doesn't consult RBAC at all — the JWT
+      // payload only carries the global role. Default the new axes
+      // to the safest possible values; the post-verify guards
+      // re-load the full user.
+      globalAccess: null,
+      platformCapabilities: [],
       sessionId: payload.sid,
       mfaEnforcementCompletedAt: null,
       mfaPending: true,

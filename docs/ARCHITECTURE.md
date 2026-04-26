@@ -64,21 +64,54 @@ empty-state copy side-by-side as you type.
 
 ## RBAC
 
-Two layers, evaluated together from a single permission matrix.
+Three orthogonal axes, evaluated by a single resolver
+(`apps/api/src/rbac/permission.service.ts`). The web layer mirrors the
+same logic in `apps/web/src/lib/roles.ts` purely to hide unreachable
+controls — every check is re-validated server-side.
 
 **Global roles** (column on `users`):
 
-- `SUPER_ADMIN` — can do anything in any tenant; manages system settings.
-- `OPERATOR` — can be granted `OPERATOR_FULL` or `OPERATOR_READONLY`
-  on specific tenants.
-- `CONTRACTOR` — same shape as OPERATOR but memberships carry an
-  `expiresAt`; access is rejected on the next request past expiry.
-- `CLIENT_USER` — limited to tenants where they hold a client membership.
+- `SUPER_ADMIN` — owner-level. Implicit FULL access to every tenant
+  *and* implicit holder of every `PlatformCapability`. Cannot be
+  demoted via the UI; the system requires at least one super admin.
+- `OPERATOR` — staff role. Per-tenant access is configurable on three
+  axes (see below). Can be promoted to "senior operator" by granting
+  individual capabilities without handing out super admin.
+- `CONTRACTOR` — short-term staff. Always per-tenant only; every
+  membership requires `expiresAt`. Never holds capabilities or
+  `globalAccess`. Reads only the tenants they are explicitly attached
+  to, and access flips off the next request past expiry.
+- `CLIENT_USER` — tenant end-user. Membership is always `READONLY`;
+  the API rejects writes regardless of UI state.
 
-**Per-tenant memberships**: `OPERATOR_FULL`, `OPERATOR_READONLY`,
-`CLIENT_ADMIN`, `CLIENT_VIEWER`.
+**Membership role** (`memberships.role`): `FULL` or `READONLY`. A
+membership row is the per-tenant override.
 
-All authorization checks go through the matrix — there are no ad-hoc
+**Default access** (`users.globalAccess`, only meaningful for
+`OPERATOR`): `FULL`, `READONLY`, or `NONE`. Applied to every tenant
+the operator does *not* have an explicit membership for. `NONE` makes
+the operator membership-only — useful for technicians who should only
+see their assigned tenants.
+
+**Platform capabilities** (`users.platformCapabilities`, array): a
+fine-grained list of platform-admin tasks delegated to operators
+(`COMPANY_MANAGE`, `INTEGRATION_MANAGE`, `LAYOUT_MANAGE`,
+`USER_MANAGE`, `MEMBERSHIP_MANAGE`, `AUDIT_READ`, `SETTINGS_MANAGE`,
+`EXPORT_CREATE`). `SUPER_ADMIN` holds them implicitly; the API
+rejects setting them on any other role.
+
+**Resolution order** for "can the viewer do X on tenant T?":
+
+1. `SUPER_ADMIN` ⇒ yes.
+2. If the operation declares a `requiredCapability`, the viewer must
+   hold it on `users.platformCapabilities` (or be `SUPER_ADMIN`). No
+   capability ⇒ no.
+3. Active `Membership` for tenant T overrides everything else: `FULL`
+   permits writes, `READONLY` permits reads only.
+4. Otherwise fall back to `users.globalAccess` for `OPERATOR`s
+   (`FULL`/`READONLY`); `NONE` is a hard deny.
+
+All authorization checks flow through the resolver — there are no ad-hoc
 role comparisons in controllers.
 
 ## Threat model
@@ -91,7 +124,9 @@ role comparisons in controllers.
   admin routes. Fields marked `visibleToClients=false` are stripped
   server-side before response.
 - **Fill-in operator (contractor)** — membership carries `expiresAt`;
-  requests past expiry are rejected. No user management.
+  requests past expiry are rejected. Never holds platform capabilities
+  or `globalAccess`, so cross-tenant reads and admin-shell access are
+  unreachable by construction.
 - **Compromised operator account** — append-only audit log; session
   revocation is immediate (no offline tokens); JWTs are 15 min and
   backed by a server-side session row that can be revoked.

@@ -10,6 +10,7 @@ import {
   serverApiFetch,
   throwUnlessFound,
 } from '../../../../../lib/server-api';
+import { hasCapability } from '../../../../../lib/roles';
 import { PageBody, PageHeader } from '../../../../../components/shell/page-header';
 import { Panel } from '../../../../../components/ui';
 import { IntegrationTabs } from './integration-tabs';
@@ -23,7 +24,7 @@ import { IntegrationTabs } from './integration-tabs';
  *   3. Organizations (per-company mappings — enable/disable, delete).
  *   4. Runs (sync run history with totals + conflicts).
  *
- * SUPER_ADMIN-only — anyone else gets bounced to /admin.
+ * Gated on `INTEGRATION_MANAGE`; SUPER_ADMIN holds it implicitly.
  */
 export default async function IntegrationDetailPage({
   params,
@@ -35,7 +36,7 @@ export default async function IntegrationDetailPage({
   const { id } = await params;
   const sp = await searchParams;
   const me = (await getMe())!;
-  if (me.role !== 'SUPER_ADMIN') redirect('/admin');
+  if (!hasCapability(me, 'INTEGRATION_MANAGE')) redirect('/admin');
 
   const [intRes, mappingsRes, runsRes, driversRes] = await Promise.all([
     serverApiFetch<IntegrationDto>(`/admin/integrations/${id}`),

@@ -2,7 +2,17 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import type { MembershipRole, UserRole } from '@weavestream/shared';
+import type {
+  GlobalAccess,
+  MembershipRole,
+  PlatformCapability,
+  UserRole,
+} from '@weavestream/shared';
+import {
+  GlobalAccessValues,
+  MANAGER_PRESET,
+  PlatformCapabilityValues,
+} from '@weavestream/shared';
 import { apiFetch } from '../../../../lib/api';
 import {
   Btn,
@@ -16,7 +26,12 @@ import {
   useToast,
   type CompanyPickerValue,
 } from '../../../../components/ui';
-import { roleLabel } from '../../../../lib/roles';
+import {
+  capabilityLabel,
+  globalAccessLabel,
+  membershipRoleLabel,
+  roleLabel,
+} from '../../../../lib/roles';
 import { capitalize } from '../../../../lib/term';
 import { useTerm } from '../../../../lib/term-context';
 
@@ -27,25 +42,21 @@ const ROLES: UserRole[] = [
   'CLIENT_USER',
 ];
 
-const MEMBERSHIP_ROLES: MembershipRole[] = [
-  'OPERATOR_FULL',
-  'OPERATOR_READONLY',
-  'CLIENT_ADMIN',
-  'CLIENT_VIEWER',
-];
+const MEMBERSHIP_ROLES: MembershipRole[] = ['FULL', 'READONLY'];
 
 /**
  * Global roles that are meant to *need* a company assignment to do
- * anything useful. SUPER_ADMIN has global access and OPERATOR gets its
- * per-company role via explicit membership, so those don't auto-show
- * the attach panel — the operator creating them can still expand it
- * manually via the toggle.
+ * anything useful. SUPER_ADMIN has global access and OPERATOR can rely
+ * on `globalAccess`, so those don't auto-show the attach panel — the
+ * operator creating them can still expand it manually via the toggle.
+ * CLIENT_USER is locked to READONLY at the API tier; CONTRACTOR is
+ * always READONLY in practice.
  */
 const DEFAULT_MEMBERSHIP_ROLES: Record<UserRole, MembershipRole> = {
-  SUPER_ADMIN: 'OPERATOR_FULL',
-  OPERATOR: 'OPERATOR_FULL',
-  CONTRACTOR: 'CLIENT_VIEWER',
-  CLIENT_USER: 'CLIENT_VIEWER',
+  SUPER_ADMIN: 'FULL',
+  OPERATOR: 'FULL',
+  CONTRACTOR: 'READONLY',
+  CLIENT_USER: 'READONLY',
 };
 
 function defaultShowMembership(role: UserRole): boolean {
@@ -108,8 +119,15 @@ export function CreateUserButton({
   const [attachCompany, setAttachCompany] = useState<CompanyPickerValue | null>(
     defaultCompany ?? null,
   );
-  const [attachRole, setAttachRole] = useState<MembershipRole>('CLIENT_VIEWER');
+  const [attachRole, setAttachRole] = useState<MembershipRole>('READONLY');
   const [attachExpiresAt, setAttachExpiresAt] = useState('');
+
+  // Operator-only axes: default platform access for companies the user
+  // has no membership for, plus delegated platform capabilities. Both
+  // are sent only when the global role is OPERATOR; the API rejects
+  // them on every other role.
+  const [globalAccess, setGlobalAccess] = useState<GlobalAccess>('FULL');
+  const [capabilities, setCapabilities] = useState<PlatformCapability[]>([]);
 
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
@@ -129,7 +147,7 @@ export function CreateUserButton({
       setAttachOpen(true);
       setAttachCompany(defaultCompany);
       setRole('CLIENT_USER');
-      setAttachRole('CLIENT_VIEWER');
+      setAttachRole('READONLY');
     }
   }, [defaultCompany?.id]);
 
@@ -141,14 +159,20 @@ export function CreateUserButton({
     setResult(null);
     setAttachOpen(!!defaultCompany);
     setAttachCompany(defaultCompany ?? null);
-    setAttachRole('CLIENT_VIEWER');
+    setAttachRole('READONLY');
     setAttachExpiresAt('');
+    setGlobalAccess('FULL');
+    setCapabilities([]);
   }
 
   async function submit() {
     setError(null);
     setPending(true);
     const body: Record<string, unknown> = { email, name, role };
+    if (role === 'OPERATOR') {
+      body.globalAccess = globalAccess;
+      body.platformCapabilities = capabilities;
+    }
     if (attachOpen && attachCompany) {
       body.membership = {
         companyId: attachCompany.id,
@@ -280,7 +304,7 @@ export function CreateUserButton({
                   Also added to{' '}
                   <strong>{attachedCompanyName}</strong> as{' '}
                   <span style={{ fontFamily: 'var(--font-mono)' }}>
-                    {roleLabel(result.membership.role)}
+                    {membershipRoleLabel(result.membership.role)}
                   </span>
                   .
                 </span>
@@ -352,6 +376,10 @@ export function CreateUserButton({
                     setAttachOpen(defaultShowMembership(next));
                   }
                   setAttachRole(DEFAULT_MEMBERSHIP_ROLES[next]);
+                  if (next !== 'OPERATOR') {
+                    setCapabilities([]);
+                    setGlobalAccess('FULL');
+                  }
                 }}
               >
                 {ROLES.map((r) => (
@@ -361,6 +389,15 @@ export function CreateUserButton({
                 ))}
               </Select>
             </Field>
+
+            {role === 'OPERATOR' && (
+              <OperatorAxes
+                globalAccess={globalAccess}
+                onGlobalAccess={setGlobalAccess}
+                capabilities={capabilities}
+                onCapabilities={setCapabilities}
+              />
+            )}
 
             <AttachPanel
               open={attachOpen}
@@ -502,7 +539,7 @@ function AttachPanel({
             >
               {MEMBERSHIP_ROLES.map((r) => (
                 <option key={r} value={r}>
-                  {roleLabel(r)}
+                  {membershipRoleLabel(r)}
                 </option>
               ))}
             </Select>
@@ -521,6 +558,112 @@ function AttachPanel({
           </Field>
         </div>
       )}
+    </div>
+  );
+}
+
+function OperatorAxes({
+  globalAccess,
+  onGlobalAccess,
+  capabilities,
+  onCapabilities,
+}: {
+  globalAccess: GlobalAccess;
+  onGlobalAccess: (g: GlobalAccess) => void;
+  capabilities: PlatformCapability[];
+  onCapabilities: (c: PlatformCapability[]) => void;
+}) {
+  const allChecked =
+    capabilities.length === MANAGER_PRESET.length &&
+    MANAGER_PRESET.every((c) => capabilities.includes(c));
+
+  function toggle(c: PlatformCapability) {
+    onCapabilities(
+      capabilities.includes(c)
+        ? capabilities.filter((x) => x !== c)
+        : [...capabilities, c],
+    );
+  }
+
+  return (
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 14,
+        padding: 12,
+        border: '1px solid var(--line)',
+        borderRadius: 6,
+        background: 'var(--panel)',
+      }}
+    >
+      <Field
+        label="Default access"
+        htmlFor="u-global-access"
+        help="Applied on companies this operator does not have an explicit membership for."
+      >
+        <Select
+          id="u-global-access"
+          value={globalAccess}
+          onChange={(e) => onGlobalAccess(e.target.value as GlobalAccess)}
+        >
+          {GlobalAccessValues.map((g) => (
+            <option key={g} value={g}>
+              {globalAccessLabel(g)}
+            </option>
+          ))}
+        </Select>
+      </Field>
+      <Field
+        label="Platform capabilities"
+        help="Granular admin tasks beyond company access. SUPER_ADMIN holds these implicitly."
+      >
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <label
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 8,
+              fontSize: 12.5,
+              padding: '6px 8px',
+              borderRadius: 5,
+              background: allChecked ? 'var(--accent-soft)' : 'transparent',
+              border: '1px dashed var(--line)',
+              cursor: 'pointer',
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={allChecked}
+              onChange={(e) =>
+                onCapabilities(e.target.checked ? [...MANAGER_PRESET] : [])
+              }
+            />
+            <span style={{ fontWeight: 500 }}>Manager preset</span>
+            <Tag tone="outline">{MANAGER_PRESET.length} capabilities</Tag>
+          </label>
+          {PlatformCapabilityValues.map((c) => (
+            <label
+              key={c}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 8,
+                fontSize: 12.5,
+                padding: '4px 6px',
+                cursor: 'pointer',
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={capabilities.includes(c)}
+                onChange={() => toggle(c)}
+              />
+              <span>{capabilityLabel(c)}</span>
+            </label>
+          ))}
+        </div>
+      </Field>
     </div>
   );
 }

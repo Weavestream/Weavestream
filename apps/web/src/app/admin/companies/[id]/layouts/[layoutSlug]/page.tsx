@@ -9,7 +9,7 @@ import {
   listAssets,
   throwUnlessFound,
 } from '../../../../../../lib/server-api';
-import { canManage } from '../../../../../../lib/roles';
+import { canWriteCompany } from '../../../../../../lib/roles';
 import {
   PageBody,
   PageHeader,
@@ -65,7 +65,6 @@ export default async function LayoutAssetsPage({
   const sp = await searchParams;
   const me = (await getMe())!;
   const term = buildTerm(await getSettings());
-  const manage = canManage(me.role);
 
   // For the page render we intentionally bypass `loadContext` so 429/
   // network failures surface through `throwUnlessFound` instead of
@@ -79,6 +78,7 @@ export default async function LayoutAssetsPage({
   const company = throwUnlessFound(companyRes, `/companies/${companyId}`);
   const layout = layouts.find((l) => l.slug === layoutSlug);
   if (!layout) notFound();
+  const manage = canWriteCompany(me, company.id);
 
   const q = typeof sp.q === 'string' ? sp.q : undefined;
   const includeArchived = sp.archived === '1';

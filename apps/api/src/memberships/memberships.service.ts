@@ -112,9 +112,16 @@ export class MembershipsService {
     if (!company) throw new NotFoundException('Company not found');
     if (!user.isActive) throw new BadRequestException('User is deactivated');
 
-    // Refuse to hand out SUPER_ADMIN via memberships — it's a global role only.
-    // (MembershipRole enum doesn't include SUPER_ADMIN, so this is a no-op
-    // defensive check but flags intent.)
+    // CLIENT_USER memberships are always read-only — the role only
+    // grants the per-row `visibleToClients` view of company data and
+    // never CRUD. Catch the misconfiguration here rather than letting
+    // a stray `FULL` row drift past the schema and into production.
+    if (user.role === 'CLIENT_USER' && input.role === 'FULL') {
+      throw new BadRequestException(
+        'CLIENT_USER memberships must be READONLY',
+      );
+    }
+
     const expiresAt = input.expiresAt ? new Date(input.expiresAt) : null;
 
     // If a revoked row exists for (user, company) reactivate it; the partial
@@ -189,25 +196,28 @@ export class MembershipsService {
   ) {
     const before = await this.prisma.membership.findUnique({
       where: { id: membershipId },
+      include: { user: { select: { role: true } } },
     });
     if (!before) throw new NotFoundException();
     if (before.revokedAt) throw new BadRequestException('Membership is revoked');
 
-    // Scope check: only SUPER_ADMIN or OPERATOR_FULL member of the company
-    // may update. PermissionGuard has already verified, but double-check
-    // since this path is reachable from both /memberships/:id (direct) and
-    // /companies/:id/memberships (company-scoped).
+    // Scope check: SUPER_ADMIN bypasses, otherwise the actor must hold
+    // the MEMBERSHIP_MANAGE platform capability. The PermissionGuard
+    // already verified this on the controller path, but we re-check
+    // here because the direct `/memberships/:id` route resolves
+    // companyId from the row, not the URL, and we want a single
+    // source of truth.
     if (actor.role !== 'SUPER_ADMIN') {
-      const isOpFull = await this.prisma.membership.findFirst({
-        where: {
-          userId: actor.id,
-          companyId: before.companyId,
-          revokedAt: null,
-          role: 'OPERATOR_FULL',
-          OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }],
-        },
-      });
-      if (!isOpFull) throw new ForbiddenException();
+      if (!actor.platformCapabilities.includes('MEMBERSHIP_MANAGE')) {
+        throw new ForbiddenException('Missing MEMBERSHIP_MANAGE capability');
+      }
+    }
+
+    if (
+      input.role === 'FULL' &&
+      before.user.role === 'CLIENT_USER'
+    ) {
+      throw new BadRequestException('CLIENT_USER memberships must be READONLY');
     }
 
     const expiresAt = input.expiresAt === undefined
@@ -252,16 +262,9 @@ export class MembershipsService {
     if (before.revokedAt) throw new BadRequestException('Already revoked');
 
     if (actor.role !== 'SUPER_ADMIN') {
-      const isOpFull = await this.prisma.membership.findFirst({
-        where: {
-          userId: actor.id,
-          companyId: before.companyId,
-          revokedAt: null,
-          role: 'OPERATOR_FULL',
-          OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }],
-        },
-      });
-      if (!isOpFull) throw new ForbiddenException();
+      if (!actor.platformCapabilities.includes('MEMBERSHIP_MANAGE')) {
+        throw new ForbiddenException('Missing MEMBERSHIP_MANAGE capability');
+      }
     }
 
     const updated = await this.prisma.membership.update({

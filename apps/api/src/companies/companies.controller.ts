@@ -21,7 +21,10 @@ import {
 } from '@weavestream/shared';
 import { CompaniesService } from './companies.service.js';
 import { CurrentUser, type AuthedUser } from '../common/current-user.decorator.js';
-import { RequirePermission } from '../rbac/require-permission.decorator.js';
+import {
+  AuthedOnly,
+  RequirePermission,
+} from '../rbac/require-permission.decorator.js';
 import { ZodBody } from '../common/zod-validation.pipe.js';
 
 @Controller({ path: 'companies', version: '1' })
@@ -29,7 +32,12 @@ export class CompaniesController {
   constructor(private readonly companies: CompaniesService) {}
 
   @Get()
-  @RequirePermission('company.manage')
+  // Listing is filtered server-side: SUPER_ADMINs see everything,
+  // OPERATORs with non-NONE `globalAccess` see every non-archived
+  // company (modulo their membership overrides), and everyone else is
+  // restricted to companies they hold a membership on. Capability
+  // gating only kicks in for the create/update/archive/restore writes.
+  @AuthedOnly()
   async list(
     @CurrentUser() user: AuthedUser,
     @Query('q') q?: string,
@@ -62,7 +70,7 @@ export class CompaniesController {
   }
 
   @Get(':id')
-  @RequirePermission('company.manage')
+  @RequirePermission('company.read', { companyIdFrom: 'params.id' })
   async get(
     @CurrentUser() user: AuthedUser,
     @Param('id', new ParseUUIDPipe()) id: string,

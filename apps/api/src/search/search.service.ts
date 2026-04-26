@@ -112,16 +112,21 @@ export class SearchService {
     // ---- scope ----
     //
     // Client + tech roles always carry an `allowedCompanyIds` scope.
-    // Superadmins get global access unless they explicitly asked for a
-    // company. A caller with `companyId` passed (and that id in their
-    // scope) gets company-scoped results; anything else yields the
-    // full allowed scope.
+    // Superadmins, and operators with non-NONE `globalAccess`, get
+    // global access unless they explicitly asked for a company. A
+    // caller with `companyId` passed (and that id in their scope) gets
+    // company-scoped results; anything else yields the full allowed
+    // scope.
+    const hasGlobalScope =
+      ctx.isSuperAdmin ||
+      ctx.globalAccess === 'FULL' ||
+      ctx.globalAccess === 'READONLY';
     const allowed = new Set(ctx.allowedCompanyIds);
     let scopeIds: string[] | 'global' = 'global';
     if (req.companyId) {
-      if (!ctx.isSuperAdmin && !allowed.has(req.companyId)) return empty;
+      if (!hasGlobalScope && !allowed.has(req.companyId)) return empty;
       scopeIds = [req.companyId];
-    } else if (!ctx.isSuperAdmin) {
+    } else if (!hasGlobalScope) {
       scopeIds = ctx.allowedCompanyIds;
       if (scopeIds.length === 0) return empty;
     }

@@ -1,4 +1,9 @@
-import type { MembershipRole, UserRole } from '@weavestream/shared';
+import type {
+  GlobalAccess,
+  MembershipRole,
+  PlatformCapability,
+  UserRole,
+} from '@weavestream/shared';
 import {
   PermissionService,
   type MembershipSnapshot,
@@ -11,12 +16,19 @@ import {
 } from './permissions.js';
 
 /**
- * Exhaustive permission-matrix sweep: every (UserRole × MembershipRole|none ×
- * membership state × Action) must match what the spec in `permissions.ts`
- * declares. The test consults the exact same matrix the production code
- * consults, so the test's job is to catch oversights in the matrix itself
- * (e.g. forgot to list CONTRACTOR for a contractor-capable action) and
- * bugs in the evaluator's branching logic.
+ * RBAC truth table for the simplified two-axis model. Every
+ * (UserRole × globalAccess × capability subset × MembershipRole|none ×
+ * state × action) tuple computed by `PermissionService.evaluate` is
+ * compared to a deliberately-independent reference implementation
+ * (`expected`). Mismatches indicate either a matrix oversight in
+ * `permissions.ts` or a divergence in the evaluator branch logic.
+ *
+ * Phase R1 — replaces the legacy four-value MembershipRole sweep with
+ * a leaner sweep that focuses on:
+ *   - SUPER_ADMIN bypass
+ *   - capability gates (every previously-SA-only action)
+ *   - membership > globalAccess precedence
+ *   - effective NONE deny path
  */
 
 const USER_ROLES: UserRole[] = [
@@ -26,13 +38,8 @@ const USER_ROLES: UserRole[] = [
   'CLIENT_USER',
 ];
 
-const MEMBERSHIP_ROLES: (MembershipRole | null)[] = [
-  null, // caller has no membership for this company
-  'OPERATOR_FULL',
-  'OPERATOR_READONLY',
-  'CLIENT_ADMIN',
-  'CLIENT_VIEWER',
-];
+const MEMBERSHIP_ROLES: (MembershipRole | null)[] = [null, 'FULL', 'READONLY'];
+const GLOBAL_ACCESSES: GlobalAccess[] = ['FULL', 'READONLY', 'NONE'];
 
 type MembershipState = 'active' | 'expired' | 'revoked';
 const STATES: MembershipState[] = ['active', 'expired', 'revoked'];
@@ -40,14 +47,36 @@ const STATES: MembershipState[] = ['active', 'expired', 'revoked'];
 const THE_COMPANY = '00000000-0000-0000-0000-000000000001';
 const OTHER_COMPANY = '00000000-0000-0000-0000-000000000002';
 
-function membershipFor(role: MembershipRole | null, state: MembershipState): MembershipSnapshot[] {
+function membershipFor(
+  role: MembershipRole | null,
+  state: MembershipState,
+): MembershipSnapshot[] {
   if (!role) return [];
-  const base = { companyId: THE_COMPANY, role, expiresAt: null as Date | null, revokedAt: null as Date | null };
+  const base = {
+    companyId: THE_COMPANY,
+    role,
+    expiresAt: null as Date | null,
+    revokedAt: null as Date | null,
+  };
   if (state === 'expired') base.expiresAt = new Date('2000-01-01');
   if (state === 'revoked') base.revokedAt = new Date('2000-01-01');
   return [base];
 }
 
+function buildUser(
+  role: UserRole,
+  globalAccess: GlobalAccess | null = null,
+  caps: PlatformCapability[] = [],
+): PermissionInput {
+  return {
+    id: 'u',
+    role,
+    globalAccess,
+    platformCapabilities: caps,
+  };
+}
+
+/** Reference implementation. */
 function expected(
   user: PermissionInput,
   action: Action,
@@ -56,262 +85,359 @@ function expected(
 ): boolean {
   if (user.role === 'SUPER_ADMIN') return true;
   const rule = PERMISSIONS[action];
-  if (rule.scope === 'global') return rule.allowGlobal.includes(user.role);
+
+  if (rule.requiredCapability) {
+    if (!user.platformCapabilities.includes(rule.requiredCapability)) {
+      return false;
+    }
+    if (rule.scope === 'company' && !companyId) return false;
+    return true;
+  }
+
+  if (rule.scope === 'global') return false;
   if (rule.scope === 'self') return true;
   if (!companyId) return false;
+
   const active = memberships.find(
-    (m) => m.companyId === companyId && !m.revokedAt && (!m.expiresAt || m.expiresAt > new Date()),
+    (m) =>
+      m.companyId === companyId &&
+      !m.revokedAt &&
+      (!m.expiresAt || m.expiresAt > new Date()),
   );
-  if (!active) return false;
-  if (rule.allowGlobal.includes(user.role)) return true;
-  return rule.allowMembership.includes(active.role);
+  let effective: GlobalAccess | null;
+  if (active) {
+    effective = active.role;
+  } else if (user.role === 'OPERATOR') {
+    effective = user.globalAccess ?? 'NONE';
+  } else {
+    effective = null;
+  }
+  if (effective === null || effective === 'NONE') return false;
+  if (effective === 'FULL' && rule.allowFull) return true;
+  if (effective === 'READONLY' && rule.allowReadonly) return true;
+  return false;
 }
 
 describe('permission matrix (exhaustive)', () => {
   const mismatches: string[] = [];
 
   for (const action of ActionValues) {
+    const rule = PERMISSIONS[action];
+    // For each rule we sweep:
+    //   - capability holder (only meaningful for capability rules)
+    //   - non-capability holder
+    // Combined with role × globalAccess × membership × state.
+    const capabilityVariants: (PlatformCapability[] | null)[] = rule.requiredCapability
+      ? [[], [rule.requiredCapability]]
+      : [[]];
+
     for (const userRole of USER_ROLES) {
-      for (const mRole of MEMBERSHIP_ROLES) {
-        for (const state of STATES) {
-          if (mRole === null && state !== 'active') continue; // no-op combo
+      const globalVariants: (GlobalAccess | null)[] =
+        userRole === 'OPERATOR' ? GLOBAL_ACCESSES : [null];
+      for (const globalAccess of globalVariants) {
+        for (const caps of capabilityVariants) {
+          for (const mRole of MEMBERSHIP_ROLES) {
+            for (const state of STATES) {
+              if (mRole === null && state !== 'active') continue;
 
-          const user: PermissionInput = { id: 'u1', role: userRole };
-          const memberships = membershipFor(mRole, state);
-          const companyId = PERMISSIONS[action].scope === 'company' ? THE_COMPANY : undefined;
+              const user = buildUser(userRole, globalAccess, caps ?? []);
+              const memberships = membershipFor(mRole, state);
+              const companyId =
+                rule.scope === 'company' ? THE_COMPANY : undefined;
 
-          const decision = PermissionService.evaluate(user, action, memberships, { companyId });
-          const want = expected(user, action, memberships, companyId);
+              const decision = PermissionService.evaluate(
+                user,
+                action,
+                memberships,
+                { companyId },
+              );
+              const want = expected(user, action, memberships, companyId);
 
-          if (decision.allowed !== want) {
-            mismatches.push(
-              `action=${action} userRole=${userRole} mRole=${mRole} state=${state} got=${decision.allowed} want=${want} (${decision.reason ?? ''})`,
-            );
+              if (decision.allowed !== want) {
+                mismatches.push(
+                  `action=${action} userRole=${userRole} ga=${globalAccess ?? '∅'} caps=[${caps?.join(',') ?? ''}] mRole=${mRole ?? '∅'} state=${state} got=${decision.allowed} want=${want} (${decision.reason ?? ''})`,
+                );
+              }
+            }
           }
         }
       }
     }
   }
 
-  it('matches the declared matrix for every (user × membership × state × action)', () => {
+  it('matches the declared matrix for every (user × access × cap × membership × state × action)', () => {
     expect(mismatches).toEqual([]);
   });
 });
 
-describe('PermissionService.evaluate', () => {
-  const user = (role: UserRole): PermissionInput => ({ id: 'u', role });
-
-  it('SUPER_ADMIN bypasses everything even without memberships', () => {
+describe('PermissionService.evaluate — semantic checks', () => {
+  it('SUPER_ADMIN bypasses every action even without memberships or capabilities', () => {
     for (const action of ActionValues) {
-      const d = PermissionService.evaluate(user('SUPER_ADMIN'), action, [], {
-        companyId: THE_COMPANY,
-      });
+      const d = PermissionService.evaluate(
+        buildUser('SUPER_ADMIN'),
+        action,
+        [],
+        { companyId: THE_COMPANY },
+      );
       expect(d.allowed).toBe(true);
     }
   });
 
-  it('CONTRACTOR cannot read assets in a company they are not a member of', () => {
-    const d = PermissionService.evaluate(user('CONTRACTOR'), 'asset.read', [], {
-      companyId: THE_COMPANY,
-    });
+  it('CONTRACTOR cannot read assets without a membership for the target company', () => {
+    const d = PermissionService.evaluate(
+      buildUser('CONTRACTOR'),
+      'asset.read',
+      [],
+      { companyId: THE_COMPANY },
+    );
     expect(d.allowed).toBe(false);
   });
 
-  it('CONTRACTOR can write assets with non-expired membership', () => {
+  it('CONTRACTOR with active READONLY membership can read but not write', () => {
     const m: MembershipSnapshot = {
       companyId: THE_COMPANY,
-      role: 'CLIENT_VIEWER', // membership role irrelevant — CONTRACTOR global rule wins
+      role: 'READONLY',
       expiresAt: new Date(Date.now() + 86400000),
       revokedAt: null,
     };
-    const d = PermissionService.evaluate(user('CONTRACTOR'), 'asset.write', [m], {
-      companyId: THE_COMPANY,
-    });
-    expect(d.allowed).toBe(true);
-  });
-
-  it('CONTRACTOR with expired membership cannot write assets', () => {
-    const m: MembershipSnapshot = {
-      companyId: THE_COMPANY,
-      role: 'CLIENT_VIEWER',
-      expiresAt: new Date('2000-01-01'),
-      revokedAt: null,
-    };
-    const d = PermissionService.evaluate(user('CONTRACTOR'), 'asset.write', [m], {
-      companyId: THE_COMPANY,
-    });
-    expect(d.allowed).toBe(false);
-  });
-
-  it('CLIENT_ADMIN cannot manage memberships', () => {
-    const m: MembershipSnapshot = {
-      companyId: THE_COMPANY,
-      role: 'CLIENT_ADMIN',
-      expiresAt: null,
-      revokedAt: null,
-    };
-    const d = PermissionService.evaluate(user('CLIENT_USER'), 'membership.manage', [m], {
-      companyId: THE_COMPANY,
-    });
-    expect(d.allowed).toBe(false);
-  });
-
-  it('OPERATOR_FULL membership grants asset.write to any global role (except client user)', () => {
-    const m: MembershipSnapshot = {
-      companyId: THE_COMPANY,
-      role: 'OPERATOR_FULL',
-      expiresAt: null,
-      revokedAt: null,
-    };
-    // CLIENT_USER with a *bogus* OPERATOR_FULL row shouldn't happen in prod,
-    // but the matrix-level check must still resolve: allowMembership wins.
-    const d = PermissionService.evaluate(user('CLIENT_USER'), 'asset.write', [m], {
-      companyId: THE_COMPANY,
-    });
-    expect(d.allowed).toBe(true);
-  });
-
-  it('OPERATOR without membership cannot access another company', () => {
-    const m: MembershipSnapshot = {
-      companyId: OTHER_COMPANY,
-      role: 'OPERATOR_FULL',
-      expiresAt: null,
-      revokedAt: null,
-    };
-    const d = PermissionService.evaluate(user('OPERATOR'), 'asset.read', [m], {
-      companyId: THE_COMPANY,
-    });
-    expect(d.allowed).toBe(false);
-  });
-
-  it('company-scoped calls without companyId are denied', () => {
-    const d = PermissionService.evaluate(user('OPERATOR'), 'asset.read', [], {});
-    expect(d.allowed).toBe(false);
-  });
-
-  it('revoked memberships never grant access', () => {
-    const m: MembershipSnapshot = {
-      companyId: THE_COMPANY,
-      role: 'OPERATOR_FULL',
-      expiresAt: null,
-      revokedAt: new Date('2001-01-01'),
-    };
-    const d = PermissionService.evaluate(user('OPERATOR'), 'asset.read', [m], {
-      companyId: THE_COMPANY,
-    });
-    expect(d.allowed).toBe(false);
-  });
-
-  it('user.manage and company.manage are SUPER_ADMIN only', () => {
-    for (const role of ['OPERATOR', 'CONTRACTOR', 'CLIENT_USER'] as UserRole[]) {
-      expect(
-        PermissionService.evaluate(user(role), 'user.manage', []).allowed,
-      ).toBe(false);
-      expect(
-        PermissionService.evaluate(user(role), 'company.manage', []).allowed,
-      ).toBe(false);
-    }
+    const ctx = { companyId: THE_COMPANY };
     expect(
-      PermissionService.evaluate(user('SUPER_ADMIN'), 'user.manage', []).allowed,
+      PermissionService.evaluate(
+        buildUser('CONTRACTOR'),
+        'asset.read',
+        [m],
+        ctx,
+      ).allowed,
     ).toBe(true);
+    expect(
+      PermissionService.evaluate(
+        buildUser('CONTRACTOR'),
+        'asset.write',
+        [m],
+        ctx,
+      ).allowed,
+    ).toBe(false);
   });
 
-  // ------------------------------------------------------------------
-  // Phase 10 — password vault action set
-  // ------------------------------------------------------------------
-
-  it('password.read allows CLIENT_* (per-row visibleToClients filter done in service)', () => {
-    for (const role of ['OPERATOR_FULL', 'OPERATOR_READONLY', 'CLIENT_ADMIN', 'CLIENT_VIEWER'] as MembershipRole[]) {
-      const m: MembershipSnapshot = { companyId: THE_COMPANY, role, expiresAt: null, revokedAt: null };
-      expect(
-        PermissionService.evaluate(user('CLIENT_USER'), 'password.read', [m], {
-          companyId: THE_COMPANY,
-        }).allowed,
-      ).toBe(true);
-    }
-  });
-
-  it('password.write denies OPERATOR_READONLY and CLIENT_*', () => {
-    for (const role of ['OPERATOR_READONLY', 'CLIENT_ADMIN', 'CLIENT_VIEWER'] as MembershipRole[]) {
-      const m: MembershipSnapshot = { companyId: THE_COMPANY, role, expiresAt: null, revokedAt: null };
-      expect(
-        PermissionService.evaluate(user('OPERATOR'), 'password.write', [m], {
-          companyId: THE_COMPANY,
-        }).allowed,
-      ).toBe(false);
-    }
-    const full: MembershipSnapshot = {
+  it('Membership wins over globalAccess (READONLY membership downgrades a globalAccess=FULL operator)', () => {
+    const m: MembershipSnapshot = {
       companyId: THE_COMPANY,
-      role: 'OPERATOR_FULL',
+      role: 'READONLY',
       expiresAt: null,
       revokedAt: null,
     };
+    const op = buildUser('OPERATOR', 'FULL');
     expect(
-      PermissionService.evaluate(user('OPERATOR'), 'password.write', [full], {
+      PermissionService.evaluate(op, 'asset.write', [m], {
+        companyId: THE_COMPANY,
+      }).allowed,
+    ).toBe(false);
+    expect(
+      PermissionService.evaluate(op, 'asset.read', [m], {
         companyId: THE_COMPANY,
       }).allowed,
     ).toBe(true);
   });
 
-  it('password.reveal allows CLIENT_ADMIN and CLIENT_VIEWER (service still enforces visibleToClients)', () => {
-    const admin: MembershipSnapshot = {
-      companyId: THE_COMPANY,
-      role: 'CLIENT_ADMIN',
-      expiresAt: null,
-      revokedAt: null,
-    };
-    const viewer: MembershipSnapshot = {
-      companyId: THE_COMPANY,
-      role: 'CLIENT_VIEWER',
-      expiresAt: null,
-      revokedAt: null,
-    };
+  it('OPERATOR globalAccess=NONE denies even reads when no membership exists', () => {
+    const op = buildUser('OPERATOR', 'NONE');
     expect(
-      PermissionService.evaluate(user('CLIENT_USER'), 'password.reveal', [admin], {
-        companyId: THE_COMPANY,
-      }).allowed,
-    ).toBe(true);
-    // CLIENT_VIEWER is allowed at the RBAC layer; PasswordsService still
-    // gates on visibleToClients / restrictedToUserIds / requireReasonToView.
-    expect(
-      PermissionService.evaluate(user('CLIENT_USER'), 'password.reveal', [viewer], {
-        companyId: THE_COMPANY,
-      }).allowed,
-    ).toBe(true);
-    // A CLIENT_USER with no membership for the company is still denied.
-    expect(
-      PermissionService.evaluate(user('CLIENT_USER'), 'password.reveal', [], {
+      PermissionService.evaluate(op, 'asset.read', [], {
         companyId: THE_COMPANY,
       }).allowed,
     ).toBe(false);
   });
 
-  it('password.archive is OPERATOR_FULL only', () => {
-    for (const role of ['OPERATOR_READONLY', 'CLIENT_ADMIN', 'CLIENT_VIEWER'] as MembershipRole[]) {
-      const m: MembershipSnapshot = { companyId: THE_COMPANY, role, expiresAt: null, revokedAt: null };
-      expect(
-        PermissionService.evaluate(user('OPERATOR'), 'password.archive', [m], {
-          companyId: THE_COMPANY,
-        }).allowed,
-      ).toBe(false);
-    }
+  it('OPERATOR globalAccess=NONE still works for companies they have a membership for', () => {
+    const m: MembershipSnapshot = {
+      companyId: THE_COMPANY,
+      role: 'FULL',
+      expiresAt: null,
+      revokedAt: null,
+    };
+    const op = buildUser('OPERATOR', 'NONE');
+    expect(
+      PermissionService.evaluate(op, 'asset.write', [m], {
+        companyId: THE_COMPANY,
+      }).allowed,
+    ).toBe(true);
   });
 
-  it('settings.manage is a global SUPER_ADMIN-only action', () => {
-    for (const role of ['OPERATOR', 'CONTRACTOR', 'CLIENT_USER'] as UserRole[]) {
-      // Even a rich membership set should not help — the scope is global.
-      const rich: MembershipSnapshot = {
-        companyId: THE_COMPANY,
-        role: 'OPERATOR_FULL',
-        expiresAt: null,
-        revokedAt: null,
-      };
-      expect(
-        PermissionService.evaluate(user(role), 'settings.manage', [rich]).allowed,
-      ).toBe(false);
-    }
+  it('Revoked memberships fall back to globalAccess for OPERATOR', () => {
+    const revoked: MembershipSnapshot = {
+      companyId: THE_COMPANY,
+      role: 'FULL',
+      expiresAt: null,
+      revokedAt: new Date('2001-01-01'),
+    };
+    const op = buildUser('OPERATOR', 'READONLY');
     expect(
-      PermissionService.evaluate(user('SUPER_ADMIN'), 'settings.manage', []).allowed,
+      PermissionService.evaluate(op, 'asset.write', [revoked], {
+        companyId: THE_COMPANY,
+      }).allowed,
+    ).toBe(false);
+    expect(
+      PermissionService.evaluate(op, 'asset.read', [revoked], {
+        companyId: THE_COMPANY,
+      }).allowed,
     ).toBe(true);
+  });
+
+  it('OPERATOR without membership cannot access another company even with FULL membership elsewhere', () => {
+    const m: MembershipSnapshot = {
+      companyId: OTHER_COMPANY,
+      role: 'FULL',
+      expiresAt: null,
+      revokedAt: null,
+    };
+    const op = buildUser('OPERATOR', 'NONE');
+    expect(
+      PermissionService.evaluate(op, 'asset.read', [m], {
+        companyId: THE_COMPANY,
+      }).allowed,
+    ).toBe(false);
+  });
+
+  it('Company-scoped calls without companyId are denied', () => {
+    expect(
+      PermissionService.evaluate(
+        buildUser('OPERATOR', 'FULL'),
+        'asset.read',
+        [],
+        {},
+      ).allowed,
+    ).toBe(false);
+  });
+
+  it('user.manage requires USER_MANAGE for non-SUPER_ADMIN', () => {
+    expect(
+      PermissionService.evaluate(buildUser('OPERATOR', 'FULL'), 'user.manage', []).allowed,
+    ).toBe(false);
+    expect(
+      PermissionService.evaluate(
+        buildUser('OPERATOR', 'FULL', ['USER_MANAGE']),
+        'user.manage',
+        [],
+      ).allowed,
+    ).toBe(true);
+    expect(
+      PermissionService.evaluate(buildUser('SUPER_ADMIN'), 'user.manage', []).allowed,
+    ).toBe(true);
+  });
+
+  it('integration.manage / sync.trigger require INTEGRATION_MANAGE', () => {
+    const op = buildUser('OPERATOR', 'FULL', ['INTEGRATION_MANAGE']);
+    const opPlain = buildUser('OPERATOR', 'FULL');
+    expect(
+      PermissionService.evaluate(op, 'integration.manage', []).allowed,
+    ).toBe(true);
+    expect(
+      PermissionService.evaluate(op, 'sync.trigger', []).allowed,
+    ).toBe(true);
+    expect(
+      PermissionService.evaluate(opPlain, 'integration.manage', []).allowed,
+    ).toBe(false);
+  });
+
+  it('membership.manage requires MEMBERSHIP_MANAGE and a companyId', () => {
+    const op = buildUser('OPERATOR', 'FULL', ['MEMBERSHIP_MANAGE']);
+    expect(
+      PermissionService.evaluate(op, 'membership.manage', [], {
+        companyId: THE_COMPANY,
+      }).allowed,
+    ).toBe(true);
+    expect(
+      PermissionService.evaluate(op, 'membership.manage', []).allowed,
+    ).toBe(false);
+  });
+
+  it('audit.read is global: capability holder can list without a companyId', () => {
+    const op = buildUser('OPERATOR', 'NONE', ['AUDIT_READ']);
+    expect(
+      PermissionService.evaluate(op, 'audit.read', []).allowed,
+    ).toBe(true);
+    expect(
+      PermissionService.evaluate(op, 'audit.read', [], {
+        companyId: THE_COMPANY,
+      }).allowed,
+    ).toBe(true);
+  });
+
+  it('settings.manage and export.create require their respective capabilities', () => {
+    const op = buildUser('OPERATOR', 'FULL', [
+      'SETTINGS_MANAGE',
+      'EXPORT_CREATE',
+    ]);
+    const opPlain = buildUser('OPERATOR', 'FULL');
+    expect(
+      PermissionService.evaluate(op, 'settings.manage', []).allowed,
+    ).toBe(true);
+    expect(
+      PermissionService.evaluate(op, 'export.create', []).allowed,
+    ).toBe(true);
+    expect(
+      PermissionService.evaluate(opPlain, 'settings.manage', []).allowed,
+    ).toBe(false);
+    expect(
+      PermissionService.evaluate(opPlain, 'export.create', []).allowed,
+    ).toBe(false);
+  });
+
+  it('layout.manage.global requires LAYOUT_MANAGE for OPERATOR', () => {
+    expect(
+      PermissionService.evaluate(
+        buildUser('OPERATOR', 'FULL', ['LAYOUT_MANAGE']),
+        'layout.manage.global',
+        [],
+      ).allowed,
+    ).toBe(true);
+    expect(
+      PermissionService.evaluate(
+        buildUser('OPERATOR', 'FULL'),
+        'layout.manage.global',
+        [],
+      ).allowed,
+    ).toBe(false);
+  });
+
+  it('CLIENT_USER cannot manage memberships even with a FULL row (defensive)', () => {
+    const m: MembershipSnapshot = {
+      companyId: THE_COMPANY,
+      role: 'FULL',
+      expiresAt: null,
+      revokedAt: null,
+    };
+    expect(
+      PermissionService.evaluate(
+        buildUser('CLIENT_USER'),
+        'membership.manage',
+        [m],
+        { companyId: THE_COMPANY },
+      ).allowed,
+    ).toBe(false);
+  });
+
+  it('CONTRACTOR cannot manage memberships, integrations, or layouts (no capabilities)', () => {
+    const m: MembershipSnapshot = {
+      companyId: THE_COMPANY,
+      role: 'FULL',
+      expiresAt: null,
+      revokedAt: null,
+    };
+    expect(
+      PermissionService.evaluate(
+        buildUser('CONTRACTOR'),
+        'membership.manage',
+        [m],
+        { companyId: THE_COMPANY },
+      ).allowed,
+    ).toBe(false);
+    expect(
+      PermissionService.evaluate(
+        buildUser('CONTRACTOR'),
+        'integration.manage',
+        [m],
+      ).allowed,
+    ).toBe(false);
   });
 });

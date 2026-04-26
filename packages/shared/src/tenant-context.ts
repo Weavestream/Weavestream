@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
-import type { UserRole } from './roles.js';
+import type { GlobalAccess, UserRole } from './roles.js';
 
 export interface TenantContext {
   userId: string;
@@ -7,6 +7,13 @@ export interface TenantContext {
   email: string;
   allowedCompanyIds: string[];
   isSuperAdmin: boolean;
+  /**
+   * Operator-level fallback access to companies the caller has no
+   * explicit membership in. `FULL` and `READONLY` widen the tenant
+   * scope on reads (and `FULL` on writes); `NONE` and `null` keep the
+   * caller pinned to `allowedCompanyIds`.
+   */
+  globalAccess: GlobalAccess | null;
   requestId: string;
   ip: string;
   userAgent: string;

@@ -10,7 +10,7 @@ import {
   listAssets,
   throwUnlessFound,
 } from '../../../../../lib/server-api';
-import { canManage } from '../../../../../lib/roles';
+import { canWriteCompany } from '../../../../../lib/roles';
 import { PageBody, PageHeader } from '../../../../../components/shell/page-header';
 import { Icon, Panel, Tag } from '../../../../../components/ui';
 import { buildTerm, lower } from '../../../../../lib/term';
@@ -36,6 +36,7 @@ export default async function CompanyAssetsPage({
 
   const companyRes = await getCompanyDetail(companyId);
   const company = throwUnlessFound(companyRes, `/companies/${companyId}`);
+  const manage = canWriteCompany(me, company.id);
 
   const layoutId = typeof sp.layout === 'string' ? sp.layout : undefined;
   const q = typeof sp.q === 'string' ? sp.q : undefined;
@@ -72,7 +73,7 @@ export default async function CompanyAssetsPage({
             : `Every asset tracked for this ${lower(term.one)}, across all layouts.`
         }
         actions={
-          canManage(me.role) ? (
+          manage ? (
             <Link
               href={`/admin/companies/${companyId}/assets/new${layoutId ? `?layout=${layoutId}` : ''}`}
               style={{
@@ -117,7 +118,7 @@ export default async function CompanyAssetsPage({
             layoutId={layoutId ?? ''}
             includeArchived={includeArchived}
             fieldFilters={fieldFilters}
-            canManage={canManage(me.role)}
+            canManage={manage}
           />
         </Panel>
       </PageBody>

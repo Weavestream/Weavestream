@@ -256,6 +256,8 @@ export class AuthService {
       email: user.email,
       name: user.name,
       role: user.role,
+      globalAccess: user.globalAccess,
+      platformCapabilities: user.platformCapabilities,
       mfaEnabled: user.mfaEnabled,
       mfaEnforcementCompletedAt: user.mfaEnforcementCompletedAt,
       memberships: user.memberships,

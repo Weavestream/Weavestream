@@ -10,7 +10,7 @@ import {
   throwUnlessFound,
   type AssetSummary,
 } from '../../../../../../lib/server-api';
-import { canManage } from '../../../../../../lib/roles';
+import { canWriteCompany } from '../../../../../../lib/roles';
 import { PageBody, PageHeader } from '../../../../../../components/shell/page-header';
 import { Icon, LayoutSwatch, Panel, Tag } from '../../../../../../components/ui';
 import { buildTerm } from '../../../../../../lib/term';
@@ -52,7 +52,7 @@ export default async function AssetDetailPage({
   ]);
   const company = throwUnlessFound(companyRes, `/companies/${companyId}`);
   if (!asset) notFound();
-  const manage = canManage(me.role);
+  const manage = canWriteCompany(me, company.id);
 
   const createdBy = asset.createdByUser;
   const updatedBy = asset.updatedByUser;
