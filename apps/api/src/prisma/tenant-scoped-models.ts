@@ -102,7 +102,18 @@ export function assertTenantScope(
   const create = (params.args['create'] ?? {}) as Record<string, unknown>;
   const update = (params.args['update'] ?? {}) as Record<string, unknown>;
 
-  if (ctx.isSuperAdmin && !isWrite) return;
+  // SUPER_ADMIN, and operators with a non-NONE `globalAccess`, bypass
+  // tenant scoping on reads — `READONLY` only widens reads, `FULL` also
+  // widens writes (matching the per-permission rules in
+  // `rbac/permissions.ts`). `NONE` keeps the caller pinned to their
+  // explicit memberships.
+  const hasReadBypass =
+    ctx.isSuperAdmin ||
+    ctx.globalAccess === 'FULL' ||
+    ctx.globalAccess === 'READONLY';
+  const hasWriteBypass = ctx.isSuperAdmin || ctx.globalAccess === 'FULL';
+
+  if (hasReadBypass && !isWrite) return;
 
   const scopeFromWhere = extractCompanyIds(where['companyId']);
   const scopeFromData = isWrite
@@ -122,7 +133,7 @@ export function assertTenantScope(
     );
   }
 
-  if (!ctx.isSuperAdmin) {
+  if (!hasWriteBypass) {
     const allowed = new Set(ctx.allowedCompanyIds);
     const outOfScope = candidates.filter((id) => !allowed.has(id));
     if (outOfScope.length > 0) {

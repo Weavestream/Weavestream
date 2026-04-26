@@ -12,10 +12,7 @@ import {
   type CompanyDetail,
   type MonitoredDomain,
 } from '../../../../lib/server-api';
-import {
-  canManage,
-  canManageCompanyMemberships,
-} from '../../../../lib/roles';
+import { canWriteCompany, hasCapability } from '../../../../lib/roles';
 import { PageBody, PageHeader } from '../../../../components/shell/page-header';
 import {
   CompanyAvatar,
@@ -88,11 +85,12 @@ export default async function CompanyDetailPage({
   const membershipsError = !membershipsRes.ok ? membershipsRes : null;
   const recentAssets = assetsPage.items;
   const domains = domainPage.items;
-  // Global-role gate for editing the company itself (archive, edit in
-  // Settings, etc.). Memberships have a stricter per-company rule, see
-  // below.
-  const manage = canManage(me.role);
-  const manageMemberships = canManageCompanyMemberships(me, company.id);
+  // RBAC v2 — editing the company itself (archive, settings) is a
+  // per-company write, gated by `canWriteCompany`. Membership writes
+  // are platform-admin (`MEMBERSHIP_MANAGE`); we still surface the
+  // panel as read-only for anyone who can read the company.
+  const manage = canWriteCompany(me, company.id);
+  const manageMemberships = hasCapability(me, 'MEMBERSHIP_MANAGE');
   const accent = companyAccent(company.id);
   const logoUrl = company.logo?.url ?? company.logo?.thumbnailUrl ?? null;
 

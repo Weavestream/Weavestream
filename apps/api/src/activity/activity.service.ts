@@ -39,11 +39,16 @@ export class ActivityService {
     const safeLimit = Math.min(Math.max(limit, 1), 25);
     const ctx = requireTenantContext();
 
-    // SUPER_ADMIN is global; everyone else is restricted to their
-    // non-revoked membership companies. An operator role with zero
-    // memberships simply gets an empty feed.
+    // SUPER_ADMIN, and operators with non-NONE `globalAccess`, see
+    // every company. Everyone else is restricted to their non-revoked
+    // membership companies; an operator with no global access and no
+    // memberships gets an empty feed.
+    const hasGlobalScope =
+      ctx.isSuperAdmin ||
+      ctx.globalAccess === 'FULL' ||
+      ctx.globalAccess === 'READONLY';
     const scope: { companyId?: { in: string[] } } = {};
-    if (!ctx.isSuperAdmin) {
+    if (!hasGlobalScope) {
       if (ctx.allowedCompanyIds.length === 0) {
         return { items: [] };
       }

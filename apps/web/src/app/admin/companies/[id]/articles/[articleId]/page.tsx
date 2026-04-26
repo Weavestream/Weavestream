@@ -10,7 +10,7 @@ import {
   listArticles,
   throwUnlessFound,
 } from '../../../../../../lib/server-api';
-import { canManage } from '../../../../../../lib/roles';
+import { canWriteCompany } from '../../../../../../lib/roles';
 import { TopBar } from '../../../../../../components/shell/top-bar';
 import { Icon, Panel, StarButton, Tag } from '../../../../../../components/ui';
 import { buildTerm } from '../../../../../../lib/term';
@@ -48,7 +48,7 @@ export default async function ArticleReadPage({
   ]);
   const company = throwUnlessFound(companyRes, `/companies/${companyId}`);
   if (!article) notFound();
-  const manage = canManage(me.role);
+  const manage = canWriteCompany(me, company.id);
 
   return (
     <>

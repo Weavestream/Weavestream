@@ -38,6 +38,8 @@ function makeCache() {
 const SUPER: AuthedUser = {
   id: 'super-1',
   role: 'SUPER_ADMIN',
+  globalAccess: null,
+  platformCapabilities: [],
   email: 's@x',
   sessionId: 'sess-1',
   mfaEnforcementCompletedAt: new Date(),
@@ -60,7 +62,7 @@ describe('MembershipsService.create', () => {
       .mockResolvedValueOnce(null); // revoked lookup
     prisma.membership.create.mockResolvedValue({
       id: 'm-1',
-      role: 'CLIENT_VIEWER',
+      role: 'READONLY',
       expiresAt: null,
     });
 
@@ -68,7 +70,7 @@ describe('MembershipsService.create', () => {
     const result = await svc.create(
       SUPER,
       COMPANY_ID,
-      { userId: USER_ID, role: 'CLIENT_VIEWER', expiresAt: null },
+      { userId: USER_ID, role: 'READONLY', expiresAt: null },
       META,
     );
 
@@ -92,7 +94,7 @@ describe('MembershipsService.create', () => {
 
     const svc = new MembershipsService(prisma as never, makeAudit() as never, makeCache() as never);
     await expect(
-      svc.create(SUPER, COMPANY_ID, { userId: USER_ID, role: 'CLIENT_VIEWER' }, META),
+      svc.create(SUPER, COMPANY_ID, { userId: USER_ID, role: 'READONLY' }, META),
     ).rejects.toBeInstanceOf(ConflictException);
   });
 
@@ -107,12 +109,12 @@ describe('MembershipsService.create', () => {
       .mockResolvedValueOnce({
         id: 'm-revoked',
         revokedAt: new Date('2020-01-01'),
-        role: 'CLIENT_VIEWER',
+        role: 'READONLY',
         expiresAt: null,
       });
     prisma.membership.update.mockResolvedValue({
       id: 'm-revoked',
-      role: 'OPERATOR_FULL',
+      role: 'FULL',
       expiresAt: null,
     });
 
@@ -120,14 +122,14 @@ describe('MembershipsService.create', () => {
     const result = await svc.create(
       SUPER,
       COMPANY_ID,
-      { userId: USER_ID, role: 'OPERATOR_FULL' },
+      { userId: USER_ID, role: 'FULL' },
       META,
     );
 
     expect(prisma.membership.create).not.toHaveBeenCalled();
     expect(prisma.membership.update).toHaveBeenCalledWith({
       where: { id: 'm-revoked' },
-      data: expect.objectContaining({ revokedAt: null, role: 'OPERATOR_FULL' }),
+      data: expect.objectContaining({ revokedAt: null, role: 'FULL' }),
     });
     expect(result.id).toBe('m-revoked');
     expect(cache.invalidate).toHaveBeenCalledWith(USER_ID);
@@ -141,7 +143,7 @@ describe('MembershipsService.create', () => {
 
     const svc = new MembershipsService(prisma as never, makeAudit() as never, makeCache() as never);
     await expect(
-      svc.create(SUPER, COMPANY_ID, { userId: USER_ID, role: 'CLIENT_VIEWER' }, META),
+      svc.create(SUPER, COMPANY_ID, { userId: USER_ID, role: 'READONLY' }, META),
     ).rejects.toBeInstanceOf(BadRequestException);
   });
 });
@@ -207,25 +209,61 @@ describe('MembershipsService.update', () => {
       userId: USER_ID,
       companyId: COMPANY_ID,
       revokedAt: null,
-      role: 'CLIENT_VIEWER',
+      role: 'READONLY',
       expiresAt: null,
+      user: { role: 'OPERATOR' },
     });
     prisma.membership.update.mockResolvedValue({
       id: 'm-1',
-      role: 'OPERATOR_READONLY',
+      role: 'FULL',
       expiresAt: null,
     });
 
     const svc = new MembershipsService(prisma as never, audit as never, cache as never);
-    await svc.update(SUPER, 'm-1', { role: 'OPERATOR_READONLY' }, META);
+    await svc.update(SUPER, 'm-1', { role: 'FULL' }, META);
 
     expect(cache.invalidate).toHaveBeenCalledWith(USER_ID);
     expect(audit.log).toHaveBeenCalledWith(
       expect.objectContaining({
         action: 'membership.update',
-        before: expect.objectContaining({ role: 'CLIENT_VIEWER' }),
-        after: expect.objectContaining({ role: 'OPERATOR_READONLY' }),
+        before: expect.objectContaining({ role: 'READONLY' }),
+        after: expect.objectContaining({ role: 'FULL' }),
       }),
     );
+  });
+
+  it('rejects FULL membership for CLIENT_USER', async () => {
+    const prisma = makePrismaMock();
+    prisma.membership.findUnique.mockResolvedValue({
+      id: 'm-1',
+      userId: USER_ID,
+      companyId: COMPANY_ID,
+      revokedAt: null,
+      role: 'READONLY',
+      expiresAt: null,
+      user: { role: 'CLIENT_USER' },
+    });
+
+    const svc = new MembershipsService(prisma as never, makeAudit() as never, makeCache() as never);
+    await expect(
+      svc.update(SUPER, 'm-1', { role: 'FULL' }, META),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+});
+
+describe('MembershipsService.create — CLIENT_USER guard', () => {
+  it('rejects FULL membership for CLIENT_USER', async () => {
+    const prisma = makePrismaMock();
+    prisma.user.findUnique.mockResolvedValue({
+      id: USER_ID,
+      isActive: true,
+      role: 'CLIENT_USER',
+    });
+    prisma.company.findUnique.mockResolvedValue({ id: COMPANY_ID });
+
+    const svc = new MembershipsService(prisma as never, makeAudit() as never, makeCache() as never);
+    await expect(
+      svc.create(SUPER, COMPANY_ID, { userId: USER_ID, role: 'FULL' }, META),
+    ).rejects.toBeInstanceOf(BadRequestException);
   });
 });

@@ -1,5 +1,10 @@
 import { z } from 'zod';
-import { MembershipRoleValues, UserRoleValues } from '../roles.js';
+import {
+  GlobalAccessValues,
+  MembershipRoleValues,
+  PlatformCapabilityValues,
+  UserRoleValues,
+} from '../roles.js';
 import { userSearchDefaultsSchema } from './search.js';
 
 /**
@@ -50,12 +55,64 @@ export const createUserMembershipSchema = z.object({
     .optional(),
 });
 
-export const createUserSchema = z.object({
-  email: emailSchema,
-  name: nameSchema,
-  role: z.enum(UserRoleValues),
-  membership: createUserMembershipSchema.optional(),
-});
+/**
+ * `globalAccess` and `platformCapabilities` are the two-axis OPERATOR
+ * model. `globalAccess` governs company-data CRUD on companies the
+ * operator doesn't have an explicit membership for; capabilities are
+ * granular platform-admin grants. The cross-field rule is enforced
+ * with `superRefine`: OPERATOR requires `globalAccess` and may
+ * include any subset of capabilities; every other role rejects both
+ * fields. Promoting/demoting `SUPER_ADMIN` is a separate hard check
+ * inside `users.service.ts` regardless of `USER_MANAGE`.
+ */
+const operatorAxesShape = {
+  globalAccess: z.enum(GlobalAccessValues).optional(),
+  platformCapabilities: z.array(z.enum(PlatformCapabilityValues)).optional(),
+};
+
+function refineOperatorAxes(
+  data: {
+    role?: (typeof UserRoleValues)[number];
+    globalAccess?: (typeof GlobalAccessValues)[number];
+    platformCapabilities?: (typeof PlatformCapabilityValues)[number][];
+  },
+  ctx: z.RefinementCtx,
+): void {
+  const isOperator = data.role === 'OPERATOR';
+  if (data.role !== undefined) {
+    if (isOperator && data.globalAccess === undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['globalAccess'],
+        message: 'globalAccess is required when role is OPERATOR',
+      });
+    }
+    if (!isOperator && data.globalAccess !== undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['globalAccess'],
+        message: 'globalAccess is only allowed for OPERATOR users',
+      });
+    }
+    if (!isOperator && data.platformCapabilities && data.platformCapabilities.length > 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['platformCapabilities'],
+        message: 'platformCapabilities are only allowed for OPERATOR users',
+      });
+    }
+  }
+}
+
+export const createUserSchema = z
+  .object({
+    email: emailSchema,
+    name: nameSchema,
+    role: z.enum(UserRoleValues),
+    membership: createUserMembershipSchema.optional(),
+    ...operatorAxesShape,
+  })
+  .superRefine(refineOperatorAxes);
 
 export const updateUserSchema = z
   .object({
@@ -63,8 +120,10 @@ export const updateUserSchema = z
     role: z.enum(UserRoleValues).optional(),
     isActive: z.boolean().optional(),
     timezone: timezoneSchema.nullable().optional(),
+    ...operatorAxesShape,
   })
-  .refine((v) => Object.keys(v).length > 0, 'At least one field must be provided');
+  .refine((v) => Object.keys(v).length > 0, 'At least one field must be provided')
+  .superRefine(refineOperatorAxes);
 
 export const updateMeSchema = z
   .object({

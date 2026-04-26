@@ -55,6 +55,8 @@ export class UsersService {
         email: true,
         name: true,
         role: true,
+        globalAccess: true,
+        platformCapabilities: true,
         isActive: true,
         mfaEnabled: true,
         deactivatedAt: true,
@@ -79,6 +81,8 @@ export class UsersService {
         email: true,
         name: true,
         role: true,
+        globalAccess: true,
+        platformCapabilities: true,
         isActive: true,
         mfaEnabled: true,
         mfaEnforcementCompletedAt: true,
@@ -119,9 +123,27 @@ export class UsersService {
     });
     if (existing) throw new ConflictException('A user with that email already exists');
 
-    // Validate the optional invite-with-company payload up front so we
-    // can refuse cleanly before writing the user — saves the rollback
-    // path from having to clean up a just-created user row.
+    // Hard guard: only SUPER_ADMIN can mint another SUPER_ADMIN.
+    // Holding `USER_MANAGE` is intentionally insufficient — a senior
+    // operator can manage every other role but cannot promote to SA.
+    if (input.role === 'SUPER_ADMIN' && actor.role !== 'SUPER_ADMIN') {
+      throw new ForbiddenException('Only SUPER_ADMIN can create SUPER_ADMIN users');
+    }
+
+    // Operator-axes consistency. The Zod schema already rejects
+    // mismatched combos; we double-check here so any bypass
+    // (e.g. an internal callsite that hand-crafts an input) still
+    // hits the correct invariant.
+    if (input.role === 'OPERATOR') {
+      if (!input.globalAccess) {
+        throw new BadRequestException('OPERATOR users must declare a globalAccess');
+      }
+    } else if (input.globalAccess !== undefined || (input.platformCapabilities?.length ?? 0) > 0) {
+      throw new BadRequestException(
+        'globalAccess and platformCapabilities are only valid for OPERATOR users',
+      );
+    }
+
     if (input.membership) {
       const company = await this.prisma.company.findUnique({
         where: { id: input.membership.companyId },
@@ -131,6 +153,11 @@ export class UsersService {
       if (company.archivedAt) {
         throw new BadRequestException('Cannot attach users to an archived company');
       }
+      if (input.role === 'CLIENT_USER' && input.membership.role === 'FULL') {
+        throw new BadRequestException(
+          'CLIENT_USER memberships must be READONLY',
+        );
+      }
     }
 
     const { user, membership } = await this.prisma.$transaction(async (tx) => {
@@ -139,6 +166,9 @@ export class UsersService {
           email: input.email.toLowerCase(),
           name: input.name,
           role: input.role,
+          globalAccess: input.role === 'OPERATOR' ? input.globalAccess! : null,
+          platformCapabilities:
+            input.role === 'OPERATOR' ? (input.platformCapabilities ?? []) : [],
           // No password — invite flow creates it.
           passwordHash: null,
           mfaEnabled: false,
@@ -181,7 +211,13 @@ export class UsersService {
       ip: meta.ip,
       userAgent: meta.userAgent,
       before: null,
-      after: { email: user.email, name: user.name, role: user.role },
+      after: {
+        email: user.email,
+        name: user.name,
+        role: user.role,
+        globalAccess: user.globalAccess,
+        platformCapabilities: user.platformCapabilities,
+      },
     });
     await this.audit.log({
       actorId: actor.id,
@@ -215,6 +251,8 @@ export class UsersService {
         email: user.email,
         name: user.name,
         role: user.role,
+        globalAccess: user.globalAccess,
+        platformCapabilities: user.platformCapabilities,
       },
       setupUrl: invite.url,
       expiresAt: invite.expiresAt,
@@ -243,9 +281,52 @@ export class UsersService {
     }
 
     const isRoleChange = input.role !== undefined && input.role !== before.role;
+
+    // SUPER_ADMIN promotion/demotion is a strict SUPER_ADMIN-only
+    // operation regardless of `USER_MANAGE`. Promotion: role becomes
+    // SUPER_ADMIN. Demotion: was SUPER_ADMIN, role is changing.
+    if (
+      isRoleChange &&
+      actor.role !== 'SUPER_ADMIN' &&
+      (input.role === 'SUPER_ADMIN' || before.role === 'SUPER_ADMIN')
+    ) {
+      throw new ForbiddenException(
+        'Only SUPER_ADMIN can promote to or demote from SUPER_ADMIN',
+      );
+    }
+
+    // Resolve the effective post-update role so we can validate the
+    // OPERATOR axes against the right baseline.
+    const nextRole = input.role ?? before.role;
+    const operatorAxesTouched =
+      input.globalAccess !== undefined ||
+      input.platformCapabilities !== undefined;
+
+    if (nextRole === 'OPERATOR') {
+      // Non-OPERATOR -> OPERATOR transition needs an explicit
+      // globalAccess; otherwise we fall back to the existing value.
+      if (input.role === 'OPERATOR' && before.role !== 'OPERATOR') {
+        if (!input.globalAccess) {
+          throw new BadRequestException(
+            'globalAccess is required when promoting a user to OPERATOR',
+          );
+        }
+      }
+    } else if (operatorAxesTouched) {
+      throw new BadRequestException(
+        'globalAccess and platformCapabilities are only valid for OPERATOR users',
+      );
+    }
+
     const isDeactivation =
       input.isActive === false && before.isActive === true;
     const isActivation = input.isActive === true && before.isActive === false;
+
+    // When demoting away from OPERATOR, clear the OPERATOR axes so a
+    // re-promoted user doesn't inherit a stale globalAccess/capabilities
+    // set from a prior life.
+    const clearOperatorAxes =
+      isRoleChange && before.role === 'OPERATOR' && nextRole !== 'OPERATOR';
 
     const updated = await this.prisma.user.update({
       where: { id },
@@ -259,6 +340,16 @@ export class UsersService {
               deactivatedAt: input.isActive ? null : new Date(),
             }
           : {}),
+        ...(clearOperatorAxes
+          ? { globalAccess: null, platformCapabilities: [] }
+          : {
+              ...(input.globalAccess !== undefined
+                ? { globalAccess: input.globalAccess }
+                : {}),
+              ...(input.platformCapabilities !== undefined
+                ? { platformCapabilities: input.platformCapabilities }
+                : {}),
+            }),
       },
     });
 
@@ -311,12 +402,16 @@ export class UsersService {
         role: before.role,
         isActive: before.isActive,
         timezone: before.timezone,
+        globalAccess: before.globalAccess,
+        platformCapabilities: before.platformCapabilities,
       },
       after: {
         name: updated.name,
         role: updated.role,
         isActive: updated.isActive,
         timezone: updated.timezone,
+        globalAccess: updated.globalAccess,
+        platformCapabilities: updated.platformCapabilities,
       },
     });
 

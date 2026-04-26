@@ -11,6 +11,7 @@ import {
   listLayouts,
   listPasswords,
 } from '../../../lib/server-api';
+import { canAccessAdminShell } from '../../../lib/roles';
 import { buildTerm } from '../../../lib/term';
 
 export async function generateMetadata({
@@ -56,10 +57,12 @@ export default async function PortalLayout({
 
   const membership = me.memberships.find((m) => m.company.slug === companySlug);
   if (!membership) {
-    // SUPER_ADMINs and operators don't need a membership to read
-    // company data, but the portal shell is membership-scoped by
-    // design. Send them to the admin view instead.
-    if (me.role === 'SUPER_ADMIN') {
+    // SUPER_ADMINs and operators with admin-shell access can read any
+    // company without an explicit membership, but the portal shell is
+    // membership-scoped by design. Bounce them into the admin view so
+    // they get their full operator chrome instead of a degenerate
+    // single-tenant sidebar with no membership context.
+    if (canAccessAdminShell(me)) {
       redirect('/admin/companies');
     }
     notFound();

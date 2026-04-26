@@ -1,7 +1,7 @@
 import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { getMe, getSettings } from '../../lib/server-api';
-import { activeMemberships, isOperator } from '../../lib/roles';
+import { activeMemberships, canAccessAdminShell } from '../../lib/roles';
 import { AuthShell } from '../../components/shell/auth-shell';
 import { LogoutButton } from '../../components/shell/logout-button';
 
@@ -21,7 +21,7 @@ export default async function AccessPendingPage() {
 
   const me = await getMe();
   if (!me) redirect('/login');
-  if (isOperator(me.role)) redirect('/admin');
+  if (canAccessAdminShell(me)) redirect('/admin');
   if (activeMemberships(me).length > 0) redirect('/');
 
   const settings = await getSettings();

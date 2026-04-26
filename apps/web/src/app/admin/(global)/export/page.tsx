@@ -1,16 +1,17 @@
 import { redirect } from 'next/navigation';
 import { getMe } from '../../../../lib/server-api';
+import { hasCapability } from '../../../../lib/roles';
 import { PageBody, PageHeader } from '../../../../components/shell/page-header';
 import { ExportWizard } from './export-wizard';
 
 /**
- * Global data-export tools page. Restricted to SUPER_ADMIN — operators
- * cannot access this page because the PDF export may contain plaintext
- * passwords and other sensitive data.
+ * Global data-export tools page. Gated by EXPORT_CREATE — the PDF
+ * export may contain plaintext passwords, so we don't grant this to
+ * every operator by default, only those an admin has elevated.
  */
 export default async function ExportPage() {
   const me = (await getMe())!;
-  if (me.role !== 'SUPER_ADMIN') redirect('/admin');
+  if (!hasCapability(me, 'EXPORT_CREATE')) redirect('/admin');
 
   return (
     <>

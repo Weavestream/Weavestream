@@ -1,6 +1,7 @@
 import { redirect } from 'next/navigation';
 import type { MembershipRole } from '@weavestream/shared';
 import { getMe, serverApiFetch } from '../../../../lib/server-api';
+import { hasCapability } from '../../../../lib/roles';
 import { PageBody, PageHeader } from '../../../../components/shell/page-header';
 import { Panel, Tag } from '../../../../components/ui';
 import { MembershipsTable } from './memberships-table';
@@ -28,8 +29,9 @@ export default async function MembershipsPage({
   }>;
 }) {
   const me = (await getMe())!;
-  if (me.role !== 'SUPER_ADMIN') {
-    // OPERATOR_FULL can see company-scoped memberships via each company page.
+  if (!hasCapability(me, 'MEMBERSHIP_MANAGE')) {
+    // Operators without MEMBERSHIP_MANAGE still see scoped memberships
+    // through each company's Users tab; the global view is gated.
     redirect('/admin/companies');
   }
   const sp = await searchParams;

@@ -1,5 +1,5 @@
 import { getMe, serverApiFetch, type UserPage } from '../../../../lib/server-api';
-import { canManage } from '../../../../lib/roles';
+import { hasCapability } from '../../../../lib/roles';
 import { PageBody, PageHeader } from '../../../../components/shell/page-header';
 import { Panel } from '../../../../components/ui';
 import { UsersTable } from './users-table';
@@ -29,11 +29,11 @@ export default async function UsersPage({
         ]}
         title="Users"
         description="Every person with an account in Weavestream. Creating a user generates a one-time setup link; the user sets their own password and enables MFA."
-        actions={canManage(me.role) ? <CreateUserButton /> : null}
+        actions={hasCapability(me, 'USER_MANAGE') ? <CreateUserButton /> : null}
       />
       <PageBody>
         <Panel title={`${rows.length} ${rows.length === 1 ? 'user' : 'users'}`} noPad>
-          <UsersTable rows={rows} filters={sp} canManage={canManage(me.role)} />
+          <UsersTable rows={rows} filters={sp} canManage={hasCapability(me, 'USER_MANAGE')} />
         </Panel>
       </PageBody>
     </>

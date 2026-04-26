@@ -5,6 +5,8 @@ import type { AuthedUser } from '../common/current-user.decorator.js';
 const ACTOR: AuthedUser = {
   id: 'actor-1',
   role: 'SUPER_ADMIN',
+  globalAccess: null,
+  platformCapabilities: [],
   email: 'a@x',
   sessionId: 's-1',
   mfaEnforcementCompletedAt: new Date(),
@@ -120,7 +122,7 @@ describe('UsersService.create', () => {
     const expiresAt = new Date(Date.now() + 86_400_000);
     prisma.membership.create.mockResolvedValue({
       id: 'm-1',
-      role: 'CLIENT_VIEWER',
+      role: 'READONLY',
       expiresAt,
     });
 
@@ -138,7 +140,7 @@ describe('UsersService.create', () => {
         role: 'CLIENT_USER',
         membership: {
           companyId: 'c-1',
-          role: 'CLIENT_VIEWER',
+          role: 'READONLY',
           expiresAt: expiresAt.toISOString(),
         },
       },
@@ -152,7 +154,7 @@ describe('UsersService.create', () => {
         data: expect.objectContaining({
           userId: 'u-1',
           companyId: 'c-1',
-          role: 'CLIENT_VIEWER',
+          role: 'READONLY',
           createdBy: ACTOR.id,
           expiresAt: expect.any(Date),
         }),
@@ -198,7 +200,7 @@ describe('UsersService.create', () => {
           role: 'CLIENT_USER',
           membership: {
             companyId: 'missing',
-            role: 'CLIENT_VIEWER',
+            role: 'READONLY',
           },
         },
         META,
@@ -241,7 +243,7 @@ describe('UsersService.create', () => {
           role: 'CLIENT_USER',
           membership: {
             companyId: 'c-1',
-            role: 'CLIENT_VIEWER',
+            role: 'READONLY',
           },
         },
         META,
@@ -282,7 +284,12 @@ describe('UsersService.update role-change auditing', () => {
       cache as never,
       makeSetupTokens() as never,
     );
-    await svc.update(ACTOR, 'u-1', { role: 'OPERATOR' }, META);
+    await svc.update(
+      ACTOR,
+      'u-1',
+      { role: 'OPERATOR', globalAccess: 'FULL' },
+      META,
+    );
 
     const actions = audit.log.mock.calls.map((c) => c[0].action);
     expect(actions).toEqual(expect.arrayContaining(['user.role.change', 'user.update']));

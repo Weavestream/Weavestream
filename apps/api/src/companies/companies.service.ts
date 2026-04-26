@@ -140,19 +140,32 @@ export class CompaniesService {
     if (options.excludeIds && options.excludeIds.length > 0) {
       where.id = { notIn: options.excludeIds };
     }
+    // RBAC v2 — visibility for the company list:
+    //   - SUPER_ADMIN              → every row
+    //   - OPERATOR with FULL/READONLY globalAccess
+    //                              → every row (per-company membership
+    //                                only ever *upgrades* access; the
+    //                                fallback already grants READ)
+    //   - OPERATOR with NONE       → only companies they're a member of
+    //   - CONTRACTOR / CLIENT_USER → only companies they're a member of
     if (actor.role !== 'SUPER_ADMIN') {
-      const memberships = await this.prisma.membership.findMany({
-        where: { userId: actor.id, revokedAt: null },
-        select: { companyId: true },
-      });
-      const ids = memberships.map((m) => m.companyId);
-      if (ids.length === 0) return { items: [], nextCursor: null };
-      // Combine with any excludeIds by filtering the allowed set.
-      const allowed = options.excludeIds
-        ? ids.filter((id) => !options.excludeIds!.includes(id))
-        : ids;
-      if (allowed.length === 0) return { items: [], nextCursor: null };
-      where.id = { in: allowed };
+      const seesEverything =
+        actor.role === 'OPERATOR' &&
+        actor.globalAccess !== null &&
+        actor.globalAccess !== 'NONE';
+      if (!seesEverything) {
+        const memberships = await this.prisma.membership.findMany({
+          where: { userId: actor.id, revokedAt: null },
+          select: { companyId: true },
+        });
+        const ids = memberships.map((m) => m.companyId);
+        if (ids.length === 0) return { items: [], nextCursor: null };
+        const allowed = options.excludeIds
+          ? ids.filter((id) => !options.excludeIds!.includes(id))
+          : ids;
+        if (allowed.length === 0) return { items: [], nextCursor: null };
+        where.id = { in: allowed };
+      }
     }
 
     // Phase 9b.3: sort by `updatedAt desc` when the caller asks — used
@@ -225,13 +238,9 @@ export class CompaniesService {
       select: COMPANY_DETAIL_SELECT,
     });
     if (!company) throw new NotFoundException();
-
-    if (actor.role !== 'SUPER_ADMIN') {
-      const membership = await this.prisma.membership.findFirst({
-        where: { companyId: id, userId: actor.id, revokedAt: null },
-      });
-      if (!membership) throw new NotFoundException();
-    }
+    // The PermissionGuard on `company.read` already verified the
+    // caller has FULL or READONLY effective access via membership or
+    // operator globalAccess, so we don't repeat that check here.
 
     const [logo, childrenCount, star] = await Promise.all([
       this.resolveLogo(company.logoUpload),

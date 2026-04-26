@@ -10,7 +10,7 @@ import {
   listArticles,
   throwUnlessFound,
 } from '../../../../../lib/server-api';
-import { canManage } from '../../../../../lib/roles';
+import { canWriteCompany } from '../../../../../lib/roles';
 import { PageBody, PageHeader } from '../../../../../components/shell/page-header';
 import { Icon, Panel, Tag } from '../../../../../components/ui';
 import { buildTerm, lower } from '../../../../../lib/term';
@@ -57,7 +57,7 @@ export default async function CompanyArticlesPage({
     }),
   ]);
 
-  const manage = canManage(me.role);
+  const manage = canWriteCompany(me, company.id);
 
   return (
     <>

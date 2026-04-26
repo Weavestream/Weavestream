@@ -11,7 +11,7 @@ import {
   listLayouts,
 } from '../../lib/server-api';
 import {
-  isOperator,
+  canAccessAdminShell,
   preferredMembership,
 } from '../../lib/roles';
 import { buildTerm } from '../../lib/term';
@@ -20,11 +20,14 @@ import { buildTerm } from '../../lib/term';
  * `/me` is the profile/settings surface and exists for every signed-in
  * role. Shell selection mirrors where the user spends the rest of
  * their time:
- *   - Operators get the global `AdminShell` with "Profile" active.
- *   - Client users get the portal `CompanyShell` for their last-used
- *     (or first active) membership, so the sidebar they already know
- *     stays in place instead of vanishing on /me.
- *   - Client users without any active membership are redirected to
+ *   - Anyone with admin-shell access (SUPER_ADMIN, or OPERATOR with
+ *     non-NONE `globalAccess` or any `platformCapabilities`) gets the
+ *     global `AdminShell` with "Profile" active.
+ *   - Everyone else (client users, contractors, locked-down operators
+ *     without admin-shell access) gets the portal `CompanyShell` for
+ *     their last-used (or first active) membership so the sidebar they
+ *     already know stays in place instead of vanishing on /me.
+ *   - Users without any active membership are redirected to
  *     `/access-pending` — there's no company to scope the shell to,
  *     and the profile page isn't actionable for them anyway.
  */
@@ -34,7 +37,7 @@ export default async function MeLayout({ children }: { children: ReactNode }) {
   const me = await getMe();
   if (!me) redirect('/login');
 
-  if (isOperator(me.role)) {
+  if (canAccessAdminShell(me)) {
     const settings = await getSettings();
     const term = buildTerm(settings);
     return (

@@ -4,7 +4,7 @@ import {
   serverApiFetch,
   type CompanyPage,
 } from '../../../../lib/server-api';
-import { canManage } from '../../../../lib/roles';
+import { hasCapability } from '../../../../lib/roles';
 import { PageBody, PageHeader } from '../../../../components/shell/page-header';
 import { Panel, Tag } from '../../../../components/ui';
 import { buildTerm, lower } from '../../../../lib/term';
@@ -18,6 +18,7 @@ export default async function CompaniesPage({
 }) {
   const sp = await searchParams;
   const me = (await getMe())!;
+  const manage = hasCapability(me, 'COMPANY_MANAGE');
   const term = buildTerm(await getSettings());
   const params = new URLSearchParams();
   params.set('limit', '200');
@@ -37,7 +38,7 @@ export default async function CompaniesPage({
         description={`Every tenant the operator team manages. Archive a ${lower(
           term.one,
         )} to remove it from portal navigation without deleting its data.`}
-        actions={canManage(me.role) ? <CreateCompanyButton /> : null}
+        actions={manage ? <CreateCompanyButton /> : null}
       />
       <PageBody>
         <Panel
@@ -58,7 +59,7 @@ export default async function CompaniesPage({
             rows={items}
             showArchived={sp.showArchived === '1'}
             q={sp.q ?? ''}
-            canManage={canManage(me.role)}
+            canManage={manage}
           />
         </Panel>
       </PageBody>

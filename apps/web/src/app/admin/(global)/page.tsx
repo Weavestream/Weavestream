@@ -107,7 +107,7 @@ export default async function AdminDashboard() {
             termOne={term.one}
             termOther={term.other}
           />
-          <RecentActivityPanel items={recent} termOne={term.one} />
+          <RecentActivityPanel items={recent} termOther={term.other} />
         </div>
 
         <DomainAlertsPanel alerts={alerts} />
@@ -514,10 +514,10 @@ function RecentCompanyCard({ company }: { company: CompanyListItem }) {
  */
 function RecentActivityPanel({
   items,
-  termOne,
+  termOther,
 }: {
   items: RecentActivityItem[];
-  termOne: string;
+  termOther: string;
 }) {
   return (
     <Panel title="Recent activity" noPad>
@@ -529,7 +529,7 @@ function RecentActivityPanel({
             fontSize: 13,
           }}
         >
-          Nothing's been updated across your {lower(termOne)}s yet.
+          Nothing's been updated across your {lower(termOther)} yet.
         </div>
       ) : (
         <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>

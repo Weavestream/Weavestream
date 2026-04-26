@@ -1,5 +1,6 @@
 import { redirect } from 'next/navigation';
 import { getMe, getSettings } from '../../../../lib/server-api';
+import { hasCapability } from '../../../../lib/roles';
 import { PageBody, PageHeader } from '../../../../components/shell/page-header';
 import { Panel } from '../../../../components/ui';
 import { SettingsForm } from './settings-form';
@@ -7,13 +8,12 @@ import { SettingsForm } from './settings-form';
 /**
  * Workspace + tenant-term configuration. The fields here are cosmetic —
  * URL routes, Prisma column names, and RBAC keys all continue to read
- * "company" under the hood. Only SUPER_ADMIN may land here; operators
- * get bounced to the admin dashboard to avoid a CTA that would 403 on
- * submit anyway.
+ * "company" under the hood. Gated by SETTINGS_MANAGE so a senior
+ * operator can rebrand without needing the SUPER_ADMIN role.
  */
 export default async function SettingsPage() {
   const me = (await getMe())!;
-  if (me.role !== 'SUPER_ADMIN') redirect('/admin');
+  if (!hasCapability(me, 'SETTINGS_MANAGE')) redirect('/admin');
 
   const settings = await getSettings();
 

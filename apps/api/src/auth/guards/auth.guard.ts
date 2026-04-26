@@ -61,6 +61,8 @@ export class AuthGuard implements CanActivate {
       id: user.id,
       email: user.email,
       role: user.role,
+      globalAccess: user.globalAccess ?? null,
+      platformCapabilities: user.platformCapabilities ?? [],
       sessionId: session.id,
       mfaEnforcementCompletedAt: user.mfaEnforcementCompletedAt,
       mfaPending: session.mfaPending,

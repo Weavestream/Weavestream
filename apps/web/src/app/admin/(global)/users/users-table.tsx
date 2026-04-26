@@ -11,7 +11,7 @@ import {
   Tag,
   type DataColumn,
 } from '../../../../components/ui';
-import { roleLabel } from '../../../../lib/roles';
+import { globalAccessLabel, roleLabel } from '../../../../lib/roles';
 import type { UserListItem } from '../../../../lib/server-api';
 
 const ROLE_FILTERS: Array<{ value: string; label: string }> = [
@@ -58,8 +58,22 @@ export function UsersTable({
       {
         id: 'role',
         header: 'Role',
-        width: 160,
-        render: (r) => <Tag tone="accent">{roleLabel(r.role)}</Tag>,
+        width: 220,
+        render: (r) => (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+            <Tag tone="accent">{roleLabel(r.role)}</Tag>
+            {r.role === 'OPERATOR' && r.globalAccess ? (
+              <Tag tone={r.globalAccess === 'NONE' ? 'warn' : 'outline'}>
+                {globalAccessLabel(r.globalAccess)}
+              </Tag>
+            ) : null}
+            {r.role === 'OPERATOR' && r.platformCapabilities.length > 0 ? (
+              <Tag tone="info">
+                +{r.platformCapabilities.length} caps
+              </Tag>
+            ) : null}
+          </div>
+        ),
       },
       {
         id: 'mfa',
@@ -208,6 +222,16 @@ export function UsersTable({
             </div>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
               <Tag tone="accent">{roleLabel(r.role)}</Tag>
+              {r.role === 'OPERATOR' && r.globalAccess ? (
+                <Tag tone={r.globalAccess === 'NONE' ? 'warn' : 'outline'}>
+                  {globalAccessLabel(r.globalAccess)}
+                </Tag>
+              ) : null}
+              {r.role === 'OPERATOR' && r.platformCapabilities.length > 0 ? (
+                <Tag tone="info">
+                  +{r.platformCapabilities.length} caps
+                </Tag>
+              ) : null}
               {r.mfaEnabled ? (
                 <Tag tone="ok" dot>
                   mfa on

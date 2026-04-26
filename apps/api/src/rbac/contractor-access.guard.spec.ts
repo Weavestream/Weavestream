@@ -57,7 +57,7 @@ describe('ContractorAccessGuard', () => {
     const g = makeGuard([
       {
         companyId: COMPANY,
-        role: 'CLIENT_VIEWER',
+        role: 'READONLY',
         expiresAt: new Date('2000-01-01'),
         revokedAt: null,
       },
@@ -73,7 +73,7 @@ describe('ContractorAccessGuard', () => {
     const g = makeGuard([
       {
         companyId: COMPANY,
-        role: 'CLIENT_VIEWER',
+        role: 'READONLY',
         expiresAt: null,
         revokedAt: new Date(),
       },
@@ -89,7 +89,7 @@ describe('ContractorAccessGuard', () => {
     const g = makeGuard([
       {
         companyId: COMPANY,
-        role: 'CLIENT_VIEWER',
+        role: 'READONLY',
         expiresAt: new Date(Date.now() + 3600_000),
         revokedAt: null,
       },

@@ -6,8 +6,9 @@ import type {
 } from '../../lib/server-api';
 import {
   activeMemberships,
-  canManage,
+  canAccessAdminShell,
   initialsFromName,
+  membershipRoleLabel,
   roleLabel,
 } from '../../lib/roles';
 import type { Term } from '../../lib/term';
@@ -205,24 +206,13 @@ export function CompanyShell({
     });
   }
 
-  if (isAdmin && canManage(me.role)) {
-    sections.push({
-      title: 'Operator',
-      items: [
-        {
-          id: 'admin-console',
-          label: 'Admin console',
-          icon: 'gear',
-          href: '/admin',
-        },
-      ],
-    });
-  }
-  // For a portal viewer who happens to be an operator (SUPER_ADMIN /
-  // OPERATOR_FULL visiting a client portal), surface the admin jump
-  // too — clients never see it because `canManage` is false for
-  // TECH_LEAD / CONTRACTOR / CLIENT_*.
-  if (!isAdmin && canManage(me.role)) {
+  // The Admin-console jump is gated by `canAccessAdminShell` — it
+  // holds for SUPER_ADMINs and any OPERATOR with non-NONE
+  // `globalAccess` or a granted platform capability. Surfaced from
+  // both modes so an operator viewing a client portal still has a
+  // one-click escape back to admin.
+  const adminAccess = canAccessAdminShell(me);
+  if (adminAccess) {
     sections.push({
       title: 'Operator',
       items: [
@@ -247,7 +237,7 @@ export function CompanyShell({
   //              pick from — i.e. >1 membership or operator access),
   //              title -> popover picker for multi-membership clients,
   //                       /admin/companies for operators, static otherwise
-  const operatorAccess = canManage(me.role);
+  const operatorAccess = adminAccess;
   const portalMemberships = activeMemberships(me);
   const hasMultipleMemberships = portalMemberships.length > 1;
   const hasOptions = hasMultipleMemberships || operatorAccess;
@@ -280,7 +270,7 @@ export function CompanyShell({
         .map((m) => ({
           id: m.id,
           name: m.company.name,
-          subtitle: `/${m.company.slug} · ${roleLabel(m.role)}`,
+          subtitle: `/${m.company.slug} · ${membershipRoleLabel(m.role)}`,
           href: `/portal/${m.company.slug}`,
           active: m.company.id === company.id,
         }))

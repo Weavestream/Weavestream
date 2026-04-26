@@ -5,7 +5,7 @@ import {
   getSettings,
   throwUnlessFound,
 } from '../../../../../lib/server-api';
-import { canManage } from '../../../../../lib/roles';
+import { canWriteCompany } from '../../../../../lib/roles';
 import { PageBody, PageHeader } from '../../../../../components/shell/page-header';
 import { buildTerm } from '../../../../../lib/term';
 import { CompanySettingsForm } from './settings-form';
@@ -18,11 +18,10 @@ export default async function CompanySettingsPage({
   const { id } = await params;
   const me = await getMe();
   if (!me) redirect('/login');
-  if (!canManage(me.role)) redirect(`/admin/companies/${id}`);
-
   const term = buildTerm(await getSettings());
   const companyRes = await getCompanyDetail(id);
   const company = throwUnlessFound(companyRes, `/companies/${id}`);
+  if (!canWriteCompany(me, company.id)) redirect(`/admin/companies/${id}`);
 
   return (
     <>

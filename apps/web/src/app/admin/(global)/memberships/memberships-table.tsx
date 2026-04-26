@@ -11,7 +11,7 @@ import {
   Tag,
   type DataColumn,
 } from '../../../../components/ui';
-import { roleLabel } from '../../../../lib/roles';
+import { membershipRoleLabel } from '../../../../lib/roles';
 import { lower } from '../../../../lib/term';
 import { useTerm } from '../../../../lib/term-context';
 import type { MembershipRole } from '@weavestream/shared';
@@ -27,10 +27,8 @@ type Row = {
 
 const ROLE_FILTERS = [
   { value: '', label: 'All roles' },
-  { value: 'OPERATOR_FULL', label: 'operator full' },
-  { value: 'OPERATOR_READONLY', label: 'operator readonly' },
-  { value: 'CLIENT_ADMIN', label: 'client admin' },
-  { value: 'CLIENT_VIEWER', label: 'client viewer' },
+  { value: 'FULL', label: 'Full access' },
+  { value: 'READONLY', label: 'Read-only' },
 ];
 
 export function MembershipsTable({
@@ -87,7 +85,7 @@ export function MembershipsTable({
         id: 'role',
         header: 'Role',
         width: 160,
-        render: (r) => <Tag tone="accent">{roleLabel(r.role)}</Tag>,
+        render: (r) => <Tag tone="accent">{membershipRoleLabel(r.role)}</Tag>,
       },
       {
         id: 'expires',
@@ -263,7 +261,7 @@ export function MembershipsTable({
                 </div>
               </MobileCardRow>
               <MobileCardRow label="Role">
-                <Tag tone="accent">{roleLabel(r.role)}</Tag>
+                <Tag tone="accent">{membershipRoleLabel(r.role)}</Tag>
               </MobileCardRow>
               <MobileCardRow label="Expires" mono>
                 {expiresNode}

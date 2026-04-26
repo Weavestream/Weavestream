@@ -3,8 +3,10 @@ import { cookies, headers } from 'next/headers';
 import { notFound } from 'next/navigation';
 import type {
   FieldType,
+  GlobalAccess,
   MembershipRole,
   PasswordGeneratorDefaults,
+  PlatformCapability,
   UserRole,
   UserSearchDefaults,
   UserUiPreferences,
@@ -13,8 +15,10 @@ import { DEFAULT_PASSWORD_GENERATOR_DEFAULTS } from '@weavestream/shared';
 
 export type {
   FieldType,
+  GlobalAccess,
   MembershipRole,
   PasswordGeneratorDefaults,
+  PlatformCapability,
   UserRole,
   UserSearchDefaults,
   UserUiPreferences,
@@ -366,6 +370,19 @@ export type Me = {
   email: string;
   name: string;
   role: UserRole;
+  /**
+   * RBAC v2 — for OPERATOR users this is the default access level on
+   * companies they don't have an explicit `Membership` for. `null` for
+   * SUPER_ADMIN, CONTRACTOR, and CLIENT_USER (those roles never fall
+   * back to a global tier — see `apps/api/src/rbac/permission.service.ts`).
+   */
+  globalAccess: GlobalAccess | null;
+  /**
+   * RBAC v2 — granular platform-admin tasks an OPERATOR has been
+   * delegated. SUPER_ADMIN implicitly holds every capability and the
+   * API enforces that this array is empty for non-OPERATORs.
+   */
+  platformCapabilities: PlatformCapability[];
   timezone: string | null;
   mfaEnabled: boolean;
   mfaEnforcementCompletedAt: string | null;
@@ -597,6 +614,19 @@ export type UserListItem = {
   email: string;
   name: string;
   role: UserRole;
+  /**
+   * RBAC v2 — `null` for non-OPERATOR roles. The API rejects writes
+   * that try to set this on any other role, so the UI can rely on
+   * non-null implying OPERATOR.
+   */
+  globalAccess: GlobalAccess | null;
+  /**
+   * RBAC v2 — empty array unless the user is an OPERATOR with
+   * delegated platform-admin capabilities. SUPER_ADMINs implicitly
+   * hold every capability and the API enforces that this array stays
+   * empty for them, so don't conflate "empty" with "no access".
+   */
+  platformCapabilities: PlatformCapability[];
   isActive: boolean;
   mfaEnabled: boolean;
   lastLoginAt: string | null;

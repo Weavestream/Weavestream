@@ -1,5 +1,10 @@
 import { Injectable } from '@nestjs/common';
-import type { MembershipRole, UserRole } from '@weavestream/shared';
+import type {
+  GlobalAccess,
+  MembershipRole,
+  PlatformCapability,
+  UserRole,
+} from '@weavestream/shared';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { RedisService } from '../redis/redis.service.js';
 import { PERMISSIONS, type Action } from './permissions.js';
@@ -14,6 +19,14 @@ export interface MembershipSnapshot {
 export interface PermissionInput {
   id: string;
   role: UserRole;
+  /** OPERATOR-only; null for SUPER_ADMIN / CONTRACTOR / CLIENT_USER. */
+  globalAccess: GlobalAccess | null;
+  /**
+   * Granular platform-admin capabilities. SUPER_ADMIN implicitly holds
+   * every capability — callers may pass an empty array for SAs and the
+   * resolver will still allow capability-gated actions.
+   */
+  platformCapabilities: PlatformCapability[];
 }
 
 export interface PermissionTarget {
@@ -26,7 +39,9 @@ export interface PermissionDecision {
 }
 
 const CACHE_KEY_PREFIX = 'user:';
-const CACHE_KEY_SUFFIX = ':memberships:full:v1';
+// v2: bumped when the membership-role enum collapsed to FULL/READONLY
+// so any leftover v1 entries with `OPERATOR_FULL` etc. are ignored.
+const CACHE_KEY_SUFFIX = ':memberships:full:v2';
 const CACHE_TTL_SEC = 60;
 
 @Injectable()
@@ -86,29 +101,48 @@ export class PermissionService {
     action: Action,
     target: PermissionTarget = {},
   ): Promise<PermissionDecision> {
-    if (user.role === 'SUPER_ADMIN') {
-      return { allowed: true };
-    }
+    if (user.role === 'SUPER_ADMIN') return { allowed: true };
 
     const rule = PERMISSIONS[action];
     if (!rule) {
       return { allowed: false, reason: `unknown action ${action as string}` };
     }
 
-    if (rule.scope === 'global') {
-      if (rule.allowGlobal.includes(user.role)) {
-        return { allowed: true };
+    // Platform-admin gate: a held capability satisfies the rule on its
+    // own. For company-scoped capability rules we still require a
+    // companyId in the target so audit logs can record what was
+    // touched, but we do NOT additionally require a membership — an
+    // elevated operator can manage any company's roster / read any
+    // company's audit, mirroring SUPER_ADMIN.
+    if (rule.requiredCapability) {
+      if (!user.platformCapabilities.includes(rule.requiredCapability)) {
+        return {
+          allowed: false,
+          reason: `missing capability ${rule.requiredCapability} for ${action}`,
+        };
       }
-      return { allowed: false, reason: `global role ${user.role} not permitted for ${action}` };
-    }
-
-    if (rule.scope === 'self') {
-      // Self-scoped actions are always authored inside the service
-      // (e.g. /me PATCH). The caller passes their own id for symmetry.
+      if (rule.scope === 'company' && !target.companyId) {
+        return {
+          allowed: false,
+          reason: `company-scoped action ${action} called without companyId`,
+        };
+      }
       return { allowed: true };
     }
 
-    // scope === 'company'
+    if (rule.scope === 'global') {
+      // Without a `requiredCapability`, a non-SA cannot satisfy a
+      // global rule. (Currently every global rule has one; this branch
+      // is defensive for future additions.)
+      return { allowed: false, reason: `global action ${action} requires SUPER_ADMIN or a capability` };
+    }
+
+    if (rule.scope === 'self') {
+      return { allowed: true };
+    }
+
+    // scope === 'company' without a capability gate: classic
+    // FULL/READONLY membership check.
     const { companyId } = target;
     if (!companyId) {
       return {
@@ -118,42 +152,8 @@ export class PermissionService {
     }
 
     const memberships = await this.loadMemberships(user.id);
-    const now = new Date();
-    const membership = memberships.find(
-      (m) =>
-        m.companyId === companyId &&
-        m.revokedAt === null &&
-        (m.expiresAt === null || m.expiresAt > now),
-    );
-
-    if (!membership) {
-      // SUPER_ADMIN already returned; every other role requires a live
-      // membership.
-      return {
-        allowed: false,
-        reason: `no active membership for company ${companyId}`,
-      };
-    }
-
-    if (rule.requireNonExpiredMembership) {
-      // Already filtered above, but this branch remains for symmetry
-      // with non-expired-only read actions if we ever flip one.
-      if (membership.expiresAt !== null && membership.expiresAt <= now) {
-        return { allowed: false, reason: 'membership expired' };
-      }
-    }
-
-    if (rule.allowGlobal.includes(user.role)) {
-      return { allowed: true };
-    }
-    if (rule.allowMembership.includes(membership.role)) {
-      return { allowed: true };
-    }
-
-    return {
-      allowed: false,
-      reason: `role ${user.role}/${membership.role} not permitted for ${action} on ${companyId}`,
-    };
+    const effective = resolveEffectiveAccess(user, memberships, companyId);
+    return decideFromEffective(action, rule, user.role, effective);
   }
 
   /**
@@ -172,10 +172,27 @@ export class PermissionService {
     const rule = PERMISSIONS[action];
     if (!rule) return { allowed: false, reason: `unknown action ${action as string}` };
 
+    if (rule.requiredCapability) {
+      if (!user.platformCapabilities.includes(rule.requiredCapability)) {
+        return {
+          allowed: false,
+          reason: `missing capability ${rule.requiredCapability} for ${action}`,
+        };
+      }
+      if (rule.scope === 'company' && !target.companyId) {
+        return {
+          allowed: false,
+          reason: `company-scoped action ${action} called without companyId`,
+        };
+      }
+      return { allowed: true };
+    }
+
     if (rule.scope === 'global') {
-      return rule.allowGlobal.includes(user.role)
-        ? { allowed: true }
-        : { allowed: false, reason: `global role ${user.role} not permitted for ${action}` };
+      return {
+        allowed: false,
+        reason: `global action ${action} requires SUPER_ADMIN or a capability`,
+      };
     }
 
     if (rule.scope === 'self') return { allowed: true };
@@ -188,22 +205,58 @@ export class PermissionService {
       };
     }
 
-    const membership = memberships.find(
-      (m) =>
-        m.companyId === companyId &&
-        m.revokedAt === null &&
-        (m.expiresAt === null || m.expiresAt > now),
-    );
-    if (!membership) {
-      return { allowed: false, reason: `no active membership for ${companyId}` };
-    }
-
-    if (rule.allowGlobal.includes(user.role)) return { allowed: true };
-    if (rule.allowMembership.includes(membership.role)) return { allowed: true };
-
-    return {
-      allowed: false,
-      reason: `role ${user.role}/${membership.role} not permitted for ${action}`,
-    };
+    const effective = resolveEffectiveAccess(user, memberships, companyId, now);
+    return decideFromEffective(action, rule, user.role, effective);
   }
+}
+
+/** Effective access for a (user, companyId) pair, encoding the
+ *  membership-wins-then-globalAccess rule. Returns:
+ *    - 'FULL' / 'READONLY'  — usable level
+ *    - 'NONE'               — explicitly no access (operator with
+ *                             globalAccess=NONE and no membership)
+ *    - null                 — caller is a CONTRACTOR or CLIENT_USER
+ *                             without an active membership; treated
+ *                             as DENY at the rule layer.
+ */
+export function resolveEffectiveAccess(
+  user: Pick<PermissionInput, 'role' | 'globalAccess'>,
+  memberships: MembershipSnapshot[],
+  companyId: string,
+  now: Date = new Date(),
+): GlobalAccess | null {
+  const membership = memberships.find(
+    (m) =>
+      m.companyId === companyId &&
+      m.revokedAt === null &&
+      (m.expiresAt === null || m.expiresAt > now),
+  );
+  if (membership) return membership.role;
+
+  if (user.role === 'OPERATOR') {
+    return user.globalAccess ?? 'NONE';
+  }
+
+  // CONTRACTOR / CLIENT_USER without a membership.
+  return null;
+}
+
+function decideFromEffective(
+  action: Action,
+  rule: { allowFull: boolean; allowReadonly: boolean },
+  role: UserRole,
+  effective: GlobalAccess | null,
+): PermissionDecision {
+  if (effective === null) {
+    return { allowed: false, reason: `no active membership for ${role}` };
+  }
+  if (effective === 'NONE') {
+    return { allowed: false, reason: `effective access NONE for ${action}` };
+  }
+  if (effective === 'FULL' && rule.allowFull) return { allowed: true };
+  if (effective === 'READONLY' && rule.allowReadonly) return { allowed: true };
+  return {
+    allowed: false,
+    reason: `effective ${effective} not permitted for ${action}`,
+  };
 }

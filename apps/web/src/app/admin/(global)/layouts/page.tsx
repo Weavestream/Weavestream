@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import { getMe, getSettings, listLayouts } from '../../../../lib/server-api';
+import { hasCapability } from '../../../../lib/roles';
 import { PageBody, PageHeader } from '../../../../components/shell/page-header';
 import { Icon, Panel, Tag } from '../../../../components/ui';
 import { buildTerm, lower } from '../../../../lib/term';
@@ -27,7 +28,9 @@ export default async function LayoutsPage({
   const sp = await searchParams;
   const me = (await getMe())!;
   const term = buildTerm(await getSettings());
-  const canEdit = me.role === 'SUPER_ADMIN';
+  // RBAC v2 — layouts are global; mutation is gated on `LAYOUT_MANAGE`.
+  // SUPER_ADMIN holds it implicitly, OPERATORs can be granted it.
+  const canEdit = hasCapability(me, 'LAYOUT_MANAGE');
   const includeArchived = sp.includeArchived === '1';
   const layouts = await listLayouts({ includeArchived });
 
@@ -43,7 +46,7 @@ export default async function LayoutsPage({
         title="Layouts"
         description={`Global asset layouts. Shared by every ${lower(
           term.one,
-        )}; only super-admins can mutate the catalog. Use the up/down controls to order how layouts appear in the sidebar.`}
+        )}; mutating the catalog requires the LAYOUT_MANAGE capability. Use the up/down controls to order how layouts appear in the sidebar.`}
         actions={canEdit ? <CreateLayoutButton /> : null}
       />
       <PageBody>

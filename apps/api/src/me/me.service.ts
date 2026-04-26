@@ -38,6 +38,11 @@ export class MeService {
         email: true,
         name: true,
         role: true,
+        // RBAC v2 — clients need the new axes so the web layer can
+        // render UI gates without a second round-trip. `null` for
+        // non-OPERATORs (the API guarantees that invariant on write).
+        globalAccess: true,
+        platformCapabilities: true,
         timezone: true,
         mfaEnabled: true,
         mfaEnforcementCompletedAt: true,

@@ -10,7 +10,7 @@ export const metadata: Metadata = { title: 'Expiring soon' };
 /**
  * Cross-tenant "Expiring soon" feed. Mirrors the per-company page
  * but aggregates across every company the caller can see. SUPER_ADMIN
- * only — OPERATOR_FULL can still reach the scoped variant from each
+ * only — operators can still reach the scoped variant from each
  * company shell, but a flat cross-tenant view of everyone's warranty
  * dates is a legitimate SUPER_ADMIN-only affordance (see the matching
  * guard on `/domains/alerts`).

@@ -1,6 +1,7 @@
 import { redirect } from 'next/navigation';
 import type { DriverDescriptor, IntegrationDto } from '@weavestream/shared';
 import { getMe, serverApiFetch } from '../../../../lib/server-api';
+import { hasCapability } from '../../../../lib/roles';
 import { PageBody, PageHeader } from '../../../../components/shell/page-header';
 import { Panel } from '../../../../components/ui';
 import { IntegrationsTable } from './integrations-table';
@@ -14,12 +15,12 @@ import { CreateIntegrationButton } from './create-integration-button';
  * here to create, pause, or remove a global integration; per-company
  * mapping editing happens on the integration detail page.
  *
- * Restricted to SUPER_ADMIN — this is a workspace-wide surface and
- * carries the fingerprint of every credential the workspace touches.
+ * Gated on `INTEGRATION_MANAGE` — SUPER_ADMIN holds it implicitly,
+ * OPERATORs can be granted the capability for delegated platform admin.
  */
 export default async function IntegrationsPage() {
   const me = (await getMe())!;
-  if (me.role !== 'SUPER_ADMIN') redirect('/admin');
+  if (!hasCapability(me, 'INTEGRATION_MANAGE')) redirect('/admin');
 
   const [listRes, driversRes] = await Promise.all([
     serverApiFetch<IntegrationDto[]>('/admin/integrations'),

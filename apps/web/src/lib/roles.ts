@@ -1,13 +1,56 @@
-import type { UserRole, MembershipRole } from '@weavestream/shared';
+import type {
+  GlobalAccess,
+  MembershipRole,
+  PlatformCapability,
+  UserRole,
+} from '@weavestream/shared';
 import type { Me, Membership } from './server-api';
 
-export type { UserRole, MembershipRole };
+export type { GlobalAccess, MembershipRole, PlatformCapability, UserRole };
 
 export const OPERATOR_ROLES: UserRole[] = ['SUPER_ADMIN', 'OPERATOR'];
+
+/**
+ * The smallest possible "viewer" identity the helpers need to evaluate
+ * a permission check. Most callers pass `Me` directly; the predicates
+ * also accept a stripped-down shape so the auth-page guards (which
+ * have already destructured `me`) don't need to round-trip through the
+ * full type.
+ */
+export type ViewerLike = Pick<
+  Me,
+  'role' | 'globalAccess' | 'platformCapabilities' | 'memberships'
+>;
+
+// ───────────────────────────────────────────────────────────────────
+// Role predicates
+// ───────────────────────────────────────────────────────────────────
+
+export function isSuperAdmin(
+  me: Pick<Me, 'role'> | null | undefined,
+): boolean {
+  return !!me && me.role === 'SUPER_ADMIN';
+}
 
 export function isOperator(role: UserRole | string | undefined | null): boolean {
   return !!role && OPERATOR_ROLES.includes(role as UserRole);
 }
+
+export function isContractor(
+  me: Pick<Me, 'role'> | null | undefined,
+): boolean {
+  return !!me && me.role === 'CONTRACTOR';
+}
+
+export function isClientUser(
+  me: Pick<Me, 'role'> | null | undefined,
+): boolean {
+  return !!me && me.role === 'CLIENT_USER';
+}
+
+// ───────────────────────────────────────────────────────────────────
+// Memberships
+// ───────────────────────────────────────────────────────────────────
 
 /**
  * Non-revoked, non-expired memberships for the current user. The API
@@ -18,6 +61,16 @@ export function activeMemberships(me: Pick<Me, 'memberships'>): Membership[] {
   const now = Date.now();
   return me.memberships.filter(
     (m) => !m.expiresAt || new Date(m.expiresAt).getTime() > now,
+  );
+}
+
+export function activeMembershipFor(
+  me: Pick<Me, 'memberships'> | null | undefined,
+  companyId: string,
+): Membership | null {
+  if (!me) return null;
+  return (
+    activeMemberships(me).find((m) => m.company.id === companyId) ?? null
   );
 }
 
@@ -43,38 +96,104 @@ export function preferredMembership(
   return active[0] ?? null;
 }
 
+// ───────────────────────────────────────────────────────────────────
+// RBAC v2 — capability + access resolution
+//
+// Mirrors `apps/api/src/rbac/permission.service.ts`. The web layer
+// only uses these to *hide* unreachable controls; the server is still
+// the source of truth and will 403 anything stale.
+// ───────────────────────────────────────────────────────────────────
+
+export type CompanyAccess = 'FULL' | 'READONLY' | 'NONE';
+
 /**
- * Global-role predicate: users that can mutate companies/users/memberships
- * in surfaces that are purely gated on global role (users list, global
- * settings, etc). For *per-company* membership writes prefer
- * `canManageCompanyMemberships` below — it mirrors the API's RBAC rule
- * so the UI stops showing buttons that 403.
+ * Per-company effective access for the current viewer. Resolution
+ * order matches the API's `can()`:
+ *   1. SUPER_ADMIN → always FULL
+ *   2. Active `Membership` on the company → its role wins (FULL or READONLY)
+ *   3. Operator with `globalAccess=FULL/READONLY` → that tier
+ *   4. Anything else → NONE
  */
-export function canManage(role: UserRole | string | undefined | null): boolean {
-  return role === 'SUPER_ADMIN' || role === 'OPERATOR';
+export function effectiveCompanyAccess(
+  me: ViewerLike | null | undefined,
+  companyId: string,
+): CompanyAccess {
+  if (!me) return 'NONE';
+  if (me.role === 'SUPER_ADMIN') return 'FULL';
+
+  const membership = activeMembershipFor(me, companyId);
+  if (membership) return membership.role;
+
+  // Only OPERATORs ever benefit from the global tier — CONTRACTOR and
+  // CLIENT_USER without a matching membership get nothing.
+  if (me.role === 'OPERATOR') {
+    if (me.globalAccess === 'FULL') return 'FULL';
+    if (me.globalAccess === 'READONLY') return 'READONLY';
+  }
+
+  return 'NONE';
+}
+
+export function canReadCompany(
+  me: ViewerLike | null | undefined,
+  companyId: string,
+): boolean {
+  return effectiveCompanyAccess(me, companyId) !== 'NONE';
+}
+
+export function canWriteCompany(
+  me: ViewerLike | null | undefined,
+  companyId: string,
+): boolean {
+  return effectiveCompanyAccess(me, companyId) === 'FULL';
 }
 
 /**
- * Per-company predicate that matches the API's `membership.manage`
- * permission: SUPER_ADMIN always, otherwise a non-expired
- * `OPERATOR_FULL` membership on the target company. A global OPERATOR
- * role alone is *not* enough — that's what [`RequirePermission`](../../../apps/api/src/rbac/require-permission.decorator.ts)
- * enforces on the server.
+ * Capability check. SUPER_ADMIN implicitly holds every capability; an
+ * OPERATOR holds only the ones explicitly granted on `User.platformCapabilities`.
+ * CONTRACTOR/CLIENT_USER never hold capabilities.
  */
-export function canManageCompanyMemberships(
-  me: Pick<Me, 'role' | 'memberships'> | null | undefined,
-  companyId: string,
+export function hasCapability(
+  me: Pick<Me, 'role' | 'platformCapabilities'> | null | undefined,
+  capability: PlatformCapability,
 ): boolean {
   if (!me) return false;
   if (me.role === 'SUPER_ADMIN') return true;
-  const now = Date.now();
-  return me.memberships.some(
-    (m) =>
-      m.company.id === companyId &&
-      m.role === 'OPERATOR_FULL' &&
-      (!m.expiresAt || new Date(m.expiresAt).getTime() > now),
-  );
+  return me.platformCapabilities.includes(capability);
 }
+
+export function hasAnyCapability(
+  me: Pick<Me, 'role' | 'platformCapabilities'> | null | undefined,
+  capabilities: readonly PlatformCapability[],
+): boolean {
+  if (!me) return false;
+  if (me.role === 'SUPER_ADMIN') return true;
+  return capabilities.some((c) => me.platformCapabilities.includes(c));
+}
+
+/**
+ * Should the user see the `/admin` shell at all? SUPER_ADMINs always;
+ * OPERATORs whenever they have either a non-NONE globalAccess (so
+ * cross-tenant reads are possible) or any platform capability (so the
+ * users / integrations / audit screens are reachable). CONTRACTORs and
+ * CLIENT_USERs never see the admin shell — they live in `/portal`.
+ */
+export function canAccessAdminShell(
+  me: ViewerLike | null | undefined,
+): boolean {
+  if (!me) return false;
+  if (me.role === 'SUPER_ADMIN') return true;
+  if (me.role !== 'OPERATOR') return false;
+  if (me.globalAccess && me.globalAccess !== 'NONE') return true;
+  if (me.platformCapabilities.length > 0) return true;
+  // Operator with NONE global access and no capabilities — they only
+  // have per-company memberships, same UX as a CONTRACTOR.
+  return false;
+}
+
+// ───────────────────────────────────────────────────────────────────
+// Display helpers
+// ───────────────────────────────────────────────────────────────────
 
 export function initialsFromName(name: string): string {
   return (
@@ -90,4 +209,38 @@ export function initialsFromName(name: string): string {
 
 export function roleLabel(role: string): string {
   return role.toLowerCase().replace(/_/g, ' ');
+}
+
+const MEMBERSHIP_ROLE_LABEL: Record<MembershipRole, string> = {
+  FULL: 'Full access',
+  READONLY: 'Read-only',
+};
+
+export function membershipRoleLabel(role: MembershipRole): string {
+  return MEMBERSHIP_ROLE_LABEL[role];
+}
+
+const GLOBAL_ACCESS_LABEL: Record<GlobalAccess, string> = {
+  FULL: 'Full access',
+  READONLY: 'Read-only',
+  NONE: 'No default access',
+};
+
+export function globalAccessLabel(value: GlobalAccess): string {
+  return GLOBAL_ACCESS_LABEL[value];
+}
+
+const CAPABILITY_LABEL: Record<PlatformCapability, string> = {
+  COMPANY_MANAGE: 'Manage companies',
+  INTEGRATION_MANAGE: 'Manage integrations & syncs',
+  LAYOUT_MANAGE: 'Manage asset layouts',
+  USER_MANAGE: 'Manage users (excl. Super Admin)',
+  MEMBERSHIP_MANAGE: 'Manage company memberships',
+  AUDIT_READ: 'Read the audit log',
+  SETTINGS_MANAGE: 'Edit workspace settings',
+  EXPORT_CREATE: 'Create exports',
+};
+
+export function capabilityLabel(c: PlatformCapability): string {
+  return CAPABILITY_LABEL[c];
 }

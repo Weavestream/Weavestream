@@ -1,17 +1,19 @@
 import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { getMe } from '../lib/server-api';
-import { isOperator, preferredMembership } from '../lib/roles';
+import { canAccessAdminShell, preferredMembership } from '../lib/roles';
 
 /**
  * Role-based landing:
- *   - Operators go to `/admin`.
- *   - Clients with active memberships go to their portal dashboard.
- *     For multi-membership clients we honour the `ws_last_company`
- *     cookie (stamped by middleware whenever they visit a `/portal/:slug`
- *     page) and fall back to their first active membership.
- *   - Clients with no active membership hit `/access-pending`, so they
- *     don't land on a profile-only page with no way forward.
+ *   - Users with admin-shell access (SUPER_ADMIN, or OPERATOR with
+ *     either `globalAccess` or any platform capability) land on
+ *     `/admin`.
+ *   - Everyone else (CONTRACTOR, CLIENT_USER, or a stripped-down
+ *     OPERATOR whose access is purely per-company) lands on the
+ *     preferred portal — the most recently visited company falling
+ *     back to their first active membership.
+ *   - No active membership → `/access-pending` so the user lands
+ *     somewhere actionable rather than a dead profile.
  */
 export default async function Home() {
   const cookieStore = await cookies();
@@ -20,7 +22,7 @@ export default async function Home() {
   const me = await getMe();
   if (!me) redirect('/login');
 
-  if (me.role === 'SUPER_ADMIN' || me.role === 'OPERATOR') {
+  if (canAccessAdminShell(me)) {
     redirect('/admin');
   }
 
