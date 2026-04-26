@@ -14,6 +14,7 @@ import { Btn, Icon, LayoutSwatch, Tag, useToast } from '../../../../../component
 import { TopBar } from '../../../../../components/shell/top-bar';
 import { useTerm } from '../../../../../lib/term-context';
 import { companyCrumbs } from '../../../../../lib/company-crumbs';
+import { vaultLinkUrl } from '../../../../../lib/vault-link';
 import {
   FileDropzone,
   type FileFieldEntry,
@@ -521,7 +522,11 @@ function FieldInput({
     case 'IP_ADDRESS':
       return (
         <input
-          value={(value as string | null) ?? ''}
+          value={
+            field.fieldType === 'VAULTWARDEN_LINK'
+              ? vaultLinkUrl(value)
+              : ((value as string | null) ?? '')
+          }
           disabled={disabled}
           onChange={(e) => onChange(e.target.value)}
           style={{

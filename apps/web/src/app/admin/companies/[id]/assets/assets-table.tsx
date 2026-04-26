@@ -9,6 +9,7 @@ import type {
 } from '../../../../../lib/server-api';
 import { Icon, LayoutSwatch, Tag } from '../../../../../components/ui';
 import { useIsMobile } from '../../../../../lib/hooks/use-is-mobile';
+import { vaultLinkLabel } from '../../../../../lib/vault-link';
 
 /**
  * Interactive asset list. URL is the source of truth; every filter
@@ -604,6 +605,7 @@ function renderScalar(
       })
       .join(', ');
   }
+  if (fieldType === 'VAULTWARDEN_LINK') return vaultLinkLabel(value) || '—';
   if (Array.isArray(value)) return value.join(', ');
   if (typeof value === 'object') return JSON.stringify(value);
   return String(value);
