@@ -71,7 +71,7 @@ function normaliseHtmlForTurndown(html: string): string {
         for (const attr of Array.from(cell.attributes)) {
           th.setAttribute(attr.name, attr.value);
         }
-        th.innerHTML = cell.innerHTML;
+        while (cell.firstChild) th.appendChild(cell.firstChild);
         cell.replaceWith(th);
       });
     }
