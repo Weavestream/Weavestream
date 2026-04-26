@@ -258,6 +258,7 @@ describe('Action1Driver.listSourceFields', () => {
               MAC: 'aa:bb:cc:dd:ee:ff',
               serial: 'ABC123',
               last_seen: '2026-04-25T05:00:00Z',
+              last_boot_time: '2022-08-29_12-22-11',
               custom_field_xyz: 'tenant-only',
               // Nested objects must be skipped — operators can't map
               // them onto a primitive AssetField.
@@ -291,6 +292,7 @@ describe('Action1Driver.listSourceFields', () => {
         'MAC',
         'serial',
         'last_seen',
+        'last_boot_time',
         'custom_field_xyz',
       ]));
       // `id` is the externalId — never user-mappable.
@@ -310,6 +312,8 @@ describe('Action1Driver.listSourceFields', () => {
       const lastSeen = fields.find((f) => f.key === 'last_seen')!;
       expect(lastSeen.label).toBe('Last seen');
       expect(lastSeen.hintType).toBe('DATETIME');
+      const lastBootTime = fields.find((f) => f.key === 'last_boot_time')!;
+      expect(lastBootTime.hintType).toBe('DATETIME');
 
       // Auto-derived fields humanise + infer correctly.
       const tenantField = fields.find((f) => f.key === 'custom_field_xyz')!;
@@ -358,7 +362,8 @@ describe('Action1Driver.fetchRecords', () => {
     const firstPage = Array.from({ length: 200 }, (_, i) => ({
       id: `e-${i + 1}`,
       name: `host-${i + 1}`,
-      last_seen: '2026-04-25T00:00:00Z',
+      last_seen: '2022-08-29_12-22-11',
+      last_boot_time: '2022-08-28_02-03-04',
     }));
     const fx = installFetchScript([
       { kind: 'json', body: { access_token: 'tok-1' } },
@@ -385,7 +390,11 @@ describe('Action1Driver.fetchRecords', () => {
       expect(page1.records[0]).toMatchObject({
         externalId: 'e-1',
         displayName: 'host-1',
-        updatedAt: '2026-04-25T00:00:00Z',
+        updatedAt: '2022-08-29T12:22:11Z',
+      });
+      expect(page1.records[0]!.fields).toMatchObject({
+        last_seen: '2022-08-29T12:22:11Z',
+        last_boot_time: '2022-08-28T02:03:04Z',
       });
       expect(page1.hasMore).toBe(true);
       expect(page1.cursor).toBe('200');

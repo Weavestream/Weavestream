@@ -6,6 +6,14 @@ this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.2.1] - 2026-04-26
+
+### Fixed
+
+- **Missing S3 SDK runtime dependency.** Added the missing AWS S3 SDK
+  runtime package required in production so S3-backed features no longer
+  fail at runtime due to missing module resolution.
+
 ## [1.2.0] - 2026-04-26
 
 ### Added
@@ -352,7 +360,8 @@ Initial public release.
   database-per-tenant.
 - English UI only.
 
-[Unreleased]: https://github.com/Weavestream/Weavestream/compare/v1.1.1...HEAD
+[Unreleased]: https://github.com/Weavestream/Weavestream/compare/v1.2.1...HEAD
+[1.2.1]: https://github.com/Weavestream/Weavestream/releases/tag/v1.2.1
 [1.1.1]: https://github.com/Weavestream/Weavestream/releases/tag/v1.1.1
 [1.1.0]: https://github.com/Weavestream/Weavestream/releases/tag/v1.1.0
 [1.0.0]: https://github.com/Weavestream/Weavestream/releases/tag/v1.0.0
