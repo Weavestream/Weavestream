@@ -14,6 +14,7 @@ import {
 } from '@nestjs/common';
 import type { Request } from 'express';
 import {
+  articleSlugSchema,
   createArticleSchema,
   moveArticleSchema,
   updateArticleSchema,
@@ -24,7 +25,7 @@ import {
 import { ArticlesService } from './articles.service.js';
 import { CurrentUser, type AuthedUser } from '../common/current-user.decorator.js';
 import { RequirePermission } from '../rbac/require-permission.decorator.js';
-import { ZodBody } from '../common/zod-validation.pipe.js';
+import { ZodBody, ZodParam } from '../common/zod-validation.pipe.js';
 
 @Controller({ path: 'companies/:companyId/articles', version: '1' })
 export class ArticlesController {
@@ -55,7 +56,7 @@ export class ArticlesController {
   async getBySlug(
     @CurrentUser() actor: AuthedUser,
     @Param('companyId', new ParseUUIDPipe()) companyId: string,
-    @Param('slug') slug: string,
+    @Param('slug', new ZodParam(articleSlugSchema)) slug: string,
   ) {
     return this.articles.getBySlug(actor, companyId, slug);
   }

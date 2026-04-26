@@ -5,6 +5,7 @@ import {
   Get,
   HttpCode,
   Param,
+  ParseUUIDPipe,
   Patch,
   Post,
   Query,
@@ -116,7 +117,7 @@ export class IntegrationsController {
 
   @Get(':id')
   @RequirePermission('integration.manage')
-  get(@Param('id') id: string) {
+  get(@Param('id', new ParseUUIDPipe()) id: string) {
     return this.integrations.get(id);
   }
 
@@ -124,7 +125,7 @@ export class IntegrationsController {
   @RequirePermission('integration.manage')
   update(
     @CurrentUser() user: AuthedUser,
-    @Param('id') id: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
     @Body(new ZodBody(updateIntegrationSchema)) dto: UpdateIntegrationInput,
     @Req() req: Request,
   ) {
@@ -136,7 +137,7 @@ export class IntegrationsController {
   @HttpCode(204)
   async delete(
     @CurrentUser() user: AuthedUser,
-    @Param('id') id: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
     @Req() req: Request,
   ): Promise<void> {
     await this.integrations.delete(user, id, meta(req));
@@ -150,7 +151,7 @@ export class IntegrationsController {
   @RequirePermission('integration.manage')
   async testConnection(
     @CurrentUser() user: AuthedUser,
-    @Param('id') id: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
     @Req() req: Request,
   ) {
     const ctx = await this.integrations.loadDriverContext(id);
@@ -195,7 +196,7 @@ export class IntegrationsController {
 
   @Get(':id/source-orgs')
   @RequirePermission('integration.manage')
-  async listSourceOrgs(@Param('id') id: string) {
+  async listSourceOrgs(@Param('id', new ParseUUIDPipe()) id: string) {
     const ctx = await this.integrations.loadDriverContext(id);
     const driver = this.drivers.get(ctx.driver);
     const integrationCtx: IntegrationContext = {
@@ -210,7 +211,7 @@ export class IntegrationsController {
   @Get(':id/source-fields')
   @RequirePermission('integration.manage')
   async listSourceFields(
-    @Param('id') id: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
     @Query('externalOrgId') externalOrgId?: string,
   ) {
     const ctx = await this.integrations.loadDriverContext(id);
@@ -246,7 +247,7 @@ export class IntegrationsController {
 
   @Get(':id/mappings')
   @RequirePermission('integration.manage')
-  listMappings(@Param('id') id: string) {
+  listMappings(@Param('id', new ParseUUIDPipe()) id: string) {
     return this.mappings.list(id);
   }
 
@@ -254,7 +255,7 @@ export class IntegrationsController {
   @RequirePermission('integration.manage')
   createMapping(
     @CurrentUser() user: AuthedUser,
-    @Param('id') id: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
     @Body(new ZodBody(createIntegrationCompanyMappingSchema))
     dto: CreateIntegrationCompanyMappingInput,
     @Req() req: Request,
@@ -264,7 +265,10 @@ export class IntegrationsController {
 
   @Get(':id/mappings/:mappingId')
   @RequirePermission('integration.manage')
-  getMapping(@Param('id') id: string, @Param('mappingId') mappingId: string) {
+  getMapping(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Param('mappingId', new ParseUUIDPipe()) mappingId: string,
+  ) {
     return this.mappings.get(id, mappingId);
   }
 
@@ -272,8 +276,8 @@ export class IntegrationsController {
   @RequirePermission('integration.manage')
   updateMapping(
     @CurrentUser() user: AuthedUser,
-    @Param('id') id: string,
-    @Param('mappingId') mappingId: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Param('mappingId', new ParseUUIDPipe()) mappingId: string,
     @Body(new ZodBody(updateIntegrationCompanyMappingSchema))
     dto: UpdateIntegrationCompanyMappingInput,
     @Req() req: Request,
@@ -286,8 +290,8 @@ export class IntegrationsController {
   @HttpCode(204)
   async deleteMapping(
     @CurrentUser() user: AuthedUser,
-    @Param('id') id: string,
-    @Param('mappingId') mappingId: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Param('mappingId', new ParseUUIDPipe()) mappingId: string,
     @Req() req: Request,
   ): Promise<void> {
     await this.mappings.delete(user, id, mappingId, meta(req));
@@ -299,7 +303,7 @@ export class IntegrationsController {
 
   @Get(':id/field-mappings')
   @RequirePermission('integration.manage')
-  listFieldMappings(@Param('id') id: string) {
+  listFieldMappings(@Param('id', new ParseUUIDPipe()) id: string) {
     return this.integrations.listFieldMappings(id);
   }
 
@@ -307,7 +311,7 @@ export class IntegrationsController {
   @RequirePermission('integration.manage')
   replaceFieldMappings(
     @CurrentUser() user: AuthedUser,
-    @Param('id') id: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
     @Body(new ZodBody(replaceFieldMappingsSchema))
     dto: ReplaceFieldMappingsInput,
     @Req() req: Request,
@@ -323,7 +327,7 @@ export class IntegrationsController {
   @RequirePermission('sync.trigger')
   triggerSync(
     @CurrentUser() user: AuthedUser,
-    @Param('id') id: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
     @Body(new ZodBody(triggerSyncSchema)) dto: TriggerSyncInput,
     @Req() req: Request,
   ) {
@@ -332,13 +336,16 @@ export class IntegrationsController {
 
   @Get(':id/runs')
   @RequirePermission('integration.manage')
-  listRuns(@Param('id') id: string) {
+  listRuns(@Param('id', new ParseUUIDPipe()) id: string) {
     return this.sync.listRuns(id);
   }
 
   @Get(':id/runs/:runId')
   @RequirePermission('integration.manage')
-  getRun(@Param('id') id: string, @Param('runId') runId: string) {
+  getRun(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Param('runId', new ParseUUIDPipe()) runId: string,
+  ) {
     return this.sync.getRun(id, runId);
   }
 

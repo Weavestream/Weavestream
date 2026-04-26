@@ -20,8 +20,12 @@ import { MfaVerifyDto } from './dto/mfa.dto.js';
 import { MfaSetupAllowed, Public, SkipCsrf } from '../common/public.decorator.js';
 import { AuthedOnly } from '../rbac/require-permission.decorator.js';
 import { CurrentUser, type AuthedUser } from '../common/current-user.decorator.js';
-import { acceptInviteSchema, type AcceptInviteInput } from '@weavestream/shared';
-import { ZodBody } from '../common/zod-validation.pipe.js';
+import {
+  acceptInviteSchema,
+  setupTokenSchema,
+  type AcceptInviteInput,
+} from '@weavestream/shared';
+import { ZodBody, ZodParam } from '../common/zod-validation.pipe.js';
 import { EnvService } from '../config/env.service.js';
 import {
   cookieNames,
@@ -150,7 +154,7 @@ export class AuthController {
 
   @Public()
   @Get('invite/:token')
-  async inviteLookup(@Param('token') token: string) {
+  async inviteLookup(@Param('token', new ZodParam(setupTokenSchema)) token: string) {
     return this.auth.inviteLookup(token);
   }
 
