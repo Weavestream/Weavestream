@@ -17,6 +17,7 @@ import { AuditLogService } from '../audit/audit.service.js';
 import { FieldTypesRegistry } from '../field-types/field-types.registry.js';
 import { SearchIndexService } from '../search/search-index.service.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
+import { assertStringIdList } from '../common/safe-id-list.js';
 
 export interface AuditMeta {
   ip: string;
@@ -495,14 +496,15 @@ export class AssetLayoutsService {
     const updatedLayout = await this.prisma.$transaction(async (tx) => {
       // Archive removed fields (soft). Destructive, but audit-friendly.
       if (removedIds.length > 0) {
+        const safeRemovedIds = assertStringIdList(removedIds, 'removedIds');
         await tx.assetField.updateMany({
-          where: { id: { in: removedIds } },
+          where: { id: { in: safeRemovedIds } },
           data: { archivedAt: now },
         });
         if (opts.force) {
           // Delete their values + any relation rows sourced through them.
           await tx.assetFieldValue.deleteMany({
-            where: { assetFieldId: { in: removedIds } },
+            where: { assetFieldId: { in: safeRemovedIds } },
           });
         }
       }

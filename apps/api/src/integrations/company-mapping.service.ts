@@ -14,6 +14,7 @@ import { PrismaService } from '../prisma/prisma.service.js';
 import { AuditLogService } from '../audit/audit.service.js';
 import { AUDIT_ACTIONS } from '../audit/audit-actions.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
+import { assertStringIdList } from '../common/safe-id-list.js';
 
 interface AuditMeta {
   ip: string;
@@ -195,13 +196,14 @@ export class IntegrationCompanyMappingService {
 
     await this.prisma.$transaction(async (tx) => {
       if (releasedAssetIds.length > 0) {
+        const safeAssetIds = assertStringIdList(releasedAssetIds, 'releasedAssetIds');
         await tx.integrationSyncRecord.deleteMany({
-          where: { assetId: { in: releasedAssetIds } },
+          where: { assetId: { in: safeAssetIds } },
         });
         await tx.asset.updateMany({
           where: {
-            id: { in: releasedAssetIds },
-            companyId: existing.companyId,
+            id: { in: safeAssetIds },
+            companyId: { equals: existing.companyId },
           },
           data: { externalId: null, externalSource: null },
         });
