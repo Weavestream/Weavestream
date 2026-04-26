@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import type { MembershipRole } from '@weavestream/shared';
+import type { MembershipRole, UserRole } from '@weavestream/shared';
 import { apiFetch } from '../../../../lib/api';
 import {
   Btn,
@@ -38,13 +38,15 @@ type Row = {
   };
 };
 
-// RBAC v2: every membership picker shows the same two values. The API
-// rejects FULL for CLIENT_USER targets — we trust the user-detail
-// surface to filter that case at the source. From the per-company
-// surface there's no easy way to filter without an extra round-trip
-// per row, so we surface both and rely on the API error toast if the
-// admin happens to set FULL on a CLIENT_USER's membership.
+// RBAC v2: CLIENT_USER memberships are pinned to READONLY at the API
+// tier; every other global role can pick either. The picker here
+// already knows the target user's role, so we filter the options
+// accordingly to avoid surfacing a value the API would reject.
 const MEMBERSHIP_ROLES: MembershipRole[] = ['FULL', 'READONLY'];
+
+function membershipRolesFor(userRole: UserRole | string | undefined): MembershipRole[] {
+  return userRole === 'CLIENT_USER' ? ['READONLY'] : MEMBERSHIP_ROLES;
+}
 
 export function CompanyMemberships({
   companyId,
@@ -397,6 +399,17 @@ function AddDialog({
     }
   }, [open]);
 
+  // CLIENT_USER members are READONLY-only at the API tier — collapse
+  // the role select to a single option and force the value if the
+  // operator picks a client user after first picking an operator.
+  const allowedRoles = membershipRolesFor(picked?.role);
+  const roleLocked = allowedRoles.length === 1;
+  useEffect(() => {
+    if (roleLocked && role !== allowedRoles[0]) {
+      setRole(allowedRoles[0]!);
+    }
+  }, [roleLocked, allowedRoles, role]);
+
   return (
     <Dialog
       open={open}
@@ -444,13 +457,22 @@ function AddDialog({
             autoFocus
           />
         </Field>
-        <Field label="Membership role" htmlFor="m-role">
+        <Field
+          label="Membership role"
+          htmlFor="m-role"
+          help={
+            roleLocked
+              ? 'Client users always join companies as read-only.'
+              : undefined
+          }
+        >
           <Select
             id="m-role"
             value={role}
             onChange={(e) => setRole(e.target.value as MembershipRole)}
+            disabled={roleLocked}
           >
-            {MEMBERSHIP_ROLES.map((r) => (
+            {allowedRoles.map((r) => (
               <option key={r} value={r}>
                 {membershipRoleLabel(r)}
               </option>
@@ -503,6 +525,9 @@ function EditDialog({
     );
   }, [row?.id]);
 
+  const allowedRoles = membershipRolesFor(row?.user.role);
+  const roleLocked = allowedRoles.length === 1;
+
   if (!row) {
     return (
       <Dialog open={false} onClose={onClose} title="Edit">
@@ -539,12 +564,20 @@ function EditDialog({
       }
     >
       <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-        <Field label="Membership role">
+        <Field
+          label="Membership role"
+          help={
+            roleLocked
+              ? 'Client users always join companies as read-only.'
+              : undefined
+          }
+        >
           <Select
             value={role}
             onChange={(e) => setRole(e.target.value as MembershipRole)}
+            disabled={roleLocked}
           >
-            {MEMBERSHIP_ROLES.map((r) => (
+            {allowedRoles.map((r) => (
               <option key={r} value={r}>
                 {membershipRoleLabel(r)}
               </option>

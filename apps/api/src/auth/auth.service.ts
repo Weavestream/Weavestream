@@ -148,22 +148,49 @@ export class AuthService {
     if (user.mfaEnforcementCompletedAt !== null) {
       throw new BadRequestException('MFA already enrolled; use reset-mfa CLI to re-enroll');
     }
-    const secret = this.mfa.generateSecret();
-    const encrypted = this.mfa.encryptSecret(secret);
-    await this.prisma.user.update({
+
+    // Re-use an in-progress secret instead of regenerating. React
+    // Strict Mode (dev) double-fires the setup page's mount effect,
+    // and a real user may also refresh the page after scanning the
+    // QR. Both paths previously rotated the DB secret while the
+    // authenticator app still held the old one — every subsequent
+    // verify failed until lockout. Once `mfaEnforcementCompletedAt`
+    // is set we go through `resetMfa` instead, so the only window
+    // where we hand out the same secret twice is between the first
+    // enroll and a successful verify.
+    const existing = await this.prisma.user.findUnique({
       where: { id: user.id },
-      data: { mfaSecretEncrypted: encrypted },
+      select: { mfaSecretEncrypted: true },
     });
-    await this.audit.log({
-      actorId: user.id,
-      action: 'auth.mfa.enroll',
-      entityType: 'User',
-      entityId: user.id,
-      ip,
-      userAgent,
-      before: null,
-      after: null,
-    });
+
+    let secret: string;
+    let isFresh: boolean;
+    if (existing?.mfaSecretEncrypted) {
+      secret = this.mfa.decryptSecret(existing.mfaSecretEncrypted);
+      isFresh = false;
+    } else {
+      secret = this.mfa.generateSecret();
+      const encrypted = this.mfa.encryptSecret(secret);
+      await this.prisma.user.update({
+        where: { id: user.id },
+        data: { mfaSecretEncrypted: encrypted },
+      });
+      isFresh = true;
+    }
+
+    if (isFresh) {
+      await this.audit.log({
+        actorId: user.id,
+        action: 'auth.mfa.enroll',
+        entityType: 'User',
+        entityId: user.id,
+        ip,
+        userAgent,
+        before: null,
+        after: null,
+      });
+    }
+
     const otpauthUrl = this.mfa.otpauthUrl(user.email, secret);
     const qrDataUrl = await this.mfa.qrDataUrl(otpauthUrl);
     return {
