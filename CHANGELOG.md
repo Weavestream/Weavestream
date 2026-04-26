@@ -6,6 +6,8 @@ this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-04-26
+
 ### Added
 
 - **Articles can be authored as Markdown or Tiptap (per-article).**
@@ -14,11 +16,18 @@ this project adheres to [Semantic Versioning](https://semver.org/).
   `content_plaintext` for both. The admin article form includes a format
   toggle; switching formats on an existing article runs a one-time
   conversion with a confirmation dialog.
+- **Vault records can now be exported to PDF.** Admin users can generate
+  PDF exports directly from the vault workflow for sharing and archival.
+- **Foundation for integration services is now in place.** Core sync
+  orchestration and shared integration plumbing were introduced to
+  support provider-specific connectors.
+- **Action1 integration was added.** The first integration driver is now
+  implemented on top of the new integration services foundation.
 
 ### Fixed
 
 - **API JSON body limit raised to 2 MB.** Express's default 100 KB cap
-  rejected legitimate article payloads — most visibly when converting a
+  rejected legitimate article payloads - most visibly when converting a
   larger Markdown article to Tiptap, since the JSON representation
   expands past the threshold. The new limit comfortably covers the
   500 KB `MAX_MARKDOWN_SOURCE` ceiling and its Tiptap projection while
@@ -28,11 +37,11 @@ this project adheres to [Semantic Versioning](https://semver.org/).
   form now waits for an explicit Save click rather than persisting the
   converted body 4 s later. The "unsaved" tag still appears, and any
   subsequent normal edit re-arms the autosave debounce.
-- **Tiptap → Markdown table conversion no longer drops to raw HTML.**
+- **Tiptap -> Markdown table conversion no longer drops to raw HTML.**
   Tables without a `<th>` row are now promoted to a header row before
   Turndown sees them (GFM Markdown requires one), and `<p>` wrappers
-  inside cells are unwrapped — joined with `<br>` for multi-paragraph
-  cells — so the output is a clean GFM table instead of leaking the
+  inside cells are unwrapped - joined with `<br>` for multi-paragraph
+  cells - so the output is a clean GFM table instead of leaking the
   original `<table>` markup.
 
 ## [1.1.5] - 2026-04-24

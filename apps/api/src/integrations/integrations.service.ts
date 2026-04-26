@@ -20,6 +20,7 @@ import { AUDIT_ACTIONS } from '../audit/audit-actions.js';
 import { IntegrationDriverRegistry } from './drivers/integration-driver.registry.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
 import { Prisma } from '@prisma/client';
+import { assertStringIdList } from '../common/safe-id-list.js';
 
 export interface AuditMeta {
   ip: string;
@@ -246,7 +247,9 @@ export class IntegrationsService {
       });
 
       if (input.clearSecret) {
-        await tx.integrationSecret.deleteMany({ where: { integrationId: id } });
+        await tx.integrationSecret.deleteMany({
+          where: { integrationId: { equals: id } },
+        });
         secretMutated = true;
       } else if (input.secret) {
         const ciphertext = this.crypto.encrypt(JSON.stringify(input.secret));
@@ -324,14 +327,15 @@ export class IntegrationsService {
 
     await this.prisma.$transaction(async (tx) => {
       if (releasedAssetIds.length > 0) {
+        const safeAssetIds = assertStringIdList(releasedAssetIds, 'releasedAssetIds');
         // The sync-records rows are deleted by the FK cascade once we
         // delete the integration. Clearing the asset linkage first keeps
         // the (asset_id) unique index from racing against the cascade.
         await tx.integrationSyncRecord.deleteMany({
-          where: { assetId: { in: releasedAssetIds } },
+          where: { assetId: { in: safeAssetIds } },
         });
         await tx.asset.updateMany({
-          where: { id: { in: releasedAssetIds } },
+          where: { id: { in: safeAssetIds } },
           data: { externalId: null, externalSource: null },
         });
       }
@@ -505,7 +509,9 @@ export class IntegrationsService {
     }
 
     await this.prisma.$transaction(async (tx) => {
-      await tx.integrationFieldMapping.deleteMany({ where: { integrationId } });
+      await tx.integrationFieldMapping.deleteMany({
+        where: { integrationId: { equals: integrationId } },
+      });
       if (input.mappings.length > 0) {
         await tx.integrationFieldMapping.createMany({
           data: input.mappings.map((m) => ({

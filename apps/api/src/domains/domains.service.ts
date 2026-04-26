@@ -326,11 +326,11 @@ export class DomainsService {
     }
 
     await this.prisma.monitoredDomain.updateMany({
-      where: { id, companyId },
+      where: { id: { equals: id }, companyId: { equals: companyId } },
       data,
     });
     const updated = await this.prisma.monitoredDomain.findFirstOrThrow({
-      where: { id, companyId },
+      where: { id: { equals: id }, companyId: { equals: companyId } },
     });
 
     await this.audit.log({
