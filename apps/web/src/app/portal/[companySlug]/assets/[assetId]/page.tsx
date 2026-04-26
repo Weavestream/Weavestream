@@ -15,6 +15,7 @@ import { Icon, LayoutSwatch, Panel, Tag } from '../../../../../components/ui';
 import { RichTextView } from '../../../../../components/editor/rich-text-view';
 import { AttachmentsPanel } from '../../../../../components/upload/attachments-panel';
 import { CredentialsPanel } from '../../../../../components/passwords/credentials-panel';
+import { vaultLinkLabel, vaultLinkUrl } from '../../../../../lib/vault-link';
 
 /**
  * Portal asset detail (read-only mirror of the admin page).
@@ -287,7 +288,6 @@ function renderValue(
         </span>
       );
     case 'URL':
-    case 'VAULTWARDEN_LINK':
       return (
         <a
           href={String(value)}
@@ -306,6 +306,29 @@ function renderValue(
           <Icon.ext size={11} />
         </a>
       );
+    case 'VAULTWARDEN_LINK': {
+      const href = vaultLinkUrl(value);
+      const label = vaultLinkLabel(value);
+      if (!href) return <span style={{ color: 'var(--dim)' }}>—</span>;
+      return (
+        <a
+          href={href}
+          target="_blank"
+          rel="noreferrer"
+          style={{
+            color: 'var(--accent)',
+            fontFamily: 'var(--font-mono)',
+            fontSize: 12.5,
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 4,
+          }}
+        >
+          {label}
+          <Icon.ext size={11} />
+        </a>
+      );
+    }
     case 'EMAIL':
       return (
         <a

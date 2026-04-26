@@ -9,6 +9,7 @@ import type {
   LayoutFieldSummary,
   LayoutSummary,
 } from '../../lib/server-api';
+import { vaultLinkLabel } from '../../lib/vault-link';
 import { Icon, LayoutSwatch, Tag } from '../ui';
 import { useIsMobile } from '../../lib/hooks/use-is-mobile';
 
@@ -617,6 +618,8 @@ function FieldCell({
     case 'IP_ADDRESS':
     case 'PHONE':
     case 'VAULTWARDEN_LINK': {
+      const text =
+        fieldType === 'VAULTWARDEN_LINK' ? vaultLinkLabel(value) : String(value);
       return (
         <span
           style={{
@@ -625,7 +628,7 @@ function FieldCell({
             color: 'var(--text-2)',
           }}
         >
-          {String(value)}
+          {text}
         </span>
       );
     }
