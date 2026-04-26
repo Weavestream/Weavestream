@@ -31,6 +31,19 @@ async function bootstrap() {
   // when the edge terminates TLS.
   app.set('trust proxy', 1);
 
+  // Use the `simple` query parser (Node's built-in `querystring`) instead
+  // of Express's default `extended` parser (`qs`). The extended parser
+  // turns `?foo[$ne]=x` into the object `{foo: {$ne: 'x'}}`, which would
+  // pass straight through any controller that forwards a query value
+  // into a Prisma `where` clause without explicit type checking — the
+  // classic NoSQL/operator-injection vector. The simple parser keeps
+  // every value as a string (or string array for repeated keys), which
+  // is the only shape any of our callers ever send anyway. This is a
+  // global belt for the per-controller braces (Zod schemas, ParseUUID,
+  // ZodParam) and closes the class even for any future endpoint that
+  // forgets to validate.
+  app.set('query parser', 'simple');
+
   app.use(
     helmet({
       contentSecurityPolicy: false, // API returns JSON only; web layer sets CSP
