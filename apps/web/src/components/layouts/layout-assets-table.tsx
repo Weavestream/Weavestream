@@ -244,7 +244,7 @@ export function LayoutAssetsTable({
           >
             <thead>
               <tr style={{ borderBottom: '1px solid var(--line)' }}>
-                <Th>{columns.primary?.name ?? 'Name'}</Th>
+                <Th>Name</Th>
                 {columns.extras.map((f) => (
                   <Th key={f.id}>{f.name}</Th>
                 ))}
@@ -308,34 +308,19 @@ function LayoutAssetMobileCard({
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <LayoutSwatch icon={layout.icon} color={layout.color} size={24} />
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div
-              style={{
-                fontWeight: 600,
-                fontSize: 14,
-                color: 'var(--text)',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-              }}
-            >
-              {row.name}
-            </div>
-            {columns.primary && columns.primary.slug !== 'name' && (
-              <div
-                style={{
-                  fontFamily: 'var(--font-mono)',
-                  fontSize: 11,
-                  color: 'var(--dim)',
-                }}
-              >
-                {renderCellPrimitive(
-                  columns.primary.fieldType,
-                  row.fieldValues[columns.primary.slug],
-                  row.references,
-                )}
-              </div>
-            )}
+          <div
+            style={{
+              flex: 1,
+              minWidth: 0,
+              fontWeight: 600,
+              fontSize: 14,
+              color: 'var(--text)',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {row.name}
           </div>
           <Icon.chevron size={12} style={{ color: 'var(--dim)' }} />
         </div>
@@ -466,41 +451,21 @@ function AssetRow({
           }}
         >
           <LayoutSwatch icon={layout.icon} color={layout.color} size={22} />
-          <div style={{ minWidth: 0 }}>
-            <div
-              style={{
-                fontWeight: 500,
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-                maxWidth: 320,
-              }}
-            >
-              {row.name}
-              {row.archivedAt && (
-                <Tag tone="warn" style={{ marginLeft: 8 }}>
-                  archived
-                </Tag>
-              )}
-            </div>
-            {columns.primary && columns.primary.slug !== 'name' && (
-              <div
-                style={{
-                  fontFamily: 'var(--font-mono)',
-                  fontSize: 10.5,
-                  color: 'var(--dim)',
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
-                  maxWidth: 320,
-                }}
-              >
-                {renderCellPrimitive(
-                  columns.primary.fieldType,
-                  row.fieldValues[columns.primary.slug],
-                  row.references,
-                )}
-              </div>
+          <div
+            style={{
+              fontWeight: 500,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+              maxWidth: 320,
+              minWidth: 0,
+            }}
+          >
+            {row.name}
+            {row.archivedAt && (
+              <Tag tone="warn" style={{ marginLeft: 8 }}>
+                archived
+              </Tag>
             )}
           </div>
         </Link>

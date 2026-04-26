@@ -62,6 +62,30 @@ export const envSchema = z.object({
   PASSWORD_PREVIOUS_KEYS: z.string().optional().default(''),
   HIBP_ENABLED: boolish.default(true),
 
+  // Phase 11: integration secret encryption. Same `kid`-tagged scheme
+  // as the password vault — `INTEGRATION_SECRET_KEY` decrypts the
+  // active ciphertext, `INTEGRATION_PREVIOUS_KEYS` (comma-separated
+  // `kid:base64key`) keeps older blobs readable until they are
+  // re-encrypted on the next mutation. The key MUST be distinct from
+  // PASSWORD_ENCRYPTION_KEY so password and integration ciphertexts
+  // can be rotated independently.
+  INTEGRATION_SECRET_KEY: base64Key(32),
+  INTEGRATION_SECRET_KEY_KID: z.string().min(1).max(32),
+  INTEGRATION_PREVIOUS_KEYS: z.string().optional().default(''),
+
+  // Phase 11: integration sync scheduling + concurrency.
+  //
+  // `INTEGRATION_SYNC_DEFAULT_CRON` is registered as the BullMQ
+  // repeat pattern when an Integration row sets `syncCron = null` and
+  // status = ACTIVE. Set to the literal string "off" to disable the
+  // global scheduler — manual runs from the admin UI still work.
+  INTEGRATION_SYNC_DEFAULT_CRON: z.string().min(1).default('0 */4 * * *'),
+  INTEGRATION_SYNC_ORCHESTRATOR_CONCURRENCY: intFromString(1, 50).default(2),
+  INTEGRATION_SYNC_MAPPING_CONCURRENCY: intFromString(1, 100).default(5),
+  INTEGRATION_HTTP_TIMEOUT_MS: intFromString(1_000, 120_000).default(30_000),
+  INTEGRATION_HTTP_MAX_RETRIES: intFromString(0, 10).default(5),
+  INTEGRATION_HTTP_BACKOFF_MS: intFromString(100, 60_000).default(1_000),
+
   ARGON2_MEMORY_KB: intFromString(16384, 1048576).default(65536),
   ARGON2_ITERATIONS: intFromString(1, 20).default(3),
   ARGON2_PARALLELISM: intFromString(1, 16).default(4),

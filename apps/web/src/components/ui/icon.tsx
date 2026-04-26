@@ -327,6 +327,21 @@ export const Icon = {
       <path d="M13.5 2v3.5H10" />
     </IconBase>
   ),
+  plug: (p: IconProps) => (
+    <IconBase {...p}>
+      <path d="M5 1v3M11 1v3" />
+      <path d="M3 4h10v3a4 4 0 0 1-4 4H7a4 4 0 0 1-4-4V4z" />
+      <path d="M8 11v4" />
+    </IconBase>
+  ),
+  sync: (p: IconProps) => (
+    <IconBase {...p}>
+      <path d="M2.5 8a5.5 5.5 0 0 1 9.4-3.9L13 5" />
+      <path d="M13 2v3h-3" />
+      <path d="M13.5 8a5.5 5.5 0 0 1-9.4 3.9L3 11" />
+      <path d="M3 14v-3h3" />
+    </IconBase>
+  ),
 };
 
 export type IconName = keyof typeof Icon;

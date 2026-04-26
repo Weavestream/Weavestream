@@ -68,6 +68,18 @@ export interface SerializedAsset {
   updatedByUser: ActorRef | null;
   createdAt: Date;
   updatedAt: Date;
+  /**
+   * Phase 11 — sync provenance. Populated when an `IntegrationSyncRecord`
+   * exists for this asset; null otherwise. The UI uses these fields to
+   * render the subtle "synced from <driver>" indicators on lists, the
+   * detail header, and the per-field labels in the edit form.
+   */
+  lastSyncedAt: Date | null;
+  /**
+   * Field ids the integration most recently wrote during a successful
+   * sync. Drives the per-field label icon. Empty array when not synced.
+   */
+  syncedFieldIds: string[];
   fieldValues: Record<string, unknown>;
   fields: Array<{
     id: string;
@@ -206,6 +218,7 @@ export class AssetsService {
     await this.hydrateFileFields(companyId, serialized);
     await this.hydrateAssetReferences(companyId, serialized);
     await this.hydrateActors(serialized);
+    await this.hydrateSyncMetadata(serialized);
     return {
       items: serialized,
       nextCursor: hasMore ? slice[slice.length - 1]!.id : null,
@@ -251,6 +264,7 @@ export class AssetsService {
     await this.hydrateFileFields(companyId, [serialized]);
     await this.hydrateAssetReferences(companyId, [serialized]);
     await this.hydrateActors([serialized]);
+    await this.hydrateSyncMetadata([serialized]);
     return serialized;
   }
 
@@ -825,6 +839,41 @@ export class AssetsService {
   }
 
   /**
+   * Phase 11 — populate `lastSyncedAt` + `syncedFieldIds` from the
+   * matching `IntegrationSyncRecord` rows. `Asset.externalSource` and
+   * `Asset.externalId` already ride on the row itself; this hydrator
+   * supplies the bookkeeping that drives the per-asset / per-field
+   * "synced" indicators in the UI without exposing checksums or run
+   * ids that operators don't need.
+   */
+  private async hydrateSyncMetadata(
+    assets: SerializedAsset[],
+  ): Promise<void> {
+    if (assets.length === 0) return;
+    const ids = assets.filter((a) => a.externalSource).map((a) => a.id);
+    if (ids.length === 0) return;
+    const rows = await this.prisma.integrationSyncRecord.findMany({
+      where: { assetId: { in: ids } },
+      select: {
+        assetId: true,
+        lastSyncedAt: true,
+        lastSyncedFieldChecksums: true,
+      },
+    });
+    const byAssetId = new Map(rows.map((r) => [r.assetId, r] as const));
+    for (const a of assets) {
+      const r = byAssetId.get(a.id);
+      if (!r) continue;
+      a.lastSyncedAt = r.lastSyncedAt;
+      const checksums = (r.lastSyncedFieldChecksums ?? {}) as Record<
+        string,
+        unknown
+      >;
+      a.syncedFieldIds = Object.keys(checksums);
+    }
+  }
+
+  /**
    * Resolve `createdBy` / `updatedBy` user ids into `{ id, name }` stubs
    * so the UI can render "updated by Jane" without the caller having to
    * hold `membership.manage`. This is a post-pass over already-serialized
@@ -886,6 +935,8 @@ export class AssetsService {
       updatedByUser: null,
       createdAt: asset.createdAt,
       updatedAt: asset.updatedAt,
+      lastSyncedAt: null,
+      syncedFieldIds: [],
       fieldValues,
       fields: visibleFields
         .sort((a, b) => a.position - b.position)

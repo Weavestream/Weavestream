@@ -81,6 +81,37 @@ export const AUDIT_ACTIONS = {
     completed: 'export.completed',
     failed: 'export.failed',
   },
+  // Phase 11 — universal integration framework. The `integration.*` rows
+  // are emitted by the global admin controller (no companyId). The
+  // `integration.sync.*` rows can carry a companyId when the worker
+  // writes the per-mapping result (`integration.sync.mapping.*`) so an
+  // operator viewing their tenant's audit log sees every sync that
+  // touched their data — even though they cannot manage the integration
+  // itself. `integration.asset.*` rows are tenant-scoped and carry the
+  // affected `assetId` for traceability of synced/claimed/archived rows.
+  integration: {
+    create: 'integration.create',
+    update: 'integration.update',
+    delete: 'integration.delete',
+    secretUpdate: 'integration.secret.update',
+    testConnection: 'integration.test_connection',
+    companyMappingCreate: 'integration.company_mapping.create',
+    companyMappingUpdate: 'integration.company_mapping.update',
+    companyMappingDelete: 'integration.company_mapping.delete',
+    fieldMappingsReplace: 'integration.field_mappings.replace',
+    syncRunStarted: 'integration.sync.started',
+    syncRunFinished: 'integration.sync.finished',
+    syncRunFailed: 'integration.sync.failed',
+    syncMappingStarted: 'integration.sync.mapping.started',
+    syncMappingFinished: 'integration.sync.mapping.finished',
+    syncMappingFailed: 'integration.sync.mapping.failed',
+    assetCreated: 'integration.asset.created',
+    assetUpdated: 'integration.asset.updated',
+    assetClaimed: 'integration.asset.claimed',
+    assetArchived: 'integration.asset.archived',
+    assetReleased: 'integration.asset.released',
+    matchAmbiguous: 'integration.match.ambiguous',
+  },
 } as const;
 
 export const ALL_AUDIT_ACTIONS: string[] = [
@@ -92,4 +123,5 @@ export const ALL_AUDIT_ACTIONS: string[] = [
   ...Object.values(AUDIT_ACTIONS.domain),
   ...Object.values(AUDIT_ACTIONS.password),
   ...Object.values(AUDIT_ACTIONS.export),
+  ...Object.values(AUDIT_ACTIONS.integration),
 ];

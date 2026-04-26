@@ -35,6 +35,19 @@ export const TENANT_SCOPED_MODELS = new Set<string>([
   'Password',
   'PasswordVersion',
   'PasswordFolder',
+  // Phase 11: integration framework. The top-level `Integration`,
+  // `IntegrationSecret`, and `IntegrationSyncRun` rows are GLOBAL
+  // (no companyId) and are SUPER_ADMIN-gated at the HTTP layer; they
+  // are intentionally NOT listed here so the middleware leaves them
+  // alone. The four rows below DO carry `companyId` and fan out per-
+  // tenant. `IntegrationFieldMapping` itself has no direct companyId
+  // — it is reached only through `IntegrationCompanyMapping` and is
+  // therefore not listed (the parent mapping enforces scope on read
+  // and the middleware-bypassing service-layer transactions are the
+  // only place rows are written).
+  'IntegrationCompanyMapping',
+  'IntegrationSyncRunCompanyResult',
+  'IntegrationSyncRecord',
   // Phase 1: AuditLog can be cross-tenant (`companyId` is nullable for
   // system events), so it is excluded by design.
   //

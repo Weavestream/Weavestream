@@ -212,6 +212,11 @@ model Company {
   starredBy       StarredCompany[]
   passwords       Password[]
   passwordFolders PasswordFolder[]
+  // Phase 11: per-tenant org-to-company mappings owned by a global
+  // integration (Action1 organisation → Weavestream company).
+  // Cascade delete clears mappings if a company is hard-deleted, but
+  // we never archive assets in that path — see `IntegrationCompanyMapping`.
+  integrationMappings IntegrationCompanyMapping[]
 
   @@index([type])
   @@index([parentCompanyId])
@@ -381,6 +386,10 @@ model AssetLayout {
 
   fields AssetField[]
   assets Asset[]
+  // Phase 11: integrations target a layout for upserts. Layouts are
+  // GLOBAL, so a single layout choice on the parent `Integration`
+  // applies across every per-company mapping.
+  integrations Integration[]
 
   // Active-slug uniqueness enforced by a partial unique index on
   // (slug) WHERE archived_at IS NULL, added in the Phase 3 migration.
@@ -419,6 +428,9 @@ model AssetField {
 
   assetLayout AssetLayout       @relation(fields: [assetLayoutId], references: [id], onDelete: Cascade)
   values      AssetFieldValue[]
+  // Phase 11: integrations may project a remote source field onto this
+  // AssetField (one row per (companyMapping, sourceField)).
+  integrationFieldMappings IntegrationFieldMapping[]
 
   // (assetLayoutId, slug) WHERE archived_at IS NULL and "at most one primary
   // per layout" are both enforced by partial unique indexes in the migration.
@@ -445,10 +457,20 @@ model Asset {
   fieldValues AssetFieldValue[]
   passwords   Password[]
   starredBy   StarredAsset[]
+  // Phase 11: 0..1 link to the external record that produced or last
+  // updated this asset. The relation is nullable because an asset can
+  // be operator-created or have been "released" by a deleted
+  // integration mapping (see the deletion-safety rules in the plan).
+  integrationSyncRecord IntegrationSyncRecord?
 
   @@index([companyId, assetLayoutId, archivedAt])
   @@index([companyId, name])
   @@index([companyId, updatedAt])
+  // Phase 11: unique-by-source so the resolver can claim a row by
+  // (companyId, externalSource, externalId) without scanning. NULLs
+  // are allowed (manual assets) — handled by the partial unique index
+  // in the migration.
+  @@index([companyId, externalSource, externalId])
   @@map("assets")
 }
 
@@ -833,4 +855,260 @@ model PasswordFolder {
   @@index([companyId, archivedAt])
   @@index([companyId, parentId, position])
   @@map("password_folders")
+}
+
+// Phase 11 — universal integration framework. Top-level `Integration`
+// rows are GLOBAL (no companyId): one row per configured connection
+// to an external system (e.g. one Action1 tenant). Sync fans out into
+// many Weavestream companies via `IntegrationCompanyMapping`. Only
+// SUPER_ADMIN may create / edit / delete an Integration.
+//
+// `driver` keys into the in-memory `IntegrationDriverRegistry`
+// (e.g. "action1"). `config` holds non-sensitive driver-specific
+// parameters (base URLs, default page sizes…) — every secret lives
+// in the sibling `IntegrationSecret` table, AES-256-GCM encrypted
+// under `INTEGRATION_SECRET_KEY`. The split exists so a row dump
+// (or a future API export) can carry config without ever exposing
+// credentials.
+enum IntegrationStatus {
+  ACTIVE
+  PAUSED
+  DISABLED
+}
+
+model Integration {
+  id            String            @id @default(uuid()) @db.Uuid
+  driver        String
+  name          String
+  status        IntegrationStatus @default(PAUSED)
+  /// Free-form JSON validated by the driver's `configSchema`. Never
+  /// contains secrets — those live in `IntegrationSecret`.
+  config        Json              @default("{}")
+  /// BullMQ cron pattern (5-field). NULL disables scheduled syncs;
+  /// manual `Run sync` from the admin UI still works.
+  syncCron      String?           @map("sync_cron")
+  /// Phase 11 — GLOBAL target layout for this integration. Every
+  /// per-company mapping syncs into the same layout (AssetLayouts
+  /// themselves are global, see DECISIONS.md D-007). Field mappings
+  /// and match keys are validated against this layout. NULL while the
+  /// operator is still configuring credentials/orgs — runs short-
+  /// circuit with a "missing layout" error in that state.
+  assetLayoutId String?           @map("asset_layout_id") @db.Uuid
+  /// Phase 11 — GLOBAL match-key fields used when claiming unsynced
+  /// Weavestream assets. AssetField ids must belong to
+  /// `assetLayoutId`. Empty array means "always create on miss".
+  /// Order is significant — drives tie-breaker ordering in conflict
+  /// logs.
+  matchKeyFieldIds String[]       @map("match_key_field_ids") @db.Uuid
+  lastRunAt     DateTime?         @map("last_run_at")
+  lastRunStatus String?           @map("last_run_status")
+  createdBy     String?           @map("created_by") @db.Uuid
+  createdAt     DateTime          @default(now()) @map("created_at")
+  updatedAt     DateTime          @updatedAt @map("updated_at")
+
+  secret           IntegrationSecret?
+  assetLayout      AssetLayout?              @relation(fields: [assetLayoutId], references: [id], onDelete: Restrict)
+  companyMappings  IntegrationCompanyMapping[]
+  fieldMappings    IntegrationFieldMapping[]
+  syncRuns         IntegrationSyncRun[]
+
+  @@unique([driver, name])
+  @@index([driver])
+  @@index([assetLayoutId])
+  @@map("integrations")
+}
+
+// Phase 11 — encrypted secret bundle for a single Integration. Stored
+// as an opaque base64 ciphertext produced by the integration crypto
+// service. Decryption requires the active `INTEGRATION_SECRET_KEY`;
+// rotation follows the same `kid`-tagged scheme as the password vault.
+model IntegrationSecret {
+  id             String   @id @default(uuid()) @db.Uuid
+  integrationId  String   @unique @map("integration_id") @db.Uuid
+  /// Base64 AES-256-GCM blob with embedded `kid`. Decrypts to a JSON
+  /// string the driver parses against its `secretSchema`.
+  ciphertext     String
+  updatedAt      DateTime @updatedAt @map("updated_at")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  integration Integration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+
+  @@map("integration_secrets")
+}
+
+// Phase 11 — tenant-scoped row that ties a single external organisation
+// (Action1 `org_id`) to a Weavestream company. Layout + match-key
+// fields + field mappings are all GLOBAL on the parent `Integration`
+// — this row only carries the per-tenant fan-out info (which company,
+// which upstream org, optional driver filter, enabled flag).
+//
+// Listed in `tenant-scoped-models.ts` so the tenant middleware blocks
+// out-of-scope reads/writes for non-SUPER_ADMIN callers.
+model IntegrationCompanyMapping {
+  id              String   @id @default(uuid()) @db.Uuid
+  integrationId   String   @map("integration_id") @db.Uuid
+  companyId       String   @map("company_id") @db.Uuid
+  /// External (driver-side) organisation id this mapping pulls from.
+  externalOrgId   String   @map("external_org_id")
+  /// Snapshot of the external organisation's display name. Refreshed
+  /// each time `listSourceOrgs` is reconciled in the admin UI.
+  externalOrgName String?  @map("external_org_name")
+  enabled         Boolean  @default(true)
+  /// Optional driver-specific filter blob (e.g. site/group restrictions).
+  /// Validated by the driver's `mappingFilterSchema` if defined.
+  filter          Json     @default("{}")
+  createdBy       String?  @map("created_by") @db.Uuid
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  integration   Integration                  @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+  company       Company                      @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  syncRecords   IntegrationSyncRecord[]
+  runResults    IntegrationSyncRunCompanyResult[]
+
+  @@unique([integrationId, externalOrgId])
+  @@index([companyId, integrationId])
+  @@map("integration_company_mappings")
+}
+
+// Phase 11 — describes how a single source field is projected onto a
+// Weavestream `AssetField`. GLOBAL: one row per (integration, sourceField),
+// shared across every per-company mapping. The `transform` blob is
+// reserved for the driver's transform DSL (e.g. `lowercase`,
+// `coerce_date`). `syncDirection` controls how the worker resolves
+// conflicts on update:
+//   - source_wins      : driver value always replaces the stored value
+//   - preserve_manual  : skip the field if the stored value differs
+//                        from the last-synced checksum (operator edited)
+//   - manual_only      : never touch the field; field exists for display
+//                        only and the worker treats it as not mapped.
+enum IntegrationSyncDirection {
+  source_wins
+  preserve_manual
+  manual_only
+}
+
+model IntegrationFieldMapping {
+  id            String                   @id @default(uuid()) @db.Uuid
+  integrationId String                   @map("integration_id") @db.Uuid
+  sourceField   String                   @map("source_field")
+  targetFieldId String                   @map("target_field_id") @db.Uuid
+  syncDirection IntegrationSyncDirection @default(source_wins) @map("sync_direction")
+  /// Optional transform descriptor; null means identity.
+  transform     Json?
+  createdAt     DateTime                 @default(now()) @map("created_at")
+  updatedAt     DateTime                 @updatedAt @map("updated_at")
+
+  integration Integration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+  targetField AssetField  @relation(fields: [targetFieldId], references: [id], onDelete: Cascade)
+
+  @@unique([integrationId, sourceField])
+  @@index([targetFieldId])
+  @@map("integration_field_mappings")
+}
+
+// Phase 11 — top-level "this Integration ran a sync" row. `kind` is
+// either `manual` (operator pressed the button) or `scheduled`
+// (cron fired). `dryRun=true` means the worker computed every
+// resolution but wrote nothing — safe to use to validate mappings.
+enum IntegrationRunKind {
+  manual
+  scheduled
+}
+
+enum IntegrationRunStatus {
+  queued
+  running
+  succeeded
+  failed
+  cancelled
+}
+
+model IntegrationSyncRun {
+  id            String               @id @default(uuid()) @db.Uuid
+  integrationId String               @map("integration_id") @db.Uuid
+  kind          IntegrationRunKind
+  status        IntegrationRunStatus @default(queued)
+  dryRun        Boolean              @default(false) @map("dry_run")
+  triggeredBy   String?              @map("triggered_by") @db.Uuid
+  startedAt     DateTime?            @map("started_at")
+  finishedAt    DateTime?            @map("finished_at")
+  /// Aggregate counters across every per-mapping child run. Filled in
+  /// by the orchestrator once children settle.
+  totals        Json?
+  /// Optional terminal error — populated when status=failed.
+  error         String?
+  createdAt     DateTime             @default(now()) @map("created_at")
+
+  integration   Integration                       @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+  companyResults IntegrationSyncRunCompanyResult[]
+  syncRecords    IntegrationSyncRecord[]
+
+  @@index([integrationId, createdAt])
+  @@map("integration_sync_runs")
+}
+
+// Phase 11 — per-mapping result row written by the per-mapping
+// processor. Tenant-scoped via `companyId` so operators can read
+// their tenant's runs without exposing other companies' counters.
+model IntegrationSyncRunCompanyResult {
+  id                          String               @id @default(uuid()) @db.Uuid
+  syncRunId                   String               @map("sync_run_id") @db.Uuid
+  integrationCompanyMappingId String               @map("integration_company_mapping_id") @db.Uuid
+  companyId                   String               @map("company_id") @db.Uuid
+  status                      IntegrationRunStatus @default(queued)
+  startedAt                   DateTime?            @map("started_at")
+  finishedAt                  DateTime?            @map("finished_at")
+  /// `{ created: n, updated: n, claimed: n, archived: n, skippedAmbiguous: n,
+  ///    skippedManual: n, errors: n, fetched: n }`.
+  totals                      Json?
+  /// Up to N structured conflicts (ambiguous match, validation error)
+  /// for the operator to triage from the run viewer. Capped to keep
+  /// the row tiny.
+  conflicts                   Json?
+  error                       String?
+  createdAt                   DateTime             @default(now()) @map("created_at")
+
+  syncRun        IntegrationSyncRun        @relation(fields: [syncRunId], references: [id], onDelete: Cascade)
+  companyMapping IntegrationCompanyMapping @relation(fields: [integrationCompanyMappingId], references: [id], onDelete: Cascade)
+
+  @@unique([syncRunId, integrationCompanyMappingId])
+  @@index([companyId, createdAt])
+  @@map("integration_sync_run_company_results")
+}
+
+// Phase 11 — durable link between an external record and a
+// Weavestream `Asset`. One row per (companyMapping, externalId).
+// `lastSyncedFieldChecksums` is a `{ assetFieldId: sha256 }` map
+// recorded on every successful field write; the next sync uses it
+// to detect manual edits when `syncDirection=preserve_manual`.
+//
+// `companyId` is denormalised so the tenant middleware can enforce
+// scope without a relational filter (mirrors AssetFieldValue).
+model IntegrationSyncRecord {
+  id                          String   @id @default(uuid()) @db.Uuid
+  integrationCompanyMappingId String   @map("integration_company_mapping_id") @db.Uuid
+  syncRunId                   String?  @map("sync_run_id") @db.Uuid
+  companyId                   String   @map("company_id") @db.Uuid
+  assetId                     String   @map("asset_id") @db.Uuid
+  externalId                  String   @map("external_id")
+  lastSyncedAt                DateTime @map("last_synced_at")
+  /// SHA-256 hex of the canonicalised JSON body returned by the driver
+  /// during the most recent successful upsert. Identical checksum on
+  /// the next run = nothing to do.
+  checksum                    String
+  /// Per-field SHA-256 checksums — keyed by `AssetField.id`. Drives
+  /// `preserve_manual` conflict detection.
+  lastSyncedFieldChecksums    Json     @map("last_synced_field_checksums") @default("{}")
+  createdAt                   DateTime @default(now()) @map("created_at")
+  updatedAt                   DateTime @updatedAt @map("updated_at")
+
+  companyMapping IntegrationCompanyMapping @relation(fields: [integrationCompanyMappingId], references: [id], onDelete: Cascade)
+  asset          Asset                     @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  syncRun        IntegrationSyncRun?       @relation(fields: [syncRunId], references: [id], onDelete: SetNull)
+
+  @@unique([integrationCompanyMappingId, externalId])
+  @@unique([assetId])
+  @@index([companyId, integrationCompanyMappingId])
+  @@map("integration_sync_records")
 }

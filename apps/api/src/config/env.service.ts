@@ -6,6 +6,7 @@ export class EnvService {
   readonly values: Env;
   readonly jwtPreviousKeys: Array<{ kid: string; key: Buffer }>;
   readonly passwordPreviousKeys: Array<{ kid: string; key: Buffer }>;
+  readonly integrationPreviousKeys: Array<{ kid: string; key: Buffer }>;
 
   constructor() {
     this.values = loadEnv(process.env);
@@ -16,6 +17,10 @@ export class EnvService {
     this.passwordPreviousKeys = parsePreviousKeys(
       this.values.PASSWORD_PREVIOUS_KEYS,
       'PASSWORD_PREVIOUS_KEYS',
+    );
+    this.integrationPreviousKeys = parsePreviousKeys(
+      this.values.INTEGRATION_PREVIOUS_KEYS,
+      'INTEGRATION_PREVIOUS_KEYS',
     );
   }
 
@@ -29,5 +34,13 @@ export class EnvService {
 
   get passwordActiveKid(): string {
     return this.values.PASSWORD_ENCRYPTION_KEY_KID;
+  }
+
+  get integrationActiveKey(): Buffer {
+    return Buffer.from(this.values.INTEGRATION_SECRET_KEY, 'base64');
+  }
+
+  get integrationActiveKid(): string {
+    return this.values.INTEGRATION_SECRET_KEY_KID;
   }
 }

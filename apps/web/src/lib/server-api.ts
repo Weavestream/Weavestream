@@ -738,6 +738,20 @@ export type AssetSummary = {
   name: string;
   externalId: string | null;
   externalSource: string | null;
+  /**
+   * Phase 11 — last time an integration successfully wrote to this
+   * asset. Null for manually-created or untouched assets. Populated by
+   * the API's `hydrateSyncMetadata` helper based on the matching
+   * `IntegrationSyncRecord` row.
+   */
+  lastSyncedAt: string | null;
+  /**
+   * Layout-field ids that were last touched by the integration sync.
+   * Used by the edit form to render a subtle "synced" indicator next
+   * to fields the operator may want to leave alone (or knowingly
+   * override). Empty for manual assets.
+   */
+  syncedFieldIds: string[];
   archivedAt: string | null;
   createdBy: string | null;
   updatedBy: string | null;

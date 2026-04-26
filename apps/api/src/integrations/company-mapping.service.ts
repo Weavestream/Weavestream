@@ -1,0 +1,295 @@
+import {
+  ConflictException,
+  Injectable,
+  BadRequestException,
+  NotFoundException,
+} from '@nestjs/common';
+import { Prisma } from '@prisma/client';
+import type {
+  CreateIntegrationCompanyMappingInput,
+  IntegrationCompanyMappingDto,
+  UpdateIntegrationCompanyMappingInput,
+} from '@weavestream/shared';
+import { PrismaService } from '../prisma/prisma.service.js';
+import { AuditLogService } from '../audit/audit.service.js';
+import { AUDIT_ACTIONS } from '../audit/audit-actions.js';
+import type { AuthedUser } from '../common/current-user.decorator.js';
+
+interface AuditMeta {
+  ip: string;
+  userAgent: string;
+}
+
+/**
+ * Phase 11 — `IntegrationCompanyMapping` CRUD.
+ *
+ * After the global field-mapping refactor (D-021) this service ONLY
+ * deals with the per-tenant fan-out row (which company, which upstream
+ * org, optional driver filter, enabled flag). Asset layout, match-key
+ * field ids, and field mappings are configured GLOBALLY on the parent
+ * `Integration` and are applied uniformly across every per-company
+ * mapping during sync.
+ *
+ * Mappings are TENANT-scoped (the row carries `companyId`), but every
+ * mutation runs under a SUPER_ADMIN actor — the global integration
+ * manager is the only role allowed by the controller. We still set
+ * `companyId` correctly on every write so the tenant middleware
+ * enforces consistency and the per-tenant audit log shows the change
+ * to the affected company's operators.
+ */
+@Injectable()
+export class IntegrationCompanyMappingService {
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly audit: AuditLogService,
+  ) {}
+
+  async list(integrationId: string): Promise<IntegrationCompanyMappingDto[]> {
+    const rows = await this.prisma.integrationCompanyMapping.findMany({
+      where: { integrationId },
+      orderBy: [{ externalOrgName: 'asc' }, { externalOrgId: 'asc' }],
+      include: {
+        company: { select: { name: true } },
+      },
+    });
+    return rows.map((r) => this.toDto(r));
+  }
+
+  async get(
+    integrationId: string,
+    mappingId: string,
+  ): Promise<IntegrationCompanyMappingDto> {
+    return this.toDto(await this.loadMapping(integrationId, mappingId));
+  }
+
+  async create(
+    actor: AuthedUser,
+    integrationId: string,
+    input: CreateIntegrationCompanyMappingInput,
+    meta: AuditMeta,
+  ): Promise<IntegrationCompanyMappingDto> {
+    const integration = await this.prisma.integration.findUnique({
+      where: { id: integrationId },
+    });
+    if (!integration) {
+      throw new NotFoundException(`Integration ${integrationId} not found`);
+    }
+
+    await this.assertCompany(input.companyId);
+
+    try {
+      const row = await this.prisma.integrationCompanyMapping.create({
+        data: {
+          integrationId,
+          companyId: input.companyId,
+          externalOrgId: input.externalOrgId,
+          externalOrgName: input.externalOrgName ?? null,
+          enabled: input.enabled ?? true,
+          filter: (input.filter ?? {}) as Prisma.InputJsonValue,
+          createdBy: actor.id,
+        },
+      });
+
+      await this.audit.log({
+        actorId: actor.id,
+        action: AUDIT_ACTIONS.integration.companyMappingCreate,
+        entityType: 'IntegrationCompanyMapping',
+        entityId: row.id,
+        companyId: input.companyId,
+        ip: meta.ip,
+        userAgent: meta.userAgent,
+        before: null,
+        after: {
+          integrationId,
+          externalOrgId: input.externalOrgId,
+          enabled: row.enabled,
+        },
+      });
+      return this.get(integrationId, row.id);
+    } catch (e) {
+      if (
+        e instanceof Prisma.PrismaClientKnownRequestError &&
+        e.code === 'P2002'
+      ) {
+        throw new ConflictException(
+          `Source organisation "${input.externalOrgId}" is already mapped to a Weavestream company for this integration.`,
+        );
+      }
+      throw e;
+    }
+  }
+
+  async update(
+    actor: AuthedUser,
+    integrationId: string,
+    mappingId: string,
+    input: UpdateIntegrationCompanyMappingInput,
+    meta: AuditMeta,
+  ): Promise<IntegrationCompanyMappingDto> {
+    const existing = await this.loadMapping(integrationId, mappingId);
+
+    if (input.companyId) await this.assertCompany(input.companyId);
+
+    const before = {
+      companyId: existing.companyId,
+      externalOrgName: existing.externalOrgName,
+      enabled: existing.enabled,
+      filter: existing.filter,
+    };
+
+    await this.prisma.integrationCompanyMapping.update({
+      where: { id: mappingId },
+      data: {
+        companyId: input.companyId ?? undefined,
+        externalOrgName:
+          input.externalOrgName === undefined
+            ? undefined
+            : input.externalOrgName ?? null,
+        enabled: input.enabled ?? undefined,
+        filter: input.filter
+          ? (input.filter as Prisma.InputJsonValue)
+          : undefined,
+      },
+    });
+
+    const fresh = await this.get(integrationId, mappingId);
+    await this.audit.logChange({
+      actorId: actor.id,
+      action: AUDIT_ACTIONS.integration.companyMappingUpdate,
+      entityType: 'IntegrationCompanyMapping',
+      entityId: mappingId,
+      companyId: fresh.companyId,
+      ip: meta.ip,
+      userAgent: meta.userAgent,
+      before,
+      after: {
+        companyId: fresh.companyId,
+        externalOrgName: fresh.externalOrgName,
+        enabled: fresh.enabled,
+        filter: fresh.filter,
+      },
+      fields: ['companyId', 'externalOrgName', 'enabled', 'filter'],
+    });
+    return fresh;
+  }
+
+  /**
+   * Delete a company-mapping. Mirrors the integration-delete safety:
+   * never delete or archive any Asset; clear `external_id` /
+   * `external_source` on the affected assets and hard-delete every
+   * sync record (cascade FKs handle the rest).
+   */
+  async delete(
+    actor: AuthedUser,
+    integrationId: string,
+    mappingId: string,
+    meta: AuditMeta,
+  ): Promise<void> {
+    const existing = await this.loadMapping(integrationId, mappingId);
+
+    const records = await this.prisma.integrationSyncRecord.findMany({
+      where: { integrationCompanyMappingId: mappingId },
+      select: { assetId: true, companyId: true },
+    });
+    const releasedAssetIds = records.map((r) => r.assetId);
+
+    await this.prisma.$transaction(async (tx) => {
+      if (releasedAssetIds.length > 0) {
+        await tx.integrationSyncRecord.deleteMany({
+          where: { assetId: { in: releasedAssetIds } },
+        });
+        await tx.asset.updateMany({
+          where: {
+            id: { in: releasedAssetIds },
+            companyId: existing.companyId,
+          },
+          data: { externalId: null, externalSource: null },
+        });
+      }
+      await tx.integrationCompanyMapping.delete({ where: { id: mappingId } });
+    });
+
+    await this.audit.log({
+      actorId: actor.id,
+      action: AUDIT_ACTIONS.integration.companyMappingDelete,
+      entityType: 'IntegrationCompanyMapping',
+      entityId: mappingId,
+      companyId: existing.companyId,
+      ip: meta.ip,
+      userAgent: meta.userAgent,
+      before: { externalOrgId: existing.externalOrgId },
+      after: { releasedAssetCount: releasedAssetIds.length },
+    });
+    for (const r of records) {
+      await this.audit.log({
+        actorId: actor.id,
+        action: AUDIT_ACTIONS.integration.assetReleased,
+        entityType: 'Asset',
+        entityId: r.assetId,
+        companyId: r.companyId,
+        ip: meta.ip,
+        userAgent: meta.userAgent,
+        before: null,
+        after: null,
+      });
+    }
+  }
+
+  // -------------------------------------------------------------------
+  // Helpers
+  // -------------------------------------------------------------------
+
+  private async loadMapping(integrationId: string, mappingId: string) {
+    const row = await this.prisma.integrationCompanyMapping.findFirst({
+      where: { id: mappingId, integrationId },
+      include: {
+        company: { select: { name: true } },
+      },
+    });
+    if (!row) {
+      throw new NotFoundException(
+        `Integration mapping ${mappingId} not found for integration ${integrationId}`,
+      );
+    }
+    return row;
+  }
+
+  private async assertCompany(companyId: string): Promise<void> {
+    const c = await this.prisma.company.findUnique({
+      where: { id: companyId },
+      select: { id: true, archivedAt: true },
+    });
+    if (!c) throw new BadRequestException(`Company ${companyId} not found`);
+    if (c.archivedAt) {
+      throw new BadRequestException(
+        `Company ${companyId} is archived and cannot receive synced data.`,
+      );
+    }
+  }
+
+  private toDto(row: {
+    id: string;
+    integrationId: string;
+    companyId: string;
+    externalOrgId: string;
+    externalOrgName: string | null;
+    enabled: boolean;
+    filter: unknown;
+    createdAt: Date;
+    updatedAt: Date;
+    company?: { name: string } | null;
+  }): IntegrationCompanyMappingDto {
+    return {
+      id: row.id,
+      integrationId: row.integrationId,
+      companyId: row.companyId,
+      companyName: row.company?.name ?? null,
+      externalOrgId: row.externalOrgId,
+      externalOrgName: row.externalOrgName,
+      enabled: row.enabled,
+      filter: (row.filter ?? {}) as Record<string, unknown>,
+      createdAt: row.createdAt.toISOString(),
+      updatedAt: row.updatedAt.toISOString(),
+    };
+  }
+}

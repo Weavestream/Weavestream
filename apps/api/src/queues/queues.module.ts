@@ -1,9 +1,9 @@
 import { Global, Module } from '@nestjs/common';
-import { QueuesService } from './queues.service.js';
+import { QueuesProducerModule } from './queues-producer.module.js';
 import { DomainChecksQueueRegistrar } from './domain-checks-queue.registrar.js';
 
 /**
- * Phase 8 — BullMQ producer module.
+ * Phase 8 — BullMQ producer module (API-side).
  *
  * Exposed globally because the DomainsService (for manual "Check now")
  * and the CLI (for `check-domains`) both enqueue into the same
@@ -16,10 +16,15 @@ import { DomainChecksQueueRegistrar } from './domain-checks-queue.registrar.js';
  * to the cron configured in `DOMAIN_CHECK_CRON`. Setting the env var
  * to the literal string "off" disables the registration, which is
  * useful for local development and CI.
+ *
+ * The actual `QueuesService` provider lives in `QueuesProducerModule`
+ * so the worker can wire the producer without also re-running the
+ * API-only registrar.
  */
 @Global()
 @Module({
-  providers: [QueuesService, DomainChecksQueueRegistrar],
-  exports: [QueuesService],
+  imports: [QueuesProducerModule],
+  providers: [DomainChecksQueueRegistrar],
+  exports: [QueuesProducerModule],
 })
 export class QueuesModule {}
