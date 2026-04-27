@@ -39,6 +39,8 @@ export const AUDIT_ACTIONS = {
   },
   settings: {
     update: 'settings.update',
+    emailUpdate: 'settings.email.update',
+    emailTest: 'settings.email.test',
   },
   domain: {
     create: 'domain.create',

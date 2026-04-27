@@ -20,6 +20,8 @@ function validEnv(): NodeJS.ProcessEnv {
     PASSWORD_ENCRYPTION_KEY_KID: 'pk-1',
     INTEGRATION_SECRET_KEY: key,
     INTEGRATION_SECRET_KEY_KID: 'ik-1',
+    SMTP_SECRET_KEY: key,
+    SMTP_SECRET_KEY_KID: 'smtp-1',
   };
 }
 

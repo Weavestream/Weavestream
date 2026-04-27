@@ -8,6 +8,7 @@ import {
   RequirePermission,
 } from '../rbac/require-permission.decorator.js';
 import { ZodBody } from '../common/zod-validation.pipe.js';
+import { requestMetaOf } from '../common/request-meta.js';
 
 @Controller({ path: 'settings', version: '1' })
 export class SettingsController {
@@ -35,15 +36,6 @@ export class SettingsController {
     @Body(new ZodBody(updateSettingsSchema)) dto: UpdateSettingsInput,
     @Req() req: Request,
   ) {
-    return this.settings.update(user, dto, { ip: ipOf(req), userAgent: uaOf(req) });
+    return this.settings.update(user, dto, requestMetaOf(req));
   }
-}
-
-function ipOf(req: Request): string {
-  const fwd = req.headers['x-forwarded-for'];
-  if (typeof fwd === 'string' && fwd.length > 0) return fwd.split(',')[0]!.trim();
-  return req.ip ?? '0.0.0.0';
-}
-function uaOf(req: Request): string {
-  return (req.headers['user-agent'] ?? 'unknown').toString().slice(0, 500);
 }

@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto';
+import { createCipheriv, randomBytes } from 'node:crypto';
 import { EnvService } from '../config/env.service.js';
 import { IntegrationSecretEncryptionService } from './integration-secret-encryption.service.js';
 
@@ -121,4 +121,31 @@ describe('IntegrationSecretEncryptionService', () => {
         ),
     ).toThrow(/32 bytes/);
   });
+
+  it('decrypts pre-refactor integration-secret blobs', () => {
+    const key = Buffer.alloc(32, 9);
+    const svc = new IntegrationSecretEncryptionService(
+      makeEnv({ integrationActiveKey: key, integrationActiveKid: 'legacy' }),
+    );
+
+    expect(svc.decrypt(legacyBlob('legacy', key, 'legacy integration'))).toBe(
+      'legacy integration',
+    );
+  });
 });
+
+function legacyBlob(kid: string, key: Buffer, plaintext: string): string {
+  const iv = Buffer.alloc(12, 4);
+  const cipher = createCipheriv('aes-256-gcm', key, iv);
+  const enc = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  const kidBuf = Buffer.from(kid, 'utf8');
+  return Buffer.concat([
+    Buffer.from([0x01]),
+    Buffer.from([kidBuf.length]),
+    kidBuf,
+    iv,
+    tag,
+    enc,
+  ]).toString('base64');
+}

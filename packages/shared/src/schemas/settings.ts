@@ -19,6 +19,9 @@ const trimmedString = (min: number, max: number, label: string) =>
         .max(max, `${label} must be at most ${max} characters`),
     );
 
+const nullableTrimmedString = (min: number, max: number, label: string) =>
+  z.union([trimmedString(min, max, label), z.null()]);
+
 export const systemSettingsSchema = z.object({
   workspaceName: z.string().min(1).max(60),
   workspaceSubtitle: z.string().min(1).max(60),
@@ -46,3 +49,48 @@ export const updateSettingsSchema = z
 
 export type SystemSettings = z.infer<typeof systemSettingsSchema>;
 export type UpdateSettingsInput = z.infer<typeof updateSettingsSchema>;
+
+export const smtpSecurityModeValues = ['STARTTLS', 'TLS', 'NONE'] as const;
+export const smtpSecurityModeSchema = z.enum(smtpSecurityModeValues);
+
+export const emailSettingsSchema = z.object({
+  enabled: z.boolean(),
+  host: z.string().min(1).max(255).nullable(),
+  port: z.number().int().min(1).max(65535).nullable(),
+  secureMode: smtpSecurityModeSchema,
+  username: z.string().min(1).max(255).nullable(),
+  fromName: z.string().min(1).max(120).nullable(),
+  fromEmail: z.string().email().max(255).nullable(),
+  replyTo: z.string().email().max(255).nullable(),
+  passwordConfigured: z.boolean(),
+  updatedAt: z.string(),
+});
+
+export const updateEmailSettingsSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    host: nullableTrimmedString(1, 255, 'SMTP host').optional(),
+    port: z.number().int().min(1).max(65535).nullable().optional(),
+    secureMode: smtpSecurityModeSchema.optional(),
+    username: nullableTrimmedString(1, 255, 'SMTP username').optional(),
+    password: z.string().min(1).max(1024, 'SMTP password is too long').optional(),
+    clearPassword: z.boolean().optional(),
+    fromName: nullableTrimmedString(1, 120, 'From name').optional(),
+    fromEmail: z.string().trim().email().max(255).nullable().optional(),
+    replyTo: z.string().trim().email().max(255).nullable().optional(),
+  })
+  .refine((v) => Object.keys(v).length > 0, 'At least one field must be provided')
+  .refine((v) => !(v.password && v.clearPassword), {
+    message: 'Cannot set and clear the SMTP password in the same request',
+    path: ['password'],
+  });
+
+export const testEmailSettingsSchema = z.object({
+  recipient: z.string().trim().email().max(255),
+  subject: trimmedString(1, 120, 'Subject').optional(),
+});
+
+export type SmtpSecurityMode = z.infer<typeof smtpSecurityModeSchema>;
+export type EmailSettings = z.infer<typeof emailSettingsSchema>;
+export type UpdateEmailSettingsInput = z.infer<typeof updateEmailSettingsSchema>;
+export type TestEmailSettingsInput = z.infer<typeof testEmailSettingsSchema>;
