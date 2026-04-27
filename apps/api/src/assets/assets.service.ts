@@ -316,6 +316,7 @@ export class AssetsService {
         companyId,
         validated,
         actor.id,
+        meta,
       );
       // Phase 6: rebuild search_index inside the same tx so the row
       // only becomes discoverable after its field values are visible
@@ -415,7 +416,7 @@ export class AssetsService {
           updatedBy: actor.id,
         },
       });
-      await this.persistFieldValues(tx, layout, id, companyId, validated, actor.id);
+      await this.persistFieldValues(tx, layout, id, companyId, validated, actor.id, meta);
       // Phase 6: rewrite the denormalised plaintext so the asset's
       // updated field values and name surface in the next search
       // query. Same-tx so a rollback cleans both sides up together.
@@ -700,6 +701,7 @@ export class AssetsService {
     companyId: string,
     values: Record<string, unknown>,
     actorId: string | null,
+    meta: AuditMeta | null,
   ): Promise<void> {
     for (const [slug, rawValue] of Object.entries(values)) {
       const field = layout.fields.find((f) => f.slug === slug && f.archivedAt === null);
@@ -718,6 +720,9 @@ export class AssetsService {
           tx,
           tags: this.tags,
           actorId,
+          audit: meta
+            ? { actorId, ip: meta.ip, userAgent: meta.userAgent }
+            : null,
         });
         if (value !== null && value !== undefined) {
           value = strategy.normalize(value, options);

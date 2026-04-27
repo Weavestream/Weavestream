@@ -43,15 +43,31 @@ export interface FieldRelateCtx {
 }
 
 /**
+ * Audit context forwarded into `preResolve` so side-effecting calls
+ * (e.g. inline tag creation through `TagsPort.upsertByName`) can write
+ * to the audit log with the originating actor's identity and request
+ * metadata. Optional because some write paths (sync drivers, seeders)
+ * legitimately don't have a request scope.
+ */
+export interface FieldPreResolveAuditCtx {
+  actorId: string | null;
+  ip: string | null;
+  userAgent: string | null;
+}
+
+/**
  * Narrow port the TAGS strategy uses to upsert unknown tag names → ids
  * inside the asset-write transaction. Lives on `FieldPreResolveCtx` so
  * strategies can opt in via `preResolve` without importing the full
- * TagsService (avoiding a circular dependency).
+ * TagsService (avoiding a circular dependency). When `audit` is supplied
+ * the implementation emits a `tag.create` audit row on the create branch
+ * (and only on the create branch — pure lookups stay silent).
  */
 export interface TagsPort {
   upsertByName(
     name: string,
     tx: Prisma.TransactionClient,
+    audit: FieldPreResolveAuditCtx | null,
   ): Promise<string>;
 }
 
@@ -65,6 +81,12 @@ export interface FieldPreResolveCtx {
   tx: Prisma.TransactionClient;
   tags: TagsPort;
   actorId: string | null;
+  /**
+   * Request-scoped audit metadata forwarded by the caller. `null` when
+   * the write originated from a non-request flow (e.g. integration sync)
+   * — strategies should still resolve, just without an audit trail.
+   */
+  audit: FieldPreResolveAuditCtx | null;
 }
 
 /**

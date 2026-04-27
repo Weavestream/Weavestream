@@ -277,6 +277,7 @@ describe('TagsStrategy', () => {
       tx: {} as never,
       tags: port,
       actorId: null,
+      audit: null,
     };
     const out = await registry
       .get('TAGS')
@@ -290,6 +291,35 @@ describe('TagsStrategy', () => {
       '11111111-1111-1111-1111-111111111111',
       'tag-1',
     ]);
+  });
+
+  it('preResolve forwards audit metadata to the TagsPort upsert call', async () => {
+    const calls: Array<{ name: string; audit: unknown }> = [];
+    const port = {
+      upsertByName: async (
+        name: string,
+        _tx: unknown,
+        audit: unknown,
+      ) => {
+        calls.push({ name, audit });
+        return `tag-${calls.length}`;
+      },
+    };
+    const audit = {
+      actorId: 'u-1',
+      ip: '10.0.0.1',
+      userAgent: 'jest',
+    };
+    const ctx = {
+      tx: {} as never,
+      tags: port,
+      actorId: 'u-1',
+      audit,
+    };
+    await registry
+      .get('TAGS')
+      .preResolve!([{ name: 'Production' }], {}, ctx);
+    expect(calls).toEqual([{ name: 'Production', audit }]);
   });
 
   it('normalize dedupes and preserves casing of UUID arrays', () => {
