@@ -13,6 +13,17 @@ export interface AuditMeta {
   userAgent: string;
 }
 
+/**
+ * Audit metadata for `upsertByName` callers. Optional fields let callers
+ * outside an HTTP scope (e.g. integration sync) still attribute the
+ * audit row to an actor without inventing IP/UA values.
+ */
+export interface UpsertAuditMeta {
+  actorId: string | null;
+  ip: string | null;
+  userAgent: string | null;
+}
+
 export interface ListTagsOptions {
   q?: string;
   limit?: number;
@@ -84,10 +95,21 @@ export class TagsService {
    * Idempotent upsert by `nameLower`. The first writer's casing wins for
    * the display `name`; subsequent calls with a different casing return
    * the same row without rewriting `name` (avoids churn on every save).
+   *
+   * When `audit` is supplied a `tag.create` row is written on the create
+   * branch and only on the create branch — pure lookups (existing row)
+   * stay silent so re-saving an asset doesn't pollute the audit log.
+   * The `findUnique` pre-check is best-effort: a concurrent writer could
+   * insert the row in the microsecond window before our `upsert`, in
+   * which case we'd audit a "create" for an already-existing row. The
+   * audit log is informational, the race is microsecond-scale, and using
+   * a SAVEPOINT-scoped insert would complicate the asset-write tx for
+   * negligible gain.
    */
   async upsertByName(
     name: string,
     tx?: Prisma.TransactionClient,
+    audit?: UpsertAuditMeta | null,
   ): Promise<string> {
     const trimmed = name.trim();
     if (trimmed.length === 0) {
@@ -98,12 +120,32 @@ export class TagsService {
     }
     const nameLower = trimmed.toLowerCase();
     const client = tx ?? this.prisma;
+
+    const existing = await client.tag.findUnique({
+      where: { nameLower },
+      select: { id: true },
+    });
+    if (existing) return existing.id;
+
     const row = await client.tag.upsert({
       where: { nameLower },
       create: { name: trimmed, nameLower },
       update: {},
-      select: { id: true },
+      select: { id: true, name: true },
     });
+
+    if (audit) {
+      await this.audit.log({
+        actorId: audit.actorId,
+        action: 'tag.create',
+        entityType: 'Tag',
+        entityId: row.id,
+        ip: audit.ip,
+        userAgent: audit.userAgent,
+        before: null,
+        after: { name: row.name },
+      });
+    }
     return row.id;
   }
 
@@ -112,19 +154,12 @@ export class TagsService {
     name: string,
     meta: AuditMeta,
   ): Promise<SerializedTag> {
-    const trimmed = name.trim();
-    const id = await this.upsertByName(trimmed);
-    const row = await this.prisma.tag.findUniqueOrThrow({ where: { id } });
-    await this.audit.log({
+    const id = await this.upsertByName(name, undefined, {
       actorId: actor.id,
-      action: 'tag.upsert',
-      entityType: 'Tag',
-      entityId: row.id,
       ip: meta.ip,
       userAgent: meta.userAgent,
-      before: null,
-      after: { name: row.name },
     });
+    const row = await this.prisma.tag.findUniqueOrThrow({ where: { id } });
     return serialize(row);
   }
 

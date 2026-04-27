@@ -33,6 +33,12 @@ function makePrisma() {
   };
 }
 
+const AUDIT_META = {
+  actorId: 'u-1',
+  ip: '127.0.0.1',
+  userAgent: 'jest',
+};
+
 function makeAudit() {
   return { log: jest.fn().mockResolvedValue(undefined) };
 }
@@ -83,16 +89,30 @@ describe('TagsService', () => {
   describe('upsertByName', () => {
     it('lowercases the key and preserves the input casing on create', async () => {
       const prisma = makePrisma();
-      prisma.tag.upsert.mockResolvedValue({ id: 't-1' });
+      prisma.tag.findUnique.mockResolvedValue(null);
+      prisma.tag.upsert.mockResolvedValue({ id: 't-1', name: 'Production' });
       const svc = new TagsService(prisma as never, makeAudit() as never);
       const id = await svc.upsertByName('  Production  ');
       expect(id).toBe('t-1');
+      expect(prisma.tag.findUnique).toHaveBeenCalledWith({
+        where: { nameLower: 'production' },
+        select: { id: true },
+      });
       expect(prisma.tag.upsert).toHaveBeenCalledWith({
         where: { nameLower: 'production' },
         create: { name: 'Production', nameLower: 'production' },
         update: {},
-        select: { id: true },
+        select: { id: true, name: true },
       });
+    });
+
+    it('skips the upsert when the row already exists', async () => {
+      const prisma = makePrisma();
+      prisma.tag.findUnique.mockResolvedValue({ id: 't-7' });
+      const svc = new TagsService(prisma as never, makeAudit() as never);
+      const id = await svc.upsertByName('Production');
+      expect(id).toBe('t-7');
+      expect(prisma.tag.upsert).not.toHaveBeenCalled();
     });
 
     it('rejects empty names', async () => {
@@ -104,12 +124,92 @@ describe('TagsService', () => {
 
     it('uses the supplied transaction client when provided', async () => {
       const prisma = makePrisma();
-      const tx = { tag: { upsert: jest.fn().mockResolvedValue({ id: 't-9' }) } };
+      const tx = {
+        tag: {
+          findUnique: jest.fn().mockResolvedValue(null),
+          upsert: jest.fn().mockResolvedValue({ id: 't-9', name: 'Critical' }),
+        },
+      };
       const svc = new TagsService(prisma as never, makeAudit() as never);
       const id = await svc.upsertByName('Critical', tx as never);
       expect(id).toBe('t-9');
       expect(prisma.tag.upsert).not.toHaveBeenCalled();
+      expect(tx.tag.findUnique).toHaveBeenCalled();
       expect(tx.tag.upsert).toHaveBeenCalled();
+    });
+
+    it('emits a tag.create audit row only on the create branch', async () => {
+      const prisma = makePrisma();
+      const audit = makeAudit();
+      prisma.tag.findUnique.mockResolvedValue(null);
+      prisma.tag.upsert.mockResolvedValue({ id: 't-1', name: 'Production' });
+      const svc = new TagsService(prisma as never, audit as never);
+      await svc.upsertByName('Production', undefined, AUDIT_META);
+      expect(audit.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          actorId: 'u-1',
+          action: 'tag.create',
+          entityType: 'Tag',
+          entityId: 't-1',
+          ip: '127.0.0.1',
+          userAgent: 'jest',
+          before: null,
+          after: { name: 'Production' },
+        }),
+      );
+    });
+
+    it('does not emit an audit row when the tag already existed', async () => {
+      const prisma = makePrisma();
+      const audit = makeAudit();
+      prisma.tag.findUnique.mockResolvedValue({ id: 't-1' });
+      const svc = new TagsService(prisma as never, audit as never);
+      await svc.upsertByName('Production', undefined, AUDIT_META);
+      expect(audit.log).not.toHaveBeenCalled();
+      expect(prisma.tag.upsert).not.toHaveBeenCalled();
+    });
+
+    it('stays silent when no audit metadata is supplied even on create', async () => {
+      const prisma = makePrisma();
+      const audit = makeAudit();
+      prisma.tag.findUnique.mockResolvedValue(null);
+      prisma.tag.upsert.mockResolvedValue({ id: 't-1', name: 'Production' });
+      const svc = new TagsService(prisma as never, audit as never);
+      await svc.upsertByName('Production');
+      expect(audit.log).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('create', () => {
+    it('writes a tag.create audit row through upsertByName', async () => {
+      const prisma = makePrisma();
+      const audit = makeAudit();
+      prisma.tag.findUnique.mockResolvedValue(null);
+      prisma.tag.upsert.mockResolvedValue({ id: 't-1', name: 'Production' });
+      prisma.tag.findUniqueOrThrow.mockResolvedValue(nowRow('Production'));
+      const svc = new TagsService(prisma as never, audit as never);
+      const out = await svc.create(ACTOR, 'Production', META);
+      expect(out.name).toBe('Production');
+      expect(audit.log).toHaveBeenCalledTimes(1);
+      expect(audit.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: 'tag.create',
+          actorId: 'u-1',
+          ip: META.ip,
+          userAgent: META.userAgent,
+        }),
+      );
+    });
+
+    it('skips the audit row when called for an existing name (idempotent)', async () => {
+      const prisma = makePrisma();
+      const audit = makeAudit();
+      prisma.tag.findUnique.mockResolvedValue({ id: 't-1' });
+      prisma.tag.findUniqueOrThrow.mockResolvedValue(nowRow('Production'));
+      const svc = new TagsService(prisma as never, audit as never);
+      await svc.create(ACTOR, 'Production', META);
+      expect(audit.log).not.toHaveBeenCalled();
+      expect(prisma.tag.upsert).not.toHaveBeenCalled();
     });
   });
 

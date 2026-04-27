@@ -97,7 +97,7 @@ export class TagsStrategy implements FieldTypeStrategy {
       const id =
         typeof entry === 'string'
           ? entry
-          : await ctx.tags.upsertByName(entry.name, ctx.tx);
+          : await ctx.tags.upsertByName(entry.name, ctx.tx, ctx.audit);
       if (!seen.has(id)) {
         seen.add(id);
         ids.push(id);
