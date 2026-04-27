@@ -73,6 +73,12 @@ export const envSchema = z.object({
   INTEGRATION_SECRET_KEY_KID: z.string().min(1).max(32),
   INTEGRATION_PREVIOUS_KEYS: z.string().optional().default(''),
 
+  // Global SMTP credential encryption. Kept separate from password vault
+  // and integration keys so mail credentials can be rotated independently.
+  SMTP_SECRET_KEY: base64Key(32),
+  SMTP_SECRET_KEY_KID: z.string().min(1).max(32),
+  SMTP_PREVIOUS_KEYS: z.string().optional().default(''),
+
   // Phase 11: integration sync scheduling + concurrency.
   //
   // `INTEGRATION_SYNC_DEFAULT_CRON` is registered as the BullMQ

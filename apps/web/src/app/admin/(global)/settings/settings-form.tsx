@@ -37,7 +37,23 @@ import { generatePassword } from '../../../../lib/password-generator';
  * optional: if blank, the API stores `null` and `buildTerm` falls back
  * to `${singular}'s`.
  */
-export function SettingsForm({ initial }: { initial: Settings }) {
+export function GeneralSettingsForm({ initial }: { initial: Settings }) {
+  return <SettingsForm initial={initial} section="general" />;
+}
+
+export function SecuritySettingsForm({ initial }: { initial: Settings }) {
+  return <SettingsForm initial={initial} section="security" />;
+}
+
+type SettingsSection = 'general' | 'security';
+
+function SettingsForm({
+  initial,
+  section,
+}: {
+  initial: Settings;
+  section: SettingsSection;
+}) {
   const router = useRouter();
   const toast = useToast();
 
@@ -91,14 +107,15 @@ export function SettingsForm({ initial }: { initial: Settings }) {
     [generator],
   );
 
-  const dirty =
+  const generalDirty =
     workspaceName.trim() !== baseline.current.workspaceName ||
     workspaceSubtitle.trim() !== baseline.current.workspaceSubtitle ||
     one.trim() !== baseline.current.tenantTermSingular ||
     other.trim() !== baseline.current.tenantTermPlural ||
     (possessive.trim() || null) !==
-      (baseline.current.tenantTermPossessive ?? null) ||
-    generatorDirty;
+      (baseline.current.tenantTermPossessive ?? null);
+
+  const dirty = section === 'general' ? generalDirty : generatorDirty;
 
   function applyPreset(id: TermPresetId) {
     setPresetId(id);
@@ -125,14 +142,17 @@ export function SettingsForm({ initial }: { initial: Settings }) {
   async function submit() {
     setError(null);
     setPending(true);
-    const payload: Record<string, unknown> = {
-      workspaceName: workspaceName.trim(),
-      workspaceSubtitle: workspaceSubtitle.trim(),
-      tenantTermSingular: one.trim(),
-      tenantTermPlural: other.trim(),
-      tenantTermPossessive: possessive.trim() === '' ? null : possessive.trim(),
-    };
-    if (generatorDirty) payload.passwordGeneratorDefaults = generator;
+    const payload: Record<string, unknown> =
+      section === 'general'
+        ? {
+            workspaceName: workspaceName.trim(),
+            workspaceSubtitle: workspaceSubtitle.trim(),
+            tenantTermSingular: one.trim(),
+            tenantTermPlural: other.trim(),
+            tenantTermPossessive:
+              possessive.trim() === '' ? null : possessive.trim(),
+          }
+        : { passwordGeneratorDefaults: generator };
     const res = await apiFetch<Settings>('/settings', {
       method: 'PATCH',
       body: JSON.stringify(payload),
@@ -168,151 +188,157 @@ export function SettingsForm({ initial }: { initial: Settings }) {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 28 }}>
-      <section style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-        <SectionHeader
-          label="Workspace"
-          help="The name and subtitle shown in the sidebar chip, above every admin page."
-        />
-        <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns: '1fr 1fr',
-            gap: 16,
-          }}
-        >
-          <Field label="Workspace name" htmlFor="s-ws-name">
-            <Input
-              id="s-ws-name"
-              value={workspaceName}
-              onChange={(e) => setWorkspaceName(e.target.value)}
-              placeholder="My Company"
-              maxLength={60}
+      {section === 'general' && (
+        <>
+          <section style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <SectionHeader
+              label="Workspace"
+              help="The name and subtitle shown in the sidebar chip, above every admin page."
             />
-          </Field>
-          <Field
-            label="Subtitle"
-            htmlFor="s-ws-sub"
-            help="Shown in a smaller, muted font under the workspace name."
-          >
-            <Input
-              id="s-ws-sub"
-              value={workspaceSubtitle}
-              onChange={(e) => setWorkspaceSubtitle(e.target.value)}
-              placeholder="workspace"
-              maxLength={60}
-            />
-          </Field>
-        </div>
-      </section>
-
-      <section style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-        <SectionHeader
-          label="Tenant terminology"
-          help={`Replaces the word "Company" everywhere in the UI. URL paths, API routes, and database columns are untouched.`}
-        />
-        <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns: '1fr 1fr 1fr',
-            gap: 16,
-          }}
-        >
-          <Field label="Preset" htmlFor="s-preset">
-            <Select
-              id="s-preset"
-              value={presetId}
-              onChange={(e) => applyPreset(e.target.value as TermPresetId)}
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: '1fr 1fr',
+                gap: 16,
+              }}
             >
-              {TERM_PRESETS.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.one} / {p.other}
-                </option>
-              ))}
-              <option value="custom">Custom…</option>
-            </Select>
-          </Field>
-          <Field label="Singular" htmlFor="s-one">
-            <Input
-              id="s-one"
-              value={one}
-              onChange={(e) => onCustomChange('one', e.target.value)}
-              placeholder="Company"
-              maxLength={40}
+              <Field label="Workspace name" htmlFor="s-ws-name">
+                <Input
+                  id="s-ws-name"
+                  value={workspaceName}
+                  onChange={(e) => setWorkspaceName(e.target.value)}
+                  placeholder="My Company"
+                  maxLength={60}
+                />
+              </Field>
+              <Field
+                label="Subtitle"
+                htmlFor="s-ws-sub"
+                help="Shown in a smaller, muted font under the workspace name."
+              >
+                <Input
+                  id="s-ws-sub"
+                  value={workspaceSubtitle}
+                  onChange={(e) => setWorkspaceSubtitle(e.target.value)}
+                  placeholder="workspace"
+                  maxLength={60}
+                />
+              </Field>
+            </div>
+          </section>
+
+          <section style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <SectionHeader
+              label="Tenant terminology"
+              help={`Replaces the word "Company" everywhere in the UI. URL paths, API routes, and database columns are untouched.`}
             />
-          </Field>
-          <Field label="Plural" htmlFor="s-other">
-            <Input
-              id="s-other"
-              value={other}
-              onChange={(e) => onCustomChange('other', e.target.value)}
-              placeholder="Companies"
-              maxLength={40}
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: '1fr 1fr 1fr',
+                gap: 16,
+              }}
+            >
+              <Field label="Preset" htmlFor="s-preset">
+                <Select
+                  id="s-preset"
+                  value={presetId}
+                  onChange={(e) => applyPreset(e.target.value as TermPresetId)}
+                >
+                  {TERM_PRESETS.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.one} / {p.other}
+                    </option>
+                  ))}
+                  <option value="custom">Custom…</option>
+                </Select>
+              </Field>
+              <Field label="Singular" htmlFor="s-one">
+                <Input
+                  id="s-one"
+                  value={one}
+                  onChange={(e) => onCustomChange('one', e.target.value)}
+                  placeholder="Company"
+                  maxLength={40}
+                />
+              </Field>
+              <Field label="Plural" htmlFor="s-other">
+                <Input
+                  id="s-other"
+                  value={other}
+                  onChange={(e) => onCustomChange('other', e.target.value)}
+                  placeholder="Companies"
+                  maxLength={40}
+                />
+              </Field>
+            </div>
+            <Field
+              label="Possessive (optional)"
+              htmlFor="s-possessive"
+              help={`Used in phrases like "this ${lower(previewTerm.one)}'s members." Leave blank to auto-generate as "${previewTerm.one}'s".`}
+            >
+              <Input
+                id="s-possessive"
+                value={possessive}
+                onChange={(e) => onCustomChange('possessive', e.target.value)}
+                placeholder={`${previewTerm.one}'s`}
+                maxLength={40}
+              />
+            </Field>
+          </section>
+
+          <section style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <SectionHeader
+              label="Preview"
+              help="Sample copy rendered with your current terminology."
             />
-          </Field>
-        </div>
-        <Field
-          label="Possessive (optional)"
-          htmlFor="s-possessive"
-          help={`Used in phrases like "this ${lower(previewTerm.one)}'s members." Leave blank to auto-generate as "${previewTerm.one}'s".`}
-        >
-          <Input
-            id="s-possessive"
-            value={possessive}
-            onChange={(e) => onCustomChange('possessive', e.target.value)}
-            placeholder={`${previewTerm.one}'s`}
-            maxLength={40}
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: '1fr',
+                gap: 8,
+                padding: 16,
+                background: 'var(--panel-2)',
+                border: '1px solid var(--line-2)',
+                borderRadius: 6,
+                fontSize: 13,
+                color: 'var(--text-2)',
+                lineHeight: 1.55,
+              }}
+            >
+              <PreviewLine>
+                Sidebar nav: <strong>{previewTerm.other}</strong>
+              </PreviewLine>
+              <PreviewLine>
+                Button: <strong>New {lower(previewTerm.one)}</strong>
+              </PreviewLine>
+              <PreviewLine>
+                Dialog: <strong>Create {lower(previewTerm.one)}</strong>
+              </PreviewLine>
+              <PreviewLine>
+                Empty state:{' '}
+                <span>
+                  No {lower(previewTerm.other)} yet — add one to get started.
+                </span>
+              </PreviewLine>
+              <PreviewLine>
+                Possessive:{' '}
+                <span>Updating this {lower(previewTerm.possessive)} details…</span>
+              </PreviewLine>
+            </div>
+          </section>
+        </>
+      )}
+
+      {section === 'security' && (
+        <section style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <SectionHeader
+            label="Password generator defaults"
+            help="Applied when operators open the generator inside the password dialog. Presets seed the knobs below; individual knobs can still be tweaked before saving."
           />
-        </Field>
-      </section>
-
-      <section style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-        <SectionHeader
-          label="Password generator defaults"
-          help="Applied when operators open the generator inside the password dialog. Presets seed the knobs below; individual knobs can still be tweaked before saving."
-        />
-        <GeneratorEditor value={generator} onChange={setGenerator} />
-      </section>
-
-      <section style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-        <SectionHeader
-          label="Preview"
-          help="Sample copy rendered with your current terminology."
-        />
-        <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns: '1fr',
-            gap: 8,
-            padding: 16,
-            background: 'var(--panel-2)',
-            border: '1px solid var(--line-2)',
-            borderRadius: 6,
-            fontSize: 13,
-            color: 'var(--text-2)',
-            lineHeight: 1.55,
-          }}
-        >
-          <PreviewLine>
-            Sidebar nav: <strong>{previewTerm.other}</strong>
-          </PreviewLine>
-          <PreviewLine>
-            Button: <strong>New {lower(previewTerm.one)}</strong>
-          </PreviewLine>
-          <PreviewLine>
-            Dialog: <strong>Create {lower(previewTerm.one)}</strong>
-          </PreviewLine>
-          <PreviewLine>
-            Empty state:{' '}
-            <span>
-              No {lower(previewTerm.other)} yet — add one to get started.
-            </span>
-          </PreviewLine>
-          <PreviewLine>
-            Possessive:{' '}
-            <span>Updating this {lower(previewTerm.possessive)} details…</span>
-          </PreviewLine>
-        </div>
-      </section>
+          <GeneratorEditor value={generator} onChange={setGenerator} />
+        </section>
+      )}
 
       {error && (
         <Tag tone="danger" style={{ alignSelf: 'flex-start' }}>

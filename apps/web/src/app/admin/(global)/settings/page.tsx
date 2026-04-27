@@ -1,9 +1,9 @@
 import { redirect } from 'next/navigation';
-import { getMe, getSettings } from '../../../../lib/server-api';
+import { getEmailSettings, getMe, getSettings } from '../../../../lib/server-api';
 import { hasCapability } from '../../../../lib/roles';
 import { PageBody, PageHeader } from '../../../../components/shell/page-header';
 import { Panel } from '../../../../components/ui';
-import { SettingsForm } from './settings-form';
+import { SettingsTabs } from './settings-tabs';
 
 /**
  * Workspace + tenant-term configuration. The fields here are cosmetic —
@@ -11,11 +11,19 @@ import { SettingsForm } from './settings-form';
  * "company" under the hood. Gated by SETTINGS_MANAGE so a senior
  * operator can rebrand without needing the SUPER_ADMIN role.
  */
-export default async function SettingsPage() {
+export default async function SettingsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ tab?: string }>;
+}) {
+  const sp = await searchParams;
   const me = (await getMe())!;
   if (!hasCapability(me, 'SETTINGS_MANAGE')) redirect('/admin');
 
-  const settings = await getSettings();
+  const [settings, emailSettings] = await Promise.all([
+    getSettings(),
+    getEmailSettings(),
+  ]);
 
   return (
     <>
@@ -25,11 +33,16 @@ export default async function SettingsPage() {
           { label: 'Settings' },
         ]}
         title="Workspace settings"
-        description="Rename the workspace and pick the terminology that fits your organization. Changes take effect on the next page load for every user."
+        description="Manage workspace defaults, security options, and SMTP email delivery."
       />
       <PageBody>
-        <Panel title="Branding & terminology">
-          <SettingsForm initial={settings} />
+        <Panel noPad>
+          <SettingsTabs
+            initialTab={(sp.tab as 'general' | 'security' | 'email') ?? 'general'}
+            settings={settings}
+            emailSettings={emailSettings}
+            currentUserEmail={me.email}
+          />
         </Panel>
       </PageBody>
     </>

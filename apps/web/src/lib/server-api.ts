@@ -4,6 +4,7 @@ import { notFound } from 'next/navigation';
 import type {
   FieldType,
   GlobalAccess,
+  EmailSettings,
   MembershipRole,
   PasswordGeneratorDefaults,
   PlatformCapability,
@@ -16,6 +17,7 @@ import { DEFAULT_PASSWORD_GENERATOR_DEFAULTS } from '@weavestream/shared';
 export type {
   FieldType,
   GlobalAccess,
+  EmailSettings,
   MembershipRole,
   PasswordGeneratorDefaults,
   PlatformCapability,
@@ -454,6 +456,25 @@ export const DEFAULT_SETTINGS: Settings = {
 export const getSettings = cache(async (): Promise<Settings> => {
   const res = await serverApiFetch<Settings>('/settings');
   if (!res.ok || !res.data) return DEFAULT_SETTINGS;
+  return res.data;
+});
+
+export const DEFAULT_EMAIL_SETTINGS: EmailSettings = {
+  enabled: false,
+  host: null,
+  port: null,
+  secureMode: 'STARTTLS',
+  username: null,
+  fromName: null,
+  fromEmail: null,
+  replyTo: null,
+  passwordConfigured: false,
+  updatedAt: new Date(0).toISOString(),
+};
+
+export const getEmailSettings = cache(async (): Promise<EmailSettings> => {
+  const res = await serverApiFetch<EmailSettings>('/settings/email');
+  if (!res.ok || !res.data) return DEFAULT_EMAIL_SETTINGS;
   return res.data;
 });
 

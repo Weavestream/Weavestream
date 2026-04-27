@@ -48,6 +48,7 @@ import { ExportsModule } from './exports/exports.module.js';
 import { IntegrationsModule } from './integrations/integrations.module.js';
 import { UiModule } from './ui/ui.module.js';
 import { CryptoModule } from './crypto/crypto.module.js';
+import { EmailModule } from './email/email.module.js';
 import { AuthGuard } from './auth/guards/auth.guard.js';
 import { MfaEnrollmentGuard } from './auth/guards/mfa-enrollment.guard.js';
 import { CsrfGuard } from './auth/guards/csrf.guard.js';
@@ -90,6 +91,8 @@ const httpSerializers = {
               'password_hash',
               'mfa_secret',
               'mfa_secret_encrypted',
+              'smtp_password',
+              'password_ciphertext',
               'csrf_token',
             ],
             censor: '[REDACTED]',
@@ -145,6 +148,7 @@ const httpSerializers = {
     ExpirationsModule,
     ExportsModule,
     IntegrationsModule,
+    EmailModule,
     UiModule,
     HealthModule,
   ],

@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto';
+import { createCipheriv, randomBytes } from 'node:crypto';
 import { EnvService } from '../config/env.service.js';
 import { SecretEncryptionService } from './secret-encryption.service.js';
 
@@ -129,4 +129,31 @@ describe('SecretEncryptionService', () => {
     expect(() => svc.decrypt('')).toThrow();
     expect(() => svc.decrypt('AAAA')).toThrow(/truncated/);
   });
+
+  it('decrypts pre-refactor password-vault blobs', () => {
+    const key = Buffer.alloc(32, 7);
+    const svc = new SecretEncryptionService(
+      makeEnv({ passwordActiveKey: key, passwordActiveKid: 'legacy' }),
+    );
+
+    expect(svc.decrypt(legacyBlob('legacy', key, 'legacy password'))).toBe(
+      'legacy password',
+    );
+  });
 });
+
+function legacyBlob(kid: string, key: Buffer, plaintext: string): string {
+  const iv = Buffer.alloc(12, 3);
+  const cipher = createCipheriv('aes-256-gcm', key, iv);
+  const enc = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  const kidBuf = Buffer.from(kid, 'utf8');
+  return Buffer.concat([
+    Buffer.from([0x01]),
+    Buffer.from([kidBuf.length]),
+    kidBuf,
+    iv,
+    tag,
+    enc,
+  ]).toString('base64');
+}
