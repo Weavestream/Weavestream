@@ -6,6 +6,8 @@ this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-04-27
+
 ### Changed
 
 - **RBAC simplified to three orthogonal axes.** `Membership.role` is now
@@ -22,16 +24,8 @@ this project adheres to [Semantic Versioning](https://semver.org/).
   buttons, and route guards now derive from `hasCapability`,
   `canWriteCompany`, and `canAccessAdminShell` helpers instead of
   ad-hoc role comparisons.
-
-### Migration
-
-- `pnpm prisma:migrate` runs the data migration: every existing
-  `OPERATOR_FULL`/`OPERATOR_READONLY`/`CLIENT_ADMIN`/`CLIENT_VIEWER`
-  membership is rewritten to `FULL` or `READONLY`, and every existing
-  `OPERATOR` user is backfilled with `globalAccess=FULL` so behaviour
-  is preserved on upgrade. Adjust to `READONLY` or `NONE` (and grant
-  capabilities individually) afterwards if you want the new
-  delegated-admin tier.
+- **Updated global tags.** Global tags were refreshed and updated across
+  the platform.
 
 ## [1.2.1] - 2026-04-26
 
@@ -387,7 +381,8 @@ Initial public release.
   database-per-tenant.
 - English UI only.
 
-[Unreleased]: https://github.com/Weavestream/Weavestream/compare/v1.2.1...HEAD
+[Unreleased]: https://github.com/Weavestream/Weavestream/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/Weavestream/Weavestream/releases/tag/v1.3.0
 [1.2.1]: https://github.com/Weavestream/Weavestream/releases/tag/v1.2.1
 [1.1.1]: https://github.com/Weavestream/Weavestream/releases/tag/v1.1.1
 [1.1.0]: https://github.com/Weavestream/Weavestream/releases/tag/v1.1.0
