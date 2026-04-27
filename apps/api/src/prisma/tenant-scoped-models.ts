@@ -58,6 +58,13 @@ export const TENANT_SCOPED_MODELS = new Set<string>([
   // `@RequirePermission('layout.manage.global')` for mutations; reads
   // are allowed for any authenticated user so operators and clients
   // alike can render forms and lists.
+  //
+  // Tags follow the same rule: `Tag` is global so the same identity is
+  // reusable across companies and layouts. Inline creation is allowed
+  // for any authed user (the asset-write tx upserts unknown names
+  // through `TagsService.upsertByName`); rename/delete is gated by
+  // `tag.manage.global` (TAG_MANAGE / SUPER_ADMIN). It is intentionally
+  // NOT listed here so the middleware leaves it alone.
 ]);
 
 /** Actions that count as writes. */

@@ -47,6 +47,7 @@ enum PlatformCapability {
   COMPANY_MANAGE
   INTEGRATION_MANAGE
   LAYOUT_MANAGE
+  TAG_MANAGE
   USER_MANAGE
   MEMBERSHIP_MANAGE
   AUDIT_READ
@@ -472,6 +473,24 @@ model AssetField {
   // per layout" are both enforced by partial unique indexes in the migration.
   @@index([assetLayoutId, position])
   @@map("asset_fields")
+}
+
+// Tag is *global* — same identity model as AssetLayout/AssetField. There is
+// deliberately no `companyId`: a tag created in one company is reusable
+// across every company and every layout. Any authenticated user can create
+// a tag inline while editing an asset (the asset-write tx upserts unknown
+// names → ids); rename/delete is gated by `tag.manage.global`
+// (TAG_MANAGE / SUPER_ADMIN). Case-insensitive uniqueness is enforced by
+// the app-maintained `nameLower` column (matches the codebase convention —
+// no citext, no expression indexes).
+model Tag {
+  id        String   @id @default(uuid()) @db.Uuid
+  name      String
+  nameLower String   @unique @map("name_lower")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("tags")
 }
 
 model Asset {

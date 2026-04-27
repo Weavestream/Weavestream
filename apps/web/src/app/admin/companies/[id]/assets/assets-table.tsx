@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState, useTransition } from 'react';
+import { useEffect, useMemo, useState, useTransition } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import type {
@@ -10,6 +10,7 @@ import type {
 import { Icon, LayoutSwatch, Tag } from '../../../../../components/ui';
 import { useIsMobile } from '../../../../../lib/hooks/use-is-mobile';
 import { vaultLinkLabel } from '../../../../../lib/vault-link';
+import { TagFilterMenu } from '../../../../../components/layouts/tag-filter-menu';
 
 /**
  * Interactive asset list. URL is the source of truth; every filter
@@ -39,12 +40,86 @@ export function AssetsTable({
   const router = useRouter();
   const [_pending, startTransition] = useTransition();
   const [draft, setDraft] = useState(q);
+  const [tagFilter, setTagFilter] = useState<string | null>(null);
   const isMobile = useIsMobile();
 
   const activeLayout = useMemo(
     () => layouts.find((l) => l.id === layoutId) ?? null,
     [layouts, layoutId],
   );
+
+  // Walk every loaded row's `fields` to find which slugs hold TAGS values.
+  // Unlike `LayoutAssetsTable` this surface is multi-layout, so the set of
+  // TAGS slugs varies row-by-row. We index per-row to avoid re-walking on
+  // each filter pass.
+  const rowTagIndex = useMemo(() => {
+    const out = new Map<string, Set<string>>();
+    for (const r of rows) {
+      const ids = new Set<string>();
+      for (const f of r.fields) {
+        if (f.fieldType !== 'TAGS') continue;
+        const v = r.fieldValues[f.slug];
+        if (!Array.isArray(v)) continue;
+        for (const entry of v as unknown[]) {
+          if (
+            entry &&
+            typeof entry === 'object' &&
+            typeof (entry as { id?: unknown }).id === 'string'
+          ) {
+            ids.add((entry as { id: string }).id);
+          }
+        }
+      }
+      out.set(r.id, ids);
+    }
+    return out;
+  }, [rows]);
+
+  // Distinct `{id, name}` chips referenced across the current row set.
+  // The server hydrates TAGS values into chip objects, so we just walk
+  // them. Sort alphabetically for stable ordering.
+  const availableTags = useMemo(() => {
+    const byId = new Map<string, string>();
+    for (const r of rows) {
+      for (const f of r.fields) {
+        if (f.fieldType !== 'TAGS') continue;
+        const v = r.fieldValues[f.slug];
+        if (!Array.isArray(v)) continue;
+        for (const entry of v as unknown[]) {
+          if (
+            entry &&
+            typeof entry === 'object' &&
+            typeof (entry as { id?: unknown }).id === 'string' &&
+            typeof (entry as { name?: unknown }).name === 'string'
+          ) {
+            const obj = entry as { id: string; name: string };
+            if (!byId.has(obj.id)) byId.set(obj.id, obj.name);
+          }
+        }
+      }
+    }
+    return Array.from(byId.entries())
+      .map(([id, name]) => ({ id, name }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [rows]);
+
+  // Drop the tagFilter selection if the underlying tag list no longer
+  // contains it (e.g. server-side filters narrowed the rows past every
+  // reference to it).
+  useEffect(() => {
+    if (tagFilter && !availableTags.some((t) => t.id === tagFilter)) {
+      setTagFilter(null);
+    }
+  }, [availableTags, tagFilter]);
+
+  const visibleRows = useMemo(() => {
+    if (!tagFilter) return rows;
+    return rows.filter((r) => rowTagIndex.get(r.id)?.has(tagFilter));
+  }, [rows, rowTagIndex, tagFilter]);
+
+  const activeTag = tagFilter
+    ? availableTags.find((t) => t.id === tagFilter) ?? null
+    : null;
 
   function pushParams(next: Record<string, string | undefined | null>) {
     const params = new URLSearchParams();
@@ -148,9 +223,12 @@ export function AssetsTable({
               fontFamily: 'var(--font-mono)',
               fontSize: 11,
               color: 'var(--muted)',
+              whiteSpace: 'nowrap',
             }}
           >
-            {rows.length} results
+            {visibleRows.length === rows.length
+              ? `${rows.length} results`
+              : `${visibleRows.length} of ${rows.length}`}
           </span>
         </div>
 
@@ -174,6 +252,15 @@ export function AssetsTable({
             </option>
           ))}
         </select>
+
+        {availableTags.length > 0 && (
+          <TagFilterMenu
+            tags={availableTags}
+            value={tagFilter}
+            activeName={activeTag?.name ?? null}
+            onChange={setTagFilter}
+          />
+        )}
 
         <button
           type="button"
@@ -256,7 +343,7 @@ export function AssetsTable({
       )}
 
       {/* Table / cards */}
-      {rows.length === 0 ? (
+      {visibleRows.length === 0 ? (
         <div
           style={{
             padding: 36,
@@ -278,7 +365,7 @@ export function AssetsTable({
             gap: 8,
           }}
         >
-          {rows.map((r) => (
+          {visibleRows.map((r) => (
             <AssetMobileCard key={r.id} row={r} companyId={companyId} />
           ))}
         </ul>
@@ -315,12 +402,12 @@ export function AssetsTable({
               </tr>
             </thead>
             <tbody>
-              {rows.map((r, i) => (
+              {visibleRows.map((r, i) => (
                 <AssetRow
                   key={r.id}
                   row={r}
                   companyId={companyId}
-                  isLast={i === rows.length - 1}
+                  isLast={i === visibleRows.length - 1}
                 />
               ))}
             </tbody>
@@ -606,7 +693,21 @@ function renderScalar(
       .join(', ');
   }
   if (fieldType === 'VAULTWARDEN_LINK') return vaultLinkLabel(value) || '—';
-  if (Array.isArray(value)) return value.join(', ');
+  if (fieldType === 'TAGS' && Array.isArray(value)) {
+    return (value as unknown[])
+      .map((v) => {
+        if (
+          v &&
+          typeof v === 'object' &&
+          typeof (v as { name?: unknown }).name === 'string'
+        ) {
+          return (v as { name: string }).name;
+        }
+        return String(v);
+      })
+      .join(', ');
+  }
+  if (Array.isArray(value)) return value.map((v) => String(v)).join(', ');
   if (typeof value === 'object') return JSON.stringify(value);
   return String(value);
 }

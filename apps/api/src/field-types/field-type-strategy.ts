@@ -43,6 +43,31 @@ export interface FieldRelateCtx {
 }
 
 /**
+ * Narrow port the TAGS strategy uses to upsert unknown tag names → ids
+ * inside the asset-write transaction. Lives on `FieldPreResolveCtx` so
+ * strategies can opt in via `preResolve` without importing the full
+ * TagsService (avoiding a circular dependency).
+ */
+export interface TagsPort {
+  upsertByName(
+    name: string,
+    tx: Prisma.TransactionClient,
+  ): Promise<string>;
+}
+
+/**
+ * Context handed to `preResolve`. Runs inside the asset-write transaction
+ * BEFORE `valueSchema` validation and `normalize`, so a strategy can shape
+ * an inbound wire-form value into the canonical stored form (e.g. resolve
+ * `{ name }` entries into Tag UUIDs).
+ */
+export interface FieldPreResolveCtx {
+  tx: Prisma.TransactionClient;
+  tags: TagsPort;
+  actorId: string | null;
+}
+
+/**
  * One FieldTypeStrategy per `FieldType`. The registry is the single source
  * of truth for: how to validate options at layout save time, how to
  * validate a stored value at asset save time, how to canonicalize on
@@ -88,4 +113,17 @@ export interface FieldTypeStrategy {
     value: unknown,
     ctx: FieldRelateCtx,
   ): Promise<void>;
+
+  /**
+   * Optionally runs inside the asset-write transaction BEFORE `valueSchema`
+   * validation and `normalize`. Lets a strategy convert an inbound wire-form
+   * value into its canonical stored form (e.g. TAGS resolves `{ name }`
+   * entries into Tag UUIDs by upserting through `ctx.tags`). The returned
+   * value MUST round-trip through `valueSchema(options)`.
+   */
+  preResolve?(
+    input: unknown,
+    options: Record<string, unknown>,
+    ctx: FieldPreResolveCtx,
+  ): Promise<unknown>;
 }

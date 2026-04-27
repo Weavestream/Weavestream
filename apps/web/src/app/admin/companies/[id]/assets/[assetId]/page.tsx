@@ -360,17 +360,40 @@ function renderValue(
         </span>
       );
     }
-    case 'TAGS':
+    case 'TAGS': {
+      // Server-side `hydrateTagFields` converts the stored UUID array into
+      // `{ id, name }` snapshots so we render the canonical display name
+      // even after a rename. Legacy string entries (pre-migration data
+      // that never got resolved) round-trip through `String(v)` as a
+      // fallback so the chip still shows something meaningful.
       if (!Array.isArray(value)) return String(value);
+      const chips = (value as unknown[])
+        .map((v) => {
+          if (
+            v &&
+            typeof v === 'object' &&
+            typeof (v as { name?: unknown }).name === 'string'
+          ) {
+            const obj = v as { id?: string; name: string };
+            return { key: obj.id ?? obj.name, label: obj.name };
+          }
+          if (typeof v === 'string' && v.length > 0) {
+            return { key: v, label: v };
+          }
+          return null;
+        })
+        .filter((x): x is { key: string; label: string } => x !== null);
+      if (chips.length === 0) return null;
       return (
         <span style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-          {value.map((v) => (
-            <Tag key={String(v)} tone="outline">
-              {String(v)}
+          {chips.map((c) => (
+            <Tag key={c.key} tone="outline">
+              {c.label}
             </Tag>
           ))}
         </span>
       );
+    }
     case 'URL':
       return (
         <a

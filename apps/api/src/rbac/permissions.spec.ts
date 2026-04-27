@@ -400,6 +400,23 @@ describe('PermissionService.evaluate — semantic checks', () => {
     ).toBe(false);
   });
 
+  it('tag.manage.global requires TAG_MANAGE for OPERATOR', () => {
+    expect(
+      PermissionService.evaluate(
+        buildUser('OPERATOR', 'FULL', ['TAG_MANAGE']),
+        'tag.manage.global',
+        [],
+      ).allowed,
+    ).toBe(true);
+    expect(
+      PermissionService.evaluate(
+        buildUser('OPERATOR', 'FULL'),
+        'tag.manage.global',
+        [],
+      ).allowed,
+    ).toBe(false);
+  });
+
   it('CLIENT_USER cannot manage memberships even with a FULL row (defensive)', () => {
     const m: MembershipSnapshot = {
       companyId: THE_COMPANY,

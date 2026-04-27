@@ -23,6 +23,7 @@ import { StarsModule } from './stars/stars.module.js';
 import { ActivityModule } from './activity/activity.module.js';
 import { FieldTypesModule } from './field-types/field-types.module.js';
 import { AssetLayoutsModule } from './asset-layouts/asset-layouts.module.js';
+import { TagsModule } from './tags/tags.module.js';
 import { AssetsModule } from './assets/assets.module.js';
 import { RelationsModule } from './relations/relations.module.js';
 import { StorageModule } from './storage/storage.module.js';
@@ -129,6 +130,7 @@ const httpSerializers = {
     ActivityModule,
     FieldTypesModule,
     AssetLayoutsModule,
+    TagsModule,
     AssetsModule,
     RelationsModule,
     StorageModule,
