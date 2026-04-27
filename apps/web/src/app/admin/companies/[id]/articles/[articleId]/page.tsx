@@ -71,24 +71,45 @@ export default async function ArticleReadPage({
               iconSize={14}
             />
             {manage && (
-              <Link
-                href={`/admin/companies/${companyId}/articles/${article.id}/edit`}
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: 6,
-                  height: 28,
-                  padding: '0 10px',
-                  background: 'var(--accent)',
-                  color: 'var(--accent-ink)',
-                  borderRadius: 5,
-                  fontSize: 12.5,
-                  fontWeight: 600,
-                }}
-              >
-                <Icon.edit size={12} />
-                Edit
-              </Link>
+              <>
+                <Link
+                  href={`/admin/companies/${companyId}/articles/${article.id}/edit`}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    height: 28,
+                    padding: '0 10px',
+                    border: '1px solid var(--line)',
+                    background: 'var(--bg)',
+                    color: 'var(--text)',
+                    borderRadius: 5,
+                    fontSize: 12.5,
+                    fontWeight: 600,
+                  }}
+                >
+                  <Icon.edit size={12} />
+                  Edit
+                </Link>
+                <Link
+                  href={`/admin/companies/${companyId}/articles/new${article.folderId ? `?folderId=${article.folderId}` : ''}`}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    height: 28,
+                    padding: '0 10px',
+                    background: 'var(--accent)',
+                    color: 'var(--accent-ink)',
+                    borderRadius: 5,
+                    fontSize: 12.5,
+                    fontWeight: 600,
+                  }}
+                >
+                  <Icon.plus size={13} />
+                  New article
+                </Link>
+              </>
             )}
           </>
         }
