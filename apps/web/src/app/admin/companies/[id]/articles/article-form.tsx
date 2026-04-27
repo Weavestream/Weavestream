@@ -361,26 +361,37 @@ export function ArticleForm({
             mode === 'edit' && article && !isMobile
               ? 'minmax(0, 1fr) 320px'
               : 'minmax(0, 1fr)',
+          gridTemplateRows: 'minmax(0, 1fr)',
         }}
       >
       <div
         ref={setScrollEl}
         style={{
-          overflow: 'auto',
+          overflow: editorMode === 'markdown' ? 'hidden' : 'auto',
           display: 'flex',
           flexDirection: 'column',
           minWidth: 0,
+          minHeight: 0,
         }}
       >
         <div
           style={{
             order: 2,
-            maxWidth: 1000,
-            margin: '0 auto',
             width: '100%',
+            display: 'flex',
+            flexDirection: 'column',
+            flex: editorMode === 'markdown' ? 1 : 'initial',
+            minHeight: 0,
           }}
         >
-          <div style={{ padding: '30px 40px 20px' }}>
+          <div
+            style={{
+              maxWidth: 1000,
+              margin: '0 auto',
+              width: '100%',
+              padding: '30px 40px 20px',
+            }}
+          >
             <input
               value={title}
               onChange={(e) => {
@@ -481,8 +492,15 @@ export function ArticleForm({
             </div>
           </div>
 
-          <div style={{ padding: '0 40px 80px' }}>
-            {editorMode === 'tiptap' ? (
+          {editorMode === 'tiptap' ? (
+            <div
+              style={{
+                maxWidth: 1000,
+                margin: '0 auto',
+                width: '100%',
+                padding: '0 40px 80px',
+              }}
+            >
               <RichTextEditor
                 variant="article"
                 value={doc}
@@ -491,15 +509,27 @@ export function ArticleForm({
                 autoFocus={mode === 'create'}
                 toolbarPortalTarget={scrollEl}
               />
-            ) : (
+            </div>
+          ) : (
+            <div
+              style={{
+                width: '100%',
+                padding: '0 16px 16px',
+                flex: 1,
+                minHeight: 0,
+                height: '100%',
+                display: 'flex',
+                flexDirection: 'column',
+              }}
+            >
               <MarkdownEditor
                 value={markdownSource}
                 onChange={onMarkdownChange}
                 autoFocus={mode === 'create'}
                 toolbarPortalTarget={scrollEl}
               />
-            )}
-          </div>
+            </div>
+          )}
         </div>
       </div>
 

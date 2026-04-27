@@ -513,6 +513,228 @@
   flex-shrink: 0;
 }
 
+/* Markdown editor (CodeMirror + resizable preview)
+ *
+ * The editor surface fills its parent container so it grows tall on wide
+ * screens. In split mode `react-resizable-panels` provides the drag handle
+ * between editor and preview — it's a thin vertical strip that goes accent
+ * on hover/active so the affordance is obvious without being noisy.
+ *
+ * Note on react-resizable-panels v4: the Panel and Separator components
+ * apply `className` to a *nested* div, while the library owns the outer
+ * div's flex sizing. We rely on `[data-panel]` / `[data-separator]` for
+ * any rule that needs to target the library-owned outer element.
+ */
+
+.sd-md-shell {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  overflow: hidden;
+  border: 1px solid var(--line-2);
+  border-radius: 8px;
+  background: var(--panel-2);
+}
+
+.sd-md-panels {
+  flex: 1 1 0;
+  min-height: 0;
+  height: 100%;
+  width: 100%;
+}
+
+/* Single-pane (Edit-only / Preview-only). Mirrors what a Panel's inner
+ * wrapper would otherwise give us. */
+.sd-md-shell > .sd-md-pane-solo {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Library-owned outer Panel div in this editor — make it a flex column
+ * so the inner content wrapper can fill 100%. */
+.sd-md-panels [data-panel] {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* Inner content wrapper (gets our `.sd-md-pane` className). */
+.sd-md-pane {
+  flex: 1 1 0;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--panel-2);
+  height: 100%;
+  width: 100%;
+}
+
+.sd-md-cm-wrap {
+  flex: 1 1 0;
+  min-height: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+.sd-md-cm-wrap > .sd-md-codemirror,
+.sd-md-cm-wrap > .sd-md-codemirror > .cm-editor,
+.sd-md-cm-wrap > [class*='cm-theme'],
+.sd-md-cm-wrap > [class*='cm-theme'] > .cm-editor {
+  flex: 1 1 0;
+  min-height: 0;
+  height: 100%;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.sd-md-cm-wrap .cm-editor {
+  background: transparent;
+}
+
+.sd-md-cm-wrap .cm-scroller {
+  flex: 1 1 0;
+  min-height: 0;
+  height: 100%;
+  overflow: auto;
+}
+
+.sd-md-cm-wrap .cm-content {
+  padding: 14px 4px;
+}
+
+.sd-md-cm-wrap .cm-gutters {
+  background: var(--panel);
+  border-right: 1px solid var(--line);
+  color: var(--dim);
+  padding-right: 4px;
+}
+
+.sd-md-cm-wrap .cm-lineNumbers .cm-gutterElement {
+  padding: 0 8px;
+  min-width: 28px;
+  text-align: right;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.sd-md-cm-wrap .cm-activeLineGutter {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.sd-md-preview-wrap {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: auto;
+  padding: 28px 34px;
+  background: var(--panel);
+}
+
+.sd-md-preview {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 820px;
+  min-height: 0;
+  margin: 0 auto;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+}
+
+/* Resize handle — the library renders an outer `[data-separator]` div with
+ * its own flex sizing; we style that directly so the visible band sits
+ * exactly where the hit-target is. */
+.sd-md-panels [data-separator],
+.sd-md-resize-handle {
+  position: relative;
+  width: 10px;
+  margin: 0;
+  background: var(--surface);
+  border: 0;
+  border-left: 1px solid var(--line);
+  border-right: 1px solid var(--line);
+  cursor: col-resize;
+  transition: background 120ms ease;
+}
+
+.sd-md-panels [data-separator]::before,
+.sd-md-resize-handle::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 1px;
+  background: transparent;
+  border-radius: 999px;
+  transition: background 120ms ease, width 120ms ease;
+}
+
+.sd-md-panels [data-separator]::after,
+.sd-md-resize-handle::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 2px;
+  height: 36px;
+  transform: translate(-50%, -50%);
+  background: var(--line-2);
+  border-radius: 999px;
+  opacity: 0.45;
+  transition: background 120ms ease, opacity 120ms ease, height 120ms ease;
+}
+
+.sd-md-panels [data-separator]:hover,
+.sd-md-resize-handle:hover {
+  background: var(--accent-soft);
+}
+
+.sd-md-panels [data-separator]:hover::before,
+.sd-md-resize-handle:hover::before {
+  background: var(--accent);
+  width: 2px;
+}
+
+.sd-md-panels [data-separator]:hover::after,
+.sd-md-resize-handle:hover::after {
+  background: var(--accent);
+  opacity: 1;
+  height: 56px;
+}
+
+.sd-md-panels [data-separator='active'],
+.sd-md-resize-handle[data-separator='active'] {
+  background: var(--accent-soft);
+  border-radius: 999px;
+}
+
+.sd-md-panels [data-separator='active']::before,
+.sd-md-resize-handle[data-separator='active']::before {
+  background: var(--accent);
+  width: 2px;
+}
+
+.sd-md-panels [data-separator='active']::after,
+.sd-md-resize-handle[data-separator='active']::after {
+  background: var(--accent);
+  opacity: 1;
+  height: 56px;
+}
+
 /* Read-only rendered view shares the same body typography. */
 .sd-richtext-view {
   color: var(--text-2);
