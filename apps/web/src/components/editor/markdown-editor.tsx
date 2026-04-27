@@ -1,9 +1,17 @@
 'use client';
 
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import CodeMirror, { type Extension } from '@uiw/react-codemirror';
+import { markdown } from '@codemirror/lang-markdown';
+import { languages } from '@codemirror/language-data';
+import { EditorView, keymap } from '@codemirror/view';
+import { indentWithTab } from '@codemirror/commands';
+import { HighlightStyle, syntaxHighlighting } from '@codemirror/language';
+import { tags as t } from '@lezer/highlight';
+import { Group, Panel, Separator, useDefaultLayout } from 'react-resizable-panels';
 import './editor.css';
 
 export type MarkdownEditorProps = {
@@ -21,11 +29,32 @@ export type MarkdownEditorProps = {
 
 type ViewMode = 'edit' | 'split' | 'preview';
 
-/**
- * Authoring surface for Markdown articles: textarea plus optional
- * live preview. Defaults to plain editing — users can opt into split
- * or preview-only via the toolbar.
- */
+/* Markdown syntax theme. Colors come from the design-token CSS variables so
+ * the editor stays consistent with the rest of the app — and tracks the
+ * dark/light theme switch automatically without a second config. */
+const markdownHighlightStyle = HighlightStyle.define([
+  { tag: t.heading1, color: 'var(--text)', fontWeight: '700', fontSize: '1.4em' },
+  { tag: t.heading2, color: 'var(--text)', fontWeight: '700', fontSize: '1.2em' },
+  { tag: t.heading3, color: 'var(--text)', fontWeight: '600', fontSize: '1.1em' },
+  { tag: [t.heading4, t.heading5, t.heading6], color: 'var(--text)', fontWeight: '600' },
+  { tag: t.strong, color: 'var(--text)', fontWeight: '700' },
+  { tag: t.emphasis, color: 'var(--text-2)', fontStyle: 'italic' },
+  { tag: t.strikethrough, color: 'var(--dim)', textDecoration: 'line-through' },
+  { tag: t.link, color: 'var(--accent)' },
+  { tag: t.url, color: 'var(--accent)', textDecoration: 'underline' },
+  { tag: t.monospace, color: 'var(--accent)', fontFamily: 'var(--font-mono)' },
+  { tag: [t.processingInstruction, t.string, t.inserted], color: 'var(--accent)' },
+  { tag: t.contentSeparator, color: 'var(--dim)' },
+  { tag: t.list, color: 'var(--accent)' },
+  { tag: t.quote, color: 'var(--text-2)', fontStyle: 'italic' },
+  { tag: [t.meta, t.comment], color: 'var(--dim)' },
+  { tag: t.atom, color: 'var(--accent)' },
+  { tag: t.keyword, color: 'var(--accent)', fontWeight: '600' },
+  { tag: t.tagName, color: 'var(--accent)' },
+  { tag: t.attributeName, color: 'var(--text-2)' },
+  { tag: t.number, color: 'var(--accent)' },
+]);
+
 export function MarkdownEditor({
   value,
   onChange,
@@ -33,15 +62,147 @@ export function MarkdownEditor({
   toolbarPortalTarget,
 }: MarkdownEditorProps) {
   const [view, setView] = useState<ViewMode>('edit');
+  const previewScrollRef = useRef<HTMLDivElement | null>(null);
+  const [editorScrollEl, setEditorScrollEl] = useState<HTMLElement | null>(null);
 
   const showEditor = view === 'edit' || view === 'split';
   const showPreview = view === 'preview' || view === 'split';
+  const previewMarkdown = useMemo(() => stripMarkdownFrontmatter(value), [value]);
 
-  const onTextChange = useCallback(
-    (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-      onChange(e.target.value);
+  const cmExtensions = useMemo<Extension[]>(
+    () => [
+      markdown({ codeLanguages: languages }),
+      EditorView.lineWrapping,
+      keymap.of([indentWithTab]),
+      syntaxHighlighting(markdownHighlightStyle),
+      EditorView.theme(
+        {
+          '&': {
+            display: 'flex',
+            flexDirection: 'column',
+            height: '100%',
+            minHeight: '0',
+            fontSize: '13px',
+          },
+          '.cm-scroller': {
+            flex: '1 1 0',
+            minHeight: '0',
+            height: '100%',
+            fontFamily: 'var(--font-mono)',
+            lineHeight: '1.6',
+          },
+          '.cm-content': {
+            caretColor: 'var(--text)',
+          },
+          '&.cm-focused': {
+            outline: 'none',
+          },
+          '.cm-line': {
+            padding: '0 8px',
+          },
+          '.cm-cursor, .cm-dropCursor': {
+            borderLeftColor: 'var(--text)',
+          },
+          '&.cm-focused .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection':
+            {
+              background: 'var(--accent-soft)',
+            },
+          '.cm-activeLine': {
+            backgroundColor: 'transparent',
+          },
+        },
+        { dark: false },
+      ),
+    ],
+    [],
+  );
+
+  const handleCmChange = useCallback(
+    (next: string) => {
+      onChange(next);
     },
     [onChange],
+  );
+
+  useEffect(() => {
+    if (!editorScrollEl) return;
+
+    const syncPreviewScroll = () => {
+      const previewEl = previewScrollRef.current;
+      if (!previewEl) return;
+
+      const editorMaxScroll =
+        editorScrollEl.scrollHeight - editorScrollEl.clientHeight;
+      const previewMaxScroll = previewEl.scrollHeight - previewEl.clientHeight;
+
+      if (editorMaxScroll <= 0 || previewMaxScroll <= 0) {
+        previewEl.scrollTop = 0;
+        return;
+      }
+
+      previewEl.scrollTop =
+        (editorScrollEl.scrollTop / editorMaxScroll) * previewMaxScroll;
+    };
+
+    editorScrollEl.addEventListener('scroll', syncPreviewScroll, {
+      passive: true,
+    });
+    syncPreviewScroll();
+
+    return () => {
+      editorScrollEl.removeEventListener('scroll', syncPreviewScroll);
+    };
+  }, [editorScrollEl]);
+
+  const editorPane = (
+    <div className="sd-md-cm-wrap" style={paneFillStyle}>
+      <CodeMirror
+        className="sd-md-codemirror"
+        style={codeMirrorWrapStyle}
+        value={value}
+        onChange={handleCmChange}
+        autoFocus={autoFocus}
+        extensions={cmExtensions}
+        basicSetup={{
+          lineNumbers: true,
+          foldGutter: false,
+          highlightActiveLine: false,
+          highlightActiveLineGutter: true,
+          dropCursor: true,
+          allowMultipleSelections: true,
+          indentOnInput: true,
+          bracketMatching: true,
+          closeBrackets: true,
+          autocompletion: false,
+          rectangularSelection: true,
+          crosshairCursor: false,
+          searchKeymap: true,
+          historyKeymap: true,
+          defaultKeymap: true,
+        }}
+        placeholder="Write Markdown…"
+        aria-label="Markdown source"
+        height="100%"
+        onCreateEditor={(nextView) => setEditorScrollEl(nextView.scrollDOM)}
+      />
+    </div>
+  );
+
+  const previewPane = (
+    <div
+      ref={previewScrollRef}
+      className="sd-md-preview-wrap"
+      style={previewWrapStyle}
+    >
+      <div
+        className="sd-editor sd-editor-article sd-richtext-view sd-markdown-view sd-md-preview"
+        style={previewSurfaceStyle}
+      >
+        <ReactMarkdown remarkPlugins={[remarkGfm]}>
+          {previewMarkdown || ' '}
+        </ReactMarkdown>
+      </div>
+    </div>
   );
 
   const toolbar = (
@@ -83,60 +244,157 @@ export function MarkdownEditor({
     <>
       {toolbarPortalTarget ? createPortal(toolbar, toolbarPortalTarget) : toolbar}
 
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns:
-            showEditor && showPreview ? '1fr 1fr' : 'minmax(0, 1fr)',
-          gap: showEditor && showPreview ? 20 : 0,
-          minHeight: 420,
-          alignItems: 'stretch',
-        }}
-      >
-        {showEditor && (
-          <textarea
-            value={value}
-            onChange={onTextChange}
-            autoFocus={autoFocus}
-            spellCheck
-            className="sd-md-textarea"
-            style={{
-              width: '100%',
-              minHeight: 420,
-              resize: 'vertical',
-              boxSizing: 'border-box',
-              fontFamily: 'var(--font-mono)',
-              fontSize: 13,
-              lineHeight: 1.55,
-              padding: 16,
-              borderRadius: 8,
-              border: '1px solid var(--line-2)',
-              background: 'var(--panel-2)',
-              color: 'var(--text)',
-              outline: 'none',
-            }}
-            placeholder="Write Markdown…"
-            aria-label="Markdown source"
-          />
-        )}
-        {showPreview && (
-          <div
-            className="sd-editor sd-editor-article sd-richtext-view sd-markdown-view"
-            style={{
-              minHeight: 420,
-              overflow: 'auto',
-              padding: 16,
-              borderRadius: 8,
-              border: '1px solid var(--line-2)',
-              background: 'var(--panel)',
-            }}
-          >
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>{value || ' '}</ReactMarkdown>
+      <div className="sd-md-shell" style={shellStyle}>
+        {showEditor && showPreview ? (
+          <SplitPanes editor={editorPane} preview={previewPane} />
+        ) : showEditor ? (
+          <div className="sd-md-pane sd-md-pane-solo" style={soloPaneStyle}>
+            {editorPane}
+          </div>
+        ) : (
+          <div className="sd-md-pane sd-md-pane-solo" style={soloPaneStyle}>
+            {previewPane}
           </div>
         )}
       </div>
     </>
   );
+}
+
+function SplitPanes({
+  editor,
+  preview,
+}: {
+  editor: React.ReactNode;
+  preview: React.ReactNode;
+}) {
+  const { defaultLayout, onLayoutChanged } = useDefaultLayout({
+    id: 'markdown-editor-split',
+    panelIds: ['editor', 'preview'],
+    storage: typeof window !== 'undefined' ? window.localStorage : undefined,
+  });
+
+  return (
+    <Group
+      orientation="horizontal"
+      className="sd-md-panels"
+      defaultLayout={defaultLayout}
+      onLayoutChanged={onLayoutChanged}
+      style={panelGroupStyle}
+    >
+      <Panel
+        id="editor"
+        defaultSize="50%"
+        minSize="20%"
+        className="sd-md-pane"
+        style={panelContentStyle}
+      >
+        {editor}
+      </Panel>
+      <Separator className="sd-md-resize-handle" style={separatorStyle} />
+      <Panel
+        id="preview"
+        defaultSize="50%"
+        minSize="20%"
+        className="sd-md-pane"
+        style={panelContentStyle}
+      >
+        {preview}
+      </Panel>
+    </Group>
+  );
+}
+
+const panelContentStyle: React.CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  flex: '1 1 0',
+  height: '100%',
+  minHeight: 0,
+  minWidth: 0,
+  overflow: 'hidden',
+};
+
+const shellStyle: React.CSSProperties = {
+  flex: '1 1 0',
+  minHeight: 0,
+  height: '100%',
+  display: 'flex',
+  flexDirection: 'column',
+  overflow: 'hidden',
+  border: '1px solid var(--line-2)',
+  borderRadius: 8,
+  background: 'var(--panel-2)',
+};
+
+const panelGroupStyle: React.CSSProperties = {
+  flex: '1 1 0',
+  height: '100%',
+  minHeight: 0,
+  width: '100%',
+};
+
+const soloPaneStyle: React.CSSProperties = {
+  ...panelContentStyle,
+  background: 'var(--panel-2)',
+};
+
+const paneFillStyle: React.CSSProperties = {
+  flex: '1 1 0',
+  minHeight: 0,
+  height: '100%',
+  display: 'flex',
+  flexDirection: 'column',
+};
+
+const codeMirrorWrapStyle: React.CSSProperties = {
+  ...paneFillStyle,
+  width: '100%',
+};
+
+const previewWrapStyle: React.CSSProperties = {
+  ...paneFillStyle,
+  overflow: 'auto',
+  padding: '28px 34px',
+  background: 'var(--panel)',
+};
+
+const previewSurfaceStyle: React.CSSProperties = {
+  boxSizing: 'border-box',
+  width: '100%',
+  maxWidth: 820,
+  minHeight: 0,
+  margin: '0 auto',
+  padding: 0,
+  background: 'transparent',
+  border: 0,
+  boxShadow: 'none',
+};
+
+const separatorStyle: React.CSSProperties = {
+  position: 'relative',
+  alignSelf: 'stretch',
+  width: 10,
+  margin: 0,
+  borderRadius: 0,
+  background: 'var(--surface)',
+  border: 0,
+  borderLeft: '1px solid var(--line)',
+  borderRight: '1px solid var(--line)',
+  cursor: 'col-resize',
+};
+
+function stripMarkdownFrontmatter(source: string): string {
+  const withoutBom = source.replace(/^\uFEFF/, '');
+  const lines = withoutBom.split(/\r?\n/);
+  if (lines[0]?.trim() !== '---') return source;
+
+  const closingIndex = lines.findIndex((line, index) => {
+    return index > 0 && line.trim() === '---';
+  });
+
+  if (closingIndex === -1) return source;
+  return lines.slice(closingIndex + 1).join('\n').replace(/^\n+/, '');
 }
 
 function ToolbarButton({
