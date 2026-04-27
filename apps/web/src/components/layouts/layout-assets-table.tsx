@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState, useTransition } from 'react';
+import { useEffect, useMemo, useState, useTransition } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import type {
@@ -12,6 +12,7 @@ import type {
 import { vaultLinkLabel } from '../../lib/vault-link';
 import { Icon, LayoutSwatch, Tag } from '../ui';
 import { useIsMobile } from '../../lib/hooks/use-is-mobile';
+import { TagFilterMenu } from './tag-filter-menu';
 
 type ReferenceMap = AssetSummary['references'];
 
@@ -55,6 +56,7 @@ export function LayoutAssetsTable({
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [draft, setDraft] = useState(q);
+  const [tagFilter, setTagFilter] = useState<string | null>(null);
   const isMobile = useIsMobile();
 
   const columns = useMemo(() => {
@@ -64,6 +66,77 @@ export function LayoutAssetsTable({
       .sort((a, b) => a.position - b.position);
     return { primary, extras };
   }, [layout.fields]);
+
+  // TAGS field slugs on this layout. The filter is only meaningful when
+  // the layout actually has at least one TAGS field, otherwise we don't
+  // surface the dropdown at all.
+  const tagFieldSlugs = useMemo(
+    () =>
+      layout.fields
+        .filter((f) => f.fieldType === 'TAGS' && f.archivedAt === null)
+        .map((f) => f.slug),
+    [layout.fields],
+  );
+
+  // Distinct `{id, name}` chips referenced by the currently loaded rows.
+  // The server hydrates TAGS values into chip objects, so we just walk
+  // them here. Sort alphabetically for stable dropdown ordering.
+  const availableTags = useMemo(() => {
+    if (tagFieldSlugs.length === 0) return [] as Array<{ id: string; name: string }>;
+    const byId = new Map<string, string>();
+    for (const r of rows) {
+      for (const slug of tagFieldSlugs) {
+        const v = r.fieldValues[slug];
+        if (!Array.isArray(v)) continue;
+        for (const entry of v as unknown[]) {
+          if (
+            entry &&
+            typeof entry === 'object' &&
+            typeof (entry as { id?: unknown }).id === 'string' &&
+            typeof (entry as { name?: unknown }).name === 'string'
+          ) {
+            const obj = entry as { id: string; name: string };
+            if (!byId.has(obj.id)) byId.set(obj.id, obj.name);
+          }
+        }
+      }
+    }
+    return Array.from(byId.entries())
+      .map(([id, name]) => ({ id, name }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [rows, tagFieldSlugs]);
+
+  // Drop the tagFilter selection if the underlying tag list no longer
+  // contains it (e.g. a search narrowed the rows past every reference).
+  useEffect(() => {
+    if (tagFilter && !availableTags.some((t) => t.id === tagFilter)) {
+      setTagFilter(null);
+    }
+  }, [availableTags, tagFilter]);
+
+  // Apply the client-side tag filter on top of the server-filtered rows.
+  // Server-side TAGS filtering would require a JSON `?| array_contains`
+  // query against `AssetFieldValue.value` — out of scope for v1. The
+  // current page is capped at 200 rows so iterating in JS is cheap.
+  const visibleRows = useMemo(() => {
+    if (!tagFilter) return rows;
+    return rows.filter((r) =>
+      tagFieldSlugs.some((slug) => {
+        const v = r.fieldValues[slug];
+        if (!Array.isArray(v)) return false;
+        return (v as unknown[]).some(
+          (entry) =>
+            entry &&
+            typeof entry === 'object' &&
+            (entry as { id?: unknown }).id === tagFilter,
+        );
+      }),
+    );
+  }, [rows, tagFieldSlugs, tagFilter]);
+
+  const activeTag = tagFilter
+    ? availableTags.find((t) => t.id === tagFilter) ?? null
+    : null;
 
   function pushParams(next: Record<string, string | undefined | null>) {
     const params = new URLSearchParams();
@@ -93,7 +166,7 @@ export function LayoutAssetsTable({
           fontSize: 13,
         }}
       >
-        {q || includeArchived ? (
+        {q || includeArchived || tagFilter ? (
           <>No {layout.name} match the current filters.</>
         ) : (
           <div style={{ display: 'grid', placeItems: 'center', gap: 10 }}>
@@ -183,11 +256,22 @@ export function LayoutAssetsTable({
                   whiteSpace: 'nowrap',
                 }}
               >
-                {rows.length} results
+                {visibleRows.length === rows.length
+                  ? `${rows.length} results`
+                  : `${visibleRows.length} of ${rows.length}`}
               </span>
             </>
           )}
         </div>
+
+        {availableTags.length > 0 && (
+          <TagFilterMenu
+            tags={availableTags}
+            value={tagFilter}
+            activeName={activeTag?.name ?? null}
+            onChange={setTagFilter}
+          />
+        )}
 
         <button
           type="button"
@@ -212,7 +296,18 @@ export function LayoutAssetsTable({
       </div>
 
       {/* Table / cards */}
-      {isMobile ? (
+      {visibleRows.length === 0 ? (
+        <div
+          style={{
+            padding: '40px 24px',
+            textAlign: 'center',
+            color: 'var(--muted)',
+            fontSize: 13,
+          }}
+        >
+          No {layout.name} match the current filters.
+        </div>
+      ) : isMobile ? (
         <ul
           style={{
             listStyle: 'none',
@@ -224,7 +319,7 @@ export function LayoutAssetsTable({
             opacity: pending ? 0.6 : 1,
           }}
         >
-          {rows.map((r) => (
+          {visibleRows.map((r) => (
             <LayoutAssetMobileCard
               key={r.id}
               row={r}
@@ -254,14 +349,14 @@ export function LayoutAssetsTable({
               </tr>
             </thead>
             <tbody>
-              {rows.map((r, i) => (
+              {visibleRows.map((r, i) => (
                 <AssetRow
                   key={r.id}
                   row={r}
                   layout={layout}
                   columns={columns}
                   basePath={basePath}
-                  isLast={i === rows.length - 1}
+                  isLast={i === visibleRows.length - 1}
                 />
               ))}
             </tbody>
@@ -588,7 +683,39 @@ function FieldCell({
         </a>
       );
     }
-    case 'TAGS':
+    case 'TAGS': {
+      // Server-side `hydrateTagFields` rewrites the stored UUID array into
+      // `{ id, name }` snapshots. Pre-migration data may still arrive as
+      // raw strings — those degrade gracefully through the fallback below.
+      if (!Array.isArray(value)) return <Dim>—</Dim>;
+      const chips = (value as unknown[])
+        .map((v) => {
+          if (
+            v &&
+            typeof v === 'object' &&
+            typeof (v as { name?: unknown }).name === 'string'
+          ) {
+            const obj = v as { id?: string; name: string };
+            return { key: obj.id ?? obj.name, label: obj.name };
+          }
+          if (typeof v === 'string' && v.length > 0) {
+            return { key: v, label: v };
+          }
+          return null;
+        })
+        .filter((x): x is { key: string; label: string } => x !== null);
+      if (chips.length === 0) return <Dim>—</Dim>;
+      return (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+          {chips.slice(0, 4).map((c) => (
+            <Tag key={c.key} tone="outline">
+              {c.label}
+            </Tag>
+          ))}
+          {chips.length > 4 && <Dim>+{chips.length - 4}</Dim>}
+        </div>
+      );
+    }
     case 'MULTISELECT': {
       const arr = Array.isArray(value)
         ? value

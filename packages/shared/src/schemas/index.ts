@@ -6,6 +6,7 @@ export * from './field-types.js';
 export * from './asset-field.js';
 export * from './asset-layout.js';
 export * from './asset.js';
+export * from './tag.js';
 export * from './folder.js';
 export * from './article.js';
 export * from './upload.js';

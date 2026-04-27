@@ -248,11 +248,58 @@ describe('RichTextStrategy', () => {
 
 describe('TagsStrategy', () => {
   const registry = new FieldTypesRegistry();
-  it('lowercases and deduplicates tags', () => {
-    expect(registry.get('TAGS').normalize(['Clinical', 'clinical', ' IMAGING '], {})).toEqual([
-      'clinical',
-      'imaging',
+
+  it('valueSchema accepts a mixed array of UUIDs and { name } objects', () => {
+    const schema = registry.get('TAGS').valueSchema({});
+    const uuid = '11111111-1111-1111-1111-111111111111';
+    expect(schema.safeParse([uuid]).success).toBe(true);
+    expect(schema.safeParse([{ name: 'Production' }]).success).toBe(true);
+    expect(schema.safeParse([uuid, { name: 'New' }]).success).toBe(true);
+    expect(schema.safeParse(null).success).toBe(true);
+    // Non-UUID raw strings are no longer accepted — names must come in as
+    // `{ name }` so the asset-write tx can resolve them via preResolve.
+    expect(schema.safeParse(['not-a-uuid']).success).toBe(false);
+  });
+
+  it('preResolve upserts new names through the TagsPort and dedupes ids', async () => {
+    const created = new Map<string, string>();
+    const port = {
+      upsertByName: async (name: string) => {
+        const lower = name.trim().toLowerCase();
+        const existing = created.get(lower);
+        if (existing) return existing;
+        const id = `tag-${created.size + 1}`;
+        created.set(lower, id);
+        return id;
+      },
+    };
+    const ctx = {
+      tx: {} as never,
+      tags: port,
+      actorId: null,
+    };
+    const out = await registry
+      .get('TAGS')
+      .preResolve!([
+        '11111111-1111-1111-1111-111111111111',
+        { name: 'Production' },
+        { name: 'production' },
+        '11111111-1111-1111-1111-111111111111',
+      ], {}, ctx);
+    expect(out).toEqual([
+      '11111111-1111-1111-1111-111111111111',
+      'tag-1',
     ]);
+  });
+
+  it('normalize dedupes and preserves casing of UUID arrays', () => {
+    const a = '11111111-1111-1111-1111-111111111111';
+    const b = '22222222-2222-2222-2222-222222222222';
+    expect(registry.get('TAGS').normalize([a, b, a], {})).toEqual([a, b]);
+  });
+
+  it('toPlaintext returns empty string (search hydration is out of scope)', () => {
+    expect(registry.get('TAGS').toPlaintext([], {})).toBe('');
   });
 });
 

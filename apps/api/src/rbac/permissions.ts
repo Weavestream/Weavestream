@@ -38,6 +38,7 @@ export const ActionValues = [
   'membership.manage',
 
   'layout.manage.global',
+  'tag.manage.global',
 
   'asset.write',
   'asset.read',
@@ -155,6 +156,15 @@ export const PERMISSIONS: Record<Action, PermissionRule> = {
     allowReadonly: false,
     requireNonExpiredMembership: false,
     note: 'Layouts are global (D-007). Read is implicit for every authenticated user; mutation is gated.',
+  },
+
+  'tag.manage.global': {
+    scope: 'global',
+    requiredCapability: 'TAG_MANAGE',
+    allowFull: false,
+    allowReadonly: false,
+    requireNonExpiredMembership: false,
+    note: 'Tags are global. Read + inline-create on asset save is implicit for every authenticated user; rename/delete is gated.',
   },
 
   'asset.write': {
@@ -295,6 +305,7 @@ export const ACTION_HUMAN_LABELS: Record<Action, string> = {
   'membership.read': 'View memberships',
   'membership.manage': 'Manage memberships',
   'layout.manage.global': 'Create/edit asset layouts (global catalog)',
+  'tag.manage.global': 'Rename/delete global tags',
   'asset.write': 'Create/edit assets',
   'asset.read': 'View assets',
   'asset.archive': 'Archive/restore assets',

@@ -234,6 +234,7 @@ const CAPABILITY_LABEL: Record<PlatformCapability, string> = {
   COMPANY_MANAGE: 'Manage companies',
   INTEGRATION_MANAGE: 'Manage integrations & syncs',
   LAYOUT_MANAGE: 'Manage asset layouts',
+  TAG_MANAGE: 'Manage tags (rename / delete)',
   USER_MANAGE: 'Manage users (excl. Super Admin)',
   MEMBERSHIP_MANAGE: 'Manage company memberships',
   AUDIT_READ: 'Read the audit log',

@@ -196,10 +196,11 @@ describe('TENANT_SCOPED_MODELS (Phase 3+4 registry)', () => {
     expect(TENANT_SCOPED_MODELS.has(model)).toBe(true);
   });
 
-  // AssetLayout / AssetField are global (see DECISIONS.md D-004). The
-  // middleware must NOT force a companyId filter on them, otherwise
-  // `GET /layouts` would 500 for every operator and client.
-  it.each(['AssetLayout', 'AssetField'])(
+  // AssetLayout / AssetField / Tag are global (see DECISIONS.md D-004
+  // and the Tag carve-out next to it). The middleware must NOT force a
+  // companyId filter on them, otherwise `GET /layouts` and `GET /tags`
+  // would 500 for every operator and client.
+  it.each(['AssetLayout', 'AssetField', 'Tag'])(
     'explicitly EXCLUDES %s (global, not tenant-scoped)',
     (model) => {
       expect(TENANT_SCOPED_MODELS.has(model)).toBe(false);
@@ -218,6 +219,13 @@ describe('TENANT_SCOPED_MODELS (Phase 3+4 registry)', () => {
     expect(() =>
       assertTenantScope(
         { model: 'AssetField', action: 'findMany', args: { where: {} } },
+        baseCtx,
+      ),
+    ).not.toThrow();
+    // Same carve-out for the global Tag catalog.
+    expect(() =>
+      assertTenantScope(
+        { model: 'Tag', action: 'findMany', args: { where: {} } },
         baseCtx,
       ),
     ).not.toThrow();

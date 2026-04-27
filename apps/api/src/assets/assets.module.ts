@@ -7,6 +7,7 @@ import { UploadsModule } from '../uploads/uploads.module.js';
 import { SearchModule } from '../search/search.module.js';
 import { PasswordsModule } from '../passwords/passwords.module.js';
 import { StarsModule } from '../stars/stars.module.js';
+import { TagsModule } from '../tags/tags.module.js';
 
 @Module({
   imports: [
@@ -16,6 +17,7 @@ import { StarsModule } from '../stars/stars.module.js';
     SearchModule,
     PasswordsModule,
     StarsModule,
+    TagsModule,
   ],
   controllers: [AssetsController],
   providers: [AssetsService],

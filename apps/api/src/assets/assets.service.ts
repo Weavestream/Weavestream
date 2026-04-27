@@ -27,6 +27,7 @@ import { UploadsService } from '../uploads/uploads.service.js';
 import { SearchIndexService } from '../search/search-index.service.js';
 import { PasswordsService } from '../passwords/passwords.service.js';
 import { StarsService } from '../stars/stars.service.js';
+import { TagsService } from '../tags/tags.service.js';
 import { buildAssetZodSchema } from './build-asset-schema.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
 
@@ -121,6 +122,7 @@ export class AssetsService {
     private readonly searchIndex: SearchIndexService,
     private readonly passwords: PasswordsService,
     private readonly stars: StarsService,
+    private readonly tags: TagsService,
   ) {}
 
   // --------------------------------------------------------------------
@@ -217,6 +219,7 @@ export class AssetsService {
     );
     await this.hydrateFileFields(companyId, serialized);
     await this.hydrateAssetReferences(companyId, serialized);
+    await this.hydrateTagFields(serialized);
     await this.hydrateActors(serialized);
     await this.hydrateSyncMetadata(companyId, serialized);
     return {
@@ -263,6 +266,7 @@ export class AssetsService {
     serialized.isStarred = await this.stars.isStarred(actor.id, 'asset', id);
     await this.hydrateFileFields(companyId, [serialized]);
     await this.hydrateAssetReferences(companyId, [serialized]);
+    await this.hydrateTagFields([serialized]);
     await this.hydrateActors([serialized]);
     await this.hydrateSyncMetadata(companyId, [serialized]);
     return serialized;
@@ -582,6 +586,15 @@ export class AssetsService {
         continue;
       }
       const strategy = this.registry.get(field.fieldType);
+      // Strategies with `preResolve` (currently TAGS) do their canonicalisation
+      // inside the asset-write transaction in `persistFieldValues`, where they
+      // can upsert global rows alongside the asset write. Skip the sync
+      // `normalize` here and pass the validated wire shape through; the tx
+      // step will run preResolve + normalize before upsert.
+      if (strategy.preResolve) {
+        normalized[slug] = value;
+        continue;
+      }
       normalized[slug] = strategy.normalize(value, (field.options ?? {}) as Record<string, unknown>);
     }
     return normalized;
@@ -688,9 +701,29 @@ export class AssetsService {
     values: Record<string, unknown>,
     actorId: string | null,
   ): Promise<void> {
-    for (const [slug, value] of Object.entries(values)) {
+    for (const [slug, rawValue] of Object.entries(values)) {
       const field = layout.fields.find((f) => f.slug === slug && f.archivedAt === null);
       if (!field) continue;
+
+      const strategy = this.registry.get(field.fieldType);
+      const options = (field.options ?? {}) as Record<string, unknown>;
+
+      let value = rawValue;
+      // Strategies with `preResolve` (currently TAGS) need DB access to
+      // canonicalise their wire shape — e.g. upsert unknown tag names
+      // into the global `tags` table. Run that here, inside the tx, so
+      // tag rows and the asset write succeed or fail together.
+      if (value !== null && value !== undefined && strategy.preResolve) {
+        value = await strategy.preResolve(value, options, {
+          tx,
+          tags: this.tags,
+          actorId,
+        });
+        if (value !== null && value !== undefined) {
+          value = strategy.normalize(value, options);
+        }
+      }
+
       if (value === null || value === undefined) {
         await tx.assetFieldValue.deleteMany({
           where: { companyId, assetId, assetFieldId: field.id },
@@ -712,7 +745,6 @@ export class AssetsService {
         });
       }
 
-      const strategy = this.registry.get(field.fieldType);
       if (strategy.onRelate) {
         await strategy.onRelate(value, {
           companyId,
@@ -720,7 +752,7 @@ export class AssetsService {
           field: {
             id: field.id,
             slug: field.slug,
-            options: (field.options ?? {}) as Record<string, unknown>,
+            options,
           },
           actorId,
           tx,
@@ -834,6 +866,45 @@ export class AssetsService {
           const hit = byId.get(v);
           if (hit) asset.references[v] = hit;
         }
+      }
+    }
+  }
+
+  /**
+   * Resolve every TAGS UUID into a `{ id, name }` snapshot so the form can
+   * render a chip with the canonical display name without holding a tag
+   * cache. One batched `IN (...)` lookup covers any number of assets.
+   * Dangling ids (tag was deleted) silently drop out — the read-side
+   * dereferencing is what makes hard-deletes safe even though the JSON
+   * arrays in `AssetFieldValue.value` are never rewritten.
+   */
+  private async hydrateTagFields(assets: SerializedAsset[]): Promise<void> {
+    const ids = new Set<string>();
+    for (const asset of assets) {
+      for (const f of asset.fields) {
+        if (f.fieldType !== 'TAGS') continue;
+        const value = asset.fieldValues[f.slug];
+        if (!Array.isArray(value)) continue;
+        for (const v of value) {
+          if (typeof v === 'string' && v.length > 0) ids.add(v);
+        }
+      }
+    }
+    if (ids.size === 0) return;
+
+    const tagsById = await this.tags.getMany(Array.from(ids));
+    for (const asset of assets) {
+      for (const f of asset.fields) {
+        if (f.fieldType !== 'TAGS') continue;
+        const value = asset.fieldValues[f.slug];
+        if (!Array.isArray(value)) continue;
+        const hydrated: Array<{ id: string; name: string }> = [];
+        for (const v of value) {
+          if (typeof v !== 'string' || v.length === 0) continue;
+          const tag = tagsById.get(v);
+          if (tag) hydrated.push({ id: tag.id, name: tag.name });
+        }
+        asset.fieldValues[f.slug] = hydrated;
       }
     }
   }

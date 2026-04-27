@@ -41,6 +41,7 @@ export function AdminShell({
   // inside that page.
   const showCompanies = true;
   const showLayouts = hasCapability(me, 'LAYOUT_MANAGE');
+  const showTags = hasCapability(me, 'TAG_MANAGE');
   const showAudit = hasCapability(me, 'AUDIT_READ');
   const showUsers = hasCapability(me, 'USER_MANAGE');
   const showMemberships = hasCapability(me, 'MEMBERSHIP_MANAGE');
@@ -67,6 +68,14 @@ export function AdminShell({
       label: 'Asset Layouts',
       icon: 'grid',
       href: '/admin/layouts',
+    });
+  }
+  if (showTags) {
+    primaryItems.push({
+      id: 'tags',
+      label: 'Tags',
+      icon: 'tag',
+      href: '/admin/tags',
     });
   }
   if (showAudit) {
