@@ -915,6 +915,7 @@ export type FolderNode = {
   position: number;
   parentId: string | null;
   archivedAt: string | null;
+  articleCount: number;
   children: FolderNode[];
 };
 

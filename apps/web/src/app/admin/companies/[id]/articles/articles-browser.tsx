@@ -10,6 +10,7 @@ import type {
 import { apiFetch } from '../../../../../lib/api';
 import { Btn, Icon, Tag, useToast } from '../../../../../components/ui';
 import { useIsMobile } from '../../../../../lib/hooks/use-is-mobile';
+import { FolderSettingsDialog } from './folder-settings-dialog';
 
 /**
  * Two-column article browser:
@@ -66,6 +67,14 @@ export function ArticlesBrowser({
   }
 
   const activeFolderId = folderId || 'all';
+  const [editingFolder, setEditingFolder] = useState(false);
+  const selectedFolder = useMemo(
+    () =>
+      activeFolderId !== 'all' && activeFolderId !== 'root'
+        ? findFolder(folders, activeFolderId)
+        : null,
+    [folders, activeFolderId],
+  );
 
   const foldersPane = (
     <aside
@@ -175,6 +184,18 @@ export function ArticlesBrowser({
             />
             Show archived
           </label>
+          {canManage && selectedFolder && (
+            <Btn
+              kind="outline"
+              size="sm"
+              icon={Icon.edit}
+              onClick={() => setEditingFolder(true)}
+              title={`Edit folder “${selectedFolder.name}”`}
+              style={{ marginLeft: 'auto' }}
+            >
+              Edit
+            </Btn>
+          )}
         </div>
 
         {articles.length === 0 ? (
@@ -255,6 +276,17 @@ export function ArticlesBrowser({
     </div>
   );
 
+  const folderDialog = selectedFolder && (
+    <FolderSettingsDialog
+      companyId={companyId}
+      folder={selectedFolder}
+      allFolders={folders}
+      open={editingFolder}
+      onClose={() => setEditingFolder(false)}
+      onArchived={() => nav({ folderId: null })}
+    />
+  );
+
   if (isMobile) {
     return (
       <div style={{ display: 'flex', flexDirection: 'column' }}>
@@ -297,6 +329,7 @@ export function ArticlesBrowser({
           })}
         </div>
         {mobileTab === 'folders' ? foldersPane : articlesPane}
+        {folderDialog}
       </div>
     );
   }
@@ -305,8 +338,18 @@ export function ArticlesBrowser({
     <div style={{ display: 'grid', gridTemplateColumns: '240px 1fr' }}>
       {foldersPane}
       {articlesPane}
+      {folderDialog}
     </div>
   );
+}
+
+function findFolder(tree: FolderNode[], id: string): FolderNode | null {
+  for (const node of tree) {
+    if (node.id === id) return node;
+    const hit = findFolder(node.children, id);
+    if (hit) return hit;
+  }
+  return null;
 }
 
 function FolderTreeNav({

@@ -30,5 +30,18 @@ export const updateFolderSchema = z
   })
   .refine((v) => Object.keys(v).length > 0, 'At least one field must be provided');
 
+/**
+ * Body for `DELETE /folders/:id` (soft-delete / archive). Tells the
+ * server how to cascade to the articles currently in the folder:
+ *   - `unassign` (default): set `folderId = NULL` so they fall back
+ *     to "Unfiled".
+ *   - `archive`: archive the articles too (set their `archivedAt`).
+ * Required when the folder has at least one active article.
+ */
+export const archiveFolderSchema = z.object({
+  articles: z.enum(['unassign', 'archive']).optional(),
+});
+
 export type CreateFolderInput = z.infer<typeof createFolderSchema>;
 export type UpdateFolderInput = z.infer<typeof updateFolderSchema>;
+export type ArchiveFolderInput = z.infer<typeof archiveFolderSchema>;
