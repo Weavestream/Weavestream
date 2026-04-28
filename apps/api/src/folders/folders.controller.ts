@@ -13,8 +13,10 @@ import {
 } from '@nestjs/common';
 import type { Request } from 'express';
 import {
+  archiveFolderSchema,
   createFolderSchema,
   updateFolderSchema,
+  type ArchiveFolderInput,
   type CreateFolderInput,
   type UpdateFolderInput,
 } from '@weavestream/shared';
@@ -78,9 +80,10 @@ export class FoldersController {
     @CurrentUser() actor: AuthedUser,
     @Param('companyId', new ParseUUIDPipe()) companyId: string,
     @Param('id', new ParseUUIDPipe()) id: string,
+    @Body(new ZodBody(archiveFolderSchema)) dto: ArchiveFolderInput,
     @Req() req: Request,
   ) {
-    return this.folders.archive(actor, companyId, id, meta(req));
+    return this.folders.archive(actor, companyId, id, dto, meta(req));
   }
 
   @Post(':id/restore')

@@ -5,7 +5,11 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import type { Folder } from '@prisma/client';
-import type { CreateFolderInput, UpdateFolderInput } from '@weavestream/shared';
+import type {
+  ArchiveFolderInput,
+  CreateFolderInput,
+  UpdateFolderInput,
+} from '@weavestream/shared';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { AuditLogService } from '../audit/audit.service.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
@@ -203,6 +207,7 @@ export class FoldersService {
     actor: AuthedUser,
     companyId: string,
     id: string,
+    input: ArchiveFolderInput,
     meta: AuditMeta,
   ): Promise<SerializedFolder> {
     const existing = await this.prisma.folder.findFirst({ where: { id, companyId } });
@@ -219,10 +224,38 @@ export class FoldersService {
       });
     }
 
-    await this.prisma.folder.updateMany({
-      where: { id, companyId },
-      data: { archivedAt: new Date() },
+    const activeArticleCount = await this.prisma.article.count({
+      where: { folderId: id, companyId, archivedAt: null },
     });
+    if (activeArticleCount > 0 && !input.articles) {
+      throw new BadRequestException({
+        error: 'ArticlesCascadeRequired',
+        message:
+          'This folder contains articles. Choose "unassign" (move to Unfiled) or "archive".',
+        articleCount: activeArticleCount,
+      });
+    }
+
+    const now = new Date();
+    const articleStrategy = input.articles ?? 'unassign';
+    const articleCascade =
+      articleStrategy === 'archive'
+        ? this.prisma.article.updateMany({
+            where: { folderId: id, companyId, archivedAt: null },
+            data: { archivedAt: now },
+          })
+        : this.prisma.article.updateMany({
+            where: { folderId: id, companyId },
+            data: { folderId: null },
+          });
+
+    await this.prisma.$transaction([
+      articleCascade,
+      this.prisma.folder.updateMany({
+        where: { id, companyId },
+        data: { archivedAt: now },
+      }),
+    ]);
     const updated = await this.prisma.folder.findFirstOrThrow({
       where: { id, companyId },
     });
@@ -235,8 +268,11 @@ export class FoldersService {
       companyId,
       ip: meta.ip,
       userAgent: meta.userAgent,
-      before: { archivedAt: null },
-      after: { archivedAt: updated.archivedAt },
+      before: { archivedAt: null, activeArticleCount },
+      after: {
+        archivedAt: updated.archivedAt,
+        articlesCascade: articleStrategy,
+      },
     });
     return this.serialize(updated);
   }
