@@ -87,6 +87,7 @@ export interface SearchHit {
   href: string;
   layoutIcon?: string | null;
   layoutColor?: string | null;
+  layoutName?: string | null;
   folderId?: string | null;
   slug?: string | null;
   thumbnailUrl?: string | null;

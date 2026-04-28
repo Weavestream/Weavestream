@@ -58,6 +58,18 @@ export async function CredentialsPanel({
           )}
         </span>
       }
+      actions={
+        mode === 'admin' ? (
+          <AttachCredentialButton
+            companyId={companyId}
+            assetId={assetId}
+            folders={folders}
+            generatorDefaults={generatorDefaults}
+            label="Add"
+            variant="button"
+          />
+        ) : null
+      }
       noPad
     >
       {items.length === 0 ? (
@@ -169,22 +181,6 @@ export async function CredentialsPanel({
               )}
             </li>
           ))}
-          {mode === 'admin' && (
-            <li
-              style={{
-                padding: '10px 14px',
-                borderTop: '1px solid var(--border)',
-              }}
-            >
-              <AttachCredentialButton
-                companyId={companyId}
-                assetId={assetId}
-                folders={folders}
-                generatorDefaults={generatorDefaults}
-                label="+ Attach another credential"
-              />
-            </li>
-          )}
         </ul>
       )}
     </Panel>

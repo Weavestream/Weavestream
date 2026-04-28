@@ -237,7 +237,7 @@ export function AddLinkModal({
                         marginTop: 2,
                       }}
                     >
-                      {r.kind === 'asset' ? 'asset' : 'article'}
+                      {r.kind === 'asset' ? (r.layoutName ?? 'asset') : 'article'}
                       {r.slug ? ` · ${r.slug}` : ''}
                     </div>
                   </div>
