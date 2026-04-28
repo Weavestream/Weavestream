@@ -6,6 +6,18 @@ this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-04-28
+
+### Added
+
+- **SMTP email provider.** Added SMTP as an email delivery provider.
+- **New alert system.** Introduced the new alert system.
+- **UniFi integration.** Added a new UniFi integration driver.
+
+### Changed
+
+- **Improved Markdown editor.** Upgraded the Markdown editing experience.
+
 ## [1.3.0] - 2026-04-27
 
 ### Changed
@@ -381,7 +393,8 @@ Initial public release.
   database-per-tenant.
 - English UI only.
 
-[Unreleased]: https://github.com/Weavestream/Weavestream/compare/v1.3.0...HEAD
+[Unreleased]: https://github.com/Weavestream/Weavestream/compare/v1.4.0...HEAD
+[1.4.0]: https://github.com/Weavestream/Weavestream/releases/tag/v1.4.0
 [1.3.0]: https://github.com/Weavestream/Weavestream/releases/tag/v1.3.0
 [1.2.1]: https://github.com/Weavestream/Weavestream/releases/tag/v1.2.1
 [1.1.1]: https://github.com/Weavestream/Weavestream/releases/tag/v1.1.1
