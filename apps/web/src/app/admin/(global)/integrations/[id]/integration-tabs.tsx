@@ -22,14 +22,14 @@ const TABS: Array<{ id: TabId; label: string; help: string }> = [
     help: 'Update the secret, status, or cron expression.',
   },
   {
-    id: 'fields',
-    label: 'Field mappings',
-    help: 'Pick the target asset layout and project source fields onto Weavestream fields. Applies globally to every mapped company.',
-  },
-  {
     id: 'orgs',
     label: 'Organizations',
     help: 'Map each upstream organization to a Weavestream company.',
+  },
+  {
+    id: 'fields',
+    label: 'Field mappings',
+    help: 'Pick the target asset layout and project source fields onto Weavestream fields. Applies globally to every mapped company.',
   },
   {
     id: 'runs',

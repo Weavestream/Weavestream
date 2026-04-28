@@ -414,17 +414,20 @@ function renderValue(
       );
     }
     case 'DATE':
-    case 'DATETIME':
+    case 'DATETIME': {
+      const raw = typeof value === 'string' ? value : String(value);
+      const formatted = formatDateField(raw, field.fieldType);
       return (
         <span
           style={{
-            fontFamily: 'var(--font-mono)',
             fontSize: 12.5,
           }}
+          title={raw}
         >
-          {typeof value === 'string' ? value : String(value)}
+          {formatted ?? raw}
         </span>
       );
+    }
     case 'RICH_TEXT':
       return <RichTextView value={value} />;
     case 'FILE': {
@@ -542,4 +545,28 @@ function relative(d: Date): string {
   if (diff < day) return `${Math.floor(diff / hour)}h ago`;
   if (diff < 7 * day) return `${Math.floor(diff / day)}d ago`;
   return d.toLocaleDateString();
+}
+
+function formatDateField(
+  raw: string,
+  fieldType: 'DATE' | 'DATETIME',
+): string | null {
+  if (!raw) return null;
+  const ms = Date.parse(raw);
+  if (!Number.isFinite(ms)) return null;
+  const date = new Date(ms);
+  if (fieldType === 'DATE') {
+    return date.toLocaleDateString(undefined, {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+    });
+  }
+  return date.toLocaleString(undefined, {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
 }
