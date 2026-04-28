@@ -7,6 +7,7 @@ import {
   IntegrationSyncOrchestratorJobNames,
   QueueNames,
 } from '@weavestream/shared';
+import { EnvService } from '../config/env.service.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { QueuesService } from '../queues/queues.service.js';
 
@@ -40,6 +41,7 @@ export class IntegrationSyncQueueRegistrar implements OnApplicationBootstrap {
   constructor(
     private readonly prisma: PrismaService,
     private readonly queues: QueuesService,
+    private readonly env: EnvService,
   ) {}
 
   async onApplicationBootstrap(): Promise<void> {
@@ -52,24 +54,37 @@ export class IntegrationSyncQueueRegistrar implements OnApplicationBootstrap {
       }
     }
 
+    // The literal "off" disables the global default — only integrations
+    // with an explicit `syncCron` get scheduled. See env.ts.
+    const rawDefault = this.env.values.INTEGRATION_SYNC_DEFAULT_CRON;
+    const defaultCron = rawDefault.toLowerCase() === 'off' ? null : rawDefault;
+
     const integrations = await this.prisma.integration.findMany({
-      where: { status: 'ACTIVE', syncCron: { not: null } },
+      where: { status: 'ACTIVE' },
       select: { id: true, syncCron: true, name: true, driver: true },
     });
 
+    this.logger.log(
+      `Sync scheduler boot: ${integrations.length} ACTIVE integration(s); ` +
+        `default cron = ${defaultCron ?? '(disabled)'}`,
+    );
+
+    let registered = 0;
     for (const i of integrations) {
-      if (!i.syncCron) continue;
+      const pattern = i.syncCron ?? defaultCron;
+      if (!pattern) continue;
       try {
         await queue.add(
           IntegrationSyncOrchestratorJobNames.scheduled,
           { kind: 'scheduled', integrationId: i.id },
           {
             jobId: `scheduled-${i.id}`,
-            repeat: { pattern: i.syncCron },
+            repeat: { pattern },
           },
         );
+        registered += 1;
         this.logger.log(
-          `Registered scheduled sync for "${i.driver}/${i.name}" with cron "${i.syncCron}"`,
+          `Registered scheduled sync for "${i.driver}/${i.name}" with cron "${pattern}"${i.syncCron ? '' : ' (default)'}`,
         );
       } catch (e) {
         this.logger.error(
@@ -79,7 +94,7 @@ export class IntegrationSyncQueueRegistrar implements OnApplicationBootstrap {
       }
     }
 
-    if (integrations.length === 0) {
+    if (registered === 0) {
       this.logger.log('No ACTIVE integrations with cron — sync scheduler idle.');
     }
   }

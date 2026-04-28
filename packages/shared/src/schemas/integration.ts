@@ -161,6 +161,12 @@ export const integrationDtoSchema = z.object({
   status: integrationStatusSchema,
   config: z.record(z.unknown()),
   syncCron: z.string().nullable(),
+  /**
+   * Cron actually in effect for this integration: the row's own
+   * `syncCron` if set, otherwise the global `INTEGRATION_SYNC_DEFAULT_CRON`,
+   * or `null` if the global default is disabled (`off`).
+   */
+  effectiveSyncCron: z.string().nullable(),
   hasSecret: z.boolean(),
   /** Last 4 chars of every secret value, by key — used for masked display. */
   secretMask: z.record(z.string()).nullable(),
