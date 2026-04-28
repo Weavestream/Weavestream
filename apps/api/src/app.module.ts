@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, RequestMethod } from '@nestjs/common';
 import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { LoggerModule } from 'nestjs-pino';
@@ -78,6 +78,7 @@ const httpSerializers = {
       imports: [ConfigModule],
       inject: [EnvService],
       useFactory: (env: EnvService) => ({
+        forRoutes: [{ method: RequestMethod.ALL, path: '*splat' }],
         pinoHttp: {
           level: env.values.LOG_LEVEL,
           serializers: httpSerializers,
