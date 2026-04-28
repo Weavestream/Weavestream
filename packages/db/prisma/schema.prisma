@@ -53,6 +53,7 @@ enum PlatformCapability {
   AUDIT_READ
   SETTINGS_MANAGE
   EXPORT_CREATE
+  ALERT_MANAGE
 }
 
 // Phase 3: every AssetField has exactly one FieldType. The type is immutable
@@ -156,46 +157,46 @@ enum SmtpSecurityMode {
 }
 
 model User {
-  id                        String    @id @default(uuid()) @db.Uuid
-  email                     String    @unique
+  id                        String               @id @default(uuid()) @db.Uuid
+  email                     String               @unique
   name                      String
-  passwordHash              String?   @map("password_hash")
-  role                      UserRole  @default(OPERATOR)
+  passwordHash              String?              @map("password_hash")
+  role                      UserRole             @default(OPERATOR)
   // Two-axis OPERATOR model. `globalAccess` governs company-scoped
   // CRUD on companies the operator doesn't have an explicit membership
   // for; memberships always override it per-company. Required for
   // OPERATOR users (FULL/READONLY/NONE), null for everyone else
   // (enforced in the service layer).
-  globalAccess              GlobalAccess? @map("global_access")
+  globalAccess              GlobalAccess?        @map("global_access")
   // Granular platform-admin capabilities. Empty for non-OPERATORs.
   // SUPER_ADMIN implicitly holds every capability — this column is
   // ignored for them and kept empty.
   platformCapabilities      PlatformCapability[] @default([]) @map("platform_capabilities")
-  isActive                  Boolean   @default(true) @map("is_active")
-  mfaEnabled                Boolean   @default(false) @map("mfa_enabled")
-  mfaSecretEncrypted        String?   @map("mfa_secret_encrypted")
-  mfaEnforcementCompletedAt DateTime? @map("mfa_enforcement_completed_at")
-  deactivatedAt             DateTime? @map("deactivated_at")
+  isActive                  Boolean              @default(true) @map("is_active")
+  mfaEnabled                Boolean              @default(false) @map("mfa_enabled")
+  mfaSecretEncrypted        String?              @map("mfa_secret_encrypted")
+  mfaEnforcementCompletedAt DateTime?            @map("mfa_enforcement_completed_at")
+  deactivatedAt             DateTime?            @map("deactivated_at")
   timezone                  String?
   // Phase 6: per-user defaults for the command palette. Shape:
   // { defaultComprehensive: boolean, defaultGlobal: boolean }.
   // NULL = both toggles off. Validated by userSearchDefaultsSchema.
-  searchDefaults            Json?     @map("search_defaults")
+  searchDefaults            Json?                @map("search_defaults")
   // Phase 9b.1: appearance preferences. Server-persisted so the choice
   // follows a user across devices. The auth layer mirrors both values
   // into the non-HttpOnly `ws_ui` cookie so the root layout can paint
   // the correct theme on the very first byte without calling /auth/me.
-  uiTheme                   UiTheme   @default(SYSTEM) @map("ui_theme")
-  uiAccent                  UiAccent  @default(LIME) @map("ui_accent")
-  createdAt                 DateTime  @default(now()) @map("created_at")
-  updatedAt                 DateTime  @updatedAt @map("updated_at")
-  lastLoginAt               DateTime? @map("last_login_at")
+  uiTheme                   UiTheme              @default(SYSTEM) @map("ui_theme")
+  uiAccent                  UiAccent             @default(LIME) @map("ui_accent")
+  createdAt                 DateTime             @default(now()) @map("created_at")
+  updatedAt                 DateTime             @updatedAt @map("updated_at")
+  lastLoginAt               DateTime?            @map("last_login_at")
 
   memberships       Membership[]
   sessions          Session[]
-  auditLogs         AuditLog[]       @relation("AuditActor")
-  setupTokens       UserSetupToken[] @relation("SetupTokenOwner")
-  issuedSetupTokens UserSetupToken[] @relation("SetupTokenCreator")
+  auditLogs         AuditLog[]        @relation("AuditActor")
+  setupTokens       UserSetupToken[]  @relation("SetupTokenOwner")
+  issuedSetupTokens UserSetupToken[]  @relation("SetupTokenCreator")
   starredCompanies  StarredCompany[]
   starredPasswords  StarredPassword[]
   starredAssets     StarredAsset[]
@@ -251,10 +252,10 @@ model Company {
   logoUploadId String? @unique @map("logo_upload_id") @db.Uuid
   logoUpload   Upload? @relation("CompanyLogo", fields: [logoUploadId], references: [id], onDelete: SetNull)
 
-  memberships     Membership[]
-  starredBy       StarredCompany[]
-  passwords       Password[]
-  passwordFolders PasswordFolder[]
+  memberships         Membership[]
+  starredBy           StarredCompany[]
+  passwords           Password[]
+  passwordFolders     PasswordFolder[]
   // Phase 11: per-tenant org-to-company mappings owned by a global
   // integration (Action1 organisation → Weavestream company).
   // Cascade delete clears mappings if a company is hard-deleted, but
@@ -427,8 +428,8 @@ model AssetLayout {
   createdAt  DateTime  @default(now()) @map("created_at")
   updatedAt  DateTime  @updatedAt @map("updated_at")
 
-  fields AssetField[]
-  assets Asset[]
+  fields       AssetField[]
+  assets       Asset[]
   // Phase 11: integrations target a layout for upserts. Layouts are
   // GLOBAL, so a single layout choice on the parent `Integration`
   // applies across every per-company mapping.
@@ -469,8 +470,8 @@ model AssetField {
   createdAt          DateTime  @default(now()) @map("created_at")
   updatedAt          DateTime  @updatedAt @map("updated_at")
 
-  assetLayout AssetLayout       @relation(fields: [assetLayoutId], references: [id], onDelete: Cascade)
-  values      AssetFieldValue[]
+  assetLayout              AssetLayout               @relation(fields: [assetLayoutId], references: [id], onDelete: Cascade)
+  values                   AssetFieldValue[]
   // Phase 11: integrations may project a remote source field onto this
   // AssetField (one row per (companyMapping, sourceField)).
   integrationFieldMappings IntegrationFieldMapping[]
@@ -514,10 +515,10 @@ model Asset {
 
   // `onDelete: Restrict` — a layout with any asset cannot be hard-deleted,
   // only archived. This matches the builder's "archive" affordance.
-  assetLayout AssetLayout       @relation(fields: [assetLayoutId], references: [id], onDelete: Restrict)
-  fieldValues AssetFieldValue[]
-  passwords   Password[]
-  starredBy   StarredAsset[]
+  assetLayout           AssetLayout            @relation(fields: [assetLayoutId], references: [id], onDelete: Restrict)
+  fieldValues           AssetFieldValue[]
+  passwords             Password[]
+  starredBy             StarredAsset[]
   // Phase 11: 0..1 link to the external record that produced or last
   // updated this asset. The relation is nullable because an asset can
   // be operator-created or have been "released" by a deleted
@@ -599,7 +600,7 @@ model Article {
   /// Tiptap/ProseMirror JSON; null when `editorMode` is `markdown`.
   content          Json?
   /// Raw Markdown; null when `editorMode` is `tiptap`.
-  markdownSource String?   @map("markdown_source")
+  markdownSource   String?   @map("markdown_source")
   contentPlaintext String    @map("content_plaintext")
   excerpt          String?
   visibleToClients Boolean   @default(true) @map("visible_to_clients")
@@ -609,7 +610,7 @@ model Article {
   createdAt        DateTime  @default(now()) @map("created_at")
   updatedAt        DateTime  @updatedAt @map("updated_at")
 
-  folder Folder? @relation(fields: [folderId], references: [id], onDelete: SetNull)
+  folder    Folder?          @relation(fields: [folderId], references: [id], onDelete: SetNull)
   starredBy StarredArticle[]
 
   // Active-slug uniqueness per company enforced by a partial unique index
@@ -720,18 +721,18 @@ model SearchIndex {
 // Stored as free-form strings so an operator can type a custom term;
 // the settings form offers a preset dropdown for the common cases.
 model SystemSetting {
-  id                   String   @id @default("singleton")
-  workspaceName        String   @default("My Company") @map("workspace_name")
-  workspaceSubtitle    String   @default("workspace") @map("workspace_subtitle")
-  tenantTermSingular   String   @default("Company") @map("tenant_term_singular")
-  tenantTermPlural     String   @default("Companies") @map("tenant_term_plural")
-  tenantTermPossessive String?  @map("tenant_term_possessive")
+  id                        String   @id @default("singleton")
+  workspaceName             String   @default("My Company") @map("workspace_name")
+  workspaceSubtitle         String   @default("workspace") @map("workspace_subtitle")
+  tenantTermSingular        String   @default("Company") @map("tenant_term_singular")
+  tenantTermPlural          String   @default("Companies") @map("tenant_term_plural")
+  tenantTermPossessive      String?  @map("tenant_term_possessive")
   // Phase 10: workspace-wide defaults for the client-side password
   // generator. Shape validated by passwordGeneratorDefaultsSchema —
   // NULL falls back to DEFAULT_PASSWORD_GENERATOR_DEFAULTS on read.
-  passwordGeneratorDefaults Json? @map("password_generator_defaults")
-  updatedAt            DateTime @updatedAt @map("updated_at")
-  updatedBy            String?  @map("updated_by") @db.Uuid
+  passwordGeneratorDefaults Json?    @map("password_generator_defaults")
+  updatedAt                 DateTime @updatedAt @map("updated_at")
+  updatedBy                 String?  @map("updated_by") @db.Uuid
 
   @@map("system_settings")
 }
@@ -783,6 +784,14 @@ model MonitoredDomain {
   whoisExpiresAt     DateTime?    @map("whois_expires_at")
   tlsExpiresAt       DateTime?    @map("tls_expires_at")
   latestStatus       DomainStatus @default(UNKNOWN) @map("latest_status")
+  // HTTP availability sub-check (alerts feature). When enabled the worker
+  // performs a HEAD/GET reachability probe and persists the latest HTTP
+  // status code + the timestamp the host has been continuously down
+  // since. `httpDownSince` is NULL whenever the host is reachable and is
+  // the read surface the alerts runner uses to fire `WEBSITE_DOWN`.
+  httpCheckEnabled   Boolean      @default(true) @map("http_check_enabled")
+  latestHttpStatus   Int?         @map("latest_http_status")
+  httpDownSince      DateTime?    @map("http_down_since")
   archivedAt         DateTime?    @map("archived_at")
   createdBy          String?      @map("created_by") @db.Uuid
   createdAt          DateTime     @default(now()) @map("created_at")
@@ -863,10 +872,10 @@ model Password {
   createdAt            DateTime  @default(now()) @map("created_at")
   updatedAt            DateTime  @updatedAt @map("updated_at")
 
-  company  Company           @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  folder   PasswordFolder?   @relation(fields: [folderId], references: [id], onDelete: SetNull)
-  asset    Asset?            @relation(fields: [assetId], references: [id], onDelete: SetNull)
-  versions PasswordVersion[]
+  company   Company           @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  folder    PasswordFolder?   @relation(fields: [folderId], references: [id], onDelete: SetNull)
+  asset     Asset?            @relation(fields: [assetId], references: [id], onDelete: SetNull)
+  versions  PasswordVersion[]
   starredBy StarredPassword[]
 
   @@index([companyId, archivedAt])
@@ -957,40 +966,40 @@ enum IntegrationStatus {
 }
 
 model Integration {
-  id            String            @id @default(uuid()) @db.Uuid
-  driver        String
-  name          String
-  status        IntegrationStatus @default(PAUSED)
+  id               String            @id @default(uuid()) @db.Uuid
+  driver           String
+  name             String
+  status           IntegrationStatus @default(PAUSED)
   /// Free-form JSON validated by the driver's `configSchema`. Never
   /// contains secrets — those live in `IntegrationSecret`.
-  config        Json              @default("{}")
+  config           Json              @default("{}")
   /// BullMQ cron pattern (5-field). NULL disables scheduled syncs;
   /// manual `Run sync` from the admin UI still works.
-  syncCron      String?           @map("sync_cron")
+  syncCron         String?           @map("sync_cron")
   /// Phase 11 — GLOBAL target layout for this integration. Every
   /// per-company mapping syncs into the same layout (AssetLayouts
   /// themselves are global, see DECISIONS.md D-007). Field mappings
   /// and match keys are validated against this layout. NULL while the
   /// operator is still configuring credentials/orgs — runs short-
   /// circuit with a "missing layout" error in that state.
-  assetLayoutId String?           @map("asset_layout_id") @db.Uuid
+  assetLayoutId    String?           @map("asset_layout_id") @db.Uuid
   /// Phase 11 — GLOBAL match-key fields used when claiming unsynced
   /// Weavestream assets. AssetField ids must belong to
   /// `assetLayoutId`. Empty array means "always create on miss".
   /// Order is significant — drives tie-breaker ordering in conflict
   /// logs.
-  matchKeyFieldIds String[]       @map("match_key_field_ids") @db.Uuid
-  lastRunAt     DateTime?         @map("last_run_at")
-  lastRunStatus String?           @map("last_run_status")
-  createdBy     String?           @map("created_by") @db.Uuid
-  createdAt     DateTime          @default(now()) @map("created_at")
-  updatedAt     DateTime          @updatedAt @map("updated_at")
+  matchKeyFieldIds String[]          @map("match_key_field_ids") @db.Uuid
+  lastRunAt        DateTime?         @map("last_run_at")
+  lastRunStatus    String?           @map("last_run_status")
+  createdBy        String?           @map("created_by") @db.Uuid
+  createdAt        DateTime          @default(now()) @map("created_at")
+  updatedAt        DateTime          @updatedAt @map("updated_at")
 
-  secret           IntegrationSecret?
-  assetLayout      AssetLayout?              @relation(fields: [assetLayoutId], references: [id], onDelete: Restrict)
-  companyMappings  IntegrationCompanyMapping[]
-  fieldMappings    IntegrationFieldMapping[]
-  syncRuns         IntegrationSyncRun[]
+  secret          IntegrationSecret?
+  assetLayout     AssetLayout?                @relation(fields: [assetLayoutId], references: [id], onDelete: Restrict)
+  companyMappings IntegrationCompanyMapping[]
+  fieldMappings   IntegrationFieldMapping[]
+  syncRuns        IntegrationSyncRun[]
 
   @@unique([driver, name])
   @@index([driver])
@@ -1003,13 +1012,13 @@ model Integration {
 // service. Decryption requires the active `INTEGRATION_SECRET_KEY`;
 // rotation follows the same `kid`-tagged scheme as the password vault.
 model IntegrationSecret {
-  id             String   @id @default(uuid()) @db.Uuid
-  integrationId  String   @unique @map("integration_id") @db.Uuid
+  id            String   @id @default(uuid()) @db.Uuid
+  integrationId String   @unique @map("integration_id") @db.Uuid
   /// Base64 AES-256-GCM blob with embedded `kid`. Decrypts to a JSON
   /// string the driver parses against its `secretSchema`.
-  ciphertext     String
-  updatedAt      DateTime @updatedAt @map("updated_at")
-  createdAt      DateTime @default(now()) @map("created_at")
+  ciphertext    String
+  updatedAt     DateTime @updatedAt @map("updated_at")
+  createdAt     DateTime @default(now()) @map("created_at")
 
   integration Integration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
 
@@ -1041,10 +1050,10 @@ model IntegrationCompanyMapping {
   createdAt       DateTime @default(now()) @map("created_at")
   updatedAt       DateTime @updatedAt @map("updated_at")
 
-  integration   Integration                  @relation(fields: [integrationId], references: [id], onDelete: Cascade)
-  company       Company                      @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  syncRecords   IntegrationSyncRecord[]
-  runResults    IntegrationSyncRunCompanyResult[]
+  integration Integration                       @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+  company     Company                           @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  syncRecords IntegrationSyncRecord[]
+  runResults  IntegrationSyncRunCompanyResult[]
 
   @@unique([integrationId, externalOrgId])
   @@index([companyId, integrationId])
@@ -1120,7 +1129,7 @@ model IntegrationSyncRun {
   error         String?
   createdAt     DateTime             @default(now()) @map("created_at")
 
-  integration   Integration                       @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+  integration    Integration                       @relation(fields: [integrationId], references: [id], onDelete: Cascade)
   companyResults IntegrationSyncRunCompanyResult[]
   syncRecords    IntegrationSyncRecord[]
 
@@ -1179,7 +1188,7 @@ model IntegrationSyncRecord {
   checksum                    String
   /// Per-field SHA-256 checksums — keyed by `AssetField.id`. Drives
   /// `preserve_manual` conflict detection.
-  lastSyncedFieldChecksums    Json     @map("last_synced_field_checksums") @default("{}")
+  lastSyncedFieldChecksums    Json     @default("{}") @map("last_synced_field_checksums")
   createdAt                   DateTime @default(now()) @map("created_at")
   updatedAt                   DateTime @updatedAt @map("updated_at")
 
@@ -1191,4 +1200,86 @@ model IntegrationSyncRecord {
   @@unique([assetId])
   @@index([companyId, integrationCompanyMappingId])
   @@map("integration_sync_records")
+}
+
+// User-configurable email alerts. Five disjoint shapes (the `type`
+// discriminator) all share the same envelope so the admin list can
+// render them in a single table. Validation per type is enforced by
+// `packages/shared/src/schemas/alert.ts` at the API boundary; the DB
+// keeps every per-type knob nullable / array-default-empty so a row
+// of any type fits without per-type tables.
+//
+// Two execution paths consume these rows:
+//   1. The scheduled `alerts:scan` BullMQ job evaluates the three
+//      time/state-based types (SINGLE_EXPIRATION, EXPIRATION_LIST,
+//      WEBSITE_DOWN). The runner aggregates expiry / down-since
+//      surfaces and enqueues `alerts:send` per match.
+//   2. `AlertEmitterService` runs synchronously inside
+//      `AuditLogService.log()` and matches RECORD_EVENT /
+//      PASSWORD_EVENT configs against the audit entry. Cache-driven
+//      so the request path pays no DB query when no configs match.
+//
+// `AlertTrigger` is the dedup ledger — one row per (config, key)
+// where `key` uniquely identifies the underlying thing that fired
+// (e.g. `single:asset-field:<fieldId>:<assetId>` or
+// `audit:<auditLogId>:<configId>`). Both paths upsert with
+// `skipDuplicates` so retries never double-send.
+enum AlertType {
+  SINGLE_EXPIRATION
+  EXPIRATION_LIST
+  WEBSITE_DOWN
+  RECORD_EVENT
+  PASSWORD_EVENT
+}
+
+model AlertConfig {
+  id              String    @id @default(uuid()) @db.Uuid
+  name            String
+  type            AlertType
+  enabled         Boolean   @default(true)
+  // One or more recipient addresses. Persisted as a Postgres TEXT[] so
+  // a single config can fan out to a team alias plus a person, etc.
+  // Always non-empty (validated at the API boundary).
+  recipientEmails String[]  @default([]) @map("recipient_emails")
+  // Optional company scope. NULL = applies across every tenant.
+  companyId       String?   @map("company_id") @db.Uuid
+
+  // Expiration knobs (SINGLE_EXPIRATION + EXPIRATION_LIST).
+  triggerDays      Int?     @map("trigger_days")
+  stopAfterTrigger Boolean  @default(true) @map("stop_after_trigger")
+  // Subset of: 'asset', 'domain_registrar', 'domain_tls', 'password', 'all'.
+  expirationKinds  String[] @default([]) @map("expiration_kinds")
+
+  // Record/password event knobs.
+  // Subset of: 'asset', 'article', 'password', 'domain', 'all'.
+  recordEntityTypes String[] @default([]) @map("record_entity_types")
+  // Subset of: 'created', 'updated', 'deleted', 'all'.
+  recordActions     String[] @default([]) @map("record_actions")
+
+  createdBy  String?   @map("created_by") @db.Uuid
+  createdAt  DateTime  @default(now()) @map("created_at")
+  updatedAt  DateTime  @updatedAt @map("updated_at")
+  archivedAt DateTime? @map("archived_at")
+
+  triggers AlertTrigger[]
+
+  @@index([type, enabled, archivedAt])
+  @@index([archivedAt])
+  @@map("alert_config")
+}
+
+model AlertTrigger {
+  id            String   @id @default(uuid()) @db.Uuid
+  alertConfigId String   @map("alert_config_id") @db.Uuid
+  // Stable identifier for the underlying thing that fired. Format is
+  // owned by the runner — see `AlertsRunnerService` and
+  // `AlertEmitterService` for the conventions.
+  key           String
+  firedAt       DateTime @default(now()) @map("fired_at")
+
+  alertConfig AlertConfig @relation(fields: [alertConfigId], references: [id], onDelete: Cascade)
+
+  @@unique([alertConfigId, key])
+  @@index([alertConfigId, firedAt])
+  @@map("alert_trigger")
 }

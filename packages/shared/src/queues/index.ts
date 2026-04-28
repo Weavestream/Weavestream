@@ -30,6 +30,10 @@ export const QueueNames = {
   // retry policies, and BullMQ metrics.
   integrationSyncOrchestrator: 'integration-sync-orchestrator',
   integrationSyncMapping: 'integration-sync-mapping',
+  // Alerts feature. `scan` is the cron tick (loads enabled time/state-based
+  // configs and enqueues `send` jobs per match); `send` is also enqueued by
+  // `AlertEmitterService` for real-time RECORD_EVENT / PASSWORD_EVENT.
+  alerts: 'alerts',
 } as const;
 
 export type QueueName = (typeof QueueNames)[keyof typeof QueueNames];
@@ -244,3 +248,55 @@ export const IntegrationSyncMappingJobNames = {
 } as const;
 export type IntegrationSyncMappingJobName =
   (typeof IntegrationSyncMappingJobNames)[keyof typeof IntegrationSyncMappingJobNames];
+
+// ---------------------------------------------------------------------
+// alerts queue (alerts feature)
+// ---------------------------------------------------------------------
+//
+// Two job shapes routed by name:
+//   - `scan`  — repeatable cron tick. The processor loads enabled
+//               SINGLE_EXPIRATION / EXPIRATION_LIST / WEBSITE_DOWN
+//               configs, evaluates them, and fans out one `send`
+//               child per match. RECORD_EVENT / PASSWORD_EVENT are
+//               handled in-process by `AlertEmitterService` and
+//               never see this lane.
+//   - `send`  — actually delivers an email via `EmailService.send`.
+//               Enqueued by both the scan processor and the
+//               real-time emitter. The payload carries the rendered
+//               subject + body so the worker doesn't need access to
+//               domain logic.
+//
+// `triggerKey` is the dedup key used to upsert an `AlertTrigger`
+// row when the send completes — keeps retries from double-sending.
+
+export const alertsScanJobSchema = z.object({
+  kind: z.literal('scan'),
+});
+export type AlertsScanJob = z.infer<typeof alertsScanJobSchema>;
+
+export const alertsSendJobSchema = z.object({
+  kind: z.literal('send'),
+  alertConfigId: z.string().uuid(),
+  triggerKey: z.string().min(1).max(500),
+  // One-or-more recipient addresses. Snapshotted at enqueue time so a
+  // later edit to the AlertConfig recipient list doesn't redirect an
+  // already-queued send.
+  recipientEmails: z.array(z.string().email()).min(1),
+  subject: z.string().min(1).max(255),
+  text: z.string().min(1),
+  html: z.string().optional(),
+});
+export type AlertsSendJob = z.infer<typeof alertsSendJobSchema>;
+
+export const alertsJobSchema = z.discriminatedUnion('kind', [
+  alertsScanJobSchema,
+  alertsSendJobSchema,
+]);
+export type AlertsJob = z.infer<typeof alertsJobSchema>;
+
+export const AlertsJobNames = {
+  scan: 'scan',
+  send: 'send',
+} as const;
+export type AlertsJobName =
+  (typeof AlertsJobNames)[keyof typeof AlertsJobNames];

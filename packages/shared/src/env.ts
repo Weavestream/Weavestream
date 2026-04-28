@@ -138,6 +138,20 @@ export const envSchema = z.object({
   RDAP_BOOTSTRAP_CACHE_HOURS: intFromString(1, 720).default(24),
   WORKER_CONCURRENCY_GLOBAL: intFromString(1, 500).default(10),
 
+  // Alerts feature. Repeatable job that evaluates time/state-based
+  // alert configs (SINGLE_EXPIRATION, EXPIRATION_LIST, WEBSITE_DOWN).
+  // Real-time RECORD_EVENT / PASSWORD_EVENT alerts do NOT depend on
+  // this cron — they fire from `AuditLogService.log()` synchronously.
+  // Set to the literal string "off" to disable scheduled scans (manual
+  // test sends still work).
+  ALERTS_SCAN_CRON: z.string().min(1).default('*/5 * * * *'),
+  // Per-domain HTTP probe timeout used by the `WEBSITE_DOWN` evaluator
+  // and the domain-checks processor. Distinct from the WHOIS/DNS/TLS
+  // timeout because HTTP can be much faster on healthy hosts but slow
+  // on dead ones (kept generous so we don't false-positive on a
+  // bogged-down origin).
+  HTTP_CHECK_TIMEOUT_MS: intFromString(1_000, 60_000).default(8_000),
+
   ALLOWED_UPLOAD_MIME: z
     .string()
     .min(1)

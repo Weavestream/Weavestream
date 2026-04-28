@@ -240,6 +240,7 @@ const CAPABILITY_LABEL: Record<PlatformCapability, string> = {
   AUDIT_READ: 'Read the audit log',
   SETTINGS_MANAGE: 'Edit workspace settings',
   EXPORT_CREATE: 'Create exports',
+  ALERT_MANAGE: 'Manage alert configurations',
 };
 
 export function capabilityLabel(c: PlatformCapability): string {

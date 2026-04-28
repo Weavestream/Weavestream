@@ -66,6 +66,8 @@ export const ActionValues = [
   'settings.manage',
 
   'export.create',
+
+  'alert.manage',
 ] as const;
 
 export type Action = (typeof ActionValues)[number];
@@ -294,6 +296,15 @@ export const PERMISSIONS: Record<Action, PermissionRule> = {
     requireNonExpiredMembership: false,
     note: 'Trigger a company vault-archive PDF export. Sensitive — typically delegated only to trusted operators.',
   },
+
+  'alert.manage': {
+    scope: 'global',
+    requiredCapability: 'ALERT_MANAGE',
+    allowFull: false,
+    allowReadonly: false,
+    requireNonExpiredMembership: false,
+    note: 'Create / edit / archive alert configurations. Configs may scope to a specific company but the surface itself is global.',
+  },
 };
 
 export const ACTION_HUMAN_LABELS: Record<Action, string> = {
@@ -324,6 +335,7 @@ export const ACTION_HUMAN_LABELS: Record<Action, string> = {
   'audit.read': 'View audit log',
   'settings.manage': 'Edit workspace branding and tenant terminology',
   'export.create': 'Trigger a company vault-archive PDF export',
+  'alert.manage': 'Manage alert configurations',
 };
 
 // Re-exported for callers that previously consumed the unused

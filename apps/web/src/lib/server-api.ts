@@ -2,6 +2,7 @@ import { cache } from 'react';
 import { cookies, headers } from 'next/headers';
 import { notFound } from 'next/navigation';
 import type {
+  AlertConfig,
   FieldType,
   GlobalAccess,
   EmailSettings,
@@ -15,6 +16,7 @@ import type {
 import { DEFAULT_PASSWORD_GENERATOR_DEFAULTS } from '@weavestream/shared';
 
 export type {
+  AlertConfig,
   FieldType,
   GlobalAccess,
   EmailSettings,
@@ -475,6 +477,17 @@ export const DEFAULT_EMAIL_SETTINGS: EmailSettings = {
 export const getEmailSettings = cache(async (): Promise<EmailSettings> => {
   const res = await serverApiFetch<EmailSettings>('/settings/email');
   if (!res.ok || !res.data) return DEFAULT_EMAIL_SETTINGS;
+  return res.data;
+});
+
+/**
+ * `/alerts` — list every active alert configuration. Returns `[]` on
+ * any failure so the admin page can still render with a "no alerts
+ * yet" empty state.
+ */
+export const getAlerts = cache(async (): Promise<AlertConfig[]> => {
+  const res = await serverApiFetch<AlertConfig[]>('/alerts');
+  if (!res.ok || !res.data) return [];
   return res.data;
 });
 

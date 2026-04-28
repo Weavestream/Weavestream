@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service.js';
 
 export interface AuditEntry {
@@ -12,6 +12,28 @@ export interface AuditEntry {
   before?: unknown;
   after?: unknown;
 }
+
+/**
+ * Snapshot of a freshly persisted audit row. Passed to any registered
+ * hook so downstream consumers (currently `AlertEmitterService` for
+ * the alerts feature) can react to the event without `audit.service.ts`
+ * needing to know about them — keeps the Audit module dependency-free
+ * and breaks the circular import chain that would otherwise form
+ * (Alerts → Audit → Alerts).
+ */
+export interface PersistedAuditEntry {
+  id: string;
+  actorId: string | null;
+  action: string;
+  entityType: string;
+  entityId: string | null;
+  companyId: string | null;
+  createdAt: Date;
+  before: unknown;
+  after: unknown;
+}
+
+export type AuditHook = (entry: PersistedAuditEntry) => void | Promise<void>;
 
 export interface LogChangeOptions {
   actorId: string | null;
@@ -38,10 +60,24 @@ export interface LogChangeOptions {
 
 @Injectable()
 export class AuditLogService {
+  private readonly logger = new Logger(AuditLogService.name);
+  private readonly hooks: AuditHook[] = [];
+
   constructor(private readonly prisma: PrismaService) {}
 
+  /**
+   * Register a side-effect that fires after every audit row is
+   * persisted. Used by `AlertEmitterService` (alerts feature) to
+   * dispatch real-time RECORD_EVENT / PASSWORD_EVENT alerts. Hook
+   * exceptions are swallowed and logged so a misbehaving consumer
+   * cannot fail the originating user request.
+   */
+  registerHook(hook: AuditHook): void {
+    this.hooks.push(hook);
+  }
+
   async log(entry: AuditEntry): Promise<void> {
-    await this.prisma.auditLog.create({
+    const row = await this.prisma.auditLog.create({
       data: {
         actorId: entry.actorId ?? null,
         action: entry.action,
@@ -53,7 +89,47 @@ export class AuditLogService {
         before: (entry.before ?? null) as never,
         after: (entry.after ?? null) as never,
       },
+      select: {
+        id: true,
+        actorId: true,
+        action: true,
+        entityType: true,
+        entityId: true,
+        companyId: true,
+        createdAt: true,
+        before: true,
+        after: true,
+      },
     });
+
+    if (this.hooks.length === 0) return;
+    const persisted: PersistedAuditEntry = {
+      id: row.id,
+      actorId: row.actorId,
+      action: row.action,
+      entityType: row.entityType,
+      entityId: row.entityId,
+      companyId: row.companyId,
+      createdAt: row.createdAt,
+      before: row.before,
+      after: row.after,
+    };
+    for (const hook of this.hooks) {
+      try {
+        const ret = hook(persisted);
+        if (ret && typeof (ret as Promise<unknown>).then === 'function') {
+          (ret as Promise<unknown>).catch((err) => {
+            this.logger.warn(
+              `audit hook rejected: ${err instanceof Error ? err.message : String(err)}`,
+            );
+          });
+        }
+      } catch (err) {
+        this.logger.warn(
+          `audit hook threw: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
   }
 
   /**

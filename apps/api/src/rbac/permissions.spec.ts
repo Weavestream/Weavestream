@@ -383,6 +383,23 @@ describe('PermissionService.evaluate — semantic checks', () => {
     ).toBe(false);
   });
 
+  it('alert.manage requires ALERT_MANAGE for OPERATOR', () => {
+    expect(
+      PermissionService.evaluate(
+        buildUser('OPERATOR', 'FULL', ['ALERT_MANAGE']),
+        'alert.manage',
+        [],
+      ).allowed,
+    ).toBe(true);
+    expect(
+      PermissionService.evaluate(
+        buildUser('OPERATOR', 'FULL'),
+        'alert.manage',
+        [],
+      ).allowed,
+    ).toBe(false);
+  });
+
   it('layout.manage.global requires LAYOUT_MANAGE for OPERATOR', () => {
     expect(
       PermissionService.evaluate(
