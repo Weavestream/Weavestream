@@ -6,13 +6,9 @@ this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-## [1.4.0] - 2026-04-28
-
 ## [1.4.1] - 2026-04-28
 
 ### Changed
-
-- **Missing Nodemailer dependency** Added the missing nodemailer dependency.
 
 ### Added
 
@@ -23,6 +19,7 @@ this project adheres to [Semantic Versioning](https://semver.org/).
 ### Changed
 
 - **Improved Markdown editor.** Upgraded the Markdown editing experience.
+- **Missing Nodemailer dependency** Added the missing nodemailer dependency.
 
 ## [1.3.0] - 2026-04-27
 
@@ -399,8 +396,8 @@ Initial public release.
   database-per-tenant.
 - English UI only.
 
-[Unreleased]: https://github.com/Weavestream/Weavestream/compare/v1.4.0...HEAD
-[1.4.0]: https://github.com/Weavestream/Weavestream/releases/tag/v1.4.0
+[Unreleased]: https://github.com/Weavestream/Weavestream/compare/v1.4.1...HEAD
+[1.4.1]: https://github.com/Weavestream/Weavestream/releases/tag/v1.4.1
 [1.3.0]: https://github.com/Weavestream/Weavestream/releases/tag/v1.3.0
 [1.2.1]: https://github.com/Weavestream/Weavestream/releases/tag/v1.2.1
 [1.1.1]: https://github.com/Weavestream/Weavestream/releases/tag/v1.1.1
