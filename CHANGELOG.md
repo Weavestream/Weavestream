@@ -8,6 +8,12 @@ this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [1.4.0] - 2026-04-28
 
+## [1.4.1] - 2026-04-28
+
+### Changed
+
+- **Missing Nodemailer dependency** Added the missing nodemailer dependency.
+
 ### Added
 
 - **SMTP email provider.** Added SMTP as an email delivery provider.

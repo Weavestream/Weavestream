@@ -6,6 +6,7 @@
 import { config } from 'dotenv';
 import { existsSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
+import { loadEnv } from '@weavestream/shared/server';
 
 function findEnvFile(start: string): string | null {
   let dir = start;
@@ -22,4 +23,15 @@ function findEnvFile(start: string): string | null {
 const envPath = findEnvFile(process.cwd());
 if (envPath) {
   config({ path: envPath, override: false });
+}
+
+// Mirror the api boot-time check so a missing/invalid env block prints
+// the actionable replacement lines at the very top of the worker log
+// instead of being buried in a NestFactory stack trace.
+try {
+  loadEnv(process.env);
+} catch (err) {
+  // eslint-disable-next-line no-console
+  console.error(err instanceof Error ? err.message : String(err));
+  process.exit(1);
 }

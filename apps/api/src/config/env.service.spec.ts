@@ -48,4 +48,19 @@ describe('env validation', () => {
     env.NODE_ENV = 'staging';
     expect(() => loadEnv(env)).toThrow(/NODE_ENV/);
   });
+
+  it('emits paste-ready replacement lines for missing encryption keys', () => {
+    const env = validEnv();
+    delete env.SMTP_SECRET_KEY;
+    delete env.SMTP_SECRET_KEY_KID;
+    let message = '';
+    try {
+      loadEnv(env);
+    } catch (err) {
+      message = err instanceof Error ? err.message : String(err);
+    }
+    expect(message).toMatch(/Missing required encryption key/);
+    expect(message).toMatch(/SMTP_SECRET_KEY=[A-Za-z0-9+/=]{40,}/);
+    expect(message).toMatch(/SMTP_SECRET_KEY_KID=\d{4}-\d{2}/);
+  });
 });
