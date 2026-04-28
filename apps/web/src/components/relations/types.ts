@@ -37,5 +37,6 @@ export interface MentionSearchItem {
   slug?: string | null;
   layoutIcon?: string | null;
   layoutColor?: string | null;
+  layoutName?: string | null;
   updatedAt: string;
 }

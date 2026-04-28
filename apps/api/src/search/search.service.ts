@@ -21,6 +21,7 @@ export interface MentionResult {
   slug?: string | null;
   layoutIcon?: string | null;
   layoutColor?: string | null;
+  layoutName?: string | null;
   updatedAt: Date;
 }
 
@@ -293,10 +294,16 @@ export class SearchService {
       layoutIds.size
         ? this.prisma.assetLayout.findMany({
             where: { id: { in: [...layoutIds] } },
-            select: { id: true, icon: true, color: true, slug: true },
+            select: { id: true, icon: true, color: true, slug: true, name: true },
           })
         : Promise.resolve(
-            [] as Array<{ id: string; icon: string; color: string; slug: string }>,
+            [] as Array<{
+              id: string;
+              icon: string;
+              color: string;
+              slug: string;
+              name: string;
+            }>,
           ),
       articleIds.size
         ? this.prisma.article.findMany({
@@ -346,6 +353,7 @@ export class SearchService {
         }),
         layoutIcon: layout?.icon ?? null,
         layoutColor: layout?.color ?? null,
+        layoutName: layout?.name ?? null,
         folderId: article?.folderId ?? null,
         slug: article?.slug ?? null,
         thumbnailUrl: upload?.isImage ? null : null,
@@ -477,6 +485,7 @@ export class SearchService {
         slug: h.slug ?? null,
         layoutIcon: h.layoutIcon ?? null,
         layoutColor: h.layoutColor ?? null,
+        layoutName: h.layoutName ?? null,
         updatedAt: new Date(h.updatedAt),
       }));
   }
