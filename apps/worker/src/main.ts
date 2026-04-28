@@ -9,6 +9,7 @@ import { PwnedCheckWorker } from './pwned-check/pwned-check.processor.js';
 import { CompanyPdfExportWorker } from './company-pdf-export/company-pdf-export.processor.js';
 import { IntegrationSyncOrchestratorWorker } from './integration-sync/integration-sync-orchestrator.processor.js';
 import { IntegrationSyncMappingWorker } from './integration-sync/integration-sync-mapping.processor.js';
+import { AlertsWorker } from './alerts/alerts.processor.js';
 
 /**
  * apps/worker bootstrap.
@@ -49,6 +50,9 @@ async function bootstrap(): Promise<void> {
 
   const integrationSyncMapping = app.get(IntegrationSyncMappingWorker);
   await integrationSyncMapping.start();
+
+  const alerts = app.get(AlertsWorker);
+  await alerts.start();
 
   logger.log('Worker online — bullmq consumers started', 'WorkerBootstrap');
 

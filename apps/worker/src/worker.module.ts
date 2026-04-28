@@ -11,11 +11,15 @@ import { StorageModule } from '../../api/src/storage/storage.module.js';
 import { CryptoModule } from '../../api/src/crypto/crypto.module.js';
 import { ExportDataModule } from '../../api/src/exports/export-data.module.js';
 import { IntegrationsCoreModule } from '../../api/src/integrations/integrations-core.module.js';
+import { EmailModule } from '../../api/src/email/email.module.js';
+import { AlertsModule } from '../../api/src/alerts/alerts.module.js';
+import { QueuesProducerModule } from '../../api/src/queues/queues-producer.module.js';
 import { DomainChecksWorker } from './domain-checks/domain-checks.processor.js';
 import { PwnedCheckWorker } from './pwned-check/pwned-check.processor.js';
 import { CompanyPdfExportWorker } from './company-pdf-export/company-pdf-export.processor.js';
 import { IntegrationSyncOrchestratorWorker } from './integration-sync/integration-sync-orchestrator.processor.js';
 import { IntegrationSyncMappingWorker } from './integration-sync/integration-sync-mapping.processor.js';
+import { AlertsWorker } from './alerts/alerts.processor.js';
 
 /**
  * Worker-side composition root. Imports only the service-only shared
@@ -65,6 +69,15 @@ import { IntegrationSyncMappingWorker } from './integration-sync/integration-syn
     DomainsModule,
     ExportDataModule,
     IntegrationsCoreModule,
+    // Alerts feature: the worker hosts the `alerts:scan` (cron tick)
+    // and `alerts:send` consumers. We import `QueuesProducerModule`
+    // (not `QueuesModule`) so the alerts:scan handler can enqueue
+    // child `alerts:send` jobs without re-running the API-only
+    // `DomainChecksQueueRegistrar`. `EmailModule` brings in
+    // `EmailService` for the actual SMTP send.
+    QueuesProducerModule,
+    EmailModule,
+    AlertsModule,
   ],
   providers: [
     DomainChecksWorker,
@@ -72,6 +85,7 @@ import { IntegrationSyncMappingWorker } from './integration-sync/integration-syn
     CompanyPdfExportWorker,
     IntegrationSyncOrchestratorWorker,
     IntegrationSyncMappingWorker,
+    AlertsWorker,
   ],
 })
 export class WorkerModule {}

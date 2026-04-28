@@ -18,6 +18,7 @@ import {
   deriveDomainStatus,
   runDomainCheck,
 } from '../../../api/src/domains/engine/index.js';
+import { runHttpCheck } from '../../../api/src/domains/engine/http-check.js';
 
 const SYSTEM_META: AuditMeta = {
   ip: '127.0.0.1',
@@ -181,6 +182,39 @@ export class DomainChecksWorker implements OnModuleDestroy {
       reason: payload.actorId ? 'manual' : 'scheduled',
       meta: SYSTEM_META,
     });
+
+    // Alerts feature: lightweight HTTP availability probe. Drives the
+    // `WEBSITE_DOWN` alert evaluator. We deliberately keep this OUT of
+    // `runDomainCheck` so the registrar/whois/tls history stays
+    // unchanged when the operator disables HTTP probing — and so an
+    // origin that refuses HTTP doesn't taint the WHOIS/DNS/TLS verdict.
+    if (domain.httpCheckEnabled) {
+      try {
+        const http = await runHttpCheck(domain.hostname, {
+          timeoutMs: this.env.values.HTTP_CHECK_TIMEOUT_MS,
+        });
+        // Update only the http-related columns. `latestHttpStatus` is
+        // null when we never received a response (DNS / TLS / timeout).
+        // `httpDownSince` keeps its existing value when the host is
+        // still down so the WEBSITE_DOWN evaluator can dedup off the
+        // continuous-outage timestamp.
+        await this.prisma.monitoredDomain.update({
+          where: { id: domain.id },
+          data: {
+            latestHttpStatus: http.status,
+            httpDownSince: http.ok
+              ? null
+              : (domain.httpDownSince ?? new Date()),
+          },
+        });
+      } catch (err) {
+        this.logger.warn(
+          `http-check failed for ${domain.hostname}: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      }
+    }
 
     return { status };
   }

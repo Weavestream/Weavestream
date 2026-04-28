@@ -49,6 +49,8 @@ import { IntegrationsModule } from './integrations/integrations.module.js';
 import { UiModule } from './ui/ui.module.js';
 import { CryptoModule } from './crypto/crypto.module.js';
 import { EmailModule } from './email/email.module.js';
+import { AlertsModule } from './alerts/alerts.module.js';
+import { AlertsController } from './alerts/alerts.controller.js';
 import { AuthGuard } from './auth/guards/auth.guard.js';
 import { MfaEnrollmentGuard } from './auth/guards/mfa-enrollment.guard.js';
 import { CsrfGuard } from './auth/guards/csrf.guard.js';
@@ -149,6 +151,7 @@ const httpSerializers = {
     ExportsModule,
     IntegrationsModule,
     EmailModule,
+    AlertsModule,
     UiModule,
     HealthModule,
   ],
@@ -158,6 +161,7 @@ const httpSerializers = {
     DomainsAlertsController,
     PasswordsController,
     PasswordFoldersController,
+    AlertsController,
   ],
   providers: [
     // Guard ordering matters: Nest runs global guards in the order

@@ -91,6 +91,33 @@ export const AUDIT_ACTIONS = {
   // touched their data — even though they cannot manage the integration
   // itself. `integration.asset.*` rows are tenant-scoped and carry the
   // affected `assetId` for traceability of synced/claimed/archived rows.
+  // Alerts feature. `fired` is written by the alerts worker after a
+  // successful send so an admin can audit which configs are actually
+  // emailing — `entityId` carries the AlertConfig id and `after`
+  // carries `{ triggerKey, recipient }` for traceability.
+  alert: {
+    create: 'alert.create',
+    update: 'alert.update',
+    archive: 'alert.archive',
+    test: 'alert.test',
+    fired: 'alert.fired',
+  },
+  // Direct (non-integration) record CRUD. The integration sync path
+  // continues to use `integration.asset.*` so the two streams stay
+  // distinguishable in the audit log.
+  asset: {
+    create: 'asset.create',
+    update: 'asset.update',
+    archive: 'asset.archive',
+    restore: 'asset.restore',
+  },
+  article: {
+    create: 'article.create',
+    update: 'article.update',
+    move: 'article.move',
+    archive: 'article.archive',
+    restore: 'article.restore',
+  },
   integration: {
     create: 'integration.create',
     update: 'integration.update',
@@ -125,5 +152,8 @@ export const ALL_AUDIT_ACTIONS: string[] = [
   ...Object.values(AUDIT_ACTIONS.domain),
   ...Object.values(AUDIT_ACTIONS.password),
   ...Object.values(AUDIT_ACTIONS.export),
+  ...Object.values(AUDIT_ACTIONS.alert),
+  ...Object.values(AUDIT_ACTIONS.asset),
+  ...Object.values(AUDIT_ACTIONS.article),
   ...Object.values(AUDIT_ACTIONS.integration),
 ];

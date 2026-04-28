@@ -30,6 +30,7 @@ export const PlatformCapabilityValues = [
   'AUDIT_READ',
   'SETTINGS_MANAGE',
   'EXPORT_CREATE',
+  'ALERT_MANAGE',
 ] as const;
 export type PlatformCapability = (typeof PlatformCapabilityValues)[number];
 

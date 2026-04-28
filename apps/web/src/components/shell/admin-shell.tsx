@@ -48,6 +48,7 @@ export function AdminShell({
   const showIntegrations = hasCapability(me, 'INTEGRATION_MANAGE');
   const showSettings = hasCapability(me, 'SETTINGS_MANAGE');
   const showExport = hasCapability(me, 'EXPORT_CREATE');
+  const showAlerts = hasCapability(me, 'ALERT_MANAGE');
 
   const primaryItems: SidebarSection['items'] = [
     { id: 'dashboard', label: 'Dashboard', icon: 'home', href: '/admin' },
@@ -107,6 +108,14 @@ export function AdminShell({
       label: 'Integrations',
       icon: 'plug',
       href: '/admin/integrations',
+    });
+  }
+  if (showAlerts) {
+    adminItems.push({
+      id: 'alerts',
+      label: 'Alerts',
+      icon: 'bell',
+      href: '/admin/alerts',
     });
   }
   if (showSettings) {

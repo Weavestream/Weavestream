@@ -15,7 +15,7 @@ export class EmailService {
   ) {}
 
   async send(input: {
-    to: string;
+    to: string | string[];
     subject: string;
     text: string;
     html?: string;
