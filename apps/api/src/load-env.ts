@@ -15,6 +15,7 @@
 import { config } from 'dotenv';
 import { existsSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
+import { loadEnv } from '@weavestream/shared/server';
 
 function findEnvFile(start: string): string | null {
   let dir = start;
@@ -31,4 +32,16 @@ function findEnvFile(start: string): string | null {
 const envPath = findEnvFile(process.cwd());
 if (envPath) {
   config({ path: envPath, override: false });
+}
+
+// Run env validation at the earliest possible moment so an operator
+// sees the actionable error block (with paste-ready replacement lines
+// for missing encryption keys) at the very top of the container log
+// rather than buried inside a Nest DI stack trace from `EnvService`.
+try {
+  loadEnv(process.env);
+} catch (err) {
+  // eslint-disable-next-line no-console
+  console.error(err instanceof Error ? err.message : String(err));
+  process.exit(1);
 }

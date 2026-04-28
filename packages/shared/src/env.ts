@@ -1,7 +1,13 @@
+import { randomBytes } from 'node:crypto';
 import { z } from 'zod';
 
-const base64Key = (minBytes: number) =>
-  z
+// Marker brand on `base64Key` schemas so `loadEnv` can recognise which
+// missing/invalid fields are 32-byte encryption keys and offer freshly
+// generated replacements in its error output.
+const BASE64_KEY_BRAND = '__base64Key' as const;
+
+const base64Key = (minBytes: number) => {
+  const schema = z
     .string()
     .min(1)
     .refine(
@@ -14,6 +20,9 @@ const base64Key = (minBytes: number) =>
       },
       { message: `must be base64-encoded and decode to at least ${minBytes} bytes` },
     );
+  (schema as unknown as { [BASE64_KEY_BRAND]: number })[BASE64_KEY_BRAND] = minBytes;
+  return schema;
+};
 
 const boolish = z
   .union([z.boolean(), z.string()])
@@ -200,15 +209,83 @@ export const envSchema = z.object({
 
 export type Env = z.infer<typeof envSchema>;
 
+// Build a lookup of which schema fields are `base64Key(N)` so the boot
+// error can suggest a freshly generated value for each one. Resolved
+// once at module load — `envSchema.shape` is stable.
+const BASE64_KEY_FIELDS: Record<string, number> = (() => {
+  const map: Record<string, number> = {};
+  for (const [name, def] of Object.entries(envSchema.shape)) {
+    const bytes = (def as unknown as { [BASE64_KEY_BRAND]?: number })[BASE64_KEY_BRAND];
+    if (typeof bytes === 'number') map[name] = bytes;
+  }
+  return map;
+})();
+
 export function loadEnv(raw: NodeJS.ProcessEnv = process.env): Env {
   const result = envSchema.safeParse(raw);
   if (!result.success) {
-    const issues = result.error.issues
-      .map((i) => `  - ${i.path.join('.') || '(root)'}: ${i.message}`)
-      .join('\n');
-    throw new Error(`Invalid env:\n${issues}`);
+    throw new Error(formatEnvError(result.error.issues));
   }
   return result.data;
+}
+
+function formatEnvError(issues: readonly z.ZodIssue[]): string {
+  const missingKeys: string[] = [];
+  const invalidKeys: string[] = [];
+  const otherIssues: string[] = [];
+
+  for (const issue of issues) {
+    const name = issue.path.join('.');
+    if (name in BASE64_KEY_FIELDS) {
+      // `Required` (Zod's `invalid_type` on undefined) → field is absent
+      // entirely. Anything else (length / base64 refinement) → field is
+      // present but malformed.
+      if (issue.code === 'invalid_type') missingKeys.push(name);
+      else invalidKeys.push(`  - ${name}: ${issue.message}`);
+      continue;
+    }
+    otherIssues.push(`  - ${name || '(root)'}: ${issue.message}`);
+  }
+
+  const lines: string[] = ['Invalid env:'];
+  if (otherIssues.length) lines.push(...otherIssues);
+  if (invalidKeys.length) lines.push(...invalidKeys);
+
+  if (missingKeys.length) {
+    lines.push(
+      '',
+      `Missing required encryption key${missingKeys.length === 1 ? '' : 's'}.`,
+      'Append the following line(s) to your .env and restart:',
+      '',
+    );
+    const today = new Date().toISOString().slice(0, 7); // YYYY-MM
+    const knownFields = new Set(Object.keys(envSchema.shape));
+    for (const name of missingKeys) {
+      const bytes = BASE64_KEY_FIELDS[name] ?? 32;
+      lines.push(`  ${name}=${randomBytes(bytes).toString('base64')}`);
+      // When a key field has a `_KID` sibling in the schema and that
+      // sibling is also absent, suggest a paired kid so the operator
+      // copies a complete, working block rather than half a config.
+      const kidName = `${name}_KID`;
+      if (
+        knownFields.has(kidName) &&
+        issues.some((i) => i.path[0] === kidName && i.code === 'invalid_type')
+      ) {
+        lines.push(`  ${kidName}=${today}`);
+      }
+    }
+    lines.push(
+      '',
+      'These values were freshly generated for this restart — losing them',
+      'after data has been written under them is unrecoverable, so save',
+      'them to .env now rather than letting the container regenerate.',
+      '',
+      'You can also re-run scripts/keygen.sh (or scripts/keygen.ps1) and',
+      'append only the lines you need.',
+    );
+  }
+
+  return lines.join('\n');
 }
 
 export function parsePreviousKeys(
