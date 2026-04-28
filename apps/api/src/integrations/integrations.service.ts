@@ -17,6 +17,7 @@ import { PrismaService } from '../prisma/prisma.service.js';
 import { IntegrationSecretEncryptionService } from '../crypto/integration-secret-encryption.service.js';
 import { AuditLogService } from '../audit/audit.service.js';
 import { AUDIT_ACTIONS } from '../audit/audit-actions.js';
+import { EnvService } from '../config/env.service.js';
 import { IntegrationDriverRegistry } from './drivers/integration-driver.registry.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
 import { Prisma } from '@prisma/client';
@@ -44,6 +45,7 @@ export class IntegrationsService {
     private readonly crypto: IntegrationSecretEncryptionService,
     private readonly audit: AuditLogService,
     private readonly drivers: IntegrationDriverRegistry,
+    private readonly env: EnvService,
   ) {}
 
   // -------------------------------------------------------------------
@@ -645,6 +647,9 @@ export class IntegrationsService {
         secretMask = { _: '••••' };
       }
     }
+    const rawDefault = this.env.values.INTEGRATION_SYNC_DEFAULT_CRON;
+    const defaultCron =
+      rawDefault.toLowerCase() === 'off' ? null : rawDefault;
     return {
       id: row.id,
       driver: row.driver,
@@ -652,6 +657,7 @@ export class IntegrationsService {
       status: row.status,
       config: (row.config ?? {}) as Record<string, unknown>,
       syncCron: row.syncCron,
+      effectiveSyncCron: row.syncCron ?? defaultCron,
       hasSecret: Boolean(row.secret),
       secretMask,
       assetLayoutId: row.assetLayoutId,

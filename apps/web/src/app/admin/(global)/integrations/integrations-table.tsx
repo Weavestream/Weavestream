@@ -114,8 +114,15 @@ export function IntegrationsTable({
         width: 180,
         mono: true,
         render: (r) =>
-          r.syncCron ? (
-            <span style={{ color: 'var(--text-2)' }}>{r.syncCron}</span>
+          r.effectiveSyncCron ? (
+            <span style={{ color: 'var(--text-2)' }}>
+              {r.effectiveSyncCron}
+              {!r.syncCron && (
+                <span style={{ color: 'var(--dim)', marginLeft: 6 }}>
+                  (default)
+                </span>
+              )}
+            </span>
           ) : (
             <span style={{ color: 'var(--dim)' }}>manual only</span>
           ),
@@ -203,9 +210,10 @@ export function IntegrationsTable({
               'never'
             )}
           </MobileCardRow>
-          {r.syncCron && (
+          {r.effectiveSyncCron && (
             <MobileCardRow label="Schedule" mono>
-              {r.syncCron}
+              {r.effectiveSyncCron}
+              {!r.syncCron && ' (default)'}
             </MobileCardRow>
           )}
         </div>
