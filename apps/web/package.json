@@ -59,7 +59,7 @@
     "@types/turndown": "^5.0.6",
     "autoprefixer": "^10.4.20",
     "dotenv": "17.4.2",
-    "eslint": "^9.14.0",
+    "eslint": "^10.2.1",
     "eslint-config-next": "^16.2.4",
     "postcss": "^8.4.49",
     "tailwindcss": "^3.4.14",
