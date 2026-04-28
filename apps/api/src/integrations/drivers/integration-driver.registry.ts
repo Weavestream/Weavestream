@@ -2,6 +2,7 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import type { DriverDescriptor } from '@weavestream/shared';
 import type { IntegrationDriver } from './integration-driver.js';
 import { Action1Driver } from './action1/action1.driver.js';
+import { UniFiSiteManagerDriver } from './unifi/unifi.driver.js';
 
 /**
  * Phase 11 — global registry of every available IntegrationDriver.
@@ -20,7 +21,10 @@ export class IntegrationDriverRegistry {
   private readonly byKey: Map<string, IntegrationDriver>;
 
   constructor() {
-    const drivers: IntegrationDriver[] = [new Action1Driver()];
+    const drivers: IntegrationDriver[] = [
+      new Action1Driver(),
+      new UniFiSiteManagerDriver(),
+    ];
     this.byKey = new Map(drivers.map((d) => [d.key, d]));
   }
 

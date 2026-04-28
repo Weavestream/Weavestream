@@ -1,0 +1,132 @@
+import type { SourceFieldDto } from '@weavestream/shared';
+import { DriverRateLimitError } from './integration-driver.js';
+
+export interface FetchWithRetryOpts {
+  method: 'GET' | 'POST';
+  headers?: Record<string, string>;
+  body?: string;
+  timeoutMs: number;
+  maxRetries: number;
+  backoffMs: number;
+  correlationId: string;
+  serviceName: string;
+}
+
+/**
+ * Fetch with exponential-backoff retry on 429 + 5xx, honouring the
+ * `Retry-After` header on rate-limit responses.
+ */
+export async function fetchWithRetry(
+  url: string,
+  opts: FetchWithRetryOpts,
+): Promise<Response> {
+  let attempt = 0;
+  let lastErr: unknown = null;
+  while (attempt <= opts.maxRetries) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), opts.timeoutMs);
+    try {
+      const res = await fetch(url, {
+        method: opts.method,
+        headers: opts.headers,
+        body: opts.body,
+        signal: controller.signal,
+      });
+      if (res.status === 429) {
+        const retryAfterRaw = res.headers.get('Retry-After');
+        const retryAfterMs = parseRetryAfter(
+          retryAfterRaw,
+          opts.backoffMs * 2 ** attempt,
+        );
+        if (attempt === opts.maxRetries) {
+          throw new DriverRateLimitError(
+            `${opts.serviceName} rate limited after ${opts.maxRetries + 1} attempts`,
+            retryAfterMs,
+          );
+        }
+        await sleep(retryAfterMs);
+        attempt += 1;
+        continue;
+      }
+      if (res.status >= 500 && res.status < 600) {
+        if (attempt === opts.maxRetries) return res;
+        await sleep(opts.backoffMs * 2 ** attempt);
+        attempt += 1;
+        continue;
+      }
+      return res;
+    } catch (e) {
+      lastErr = e;
+      if (e instanceof DriverRateLimitError) throw e;
+      if (attempt === opts.maxRetries) break;
+      await sleep(opts.backoffMs * 2 ** attempt);
+      attempt += 1;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  throw lastErr instanceof Error
+    ? lastErr
+    : new Error(`${opts.serviceName} request failed: ${String(lastErr)}`);
+}
+
+export function parseRetryAfter(raw: string | null, fallbackMs: number): number {
+  if (!raw) return fallbackMs;
+  const seconds = Number.parseInt(raw, 10);
+  if (Number.isFinite(seconds)) return seconds * 1_000;
+  const date = new Date(raw).getTime();
+  if (Number.isFinite(date)) return Math.max(0, date - Date.now());
+  return fallbackMs;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+export function inferHintType(
+  values: unknown[],
+  normalizeDateTimeString?: (value: string) => string | null,
+): SourceFieldDto['hintType'] {
+  const first = values.find((v) => v !== null && v !== undefined);
+  if (first === undefined) return 'TEXT';
+  if (typeof first === 'boolean') return 'BOOLEAN';
+  if (typeof first === 'number') return 'NUMBER';
+  if (typeof first === 'string') {
+    const s = first;
+    if (normalizeDateTimeString?.(s) || isIsoDateTime(s)) return 'DATETIME';
+    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return 'DATE';
+    if (/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(s)) return 'EMAIL';
+    if (/^https?:\/\/\S+$/i.test(s)) return 'URL';
+    if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(s)) return 'IP_ADDRESS';
+    return 'TEXT';
+  }
+  return 'TEXT';
+}
+
+export function humanizeKey(key: string): string {
+  const spaced = key
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/[_-]/g, ' ');
+  const titled = spaced.replace(/\b\w/g, (c) => c.toUpperCase());
+  return titled
+    .replace(/\bIp\b/g, 'IP')
+    .replace(/\bIpv6\b/g, 'IPv6')
+    .replace(/\bOs\b/g, 'OS')
+    .replace(/\bCpu\b/g, 'CPU')
+    .replace(/\bRam\b/g, 'RAM')
+    .replace(/\bMac\b/g, 'MAC')
+    .replace(/\bDns\b/g, 'DNS')
+    .replace(/\bUuid\b/g, 'UUID')
+    .replace(/\bId\b/g, 'ID')
+    .replace(/\bUrl\b/g, 'URL');
+}
+
+export function sortByLabel(fields: SourceFieldDto[]): SourceFieldDto[] {
+  return [...fields].sort((a, b) => a.label.localeCompare(b.label));
+}
+
+function isIsoDateTime(value: string): boolean {
+  return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})?$/.test(
+    value.trim(),
+  );
+}

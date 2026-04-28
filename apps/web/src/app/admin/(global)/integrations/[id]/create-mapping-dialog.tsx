@@ -201,13 +201,13 @@ export function CreateMappingDialog({
         {error && <Tag tone="danger">{error}</Tag>}
 
         {hasGlobalLayout ? (
-          <Tag tone="info">
+          <Tag tone="info" style={blockTagStyle}>
             This integration’s asset layout, match keys, and field
             mappings are configured globally — they’ll apply to this
             mapping automatically.
           </Tag>
         ) : (
-          <Tag tone="warn">
+          <Tag tone="warn" style={blockTagStyle}>
             No global field mappings yet. After creating this mapping,
             open the “Field mappings” tab to pick a layout and project
             upstream fields before the next sync.
@@ -227,4 +227,12 @@ const inputStyle: React.CSSProperties = {
   color: 'var(--text)',
   fontSize: 13,
   fontFamily: 'var(--font-mono)',
+};
+
+const blockTagStyle: React.CSSProperties = {
+  display: 'block',
+  whiteSpace: 'normal',
+  height: 'auto',
+  padding: '8px 10px',
+  lineHeight: 1.45,
 };

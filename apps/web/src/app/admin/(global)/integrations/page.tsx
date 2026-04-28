@@ -4,6 +4,7 @@ import { getMe, serverApiFetch } from '../../../../lib/server-api';
 import { hasCapability } from '../../../../lib/roles';
 import { PageBody, PageHeader } from '../../../../components/shell/page-header';
 import { Panel } from '../../../../components/ui';
+import { AvailableIntegrationsGallery } from './available-integrations-gallery';
 import { IntegrationsTable } from './integrations-table';
 import { CreateIntegrationButton } from './create-integration-button';
 
@@ -45,12 +46,13 @@ export default async function IntegrationsPage() {
       <PageBody>
         <Panel
           title={`${integrations.length} ${
-            integrations.length === 1 ? 'integration' : 'integrations'
+            integrations.length === 1 ? 'active integration' : 'active integrations'
           }`}
           noPad
         >
           <IntegrationsTable rows={integrations} drivers={drivers} />
         </Panel>
+        <AvailableIntegrationsGallery drivers={drivers} />
       </PageBody>
     </>
   );

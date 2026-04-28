@@ -7,13 +7,18 @@ import type {
 } from '@weavestream/shared';
 import {
   DriverAuthError,
-  DriverRateLimitError,
   type DriverFetchPage,
   type DriverRecord,
   type FetchRecordsContext,
   type IntegrationContext,
   type IntegrationDriver,
 } from '../integration-driver.js';
+import {
+  fetchWithRetry,
+  humanizeKey,
+  inferHintType,
+  sortByLabel,
+} from '../driver-utils.js';
 
 /**
  * Phase 11 — Action1 RMM driver.
@@ -295,7 +300,7 @@ export class Action1Driver implements IntegrationDriver {
         out.push({
           key,
           label: humanizeKey(key),
-          hintType: inferHintType(sampleValues),
+          hintType: inferHintType(sampleValues, normalizeAction1DateTimeString),
           alwaysPresent,
         });
       }
@@ -413,6 +418,7 @@ export class Action1Driver implements IntegrationDriver {
       maxRetries: ctx.http.maxRetries,
       backoffMs: ctx.http.backoffMs,
       correlationId: ctx.correlationId,
+      serviceName: 'Action1',
     });
 
     if (res.status === 401 || res.status === 403) {
@@ -447,6 +453,7 @@ export class Action1Driver implements IntegrationDriver {
       maxRetries: opts.ctx.http.maxRetries,
       backoffMs: opts.ctx.http.backoffMs,
       correlationId: opts.ctx.correlationId,
+      serviceName: 'Action1',
     });
 
     if (res.status === 401 || res.status === 403) {
@@ -463,86 +470,6 @@ export class Action1Driver implements IntegrationDriver {
 
 function parseConfig(raw: Record<string, unknown>): { baseUrl: string } {
   return action1ConfigSchema.parse(raw ?? {});
-}
-
-interface FetchOpts {
-  method: 'GET' | 'POST';
-  headers?: Record<string, string>;
-  body?: string;
-  timeoutMs: number;
-  maxRetries: number;
-  backoffMs: number;
-  correlationId: string;
-}
-
-/**
- * Fetch with exponential-backoff retry on 429 + 5xx, honouring the
- * `Retry-After` header on rate-limit responses. Throws
- * `DriverRateLimitError` if the budget is exhausted while still rate
- * limited so the worker can pause the mapping cleanly.
- */
-async function fetchWithRetry(
-  url: string,
-  opts: FetchOpts,
-): Promise<Response> {
-  let attempt = 0;
-  let lastErr: unknown = null;
-  while (attempt <= opts.maxRetries) {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), opts.timeoutMs);
-    try {
-      const res = await fetch(url, {
-        method: opts.method,
-        headers: opts.headers,
-        body: opts.body,
-        signal: controller.signal,
-      });
-      if (res.status === 429) {
-        const retryAfterRaw = res.headers.get('Retry-After');
-        const retryAfterMs = parseRetryAfter(retryAfterRaw, opts.backoffMs * 2 ** attempt);
-        if (attempt === opts.maxRetries) {
-          throw new DriverRateLimitError(
-            `Action1 rate limited after ${opts.maxRetries + 1} attempts`,
-            retryAfterMs,
-          );
-        }
-        await sleep(retryAfterMs);
-        attempt += 1;
-        continue;
-      }
-      if (res.status >= 500 && res.status < 600) {
-        if (attempt === opts.maxRetries) return res;
-        await sleep(opts.backoffMs * 2 ** attempt);
-        attempt += 1;
-        continue;
-      }
-      return res;
-    } catch (e) {
-      lastErr = e;
-      if (e instanceof DriverRateLimitError) throw e;
-      if (attempt === opts.maxRetries) break;
-      await sleep(opts.backoffMs * 2 ** attempt);
-      attempt += 1;
-    } finally {
-      clearTimeout(timer);
-    }
-  }
-  throw lastErr instanceof Error
-    ? lastErr
-    : new Error(`Action1 request failed: ${String(lastErr)}`);
-}
-
-function parseRetryAfter(raw: string | null, fallbackMs: number): number {
-  if (!raw) return fallbackMs;
-  const seconds = Number.parseInt(raw, 10);
-  if (Number.isFinite(seconds)) return seconds * 1_000;
-  const date = new Date(raw).getTime();
-  if (Number.isFinite(date)) return Math.max(0, date - Date.now());
-  return fallbackMs;
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((r) => setTimeout(r, ms));
 }
 
 /**
@@ -633,50 +560,3 @@ const ACTION1_KNOWN_FIELDS: SourceFieldDto[] = [
   { key: 'group', label: 'Endpoint group', hintType: 'TEXT', alwaysPresent: false },
 ];
 
-/**
- * Heuristically infers the most-likely Weavestream field type for an
- * Action1 column we don't have in the curated catalogue. We never
- * promise the inference is perfect — `hintType` only drives the
- * "suggested target" UI, the operator still picks the final mapping.
- */
-function inferHintType(values: unknown[]): SourceFieldDto['hintType'] {
-  const first = values.find((v) => v !== null && v !== undefined);
-  if (first === undefined) return 'TEXT';
-  if (typeof first === 'boolean') return 'BOOLEAN';
-  if (typeof first === 'number') return 'NUMBER';
-  if (typeof first === 'string') {
-    const s = first;
-    if (normalizeAction1DateTimeString(s)) return 'DATETIME';
-    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return 'DATE';
-    if (/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(s)) return 'EMAIL';
-    if (/^https?:\/\/\S+$/i.test(s)) return 'URL';
-    if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(s)) return 'IP_ADDRESS';
-    return 'TEXT';
-  }
-  return 'TEXT';
-}
-
-/**
- * `snake_case_key` → `Snake Case Key`, with a couple of well-known
- * acronyms upper-cased so the dropdown reads naturally.
- */
-function humanizeKey(key: string): string {
-  const titled = key
-    .replace(/_/g, ' ')
-    .replace(/\b\w/g, (c) => c.toUpperCase());
-  return titled
-    .replace(/\bIp\b/g, 'IP')
-    .replace(/\bIpv6\b/g, 'IPv6')
-    .replace(/\bOs\b/g, 'OS')
-    .replace(/\bCpu\b/g, 'CPU')
-    .replace(/\bRam\b/g, 'RAM')
-    .replace(/\bMac\b/g, 'MAC')
-    .replace(/\bDns\b/g, 'DNS')
-    .replace(/\bUuid\b/g, 'UUID')
-    .replace(/\bId\b/g, 'ID')
-    .replace(/\bUrl\b/g, 'URL');
-}
-
-function sortByLabel(fields: SourceFieldDto[]): SourceFieldDto[] {
-  return [...fields].sort((a, b) => a.label.localeCompare(b.label));
-}
