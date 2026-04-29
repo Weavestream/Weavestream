@@ -1,0 +1,24 @@
+name: WeaveStream CodeQL config
+
+# Use the security-extended pack so we keep the alerts default setup
+# would have given us (CWE-89, CWE-79, CWE-22, etc.) and only narrow
+# the specific false-positive below.
+queries:
+  - uses: security-extended
+
+# Per-query path filtering for confirmed false positives.
+#
+# `js/insufficient-password-hash` — CWE-916 — flags any flow from a
+# password-shaped source into SHA-1/MD5/etc. The HIBP Pwned Passwords
+# *range* API is a public k-anonymity protocol that mandates uppercase
+# hex SHA-1 of the plaintext: only the first 5 hex chars (20 bits) are
+# sent off-host, and the digest is never persisted (stored credentials
+# use AES-GCM envelope encryption — see PasswordsService.encrypt). The
+# protocol cannot be satisfied with bcrypt/argon2/scrypt.
+#
+# Reference: https://haveibeenpwned.com/API/v3#PwnedPasswords
+query-filters:
+  - exclude:
+      id: js/insufficient-password-hash
+      paths:
+        - apps/api/src/passwords/hibp-range-hash.ts
