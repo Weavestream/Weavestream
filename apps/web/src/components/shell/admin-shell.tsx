@@ -49,6 +49,7 @@ export function AdminShell({
   const showSettings = hasCapability(me, 'SETTINGS_MANAGE');
   const showExport = hasCapability(me, 'EXPORT_CREATE');
   const showAlerts = hasCapability(me, 'ALERT_MANAGE');
+  const showSecurity = hasCapability(me, 'SECURITY_READ');
 
   const primaryItems: SidebarSection['items'] = [
     { id: 'dashboard', label: 'Dashboard', icon: 'home', href: '/admin' },
@@ -85,6 +86,14 @@ export function AdminShell({
       label: 'Audit log',
       icon: 'shield',
       href: '/admin/audit',
+    });
+  }
+  if (showSecurity) {
+    primaryItems.push({
+      id: 'security',
+      label: 'Security',
+      icon: 'lock',
+      href: '/admin/security',
     });
   }
 

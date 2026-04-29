@@ -68,6 +68,8 @@ export const ActionValues = [
   'export.create',
 
   'alert.manage',
+
+  'security.read',
 ] as const;
 
 export type Action = (typeof ActionValues)[number];
@@ -305,6 +307,15 @@ export const PERMISSIONS: Record<Action, PermissionRule> = {
     requireNonExpiredMembership: false,
     note: 'Create / edit / archive alert configurations. Configs may scope to a specific company but the surface itself is global.',
   },
+
+  'security.read': {
+    scope: 'global',
+    requiredCapability: 'SECURITY_READ',
+    allowFull: false,
+    allowReadonly: false,
+    requireNonExpiredMembership: false,
+    note: 'Read the admin Security Center: login failures, active lockouts, throttle blocks, and cross-user active sessions. Write actions on those rows still require their own capabilities (e.g. revoking another user\'s session needs USER_MANAGE).',
+  },
 };
 
 export const ACTION_HUMAN_LABELS: Record<Action, string> = {
@@ -336,6 +347,7 @@ export const ACTION_HUMAN_LABELS: Record<Action, string> = {
   'settings.manage': 'Edit workspace branding and tenant terminology',
   'export.create': 'Trigger a company vault-archive PDF export',
   'alert.manage': 'Manage alert configurations',
+  'security.read': 'View the Security Center (logins, lockouts, sessions)',
 };
 
 // Re-exported for callers that previously consumed the unused

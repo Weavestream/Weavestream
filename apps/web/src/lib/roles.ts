@@ -241,6 +241,7 @@ const CAPABILITY_LABEL: Record<PlatformCapability, string> = {
   SETTINGS_MANAGE: 'Edit workspace settings',
   EXPORT_CREATE: 'Create exports',
   ALERT_MANAGE: 'Manage alert configurations',
+  SECURITY_READ: 'View Security Center (logins, lockouts, sessions)',
 };
 
 export function capabilityLabel(c: PlatformCapability): string {

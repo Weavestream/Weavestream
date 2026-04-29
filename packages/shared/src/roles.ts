@@ -31,6 +31,11 @@ export const PlatformCapabilityValues = [
   'SETTINGS_MANAGE',
   'EXPORT_CREATE',
   'ALERT_MANAGE',
+  // Phase 12 — read-only Security Center (login failures, active
+  // lockouts, throttle blocks, cross-user session list). Write
+  // actions on those views (revoking arbitrary sessions, etc.) still
+  // require `USER_MANAGE`; this capability gates only the visibility.
+  'SECURITY_READ',
 ] as const;
 export type PlatformCapability = (typeof PlatformCapabilityValues)[number];
 
@@ -47,4 +52,5 @@ export const MANAGER_PRESET: readonly PlatformCapability[] = [
   'USER_MANAGE',
   'MEMBERSHIP_MANAGE',
   'AUDIT_READ',
+  'SECURITY_READ',
 ] as const;
