@@ -10,6 +10,7 @@ import {
   listDomains,
   listLayouts,
   listPasswords,
+  listSubnets,
 } from '../../../lib/server-api';
 import { canAccessAdminShell } from '../../../lib/roles';
 import { buildTerm } from '../../../lib/term';
@@ -103,20 +104,14 @@ export default async function PortalLayout({
     );
   }
 
-  const [settings, layouts, counts, domainList, passwordList] =
+  const [settings, layouts, counts, domainList, passwordList, subnetList] =
     await Promise.all([
       getSettings(),
       listLayouts(),
       getAssetCountsByLayout(membership.company.id),
-      // The API already filters out non-`visibleToClients` rows for
-      // client users, so every item returned here is portal-eligible.
-      // We only need to know "are there any?" to decide whether to
-      // show the sidebar entry.
       listDomains(membership.company.id, { limit: 1 }),
-      // Same logic for passwords — portal users only see client-
-      // visible rows, so the count directly reflects what the sidebar
-      // entry would land on.
       listPasswords(membership.company.id),
+      listSubnets(membership.company.id),
     ]);
   const term = buildTerm(settings);
   const passwordCount = passwordList.filter((p) => !p.archivedAt).length;
@@ -132,6 +127,8 @@ export default async function PortalLayout({
       portalHasDomains={domainList.items.length > 0}
       portalHasPasswords={passwordCount > 0}
       passwordCount={passwordCount}
+      subnetCount={subnetList.length}
+      portalHasSubnets={subnetList.length > 0}
     >
       {children}
     </CompanyShell>

@@ -44,9 +44,23 @@ async function bootstrap() {
   // forgets to validate.
   app.set('query parser', 'simple');
 
+  // The API only emits `application/json`; it never serves HTML, scripts,
+  // styles, or framed content. A deny-all CSP is the correct posture here
+  // and provides defense-in-depth if a response is ever mis-rendered as
+  // HTML by a buggy client. The browser-facing CSP (with nonces and
+  // strict-dynamic) is set on HTML responses by the Next.js proxy layer
+  // in `apps/web/src/proxy.ts`.
   app.use(
     helmet({
-      contentSecurityPolicy: false, // API returns JSON only; web layer sets CSP
+      contentSecurityPolicy: {
+        useDefaults: false,
+        directives: {
+          'default-src': ["'none'"],
+          'frame-ancestors': ["'none'"],
+          'base-uri': ["'none'"],
+          'form-action': ["'none'"],
+        },
+      },
       crossOriginResourcePolicy: { policy: 'same-site' },
     }),
   );

@@ -8,6 +8,7 @@ import {
   getCompanyAssetCounts,
   getCompanyDetail,
   getCompanyDomainsBasic,
+  getCompanySubnetsBasic,
   getMe,
   getSettings,
   throwUnlessFound,
@@ -54,23 +55,16 @@ export default async function CompanyScopedLayout({
 }) {
   const { id } = await params;
 
-  const [me, settings, companyRes, layouts, counts, domainList, passwordList] =
+  const [me, settings, companyRes, layouts, counts, domainList, passwordList, subnetList] =
     await Promise.all([
       getMe(),
       getSettings(),
-      // Each of these is a cache()-wrapped read. The layout and the
-      // nested page both await the same helper, so the second caller
-      // gets the in-flight promise back and we issue exactly one
-      // upstream request per URL per render.
       getCompanyDetail(id),
       getActiveLayouts(),
       getCompanyAssetCounts(id),
-      // Just the first page — we only need a count of rows that
-      // warrant attention, not the full list. `limit: 200` is plenty
-      // for the alerting badge (any customer with more than 200
-      // expiring domains has bigger problems than a sidebar count).
       getCompanyDomainsBasic(id),
       getCompanyActivePasswords(id),
+      getCompanySubnetsBasic(id),
     ]);
   if (!me) notFound();
   // `throwUnlessFound` maps 404s to `notFound()`, 429s to a dedicated
@@ -102,6 +96,12 @@ export default async function CompanyScopedLayout({
     return false;
   }).length;
 
+  const subnetCount = subnetList.length;
+  const subnetConflictBadge = subnetList.reduce(
+    (sum, s) => sum + (s.conflictCount ?? 0),
+    0,
+  );
+
   return (
     <CompanyShell
       me={me}
@@ -113,6 +113,8 @@ export default async function CompanyScopedLayout({
       domainBadge={domainBadge}
       passwordCount={passwordCount}
       passwordStaleBadge={passwordStaleBadge}
+      subnetCount={subnetCount}
+      subnetConflictBadge={subnetConflictBadge}
     >
       {children}
     </CompanyShell>

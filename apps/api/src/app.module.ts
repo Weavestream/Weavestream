@@ -46,6 +46,8 @@ import {
 import { ExpirationsModule } from './expirations/expirations.module.js';
 import { ExportsModule } from './exports/exports.module.js';
 import { IntegrationsModule } from './integrations/integrations.module.js';
+import { IpamModule } from './ipam/ipam.module.js';
+import { IpamController } from './ipam/ipam.controller.js';
 import { UiModule } from './ui/ui.module.js';
 import { CryptoModule } from './crypto/crypto.module.js';
 import { EmailModule } from './email/email.module.js';
@@ -151,6 +153,7 @@ const httpSerializers = {
     ExpirationsModule,
     ExportsModule,
     IntegrationsModule,
+    IpamModule,
     EmailModule,
     AlertsModule,
     UiModule,
@@ -163,6 +166,7 @@ const httpSerializers = {
     PasswordsController,
     PasswordFoldersController,
     AlertsController,
+    IpamController,
   ],
   providers: [
     // Guard ordering matters: Nest runs global guards in the order

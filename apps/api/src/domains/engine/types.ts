@@ -36,6 +36,16 @@ export interface TlsCertificateInfo {
   subjectAltNames: string[];
   chainLength: number;
   protocol: string | null;
+  /**
+   * Result of Node's built-in trust validation against the system CA
+   * store + hostname. The probe itself runs with `rejectUnauthorized:
+   * false` so we can inspect expired / self-signed / mismatched certs;
+   * this field surfaces the verdict separately so the caller can still
+   * alert on it. `null` if the runtime didn't report either way.
+   */
+  authorized: boolean;
+  /** OpenSSL error code when `authorized === false`, else `null`. */
+  authorizationError: string | null;
 }
 
 /** TLS probe. Returns `null` on connection failure (caller logs FAIL). */
@@ -109,6 +119,9 @@ export interface TlsSubResult {
   subjectAltNames: string[];
   chainLength: number;
   protocol: string | null;
+  /** See `TlsCertificateInfo.authorized`. */
+  authorized: boolean;
+  authorizationError: string | null;
 }
 
 /**

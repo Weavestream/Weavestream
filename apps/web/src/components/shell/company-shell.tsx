@@ -65,6 +65,9 @@ export function CompanyShell({
   passwordCount,
   passwordStaleBadge,
   portalHasPasswords = true,
+  subnetCount,
+  subnetConflictBadge,
+  portalHasSubnets = true,
 }: {
   me: Me;
   company: Pick<CompanyListItem, 'id' | 'name' | 'slug'>;
@@ -107,6 +110,12 @@ export function CompanyShell({
    * tenant has no client-visible credentials. Defaults to true.
    */
   portalHasPasswords?: boolean;
+  /** Total active subnets. Dim count on the IPAM sidebar entry. */
+  subnetCount?: number;
+  /** Number of subnets with at least one IP conflict. Warning badge. */
+  subnetConflictBadge?: number;
+  /** Hide IPAM entry on the portal when the tenant has no subnets. */
+  portalHasSubnets?: boolean;
 }) {
   const isAdmin = mode === 'admin';
   const base = isAdmin
@@ -132,6 +141,7 @@ export function CompanyShell({
 
   const showDomains = isAdmin || portalHasDomains;
   const showPasswords = isAdmin || portalHasPasswords;
+  const showIpam = isAdmin || (portalHasSubnets ?? false);
   // Portal nav is intentionally a subset: no Photos, no All-assets
   // catch-all. Each content surface shows up only when the tenant
   // actually has something in it (layouts are filtered by count above,
@@ -169,6 +179,21 @@ export function CompanyShell({
                 badge:
                   domainBadge && domainBadge > 0
                     ? String(domainBadge)
+                    : undefined,
+              },
+            ]
+          : []),
+        ...(showIpam
+          ? [
+              {
+                id: 'ipam',
+                label: 'IPAM',
+                icon: 'globe' as const,
+                href: `${base}/ipam`,
+                count: subnetCount,
+                badge:
+                  subnetConflictBadge && subnetConflictBadge > 0
+                    ? String(subnetConflictBadge)
                     : undefined,
               },
             ]

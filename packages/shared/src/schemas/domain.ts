@@ -133,6 +133,14 @@ export const domainCheckDetailsSchema = z.object({
       subjectAltNames: z.array(z.string()).optional(),
       chainLength: z.number().optional(),
       protocol: z.string().nullable().optional(),
+      /**
+       * Result of Node's built-in trust validation (system CA store +
+       * hostname). The probe runs with `rejectUnauthorized: false` so
+       * it can inspect untrusted certs; this field surfaces the
+       * verdict so the UI/alerting can still flag them.
+       */
+      authorized: z.boolean().nullable().optional(),
+      authorizationError: z.string().nullable().optional(),
     })
     .optional(),
 });
