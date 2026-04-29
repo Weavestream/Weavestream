@@ -10,8 +10,11 @@ need the source tree, Node.js, or pnpm — just Docker.
   Desktop). Verify with `docker --version` and `docker compose version`.
 - **2 GB RAM** free for the full stack (Postgres + Redis + MinIO + 3
   Weavestream services).
-- **A free TCP port** for the web UI (defaults to `3000`) and for
-  MinIO's S3 API + console (defaults to `9100` and `9101`).
+- **A free TCP port** for the web UI (defaults to `3000`). The MinIO S3
+  API binds to `127.0.0.1:9100` by default so a same-host reverse proxy
+  can forward to it without exposing the bucket endpoint externally.
+  Postgres, Redis, and the MinIO admin console stay on the internal
+  docker network.
 
 ## 1. Download the two files you need
 
@@ -99,8 +102,17 @@ docker compose ps
 docker compose logs -f api   # tail API logs
 ```
 
-The web UI is available at <http://localhost:3000>. The API's
-`/health` endpoint reports the running version.
+The web UI is available at <http://localhost:3000>. The API exposes
+two health endpoints:
+
+- `GET /health` — public, liveness only. Returns `{ "status": "ok" }`.
+  Safe to scrape from external monitoring; deliberately does not reveal
+  the running version or backend topology.
+- `GET /health/ready` — authenticated. Probes Postgres + Redis and
+  reports the running `WEAVESTREAM_VERSION`. Returns 503 when a
+  dependency is down. Reach it from a logged-in admin session.
+- `GET /health/queues` — authenticated, requires the `audit.read`
+  capability (or `SUPER_ADMIN`). Returns BullMQ counts per lane.
 
 ## 6. Create the first admin
 
@@ -138,10 +150,38 @@ upgrade steps before bumping across minor versions.
 ## Reverse proxy & TLS
 
 Weavestream does not terminate TLS. Front it with Nginx, Caddy, or
-Traefik and forward to `http://<compose-host>:3000`. Update `APP_URL`,
-`API_URL`, `MINIO_PUBLIC_URL`, and `NEXT_PUBLIC_MINIO_ORIGINS` in `.env`
-to the public HTTPS origins before restarting so cookies, CSP, and
-presigned URLs point at the right hostname.
+Traefik and forward two upstreams:
+
+| Public path                      | Upstream                              |
+| -------------------------------- | ------------------------------------- |
+| `https://app.example.com/*`      | `http://<compose-host>:3000`          |
+| `https://files.example.com/*`    | `http://127.0.0.1:9100` (MinIO S3 API)|
+
+Both `WEB_HOST_PORT` (3000) and `MINIO_HOST_PORT` (9100) are published
+by `compose.yml`. The MinIO port is bound to loopback by default; if
+your reverse proxy runs on a different host, either move it onto the
+deploy host, run it inside the same docker network, or override
+`MINIO_HOST_BIND` (see [`docs/CONFIGURATION.md`](CONFIGURATION.md#host-ports)).
+
+Update the following in `.env` to match your public origins before
+restarting so cookies, CSP, and presigned URLs point at the right
+hostname:
+
+- `APP_URL` — public web origin (`https://app.example.com`).
+- `API_URL` — public API origin (`https://app.example.com/api`).
+- `MINIO_PUBLIC_URL` — public bucket origin (`https://files.example.com`).
+- `NEXT_PUBLIC_MINIO_ORIGINS` — comma-separated allowlist mirrored into
+  the web app's CSP. Usually equal to `MINIO_PUBLIC_URL`.
+
+Make sure your reverse proxy:
+
+- Terminates TLS and only forwards to the upstreams above.
+- Sets `X-Forwarded-Proto: https` and overwrites (does not append to)
+  `X-Forwarded-For` so the API audit trail records the real client IP
+  rather than a value the client supplied.
+- Does NOT forward the deploy-host's MinIO console port. The console
+  ships with root credentials and should remain reachable only via SSH
+  tunnel or a temporary `compose.console.yml` overlay.
 
 ## Backups
 

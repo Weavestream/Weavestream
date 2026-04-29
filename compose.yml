@@ -37,8 +37,11 @@ services:
     image: postgres:16-alpine
     restart: unless-stopped
     networks: [weavestream-net]
-    ports:
-      - "${POSTGRES_HOST_PORT:-5434}:5432"
+    # Postgres stays on the internal compose network only. Contributors
+    # running `pnpm dev` on the host get a 5434 host mapping via
+    # compose.build.yml. Operators who need ad-hoc shell access should
+    # use `docker compose exec postgres psql ...` rather than re-publishing
+    # the port to the host.
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
@@ -55,8 +58,9 @@ services:
     image: redis:7-alpine
     restart: unless-stopped
     networks: [weavestream-net]
-    ports:
-      - "${REDIS_HOST_PORT:-6381}:6379"
+    # Redis is internal-only by default. Same rationale as postgres:
+    # contributors get a 6381 host mapping in compose.build.yml; operators
+    # use `docker compose exec redis redis-cli ...` for inspection.
     command: ["redis-server", "--requirepass", "${REDIS_PASSWORD}", "--appendonly", "yes"]
     volumes:
       - ${DATA_DIR:-./data}/redis:/data
@@ -77,11 +81,17 @@ services:
       MINIO_BROWSER_REDIRECT_URL: ${MINIO_PUBLIC_URL}
     volumes:
       - ${DATA_DIR:-./data}/minio:/data
-    # 9000 = S3 API, 9001 = console. Published so browsers fetching
-    # presigned URLs can reach the same host the API signed against.
+    # 9000 = S3 API. Bound to 127.0.0.1 by default so a same-host reverse
+    # proxy (Nginx / Caddy / Traefik) can forward MINIO_PUBLIC_URL to it
+    # without exposing the bucket endpoint to the wider network. Set
+    # MINIO_HOST_BIND=0.0.0.0 if you really need direct external access
+    # (not recommended outside of local evaluation).
+    #
+    # The console (9001) is intentionally NOT published. Use
+    # `docker compose -f compose.yml -f compose.console.yml up -d`, an
+    # SSH tunnel, or `docker compose exec` if you need it.
     ports:
-      - "${MINIO_HOST_PORT:-9100}:9000"
-      - "${MINIO_CONSOLE_HOST_PORT:-9101}:9001"
+      - "${MINIO_HOST_BIND:-127.0.0.1}:${MINIO_HOST_PORT:-9100}:9000"
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:9000/minio/health/live"]
       interval: 15s

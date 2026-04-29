@@ -6,6 +6,35 @@ this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Security
+
+- **Tighter default network surface.** `compose.yml` no longer publishes
+  Postgres (5434) or Redis (6381) to the host, and MinIO's S3 port now
+  binds to `127.0.0.1:9100` so a same-host reverse proxy can forward
+  `MINIO_PUBLIC_URL` to it without exposing the bucket endpoint to the
+  wider network. The MinIO admin console (9101) is no longer published
+  by default.
+  - Operators on existing installs who relied on host-side `psql` /
+    `redis-cli` against compose: switch to
+    `docker compose exec postgres psql ...` (or `redis-cli`), or layer
+    [`compose.build.yml`](compose.build.yml) which still publishes the
+    contributor dev ports.
+  - Operators who genuinely need the MinIO console can layer the new
+    [`compose.console.yml`](compose.console.yml) overlay
+    (`docker compose -f compose.yml -f compose.console.yml up -d`) or
+    SSH-tunnel `127.0.0.1:9101`.
+  - Set `MINIO_HOST_BIND=0.0.0.0` in `.env` to restore the previous
+    "publish on every interface" behavior (rarely the right answer for
+    internet-facing installs).
+- **Public health endpoint reduced to liveness only.** `GET /health`
+  now returns `{ "status": "ok" }` with no version or backend
+  diagnostics — those moved to authenticated `GET /health/ready` and
+  `GET /health/queues` endpoints (require `audit.read` capability for
+  the queue probe). External monitoring agents that scraped the old
+  detailed payload should hit the new private endpoints with a session
+  cookie or be replaced with `docker compose exec api curl ...` from
+  inside the network.
+
 ### [1.5.1] - 2026-04-29
 
 - **IPAM resilience against malformed IP values.** The subnet occupants query no longer fails when an asset's `IP_ADDRESS` field somehow contains a non-canonical value (e.g. a multi-NIC RMM agent that flattens addresses to `10.0.0.35, 10.0.0.50`). Candidate values are now strict-regex-filtered in SQL and re-validated in JS, so a single bad row can never abort the entire IPAM read.
