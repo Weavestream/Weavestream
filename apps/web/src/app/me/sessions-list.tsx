@@ -31,6 +31,7 @@ export function SessionsList({ sessions }: { sessions: Session[] }) {
     {
       id: 'session',
       header: 'Session',
+      sortValue: (s) => summariseUserAgent(s.userAgent).toLowerCase(),
       render: (s) => (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
           <span style={{ color: 'var(--text)', fontWeight: 500 }}>
@@ -49,6 +50,7 @@ export function SessionsList({ sessions }: { sessions: Session[] }) {
       header: 'Started',
       mono: true,
       width: 150,
+      sortValue: (s) => new Date(s.createdAt),
       render: (s) => (
         <span style={{ color: 'var(--dim)' }}>{relative(s.createdAt)}</span>
       ),
@@ -57,6 +59,7 @@ export function SessionsList({ sessions }: { sessions: Session[] }) {
       id: 'status',
       header: 'Status',
       width: 140,
+      sortValue: (s) => (s.current ? 1 : 0),
       render: (s) =>
         s.current ? (
           <Tag tone="ok" dot>

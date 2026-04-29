@@ -19,9 +19,13 @@ import {
   Btn,
   CompanyPicker,
   type CompanyPickerValue,
+  DataTable,
+  type DataColumn,
   Dialog,
   Field,
+  Icon,
   Input,
+  MobileCardRow,
   Select,
   Tag,
   useToast,
@@ -127,104 +131,87 @@ export function AlertsAdminClient({
           No alerts configured.
         </div>
       ) : (
-        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-          <thead>
-            <tr
-              style={{
-                textAlign: 'left',
-                fontSize: 12,
-                color: 'var(--muted)',
-                borderBottom: '1px solid var(--line)',
-              }}
-            >
-              <th style={th}>Name</th>
-              <th style={th}>Type</th>
-              <th style={th}>Recipient</th>
-              <th style={th}>Status</th>
-              <th style={{ ...th, textAlign: 'right' }}>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {alerts.map((a) => (
-              <tr
-                key={a.id}
-                style={{ borderBottom: '1px solid var(--line)' }}
-              >
-                <td style={td}>
-                  <div style={{ fontWeight: 500 }}>{a.name}</div>
-                  <div style={{ fontSize: 12, color: 'var(--muted)' }}>
-                    {summariseConfig(a)}
-                  </div>
-                </td>
-                <td style={td}>
-                  <Tag tone="default">{ALERT_TYPE_LABELS[a.type]}</Tag>
-                </td>
-                <td style={td}>
-                  {a.recipientEmails.length <= 1 ? (
-                    a.recipientEmails[0] ?? '—'
-                  ) : (
-                    <span title={a.recipientEmails.join(', ')}>
-                      {a.recipientEmails[0]}{' '}
-                      <span style={{ color: 'var(--muted)' }}>
-                        +{a.recipientEmails.length - 1}
-                      </span>
+        <DataTable
+          columns={alertColumns({ busyId, toggleEnabled, sendTest, archive, setEditing })}
+          rows={alerts}
+          renderMobileCard={(a) => (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <div style={{ fontWeight: 500, color: 'var(--text)' }}>{a.name}</div>
+              <div style={{ fontSize: 12, color: 'var(--muted)' }}>
+                {summariseConfig(a)}
+              </div>
+              <MobileCardRow label="Type">
+                <Tag tone="default">{ALERT_TYPE_LABELS[a.type]}</Tag>
+              </MobileCardRow>
+              <MobileCardRow label="Recipient">
+                {a.recipientEmails.length <= 1 ? (
+                  a.recipientEmails[0] ?? '—'
+                ) : (
+                  <span title={a.recipientEmails.join(', ')}>
+                    {a.recipientEmails[0]}{' '}
+                    <span style={{ color: 'var(--muted)' }}>
+                      +{a.recipientEmails.length - 1}
                     </span>
-                  )}
-                </td>
-                <td style={td}>
-                  <Tag tone={a.enabled ? 'ok' : 'default'}>
-                    {a.enabled ? 'Enabled' : 'Disabled'}
-                  </Tag>
-                </td>
-                <td style={{ ...td, textAlign: 'right' }}>
-                  <div
-                    style={{
-                      display: 'inline-flex',
-                      gap: 6,
-                      flexWrap: 'wrap',
-                      justifyContent: 'flex-end',
-                    }}
-                  >
-                    <Btn
-                      kind="ghost"
-                      disabled={busyId === a.id}
-                      onClick={() => toggleEnabled(a)}
-                    >
-                      {a.enabled ? 'Disable' : 'Enable'}
-                    </Btn>
-                    <Btn
-                      kind="ghost"
-                      disabled={busyId === a.id}
-                      onClick={() => sendTest(a)}
-                    >
-                      Test
-                    </Btn>
-                    <Btn
-                      kind="ghost"
-                      onClick={() =>
-                        setEditing({
-                          mode: 'edit',
-                          id: a.id,
-                          draft: toDraft(a),
-                          error: null,
-                        })
-                      }
-                    >
-                      Edit
-                    </Btn>
-                    <Btn
-                      kind="ghost"
-                      disabled={busyId === a.id}
-                      onClick={() => archive(a)}
-                    >
-                      Archive
-                    </Btn>
-                  </div>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+                  </span>
+                )}
+              </MobileCardRow>
+              <MobileCardRow label="Status">
+                <Tag tone={a.enabled ? 'ok' : 'default'}>
+                  {a.enabled ? 'Enabled' : 'Disabled'}
+                </Tag>
+              </MobileCardRow>
+              <div
+                style={{
+                  display: 'flex',
+                  flexWrap: 'wrap',
+                  gap: 6,
+                  borderTop: '1px solid var(--line)',
+                  paddingTop: 8,
+                }}
+              >
+                <Btn
+                  kind="outline"
+                  size="sm"
+                  disabled={busyId === a.id}
+                  onClick={() => toggleEnabled(a)}
+                >
+                  {a.enabled ? 'Disable' : 'Enable'}
+                </Btn>
+                <Btn
+                  kind="outline"
+                  size="sm"
+                  disabled={busyId === a.id}
+                  onClick={() => sendTest(a)}
+                >
+                  Test
+                </Btn>
+                <Btn
+                  kind="outline"
+                  size="sm"
+                  onClick={() =>
+                    setEditing({
+                      mode: 'edit',
+                      id: a.id,
+                      draft: toDraft(a),
+                      error: null,
+                    })
+                  }
+                >
+                  Edit
+                </Btn>
+                <Btn
+                  kind="outline"
+                  size="sm"
+                  disabled={busyId === a.id}
+                  onClick={() => archive(a)}
+                  style={{ marginLeft: 'auto' }}
+                >
+                  Archive
+                </Btn>
+              </div>
+            </div>
+          )}
+        />
       )}
 
       {editing && (
@@ -567,16 +554,127 @@ function Checkbox({
   );
 }
 
-const th = {
-  padding: '10px 16px',
-  fontWeight: 500,
-} as const;
-
-const td = {
-  padding: '10px 16px',
-  fontSize: 13,
-  verticalAlign: 'top' as const,
-};
+function alertColumns({
+  busyId,
+  toggleEnabled,
+  sendTest,
+  archive,
+  setEditing,
+}: {
+  busyId: string | null;
+  toggleEnabled: (a: AlertConfig) => void;
+  sendTest: (a: AlertConfig) => void;
+  archive: (a: AlertConfig) => void;
+  setEditing: (s: EditState) => void;
+}): DataColumn<AlertConfig>[] {
+  return [
+    {
+      id: 'name',
+      header: 'Name',
+      width: 320,
+      sortValue: (a) => a.name.toLowerCase(),
+      render: (a) => (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
+          <span style={{ fontWeight: 500, color: 'var(--text)' }}>{a.name}</span>
+          <span style={{ fontSize: 12, color: 'var(--muted)' }}>
+            {summariseConfig(a)}
+          </span>
+        </div>
+      ),
+    },
+    {
+      id: 'type',
+      header: 'Type',
+      width: 180,
+      sortValue: (a) => ALERT_TYPE_LABELS[a.type],
+      render: (a) => <Tag tone="default">{ALERT_TYPE_LABELS[a.type]}</Tag>,
+    },
+    {
+      id: 'recipient',
+      header: 'Recipient',
+      width: 220,
+      sortValue: (a) => a.recipientEmails[0]?.toLowerCase() ?? '',
+      render: (a) =>
+        a.recipientEmails.length <= 1 ? (
+          a.recipientEmails[0] ?? '—'
+        ) : (
+          <span title={a.recipientEmails.join(', ')}>
+            {a.recipientEmails[0]}{' '}
+            <span style={{ color: 'var(--muted)' }}>
+              +{a.recipientEmails.length - 1}
+            </span>
+          </span>
+        ),
+    },
+    {
+      id: 'status',
+      header: 'Status',
+      width: 110,
+      sortValue: (a) => (a.enabled ? 1 : 0),
+      render: (a) => (
+        <Tag tone={a.enabled ? 'ok' : 'default'}>
+          {a.enabled ? 'Enabled' : 'Disabled'}
+        </Tag>
+      ),
+    },
+    {
+      id: 'actions',
+      header: 'Actions',
+      width: 320,
+      align: 'right',
+      sortable: false,
+      render: (a) => (
+        <div
+          style={{
+            display: 'inline-flex',
+            gap: 6,
+            flexWrap: 'wrap',
+            justifyContent: 'flex-end',
+          }}
+        >
+          <Btn
+            kind="ghost"
+            icon={a.enabled ? Icon.x : Icon.check}
+            disabled={busyId === a.id}
+            onClick={() => toggleEnabled(a)}
+          >
+            {a.enabled ? 'Disable' : 'Enable'}
+          </Btn>
+          <Btn
+            kind="ghost"
+            icon={Icon.bell}
+            disabled={busyId === a.id}
+            onClick={() => sendTest(a)}
+          >
+            Test
+          </Btn>
+          <Btn
+            kind="ghost"
+            icon={Icon.edit}
+            onClick={() =>
+              setEditing({
+                mode: 'edit',
+                id: a.id,
+                draft: toDraft(a),
+                error: null,
+              })
+            }
+          >
+            Edit
+          </Btn>
+          <Btn
+            kind="ghost"
+            icon={Icon.archive}
+            disabled={busyId === a.id}
+            onClick={() => archive(a)}
+          >
+            Archive
+          </Btn>
+        </div>
+      ),
+    },
+  ];
+}
 
 function emptyDraft(): DraftState {
   return {

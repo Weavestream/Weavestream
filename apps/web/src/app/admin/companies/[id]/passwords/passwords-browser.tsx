@@ -9,7 +9,14 @@ import type {
 } from '../../../../../lib/server-api';
 import type { PasswordGeneratorDefaults } from '@weavestream/shared';
 import { apiFetch } from '../../../../../lib/api';
-import { Btn, Icon, MobileCardRow, Tag } from '../../../../../components/ui';
+import {
+  Btn,
+  DataTable,
+  type DataColumn,
+  Icon,
+  MobileCardRow,
+  Tag,
+} from '../../../../../components/ui';
 import { useIsMobile } from '../../../../../lib/hooks/use-is-mobile';
 import { PasswordStrengthMeter } from '../../../../../components/passwords/password-strength-meter';
 import { CreatePasswordDialog } from '../../../../../components/passwords/create-password-dialog';
@@ -144,23 +151,55 @@ export function PasswordsBrowser({
         flexWrap: 'wrap',
       }}
     >
-      <input
-        placeholder="Search name, username, or URL…"
-        value={query}
-        onChange={(e) => setQuery(e.target.value)}
+      <div
         style={{
           flex: 1,
-          minWidth: 160,
-          padding: '6px 10px',
+          minWidth: 180,
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          height: 28,
+          padding: '0 10px',
+          background: 'var(--panel-2)',
           border: '1px solid var(--line)',
-          borderRadius: 6,
-          background: 'var(--panel)',
-          color: 'var(--fg)',
+          borderRadius: 5,
         }}
-      />
-      <Btn size="sm" onClick={toggleArchived}>
+      >
+        <Icon.search size={12} style={{ color: 'var(--muted)' }} />
+        <input
+          placeholder="Search name, username, or URL…"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          style={{
+            flex: 1,
+            background: 'transparent',
+            border: 'none',
+            outline: 'none',
+            fontSize: 12.5,
+            color: 'var(--text)',
+          }}
+        />
+      </div>
+      <button
+        type="button"
+        onClick={toggleArchived}
+        style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 6,
+          height: 28,
+          padding: '0 10px',
+          background: includeArchived ? 'var(--panel-2)' : 'transparent',
+          border: '1px solid var(--line-2)',
+          borderRadius: 5,
+          fontSize: 12,
+          color: 'var(--text-2)',
+          cursor: 'pointer',
+        }}
+      >
+        <Icon.archive size={12} />
         {includeArchived ? 'Hide archived' : 'Show archived'}
-      </Btn>
+      </button>
       {canManage && (
         <Btn
           kind="primary"
@@ -359,148 +398,14 @@ export function PasswordsBrowser({
         >
           No credentials match.
         </div>
-      ) : isMobile ? (
-        <ul
-          style={{
-            listStyle: 'none',
-            margin: 0,
-            padding: 10,
-            display: 'flex',
-            flexDirection: 'column',
-            gap: 8,
-          }}
-        >
-          {filtered.map((p) => (
-            <PasswordMobileCard
-              key={p.id}
-              row={p}
-              companyId={companyId}
-            />
-          ))}
-        </ul>
       ) : (
-        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-          <thead>
-            <tr
-              style={{
-                textAlign: 'left',
-                fontSize: 11,
-                color: 'var(--muted)',
-              }}
-            >
-              <th style={th}>Name</th>
-              <th style={th}>Username</th>
-              <th style={th}>Strength</th>
-              <th style={th}>OTP</th>
-              <th style={th}>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {filtered.map((p) => (
-              <tr
-                key={p.id}
-                style={{
-                  borderTop: '1px solid var(--line)',
-                  opacity: p.archivedAt ? 0.55 : 1,
-                }}
-              >
-                <td style={td}>
-                  <Link
-                    href={`/admin/companies/${companyId}/passwords/${p.id}`}
-                    style={{
-                      color: 'inherit',
-                      textDecoration: 'none',
-                      fontWeight: 500,
-                    }}
-                  >
-                    {p.color && (
-                      <span
-                        style={{
-                          display: 'inline-block',
-                          width: 8,
-                          height: 8,
-                          borderRadius: 2,
-                          background: p.color,
-                          marginRight: 6,
-                        }}
-                      />
-                    )}
-                    {p.name}
-                  </Link>
-                  <div
-                    style={{
-                      display: 'flex',
-                      gap: 4,
-                      flexWrap: 'wrap',
-                      marginTop: 4,
-                    }}
-                  >
-                    {(p.pwnedCount ?? 0) > 0 && (
-                      <Tag tone="danger" style={{ fontSize: 10 }}>
-                        pwned ×{p.pwnedCount}
-                      </Tag>
-                    )}
-                    {p.archivedAt && (
-                      <Tag tone="default" style={{ fontSize: 10 }}>
-                        archived
-                      </Tag>
-                    )}
-                  </div>
-                  {p.url && (
-                    <div
-                      style={{
-                        fontSize: 11,
-                        color: 'var(--muted)',
-                        marginTop: 2,
-                      }}
-                    >
-                      {p.url}
-                    </div>
-                  )}
-                </td>
-                <td
-                  style={{
-                    ...td,
-                    fontFamily: 'ui-monospace, monospace',
-                    fontSize: 12,
-                  }}
-                >
-                  {p.username ?? '—'}
-                </td>
-                <td style={{ ...td, width: 130 }}>
-                  <PasswordStrengthMeter
-                    score={p.passwordStrength}
-                    width={110}
-                  />
-                </td>
-                <td style={{ ...td, width: 170 }}>
-                  {p.hasTotp && !p.archivedAt ? (
-                    <TotpCode
-                      companyId={companyId}
-                      passwordId={p.id}
-                      compact
-                    />
-                  ) : (
-                    <span style={{ color: 'var(--muted)', fontSize: 12 }}>
-                      —
-                    </span>
-                  )}
-                </td>
-                <td style={{ ...td, width: 150 }}>
-                  {!p.archivedAt && (
-                    <PasswordRowActions
-                      companyId={companyId}
-                      passwordId={p.id}
-                      username={p.username}
-                      url={p.url}
-                      requiresReason={p.requireReasonToView}
-                    />
-                  )}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <DataTable
+          columns={passwordColumns({ companyId })}
+          rows={filtered}
+          renderMobileCard={(p) => (
+            <PasswordMobileBody row={p} companyId={companyId} />
+          )}
+        />
       )}
     </div>
   );
@@ -583,7 +488,123 @@ export function PasswordsBrowser({
   );
 }
 
-function PasswordMobileCard({
+function passwordColumns({
+  companyId,
+}: {
+  companyId: string;
+}): DataColumn<PasswordSummary>[] {
+  return [
+    {
+      id: 'name',
+      header: 'Name',
+      width: 240,
+      sortValue: (p) => p.name.toLowerCase(),
+      render: (p) => (
+        <div style={{ opacity: p.archivedAt ? 0.55 : 1 }}>
+          <Link
+            href={`/admin/companies/${companyId}/passwords/${p.id}`}
+            style={{
+              color: 'inherit',
+              textDecoration: 'none',
+              fontWeight: 500,
+            }}
+          >
+            {p.color && (
+              <span
+                style={{
+                  display: 'inline-block',
+                  width: 8,
+                  height: 8,
+                  borderRadius: 2,
+                  background: p.color,
+                  marginRight: 6,
+                }}
+              />
+            )}
+            {p.name}
+          </Link>
+          <div
+            style={{
+              display: 'flex',
+              gap: 4,
+              flexWrap: 'wrap',
+              marginTop: 4,
+            }}
+          >
+            {(p.pwnedCount ?? 0) > 0 && (
+              <Tag tone="danger" style={{ fontSize: 10 }}>
+                pwned ×{p.pwnedCount}
+              </Tag>
+            )}
+            {p.archivedAt && (
+              <Tag tone="default" style={{ fontSize: 10 }}>
+                archived
+              </Tag>
+            )}
+          </div>
+          {p.url && (
+            <div
+              style={{
+                fontSize: 11,
+                color: 'var(--muted)',
+                marginTop: 2,
+              }}
+            >
+              {p.url}
+            </div>
+          )}
+        </div>
+      ),
+    },
+    {
+      id: 'username',
+      header: 'Username',
+      width: 220,
+      mono: true,
+      sortValue: (p) => p.username?.toLowerCase() ?? null,
+      render: (p) => p.username ?? '—',
+    },
+    {
+      id: 'strength',
+      header: 'Strength',
+      width: 130,
+      sortValue: (p) => p.passwordStrength ?? -1,
+      render: (p) => (
+        <PasswordStrengthMeter score={p.passwordStrength} width={110} />
+      ),
+    },
+    {
+      id: 'otp',
+      header: 'OTP',
+      width: 170,
+      sortValue: (p) => (p.hasTotp ? 1 : 0),
+      render: (p) =>
+        p.hasTotp && !p.archivedAt ? (
+          <TotpCode companyId={companyId} passwordId={p.id} compact />
+        ) : (
+          <span style={{ color: 'var(--muted)', fontSize: 12 }}>—</span>
+        ),
+    },
+    {
+      id: 'actions',
+      header: 'Actions',
+      width: 150,
+      sortable: false,
+      render: (p) =>
+        !p.archivedAt ? (
+          <PasswordRowActions
+            companyId={companyId}
+            passwordId={p.id}
+            username={p.username}
+            url={p.url}
+            requiresReason={p.requireReasonToView}
+          />
+        ) : null,
+    },
+  ];
+}
+
+function PasswordMobileBody({
   row,
   companyId,
 }: {
@@ -592,12 +613,8 @@ function PasswordMobileCard({
 }) {
   const detailHref = `/admin/companies/${companyId}/passwords/${row.id}`;
   return (
-    <li
+    <div
       style={{
-        border: '1px solid var(--line)',
-        borderRadius: 10,
-        padding: 12,
-        background: 'var(--panel)',
         opacity: row.archivedAt ? 0.7 : 1,
         display: 'flex',
         flexDirection: 'column',
@@ -709,7 +726,7 @@ function PasswordMobileCard({
           />
         </div>
       )}
-    </li>
+    </div>
   );
 }
 
@@ -811,5 +828,3 @@ function FolderRow({
   );
 }
 
-const th = { padding: '10px 14px', fontWeight: 500 } as const;
-const td = { padding: '10px 14px', verticalAlign: 'top' } as const;

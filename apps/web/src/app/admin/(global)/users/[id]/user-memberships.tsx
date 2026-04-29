@@ -174,6 +174,7 @@ export function UserMembershipsList({
     {
       id: 'company',
       header: term.one,
+      sortValue: (r) => r.company.name.toLowerCase(),
       render: (r) => (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
           <span style={{ color: 'var(--text)', fontWeight: 500 }}>
@@ -195,6 +196,7 @@ export function UserMembershipsList({
       id: 'role',
       header: 'Role',
       width: 180,
+      sortValue: (r) => r.role.toLowerCase(),
       render: (r) => <Tag tone="accent">{membershipRoleLabel(r.role)}</Tag>,
     },
     {
@@ -202,6 +204,7 @@ export function UserMembershipsList({
       header: 'Expires',
       width: 160,
       mono: true,
+      sortValue: (r) => (r.expiresAt ? new Date(r.expiresAt) : null),
       render: (r) => {
         if (!r.expiresAt) return <span style={{ color: 'var(--dim)' }}>never</span>;
         const ms = new Date(r.expiresAt).getTime() - Date.now();
@@ -225,6 +228,7 @@ export function UserMembershipsList({
       id: 'status',
       header: 'Status',
       width: 120,
+      sortValue: (r) => (r.company.archivedAt ? 1 : 0),
       render: (r) =>
         r.company.archivedAt ? (
           <Tag tone="warn" dot>
@@ -250,6 +254,7 @@ export function UserMembershipsList({
       header: '',
       width: 180,
       align: 'right',
+      sortable: false,
       render: (r) => {
         return (
           <div

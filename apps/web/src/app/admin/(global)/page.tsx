@@ -26,6 +26,7 @@ import {
 } from '../../../lib/server-api';
 import { buildTerm, lower } from '../../../lib/term';
 import { companyAccent } from '../../../lib/company-format';
+import { DomainAlertsPanel } from './domain-alerts-panel';
 
 export default async function AdminDashboard() {
   const me = (await getMe())!;
@@ -617,170 +618,6 @@ function activityHref(it: RecentActivityItem): string {
     : `/admin/companies/${it.companyId}/articles/${it.id}`;
 }
 
-/**
- * Cross-company domain alerts — surfaces EXPIRING / EXPIRED / FAIL
- * domains on the global dashboard so SUPER_ADMIN sees trouble at a
- * glance. Sorted server-side by urgency.
- */
-function DomainAlertsPanel({ alerts }: { alerts: DomainAlert[] }) {
-  return (
-    <Panel
-      title={
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 10 }}>
-          Domain alerts
-          {alerts.length > 0 && (
-            <Tag tone="danger" dot>
-              {alerts.length}
-            </Tag>
-          )}
-        </span>
-      }
-      noPad
-    >
-      {alerts.length === 0 ? (
-        <div
-          style={{
-            padding: 24,
-            color: 'var(--muted)',
-            fontSize: 13,
-          }}
-        >
-          All monitored domains are healthy.
-        </div>
-      ) : (
-        <>
-          <div className="hide-on-mobile" style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-              <thead>
-                <tr style={{ textAlign: 'left', color: 'var(--dim)' }}>
-                  <th style={alertTh}>Hostname</th>
-                  <th style={alertTh}>Company</th>
-                  <th style={alertTh}>Status</th>
-                  <th style={alertTh}>WHOIS expires</th>
-                  <th style={alertTh}>TLS expires</th>
-                </tr>
-              </thead>
-              <tbody>
-                {alerts.map((a) => (
-                  <tr key={a.domainId} style={{ borderTop: '1px solid var(--line)' }}>
-                    <td style={alertTd}>
-                      <Link
-                        href={`/admin/companies/${a.companyId}/domains/${a.domainId}`}
-                        style={{ color: 'var(--text)', fontWeight: 500 }}
-                      >
-                        {a.hostname}
-                      </Link>
-                    </td>
-                    <td style={alertTd}>
-                      <Link
-                        href={`/admin/companies/${a.companyId}`}
-                        style={{ color: 'var(--muted)' }}
-                      >
-                        {a.companyName}
-                      </Link>
-                    </td>
-                    <td style={alertTd}>
-                      <AlertStatus status={a.status} />
-                    </td>
-                    <td style={alertMono}>{fmtDate(a.whoisExpiresAt)}</td>
-                    <td style={alertMono}>{fmtDate(a.tlsExpiresAt)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          <ul
-            className="mobile-only"
-            style={{
-              listStyle: 'none',
-              margin: 0,
-              padding: 10,
-              display: 'flex',
-              flexDirection: 'column',
-              gap: 8,
-            }}
-          >
-            {alerts.map((a) => (
-              <li
-                key={a.domainId}
-                style={{
-                  border: '1px solid var(--line)',
-                  borderRadius: 10,
-                  padding: 12,
-                  background: 'var(--panel)',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: 8,
-                }}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <Link
-                    href={`/admin/companies/${a.companyId}/domains/${a.domainId}`}
-                    style={{
-                      flex: 1,
-                      color: 'var(--text)',
-                      fontWeight: 600,
-                      fontSize: 14,
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                      whiteSpace: 'nowrap',
-                    }}
-                  >
-                    {a.hostname}
-                  </Link>
-                  <AlertStatus status={a.status} />
-                </div>
-                <Link
-                  href={`/admin/companies/${a.companyId}`}
-                  style={{
-                    color: 'var(--muted)',
-                    fontSize: 12,
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    whiteSpace: 'nowrap',
-                  }}
-                >
-                  {a.companyName}
-                </Link>
-                <div
-                  style={{
-                    display: 'flex',
-                    gap: 12,
-                    fontFamily: 'var(--font-mono)',
-                    fontSize: 11.5,
-                    color: 'var(--muted)',
-                  }}
-                >
-                  <span>WHOIS {fmtDate(a.whoisExpiresAt)}</span>
-                  <span>TLS {fmtDate(a.tlsExpiresAt)}</span>
-                </div>
-              </li>
-            ))}
-          </ul>
-        </>
-      )}
-    </Panel>
-  );
-}
-
-function AlertStatus({ status }: { status: DomainAlert['status'] }) {
-  switch (status) {
-    case 'EXPIRING':
-      return <Tag tone="warn">Expiring</Tag>;
-    case 'EXPIRED':
-      return <Tag tone="danger">Expired</Tag>;
-    case 'FAIL':
-      return <Tag tone="danger">Fail</Tag>;
-    default:
-      return <Tag tone="outline">{status}</Tag>;
-  }
-}
-
-function fmtDate(iso: string | null): string {
-  if (!iso) return '—';
-  return new Date(iso).toISOString().slice(0, 10);
-}
-
 function relative(iso: string): string {
   const diff = Date.now() - new Date(iso).getTime();
   if (diff < 60_000) return 'just now';
@@ -793,23 +630,6 @@ function relative(iso: string): string {
   if (diff < 365 * day) return `${Math.floor(diff / (30 * day))}mo ago`;
   return `${Math.floor(diff / (365 * day))}y ago`;
 }
-
-const alertTh: React.CSSProperties = {
-  padding: '10px 14px',
-  fontSize: 11,
-  fontFamily: 'var(--font-mono)',
-  fontWeight: 500,
-  letterSpacing: 0.3,
-  textTransform: 'uppercase',
-  borderBottom: '1px solid var(--line)',
-};
-const alertTd: React.CSSProperties = { padding: '10px 14px' };
-const alertMono: React.CSSProperties = {
-  ...alertTd,
-  fontFamily: 'var(--font-mono)',
-  fontSize: 12,
-  color: 'var(--muted)',
-};
 
 function Row({ label, value }: { label: string; value: React.ReactNode }) {
   return (

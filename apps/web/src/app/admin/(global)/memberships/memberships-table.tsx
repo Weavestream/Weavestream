@@ -48,6 +48,7 @@ export function MembershipsTable({
       {
         id: 'user',
         header: 'User',
+        sortValue: (r) => r.user.name.toLowerCase(),
         render: (r) => (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
             <span style={{ color: 'var(--text)', fontWeight: 500 }}>{r.user.name}</span>
@@ -66,6 +67,7 @@ export function MembershipsTable({
       {
         id: 'company',
         header: term.one,
+        sortValue: (r) => r.company.name.toLowerCase(),
         render: (r) => (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
             <span style={{ color: 'var(--text)', fontWeight: 500 }}>{r.company.name}</span>
@@ -85,6 +87,7 @@ export function MembershipsTable({
         id: 'role',
         header: 'Role',
         width: 160,
+        sortValue: (r) => r.role.toLowerCase(),
         render: (r) => <Tag tone="accent">{membershipRoleLabel(r.role)}</Tag>,
       },
       {
@@ -92,6 +95,7 @@ export function MembershipsTable({
         header: 'Expires',
         width: 160,
         mono: true,
+        sortValue: (r) => (r.expiresAt ? new Date(r.expiresAt) : null),
         render: (r) => {
           if (!r.expiresAt) return <span style={{ color: 'var(--dim)' }}>never</span>;
           const ms = new Date(r.expiresAt).getTime() - Date.now();

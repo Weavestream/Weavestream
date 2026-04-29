@@ -10,8 +10,14 @@ import type {
   LayoutSummary,
 } from '../../lib/server-api';
 import { vaultLinkLabel } from '../../lib/vault-link';
-import { Icon, LayoutSwatch, Tag } from '../ui';
-import { useIsMobile } from '../../lib/hooks/use-is-mobile';
+import {
+  DataTable,
+  type DataColumn,
+  Icon,
+  LayoutSwatch,
+  MobileCardRow,
+  Tag,
+} from '../ui';
 import { TagFilterMenu } from './tag-filter-menu';
 
 type ReferenceMap = AssetSummary['references'];
@@ -57,7 +63,6 @@ export function LayoutAssetsTable({
   const [pending, startTransition] = useTransition();
   const [draft, setDraft] = useState(q);
   const [tagFilter, setTagFilter] = useState<string | null>(null);
-  const isMobile = useIsMobile();
 
   const columns = useMemo(() => {
     const primary = layout.fields.find((f) => f.isPrimary);
@@ -245,23 +250,23 @@ export function LayoutAssetsTable({
               color: 'var(--text)',
             }}
           />
-          {!isMobile && (
-            <>
-              <span style={{ width: 1, height: 14, background: 'var(--line-2)' }} />
-              <span
-                style={{
-                  fontFamily: 'var(--font-mono)',
-                  fontSize: 11,
-                  color: 'var(--muted)',
-                  whiteSpace: 'nowrap',
-                }}
-              >
-                {visibleRows.length === rows.length
-                  ? `${rows.length} results`
-                  : `${visibleRows.length} of ${rows.length}`}
-              </span>
-            </>
-          )}
+          <span
+            className="hide-on-mobile"
+            style={{ width: 1, height: 14, background: 'var(--line-2)' }}
+          />
+          <span
+            className="hide-on-mobile"
+            style={{
+              fontFamily: 'var(--font-mono)',
+              fontSize: 11,
+              color: 'var(--muted)',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {visibleRows.length === rows.length
+              ? `${rows.length} results`
+              : `${visibleRows.length} of ${rows.length}`}
+          </span>
         </div>
 
         {availableTags.length > 0 && (
@@ -307,247 +312,53 @@ export function LayoutAssetsTable({
         >
           No {layout.name} match the current filters.
         </div>
-      ) : isMobile ? (
-        <ul
-          style={{
-            listStyle: 'none',
-            margin: 0,
-            padding: 10,
-            display: 'flex',
-            flexDirection: 'column',
-            gap: 8,
-            opacity: pending ? 0.6 : 1,
-          }}
-        >
-          {visibleRows.map((r) => (
-            <LayoutAssetMobileCard
-              key={r.id}
-              row={r}
-              layout={layout}
-              columns={columns}
-              basePath={basePath}
-            />
-          ))}
-        </ul>
       ) : (
-        <div style={{ overflow: 'auto', opacity: pending ? 0.6 : 1 }}>
-          <table
-            style={{
-              width: '100%',
-              borderCollapse: 'collapse',
-              fontSize: 12.5,
-            }}
-          >
-            <thead>
-              <tr style={{ borderBottom: '1px solid var(--line)' }}>
-                <Th>Name</Th>
-                {columns.extras.map((f) => (
-                  <Th key={f.id}>{f.name}</Th>
-                ))}
-                <Th style={{ textAlign: 'right' }}>Updated</Th>
-                <Th style={{ width: 60 }} />
-              </tr>
-            </thead>
-            <tbody>
-              {visibleRows.map((r, i) => (
-                <AssetRow
-                  key={r.id}
-                  row={r}
-                  layout={layout}
-                  columns={columns}
-                  basePath={basePath}
-                  isLast={i === visibleRows.length - 1}
-                />
-              ))}
-            </tbody>
-          </table>
+        <div style={{ opacity: pending ? 0.6 : 1, transition: 'opacity 120ms ease' }}>
+          <DataTable
+            columns={layoutColumns({ layout, extras: columns.extras, basePath })}
+            rows={visibleRows}
+            renderMobileCard={(r) => (
+              <LayoutAssetMobileBody
+                row={r}
+                layout={layout}
+                extras={columns.extras}
+                basePath={basePath}
+              />
+            )}
+          />
         </div>
       )}
     </div>
   );
 }
 
-function LayoutAssetMobileCard({
-  row,
+function layoutColumns({
   layout,
-  columns,
+  extras,
   basePath,
 }: {
-  row: AssetSummary;
   layout: LayoutSummary;
-  columns: {
-    primary: LayoutFieldSummary | undefined;
-    extras: LayoutFieldSummary[];
-  };
+  extras: LayoutFieldSummary[];
   basePath: string;
-}) {
-  const updated = new Date(row.updatedAt);
-  const firstTwoExtras = columns.extras.slice(0, 2);
-  return (
-    <li
-      style={{
-        border: '1px solid var(--line)',
-        borderRadius: 10,
-        background: 'var(--panel)',
-        opacity: row.archivedAt ? 0.7 : 1,
-      }}
-    >
-      <Link
-        href={`${basePath}/assets/${row.id}`}
-        style={{
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 8,
-          padding: 12,
-          color: 'inherit',
-        }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <LayoutSwatch icon={layout.icon} color={layout.color} size={24} />
-          <div
-            style={{
-              flex: 1,
-              minWidth: 0,
-              fontWeight: 600,
-              fontSize: 14,
-              color: 'var(--text)',
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-            }}
-          >
-            {row.name}
-          </div>
-          <Icon.chevron size={12} style={{ color: 'var(--dim)' }} />
-        </div>
-        {firstTwoExtras.length > 0 && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-            {firstTwoExtras.map((f) => (
-              <div
-                key={f.id}
-                style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}
-              >
-                <span
-                  style={{
-                    fontFamily: 'var(--font-mono)',
-                    fontSize: 10.5,
-                    textTransform: 'uppercase',
-                    letterSpacing: 0.6,
-                    color: 'var(--dim)',
-                    minWidth: 64,
-                  }}
-                >
-                  {f.name}
-                </span>
-                <span
-                  style={{
-                    flex: 1,
-                    minWidth: 0,
-                    fontSize: 12,
-                    color: 'var(--text-2)',
-                    wordBreak: 'break-word',
-                  }}
-                >
-                  <FieldCell
-                    fieldType={f.fieldType}
-                    value={row.fieldValues[f.slug]}
-                    references={row.references}
-                  />
-                </span>
-              </div>
-            ))}
-          </div>
-        )}
-        <div
+}): DataColumn<AssetSummary>[] {
+  const cols: DataColumn<AssetSummary>[] = [
+    {
+      id: 'name',
+      header: 'Name',
+      width: 320,
+      sortValue: (r) => r.name.toLowerCase(),
+      render: (r) => (
+        <span
           style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 6,
-            flexWrap: 'wrap',
-          }}
-        >
-          {row.archivedAt && <Tag tone="warn">archived</Tag>}
-          <span
-            style={{
-              marginLeft: 'auto',
-              fontFamily: 'var(--font-mono)',
-              fontSize: 11,
-              color: 'var(--dim)',
-            }}
-          >
-            {relative(updated)}
-          </span>
-        </div>
-      </Link>
-    </li>
-  );
-}
-
-function Th({
-  children,
-  style,
-}: {
-  children?: React.ReactNode;
-  style?: React.CSSProperties;
-}) {
-  return (
-    <th
-      style={{
-        textAlign: 'left',
-        padding: '8px 12px',
-        fontSize: 10,
-        fontFamily: 'var(--font-mono)',
-        color: 'var(--muted)',
-        fontWeight: 400,
-        textTransform: 'uppercase',
-        letterSpacing: 0.5,
-        whiteSpace: 'nowrap',
-        ...style,
-      }}
-    >
-      {children}
-    </th>
-  );
-}
-
-function AssetRow({
-  row,
-  layout,
-  columns,
-  basePath,
-  isLast,
-}: {
-  row: AssetSummary;
-  layout: LayoutSummary;
-  columns: {
-    primary: LayoutFieldSummary | undefined;
-    extras: LayoutFieldSummary[];
-  };
-  basePath: string;
-  isLast: boolean;
-}) {
-  const updated = new Date(row.updatedAt);
-
-  return (
-    <tr
-      style={{
-        borderBottom: isLast ? 'none' : '1px solid var(--line)',
-        height: 44,
-        opacity: row.archivedAt ? 0.55 : 1,
-      }}
-    >
-      <td style={{ padding: '0 12px' }}>
-        <Link
-          href={`${basePath}/assets/${row.id}`}
-          style={{
-            display: 'flex',
+            display: 'inline-flex',
             alignItems: 'center',
             gap: 10,
-            color: 'inherit',
+            opacity: r.archivedAt ? 0.55 : 1,
           }}
         >
           <LayoutSwatch icon={layout.icon} color={layout.color} size={22} />
-          <div
+          <Link
+            href={`${basePath}/assets/${r.id}`}
             style={{
               fontWeight: 500,
               overflow: 'hidden',
@@ -555,62 +366,199 @@ function AssetRow({
               whiteSpace: 'nowrap',
               maxWidth: 320,
               minWidth: 0,
+              color: 'inherit',
             }}
           >
-            {row.name}
-            {row.archivedAt && (
+            {r.name}
+            {r.archivedAt && (
               <Tag tone="warn" style={{ marginLeft: 8 }}>
                 archived
               </Tag>
             )}
-          </div>
-        </Link>
-      </td>
-      {columns.extras.map((f) => (
-        <td
-          key={f.id}
+          </Link>
+        </span>
+      ),
+    },
+  ];
+
+  for (const f of extras) {
+    cols.push({
+      id: `field:${f.slug}`,
+      header: f.name,
+      width: 240,
+      sortValue: (r) => fieldSortValue(f.fieldType, r.fieldValues[f.slug], r.references),
+      render: (r) => (
+        <FieldCell
+          fieldType={f.fieldType}
+          value={r.fieldValues[f.slug]}
+          references={r.references}
+        />
+      ),
+    });
+  }
+
+  cols.push({
+    id: 'updated',
+    header: 'Updated',
+    width: 120,
+    align: 'right',
+    mono: true,
+    sortValue: (r) => new Date(r.updatedAt),
+    render: (r) => (
+      <span style={{ color: 'var(--dim)', whiteSpace: 'nowrap' }}>
+        {relative(new Date(r.updatedAt))}
+      </span>
+    ),
+  });
+
+  cols.push({
+    id: 'open',
+    header: '',
+    width: 80,
+    align: 'right',
+    sortable: false,
+    render: (r) => (
+      <Link
+        href={`${basePath}/assets/${r.id}`}
+        style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 4,
+          fontSize: 11.5,
+          color: 'var(--accent)',
+          fontFamily: 'var(--font-mono)',
+        }}
+      >
+        open
+        <Icon.chevron size={10} />
+      </Link>
+    ),
+  });
+
+  return cols;
+}
+
+function LayoutAssetMobileBody({
+  row,
+  layout,
+  extras,
+  basePath,
+}: {
+  row: AssetSummary;
+  layout: LayoutSummary;
+  extras: LayoutFieldSummary[];
+  basePath: string;
+}) {
+  const updated = new Date(row.updatedAt);
+  const firstTwoExtras = extras.slice(0, 2);
+  return (
+    <Link
+      href={`${basePath}/assets/${row.id}`}
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 8,
+        color: 'inherit',
+        opacity: row.archivedAt ? 0.7 : 1,
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <LayoutSwatch icon={layout.icon} color={layout.color} size={24} />
+        <div
           style={{
-            padding: '0 12px',
-            maxWidth: 240,
+            flex: 1,
+            minWidth: 0,
+            fontWeight: 600,
+            fontSize: 14,
+            color: 'var(--text)',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
           }}
         >
+          {row.name}
+        </div>
+        <Icon.chevron size={12} style={{ color: 'var(--dim)' }} />
+      </div>
+      {firstTwoExtras.map((f) => (
+        <MobileCardRow key={f.id} label={f.name}>
           <FieldCell
             fieldType={f.fieldType}
             value={row.fieldValues[f.slug]}
             references={row.references}
           />
-        </td>
+        </MobileCardRow>
       ))}
-      <td
+      <div
         style={{
-          padding: '0 12px',
-          fontFamily: 'var(--font-mono)',
-          fontSize: 11,
-          color: 'var(--dim)',
-          textAlign: 'right',
-          whiteSpace: 'nowrap',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 6,
+          flexWrap: 'wrap',
         }}
       >
-        {relative(updated)}
-      </td>
-      <td style={{ padding: '0 12px', textAlign: 'right' }}>
-        <Link
-          href={`${basePath}/assets/${row.id}`}
+        {row.archivedAt && <Tag tone="warn">archived</Tag>}
+        <span
           style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: 4,
-            fontSize: 11.5,
-            color: 'var(--accent)',
+            marginLeft: 'auto',
             fontFamily: 'var(--font-mono)',
+            fontSize: 11,
+            color: 'var(--dim)',
           }}
         >
-          open
-          <Icon.chevron size={10} />
-        </Link>
-      </td>
-    </tr>
+          {relative(updated)}
+        </span>
+      </div>
+    </Link>
   );
+}
+
+/**
+ * Sortable representation of an arbitrary field value. Keeps the
+ * comparison stable across the heterogeneous shapes the API can return
+ * (chip arrays for TAGS, ISO strings for DATE, raw strings/booleans/
+ * numbers for the simple types). Returns null/undefined for empties so
+ * the comparator naturally pushes them to the bottom.
+ */
+function fieldSortValue(
+  type: FieldType,
+  value: unknown,
+  references: ReferenceMap,
+): string | number | boolean | Date | null | undefined {
+  if (value == null || value === '') return null;
+  switch (type) {
+    case 'BOOLEAN':
+      return value === true || value === 'true';
+    case 'NUMBER':
+      return Number(value);
+    case 'DATE':
+    case 'DATETIME': {
+      const d = new Date(String(value));
+      return Number.isNaN(d.getTime()) ? String(value) : d;
+    }
+    case 'TAGS':
+    case 'MULTISELECT': {
+      const arr = Array.isArray(value) ? (value as unknown[]) : [];
+      if (arr.length === 0) return null;
+      const first = arr[0];
+      if (
+        first &&
+        typeof first === 'object' &&
+        typeof (first as { name?: unknown }).name === 'string'
+      ) {
+        return ((first as { name: string }).name || '').toLowerCase();
+      }
+      return String(first ?? '').toLowerCase();
+    }
+    case 'ASSET_REFERENCE': {
+      const ids = Array.isArray(value) ? value : [value];
+      const id = String(ids[0] ?? '');
+      const hit = references[id];
+      return (hit?.name ?? id).toLowerCase();
+    }
+    default:
+      return String(value).toLowerCase();
+  }
 }
 
 function FieldCell({

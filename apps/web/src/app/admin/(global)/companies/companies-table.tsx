@@ -43,7 +43,9 @@ export function CompaniesTable({
       {
         id: 'star',
         header: '',
-        width: 36,
+        width: 48,
+        align: 'center',
+        sortValue: (r) => (r.isStarred ? 0 : 1),
         render: (r) => (
           <StarButton
             entityType="company"
@@ -56,6 +58,7 @@ export function CompaniesTable({
       {
         id: 'name',
         header: term.one,
+        sortValue: (r) => r.name.toLowerCase(),
         render: (r) => (
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <CompanyAvatar
@@ -82,6 +85,7 @@ export function CompaniesTable({
         id: 'type',
         header: 'Type',
         width: 120,
+        sortValue: (r) => companyTypeLabel(r.type).toLowerCase(),
         render: (r) => (
           <Tag tone={companyTypeTone(r.type)} dot>
             {companyTypeLabel(r.type)}
@@ -92,6 +96,9 @@ export function CompaniesTable({
         id: 'location',
         header: 'Location',
         width: 180,
+        sortValue: (r) =>
+          [r.city, r.region, r.country].filter(Boolean).join(', ').toLowerCase() ||
+          null,
         render: (r) => {
           const parts = [r.city, r.region, r.country].filter(Boolean);
           if (parts.length === 0) {
@@ -109,12 +116,14 @@ export function CompaniesTable({
         header: 'Members',
         mono: true,
         width: 100,
+        sortValue: (r) => r.memberCount,
         render: (r) => <span>{r.memberCount}</span>,
       },
       {
         id: 'status',
         header: 'Status',
         width: 120,
+        sortValue: (r) => (r.archivedAt ? 1 : 0),
         render: (r) =>
           r.archivedAt ? (
             <Tag tone="warn" dot>
@@ -131,6 +140,7 @@ export function CompaniesTable({
         header: 'Created',
         mono: true,
         width: 130,
+        sortValue: (r) => new Date(r.createdAt),
         render: (r) => <span style={{ color: 'var(--dim)' }}>{relative(r.createdAt)}</span>,
       },
     ],

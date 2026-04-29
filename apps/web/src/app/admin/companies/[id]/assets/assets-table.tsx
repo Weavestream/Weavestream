@@ -7,8 +7,14 @@ import type {
   AssetSummary,
   LayoutSummary,
 } from '../../../../../lib/server-api';
-import { Icon, LayoutSwatch, Tag } from '../../../../../components/ui';
-import { useIsMobile } from '../../../../../lib/hooks/use-is-mobile';
+import {
+  DataTable,
+  type DataColumn,
+  Icon,
+  LayoutSwatch,
+  MobileCardRow,
+  Tag,
+} from '../../../../../components/ui';
 import { vaultLinkLabel } from '../../../../../lib/vault-link';
 import { TagFilterMenu } from '../../../../../components/layouts/tag-filter-menu';
 
@@ -41,7 +47,6 @@ export function AssetsTable({
   const [_pending, startTransition] = useTransition();
   const [draft, setDraft] = useState(q);
   const [tagFilter, setTagFilter] = useState<string | null>(null);
-  const isMobile = useIsMobile();
 
   const activeLayout = useMemo(
     () => layouts.find((l) => l.id === layoutId) ?? null,
@@ -354,243 +359,90 @@ export function AssetsTable({
         >
           No assets match the current filters.
         </div>
-      ) : isMobile ? (
-        <ul
-          style={{
-            listStyle: 'none',
-            margin: 0,
-            padding: 10,
-            display: 'flex',
-            flexDirection: 'column',
-            gap: 8,
-          }}
-        >
-          {visibleRows.map((r) => (
-            <AssetMobileCard key={r.id} row={r} companyId={companyId} />
-          ))}
-        </ul>
       ) : (
-        <div style={{ overflow: 'auto' }}>
-          <table
-            style={{
-              width: '100%',
-              borderCollapse: 'collapse',
-              fontSize: 12.5,
-            }}
-          >
-            <thead>
-              <tr style={{ borderBottom: '1px solid var(--line)' }}>
-                {['Name', 'Layout', 'Primary field', 'Source', 'Updated', ''].map(
-                  (h, i) => (
-                    <th
-                      key={`${h}-${i}`}
-                      style={{
-                        textAlign: 'left',
-                        padding: '8px 12px',
-                        fontSize: 10,
-                        fontFamily: 'var(--font-mono)',
-                        color: 'var(--muted)',
-                        fontWeight: 400,
-                        textTransform: 'uppercase',
-                        letterSpacing: 0.5,
-                      }}
-                    >
-                      {h}
-                    </th>
-                  ),
-                )}
-              </tr>
-            </thead>
-            <tbody>
-              {visibleRows.map((r, i) => (
-                <AssetRow
-                  key={r.id}
-                  row={r}
-                  companyId={companyId}
-                  isLast={i === visibleRows.length - 1}
-                />
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <DataTable
+          columns={assetColumns({ companyId })}
+          rows={visibleRows}
+          renderMobileCard={(r) => <AssetMobileBody row={r} companyId={companyId} />}
+        />
       )}
     </div>
   );
 }
 
-function AssetMobileCard({
-  row,
+function assetColumns({
   companyId,
 }: {
-  row: AssetSummary;
   companyId: string;
-}) {
-  const primary = row.fields.find((f) => f.isPrimary);
-  const primaryValue =
-    primary && primary.slug in row.fieldValues
-      ? renderScalar(
-          row.fieldValues[primary.slug],
-          primary.fieldType,
-          row.references,
-        )
-      : null;
-  return (
-    <li
-      style={{
-        border: '1px solid var(--line)',
-        borderRadius: 10,
-        background: 'var(--panel)',
-        opacity: row.archivedAt ? 0.7 : 1,
-      }}
-    >
-      <Link
-        href={`/admin/companies/${companyId}/assets/${row.id}`}
-        style={{
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 8,
-          padding: 12,
-          color: 'inherit',
-        }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <LayoutSwatch icon={row.layoutIcon} color={row.layoutColor} size={24} />
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div
-              style={{
-                fontWeight: 600,
-                fontSize: 14,
-                color: 'var(--text)',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-              }}
-            >
-              {row.name}
-            </div>
-            <div
-              style={{
-                fontFamily: 'var(--font-mono)',
-                fontSize: 11,
-                color: 'var(--dim)',
-              }}
-            >
-              {row.layoutName}
-            </div>
-          </div>
-          <Icon.chevron size={12} style={{ color: 'var(--dim)' }} />
-        </div>
-        {primaryValue && primaryValue !== '—' && (
-          <div
-            style={{
-              fontFamily: 'var(--font-mono)',
-              fontSize: 11.5,
-              color: 'var(--text-2)',
-              wordBreak: 'break-word',
-            }}
-          >
-            {primaryValue}
-          </div>
-        )}
-        <div
+}): DataColumn<AssetSummary>[] {
+  return [
+    {
+      id: 'name',
+      header: 'Name',
+      width: 320,
+      sortValue: (r) => r.name.toLowerCase(),
+      render: (r) => (
+        <span
           style={{
-            display: 'flex',
-            flexWrap: 'wrap',
-            gap: 6,
-            alignItems: 'center',
-          }}
-        >
-          {row.externalSource ? (
-            <Tag tone="info">{row.externalSource.toLowerCase()}</Tag>
-          ) : (
-            <Tag tone="outline">manual</Tag>
-          )}
-          {row.archivedAt && <Tag tone="warn">archived</Tag>}
-          <span
-            style={{
-              marginLeft: 'auto',
-              fontFamily: 'var(--font-mono)',
-              fontSize: 11,
-              color: 'var(--dim)',
-            }}
-          >
-            {relative(new Date(row.updatedAt))}
-          </span>
-        </div>
-      </Link>
-    </li>
-  );
-}
-
-function AssetRow({
-  row,
-  companyId,
-  isLast,
-}: {
-  row: AssetSummary;
-  companyId: string;
-  isLast: boolean;
-}) {
-  const primary = row.fields.find((f) => f.isPrimary);
-  const primaryValue =
-    primary && primary.slug in row.fieldValues
-      ? renderScalar(
-          row.fieldValues[primary.slug],
-          primary.fieldType,
-          row.references,
-        )
-      : '—';
-  const updated = new Date(row.updatedAt);
-
-  return (
-    <tr
-      style={{
-        borderBottom: isLast ? 'none' : '1px solid var(--line)',
-        height: 44,
-        opacity: row.archivedAt ? 0.55 : 1,
-      }}
-    >
-      <td style={{ padding: '0 12px' }}>
-        <Link
-          href={`/admin/companies/${companyId}/assets/${row.id}`}
-          style={{
-            display: 'flex',
+            display: 'inline-flex',
             alignItems: 'center',
             gap: 10,
-            color: 'inherit',
+            opacity: r.archivedAt ? 0.55 : 1,
           }}
         >
-          <LayoutSwatch icon={row.layoutIcon} color={row.layoutColor} size={22} />
-          <div style={{ fontWeight: 500 }}>
-            {row.name}
-            {row.archivedAt && (
+          <LayoutSwatch icon={r.layoutIcon} color={r.layoutColor} size={22} />
+          <Link
+            href={`/admin/companies/${companyId}/assets/${r.id}`}
+            style={{ color: 'inherit', fontWeight: 500 }}
+          >
+            {r.name}
+            {r.archivedAt && (
               <Tag tone="warn" style={{ marginLeft: 8 }}>
                 archived
               </Tag>
             )}
-          </div>
-        </Link>
-      </td>
-      <td style={{ padding: '0 12px', color: 'var(--muted)' }}>
-        {row.layoutName}
-      </td>
-      <td
-        style={{
-          padding: '0 12px',
-          fontFamily: 'var(--font-mono)',
-          fontSize: 11.5,
-          color: 'var(--text-2)',
-          maxWidth: 260,
-          overflow: 'hidden',
-          textOverflow: 'ellipsis',
-          whiteSpace: 'nowrap',
-        }}
-      >
-        {primaryValue}
-      </td>
-      <td style={{ padding: '0 12px' }}>
-        {row.externalSource ? (
-          <Tag tone="info">{row.externalSource.toLowerCase()}</Tag>
+          </Link>
+        </span>
+      ),
+    },
+    {
+      id: 'layout',
+      header: 'Layout',
+      width: 180,
+      sortValue: (r) => r.layoutName.toLowerCase(),
+      render: (r) => <span style={{ color: 'var(--muted)' }}>{r.layoutName}</span>,
+    },
+    {
+      id: 'primary',
+      header: 'Primary field',
+      width: 280,
+      sortValue: (r) => primaryString(r).toLowerCase(),
+      render: (r) => (
+        <span
+          style={{
+            fontFamily: 'var(--font-mono)',
+            fontSize: 11.5,
+            color: 'var(--text-2)',
+            display: 'inline-block',
+            maxWidth: 260,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+            verticalAlign: 'middle',
+          }}
+        >
+          {primaryString(r)}
+        </span>
+      ),
+    },
+    {
+      id: 'source',
+      header: 'Source',
+      width: 140,
+      sortValue: (r) => r.externalSource ?? 'manual',
+      render: (r) =>
+        r.externalSource ? (
+          <Tag tone="info">{r.externalSource.toLowerCase()}</Tag>
         ) : (
           <span
             style={{
@@ -601,21 +453,27 @@ function AssetRow({
           >
             manual
           </span>
-        )}
-      </td>
-      <td
-        style={{
-          padding: '0 12px',
-          fontFamily: 'var(--font-mono)',
-          fontSize: 11,
-          color: 'var(--dim)',
-        }}
-      >
-        {relative(updated)}
-      </td>
-      <td style={{ padding: '0 12px', textAlign: 'right' }}>
+        ),
+    },
+    {
+      id: 'updated',
+      header: 'Updated',
+      width: 120,
+      mono: true,
+      sortValue: (r) => new Date(r.updatedAt),
+      render: (r) => (
+        <span style={{ color: 'var(--dim)' }}>{relative(new Date(r.updatedAt))}</span>
+      ),
+    },
+    {
+      id: 'open',
+      header: '',
+      width: 80,
+      align: 'right',
+      sortable: false,
+      render: (r) => (
         <Link
-          href={`/admin/companies/${companyId}/assets/${row.id}`}
+          href={`/admin/companies/${companyId}/assets/${r.id}`}
           style={{
             display: 'inline-flex',
             alignItems: 'center',
@@ -628,8 +486,98 @@ function AssetRow({
           open
           <Icon.chevron size={10} />
         </Link>
-      </td>
-    </tr>
+      ),
+    },
+  ];
+}
+
+function primaryString(row: AssetSummary): string {
+  const primary = row.fields.find((f) => f.isPrimary);
+  if (!primary || !(primary.slug in row.fieldValues)) return '—';
+  return renderScalar(
+    row.fieldValues[primary.slug],
+    primary.fieldType,
+    row.references,
+  );
+}
+
+function AssetMobileBody({
+  row,
+  companyId,
+}: {
+  row: AssetSummary;
+  companyId: string;
+}) {
+  const primaryValue = primaryString(row);
+  return (
+    <Link
+      href={`/admin/companies/${companyId}/assets/${row.id}`}
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 8,
+        color: 'inherit',
+        opacity: row.archivedAt ? 0.7 : 1,
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <LayoutSwatch icon={row.layoutIcon} color={row.layoutColor} size={24} />
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div
+            style={{
+              fontWeight: 600,
+              fontSize: 14,
+              color: 'var(--text)',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {row.name}
+          </div>
+          <div
+            style={{
+              fontFamily: 'var(--font-mono)',
+              fontSize: 11,
+              color: 'var(--dim)',
+            }}
+          >
+            {row.layoutName}
+          </div>
+        </div>
+        <Icon.chevron size={12} style={{ color: 'var(--dim)' }} />
+      </div>
+      {primaryValue && primaryValue !== '—' && (
+        <MobileCardRow label="Primary" mono>
+          {primaryValue}
+        </MobileCardRow>
+      )}
+      <div
+        style={{
+          display: 'flex',
+          flexWrap: 'wrap',
+          gap: 6,
+          alignItems: 'center',
+        }}
+      >
+        {row.externalSource ? (
+          <Tag tone="info">{row.externalSource.toLowerCase()}</Tag>
+        ) : (
+          <Tag tone="outline">manual</Tag>
+        )}
+        {row.archivedAt && <Tag tone="warn">archived</Tag>}
+        <span
+          style={{
+            marginLeft: 'auto',
+            fontFamily: 'var(--font-mono)',
+            fontSize: 11,
+            color: 'var(--dim)',
+          }}
+        >
+          {relative(new Date(row.updatedAt))}
+        </span>
+      </div>
+    </Link>
   );
 }
 
