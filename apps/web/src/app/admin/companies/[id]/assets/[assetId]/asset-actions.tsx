@@ -67,6 +67,18 @@ export function AssetActions({ asset }: { asset: AssetSummary }) {
       >
         {asset.archivedAt ? 'Restore' : 'Archive'}
       </Btn>
+      <Btn
+        kind="primary"
+        size="md"
+        icon={Icon.plus}
+        onClick={() =>
+          router.push(
+            `/admin/companies/${asset.companyId}/assets/new?layout=${asset.assetLayoutId}`,
+          )
+        }
+      >
+        New
+      </Btn>
       <Dialog
         open={confirming}
         onClose={() => !pending && setConfirming(false)}
