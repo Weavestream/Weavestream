@@ -113,6 +113,8 @@ function buildDetails(
       subjectAltNames: tls.data?.subjectAltNames ?? [],
       chainLength: tls.data?.chainLength ?? 0,
       protocol: tls.data?.protocol ?? null,
+      authorized: tls.data?.authorized ?? null,
+      authorizationError: tls.data?.authorizationError ?? null,
     };
   }
   return out;

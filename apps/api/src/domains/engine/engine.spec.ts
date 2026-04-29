@@ -31,6 +31,8 @@ interface StubOptions {
     subjectAltNames: string[];
     chainLength: number;
     protocol: string | null;
+    authorized: boolean;
+    authorizationError: string | null;
   };
   tlsThrows?: string;
   now?: Date;
@@ -81,6 +83,8 @@ function makePorts(opts: StubOptions = {}): EnginePorts {
             subjectAltNames: ['example.com'],
             chainLength: 3,
             protocol: 'TLSv1.3',
+            authorized: true,
+            authorizationError: null,
           }
         );
       }),
@@ -211,6 +215,8 @@ describe('runDomainCheck — TLS', () => {
         subjectAltNames: ['example.com'],
         chainLength: 3,
         protocol: 'TLSv1.2',
+        authorized: false,
+        authorizationError: 'CERT_HAS_EXPIRED',
       },
     });
 
@@ -329,6 +335,8 @@ describe('deriveDomainStatus', () => {
             subjectAltNames: [],
             chainLength: 3,
             protocol: null,
+            authorized: true,
+            authorizationError: null,
           },
           error: null,
         },

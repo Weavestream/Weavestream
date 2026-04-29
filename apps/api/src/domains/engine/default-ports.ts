@@ -65,6 +65,16 @@ const defaultTls: TlsPort = {
         port,
         servername: hostname,
         timeout: timeoutMs,
+        // Intentional: this is a certificate observability probe, not a
+        // trust-establishing client. We must be able to handshake with
+        // expired, self-signed, hostname-mismatched, and untrusted-CA
+        // certs in order to *report* on them — `rejectUnauthorized:
+        // true` aborts before the cert is exposed and we'd lose the
+        // very signal we're trying to monitor. The trust verdict from
+        // Node's validator is captured separately below via
+        // `socket.authorized` / `socket.authorizationError` and
+        // surfaced in the result so callers can still alert on it. No
+        // application data is sent over the socket.
         rejectUnauthorized: false,
       });
       const timer = setTimeout(() => {
@@ -91,6 +101,17 @@ const defaultTls: TlsPort = {
             current = next;
           }
 
+          const authorized = socket.authorized === true;
+          const rawAuthError = (socket as { authorizationError?: unknown })
+            .authorizationError;
+          const authorizationError = authorized
+            ? null
+            : rawAuthError instanceof Error
+              ? rawAuthError.message
+              : typeof rawAuthError === 'string' && rawAuthError.length > 0
+                ? rawAuthError
+                : null;
+
           const info: TlsCertificateInfo = {
             validFrom: cert.valid_from ?? null,
             validTo: cert.valid_to ?? null,
@@ -100,6 +121,8 @@ const defaultTls: TlsPort = {
             ),
             chainLength,
             protocol: socket.getProtocol(),
+            authorized,
+            authorizationError,
           };
           socket.end();
           resolve(info);

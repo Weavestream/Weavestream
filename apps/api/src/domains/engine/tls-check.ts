@@ -38,6 +38,8 @@ export async function runTlsCheck(
       subjectAltNames: info.subjectAltNames,
       chainLength: info.chainLength,
       protocol: info.protocol,
+      authorized: info.authorized,
+      authorizationError: info.authorizationError,
     };
 
     if (!data.validTo) {
@@ -57,6 +59,17 @@ export async function runTlsCheck(
 
     const warnings: string[] = [];
     if (data.chainLength < 2) warnings.push('chain length < 2 (self-signed?)');
+    // Trust verdict from Node's TLS validator. We probe with
+    // `rejectUnauthorized: false` so we can read expired / mismatched
+    // certs, but we still surface the verdict so callers can alert on
+    // untrusted issuers, hostname mismatches, etc.
+    if (data.authorized === false) {
+      warnings.push(
+        data.authorizationError
+          ? `untrusted: ${data.authorizationError}`
+          : 'untrusted (peer failed system store / hostname validation)',
+      );
+    }
 
     return {
       status: warnings.length === 0 ? 'OK' : 'WARN',

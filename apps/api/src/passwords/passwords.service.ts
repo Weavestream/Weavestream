@@ -15,8 +15,8 @@ import type {
   UpdatePasswordFolderInput,
   UpdatePasswordInput,
 } from '@weavestream/shared';
-import { createHash } from 'node:crypto';
 import { authenticator } from 'otplib';
+import { computeHibpRangeHash } from './hibp-range-hash.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { AuditLogService } from '../audit/audit.service.js';
 import { AUDIT_ACTIONS } from '../audit/audit-actions.js';
@@ -1148,13 +1148,12 @@ export class PasswordsService {
   private enqueuePwnedCheck(
     passwordId: string,
     companyId: string,
-    plaintext: string,
+    secret: string,
   ): void {
     if (!this.env.values.HIBP_ENABLED) return;
-    const sha1Hex = createHash('sha1')
-      .update(plaintext, 'utf8')
-      .digest('hex')
-      .toUpperCase();
+    // SHA-1 here is mandated by the HIBP range API protocol — see
+    // `hibp-range-hash.ts`. It is *not* a stored credential hash.
+    const sha1Hex = computeHibpRangeHash(secret);
     void this.queues
       .enqueuePwnedCheck({
         kind: 'password',

@@ -1283,3 +1283,50 @@ model AlertTrigger {
   @@index([alertConfigId, firedAt])
   @@map("alert_trigger")
 }
+
+// IPAM — company-scoped IPv4 subnet registry. Operators define a CIDR
+// block and the system passively discovers matching assets by querying
+// `AssetFieldValue` rows whose `IP_ADDRESS` value falls within the
+// range (via PostgreSQL `inet` containment). No active scanning.
+model Subnet {
+  id          String    @id @default(uuid()) @db.Uuid
+  companyId   String    @map("company_id") @db.Uuid
+  name        String
+  cidr        String
+  prefix      Int
+  vlanId      Int?      @map("vlan_id")
+  gateway     String?
+  description String?
+  archivedAt  DateTime? @map("archived_at")
+  createdBy   String?   @map("created_by") @db.Uuid
+  updatedBy   String?   @map("updated_by") @db.Uuid
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+
+  reservations IpReservation[]
+
+  @@index([companyId, archivedAt])
+  @@map("subnets")
+}
+
+// IPAM — manual IP reservation within a subnet. Lets operators pin a
+// label to an IP slot without needing a full asset record, filling gaps
+// in the address-grid view.
+model IpReservation {
+  id        String   @id @default(uuid()) @db.Uuid
+  companyId String   @map("company_id") @db.Uuid
+  subnetId  String   @map("subnet_id") @db.Uuid
+  ipAddress String   @map("ip_address")
+  label     String
+  notes     String?
+  createdBy String?  @map("created_by") @db.Uuid
+  updatedBy String?  @map("updated_by") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  subnet Subnet @relation(fields: [subnetId], references: [id], onDelete: Cascade)
+
+  @@unique([subnetId, ipAddress])
+  @@index([companyId, subnetId])
+  @@map("ip_reservations")
+}

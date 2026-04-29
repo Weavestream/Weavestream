@@ -141,6 +141,15 @@ export const AUDIT_ACTIONS = {
     assetReleased: 'integration.asset.released',
     matchAmbiguous: 'integration.match.ambiguous',
   },
+  subnet: {
+    create: 'subnet.create',
+    update: 'subnet.update',
+    archive: 'subnet.archive',
+    restore: 'subnet.restore',
+    reservationCreate: 'subnet.reservation.create',
+    reservationUpdate: 'subnet.reservation.update',
+    reservationDelete: 'subnet.reservation.delete',
+  },
 } as const;
 
 export const ALL_AUDIT_ACTIONS: string[] = [
@@ -156,4 +165,5 @@ export const ALL_AUDIT_ACTIONS: string[] = [
   ...Object.values(AUDIT_ACTIONS.asset),
   ...Object.values(AUDIT_ACTIONS.article),
   ...Object.values(AUDIT_ACTIONS.integration),
+  ...Object.values(AUDIT_ACTIONS.subnet),
 ];
