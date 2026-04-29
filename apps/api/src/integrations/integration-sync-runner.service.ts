@@ -692,6 +692,29 @@ export class IntegrationSyncRunnerService {
         const strategy = this.fieldTypes.get(fm.targetField.fieldType as never);
         const opts = (fm.targetField.options ?? {}) as Record<string, unknown>;
         const normalised = strategy.normalize(raw, opts);
+
+        // Defense-in-depth: drivers occasionally surface values that pass
+        // the strategy's coercion (e.g. a flattened multi-NIC RMM string
+        // "10.0.0.35, 10.0.0.50" mapped to an IP_ADDRESS field) but would
+        // never round-trip through `valueSchema`. Re-validate so invalid
+        // shapes never reach the DB and break downstream typed queries
+        // (Phase 6 search, IPAM containment, etc.).
+        if (normalised !== null && normalised !== undefined) {
+          const parsed = strategy.valueSchema(opts).safeParse(normalised);
+          if (!parsed.success) {
+            this.logger.debug(
+              {
+                sourceField: fm.sourceField,
+                targetSlug: fm.targetField.slug,
+                fieldType: fm.targetField.fieldType,
+                issues: parsed.error.issues.map((i) => i.message),
+              },
+              'projectFields: dropping value that failed valueSchema',
+            );
+            continue;
+          }
+        }
+
         out[fm.targetField.id] = {
           fieldId: fm.targetField.id,
           slug: fm.targetField.slug,
