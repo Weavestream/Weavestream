@@ -123,11 +123,14 @@ export class IpAddressStrategy implements FieldTypeStrategy {
       return null as unknown as Prisma.InputJsonValue;
     const opts = withResolvedOptions(options);
     const out = normalizeIp(String(input), opts);
-    // Returning the original (trimmed) string on failed normalization
-    // lets `valueSchema` produce the error message — the service layer
-    // always runs the schema after `normalize` so invalid values never
-    // reach the database.
-    return (out ?? String(input).trim()) as unknown as Prisma.InputJsonValue;
+    // Honor the strategy contract: the normalized value MUST round-trip
+    // through `valueSchema`. Returning a non-IP string here would let
+    // unvalidated callers (e.g. the integration sync runner pulling an
+    // upstream "10.0.0.35, 10.0.0.50" string from a multi-NIC RMM agent)
+    // persist garbage that later breaks IPAM `inet` queries. Reject by
+    // returning `null` so the caller treats the value as unset rather
+    // than as a typed IP address.
+    return (out ?? null) as unknown as Prisma.InputJsonValue;
   }
 
   toPlaintext(value: unknown): string {

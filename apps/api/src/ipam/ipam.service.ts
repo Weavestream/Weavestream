@@ -131,10 +131,31 @@ export class IpamService {
     companyId: string,
     cidr: string,
   ): Promise<SubnetOccupant[]> {
+    // We deliberately avoid `::inet` casts on user-supplied data: a single
+    // malformed value (e.g. an asset whose IP_ADDRESS field somehow holds
+    // "10.0.0.35, 10.0.0.50" because of a legacy import or a driver that
+    // bypassed validation) would otherwise abort the entire query with
+    // `invalid input syntax for type inet`. Instead we pull candidate
+    // strings through a strict regex (full-string IPv4, optional /N) and
+    // do containment + canonicalisation in JS using the same helpers that
+    // power the rest of the IPAM module.
+    type Row = {
+      raw: string;
+      assetId: string;
+      assetName: string;
+      assetLayoutId: string;
+      assetLayoutName: string;
+      assetLayoutColor: string;
+      assetLayoutIcon: string;
+      assetFieldId: string;
+      fieldName: string;
+    };
+
+    let rows: Row[];
     try {
-      const rows = await this.prisma.$queryRaw<SubnetOccupant[]>`
+      rows = await this.prisma.$queryRaw<Row[]>`
         SELECT
-          host((afv.value #>> '{}')::inet)::text AS "ip",
+          (afv.value #>> '{}')                   AS "raw",
           afv.asset_id::text                     AS "assetId",
           a.name                                 AS "assetName",
           a.asset_layout_id::text                AS "assetLayoutId",
@@ -150,15 +171,35 @@ export class IpamService {
         WHERE afv.company_id = ${companyId}::uuid
           AND afv.value IS NOT NULL
           AND jsonb_typeof(afv.value) = 'string'
-          AND (afv.value #>> '{}') ~ '^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+'
-          AND host((afv.value #>> '{}')::inet)::inet <<= ${cidr}::inet
-        ORDER BY host((afv.value #>> '{}')::inet)::inet
+          AND (afv.value #>> '{}') ~ '^[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}(/[0-9]{1,2})?$'
       `;
-      return rows;
     } catch (err) {
       this.logger.warn(`listOccupants query failed for CIDR ${cidr}: ${err}`);
       return [];
     }
+
+    const out: SubnetOccupant[] = [];
+    for (const row of rows) {
+      // Strip any /N suffix — IPAM occupancy is a host-level concept; a
+      // field storing "10.0.0.5/24" still occupies "10.0.0.5".
+      const slash = row.raw.indexOf('/');
+      const host = (slash >= 0 ? row.raw.slice(0, slash) : row.raw).trim();
+      if (!ipInCidr(host, cidr)) continue;
+      out.push({
+        ip: host,
+        assetId: row.assetId,
+        assetName: row.assetName,
+        assetLayoutId: row.assetLayoutId,
+        assetLayoutName: row.assetLayoutName,
+        assetLayoutColor: row.assetLayoutColor,
+        assetLayoutIcon: row.assetLayoutIcon,
+        assetFieldId: row.assetFieldId,
+        fieldName: row.fieldName,
+      });
+    }
+
+    out.sort((a, b) => compareIpv4(a.ip, b.ip));
+    return out;
   }
 
   /**
@@ -529,6 +570,30 @@ export class IpamService {
       );
     }
   }
+}
+
+// Sort IPv4 addresses numerically (so 10.0.0.9 < 10.0.0.10). Strings
+// that don't parse as four octets sort last so they don't crash the
+// comparator if a malformed value ever sneaks past the SQL filter.
+function compareIpv4(a: string, b: string): number {
+  const ai = ipToUint32(a);
+  const bi = ipToUint32(b);
+  if (ai === null && bi === null) return a.localeCompare(b);
+  if (ai === null) return 1;
+  if (bi === null) return -1;
+  return ai - bi;
+}
+
+function ipToUint32(ip: string): number | null {
+  const parts = ip.split('.');
+  if (parts.length !== 4) return null;
+  let n = 0;
+  for (const part of parts) {
+    const o = Number(part);
+    if (!Number.isInteger(o) || o < 0 || o > 255) return null;
+    n = (n * 256 + o) >>> 0;
+  }
+  return n;
 }
 
 // Pure helper — exported for testing.

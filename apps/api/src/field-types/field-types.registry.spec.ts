@@ -370,4 +370,15 @@ describe('IpAddressStrategy', () => {
     expect(s.valueSchema(withCidr).safeParse('2001:db8::/129').success).toBe(false);
     expect(s.valueSchema(withCidr).safeParse('2001:db8::/48').success).toBe(true);
   });
+
+  it('returns null from normalize when input is not a valid IP', () => {
+    // Drivers that flatten multi-NIC endpoints sometimes hand us a
+    // comma-separated list. We refuse to persist that as a typed IP —
+    // returning null lets the integration sync runner clear the value
+    // instead of leaking malformed strings into Postgres `inet` queries.
+    const s = registry.get('IP_ADDRESS');
+    expect(s.normalize('10.0.0.35, 10.0.0.50', any)).toBeNull();
+    expect(s.normalize('not-an-ip', any)).toBeNull();
+    expect(s.normalize('10.0.0.999', any)).toBeNull();
+  });
 });
