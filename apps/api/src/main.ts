@@ -11,6 +11,9 @@ import compression from 'compression';
 import { AppModule } from './app.module.js';
 import { ProblemExceptionFilter } from './common/problem-exception.filter.js';
 import { EnvService } from './config/env.service.js';
+import { configureEgressGuard } from './common/egress/safe-fetch.js';
+import { AuditLogService } from './audit/audit.service.js';
+import { AUDIT_ACTIONS } from './audit/audit-actions.js';
 
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
@@ -33,6 +36,42 @@ async function bootstrap() {
   // single throttler bucket. `X-Forwarded-Proto` is also respected so
   // `req.secure` is correct when the edge terminates TLS.
   app.set('trust proxy', env.TRUST_PROXY_HOPS);
+
+  // Phase 6 — wire the egress / SSRF guard. Every server-side outbound
+  // HTTP call goes through `safeFetch`, which refuses to dial private
+  // / loopback / link-local / metadata addresses unless the operator
+  // has explicitly allow-listed them. Each refusal lands in the audit
+  // log as `security.egress.blocked` so the Security Center can show
+  // recent attempts.
+  const audit = app.get(AuditLogService);
+  configureEgressGuard({
+    allowPrivateNetworks: env.EGRESS_ALLOW_PRIVATE_NETWORKS,
+    allowedPrivateCidrs: env.EGRESS_ALLOWED_PRIVATE_CIDRS,
+    onBlocked: (info) => {
+      void audit
+        .log({
+          actorId: null,
+          action: AUDIT_ACTIONS.security.egressBlocked,
+          entityType: 'Egress',
+          entityId: null,
+          ip: '127.0.0.1',
+          userAgent: 'system/egress-guard',
+          before: null,
+          after: {
+            url: info.url,
+            hostname: info.hostname,
+            resolvedIps: info.resolvedIps,
+            reason: info.reason,
+            matchedCidr: info.matchedCidr,
+          },
+        })
+        .catch((err: unknown) => {
+          // Never let audit-log failures shadow the original block.
+          // eslint-disable-next-line no-console
+          console.error('Failed to audit egress block:', err);
+        });
+    },
+  });
 
   // Use the `simple` query parser (Node's built-in `querystring`) instead
   // of Express's default `extended` parser (`qs`). The extended parser

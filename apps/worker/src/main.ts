@@ -10,6 +10,10 @@ import { CompanyPdfExportWorker } from './company-pdf-export/company-pdf-export.
 import { IntegrationSyncOrchestratorWorker } from './integration-sync/integration-sync-orchestrator.processor.js';
 import { IntegrationSyncMappingWorker } from './integration-sync/integration-sync-mapping.processor.js';
 import { AlertsWorker } from './alerts/alerts.processor.js';
+import { configureEgressGuard } from '../../api/src/common/egress/safe-fetch.js';
+import { EnvService } from '../../api/src/config/env.service.js';
+import { AuditLogService } from '../../api/src/audit/audit.service.js';
+import { AUDIT_ACTIONS } from '../../api/src/audit/audit-actions.js';
 
 /**
  * apps/worker bootstrap.
@@ -35,6 +39,40 @@ async function bootstrap(): Promise<void> {
   app.enableShutdownHooks();
 
   const logger = app.get(Logger);
+
+  // Phase 6 — wire the egress / SSRF guard. Same posture as the API:
+  // every outbound HTTP request from the worker (HIBP range checks,
+  // domain probes, RDAP, integration syncs) flows through `safeFetch`
+  // and any refusal lands in the audit log.
+  const env = app.get(EnvService).values;
+  const audit = app.get(AuditLogService);
+  configureEgressGuard({
+    allowPrivateNetworks: env.EGRESS_ALLOW_PRIVATE_NETWORKS,
+    allowedPrivateCidrs: env.EGRESS_ALLOWED_PRIVATE_CIDRS,
+    onBlocked: (info) => {
+      void audit
+        .log({
+          actorId: null,
+          action: AUDIT_ACTIONS.security.egressBlocked,
+          entityType: 'Egress',
+          entityId: null,
+          ip: '127.0.0.1',
+          userAgent: 'worker/egress-guard',
+          before: null,
+          after: {
+            url: info.url,
+            hostname: info.hostname,
+            resolvedIps: info.resolvedIps,
+            reason: info.reason,
+            matchedCidr: info.matchedCidr,
+          },
+        })
+        .catch((err: unknown) => {
+          // eslint-disable-next-line no-console
+          console.error('Failed to audit egress block:', err);
+        });
+    },
+  });
 
   const domainChecks = app.get(DomainChecksWorker);
   await domainChecks.start();

@@ -831,6 +831,33 @@ export async function getSecuritySessions(): Promise<
   return res.ok ? (res.data?.items ?? []) : null;
 }
 
+export type EgressBlockRow = {
+  id: string;
+  createdAt: string;
+  userAgent: string | null;
+  url: string | null;
+  hostname: string | null;
+  resolvedIps: string[];
+  reason: string | null;
+  matchedCidr: string | null;
+};
+
+export type EgressBlocksResponse = {
+  windowHours: number;
+  since: string;
+  total: number;
+  recent: EgressBlockRow[];
+};
+
+export async function getSecurityEgressBlocks(
+  windowHours = 168,
+): Promise<EgressBlocksResponse | null> {
+  const res = await serverApiFetch<EgressBlocksResponse>(
+    `/security/egress-blocks?windowHours=${windowHours}`,
+  );
+  return res.ok ? res.data : null;
+}
+
 // ───────────────────────────────────────────────────────────────────
 // Phase 3: asset layouts + assets
 // ───────────────────────────────────────────────────────────────────

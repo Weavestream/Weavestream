@@ -10,6 +10,7 @@ import { RedisService } from '../../../api/src/redis/redis.service.js';
 import { PrismaService } from '../../../api/src/prisma/prisma.service.js';
 import { AuditLogService } from '../../../api/src/audit/audit.service.js';
 import { AUDIT_ACTIONS } from '../../../api/src/audit/audit-actions.js';
+import { safeFetch } from '../../../api/src/common/egress/safe-fetch.js';
 
 const HIBP_RANGE_ENDPOINT = 'https://api.pwnedpasswords.com/range';
 
@@ -143,12 +144,16 @@ export class PwnedCheckWorker implements OnModuleDestroy {
   private async queryHibp(sha1Hex: string): Promise<number> {
     const prefix = sha1Hex.slice(0, 5);
     const suffix = sha1Hex.slice(5);
-    const res = await fetch(`${HIBP_RANGE_ENDPOINT}/${prefix}`, {
+    const res = await safeFetch(`${HIBP_RANGE_ENDPOINT}/${prefix}`, {
       headers: {
         'Add-Padding': 'true',
         'User-Agent': 'weavestream-password-vault',
       },
-      signal: AbortSignal.timeout(10_000),
+      timeoutMs: 10_000,
+      // The HIBP response is padded to a fixed size so it stays small;
+      // 256 KB is several orders of magnitude over what's expected and
+      // still cheap to load fully.
+      maxResponseBytes: 256 * 1024,
     });
     if (!res.ok) {
       throw new Error(`HIBP responded ${res.status}`);

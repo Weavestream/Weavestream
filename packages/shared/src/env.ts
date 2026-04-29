@@ -124,6 +124,27 @@ export const envSchema = z.object({
   // into a single bucket. Production deploys MUST count their hops.
   TRUST_PROXY_HOPS: intFromString(0, 10).default(1),
 
+  // Phase 6 — egress / SSRF guard.
+  //
+  // Every server-side outbound HTTP request flows through `safeFetch`,
+  // which resolves the hostname and refuses to connect when a target
+  // resolves to a loopback / RFC1918 / link-local / multicast / reserved
+  // IP. That blocks the standard SSRF playbook (operator paste of
+  // `http://127.0.0.1`, `http://169.254.169.254` for cloud metadata,
+  // `http://10.x.x.x` to peek at internal services).
+  //
+  // `EGRESS_ALLOW_PRIVATE_NETWORKS=true` disables the entire blocklist.
+  // Use only in lab / single-host setups where the API is talking to
+  // sibling containers over a flat private network and there are no
+  // operator-supplied URLs.
+  //
+  // `EGRESS_ALLOWED_PRIVATE_CIDRS` is the surgical alternative — a
+  // comma-separated list of CIDRs that are permitted even when the
+  // global blocklist is on. Use this for on-prem RMM endpoints
+  // (`10.42.0.0/16,192.168.50.0/24`).
+  EGRESS_ALLOW_PRIVATE_NETWORKS: boolish.default(false),
+  EGRESS_ALLOWED_PRIVATE_CIDRS: z.string().optional().default(''),
+
   LOG_LEVEL: z.enum(['trace', 'debug', 'info', 'warn', 'error', 'fatal']).default('info'),
 
   // Phase 4: MinIO object storage + upload policy.

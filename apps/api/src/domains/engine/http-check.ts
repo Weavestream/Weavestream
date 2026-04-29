@@ -21,6 +21,8 @@
  * "DNS resolution failed".
  */
 
+import { safeFetch } from '../../common/egress/safe-fetch.js';
+
 export interface HttpCheckResult {
   ok: boolean;
   status: number | null;
@@ -75,18 +77,13 @@ async function fetchWithTimeout(
   method: 'HEAD' | 'GET',
   timeoutMs: number,
 ): Promise<{ status: number }> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const res = await fetch(url, {
-      method,
-      redirect: 'follow',
-      signal: controller.signal,
-      // Keep the request small — we never read the body.
-      headers: { 'User-Agent': 'weavestream-alerts/1.0 (+https://weavestream.io)' },
-    });
-    return { status: res.status };
-  } finally {
-    clearTimeout(timer);
-  }
+  // safeFetch enforces the timeout, blocks SSRF targets, and caps the
+  // response body. We never read the body of a HEAD/GET probe.
+  const res = await safeFetch(url, {
+    method,
+    redirect: 'follow',
+    timeoutMs,
+    headers: { 'User-Agent': 'weavestream-alerts/1.0 (+https://weavestream.io)' },
+  });
+  return { status: res.status };
 }
