@@ -70,6 +70,8 @@ export const ActionValues = [
   'alert.manage',
 
   'security.read',
+
+  'ip_rule.manage',
 ] as const;
 
 export type Action = (typeof ActionValues)[number];
@@ -316,6 +318,15 @@ export const PERMISSIONS: Record<Action, PermissionRule> = {
     requireNonExpiredMembership: false,
     note: 'Read the admin Security Center: login failures, active lockouts, throttle blocks, and cross-user active sessions. Write actions on those rows still require their own capabilities (e.g. revoking another user\'s session needs USER_MANAGE).',
   },
+
+  'ip_rule.manage': {
+    scope: 'global',
+    requiredCapability: 'IP_RULE_MANAGE',
+    allowFull: false,
+    allowReadonly: false,
+    requireNonExpiredMembership: false,
+    note: 'Create, update, and delete IP allow/deny rules enforced globally before authentication.',
+  },
 };
 
 export const ACTION_HUMAN_LABELS: Record<Action, string> = {
@@ -348,6 +359,7 @@ export const ACTION_HUMAN_LABELS: Record<Action, string> = {
   'export.create': 'Trigger a company vault-archive PDF export',
   'alert.manage': 'Manage alert configurations',
   'security.read': 'View the Security Center (logins, lockouts, sessions)',
+  'ip_rule.manage': 'Manage IP allow/deny rules',
 };
 
 // Re-exported for callers that previously consumed the unused

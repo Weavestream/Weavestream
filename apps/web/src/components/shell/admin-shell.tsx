@@ -50,6 +50,7 @@ export function AdminShell({
   const showExport = hasCapability(me, 'EXPORT_CREATE');
   const showAlerts = hasCapability(me, 'ALERT_MANAGE');
   const showSecurity = hasCapability(me, 'SECURITY_READ');
+  const showIpRules = hasCapability(me, 'IP_RULE_MANAGE');
 
   const primaryItems: SidebarSection['items'] = [
     { id: 'dashboard', label: 'Dashboard', icon: 'home', href: '/admin' },
@@ -133,6 +134,14 @@ export function AdminShell({
       label: 'Settings',
       icon: 'gear',
       href: '/admin/settings',
+    });
+  }
+  if (showIpRules) {
+    adminItems.push({
+      id: 'ip-rules',
+      label: 'IP Rules',
+      icon: 'shield',
+      href: '/admin/ip-rules',
     });
   }
   if (showExport) {

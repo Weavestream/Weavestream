@@ -425,6 +425,31 @@ describe('PermissionService.evaluate — semantic checks', () => {
     ).toBe(true);
   });
 
+  it('ip_rule.manage requires IP_RULE_MANAGE and works without a companyId', () => {
+    expect(
+      PermissionService.evaluate(
+        buildUser('OPERATOR', 'NONE', ['IP_RULE_MANAGE']),
+        'ip_rule.manage',
+        [],
+      ).allowed,
+    ).toBe(true);
+    expect(
+      PermissionService.evaluate(
+        buildUser('OPERATOR', 'FULL'),
+        'ip_rule.manage',
+        [],
+      ).allowed,
+    ).toBe(false);
+    // SUPER_ADMIN bypasses even without the cap.
+    expect(
+      PermissionService.evaluate(
+        buildUser('SUPER_ADMIN'),
+        'ip_rule.manage',
+        [],
+      ).allowed,
+    ).toBe(true);
+  });
+
   it('layout.manage.global requires LAYOUT_MANAGE for OPERATOR', () => {
     expect(
       PermissionService.evaluate(

@@ -20,6 +20,15 @@ this project adheres to [Semantic Versioning](https://semver.org/).
   requires `USER_MANAGE` and writes a `security.session.revoke`
   audit row tagged with the target user. Backed by
   [`apps/api/src/security/`](apps/api/src/security/).
+- **IP allow/deny rules.** New `/admin/ip-rules` page lets admins
+  with `IP_RULE_MANAGE` capability create global IP-based access rules.
+  Rules support single IPv4 addresses (192.168.1.1) or CIDR ranges
+  (10.0.0.0/8) with ALLOW or DENY actions. Rules are evaluated in
+  priority order (lowest first) by `IpRuleGuard`, which runs before
+  `AuthGuard` on every request. First match wins; if no rules match,
+  access is allowed (default-allow policy). All rule changes are
+  audited (`security.ip_rule.{create,update,delete}`). The new
+  `IP_RULE_MANAGE` capability is added to `MANAGER_PRESET`.
 
 ### Security
 

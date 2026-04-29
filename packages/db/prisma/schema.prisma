@@ -55,6 +55,8 @@ enum PlatformCapability {
   EXPORT_CREATE
   ALERT_MANAGE
   SECURITY_READ
+  // Phase 5: IP allow/deny rule management
+  IP_RULE_MANAGE
 }
 
 // Phase 3: every AssetField has exactly one FieldType. The type is immutable
@@ -1283,6 +1285,34 @@ model AlertTrigger {
   @@unique([alertConfigId, key])
   @@index([alertConfigId, firedAt])
   @@map("alert_trigger")
+}
+
+// Phase 5: Manual IP allow/deny rules. Enforced globally before any
+// authentication attempt. Rules are evaluated in priority order (ascending);
+// the first matching rule wins. If no rules match, access is allowed.
+// Supports single IPs (192.168.1.1) or CIDR ranges (10.0.0.0/8).
+enum IpRuleAction {
+  ALLOW
+  DENY
+}
+
+model IpRule {
+  id        String     @id @default(uuid()) @db.Uuid
+  // CIDR notation or single IP: "192.168.1.1" or "10.0.0.0/8"
+  cidr      String
+  action    IpRuleAction
+  // Optional human-readable note explaining why this rule exists
+  note      String?
+  // Priority for evaluation order (lower = evaluated first)
+  priority  Int        @default(0)
+  // Disabled rules are ignored during evaluation but kept in DB
+  enabled   Boolean    @default(true)
+  createdBy String?    @map("created_by") @db.Uuid
+  createdAt DateTime   @default(now()) @map("created_at")
+  updatedAt DateTime   @updatedAt @map("updated_at")
+
+  @@index([enabled, priority])
+  @@map("ip_rules")
 }
 
 // IPAM — company-scoped IPv4 subnet registry. Operators define a CIDR

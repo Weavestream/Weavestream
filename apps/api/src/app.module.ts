@@ -54,6 +54,8 @@ import { EmailModule } from './email/email.module.js';
 import { AlertsModule } from './alerts/alerts.module.js';
 import { AlertsController } from './alerts/alerts.controller.js';
 import { SecurityModule } from './security/security.module.js';
+import { IpRulesModule } from './ip-rules/ip-rules.module.js';
+import { IpRuleGuard } from './ip-rules/ip-rule.guard.js';
 import { AuthGuard } from './auth/guards/auth.guard.js';
 import { MfaEnrollmentGuard } from './auth/guards/mfa-enrollment.guard.js';
 import { CsrfGuard } from './auth/guards/csrf.guard.js';
@@ -158,6 +160,7 @@ const httpSerializers = {
     EmailModule,
     AlertsModule,
     SecurityModule,
+    IpRulesModule,
     UiModule,
     HealthModule,
   ],
@@ -172,11 +175,15 @@ const httpSerializers = {
   ],
   providers: [
     // Guard ordering matters: Nest runs global guards in the order
-    // they're registered. `AuthGuard` must run before `UserThrottlerGuard`
-    // so the throttler can key on `req.user.id` instead of falling back
-    // to IP for every authenticated request. `CsrfGuard` runs after
-    // throttling so abusive clients can't burn CSRF budget by spamming
-    // invalid requests.
+    // they're registered.
+    // 1. `IpRuleGuard` runs first to block/allow by IP before any auth.
+    //    The guard and `IpRulesService` both depend on a shared
+    //    `IpRuleCacheService` (provided by IpRulesModule) for cache
+    //    invalidation — no circular dependency between them.
+    // 2. `AuthGuard` authenticates the request.
+    // 3. `UserThrottlerGuard` throttles by user.id (or IP if unauthenticated).
+    // 4. `CsrfGuard` runs after throttling so abusive clients can't burn budget.
+    { provide: APP_GUARD, useClass: IpRuleGuard },
     { provide: APP_GUARD, useClass: AuthGuard },
     { provide: APP_GUARD, useClass: UserThrottlerGuard },
     { provide: APP_GUARD, useClass: MfaEnrollmentGuard },
