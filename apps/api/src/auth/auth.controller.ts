@@ -110,9 +110,11 @@ export class AuthController {
     // we still re-authenticate against the access cookie manually to bind the
     // verify to the caller's session.
     const names = cookieNames(this.env);
-    const jwt = (req.signedCookies[names.access] ?? req.cookies[names.access]) as
-      | string
-      | undefined;
+    // Only trust the signed read; never fall back to `req.cookies`, which
+    // would accept an attacker-set unsigned cookie of the same name and
+    // defeat the cookie-signing layer (CWE-807 / CWE-290).
+    const signed = req.signedCookies[names.access];
+    const jwt = typeof signed === 'string' ? signed : undefined;
     if (!jwt) throw new UnauthorizedException();
     const payload = await this.tokens.verifyAccessToken(jwt);
     if (!payload) throw new UnauthorizedException();

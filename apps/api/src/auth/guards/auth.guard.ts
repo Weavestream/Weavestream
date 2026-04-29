@@ -32,9 +32,14 @@ export class AuthGuard implements CanActivate {
     const req = ctx.switchToHttp().getRequest<Request & { user?: AuthedUser }>();
     const res = ctx.switchToHttp().getResponse<Response>();
     const names = cookieNames(this.env);
-    const jwt = (req.signedCookies[names.access] ?? req.cookies[names.access]) as
-      | string
-      | undefined;
+    // Only trust the signed read. cookie-parser returns the verified value
+    // here when the signature checks out, `false` when the cookie was sent
+    // with an `s:` prefix but a bad signature, and `undefined` when no
+    // signed cookie was sent at all. Falling back to `req.cookies` would
+    // accept a raw attacker-controlled cookie of the same name, defeating
+    // the cookie-signing layer (CWE-807 / CWE-290).
+    const signed = req.signedCookies[names.access];
+    const jwt = typeof signed === 'string' ? signed : undefined;
 
     // Try the short-lived access token first; if missing or invalid, fall
     // through to silent refresh using the 30-day signed session cookie.
