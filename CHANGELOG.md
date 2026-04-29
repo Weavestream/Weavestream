@@ -6,6 +6,8 @@ this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.5.2] - 2026-04-29
+
 ### Added
 
 - **Admin Security Center (read-only).** New
@@ -84,7 +86,9 @@ this project adheres to [Semantic Versioning](https://semver.org/).
   to match your real topology if you run multiple proxies in front of
   the stack (see `docs/CONFIGURATION.md` → "Client IP attribution").
 
-### [1.5.1] - 2026-04-29
+## [1.5.1] - 2026-04-29
+
+### Fixed
 
 - **IPAM resilience against malformed IP values.** The subnet occupants query no longer fails when an asset's `IP_ADDRESS` field somehow contains a non-canonical value (e.g. a multi-NIC RMM agent that flattens addresses to `10.0.0.35, 10.0.0.50`). Candidate values are now strict-regex-filtered in SQL and re-validated in JS, so a single bad row can never abort the entire IPAM read.
 - **Driver-sourced field validation.** The `IP_ADDRESS` field strategy now refuses to persist values that don't round-trip through its schema, and the integration sync runner re-validates every projected value with the strategy's `valueSchema` before writing — preventing upstream drivers from leaking malformed values into typed columns.
@@ -486,7 +490,8 @@ Initial public release.
   database-per-tenant.
 - English UI only.
 
-[Unreleased]: https://github.com/Weavestream/Weavestream/compare/v1.5.0...HEAD
+[Unreleased]: https://github.com/Weavestream/Weavestream/compare/v1.5.2...HEAD
+[1.5.2]: https://github.com/Weavestream/Weavestream/releases/tag/v1.5.2
 [1.5.1]: https://github.com/Weavestream/Weavestream/releases/tag/v1.5.1
 [1.5.0]: https://github.com/Weavestream/Weavestream/releases/tag/v1.5.0
 [1.4.1]: https://github.com/Weavestream/Weavestream/releases/tag/v1.4.1

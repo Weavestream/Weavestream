@@ -32,16 +32,26 @@ audience without code changes.
 
 - **Tenant documentation.** Rich-text articles (Tiptap), folders, photo
   galleries, and configurable asset layouts per organization.
-- **Password management.** Comprehensive credential storage with secure
-  sharing and role-based access control.
+- **Password management.** AES-256-GCM encrypted credential storage with
+  TOTP support, breach detection, and role-based access control.
+- **IP Address Management (IPAM).** Manage IPv4 subnets, track utilization,
+  detect conflicts with asset IP fields, and expose network data to clients.
+- **Domain & SSL monitoring.** WHOIS expiry, DNS health, and TLS certificate
+  validity checks with aggregated expiration dashboards.
 - **Expiration tracking.** Monitor asset expiration dates (licenses,
-  warranties, SSL certificates) with visibility into upcoming renewals.
+  warranties, SSL certificates, passwords) with visibility into upcoming renewals.
+- **Alert system.** Email notifications for expirations, website downtime,
+  and record lifecycle events with flexible scheduling.
+- **Security Center.** Admin dashboard for login activity, active sessions,
+  lockouts, rate-limit blocks, and egress attempt monitoring.
+- **Integrations.** Sync inventory from external platforms (Action1, UniFi)
+  into tenant asset records on demand or on a schedule.
 - **Invite-only user management** with per-user setup tokens, forced
-  TOTP MFA, and append-only audit logging across every mutation.
+  TOTP MFA, IP-based access rules, and append-only audit logging.
 - **Two-layer RBAC.** Global roles combined with per-tenant memberships
   evaluated from a single permission matrix.
 - **Client portals.** Each tenant gets a read-only portal where client
-  users see only the articles and assets their role allows.
+  users see only the articles, assets, passwords, and domains their role allows.
 - **Bring-your-own storage.** MinIO-compatible object store with one
   bucket per tenant for tenant-level isolation at the storage layer.
 - **Docker-first.** Three containers (`api`, `web`, `worker`) plus
@@ -90,9 +100,9 @@ Full guided walkthrough on the website: [weavestream.io/getting-started](https:/
 | [weavestream.io/features/assets](https://weavestream.io/features/assets) | Everyone |
 | [weavestream.io/features/passwords](https://weavestream.io/features/passwords) | Everyone |
 | [weavestream.io/features/articles](https://weavestream.io/features/articles) | Everyone |
-| [weavestream.io/features/domains](https://weavestream.io/features/domains) | Everyone |
-| [weavestream.io/features/domains](https://weavestream.io/features/domains) | Everyone |
-| [weavestream.io/features/domains](https://weavestream.io/features/domains) | Everyone |
+| [weavestream.io/features/ipam](https://weavestream.io/features/ipam) | Everyone |
+| [weavestream.io/features/integrations](https://weavestream.io/features/integrations) | Everyone |
+| [weavestream.io/guides/security-center](https://weavestream.io/guides/security-center) | Everyone |
 | [weavestream.io/overview/changelog](https://weavestream.io/overview/changelog) | Everyone |
 
 ## Project status
