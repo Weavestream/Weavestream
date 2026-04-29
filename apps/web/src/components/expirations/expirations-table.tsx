@@ -138,6 +138,7 @@ export function ExpirationsTable({
     <DataTable
       columns={columns}
       rows={dataRows}
+      disableSort
       rowHref={(row) => detailHref(row)}
       renderMobileCard={(row) => (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>

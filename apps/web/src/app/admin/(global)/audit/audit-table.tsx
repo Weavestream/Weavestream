@@ -269,6 +269,7 @@ export function AuditTable({
       <DataTable
         columns={columns}
         rows={rows}
+        disableSort
         onRowClick={(r) => setSelected(r)}
         empty={
           requireCompany && !filters.companyId

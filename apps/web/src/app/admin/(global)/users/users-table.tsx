@@ -40,6 +40,7 @@ export function UsersTable({
       {
         id: 'name',
         header: 'User',
+        sortValue: (r) => r.name.toLowerCase(),
         render: (r) => (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
             <span style={{ color: 'var(--text)', fontWeight: 500 }}>{r.name}</span>
@@ -59,6 +60,7 @@ export function UsersTable({
         id: 'role',
         header: 'Role',
         width: 220,
+        sortValue: (r) => roleLabel(r.role).toLowerCase(),
         render: (r) => (
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
             <Tag tone="accent">{roleLabel(r.role)}</Tag>
@@ -79,6 +81,7 @@ export function UsersTable({
         id: 'mfa',
         header: 'MFA',
         width: 90,
+        sortValue: (r) => (r.mfaEnabled ? 1 : 0),
         render: (r) =>
           r.mfaEnabled ? (
             <Tag tone="ok" dot>
@@ -94,6 +97,7 @@ export function UsersTable({
         id: 'status',
         header: 'Status',
         width: 120,
+        sortValue: (r) => (r.isActive ? 1 : 0),
         render: (r) =>
           r.isActive ? (
             <Tag tone="ok" dot>
@@ -110,6 +114,7 @@ export function UsersTable({
         header: 'Last login',
         width: 150,
         mono: true,
+        sortValue: (r) => (r.lastLoginAt ? new Date(r.lastLoginAt) : null),
         render: (r) => (
           <span style={{ color: 'var(--dim)' }}>
             {r.lastLoginAt ? relative(r.lastLoginAt) : 'never'}

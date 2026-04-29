@@ -143,6 +143,7 @@ export function SubnetDetailView({
       header: 'IP',
       width: 160,
       mono: true,
+      sortValue: (r) => ipToInt(r.ip),
       render: (r) => (
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
           {r.ip}
@@ -162,6 +163,10 @@ export function SubnetDetailView({
     {
       id: 'name',
       header: 'Asset / label',
+      sortValue: (r) =>
+        r.kind === 'reservation'
+          ? r.reservation.label.toLowerCase()
+          : r.occupant.assetName.toLowerCase(),
       render: (r) => {
         if (r.kind === 'reservation') {
           return (
@@ -181,6 +186,10 @@ export function SubnetDetailView({
     {
       id: 'layout',
       header: 'Layout',
+      sortValue: (r) =>
+        r.kind === 'reservation'
+          ? null
+          : r.occupant.assetLayoutName.toLowerCase(),
       render: (r) => {
         if (r.kind === 'reservation') {
           return (
@@ -204,6 +213,10 @@ export function SubnetDetailView({
     {
       id: 'field',
       header: 'Field / notes',
+      sortValue: (r) => {
+        if (r.kind === 'asset') return r.occupant.fieldName.toLowerCase();
+        return r.reservation.notes?.toLowerCase() ?? null;
+      },
       render: (r) =>
         r.kind === 'asset'
           ? r.occupant.fieldName
@@ -217,32 +230,33 @@ export function SubnetDetailView({
     occupantColumns.push({
       id: 'actions',
       header: '',
-      width: 80,
+      width: 180,
       align: 'right',
+      sortable: false,
       render: (r) => {
         if (r.kind !== 'reservation') return null;
         return (
           <div
-            style={{ display: 'inline-flex', gap: 4, justifyContent: 'flex-end' }}
+            style={{ display: 'inline-flex', gap: 6, justifyContent: 'flex-end' }}
           >
             <Btn
               size="sm"
               kind="ghost"
-              iconOnly
               icon={Icon.edit}
-              aria-label="Edit reservation"
               onClick={() =>
                 setResDialog({ kind: 'edit', row: r.reservation })
               }
-            />
+            >
+              Edit
+            </Btn>
             <Btn
               size="sm"
               kind="ghost"
-              iconOnly
               icon={Icon.trash}
-              aria-label="Delete reservation"
               onClick={() => deleteReservation(r.reservation.id)}
-            />
+            >
+              Delete
+            </Btn>
           </div>
         );
       },
@@ -255,16 +269,19 @@ export function SubnetDetailView({
       header: 'IP',
       width: 160,
       mono: true,
+      sortValue: (r) => ipToInt(r.ipAddress),
       render: (r) => r.ipAddress,
     },
     {
       id: 'label',
       header: 'Label',
+      sortValue: (r) => r.label.toLowerCase(),
       render: (r) => <span style={{ color: 'var(--text)' }}>{r.label}</span>,
     },
     {
       id: 'notes',
       header: 'Notes',
+      sortValue: (r) => r.notes?.toLowerCase() ?? null,
       render: (r) =>
         r.notes ?? <span style={{ color: 'var(--dim)' }}>—</span>,
     },
@@ -274,28 +291,29 @@ export function SubnetDetailView({
     reservationColumns.push({
       id: 'actions',
       header: '',
-      width: 80,
+      width: 180,
       align: 'right',
+      sortable: false,
       render: (r) => (
         <div
-          style={{ display: 'inline-flex', gap: 4, justifyContent: 'flex-end' }}
+          style={{ display: 'inline-flex', gap: 6, justifyContent: 'flex-end' }}
         >
           <Btn
             size="sm"
             kind="ghost"
-            iconOnly
             icon={Icon.edit}
-            aria-label="Edit reservation"
             onClick={() => setResDialog({ kind: 'edit', row: r })}
-          />
+          >
+            Edit
+          </Btn>
           <Btn
             size="sm"
             kind="ghost"
-            iconOnly
             icon={Icon.trash}
-            aria-label="Delete reservation"
             onClick={() => deleteReservation(r.id)}
-          />
+          >
+            Delete
+          </Btn>
         </div>
       ),
     });

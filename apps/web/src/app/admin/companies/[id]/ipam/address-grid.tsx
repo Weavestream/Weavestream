@@ -6,7 +6,12 @@ import type {
   SubnetOccupant,
   IpReservationRow,
 } from '../../../../../lib/server-api';
-import { Btn, Tag } from '../../../../../components/ui';
+import {
+  Btn,
+  DataTable,
+  type DataColumn,
+  Tag,
+} from '../../../../../components/ui';
 
 type CellState =
   | 'free'
@@ -294,57 +299,86 @@ function CompactList({
     );
   }
 
+  type Row = {
+    id: string;
+    ip: string;
+    occupants: SubnetOccupant[];
+    reservation: IpReservationRow | null;
+  };
+  const rows: Row[] = allIps.map((ip) => ({
+    id: ip,
+    ip,
+    occupants: occupantMap.get(ip) ?? [],
+    reservation: reservationMap.get(ip) ?? null,
+  }));
+
+  const columns: DataColumn<Row>[] = [
+    {
+      id: 'ip',
+      header: 'IP',
+      width: 200,
+      mono: true,
+      sortValue: (r) => ipToInt(r.ip),
+      render: (r) => (
+        <span>
+          {r.ip}
+          {r.occupants.length > 1 && (
+            <Tag tone="danger" style={{ marginLeft: 6, fontSize: 11 }}>
+              conflict
+            </Tag>
+          )}
+        </span>
+      ),
+    },
+    {
+      id: 'occupant',
+      header: 'Occupant',
+      sortValue: (r) =>
+        r.occupants[0]?.assetName?.toLowerCase() ??
+        r.reservation?.label?.toLowerCase() ??
+        null,
+      render: (r) => (
+        <span>
+          {r.occupants.map((o, i) => (
+            <span key={i}>
+              {i > 0 && ', '}
+              <Link
+                href={`/admin/companies/${companyId}/assets/${o.assetId}`}
+                style={{ color: 'var(--accent)', textDecoration: 'none' }}
+              >
+                {o.assetName}
+              </Link>
+            </span>
+          ))}
+          {r.reservation && !r.occupants.length && r.reservation.label}
+        </span>
+      ),
+    },
+    {
+      id: 'type',
+      header: 'Type',
+      width: 120,
+      sortValue: (r) =>
+        r.occupants.length > 0 ? 'asset' : r.reservation ? 'reserved' : '',
+      render: (r) =>
+        r.occupants.length > 0 ? (
+          <Tag tone="accent" style={{ fontSize: 11 }}>
+            asset
+          </Tag>
+        ) : r.reservation ? (
+          <Tag tone="outline" style={{ fontSize: 11 }}>
+            reserved
+          </Tag>
+        ) : null,
+    },
+  ];
+
   return (
     <div>
       <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 8 }}>
         Showing {allIps.length} assigned addresses (subnet too large for full grid view)
       </div>
-      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-        <thead>
-          <tr style={{ borderBottom: '1px solid var(--border)' }}>
-            <Th>IP</Th>
-            <Th>Occupant</Th>
-            <Th>Type</Th>
-          </tr>
-        </thead>
-        <tbody>
-          {allIps.map((ip) => {
-            const occ = occupantMap.get(ip) ?? [];
-            const res = reservationMap.get(ip);
-            return (
-              <tr key={ip} style={{ borderBottom: '1px solid var(--border)' }}>
-                <td style={{ padding: '8px 12px', fontFamily: 'var(--font-mono, monospace)' }}>
-                  {ip}
-                  {occ.length > 1 && (
-                    <Tag tone="danger" style={{ marginLeft: 6, fontSize: 11 }}>conflict</Tag>
-                  )}
-                </td>
-                <td style={{ padding: '8px 12px' }}>
-                  {occ.map((o, i) => (
-                    <span key={i}>
-                      {i > 0 && ', '}
-                      <Link
-                        href={`/admin/companies/${companyId}/assets/${o.assetId}`}
-                        style={{ color: 'var(--accent)', textDecoration: 'none' }}
-                      >
-                        {o.assetName}
-                      </Link>
-                    </span>
-                  ))}
-                  {res && !occ.length && res.label}
-                </td>
-                <td style={{ padding: '8px 12px' }}>
-                  {occ.length > 0 ? (
-                    <Tag tone="accent" style={{ fontSize: 11 }}>asset</Tag>
-                  ) : res ? (
-                    <Tag tone="outline" style={{ fontSize: 11 }}>reserved</Tag>
-                  ) : null}
-                </td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
+      <DataTable columns={columns} rows={rows} />
     </div>
   );
 }
@@ -358,11 +392,14 @@ function LegendDot({ color, label }: { color: string; label: string }) {
   );
 }
 
-function Th({ children, style }: { children?: React.ReactNode; style?: React.CSSProperties }) {
+function ipToInt(ip: string): number {
+  const parts = ip.split('.').map(Number);
+  if (parts.length !== 4 || parts.some((p) => Number.isNaN(p))) return 0;
   return (
-    <th style={{ padding: '8px 12px', textAlign: 'left', fontWeight: 500, fontSize: 12, color: 'var(--muted)', ...style }}>
-      {children}
-    </th>
+    ((parts[0]! << 24) >>> 0) +
+    ((parts[1]! << 16) >>> 0) +
+    ((parts[2]! << 8) >>> 0) +
+    (parts[3]! >>> 0)
   );
 }
 

@@ -88,6 +88,7 @@ export function SubnetsBrowser({
     {
       id: 'name',
       header: 'Name',
+      sortValue: (r) => r.name.toLowerCase(),
       render: (r) => (
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
           <span style={{ color: 'var(--text)', fontWeight: 500 }}>{r.name}</span>
@@ -105,12 +106,18 @@ export function SubnetsBrowser({
       header: 'CIDR',
       width: 160,
       mono: true,
+      sortValue: (r) => {
+        const [host, prefix] = r.cidr.split('/');
+        if (!host || !prefix) return null;
+        return ipToInt(host) * 64 + Number(prefix);
+      },
       render: (r) => r.cidr,
     },
     {
       id: 'vlan',
       header: 'VLAN',
       width: 80,
+      sortValue: (r) => r.vlanId,
       render: (r) => (r.vlanId != null ? String(r.vlanId) : <span style={{ color: 'var(--dim)' }}>—</span>),
     },
     {
@@ -118,11 +125,16 @@ export function SubnetsBrowser({
       header: 'Gateway',
       width: 140,
       mono: true,
+      sortValue: (r) => (r.gateway ? ipToInt(r.gateway) : null),
       render: (r) => r.gateway ?? <span style={{ color: 'var(--dim)' }}>—</span>,
     },
     {
       id: 'util',
       header: 'Utilization',
+      sortValue: (r) =>
+        r.utilization.totalUsable > 0
+          ? r.utilization.claimed / r.utilization.totalUsable
+          : 0,
       render: (r) => <UtilizationCell row={r} />,
     },
   ];
@@ -131,40 +143,41 @@ export function SubnetsBrowser({
     columns.push({
       id: 'actions',
       header: '',
-      width: 96,
+      width: 200,
       align: 'right',
+      sortable: false,
       render: (r) => {
         const archived = !!r.archivedAt;
         return (
           <div
-            style={{ display: 'inline-flex', gap: 4, justifyContent: 'flex-end', opacity: busyId === r.id ? 0.5 : 1 }}
+            style={{ display: 'inline-flex', gap: 6, justifyContent: 'flex-end', opacity: busyId === r.id ? 0.5 : 1 }}
           >
             <Btn
               size="sm"
               kind="ghost"
-              iconOnly
               icon={Icon.edit}
-              aria-label="Edit subnet"
               onClick={() => setDialog({ kind: 'edit', row: r })}
-            />
+            >
+              Edit
+            </Btn>
             {archived ? (
               <Btn
                 size="sm"
                 kind="ghost"
-                iconOnly
                 icon={Icon.refresh}
-                aria-label="Restore subnet"
                 onClick={() => restore(r.id)}
-              />
+              >
+                Restore
+              </Btn>
             ) : (
               <Btn
                 size="sm"
                 kind="ghost"
-                iconOnly
                 icon={Icon.archive}
-                aria-label="Archive subnet"
                 onClick={() => archive(r.id)}
-              />
+              >
+                Archive
+              </Btn>
             )}
           </div>
         );

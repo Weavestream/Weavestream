@@ -140,6 +140,7 @@ export function CompanyMemberships({
     {
       id: 'user',
       header: 'Member',
+      sortValue: (r) => r.user.name.toLowerCase(),
       render: (r) => (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
           <span style={{ color: 'var(--text)', fontWeight: 500 }}>{r.user.name}</span>
@@ -155,12 +156,14 @@ export function CompanyMemberships({
       id: 'role',
       header: 'Membership role',
       width: 170,
+      sortValue: (r) => r.role.toLowerCase(),
       render: (r) => <Tag tone="accent">{membershipRoleLabel(r.role)}</Tag>,
     },
     {
       id: 'userRole',
       header: 'Global role',
       width: 160,
+      sortValue: (r) => r.user.role.toLowerCase(),
       render: (r) => (
         <span style={{ color: 'var(--muted)', fontFamily: 'var(--font-mono)', fontSize: 11 }}>
           {roleLabel(r.user.role)}
@@ -172,6 +175,7 @@ export function CompanyMemberships({
       header: 'Expires',
       width: 150,
       mono: true,
+      sortValue: (r) => (r.expiresAt ? new Date(r.expiresAt) : null),
       render: (r) =>
         r.expiresAt ? (
           <ExpirationTag date={r.expiresAt} />
@@ -187,6 +191,7 @@ export function CompanyMemberships({
       header: '',
       width: 140,
       align: 'right',
+      sortable: false,
       render: (r) => (
         <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
           <Btn kind="ghost" size="sm" icon={Icon.edit} onClick={() => setEditing(r)}>

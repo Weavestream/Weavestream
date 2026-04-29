@@ -13,6 +13,8 @@ import { apiFetch } from '../../../../../../lib/api';
 import { copyToClipboard } from '../../../../../../lib/clipboard';
 import {
   Btn,
+  DataTable,
+  type DataColumn,
   Dialog,
   Field,
   Icon,
@@ -405,6 +407,8 @@ function Label({ children }: { children: React.ReactNode }) {
   );
 }
 
+type VersionRow = PasswordVersionRow & { id: string };
+
 function VersionsTable({
   companyId,
   passwordId,
@@ -446,93 +450,123 @@ function VersionsTable({
     startTransition(() => router.refresh());
   }
 
+  // DataTable rows require a string `id`. Versions key naturally on the
+  // numeric `version` column so we map to `${passwordId}-v${version}`.
+  const rows: VersionRow[] = useMemo(
+    () =>
+      versions.map((v) => ({ ...v, id: `${passwordId}-v${v.version}` })),
+    [versions, passwordId],
+  );
+
+  const columns: DataColumn<VersionRow>[] = [
+    {
+      id: 'version',
+      header: '#',
+      width: 60,
+      mono: true,
+      sortValue: (v) => v.version,
+      render: (v) => `v${v.version}`,
+    },
+    {
+      id: 'changedBy',
+      header: 'Changed by',
+      width: 180,
+      sortValue: (v) => (v.changedByName ?? v.changedBy ?? '').toLowerCase(),
+      render: (v) => (
+        <span
+          style={{
+            whiteSpace: 'nowrap',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            display: 'inline-block',
+            maxWidth: '100%',
+          }}
+        >
+          {v.changedByName ?? v.changedBy}
+        </span>
+      ),
+    },
+    {
+      id: 'fields',
+      header: 'Fields',
+      width: 220,
+      sortValue: (v) => v.changedFields.length,
+      render: (v) => (
+        <div
+          style={{
+            display: 'flex',
+            gap: 4,
+            flexWrap: 'wrap',
+            maxWidth: 200,
+          }}
+        >
+          {v.changedFields.map((f) => (
+            <Tag key={f} tone="outline" style={{ fontSize: 10 }}>
+              {f}
+            </Tag>
+          ))}
+        </div>
+      ),
+    },
+    {
+      id: 'reason',
+      header: 'Reason',
+      sortValue: (v) => v.changeReason?.toLowerCase() ?? null,
+      render: (v) => (
+        <span
+          style={{
+            color: 'var(--muted)',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            display: 'inline-block',
+            maxWidth: '100%',
+          }}
+        >
+          {v.changeReason ?? '—'}
+        </span>
+      ),
+    },
+    {
+      id: 'when',
+      header: 'When',
+      width: 180,
+      mono: true,
+      sortValue: (v) => new Date(v.createdAt),
+      render: (v) => (
+        <span style={{ whiteSpace: 'nowrap' }}>{fmtDateTime(v.createdAt)}</span>
+      ),
+    },
+  ];
+
+  if (canManage) {
+    columns.push({
+      id: 'actions',
+      header: '',
+      width: 120,
+      align: 'right',
+      sortable: false,
+      render: (v) => (
+        <Btn
+          size="sm"
+          kind="ghost"
+          icon={Icon.refresh}
+          disabled={busy === v.version}
+          onClick={() => void restore(v.version)}
+        >
+          Restore
+        </Btn>
+      ),
+    });
+  }
+
   return (
-    <table
-      style={{
-        width: '100%',
-        borderCollapse: 'collapse',
-        fontSize: 12.5,
-        tableLayout: 'fixed',
-      }}
-    >
-      <colgroup>
-        <col style={{ width: 48 }} />
-        <col style={{ width: 180 }} />
-        <col style={{ width: 200 }} />
-        <col />
-        <col style={{ width: 160 }} />
-        <col style={{ width: 90 }} />
-      </colgroup>
-      <thead>
-        <tr style={{ textAlign: 'left', color: 'var(--muted)' }}>
-          <th style={vth}>#</th>
-          <th style={vth}>Changed by</th>
-          <th style={vth}>Fields</th>
-          <th style={vth}>Reason</th>
-          <th style={vth}>When</th>
-          <th style={vth}></th>
-        </tr>
-      </thead>
-      <tbody>
-        {versions.map((v) => (
-          <tr key={v.version} style={{ borderTop: '1px solid var(--line)' }}>
-            <td style={vtd}>v{v.version}</td>
-            <td style={vtdNoWrap}>{v.changedByName ?? v.changedBy}</td>
-            <td style={vtd}>
-              <div
-                style={{
-                  display: 'flex',
-                  gap: 4,
-                  flexWrap: 'wrap',
-                  maxWidth: 200,
-                }}
-              >
-                {v.changedFields.map((f) => (
-                  <Tag key={f} tone="outline" style={{ fontSize: 10 }}>
-                    {f}
-                  </Tag>
-                ))}
-              </div>
-            </td>
-            <td
-              style={{
-                ...vtd,
-                color: 'var(--muted)',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-              }}
-            >
-              {v.changeReason ?? '—'}
-            </td>
-            <td style={{ ...vtdNoWrap, fontFamily: 'var(--font-mono)' }}>
-              {fmtDateTime(v.createdAt)}
-            </td>
-            <td style={{ ...vtd, textAlign: 'right' }}>
-              {canManage && (
-                <Btn
-                  size="sm"
-                  disabled={busy === v.version}
-                  onClick={() => void restore(v.version)}
-                >
-                  Restore
-                </Btn>
-              )}
-            </td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
+    <DataTable
+      columns={columns}
+      rows={rows}
+      defaultSort={{ columnId: 'version', direction: 'desc' }}
+    />
   );
 }
-
-const vth = { padding: '8px 12px', fontWeight: 500 } as const;
-const vtd = { padding: '8px 12px', verticalAlign: 'top' } as const;
-const vtdNoWrap = {
-  ...vtd,
-  whiteSpace: 'nowrap' as const,
-  overflow: 'hidden' as const,
-  textOverflow: 'ellipsis' as const,
-};
 
 function EditPasswordDialog({
   companyId,

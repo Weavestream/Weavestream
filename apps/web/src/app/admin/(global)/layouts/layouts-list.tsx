@@ -1,12 +1,20 @@
 'use client';
 
-import { useEffect, useState, useTransition } from 'react';
+import { useEffect, useMemo, useState, useTransition } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { apiFetch } from '../../../../lib/api';
 import type { LayoutSummary } from '../../../../lib/server-api';
-import { Btn, Icon, LayoutSwatch, Tag, useToast } from '../../../../components/ui';
-import { useIsMobile } from '../../../../lib/hooks/use-is-mobile';
+import {
+  Btn,
+  DataTable,
+  type DataColumn,
+  Icon,
+  LayoutSwatch,
+  MobileCardRow,
+  Tag,
+  useToast,
+} from '../../../../components/ui';
 import { LayoutSettingsDialog } from './layout-settings-dialog';
 import { LayoutArchiveDialog } from './layout-archive-dialog';
 
@@ -22,7 +30,10 @@ import { LayoutArchiveDialog } from './layout-archive-dialog';
  *
  * Archived layouts are always rendered at the bottom and are never
  * part of the active ordering (the server-side reorder validator
- * refuses archived ids outright).
+ * refuses archived ids outright). Sorting is disabled here because the
+ * canonical order is meaningful (it drives the sidebar) and the
+ * up/down reorder buttons would confuse users if a transient sort were
+ * shuffling rows around.
  */
 export function LayoutsList({
   layouts,
@@ -34,7 +45,6 @@ export function LayoutsList({
   const router = useRouter();
   const toast = useToast();
   const [pending, startTransition] = useTransition();
-  const isMobile = useIsMobile();
   // Open-dialog state lives on the list so row-level clicks can hand a
   // specific layout to a single shared dialog instance instead of each
   // row mounting its own.
@@ -55,6 +65,7 @@ export function LayoutsList({
 
   const active = localOrder.filter((l) => !l.archivedAt);
   const archived = localOrder.filter((l) => l.archivedAt);
+  const orderedRows = useMemo(() => [...active, ...archived], [active, archived]);
 
   const canReorder = canEdit && active.length > 1;
 
@@ -116,6 +127,187 @@ export function LayoutsList({
     </>
   ) : null;
 
+  const columns: DataColumn<LayoutSummary>[] = [
+    {
+      id: 'name',
+      header: 'Name',
+      width: 320,
+      render: (l) => (
+        <Link
+          href={`/admin/layouts/${l.id}/edit`}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 10,
+            color: 'inherit',
+          }}
+        >
+          <LayoutSwatch icon={l.icon} color={l.color} size={28} />
+          <span style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
+            <span style={{ fontWeight: 500, color: 'var(--text)' }}>
+              {l.name}
+              {l.archivedAt && (
+                <Tag tone="warn" style={{ marginLeft: 8 }}>
+                  archived
+                </Tag>
+              )}
+              {!l.isActive && !l.archivedAt && (
+                <Tag tone="outline" style={{ marginLeft: 8 }}>
+                  inactive
+                </Tag>
+              )}
+            </span>
+            <span
+              style={{
+                fontFamily: 'var(--font-mono)',
+                fontSize: 11,
+                color: 'var(--dim)',
+              }}
+            >
+              /{l.slug}
+            </span>
+          </span>
+        </Link>
+      ),
+    },
+    {
+      id: 'version',
+      header: 'Version',
+      width: 90,
+      mono: true,
+      render: (l) => `v${l.version}`,
+    },
+    {
+      id: 'fields',
+      header: 'Fields',
+      width: 110,
+      mono: true,
+      render: (l) => `${l.fields.filter((f) => !f.archivedAt).length} fields`,
+    },
+    {
+      id: 'updated',
+      header: 'Updated',
+      width: 140,
+      mono: true,
+      render: (l) => (
+        <span style={{ color: 'var(--dim)' }}>{relative(l.updatedAt)}</span>
+      ),
+    },
+  ];
+
+  if (canReorder) {
+    columns.unshift({
+      id: 'order',
+      header: 'Order',
+      width: 96,
+      align: 'center',
+      render: (l) => {
+        const activeIdx = active.findIndex((a) => a.id === l.id);
+        const isActiveRow = activeIdx >= 0;
+        if (!isActiveRow) return null;
+        return (
+          <div style={{ display: 'inline-flex', alignItems: 'center', gap: 2 }}>
+            <Btn
+              kind="ghost"
+              size="sm"
+              onClick={() => move(l.id, -1)}
+              disabled={activeIdx === 0 || pending}
+              title="Move up"
+              aria-label="Move up"
+            >
+              <span
+                style={{ display: 'inline-flex', transform: 'rotate(180deg)' }}
+              >
+                <Icon.chevronD size={11} />
+              </span>
+            </Btn>
+            <Btn
+              kind="ghost"
+              size="sm"
+              icon={Icon.chevronD}
+              onClick={() => move(l.id, 1)}
+              disabled={activeIdx === active.length - 1 || pending}
+              title="Move down"
+              aria-label="Move down"
+            />
+          </div>
+        );
+      },
+    });
+  }
+
+  if (canEdit) {
+    columns.push({
+      id: 'actions',
+      header: '',
+      width: 260,
+      align: 'right',
+      render: (l) => (
+        <div
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 4,
+            whiteSpace: 'nowrap',
+          }}
+        >
+          <Btn
+            kind="ghost"
+            size="sm"
+            icon={Icon.edit}
+            onClick={() => router.push(`/admin/layouts/${l.id}/edit`)}
+            title="Open builder"
+          >
+            Edit
+          </Btn>
+          {!l.archivedAt && (
+            <Btn
+              kind="ghost"
+              size="sm"
+              icon={Icon.gear}
+              onClick={() => setSettingsFor(l)}
+              title="Rename layout or change icon/color"
+            >
+              Rename
+            </Btn>
+          )}
+          <Btn
+            kind="ghost"
+            size="sm"
+            icon={l.archivedAt ? Icon.check : Icon.archive}
+            onClick={() => setArchiveFor(l)}
+            title={l.archivedAt ? 'Restore layout' : 'Archive layout'}
+          >
+            {l.archivedAt ? 'Restore' : 'Archive'}
+          </Btn>
+        </div>
+      ),
+    });
+  } else {
+    columns.push({
+      id: 'view',
+      header: '',
+      width: 80,
+      align: 'right',
+      render: (l) => (
+        <Link
+          href={`/admin/layouts/${l.id}/edit`}
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 5,
+            fontSize: 11.5,
+            color: 'var(--accent)',
+            fontFamily: 'var(--font-mono)',
+          }}
+        >
+          <Icon.edit size={11} />
+          View
+        </Link>
+      ),
+    });
+  }
+
   if (localOrder.length === 0) {
     return (
       <>
@@ -136,403 +328,144 @@ export function LayoutsList({
     );
   }
 
-  if (isMobile) {
-    return (
-      <>
-      <ul
-        style={{
-          listStyle: 'none',
-          margin: 0,
-          padding: 10,
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 8,
-          opacity: pending ? 0.6 : 1,
-        }}
-      >
-        {[...active, ...archived].map((l) => {
-          const activeIdx = active.findIndex((a) => a.id === l.id);
-          const isActiveRow = activeIdx >= 0;
-          return (
-            <li
-              key={l.id}
-              style={{
-                border: '1px solid var(--line)',
-                borderRadius: 10,
-                padding: 12,
-                background: 'var(--panel)',
-                opacity: l.archivedAt ? 0.7 : 1,
-                display: 'flex',
-                flexDirection: 'column',
-                gap: 8,
-              }}
-            >
-              <Link
-                href={`/admin/layouts/${l.id}/edit`}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 10,
-                  color: 'inherit',
-                }}
-              >
-                <LayoutSwatch icon={l.icon} color={l.color} size={28} />
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div
-                    style={{
-                      fontWeight: 600,
-                      fontSize: 14,
-                      color: 'var(--text)',
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                      whiteSpace: 'nowrap',
-                    }}
-                  >
-                    {l.name}
-                  </div>
-                  <div
-                    style={{
-                      fontFamily: 'var(--font-mono)',
-                      fontSize: 11,
-                      color: 'var(--dim)',
-                    }}
-                  >
-                    /{l.slug} · v{l.version}
-                  </div>
-                </div>
-                <Icon.chevron size={12} style={{ color: 'var(--dim)' }} />
-              </Link>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                {l.archivedAt ? (
-                  <Tag tone="warn" dot>
-                    archived
-                  </Tag>
-                ) : l.isActive ? (
-                  <Tag tone="ok" dot>
-                    active
-                  </Tag>
-                ) : (
-                  <Tag tone="outline">inactive</Tag>
-                )}
-                <Tag tone="outline">
-                  {l.fields.filter((f) => !f.archivedAt).length} fields
-                </Tag>
-                <span
-                  style={{
-                    marginLeft: 'auto',
-                    fontFamily: 'var(--font-mono)',
-                    fontSize: 11,
-                    color: 'var(--dim)',
-                  }}
-                >
-                  {relative(l.updatedAt)}
-                </span>
-              </div>
-              {canEdit && (
-                <div
-                  style={{
-                    display: 'flex',
-                    flexWrap: 'wrap',
-                    gap: 6,
-                    borderTop: '1px solid var(--line)',
-                    paddingTop: 8,
-                  }}
-                >
-                  {canReorder && isActiveRow && (
-                    <>
-                      <Btn
-                        kind="outline"
-                        size="sm"
-                        onClick={() => move(l.id, -1)}
-                        disabled={activeIdx === 0 || pending}
-                        title="Move up"
-                        aria-label="Move up"
-                      >
-                        <span
-                          style={{
-                            display: 'inline-flex',
-                            transform: 'rotate(180deg)',
-                          }}
-                        >
-                          <Icon.chevronD size={11} />
-                        </span>
-                        Up
-                      </Btn>
-                      <Btn
-                        kind="outline"
-                        size="sm"
-                        icon={Icon.chevronD}
-                        onClick={() => move(l.id, 1)}
-                        disabled={activeIdx === active.length - 1 || pending}
-                        title="Move down"
-                        aria-label="Move down"
-                      >
-                        Down
-                      </Btn>
-                    </>
-                  )}
-                  {!l.archivedAt && (
-                    <Btn
-                      kind="outline"
-                      size="sm"
-                      icon={Icon.edit}
-                      onClick={() => setSettingsFor(l)}
-                    >
-                      Rename
-                    </Btn>
-                  )}
-                  <Btn
-                    kind={l.archivedAt ? 'primary' : 'outline'}
-                    size="sm"
-                    icon={l.archivedAt ? Icon.check : Icon.archive}
-                    onClick={() => setArchiveFor(l)}
-                    style={{ marginLeft: 'auto' }}
-                  >
-                    {l.archivedAt ? 'Restore' : 'Archive'}
-                  </Btn>
-                </div>
-              )}
-            </li>
-          );
-        })}
-      </ul>
-      {dialogs}
-      </>
-    );
-  }
-
   return (
     <>
-    <div style={{ overflowX: 'auto' }}>
-    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-      <thead>
-        <tr style={{ borderBottom: '1px solid var(--line)' }}>
-          {[
-            canReorder ? 'Order' : '',
-            '',
-            'Name',
-            'Version',
-            'Fields',
-            'Updated',
-            '',
-          ].map((h, i) => (
-            <th
-              key={`${h}-${i}`}
-              style={{
-                textAlign: 'left',
-                padding: '8px 12px',
-                fontSize: 10.5,
-                fontFamily: 'var(--font-mono)',
-                color: 'var(--muted)',
-                fontWeight: 400,
-                textTransform: 'uppercase',
-                letterSpacing: 0.5,
-              }}
-            >
-              {h}
-            </th>
-          ))}
-        </tr>
-      </thead>
-      <tbody>
-        {[...active, ...archived].map((l, i, rows) => {
-          const activeIdx = active.findIndex((a) => a.id === l.id);
-          const isActiveRow = activeIdx >= 0;
-          return (
-            <tr
-              key={l.id}
-              style={{
-                borderBottom:
-                  i === rows.length - 1 ? 'none' : '1px solid var(--line)',
-                height: 44,
-                opacity: l.archivedAt ? 0.55 : 1,
-              }}
-            >
-              <td
-                style={{
-                  padding: '0 12px',
-                  width: canReorder ? 72 : 0,
-                  whiteSpace: 'nowrap',
-                }}
-              >
-                {canReorder && isActiveRow && (
-                  <div
-                    style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: 2,
-                    }}
-                  >
-                    <Btn
-                      kind="ghost"
-                      size="sm"
-                      onClick={() => move(l.id, -1)}
-                      disabled={activeIdx === 0 || pending}
-                      title="Move up"
-                      aria-label="Move up"
-                    >
-                      <span
-                        style={{
-                          display: 'inline-flex',
-                          transform: 'rotate(180deg)',
-                        }}
-                      >
-                        <Icon.chevronD size={11} />
-                      </span>
-                    </Btn>
-                    <Btn
-                      kind="ghost"
-                      size="sm"
-                      icon={Icon.chevronD}
-                      onClick={() => move(l.id, 1)}
-                      disabled={activeIdx === active.length - 1 || pending}
-                      title="Move down"
-                      aria-label="Move down"
-                    />
-                  </div>
-                )}
-              </td>
-              <td style={{ padding: '0 12px', width: 40 }}>
-                <LayoutSwatch icon={l.icon} color={l.color} size={28} />
-              </td>
-              <td style={{ padding: '0 12px' }}>
+      <div style={{ opacity: pending ? 0.6 : 1, transition: 'opacity 120ms ease' }}>
+        <DataTable
+          columns={columns}
+          rows={orderedRows}
+          disableSort
+          renderMobileCard={(l) => {
+            const activeIdx = active.findIndex((a) => a.id === l.id);
+            const isActiveRow = activeIdx >= 0;
+            return (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                 <Link
                   href={`/admin/layouts/${l.id}/edit`}
                   style={{
                     display: 'flex',
-                    flexDirection: 'column',
-                    gap: 2,
+                    alignItems: 'center',
+                    gap: 10,
                     color: 'inherit',
                   }}
                 >
-                  <span style={{ fontWeight: 500, fontSize: 13 }}>
-                    {l.name}
-                    {l.archivedAt && (
-                      <Tag tone="warn" style={{ marginLeft: 8 }}>
+                  <LayoutSwatch icon={l.icon} color={l.color} size={28} />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div
+                      style={{
+                        fontWeight: 600,
+                        fontSize: 14,
+                        color: 'var(--text)',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
+                      {l.name}
+                    </div>
+                    <div
+                      style={{
+                        fontFamily: 'var(--font-mono)',
+                        fontSize: 11,
+                        color: 'var(--dim)',
+                      }}
+                    >
+                      /{l.slug} · v{l.version}
+                    </div>
+                  </div>
+                  <Icon.chevron size={12} style={{ color: 'var(--dim)' }} />
+                </Link>
+                <MobileCardRow label="Status">
+                  <span style={{ display: 'inline-flex', flexWrap: 'wrap', gap: 6 }}>
+                    {l.archivedAt ? (
+                      <Tag tone="warn" dot>
                         archived
                       </Tag>
-                    )}
-                    {!l.isActive && !l.archivedAt && (
-                      <Tag tone="outline" style={{ marginLeft: 8 }}>
-                        inactive
+                    ) : l.isActive ? (
+                      <Tag tone="ok" dot>
+                        active
                       </Tag>
+                    ) : (
+                      <Tag tone="outline">inactive</Tag>
                     )}
+                    <Tag tone="outline">
+                      {l.fields.filter((f) => !f.archivedAt).length} fields
+                    </Tag>
                   </span>
-                  <span
-                    style={{
-                      fontFamily: 'var(--font-mono)',
-                      fontSize: 11,
-                      color: 'var(--dim)',
-                    }}
-                  >
-                    /{l.slug}
-                  </span>
-                </Link>
-              </td>
-              <td
-                style={{
-                  padding: '0 12px',
-                  fontFamily: 'var(--font-mono)',
-                  fontSize: 11.5,
-                  color: 'var(--muted)',
-                  width: 90,
-                }}
-              >
-                v{l.version}
-              </td>
-              <td
-                style={{
-                  padding: '0 12px',
-                  fontFamily: 'var(--font-mono)',
-                  fontSize: 11.5,
-                  color: 'var(--muted)',
-                  width: 110,
-                }}
-              >
-                {l.fields.filter((f) => !f.archivedAt).length} fields
-              </td>
-              <td
-                style={{
-                  padding: '0 12px',
-                  fontFamily: 'var(--font-mono)',
-                  fontSize: 11.5,
-                  color: 'var(--dim)',
-                  width: 140,
-                }}
-              >
-                {relative(l.updatedAt)}
-              </td>
-              <td
-                style={{
-                  padding: '0 12px',
-                  width: canEdit ? 260 : 80,
-                  textAlign: 'right',
-                  whiteSpace: 'nowrap',
-                }}
-              >
-                {canEdit ? (
+                </MobileCardRow>
+                <MobileCardRow label="Updated" mono>
+                  {relative(l.updatedAt)}
+                </MobileCardRow>
+                {canEdit && (
                   <div
                     style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: 4,
+                      display: 'flex',
+                      flexWrap: 'wrap',
+                      gap: 6,
+                      borderTop: '1px solid var(--line)',
+                      paddingTop: 8,
                     }}
                   >
-                    <Btn
-                      kind="ghost"
-                      size="sm"
-                      icon={Icon.edit}
-                      onClick={() =>
-                        router.push(`/admin/layouts/${l.id}/edit`)
-                      }
-                      title="Open builder"
-                    >
-                      Edit
-                    </Btn>
+                    {canReorder && isActiveRow && (
+                      <>
+                        <Btn
+                          kind="outline"
+                          size="sm"
+                          onClick={() => move(l.id, -1)}
+                          disabled={activeIdx === 0 || pending}
+                          title="Move up"
+                          aria-label="Move up"
+                        >
+                          <span
+                            style={{
+                              display: 'inline-flex',
+                              transform: 'rotate(180deg)',
+                            }}
+                          >
+                            <Icon.chevronD size={11} />
+                          </span>
+                          Up
+                        </Btn>
+                        <Btn
+                          kind="outline"
+                          size="sm"
+                          icon={Icon.chevronD}
+                          onClick={() => move(l.id, 1)}
+                          disabled={activeIdx === active.length - 1 || pending}
+                          title="Move down"
+                          aria-label="Move down"
+                        >
+                          Down
+                        </Btn>
+                      </>
+                    )}
                     {!l.archivedAt && (
                       <Btn
-                        kind="ghost"
+                        kind="outline"
                         size="sm"
+                        icon={Icon.edit}
                         onClick={() => setSettingsFor(l)}
-                        title="Rename layout or change icon/color"
                       >
                         Rename
                       </Btn>
                     )}
                     <Btn
-                      kind="ghost"
+                      kind={l.archivedAt ? 'primary' : 'outline'}
                       size="sm"
                       icon={l.archivedAt ? Icon.check : Icon.archive}
                       onClick={() => setArchiveFor(l)}
-                      title={l.archivedAt ? 'Restore layout' : 'Archive layout'}
+                      style={{ marginLeft: 'auto' }}
                     >
                       {l.archivedAt ? 'Restore' : 'Archive'}
                     </Btn>
                   </div>
-                ) : (
-                  <Link
-                    href={`/admin/layouts/${l.id}/edit`}
-                    style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: 5,
-                      fontSize: 11.5,
-                      color: 'var(--accent)',
-                      fontFamily: 'var(--font-mono)',
-                    }}
-                  >
-                    <Icon.edit size={11} />
-                    View
-                  </Link>
                 )}
-              </td>
-            </tr>
-          );
-        })}
-      </tbody>
-    </table>
-    </div>
-    {dialogs}
+              </div>
+            );
+          }}
+        />
+      </div>
+      {dialogs}
     </>
   );
 }

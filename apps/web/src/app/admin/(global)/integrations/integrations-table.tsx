@@ -36,6 +36,7 @@ export function IntegrationsTable({
       {
         id: 'name',
         header: 'Integration',
+        sortValue: (r) => r.name.toLowerCase(),
         render: (r) => (
           <div
             style={{
@@ -64,12 +65,14 @@ export function IntegrationsTable({
         id: 'status',
         header: 'Status',
         width: 110,
+        sortValue: (r) => r.status.toLowerCase(),
         render: (r) => <StatusTag status={r.status} />,
       },
       {
         id: 'mappings',
         header: 'Companies',
         width: 100,
+        sortValue: (r) => r.mappingCount,
         render: (r) => (
           <span style={{ color: 'var(--text-2)', fontVariantNumeric: 'tabular-nums' }}>
             {r.mappingCount}
@@ -80,6 +83,7 @@ export function IntegrationsTable({
         id: 'layout',
         header: 'Layout',
         width: 200,
+        sortValue: (r) => r.assetLayoutName?.toLowerCase() ?? null,
         render: (r) =>
           r.assetLayoutId ? (
             <div
@@ -113,6 +117,7 @@ export function IntegrationsTable({
         header: 'Schedule',
         width: 180,
         mono: true,
+        sortValue: (r) => r.effectiveSyncCron?.toLowerCase() ?? null,
         render: (r) =>
           r.effectiveSyncCron ? (
             <span style={{ color: 'var(--text-2)' }}>
@@ -131,6 +136,7 @@ export function IntegrationsTable({
         id: 'lastRun',
         header: 'Last run',
         width: 170,
+        sortValue: (r) => (r.lastRunAt ? new Date(r.lastRunAt) : null),
         render: (r) =>
           r.lastRunAt ? (
             <div
@@ -149,6 +155,7 @@ export function IntegrationsTable({
         id: 'secret',
         header: 'Credentials',
         width: 110,
+        sortValue: (r) => (r.hasSecret ? 1 : 0),
         render: (r) =>
           r.hasSecret ? (
             <Tag tone="ok" dot>

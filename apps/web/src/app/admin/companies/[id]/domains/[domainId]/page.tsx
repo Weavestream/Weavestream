@@ -10,7 +10,6 @@ import {
   getSettings,
   listDomainChecks,
   throwUnlessFound,
-  type DomainCheck,
 } from '../../../../../../lib/server-api';
 import { canWriteCompany } from '../../../../../../lib/roles';
 import { PageBody, PageHeader } from '../../../../../../components/shell/page-header';
@@ -18,6 +17,7 @@ import { Panel, Tag } from '../../../../../../components/ui';
 import { buildTerm } from '../../../../../../lib/term';
 import { companyCrumbs } from '../../../../../../lib/company-crumbs';
 import { DomainActions } from './domain-actions';
+import { DomainHistory } from './domain-history';
 import { StatusPill } from '../domains-browser';
 
 /**
@@ -129,7 +129,7 @@ export default async function DomainDetailPage({
               No checks have been run yet.
             </div>
           ) : (
-            <HistoryTable checks={checks} />
+            <DomainHistory checks={checks} />
           )}
         </Panel>
       </PageBody>
@@ -171,166 +171,6 @@ function Stat({
   );
 }
 
-function HistoryTable({ checks }: { checks: DomainCheck[] }) {
-  return (
-    <>
-      <div className="hide-on-mobile" style={{ overflowX: 'auto' }}>
-        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
-          <thead>
-            <tr style={{ textAlign: 'left', color: 'var(--dim)' }}>
-              <th style={thStyle}>Checked</th>
-              <th style={thStyle}>WHOIS</th>
-              <th style={thStyle}>DNS</th>
-              <th style={thStyle}>TLS</th>
-              <th style={thStyle}>WHOIS expiry</th>
-              <th style={thStyle}>TLS expiry</th>
-              <th style={thStyle}>Note</th>
-            </tr>
-          </thead>
-          <tbody>
-            {checks.map((c) => (
-              <tr key={c.id} style={{ borderTop: '1px solid var(--line)' }}>
-                <td style={monoCell}>{fmtDateTime(c.checkedAt)}</td>
-                <td style={tdStyle}>
-                  <SubStatus status={c.whoisStatus} />
-                </td>
-                <td style={tdStyle}>
-                  <SubStatus status={c.dnsStatus} />
-                </td>
-                <td style={tdStyle}>
-                  <SubStatus status={c.tlsStatus} />
-                </td>
-                <td style={monoCell}>{fmtDate(c.whoisExpiresAt)}</td>
-                <td style={monoCell}>{fmtDate(c.tlsExpiresAt)}</td>
-                <td style={{ ...tdStyle, color: 'var(--muted)' }}>
-                  {c.error ?? summarize(c.details)}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-      <ul
-        className="mobile-only"
-        style={{
-          listStyle: 'none',
-          margin: 0,
-          padding: 10,
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 8,
-        }}
-      >
-        {checks.map((c) => (
-          <li
-            key={c.id}
-            style={{
-              border: '1px solid var(--line)',
-              borderRadius: 10,
-              padding: 12,
-              background: 'var(--panel)',
-              display: 'flex',
-              flexDirection: 'column',
-              gap: 8,
-            }}
-          >
-            <div
-              style={{
-                fontFamily: 'var(--font-mono)',
-                fontSize: 11.5,
-                color: 'var(--dim)',
-              }}
-            >
-              {fmtDateTime(c.checkedAt)}
-            </div>
-            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-              <span
-                style={{
-                  fontSize: 10,
-                  fontFamily: 'var(--font-mono)',
-                  color: 'var(--dim)',
-                  marginRight: 2,
-                }}
-              >
-                WHOIS
-              </span>
-              <SubStatus status={c.whoisStatus} />
-              <span
-                style={{
-                  fontSize: 10,
-                  fontFamily: 'var(--font-mono)',
-                  color: 'var(--dim)',
-                  marginLeft: 6,
-                  marginRight: 2,
-                }}
-              >
-                DNS
-              </span>
-              <SubStatus status={c.dnsStatus} />
-              <span
-                style={{
-                  fontSize: 10,
-                  fontFamily: 'var(--font-mono)',
-                  color: 'var(--dim)',
-                  marginLeft: 6,
-                  marginRight: 2,
-                }}
-              >
-                TLS
-              </span>
-              <SubStatus status={c.tlsStatus} />
-            </div>
-            <div
-              style={{
-                display: 'grid',
-                gridTemplateColumns: '1fr 1fr',
-                gap: 6,
-                fontFamily: 'var(--font-mono)',
-                fontSize: 11.5,
-                color: 'var(--muted)',
-              }}
-            >
-              <span>WHOIS {fmtDate(c.whoisExpiresAt)}</span>
-              <span>TLS {fmtDate(c.tlsExpiresAt)}</span>
-            </div>
-            {(c.error || summarize(c.details)) && (
-              <div style={{ fontSize: 11.5, color: 'var(--muted)' }}>
-                {c.error ?? summarize(c.details)}
-              </div>
-            )}
-          </li>
-        ))}
-      </ul>
-    </>
-  );
-}
-
-function SubStatus({ status }: { status: DomainCheck['whoisStatus'] }) {
-  if (!status) return <Tag tone="outline">—</Tag>;
-  switch (status) {
-    case 'OK':
-      return <Tag tone="ok">OK</Tag>;
-    case 'WARN':
-      return <Tag tone="warn">Warn</Tag>;
-    case 'FAIL':
-      return <Tag tone="danger">Fail</Tag>;
-    case 'SKIP':
-      return <Tag tone="outline">Skip</Tag>;
-  }
-}
-
-function summarize(details: Record<string, unknown>): string {
-  const parts: string[] = [];
-  const whois = details.whois as { registrar?: string } | undefined;
-  if (whois?.registrar) parts.push(`registrar=${whois.registrar}`);
-  const tls = details.tls as { issuer?: string } | undefined;
-  if (tls?.issuer) parts.push(`issuer=${tls.issuer}`);
-  const dns = details.dns as { a?: string[]; mx?: string[] } | undefined;
-  if (dns?.a && dns.a.length > 0) parts.push(`A=${dns.a.length}`);
-  if (dns?.mx && dns.mx.length > 0) parts.push(`MX=${dns.mx.length}`);
-  return parts.join(' · ');
-}
-
 function fmtDate(iso: string | null): string {
   if (!iso) return '—';
   return new Date(iso).toISOString().slice(0, 10);
@@ -364,20 +204,3 @@ function fmtRelativeFuture(iso: string | null): string | undefined {
   if (days < 365) return `in ${Math.round(days / 30)} months`;
   return `in ${Math.round(days / 365)} years`;
 }
-
-const thStyle: React.CSSProperties = {
-  padding: '10px 14px',
-  fontSize: 11,
-  fontFamily: 'var(--font-mono)',
-  fontWeight: 500,
-  letterSpacing: 0.3,
-  textTransform: 'uppercase',
-  borderBottom: '1px solid var(--line)',
-};
-const tdStyle: React.CSSProperties = { padding: '10px 14px', verticalAlign: 'middle' };
-const monoCell: React.CSSProperties = {
-  ...tdStyle,
-  fontFamily: 'var(--font-mono)',
-  fontSize: 12,
-  color: 'var(--muted)',
-};

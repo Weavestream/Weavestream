@@ -5,8 +5,15 @@ import Link from 'next/link';
 import { useState, useTransition } from 'react';
 import type { MonitoredDomain } from '../../../../../lib/server-api';
 import { apiFetch } from '../../../../../lib/api';
-import { Dialog, Icon, Tag } from '../../../../../components/ui';
-import { useIsMobile } from '../../../../../lib/hooks/use-is-mobile';
+import {
+  Btn,
+  DataTable,
+  type DataColumn,
+  Dialog,
+  Icon,
+  MobileCardRow,
+  Tag,
+} from '../../../../../components/ui';
 
 /**
  * Phase 8 — Admin domains browser.
@@ -28,7 +35,6 @@ export function DomainsBrowser({
 }) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
-  const isMobile = useIsMobile();
   const [dialog, setDialog] = useState<
     | { kind: 'add' }
     | { kind: 'edit'; row: MonitoredDomain }
@@ -159,25 +165,22 @@ export function DomainsBrowser({
           </div>
           No monitored domains yet.
         </div>
-      ) : isMobile ? (
-        <ul
-          style={{
-            listStyle: 'none',
-            margin: 0,
-            padding: 10,
-            display: 'flex',
-            flexDirection: 'column',
-            gap: 8,
-          }}
-        >
-          {rows.map((r) => (
-            <li
-              key={r.id}
+      ) : (
+        <DataTable
+          columns={domainColumns({
+            companyId,
+            canManage,
+            busyId,
+            isPending,
+            runCheck,
+            archive,
+            restore,
+            setDialog,
+          })}
+          rows={rows}
+          renderMobileCard={(r) => (
+            <div
               style={{
-                border: '1px solid var(--line)',
-                borderRadius: 10,
-                padding: 12,
-                background: 'var(--panel)',
                 opacity: r.archivedAt ? 0.6 : 1,
                 display: 'flex',
                 flexDirection: 'column',
@@ -201,22 +204,18 @@ export function DomainsBrowser({
                 </Link>
                 <StatusPill status={r.latestStatus} />
               </div>
-              <div
-                style={{
-                  display: 'grid',
-                  gridTemplateColumns: '1fr 1fr',
-                  gap: 6,
-                  fontSize: 12,
-                }}
-              >
-                <MobileField label="WHOIS" value={fmtDate(r.whoisExpiresAt)} />
-                <MobileField label="TLS" value={fmtDate(r.tlsExpiresAt)} />
-                <MobileField
-                  label="Visibility"
-                  value={r.visibleToClients ? 'Client-visible' : 'Internal'}
-                />
-                <MobileField label="Last checked" value={fmtRelative(r.lastCheckedAt)} />
-              </div>
+              <MobileCardRow label="WHOIS" mono>
+                {fmtDate(r.whoisExpiresAt)}
+              </MobileCardRow>
+              <MobileCardRow label="TLS" mono>
+                {fmtDate(r.tlsExpiresAt)}
+              </MobileCardRow>
+              <MobileCardRow label="Visibility">
+                {r.visibleToClients ? 'Client-visible' : 'Internal'}
+              </MobileCardRow>
+              <MobileCardRow label="Checked" mono>
+                {fmtRelative(r.lastCheckedAt)}
+              </MobileCardRow>
               {r.archivedAt && (
                 <Tag tone="outline" style={{ alignSelf: 'flex-start' }}>
                   archived
@@ -234,147 +233,46 @@ export function DomainsBrowser({
                 >
                   {!r.archivedAt ? (
                     <>
-                      <button
-                        type="button"
-                        onClick={() => runCheck(r.id)}
+                      <Btn
+                        kind="ghost"
+                        icon={Icon.refresh}
                         disabled={busyId === r.id || isPending}
-                        style={rowButton}
+                        onClick={() => runCheck(r.id)}
                       >
                         Check
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setDialog({ kind: 'edit', row: r })}
+                      </Btn>
+                      <Btn
+                        kind="ghost"
+                        icon={Icon.edit}
                         disabled={busyId === r.id || isPending}
-                        style={rowButton}
+                        onClick={() => setDialog({ kind: 'edit', row: r })}
                       >
                         Edit
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => archive(r.id)}
+                      </Btn>
+                      <Btn
+                        kind="ghost"
+                        icon={Icon.archive}
                         disabled={busyId === r.id || isPending}
-                        style={rowButton}
+                        onClick={() => archive(r.id)}
                       >
                         Archive
-                      </button>
+                      </Btn>
                     </>
                   ) : (
-                    <button
-                      type="button"
-                      onClick={() => restore(r.id)}
+                    <Btn
+                      kind="ghost"
+                      icon={Icon.refresh}
                       disabled={busyId === r.id || isPending}
-                      style={rowButton}
+                      onClick={() => restore(r.id)}
                     >
                       Restore
-                    </button>
+                    </Btn>
                   )}
                 </div>
               )}
-            </li>
-          ))}
-        </ul>
-      ) : (
-        <div style={{ overflowX: 'auto' }}>
-        <table
-          style={{
-            width: '100%',
-            borderCollapse: 'collapse',
-            fontSize: 13,
-          }}
-        >
-          <thead>
-            <tr style={{ textAlign: 'left', color: 'var(--dim)' }}>
-              <th style={thStyle}>Hostname</th>
-              <th style={thStyle}>Status</th>
-              <th style={thStyle}>WHOIS expires</th>
-              <th style={thStyle}>TLS expires</th>
-              <th style={thStyle}>Visibility</th>
-              <th style={thStyle}>Last checked</th>
-              <th style={{ ...thStyle, textAlign: 'right' }}>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((r) => (
-              <tr
-                key={r.id}
-                style={{
-                  borderTop: '1px solid var(--line)',
-                  opacity: r.archivedAt ? 0.6 : 1,
-                }}
-              >
-                <td style={tdStyle}>
-                  <Link
-                    href={`/admin/companies/${companyId}/domains/${r.id}`}
-                    style={{ color: 'var(--text)', fontWeight: 500 }}
-                  >
-                    {r.hostname}
-                  </Link>
-                  {r.archivedAt && (
-                    <Tag tone="outline" style={{ marginLeft: 8 }}>
-                      archived
-                    </Tag>
-                  )}
-                </td>
-                <td style={tdStyle}>
-                  <StatusPill status={r.latestStatus} />
-                </td>
-                <td style={monoCell}>{fmtDate(r.whoisExpiresAt)}</td>
-                <td style={monoCell}>{fmtDate(r.tlsExpiresAt)}</td>
-                <td style={tdStyle}>
-                  {r.visibleToClients ? (
-                    <Tag tone="accent">client-visible</Tag>
-                  ) : (
-                    <Tag tone="outline">internal</Tag>
-                  )}
-                </td>
-                <td style={monoCell}>{fmtRelative(r.lastCheckedAt)}</td>
-                <td style={{ ...tdStyle, textAlign: 'right', whiteSpace: 'nowrap' }}>
-                  {canManage && !r.archivedAt && (
-                    <>
-                      <button
-                        type="button"
-                        onClick={() => runCheck(r.id)}
-                        disabled={busyId === r.id || isPending}
-                        style={rowButton}
-                        title="Run all checks now"
-                      >
-                        Check
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setDialog({ kind: 'edit', row: r })}
-                        disabled={busyId === r.id || isPending}
-                        style={rowButton}
-                      >
-                        Edit
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => archive(r.id)}
-                        disabled={busyId === r.id || isPending}
-                        style={rowButton}
-                      >
-                        Archive
-                      </button>
-                    </>
-                  )}
-                  {canManage && r.archivedAt && (
-                    <button
-                      type="button"
-                      onClick={() => restore(r.id)}
-                      disabled={busyId === r.id || isPending}
-                      style={rowButton}
-                    >
-                      Restore
-                    </button>
-                  )}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        </div>
+            </div>
+          )}
+        />
       )}
 
       {dialog && canManage && (
@@ -558,34 +456,170 @@ function Toggle({
   );
 }
 
-function MobileField({ label, value }: { label: string; value: React.ReactNode }) {
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-      <span
-        style={{
-          fontSize: 10,
-          fontFamily: 'var(--font-mono)',
-          color: 'var(--dim)',
-          textTransform: 'uppercase',
-          letterSpacing: 0.3,
-        }}
-      >
-        {label}
-      </span>
-      <span
-        style={{
-          fontFamily: 'var(--font-mono)',
-          fontSize: 12,
-          color: 'var(--muted)',
-          overflow: 'hidden',
-          textOverflow: 'ellipsis',
-          whiteSpace: 'nowrap',
-        }}
-      >
-        {value}
-      </span>
-    </div>
-  );
+function domainColumns({
+  companyId,
+  canManage,
+  busyId,
+  isPending,
+  runCheck,
+  archive,
+  restore,
+  setDialog,
+}: {
+  companyId: string;
+  canManage: boolean;
+  busyId: string | null;
+  isPending: boolean;
+  runCheck: (id: string) => Promise<void>;
+  archive: (id: string) => Promise<void>;
+  restore: (id: string) => Promise<void>;
+  setDialog: (
+    s: { kind: 'add' } | { kind: 'edit'; row: MonitoredDomain } | null,
+  ) => void;
+}): DataColumn<MonitoredDomain>[] {
+  const STATUS_RANK: Record<MonitoredDomain['latestStatus'], number> = {
+    OK: 0,
+    EXPIRING: 1,
+    EXPIRED: 2,
+    FAIL: 3,
+    UNKNOWN: 4,
+  };
+  const cols: DataColumn<MonitoredDomain>[] = [
+    {
+      id: 'hostname',
+      header: 'Hostname',
+      width: 280,
+      sortValue: (r) => r.hostname.toLowerCase(),
+      render: (r) => (
+        <span
+          style={{
+            opacity: r.archivedAt ? 0.6 : 1,
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 8,
+          }}
+        >
+          <Link
+            href={`/admin/companies/${companyId}/domains/${r.id}`}
+            style={{ color: 'var(--text)', fontWeight: 500 }}
+          >
+            {r.hostname}
+          </Link>
+          {r.archivedAt && <Tag tone="outline">archived</Tag>}
+        </span>
+      ),
+    },
+    {
+      id: 'status',
+      header: 'Status',
+      width: 110,
+      sortValue: (r) => STATUS_RANK[r.latestStatus],
+      render: (r) => <StatusPill status={r.latestStatus} />,
+    },
+    {
+      id: 'whois',
+      header: 'WHOIS expires',
+      width: 140,
+      mono: true,
+      sortValue: (r) => (r.whoisExpiresAt ? new Date(r.whoisExpiresAt) : null),
+      render: (r) => (
+        <span style={{ color: 'var(--muted)' }}>{fmtDate(r.whoisExpiresAt)}</span>
+      ),
+    },
+    {
+      id: 'tls',
+      header: 'TLS expires',
+      width: 140,
+      mono: true,
+      sortValue: (r) => (r.tlsExpiresAt ? new Date(r.tlsExpiresAt) : null),
+      render: (r) => (
+        <span style={{ color: 'var(--muted)' }}>{fmtDate(r.tlsExpiresAt)}</span>
+      ),
+    },
+    {
+      id: 'visibility',
+      header: 'Visibility',
+      width: 140,
+      sortValue: (r) => (r.visibleToClients ? 1 : 0),
+      render: (r) =>
+        r.visibleToClients ? (
+          <Tag tone="accent">client-visible</Tag>
+        ) : (
+          <Tag tone="outline">internal</Tag>
+        ),
+    },
+    {
+      id: 'lastChecked',
+      header: 'Last checked',
+      width: 140,
+      mono: true,
+      sortValue: (r) => (r.lastCheckedAt ? new Date(r.lastCheckedAt) : null),
+      render: (r) => (
+        <span style={{ color: 'var(--muted)' }}>{fmtRelative(r.lastCheckedAt)}</span>
+      ),
+    },
+  ];
+
+  if (canManage) {
+    cols.push({
+      id: 'actions',
+      header: 'Actions',
+      width: 240,
+      align: 'right',
+      sortable: false,
+      render: (r) => (
+        <span
+          style={{
+            display: 'inline-flex',
+            gap: 6,
+            justifyContent: 'flex-end',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          {!r.archivedAt ? (
+            <>
+              <Btn
+                kind="ghost"
+                icon={Icon.refresh}
+                disabled={busyId === r.id || isPending}
+                onClick={() => runCheck(r.id)}
+                title="Run all checks now"
+              >
+                Check
+              </Btn>
+              <Btn
+                kind="ghost"
+                icon={Icon.edit}
+                disabled={busyId === r.id || isPending}
+                onClick={() => setDialog({ kind: 'edit', row: r })}
+              >
+                Edit
+              </Btn>
+              <Btn
+                kind="ghost"
+                icon={Icon.archive}
+                disabled={busyId === r.id || isPending}
+                onClick={() => archive(r.id)}
+              >
+                Archive
+              </Btn>
+            </>
+          ) : (
+            <Btn
+              kind="ghost"
+              icon={Icon.refresh}
+              disabled={busyId === r.id || isPending}
+              onClick={() => restore(r.id)}
+            >
+              Restore
+            </Btn>
+          )}
+        </span>
+      ),
+    });
+  }
+
+  return cols;
 }
 
 export function StatusPill({ status }: { status: MonitoredDomain['latestStatus'] }) {
@@ -629,24 +663,6 @@ function problemMessage(problem: unknown): string | null {
   return null;
 }
 
-const thStyle: React.CSSProperties = {
-  padding: '10px 14px',
-  fontSize: 11,
-  fontFamily: 'var(--font-mono)',
-  fontWeight: 500,
-  letterSpacing: 0.3,
-  textTransform: 'uppercase',
-  borderBottom: '1px solid var(--line)',
-};
-
-const tdStyle: React.CSSProperties = { padding: '12px 14px', verticalAlign: 'middle' };
-const monoCell: React.CSSProperties = {
-  ...tdStyle,
-  fontFamily: 'var(--font-mono)',
-  fontSize: 12,
-  color: 'var(--muted)',
-};
-
 const addButtonStyle: React.CSSProperties = {
   display: 'inline-flex',
   alignItems: 'center',
@@ -659,17 +675,6 @@ const addButtonStyle: React.CSSProperties = {
   fontSize: 12,
   fontWeight: 600,
   border: 'none',
-  cursor: 'pointer',
-};
-
-const rowButton: React.CSSProperties = {
-  marginLeft: 6,
-  padding: '4px 10px',
-  fontSize: 11.5,
-  background: 'var(--panel-2)',
-  border: '1px solid var(--line)',
-  borderRadius: 4,
-  color: 'var(--text)',
   cursor: 'pointer',
 };
 

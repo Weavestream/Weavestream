@@ -116,19 +116,43 @@ export function TagsAdminClient() {
     <div>
       <div
         style={{
-          padding: '12px 14px',
+          padding: '10px 14px',
           borderBottom: '1px solid var(--line)',
           display: 'flex',
-          gap: 10,
+          gap: 8,
           alignItems: 'center',
         }}
       >
-        <input
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-          placeholder="Search tags…"
-          style={{ ...controlStyle, flex: 1, maxWidth: 360 }}
-        />
+        <div
+          style={{
+            flex: 1,
+            minWidth: 180,
+            maxWidth: 360,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            height: 28,
+            padding: '0 10px',
+            background: 'var(--panel-2)',
+            border: '1px solid var(--line)',
+            borderRadius: 5,
+          }}
+        >
+          <Icon.search size={12} style={{ color: 'var(--muted)' }} />
+          <input
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="Search tags…"
+            style={{
+              flex: 1,
+              background: 'transparent',
+              border: 'none',
+              outline: 'none',
+              fontSize: 12.5,
+              color: 'var(--text)',
+            }}
+          />
+        </div>
         <span style={{ fontSize: 11.5, color: 'var(--muted)' }}>
           {items ? `${items.length} tag${items.length === 1 ? '' : 's'}` : '…'}
         </span>
@@ -221,7 +245,8 @@ export function TagsAdminClient() {
                       </Btn>
                       <Btn
                         size="sm"
-                        kind="outline"
+                        kind="ghost"
+                        icon={Icon.x}
                         onClick={cancelEdit}
                         disabled={busy}
                       >
@@ -232,7 +257,7 @@ export function TagsAdminClient() {
                     <>
                       <Btn
                         size="sm"
-                        kind="outline"
+                        kind="ghost"
                         icon={Icon.edit}
                         onClick={() => startEdit(row)}
                         disabled={busy}
@@ -241,7 +266,7 @@ export function TagsAdminClient() {
                       </Btn>
                       <Btn
                         size="sm"
-                        kind="outline"
+                        kind="ghost"
                         icon={Icon.trash}
                         onClick={() => remove(row)}
                         loading={busy}
