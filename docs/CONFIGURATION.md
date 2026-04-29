@@ -125,6 +125,39 @@ lets a malicious upstream forge the client IP; setting it too low collapses ever
 request behind a proxy into one bucket — the original cause of the 429-as-404
 flake we hit in compose.
 
+## Egress / SSRF guard
+
+Every server-side outbound HTTP request flows through `safeFetch`, which
+resolves the target hostname and refuses to dial loopback, RFC1918,
+link-local, multicast, or cloud-metadata (`169.254.169.254`) addresses.
+This blocks the standard SSRF playbook — operator paste of
+`http://localhost`, `http://169.254.169.254` for AWS / GCP / Azure
+metadata, `http://10.x.x.x` to enumerate internal services — and applies
+to integration drivers, RDAP / WHOIS bootstrap, the WEBSITE_DOWN HTTP
+probe, and the HIBP password-leak check.
+
+| Variable                        | Default | Notes                                                                 |
+| ------------------------------- | ------- | --------------------------------------------------------------------- |
+| `EGRESS_ALLOW_PRIVATE_NETWORKS` | `false` | Set to `true` to disable the entire blocklist. Lab / single-host only. |
+| `EGRESS_ALLOWED_PRIVATE_CIDRS`  | _empty_ | Comma-separated CIDRs allowed even when the blocklist is on.           |
+
+**Operator playbook**
+
+- **You don't need either knob** for normal cloud-hosted deployments —
+  every legitimate target (HIBP, RDAP, IANA, customer SaaS endpoints)
+  resolves to a public IP and goes through unchanged.
+- **On-prem RMM endpoints** (e.g. an internal Action1 / UniFi instance):
+  add the network to `EGRESS_ALLOWED_PRIVATE_CIDRS`, e.g.
+  `EGRESS_ALLOWED_PRIVATE_CIDRS=10.42.0.0/16`. Other private addresses
+  remain blocked.
+- **All-private network** (offline lab, air-gapped install): set
+  `EGRESS_ALLOW_PRIVATE_NETWORKS=true`. Every refusal is still audit-
+  logged, but the guard becomes an observation tool only.
+
+Each refusal is recorded as `security.egress.blocked` and surfaced in
+**Admin → Security → Egress blocks** with the URL, hostname, resolved
+IPs, reason, and matched CIDR.
+
 ## Object storage (MinIO / S3-compatible)
 
 | Variable                    | Notes                                                                   |

@@ -1,5 +1,6 @@
 import type { SourceFieldDto } from '@weavestream/shared';
 import { DriverRateLimitError } from './integration-driver.js';
+import { safeFetch } from '../../common/egress/safe-fetch.js';
 
 export interface FetchWithRetryOpts {
   method: 'GET' | 'POST';
@@ -23,14 +24,16 @@ export async function fetchWithRetry(
   let attempt = 0;
   let lastErr: unknown = null;
   while (attempt <= opts.maxRetries) {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), opts.timeoutMs);
     try {
-      const res = await fetch(url, {
+      // safeFetch handles its own AbortController + timeout, validates
+      // the resolved IPs against the egress blocklist, and caps the
+      // response body. Operator-supplied integration baseUrls flow
+      // through here, so the egress guard is the SSRF backstop.
+      const res = await safeFetch(url, {
         method: opts.method,
         headers: opts.headers,
         body: opts.body,
-        signal: controller.signal,
+        timeoutMs: opts.timeoutMs,
       });
       if (res.status === 429) {
         const retryAfterRaw = res.headers.get('Retry-After');
@@ -58,11 +61,13 @@ export async function fetchWithRetry(
     } catch (e) {
       lastErr = e;
       if (e instanceof DriverRateLimitError) throw e;
+      // Egress blocks are deterministic — retrying the same operator
+      // URL will never resolve to a different (public) IP, so bail
+      // out immediately and let the caller surface the reason.
+      if (e instanceof Error && e.name === 'EgressBlockedError') throw e;
       if (attempt === opts.maxRetries) break;
       await sleep(opts.backoffMs * 2 ** attempt);
       attempt += 1;
-    } finally {
-      clearTimeout(timer);
     }
   }
   throw lastErr instanceof Error

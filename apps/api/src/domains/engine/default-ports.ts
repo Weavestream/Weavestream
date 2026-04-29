@@ -12,6 +12,7 @@ import {
   type PeerCertificate,
 } from 'node:tls';
 import { Socket } from 'node:net';
+import { safeFetch } from '../../common/egress/safe-fetch.js';
 import type {
   Clock,
   DnsPort,
@@ -173,7 +174,16 @@ export function createDefaultPorts(): EnginePorts {
     tls: defaultTls,
     whois43: defaultWhois43,
     fetch: async (url, init) => {
-      const res = await fetch(url, init);
+      // The RDAP + bootstrap callers wrap us in their own
+      // `AbortController` + setTimeout pair, so the caller-supplied
+      // `signal` is the operative deadline. We still pass a generous
+      // hard ceiling to safeFetch so a stuck connection can't outlive
+      // the caller's signal cleanup. The egress guard validates the
+      // resolved IPs first and refuses to dial private addresses.
+      const res = await safeFetch(url, {
+        ...(init ?? {}),
+        timeoutMs: 60_000,
+      });
       return {
         ok: res.ok,
         status: res.status,

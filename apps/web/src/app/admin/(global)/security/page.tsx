@@ -1,6 +1,7 @@
 import { redirect } from 'next/navigation';
 import {
   getMe,
+  getSecurityEgressBlocks,
   getSecurityLockouts,
   getSecurityLoginActivity,
   getSecuritySessions,
@@ -32,17 +33,19 @@ export default async function SecurityCenterPage({
   const sp = await searchParams;
   const requestedWindow = parseWindow(sp.window);
 
-  const [activity, lockouts, blocks, sessions] = await Promise.all([
+  const [activity, lockouts, blocks, sessions, egress] = await Promise.all([
     getSecurityLoginActivity(requestedWindow),
     getSecurityLockouts(),
     getSecurityThrottleBlocks(),
     getSecuritySessions(),
+    getSecurityEgressBlocks(168),
   ]);
 
   const lockedIp = (lockouts?.ip ?? []).filter((r) => r.locked).length;
   const lockedEmail = (lockouts?.email ?? []).filter((r) => r.locked).length;
   const blockCount = blocks?.length ?? 0;
   const sessionCount = sessions?.length ?? 0;
+  const egressCount = egress?.total ?? 0;
   const totalFailures =
     (activity?.counts.failure ?? 0) + (activity?.counts.mfaFailure ?? 0);
 
@@ -105,6 +108,11 @@ export default async function SecurityCenterPage({
               value={sessionCount}
               delta="non-revoked"
             />
+            <Stat
+              label="Egress blocks"
+              value={egressCount}
+              delta={egress ? `${egress.windowHours}h window` : '—'}
+            />
           </div>
         </Panel>
 
@@ -115,6 +123,7 @@ export default async function SecurityCenterPage({
           lockouts={lockouts}
           blocks={blocks}
           sessions={sessions}
+          egress={egress}
           canRevoke={canRevoke}
           currentUserId={me.id}
         />
@@ -129,7 +138,7 @@ function parseWindow(raw: string | undefined): number {
   return Math.min(n, 168);
 }
 
-const VALID_TABS = ['logins', 'lockouts', 'blocks', 'sessions'] as const;
+const VALID_TABS = ['logins', 'lockouts', 'blocks', 'sessions', 'egress'] as const;
 type TabId = (typeof VALID_TABS)[number];
 
 function parseTab(raw: string | undefined): TabId {

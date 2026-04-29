@@ -230,6 +230,75 @@ export class SecurityService {
   // Cross-user active sessions
   // ────────────────────────────────────────────────────────────────
 
+  // ────────────────────────────────────────────────────────────────
+  // Egress (Phase 6) — recent SSRF / private-network blocks
+  // ────────────────────────────────────────────────────────────────
+
+  /**
+   * Recent `security.egress.blocked` audit rows. Each row is one
+   * outbound HTTP request that `safeFetch` refused — typically because
+   * an integration baseUrl pointed at a private address, or an operator
+   * pasted a localhost / 169.254 metadata URL. The result mirrors the
+   * other Security Center read methods: hard-capped row count, formatted
+   * for direct rendering by `<DataTable>`.
+   */
+  async egressBlocks(windowHours: number): Promise<{
+    windowHours: number;
+    since: string;
+    total: number;
+    recent: Array<EgressBlockRow>;
+  }> {
+    const safeWindow = Math.min(Math.max(windowHours, 1), 24 * 30);
+    const since = new Date(Date.now() - safeWindow * 60 * 60 * 1000);
+    const [rows, total] = await Promise.all([
+      this.prisma.auditLog.findMany({
+        where: {
+          action: 'security.egress.blocked',
+          createdAt: { gte: since },
+        },
+        orderBy: { createdAt: 'desc' },
+        take: EGRESS_RETURNED,
+        select: {
+          id: true,
+          createdAt: true,
+          userAgent: true,
+          after: true,
+        },
+      }),
+      this.prisma.auditLog.count({
+        where: {
+          action: 'security.egress.blocked',
+          createdAt: { gte: since },
+        },
+      }),
+    ]);
+
+    const recent: EgressBlockRow[] = rows.map((r) => {
+      const after = (r.after ?? {}) as Record<string, unknown>;
+      const resolved = Array.isArray(after.resolvedIps)
+        ? after.resolvedIps.filter((x): x is string => typeof x === 'string')
+        : [];
+      return {
+        id: r.id,
+        createdAt: r.createdAt.toISOString(),
+        userAgent: r.userAgent ?? null,
+        url: typeof after.url === 'string' ? after.url : null,
+        hostname: typeof after.hostname === 'string' ? after.hostname : null,
+        resolvedIps: resolved,
+        reason: typeof after.reason === 'string' ? after.reason : null,
+        matchedCidr:
+          typeof after.matchedCidr === 'string' ? after.matchedCidr : null,
+      };
+    });
+
+    return {
+      windowHours: safeWindow,
+      since: since.toISOString(),
+      total,
+      recent,
+    };
+  }
+
   async listActiveSessions(params: {
     userId?: string;
     limit?: number;
@@ -369,6 +438,7 @@ const RECENT_LIMIT_RETURNED = 200;
 const BUCKET_LIMIT = 50;
 const LOCKOUT_KEY_LIMIT = 1_000;
 const THROTTLE_KEY_LIMIT = 1_000;
+const EGRESS_RETURNED = 200;
 
 type MutableBucket = {
   identifier: string;
@@ -454,6 +524,17 @@ export type ThrottleBlockEntry = {
   tracker: string;
   blockedUntil: string | null;
   remainingMs: number;
+};
+
+export type EgressBlockRow = {
+  id: string;
+  createdAt: string;
+  userAgent: string | null;
+  url: string | null;
+  hostname: string | null;
+  resolvedIps: string[];
+  reason: string | null;
+  matchedCidr: string | null;
 };
 
 export type ActiveSessionRow = {

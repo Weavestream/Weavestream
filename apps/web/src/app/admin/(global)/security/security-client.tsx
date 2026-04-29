@@ -14,19 +14,22 @@ import {
 } from '../../../../components/ui';
 import { apiFetch } from '../../../../lib/api';
 import type {
+  EgressBlockRow,
+  EgressBlocksResponse,
   LockoutsResponse,
   LoginActivity,
   SecuritySessionRow,
   ThrottleBlockEntry,
 } from '../../../../lib/server-api';
 
-type TabId = 'logins' | 'lockouts' | 'blocks' | 'sessions';
+type TabId = 'logins' | 'lockouts' | 'blocks' | 'sessions' | 'egress';
 
 const TABS: Array<{ id: TabId; label: string; icon: keyof typeof Icon }> = [
   { id: 'logins', label: 'Login activity', icon: 'shield' },
   { id: 'lockouts', label: 'Lockouts', icon: 'lock' },
   { id: 'blocks', label: 'Rate-limit blocks', icon: 'clock' },
   { id: 'sessions', label: 'Active sessions', icon: 'users' },
+  { id: 'egress', label: 'Egress blocks', icon: 'globe' },
 ];
 
 const WINDOW_OPTIONS = [
@@ -44,6 +47,7 @@ export function SecurityCenterClient({
   lockouts,
   blocks,
   sessions,
+  egress,
   canRevoke,
   currentUserId,
 }: {
@@ -53,6 +57,7 @@ export function SecurityCenterClient({
   lockouts: LockoutsResponse | null;
   blocks: ThrottleBlockEntry[] | null;
   sessions: SecuritySessionRow[] | null;
+  egress: EgressBlocksResponse | null;
   canRevoke: boolean;
   currentUserId: string;
 }) {
@@ -166,6 +171,7 @@ export function SecurityCenterClient({
             onRefresh={refresh}
           />
         )}
+        {tab === 'egress' && <EgressPane egress={egress} />}
       </div>
     </section>
   );
@@ -704,6 +710,155 @@ function SessionsPane({
     />
   );
 }
+
+// ─── Egress blocks (Phase 6) ──────────────────────────────────────
+
+function EgressPane({ egress }: { egress: EgressBlocksResponse | null }) {
+  if (!egress) {
+    return <Empty>Egress block history is unavailable right now.</Empty>;
+  }
+  if (egress.recent.length === 0) {
+    return (
+      <div style={{ display: 'grid', gap: 12 }}>
+        <div
+          style={{
+            fontSize: 12,
+            color: 'var(--muted)',
+            padding: '0 4px',
+          }}
+        >
+          The egress guard refuses outbound HTTP to private, loopback, and
+          link-local addresses (incl. cloud metadata <code>169.254.169.254</code>).
+          Operators can punch holes via{' '}
+          <code>EGRESS_ALLOWED_PRIVATE_CIDRS</code>.
+        </div>
+        <Empty>
+          No egress was blocked in the last {egress.windowHours} hours.
+        </Empty>
+      </div>
+    );
+  }
+  return (
+    <div style={{ display: 'grid', gap: 12 }}>
+      <div
+        style={{
+          fontSize: 12,
+          color: 'var(--muted)',
+          padding: '0 4px',
+        }}
+      >
+        {egress.total} block{egress.total === 1 ? '' : 's'} in the last{' '}
+        {egress.windowHours} hours. Showing the most recent {egress.recent.length}.
+      </div>
+      <DataTable<EgressBlockRow>
+        columns={egressColumns}
+        rows={egress.recent}
+        disableSort
+        empty="No egress blocks."
+        renderMobileCard={(r) => (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <strong>{r.hostname ?? r.url ?? 'unknown'}</strong>
+            <span style={{ fontSize: 12, color: 'var(--dim)' }}>
+              {r.reason ?? '—'}
+            </span>
+            <span style={{ fontSize: 11, color: 'var(--dim)' }}>
+              {new Date(r.createdAt).toLocaleString()}
+            </span>
+          </div>
+        )}
+      />
+    </div>
+  );
+}
+
+const egressColumns: DataColumn<EgressBlockRow>[] = [
+  {
+    id: 'when',
+    header: 'When',
+    width: 170,
+    mono: true,
+    render: (r) => (
+      <span style={{ color: 'var(--dim)' }}>
+        {new Date(r.createdAt).toLocaleString()}
+      </span>
+    ),
+  },
+  {
+    id: 'host',
+    header: 'Host',
+    width: 220,
+    render: (r) => (
+      <span
+        style={{
+          color: 'var(--text-2)',
+          fontFamily: 'var(--font-mono)',
+          fontSize: 12,
+          display: 'inline-block',
+          maxWidth: 220,
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+        }}
+        title={r.url ?? r.hostname ?? ''}
+      >
+        {r.hostname ?? r.url ?? '—'}
+      </span>
+    ),
+  },
+  {
+    id: 'ips',
+    header: 'Resolved IPs',
+    width: 220,
+    mono: true,
+    render: (r) => (
+      <span style={{ color: 'var(--dim)' }}>
+        {r.resolvedIps.length > 0 ? r.resolvedIps.join(', ') : '—'}
+      </span>
+    ),
+  },
+  {
+    id: 'reason',
+    header: 'Reason',
+    render: (r) => (
+      <Tag tone="danger">
+        <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11 }}>
+          {r.reason ?? 'blocked'}
+        </span>
+      </Tag>
+    ),
+  },
+  {
+    id: 'matched',
+    header: 'CIDR',
+    width: 140,
+    mono: true,
+    render: (r) => (
+      <span style={{ color: 'var(--dim)' }}>{r.matchedCidr ?? '—'}</span>
+    ),
+  },
+  {
+    id: 'src',
+    header: 'Source',
+    width: 180,
+    render: (r) => (
+      <span
+        style={{
+          color: 'var(--dim)',
+          fontFamily: 'var(--font-mono)',
+          fontSize: 11,
+          display: 'inline-block',
+          maxWidth: 180,
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+        }}
+        title={r.userAgent ?? undefined}
+      >
+        {r.userAgent ?? '—'}
+      </span>
+    ),
+  },
+];
 
 // ─── Helpers ──────────────────────────────────────────────────────
 

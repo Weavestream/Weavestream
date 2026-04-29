@@ -48,6 +48,13 @@ export class SecurityController {
     return this.security.activeThrottleBlocks();
   }
 
+  @Get('egress-blocks')
+  @RequirePermission('security.read')
+  async egressBlocks(@Query('windowHours') windowHours?: string) {
+    const parsed = windowHours ? parseInt(windowHours, 10) : 168;
+    return this.security.egressBlocks(Number.isFinite(parsed) ? parsed : 168);
+  }
+
   @Get('sessions')
   @RequirePermission('security.read')
   async sessions(

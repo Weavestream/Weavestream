@@ -29,6 +29,19 @@ this project adheres to [Semantic Versioning](https://semver.org/).
   access is allowed (default-allow policy). All rule changes are
   audited (`security.ip_rule.{create,update,delete}`). The new
   `IP_RULE_MANAGE` capability is added to `MANAGER_PRESET`.
+- **Egress / SSRF guard.** Every server-side outbound HTTP call (Action1
+  + UniFi integration drivers, RDAP / IANA bootstrap, `WEBSITE_DOWN`
+  HTTP probes, HIBP password-leak check) now flows through a new
+  `safeFetch` helper that resolves the target hostname and refuses to
+  dial loopback, RFC1918, link-local, multicast, or cloud-metadata
+  (`169.254.169.254`) addresses. Operators can punch holes for legit
+  on-prem RMM endpoints via `EGRESS_ALLOWED_PRIVATE_CIDRS=10.42.0.0/16`,
+  or short-circuit the entire guard for lab installs with
+  `EGRESS_ALLOW_PRIVATE_NETWORKS=true`. The guard also caps response
+  bodies (default 16 MB) and enforces per-call timeouts so a hostile
+  origin can't pin a worker on a multi-gigabyte payload. Every refusal
+  is recorded as `security.egress.blocked` and surfaced in the new
+  **Egress blocks** tab of the Security Center.
 
 ### Security
 

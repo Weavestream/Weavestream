@@ -160,6 +160,12 @@ export const AUDIT_ACTIONS = {
     ipRuleCreate: 'security.ip_rule.create',
     ipRuleUpdate: 'security.ip_rule.update',
     ipRuleDelete: 'security.ip_rule.delete',
+    // Phase 6 — every rejection from `safeFetch` is recorded so an
+    // operator can see exactly which integration / driver / job tried
+    // to talk to a private address. `entityType: 'Egress'`, `entityId`
+    // null; `after` carries `{ url, hostname, resolvedIps, reason,
+    // matchedCidr }`.
+    egressBlocked: 'security.egress.blocked',
   },
 } as const;
 
@@ -178,7 +184,4 @@ export const ALL_AUDIT_ACTIONS: string[] = [
   ...Object.values(AUDIT_ACTIONS.integration),
   ...Object.values(AUDIT_ACTIONS.subnet),
   ...Object.values(AUDIT_ACTIONS.security),
-  'security.ip_rule.create',
-  'security.ip_rule.update',
-  'security.ip_rule.delete',
 ];
