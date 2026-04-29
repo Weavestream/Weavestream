@@ -23,6 +23,7 @@ import { AssetsService } from './assets.service.js';
 import { CurrentUser, type AuthedUser } from '../common/current-user.decorator.js';
 import { RequirePermission } from '../rbac/require-permission.decorator.js';
 import { ZodBody } from '../common/zod-validation.pipe.js';
+import { requestMetaOf as meta } from '../common/request-meta.js';
 
 /**
  * Company-scoped asset endpoints. Path carries `:companyId` so the
@@ -140,12 +141,3 @@ export class AssetsController {
   }
 }
 
-function meta(req: Request) {
-  const fwd = req.headers['x-forwarded-for'];
-  const ip =
-    typeof fwd === 'string' && fwd.length > 0
-      ? fwd.split(',')[0]!.trim()
-      : req.ip ?? '0.0.0.0';
-  const userAgent = (req.headers['user-agent'] ?? 'unknown').toString().slice(0, 500);
-  return { ip, userAgent };
-}

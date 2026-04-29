@@ -33,6 +33,7 @@ import {
 } from '../common/current-user.decorator.js';
 import { RequirePermission } from '../rbac/require-permission.decorator.js';
 import { IntegrationsService } from './integrations.service.js';
+import { requestMetaOf as meta } from '../common/request-meta.js';
 import { IntegrationCompanyMappingService } from './company-mapping.service.js';
 import { IntegrationSyncService } from './integration-sync.service.js';
 import { IntegrationDriverRegistry } from './drivers/integration-driver.registry.js';
@@ -362,14 +363,3 @@ export class IntegrationsController {
   }
 }
 
-function meta(req: Request): { ip: string; userAgent: string } {
-  return { ip: ipOf(req), userAgent: uaOf(req) };
-}
-function ipOf(req: Request): string {
-  const fwd = req.headers['x-forwarded-for'];
-  if (typeof fwd === 'string' && fwd.length > 0) return fwd.split(',')[0]!.trim();
-  return req.ip ?? '0.0.0.0';
-}
-function uaOf(req: Request): string {
-  return (req.headers['user-agent'] ?? 'unknown').toString().slice(0, 500);
-}

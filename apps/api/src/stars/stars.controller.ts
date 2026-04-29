@@ -13,6 +13,7 @@ import type { Request } from 'express';
 import { StarsService, type EntityType } from './stars.service.js';
 import { CurrentUser, type AuthedUser } from '../common/current-user.decorator.js';
 import { AuthedOnly } from '../rbac/require-permission.decorator.js';
+import { ipOf, userAgentOf as uaOf } from '../common/request-meta.js';
 
 /**
  * Phase 9b.3 — star / unstar entities for the signed-in user.
@@ -135,11 +136,3 @@ function metaFrom(req: Request): { ip: string; userAgent: string } {
   };
 }
 
-function ipOf(req: Request): string {
-  const fwd = req.headers['x-forwarded-for'];
-  if (typeof fwd === 'string' && fwd.length > 0) return fwd.split(',')[0]!.trim();
-  return req.ip ?? '0.0.0.0';
-}
-function uaOf(req: Request): string {
-  return (req.headers['user-agent'] ?? 'unknown').toString().slice(0, 500);
-}

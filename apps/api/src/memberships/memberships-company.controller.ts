@@ -20,6 +20,7 @@ import { MembershipsService } from './memberships.service.js';
 import { CurrentUser, type AuthedUser } from '../common/current-user.decorator.js';
 import { RequirePermission } from '../rbac/require-permission.decorator.js';
 import { ZodBody } from '../common/zod-validation.pipe.js';
+import { ipOf, userAgentOf as uaOf } from '../common/request-meta.js';
 
 /**
  * Company-scoped membership endpoints. companyId is in the URL path so
@@ -68,11 +69,3 @@ export class MembershipsCompanyController {
   }
 }
 
-function ipOf(req: Request): string {
-  const fwd = req.headers['x-forwarded-for'];
-  if (typeof fwd === 'string' && fwd.length > 0) return fwd.split(',')[0]!.trim();
-  return req.ip ?? '0.0.0.0';
-}
-function uaOf(req: Request): string {
-  return (req.headers['user-agent'] ?? 'unknown').toString().slice(0, 500);
-}

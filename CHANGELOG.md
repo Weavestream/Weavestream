@@ -34,6 +34,18 @@ this project adheres to [Semantic Versioning](https://semver.org/).
   detailed payload should hit the new private endpoints with a session
   cookie or be replaced with `docker compose exec api curl ...` from
   inside the network.
+- **Centralised client-IP handling.** Every controller, the audit
+  interceptor, and the tenant-context interceptor now read the client
+  IP from `req.ip` only (via the new
+  [`apps/api/src/common/request-meta.ts`](apps/api/src/common/request-meta.ts)
+  helper) and never re-parse the raw `X-Forwarded-For` header. Before
+  this change, hitting the API directly with a forged `X-Forwarded-For:`
+  header could spoof the IP recorded in audit rows, evaded by the
+  rate-limit and lockout services, etc. The new env var
+  `TRUST_PROXY_HOPS` (default `1`) replaces the hardcoded `trust proxy`
+  literal in [`apps/api/src/main.ts`](apps/api/src/main.ts) — bump it
+  to match your real topology if you run multiple proxies in front of
+  the stack (see `docs/CONFIGURATION.md` → "Client IP attribution").
 
 ### [1.5.1] - 2026-04-29
 

@@ -97,11 +97,33 @@ Signing keys are 32 random bytes in base64. Generate with
 | `LOCKOUT_WINDOW_MIN`        | `15`    | Lock duration.                                                                        |
 
 The global throttler uses a per-user bucket so concurrent operators don't starve each
-other. The API trusts a single `X-Forwarded-For` hop (set by the Next.js `web` tier or
-an upstream Traefik/Caddy), which is what makes IP-based fallback meaningful inside
-Docker — without it every SSR request would share the internal bridge address and
-collapse into a single bucket. If you run behind a double-proxy (e.g. Cloudflare →
-Traefik → web → api) bump the trust-proxy hop count in `apps/api/src/main.ts`.
+other. IP-based fallback (rate limiting, login lockouts, audit attribution) reads
+`req.ip` only — never the raw `X-Forwarded-For` header — so the API only ever sees an
+IP that survived Express's `trust proxy` validation. See **Client IP attribution**
+below for how to configure the proxy depth.
+
+## Client IP attribution
+
+| Variable             | Default | Notes                                                                |
+| -------------------- | ------- | -------------------------------------------------------------------- |
+| `TRUST_PROXY_HOPS`   | `1`     | Number of trusted reverse-proxy hops between the client and the API. |
+
+Express resolves `req.ip` to the `(N+1)`th entry from the right of the verified
+`X-Forwarded-For` chain, where `N` is `TRUST_PROXY_HOPS`. Match this to your actual
+topology:
+
+| Topology                                             | `TRUST_PROXY_HOPS` |
+| ---------------------------------------------------- | ------------------ |
+| `compose.yml` default (`web` Next.js → `api`)        | `1`                |
+| Edge proxy (Caddy / Traefik / Nginx) → `web` → `api` | `2`                |
+| CDN (e.g. Cloudflare) → edge → `web` → `api`         | `3`                |
+
+The reverse proxy at every hop **must** overwrite or append to `X-Forwarded-For`
+(never blindly trust the value the client supplied) and should set
+`X-Forwarded-Proto` so `req.secure` is correct. Setting `TRUST_PROXY_HOPS` too high
+lets a malicious upstream forge the client IP; setting it too low collapses every
+request behind a proxy into one bucket — the original cause of the 429-as-404
+flake we hit in compose.
 
 ## Object storage (MinIO / S3-compatible)
 

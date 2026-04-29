@@ -30,6 +30,7 @@ import { CurrentUser, type AuthedUser } from '../common/current-user.decorator.j
 import { RequirePermission } from '../rbac/require-permission.decorator.js';
 import { ZodBody } from '../common/zod-validation.pipe.js';
 import { AuditLogService } from '../audit/audit.service.js';
+import { requestMetaOf as meta } from '../common/request-meta.js';
 
 /**
  * Phase 5 HTTP surface for the polymorphic `Relation` table. Every route
@@ -185,12 +186,3 @@ export class RelationsController {
   }
 }
 
-function meta(req: Request) {
-  const fwd = req.headers['x-forwarded-for'];
-  const ip =
-    typeof fwd === 'string' && fwd.length > 0
-      ? fwd.split(',')[0]!.trim()
-      : req.ip ?? '0.0.0.0';
-  const userAgent = (req.headers['user-agent'] ?? 'unknown').toString().slice(0, 500);
-  return { ip, userAgent };
-}

@@ -35,6 +35,7 @@ import {
   setSessionCookie,
   setUiCookie,
 } from './cookies.js';
+import { ipOf, userAgentOf } from '../common/request-meta.js';
 
 @Controller({ path: 'auth', version: '1' })
 export class AuthController {
@@ -216,16 +217,4 @@ export class AuthController {
     setAccessCookie(res, this.env, out.accessToken);
     return { ok: true };
   }
-}
-
-function ipOf(req: Request): string {
-  const fwd = req.headers['x-forwarded-for'];
-  if (typeof fwd === 'string' && fwd.length > 0) {
-    return fwd.split(',')[0]!.trim();
-  }
-  return req.ip ?? '0.0.0.0';
-}
-
-function userAgentOf(req: Request): string {
-  return (req.headers['user-agent'] ?? 'unknown').toString().slice(0, 500);
 }

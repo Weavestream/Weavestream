@@ -26,6 +26,7 @@ import {
   RequirePermission,
 } from '../rbac/require-permission.decorator.js';
 import { ZodBody } from '../common/zod-validation.pipe.js';
+import { ipOf, userAgentOf as uaOf } from '../common/request-meta.js';
 
 @Controller({ path: 'companies', version: '1' })
 export class CompaniesController {
@@ -128,11 +129,3 @@ export class CompaniesController {
   }
 }
 
-function ipOf(req: Request): string {
-  const fwd = req.headers['x-forwarded-for'];
-  if (typeof fwd === 'string' && fwd.length > 0) return fwd.split(',')[0]!.trim();
-  return req.ip ?? '0.0.0.0';
-}
-function uaOf(req: Request): string {
-  return (req.headers['user-agent'] ?? 'unknown').toString().slice(0, 500);
-}
