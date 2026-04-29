@@ -97,8 +97,9 @@ see their assigned tenants.
 fine-grained list of platform-admin tasks delegated to operators
 (`COMPANY_MANAGE`, `INTEGRATION_MANAGE`, `LAYOUT_MANAGE`,
 `USER_MANAGE`, `MEMBERSHIP_MANAGE`, `AUDIT_READ`, `SETTINGS_MANAGE`,
-`EXPORT_CREATE`). `SUPER_ADMIN` holds them implicitly; the API
-rejects setting them on any other role.
+`EXPORT_CREATE`, `ALERT_MANAGE`, `TAG_MANAGE`, `SECURITY_READ`).
+`SUPER_ADMIN` holds them implicitly; the API rejects setting them on
+any other role.
 
 **Resolution order** for "can the viewer do X on tenant T?":
 

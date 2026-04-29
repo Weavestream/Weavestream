@@ -54,6 +54,7 @@ enum PlatformCapability {
   SETTINGS_MANAGE
   EXPORT_CREATE
   ALERT_MANAGE
+  SECURITY_READ
 }
 
 // Phase 3: every AssetField has exactly one FieldType. The type is immutable

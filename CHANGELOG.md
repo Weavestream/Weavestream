@@ -6,6 +6,21 @@ this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **Admin Security Center (read-only).** New
+  `/admin/security` page surfaces login activity (success / password
+  failure / MFA failure aggregates by IP and email over a configurable
+  1h–7d window), active account lockouts read from the lockout
+  service's Redis counters, active rate-limit blocks, and every
+  non-revoked session across users with MFA / role / IP / UA
+  metadata. SUPER_ADMIN sees everything; OPERATORs need the new
+  `SECURITY_READ` platform capability (added to `MANAGER_PRESET`).
+  Revoking another user's session from this page additionally
+  requires `USER_MANAGE` and writes a `security.session.revoke`
+  audit row tagged with the target user. Backed by
+  [`apps/api/src/security/`](apps/api/src/security/).
+
 ### Security
 
 - **Tighter default network surface.** `compose.yml` no longer publishes

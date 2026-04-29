@@ -53,6 +53,7 @@ import { CryptoModule } from './crypto/crypto.module.js';
 import { EmailModule } from './email/email.module.js';
 import { AlertsModule } from './alerts/alerts.module.js';
 import { AlertsController } from './alerts/alerts.controller.js';
+import { SecurityModule } from './security/security.module.js';
 import { AuthGuard } from './auth/guards/auth.guard.js';
 import { MfaEnrollmentGuard } from './auth/guards/mfa-enrollment.guard.js';
 import { CsrfGuard } from './auth/guards/csrf.guard.js';
@@ -156,6 +157,7 @@ const httpSerializers = {
     IpamModule,
     EmailModule,
     AlertsModule,
+    SecurityModule,
     UiModule,
     HealthModule,
   ],

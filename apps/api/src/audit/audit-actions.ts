@@ -150,6 +150,14 @@ export const AUDIT_ACTIONS = {
     reservationUpdate: 'subnet.reservation.update',
     reservationDelete: 'subnet.reservation.delete',
   },
+  // Security Center actions. `session.revoke` is written when an
+  // admin holding `user.manage` ends another user's session via
+  // `DELETE /security/sessions/:id`. The targeted session id lands in
+  // `entityId`; `after.targetUserId` carries the affected user so the
+  // audit-log UI surfaces the right name without a join.
+  security: {
+    sessionRevoke: 'security.session.revoke',
+  },
 } as const;
 
 export const ALL_AUDIT_ACTIONS: string[] = [
@@ -166,4 +174,5 @@ export const ALL_AUDIT_ACTIONS: string[] = [
   ...Object.values(AUDIT_ACTIONS.article),
   ...Object.values(AUDIT_ACTIONS.integration),
   ...Object.values(AUDIT_ACTIONS.subnet),
+  ...Object.values(AUDIT_ACTIONS.security),
 ];

@@ -400,6 +400,31 @@ describe('PermissionService.evaluate — semantic checks', () => {
     ).toBe(false);
   });
 
+  it('security.read requires SECURITY_READ and works without a companyId', () => {
+    expect(
+      PermissionService.evaluate(
+        buildUser('OPERATOR', 'NONE', ['SECURITY_READ']),
+        'security.read',
+        [],
+      ).allowed,
+    ).toBe(true);
+    expect(
+      PermissionService.evaluate(
+        buildUser('OPERATOR', 'FULL'),
+        'security.read',
+        [],
+      ).allowed,
+    ).toBe(false);
+    // SUPER_ADMIN bypasses even without the cap.
+    expect(
+      PermissionService.evaluate(
+        buildUser('SUPER_ADMIN'),
+        'security.read',
+        [],
+      ).allowed,
+    ).toBe(true);
+  });
+
   it('layout.manage.global requires LAYOUT_MANAGE for OPERATOR', () => {
     expect(
       PermissionService.evaluate(
