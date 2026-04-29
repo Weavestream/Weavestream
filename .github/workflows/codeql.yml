@@ -1,0 +1,51 @@
+name: CodeQL
+
+# Advanced setup. Replaces GitHub's "default" code scanning so we can
+# pin a custom config (`.github/codeql/codeql-config.yml`) that scopes
+# a documented false-positive suppression to a single file.
+#
+# IMPORTANT — when this workflow first runs on `main`, disable the
+# default CodeQL setup in:
+#   Settings → Code security and analysis → Code scanning → CodeQL
+# and select "Set up → Advanced". Otherwise both the default and this
+# workflow will run and the default's config will continue to flag
+# the suppressed alert.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Weekly Monday 04:17 UTC — keeps the alert set fresh against
+    # newly-published CodeQL queries without competing with CI.
+    - cron: "17 4 * * 1"
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [javascript-typescript]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          config-file: ./.github/codeql/codeql-config.yml
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:${{ matrix.language }}"

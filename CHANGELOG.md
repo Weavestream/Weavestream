@@ -6,6 +6,13 @@ this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-04-29
+
+### Added
+
+- **Folder editing.** Folders can now be renamed directly from the folder tree.
+- **IPAM (IP Address Management).** A new dedicated IPAM module for managing IP addresses, subnets, and network ranges across tenants.
+
 ## [1.4.1] - 2026-04-28
 
 ### Changed
@@ -396,7 +403,8 @@ Initial public release.
   database-per-tenant.
 - English UI only.
 
-[Unreleased]: https://github.com/Weavestream/Weavestream/compare/v1.4.1...HEAD
+[Unreleased]: https://github.com/Weavestream/Weavestream/compare/v1.5.0...HEAD
+[1.5.0]: https://github.com/Weavestream/Weavestream/releases/tag/v1.5.0
 [1.4.1]: https://github.com/Weavestream/Weavestream/releases/tag/v1.4.1
 [1.3.0]: https://github.com/Weavestream/Weavestream/releases/tag/v1.3.0
 [1.2.1]: https://github.com/Weavestream/Weavestream/releases/tag/v1.2.1

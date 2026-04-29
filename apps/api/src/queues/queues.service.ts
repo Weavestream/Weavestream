@@ -151,18 +151,21 @@ export class QueuesService implements OnModuleInit, OnModuleDestroy {
    * Enqueue a HIBP k-anonymity check for a password. Called from the
    * API's PasswordsService after a successful create/update. The
    * payload carries the full SHA-1 hex of the plaintext so the worker
-   * can split into prefix (sent to hibp) + suffix (local compare);
-   * retained only long enough for the worker to consume it, with an
-   * aggressive removeOnComplete so Redis snapshots don't keep it
-   * around. HIBP rate limits are gentle but we keep attempts modest.
+   * can split into prefix (sent to hibp) + suffix (local compare).
+   *
+   * Retention is intentionally minimal: completed jobs are removed
+   * immediately so the SHA-1 hex never lingers in Redis snapshots /
+   * AOF beyond the worker's consume window. Failed jobs are kept just
+   * long enough to surface in dashboards (1h) — `attempts: 3` with
+   * exponential backoff already replays transient HIBP outages.
    */
   async enqueuePwnedCheck(payload: PwnedCheckJob): Promise<string> {
     const queue = this.get(QueueNames.pwnedCheck);
     const job = await queue.add(PwnedCheckJobNames.password, payload, {
       attempts: 3,
       backoff: { type: 'exponential', delay: 30_000 },
-      removeOnComplete: { age: 60 * 60, count: 100 },
-      removeOnFail: { age: 24 * 60 * 60 },
+      removeOnComplete: true,
+      removeOnFail: { age: 60 * 60, count: 50 },
     });
     return job.id ?? '';
   }
