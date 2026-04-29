@@ -49,10 +49,14 @@ export class AssetsController {
     @Param('companyId', new ParseUUIDPipe()) companyId: string,
     @Query() query: Record<string, string | undefined>,
   ) {
-    const fieldFilters: Record<string, string> = {};
+    // Use a null-prototype object so attacker-supplied `field.<slug>` keys
+    // such as `__proto__` or `constructor` cannot pollute Object.prototype.
+    const fieldFilters: Record<string, string> = Object.create(null);
     for (const [key, value] of Object.entries(query)) {
       if (!key.startsWith('field.') || typeof value !== 'string') continue;
-      fieldFilters[key.slice('field.'.length)] = value;
+      const slug = key.slice('field.'.length);
+      if (slug === '__proto__' || slug === 'prototype' || slug === 'constructor') continue;
+      fieldFilters[slug] = value;
     }
     return this.assets.list(actor, companyId, {
       layoutId: query['layout'],
