@@ -1,5 +1,10 @@
 import type { Request } from 'express';
-import { ipOf, requestMetaOf, userAgentOf } from './request-meta.js';
+import {
+  ipOf,
+  normalizeIp,
+  requestMetaOf,
+  userAgentOf,
+} from './request-meta.js';
 
 describe('request-meta', () => {
   it('ipOf returns req.ip without consulting raw X-Forwarded-For', () => {
@@ -42,5 +47,32 @@ describe('request-meta', () => {
       ip: '198.51.100.7',
       userAgent: 'jest/1',
     });
+  });
+
+  it('ipOf collapses IPv4-mapped IPv6 down to plain IPv4', () => {
+    const req = { ip: '::ffff:192.168.1.50', headers: {} } as unknown as Request;
+    expect(ipOf(req)).toBe('192.168.1.50');
+  });
+
+  it('normalizeIp leaves real IPv6 addresses unchanged', () => {
+    expect(normalizeIp('2001:db8::1')).toBe('2001:db8::1');
+    expect(normalizeIp('::1')).toBe('::1');
+  });
+
+  it('normalizeIp leaves plain IPv4 unchanged', () => {
+    expect(normalizeIp('203.0.113.5')).toBe('203.0.113.5');
+  });
+
+  it('normalizeIp does not strip "::ffff:" when the suffix is not IPv4', () => {
+    // Real IPv6 addresses can begin with `::ffff:` followed by a
+    // hex group (e.g. some link-local forms). Only collapse when
+    // what follows is unambiguously dotted-quad v4.
+    expect(normalizeIp('::ffff:dead:beef')).toBe('::ffff:dead:beef');
+  });
+
+  it('normalizeIp falls back to 0.0.0.0 for missing input', () => {
+    expect(normalizeIp(undefined)).toBe('0.0.0.0');
+    expect(normalizeIp(null)).toBe('0.0.0.0');
+    expect(normalizeIp('')).toBe('0.0.0.0');
   });
 });

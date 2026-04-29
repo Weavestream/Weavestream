@@ -1637,3 +1637,25 @@ export async function listPhotos(
   return res.data ?? { items: [], nextCursor: null };
 }
 
+// ---------------------------------------------------------------------
+// Phase 5: IP allow/deny rules (global, enforced before auth)
+// ---------------------------------------------------------------------
+
+export type IpRuleAction = 'ALLOW' | 'DENY';
+
+export type IpRule = {
+  id: string;
+  cidr: string;
+  action: IpRuleAction;
+  note: string | null;
+  priority: number;
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export async function listIpRules(): Promise<IpRule[]> {
+  const res = await serverApiFetch<{ items: IpRule[] }>('/ip-rules');
+  return res.data?.items ?? [];
+}
+

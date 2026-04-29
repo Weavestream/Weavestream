@@ -157,6 +157,9 @@ export const AUDIT_ACTIONS = {
   // audit-log UI surfaces the right name without a join.
   security: {
     sessionRevoke: 'security.session.revoke',
+    ipRuleCreate: 'security.ip_rule.create',
+    ipRuleUpdate: 'security.ip_rule.update',
+    ipRuleDelete: 'security.ip_rule.delete',
   },
 } as const;
 
@@ -175,4 +178,7 @@ export const ALL_AUDIT_ACTIONS: string[] = [
   ...Object.values(AUDIT_ACTIONS.integration),
   ...Object.values(AUDIT_ACTIONS.subnet),
   ...Object.values(AUDIT_ACTIONS.security),
+  'security.ip_rule.create',
+  'security.ip_rule.update',
+  'security.ip_rule.delete',
 ];

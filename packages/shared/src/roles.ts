@@ -36,6 +36,8 @@ export const PlatformCapabilityValues = [
   // actions on those views (revoking arbitrary sessions, etc.) still
   // require `USER_MANAGE`; this capability gates only the visibility.
   'SECURITY_READ',
+  // Phase 5: Manage IP allow/deny rules enforced before authentication.
+  'IP_RULE_MANAGE',
 ] as const;
 export type PlatformCapability = (typeof PlatformCapabilityValues)[number];
 
@@ -53,4 +55,5 @@ export const MANAGER_PRESET: readonly PlatformCapability[] = [
   'MEMBERSHIP_MANAGE',
   'AUDIT_READ',
   'SECURITY_READ',
+  'IP_RULE_MANAGE',
 ] as const;

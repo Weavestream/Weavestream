@@ -242,6 +242,7 @@ const CAPABILITY_LABEL: Record<PlatformCapability, string> = {
   EXPORT_CREATE: 'Create exports',
   ALERT_MANAGE: 'Manage alert configurations',
   SECURITY_READ: 'View Security Center (logins, lockouts, sessions)',
+  IP_RULE_MANAGE: 'Manage IP allow/deny rules',
 };
 
 export function capabilityLabel(c: PlatformCapability): string {

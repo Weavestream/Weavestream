@@ -29,11 +29,53 @@ const { dirname, resolve } = require('node:path');
 /** @type {import('next').NextConfig} */
 const API_URL = process.env.API_INTERNAL_URL ?? 'http://api:4000';
 
+// Dev-only: allow the dev server's HMR / dev-resource endpoints to be reached
+// from non-localhost origins (e.g. testing the UI on a phone over the LAN).
+// Next 16 hard-blocks these by default, which causes the React bundle to fail
+// to hydrate on a non-localhost origin — the login form's onSubmit handler
+// then never binds and tapping "Sign in" silently degrades to a plain HTML
+// form GET, so no `/auth/login` POST ever reaches the API.
+//
+// In dev we additionally seed the host's primary LAN IPv4 address(es) so
+// laptop ↔ phone testing works out-of-the-box without anyone editing this
+// file. Comma-separated env override (`WEB_ALLOWED_DEV_ORIGINS=...`) wins
+// over auto-detection. Production builds ignore this entirely.
+const { networkInterfaces } = require('node:os');
+
+function detectLanIPs() {
+  const out = new Set();
+  try {
+    const ifaces = networkInterfaces();
+    for (const list of Object.values(ifaces)) {
+      if (!list) continue;
+      for (const i of list) {
+        if (i.family === 'IPv4' && !i.internal) out.add(i.address);
+      }
+    }
+  } catch {
+    /* no-op */
+  }
+  return [...out];
+}
+
+const envOrigins = (process.env.WEB_ALLOWED_DEV_ORIGINS ?? '')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
+
+const allowedDevOrigins = [
+  ...new Set([
+    ...envOrigins,
+    ...(process.env.NODE_ENV === 'production' ? [] : detectLanIPs()),
+  ]),
+];
+
 const nextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
   // Hide the Next 16 dev-only "N" badge. Build/runtime errors still surface.
   devIndicators: false,
+  ...(allowedDevOrigins.length > 0 ? { allowedDevOrigins } : {}),
   // Rewrite barrel imports (`from '@tiptap/react'`) into deep named imports
   // so Turbopack only compiles the symbols we actually reference. In dev
   // this is the difference between shipping the entire Tiptap / dnd-kit /
