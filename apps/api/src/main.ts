@@ -95,7 +95,16 @@ async function bootstrap() {
   app.useGlobalFilters(new ProblemExceptionFilter(app.get(Logger)));
 
   app.enableVersioning({ type: VersioningType.URI, defaultVersion: '1' });
-  app.setGlobalPrefix('api', { exclude: ['health'] });
+  // Exclude the entire /health/* tree from the /api/v1 prefix so that
+  // /health (public liveness), /health/ready (authenticated readiness),
+  // and /health/queues (audit.read-gated) all sit at top-level paths a
+  // reverse proxy / orchestrator can hit without baking in a version.
+  // Note: Express paths are matched as-is — `'health'` only excludes the
+  // exact path, so we pass an explicit RouteInfo for the `:path*`
+  // wildcard as well.
+  app.setGlobalPrefix('api', {
+    exclude: ['health', 'health/(.*)'],
+  });
 
   await app.listen(4000, '0.0.0.0');
 }

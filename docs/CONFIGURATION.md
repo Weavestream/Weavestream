@@ -12,14 +12,35 @@ This document explains each group and notes the operational impact.
 
 ## Host ports
 
-The default compose file only exposes the web UI and MinIO.
-Postgres/Redis stay internal. Override if these collide on your host:
+The default `compose.yml` deliberately publishes the smallest possible
+surface so an operator can put the stack on the open internet behind a
+reverse proxy without re-checking what is reachable.
 
-| Variable                   | Default | Service    |
-| -------------------------- | ------- | ---------- |
-| `WEB_HOST_PORT`            | `3000`  | Next.js    |
-| `MINIO_HOST_PORT`          | `9100`  | MinIO S3   |
-| `MINIO_CONSOLE_HOST_PORT`  | `9101`  | MinIO UI   |
+| Variable                  | Default     | Published                        | Service                                                         |
+| ------------------------- | ----------- | -------------------------------- | --------------------------------------------------------------- |
+| `WEB_HOST_PORT`           | `3000`      | All interfaces                   | Next.js UI. Front this with HTTPS in production.                |
+| `MINIO_HOST_PORT`         | `9100`      | `127.0.0.1` (loopback) by default| MinIO S3 API. Loopback is enough for a same-host reverse proxy. |
+| `MINIO_HOST_BIND`         | `127.0.0.1` | n/a                              | Bind address for the MinIO S3 port. Set to `0.0.0.0` only if you genuinely need direct external access (rarely correct). |
+| `MINIO_CONSOLE_HOST_PORT` | `9101`      | not published                    | Only honored when you layer [`compose.console.yml`](../compose.console.yml). |
+
+Postgres and Redis are not published to the host. Operators inspect them
+with `docker compose exec postgres psql ...` and
+`docker compose exec redis redis-cli ...`. Contributors who run
+`pnpm dev` against the compose stack layer
+[`compose.build.yml`](../compose.build.yml), which re-publishes the
+classic dev ports (`5434` Postgres, `6381` Redis, `9100`/`9101` MinIO).
+
+If you need temporary host access to the MinIO admin console, layer the
+console overlay:
+
+```bash
+docker compose -f compose.yml -f compose.console.yml up -d
+```
+
+Open it at <http://127.0.0.1:9101> on the deploy host or via an SSH
+tunnel. The console authenticates with the same root credentials that
+have programmatic access to every bucket, so do not expose it to the
+LAN or the internet.
 
 ## Core URLs
 

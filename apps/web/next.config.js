@@ -64,9 +64,16 @@ const nextConfig = {
         source: '/api/:path*',
         destination: `${API_URL}/api/:path*`,
       },
+      // `/health` (anonymous liveness) and `/health/:path*` (authenticated
+      // readiness/queue diagnostics) both proxy to the API. The API
+      // enforces auth on the sub-paths, so opening this rewrite is safe.
       {
         source: '/health',
         destination: `${API_URL}/health`,
+      },
+      {
+        source: '/health/:path*',
+        destination: `${API_URL}/health/:path*`,
       },
     ];
   },

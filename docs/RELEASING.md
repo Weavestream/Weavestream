@@ -94,7 +94,8 @@ The version string flows through three places:
 1. **Git tag** (`vX.Y.Z`) — source of truth.
 2. **Docker image tag + `WEAVESTREAM_VERSION` build arg** — baked into
    each image by the release workflow. Surfaces at runtime:
-   - `apps/api` `/health` response
+   - `apps/api` `/health/ready` response (authenticated; the public
+     `/health` is liveness-only and does not leak the version)
    - `apps/web` login page footer (`NEXT_PUBLIC_APP_VERSION`)
 3. **`CHANGELOG.md`** — the human-readable story.
 
