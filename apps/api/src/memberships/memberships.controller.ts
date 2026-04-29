@@ -23,6 +23,7 @@ import { CurrentUser, type AuthedUser } from '../common/current-user.decorator.j
 import { AuthedOnly } from '../rbac/require-permission.decorator.js';
 import { ZodBody } from '../common/zod-validation.pipe.js';
 import { PermissionService } from '../rbac/permission.service.js';
+import { ipOf, userAgentOf as uaOf } from '../common/request-meta.js';
 import { ForbiddenException, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service.js';
 
@@ -122,11 +123,3 @@ export class MembershipsController {
   }
 }
 
-function ipOf(req: Request): string {
-  const fwd = req.headers['x-forwarded-for'];
-  if (typeof fwd === 'string' && fwd.length > 0) return fwd.split(',')[0]!.trim();
-  return req.ip ?? '0.0.0.0';
-}
-function uaOf(req: Request): string {
-  return (req.headers['user-agent'] ?? 'unknown').toString().slice(0, 500);
-}

@@ -10,6 +10,7 @@ import type { Request } from 'express';
 import { Observable, tap } from 'rxjs';
 import { AuditLogService } from './audit.service.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
+import { ipOf, userAgentOf } from '../common/request-meta.js';
 
 export const AUDIT_KEY = 'audit_action';
 export const Audit = (action: string, entityType: string = 'Route') =>
@@ -30,8 +31,8 @@ export class AuditInterceptor implements NestInterceptor {
     if (!meta) return next.handle();
 
     const req = ctx.switchToHttp().getRequest<Request & { user?: AuthedUser }>();
-    const ip = req.ip ?? '0.0.0.0';
-    const ua = (req.headers['user-agent'] ?? 'unknown').toString();
+    const ip = ipOf(req);
+    const ua = userAgentOf(req);
 
     return next.handle().pipe(
       tap({

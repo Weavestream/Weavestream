@@ -110,6 +110,20 @@ export const envSchema = z.object({
   LOCKOUT_MAX_FAILURES: intFromString(1, 100).default(5),
   LOCKOUT_WINDOW_MIN: intFromString(1, 1440).default(15),
 
+  // How many proxy hops between the client and the API are trusted to
+  // append to `X-Forwarded-For`. Express resolves `req.ip` to the
+  // (N+1)th-from-rightmost entry of the chain — every controller, the
+  // throttler, the lockout service, and the audit log read from
+  // `req.ip` only, so this knob is the single source of truth for IP
+  // attribution. Topology guide:
+  //   1 → web (Next.js) → api          (default; matches `compose.yml`)
+  //   2 → edge proxy → web → api       (Caddy/Traefik in front of compose)
+  //   3 → CDN → edge → web → api       (e.g. Cloudflare in front)
+  // Setting this too high lets a malicious upstream forge the client
+  // IP; setting it too low collapses every request behind your proxy
+  // into a single bucket. Production deploys MUST count their hops.
+  TRUST_PROXY_HOPS: intFromString(0, 10).default(1),
+
   LOG_LEVEL: z.enum(['trace', 'debug', 'info', 'warn', 'error', 'fatal']).default('info'),
 
   // Phase 4: MinIO object storage + upload policy.

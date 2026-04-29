@@ -20,16 +20,19 @@ async function bootstrap() {
 
   const env = app.get(EnvService).values;
 
-  // Trust a single upstream hop (the Next.js `web` container acts as the
-  // reverse proxy for browser → API traffic; a Traefik/Caddy edge may
-  // sit in front of it in production). Without this Express returns its
-  // own socket peer (`192.168.160.x` in Docker) for `req.ip`, which
-  // collapses every SSR call into a single throttler bucket and was the
-  // root cause of the intermittent 429-as-404 bug. `1` is the safe
-  // default for our topology; bump to `2` behind a double-proxy setup.
-  // `X-Forwarded-Proto` is also respected so `req.secure` is correct
-  // when the edge terminates TLS.
-  app.set('trust proxy', 1);
+  // Trust N upstream hops from the configured topology. The Next.js
+  // `web` container acts as the reverse proxy for browser → API traffic
+  // (1 hop, default). A Traefik/Caddy edge or a CDN like Cloudflare in
+  // front of compose adds more hops — set `TRUST_PROXY_HOPS=2` or `3`
+  // accordingly. Express resolves `req.ip` to the (N+1)th entry from
+  // the right of the verified `X-Forwarded-For` chain; every IP-based
+  // control in the API (rate limiting, login lockouts, audit attribution)
+  // reads from `req.ip` only, so this knob is the single source of
+  // truth. Without it Express returns its own socket peer
+  // (`192.168.160.x` in Docker) and collapses every SSR call into a
+  // single throttler bucket. `X-Forwarded-Proto` is also respected so
+  // `req.secure` is correct when the edge terminates TLS.
+  app.set('trust proxy', env.TRUST_PROXY_HOPS);
 
   // Use the `simple` query parser (Node's built-in `querystring`) instead
   // of Express's default `extended` parser (`qs`). The extended parser

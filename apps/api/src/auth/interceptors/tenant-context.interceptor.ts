@@ -11,6 +11,7 @@ import { PrismaService } from '../../prisma/prisma.service.js';
 import { RedisService } from '../../redis/redis.service.js';
 import { MembershipCacheService } from '../../cache/membership-cache.service.js';
 import type { AuthedUser } from '../../common/current-user.decorator.js';
+import { ipOf, userAgentOf } from '../../common/request-meta.js';
 
 const MEMBERSHIP_CACHE_SEC = 60;
 
@@ -35,8 +36,8 @@ export class TenantContextInterceptor implements NestInterceptor {
       isSuperAdmin: req.user.role === 'SUPER_ADMIN',
       globalAccess: req.user.globalAccess,
       requestId: (req.id as string | undefined) ?? 'unknown',
-      ip: req.ip ?? '0.0.0.0',
-      userAgent: (req.headers['user-agent'] ?? 'unknown').toString(),
+      ip: ipOf(req),
+      userAgent: userAgentOf(req),
     };
 
     return new Observable((subscriber) => {

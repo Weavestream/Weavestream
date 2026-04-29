@@ -85,7 +85,16 @@ describe('TagsController', () => {
     );
   });
 
-  it('audit meta picks the first x-forwarded-for entry over req.ip', async () => {
+  it('audit meta uses req.ip and ignores a directly-supplied X-Forwarded-For', async () => {
+    // Pre-Phase 3 the controllers hand-parsed `x-forwarded-for` and
+    // accepted whatever the client sent — directly hitting the API
+    // (no trusted proxy in front) let an attacker forge their own IP
+    // for audit attribution and per-IP rate limiting. Now every
+    // controller goes through `requestMetaOf` which only reads
+    // `req.ip`, the value Express resolves *after* honoring
+    // `app.set('trust proxy', N)`. In this unit test the request is
+    // synthesized directly (no proxy), so a forged XFF must be
+    // ignored and the test sees the value `req.ip` was set to.
     const svc = makeService();
     (svc.create as jest.Mock).mockResolvedValue({ id: 't-1', name: 'A' });
     const ctrl = new TagsController(svc);
@@ -100,7 +109,7 @@ describe('TagsController', () => {
     expect(svc.create).toHaveBeenCalledWith(
       ACTOR,
       'X',
-      expect.objectContaining({ ip: '203.0.113.4' }),
+      expect.objectContaining({ ip: '10.0.0.1' }),
     );
   });
 });
