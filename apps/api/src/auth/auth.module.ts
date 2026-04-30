@@ -3,6 +3,7 @@ import { AuthController } from './auth.controller.js';
 import { AuthService } from './auth.service.js';
 import { TokenService } from './token.service.js';
 import { MfaService } from './mfa.service.js';
+import { MfaBackupCodeService } from './mfa-backup-code.service.js';
 import { LockoutService } from './lockout.service.js';
 import { PasswordService } from './password.service.js';
 import { CsrfService } from './csrf.service.js';
@@ -15,10 +16,18 @@ import { UsersModule } from '../users/users.module.js';
     AuthService,
     TokenService,
     MfaService,
+    MfaBackupCodeService,
     LockoutService,
     PasswordService,
     CsrfService,
   ],
-  exports: [AuthService, TokenService, MfaService, PasswordService, CsrfService],
+  exports: [
+    AuthService,
+    TokenService,
+    MfaService,
+    MfaBackupCodeService,
+    PasswordService,
+    CsrfService,
+  ],
 })
 export class AuthModule {}

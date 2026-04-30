@@ -6,6 +6,37 @@ this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.5.3] - 2026-04-29
+
+### Added
+
+- **MFA backup codes.** Completing MFA enrollment now issues one-time
+  recovery codes that users can save, copy, and use on the MFA
+  challenge if their authenticator is unavailable. Codes are hashed at
+  rest, consumed atomically, deleted when MFA is reset, and can be
+  regenerated from the profile page. Operators also get
+  `reset-mfa <email>` in the CLI to clear MFA, backup codes, and active
+  sessions for account recovery.
+
+### Changed
+
+- **Uploads relayed through the API.** Browsers no longer PUT directly
+  to MinIO; the init endpoint now returns a same-origin relay URL
+  (`/api/v1/companies/:id/uploads/:uploadId/blob`) and the API streams
+  the body to the internal bucket. Embedded article images served via
+  `/uploads/:id/image` are likewise streamed back through the API
+  instead of 302-redirecting to a presigned S3 URL. This keeps MinIO
+  fully reachable only over the Docker network (matching the v1.5.2
+  loopback-by-default `MINIO_HOST_BIND`) and removes the need to put a
+  reverse proxy in front of the bucket endpoint just so a browser can
+  upload a logo or paste an image into the rich-text editor.
+
+### Security
+
+- **MFA reset hardening.** Admin-triggered MFA resets now require a
+  recent actor sign-in, clear stored backup codes, and revoke the target
+  user's active sessions.
+
 ## [1.5.2] - 2026-04-29
 
 ### Added

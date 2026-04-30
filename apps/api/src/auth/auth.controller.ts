@@ -135,11 +135,13 @@ export class AuthController {
       mfaPending: true,
     };
     // AuthService.verifyMfa re-fetches the user row; we only need id/sessionId here.
-    await this.auth.verifyMfa(asUser, dto.token, ipOf(req), userAgentOf(req));
+    const result = await this.auth.verifyMfa(asUser, dto.token, ipOf(req), userAgentOf(req));
 
     // Rotate CSRF on state transition.
     setCsrfCookie(res, this.env, this.csrf.issue());
-    return { ok: true };
+    return result.backupCodes
+      ? { ok: true, backupCodes: result.backupCodes }
+      : { ok: true };
   }
 
   @AuthedOnly()

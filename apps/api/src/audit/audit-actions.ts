@@ -14,6 +14,8 @@ export const AUDIT_ACTIONS = {
     mfaEnrollComplete: 'auth.mfa.enroll.complete',
     mfaVerifySuccess: 'auth.mfa.verify.success',
     mfaVerifyFailure: 'auth.mfa.verify.failure',
+    mfaBackupUsed: 'auth.mfa.backup.used',
+    mfaBackupRegenerate: 'auth.mfa.backup.regenerate',
     sessionsRevokeOthers: 'auth.sessions.revoke_others',
   },
   user: {

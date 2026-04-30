@@ -69,6 +69,15 @@ export class MeController {
     return this.me.revokeOtherSessions(user, { ip: ipOf(req), userAgent: uaOf(req) });
   }
 
+  @Post('mfa/backup-codes/regenerate')
+  @HttpCode(HttpStatus.OK)
+  async regenerateMfaBackupCodes(@CurrentUser() user: AuthedUser, @Req() req: Request) {
+    return this.me.regenerateMfaBackupCodes(user, {
+      ip: ipOf(req),
+      userAgent: uaOf(req),
+    });
+  }
+
   /**
    * Phase 9b.1 — persist the user's appearance preferences (theme +
    * accent) and mirror them into the non-HttpOnly `ws_ui` cookie so the

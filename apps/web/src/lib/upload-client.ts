@@ -4,13 +4,14 @@ import { apiFetch } from './api';
 
 /**
  * Client-side helper for the 3-step upload protocol (init → PUT → confirm).
- * Lives on the browser, so it goes through `apiFetch` (which handles CSRF)
- * for the two API calls and a plain `XMLHttpRequest` PUT for progress
- * reporting against MinIO.
+ * `apiFetch` handles the JSON init/confirm calls (cookie + CSRF). The PUT
+ * is sent over the same origin to a relay endpoint on the API, which
+ * streams the body into the internal MinIO bucket — so the browser
+ * never needs to reach MinIO directly and the bucket endpoint can stay
+ * locked to the Docker network.
  *
- * The MinIO public URL lives at `MINIO_PUBLIC_URL` on the server and is
- * returned as `presignedUrl` in the init response, so browsers never need
- * to know about the internal Docker network hostname.
+ * `presignedUrl` is the response field name preserved from the previous
+ * presigned-S3 design; today it points at the same-origin relay.
  */
 
 export type InitUploadResponse = {
@@ -69,7 +70,11 @@ export async function uploadFile(opts: {
   }
   const init = initRes.data;
 
-  await putWithProgress(init.presignedUrl, file, opts.onProgress, opts.signal);
+  await putWithProgress(init.presignedUrl, file, {
+    onProgress: opts.onProgress,
+    signal: opts.signal,
+    csrfToken: await ensureCsrfTokenForPut(),
+  });
 
   const confirmRes = await apiFetch<ConfirmUploadResponse>(
     `/companies/${companyId}/uploads/confirm`,
@@ -91,17 +96,29 @@ export async function uploadFile(opts: {
 function putWithProgress(
   url: string,
   file: File,
-  onProgress?: (p: UploadProgress) => void,
-  signal?: AbortSignal,
+  opts: {
+    onProgress?: (p: UploadProgress) => void;
+    signal?: AbortSignal;
+    /**
+     * CSRF token for the same-origin relay PUT. We deliberately skip
+     * this when the URL is absolute (i.e. an externally hosted bucket
+     * endpoint) so we don't leak the token to a third party.
+     */
+    csrfToken?: string;
+  } = {},
 ): Promise<void> {
   return new Promise<void>((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open('PUT', url);
     xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
-    if (onProgress) {
+    xhr.withCredentials = isSameOriginUrl(url);
+    if (opts.csrfToken && isSameOriginUrl(url)) {
+      xhr.setRequestHeader('X-CSRF-Token', opts.csrfToken);
+    }
+    if (opts.onProgress) {
       xhr.upload.onprogress = (ev) => {
         if (!ev.lengthComputable) return;
-        onProgress({
+        opts.onProgress!({
           loaded: ev.loaded,
           total: ev.total,
           percent: ev.total > 0 ? Math.round((ev.loaded / ev.total) * 100) : 0,
@@ -110,19 +127,61 @@ function putWithProgress(
     }
     xhr.onload = () => {
       if (xhr.status >= 200 && xhr.status < 300) resolve();
-      else reject(new UploadError('put-failed', { status: xhr.status }));
+      else {
+        let problem: unknown;
+        try {
+          problem = xhr.responseText ? JSON.parse(xhr.responseText) : undefined;
+        } catch {
+          problem = { status: xhr.status };
+        }
+        reject(new UploadError('put-failed', problem ?? { status: xhr.status }));
+      }
     };
     xhr.onerror = () => reject(new UploadError('network-error'));
     xhr.onabort = () => reject(new UploadError('aborted'));
-    if (signal) {
-      if (signal.aborted) {
+    if (opts.signal) {
+      if (opts.signal.aborted) {
         xhr.abort();
         return;
       }
-      signal.addEventListener('abort', () => xhr.abort(), { once: true });
+      opts.signal.addEventListener('abort', () => xhr.abort(), { once: true });
     }
     xhr.send(file);
   });
+}
+
+function isSameOriginUrl(url: string): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    const parsed = new URL(url, window.location.origin);
+    return parsed.origin === window.location.origin;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Cookie-based CSRF for same-origin requests. Mirrors the read in
+ * `apiFetch`: prefer the cookie set by an earlier non-GET call, and
+ * mint a fresh token via the `/auth/csrf` endpoint if none exists yet.
+ */
+async function ensureCsrfTokenForPut(): Promise<string | undefined> {
+  if (typeof document === 'undefined') return undefined;
+  const fromCookie = readCookie('ws_csrf');
+  if (fromCookie) return fromCookie;
+  const res = await fetch('/api/v1/auth/csrf', {
+    method: 'POST',
+    credentials: 'include',
+  });
+  if (!res.ok) return undefined;
+  const data = (await res.json().catch(() => null)) as { csrfToken?: string } | null;
+  return data?.csrfToken ?? undefined;
+}
+
+function readCookie(name: string): string | undefined {
+  if (typeof document === 'undefined') return undefined;
+  const match = document.cookie.match(new RegExp('(?:^|; )' + name + '=([^;]*)'));
+  return match ? decodeURIComponent(match[1]!) : undefined;
 }
 
 export class UploadError extends Error {

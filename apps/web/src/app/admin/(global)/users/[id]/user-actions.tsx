@@ -68,7 +68,10 @@ export function UserActions({ user, isSelf }: { user: UserDetail; isSelf: boolea
     const res = await apiFetch(`/users/${user.id}/reset-mfa`, { method: 'POST' });
     setPending(false);
     if (!res.ok) {
-      toast.push('Reset failed.', 'danger');
+      toast.push(
+        res.status === 403 ? 'Sign in again before resetting MFA.' : 'Reset failed.',
+        'danger',
+      );
       return;
     }
     toast.push('MFA reset. User will re-enrol on next login.', 'ok');
@@ -146,7 +149,8 @@ export function UserActions({ user, isSelf }: { user: UserDetail; isSelf: boolea
       >
         <p style={{ margin: 0, fontSize: 13, color: 'var(--text-2)', lineHeight: 1.5 }}>
           Every active session for {user.name} will be revoked. They'll enrol a new
-          authenticator on their next sign-in.
+          authenticator on their next sign-in. You must have signed in within the last
+          five minutes to do this.
         </p>
       </Dialog>
 

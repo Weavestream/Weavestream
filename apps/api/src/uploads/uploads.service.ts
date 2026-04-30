@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ForbiddenException,
   Injectable,
   Logger,
   NotFoundException,
@@ -7,6 +8,7 @@ import {
   UnsupportedMediaTypeException,
 } from '@nestjs/common';
 import { createHash, randomUUID } from 'node:crypto';
+import type { Readable } from 'node:stream';
 import type { FileTypeResult } from 'file-type';
 import sharp from 'sharp';
 
@@ -100,7 +102,8 @@ export class UploadsService {
   }
 
   // ------------------------------------------------------------------
-  // 1) init — mint a presigned PUT URL and stash an expiry in Redis.
+  // 1) init — register a pending upload and return a same-origin URL
+  //    the browser will PUT the file body to.
   // ------------------------------------------------------------------
 
   async init(
@@ -132,14 +135,17 @@ export class UploadsService {
 
     const uploadId = randomUUID();
     const storageKey = this.storage.uploadKey(companyId, uploadId, input.filename);
-    // Only `contentType` is signed — see the note on `presignPut` for why
-    // signing `ContentLength` would break the browser PUT. The declared
-    // `input.sizeBytes` is still enforced by comparing against the
-    // `HeadObject` `ContentLength` during `confirm`.
-    const { url, expiresAt } = await this.storage.presignPut(companyId, storageKey, {
-      contentType: mime,
-      ttlSeconds: 300,
-    });
+    // Make sure the bucket exists *before* we hand the client a relay URL,
+    // so the upload PUT doesn't race against bucket creation.
+    await this.storage.ensureBucket(companyId);
+
+    // Browser PUT goes to a same-origin relay endpoint instead of a
+    // presigned MinIO URL. This keeps MinIO fully internal (Docker
+    // compose pins the S3 port to 127.0.0.1 by default) and removes
+    // the operational burden of fronting the bucket endpoint with a
+    // reverse proxy + CSP/CORS just so browsers can PUT to it.
+    const expiresAt = new Date(Date.now() + PENDING_TTL_SECONDS * 1000);
+    const presignedUrl = `/api/v1/companies/${companyId}/uploads/${uploadId}/blob`;
 
     const pending = {
       companyId,
@@ -159,7 +165,78 @@ export class UploadsService {
       PENDING_TTL_SECONDS,
     );
 
-    return { uploadId, storageKey, presignedUrl: url, expiresAt };
+    return { uploadId, storageKey, presignedUrl, expiresAt };
+  }
+
+  // ------------------------------------------------------------------
+  // 1b) relayPut — same-origin replacement for the previous browser →
+  //    MinIO presigned PUT. Reads the request body up to MAX_UPLOAD_MB
+  //    and writes it to the internal MinIO endpoint, scoped to the
+  //    pending upload session in Redis.
+  // ------------------------------------------------------------------
+
+  async relayPut(
+    actor: AuthedUser,
+    companyId: string,
+    uploadId: string,
+    body: Readable,
+    headers: { contentType?: string; contentLength?: number },
+  ): Promise<void> {
+    const raw = await this.redis.client.get(pendingKey(uploadId));
+    if (!raw) {
+      throw new NotFoundException({
+        error: 'PendingUploadNotFound',
+        message: 'The upload session has expired or does not exist.',
+      });
+    }
+    const pending = JSON.parse(raw) as {
+      companyId: string;
+      filename: string;
+      mimeType: string;
+      sizeBytes: number;
+      storageKey: string;
+      uploaderId: string | null;
+      attachedToType: UploadAttachmentType | null;
+      attachedToId: string | null;
+    };
+
+    if (pending.companyId !== companyId) {
+      throw new BadRequestException({
+        error: 'CompanyScopeMismatch',
+        message: 'Pending upload belongs to a different company.',
+      });
+    }
+    // Only the user who created the pending session may PUT against it.
+    // The init endpoint already gated on `upload.create`, so this is a
+    // narrowing check rather than the primary authorization decision.
+    if (pending.uploaderId && pending.uploaderId !== actor.id) {
+      throw new ForbiddenException({
+        error: 'UploadNotOwned',
+        message: 'This upload session belongs to a different user.',
+      });
+    }
+
+    if (
+      typeof headers.contentLength === 'number' &&
+      Number.isFinite(headers.contentLength) &&
+      headers.contentLength > this.maxBytes
+    ) {
+      throw new PayloadTooLargeException({
+        error: 'FileTooLarge',
+        sizeBytes: headers.contentLength,
+        maxBytes: this.maxBytes,
+        message: `File size ${headers.contentLength} exceeds ${this.env.values.MAX_UPLOAD_MB} MB limit.`,
+      });
+    }
+
+    const buffer = await readBoundedStream(body, this.maxBytes);
+
+    // Trust the pending mimeType from init for the stored object's
+    // Content-Type. The browser-declared header is only a hint; magic-
+    // bytes verification still happens at confirm time.
+    await this.storage.putObject(companyId, pending.storageKey, buffer, {
+      contentType: pending.mimeType,
+    });
   }
 
   // ------------------------------------------------------------------
@@ -404,6 +481,45 @@ export class UploadsService {
     return url;
   }
 
+  /**
+   * Stream the original or thumbnail bytes for an upload directly to
+   * the caller. Used by the `<img src>` endpoint so embedded article
+   * images (and any other long-lived references) render without the
+   * browser ever needing to reach MinIO.
+   */
+  async openImageStream(
+    companyId: string,
+    uploadId: string,
+    variant: 'original' | 'thumb',
+  ): Promise<{
+    body: AsyncIterable<Uint8Array>;
+    contentType: string;
+    contentLength?: number;
+    lastModified?: Date;
+    etag?: string;
+    filename: string;
+  } | null> {
+    const upload = await this.prisma.upload.findFirst({
+      where: { id: uploadId, companyId, deletedAt: null },
+    });
+    if (!upload) return null;
+    const key = variant === 'thumb' ? upload.thumbnailKey : upload.storageKey;
+    if (!key) return null;
+    const stream = await this.storage.getObjectStream(companyId, key);
+    if (!stream) return null;
+    return {
+      body: stream.body,
+      contentType:
+        stream.contentType ??
+        (variant === 'thumb' ? 'image/webp' : upload.mimeType) ??
+        'application/octet-stream',
+      contentLength: stream.contentLength,
+      lastModified: stream.lastModified,
+      etag: stream.etag,
+      filename: upload.filename,
+    };
+  }
+
   // ------------------------------------------------------------------
   // 4) delete — soft-delete the Upload row. The actual bytes are left
   //    in storage so an undelete job can be added later; a cleanup job
@@ -636,4 +752,52 @@ function pendingKey(uploadId: string): string {
 
 function sanitizeForHeader(filename: string): string {
   return filename.replace(/["\\]/g, '_').replace(/[\r\n]/g, '');
+}
+
+/**
+ * Read a Node Readable stream into a Buffer, rejecting once the
+ * cumulative size exceeds `maxBytes`. We can't trust a client's
+ * declared `Content-Length`, so this is the real ceiling — even if a
+ * malicious caller lies about the length we'll still tear the
+ * connection down before the body grows past the configured limit.
+ */
+async function readBoundedStream(stream: Readable, maxBytes: number): Promise<Buffer> {
+  return new Promise<Buffer>((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    let received = 0;
+    let settled = false;
+
+    const settle = (err: Error | null, buf?: Buffer) => {
+      if (settled) return;
+      settled = true;
+      if (err) {
+        stream.destroy(err);
+        reject(err);
+      } else {
+        resolve(buf!);
+      }
+    };
+
+    stream.on('data', (chunk: Buffer | string) => {
+      const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      received += buf.length;
+      if (received > maxBytes) {
+        settle(
+          new PayloadTooLargeException({
+            error: 'FileTooLarge',
+            sizeBytes: received,
+            maxBytes,
+            message: `Upload body exceeds ${maxBytes} bytes.`,
+          }),
+        );
+        return;
+      }
+      chunks.push(buf);
+    });
+    stream.on('end', () => settle(null, Buffer.concat(chunks)));
+    stream.on('error', (err) => settle(err));
+    stream.on('aborted', () =>
+      settle(new BadRequestException({ error: 'ClientAborted', message: 'Client aborted upload.' })),
+    );
+  });
 }

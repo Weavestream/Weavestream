@@ -47,6 +47,7 @@ function makeService(
   return new MeService(
     prisma as never,
     { verify: jest.fn(), hash: jest.fn() } as never,
+    { replaceForUser: jest.fn() } as never,
     audit as never,
   );
 }
@@ -115,5 +116,40 @@ describe('MeService.updatePreferences', () => {
       }),
     );
     expect(out).toEqual({ uiTheme: 'dark', uiAccent: 'coral' });
+  });
+});
+
+describe('MeService.regenerateMfaBackupCodes', () => {
+  it('replaces existing codes and audits the one-time return', async () => {
+    const prisma = {
+      user: {
+        findUnique: jest.fn().mockResolvedValue({
+          mfaEnabled: true,
+          mfaEnforcementCompletedAt: new Date(),
+        }),
+      },
+    };
+    const backupCodes = {
+      replaceForUser: jest.fn().mockResolvedValue(['AAAAA-BBBBB']),
+    };
+    const audit = makeAudit();
+    const svc = new MeService(
+      prisma as never,
+      { verify: jest.fn(), hash: jest.fn() } as never,
+      backupCodes as never,
+      audit as never,
+    );
+
+    const out = await svc.regenerateMfaBackupCodes(ACTOR, META);
+
+    expect(out).toEqual({ backupCodes: ['AAAAA-BBBBB'] });
+    expect(backupCodes.replaceForUser).toHaveBeenCalledWith(ACTOR.id);
+    expect(audit.log).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'auth.mfa.backup.regenerate',
+        entityId: ACTOR.id,
+        after: { count: 1 },
+      }),
+    );
   });
 });

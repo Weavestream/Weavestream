@@ -11,6 +11,11 @@ interface EnrollResponse {
   qrDataUrl: string;
 }
 
+interface VerifyResponse {
+  ok: true;
+  backupCodes?: string[];
+}
+
 export default function MfaSetupClient() {
   const router = useRouter();
   const [secret, setSecret] = useState<string | null>(null);
@@ -18,6 +23,8 @@ export default function MfaSetupClient() {
   const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
   const [showManual, setShowManual] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [copiedCodes, setCopiedCodes] = useState(false);
+  const [backupCodes, setBackupCodes] = useState<string[] | null>(null);
   const [token, setToken] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
@@ -39,13 +46,17 @@ export default function MfaSetupClient() {
     e.preventDefault();
     setError(null);
     setPending(true);
-    const res = await apiFetch('/auth/mfa/verify', {
+    const res = await apiFetch<VerifyResponse>('/auth/mfa/verify', {
       method: 'POST',
       body: JSON.stringify({ token }),
     });
     setPending(false);
     if (!res.ok) {
       setError('Invalid code. Try again.');
+      return;
+    }
+    if (res.data?.backupCodes?.length) {
+      setBackupCodes(res.data.backupCodes);
       return;
     }
     router.push('/');
@@ -62,7 +73,61 @@ export default function MfaSetupClient() {
     }
   }
 
+  async function copyBackupCodes() {
+    if (!backupCodes) return;
+    try {
+      await navigator.clipboard.writeText(backupCodes.join('\n'));
+      setCopiedCodes(true);
+      setTimeout(() => setCopiedCodes(false), 1500);
+    } catch {
+      // noop — user can still read the codes
+    }
+  }
+
   const ready = Boolean(qrDataUrl && secret);
+
+  if (backupCodes) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+        <p style={{ margin: 0, fontSize: 13, color: 'var(--text-2)', lineHeight: 1.5 }}>
+          Save these recovery codes now. Each code works once if you lose access to
+          your authenticator.
+        </p>
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+            gap: 8,
+            padding: 12,
+            background: 'var(--panel-2)',
+            border: '1px solid var(--line-2)',
+            borderRadius: 8,
+          }}
+        >
+          {backupCodes.map((code) => (
+            <code
+              key={code}
+              style={{
+                fontFamily: 'var(--font-mono)',
+                fontSize: 12,
+                color: 'var(--text)',
+              }}
+            >
+              {code}
+            </code>
+          ))}
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+          <Btn type="button" kind="outline" size="md" onClick={copyBackupCodes}>
+            {copiedCodes ? 'Copied' : 'Copy codes'}
+          </Btn>
+          <Btn type="button" kind="primary" size="md" onClick={() => router.push('/')}>
+            Continue
+          </Btn>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>

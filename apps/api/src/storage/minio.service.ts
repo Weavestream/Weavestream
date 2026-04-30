@@ -230,6 +230,45 @@ export class MinioService implements OnModuleInit {
     return Buffer.concat(chunks);
   }
 
+  /**
+   * Stream a stored object back to the caller without buffering. Used by
+   * the upload `image` endpoint to relay article images to the browser
+   * over the same origin, so MinIO can stay locked to the internal
+   * Docker network. Returns the underlying stream plus the metadata the
+   * controller needs to set response headers (Content-Type, Length,
+   * Last-Modified, ETag).
+   */
+  async getObjectStream(
+    companyId: string,
+    key: string,
+  ): Promise<{
+    body: AsyncIterable<Uint8Array>;
+    contentType?: string;
+    contentLength?: number;
+    lastModified?: Date;
+    etag?: string;
+  } | null> {
+    const bucket = this.bucketFor(companyId);
+    try {
+      const res = await this.internal.send(
+        new GetObjectCommand({ Bucket: bucket, Key: key }),
+      );
+      if (!res.Body) return null;
+      return {
+        body: res.Body as AsyncIterable<Uint8Array>,
+        contentType: res.ContentType,
+        contentLength: res.ContentLength,
+        lastModified: res.LastModified,
+        etag: res.ETag,
+      };
+    } catch (err) {
+      const status = (err as { $metadata?: { httpStatusCode?: number } }).$metadata
+        ?.httpStatusCode;
+      if (status === 404) return null;
+      throw err;
+    }
+  }
+
   async putObject(
     companyId: string,
     key: string,
