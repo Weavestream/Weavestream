@@ -3,15 +3,16 @@
 import { useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { apiFetch } from '../../../../../lib/api';
+import { uploadFile } from '../../../../../lib/upload-client';
 import { Btn, CompanyAvatar, Icon, useToast } from '../../../../../components/ui';
 import { companyAccent } from '../../../../../lib/company-format';
 import type { CompanyDetail } from '../../../../../lib/server-api';
 
 /**
- * Logo uploader built on top of the existing presigned upload flow:
+ * Logo uploader built on top of the same-origin upload flow:
  *
- *   POST /companies/:id/uploads/init    → presigned PUT url
- *   PUT <presigned-url> with file body  → MinIO
+ *   POST /companies/:id/uploads/init    → relay PUT url
+ *   PUT <relay-url> with file body      → API streams to internal MinIO
  *   POST /companies/:id/uploads/confirm → creates the Upload row
  *   PATCH /companies/:id { logoUploadId } → points Company at the upload
  *
@@ -40,39 +41,13 @@ export function LogoUploadField({ company }: { company: CompanyDetail }) {
     }
     setBusy(true);
     try {
-      const init = await apiFetch<{
-        uploadId: string;
-        presignedUrl: string;
-        expiresAt: string;
-      }>(`/companies/${company.id}/uploads/init`, {
-        method: 'POST',
-        body: JSON.stringify({
-          filename: file.name,
-          mimeType: file.type,
-          sizeBytes: file.size,
-        }),
-      });
-      if (!init.ok || !init.data) throw new Error('init-failed');
-
-      const put = await fetch(init.data.presignedUrl, {
-        method: 'PUT',
-        headers: { 'Content-Type': file.type },
-        body: file,
-      });
-      if (!put.ok) throw new Error(`put-failed-${put.status}`);
-
-      const confirm = await apiFetch<{ id: string }>(
-        `/companies/${company.id}/uploads/confirm`,
-        {
-          method: 'POST',
-          body: JSON.stringify({ uploadId: init.data.uploadId }),
-        },
-      );
-      if (!confirm.ok || !confirm.data) throw new Error('confirm-failed');
+      // Reuse the shared client so the relay PUT, CSRF, and confirm
+      // flow stay in lock-step with the article-editor uploader.
+      const upload = await uploadFile({ companyId: company.id, file });
 
       const patch = await apiFetch(`/companies/${company.id}`, {
         method: 'PATCH',
-        body: JSON.stringify({ logoUploadId: confirm.data.id }),
+        body: JSON.stringify({ logoUploadId: upload.id }),
       });
       if (!patch.ok) throw new Error('patch-failed');
 

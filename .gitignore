@@ -44,3 +44,5 @@ docs/PHASE_*_NOTE.md
 docs/permissions.md
 /Website/
 .cursor/plans/
+.cursor/
+.cursor/rules/

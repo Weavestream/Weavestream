@@ -11,6 +11,7 @@ import { PrismaService } from '../prisma/prisma.service.js';
 import { PasswordService } from './password.service.js';
 import { TokenService } from './token.service.js';
 import { MfaService } from './mfa.service.js';
+import { MfaBackupCodeService } from './mfa-backup-code.service.js';
 import { LockoutService } from './lockout.service.js';
 import { EnvService } from '../config/env.service.js';
 import { AuditLogService } from '../audit/audit.service.js';
@@ -34,6 +35,7 @@ export class AuthService {
     private readonly passwords: PasswordService,
     private readonly tokens: TokenService,
     private readonly mfa: MfaService,
+    private readonly backupCodes: MfaBackupCodeService,
     private readonly lockout: LockoutService,
     private readonly env: EnvService,
     private readonly audit: AuditLogService,
@@ -205,7 +207,7 @@ export class AuthService {
     token: string,
     ip: string,
     userAgent: string,
-  ): Promise<void> {
+  ): Promise<{ backupCodes?: string[] }> {
     if (await this.lockout.isLocked(ip, user.email)) {
       throw new HttpException(
         'Too many failed attempts. Try again later.',
@@ -218,8 +220,13 @@ export class AuthService {
       throw new BadRequestException('MFA not enrolled');
     }
 
+    const firstTime = row.mfaEnforcementCompletedAt === null;
     const secret = this.mfa.decryptSecret(row.mfaSecretEncrypted);
-    const ok = this.mfa.verify(token, secret);
+    const totpOk = this.mfa.verify(token, secret);
+    const backupOk = !totpOk && !firstTime
+      ? await this.backupCodes.consume(user.id, token)
+      : false;
+    const ok = totpOk || backupOk;
     if (!ok) {
       await this.lockout.recordFailure(ip, user.email);
       await this.audit.log({
@@ -237,7 +244,10 @@ export class AuthService {
 
     await this.lockout.clear(ip, user.email);
 
-    const firstTime = row.mfaEnforcementCompletedAt === null;
+    const issuedBackupCodes = firstTime
+      ? await this.backupCodes.replaceForUser(user.id)
+      : undefined;
+
     await this.prisma.user.update({
       where: { id: user.id },
       data: {
@@ -253,14 +263,20 @@ export class AuthService {
 
     await this.audit.log({
       actorId: user.id,
-      action: firstTime ? 'auth.mfa.enroll.complete' : 'auth.mfa.verify.success',
+      action: backupOk
+        ? 'auth.mfa.backup.used'
+        : firstTime
+          ? 'auth.mfa.enroll.complete'
+          : 'auth.mfa.verify.success',
       entityType: 'User',
       entityId: user.id,
       ip,
       userAgent,
       before: null,
-      after: null,
+      after: backupOk ? { sessionId: user.sessionId } : null,
     });
+
+    return issuedBackupCodes ? { backupCodes: issuedBackupCodes } : {};
   }
 
   async me(userId: string) {
@@ -346,6 +362,7 @@ export class AuthService {
           mfaSecretEncrypted: null,
         },
       });
+      await tx.userMfaBackupCode.deleteMany({ where: { userId: user.id } });
     });
 
     // Mint session immediately so the user bounces into /mfa/setup.

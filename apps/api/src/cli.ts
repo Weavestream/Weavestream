@@ -28,6 +28,9 @@ async function bootstrap() {
       case 'reset-password':
         await resetPassword(prisma, passwords, audit, rest[0]);
         break;
+      case 'reset-mfa':
+        await resetMfa(prisma, audit, rest[0]);
+        break;
       case 'list-users':
         await listUsers(prisma);
         break;
@@ -60,6 +63,7 @@ Weavestream CLI
 Commands:
   create-admin [--force]         Create the initial SUPER_ADMIN user
   reset-password <email>         Reset a user's password, revoke their sessions
+  reset-mfa <email>              Clear MFA, backup codes, and active sessions
   list-users                     List users (id, email, role, active, mfa)
   rotate-sessions                Revoke every active session
   reindex-search                 Rebuild the Phase 6 search index from scratch
@@ -207,6 +211,53 @@ async function resetPassword(
   });
   // eslint-disable-next-line no-console
   console.log(`Password reset for ${user.email}. All sessions revoked.`);
+}
+
+async function resetMfa(
+  prisma: PrismaService,
+  audit: AuditLogService,
+  email: string | undefined,
+): Promise<void> {
+  if (!email) {
+    console.error('Usage: reset-mfa <email>');
+    process.exit(1);
+  }
+  const user = await prisma.user.findUnique({ where: { email: email.toLowerCase() } });
+  if (!user) {
+    console.error('No such user.');
+    process.exit(1);
+  }
+
+  await prisma.$transaction(async (tx) => {
+    await tx.user.update({
+      where: { id: user.id },
+      data: {
+        mfaSecretEncrypted: null,
+        mfaEnabled: false,
+        mfaEnforcementCompletedAt: null,
+      },
+    });
+    await tx.userMfaBackupCode.deleteMany({ where: { userId: user.id } });
+    await tx.session.updateMany({
+      where: { userId: user.id, revokedAt: null },
+      data: { revokedAt: new Date() },
+    });
+  });
+
+  await audit.log({
+    actorId: null,
+    action: 'admin.reset-mfa',
+    entityType: 'User',
+    entityId: user.id,
+    ip: 'cli',
+    userAgent: 'cli',
+    before: {
+      mfaEnabled: user.mfaEnabled,
+      mfaEnforcementCompletedAt: user.mfaEnforcementCompletedAt,
+    },
+    after: { mfaEnabled: false, mfaEnforcementCompletedAt: null },
+  });
+  console.log(`MFA reset for ${user.email}. Backup codes removed and sessions revoked.`);
 }
 
 async function listUsers(prisma: PrismaService): Promise<void> {

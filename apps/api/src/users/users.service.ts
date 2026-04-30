@@ -462,19 +462,30 @@ export class UsersService {
     const before = await this.prisma.user.findUnique({ where: { id } });
     if (!before) throw new NotFoundException();
 
-    await this.prisma.user.update({
-      where: { id },
-      data: {
-        mfaSecretEncrypted: null,
-        mfaEnabled: false,
-        mfaEnforcementCompletedAt: null,
-      },
+    const actorRow = await this.prisma.user.findUnique({
+      where: { id: actor.id },
+      select: { lastLoginAt: true },
     });
+    const fiveMinutesAgo = Date.now() - 5 * 60 * 1000;
+    if (!actorRow?.lastLoginAt || actorRow.lastLoginAt.getTime() < fiveMinutesAgo) {
+      throw new ForbiddenException('Recent sign-in required to reset MFA');
+    }
 
-    // Revoke every session so the user is forced back through login + MFA setup.
-    await this.prisma.session.updateMany({
-      where: { userId: id, revokedAt: null },
-      data: { revokedAt: new Date() },
+    await this.prisma.$transaction(async (tx) => {
+      await tx.user.update({
+        where: { id },
+        data: {
+          mfaSecretEncrypted: null,
+          mfaEnabled: false,
+          mfaEnforcementCompletedAt: null,
+        },
+      });
+      await tx.userMfaBackupCode.deleteMany({ where: { userId: id } });
+      // Revoke every session so the user is forced back through login + MFA setup.
+      await tx.session.updateMany({
+        where: { userId: id, revokedAt: null },
+        data: { revokedAt: new Date() },
+      });
     });
 
     await this.audit.log({

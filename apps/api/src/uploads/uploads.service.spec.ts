@@ -1,4 +1,10 @@
-import { BadRequestException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  NotFoundException,
+  PayloadTooLargeException,
+} from '@nestjs/common';
+import { Readable } from 'node:stream';
 import type { Upload } from '@prisma/client';
 import { UploadsService } from './uploads.service.js';
 
@@ -102,5 +108,196 @@ describe('UploadsService.listAttachments', () => {
       }),
     );
     expect(findMany.mock.calls[0][0].where).not.toHaveProperty('isImage');
+  });
+});
+
+describe('UploadsService.init / relayPut', () => {
+  type Storage = {
+    presignGet: jest.Mock;
+    presignPut: jest.Mock;
+    headObject: jest.Mock;
+    getObjectBody: jest.Mock;
+    deleteObject: jest.Mock;
+    putObject: jest.Mock;
+    uploadKey: jest.Mock;
+    thumbnailKey: jest.Mock;
+    ensureBucket: jest.Mock;
+  };
+  type RedisClient = {
+    get: jest.Mock;
+    set: jest.Mock;
+    del: jest.Mock;
+  };
+
+  let storage: Storage;
+  let redis: { client: RedisClient };
+  let service: UploadsService;
+  const actor = { id: 'user-1' } as never;
+
+  beforeEach(() => {
+    storage = {
+      presignGet: jest.fn(),
+      presignPut: jest.fn(),
+      headObject: jest.fn(),
+      getObjectBody: jest.fn(),
+      deleteObject: jest.fn(),
+      putObject: jest.fn().mockResolvedValue(undefined),
+      uploadKey: jest
+        .fn()
+        .mockImplementation(
+          (cid: string, uid: string, name: string) =>
+            `company/${cid}/uploads/${uid}/${name}`,
+        ),
+      thumbnailKey: jest.fn(),
+      ensureBucket: jest.fn().mockResolvedValue('weavestream-c1'),
+    };
+    redis = {
+      client: {
+        get: jest.fn(),
+        set: jest.fn().mockResolvedValue('OK'),
+        del: jest.fn(),
+      },
+    };
+    const env = {
+      values: { MAX_UPLOAD_MB: 1, ALLOWED_UPLOAD_MIME: 'image/png,application/zip' },
+    };
+    service = new UploadsService(
+      { upload: {} } as never,
+      storage as never,
+      redis as never,
+      { log: jest.fn() } as never,
+      env as never,
+    );
+  });
+
+  it('init returns a same-origin relay URL and primes the bucket', async () => {
+    const res = await service.init(actor, 'c1', {
+      filename: 'a.png',
+      mimeType: 'image/png',
+      sizeBytes: 100,
+    } as never);
+    expect(storage.ensureBucket).toHaveBeenCalledWith('c1');
+    expect(storage.presignPut).not.toHaveBeenCalled();
+    expect(res.presignedUrl).toBe(
+      `/api/v1/companies/c1/uploads/${res.uploadId}/blob`,
+    );
+    expect(redis.client.set).toHaveBeenCalledWith(
+      `upload:pending:${res.uploadId}`,
+      expect.any(String),
+      'EX',
+      expect.any(Number),
+    );
+  });
+
+  it('relayPut streams the body to MinIO when the pending session matches', async () => {
+    redis.client.get.mockResolvedValue(
+      JSON.stringify({
+        companyId: 'c1',
+        filename: 'a.png',
+        mimeType: 'image/png',
+        sizeBytes: 5,
+        storageKey: 'company/c1/uploads/u-1/a.png',
+        uploaderId: 'user-1',
+        attachedToType: null,
+        attachedToId: null,
+      }),
+    );
+    const body = Readable.from(Buffer.from('hello'));
+    await service.relayPut(actor, 'c1', 'u-1', body, {
+      contentType: 'image/png',
+      contentLength: 5,
+    });
+    expect(storage.putObject).toHaveBeenCalledWith(
+      'c1',
+      'company/c1/uploads/u-1/a.png',
+      Buffer.from('hello'),
+      { contentType: 'image/png' },
+    );
+  });
+
+  it('relayPut rejects when no pending session exists', async () => {
+    redis.client.get.mockResolvedValue(null);
+    await expect(
+      service.relayPut(actor, 'c1', 'u-1', Readable.from(Buffer.alloc(0)), {}),
+    ).rejects.toBeInstanceOf(NotFoundException);
+    expect(storage.putObject).not.toHaveBeenCalled();
+  });
+
+  it('relayPut rejects when the company scope mismatches', async () => {
+    redis.client.get.mockResolvedValue(
+      JSON.stringify({
+        companyId: 'OTHER',
+        filename: 'a.png',
+        mimeType: 'image/png',
+        sizeBytes: 5,
+        storageKey: 'k',
+        uploaderId: 'user-1',
+        attachedToType: null,
+        attachedToId: null,
+      }),
+    );
+    await expect(
+      service.relayPut(actor, 'c1', 'u-1', Readable.from(Buffer.alloc(0)), {}),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('relayPut rejects when the session belongs to a different uploader', async () => {
+    redis.client.get.mockResolvedValue(
+      JSON.stringify({
+        companyId: 'c1',
+        filename: 'a.png',
+        mimeType: 'image/png',
+        sizeBytes: 5,
+        storageKey: 'k',
+        uploaderId: 'someone-else',
+        attachedToType: null,
+        attachedToId: null,
+      }),
+    );
+    await expect(
+      service.relayPut(actor, 'c1', 'u-1', Readable.from(Buffer.alloc(0)), {}),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it('relayPut rejects when the declared content-length exceeds the limit', async () => {
+    redis.client.get.mockResolvedValue(
+      JSON.stringify({
+        companyId: 'c1',
+        filename: 'a.png',
+        mimeType: 'image/png',
+        sizeBytes: 5,
+        storageKey: 'k',
+        uploaderId: 'user-1',
+        attachedToType: null,
+        attachedToId: null,
+      }),
+    );
+    await expect(
+      service.relayPut(actor, 'c1', 'u-1', Readable.from(Buffer.alloc(0)), {
+        contentLength: 10 * 1024 * 1024, // 10 MB > 1 MB cap
+      }),
+    ).rejects.toBeInstanceOf(PayloadTooLargeException);
+  });
+
+  it('relayPut rejects when the streamed body exceeds the limit even if header lies', async () => {
+    redis.client.get.mockResolvedValue(
+      JSON.stringify({
+        companyId: 'c1',
+        filename: 'a.png',
+        mimeType: 'image/png',
+        sizeBytes: 5,
+        storageKey: 'k',
+        uploaderId: 'user-1',
+        attachedToType: null,
+        attachedToId: null,
+      }),
+    );
+    const oversize = Buffer.alloc(2 * 1024 * 1024); // 2 MB > 1 MB cap
+    await expect(
+      service.relayPut(actor, 'c1', 'u-1', Readable.from(oversize), {
+        contentLength: 5,
+      }),
+    ).rejects.toBeInstanceOf(PayloadTooLargeException);
+    expect(storage.putObject).not.toHaveBeenCalled();
   });
 });

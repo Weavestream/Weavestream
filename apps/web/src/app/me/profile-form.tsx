@@ -87,7 +87,7 @@ export function ProfileForm({ me }: { me: Me }) {
           <div
             style={{
               fontFamily: 'var(--font-mono)',
-              fontSize: 10,
+              fontSize: 11,
               color: 'var(--muted)',
               letterSpacing: 0.6,
               textTransform: 'uppercase',

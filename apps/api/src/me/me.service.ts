@@ -13,6 +13,7 @@ import { userSearchDefaultsSchema } from '@weavestream/shared';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { PasswordService } from '../auth/password.service.js';
+import { MfaBackupCodeService } from '../auth/mfa-backup-code.service.js';
 import { AuditLogService } from '../audit/audit.service.js';
 import {
   accentFromDb,
@@ -27,6 +28,7 @@ export class MeService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly passwords: PasswordService,
+    private readonly backupCodes: MfaBackupCodeService,
     private readonly audit: AuditLogService,
   ) {}
 
@@ -265,5 +267,33 @@ export class MeService {
       after: { revoked: result.count },
     });
     return { revoked: result.count };
+  }
+
+  async regenerateMfaBackupCodes(
+    actor: AuthedUser,
+    meta: { ip: string; userAgent: string },
+  ) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: actor.id },
+      select: { mfaEnabled: true, mfaEnforcementCompletedAt: true },
+    });
+    if (!user) throw new NotFoundException();
+    if (!user.mfaEnabled || user.mfaEnforcementCompletedAt === null || actor.mfaPending) {
+      throw new BadRequestException('MFA must be enabled before backup codes can be regenerated');
+    }
+
+    const backupCodes = await this.backupCodes.replaceForUser(actor.id);
+    await this.audit.log({
+      actorId: actor.id,
+      action: 'auth.mfa.backup.regenerate',
+      entityType: 'User',
+      entityId: actor.id,
+      ip: meta.ip,
+      userAgent: meta.userAgent,
+      before: null,
+      after: { count: backupCodes.length },
+    });
+
+    return { backupCodes };
   }
 }

@@ -1,4 +1,4 @@
-import { BadRequestException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { UsersService } from './users.service.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
 
@@ -25,6 +25,7 @@ function makePrisma() {
     company: { findUnique: jest.Mock };
     membership: { create: jest.Mock };
     session: { updateMany: jest.Mock };
+    userMfaBackupCode: { deleteMany: jest.Mock };
     $transaction: jest.Mock;
   } = {
     user: {
@@ -35,6 +36,7 @@ function makePrisma() {
     company: { findUnique: jest.fn() },
     membership: { create: jest.fn() },
     session: { updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
+    userMfaBackupCode: { deleteMany: jest.fn().mockResolvedValue({ count: 0 }) },
     $transaction: jest.fn(async (fn: (tx: unknown) => unknown) => fn(prisma)),
   };
   return prisma;
@@ -363,10 +365,13 @@ describe('UsersService.resetMfa', () => {
     const prisma = makePrisma();
     const audit = makeAudit();
     const cache = makeCache();
-    prisma.user.findUnique.mockResolvedValue({
+    prisma.user.findUnique.mockResolvedValueOnce({
       id: 'u-1',
       mfaEnabled: true,
       mfaEnforcementCompletedAt: new Date(),
+    });
+    prisma.user.findUnique.mockResolvedValueOnce({
+      lastLoginAt: new Date(),
     });
     prisma.user.update.mockResolvedValue({ id: 'u-1' });
 
@@ -388,7 +393,35 @@ describe('UsersService.resetMfa', () => {
       }),
     );
     expect(prisma.session.updateMany).toHaveBeenCalled();
+    expect(prisma.userMfaBackupCode.deleteMany).toHaveBeenCalledWith({
+      where: { userId: 'u-1' },
+    });
     const actions = audit.log.mock.calls.map((c) => c[0].action);
     expect(actions).toContain('user.mfa.reset');
+  });
+
+  it('requires the acting admin to have signed in recently', async () => {
+    const prisma = makePrisma();
+    prisma.user.findUnique.mockResolvedValueOnce({
+      id: 'u-1',
+      mfaEnabled: true,
+      mfaEnforcementCompletedAt: new Date(),
+    });
+    prisma.user.findUnique.mockResolvedValueOnce({
+      lastLoginAt: new Date(Date.now() - 10 * 60 * 1000),
+    });
+
+    const svc = new UsersService(
+      prisma as never,
+      makeAudit() as never,
+      makeCache() as never,
+      makeSetupTokens() as never,
+    );
+
+    await expect(svc.resetMfa(ACTOR, 'u-1', META)).rejects.toBeInstanceOf(
+      ForbiddenException,
+    );
+    expect(prisma.user.update).not.toHaveBeenCalled();
+    expect(prisma.session.updateMany).not.toHaveBeenCalled();
   });
 });

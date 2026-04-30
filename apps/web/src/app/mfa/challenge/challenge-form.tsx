@@ -29,16 +29,15 @@ export default function MfaChallengeForm() {
 
   return (
     <form onSubmit={onSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-      <Field label="6-digit code" htmlFor="totp" error={error ?? undefined}>
+      <Field label="Authenticator or backup code" htmlFor="totp" error={error ?? undefined}>
         <Input
           id="totp"
-          inputMode="numeric"
+          inputMode="text"
           autoComplete="one-time-code"
-          pattern="\d{6}"
           required
           value={token}
           onChange={(e) => setToken(e.target.value)}
-          style={{ letterSpacing: '0.4em', fontFamily: 'var(--font-mono)', textAlign: 'center' }}
+          style={{ fontFamily: 'var(--font-mono)', textAlign: 'center' }}
         />
       </Field>
       <Btn

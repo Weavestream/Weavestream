@@ -197,6 +197,7 @@ model User {
 
   memberships       Membership[]
   sessions          Session[]
+  mfaBackupCodes    UserMfaBackupCode[]
   auditLogs         AuditLog[]        @relation("AuditActor")
   setupTokens       UserSetupToken[]  @relation("SetupTokenOwner")
   issuedSetupTokens UserSetupToken[]  @relation("SetupTokenCreator")
@@ -369,6 +370,20 @@ model Session {
 
   @@index([userId])
   @@map("sessions")
+}
+
+model UserMfaBackupCode {
+  id         String    @id @default(uuid()) @db.Uuid
+  userId     String    @map("user_id") @db.Uuid
+  codeHash   String    @map("code_hash")
+  consumedAt DateTime? @map("consumed_at")
+  createdAt  DateTime  @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([userId, consumedAt])
+  @@map("user_mfa_backup_codes")
 }
 
 model UserSetupToken {
