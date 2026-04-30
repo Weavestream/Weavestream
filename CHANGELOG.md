@@ -6,6 +6,8 @@ this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.5.4] - 2026-04-30
+
 ### Security
 
 - **`no-new-privileges` enforced on every container.** `compose.yml`
@@ -23,8 +25,9 @@ this project adheres to [Semantic Versioning](https://semver.org/).
   silently change the image under a running deployment. Upstream
   archived the public `minio/minio` Docker repository in Feb 2026, so
   no further security updates ship to this tag; a deliberate migration
-  to `quay.io/minio/aistor/minio` (commercial) or a community fork is
-  tracked separately and intentionally not bundled with this release.
+  to a maintained successor (commercial AiStor or a community fork)
+  is tracked separately and intentionally not bundled with this
+  release.
 - **Append-only `audit_log` enforced in Postgres.** A new
   `audit_log_no_update_delete` trigger (migration
   `0032_audit_log_immutable`) rejects any UPDATE or DELETE against
@@ -150,15 +153,24 @@ this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
-- **IPAM resilience against malformed IP values.** The subnet occupants query no longer fails when an asset's `IP_ADDRESS` field somehow contains a non-canonical value (e.g. a multi-NIC RMM agent that flattens addresses to `10.0.0.35, 10.0.0.50`). Candidate values are now strict-regex-filtered in SQL and re-validated in JS, so a single bad row can never abort the entire IPAM read.
-- **Driver-sourced field validation.** The `IP_ADDRESS` field strategy now refuses to persist values that don't round-trip through its schema, and the integration sync runner re-validates every projected value with the strategy's `valueSchema` before writing — preventing upstream drivers from leaking malformed values into typed columns.
+- **IPAM resilience against malformed IP values.** The subnet occupants query no 
+longer fails when an asset's `IP_ADDRESS` field somehow contains a non-canonical 
+value (e.g. a multi-NIC RMM agent that flattens addresses to `10.0.0.35, 10.0.0.50`). 
+Candidate values are now strict-regex-filtered in SQL and re-validated in JS, so a 
+single bad row can never abort the entire IPAM read.
+- **Driver-sourced field validation.** The `IP_ADDRESS` field strategy now 
+refuses to persist values that don't round-trip through its schema, and the 
+integration sync runner re-validates every projected value with the strategy's 
+`valueSchema` before writing — preventing upstream drivers from leaking 
+malformed values into typed columns.
 
 ## [1.5.0] - 2026-04-29
 
 ### Added
 
 - **Folder editing.** Folders can now be renamed directly from the folder tree.
-- **IPAM (IP Address Management).** A new dedicated IPAM module for managing IP addresses, subnets, and network ranges across tenants.
+- **IPAM (IP Address Management).** A new dedicated IPAM module for managing IP 
+addresses, subnets, and network ranges across tenants.
 
 ## [1.4.1] - 2026-04-28
 
@@ -550,7 +562,9 @@ Initial public release.
   database-per-tenant.
 - English UI only.
 
-[Unreleased]: https://github.com/Weavestream/Weavestream/compare/v1.5.2...HEAD
+[Unreleased]: https://github.com/Weavestream/Weavestream/compare/v1.5.4...HEAD
+[1.5.4]: https://github.com/Weavestream/Weavestream/releases/tag/v1.5.4
+[1.5.3]: https://github.com/Weavestream/Weavestream/releases/tag/v1.5.3
 [1.5.2]: https://github.com/Weavestream/Weavestream/releases/tag/v1.5.2
 [1.5.1]: https://github.com/Weavestream/Weavestream/releases/tag/v1.5.1
 [1.5.0]: https://github.com/Weavestream/Weavestream/releases/tag/v1.5.0
