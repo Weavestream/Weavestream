@@ -6,6 +6,20 @@ this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.5.5] - 2026-04-30
+
+### Added
+
+- **Message/rfc822 support.** Uploads now accept `message/rfc822` MIME type for email message files.
+
+### Changed
+
+- **MinIO configuration simplified.** The upload client now fetches MinIO config directly from the API, removing the need for a reverse proxy setup.
+
+### Fixed
+
+- Miscellaneous bug fixes.
+
 ## [1.5.4] - 2026-04-30
 
 ### Security
@@ -562,7 +576,8 @@ Initial public release.
   database-per-tenant.
 - English UI only.
 
-[Unreleased]: https://github.com/Weavestream/Weavestream/compare/v1.5.4...HEAD
+[Unreleased]: https://github.com/Weavestream/Weavestream/compare/v1.5.5...HEAD
+[1.5.5]: https://github.com/Weavestream/Weavestream/releases/tag/v1.5.5
 [1.5.4]: https://github.com/Weavestream/Weavestream/releases/tag/v1.5.4
 [1.5.3]: https://github.com/Weavestream/Weavestream/releases/tag/v1.5.3
 [1.5.2]: https://github.com/Weavestream/Weavestream/releases/tag/v1.5.2
