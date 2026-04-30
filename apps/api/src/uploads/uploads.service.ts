@@ -580,6 +580,31 @@ export class UploadsService {
   }
 
   // ------------------------------------------------------------------
+  // Bulk soft-delete used by article body diffing. When an operator
+  // removes an embedded image from an article, the upload it pointed
+  // at is no longer reachable from the UI, so we tombstone the row
+  // here. Bytes stay on disk — the Phase 7 reaper will reap the
+  // storage object once the row has been soft-deleted long enough.
+  // ------------------------------------------------------------------
+
+  async softDeleteManyForArticle(
+    companyId: string,
+    uploadIds: string[],
+  ): Promise<{ softDeleted: number }> {
+    if (uploadIds.length === 0) return { softDeleted: 0 };
+    const { count } = await this.prisma.upload.updateMany({
+      where: {
+        id: { in: uploadIds },
+        companyId,
+        attachedToType: 'article',
+        deletedAt: null,
+      },
+      data: { deletedAt: new Date() },
+    });
+    return { softDeleted: count };
+  }
+
+  // ------------------------------------------------------------------
   // Queries
   // ------------------------------------------------------------------
 

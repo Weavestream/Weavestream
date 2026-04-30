@@ -19,6 +19,8 @@ import {
 import { PrismaService } from '../prisma/prisma.service.js';
 import { AuditLogService } from '../audit/audit.service.js';
 import { StarsService } from '../stars/stars.service.js';
+import { UploadsService } from '../uploads/uploads.service.js';
+import { diffRemovedUploadIds } from './article-uploads.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
 
 export interface AuditMeta {
@@ -75,6 +77,7 @@ export class ArticlesService {
     private readonly prisma: PrismaService,
     private readonly audit: AuditLogService,
     private readonly stars: StarsService,
+    private readonly uploads: UploadsService,
   ) {}
 
   // ------------------------------------------------------------------
@@ -287,6 +290,25 @@ export class ArticlesService {
       where: { id, companyId },
     });
 
+    // Tombstone any upload the operator just unembedded so it leaves
+    // the photos gallery / attachment panels alongside the image they
+    // removed. We diff both Tiptap and Markdown bodies — the URL
+    // shape is identical, so a single regex sweep covers either mode.
+    let removedUploads = 0;
+    if (input.content !== undefined || input.markdownSource !== undefined) {
+      const removed = diffRemovedUploadIds(
+        existing.content ?? existing.markdownSource,
+        updated.content ?? updated.markdownSource,
+      );
+      if (removed.length > 0) {
+        const result = await this.uploads.softDeleteManyForArticle(
+          companyId,
+          removed,
+        );
+        removedUploads = result.softDeleted;
+      }
+    }
+
     await this.audit.log({
       actorId: actor.id,
       action: 'article.update',
@@ -296,7 +318,10 @@ export class ArticlesService {
       ip: meta.ip,
       userAgent: meta.userAgent,
       before: this.auditFields(existing),
-      after: this.auditFields(updated),
+      after:
+        removedUploads > 0
+          ? { ...this.auditFields(updated), removedUploads }
+          : this.auditFields(updated),
     });
     const out = this.serialize(updated, actor.role);
     await this.hydrateActors([out]);

@@ -192,7 +192,11 @@ function makeStubs(initial: {
     }),
   };
 
-  return { prisma, audit, stars, articles, folders };
+  const uploads = {
+    softDeleteManyForArticle: jest.fn(async () => ({ softDeleted: 0 })),
+  };
+
+  return { prisma, audit, stars, uploads, articles, folders };
 }
 
 function actor(overrides: Partial<AuthedUser> = {}): AuthedUser {
@@ -220,9 +224,9 @@ function doc(text: string) {
 describe('ArticlesService', () => {
   describe('create', () => {
     it('rejects non-doc content', async () => {
-      const { prisma, audit, stars } = makeStubs();
+      const { prisma, audit, stars, uploads } = makeStubs();
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const svc = new ArticlesService(prisma as any, audit as any, stars as any);
+      const svc = new ArticlesService(prisma as any, audit as any, stars as any, uploads as any);
       await expect(
         svc.create(
           actor(),
@@ -237,9 +241,9 @@ describe('ArticlesService', () => {
     });
 
     it('slugifies the title when no slug is provided', async () => {
-      const { prisma, audit, stars } = makeStubs();
+      const { prisma, audit, stars, uploads } = makeStubs();
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const svc = new ArticlesService(prisma as any, audit as any, stars as any);
+      const svc = new ArticlesService(prisma as any, audit as any, stars as any, uploads as any);
       const created = await svc.create(
         actor(),
         'c-1',
@@ -269,9 +273,9 @@ describe('ArticlesService', () => {
         updatedBy: null,
         archivedAt: null,
       };
-      const { prisma, audit, stars } = makeStubs({ articles: [existing] });
+      const { prisma, audit, stars, uploads } = makeStubs({ articles: [existing] });
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const svc = new ArticlesService(prisma as any, audit as any, stars as any);
+      const svc = new ArticlesService(prisma as any, audit as any, stars as any, uploads as any);
       await expect(
         svc.create(
           actor(),
@@ -301,9 +305,9 @@ describe('ArticlesService', () => {
         updatedBy: null,
         archivedAt: null,
       };
-      const { prisma, audit, stars } = makeStubs({ articles: [other] });
+      const { prisma, audit, stars, uploads } = makeStubs({ articles: [other] });
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const svc = new ArticlesService(prisma as any, audit as any, stars as any);
+      const svc = new ArticlesService(prisma as any, audit as any, stars as any, uploads as any);
       const created = await svc.create(
         actor(),
         'c-1',
@@ -328,9 +332,9 @@ describe('ArticlesService', () => {
         updatedAt: new Date(),
         archivedAt: null,
       };
-      const { prisma, audit, stars } = makeStubs({ folders: [folder] });
+      const { prisma, audit, stars, uploads } = makeStubs({ folders: [folder] });
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const svc = new ArticlesService(prisma as any, audit as any, stars as any);
+      const svc = new ArticlesService(prisma as any, audit as any, stars as any, uploads as any);
       await expect(
         svc.create(
           actor(),
@@ -342,9 +346,9 @@ describe('ArticlesService', () => {
     });
 
     it('persists Markdown and derives search plaintext without Markdown syntax', async () => {
-      const { prisma, audit, stars } = makeStubs();
+      const { prisma, audit, stars, uploads } = makeStubs();
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const svc = new ArticlesService(prisma as any, audit as any, stars as any);
+      const svc = new ArticlesService(prisma as any, audit as any, stars as any, uploads as any);
       const created = await svc.create(
         actor(),
         'c-1',
@@ -383,9 +387,9 @@ describe('ArticlesService', () => {
         updatedBy: null,
         archivedAt: null,
       };
-      const { prisma, audit, stars } = makeStubs({ articles: [row] });
+      const { prisma, audit, stars, uploads } = makeStubs({ articles: [row] });
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const svc = new ArticlesService(prisma as any, audit as any, stars as any);
+      const svc = new ArticlesService(prisma as any, audit as any, stars as any, uploads as any);
       const updated = await svc.update(
         actor(),
         'c-1',
@@ -419,9 +423,9 @@ describe('ArticlesService', () => {
         updatedBy: null,
         archivedAt: null,
       };
-      const { prisma, audit, stars } = makeStubs({ articles: [row] });
+      const { prisma, audit, stars, uploads } = makeStubs({ articles: [row] });
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const svc = new ArticlesService(prisma as any, audit as any, stars as any);
+      const svc = new ArticlesService(prisma as any, audit as any, stars as any, uploads as any);
       await expect(
         svc.update(actor(), 'c-1', 'art-md', { content: doc('y') } as never, meta()),
       ).rejects.toBeInstanceOf(BadRequestException);
@@ -448,9 +452,9 @@ describe('ArticlesService', () => {
         updatedBy: null,
         archivedAt: null,
       };
-      const { prisma, audit, stars } = makeStubs({ articles: [row] });
+      const { prisma, audit, stars, uploads } = makeStubs({ articles: [row] });
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const svc = new ArticlesService(prisma as any, audit as any, stars as any);
+      const svc = new ArticlesService(prisma as any, audit as any, stars as any, uploads as any);
       await expect(svc.getById(actor(), 'c-1', 'art-1')).rejects.toBeInstanceOf(
         NotFoundException,
       );
@@ -475,9 +479,9 @@ describe('ArticlesService', () => {
         updatedBy: null,
         archivedAt: null,
       };
-      const { prisma, audit, stars } = makeStubs({ articles: [row] });
+      const { prisma, audit, stars, uploads } = makeStubs({ articles: [row] });
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const svc = new ArticlesService(prisma as any, audit as any, stars as any);
+      const svc = new ArticlesService(prisma as any, audit as any, stars as any, uploads as any);
       await expect(
         svc.getById(actor({ role: 'CLIENT_USER' }), 'c-1', 'art-1'),
       ).rejects.toBeInstanceOf(NotFoundException);
@@ -502,9 +506,9 @@ describe('ArticlesService', () => {
         updatedBy: null,
         archivedAt: null,
       };
-      const { prisma, audit, stars } = makeStubs({ articles: [row] });
+      const { prisma, audit, stars, uploads } = makeStubs({ articles: [row] });
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const svc = new ArticlesService(prisma as any, audit as any, stars as any);
+      const svc = new ArticlesService(prisma as any, audit as any, stars as any, uploads as any);
       const got = await svc.getById(actor(), 'c-1', 'art-1');
       expect(got.id).toBe('art-1');
     });
@@ -512,10 +516,10 @@ describe('ArticlesService', () => {
 
   describe('list', () => {
     it('orders by archivedAt (nulls first) then title alphabetically', async () => {
-      const { prisma, audit, stars } = makeStubs();
+      const { prisma, audit, stars, uploads } = makeStubs();
       const findManySpy = jest.spyOn(prisma.article, 'findMany');
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const svc = new ArticlesService(prisma as any, audit as any, stars as any);
+      const svc = new ArticlesService(prisma as any, audit as any, stars as any, uploads as any);
 
       await svc.list(actor(), 'c-1');
 
@@ -547,9 +551,9 @@ describe('ArticlesService', () => {
         updatedBy: null,
         archivedAt: null,
       };
-      const { prisma, audit, stars } = makeStubs({ articles: [row] });
+      const { prisma, audit, stars, uploads } = makeStubs({ articles: [row] });
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const svc = new ArticlesService(prisma as any, audit as any, stars as any);
+      const svc = new ArticlesService(prisma as any, audit as any, stars as any, uploads as any);
       const archived = await svc.archive(actor(), 'c-1', 'art-1', meta());
       expect(archived.archivedAt).toBeInstanceOf(Date);
 
