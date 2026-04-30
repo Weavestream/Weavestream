@@ -6,6 +6,8 @@ this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.5.6] - 2026-04-30
+
 ### Changed
 
 - **MinIO replaced with native local filesystem storage.** The
@@ -35,27 +37,7 @@ this project adheres to [Semantic Versioning](https://semver.org/).
 - **AWS S3 SDK runtime dependencies** (`@aws-sdk/client-s3`,
   `@aws-sdk/s3-request-presigner`) from `apps/api` and `apps/worker`.
 
-### Upgrading from 1.5.5
 
-This release is a breaking change for stored files. Existing
-`Upload`, `Company.logoUploadId`, and embedded article image
-references will resolve to bytes that no longer exist. There is no
-in-place migration; wipe affected rows and re-upload:
-
-```bash
-docker compose down
-# Edit .env: remove every MINIO_* line, add FILE_STORAGE_DIR=/var/lib/weavestream/files
-docker compose up -d postgres
-docker compose exec postgres psql -U $POSTGRES_USER -d $POSTGRES_DB \
-  -c "TRUNCATE uploads CASCADE;"
-rm -rf $DATA_DIR/minio
-docker compose up -d
-```
-
-After the stack comes back up, redo logos, photos, attachments, and
-article images in the UI. The `MINIO_ACCESS_KEY` / `MINIO_SECRET_KEY`
-lines previously emitted by `scripts/keygen.{sh,ps1}` are also gone;
-no replacement secrets are required for the new backend.
 
 ## [1.5.5] - 2026-04-30
 
@@ -624,6 +606,7 @@ Initial public release.
 - English UI only.
 
 [Unreleased]: https://github.com/Weavestream/Weavestream/compare/v1.5.5...HEAD
+[1.5.6]: https://github.com/Weavestream/Weavestream/releases/tag/v1.5.6
 [1.5.5]: https://github.com/Weavestream/Weavestream/releases/tag/v1.5.5
 [1.5.4]: https://github.com/Weavestream/Weavestream/releases/tag/v1.5.4
 [1.5.3]: https://github.com/Weavestream/Weavestream/releases/tag/v1.5.3
