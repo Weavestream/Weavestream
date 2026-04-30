@@ -8,10 +8,6 @@ this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [1.5.5] - 2026-04-30
 
-### Added
-
-- **Message/rfc822 support.** Uploads now accept `message/rfc822` MIME type for email message files.
-
 ### Changed
 
 - **MinIO configuration simplified.** The upload client now fetches MinIO config directly from the API, removing the need for a reverse proxy setup.
