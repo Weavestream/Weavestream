@@ -6,6 +6,35 @@ this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Security
+
+- **`no-new-privileges` enforced on every container.** `compose.yml`
+  now applies `security_opt: [no-new-privileges:true]` to `postgres`,
+  `redis`, `minio`, `api`, `worker`, and `web`. After this flag is set,
+  a process inside the container cannot gain new capabilities via
+  `setuid` / `setgid` binaries — neutering a common post-exploitation
+  step (drop a tool, escalate, persist). Transparent for operators;
+  no env or workflow changes required.
+- **MinIO image pinned to a specific release.** `compose.yml` now
+  references `minio/minio:RELEASE.2025-09-07T16-13-09Z` instead of
+  `:latest`. This is byte-identical to what `:latest` resolves to today
+  (same `sha256:14cea493…` digest) so existing operators are not
+  upgraded or downgraded — but future `:latest` drift can no longer
+  silently change the image under a running deployment. Upstream
+  archived the public `minio/minio` Docker repository in Feb 2026, so
+  no further security updates ship to this tag; a deliberate migration
+  to `quay.io/minio/aistor/minio` (commercial) or a community fork is
+  tracked separately and intentionally not bundled with this release.
+- **Append-only `audit_log` enforced in Postgres.** A new
+  `audit_log_no_update_delete` trigger (migration
+  `0032_audit_log_immutable`) rejects any UPDATE or DELETE against
+  `audit_log` with `audit_log is append-only`, raising the bar from
+  application-level convention to a database invariant. INSERT remains
+  the only legal write path, and `pg_dump` / `pg_restore` are
+  unaffected. Operators that legitimately need to rewrite audit rows
+  (e.g. anonymising a dump) can disable the trigger as the table owner;
+  see [`docs/INSTALL.md`](docs/INSTALL.md#audit_log-immutability).
+
 ## [1.5.3] - 2026-04-29
 
 ### Added

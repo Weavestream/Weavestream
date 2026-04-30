@@ -80,6 +80,10 @@ jobs:
       - run: pnpm --filter @weavestream/db prisma:generate
       - run: pnpm --filter @weavestream/shared build
       - run: pnpm --filter @weavestream/db build
+      # Apply migrations so DB-level integration specs (e.g. the
+      # audit_log immutability trigger from migration 0032) run against
+      # a schema that matches production.
+      - run: pnpm --filter @weavestream/db prisma:deploy
       - run: pnpm -r test
 
   prisma-migrate-dry-run:
