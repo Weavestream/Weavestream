@@ -37,6 +37,11 @@ services:
     image: postgres:16-alpine
     restart: unless-stopped
     networks: [weavestream-net]
+    # Block in-container privilege escalation (setuid/setgid binaries can
+    # no longer gain new capabilities). Safe across all images we ship:
+    # nothing in the runtime path relies on post-exec privilege gain.
+    security_opt:
+      - no-new-privileges:true
     # Postgres stays on the internal compose network only. Contributors
     # running `pnpm dev` on the host get a 5434 host mapping via
     # compose.build.yml. Operators who need ad-hoc shell access should
@@ -58,6 +63,8 @@ services:
     image: redis:7-alpine
     restart: unless-stopped
     networks: [weavestream-net]
+    security_opt:
+      - no-new-privileges:true
     # Redis is internal-only by default. Same rationale as postgres:
     # contributors get a 6381 host mapping in compose.build.yml; operators
     # use `docker compose exec redis redis-cli ...` for inspection.
@@ -71,9 +78,16 @@ services:
       retries: 5
 
   minio:
-    image: minio/minio:latest
+    # Pinned to the last public `minio/minio` release. Upstream archived
+    # the community Docker repo in Feb 2026; future security updates ship
+    # under `quay.io/minio/aistor/minio` (commercial) and require a
+    # deliberate operator opt-in, so we hold here and revisit as a
+    # dedicated migration rather than silently following :latest.
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
     restart: unless-stopped
     networks: [weavestream-net]
+    security_opt:
+      - no-new-privileges:true
     command: ["server", "/data", "--console-address", ":9001"]
     environment:
       MINIO_ROOT_USER: ${MINIO_ACCESS_KEY}
@@ -103,6 +117,8 @@ services:
     image: ghcr.io/weavestream/weavestream-api:${WEAVESTREAM_VERSION:-latest}
     restart: unless-stopped
     networks: [weavestream-net]
+    security_opt:
+      - no-new-privileges:true
     env_file: .env
     # Inside the compose network the api reaches postgres/redis/minio by
     # service name. These overrides take precedence over any localhost
@@ -141,6 +157,8 @@ services:
     image: ghcr.io/weavestream/weavestream-worker:${WEAVESTREAM_VERSION:-latest}
     restart: unless-stopped
     networks: [weavestream-net]
+    security_opt:
+      - no-new-privileges:true
     env_file: .env
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
@@ -165,6 +183,8 @@ services:
     image: ghcr.io/weavestream/weavestream-web:${WEAVESTREAM_VERSION:-latest}
     restart: unless-stopped
     networks: [weavestream-net]
+    security_opt:
+      - no-new-privileges:true
     env_file: .env
     environment:
       API_INTERNAL_URL: http://api:4000

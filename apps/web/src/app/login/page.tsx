@@ -8,7 +8,7 @@ export default function LoginPage() {
   return (
     <AuthShell
       title="Sign in"
-      subtitle="Use your Weavestream credentials."
+      //subtitle="Use your Weavestream credentials."
       footer={<span>v{VERSION}</span>}
     >
       <LoginForm />

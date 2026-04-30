@@ -35,6 +35,23 @@
   }
 }
 
+/* Theme-aware wordmark logo. Both variants are rendered by `AppLogo`
+ * so SSR can pick the correct one purely via CSS — no hydration flash.
+ * `<html data-theme>` is always set to 'light' or 'dark' by the root
+ * layout, with 'dark' as the default. */
+.app-logo-wordmark--light {
+  display: none;
+}
+.app-logo-wordmark--dark {
+  display: inline-block;
+}
+[data-theme='light'] .app-logo-wordmark--light {
+  display: inline-block;
+}
+[data-theme='light'] .app-logo-wordmark--dark {
+  display: none;
+}
+
 /* Phase 9c mobile helpers. Many shell primitives style themselves with
  * inline `style` attributes instead of Tailwind classes, so a handful
  * of responsive utilities in plain CSS is the cheapest way to let them

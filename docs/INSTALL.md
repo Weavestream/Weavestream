@@ -208,6 +208,32 @@ docker compose exec -T postgres pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB" \
 mc mirror myalias/weavestream-* ./minio-backup/
 ```
 
+### `audit_log` immutability
+
+The `audit_log` table is append-only at the database level: a
+`BEFORE UPDATE OR DELETE` trigger (`audit_log_no_update_delete`,
+installed by migration `0032_audit_log_immutable`) rejects any
+non-INSERT write with `audit_log is append-only`. `pg_dump` /
+`pg_restore` are unaffected because both rely on `COPY` and `TRUNCATE`,
+neither of which fires per-row triggers.
+
+Operators who legitimately need to rewrite audit rows — for example to
+anonymise audit data before sharing a dump — can disable the trigger
+as the table owner:
+
+```bash
+docker compose exec -T postgres \
+  psql -U "$POSTGRES_USER" "$POSTGRES_DB" <<'SQL'
+ALTER TABLE audit_log DISABLE TRIGGER audit_log_no_update_delete;
+-- ... UPDATE / DELETE statements here ...
+ALTER TABLE audit_log ENABLE TRIGGER  audit_log_no_update_delete;
+SQL
+```
+
+Non-superuser application credentials (the role configured in
+`DATABASE_URL`) cannot disable the trigger, so a compromised API
+process cannot quietly rewrite audit history.
+
 ## Troubleshooting
 
 | Symptom                                          | Check                                                                             |

@@ -402,6 +402,11 @@ model UserSetupToken {
   @@map("user_setup_tokens")
 }
 
+/// Append-only audit trail. A `BEFORE UPDATE OR DELETE` trigger
+/// installed in migration `0032_audit_log_immutable` rejects any
+/// UPDATE/DELETE against `audit_log` with `audit_log is append-only`.
+/// Backup/restore tooling that needs to rewrite rows must temporarily
+/// disable the trigger as the table owner — see docs/INSTALL.md.
 model AuditLog {
   id         String   @id @default(uuid()) @db.Uuid
   actorId    String?  @map("actor_id") @db.Uuid

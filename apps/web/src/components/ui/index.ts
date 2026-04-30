@@ -1,5 +1,4 @@
 export { Icon, IconBase, type IconComponent, type IconName, type IconProps } from './icon';
-export { WeavestreamLogo } from './weavestream-logo';
 export { AppLogo } from './app-logo';
 export { Btn, type BtnProps } from './btn';
 export { Tag, type TagTone } from './tag';
