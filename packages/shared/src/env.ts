@@ -147,31 +147,16 @@ export const envSchema = z.object({
 
   LOG_LEVEL: z.enum(['trace', 'debug', 'info', 'warn', 'error', 'fatal']).default('info'),
 
-  // Phase 4: MinIO object storage + upload policy.
-  // Buckets are created lazily per-company as `${MINIO_BUCKET_PREFIX}-<companyId>`.
-  // `MINIO_PUBLIC_URL` used to be the browser-facing origin for
-  // presigned PUT/GET. Since v1.5.5 the browser never reaches MinIO
-  // directly — every read streams through the API on the web origin
-  // and uploads PUT to a relay endpoint there too — so this field is
-  // optional and only consulted when an operator wants a presigned
-  // URL for an out-of-band consumer (CLI tools, sibling services).
-  MINIO_ENDPOINT: z.string().min(1).default('minio'),
-  MINIO_PORT: intFromString(1, 65535).default(9000),
-  MINIO_USE_SSL: boolish.default(false),
-  MINIO_REGION: z.string().min(1).default('us-east-1'),
-  MINIO_ACCESS_KEY: z.string().min(1),
-  MINIO_SECRET_KEY: z.string().min(1),
-  MINIO_BUCKET_PREFIX: z
-    .string()
-    .min(1)
-    .max(40)
-    .regex(/^[a-z0-9][a-z0-9-]*$/, 'lowercase DNS-safe prefix')
-    .default('weavestream'),
-  MINIO_PUBLIC_URL: z
-    .string()
-    .url()
-    .optional()
-    .or(z.literal('').transform(() => undefined)),
+  // Local filesystem storage. Every uploaded file (attachments,
+  // thumbnails, company logos, export PDFs) lives under this root,
+  // tenant-isolated by directory:
+  //   ${FILE_STORAGE_DIR}/<companyId>/uploads/<uploadId>/<filename>
+  //   ${FILE_STORAGE_DIR}/<companyId>/thumbs/<uploadId>.webp
+  //   ${FILE_STORAGE_DIR}/<companyId>/exports/<exportId>.pdf
+  // The default path is the bind-mount target inside the api/worker
+  // containers (see compose.yml). For `pnpm dev` on the host, set
+  // FILE_STORAGE_DIR to a writable absolute path like ./data/files.
+  FILE_STORAGE_DIR: z.string().min(1).default('/var/lib/weavestream/files'),
   MAX_UPLOAD_MB: intFromString(1, 1024).default(25),
 
   // Phase 8: Domain & SSL monitor + BullMQ infra.

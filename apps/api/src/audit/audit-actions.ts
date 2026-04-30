@@ -77,9 +77,9 @@ export const AUDIT_ACTIONS = {
   // `triggered` row is written by the API the moment the job is
   // enqueued so we have a record of intent even if the worker never
   // produces a PDF; `completed` is written by the worker once the file
-  // is in MinIO and includes the byte size + whether plaintext
-  // passwords were embedded. Both rows carry the same `exportId` in
-  // `entityId` so the audit log groups them together.
+  // is written to storage and includes the byte size + whether
+  // plaintext passwords were embedded. Both rows carry the same
+  // `exportId` in `entityId` so the audit log groups them together.
   export: {
     triggered: 'export.triggered',
     completed: 'export.completed',

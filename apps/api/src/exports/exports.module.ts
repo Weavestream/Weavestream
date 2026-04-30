@@ -9,10 +9,10 @@ import { AuditModule } from '../audit/audit.module.js';
  * poll company PDF exports. Business logic lives in ExportsService;
  * data-gathering in CompanyExportDataService (via ExportDataModule).
  *
- * QueuesService, MinioService, and SecretEncryptionService are all
- * @Global() so they're available without an explicit import here. The
- * AuditModule is NOT global — it has to be imported anywhere we want
- * to call `audit.log()`.
+ * QueuesService, LocalStorageService, and SecretEncryptionService are
+ * all @Global() so they're available without an explicit import here.
+ * The AuditModule is NOT global — it has to be imported anywhere we
+ * want to call `audit.log()`.
  */
 @Module({
   imports: [ExportDataModule, AuditModule],

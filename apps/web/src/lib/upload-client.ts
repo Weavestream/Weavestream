@@ -6,18 +6,14 @@ import { apiFetch } from './api';
  * Client-side helper for the 3-step upload protocol (init → PUT → confirm).
  * `apiFetch` handles the JSON init/confirm calls (cookie + CSRF). The PUT
  * is sent over the same origin to a relay endpoint on the API, which
- * streams the body into the internal MinIO bucket — so the browser
- * never needs to reach MinIO directly and the bucket endpoint can stay
- * locked to the Docker network.
- *
- * `presignedUrl` is the response field name preserved from the previous
- * presigned-S3 design; today it points at the same-origin relay.
+ * streams the body into local filesystem storage — so the browser never
+ * needs to reach the storage layer directly.
  */
 
 export type InitUploadResponse = {
   uploadId: string;
   storageKey: string;
-  presignedUrl: string;
+  relayUrl: string;
   expiresAt: string;
 };
 
@@ -70,7 +66,7 @@ export async function uploadFile(opts: {
   }
   const init = initRes.data;
 
-  await putWithProgress(init.presignedUrl, file, {
+  await putWithProgress(init.relayUrl, file, {
     onProgress: opts.onProgress,
     signal: opts.signal,
     csrfToken: await ensureCsrfTokenForPut(),
@@ -100,9 +96,9 @@ function putWithProgress(
     onProgress?: (p: UploadProgress) => void;
     signal?: AbortSignal;
     /**
-     * CSRF token for the same-origin relay PUT. We deliberately skip
-     * this when the URL is absolute (i.e. an externally hosted bucket
-     * endpoint) so we don't leak the token to a third party.
+     * CSRF token for the same-origin relay PUT. The relay URL the API
+     * returns is always same-origin, but the helper still guards
+     * against accidentally leaking the token to a third-party origin.
      */
     csrfToken?: string;
   } = {},

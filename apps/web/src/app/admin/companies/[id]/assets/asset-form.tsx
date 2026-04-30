@@ -47,7 +47,7 @@ const RichTextEditor = dynamic(
  * Dynamic asset form. Renders one input per active field in the given
  * layout, following the two-column grid defined in the design template
  * (`FieldTypeMeta.width`). `RICH_TEXT` mounts the Tiptap editor and
- * `FILE` mounts the MinIO-backed upload control.
+ * `FILE` mounts the upload control backed by local file storage.
  */
 
 type Mode = 'create' | 'edit';

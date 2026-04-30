@@ -41,7 +41,3 @@ function New-Key {
 # Passwords embedded in DATABASE_URL / REDIS_URL — URL-safe base64.
 "POSTGRES_PASSWORD=$(New-Key 24 -UrlSafe)"
 "REDIS_PASSWORD=$(New-Key 24 -UrlSafe)"
-
-# MinIO — hex access key, URL-safe secret.
-"MINIO_ACCESS_KEY=$(New-Key 12 -Hex)"
-"MINIO_SECRET_KEY=$(New-Key 24 -UrlSafe)"

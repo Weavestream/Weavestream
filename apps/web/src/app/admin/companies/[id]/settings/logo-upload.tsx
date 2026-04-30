@@ -12,7 +12,7 @@ import type { CompanyDetail } from '../../../../../lib/server-api';
  * Logo uploader built on top of the same-origin upload flow:
  *
  *   POST /companies/:id/uploads/init    → relay PUT url
- *   PUT <relay-url> with file body      → API streams to internal MinIO
+ *   PUT <relay-url> with file body      → API streams to local storage
  *   POST /companies/:id/uploads/confirm → creates the Upload row
  *   PATCH /companies/:id { logoUploadId } → points Company at the upload
  *

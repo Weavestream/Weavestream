@@ -16,8 +16,8 @@ import { buildTerm, lower } from '../../../../../lib/term';
 import { companyCrumbs } from '../../../../../lib/company-crumbs';
 
 /**
- * Phase 4 per-company photo gallery. The MinIO-backed `Upload` rows with
- * `isImage=true` light up here, filtered by optional `attachedToType`
+ * Phase 4 per-company photo gallery. `Upload` rows with `isImage=true`
+ * light up here, filtered by optional `attachedToType`
  * (asset | article | asset_field) so operators can audit everything
  * uploaded against a single entity from one place.
  */

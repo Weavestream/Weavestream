@@ -41,8 +41,8 @@ type ExportStatus = 'working' | 'ready' | 'failed' | 'expired';
  * Per-row record persisted in localStorage so a refresh doesn't lose
  * recent exports. We deliberately do NOT persist the `downloadUrl` — it
  * resolves to a same-origin streaming endpoint (`/export/job/:id/download`)
- * that the API re-validates against MinIO on every click, so we just
- * keep the `jobId` (BullMQ knows the actual storage key).
+ * that the API re-validates against the storage backend on every click,
+ * so we just keep the `jobId` (BullMQ knows the actual storage key).
  */
 interface ExportRecord {
   jobId: string;
@@ -59,8 +59,9 @@ interface ExportRecord {
 const POLL_INTERVAL_MS = 2000;
 /**
  * Drop persisted records older than this on mount. The PDF file is
- * removed from MinIO after 4 hours and the BullMQ job is evicted after
- * ~5 hours, so anything older than a day is guaranteed unrecoverable.
+ * deleted from storage after 4 hours and the BullMQ job is evicted
+ * after ~5 hours, so anything older than a day is guaranteed
+ * unrecoverable.
  */
 const RECORD_TTL_MS = 24 * 60 * 60 * 1000;
 const STORAGE_KEY = 'weavestream:exports:recent';

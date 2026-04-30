@@ -36,20 +36,20 @@ Then edit `.env`:
   `REDIS_URL` with the real `POSTGRES_PASSWORD` / `REDIS_PASSWORD`
   values you just generated.
 - For local `pnpm dev`, point URLs at the host-mapped ports (the
-  compose.build.yml override exposes Postgres on `5434`, Redis on
-  `6381`, MinIO on `9100/9101`):
+  compose.build.yml override exposes Postgres on `5434` and Redis on
+  `6381`) and pick a writable absolute path for the file store so
+  `pnpm dev` doesn't try to write to `/var/lib/weavestream/files`:
 
   ```env
   DATABASE_URL=postgresql://weavestream:<pw>@localhost:5434/weavestream
   REDIS_URL=redis://:<pw>@localhost:6381/0
-  MINIO_ENDPOINT=localhost
-  MINIO_PORT=9100
+  FILE_STORAGE_DIR=/absolute/path/to/your/repo/data/files
   ```
 
 ## 3. Start dependencies
 
 ```bash
-docker compose -f compose.yml -f compose.build.yml up -d postgres redis minio
+docker compose -f compose.yml -f compose.build.yml up -d postgres redis
 pnpm prisma:migrate
 ```
 

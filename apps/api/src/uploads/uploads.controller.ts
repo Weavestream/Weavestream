@@ -43,8 +43,8 @@ import { requestMetaOf as meta } from '../common/request-meta.js';
  *      → return a same-origin relay URL (`…/uploads/:id/blob`) the
  *        browser PUTs the file body to. Requires `upload.create`.
  *   PUT  /companies/:companyId/uploads/:id/blob
- *      → relay endpoint that streams the request body to the
- *        internal MinIO bucket. Requires `upload.create` + CSRF.
+ *      → relay endpoint that streams the request body to local
+ *        filesystem storage. Requires `upload.create` + CSRF.
  *   POST /companies/:companyId/uploads/confirm
  *      → after the browser PUT succeeds, verify magic bytes, hash,
  *        thumbnail, and flip the pending record into an Upload row.
@@ -113,12 +113,11 @@ export class UploadsController {
   }
 
   /**
-   * Relay PUT endpoint. Browsers no longer PUT directly to MinIO — the
-   * request comes here over the same origin, with normal cookie auth +
-   * CSRF, and the API streams the body to the internal MinIO bucket.
-   * The body is read as a raw stream (NestJS body parsers are scoped
-   * to JSON / urlencoded content types and will not consume an image
-   * or octet-stream payload).
+   * Relay PUT endpoint. The browser PUTs over the same origin with
+   * normal cookie auth + CSRF, and the API streams the body to local
+   * filesystem storage. The body is read as a raw stream (NestJS body
+   * parsers are scoped to JSON / urlencoded content types and will not
+   * consume an image or octet-stream payload).
    */
   @Put(':uploadId/blob')
   @HttpCode(HttpStatus.NO_CONTENT)
@@ -188,10 +187,9 @@ export class UploadsController {
   /**
    * Stable, permanent URL suitable for `<img src>` and `<a href>`. The
    * original (or thumbnail with `?v=thumb`) is streamed back through
-   * the API from the internal MinIO bucket, so the browser never
-   * needs to reach MinIO directly. This means a single host-level
-   * reverse-proxy entry is enough for the entire app — no second
-   * `MINIO_PUBLIC_URL` virtual host required.
+   * the API from local filesystem storage, so the browser never needs
+   * to reach the storage layer directly. A single host-level reverse-
+   * proxy entry covers the whole app.
    *
    * `attachment=1` flips `Content-Disposition` to `attachment` with
    * the original filename, turning the URL into a save-as link

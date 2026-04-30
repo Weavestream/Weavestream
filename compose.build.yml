@@ -2,8 +2,8 @@
 # Weavestream — contributor overrides
 #
 # Layer this on top of compose.yml to build images from local source
-# instead of pulling from GHCR, and to expose Postgres/Redis/MinIO host
-# ports so `pnpm dev` on the workstation can reach them.
+# instead of pulling from GHCR, and to expose Postgres/Redis host ports
+# so `pnpm dev` on the workstation can reach them.
 #
 #   docker compose -f compose.yml -f compose.build.yml up -d --build
 #
@@ -21,15 +21,6 @@ services:
     # 6379/6380 are typically in use by other local stacks.
     ports:
       - "6381:6379"
-
-  minio:
-    # Production compose publishes the S3 API on loopback only; the dev
-    # default keeps that loopback binding (already enough for `pnpm dev`
-    # on the same host) and additively publishes the admin console at
-    # 9101 for debugging. Set MINIO_HOST_BIND=0.0.0.0 in .env if you
-    # need LAN access — e.g. testing presigned uploads from a phone.
-    ports:
-      - "${MINIO_CONSOLE_HOST_BIND:-127.0.0.1}:${MINIO_CONSOLE_HOST_PORT:-9101}:9001"
 
   api:
     image: weavestream-api:dev

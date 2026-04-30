@@ -21,9 +21,13 @@ threat model the implementation is written against.
                  └──────────┘
                        ▲
                        │
-                 ┌─────┴────┐
-                 │  minio   │  (per-tenant buckets)
-                 └──────────┘
+            (api & worker also share)
+                       │
+                 ┌─────┴────────────┐
+                 │  files (bind     │
+                 │  mount, per      │
+                 │  tenant subdir)  │
+                 └──────────────────┘
 ```
 
 - **web** — Next.js 15 App Router. Admin UI + client portals + auth
@@ -140,9 +144,12 @@ role comparisons in controllers.
 One Postgres database. Tenants share tables but scope via foreign key
 (`companyId`) and RLS-equivalent checks in application code.
 
-Object storage uses **one MinIO bucket per tenant** (`<prefix>-<tenantId>`),
-so even an IDOR in application code cannot cross tenants at the storage
-layer. Presigned URLs are scoped to the tenant's bucket.
+File storage uses **one directory per tenant** under
+`${FILE_STORAGE_DIR}/<tenantId>/`. The api and worker mount the same
+host directory and write atomically (`<key>.tmp-<rand>` then
+`fs.rename`). Browsers never read the directory directly — every
+access goes through the API's streaming endpoints, which authorize
+the request against the requested tenant before opening the file.
 
 ## Repo layout
 

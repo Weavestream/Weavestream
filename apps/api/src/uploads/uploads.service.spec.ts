@@ -52,8 +52,6 @@ describe('UploadsService.listAttachments', () => {
 
     const prisma = { upload: { findMany } };
     const storage = {
-      presignGet: jest.fn().mockResolvedValue({ url: 'https://signed.example/obj' }),
-      presignPut: jest.fn(),
       headObject: jest.fn(),
       getObjectBody: jest.fn(),
       deleteObject: jest.fn(),
@@ -113,8 +111,6 @@ describe('UploadsService.listAttachments', () => {
 
 describe('UploadsService.init / relayPut', () => {
   type Storage = {
-    presignGet: jest.Mock;
-    presignPut: jest.Mock;
     headObject: jest.Mock;
     getObjectBody: jest.Mock;
     deleteObject: jest.Mock;
@@ -136,8 +132,6 @@ describe('UploadsService.init / relayPut', () => {
 
   beforeEach(() => {
     storage = {
-      presignGet: jest.fn(),
-      presignPut: jest.fn(),
       headObject: jest.fn(),
       getObjectBody: jest.fn(),
       deleteObject: jest.fn(),
@@ -146,10 +140,10 @@ describe('UploadsService.init / relayPut', () => {
         .fn()
         .mockImplementation(
           (cid: string, uid: string, name: string) =>
-            `company/${cid}/uploads/${uid}/${name}`,
+            `${cid}/uploads/${uid}/${name}`,
         ),
       thumbnailKey: jest.fn(),
-      ensureBucket: jest.fn().mockResolvedValue('weavestream-c1'),
+      ensureBucket: jest.fn().mockResolvedValue('/var/lib/weavestream/files/c1'),
     };
     redis = {
       client: {
@@ -170,15 +164,14 @@ describe('UploadsService.init / relayPut', () => {
     );
   });
 
-  it('init returns a same-origin relay URL and primes the bucket', async () => {
+  it('init returns a same-origin relay URL and primes the tenant directory', async () => {
     const res = await service.init(actor, 'c1', {
       filename: 'a.png',
       mimeType: 'image/png',
       sizeBytes: 100,
     } as never);
     expect(storage.ensureBucket).toHaveBeenCalledWith('c1');
-    expect(storage.presignPut).not.toHaveBeenCalled();
-    expect(res.presignedUrl).toBe(
+    expect(res.relayUrl).toBe(
       `/api/v1/companies/c1/uploads/${res.uploadId}/blob`,
     );
     expect(redis.client.set).toHaveBeenCalledWith(
@@ -189,14 +182,14 @@ describe('UploadsService.init / relayPut', () => {
     );
   });
 
-  it('relayPut streams the body to MinIO when the pending session matches', async () => {
+  it('relayPut streams the body to local storage when the pending session matches', async () => {
     redis.client.get.mockResolvedValue(
       JSON.stringify({
         companyId: 'c1',
         filename: 'a.png',
         mimeType: 'image/png',
         sizeBytes: 5,
-        storageKey: 'company/c1/uploads/u-1/a.png',
+        storageKey: 'c1/uploads/u-1/a.png',
         uploaderId: 'user-1',
         attachedToType: null,
         attachedToId: null,
@@ -209,7 +202,7 @@ describe('UploadsService.init / relayPut', () => {
     });
     expect(storage.putObject).toHaveBeenCalledWith(
       'c1',
-      'company/c1/uploads/u-1/a.png',
+      'c1/uploads/u-1/a.png',
       Buffer.from('hello'),
       { contentType: 'image/png' },
     );

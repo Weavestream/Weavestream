@@ -172,8 +172,9 @@ export class QueuesService implements OnModuleInit, OnModuleDestroy {
 
   /**
    * Enqueue a company PDF export job. The worker will gather all company
-   * data, build a PDFKit document, upload to MinIO, and store the
-   * storage key in the job return value for the API to presign on poll.
+   * data, build a PDFKit document, write it to the local storage
+   * backend, and store the storage key in the job return value for the
+   * API to look up on poll.
    */
   async enqueueCompanyExport(payload: CompanyExportJob): Promise<string> {
     const queue = this.get(QueueNames.companyExport);

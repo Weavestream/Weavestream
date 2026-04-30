@@ -35,6 +35,4 @@ COOKIE_SIGNING_KEY=$(openssl rand -base64 32)
 CSRF_SIGNING_KEY=$(openssl rand -base64 32)
 POSTGRES_PASSWORD=$(urlsafe_b64 24)
 REDIS_PASSWORD=$(urlsafe_b64 24)
-MINIO_ACCESS_KEY=$(openssl rand -hex 12)
-MINIO_SECRET_KEY=$(urlsafe_b64 24)
 EOF

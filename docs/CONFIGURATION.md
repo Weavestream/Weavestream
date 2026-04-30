@@ -16,45 +16,26 @@ The default `compose.yml` deliberately publishes the smallest possible
 surface so an operator can put the stack on the open internet behind a
 reverse proxy without re-checking what is reachable.
 
-| Variable                  | Default     | Published                        | Service                                                         |
-| ------------------------- | ----------- | -------------------------------- | --------------------------------------------------------------- |
-| `WEB_HOST_PORT`           | `3000`      | All interfaces                   | Next.js UI. Front this with HTTPS in production.                |
-| `MINIO_HOST_PORT`         | `9100`      | `127.0.0.1` (loopback) by default| MinIO S3 API. Browsers never dial it — it's there for host-local admin tooling (`mc`, backup scripts). |
-| `MINIO_HOST_BIND`         | `127.0.0.1` | n/a                              | Bind address for `MINIO_HOST_PORT`. Default loopback is correct for the standard install. Widen only if you genuinely need an external admin tool to reach the bucket endpoint. |
-| `MINIO_CONSOLE_HOST_PORT` | `9101`      | not published                    | Only honored when you layer [`compose.console.yml`](../compose.console.yml). |
+| Variable        | Default | Published      | Service                                          |
+| --------------- | ------- | -------------- | ------------------------------------------------ |
+| `WEB_HOST_PORT` | `3000`  | All interfaces | Next.js UI. Front this with HTTPS in production. |
 
-### Browsers never fetch from MinIO directly
+### Browsers never fetch the storage layer directly
 
 Every thumbnail, attachment, logo, and export PDF is streamed through
 the API on the same origin as the web app
 (`/api/v1/companies/:id/uploads/:upload/image`,
 `/api/v1/export/job/:id/download`, etc.). One reverse-proxy entry
 covers the whole app — there is **no second `files.example.com`
-virtual host** to set up, and `MINIO_HOST_BIND` can stay on loopback
-on every topology (host-process proxy, containerised proxy,
-cross-host proxy alike). The `MINIO_PUBLIC_URL` /
-`NEXT_PUBLIC_MINIO_ORIGINS` env vars survive only as optional knobs
-for operators who want to hand a presigned URL to a non-browser
-consumer; new installs can leave both blank.
+virtual host** to set up, and the underlying file directory has no
+network surface of its own.
 
-Postgres and Redis are not published to the host. Operators inspect them
-with `docker compose exec postgres psql ...` and
+Postgres and Redis are not published to the host. Operators inspect
+them with `docker compose exec postgres psql ...` and
 `docker compose exec redis redis-cli ...`. Contributors who run
 `pnpm dev` against the compose stack layer
 [`compose.build.yml`](../compose.build.yml), which re-publishes the
-classic dev ports (`5434` Postgres, `6381` Redis, `9100`/`9101` MinIO).
-
-If you need temporary host access to the MinIO admin console, layer the
-console overlay:
-
-```bash
-docker compose -f compose.yml -f compose.console.yml up -d
-```
-
-Open it at <http://127.0.0.1:9101> on the deploy host or via an SSH
-tunnel. The console authenticates with the same root credentials that
-have programmatic access to every bucket, so do not expose it to the
-LAN or the internet.
+classic dev ports (`5434` Postgres, `6381` Redis).
 
 ## Core URLs
 
@@ -172,19 +153,27 @@ Each refusal is recorded as `security.egress.blocked` and surfaced in
 **Admin → Security → Egress blocks** with the URL, hostname, resolved
 IPs, reason, and matched CIDR.
 
-## Object storage (MinIO / S3-compatible)
+## File storage
 
-| Variable                    | Notes                                                                   |
-| --------------------------- | ----------------------------------------------------------------------- |
-| `MINIO_ENDPOINT`            | Internal hostname the API talks to. `minio` inside compose.             |
-| `MINIO_PORT`                | Internal port. `9000` inside compose.                                   |
-| `MINIO_USE_SSL`             | `true` if MinIO terminates TLS internally (rare in compose).            |
-| `MINIO_REGION`              | Free-form; defaults to `us-east-1`.                                     |
-| `MINIO_ACCESS_KEY`          | Root access key — also used by MinIO to init its admin user.            |
-| `MINIO_SECRET_KEY`          | Root secret key.                                                        |
-| `MINIO_BUCKET_PREFIX`       | Buckets are created as `<prefix>-<tenant>` for isolation.               |
-| `MINIO_PUBLIC_URL`          | **Optional.** Origin used to sign presigned URLs handed to non-browser consumers (CLI tools, sibling services). Browser-facing reads stream through the API and do not consult this. Leaving it blank falls back to the internal endpoint. |
-| `NEXT_PUBLIC_MINIO_ORIGINS` | **Optional.** Legacy CSP allowlist for thumbnail URLs minted before v1.5.5. Fresh installs leave it blank. |
+Uploaded files (attachments, thumbnails, logos, export PDFs) live on
+the local filesystem under a single host-bind-mounted directory.
+Tenant isolation is by directory:
+
+```text
+${FILE_STORAGE_DIR}/<companyId>/uploads/<uploadId>/<filename>
+${FILE_STORAGE_DIR}/<companyId>/thumbs/<uploadId>.webp
+${FILE_STORAGE_DIR}/<companyId>/exports/<exportId>.pdf
+```
+
+| Variable            | Default                       | Notes                                                                                          |
+| ------------------- | ----------------------------- | ---------------------------------------------------------------------------------------------- |
+| `FILE_STORAGE_DIR`  | `/var/lib/weavestream/files`  | Container-side root. compose.yml bind-mounts `${DATA_DIR}/files` here on api+worker.           |
+| `DATA_DIR`          | `./data`                      | Host-side root. `${DATA_DIR}/files` ends up at `${FILE_STORAGE_DIR}` inside the container.     |
+
+The api/worker write atomically (write to `<key>.tmp-<random>`, then
+`fs.rename`), so an `rsync` of the host directory while the stack is
+running never sees partial files. There is no S3 surface, no admin
+console, and no extra credentials to manage.
 
 ## Uploads
 

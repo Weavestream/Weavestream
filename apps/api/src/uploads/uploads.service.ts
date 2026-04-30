@@ -39,7 +39,7 @@ import type {
 } from '@weavestream/shared';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { AuditLogService } from '../audit/audit.service.js';
-import { MinioService } from '../storage/minio.service.js';
+import { LocalStorageService } from '../storage/local-storage.service.js';
 import { RedisService } from '../redis/redis.service.js';
 import { EnvService } from '../config/env.service.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
@@ -83,7 +83,7 @@ export class UploadsService {
 
   constructor(
     private readonly prisma: PrismaService,
-    private readonly storage: MinioService,
+    private readonly storage: LocalStorageService,
     private readonly redis: RedisService,
     private readonly audit: AuditLogService,
     private readonly env: EnvService,
@@ -113,7 +113,7 @@ export class UploadsService {
   ): Promise<{
     uploadId: string;
     storageKey: string;
-    presignedUrl: string;
+    relayUrl: string;
     expiresAt: Date;
   }> {
     const mime = input.mimeType.toLowerCase();
@@ -139,13 +139,13 @@ export class UploadsService {
     // so the upload PUT doesn't race against bucket creation.
     await this.storage.ensureBucket(companyId);
 
-    // Browser PUT goes to a same-origin relay endpoint instead of a
-    // presigned MinIO URL. This keeps MinIO fully internal (Docker
-    // compose pins the S3 port to 127.0.0.1 by default) and removes
-    // the operational burden of fronting the bucket endpoint with a
-    // reverse proxy + CSP/CORS just so browsers can PUT to it.
+    // Browser PUT goes to a same-origin relay endpoint on the API,
+    // which streams the body to local filesystem storage. The browser
+    // never touches the storage layer directly — that gives us a single
+    // reverse-proxy entry for the whole app and lets us run on a
+    // private filesystem path with no S3 surface.
     const expiresAt = new Date(Date.now() + PENDING_TTL_SECONDS * 1000);
-    const presignedUrl = `/api/v1/companies/${companyId}/uploads/${uploadId}/blob`;
+    const relayUrl = `/api/v1/companies/${companyId}/uploads/${uploadId}/blob`;
 
     const pending = {
       companyId,
@@ -165,14 +165,14 @@ export class UploadsService {
       PENDING_TTL_SECONDS,
     );
 
-    return { uploadId, storageKey, presignedUrl, expiresAt };
+    return { uploadId, storageKey, relayUrl, expiresAt };
   }
 
   // ------------------------------------------------------------------
-  // 1b) relayPut — same-origin replacement for the previous browser →
-  //    MinIO presigned PUT. Reads the request body up to MAX_UPLOAD_MB
-  //    and writes it to the internal MinIO endpoint, scoped to the
-  //    pending upload session in Redis.
+  // 1b) relayPut — same-origin endpoint the browser PUTs the file
+  //    body to. Reads the request body up to MAX_UPLOAD_MB and writes
+  //    it to the local storage backend, scoped to the pending upload
+  //    session in Redis.
   // ------------------------------------------------------------------
 
   async relayPut(
@@ -430,8 +430,8 @@ export class UploadsService {
     // Browsers always render uploaded media through the API streaming
     // endpoint (`…/image[?v=thumb]`). The client just sees a stable,
     // same-origin URL — `<img src>` works, `<a href target=_blank>`
-    // works, no expiring presigned URLs to refresh, and MinIO never
-    // needs a public origin. `serialize()` intentionally leaves URL
+    // works, no expiring presigned URLs to refresh, and the storage
+    // backend stays private. `serialize()` intentionally leaves URL
     // fields null so we don't bake URLs into audit payloads or
     // background jobs that don't care.
     const base = this.serialize(upload);
@@ -502,7 +502,7 @@ export class UploadsService {
    * Stream the original or thumbnail bytes for an upload directly to
    * the caller. Used by the `<img src>` endpoint so embedded article
    * images (and any other long-lived references) render without the
-   * browser ever needing to reach MinIO.
+   * browser ever touching the storage backend directly.
    */
   async openImageStream(
     companyId: string,

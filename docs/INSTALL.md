@@ -8,13 +8,11 @@ need the source tree, Node.js, or pnpm — just Docker.
 
 - **Docker Engine 24+** with Docker Compose v2 (bundled with Docker
   Desktop). Verify with `docker --version` and `docker compose version`.
-- **2 GB RAM** free for the full stack (Postgres + Redis + MinIO + 3
+- **2 GB RAM** free for the full stack (Postgres + Redis + 3
   Weavestream services).
-- **A free TCP port** for the web UI (defaults to `3000`). The MinIO S3
-  API binds to `127.0.0.1:9100` by default so a same-host reverse proxy
-  can forward to it without exposing the bucket endpoint externally.
-  Postgres, Redis, and the MinIO admin console stay on the internal
-  docker network.
+- **A free TCP port** for the web UI (defaults to `3000`). Postgres
+  and Redis stay on the internal docker network and are not published
+  to the host.
 
 ## 1. Download the two files you need
 
@@ -76,7 +74,7 @@ DATA_DIR=/srv/weavestream                # plain Linux
 ```
 
 You don't need to pre-create the folder. Docker auto-creates
-`$DATA_DIR/{postgres,redis,minio}` on the first `up`, and each
+`$DATA_DIR/{postgres,redis,files}` on the first `up`, and each
 container fixes its own ownership on first boot. Pre-create them
 only if you want to lock down permissions ahead of time.
 
@@ -89,7 +87,7 @@ docker compose up -d
 This:
 
 1. Pulls `ghcr.io/weavestream/weavestream-{api,web,worker}:${WEAVESTREAM_VERSION}`
-   plus Postgres, Redis, and MinIO.
+   plus Postgres and Redis.
 2. The `api` container runs `prisma migrate deploy` on startup before
    serving traffic. It's idempotent, so re-runs on every `up` are a
    no-op once the schema is current.
@@ -156,14 +154,11 @@ Traefik and forward a single upstream:
 | -------------------------------- | ------------------------------------- |
 | `https://app.example.com/*`      | `http://<compose-host>:3000`          |
 
-Browsers never fetch directly from MinIO — every thumbnail,
-attachment, logo, and export PDF is streamed through the API on the
-same origin as the web app. That means **one virtual host is enough**
-(no separate `files.example.com` to set up) and `MINIO_HOST_BIND`
-stays on `127.0.0.1` regardless of where your proxy runs (host
-process, container, different host). MinIO's published port (9100)
-is purely for operator tooling — `mc`, `s3cmd`, backup scripts you
-run on the deploy host.
+Every thumbnail, attachment, logo, and export PDF is streamed through
+the API on the same origin as the web app. That means **one virtual
+host is enough** — no separate `files.example.com` to set up, and the
+underlying file store stays on the container's bind-mounted directory
+without any network surface of its own.
 
 Update the following in `.env` to match your public origin before
 restarting so cookies and links point at the right hostname:
@@ -171,19 +166,12 @@ restarting so cookies and links point at the right hostname:
 - `APP_URL` — public web origin (`https://app.example.com`).
 - `API_URL` — public API origin (`https://app.example.com/api`).
 
-`MINIO_PUBLIC_URL` and `NEXT_PUBLIC_MINIO_ORIGINS` may be left blank;
-they are optional knobs for handing presigned URLs to non-browser
-consumers, not part of the standard install.
-
 Make sure your reverse proxy:
 
-- Terminates TLS and only forwards to the upstreams above.
+- Terminates TLS and only forwards to the upstream above.
 - Sets `X-Forwarded-Proto: https` and overwrites (does not append to)
   `X-Forwarded-For` so the API audit trail records the real client IP
   rather than a value the client supplied.
-- Does NOT forward the deploy-host's MinIO console port. The console
-  ships with root credentials and should remain reachable only via SSH
-  tunnel or a temporary `compose.console.yml` overlay.
 
 ## Backups
 
@@ -192,11 +180,11 @@ Persistent data lives in real host folders under `$DATA_DIR`
 `.env` to relocate — e.g. `DATA_DIR=/volume1/docker/weavestream` on a
 Synology/UGREEN NAS.
 
-| Folder           | Purpose                                   | Back up? |
-| ---------------- | ----------------------------------------- | -------- |
-| `$DATA_DIR/postgres` | Postgres data dir                     | **Yes**  |
-| `$DATA_DIR/minio`    | Uploaded images, attachments          | **Yes**  |
-| `$DATA_DIR/redis`    | Cache + BullMQ queue (replayable)     | Optional |
+| Folder               | Purpose                                | Back up? |
+| -------------------- | -------------------------------------- | -------- |
+| `$DATA_DIR/postgres` | Postgres data dir                      | **Yes**  |
+| `$DATA_DIR/files`    | Uploaded images, attachments, exports  | **Yes**  |
+| `$DATA_DIR/redis`    | Cache + BullMQ queue (replayable)      | Optional |
 
 A simple nightly routine:
 
@@ -205,9 +193,10 @@ A simple nightly routine:
 docker compose exec -T postgres pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB" \
   | gzip > "backup-$(date +%F).sql.gz"
 
-# Object storage — either rsync the folder while MinIO is stopped,
-# or use mc mirror against a running instance:
-mc mirror myalias/weavestream-* ./minio-backup/
+# Files — straight rsync of the host directory (safe while running;
+# the api/worker write atomically via tmp+rename so partial files
+# never appear in the destination).
+rsync -a "$DATA_DIR/files/" "/backup/files-$(date +%F)/"
 ```
 
 ### `audit_log` immutability
@@ -242,7 +231,7 @@ process cannot quietly rewrite audit history.
 | ------------------------------------------------ | --------------------------------------------------------------------------------- |
 | `api` fails at startup with `P1000` or `P1001`   | Migration step can't reach Postgres. Check `DATABASE_URL` and `docker compose logs postgres`. |
 | Web UI loads but API calls 502                   | `api` probably unhealthy; `docker compose logs api`. Confirm Redis password matches. |
-| Image uploads fail with CORS / CSP errors        | Browser-facing reads now stream through the API on the web origin — confirm `APP_URL` matches the hostname you load in the browser. (Legacy thumbnails minted before v1.5.5 still need the source MinIO origin in `NEXT_PUBLIC_MINIO_ORIGINS`.) |
+| Image uploads fail with CORS / CSP errors        | Browser-facing reads stream through the API on the web origin — confirm `APP_URL` matches the hostname you load in the browser. |
 | Login says "Invalid credentials" after reset     | `POSTGRES_PASSWORD` changed but `DATABASE_URL` still points at the old password.  |
 
 Still stuck? Open a [GitHub Discussion](https://github.com/Weavestream/Weavestream/discussions)

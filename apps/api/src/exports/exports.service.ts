@@ -7,7 +7,7 @@ import {
 } from '@weavestream/shared';
 import { QueuesService } from '../queues/queues.service.js';
 import { PrismaService } from '../prisma/prisma.service.js';
-import { MinioService } from '../storage/minio.service.js';
+import { LocalStorageService } from '../storage/local-storage.service.js';
 import { SecretEncryptionService } from '../crypto/secret-encryption.service.js';
 import { AuditLogService } from '../audit/audit.service.js';
 import { AUDIT_ACTIONS } from '../audit/audit-actions.js';
@@ -29,7 +29,7 @@ export class ExportsService {
   constructor(
     private readonly queues: QueuesService,
     private readonly prisma: PrismaService,
-    private readonly minio: MinioService,
+    private readonly storage: LocalStorageService,
     private readonly crypto: SecretEncryptionService,
     private readonly audit: AuditLogService,
   ) {}
@@ -95,11 +95,11 @@ export class ExportsService {
       const result = job.returnvalue as ExportJobResult | undefined;
       if (!result?.storageKey) return { status: 'completed' };
 
-      // Confirm the bytes are still in MinIO before handing out a
-      // download URL. The export bucket has a lifecycle TTL, so a job
-      // can complete and then have its blob reaped before the user
-      // gets back to it.
-      const head = await this.minio.headObject(result.companyId, result.storageKey);
+      // Confirm the bytes are still on disk before handing out a
+      // download URL. Exports are reaped on a delayed cleanup job, so
+      // a completed job can lose its blob before the user comes back
+      // to it.
+      const head = await this.storage.headObject(result.companyId, result.storageKey);
       if (!head) {
         return {
           status: 'failed',
@@ -108,7 +108,7 @@ export class ExportsService {
       }
 
       // Same-origin streaming URL — see `download` in the controller.
-      // Stable for the lifetime of the file in MinIO, no expiry to
+      // Stable for the lifetime of the file on disk, no expiry to
       // track on the client.
       return {
         status: 'completed',
@@ -141,17 +141,17 @@ export class ExportsService {
     if (state !== 'completed') return null;
     const result = job.returnvalue as ExportJobResult | undefined;
     if (!result?.storageKey || !result.companyId) return null;
-    const head = await this.minio.headObject(result.companyId, result.storageKey);
+    const head = await this.storage.headObject(result.companyId, result.storageKey);
     if (!head) return null;
     return { companyId: result.companyId, storageKey: result.storageKey };
   }
 
   /**
    * Open a streaming read of the export PDF. Thin wrapper over
-   * `MinioService.getObjectStream` — exists so the controller doesn't
-   * have to know about the storage layer directly.
+   * `LocalStorageService.getObjectStream` — exists so the controller
+   * doesn't have to know about the storage layer directly.
    */
   async getExportObjectStream(companyId: string, storageKey: string) {
-    return this.minio.getObjectStream(companyId, storageKey);
+    return this.storage.getObjectStream(companyId, storageKey);
   }
 }

@@ -77,43 +77,6 @@ services:
       timeout: 3s
       retries: 5
 
-  minio:
-    # Pinned to the last public `minio/minio` release. Upstream archived
-    # the community Docker repo in Feb 2026; future security updates ship
-    # under `quay.io/minio/aistor/minio` (commercial) and require a
-    # deliberate operator opt-in, so we hold here and revisit as a
-    # dedicated migration rather than silently following :latest.
-    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
-    restart: unless-stopped
-    networks: [weavestream-net]
-    security_opt:
-      - no-new-privileges:true
-    command: ["server", "/data", "--console-address", ":9001"]
-    environment:
-      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY}
-      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY}
-    volumes:
-      - ${DATA_DIR:-./data}/minio:/data
-    # 9000 = S3 API. Bound to 127.0.0.1 by default. Browsers never
-    # fetch from MinIO directly (every thumbnail, attachment, logo,
-    # and export PDF is streamed through the API on the web origin),
-    # so the only thing that ever dials this port is operator tooling
-    # (`mc`, `s3cmd`, backup scripts) running on this host. Widen
-    # MINIO_HOST_BIND only if you genuinely need an external admin
-    # tool to reach the bucket endpoint.
-    #
-    # The console (9001) is intentionally NOT published. Use
-    # `docker compose -f compose.yml -f compose.console.yml up -d`, an
-    # SSH tunnel, or `docker compose exec` if you need it.
-    ports:
-      - "${MINIO_HOST_BIND:-127.0.0.1}:${MINIO_HOST_PORT:-9100}:9000"
-    healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://localhost:9000/minio/health/live"]
-      interval: 15s
-      timeout: 3s
-      retries: 5
-      start_period: 10s
-
   api:
     image: ghcr.io/weavestream/weavestream-api:${WEAVESTREAM_VERSION:-latest}
     restart: unless-stopped
@@ -121,14 +84,15 @@ services:
     security_opt:
       - no-new-privileges:true
     env_file: .env
-    # Inside the compose network the api reaches postgres/redis/minio by
-    # service name. These overrides take precedence over any localhost
-    # URLs a contributor left in .env for host-side `pnpm dev`.
+    # Inside the compose network the api reaches postgres/redis by service
+    # name. Uploaded files live on a host-bound directory shared with
+    # the worker container; both write atomically via tmp+rename.
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
-      MINIO_ENDPOINT: minio
-      MINIO_PORT: "9000"
+      FILE_STORAGE_DIR: /var/lib/weavestream/files
+    volumes:
+      - ${DATA_DIR:-./data}/files:/var/lib/weavestream/files
     # `prisma migrate deploy` is idempotent and protected by a Postgres
     # advisory lock, so running it on every api start is safe and lets
     # us avoid a short-lived one-shot `migrate` container (which some
@@ -142,8 +106,6 @@ services:
       postgres:
         condition: service_healthy
       redis:
-        condition: service_healthy
-      minio:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:4000/health"]
@@ -164,8 +126,9 @@ services:
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
-      MINIO_ENDPOINT: minio
-      MINIO_PORT: "9000"
+      FILE_STORAGE_DIR: /var/lib/weavestream/files
+    volumes:
+      - ${DATA_DIR:-./data}/files:/var/lib/weavestream/files
     depends_on:
       redis:
         condition: service_healthy

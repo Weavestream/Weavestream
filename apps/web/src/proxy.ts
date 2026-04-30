@@ -27,35 +27,19 @@ export function proxy(req: NextRequest) {
     ? `script-src 'self' 'nonce-${nonce}' 'strict-dynamic' 'unsafe-eval'`
     : `script-src 'self' 'nonce-${nonce}' 'strict-dynamic'`;
 
-  // Browsers no longer fetch from MinIO directly — every thumbnail,
-  // attachment, logo, and export PDF is streamed through the API
-  // (`/uploads/:id/image`, `/export/job/:id/download`). That keeps the
-  // CSP same-origin only, and means a single reverse-proxy entry
-  // covers the whole app (no second `MINIO_PUBLIC_URL` virtual host
-  // required). The legacy `NEXT_PUBLIC_MINIO_ORIGINS` env is honored
-  // here only so existing deployments that haven't restarted yet keep
-  // rendering thumbnails minted before the upgrade — new installs can
-  // leave it unset.
-  const legacyMinioOrigins = (process.env.NEXT_PUBLIC_MINIO_ORIGINS ?? '')
-    .split(',')
-    .map((s) => s.trim())
-    .filter((s) => s.length > 0);
+  // Every thumbnail, attachment, logo, and export PDF is streamed
+  // through the API (`/uploads/:id/image`, `/export/job/:id/download`).
+  // That keeps the CSP same-origin only, and means a single reverse-
+  // proxy entry covers the whole app.
 
   // Dev also needs websocket access for HMR; production keeps connect-src tight.
   const connectSrc = [
     'connect-src',
     "'self'",
-    ...legacyMinioOrigins,
     ...(isDev ? ['ws:', 'wss:'] : []),
   ].join(' ');
 
-  const imgSrc = [
-    'img-src',
-    "'self'",
-    'data:',
-    'blob:',
-    ...legacyMinioOrigins,
-  ].join(' ');
+  const imgSrc = ['img-src', "'self'", 'data:', 'blob:'].join(' ');
 
   const csp = [
     "default-src 'self'",

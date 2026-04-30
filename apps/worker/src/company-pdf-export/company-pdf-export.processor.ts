@@ -8,7 +8,7 @@ import {
   type ExportJobResult,
 } from '@weavestream/shared';
 import { RedisService } from '../../../api/src/redis/redis.service.js';
-import { MinioService } from '../../../api/src/storage/minio.service.js';
+import { LocalStorageService } from '../../../api/src/storage/local-storage.service.js';
 import { SecretEncryptionService } from '../../../api/src/crypto/secret-encryption.service.js';
 import { AuditLogService } from '../../../api/src/audit/audit.service.js';
 import { AUDIT_ACTIONS } from '../../../api/src/audit/audit-actions.js';
@@ -33,7 +33,7 @@ export class CompanyPdfExportWorker implements OnModuleDestroy {
 
   constructor(
     private readonly redis: RedisService,
-    private readonly minio: MinioService,
+    private readonly storage: LocalStorageService,
     private readonly crypto: SecretEncryptionService,
     private readonly audit: AuditLogService,
     private readonly exportData: CompanyExportDataService,
@@ -129,10 +129,10 @@ export class CompanyPdfExportWorker implements OnModuleDestroy {
       throw err;
     }
 
-    const storageKey = this.minio.exportKey(companyId, exportId);
-    this.logger.log(`[${job.id}] Uploading PDF to MinIO (key=${storageKey})`);
+    const storageKey = this.storage.exportKey(companyId, exportId);
+    this.logger.log(`[${job.id}] Writing PDF to storage (key=${storageKey})`);
     try {
-      await this.minio.putObject(companyId, storageKey, pdfBuffer, {
+      await this.storage.putObject(companyId, storageKey, pdfBuffer, {
         contentType: 'application/pdf',
       });
     } catch (err) {
@@ -180,7 +180,7 @@ export class CompanyPdfExportWorker implements OnModuleDestroy {
     const { companyId, storageKey } = payload;
     this.logger.log(`Cleaning up export ${storageKey} for company ${companyId}`);
     try {
-      await this.minio.deleteObject(companyId, storageKey);
+      await this.storage.deleteObject(companyId, storageKey);
       this.logger.log(`Deleted export ${storageKey}`);
     } catch (err) {
       // Object may already be gone — log and swallow so the job completes cleanly.

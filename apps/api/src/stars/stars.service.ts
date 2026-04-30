@@ -633,8 +633,8 @@ export class StarsService {
   ) {
     if (!upload) return null;
     // Same-origin streaming URL — see CompaniesService.resolveLogo for
-    // the rationale (browsers never hit MinIO directly, one reverse-
-    // proxy entry covers the whole app).
+    // the rationale (browsers never touch the storage layer directly,
+    // one reverse-proxy entry covers the whole app).
     const base = `/api/v1/companies/${upload.companyId}/uploads/${upload.id}/image`;
     return {
       uploadId: upload.id,

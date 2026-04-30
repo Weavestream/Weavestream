@@ -528,9 +528,9 @@ export class CompaniesService {
   /**
    * Turn a stored `Upload` row into the UI-shaped logo descriptor.
    * URLs point at the same-origin API streaming endpoint
-   * (`/uploads/:id/image`) so the browser never reaches MinIO
-   * directly — one reverse-proxy entry covers everything. Returns
-   * `null` when there's no logo — all callers branch on that.
+   * (`/uploads/:id/image`) so the browser never reaches the storage
+   * layer directly — one reverse-proxy entry covers everything.
+   * Returns `null` when there's no logo — all callers branch on that.
    */
   private async resolveLogo(
     upload:
