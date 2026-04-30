@@ -27,17 +27,16 @@ export function proxy(req: NextRequest) {
     ? `script-src 'self' 'nonce-${nonce}' 'strict-dynamic' 'unsafe-eval'`
     : `script-src 'self' 'nonce-${nonce}' 'strict-dynamic'`;
 
-  // MinIO (S3) origin — browsers fetch thumbnails and presigned downloads
-  // directly against this host. Parsed from env so it works across local
-  // compose, staging, and prod without code changes. Multiple origins are
-  // comma-separated.
-  // The proxy runs server-side (edge runtime), so it can read non-public
-  // env vars. We prefer the explicit `NEXT_PUBLIC_MINIO_ORIGINS` list,
-  // then fall back to the server-side `MINIO_PUBLIC_URL` that Phase 4
-  // already requires. Multiple origins are comma-separated.
-  const minioOrigins = (process.env.NEXT_PUBLIC_MINIO_ORIGINS ??
-    process.env.MINIO_PUBLIC_URL ??
-    '')
+  // Browsers no longer fetch from MinIO directly — every thumbnail,
+  // attachment, logo, and export PDF is streamed through the API
+  // (`/uploads/:id/image`, `/export/job/:id/download`). That keeps the
+  // CSP same-origin only, and means a single reverse-proxy entry
+  // covers the whole app (no second `MINIO_PUBLIC_URL` virtual host
+  // required). The legacy `NEXT_PUBLIC_MINIO_ORIGINS` env is honored
+  // here only so existing deployments that haven't restarted yet keep
+  // rendering thumbnails minted before the upgrade — new installs can
+  // leave it unset.
+  const legacyMinioOrigins = (process.env.NEXT_PUBLIC_MINIO_ORIGINS ?? '')
     .split(',')
     .map((s) => s.trim())
     .filter((s) => s.length > 0);
@@ -46,7 +45,7 @@ export function proxy(req: NextRequest) {
   const connectSrc = [
     'connect-src',
     "'self'",
-    ...minioOrigins,
+    ...legacyMinioOrigins,
     ...(isDev ? ['ws:', 'wss:'] : []),
   ].join(' ');
 
@@ -55,7 +54,7 @@ export function proxy(req: NextRequest) {
     "'self'",
     'data:',
     'blob:',
-    ...minioOrigins,
+    ...legacyMinioOrigins,
   ].join(' ');
 
   const csp = [

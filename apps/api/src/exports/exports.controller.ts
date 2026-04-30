@@ -2,15 +2,20 @@ import {
   Body,
   Controller,
   Get,
+  Header,
   HttpCode,
   HttpStatus,
+  NotFoundException,
   Param,
   ParseUUIDPipe,
   Post,
   Req,
+  Res,
+  StreamableFile,
 } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
-import type { Request } from 'express';
+import type { Request, Response } from 'express';
+import { Readable } from 'node:stream';
 import { z } from 'zod';
 import { ExportsService } from './exports.service.js';
 import { RequirePermission } from '../rbac/require-permission.decorator.js';
@@ -59,6 +64,48 @@ export class ExportsController {
   @RequirePermission('export.create')
   async status(@Param('jobId', new ZodParam(jobIdSchema)) jobId: string) {
     return this.exports.getJobStatus(jobId);
+  }
+
+  /**
+   * Stream a completed export PDF back through the API. Same pattern
+   * as `/uploads/:id/image` — keeps the browser on a single origin
+   * and means deployments only need one reverse-proxy entry. The
+   * `attachment` Content-Disposition triggers the save-as dialog so
+   * the click acts like a regular download link.
+   */
+  @Get('job/:jobId/download')
+  @Header('Cache-Control', 'private, no-store')
+  @RequirePermission('export.create')
+  async download(
+    @Param('jobId', new ZodParam(jobIdSchema)) jobId: string,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<StreamableFile> {
+    const located = await this.exports.resolveCompletedExport(jobId);
+    if (!located) {
+      throw new NotFoundException({ error: 'ExportUnavailable' });
+    }
+    const stream = await this.exports.getExportObjectStream(
+      located.companyId,
+      located.storageKey,
+    );
+    if (!stream) {
+      throw new NotFoundException({ error: 'ExportUnavailable' });
+    }
+    res.setHeader('Content-Type', stream.contentType ?? 'application/pdf');
+    if (typeof stream.contentLength === 'number') {
+      res.setHeader('Content-Length', stream.contentLength.toString());
+    }
+    if (stream.lastModified) {
+      res.setHeader('Last-Modified', stream.lastModified.toUTCString());
+    }
+    if (stream.etag) {
+      res.setHeader('ETag', stream.etag);
+    }
+    res.setHeader(
+      'Content-Disposition',
+      'attachment; filename="vault-export.pdf"',
+    );
+    return new StreamableFile(Readable.from(stream.body));
   }
 }
 

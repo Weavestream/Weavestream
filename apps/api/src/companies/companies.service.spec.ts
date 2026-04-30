@@ -107,14 +107,6 @@ function makeCache() {
   return { invalidateMany: jest.fn().mockResolvedValue(undefined) };
 }
 
-function makeMinio() {
-  return {
-    presignGet: jest
-      .fn()
-      .mockResolvedValue({ url: 'https://signed.example/obj', expiresAt: new Date() }),
-  };
-}
-
 describe('CompaniesService parent hierarchy', () => {
   it('rejects self-parent', async () => {
     const companies = { a: makeCompany({ id: 'a' }) };
@@ -123,7 +115,6 @@ describe('CompaniesService parent hierarchy', () => {
       prisma as never,
       makeAudit() as never,
       makeCache() as never,
-      makeMinio() as never,
     );
 
     await expect(
@@ -138,7 +129,6 @@ describe('CompaniesService parent hierarchy', () => {
       prisma as never,
       makeAudit() as never,
       makeCache() as never,
-      makeMinio() as never,
     );
 
     await expect(
@@ -159,7 +149,6 @@ describe('CompaniesService parent hierarchy', () => {
       prisma as never,
       makeAudit() as never,
       makeCache() as never,
-      makeMinio() as never,
     );
 
     await expect(
@@ -178,7 +167,6 @@ describe('CompaniesService parent hierarchy', () => {
       prisma as never,
       audit as never,
       makeCache() as never,
-      makeMinio() as never,
     );
 
     const out = await svc.update(ACTOR, 'b', { parentCompanyId: 'a' }, META);
@@ -200,7 +188,6 @@ describe('CompaniesService logo guard', () => {
         prisma as never,
         makeAudit() as never,
         makeCache() as never,
-        makeMinio() as never,
       ),
     };
   }
@@ -243,7 +230,6 @@ describe('CompaniesService logo guard', () => {
       prisma as never,
       makeAudit() as never,
       makeCache() as never,
-      makeMinio() as never,
     );
     const out = await svc.update(ACTOR, 'c1', { logoUploadId: null }, META);
     expect(out.logoUploadId).toBeNull();
@@ -261,7 +247,6 @@ describe('CompaniesService slug uniqueness', () => {
       prisma as never,
       makeAudit() as never,
       makeCache() as never,
-      makeMinio() as never,
     );
 
     await expect(
@@ -278,7 +263,6 @@ describe('CompaniesService website normalisation', () => {
       prisma as never,
       makeAudit() as never,
       makeCache() as never,
-      makeMinio() as never,
     );
 
     const out = await svc.update(ACTOR, 'c', { website: 'example.com' }, META);
@@ -292,7 +276,6 @@ describe('CompaniesService website normalisation', () => {
       prisma as never,
       makeAudit() as never,
       makeCache() as never,
-      makeMinio() as never,
     );
 
     const out = await svc.update(

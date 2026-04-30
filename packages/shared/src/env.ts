@@ -149,10 +149,12 @@ export const envSchema = z.object({
 
   // Phase 4: MinIO object storage + upload policy.
   // Buckets are created lazily per-company as `${MINIO_BUCKET_PREFIX}-<companyId>`.
-  // `MINIO_PUBLIC_URL` is what the browser sees for presigned PUT/GET —
-  // when the stack runs under compose, the API resolves `MINIO_ENDPOINT`
-  // (e.g. `minio`) internally but browsers hit `MINIO_PUBLIC_URL`
-  // (typically `http://localhost:9100`).
+  // `MINIO_PUBLIC_URL` used to be the browser-facing origin for
+  // presigned PUT/GET. Since v1.5.5 the browser never reaches MinIO
+  // directly — every read streams through the API on the web origin
+  // and uploads PUT to a relay endpoint there too — so this field is
+  // optional and only consulted when an operator wants a presigned
+  // URL for an out-of-band consumer (CLI tools, sibling services).
   MINIO_ENDPOINT: z.string().min(1).default('minio'),
   MINIO_PORT: intFromString(1, 65535).default(9000),
   MINIO_USE_SSL: boolish.default(false),
@@ -165,7 +167,11 @@ export const envSchema = z.object({
     .max(40)
     .regex(/^[a-z0-9][a-z0-9-]*$/, 'lowercase DNS-safe prefix')
     .default('weavestream'),
-  MINIO_PUBLIC_URL: z.string().url(),
+  MINIO_PUBLIC_URL: z
+    .string()
+    .url()
+    .optional()
+    .or(z.literal('').transform(() => undefined)),
   MAX_UPLOAD_MB: intFromString(1, 1024).default(25),
 
   // Phase 8: Domain & SSL monitor + BullMQ infra.

@@ -150,34 +150,30 @@ upgrade steps before bumping across minor versions.
 ## Reverse proxy & TLS
 
 Weavestream does not terminate TLS. Front it with Nginx, Caddy, or
-Traefik and forward two upstreams:
+Traefik and forward a single upstream:
 
 | Public path                      | Upstream                              |
 | -------------------------------- | ------------------------------------- |
 | `https://app.example.com/*`      | `http://<compose-host>:3000`          |
-| `https://files.example.com/*`    | `http://127.0.0.1:9100` (MinIO S3 API)|
 
-Both `WEB_HOST_PORT` (3000) and `MINIO_HOST_PORT` (9100) are published
-by `compose.yml`. The MinIO port is bound to `127.0.0.1` by default,
-which is reachable only from a reverse proxy running **on this same
-host as a host process**. If your proxy runs in a container (Nginx
-Proxy Manager, Traefik, Caddy in Docker) or on a different host, the
-default loopback bind will cause `502 Bad Gateway` on every thumbnail
-and file open — set `MINIO_HOST_BIND` to a reachable interface (a
-docker bridge IP, a LAN IP, or `0.0.0.0`) and firewall 9100 to the
-proxy's source IP. See
-[**MinIO bind address**](CONFIGURATION.md#minio-bind-address) for the
-full decision matrix.
+Browsers never fetch directly from MinIO — every thumbnail,
+attachment, logo, and export PDF is streamed through the API on the
+same origin as the web app. That means **one virtual host is enough**
+(no separate `files.example.com` to set up) and `MINIO_HOST_BIND`
+stays on `127.0.0.1` regardless of where your proxy runs (host
+process, container, different host). MinIO's published port (9100)
+is purely for operator tooling — `mc`, `s3cmd`, backup scripts you
+run on the deploy host.
 
-Update the following in `.env` to match your public origins before
-restarting so cookies, CSP, and presigned URLs point at the right
-hostname:
+Update the following in `.env` to match your public origin before
+restarting so cookies and links point at the right hostname:
 
 - `APP_URL` — public web origin (`https://app.example.com`).
 - `API_URL` — public API origin (`https://app.example.com/api`).
-- `MINIO_PUBLIC_URL` — public bucket origin (`https://files.example.com`).
-- `NEXT_PUBLIC_MINIO_ORIGINS` — comma-separated allowlist mirrored into
-  the web app's CSP. Usually equal to `MINIO_PUBLIC_URL`.
+
+`MINIO_PUBLIC_URL` and `NEXT_PUBLIC_MINIO_ORIGINS` may be left blank;
+they are optional knobs for handing presigned URLs to non-browser
+consumers, not part of the standard install.
 
 Make sure your reverse proxy:
 
@@ -246,7 +242,7 @@ process cannot quietly rewrite audit history.
 | ------------------------------------------------ | --------------------------------------------------------------------------------- |
 | `api` fails at startup with `P1000` or `P1001`   | Migration step can't reach Postgres. Check `DATABASE_URL` and `docker compose logs postgres`. |
 | Web UI loads but API calls 502                   | `api` probably unhealthy; `docker compose logs api`. Confirm Redis password matches. |
-| Image uploads fail with CORS / CSP errors        | `NEXT_PUBLIC_MINIO_ORIGINS` must include the hostname your browser actually uses. |
+| Image uploads fail with CORS / CSP errors        | Browser-facing reads now stream through the API on the web origin — confirm `APP_URL` matches the hostname you load in the browser. (Legacy thumbnails minted before v1.5.5 still need the source MinIO origin in `NEXT_PUBLIC_MINIO_ORIGINS`.) |
 | Login says "Invalid credentials" after reset     | `POSTGRES_PASSWORD` changed but `DATABASE_URL` still points at the old password.  |
 
 Still stuck? Open a [GitHub Discussion](https://github.com/Weavestream/Weavestream/discussions)

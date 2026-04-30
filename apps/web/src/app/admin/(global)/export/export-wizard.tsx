@@ -27,7 +27,6 @@ import {
 interface JobStatusResponse {
   status: 'waiting' | 'active' | 'completed' | 'failed' | 'unknown';
   downloadUrl?: string;
-  downloadExpiresAt?: string;
   error?: string;
 }
 
@@ -41,10 +40,9 @@ type ExportStatus = 'working' | 'ready' | 'failed' | 'expired';
 /**
  * Per-row record persisted in localStorage so a refresh doesn't lose
  * recent exports. We deliberately do NOT persist the `downloadUrl` — it
- * expires on its own (2-hour presign window) and the API re-mints a
- * fresh one on every poll, so we always re-fetch on click. That means
- * the only thing we need to keep around is the `jobId` (BullMQ keeps
- * the actual file metadata).
+ * resolves to a same-origin streaming endpoint (`/export/job/:id/download`)
+ * that the API re-validates against MinIO on every click, so we just
+ * keep the `jobId` (BullMQ knows the actual storage key).
  */
 interface ExportRecord {
   jobId: string;
@@ -55,8 +53,6 @@ interface ExportRecord {
   includePasswords: boolean;
   pdfPasswordProtected: boolean;
   status: ExportStatus;
-  /** Last known presign expiry; informational only. */
-  downloadExpiresAt?: string;
   error?: string;
 }
 
@@ -171,7 +167,6 @@ function VaultArchiveWizard() {
           return {
             ...rec,
             status: 'ready',
-            downloadExpiresAt: u.downloadExpiresAt,
             error: undefined,
           };
         }
@@ -263,14 +258,6 @@ function VaultArchiveWizard() {
       return;
     }
     if (poll.data.status === 'completed' && poll.data.downloadUrl) {
-      // Update the cached expiry so the UI shows the new window.
-      setRecords((prev) =>
-        prev.map((r) =>
-          r.jobId === rec.jobId
-            ? { ...r, downloadExpiresAt: poll.data!.downloadExpiresAt }
-            : r,
-        ),
-      );
       window.open(poll.data.downloadUrl, '_blank', 'noopener,noreferrer');
       return;
     }
@@ -478,16 +465,6 @@ function ExportRow({
   onDismiss: () => void;
 }) {
   const startedLabel = useMemo(() => formatRelative(rec.startedAt), [rec.startedAt]);
-  const expiresLabel = useMemo(
-    () =>
-      rec.downloadExpiresAt
-        ? new Date(rec.downloadExpiresAt).toLocaleTimeString('en-US', {
-            hour: '2-digit',
-            minute: '2-digit',
-          })
-        : null,
-    [rec.downloadExpiresAt],
-  );
 
   const rowStyle: CSSProperties = {
     display: 'grid',
@@ -549,11 +526,6 @@ function ExportRow({
           }}
         >
           <span>Started {startedLabel}</span>
-          {rec.status === 'ready' && expiresLabel && (
-            <span style={{ color: 'var(--text-3, var(--text-2))' }}>
-              Link valid until ~{expiresLabel}
-            </span>
-          )}
           {rec.status === 'failed' && rec.error && (
             <span style={{ color: 'var(--danger)' }}>{rec.error}</span>
           )}

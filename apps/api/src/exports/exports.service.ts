@@ -16,11 +16,8 @@ import type { AuthedUser } from '../common/current-user.decorator.js';
 export interface ExportJobStatus {
   status: 'waiting' | 'active' | 'completed' | 'failed' | 'unknown';
   downloadUrl?: string;
-  downloadExpiresAt?: string;
   error?: string;
 }
-
-const PRESIGN_TTL_SECONDS = 7200; // 2 hours
 
 export interface TriggerActorMeta {
   ip: string;
@@ -98,31 +95,24 @@ export class ExportsService {
       const result = job.returnvalue as ExportJobResult | undefined;
       if (!result?.storageKey) return { status: 'completed' };
 
-      // Re-mint a fresh presigned URL on every poll so the link never
-      // expires while the file is still in MinIO.
+      // Confirm the bytes are still in MinIO before handing out a
+      // download URL. The export bucket has a lifecycle TTL, so a job
+      // can complete and then have its blob reaped before the user
+      // gets back to it.
       const head = await this.minio.headObject(result.companyId, result.storageKey);
       if (!head) {
-        // File already cleaned up — surface as `failed` so the
-        // frontend stops polling. The job still exists in BullMQ; we
-        // just can't hand out a download anymore.
         return {
           status: 'failed',
           error: 'Export file has expired and been deleted.',
         };
       }
 
-      const { url, expiresAt } = await this.minio.presignGet(
-        result.companyId,
-        result.storageKey,
-        {
-          ttlSeconds: PRESIGN_TTL_SECONDS,
-          contentDisposition: 'attachment; filename="vault-export.pdf"',
-        },
-      );
+      // Same-origin streaming URL — see `download` in the controller.
+      // Stable for the lifetime of the file in MinIO, no expiry to
+      // track on the client.
       return {
         status: 'completed',
-        downloadUrl: url,
-        downloadExpiresAt: expiresAt.toISOString(),
+        downloadUrl: `/api/v1/export/job/${encodeURIComponent(jobId)}/download`,
       };
     }
 
@@ -133,5 +123,35 @@ export class ExportsService {
     if (state === 'active') return { status: 'active' };
 
     return { status: 'waiting' };
+  }
+
+  /**
+   * Resolve a completed export job back to its `(companyId, storageKey)`
+   * tuple, or `null` if the job is missing, not finished, or its file
+   * has been reaped. Used by the streaming download controller to
+   * authorize and locate the blob.
+   */
+  async resolveCompletedExport(
+    jobId: string,
+  ): Promise<{ companyId: string; storageKey: string } | null> {
+    const queue = this.queues.get(QueueNames.companyExport);
+    const job = await queue.getJob(jobId);
+    if (!job) return null;
+    const state = await job.getState();
+    if (state !== 'completed') return null;
+    const result = job.returnvalue as ExportJobResult | undefined;
+    if (!result?.storageKey || !result.companyId) return null;
+    const head = await this.minio.headObject(result.companyId, result.storageKey);
+    if (!head) return null;
+    return { companyId: result.companyId, storageKey: result.storageKey };
+  }
+
+  /**
+   * Open a streaming read of the export PDF. Thin wrapper over
+   * `MinioService.getObjectStream` — exists so the controller doesn't
+   * have to know about the storage layer directly.
+   */
+  async getExportObjectStream(companyId: string, storageKey: string) {
+    return this.minio.getObjectStream(companyId, storageKey);
   }
 }

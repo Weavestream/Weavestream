@@ -801,9 +801,9 @@ export class AssetsService {
 
   /**
    * Replace every FILE field's raw entries with hydrated entries that
-   * include fresh presigned `thumbnailUrl` and `downloadUrl`. Batched in
-   * a single `uploads` query per call so listing N assets with FILE
-   * fields is one SELECT, not N. Mutates `assets` in place.
+   * include same-origin API `thumbnailUrl` and `downloadUrl`. Batched
+   * in a single `uploads` query per call so listing N assets with
+   * FILE fields is one SELECT, not N. Mutates `assets` in place.
    */
   private async hydrateFileFields(
     companyId: string,

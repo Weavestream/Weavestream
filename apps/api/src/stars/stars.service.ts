@@ -1,7 +1,6 @@
 import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { AuditLogService } from '../audit/audit.service.js';
-import { MinioService } from '../storage/minio.service.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
 
 /**
@@ -114,7 +113,6 @@ export class StarsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditLogService,
-    private readonly minio: MinioService,
   ) {}
 
   /**
@@ -634,34 +632,17 @@ export class StarsService {
       | null,
   ) {
     if (!upload) return null;
-    try {
-      const [full, thumb] = await Promise.all([
-        this.minio.presignGet(upload.companyId, upload.storageKey, {
-          ttlSeconds: 300,
-        }),
-        upload.thumbnailKey
-          ? this.minio.presignGet(upload.companyId, upload.thumbnailKey, {
-              ttlSeconds: 300,
-            })
-          : Promise.resolve(null),
-      ]);
-      return {
-        uploadId: upload.id,
-        url: full.url,
-        thumbnailUrl: thumb?.url ?? null,
-        mimeType: upload.mimeType,
-        sizeBytes: upload.sizeBytes,
-        uploadedAt: upload.createdAt.toISOString(),
-      };
-    } catch {
-      return {
-        uploadId: upload.id,
-        url: null,
-        thumbnailUrl: null,
-        mimeType: upload.mimeType,
-        sizeBytes: upload.sizeBytes,
-        uploadedAt: upload.createdAt.toISOString(),
-      };
-    }
+    // Same-origin streaming URL — see CompaniesService.resolveLogo for
+    // the rationale (browsers never hit MinIO directly, one reverse-
+    // proxy entry covers the whole app).
+    const base = `/api/v1/companies/${upload.companyId}/uploads/${upload.id}/image`;
+    return {
+      uploadId: upload.id,
+      url: base,
+      thumbnailUrl: upload.thumbnailKey ? `${base}?v=thumb` : null,
+      mimeType: upload.mimeType,
+      sizeBytes: upload.sizeBytes,
+      uploadedAt: upload.createdAt.toISOString(),
+    };
   }
 }

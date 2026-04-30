@@ -95,15 +95,13 @@ services:
       MINIO_BROWSER_REDIRECT_URL: ${MINIO_PUBLIC_URL}
     volumes:
       - ${DATA_DIR:-./data}/minio:/data
-    # 9000 = S3 API. Bound to 127.0.0.1 by default, which is the right
-    # choice when a reverse proxy runs on this same host as a host
-    # process and forwards MINIO_PUBLIC_URL to 127.0.0.1:9100. A
-    # containerised proxy (NPM / Traefik / Caddy in Docker) has its own
-    # loopback and cannot reach the host's 127.0.0.1, and a proxy on a
-    # different host obviously can't either — in those topologies set
-    # MINIO_HOST_BIND to a reachable interface (a docker bridge IP, a
-    # LAN IP, or 0.0.0.0) and firewall the port to the proxy's source
-    # IP. See .env.example for the full decision matrix.
+    # 9000 = S3 API. Bound to 127.0.0.1 by default. Browsers never
+    # fetch from MinIO directly (every thumbnail, attachment, logo,
+    # and export PDF is streamed through the API on the web origin),
+    # so the only thing that ever dials this port is operator tooling
+    # (`mc`, `s3cmd`, backup scripts) running on this host. Widen
+    # MINIO_HOST_BIND only if you genuinely need an external admin
+    # tool to reach the bucket endpoint.
     #
     # The console (9001) is intentionally NOT published. Use
     # `docker compose -f compose.yml -f compose.console.yml up -d`, an

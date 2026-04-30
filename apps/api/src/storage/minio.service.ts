@@ -25,12 +25,14 @@ import { EnvService } from '../config/env.service.js';
  *   `company/<companyId>/…` — the UploadsService is the only caller and
  *   always computes the key itself, so the client never picks the path.
  *
- * The `public` endpoint (`MINIO_PUBLIC_URL`) is the origin the *browser*
- * reaches for presigned PUT/GET. Under compose the API talks to the
- * internal `minio:9000` hostname, but signed URLs must point at
- * whatever the browser can resolve (typically `http://localhost:9100`).
- * We sign with a separate client pinned to the public endpoint so the
- * URL we return is reachable from outside the compose network.
+ * As of v1.5.5 the browser never fetches from MinIO directly — every
+ * thumbnail, attachment, logo, and export PDF is streamed through the
+ * API on the same origin as the web app. `MINIO_PUBLIC_URL` is
+ * therefore optional and only consulted when an operator explicitly
+ * wants a presigned URL for an out-of-band consumer (a CLI tool, a
+ * sibling service, etc.). When unset, the presigner falls back to the
+ * internal endpoint so signed URLs still resolve from inside the
+ * compose network.
  */
 @Injectable()
 export class MinioService implements OnModuleInit {
@@ -62,7 +64,7 @@ export class MinioService implements OnModuleInit {
     });
 
     this.presigner = new S3Client({
-      endpoint: MINIO_PUBLIC_URL,
+      endpoint: MINIO_PUBLIC_URL ?? internalEndpoint,
       region: MINIO_REGION,
       credentials: creds,
       forcePathStyle: true,
@@ -70,8 +72,9 @@ export class MinioService implements OnModuleInit {
   }
 
   async onModuleInit(): Promise<void> {
+    const publicLabel = this.env.values.MINIO_PUBLIC_URL ?? '<internal>';
     this.logger.log(
-      `MinIO configured (internal=${this.env.values.MINIO_ENDPOINT}:${this.env.values.MINIO_PORT}, public=${this.env.values.MINIO_PUBLIC_URL})`,
+      `MinIO configured (internal=${this.env.values.MINIO_ENDPOINT}:${this.env.values.MINIO_PORT}, public=${publicLabel})`,
     );
   }
 

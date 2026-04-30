@@ -422,63 +422,75 @@ export class UploadsService {
       },
     });
 
-    // Presign the freshly-generated thumbnail so the caller (the FILE
-    // dropzone tile, the rich-text image insert, etc.) can render a
-    // preview immediately without a second round-trip to the
-    // `/uploads/:id/thumbnail` endpoint. `serialize()` intentionally
-    // leaves URL fields null — they're only populated by call sites
-    // that want them, to avoid accidentally minting presigned URLs in
-    // audit payloads or background jobs.
+    // Browsers always render uploaded media through the API streaming
+    // endpoint (`…/image[?v=thumb]`). The client just sees a stable,
+    // same-origin URL — `<img src>` works, `<a href target=_blank>`
+    // works, no expiring presigned URLs to refresh, and MinIO never
+    // needs a public origin. `serialize()` intentionally leaves URL
+    // fields null so we don't bake URLs into audit payloads or
+    // background jobs that don't care.
     const base = this.serialize(upload);
-    base.thumbnailUrl = await this.presignThumbnail(companyId, upload.thumbnailKey);
+    base.thumbnailUrl = upload.thumbnailKey
+      ? this.apiUploadUrl(companyId, upload.id, { variant: 'thumb' })
+      : null;
+    base.downloadUrl = this.apiUploadUrl(companyId, upload.id);
     return base;
   }
 
-  private async presignThumbnail(
+  /**
+   * Same-origin streaming URL for an upload. The public API path
+   * mirrors the `image` controller route (`/uploads/:id/image`) and
+   * accepts `?v=thumb` for the 300px webp preview and `?attachment=1`
+   * for a save-as `Content-Disposition`. Callers store these strings
+   * straight into the response body — they never expire and never
+   * point at a private bucket origin.
+   */
+  private apiUploadUrl(
     companyId: string,
-    thumbnailKey: string | null,
-  ): Promise<string | null> {
-    if (!thumbnailKey) return null;
-    const { url } = await this.storage.presignGet(companyId, thumbnailKey, {
-      ttlSeconds: 300,
-    });
-    return url;
+    uploadId: string,
+    opts: { variant?: 'thumb'; attachment?: boolean } = {},
+  ): string {
+    const params = new URLSearchParams();
+    if (opts.variant === 'thumb') params.set('v', 'thumb');
+    if (opts.attachment) params.set('attachment', '1');
+    const qs = params.toString();
+    const base = `/api/v1/companies/${companyId}/uploads/${uploadId}/image`;
+    return qs ? `${base}?${qs}` : base;
   }
 
   // ------------------------------------------------------------------
-  // 3) download — fresh presigned GET, short TTL.
+  // 3) download / thumbnail — same-origin URLs pointing at the API
+  //    streaming endpoint. Kept as JSON-returning endpoints for back
+  //    compat with code that resolves the URL out of band; new
+  //    callers should hit `…/image` directly.
   // ------------------------------------------------------------------
 
   async download(
     companyId: string,
     uploadId: string,
     opts: { asAttachment?: boolean } = {},
-  ): Promise<{ url: string; expiresAt: Date; filename: string; mimeType: string }> {
+  ): Promise<{ url: string; filename: string; mimeType: string }> {
     const upload = await this.prisma.upload.findFirst({
       where: { id: uploadId, companyId, deletedAt: null },
+      select: { id: true, filename: true, mimeType: true },
     });
     if (!upload) throw new NotFoundException();
-
-    const disposition = opts.asAttachment
-      ? `attachment; filename="${sanitizeForHeader(upload.filename)}"`
-      : undefined;
-
-    const { url, expiresAt } = await this.storage.presignGet(companyId, upload.storageKey, {
-      ttlSeconds: 60,
-      contentDisposition: disposition,
-    });
-    return { url, expiresAt, filename: upload.filename, mimeType: upload.mimeType };
+    return {
+      url: this.apiUploadUrl(companyId, upload.id, {
+        attachment: opts.asAttachment,
+      }),
+      filename: upload.filename,
+      mimeType: upload.mimeType,
+    };
   }
 
   async thumbnailUrl(companyId: string, uploadId: string): Promise<string | null> {
     const upload = await this.prisma.upload.findFirst({
       where: { id: uploadId, companyId, deletedAt: null },
+      select: { id: true, thumbnailKey: true },
     });
     if (!upload || !upload.thumbnailKey) return null;
-    const { url } = await this.storage.presignGet(companyId, upload.thumbnailKey, {
-      ttlSeconds: 300,
-    });
-    return url;
+    return this.apiUploadUrl(companyId, upload.id, { variant: 'thumb' });
   }
 
   /**
@@ -638,25 +650,19 @@ export class UploadsService {
     });
     const hasMore = rows.length > limit;
     const slice = hasMore ? rows.slice(0, limit) : rows;
-    const serialized = await Promise.all(
-      slice.map(async (row) => {
-        const base = this.serialize(row);
-        // Inline content-disposition so clicking a tile opens the image
-        // in a new tab's native viewer; browsers refuse to render when
-        // the URL is tagged `attachment;...`, which used to make the
-        // tab open-then-close on click.
-        const [thumbnailUrl, download] = await Promise.all([
-          this.presignThumbnail(companyId, row.thumbnailKey),
-          this.storage.presignGet(companyId, row.storageKey, {
-            ttlSeconds: 300,
-            contentDisposition: `inline; filename="${sanitizeForHeader(row.filename)}"`,
-          }),
-        ]);
-        base.thumbnailUrl = thumbnailUrl;
-        base.downloadUrl = download.url;
-        return base;
-      }),
-    );
+    // Stable same-origin URLs pointing at the API streaming endpoint.
+    // `image` (no `attachment=1`) sends inline Content-Disposition, so
+    // clicking a tile opens the file in a new tab's native viewer
+    // (image renders, PDF previews, etc.) just like the previous
+    // presigned URL flow did, while staying on the app's own origin.
+    const serialized = slice.map((row) => {
+      const base = this.serialize(row);
+      base.thumbnailUrl = row.thumbnailKey
+        ? this.apiUploadUrl(companyId, row.id, { variant: 'thumb' })
+        : null;
+      base.downloadUrl = this.apiUploadUrl(companyId, row.id);
+      return base;
+    });
     return {
       items: serialized,
       nextCursor: hasMore ? slice[slice.length - 1]!.id : null,
@@ -676,13 +682,13 @@ export class UploadsService {
   }
 
   /**
-   * Hydrate a batch of FILE-field entries with fresh presigned thumbnail
-   * and download URLs. The values stored in `asset_field_values.value`
-   * are intentionally URL-free (URLs are ephemeral S3 signatures) — every
-   * read path that needs to render a tile must call this to mint new
-   * URLs. Entries that reference a deleted or cross-tenant upload are
-   * kept in-place with null URLs so the tile still shows the filename
-   * rather than silently disappearing.
+   * Hydrate a batch of FILE-field entries with same-origin API
+   * `thumbnailUrl` and `downloadUrl` values. The values stored in
+   * `asset_field_values.value` are intentionally URL-free — every
+   * read path that needs to render a tile calls this. Entries that
+   * reference a deleted or cross-tenant upload are kept in-place with
+   * null URLs so the tile still shows the filename rather than
+   * silently disappearing.
    */
   async hydrateFileFieldEntries(
     companyId: string,
@@ -692,23 +698,20 @@ export class UploadsService {
     const ids = Array.from(new Set(entries.map((e) => e.uploadId)));
     const rows = await this.prisma.upload.findMany({
       where: { id: { in: ids }, companyId, deletedAt: null },
-      select: { id: true, storageKey: true, thumbnailKey: true, filename: true },
+      select: { id: true, thumbnailKey: true },
     });
     const byId = new Map(rows.map((r) => [r.id, r]));
-    return Promise.all(
-      entries.map(async (entry) => {
-        const row = byId.get(entry.uploadId);
-        if (!row) return { ...entry, thumbnailUrl: null, downloadUrl: null };
-        const [thumbnailUrl, download] = await Promise.all([
-          this.presignThumbnail(companyId, row.thumbnailKey),
-          this.storage.presignGet(companyId, row.storageKey, {
-            ttlSeconds: 300,
-            contentDisposition: `inline; filename="${sanitizeForHeader(row.filename)}"`,
-          }),
-        ]);
-        return { ...entry, thumbnailUrl, downloadUrl: download.url };
-      }),
-    );
+    return entries.map((entry) => {
+      const row = byId.get(entry.uploadId);
+      if (!row) return { ...entry, thumbnailUrl: null, downloadUrl: null };
+      return {
+        ...entry,
+        thumbnailUrl: row.thumbnailKey
+          ? this.apiUploadUrl(companyId, row.id, { variant: 'thumb' })
+          : null,
+        downloadUrl: this.apiUploadUrl(companyId, row.id),
+      };
+    });
   }
 
   private serialize(row: {
@@ -748,10 +751,6 @@ export class UploadsService {
 
 function pendingKey(uploadId: string): string {
   return `upload:pending:${uploadId}`;
-}
-
-function sanitizeForHeader(filename: string): string {
-  return filename.replace(/["\\]/g, '_').replace(/[\r\n]/g, '');
 }
 
 /**

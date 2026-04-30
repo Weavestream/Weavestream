@@ -48,15 +48,22 @@ import { requestMetaOf as meta } from '../common/request-meta.js';
  *   POST /companies/:companyId/uploads/confirm
  *      → after the browser PUT succeeds, verify magic bytes, hash,
  *        thumbnail, and flip the pending record into an Upload row.
- *   GET  /companies/:companyId/uploads/:id/download
- *      → presigned GET URL (60s TTL). Requires `upload.read`.
+ *   GET  /companies/:companyId/uploads/:id/download[?attachment=1]
+ *      → JSON `{ url }` pointing at the API streaming endpoint.
+ *        `attachment=1` causes the URL to force a save-as dialog when
+ *        followed. Kept for backwards compat with code that resolves
+ *        the URL out of band; new callers should hit `…/image`
+ *        directly.
  *   GET  /companies/:companyId/uploads/:id/thumbnail
- *      → presigned GET URL for the thumbnail (300s TTL).
- *   GET  /companies/:companyId/uploads/:id/image[?v=thumb]
+ *      → JSON `{ url }` pointing at the API streaming endpoint with
+ *        `?v=thumb`. Same compat note as above.
+ *   GET  /companies/:companyId/uploads/:id/image[?v=thumb][&attachment=1]
  *      → stream the original (or thumbnail) bytes back through the API.
- *        Stable, embeddable URL for `<img src>`; used by the rich-text
- *        editor so article content never stores expiring signed URLs
- *        and so MinIO can stay locked to the internal Docker network.
+ *        Stable, embeddable, same-origin URL for `<img src>` and
+ *        `<a href>` — the canonical browser-facing read endpoint.
+ *        `attachment=1` switches `Content-Disposition` to `attachment`
+ *        with the original filename so a click triggers a download
+ *        instead of inline rendering.
  *   DELETE /companies/:companyId/uploads/:id
  *      → soft-delete.
  */
@@ -179,12 +186,18 @@ export class UploadsController {
   }
 
   /**
-   * Stable, permanent URL suitable for `<img src>`. The original (or
-   * thumbnail with `?v=thumb`) is streamed back through the API from
-   * the internal MinIO bucket, so embedded article images keep
-   * working even when the bucket endpoint isn't reachable from the
-   * browser (the default in production, where MinIO is bound to
-   * loopback only).
+   * Stable, permanent URL suitable for `<img src>` and `<a href>`. The
+   * original (or thumbnail with `?v=thumb`) is streamed back through
+   * the API from the internal MinIO bucket, so the browser never
+   * needs to reach MinIO directly. This means a single host-level
+   * reverse-proxy entry is enough for the entire app — no second
+   * `MINIO_PUBLIC_URL` virtual host required.
+   *
+   * `attachment=1` flips `Content-Disposition` to `attachment` with
+   * the original filename, turning the URL into a save-as link
+   * (used by the photos tile / attachments panel "download" actions).
+   * Without it the response is `inline`, so an image renders in an
+   * `<img>` tag and a click on a PDF/doc opens it in a new tab.
    *
    * Sets a private `Cache-Control` so a single user's browser can
    * reuse the bytes for the lifetime of the page session, while
@@ -199,6 +212,7 @@ export class UploadsController {
     @Param('id', new ParseUUIDPipe()) id: string,
     @Res({ passthrough: true }) res: Response,
     @Query('v') variant?: string,
+    @Query('attachment') attachment?: string,
   ): Promise<StreamableFile> {
     const wantThumb = variant === 'thumb';
     const stream = await this.uploads.openImageStream(
@@ -221,6 +235,11 @@ export class UploadsController {
     if (stream.etag) {
       res.setHeader('ETag', stream.etag);
     }
+    const asAttachment = attachment === '1' || attachment === 'true';
+    res.setHeader(
+      'Content-Disposition',
+      contentDispositionFor(stream.filename, asAttachment ? 'attachment' : 'inline'),
+    );
     return new StreamableFile(Readable.from(stream.body));
   }
 
@@ -235,6 +254,23 @@ export class UploadsController {
   ) {
     return this.uploads.softDelete(actor, companyId, id, meta(req));
   }
+}
+
+/**
+ * Build a `Content-Disposition` header value for a streamed upload.
+ * Sanitises the filename (newlines and quotes break the header) and
+ * also emits an RFC 5987 `filename*` so non-ASCII names round-trip
+ * correctly across browsers.
+ */
+function contentDispositionFor(
+  filename: string,
+  mode: 'inline' | 'attachment',
+): string {
+  const fallback = filename.replace(/["\\]/g, '_').replace(/[\r\n]/g, '');
+  const encoded = encodeURIComponent(filename).replace(/['()*]/g, (c) =>
+    '%' + c.charCodeAt(0).toString(16).toUpperCase(),
+  );
+  return `${mode}; filename="${fallback}"; filename*=UTF-8''${encoded}`;
 }
 
 /**

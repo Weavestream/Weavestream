@@ -11,7 +11,6 @@ import type {
 import { PrismaService } from '../prisma/prisma.service.js';
 import { AuditLogService } from '../audit/audit.service.js';
 import { MembershipCacheService } from '../cache/membership-cache.service.js';
-import { MinioService } from '../storage/minio.service.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
 
 export interface CompanyListOptions {
@@ -122,7 +121,6 @@ export class CompaniesService {
     private readonly prisma: PrismaService,
     private readonly audit: AuditLogService,
     private readonly cache: MembershipCacheService,
-    private readonly minio: MinioService,
   ) {}
 
   async list(actor: AuthedUser, options: CompanyListOptions = {}) {
@@ -528,11 +526,11 @@ export class CompaniesService {
   }
 
   /**
-   * Turn a stored `Upload` row into the UI-shaped logo descriptor,
-   * signing the storage URL with a short TTL. Returns `null` when
-   * there's no logo — all callers branch on that. Failures from MinIO
-   * are swallowed and logged at the storage layer so a broken
-   * object-storage setup doesn't take the company page down with it.
+   * Turn a stored `Upload` row into the UI-shaped logo descriptor.
+   * URLs point at the same-origin API streaming endpoint
+   * (`/uploads/:id/image`) so the browser never reaches MinIO
+   * directly — one reverse-proxy entry covers everything. Returns
+   * `null` when there's no logo — all callers branch on that.
    */
   private async resolveLogo(
     upload:
@@ -548,35 +546,15 @@ export class CompaniesService {
       | null,
   ) {
     if (!upload) return null;
-    try {
-      const [full, thumb] = await Promise.all([
-        this.minio.presignGet(upload.companyId, upload.storageKey, {
-          ttlSeconds: 300,
-        }),
-        upload.thumbnailKey
-          ? this.minio.presignGet(upload.companyId, upload.thumbnailKey, {
-              ttlSeconds: 300,
-            })
-          : Promise.resolve(null),
-      ]);
-      return {
-        uploadId: upload.id,
-        url: full.url,
-        thumbnailUrl: thumb?.url ?? null,
-        mimeType: upload.mimeType,
-        sizeBytes: upload.sizeBytes,
-        uploadedAt: upload.createdAt.toISOString(),
-      };
-    } catch {
-      return {
-        uploadId: upload.id,
-        url: null,
-        thumbnailUrl: null,
-        mimeType: upload.mimeType,
-        sizeBytes: upload.sizeBytes,
-        uploadedAt: upload.createdAt.toISOString(),
-      };
-    }
+    const base = `/api/v1/companies/${upload.companyId}/uploads/${upload.id}/image`;
+    return {
+      uploadId: upload.id,
+      url: base,
+      thumbnailUrl: upload.thumbnailKey ? `${base}?v=thumb` : null,
+      mimeType: upload.mimeType,
+      sizeBytes: upload.sizeBytes,
+      uploadedAt: upload.createdAt.toISOString(),
+    };
   }
 }
 
