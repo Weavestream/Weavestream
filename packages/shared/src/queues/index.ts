@@ -122,13 +122,14 @@ export type PwnedCheckJobName =
 // ---------------------------------------------------------------------
 //
 // The API enqueues an `export` job when an admin requests a company PDF.
-// The worker gathers all company data, builds a PDFKit document, uploads
-// the buffer to MinIO, and stores the storage key in the job return value
-// so the API can re-mint a presigned URL on every status poll.
+// The worker gathers all company data, builds a PDFKit document, writes
+// the buffer to local filesystem storage, and stores the storage key in
+// the job return value so the API can serve the file on every status
+// poll via its same-origin streaming endpoint.
 //
 // After generating the PDF the worker also enqueues a `cleanup` job with
-// a 4-hour delay to delete the MinIO object — the PDF is ephemeral and
-// must not linger indefinitely since it may contain plaintext passwords.
+// a 4-hour delay to delete the file — the PDF is ephemeral and must not
+// linger indefinitely since it may contain plaintext passwords.
 //
 // Sensitive fields in the payload (the optional user-supplied PDF
 // password) are NEVER stored as plaintext in Redis. The API encrypts
@@ -154,7 +155,7 @@ export const companyExportJobSchema = z.discriminatedUnion('kind', [
   }),
   z.object({
     kind: z.literal('cleanup'),
-    /** MinIO storage key to delete after the TTL window. */
+    /** Storage key to delete after the TTL window. */
     storageKey: z.string(),
     companyId: z.string().uuid(),
   }),
@@ -171,15 +172,15 @@ export type CompanyExportJobName =
 
 /**
  * Stored as the BullMQ job's `returnvalue` when the worker successfully
- * produces a PDF. The API reads this on every status poll and re-mints
- * a presigned GET URL against MinIO. Lives here (instead of inside
- * `apps/api`) so the worker can `import type { ExportJobResult }` from
- * the shared package without reaching across the package boundary.
+ * produces a PDF. The API reads this on every status poll and serves the
+ * file through its same-origin streaming endpoint. Lives here (instead
+ * of inside `apps/api`) so the worker can `import type { ExportJobResult }`
+ * from the shared package without reaching across the package boundary.
  */
 export interface ExportJobResult {
   companyId: string;
   storageKey: string;
-  /** Bytes the rendered PDF occupies in MinIO. Surfaced in audit only. */
+  /** Bytes the rendered PDF occupies on disk. Surfaced in audit only. */
   sizeBytes: number;
 }
 

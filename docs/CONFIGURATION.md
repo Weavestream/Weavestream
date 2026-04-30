@@ -165,10 +165,10 @@ ${FILE_STORAGE_DIR}/<companyId>/thumbs/<uploadId>.webp
 ${FILE_STORAGE_DIR}/<companyId>/exports/<exportId>.pdf
 ```
 
-| Variable            | Default                       | Notes                                                                                          |
-| ------------------- | ----------------------------- | ---------------------------------------------------------------------------------------------- |
-| `FILE_STORAGE_DIR`  | `/var/lib/weavestream/files`  | Container-side root. compose.yml bind-mounts `${DATA_DIR}/files` here on api+worker.           |
-| `DATA_DIR`          | `./data`                      | Host-side root. `${DATA_DIR}/files` ends up at `${FILE_STORAGE_DIR}` inside the container.     |
+| Variable           | Default          | Notes                                                                                                                                                                                  |
+| ------------------ | ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DATA_DIR`         | `./data`         | Host-side data root. Uploaded files live at `${DATA_DIR}/files`, alongside `${DATA_DIR}/postgres` and `${DATA_DIR}/redis`.                                                              |
+| `FILE_STORAGE_DIR` | `./data/files`   | Storage root. Defaults to a path under `DATA_DIR`. compose.yml bind-mounts `${DATA_DIR}/files` into api+worker and sets `FILE_STORAGE_DIR` for you, so leave this unset for compose. |
 
 The api/worker write atomically (write to `<key>.tmp-<random>`, then
 `fs.rename`), so an `rsync` of the host directory while the stack is

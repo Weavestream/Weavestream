@@ -153,10 +153,14 @@ export const envSchema = z.object({
   //   ${FILE_STORAGE_DIR}/<companyId>/uploads/<uploadId>/<filename>
   //   ${FILE_STORAGE_DIR}/<companyId>/thumbs/<uploadId>.webp
   //   ${FILE_STORAGE_DIR}/<companyId>/exports/<exportId>.pdf
-  // The default path is the bind-mount target inside the api/worker
-  // containers (see compose.yml). For `pnpm dev` on the host, set
-  // FILE_STORAGE_DIR to a writable absolute path like ./data/files.
-  FILE_STORAGE_DIR: z.string().min(1).default('/var/lib/weavestream/files'),
+  //
+  // Default is `./data/files` so a fresh checkout / bare host install
+  // lands files alongside `./data/postgres` and `./data/redis`. Inside
+  // the api/worker containers, compose.yml sets this to the absolute
+  // bind-mount target (`/var/lib/weavestream/files`) which is fed by
+  // `${DATA_DIR}/files` on the host — same effective location, just
+  // with the container/host paths spelled out explicitly.
+  FILE_STORAGE_DIR: z.string().min(1).default('./data/files'),
   MAX_UPLOAD_MB: intFromString(1, 1024).default(25),
 
   // Phase 8: Domain & SSL monitor + BullMQ infra.

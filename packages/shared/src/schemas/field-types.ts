@@ -258,7 +258,7 @@ export const FIELD_TYPE_CATALOG: readonly FieldTypeMeta[] = [
     composite: true,
     filterable: false,
     hasOptions: true,
-    hint: 'Uploads go through MinIO; cap per-field size via the Max size option.',
+    hint: 'Uploads stream through the API to local storage; cap per-field size via the Max size option.',
   },
   {
     kind: 'TAGS',

@@ -4,7 +4,7 @@ import type { AuthedUser } from '../common/current-user.decorator.js';
 
 /**
  * Phase 9a service coverage. These are pure unit tests backed by
- * hand-mocked `Prisma`, `Audit`, and `Minio` collaborators. We focus
+ * hand-mocked `Prisma`, `Audit`, and storage collaborators. We focus
  * on the branches that are purely business logic and don't touch the
  * DB in a meaningful way:
  *

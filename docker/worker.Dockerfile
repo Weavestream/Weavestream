@@ -3,8 +3,9 @@
 #
 # Structured identically to api.Dockerfile so Compose can run both from
 # the same workspace install, but without HTTP exposure — the worker
-# only consumes Redis queues and talks to Postgres + MinIO via the
-# internal compose network.
+# only consumes Redis queues, talks to Postgres on the internal compose
+# network, and shares a host-bind-mounted file storage directory with
+# the api container.
 # ───────────────────────────────────────────────────────────────────────
 FROM node:24-alpine AS base
 RUN apk add --no-cache libc6-compat openssl tini

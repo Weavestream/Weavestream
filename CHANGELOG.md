@@ -6,6 +6,57 @@ this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- **MinIO replaced with native local filesystem storage.** The
+  `minio` container is gone. The api and worker now share a
+  host-bind-mounted directory (`${DATA_DIR}/files`, surfaced inside
+  the containers as `${FILE_STORAGE_DIR}`, default
+  `/var/lib/weavestream/files`) and write atomically via tmp+rename.
+  Per-tenant isolation is by directory
+  (`${FILE_STORAGE_DIR}/<companyId>/...`); browsers continue to read
+  every file through the API's same-origin streaming endpoints, so
+  there is still no public file surface. The init upload response
+  field `presignedUrl` was renamed to `relayUrl` for clarity (it has
+  always been a same-origin relay path since v1.5.5). The AWS S3 SDK
+  is no longer a runtime dependency.
+
+### Removed
+
+- **MinIO** service from `compose.yml`, the `compose.console.yml`
+  overlay, and the `minio:` block in `compose.build.yml`.
+- **MinIO host port bindings.** `MINIO_HOST_PORT`,
+  `MINIO_HOST_BIND`, and `MINIO_CONSOLE_HOST_PORT` are no longer
+  honored.
+- **All `MINIO_*` env vars.** `MINIO_ENDPOINT`, `MINIO_PORT`,
+  `MINIO_USE_SSL`, `MINIO_REGION`, `MINIO_ACCESS_KEY`,
+  `MINIO_SECRET_KEY`, `MINIO_BUCKET_PREFIX`, `MINIO_PUBLIC_URL`, and
+  `NEXT_PUBLIC_MINIO_ORIGINS` are removed.
+- **AWS S3 SDK runtime dependencies** (`@aws-sdk/client-s3`,
+  `@aws-sdk/s3-request-presigner`) from `apps/api` and `apps/worker`.
+
+### Upgrading from 1.5.5
+
+This release is a breaking change for stored files. Existing
+`Upload`, `Company.logoUploadId`, and embedded article image
+references will resolve to bytes that no longer exist. There is no
+in-place migration; wipe affected rows and re-upload:
+
+```bash
+docker compose down
+# Edit .env: remove every MINIO_* line, add FILE_STORAGE_DIR=/var/lib/weavestream/files
+docker compose up -d postgres
+docker compose exec postgres psql -U $POSTGRES_USER -d $POSTGRES_DB \
+  -c "TRUNCATE uploads CASCADE;"
+rm -rf $DATA_DIR/minio
+docker compose up -d
+```
+
+After the stack comes back up, redo logos, photos, attachments, and
+article images in the UI. The `MINIO_ACCESS_KEY` / `MINIO_SECRET_KEY`
+lines previously emitted by `scripts/keygen.{sh,ps1}` are also gone;
+no replacement secrets are required for the new backend.
+
 ## [1.5.5] - 2026-04-30
 
 ### Changed

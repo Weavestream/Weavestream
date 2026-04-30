@@ -37,8 +37,10 @@ Then edit `.env`:
   values you just generated.
 - For local `pnpm dev`, point URLs at the host-mapped ports (the
   compose.build.yml override exposes Postgres on `5434` and Redis on
-  `6381`) and pick a writable absolute path for the file store so
-  `pnpm dev` doesn't try to write to `/var/lib/weavestream/files`:
+  `6381`). The default `FILE_STORAGE_DIR=./data/files` resolves to a
+  per-package directory because `pnpm` runs each app from its own
+  working directory; pin it to an absolute path to keep uploads in
+  one place across all three apps:
 
   ```env
   DATABASE_URL=postgresql://weavestream:<pw>@localhost:5434/weavestream
