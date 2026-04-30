@@ -200,7 +200,7 @@ export class UploadError extends Error {
  * We intentionally summarise instead of dumping mime strings at the user.
  */
 export const SUPPORTED_FILE_KINDS =
-  'images (JPG, PNG, WebP, GIF, HEIC), PDFs, Word, Excel, Markdown, CSV, plain text, archives (ZIP, 7Z, TAR, GZ), installers (MSI), Outlook messages (MSG), scripts (PS1, CMD, BAT, SH, REG, PY), or config files (JSON, XML, YAML, INI, CONF, LOG)';
+  'images (JPG, PNG, WebP, GIF, HEIC), PDFs, Word, Excel, Markdown, CSV, plain text, archives (ZIP, 7Z, TAR, GZ), installers (MSI), email messages (MSG, EML), scripts (PS1, CMD, BAT, SH, REG, PY), or config files (JSON, XML, YAML, INI, CONF, LOG)';
 
 /**
  * Optimistic client-side allowlist used for pre-flight validation. It
@@ -232,6 +232,7 @@ const CLIENT_ALLOWED_MIMES: ReadonlySet<string> = new Set([
   'application/x-msi',
   'application/x-ms-installer',
   'application/vnd.ms-outlook',
+  'message/rfc822',
   'text/x-shellscript',
   'text/x-python',
   'application/json',
@@ -267,9 +268,10 @@ const EXT_TO_MIME: Record<string, string> = {
   tar: 'application/x-tar',
   gz: 'application/gzip',
   tgz: 'application/gzip',
-  // Microsoft installers + Outlook messages
+  // Microsoft installers + email messages
   msi: 'application/x-msi',
   msg: 'application/vnd.ms-outlook',
+  eml: 'message/rfc822',
   // Scripts (no magic bytes; server's text/* fallback lets these through)
   ps1: 'text/plain',
   psm1: 'text/plain',

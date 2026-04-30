@@ -299,6 +299,11 @@ export class UploadsService {
 
     const declaredMime = pending.mimeType.toLowerCase();
     const isTextDeclared = declaredMime.startsWith('text/');
+    // RFC822 email messages (.eml) are plain ASCII headers + body, so
+    // `file-type` returns nothing. Treat them like text/* for the
+    // "no magic bytes" fallback — the allowlist check below still
+    // gates whether the operator actually wants .eml uploads.
+    const isTextLikeDeclared = isTextDeclared || declaredMime === 'message/rfc822';
 
     let finalMime = declaredMime;
 
@@ -329,13 +334,13 @@ export class UploadsService {
             message: `File magic bytes (${detected.mime}) do not match declared Content-Type (${declaredMime}).`,
           });
         }
-      } else if (!isTextDeclared) {
+      } else if (!isTextLikeDeclared) {
         await this.storage.deleteObject(companyId, pending.storageKey).catch(() => undefined);
         throw new BadRequestException({
           error: 'MimeUndetectable',
           declared: declaredMime,
           message:
-            'Could not detect a magic-bytes signature for this file. Only text/* uploads are allowed without a signature.',
+            'Could not detect a magic-bytes signature for this file. Only text/* and message/rfc822 uploads are allowed without a signature.',
         });
       }
     }

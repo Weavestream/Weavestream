@@ -92,7 +92,6 @@ services:
     environment:
       MINIO_ROOT_USER: ${MINIO_ACCESS_KEY}
       MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY}
-      MINIO_BROWSER_REDIRECT_URL: ${MINIO_PUBLIC_URL}
     volumes:
       - ${DATA_DIR:-./data}/minio:/data
     # 9000 = S3 API. Bound to 127.0.0.1 by default. Browsers never
