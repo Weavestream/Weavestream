@@ -19,9 +19,32 @@ reverse proxy without re-checking what is reachable.
 | Variable                  | Default     | Published                        | Service                                                         |
 | ------------------------- | ----------- | -------------------------------- | --------------------------------------------------------------- |
 | `WEB_HOST_PORT`           | `3000`      | All interfaces                   | Next.js UI. Front this with HTTPS in production.                |
-| `MINIO_HOST_PORT`         | `9100`      | `127.0.0.1` (loopback) by default| MinIO S3 API. Loopback is enough for a same-host reverse proxy. |
-| `MINIO_HOST_BIND`         | `127.0.0.1` | n/a                              | Bind address for the MinIO S3 port. Set to `0.0.0.0` only if you genuinely need direct external access (rarely correct). |
+| `MINIO_HOST_PORT`         | `9100`      | `127.0.0.1` (loopback) by default| MinIO S3 API. Loopback is enough for a reverse proxy that runs **on this host as a host process**. |
+| `MINIO_HOST_BIND`         | `127.0.0.1` | n/a                              | Bind address for `MINIO_HOST_PORT`. See **MinIO bind address** below — the default is wrong for containerised or cross-host proxies. |
 | `MINIO_CONSOLE_HOST_PORT` | `9101`      | not published                    | Only honored when you layer [`compose.console.yml`](../compose.console.yml). |
+
+### MinIO bind address
+
+`MINIO_HOST_BIND` is the trickiest knob in the file because the right
+value depends on **where your reverse proxy runs** relative to the
+Weavestream host. Browsers fetch thumbnails and presigned downloads
+from `MINIO_PUBLIC_URL`, which the reverse proxy must forward to
+`<host>:MINIO_HOST_PORT`. Symptoms when this is wrong: thumbnails don't
+render and clicking an attachment returns `502 Bad Gateway` from the
+proxy, while uploads, SSR, and every API call keep working (those
+travel over the internal compose network).
+
+| Topology                                                          | Recommended `MINIO_HOST_BIND` | Notes |
+| ----------------------------------------------------------------- | ----------------------------- | ----- |
+| Reverse proxy is a **host process** on the deploy host            | `127.0.0.1` (default)         | Loopback is reachable from any host process. Strongest posture. |
+| Reverse proxy is a **container** on the same docker engine        | a bridge IP, or `0.0.0.0`     | A containerised proxy's `127.0.0.1` is itself, not the host. Bind to the docker bridge IP the proxy attaches to (or `0.0.0.0` and firewall the port). |
+| Reverse proxy is on a **different host** (LAN / VPN)              | a LAN/VPN IP, or `0.0.0.0`    | Bind to the interface the remote proxy dials. Firewall 9100 inbound to the proxy's source IP. |
+
+Whichever value you pick, the bucket-level `PublicAccessBlock` and
+SigV4 signing keys stay in force, so reaching the port is not the same
+as being able to list or read objects. Combine the bind choice with a
+host firewall rule whenever the port leaves loopback — that is the
+meaningful boundary, not the bind address alone.
 
 Postgres and Redis are not published to the host. Operators inspect them
 with `docker compose exec postgres psql ...` and

@@ -176,7 +176,7 @@ export default async function AssetDetailPage({
                 style={{
                   marginTop: 20,
                   display: 'grid',
-                  gridTemplateColumns: '140px 1fr',
+                  gridTemplateColumns: '140px minmax(0, 1fr)',
                   gap: '10px 20px',
                 }}
               >
@@ -201,7 +201,15 @@ export default async function AssetDetailPage({
                           </Tag>
                         )}
                       </div>
-                      <div style={{ fontSize: 13, color: 'var(--text)' }}>
+                      <div
+                        style={{
+                          fontSize: 13,
+                          color: 'var(--text)',
+                          minWidth: 0,
+                          overflowWrap: 'anywhere',
+                          wordBreak: 'break-word',
+                        }}
+                      >
                         {renderValue(
                           f,
                           asset.fieldValues[f.slug],
@@ -225,6 +233,8 @@ export default async function AssetDetailPage({
                       lineHeight: 1.6,
                       color: 'var(--text-2)',
                       whiteSpace: 'pre-wrap',
+                      overflowWrap: 'anywhere',
+                      wordBreak: 'break-word',
                     }}
                   >
                     {String(asset.fieldValues[noteField.slug] ?? '')}

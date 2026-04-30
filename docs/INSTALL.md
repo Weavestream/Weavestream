@@ -158,10 +158,16 @@ Traefik and forward two upstreams:
 | `https://files.example.com/*`    | `http://127.0.0.1:9100` (MinIO S3 API)|
 
 Both `WEB_HOST_PORT` (3000) and `MINIO_HOST_PORT` (9100) are published
-by `compose.yml`. The MinIO port is bound to loopback by default; if
-your reverse proxy runs on a different host, either move it onto the
-deploy host, run it inside the same docker network, or override
-`MINIO_HOST_BIND` (see [`docs/CONFIGURATION.md`](CONFIGURATION.md#host-ports)).
+by `compose.yml`. The MinIO port is bound to `127.0.0.1` by default,
+which is reachable only from a reverse proxy running **on this same
+host as a host process**. If your proxy runs in a container (Nginx
+Proxy Manager, Traefik, Caddy in Docker) or on a different host, the
+default loopback bind will cause `502 Bad Gateway` on every thumbnail
+and file open — set `MINIO_HOST_BIND` to a reachable interface (a
+docker bridge IP, a LAN IP, or `0.0.0.0`) and firewall 9100 to the
+proxy's source IP. See
+[**MinIO bind address**](CONFIGURATION.md#minio-bind-address) for the
+full decision matrix.
 
 Update the following in `.env` to match your public origins before
 restarting so cookies, CSP, and presigned URLs point at the right
