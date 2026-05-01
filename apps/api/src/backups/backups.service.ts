@@ -345,6 +345,7 @@ function toConfigDto(row: BackupConfigRow): BackupConfig {
     cron: row.cron,
     timezone: row.timezone,
     retention: {
+      keepLast: retention?.keepLast ?? 3,
       daily: retention?.daily ?? 7,
       weekly: retention?.weekly ?? 4,
       monthly: retention?.monthly ?? 12,

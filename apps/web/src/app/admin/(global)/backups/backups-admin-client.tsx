@@ -622,7 +622,7 @@ interface DraftState {
   cronPreset: string;
   cron: string;
   timezone: string;
-  retention: { daily: string; weekly: string; monthly: string };
+  retention: { keepLast: string; daily: string; weekly: string; monthly: string };
   notifyEmails: string;
   notifyOnSuccess: boolean;
 }
@@ -749,9 +749,22 @@ function ScheduleDialog({
 
         <Field
           label="Retention"
-          help="GFS — how many of the most recent runs to keep in each window. The most recent successful run is always kept regardless of these numbers."
+          help="`Keep last N` is a floor that always retains the N most-recent successful runs (useful for testing or multiple manual triggers in one day). On top of that, GFS keeps one run per day / week / month for the windows below. The most recent successful run is always kept regardless of these numbers."
         >
-          <div style={{ display: 'grid', gap: 8, gridTemplateColumns: '1fr 1fr 1fr' }}>
+          <div
+            style={{
+              display: 'grid',
+              gap: 8,
+              gridTemplateColumns: '1fr 1fr 1fr 1fr',
+            }}
+          >
+            <RetentionField
+              label="Keep last"
+              value={draft.retention.keepLast}
+              onChange={(v) =>
+                update('retention', { ...draft.retention, keepLast: v })
+              }
+            />
             <RetentionField
               label="Daily"
               value={draft.retention.daily}
@@ -932,7 +945,7 @@ function emptyDraft(): DraftState {
     cronPreset: 'daily-3am',
     cron: '0 3 * * *',
     timezone: 'Etc/UTC',
-    retention: { daily: '7', weekly: '4', monthly: '12' },
+    retention: { keepLast: '3', daily: '7', weekly: '4', monthly: '12' },
     notifyEmails: '',
     notifyOnSuccess: false,
   };
@@ -947,6 +960,7 @@ function toDraft(c: BackupConfig): DraftState {
     cron: c.cron,
     timezone: c.timezone ?? 'Etc/UTC',
     retention: {
+      keepLast: String(c.retention.keepLast ?? 3),
       daily: String(c.retention.daily),
       weekly: String(c.retention.weekly),
       monthly: String(c.retention.monthly),
@@ -957,7 +971,12 @@ function toDraft(c: BackupConfig): DraftState {
 }
 
 function toPayload(draft: DraftState): Partial<BackupConfigInput> & {
-  retention: { daily: number; weekly: number; monthly: number };
+  retention: {
+    keepLast: number;
+    daily: number;
+    weekly: number;
+    monthly: number;
+  };
 } {
   return {
     name: draft.name.trim(),
@@ -965,6 +984,7 @@ function toPayload(draft: DraftState): Partial<BackupConfigInput> & {
     cron: draft.cron.trim(),
     timezone: draft.timezone.trim() === '' ? null : draft.timezone.trim(),
     retention: {
+      keepLast: numberOr(draft.retention.keepLast, 3),
       daily: numberOr(draft.retention.daily, 7),
       weekly: numberOr(draft.retention.weekly, 4),
       monthly: numberOr(draft.retention.monthly, 12),
@@ -981,6 +1001,8 @@ function numberOr(raw: string, fallback: number): number {
 
 function summariseRetention(c: BackupConfig): string {
   const parts: string[] = [];
+  const keepLast = c.retention.keepLast ?? 0;
+  if (keepLast > 0) parts.push(`keep last ${keepLast}`);
   if (c.retention.daily > 0) parts.push(`${c.retention.daily} daily`);
   if (c.retention.weekly > 0) parts.push(`${c.retention.weekly} weekly`);
   if (c.retention.monthly > 0) parts.push(`${c.retention.monthly} monthly`);

@@ -58,7 +58,20 @@ const timezoneSchema = z
   .nullable()
   .optional();
 
+/**
+ * Retention window. The prune lane in the worker walks successful runs
+ * newest-first and keeps:
+ *   - the most recent `keepLast` runs, regardless of bucket (so
+ *     multiple runs in the same day during testing or manual triggers
+ *     are all retained until that floor is satisfied), then
+ *   - one run per distinct day for `daily` slots, then
+ *   - one run per ISO week for `weekly` slots, then
+ *   - one run per calendar month for `monthly` slots.
+ * Anything outside the union of those sets is deleted. The most
+ * recent successful run is always kept regardless of these numbers.
+ */
 const retentionSchema = z.object({
+  keepLast: z.number().int().min(0).max(100).default(3),
   daily: z.number().int().min(0).max(365).default(7),
   weekly: z.number().int().min(0).max(104).default(4),
   monthly: z.number().int().min(0).max(120).default(12),
@@ -114,7 +127,12 @@ export const backupConfigInputSchema = z.object({
   enabled: z.boolean().default(true),
   cron: cronSchema,
   timezone: timezoneSchema,
-  retention: retentionSchema.default({ daily: 7, weekly: 4, monthly: 12 }),
+  retention: retentionSchema.default({
+    keepLast: 3,
+    daily: 7,
+    weekly: 4,
+    monthly: 12,
+  }),
   notifyEmails: notifyEmailsSchema.default([]),
   notifyOnSuccess: z.boolean().default(false),
 });

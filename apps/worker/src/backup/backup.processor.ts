@@ -489,10 +489,12 @@ export class BackupWorker implements OnModuleDestroy {
     if (!cfg) return;
 
     const retention = (cfg.retention ?? {}) as {
+      keepLast?: number;
       daily?: number;
       weekly?: number;
       monthly?: number;
     };
+    const keepLast = clamp(retention.keepLast ?? 3, 0, 100);
     const keepDaily = clamp(retention.daily ?? 7, 0, 365);
     const keepWeekly = clamp(retention.weekly ?? 4, 0, 104);
     const keepMonthly = clamp(retention.monthly ?? 12, 0, 120);
@@ -514,6 +516,15 @@ export class BackupWorker implements OnModuleDestroy {
     // Always keep the most recent successful run, period — operators
     // never lose a recovery anchor to retention.
     keepIds.add(successes[0]!.id);
+
+    // Bucket-agnostic floor: always retain the N most-recent successful
+    // runs regardless of GFS bucket assignment. Without this, multiple
+    // runs inside the same day (manual triggers, testing) collapse
+    // into a single daily slot and earlier ones get pruned the moment
+    // the next run completes.
+    for (let i = 0; i < Math.min(keepLast, successes.length); i += 1) {
+      keepIds.add(successes[i]!.id);
+    }
 
     pickGfs(successes, 'day', keepDaily, keepIds);
     pickGfs(successes, 'week', keepWeekly, keepIds);
