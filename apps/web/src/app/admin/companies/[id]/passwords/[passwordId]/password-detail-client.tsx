@@ -19,6 +19,7 @@ import {
   Field,
   Icon,
   Input,
+  MobileCardRow,
   Panel,
   Select,
   Tag,
@@ -140,6 +141,7 @@ export function PasswordDetailClient({
       )}
 
       <div
+        className="detail-grid-main-aside"
         style={{
           display: 'grid',
           gridTemplateColumns: 'minmax(0, 2fr) minmax(260px, 1fr)',
@@ -564,6 +566,88 @@ function VersionsTable({
       columns={columns}
       rows={rows}
       defaultSort={{ columnId: 'version', direction: 'desc' }}
+      renderMobileCard={(v) => (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: 8,
+            }}
+          >
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'baseline',
+                gap: 8,
+                minWidth: 0,
+              }}
+            >
+              <span
+                style={{
+                  fontFamily: 'var(--font-mono)',
+                  fontSize: 13,
+                  fontWeight: 600,
+                  color: 'var(--text)',
+                }}
+              >
+                v{v.version}
+              </span>
+              <span
+                style={{
+                  fontSize: 13,
+                  color: 'var(--text)',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {v.changedByName ?? v.changedBy}
+              </span>
+            </div>
+            <span
+              style={{
+                fontFamily: 'var(--font-mono)',
+                fontSize: 11,
+                color: 'var(--dim)',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {fmtDateTime(v.createdAt)}
+            </span>
+          </div>
+          {v.changedFields.length > 0 && (
+            <MobileCardRow label="Fields">
+              <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                {v.changedFields.map((f) => (
+                  <Tag key={f} tone="outline" style={{ fontSize: 10 }}>
+                    {f}
+                  </Tag>
+                ))}
+              </div>
+            </MobileCardRow>
+          )}
+          {v.changeReason && (
+            <MobileCardRow label="Reason">
+              <span style={{ color: 'var(--muted)' }}>{v.changeReason}</span>
+            </MobileCardRow>
+          )}
+          {canManage && (
+            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+              <Btn
+                size="sm"
+                kind="ghost"
+                icon={Icon.refresh}
+                disabled={busy === v.version}
+                onClick={() => void restore(v.version)}
+              >
+                Restore
+              </Btn>
+            </div>
+          )}
+        </div>
+      )}
     />
   );
 }
