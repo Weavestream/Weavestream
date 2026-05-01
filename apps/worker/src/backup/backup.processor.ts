@@ -79,6 +79,17 @@ export class BackupWorker implements OnModuleDestroy {
       connection: this.redis.bullmqConnection(),
     });
 
+    // Backups are IO-heavy and can run for a long time on slow disks
+    // or NAS-backed Docker hosts. BullMQ's default 30s job lock is
+    // far too tight — pg_dump on a multi-GB database easily exceeds
+    // that and would be flagged stalled mid-run. Use the configured
+    // ceiling (`BACKUP_JOB_LOCK_MINUTES`, default 6h) and renew the
+    // lock at 1/6 of that interval so a dead worker is still detected
+    // within ~lockDuration / 6 of its death.
+    const lockDurationMs =
+      this.env.values.BACKUP_JOB_LOCK_MINUTES * 60_000;
+    const lockRenewMs = Math.max(60_000, Math.floor(lockDurationMs / 6));
+
     this.worker = new Worker(
       QueueNames.backup,
       async (job: Job) => this.dispatch(job),
@@ -89,6 +100,9 @@ export class BackupWorker implements OnModuleDestroy {
         // can hold the lock at a time. concurrency=1 saves the wasted
         // round trips.
         concurrency: 1,
+        lockDuration: lockDurationMs,
+        lockRenewTime: lockRenewMs,
+        stalledInterval: Math.min(60_000, lockRenewMs),
       },
     );
 
@@ -100,9 +114,12 @@ export class BackupWorker implements OnModuleDestroy {
         `[${job?.id ?? '<unknown>'}] backup job failed: ${err?.message ?? err}`,
       ),
     );
+    this.worker.on('stalled', (jobId) =>
+      this.logger.warn(`[${jobId}] backup job stalled; waiting for recovery`),
+    );
     await this.worker.waitUntilReady();
     this.logger.log(
-      `Worker ready — backup queue consumer started (dir=${this.backupDir})`,
+      `Worker ready — backup queue consumer started (dir=${this.backupDir}, lock=${Math.round(lockDurationMs / 60_000)}min)`,
     );
   }
 

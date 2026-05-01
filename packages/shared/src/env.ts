@@ -172,6 +172,16 @@ export const envSchema = z.object({
   // only); the worker mounts it read-write (dump + prune).
   BACKUP_STORAGE_DIR: z.string().min(1).default('./data/backup'),
 
+  // Maximum minutes a single backup job is allowed to run before the
+  // BullMQ lock expires and the job is treated as stalled. Sized for
+  // worst-case `pg_dump --format=custom` runtime on slow disks or
+  // NAS-backed Docker hosts. The default of 360 (6 hours) covers
+  // everything from the typical sub-GB Weavestream Postgres up to
+  // tens-of-GB audit-heavy installs on consumer NAS hardware. Operators
+  // with unusually large databases can raise this further; smaller /
+  // SSD-backed installs can lower it for quicker stall detection.
+  BACKUP_JOB_LOCK_MINUTES: intFromString(5, 24 * 60).default(360),
+
   // Phase 8: Domain & SSL monitor + BullMQ infra.
   //
   // `DOMAIN_CHECK_CRON` follows the BullMQ `repeat.pattern` syntax
