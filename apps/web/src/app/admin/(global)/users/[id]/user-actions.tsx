@@ -106,7 +106,7 @@ export function UserActions({ user, isSelf }: { user: UserDetail; isSelf: boolea
         loading={pending && !inviteOpen}
         disabled={!user.isActive}
       >
-        Send setup link
+        Generate password reset link
       </Btn>
       <Btn kind="outline" size="md" icon={Icon.shield} onClick={() => setResetOpen(true)}>
         Reset MFA
@@ -183,7 +183,7 @@ export function UserActions({ user, isSelf }: { user: UserDetail; isSelf: boolea
       <Dialog
         open={inviteOpen}
         onClose={() => setInviteOpen(false)}
-        title="New setup link"
+        title="Password reset link"
         width={480}
         footer={
           <Btn kind="primary" onClick={() => setInviteOpen(false)}>
@@ -201,7 +201,8 @@ export function UserActions({ user, isSelf }: { user: UserDetail; isSelf: boolea
                 lineHeight: 1.5,
               }}
             >
-              Send this to {user.email}. It expires{' '}
+              Send this one-time link to {user.email}. They can choose a new
+              password and re-enroll MFA. It expires{' '}
               <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text)' }}>
                 {new Date(invite.expiresAt).toLocaleString()}
               </span>
@@ -243,7 +244,7 @@ export function UserActions({ user, isSelf }: { user: UserDetail; isSelf: boolea
                 Copy
               </Btn>
             </div>
-            <Tag tone="warn">Shown once — copy it now.</Tag>
+            <Tag tone="warn">Shown once - copy it now.</Tag>
           </div>
         )}
       </Dialog>
