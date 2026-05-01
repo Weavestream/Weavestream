@@ -91,8 +91,15 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
       FILE_STORAGE_DIR: /var/lib/weavestream/files
+      BACKUP_STORAGE_DIR: /var/lib/weavestream/backup
     volumes:
       - ${DATA_DIR:-./data}/files:/var/lib/weavestream/files
+      # Scheduled Postgres exports land here. Mounted read-only on the
+      # api so the admin Backups download endpoint can stream completed
+      # dumps back to the browser without giving the api process write
+      # access to the directory. The worker mounts the same path
+      # read-write (see below) and is the only writer.
+      - ${DATA_DIR:-./data}/backup:/var/lib/weavestream/backup:ro
     # `prisma migrate deploy` is idempotent and protected by a Postgres
     # advisory lock, so running it on every api start is safe and lets
     # us avoid a short-lived one-shot `migrate` container (which some
@@ -127,8 +134,15 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
       FILE_STORAGE_DIR: /var/lib/weavestream/files
+      BACKUP_STORAGE_DIR: /var/lib/weavestream/backup
     volumes:
       - ${DATA_DIR:-./data}/files:/var/lib/weavestream/files
+      # Worker is the sole writer for scheduled Postgres exports. The
+      # api mounts the same host path read-only so admins can download
+      # completed dumps via the Backups page. Operators MUST include
+      # both `${DATA_DIR}/backup` and `${DATA_DIR}/files` in their
+      # external backup routine — the runbook calls this out.
+      - ${DATA_DIR:-./data}/backup:/var/lib/weavestream/backup
     depends_on:
       redis:
         condition: service_healthy

@@ -57,6 +57,10 @@ enum PlatformCapability {
   SECURITY_READ
   // Phase 5: IP allow/deny rule management
   IP_RULE_MANAGE
+  // Scheduled Postgres exports (backup feature). Delegatable to a
+  // senior operator; intentionally NOT part of MANAGER_PRESET because
+  // holders of this capability can read and download full DB dumps.
+  BACKUP_MANAGE
 }
 
 // Phase 3: every AssetField has exactly one FieldType. The type is immutable
@@ -198,9 +202,9 @@ model User {
   memberships       Membership[]
   sessions          Session[]
   mfaBackupCodes    UserMfaBackupCode[]
-  auditLogs         AuditLog[]        @relation("AuditActor")
-  setupTokens       UserSetupToken[]  @relation("SetupTokenOwner")
-  issuedSetupTokens UserSetupToken[]  @relation("SetupTokenCreator")
+  auditLogs         AuditLog[]          @relation("AuditActor")
+  setupTokens       UserSetupToken[]    @relation("SetupTokenOwner")
+  issuedSetupTokens UserSetupToken[]    @relation("SetupTokenCreator")
   starredCompanies  StarredCompany[]
   starredPasswords  StarredPassword[]
   starredAssets     StarredAsset[]
@@ -1317,19 +1321,19 @@ enum IpRuleAction {
 }
 
 model IpRule {
-  id        String     @id @default(uuid()) @db.Uuid
+  id        String       @id @default(uuid()) @db.Uuid
   // CIDR notation or single IP: "192.168.1.1" or "10.0.0.0/8"
   cidr      String
   action    IpRuleAction
   // Optional human-readable note explaining why this rule exists
   note      String?
   // Priority for evaluation order (lower = evaluated first)
-  priority  Int        @default(0)
+  priority  Int          @default(0)
   // Disabled rules are ignored during evaluation but kept in DB
-  enabled   Boolean    @default(true)
-  createdBy String?    @map("created_by") @db.Uuid
-  createdAt DateTime   @default(now()) @map("created_at")
-  updatedAt DateTime   @updatedAt @map("updated_at")
+  enabled   Boolean      @default(true)
+  createdBy String?      @map("created_by") @db.Uuid
+  createdAt DateTime     @default(now()) @map("created_at")
+  updatedAt DateTime     @updatedAt @map("updated_at")
 
   @@index([enabled, priority])
   @@map("ip_rules")
@@ -1380,4 +1384,78 @@ model IpReservation {
   @@unique([subnetId, ipAddress])
   @@index([companyId, subnetId])
   @@map("ip_reservations")
+}
+
+// Scheduled Postgres dump feature. One row per admin-configured
+// schedule; the API-side `BackupQueueRegistrar` asserts one BullMQ
+// repeatable per enabled row, and every fire produces a `BackupRun`.
+// Dumps land on the host via a bind mount at
+// `${DATA_DIR}/backup:/var/lib/weavestream/backup`, accompanied by a
+// `*.manifest.json` sidecar. Operators are responsible for including
+// both `${DATA_DIR}/backup` and `${DATA_DIR}/files` in their external
+// backup routine — the runbook makes this explicit.
+model BackupConfig {
+  id              String    @id @default(uuid()) @db.Uuid
+  name            String
+  enabled         Boolean   @default(true)
+  // Standard 5-field cron pattern (minute hour dom month dow). The
+  // worker uses BullMQ's repeat.pattern, which is cron-parser compatible.
+  cron            String
+  // IANA timezone name (e.g. "Etc/UTC", "America/New_York"). Nullable
+  // so the registrar can fall back to `Etc/UTC` when unset.
+  timezone        String?
+  // GFS retention: { daily: number, weekly: number, monthly: number }.
+  // Defaults applied at the API boundary.
+  retention       Json
+  // Notification recipients. Empty array = notifications disabled.
+  notifyEmails    String[]  @default([]) @map("notify_emails")
+  notifyOnSuccess Boolean   @default(false) @map("notify_on_success")
+  lastRunAt       DateTime? @map("last_run_at")
+  createdBy       String?   @map("created_by") @db.Uuid
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  runs BackupRun[]
+
+  @@index([enabled])
+  @@map("backup_config")
+}
+
+enum BackupRunKind {
+  SCHEDULED
+  MANUAL
+}
+
+enum BackupRunStatus {
+  queued
+  running
+  success
+  failed
+}
+
+// One row per backup attempt. `configId` is nullable so a future
+// operator-driven ad-hoc run (no saved schedule) can still reuse the
+// same table.
+model BackupRun {
+  id           String          @id @default(uuid()) @db.Uuid
+  configId     String?         @map("config_id") @db.Uuid
+  kind         BackupRunKind
+  status       BackupRunStatus @default(queued)
+  startedAt    DateTime?       @map("started_at")
+  finishedAt   DateTime?       @map("finished_at")
+  sizeBytes    BigInt?         @map("size_bytes")
+  // Snapshot of the manifest.json emitted beside the dump — keeps
+  // operator-facing diagnostics queryable without opening the file.
+  manifest     Json?
+  dumpPath     String?         @map("dump_path")
+  manifestPath String?         @map("manifest_path")
+  error        String?
+  triggeredBy  String?         @map("triggered_by") @db.Uuid
+  createdAt    DateTime        @default(now()) @map("created_at")
+
+  config BackupConfig? @relation(fields: [configId], references: [id], onDelete: SetNull)
+
+  @@index([configId, startedAt(sort: Desc)])
+  @@index([status, createdAt])
+  @@map("backup_run")
 }

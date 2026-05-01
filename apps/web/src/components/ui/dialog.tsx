@@ -64,6 +64,12 @@ export function Dialog({
     borderRadius: 8,
     boxShadow: 'var(--shadow-2)',
     outline: 'none',
+    // Neutralise inherited `text-align` from the call site (e.g. a
+    // right-aligned table cell or row-actions container) — `text-align`
+    // is an inherited property even across fixed-positioned children,
+    // so without this the dialog body would render right-aligned when
+    // launched from a right-aligned column.
+    textAlign: 'start',
   };
 
   return (

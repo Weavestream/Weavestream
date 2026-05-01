@@ -450,6 +450,30 @@ describe('PermissionService.evaluate — semantic checks', () => {
     ).toBe(true);
   });
 
+  it('backup.manage requires BACKUP_MANAGE and works without a companyId', () => {
+    expect(
+      PermissionService.evaluate(
+        buildUser('OPERATOR', 'NONE', ['BACKUP_MANAGE']),
+        'backup.manage',
+        [],
+      ).allowed,
+    ).toBe(true);
+    expect(
+      PermissionService.evaluate(
+        buildUser('OPERATOR', 'FULL'),
+        'backup.manage',
+        [],
+      ).allowed,
+    ).toBe(false);
+    expect(
+      PermissionService.evaluate(
+        buildUser('SUPER_ADMIN'),
+        'backup.manage',
+        [],
+      ).allowed,
+    ).toBe(true);
+  });
+
   it('layout.manage.global requires LAYOUT_MANAGE for OPERATOR', () => {
     expect(
       PermissionService.evaluate(

@@ -184,9 +184,20 @@ Synology/UGREEN NAS.
 | -------------------- | -------------------------------------- | -------- |
 | `$DATA_DIR/postgres` | Postgres data dir                      | **Yes**  |
 | `$DATA_DIR/files`    | Uploaded images, attachments, exports  | **Yes**  |
+| `$DATA_DIR/backup`   | Scheduled `pg_dump` files + manifests written by the worker | **Yes — if scheduled exports are enabled** |
 | `$DATA_DIR/redis`    | Cache + BullMQ queue (replayable)      | Optional |
 
-A simple nightly routine:
+Operators with the `BACKUP_MANAGE` capability (or `SUPER_ADMIN`) can
+configure scheduled `pg_dump --format=custom` exports under
+**Admin → Backups**. Each run produces a `.dump` file and a
+`*.manifest.json` sidecar in `$DATA_DIR/backup` on the Docker host;
+the API serves downloads on demand and the worker prunes old files
+according to the schedule's GFS retention. Either way, your external
+backup routine still needs to copy `$DATA_DIR/backup` and
+`$DATA_DIR/files` off-host — the in-app schedule covers the database
+only and lives on the same host as the rest of the stack.
+
+A simple nightly routine (no in-app schedule):
 
 ```bash
 # Postgres dump (recommended — always point-in-time consistent)
@@ -198,6 +209,10 @@ docker compose exec -T postgres pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB" \
 # never appear in the destination).
 rsync -a "$DATA_DIR/files/" "/backup/files-$(date +%F)/"
 ```
+
+For a full walk-through of the in-app schedule, the off-host sync,
+and a step-by-step restore on a fresh Docker host, see
+[`Website/deployment/backup.md`](../Website/deployment/backup.md).
 
 ### `audit_log` immutability
 

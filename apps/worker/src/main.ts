@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+
 import './load-env.js';
 import 'reflect-metadata';
 import { NestFactory } from '@nestjs/core';
@@ -10,6 +11,7 @@ import { CompanyPdfExportWorker } from './company-pdf-export/company-pdf-export.
 import { IntegrationSyncOrchestratorWorker } from './integration-sync/integration-sync-orchestrator.processor.js';
 import { IntegrationSyncMappingWorker } from './integration-sync/integration-sync-mapping.processor.js';
 import { AlertsWorker } from './alerts/alerts.processor.js';
+import { BackupWorker } from './backup/backup.processor.js';
 import { configureEgressGuard } from '../../api/src/common/egress/safe-fetch.js';
 import { EnvService } from '../../api/src/config/env.service.js';
 import { AuditLogService } from '../../api/src/audit/audit.service.js';
@@ -91,6 +93,9 @@ async function bootstrap(): Promise<void> {
 
   const alerts = app.get(AlertsWorker);
   await alerts.start();
+
+  const backup = app.get(BackupWorker);
+  await backup.start();
 
   logger.log('Worker online — bullmq consumers started', 'WorkerBootstrap');
 

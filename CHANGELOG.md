@@ -6,6 +6,32 @@ this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **In-app scheduled Postgres exports.** Operators with the new
+  `BACKUP_MANAGE` capability (or `SUPER_ADMIN`) can configure cron
+  schedules under **Admin → Backups** that produce
+  `pg_dump --format=custom` files plus a `manifest.json` sidecar in a
+  new bind-mounted host directory (`${DATA_DIR}/backup`). Schedules
+  carry a timezone, GFS retention (`{ daily, weekly, monthly }`), and
+  optional notification recipients (failures always email; successes
+  are opt-in). Manual "Run now" attempts are polled to terminal status
+  in the History tab; successful runs surface a download button that
+  streams the dump back through the API (the api container has the
+  backup directory mounted read-only — the worker is the sole writer).
+  Concurrency is guarded by a Postgres advisory lock around the whole
+  job. The worker image now ships `postgresql16-client` so `pg_dump`
+  is available without sidecars or socket mounts.
+
+### Documentation
+
+- **Backup & Restore guide refreshed** to cover the new in-app
+  scheduled exports, the off-host sync of `${DATA_DIR}/backup` and
+  `${DATA_DIR}/files`, and a step-by-step `pg_restore` recovery on a
+  fresh Docker host (`Website/deployment/backup.md`,
+  `docs/INSTALL.md`). The authentication doc now flags that vault
+  decryption requires the matching `.env` keys at restore time.
+
 ## [1.5.6] - 2026-04-30
 
 ### Changed

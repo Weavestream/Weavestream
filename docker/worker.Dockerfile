@@ -45,7 +45,12 @@ RUN --mount=type=cache,id=pnpm,target=/pnpm/store \
 
 # ───── runner ─────
 FROM node:24-alpine AS runner
-RUN apk add --no-cache libc6-compat openssl tini \
+# `postgresql16-client` ships `pg_dump` for the scheduled Postgres
+# export feature. Pinned to the same major as the `postgres:16-alpine`
+# image used by the database service in compose.yml so the dump format
+# stays compatible with the running server. Available in alpine 3.20+,
+# which `node:24-alpine` is built on.
+RUN apk add --no-cache libc6-compat openssl tini postgresql16-client \
  && addgroup -S app && adduser -S app -G app
 
 ARG WEAVESTREAM_VERSION=dev

@@ -157,6 +157,18 @@ export const AUDIT_ACTIONS = {
   // `DELETE /security/sessions/:id`. The targeted session id lands in
   // `entityId`; `after.targetUserId` carries the affected user so the
   // audit-log UI surfaces the right name without a join.
+  // Scheduled Postgres export feature. Config CRUD rows carry the
+  // `BackupConfig.id` in `entityId`; per-run rows carry the
+  // `BackupRun.id` so History entries line up with the backup row.
+  backup: {
+    configCreate: 'backup.config.create',
+    configUpdate: 'backup.config.update',
+    configDelete: 'backup.config.delete',
+    runTriggered: 'backup.run.triggered',
+    runCompleted: 'backup.run.completed',
+    runFailed: 'backup.run.failed',
+    runDownloaded: 'backup.run.downloaded',
+  },
   security: {
     sessionRevoke: 'security.session.revoke',
     ipRuleCreate: 'security.ip_rule.create',
@@ -186,4 +198,5 @@ export const ALL_AUDIT_ACTIONS: string[] = [
   ...Object.values(AUDIT_ACTIONS.integration),
   ...Object.values(AUDIT_ACTIONS.subnet),
   ...Object.values(AUDIT_ACTIONS.security),
+  ...Object.values(AUDIT_ACTIONS.backup),
 ];

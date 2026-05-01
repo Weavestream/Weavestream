@@ -38,6 +38,11 @@ export const PlatformCapabilityValues = [
   'SECURITY_READ',
   // Phase 5: Manage IP allow/deny rules enforced before authentication.
   'IP_RULE_MANAGE',
+  // Scheduled Postgres exports (backup feature). Holders of this
+  // capability can read + download full database dumps, so this is
+  // deliberately NOT in `MANAGER_PRESET` — it has to be granted
+  // explicitly, the same way `SETTINGS_MANAGE` / `EXPORT_CREATE` are.
+  'BACKUP_MANAGE',
 ] as const;
 export type PlatformCapability = (typeof PlatformCapabilityValues)[number];
 

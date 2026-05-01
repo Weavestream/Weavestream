@@ -163,6 +163,15 @@ export const envSchema = z.object({
   FILE_STORAGE_DIR: z.string().min(1).default('./data/files'),
   MAX_UPLOAD_MB: intFromString(1, 1024).default(25),
 
+  // Local filesystem destination for scheduled Postgres dumps and the
+  // sidecar `*.manifest.json` files written by the worker. Mirrors the
+  // FILE_STORAGE_DIR pattern: defaults to `./data/backup` for bare-host
+  // / dev checkouts; compose.yml overrides it inside the api/worker
+  // containers to `/var/lib/weavestream/backup` (host-bind-mounted from
+  // `${DATA_DIR}/backup`). The api mounts this read-only (downloads
+  // only); the worker mounts it read-write (dump + prune).
+  BACKUP_STORAGE_DIR: z.string().min(1).default('./data/backup'),
+
   // Phase 8: Domain & SSL monitor + BullMQ infra.
   //
   // `DOMAIN_CHECK_CRON` follows the BullMQ `repeat.pattern` syntax

@@ -3,6 +3,8 @@ import { cookies, headers } from 'next/headers';
 import { notFound } from 'next/navigation';
 import type {
   AlertConfig,
+  BackupConfig,
+  BackupRunDto,
   FieldType,
   GlobalAccess,
   EmailSettings,
@@ -17,6 +19,8 @@ import { DEFAULT_PASSWORD_GENERATOR_DEFAULTS } from '@weavestream/shared';
 
 export type {
   AlertConfig,
+  BackupConfig,
+  BackupRunDto,
   FieldType,
   GlobalAccess,
   EmailSettings,
@@ -1684,5 +1688,25 @@ export type IpRule = {
 export async function listIpRules(): Promise<IpRule[]> {
   const res = await serverApiFetch<{ items: IpRule[] }>('/ip-rules');
   return res.data?.items ?? [];
+}
+
+// ───────────────────────────────────────────────────────────────────
+// Backups admin (`/admin/backups`)
+//
+// Server-rendered first paint loads schedules and recent runs. The
+// client component then refreshes via `apiFetch` after mutations and
+// while polling a "Run now" attempt to terminal status.
+// ───────────────────────────────────────────────────────────────────
+
+export async function listBackupConfigs(): Promise<BackupConfig[]> {
+  const res = await serverApiFetch<BackupConfig[]>('/backups/configs');
+  if (!res.ok || !res.data) return [];
+  return res.data;
+}
+
+export async function listBackupRuns(): Promise<BackupRunDto[]> {
+  const res = await serverApiFetch<BackupRunDto[]>('/backups/runs?limit=50');
+  if (!res.ok || !res.data) return [];
+  return res.data;
 }
 

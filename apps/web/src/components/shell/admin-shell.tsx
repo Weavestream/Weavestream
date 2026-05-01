@@ -51,6 +51,7 @@ export function AdminShell({
   const showAlerts = hasCapability(me, 'ALERT_MANAGE');
   const showSecurity = hasCapability(me, 'SECURITY_READ');
   const showIpRules = hasCapability(me, 'IP_RULE_MANAGE');
+  const showBackups = hasCapability(me, 'BACKUP_MANAGE');
 
   const primaryItems: SidebarSection['items'] = [
     { id: 'dashboard', label: 'Dashboard', icon: 'home', href: '/admin' },
@@ -150,6 +151,14 @@ export function AdminShell({
       label: 'Export',
       icon: 'archive',
       href: '/admin/export',
+    });
+  }
+  if (showBackups) {
+    adminItems.push({
+      id: 'backups',
+      label: 'Backups',
+      icon: 'box',
+      href: '/admin/backups',
     });
   }
   if (adminItems.length > 0) {

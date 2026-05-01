@@ -37,15 +37,17 @@ Then edit `.env`:
   values you just generated.
 - For local `pnpm dev`, point URLs at the host-mapped ports (the
   compose.build.yml override exposes Postgres on `5434` and Redis on
-  `6381`). The default `FILE_STORAGE_DIR=./data/files` resolves to a
-  per-package directory because `pnpm` runs each app from its own
-  working directory; pin it to an absolute path to keep uploads in
-  one place across all three apps:
+  `6381`). The defaults `FILE_STORAGE_DIR=./data/files` and
+  `BACKUP_STORAGE_DIR=./data/backup` resolve to a per-package
+  directory because `pnpm` runs each app from its own working
+  directory; pin them to absolute paths so the api and worker share
+  one location for uploads and Postgres dumps:
 
   ```env
   DATABASE_URL=postgresql://weavestream:<pw>@localhost:5434/weavestream
   REDIS_URL=redis://:<pw>@localhost:6381/0
   FILE_STORAGE_DIR=/absolute/path/to/your/repo/data/files
+  BACKUP_STORAGE_DIR=/absolute/path/to/your/repo/data/backup
   ```
 
 ## 3. Start dependencies

@@ -34,6 +34,14 @@ export const QueueNames = {
   // configs and enqueues `send` jobs per match); `send` is also enqueued by
   // `AlertEmitterService` for real-time RECORD_EVENT / PASSWORD_EVENT.
   alerts: 'alerts',
+  // Scheduled Postgres exports (backup feature). Two job shapes:
+  //   - `run`    — produce a dump + manifest for a BackupConfig /
+  //                BackupRun pair. Enqueued both by the repeatable
+  //                cron and by the "Run now" admin action.
+  //   - `prune`  — GFS retention pass. Enqueued by the run processor
+  //                itself on success so cleanup is part of the same
+  //                lane and inherits the same advisory-lock guard.
+  backup: 'backup',
 } as const;
 
 export type QueueName = (typeof QueueNames)[keyof typeof QueueNames];
@@ -301,3 +309,54 @@ export const AlertsJobNames = {
 } as const;
 export type AlertsJobName =
   (typeof AlertsJobNames)[keyof typeof AlertsJobNames];
+
+// ---------------------------------------------------------------------
+// backup queue (scheduled Postgres exports)
+// ---------------------------------------------------------------------
+//
+// Two job shapes routed by `kind`:
+//   - `run`    - produce a `pg_dump --format=custom` file and a
+//                `*.manifest.json` sidecar under
+//                `/var/lib/weavestream/backup` (a host-bound directory
+//                from compose.yml). `backupRunId` references a
+//                pre-created `BackupRun` row so the API can poll
+//                status without talking to BullMQ directly.
+//   - `prune`  - apply GFS retention (keep the most recent N dailies,
+//                weeklies, and monthlies) for a config. Enqueued by
+//                the run processor on success.
+//
+// The processor takes a Postgres advisory lock around the whole job
+// so a second run that fires while one is in flight fails fast with
+// `error = 'concurrent'` instead of racing.
+
+export const backupRunJobSchema = z.object({
+  kind: z.literal('run'),
+  configId: z.string().uuid(),
+  /**
+   * Pre-allocated `BackupRun` row id. The "Run now" admin action
+   * mints a `MANUAL` row up-front and passes its id so the UI can
+   * poll status by run id. The repeatable cron-fired version omits
+   * this field; the consumer creates a `SCHEDULED` row inline.
+   */
+  backupRunId: z.string().uuid().optional(),
+});
+export type BackupRunJob = z.infer<typeof backupRunJobSchema>;
+
+export const backupPruneJobSchema = z.object({
+  kind: z.literal('prune'),
+  configId: z.string().uuid(),
+});
+export type BackupPruneJob = z.infer<typeof backupPruneJobSchema>;
+
+export const backupJobSchema = z.discriminatedUnion('kind', [
+  backupRunJobSchema,
+  backupPruneJobSchema,
+]);
+export type BackupJob = z.infer<typeof backupJobSchema>;
+
+export const BackupJobNames = {
+  run: 'run',
+  prune: 'prune',
+} as const;
+export type BackupJobName =
+  (typeof BackupJobNames)[keyof typeof BackupJobNames];

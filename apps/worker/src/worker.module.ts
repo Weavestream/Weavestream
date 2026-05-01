@@ -20,6 +20,7 @@ import { CompanyPdfExportWorker } from './company-pdf-export/company-pdf-export.
 import { IntegrationSyncOrchestratorWorker } from './integration-sync/integration-sync-orchestrator.processor.js';
 import { IntegrationSyncMappingWorker } from './integration-sync/integration-sync-mapping.processor.js';
 import { AlertsWorker } from './alerts/alerts.processor.js';
+import { BackupWorker } from './backup/backup.processor.js';
 
 /**
  * Worker-side composition root. Imports only the service-only shared
@@ -86,6 +87,7 @@ import { AlertsWorker } from './alerts/alerts.processor.js';
     IntegrationSyncOrchestratorWorker,
     IntegrationSyncMappingWorker,
     AlertsWorker,
+    BackupWorker,
   ],
 })
 export class WorkerModule {}

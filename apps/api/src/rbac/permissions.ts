@@ -72,6 +72,8 @@ export const ActionValues = [
   'security.read',
 
   'ip_rule.manage',
+
+  'backup.manage',
 ] as const;
 
 export type Action = (typeof ActionValues)[number];
@@ -327,6 +329,15 @@ export const PERMISSIONS: Record<Action, PermissionRule> = {
     requireNonExpiredMembership: false,
     note: 'Create, update, and delete IP allow/deny rules enforced globally before authentication.',
   },
+
+  'backup.manage': {
+    scope: 'global',
+    requiredCapability: 'BACKUP_MANAGE',
+    allowFull: false,
+    allowReadonly: false,
+    requireNonExpiredMembership: false,
+    note: 'Create, edit, and run scheduled Postgres exports. Holders can download raw database dumps, so grant deliberately.',
+  },
 };
 
 export const ACTION_HUMAN_LABELS: Record<Action, string> = {
@@ -360,6 +371,7 @@ export const ACTION_HUMAN_LABELS: Record<Action, string> = {
   'alert.manage': 'Manage alert configurations',
   'security.read': 'View the Security Center (logins, lockouts, sessions)',
   'ip_rule.manage': 'Manage IP allow/deny rules',
+  'backup.manage': 'Manage scheduled Postgres exports',
 };
 
 // Re-exported for callers that previously consumed the unused
