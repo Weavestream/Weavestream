@@ -6,6 +6,17 @@ this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.6.2] - 2026-05-01
+
+### Changed
+
+- **Backup job reliability tweaks.** Scheduled and manual Postgres export jobs now handle edge cases more consistently across retention, history, and download workflows.
+
+### Fixed
+
+- **Vault PDF exports.** Fixed PDF generation issues in vault exports that could produce broken or incomplete documents.
+- **Password detail mobile layout.** Fixed mobile rendering of password detail views so content and actions remain readable on narrow screens.
+
 ## [1.6.0] - 2026-05-01
 
 ### Added
@@ -71,7 +82,8 @@ this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
-- **MinIO configuration simplified.** The upload client now fetches MinIO config directly from the API, removing the need for a reverse proxy setup.
+- **MinIO configuration simplified.** The upload client now fetches MinIO 
+config directly from the API, removing the need for a reverse proxy setup.
 
 ### Fixed
 
@@ -633,7 +645,8 @@ Initial public release.
   database-per-tenant.
 - English UI only.
 
-[Unreleased]: https://github.com/Weavestream/Weavestream/compare/v1.5.5...HEAD
+[Unreleased]: https://github.com/Weavestream/Weavestream/compare/v1.6.2...HEAD
+[1.6.2]: https://github.com/Weavestream/Weavestream/releases/tag/v1.6.2
 [1.6.0]: https://github.com/Weavestream/Weavestream/releases/tag/v1.6.0
 [1.5.6]: https://github.com/Weavestream/Weavestream/releases/tag/v1.5.6
 [1.5.5]: https://github.com/Weavestream/Weavestream/releases/tag/v1.5.5
