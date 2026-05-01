@@ -669,11 +669,7 @@ export function ExportWizard() {
         <VaultArchiveWizard />
       </Panel>
 
-      <Panel title="Database backup">
-        <p style={{ margin: 0, fontSize: 13, color: 'var(--text-2)', lineHeight: 1.5 }}>
-          On-demand Postgres database backup. Coming soon.
-        </p>
-      </Panel>
+
     </div>
   );
 }

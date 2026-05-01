@@ -1,6 +1,8 @@
 import { Injectable } from '@nestjs/common';
+import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { SecretEncryptionService } from '../crypto/secret-encryption.service.js';
+import { extractEmbeddedUploadIds } from '../articles/article-uploads.js';
 
 // ---------------------------------------------------------------------------
 // Export data shapes
@@ -40,7 +42,15 @@ export interface ExportMember {
 
 export interface ExportAssetField {
   label: string;
+  fieldType: string;
   value: unknown;
+  /**
+   * UUID → display name lookup populated for fields whose stored value is an
+   * array of foreign-key ids (`ASSET_REFERENCE` → `Asset.name`,
+   * `TAGS` → `Tag.name`). Lets the PDF formatter render readable text without
+   * re-querying.
+   */
+  referenceLabels?: Record<string, string>;
 }
 
 export interface ExportAsset {
@@ -56,7 +66,7 @@ export interface ExportPassword {
   folderPath: string;
   tags: string[];
   password: string | null;
-  notes: string | null;
+  notes: unknown | null;
   totpSecret: string | null;
   lastRotatedAt: Date | null;
   expiresAt: Date | null;
@@ -64,10 +74,23 @@ export interface ExportPassword {
 }
 
 export interface ExportArticle {
+  id: string;
   title: string;
   folderPath: string;
+  editorMode: 'tiptap' | 'markdown';
+  content: Prisma.JsonValue | null;
+  markdownSource: string | null;
   contentPlaintext: string | null;
+  images: ExportArticleImage[];
   updatedAt: Date;
+}
+
+export interface ExportArticleImage {
+  uploadId: string;
+  filename: string;
+  mimeType: string;
+  storageKey: string;
+  data?: Buffer;
 }
 
 export interface ExportDomain {
@@ -199,19 +222,77 @@ export class CompanyExportDataService {
         assetLayout: { select: { name: true } },
         fieldValues: {
           include: {
-            assetField: { select: { name: true } },
+            assetField: { select: { name: true, fieldType: true, position: true } },
           },
         },
       },
       orderBy: [{ assetLayout: { name: 'asc' } }, { name: 'asc' }],
     });
+
+    const assetReferenceIds = new Set<string>();
+    const tagIds = new Set<string>();
+    for (const asset of rows) {
+      for (const fv of asset.fieldValues) {
+        if (fv.assetField.fieldType === 'ASSET_REFERENCE') {
+          for (const id of listStrings(fv.value)) {
+            if (UUID_RE.test(id)) assetReferenceIds.add(id);
+          }
+        } else if (fv.assetField.fieldType === 'TAGS') {
+          // Pre-migration TAGS rows can hold raw names like "production"
+          // alongside UUIDs (see TagsService spec). Filter to UUIDs so the
+          // Prisma UUID column doesn't reject the query, and let the
+          // formatter fall through to the raw string for the rest.
+          for (const id of listStrings(fv.value)) {
+            if (UUID_RE.test(id)) tagIds.add(id);
+          }
+        }
+      }
+    }
+
+    const [assetReferenceRows, tagRows] = await Promise.all([
+      assetReferenceIds.size > 0
+        ? this.prisma.asset.findMany({
+            where: { companyId, id: { in: Array.from(assetReferenceIds) } },
+            select: { id: true, name: true },
+          })
+        : Promise.resolve(
+            [] as Array<{ id: string; name: string }>,
+          ),
+      tagIds.size > 0
+        ? this.prisma.tag.findMany({
+            where: { id: { in: Array.from(tagIds) } },
+            select: { id: true, name: true },
+          })
+        : Promise.resolve([] as Array<{ id: string; name: string }>),
+    ]);
+    const labelLookup = new Map<string, string>();
+    for (const r of assetReferenceRows) labelLookup.set(r.id, r.name);
+    for (const r of tagRows) labelLookup.set(r.id, r.name);
+
     return rows.map((a) => ({
       name: a.name,
       layoutName: a.assetLayout.name,
-      fields: a.fieldValues.map((fv) => ({
-        label: fv.assetField.name,
-        value: fv.value,
-      })),
+      fields: a.fieldValues
+        .slice()
+        .sort((left, right) => left.assetField.position - right.assetField.position)
+        .map((fv) => {
+          const fieldType = fv.assetField.fieldType;
+          const needsLabels = fieldType === 'ASSET_REFERENCE' || fieldType === 'TAGS';
+          return {
+            label: fv.assetField.name,
+            fieldType,
+            value: fv.value,
+            ...(needsLabels
+              ? {
+                  referenceLabels: Object.fromEntries(
+                    listStrings(fv.value)
+                      .map((id) => [id, labelLookup.get(id)])
+                      .filter((entry): entry is [string, string] => Boolean(entry[1])),
+                  ),
+                }
+              : {}),
+          };
+        }),
     }));
   }
 
@@ -219,17 +300,62 @@ export class CompanyExportDataService {
     const rows = await this.prisma.article.findMany({
       where: { companyId, archivedAt: null },
       select: {
+        id: true,
         title: true,
+        editorMode: true,
+        content: true,
+        markdownSource: true,
         contentPlaintext: true,
         updatedAt: true,
         folder: { select: { name: true } },
       },
       orderBy: [{ folder: { name: 'asc' } }, { title: 'asc' }],
     });
+    const imageIds = new Set<string>();
+    const imageIdsByArticle = new Map<string, string[]>();
+    for (const article of rows) {
+      const body =
+        article.editorMode === 'markdown' ? article.markdownSource : article.content;
+      const ids = Array.from(extractEmbeddedUploadIds(body));
+      imageIdsByArticle.set(article.id, ids);
+      for (const id of ids) imageIds.add(id);
+    }
+
+    const uploads =
+      imageIds.size > 0
+        ? await this.prisma.upload.findMany({
+            where: {
+              companyId,
+              deletedAt: null,
+              id: { in: Array.from(imageIds) },
+            },
+            select: {
+              id: true,
+              filename: true,
+              mimeType: true,
+              storageKey: true,
+            },
+          })
+        : [];
+    const uploadsById = new Map(uploads.map((u) => [u.id.toLowerCase(), u]));
+
     return rows.map((a) => ({
+      id: a.id,
       title: a.title,
       folderPath: a.folder?.name ?? '/',
+      editorMode: a.editorMode as 'tiptap' | 'markdown',
+      content: a.content,
+      markdownSource: a.markdownSource,
       contentPlaintext: a.contentPlaintext,
+      images: (imageIdsByArticle.get(a.id) ?? [])
+        .map((id) => uploadsById.get(id))
+        .filter((u): u is (typeof uploads)[number] => u !== undefined)
+        .map((u) => ({
+          uploadId: u.id,
+          filename: u.filename,
+          mimeType: u.mimeType,
+          storageKey: u.storageKey,
+        })),
       updatedAt: a.updatedAt,
     }));
   }
@@ -294,10 +420,10 @@ export class CompanyExportDataService {
         password = '[decryption error]';
       }
 
-      let notes: string | null = null;
+      let notes: unknown | null = null;
       if (p.notesCiphertext) {
         try {
-          notes = this.crypto.decrypt(p.notesCiphertext);
+          notes = parseJsonIfPossible(this.crypto.decrypt(p.notesCiphertext));
         } catch {
           notes = '[decryption error]';
         }
@@ -366,5 +492,20 @@ export class CompanyExportDataService {
       sizeBytes: u.sizeBytes,
       createdAt: u.createdAt,
     }));
+  }
+}
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function listStrings(value: unknown): string[] {
+  const list = Array.isArray(value) ? value : value != null ? [value] : [];
+  return list.filter((v): v is string => typeof v === 'string' && v.length > 0);
+}
+
+function parseJsonIfPossible(value: string): unknown {
+  try {
+    return JSON.parse(value) as unknown;
+  } catch {
+    return value;
   }
 }

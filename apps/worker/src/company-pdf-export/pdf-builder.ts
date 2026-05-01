@@ -1,4 +1,5 @@
 import PDFDocument from 'pdfkit';
+import { tiptapToPlaintext } from '@weavestream/shared';
 import type { CompanyExportData } from '../../../api/src/exports/company-export-data.service.js';
 
 interface PdfBuildOpts {
@@ -55,6 +56,33 @@ const C = {
   zebra: '#f8fafc',
 };
 
+type ExportAssetField = CompanyExportData['assets'][number]['fields'][number];
+type ExportArticle = CompanyExportData['articles'][number];
+
+export type ArticleSegment =
+  | { kind: 'text'; text: string }
+  | { kind: 'image'; uploadId: string | null; fallbackLabel: string | null };
+
+const ARTICLE_IMAGE_RE =
+  /\/api\/v1\/companies\/[0-9a-f-]{36}\/uploads\/([0-9a-f-]{36})/i;
+
+const TIPTAP_BLOCK_TYPES = new Set([
+  'paragraph',
+  'heading',
+  'blockquote',
+  'listItem',
+  'bulletList',
+  'orderedList',
+  'codeBlock',
+  'taskList',
+  'taskItem',
+  'table',
+  'tableRow',
+  'tableHeader',
+  'tableCell',
+  'horizontalRule',
+]);
+
 // ---------------------------------------------------------------------------
 // Public entry point
 // ---------------------------------------------------------------------------
@@ -102,7 +130,7 @@ export async function buildCompanyExportPdf(
       if (data.assets.length > 0) renderAssets(doc, data);
       renderPasswords(doc, data);
       if (data.articles.length > 0) renderArticles(doc, data);
-      if (data.domains.length > 0) renderDomains(doc, data);
+      renderDomains(doc, data);
       if (data.uploads.length > 0) renderUploads(doc, data);
 
       // Stamp page numbers / running footer AFTER content is laid out
@@ -397,6 +425,103 @@ function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+export function formatAssetFieldValue(field: ExportAssetField): string {
+  const value = field.value;
+  if (value === null || value === undefined || value === '') return '';
+
+  switch (field.fieldType) {
+    case 'ASSET_REFERENCE':
+    case 'TAGS':
+      return listStrings(value)
+        .map((id) => field.referenceLabels?.[id] ?? id)
+        .join(', ');
+    case 'RICH_TEXT':
+      return richTextToPlaintext(value);
+    case 'BOOLEAN':
+      return value ? 'true' : 'false';
+    case 'DATE':
+    case 'DATETIME':
+      return formatStoredDate(value, field.fieldType);
+    case 'FILE':
+      return formatFileFieldValue(value);
+    case 'MULTISELECT':
+      return listStrings(value).join(', ');
+    default:
+      return stringifyFieldValue(value);
+  }
+}
+
+export function richTextToPlaintext(value: unknown): string {
+  if (value === null || value === undefined || value === '') return '';
+  if (typeof value === 'string') {
+    const parsed = parseJsonIfPossible(value);
+    return typeof parsed === 'string' ? parsed : richTextToPlaintext(parsed);
+  }
+  if (value && typeof value === 'object') {
+    const wrapped = value as { plain?: unknown; v?: unknown };
+    if (typeof wrapped.plain === 'string') return wrapped.plain;
+    if (wrapped.v !== undefined) return richTextToPlaintext(wrapped.v);
+  }
+  const text = tiptapToPlaintext(value);
+  if (text) return text;
+  if (isTiptapDocumentLike(value)) return '';
+  return stringifyFieldValue(value);
+}
+
+function isTiptapDocumentLike(value: unknown): boolean {
+  return Boolean(
+    value &&
+      typeof value === 'object' &&
+      ((value as { type?: unknown }).type === 'doc' ||
+        'v' in (value as Record<string, unknown>)),
+  );
+}
+
+function formatStoredDate(value: unknown, fieldType: string): string {
+  const raw = typeof value === 'string' ? value : String(value);
+  const date = new Date(raw);
+  if (Number.isNaN(date.getTime())) return raw;
+  if (fieldType === 'DATE') return formatDate(date);
+  return date.toLocaleString('en-US', {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+function formatFileFieldValue(value: unknown): string {
+  if (!Array.isArray(value)) return '';
+  return value
+    .map((entry) =>
+      entry && typeof entry === 'object'
+        ? (entry as { filename?: unknown }).filename
+        : null,
+    )
+    .filter((filename): filename is string => typeof filename === 'string')
+    .join(', ');
+}
+
+function stringifyFieldValue(value: unknown): string {
+  if (Array.isArray(value)) return value.map((v) => stringifyFieldValue(v)).join(', ');
+  if (value && typeof value === 'object') return JSON.stringify(value);
+  return String(value);
+}
+
+function listStrings(value: unknown): string[] {
+  const list = Array.isArray(value) ? value : value != null ? [value] : [];
+  return list.filter((v): v is string => typeof v === 'string' && v.length > 0);
+}
+
+function parseJsonIfPossible(value: string): unknown {
+  try {
+    return JSON.parse(value) as unknown;
+  } catch {
+    return value;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -714,12 +839,7 @@ function drawAssetCard(
   doc.y = startY + 22;
 
   for (const fv of asset.fields) {
-    const raw =
-      fv.value == null
-        ? ''
-        : typeof fv.value === 'object'
-          ? JSON.stringify(fv.value)
-          : String(fv.value);
+    const raw = formatAssetFieldValue(fv);
     if (!raw) continue;
     const truncated = raw.length > ASSET_VALUE_MAX_CHARS;
     const text = truncated ? raw.slice(0, ASSET_VALUE_MAX_CHARS) : raw;
@@ -832,7 +952,8 @@ function drawPasswordCard(
       ],
       sectionTitle,
     );
-    if (p.notes) field(doc, 'Notes', p.notes, sectionTitle);
+    const notes = richTextToPlaintext(p.notes);
+    if (notes) field(doc, 'Notes', notes, sectionTitle);
   }
 
   fieldGrid(
@@ -925,17 +1046,7 @@ function renderArticles(doc: PDFKit.PDFDocument, data: CompanyExportData): void 
       .text(`Folder: ${a.folderPath}  ·  Updated ${formatDate(a.updatedAt)}`, MARGIN_X, doc.y, { width: CONTENT_WIDTH });
     doc.moveDown(0.4);
 
-    if (a.contentPlaintext) {
-      // Let PDFKit's text engine handle pagination naturally — no
-      // truncation. Long articles flow across as many pages as they
-      // need.
-      doc.font(FONT_NORMAL).fontSize(10).fillColor(C.ink2)
-        .text(a.contentPlaintext, MARGIN_X, doc.y, {
-          width: CONTENT_WIDTH,
-          align: 'left',
-          paragraphGap: 4,
-        });
-    }
+    renderArticleBody(doc, a, TITLE);
     doc.moveDown(0.6);
 
     // Soft separator between articles (only if there are more to come).
@@ -951,6 +1062,180 @@ function renderArticles(doc: PDFKit.PDFDocument, data: CompanyExportData): void 
   });
 }
 
+function renderArticleBody(
+  doc: PDFKit.PDFDocument,
+  article: ExportArticle,
+  sectionTitle: string,
+): void {
+  if (article.editorMode !== 'tiptap') {
+    renderArticleText(doc, article.contentPlaintext ?? '', sectionTitle);
+    return;
+  }
+
+  const segments = articleSegmentsFromTiptap(article.content);
+  if (segments.length === 0) {
+    renderArticleText(doc, article.contentPlaintext ?? '', sectionTitle);
+    return;
+  }
+
+  const imagesById = new Map(
+    article.images.map((image) => [image.uploadId.toLowerCase(), image]),
+  );
+  for (const segment of segments) {
+    if (segment.kind === 'text') {
+      renderArticleText(doc, segment.text, sectionTitle);
+    } else {
+      renderArticleImage(doc, imagesById, segment, sectionTitle);
+    }
+  }
+}
+
+function renderArticleText(
+  doc: PDFKit.PDFDocument,
+  text: string,
+  sectionTitle: string,
+): void {
+  const clean = text.replace(/[ \t]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim();
+  if (!clean) return;
+  ensureRoom(doc, 28, sectionTitle);
+  doc.font(FONT_NORMAL).fontSize(10).fillColor(C.ink2)
+    .text(clean, MARGIN_X, doc.y, {
+      width: CONTENT_WIDTH,
+      align: 'left',
+      paragraphGap: 4,
+    });
+  doc.moveDown(0.3);
+}
+
+function renderArticleImage(
+  doc: PDFKit.PDFDocument,
+  imagesById: Map<string, ExportArticle['images'][number]>,
+  segment: Extract<ArticleSegment, { kind: 'image' }>,
+  sectionTitle: string,
+): void {
+  const image = segment.uploadId
+    ? imagesById.get(segment.uploadId.toLowerCase())
+    : undefined;
+  const label = image?.filename ?? segment.fallbackLabel ?? 'embedded image';
+
+  if (!image) {
+    renderImageFallback(doc, label, 'not found', sectionTitle);
+    return;
+  }
+  if (!isPdfEmbeddableImage(image.mimeType)) {
+    renderImageFallback(doc, label, `${image.mimeType} is not embeddable`, sectionTitle);
+    return;
+  }
+  if (!image.data) {
+    renderImageFallback(doc, label, 'file unavailable', sectionTitle);
+    return;
+  }
+
+  ensureRoom(doc, 168, sectionTitle);
+  const startY = doc.y;
+  const maxHeight = Math.min(220, pageBottomBoundary() - startY - 24);
+  try {
+    doc.image(image.data, MARGIN_X, startY, {
+      fit: [CONTENT_WIDTH, maxHeight],
+      align: 'center',
+    });
+    doc.y = startY + maxHeight + 4;
+    doc.font(FONT_OBLIQUE).fontSize(8).fillColor(C.ink3)
+      .text(label, MARGIN_X, doc.y, { width: CONTENT_WIDTH, align: 'center' });
+    doc.moveDown(0.5);
+  } catch {
+    doc.y = startY;
+    renderImageFallback(doc, label, 'unsupported image data', sectionTitle);
+  }
+}
+
+function renderImageFallback(
+  doc: PDFKit.PDFDocument,
+  label: string,
+  reason: string,
+  sectionTitle: string,
+): void {
+  ensureRoom(doc, 24, sectionTitle);
+  doc.font(FONT_OBLIQUE).fontSize(9).fillColor(C.ink3)
+    .text(`[Image: ${label} - ${reason}]`, MARGIN_X, doc.y, {
+      width: CONTENT_WIDTH,
+    });
+  doc.moveDown(0.35);
+}
+
+export function articleSegmentsFromTiptap(value: unknown): ArticleSegment[] {
+  const segments: ArticleSegment[] = [];
+
+  const appendText = (text: string) => {
+    if (!text) return;
+    const previous = segments[segments.length - 1];
+    if (previous?.kind === 'text') {
+      previous.text += text;
+      return;
+    }
+    segments.push({ kind: 'text', text });
+  };
+
+  const walk = (node: unknown): void => {
+    if (!node || typeof node !== 'object') return;
+    const n = node as {
+      type?: string;
+      text?: string;
+      attrs?: Record<string, unknown>;
+      content?: unknown[];
+    };
+
+    if (n.type === 'text' && typeof n.text === 'string') {
+      appendText(n.text);
+      return;
+    }
+    if (n.type === 'hardBreak' || n.type === 'horizontalRule') {
+      appendText('\n');
+      return;
+    }
+    if (n.type === 'mention' || n.type === 'internalLink') {
+      const label = stringAttr(n.attrs, 'label') ?? stringAttr(n.attrs, 'title');
+      if (label) appendText(label);
+      return;
+    }
+    if (n.type === 'image') {
+      const src = stringAttr(n.attrs, 'src');
+      const uploadId = src ? extractUploadId(src) : null;
+      const fallbackLabel =
+        stringAttr(n.attrs, 'alt') ?? stringAttr(n.attrs, 'title') ?? uploadId;
+      segments.push({ kind: 'image', uploadId, fallbackLabel });
+      return;
+    }
+
+    const children = Array.isArray(n.content) ? n.content : [];
+    for (const child of children) walk(child);
+    if (n.type && TIPTAP_BLOCK_TYPES.has(n.type)) appendText('\n');
+  };
+
+  walk(value);
+  return segments.filter((segment) =>
+    segment.kind === 'image' ? true : segment.text.trim().length > 0,
+  );
+}
+
+function stringAttr(
+  attrs: Record<string, unknown> | undefined,
+  key: string,
+): string | null {
+  const value = attrs?.[key];
+  return typeof value === 'string' && value.length > 0 ? value : null;
+}
+
+function extractUploadId(src: string): string | null {
+  const match = ARTICLE_IMAGE_RE.exec(src);
+  return match?.[1]?.toLowerCase() ?? null;
+}
+
+function isPdfEmbeddableImage(mimeType: string): boolean {
+  const normalized = mimeType.toLowerCase();
+  return normalized === 'image/png' || normalized === 'image/jpeg';
+}
+
 function renderDomains(doc: PDFKit.PDFDocument, data: CompanyExportData): void {
   const TITLE = 'Monitored Domains';
   sectionBanner(
@@ -958,6 +1243,12 @@ function renderDomains(doc: PDFKit.PDFDocument, data: CompanyExportData): void {
     TITLE,
     `${data.domains.length} ${plural(data.domains.length, 'domain')}`,
   );
+
+  if (data.domains.length === 0) {
+    doc.font(FONT_OBLIQUE).fontSize(10).fillColor(C.ink3)
+      .text('No monitored domains.', MARGIN_X, doc.y, { width: CONTENT_WIDTH });
+    return;
+  }
 
   // Widths sum to 504 (CONTENT_WIDTH).
   const table: TableSpec = {

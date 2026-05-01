@@ -26,6 +26,7 @@ import {
   type BackupRunKind,
   type BackupRunStatus,
 } from '@weavestream/shared';
+import { resolveDataDir } from '@weavestream/shared/server';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { AuditLogService } from '../audit/audit.service.js';
 import { AUDIT_ACTIONS } from '../audit/audit-actions.js';
@@ -50,8 +51,10 @@ export class BackupsService {
   /**
    * Resolved absolute backup directory. Compose maps this to
    * `/var/lib/weavestream/backup` on the api container (read-only;
-   * the worker owns the write path); dev defaults to `./data/backup`.
-   * Derived from the `BACKUP_STORAGE_DIR` env var.
+   * the worker owns the write path); dev `./data/backup` is anchored
+   * to the monorepo root via `resolveDataDir` so api + worker share a
+   * single path regardless of which package directory they were
+   * launched from. Derived from the `BACKUP_STORAGE_DIR` env var.
    */
   private readonly backupDir: string;
 
@@ -63,7 +66,7 @@ export class BackupsService {
     @Inject(forwardRef(() => BackupQueueRegistrar))
     private readonly registrar: BackupQueueRegistrar,
   ) {
-    this.backupDir = path.resolve(this.env.values.BACKUP_STORAGE_DIR);
+    this.backupDir = resolveDataDir(this.env.values.BACKUP_STORAGE_DIR);
   }
 
   // ------------------------------------------------------------------

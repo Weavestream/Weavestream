@@ -8,6 +8,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { createReadStream, type ReadStream } from 'node:fs';
 import { promises as fs } from 'node:fs';
 import * as path from 'node:path';
+import { resolveDataDir } from '@weavestream/shared/server';
 import { EnvService } from '../config/env.service.js';
 
 /**
@@ -37,7 +38,7 @@ export class LocalStorageService implements OnModuleInit {
   private readonly root: string;
 
   constructor(private readonly env: EnvService) {
-    this.root = path.resolve(this.env.values.FILE_STORAGE_DIR);
+    this.root = resolveDataDir(this.env.values.FILE_STORAGE_DIR);
   }
 
   async onModuleInit(): Promise<void> {

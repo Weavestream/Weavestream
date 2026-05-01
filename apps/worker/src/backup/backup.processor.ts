@@ -10,6 +10,7 @@ import {
   backupJobSchema,
   type BackupJob,
 } from '@weavestream/shared';
+import { resolveDataDir } from '@weavestream/shared/server';
 import { RedisService } from '../../../api/src/redis/redis.service.js';
 import { PrismaService } from '../../../api/src/prisma/prisma.service.js';
 import { AuditLogService } from '../../../api/src/audit/audit.service.js';
@@ -56,8 +57,9 @@ export class BackupWorker implements OnModuleDestroy {
   /**
    * Resolved absolute backup directory. In compose this is
    * `/var/lib/weavestream/backup` (host-bind-mounted from
-   * `${DATA_DIR}/backup`); in dev it defaults to `./data/backup`
-   * relative to the worker process cwd. Operators can override via
+   * `${DATA_DIR}/backup`); in dev `./data/backup` is anchored to the
+   * monorepo root via `resolveDataDir` so api and worker land on the
+   * same path under `pnpm dev`. Operators can override via
    * the `BACKUP_STORAGE_DIR` env var.
    */
   private readonly backupDir: string;
@@ -69,7 +71,7 @@ export class BackupWorker implements OnModuleDestroy {
     private readonly email: EmailService,
     private readonly env: EnvService,
   ) {
-    this.backupDir = path.resolve(this.env.values.BACKUP_STORAGE_DIR);
+    this.backupDir = resolveDataDir(this.env.values.BACKUP_STORAGE_DIR);
   }
 
   async start(): Promise<void> {

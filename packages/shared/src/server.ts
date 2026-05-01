@@ -6,6 +6,7 @@
  * AsyncLocalStorage. Never import this from a React Client Component — it
  * pulls in `node:async_hooks` and `Buffer` and will fail to bundle.
  */
+export * from './data-dir.js';
 export * from './env.js';
 export * from './tenant-context.js';
 // Re-export the client-safe bits so server code can use a single import.

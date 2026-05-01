@@ -12,7 +12,10 @@ import { LocalStorageService } from '../../../api/src/storage/local-storage.serv
 import { SecretEncryptionService } from '../../../api/src/crypto/secret-encryption.service.js';
 import { AuditLogService } from '../../../api/src/audit/audit.service.js';
 import { AUDIT_ACTIONS } from '../../../api/src/audit/audit-actions.js';
-import { CompanyExportDataService } from '../../../api/src/exports/company-export-data.service.js';
+import {
+  CompanyExportDataService,
+  type CompanyExportData,
+} from '../../../api/src/exports/company-export-data.service.js';
 import { buildCompanyExportPdf } from './pdf-builder.js';
 
 /** 4 hours in milliseconds — how long before the cleanup job fires. */
@@ -115,6 +118,7 @@ export class CompanyPdfExportWorker implements OnModuleDestroy {
     let data;
     try {
       data = await this.exportData.gather(companyId, { includePasswords });
+      await this.hydrateArticleImages(companyId, data);
     } catch (err) {
       await this.recordFailure(exportId, companyId, includePasswords, err);
       throw err;
@@ -190,6 +194,34 @@ export class CompanyPdfExportWorker implements OnModuleDestroy {
     }
   }
 
+  private async hydrateArticleImages(
+    companyId: string,
+    data: CompanyExportData,
+  ): Promise<void> {
+    const cache = new Map<string, Buffer | null>();
+    for (const article of data.articles) {
+      for (const image of article.images) {
+        if (!isPdfEmbeddableImage(image.mimeType)) continue;
+        const cached = cache.get(image.storageKey);
+        if (cached !== undefined) {
+          if (cached) image.data = cached;
+          continue;
+        }
+
+        try {
+          const body = await this.storage.getObjectBody(companyId, image.storageKey);
+          cache.set(image.storageKey, body);
+          image.data = body;
+        } catch (err) {
+          cache.set(image.storageKey, null);
+          this.logger.warn(
+            `Could not hydrate article image ${image.uploadId}: ${(err as Error).message}`,
+          );
+        }
+      }
+    }
+  }
+
   private async recordFailure(
     exportId: string,
     companyId: string,
@@ -219,4 +251,9 @@ export class CompanyPdfExportWorker implements OnModuleDestroy {
       );
     }
   }
+}
+
+function isPdfEmbeddableImage(mimeType: string): boolean {
+  const normalized = mimeType.toLowerCase();
+  return normalized === 'image/png' || normalized === 'image/jpeg';
 }
