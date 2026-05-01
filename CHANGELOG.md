@@ -6,6 +6,8 @@ this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-05-01
+
 ### Added
 
 - **In-app scheduled Postgres exports.** Operators with the new
@@ -632,6 +634,7 @@ Initial public release.
 - English UI only.
 
 [Unreleased]: https://github.com/Weavestream/Weavestream/compare/v1.5.5...HEAD
+[1.6.0]: https://github.com/Weavestream/Weavestream/releases/tag/v1.6.0
 [1.5.6]: https://github.com/Weavestream/Weavestream/releases/tag/v1.5.6
 [1.5.5]: https://github.com/Weavestream/Weavestream/releases/tag/v1.5.5
 [1.5.4]: https://github.com/Weavestream/Weavestream/releases/tag/v1.5.4
