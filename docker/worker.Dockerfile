@@ -50,7 +50,7 @@ FROM node:24-alpine AS runner
 # image used by the database service in compose.yml so the dump format
 # stays compatible with the running server. Available in alpine 3.20+,
 # which `node:24-alpine` is built on.
-RUN apk add --no-cache libc6-compat openssl tini postgresql16-client \
+RUN apk add --no-cache libc6-compat openssl tini su-exec postgresql16-client \
  && addgroup -S app && adduser -S app -G app
 
 ARG WEAVESTREAM_VERSION=dev
@@ -73,9 +73,16 @@ COPY --from=build /repo/apps/worker/dist ./apps/worker/dist
 COPY --from=build /repo/apps/worker/package.json ./apps/worker/package.json
 COPY --from=build /repo/apps/worker/node_modules ./apps/worker/node_modules
 
-USER app
+# Entrypoint runs as root just long enough to chown the host
+# bind-mounted storage + backup dirs to `app`, then drops to that
+# unprivileged user via `su-exec`. Without this, host directories
+# created by Docker (root:root) or by the operator's host user are
+# unwritable from inside the container and `pg_dump` / file uploads
+# fail with EACCES on the first write.
+COPY docker/worker-entrypoint.sh /usr/local/bin/worker-entrypoint.sh
+RUN chmod +x /usr/local/bin/worker-entrypoint.sh
 WORKDIR /app/apps/worker
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
   CMD node -e "process.exit(0)" || exit 1
-ENTRYPOINT ["/sbin/tini", "--"]
+ENTRYPOINT ["/usr/local/bin/worker-entrypoint.sh"]
 CMD ["node", "dist/worker/src/main.js"]

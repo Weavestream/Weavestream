@@ -48,7 +48,7 @@ RUN --mount=type=cache,id=pnpm,target=/pnpm/store \
 FROM node:24-alpine AS runner
 # Sharp's prebuilt binary bundles its own libvips, so no system `vips`
 # package is needed at runtime — just libc6-compat + openssl + tini.
-RUN apk add --no-cache libc6-compat openssl tini curl \
+RUN apk add --no-cache libc6-compat openssl tini su-exec curl \
  && addgroup -S app && adduser -S app -G app
 
 ARG WEAVESTREAM_VERSION=dev
@@ -71,10 +71,15 @@ COPY --from=build /repo/apps/api/dist ./apps/api/dist
 COPY --from=build /repo/apps/api/package.json ./apps/api/package.json
 COPY --from=build /repo/apps/api/node_modules ./apps/api/node_modules
 
-USER app
+# Entrypoint runs as root just long enough to chown the host
+# bind-mounted file-storage dir to `app`, then drops to that
+# unprivileged user via `su-exec`. The backup directory is mounted
+# read-only and intentionally not touched here.
+COPY docker/api-entrypoint.sh /usr/local/bin/api-entrypoint.sh
+RUN chmod +x /usr/local/bin/api-entrypoint.sh
 WORKDIR /app/apps/api
 EXPOSE 4000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
   CMD curl -fsS http://localhost:4000/health || exit 1
-ENTRYPOINT ["/sbin/tini", "--"]
+ENTRYPOINT ["/usr/local/bin/api-entrypoint.sh"]
 CMD ["node", "dist/main.js"]
