@@ -320,6 +320,24 @@ export function CompanyShell({
     subtitle: `${roleLabel(me.role)} · ${me.mfaEnabled ? 'mfa' : 'no mfa'}`,
   };
 
+  // Footer toolbar layout:
+  //   admin   : Expiring-soon shortcut + Starred drawer.
+  //   portal  : Expiring-soon links to /admin (gated by AdminLayout) so
+  //             we hide it for clients; Starred is admin-only too. When
+  //             nothing remains (CLIENT_USER without operator access),
+  //             we omit the whole row so the divider above it doesn't
+  //             render either.
+  const showStarred = isAdmin || operatorAccess;
+  const showExpirations = isAdmin;
+  const footerToolbar =
+    showStarred || showExpirations ? (
+      <SidebarToolbar
+        companyId={company.id}
+        showStarred={showStarred}
+        showExpirations={showExpirations}
+      />
+    ) : undefined;
+
   return (
     <SearchPaletteProvider
       scopedCompany={{ id: company.id, name: company.name }}
@@ -332,12 +350,7 @@ export function CompanyShell({
           user={sidebarUser}
           activeId={activeId}
           footerAction={<SidebarActions />}
-          footerToolbar={
-            <SidebarToolbar
-              companyId={company.id}
-              showStarred={isAdmin || operatorAccess}
-            />
-          }
+          footerToolbar={footerToolbar}
           className="hide-on-mobile"
         />
         <main
@@ -359,12 +372,7 @@ export function CompanyShell({
                 user={sidebarUser}
                 activeId={activeId}
                 footerAction={<SidebarActions />}
-                footerToolbar={
-                  <SidebarToolbar
-                    companyId={company.id}
-                    showStarred={isAdmin || operatorAccess}
-                  />
-                }
+                footerToolbar={footerToolbar}
                 variant="drawer"
               />
             }

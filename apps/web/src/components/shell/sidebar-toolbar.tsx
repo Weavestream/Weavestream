@@ -30,6 +30,7 @@ import { CompanyAvatar, Icon, LayoutSwatch, type IconName } from '../ui';
 export function SidebarToolbar({
   companyId,
   showStarred = true,
+  showExpirations = true,
 }: {
   /**
    * When present, all scoped shortcuts target the company routes
@@ -39,16 +40,25 @@ export function SidebarToolbar({
   companyId?: string;
   /** Hide the admin-route starred drawer on client-only portal shells. */
   showStarred?: boolean;
+  /**
+   * Hide the "Expiring soon" shortcut on client portal shells. The
+   * destination lives under `/admin` and would just bounce a
+   * CLIENT_USER home, so we omit it entirely instead of teasing a
+   * dead link.
+   */
+  showExpirations?: boolean;
 }) {
   const base = companyId ? `/admin/companies/${companyId}` : '/admin';
 
   return (
     <>
-      <ToolbarIconLink
-        href={`${base}/expirations`}
-        icon="clock"
-        label="Expiring soon"
-      />
+      {showExpirations && (
+        <ToolbarIconLink
+          href={`${base}/expirations`}
+          icon="clock"
+          label="Expiring soon"
+        />
+      )}
       {showStarred && <StarredQuickAccessTrigger />}
     </>
   );
