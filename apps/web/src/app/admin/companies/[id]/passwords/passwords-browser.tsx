@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { useMemo, useState, useTransition } from 'react';
+import { useEffect, useMemo, useRef, useState, useTransition } from 'react';
 import type {
   PasswordFolderRow,
   PasswordSummary,
@@ -37,6 +37,17 @@ type DialogState =
   | { kind: 'add'; prefillAssetId?: string }
   | { kind: 'edit'; row: PasswordSummary }
   | null;
+
+type PasswordColumnPrefs = {
+  showPortalVisibility: boolean;
+  showStrength: boolean;
+};
+
+const PASSWORD_COLUMN_PREFS_KEY = 'weavestream.passwords.columns.v1';
+const DEFAULT_COLUMN_PREFS: PasswordColumnPrefs = {
+  showPortalVisibility: false,
+  showStrength: true,
+};
 
 /**
  * Phase 10 — admin passwords vault browser.
@@ -76,8 +87,47 @@ export function PasswordsBrowser({
   const [mobileTab, setMobileTab] = useState<'folders' | 'passwords'>(
     'passwords',
   );
+  const [columnPrefs, setColumnPrefs] = useState<PasswordColumnPrefs>(
+    DEFAULT_COLUMN_PREFS,
+  );
+  const [columnPrefsLoaded, setColumnPrefsLoaded] = useState(false);
 
   const includeArchived = searchParams.get('archived') === '1';
+
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(PASSWORD_COLUMN_PREFS_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw) as Partial<PasswordColumnPrefs>;
+        setColumnPrefs({
+          showPortalVisibility:
+            typeof parsed.showPortalVisibility === 'boolean'
+              ? parsed.showPortalVisibility
+              : DEFAULT_COLUMN_PREFS.showPortalVisibility,
+          showStrength:
+            typeof parsed.showStrength === 'boolean'
+              ? parsed.showStrength
+              : DEFAULT_COLUMN_PREFS.showStrength,
+        });
+      }
+    } catch {
+      // Ignore malformed or blocked storage and keep the default layout.
+    } finally {
+      setColumnPrefsLoaded(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!columnPrefsLoaded) return;
+    try {
+      window.localStorage.setItem(
+        PASSWORD_COLUMN_PREFS_KEY,
+        JSON.stringify(columnPrefs),
+      );
+    } catch {
+      // Column preferences are nice-to-have; the table still works without storage.
+    }
+  }, [columnPrefs, columnPrefsLoaded]);
 
   const filtered = useMemo(() => {
     let list = rows;
@@ -200,6 +250,7 @@ export function PasswordsBrowser({
         <Icon.archive size={12} />
         {includeArchived ? 'Hide archived' : 'Show archived'}
       </button>
+      <PasswordColumnsMenu value={columnPrefs} onChange={setColumnPrefs} />
       {canManage && (
         <Btn
           kind="primary"
@@ -400,10 +451,14 @@ export function PasswordsBrowser({
         </div>
       ) : (
         <DataTable
-          columns={passwordColumns({ companyId })}
+          columns={passwordColumns({ companyId, columnPrefs })}
           rows={filtered}
           renderMobileCard={(p) => (
-            <PasswordMobileBody row={p} companyId={companyId} />
+            <PasswordMobileBody
+              row={p}
+              companyId={companyId}
+              columnPrefs={columnPrefs}
+            />
           )}
         />
       )}
@@ -490,10 +545,12 @@ export function PasswordsBrowser({
 
 function passwordColumns({
   companyId,
+  columnPrefs,
 }: {
   companyId: string;
+  columnPrefs: PasswordColumnPrefs;
 }): DataColumn<PasswordSummary>[] {
-  return [
+  const columns: DataColumn<PasswordSummary>[] = [
     {
       id: 'name',
       header: 'Name',
@@ -565,15 +622,6 @@ function passwordColumns({
       render: (p) => p.username ?? '—',
     },
     {
-      id: 'strength',
-      header: 'Strength',
-      width: 130,
-      sortValue: (p) => p.passwordStrength ?? -1,
-      render: (p) => (
-        <PasswordStrengthMeter score={p.passwordStrength} width={110} />
-      ),
-    },
-    {
       id: 'otp',
       header: 'OTP',
       width: 170,
@@ -602,14 +650,40 @@ function passwordColumns({
         ) : null,
     },
   ];
+
+  if (columnPrefs.showPortalVisibility) {
+    columns.splice(2, 0, {
+      id: 'visibility',
+      header: 'Visibility',
+      width: 140,
+      sortValue: (p) => (p.visibleToClients ? 1 : 0),
+      render: (p) => <PortalVisibilityTag visible={p.visibleToClients} />,
+    });
+  }
+
+  if (columnPrefs.showStrength) {
+    columns.splice(columnPrefs.showPortalVisibility ? 3 : 2, 0, {
+      id: 'strength',
+      header: 'Strength',
+      width: 130,
+      sortValue: (p) => p.passwordStrength ?? -1,
+      render: (p) => (
+        <PasswordStrengthMeter score={p.passwordStrength} width={110} />
+      ),
+    });
+  }
+
+  return columns;
 }
 
 function PasswordMobileBody({
   row,
   companyId,
+  columnPrefs,
 }: {
   row: PasswordSummary;
   companyId: string;
+  columnPrefs: PasswordColumnPrefs;
 }) {
   const detailHref = `/admin/companies/${companyId}/passwords/${row.id}`;
   return (
@@ -699,9 +773,16 @@ function PasswordMobileBody({
           {row.username}
         </MobileCardRow>
       )}
-      <MobileCardRow label="Strength">
-        <PasswordStrengthMeter score={row.passwordStrength} />
-      </MobileCardRow>
+      {columnPrefs.showPortalVisibility && (
+        <MobileCardRow label="Visibility">
+          <PortalVisibilityTag visible={row.visibleToClients} />
+        </MobileCardRow>
+      )}
+      {columnPrefs.showStrength && (
+        <MobileCardRow label="Strength">
+          <PasswordStrengthMeter score={row.passwordStrength} />
+        </MobileCardRow>
+      )}
       {row.hasTotp && !row.archivedAt && (
         <MobileCardRow label="OTP">
           <TotpCode companyId={companyId} passwordId={row.id} compact />
@@ -727,6 +808,161 @@ function PasswordMobileBody({
         </div>
       )}
     </div>
+  );
+}
+
+function PortalVisibilityTag({ visible }: { visible: boolean }) {
+  return visible ? (
+    <Tag tone="accent">client-visible</Tag>
+  ) : (
+    <Tag tone="outline">internal</Tag>
+  );
+}
+
+function PasswordColumnsMenu({
+  value,
+  onChange,
+}: {
+  value: PasswordColumnPrefs;
+  onChange: (next: PasswordColumnPrefs) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const wrapperRef = useRef<HTMLDivElement | null>(null);
+  const customized =
+    value.showPortalVisibility !== DEFAULT_COLUMN_PREFS.showPortalVisibility ||
+    value.showStrength !== DEFAULT_COLUMN_PREFS.showStrength;
+
+  useEffect(() => {
+    if (!open) return;
+    function onDocClick(e: MouseEvent) {
+      if (!wrapperRef.current) return;
+      if (!wrapperRef.current.contains(e.target as Node)) setOpen(false);
+    }
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') setOpen(false);
+    }
+    document.addEventListener('mousedown', onDocClick);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDocClick);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
+  function toggle(key: keyof PasswordColumnPrefs) {
+    onChange({ ...value, [key]: !value[key] });
+  }
+
+  return (
+    <div ref={wrapperRef} style={{ position: 'relative' }}>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        title="Show or hide columns"
+        aria-label="Show or hide columns"
+        aria-expanded={open}
+        aria-haspopup="menu"
+        style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          width: 28,
+          height: 28,
+          background: customized ? 'var(--accent-soft)' : 'transparent',
+          border: '1px solid',
+          borderColor: customized ? 'var(--accent-line)' : 'var(--line-2)',
+          borderRadius: 5,
+          color: customized ? 'var(--accent)' : 'var(--text-2)',
+          cursor: 'pointer',
+        }}
+      >
+        <Icon.eye size={13} />
+      </button>
+      {open && (
+        <div
+          role="menu"
+          aria-label="Password table columns"
+          style={{
+            position: 'absolute',
+            top: '100%',
+            right: 0,
+            marginTop: 4,
+            minWidth: 210,
+            background: 'var(--panel)',
+            border: '1px solid var(--line-2)',
+            borderRadius: 6,
+            boxShadow: '0 8px 24px rgba(0,0,0,0.35)',
+            zIndex: 50,
+            padding: 6,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 2,
+          }}
+        >
+          <ColumnMenuItem
+            checked={value.showPortalVisibility}
+            label="Portal visibility"
+            onClick={() => toggle('showPortalVisibility')}
+          />
+          <ColumnMenuItem
+            checked={value.showStrength}
+            label="Strength"
+            onClick={() => toggle('showStrength')}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ColumnMenuItem({
+  checked,
+  label,
+  onClick,
+}: {
+  checked: boolean;
+  label: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      role="menuitemcheckbox"
+      aria-checked={checked}
+      onClick={onClick}
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 8,
+        width: '100%',
+        padding: '7px 8px',
+        background: checked ? 'var(--accent-soft)' : 'transparent',
+        color: checked ? 'var(--accent)' : 'var(--text)',
+        border: 'none',
+        borderRadius: 4,
+        cursor: 'pointer',
+        fontSize: 12.5,
+        textAlign: 'left',
+      }}
+    >
+      <span
+        aria-hidden
+        style={{
+          width: 14,
+          height: 14,
+          border: `1px solid ${checked ? 'var(--accent)' : 'var(--line-2)'}`,
+          borderRadius: 3,
+          display: 'grid',
+          placeItems: 'center',
+          flexShrink: 0,
+          color: checked ? 'var(--accent)' : 'transparent',
+          background: checked ? 'var(--accent-soft)' : 'var(--panel-2)',
+        }}
+      >
+        <Icon.check size={10} />
+      </span>
+      <span>{label}</span>
+    </button>
   );
 }
 
@@ -827,4 +1063,3 @@ function FolderRow({
     </button>
   );
 }
-

@@ -59,7 +59,7 @@ export function CreatePasswordDialog({
   const [password, setPassword] = useState('');
   const [notes, setNotes] = useState('');
   const [selectedFolder, setSelectedFolder] = useState<string | null>(folderId);
-  const [visibleToClients, setVisibleToClients] = useState(false);
+  const [visibleToClients, setVisibleToClients] = useState(true);
   const [requireReason, setRequireReason] = useState(false);
   const [totpSecret, setTotpSecret] = useState('');
   const fieldSeed = useId().replace(/:/g, '');
