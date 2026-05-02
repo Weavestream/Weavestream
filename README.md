@@ -52,10 +52,10 @@ audience without code changes.
   evaluated from a single permission matrix.
 - **Client portals.** Each tenant gets a read-only portal where client
   users see only the articles, assets, passwords, and domains their role allows.
-- **Bring-your-own storage.** MinIO-compatible object store with one
-  bucket per tenant for tenant-level isolation at the storage layer.
+- **Local file storage.** Tenant files live on a shared host-mounted
+  filesystem path with per-tenant directory isolation.
 - **Docker-first.** Three containers (`api`, `web`, `worker`) plus
-  Postgres, Redis, and MinIO. Pulled, not built.
+  Postgres and Redis. Pulled, not built.
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the threat model,
 branding/terminology system, and repo layout.
