@@ -954,6 +954,21 @@ export type AssetSummary = {
    * override). Empty for manual assets.
    */
   syncedFieldIds: string[];
+  /**
+   * Phase 11.2 — every IntegrationSyncRecord linked to this asset.
+   * One asset can be claimed by several integrations at once (e.g.
+   * Action1 endpoint + UniFi client representing the same machine);
+   * the UI surfaces all of them rather than just the "primary" one
+   * stored on `externalSource`. Empty array for manual assets.
+   */
+  syncSources: Array<{
+    integrationId: string;
+    integrationName: string;
+    driver: string;
+    resourceKey: string;
+    externalId: string;
+    lastSyncedAt: string;
+  }>;
   archivedAt: string | null;
   createdBy: string | null;
   updatedBy: string | null;

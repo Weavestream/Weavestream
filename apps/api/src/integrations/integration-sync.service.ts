@@ -614,6 +614,7 @@ const TOTAL_KEYS = [
   'archived',
   'skippedAmbiguous',
   'skippedManual',
+  'skippedArchived',
   'errors',
 ] as const satisfies ReadonlyArray<keyof SyncRunResourceTotals>;
 
@@ -627,6 +628,7 @@ export function zeroResourceTotals(): SyncRunResourceTotals {
     archived: 0,
     skippedAmbiguous: 0,
     skippedManual: 0,
+    skippedArchived: 0,
     errors: 0,
   };
 }
@@ -681,6 +683,7 @@ function mergeAggregate(
     archived: resourceTotals.archived,
     skippedAmbiguous: resourceTotals.skippedAmbiguous,
     skippedManual: resourceTotals.skippedManual,
+    skippedArchived: resourceTotals.skippedArchived,
     errors: resourceTotals.errors,
   };
   return acc;

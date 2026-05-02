@@ -438,22 +438,44 @@ function assetColumns({
     {
       id: 'source',
       header: 'Source',
-      width: 140,
-      sortValue: (r) => r.externalSource ?? 'manual',
-      render: (r) =>
-        r.externalSource ? (
-          <Tag tone="info">{r.externalSource.toLowerCase()}</Tag>
-        ) : (
-          <span
-            style={{
-              fontFamily: 'var(--font-mono)',
-              fontSize: 11,
-              color: 'var(--dim)',
-            }}
-          >
-            manual
-          </span>
-        ),
+      width: 180,
+      sortValue: (r) =>
+        r.syncSources.length > 0
+          ? r.syncSources
+              .map((s) => s.driver)
+              .sort()
+              .join(',')
+          : r.externalSource ?? 'manual',
+      render: (r) => {
+        const drivers =
+          r.syncSources.length > 0
+            ? Array.from(new Set(r.syncSources.map((s) => s.driver)))
+            : r.externalSource
+              ? [r.externalSource]
+              : [];
+        if (drivers.length === 0) {
+          return (
+            <span
+              style={{
+                fontFamily: 'var(--font-mono)',
+                fontSize: 11,
+                color: 'var(--dim)',
+              }}
+            >
+              manual
+            </span>
+          );
+        }
+        return (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+            {drivers.map((d) => (
+              <Tag key={d} tone="info">
+                {d.toLowerCase()}
+              </Tag>
+            ))}
+          </div>
+        );
+      },
     },
     {
       id: 'updated',
@@ -560,7 +582,13 @@ function AssetMobileBody({
           alignItems: 'center',
         }}
       >
-        {row.externalSource ? (
+        {row.syncSources.length > 0 ? (
+          Array.from(new Set(row.syncSources.map((s) => s.driver))).map((d) => (
+            <Tag key={d} tone="info">
+              {d.toLowerCase()}
+            </Tag>
+          ))
+        ) : row.externalSource ? (
           <Tag tone="info">{row.externalSource.toLowerCase()}</Tag>
         ) : (
           <Tag tone="outline">manual</Tag>

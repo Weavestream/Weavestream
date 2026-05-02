@@ -81,6 +81,22 @@ export interface SerializedAsset {
    * sync. Drives the per-field label icon. Empty array when not synced.
    */
   syncedFieldIds: string[];
+  /**
+   * Phase 11.2 — every IntegrationSyncRecord currently linked to this
+   * asset. An asset can be synced from many integrations at once (e.g.
+   * Action1 endpoint + UniFi client representing the same physical
+   * machine), so the UI surfaces all of them rather than just the
+   * "primary" one stored on `Asset.externalSource`. Empty array when
+   * the asset is unsynced.
+   */
+  syncSources: Array<{
+    integrationId: string;
+    integrationName: string;
+    driver: string;
+    resourceKey: string;
+    externalId: string;
+    lastSyncedAt: Date;
+  }>;
   fieldValues: Record<string, unknown>;
   fields: Array<{
     id: string;
@@ -532,6 +548,87 @@ export class AssetsService {
     return this.get(actor, companyId, id);
   }
 
+  /**
+   * Hard-deletes an asset row. Required so operators can expunge
+   * duplicates created by integration matching mistakes — archive
+   * alone is insufficient because a sync run will keep refreshing the
+   * archived shell as long as its IntegrationSyncRecord still resolves
+   * to it on the next pass.
+   *
+   * Guarded:
+   *   - The asset must already be archived. The two-step
+   *     archive → purge gate forces the operator to look at the row
+   *     once more (and lets the UI surface a Restore escape hatch up
+   *     until the purge confirmation).
+   *   - Caller must hold `asset.purge` (FULL access).
+   *
+   * Cascade:
+   *   - `AssetFieldValue`, `IntegrationSyncRecord`, `StarredAsset`
+   *     drop with the row (FK ON DELETE CASCADE).
+   *   - `Password.assetId` is SET NULL (credentials survive the asset
+   *     so the operator can re-link them).
+   *   - `Relation` is polymorphic (no FK) → cleaned manually here.
+   *   - `SearchIndex` is denormalised (no FK) → cleaned manually.
+   *
+   * After deletion the next integration sync that *would* have
+   * landed on this row falls through to a fresh `create` (or matches
+   * a different existing asset via the configured match keys).
+   */
+  async purge(
+    actor: AuthedUser,
+    companyId: string,
+    id: string,
+    meta: AuditMeta,
+  ): Promise<{ id: string }> {
+    const existing = await this.prisma.asset.findFirst({
+      where: { id, companyId },
+      select: {
+        id: true,
+        name: true,
+        assetLayoutId: true,
+        archivedAt: true,
+        externalId: true,
+        externalSource: true,
+      },
+    });
+    if (!existing) throw new NotFoundException();
+    if (!existing.archivedAt) {
+      throw new BadRequestException(
+        'Archive the asset before permanently deleting it.',
+      );
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      await this.relations.cleanupForAsset({ tx, companyId, assetId: id });
+      await this.searchIndex.removeAsset(tx, id);
+      const result = await tx.asset.deleteMany({ where: { id, companyId } });
+      if (result.count === 0) {
+        // Defence in depth: another request already purged the row.
+        throw new NotFoundException();
+      }
+    });
+
+    await this.audit.log({
+      actorId: actor.id,
+      action: 'asset.purge',
+      entityType: 'Asset',
+      entityId: id,
+      companyId,
+      ip: meta.ip,
+      userAgent: meta.userAgent,
+      before: {
+        name: existing.name,
+        assetLayoutId: existing.assetLayoutId,
+        archivedAt: existing.archivedAt,
+        externalId: existing.externalId,
+        externalSource: existing.externalSource,
+      },
+      after: null,
+    });
+
+    return { id };
+  }
+
   // --------------------------------------------------------------------
   // Validation + persistence
   // --------------------------------------------------------------------
@@ -933,36 +1030,65 @@ export class AssetsService {
     assets: SerializedAsset[],
   ): Promise<void> {
     if (assets.length === 0) return;
-    const ids = assets.filter((a) => a.externalSource).map((a) => a.id);
-    if (ids.length === 0) return;
+    // Probe every asset, not just rows whose `externalSource` is set.
+    // A multi-owned asset only carries the *primary* integration on
+    // its denormalised columns; the second / third owners live purely
+    // as IntegrationSyncRecord rows and would otherwise be invisible
+    // to the UI (which is what surfaced the "shows action1 only when
+    // unifi also owns it" bug).
+    const ids = assets.map((a) => a.id);
     const rows = await this.prisma.integrationSyncRecord.findMany({
       where: { companyId, assetId: { in: ids } },
       select: {
         assetId: true,
+        externalId: true,
         lastSyncedAt: true,
         lastSyncedFieldChecksums: true,
+        resource: { select: { resourceKey: true } },
+        companyMapping: {
+          select: {
+            integration: {
+              select: { id: true, driver: true, name: true },
+            },
+          },
+        },
       },
+      orderBy: { lastSyncedAt: 'desc' },
     });
     const aggregated = new Map<
       string,
-      { lastSyncedAt: Date; syncedFieldIds: Set<string> }
+      {
+        lastSyncedAt: Date;
+        syncedFieldIds: Set<string>;
+        syncSources: SerializedAsset['syncSources'];
+      }
     >();
     for (const r of rows) {
       const checksums = (r.lastSyncedFieldChecksums ?? {}) as Record<
         string,
         unknown
       >;
+      const source = {
+        integrationId: r.companyMapping.integration.id,
+        integrationName: r.companyMapping.integration.name,
+        driver: r.companyMapping.integration.driver,
+        resourceKey: r.resource.resourceKey,
+        externalId: r.externalId,
+        lastSyncedAt: r.lastSyncedAt,
+      };
       const entry = aggregated.get(r.assetId);
       if (!entry) {
         aggregated.set(r.assetId, {
           lastSyncedAt: r.lastSyncedAt,
           syncedFieldIds: new Set(Object.keys(checksums)),
+          syncSources: [source],
         });
       } else {
         if (r.lastSyncedAt > entry.lastSyncedAt) {
           entry.lastSyncedAt = r.lastSyncedAt;
         }
         for (const k of Object.keys(checksums)) entry.syncedFieldIds.add(k);
+        entry.syncSources.push(source);
       }
     }
     for (const a of assets) {
@@ -970,6 +1096,7 @@ export class AssetsService {
       if (!entry) continue;
       a.lastSyncedAt = entry.lastSyncedAt;
       a.syncedFieldIds = Array.from(entry.syncedFieldIds);
+      a.syncSources = entry.syncSources;
     }
   }
 
@@ -1037,6 +1164,7 @@ export class AssetsService {
       updatedAt: asset.updatedAt,
       lastSyncedAt: null,
       syncedFieldIds: [],
+      syncSources: [],
       fieldValues,
       fields: visibleFields
         .sort((a, b) => a.position - b.position)

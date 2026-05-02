@@ -367,6 +367,9 @@ function RunTotalsSummary({
       {totals.skippedAmbiguous > 0
         ? ` · ${totals.skippedAmbiguous} ambiguous`
         : ''}
+      {totals.skippedArchived > 0
+        ? ` · ${totals.skippedArchived} archived skipped`
+        : ''}
       {totals.errors > 0 ? ` · ${totals.errors} errors` : ''}
       {dryRun ? ' · dry-run' : ''}
     </span>
@@ -392,6 +395,7 @@ function ResourceTotalsBreakdown({
         v.archived > 0 ||
         v.skippedAmbiguous > 0 ||
         v.skippedManual > 0 ||
+        v.skippedArchived > 0 ||
         v.errors > 0)
     );
   });
@@ -468,6 +472,7 @@ function RunTotalsBreakdown({ totals }: { totals: SyncRunTotals | null }) {
       { label: 'archived', value: totals.archived, tone: 'warn' },
       { label: 'ambiguous', value: totals.skippedAmbiguous, tone: 'warn' },
       { label: 'manual skip', value: totals.skippedManual, tone: 'warn' },
+      { label: 'archived skip', value: totals.skippedArchived, tone: 'warn' },
       { label: 'errors', value: totals.errors, tone: 'danger' },
     ] satisfies Cell[]
   ).filter((c) => c.value > 0);

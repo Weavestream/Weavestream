@@ -1,7 +1,7 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import { Fragment } from 'react';
+import React, { Fragment } from 'react';
 import {
   getAsset,
   getCompanyDetail,
@@ -119,34 +119,6 @@ export default async function AssetDetailPage({
                     <Tag tone="info" dot>
                       {asset.layoutName}
                     </Tag>
-                    {asset.externalId && (
-                      <span
-                        style={{
-                          fontFamily: 'var(--font-mono)',
-                          fontSize: 10.5,
-                          color: 'var(--dim)',
-                        }}
-                      >
-                        {asset.externalId}
-                      </span>
-                    )}
-                    {asset.externalSource && (
-                      <span
-                        title={
-                          asset.lastSyncedAt
-                            ? `Last synced ${new Date(asset.lastSyncedAt).toLocaleString()}`
-                            : `Linked to ${asset.externalSource}`
-                        }
-                        style={{ display: 'inline-flex' }}
-                      >
-                        <Tag tone="outline" dot>
-                          synced · {asset.externalSource.toLowerCase()}
-                          {asset.lastSyncedAt
-                            ? ` · ${relative(new Date(asset.lastSyncedAt))}`
-                            : ''}
-                        </Tag>
-                      </span>
-                    )}
                     {asset.archivedAt && <Tag tone="warn">archived</Tag>}
                   </div>
                   <h2
@@ -266,23 +238,69 @@ export default async function AssetDetailPage({
             />
 
             <Panel title="Last activity">
-              <Row label="Created" value={new Date(asset.createdAt).toLocaleString()} />
-              {createdBy && <Row label="Created by" value={createdBy.name} />}
-              <Row
-                label="Updated"
-                value={new Date(asset.updatedAt).toLocaleString()}
-                last={!updatedBy && !asset.archivedAt}
-              />
-              {updatedBy && (
-                <Row label="Updated by" value={updatedBy.name} last={!asset.archivedAt} />
-              )}
-              {asset.archivedAt && (
-                <Row
-                  label="Archived"
-                  value={new Date(asset.archivedAt).toLocaleString()}
-                  last
-                />
-              )}
+              {(() => {
+                const rows: React.ReactNode[] = [];
+                rows.push(
+                  <Row
+                    key="created"
+                    label="Created"
+                    value={new Date(asset.createdAt).toLocaleString()}
+                  />,
+                );
+                if (createdBy) {
+                  rows.push(
+                    <Row
+                      key="created-by"
+                      label="Created by"
+                      value={createdBy.name}
+                    />,
+                  );
+                }
+                rows.push(
+                  <Row
+                    key="updated"
+                    label="Updated"
+                    value={new Date(asset.updatedAt).toLocaleString()}
+                  />,
+                );
+                if (updatedBy) {
+                  rows.push(
+                    <Row
+                      key="updated-by"
+                      label="Updated by"
+                      value={updatedBy.name}
+                    />,
+                  );
+                }
+                for (const src of asset.syncSources) {
+                  rows.push(
+                    <Row
+                      key={`sync-${src.integrationId}-${src.resourceKey}-${src.externalId}`}
+                      label={`Synced · ${src.driver.toLowerCase()}`}
+                      value={relative(new Date(src.lastSyncedAt))}
+                      title={`${src.resourceKey} · external id ${src.externalId} · last synced ${new Date(src.lastSyncedAt).toLocaleString()}`}
+                    />,
+                  );
+                }
+                if (asset.archivedAt) {
+                  rows.push(
+                    <Row
+                      key="archived"
+                      label="Archived"
+                      value={new Date(asset.archivedAt).toLocaleString()}
+                    />,
+                  );
+                }
+                // Strip the bottom border from the final row.
+                return rows.map((node, i) =>
+                  i === rows.length - 1 && React.isValidElement(node)
+                    ? React.cloneElement(
+                        node as React.ReactElement<RowProps>,
+                        { last: true },
+                      )
+                    : node,
+                );
+              })()}
             </Panel>
 
             <Link
@@ -306,11 +324,20 @@ export default async function AssetDetailPage({
   );
 }
 
-function Row({ label, value, last }: { label: string; value: string; last?: boolean }) {
+interface RowProps {
+  label: string;
+  value: string;
+  last?: boolean;
+  title?: string;
+}
+
+function Row({ label, value, last, title }: RowProps) {
   return (
     <div
+      title={title}
       style={{
         display: 'flex',
+        gap: 8,
         padding: '6px 0',
         borderBottom: last ? 'none' : '1px solid var(--line)',
         fontSize: 12,
@@ -319,16 +346,31 @@ function Row({ label, value, last }: { label: string; value: string; last?: bool
       <span
         style={{
           flex: 1,
+          minWidth: 0,
           color: 'var(--muted)',
           fontFamily: 'var(--font-mono)',
           textTransform: 'uppercase',
           letterSpacing: 0.4,
           fontSize: 10.5,
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
         }}
       >
         {label}
       </span>
-      <span style={{ color: 'var(--text-2)' }}>{value}</span>
+      <span
+        style={{
+          color: 'var(--text-2)',
+          textAlign: 'right',
+          minWidth: 0,
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+        }}
+      >
+        {value}
+      </span>
     </div>
   );
 }

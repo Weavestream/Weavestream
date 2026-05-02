@@ -43,6 +43,7 @@ export const ActionValues = [
   'asset.write',
   'asset.read',
   'asset.archive',
+  'asset.purge',
 
   'article.write',
   'article.read',
@@ -193,6 +194,13 @@ export const PERMISSIONS: Record<Action, PermissionRule> = {
     allowFull: true,
     allowReadonly: false,
     requireNonExpiredMembership: true,
+  },
+  'asset.purge': {
+    scope: 'company',
+    allowFull: true,
+    allowReadonly: false,
+    requireNonExpiredMembership: true,
+    note: 'Hard-deletes an asset row (and its field values, sync records, relations, search index). Irreversible — used to expunge duplicates or stop an integration from re-syncing an archived shell. FULL company access only; the asset must be archived first so the operator confirms intent.',
   },
 
   'article.write': {
@@ -353,6 +361,7 @@ export const ACTION_HUMAN_LABELS: Record<Action, string> = {
   'asset.write': 'Create/edit assets',
   'asset.read': 'View assets',
   'asset.archive': 'Archive/restore assets',
+  'asset.purge': 'Permanently delete archived assets',
   'article.write': 'Create/edit articles',
   'article.read': 'View articles',
   'upload.create': 'Upload files',

@@ -482,6 +482,19 @@ export class IntegrationSyncRunnerService {
     );
 
     if (args.resolution.kind === 'reuse') {
+      const reuseAssetId = args.resolution.assetId;
+      // Refuse to refresh archived rows. Operators archive duplicates
+      // expecting the integration to leave them alone; without this
+      // guard the sync would keep rewriting the archived shell on
+      // every run because its IntegrationSyncRecord still resolves.
+      // The matching record is preserved so a later Restore resumes
+      // updates seamlessly; if the operator wants the record to fall
+      // through to a fresh `create` they purge the asset (and the
+      // cascade deletes the IntegrationSyncRecord with it).
+      if (await this.isAssetArchived(reuseAssetId, args.mapping.companyId)) {
+        args.totals.skippedArchived += 1;
+        return;
+      }
       const sync = await this.prisma.integrationSyncRecord.findUnique({
         where: {
           integrationCompanyMappingId_resourceId_externalId: {
@@ -577,6 +590,18 @@ export class IntegrationSyncRunnerService {
     }
 
     if (args.resolution.kind === 'claim') {
+      const claimTargetId = args.resolution.assetId;
+      // Same archive guard as the reuse path. If the candidate the
+      // resolver picked is archived, refuse to claim it — that would
+      // both resurrect operator intent and silently bind THIS sync
+      // to a row that's hidden from the asset list. The record falls
+      // through to no-op; the next run will pick a different
+      // candidate (or create a new asset) once the archived row is
+      // restored or purged.
+      if (await this.isAssetArchived(claimTargetId, args.mapping.companyId)) {
+        args.totals.skippedArchived += 1;
+        return;
+      }
       await this.prisma.$transaction(async (tx) => {
         const claimAssetId =
           args.resolution.kind === 'claim' ? args.resolution.assetId : '';
@@ -800,6 +825,26 @@ export class IntegrationSyncRunnerService {
    *     binding is fully tracked in the per-resource
    *     `IntegrationSyncRecord` row written separately.
    */
+  /**
+   * Cheap pre-flight used by the reuse / claim branches: returns true
+   * if the candidate asset has been archived. Done outside the write
+   * transaction so an archived target short-circuits before we open
+   * one (and before we hit the field-write fan-out, which is the
+   * expensive part of a record). Tenant-scoped via the `companyId`
+   * filter so the prisma middleware leaves the query alone.
+   */
+  private async isAssetArchived(
+    assetId: string,
+    companyId: string,
+  ): Promise<boolean> {
+    if (!assetId) return false;
+    const row = await this.prisma.asset.findFirst({
+      where: { id: assetId, companyId },
+      select: { archivedAt: true },
+    });
+    return !!row?.archivedAt;
+  }
+
   private async maybeUpdateAssetIdentity(
     tx: Prisma.TransactionClient,
     args: {
@@ -1014,6 +1059,7 @@ function emptyTotals(): SyncRunTotals {
     archived: 0,
     skippedAmbiguous: 0,
     skippedManual: 0,
+    skippedArchived: 0,
     errors: 0,
   };
 }

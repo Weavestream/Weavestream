@@ -208,6 +208,7 @@ function zeroTotals() {
     archived: 0,
     skippedAmbiguous: 0,
     skippedManual: 0,
+    skippedArchived: 0,
     errors: 1,
   };
 }

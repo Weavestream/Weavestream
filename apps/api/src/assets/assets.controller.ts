@@ -139,5 +139,24 @@ export class AssetsController {
   ) {
     return this.assets.restore(actor, companyId, id, meta(req));
   }
+
+  /**
+   * Hard-delete an archived asset. POST (not DELETE) so the unscoped
+   * `DELETE /:id` keeps its archive semantics — operators have to
+   * archive first, then opt into the irreversible purge from a
+   * different verb. The asset must already be `archivedAt != null`;
+   * the service throws 400 otherwise.
+   */
+  @Post(':id/purge')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @RequirePermission('asset.purge', { companyIdFrom: 'params.companyId' })
+  async purge(
+    @CurrentUser() actor: AuthedUser,
+    @Param('companyId', new ParseUUIDPipe()) companyId: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Req() req: Request,
+  ) {
+    await this.assets.purge(actor, companyId, id, meta(req));
+  }
 }
 

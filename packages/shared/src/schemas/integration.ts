@@ -455,6 +455,14 @@ const baseSyncRunTotalsShape = {
   archived: z.number().int().nonnegative().default(0),
   skippedAmbiguous: z.number().int().nonnegative().default(0),
   skippedManual: z.number().int().nonnegative().default(0),
+  /**
+   * Records that resolved to an existing Weavestream asset which has
+   * been archived by an operator. The runner refuses to refresh
+   * archived rows so the operator's archive intent is preserved —
+   * the next run either picks up a Restore (and resumes updates) or
+   * the row is purged and the next sync creates a fresh asset.
+   */
+  skippedArchived: z.number().int().nonnegative().default(0),
   errors: z.number().int().nonnegative().default(0),
 } as const;
 

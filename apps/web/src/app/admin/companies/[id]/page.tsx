@@ -239,7 +239,19 @@ export default async function CompanyDetailPage({
                       }}
                     >
                       {a.layoutName}
-                      {a.externalSource ? ` · ${a.externalSource.toLowerCase()}` : ''}
+                      {(() => {
+                        const drivers =
+                          a.syncSources.length > 0
+                            ? Array.from(
+                                new Set(a.syncSources.map((s) => s.driver)),
+                              )
+                            : a.externalSource
+                              ? [a.externalSource]
+                              : [];
+                        return drivers.length > 0
+                          ? ` · ${drivers.map((d) => d.toLowerCase()).join(' + ')}`
+                          : '';
+                      })()}
                     </div>
                   </div>
                   <span
