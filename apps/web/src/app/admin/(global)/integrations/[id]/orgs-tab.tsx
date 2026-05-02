@@ -34,6 +34,15 @@ export function OrgsTab({
   const [createOpen, setCreateOpen] = useState(false);
   const [editing, setEditing] = useState<IntegrationCompanyMappingDto | null>(null);
 
+  // Phase 11.1 — layout / match-key / field-mappings live per resource.
+  // The integration is "ready to sync" once at least one enabled
+  // resource has a layout configured.
+  const enabledResources = integration.resources.filter((r) => r.enabled);
+  const configuredResources = enabledResources.filter(
+    (r) => r.assetLayoutId && r.fieldMappingCount > 0,
+  );
+  const hasConfiguredResource = configuredResources.length > 0;
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
       <header
@@ -59,8 +68,11 @@ export function OrgsTab({
           </h3>
           <p style={{ margin: 0, fontSize: 12.5, color: 'var(--muted)' }}>
             Map each upstream organization to a Weavestream company.
-            Field mappings, match keys, and target layout are
-            configured globally on the “Field mappings” tab.
+            Mappings drive every enabled resource —{' '}
+            {integration.resources.map((r) => r.resourceLabel).join(', ') ||
+              'configure resources on their dedicated tabs'}
+            . Layout, match keys, and field mappings are configured per
+            resource.
           </p>
         </div>
         <Btn
@@ -79,11 +91,11 @@ export function OrgsTab({
           Add credentials in the “Credentials &amp; schedule” tab before mapping organizations.
         </Tag>
       )}
-      {integration.hasSecret && !integration.assetLayoutId && (
+      {integration.hasSecret && !hasConfiguredResource && (
         <Tag tone="warn">
-          No global field mappings yet — open the “Field mappings” tab
-          to pick a layout and project upstream fields. Syncs are blocked
-          until at least one field mapping exists.
+          No resource is fully configured yet — open a resource tab to pick a
+          layout and project upstream fields. Syncs run only for resources with
+          at least one field mapping.
         </Tag>
       )}
 
@@ -174,7 +186,7 @@ export function OrgsTab({
         <CreateMappingDialog
           integrationId={integration.id}
           driver={driver}
-          hasGlobalLayout={Boolean(integration.assetLayoutId)}
+          hasGlobalLayout={hasConfiguredResource}
           existingExternalOrgIds={mappings.map((m) => m.externalOrgId)}
           onClose={() => setCreateOpen(false)}
           onCreated={() => {

@@ -75,6 +75,31 @@ export const driverFieldDescriptorSchema = z.object({
 
 export type DriverFieldDescriptor = z.infer<typeof driverFieldDescriptorSchema>;
 
+/**
+ * Phase 11.1 — driver-declared resources.
+ *
+ * A driver advertises one or more "resources" it can sync. Each
+ * resource maps to its own `IntegrationResource` row carrying a
+ * distinct asset layout, match keys, and field mappings. Single-
+ * resource drivers (Action1) declare a single `'records'` entry; the
+ * UI still renders one resource tab so the editor stays uniform.
+ */
+export const driverResourceDescriptorSchema = z.object({
+  key: z.string().min(1),
+  label: z.string().min(1),
+  description: z.string().nullable().optional(),
+  /**
+   * Free-text hint shown in the UI when the operator first enables the
+   * resource (e.g. the natural match-key field). Purely informational
+   * — the driver does not enforce it.
+   */
+  defaultMatchKeyHint: z.string().nullable().optional(),
+});
+
+export type DriverResourceDescriptor = z.infer<
+  typeof driverResourceDescriptorSchema
+>;
+
 export const driverDescriptorSchema = z.object({
   /** Stable id used as `Integration.driver` and in registry lookups. */
   key: z.string().min(1),
@@ -86,6 +111,14 @@ export const driverDescriptorSchema = z.object({
   configFields: z.array(driverFieldDescriptorSchema),
   /** Editable `IntegrationSecret` shape (write-only, never returned). */
   secretFields: z.array(driverFieldDescriptorSchema),
+  /**
+   * Resources this driver knows how to fetch. Always non-empty;
+   * drivers that don't declare any resources implicitly get a single
+   * `{ key: 'records', label: 'Records' }` entry from the registry
+   * shim so the UI / sync runner have a uniform "one or more
+   * resources" model.
+   */
+  resources: z.array(driverResourceDescriptorSchema).min(1),
   /** Driver capabilities surfaced to the UI. */
   capabilities: z.object({
     /** Driver can list source orgs to populate the matcher. */
@@ -111,21 +144,6 @@ export const createIntegrationSchema = z.object({
   /** Optional 5-field cron expression. NULL disables scheduled syncs. */
   syncCron: z.string().nullable().optional(),
   status: integrationStatusSchema.default('PAUSED'),
-  /**
-   * GLOBAL target layout for this integration. Optional at create
-   * time so the operator can stage credentials before the layout is
-   * picked. The layout MUST be set before any field mappings are
-   * defined (the API enforces this) — and before a sync run is
-   * triggered.
-   */
-  assetLayoutId: z.string().uuid().nullable().optional(),
-  /**
-   * AssetField ids used to claim unsynced Weavestream assets when an
-   * incoming external record matches their stored values. Must
-   * belong to `assetLayoutId`. Empty array means "always create on
-   * miss".
-   */
-  matchKeyFieldIds: z.array(z.string().uuid()).default([]),
 });
 
 export const updateIntegrationSchema = z
@@ -138,11 +156,50 @@ export const updateIntegrationSchema = z
     clearSecret: z.boolean().optional(),
     syncCron: z.string().nullable().optional(),
     status: integrationStatusSchema.optional(),
-    /**
-     * Set to a UUID to attach a layout, or `null` to detach. Detaching
-     * a layout while field mappings still exist is rejected by the
-     * API — drop the field mappings first.
-     */
+  })
+  .refine((v) => Object.keys(v).length > 0, {
+    message: 'At least one field must be provided',
+  });
+
+export type CreateIntegrationInput = z.infer<typeof createIntegrationSchema>;
+export type UpdateIntegrationInput = z.infer<typeof updateIntegrationSchema>;
+
+/**
+ * Phase 11.1 — per-resource configuration carried on an Integration.
+ *
+ * Every `(integration, resourceKey)` pair owns its own asset layout,
+ * match-keys, and field mappings. Snapshotted onto the parent
+ * `IntegrationDto.resources` array so the UI can render the per-
+ * resource tabs without a second round-trip.
+ */
+export const integrationResourceDtoSchema = z.object({
+  id: z.string().uuid(),
+  integrationId: z.string().uuid(),
+  resourceKey: z.string(),
+  /** Driver-declared label (snapshotted from the descriptor). */
+  resourceLabel: z.string(),
+  enabled: z.boolean(),
+  assetLayoutId: z.string().uuid().nullable(),
+  assetLayoutName: z.string().nullable(),
+  matchKeyFieldIds: z.array(z.string().uuid()),
+  /** Snapshot of total field mappings configured for this resource. */
+  fieldMappingCount: z.number().int(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+
+export type IntegrationResourceDto = z.infer<
+  typeof integrationResourceDtoSchema
+>;
+
+export const createIntegrationResourceSchema = z.object({
+  resourceKey: z.string().min(1),
+});
+
+export const updateIntegrationResourceSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    /** Set to a UUID to attach a layout, or `null` to detach. Detaching while field mappings exist is rejected. */
     assetLayoutId: z.string().uuid().nullable().optional(),
     /** Replace-all set of match-key AssetField ids on the chosen layout. */
     matchKeyFieldIds: z.array(z.string().uuid()).optional(),
@@ -151,8 +208,12 @@ export const updateIntegrationSchema = z
     message: 'At least one field must be provided',
   });
 
-export type CreateIntegrationInput = z.infer<typeof createIntegrationSchema>;
-export type UpdateIntegrationInput = z.infer<typeof updateIntegrationSchema>;
+export type CreateIntegrationResourceInput = z.infer<
+  typeof createIntegrationResourceSchema
+>;
+export type UpdateIntegrationResourceInput = z.infer<
+  typeof updateIntegrationResourceSchema
+>;
 
 export const integrationDtoSchema = z.object({
   id: z.string().uuid(),
@@ -170,14 +231,13 @@ export const integrationDtoSchema = z.object({
   hasSecret: z.boolean(),
   /** Last 4 chars of every secret value, by key — used for masked display. */
   secretMask: z.record(z.string()).nullable(),
-  /** GLOBAL target asset layout. NULL until the operator picks one. */
-  assetLayoutId: z.string().uuid().nullable(),
-  /** Snapshot of the layout's display name, NULL when unset. */
-  assetLayoutName: z.string().nullable(),
-  /** GLOBAL match-key AssetField ids (must live on `assetLayoutId`). */
-  matchKeyFieldIds: z.array(z.string().uuid()),
-  /** Snapshot of total field mappings configured (drives UI hints). */
-  fieldMappingCount: z.number().int(),
+  /**
+   * Per-resource config snapshots. Always non-empty (the seed migration
+   * + create flow guarantee at least one resource row exists per
+   * integration). Single-resource drivers expose one entry; UniFi
+   * exposes one per declared resource.
+   */
+  resources: z.array(integrationResourceDtoSchema),
   lastRunAt: z.string().nullable(),
   lastRunStatus: z.string().nullable(),
   createdBy: z.string().uuid().nullable(),
@@ -305,7 +365,9 @@ export type ReplaceFieldMappingsInput = z.infer<
 
 export const integrationFieldMappingDtoSchema = z.object({
   id: z.string().uuid(),
-  integrationId: z.string().uuid(),
+  /** Phase 11.1 — scoped per resource (devices vs clients vs records). */
+  resourceId: z.string().uuid(),
+  resourceKey: z.string(),
   sourceField: z.string(),
   targetFieldId: z.string().uuid(),
   targetFieldSlug: z.string().nullable(),
@@ -384,7 +446,7 @@ export type IntegrationSyncRunCompanyResultDto = z.infer<
 // both worker (writer) and admin UI (reader) share the source of truth.
 // ---------------------------------------------------------------------
 
-export const syncRunTotalsSchema = z.object({
+const baseSyncRunTotalsShape = {
   fetched: z.number().int().nonnegative().default(0),
   created: z.number().int().nonnegative().default(0),
   updated: z.number().int().nonnegative().default(0),
@@ -394,6 +456,22 @@ export const syncRunTotalsSchema = z.object({
   skippedAmbiguous: z.number().int().nonnegative().default(0),
   skippedManual: z.number().int().nonnegative().default(0),
   errors: z.number().int().nonnegative().default(0),
+} as const;
+
+export const syncRunResourceTotalsSchema = z.object(baseSyncRunTotalsShape);
+export type SyncRunResourceTotals = z.infer<
+  typeof syncRunResourceTotalsSchema
+>;
+
+export const syncRunTotalsSchema = z.object({
+  ...baseSyncRunTotalsShape,
+  /**
+   * Phase 11.1 — per-resource breakdown, keyed by `resourceKey`. The
+   * top-level counters above are the sum across every resource the
+   * mapping ran. Optional so legacy single-resource rows pre-migration
+   * still parse.
+   */
+  byResource: z.record(syncRunResourceTotalsSchema).optional(),
 });
 
 export type SyncRunTotals = z.infer<typeof syncRunTotalsSchema>;

@@ -21,7 +21,7 @@ import {
  */
 describe('integration zod schemas', () => {
   describe('createIntegrationSchema', () => {
-    it('applies defaults for status / config / matchKeyFieldIds', () => {
+    it('applies defaults for status / config and ignores layout-level inputs', () => {
       const out = createIntegrationSchema.parse({
         driver: 'action1',
         name: 'Action1 Production',
@@ -30,10 +30,12 @@ describe('integration zod schemas', () => {
       expect(out.config).toEqual({});
       expect(out.secret).toBeUndefined();
       expect(out.syncCron).toBeUndefined();
-      // Layout / match-keys are GLOBAL on the Integration after the
-      // global field-mapping refactor (D-021).
-      expect(out.assetLayoutId).toBeUndefined();
-      expect(out.matchKeyFieldIds).toEqual([]);
+      // Layout / match-keys are PER-RESOURCE after the resource refactor
+      // (Phase 11.1) — the create flow seeds resources from the driver
+      // descriptor and the per-resource PATCH endpoint configures the
+      // layout/match keys.
+      expect((out as Record<string, unknown>).assetLayoutId).toBeUndefined();
+      expect((out as Record<string, unknown>).matchKeyFieldIds).toBeUndefined();
     });
 
     it('rejects an empty driver / name', () => {
@@ -54,15 +56,15 @@ describe('integration zod schemas', () => {
       ).toThrow();
     });
 
-    it('rejects non-uuid match-key field ids', () => {
-      expect(() =>
-        createIntegrationSchema.parse({
-          driver: 'action1',
-          name: 'A1',
-          assetLayoutId: '00000000-0000-0000-0000-000000000002',
-          matchKeyFieldIds: ['not-a-uuid'],
-        }),
-      ).toThrow();
+    it('strips legacy layout / match-key inputs from the create payload', () => {
+      const out = createIntegrationSchema.parse({
+        driver: 'action1',
+        name: 'A1',
+        assetLayoutId: '00000000-0000-0000-0000-000000000002',
+        matchKeyFieldIds: ['not-a-uuid'],
+      });
+      expect((out as Record<string, unknown>).assetLayoutId).toBeUndefined();
+      expect((out as Record<string, unknown>).matchKeyFieldIds).toBeUndefined();
     });
   });
 
@@ -154,21 +156,34 @@ describe('integration zod schemas', () => {
 
   describe('syncRunTotalsSchema', () => {
     it('defaults all counters to 0', () => {
-      expect(syncRunTotalsSchema.parse({})).toEqual({
-        fetched: 0,
-        created: 0,
-        updated: 0,
-        unchanged: 0,
-        claimed: 0,
-        archived: 0,
-        skippedAmbiguous: 0,
-        skippedManual: 0,
-        errors: 0,
-      });
+      const out = syncRunTotalsSchema.parse({});
+      expect(out.fetched).toBe(0);
+      expect(out.created).toBe(0);
+      expect(out.updated).toBe(0);
+      expect(out.unchanged).toBe(0);
+      expect(out.claimed).toBe(0);
+      expect(out.archived).toBe(0);
+      expect(out.skippedAmbiguous).toBe(0);
+      expect(out.skippedManual).toBe(0);
+      expect(out.errors).toBe(0);
+      expect(out.byResource).toBeUndefined();
     });
 
     it('rejects negative counters', () => {
       expect(() => syncRunTotalsSchema.parse({ created: -1 })).toThrow();
+    });
+
+    it('accepts a per-resource breakdown', () => {
+      const out = syncRunTotalsSchema.parse({
+        fetched: 5,
+        created: 2,
+        byResource: {
+          devices: { fetched: 3, created: 1, updated: 0, unchanged: 0 },
+          clients: { fetched: 2, created: 1, updated: 0, unchanged: 0 },
+        },
+      });
+      expect(out.byResource?.['devices']?.fetched).toBe(3);
+      expect(out.byResource?.['clients']?.created).toBe(1);
     });
   });
 

@@ -7,11 +7,15 @@ import {
 } from '@nestjs/common';
 import type {
   CreateIntegrationInput,
+  CreateIntegrationResourceInput,
   DriverDescriptor,
+  DriverResourceDescriptor,
   IntegrationDto,
   IntegrationFieldMappingDto,
+  IntegrationResourceDto,
   ReplaceFieldMappingsInput,
   UpdateIntegrationInput,
+  UpdateIntegrationResourceInput,
 } from '@weavestream/shared';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { IntegrationSecretEncryptionService } from '../crypto/integration-secret-encryption.service.js';
@@ -35,6 +39,13 @@ export interface AuditMeta {
  * here is gated by `integration.manage` at the controller layer (which
  * is in turn SUPER_ADMIN-only). The service NEVER returns plaintext
  * secrets — only a fingerprint mask suitable for the admin UI.
+ *
+ * Phase 11.1 — per-resource configuration. Each Integration owns one or
+ * more `IntegrationResource` rows (one per driver-declared resource:
+ * UniFi -> devices + clients, Action1 -> records). Field mappings,
+ * asset layout, and match keys live on the resource container; this
+ * service exposes the per-resource read/write methods consumed by the
+ * controller and the sync runner.
  */
 @Injectable()
 export class IntegrationsService {
@@ -65,8 +76,8 @@ export class IntegrationsService {
       orderBy: [{ driver: 'asc' }, { name: 'asc' }],
       include: {
         secret: { select: { ciphertext: true } },
-        assetLayout: { select: { name: true } },
-        _count: { select: { companyMappings: true, fieldMappings: true } },
+        resources: this.resourceInclude(),
+        _count: { select: { companyMappings: true } },
       },
     });
     return rows.map((r) => this.toDto(r));
@@ -77,8 +88,8 @@ export class IntegrationsService {
       where: { id },
       include: {
         secret: { select: { ciphertext: true } },
-        assetLayout: { select: { name: true } },
-        _count: { select: { companyMappings: true, fieldMappings: true } },
+        resources: this.resourceInclude(),
+        _count: { select: { companyMappings: true } },
       },
     });
     if (!row) throw new NotFoundException(`Integration ${id} not found`);
@@ -93,18 +104,6 @@ export class IntegrationsService {
     const driver = this.drivers.get(input.driver);
     this.validateDriverPayload(driver.descriptor, input.config, input.secret);
 
-    if (input.assetLayoutId) {
-      await this.assertLayout(input.assetLayoutId);
-      await this.assertMatchKeysOnLayout(
-        input.assetLayoutId,
-        input.matchKeyFieldIds ?? [],
-      );
-    } else if ((input.matchKeyFieldIds ?? []).length > 0) {
-      throw new BadRequestException(
-        'Cannot configure match-key fields before an asset layout is selected.',
-      );
-    }
-
     const created = await this.prisma.$transaction(async (tx) => {
       const row = await tx.integration.create({
         data: {
@@ -113,11 +112,23 @@ export class IntegrationsService {
           status: input.status ?? 'PAUSED',
           config: (input.config ?? {}) as Prisma.InputJsonValue,
           syncCron: input.syncCron ?? null,
-          assetLayoutId: input.assetLayoutId ?? null,
-          matchKeyFieldIds: input.matchKeyFieldIds ?? [],
           createdBy: actor.id,
         },
       });
+      // Seed one IntegrationResource row per driver-declared resource so
+      // the operator can immediately pick a layout per resource without
+      // a separate "enable resource" round-trip. Newly added driver
+      // resources (e.g. UniFi adds 'clients' later) are auto-seeded for
+      // existing integrations on next API read via reconcileResources().
+      for (const r of driver.descriptor.resources) {
+        await tx.integrationResource.create({
+          data: {
+            integrationId: row.id,
+            resourceKey: r.key,
+            enabled: true,
+          },
+        });
+      }
       if (input.secret && Object.keys(input.secret).length > 0) {
         await tx.integrationSecret.create({
           data: {
@@ -142,8 +153,7 @@ export class IntegrationsService {
         name: created.name,
         status: created.status,
         hasSecret: Boolean(input.secret),
-        assetLayoutId: created.assetLayoutId,
-        matchKeyFieldIds: created.matchKeyFieldIds,
+        resources: driver.descriptor.resources.map((r) => r.key),
       },
     });
 
@@ -158,10 +168,7 @@ export class IntegrationsService {
   ): Promise<IntegrationDto> {
     const existing = await this.prisma.integration.findUnique({
       where: { id },
-      include: {
-        secret: true,
-        _count: { select: { fieldMappings: true } },
-      },
+      include: { secret: true },
     });
     if (!existing) throw new NotFoundException(`Integration ${id} not found`);
     const driver = this.drivers.get(existing.driver);
@@ -172,57 +179,12 @@ export class IntegrationsService {
       this.validateDriverPayload(driver.descriptor, null, input.secret);
     }
 
-    // Decide the post-update layout (may be unchanged, swapped, or
-    // detached) so we can validate match keys against it in one place.
-    const nextLayoutId =
-      input.assetLayoutId === undefined
-        ? existing.assetLayoutId
-        : input.assetLayoutId;
-
-    if (input.assetLayoutId !== undefined) {
-      if (input.assetLayoutId === null) {
-        if (existing._count.fieldMappings > 0) {
-          throw new BadRequestException(
-            'Remove all field mappings before detaching the asset layout.',
-          );
-        }
-      } else {
-        await this.assertLayout(input.assetLayoutId);
-        // Switching layouts wipes any previously-saved field mappings
-        // because their `targetFieldId`s belong to the OLD layout. The
-        // operator must reconfigure them on the new layout.
-        if (
-          existing.assetLayoutId &&
-          existing.assetLayoutId !== input.assetLayoutId &&
-          existing._count.fieldMappings > 0
-        ) {
-          throw new BadRequestException(
-            'Remove all field mappings before changing the asset layout.',
-          );
-        }
-      }
-    }
-
-    const nextMatchKeys = input.matchKeyFieldIds ?? existing.matchKeyFieldIds;
-    if (input.matchKeyFieldIds !== undefined) {
-      if (!nextLayoutId && nextMatchKeys.length > 0) {
-        throw new BadRequestException(
-          'Cannot configure match-key fields before an asset layout is selected.',
-        );
-      }
-      if (nextLayoutId) {
-        await this.assertMatchKeysOnLayout(nextLayoutId, nextMatchKeys);
-      }
-    }
-
     const before = {
       name: existing.name,
       status: existing.status,
       config: existing.config,
       syncCron: existing.syncCron,
       hasSecret: Boolean(existing.secret),
-      assetLayoutId: existing.assetLayoutId,
-      matchKeyFieldIds: existing.matchKeyFieldIds,
     };
 
     let secretMutated = false;
@@ -237,14 +199,6 @@ export class IntegrationsService {
             : undefined,
           syncCron:
             input.syncCron === undefined ? undefined : input.syncCron ?? null,
-          assetLayoutId:
-            input.assetLayoutId === undefined
-              ? undefined
-              : input.assetLayoutId ?? null,
-          matchKeyFieldIds:
-            input.matchKeyFieldIds === undefined
-              ? undefined
-              : input.matchKeyFieldIds,
         },
       });
 
@@ -279,18 +233,8 @@ export class IntegrationsService {
         config: fresh.config,
         syncCron: fresh.syncCron,
         hasSecret: fresh.hasSecret,
-        assetLayoutId: fresh.assetLayoutId,
-        matchKeyFieldIds: fresh.matchKeyFieldIds,
       },
-      fields: [
-        'name',
-        'status',
-        'config',
-        'syncCron',
-        'hasSecret',
-        'assetLayoutId',
-        'matchKeyFieldIds',
-      ],
+      fields: ['name', 'status', 'config', 'syncCron', 'hasSecret'],
     });
     if (secretMutated) {
       await this.audit.log({
@@ -327,19 +271,53 @@ export class IntegrationsService {
 
     const releasedAssetIds = records.map((r) => r.assetId);
 
+    // Tenant middleware requires `companyId` on every write to a
+    // tenant-scoped model (`IntegrationSyncRecord`, `Asset`). An
+    // integration can fan out across many companies, so we collect the
+    // distinct set of affected company ids and pass them as `in: [...]`.
+    const affectedCompanyIds = Array.from(
+      new Set(records.map((r) => r.companyId)),
+    );
+
     await this.prisma.$transaction(async (tx) => {
       if (releasedAssetIds.length > 0) {
         const safeAssetIds = assertStringIdList(releasedAssetIds, 'releasedAssetIds');
-        // The sync-records rows are deleted by the FK cascade once we
-        // delete the integration. Clearing the asset linkage first keeps
-        // the (asset_id) unique index from racing against the cascade.
+        const safeCompanyIds = assertStringIdList(
+          affectedCompanyIds,
+          'affectedCompanyIds',
+        );
+        // Cascade FKs would delete the sync-records rows when we
+        // drop the parent integration anyway, but doing it explicitly
+        // first lets us check the "is this asset still linked to any
+        // OTHER integration?" question below.
         await tx.integrationSyncRecord.deleteMany({
+          where: {
+            assetId: { in: safeAssetIds },
+            companyId: { in: safeCompanyIds },
+            companyMapping: { integrationId: id },
+          },
+        });
+        // Phase 11.2 — assets linked to multiple integrations keep
+        // their identity when one integration disappears. Only the
+        // assets with no remaining sync records get released.
+        const stillLinked = await tx.integrationSyncRecord.findMany({
           where: { assetId: { in: safeAssetIds } },
+          select: { assetId: true },
         });
-        await tx.asset.updateMany({
-          where: { id: { in: safeAssetIds } },
-          data: { externalId: null, externalSource: null },
-        });
+        const stillLinkedIds = new Set(stillLinked.map((r) => r.assetId));
+        const releasableAssetIds = safeAssetIds.filter(
+          (idCandidate) => !stillLinkedIds.has(idCandidate),
+        );
+        if (releasableAssetIds.length > 0) {
+          await tx.asset.updateMany({
+            where: {
+              id: { in: releasableAssetIds },
+              companyId: { in: safeCompanyIds },
+              externalSource: existing.driver,
+            },
+            data: { externalId: null, externalSource: null },
+          });
+        }
       }
       await tx.integration.delete({ where: { id } });
     });
@@ -425,20 +403,213 @@ export class IntegrationsService {
   }
 
   // -------------------------------------------------------------------
-  // Field-mapping CRUD (GLOBAL — replace-all per integration)
+  // Resources (per-integration, per-resource configuration)
   // -------------------------------------------------------------------
-  //
-  // Field mappings live on the Integration so a single source-field
-  // → target-field projection serves every per-company mapping. They
-  // are validated against the integration's globally-configured
-  // `assetLayoutId`; the API rejects writes if no layout is set yet.
+
+  /**
+   * Reconcile the Integration's `IntegrationResource` rows against the
+   * driver's current `descriptor.resources`. Auto-seeds rows for any
+   * driver resource that doesn't have one yet (e.g. when UniFi adds a
+   * new resource key to existing tenants). Idempotent.
+   *
+   * Does NOT remove rows for descriptor resources that disappeared —
+   * that would silently destroy operator config; we leave them in place
+   * (the API may surface a deprecation warning later).
+   */
+  async reconcileResources(integrationId: string): Promise<void> {
+    const integration = await this.requireIntegration(integrationId);
+    const driver = this.drivers.get(integration.driver);
+    const existing = await this.prisma.integrationResource.findMany({
+      where: { integrationId },
+      select: { resourceKey: true },
+    });
+    const existingKeys = new Set(existing.map((e) => e.resourceKey));
+    for (const r of driver.descriptor.resources) {
+      if (existingKeys.has(r.key)) continue;
+      await this.prisma.integrationResource.create({
+        data: {
+          integrationId,
+          resourceKey: r.key,
+          enabled: true,
+        },
+      });
+    }
+  }
+
+  async listResources(integrationId: string): Promise<IntegrationResourceDto[]> {
+    const integration = await this.requireIntegration(integrationId);
+    await this.reconcileResources(integrationId);
+    const driver = this.drivers.get(integration.driver);
+    const rows = await this.prisma.integrationResource.findMany({
+      where: { integrationId },
+      include: {
+        assetLayout: { select: { name: true } },
+        _count: { select: { fieldMappings: true } },
+      },
+    });
+    return this.sortResources(driver, rows.map((r) => this.toResourceDto(driver, r)));
+  }
+
+  async getResource(
+    integrationId: string,
+    resourceKey: string,
+  ): Promise<IntegrationResourceDto> {
+    const integration = await this.requireIntegration(integrationId);
+    const driver = this.drivers.get(integration.driver);
+    this.assertResourceKey(driver.descriptor, resourceKey);
+    const row = await this.findOrCreateResource(integrationId, resourceKey);
+    return this.toResourceDto(driver, row);
+  }
+
+  async createResource(
+    actor: AuthedUser,
+    integrationId: string,
+    input: CreateIntegrationResourceInput,
+    meta: AuditMeta,
+  ): Promise<IntegrationResourceDto> {
+    const integration = await this.requireIntegration(integrationId);
+    const driver = this.drivers.get(integration.driver);
+    this.assertResourceKey(driver.descriptor, input.resourceKey);
+    const existing = await this.prisma.integrationResource.findUnique({
+      where: {
+        integrationId_resourceKey: {
+          integrationId,
+          resourceKey: input.resourceKey,
+        },
+      },
+    });
+    if (existing) {
+      throw new ConflictException(
+        `Resource "${input.resourceKey}" is already enabled for this integration.`,
+      );
+    }
+    await this.prisma.integrationResource.create({
+      data: {
+        integrationId,
+        resourceKey: input.resourceKey,
+        enabled: true,
+      },
+    });
+    await this.audit.log({
+      actorId: actor.id,
+      action: AUDIT_ACTIONS.integration.resourceCreate,
+      entityType: 'Integration',
+      entityId: integrationId,
+      ip: meta.ip,
+      userAgent: meta.userAgent,
+      before: null,
+      after: { resourceKey: input.resourceKey },
+    });
+    return this.getResource(integrationId, input.resourceKey);
+  }
+
+  async updateResource(
+    actor: AuthedUser,
+    integrationId: string,
+    resourceKey: string,
+    input: UpdateIntegrationResourceInput,
+    meta: AuditMeta,
+  ): Promise<IntegrationResourceDto> {
+    const integration = await this.requireIntegration(integrationId);
+    const driver = this.drivers.get(integration.driver);
+    this.assertResourceKey(driver.descriptor, resourceKey);
+    const existing = await this.findOrCreateResource(integrationId, resourceKey);
+    const fieldMappingCount = await this.prisma.integrationFieldMapping.count({
+      where: { resourceId: existing.id },
+    });
+
+    const nextLayoutId =
+      input.assetLayoutId === undefined
+        ? existing.assetLayoutId
+        : input.assetLayoutId;
+
+    if (input.assetLayoutId !== undefined) {
+      if (input.assetLayoutId === null) {
+        if (fieldMappingCount > 0) {
+          throw new BadRequestException(
+            'Remove all field mappings before detaching the asset layout.',
+          );
+        }
+      } else {
+        await this.assertLayout(input.assetLayoutId);
+        if (
+          existing.assetLayoutId &&
+          existing.assetLayoutId !== input.assetLayoutId &&
+          fieldMappingCount > 0
+        ) {
+          throw new BadRequestException(
+            'Remove all field mappings before changing the asset layout.',
+          );
+        }
+      }
+    }
+
+    const nextMatchKeys = input.matchKeyFieldIds ?? existing.matchKeyFieldIds;
+    if (input.matchKeyFieldIds !== undefined) {
+      if (!nextLayoutId && nextMatchKeys.length > 0) {
+        throw new BadRequestException(
+          'Cannot configure match-key fields before an asset layout is selected.',
+        );
+      }
+      if (nextLayoutId) {
+        await this.assertMatchKeysOnLayout(nextLayoutId, nextMatchKeys);
+      }
+    }
+
+    const before = {
+      enabled: existing.enabled,
+      assetLayoutId: existing.assetLayoutId,
+      matchKeyFieldIds: existing.matchKeyFieldIds,
+    };
+
+    await this.prisma.integrationResource.update({
+      where: { id: existing.id },
+      data: {
+        enabled: input.enabled ?? undefined,
+        assetLayoutId:
+          input.assetLayoutId === undefined
+            ? undefined
+            : input.assetLayoutId ?? null,
+        matchKeyFieldIds:
+          input.matchKeyFieldIds === undefined
+            ? undefined
+            : input.matchKeyFieldIds,
+      },
+    });
+
+    const fresh = await this.getResource(integrationId, resourceKey);
+    await this.audit.logChange({
+      actorId: actor.id,
+      action: AUDIT_ACTIONS.integration.resourceUpdate,
+      entityType: 'Integration',
+      entityId: integrationId,
+      ip: meta.ip,
+      userAgent: meta.userAgent,
+      before,
+      after: {
+        enabled: fresh.enabled,
+        assetLayoutId: fresh.assetLayoutId,
+        matchKeyFieldIds: fresh.matchKeyFieldIds,
+      },
+      fields: ['enabled', 'assetLayoutId', 'matchKeyFieldIds'],
+    });
+    return fresh;
+  }
+
+  // -------------------------------------------------------------------
+  // Field-mapping CRUD (per-resource — replace-all per resource)
+  // -------------------------------------------------------------------
 
   async listFieldMappings(
     integrationId: string,
+    resourceKey: string,
   ): Promise<IntegrationFieldMappingDto[]> {
-    await this.requireIntegration(integrationId);
+    const integration = await this.requireIntegration(integrationId);
+    const driver = this.drivers.get(integration.driver);
+    this.assertResourceKey(driver.descriptor, resourceKey);
+    const resource = await this.findOrCreateResource(integrationId, resourceKey);
     const rows = await this.prisma.integrationFieldMapping.findMany({
-      where: { integrationId },
+      where: { resourceId: resource.id },
       orderBy: { sourceField: 'asc' },
       include: {
         targetField: {
@@ -448,7 +619,8 @@ export class IntegrationsService {
     });
     return rows.map((r) => ({
       id: r.id,
-      integrationId: r.integrationId,
+      resourceId: r.resourceId,
+      resourceKey,
       sourceField: r.sourceField,
       targetFieldId: r.targetFieldId,
       targetFieldName: r.targetField?.name ?? null,
@@ -464,11 +636,15 @@ export class IntegrationsService {
   async replaceFieldMappings(
     actor: AuthedUser,
     integrationId: string,
+    resourceKey: string,
     input: ReplaceFieldMappingsInput,
     meta: AuditMeta,
   ): Promise<IntegrationFieldMappingDto[]> {
     const integration = await this.requireIntegration(integrationId);
-    if (!integration.assetLayoutId) {
+    const driver = this.drivers.get(integration.driver);
+    this.assertResourceKey(driver.descriptor, resourceKey);
+    const resource = await this.findOrCreateResource(integrationId, resourceKey);
+    if (!resource.assetLayoutId) {
       throw new BadRequestException(
         'Pick a target asset layout before configuring field mappings.',
       );
@@ -495,7 +671,7 @@ export class IntegrationsService {
       const valid = await this.prisma.assetField.findMany({
         where: {
           id: { in: input.mappings.map((m) => m.targetFieldId) },
-          assetLayoutId: integration.assetLayoutId,
+          assetLayoutId: resource.assetLayoutId,
           archivedAt: null,
         },
         select: { id: true },
@@ -504,7 +680,7 @@ export class IntegrationsService {
       for (const m of input.mappings) {
         if (!validSet.has(m.targetFieldId)) {
           throw new BadRequestException(
-            `Target field ${m.targetFieldId} does not belong to layout ${integration.assetLayoutId} or is archived.`,
+            `Target field ${m.targetFieldId} does not belong to layout ${resource.assetLayoutId} or is archived.`,
           );
         }
       }
@@ -512,12 +688,12 @@ export class IntegrationsService {
 
     await this.prisma.$transaction(async (tx) => {
       await tx.integrationFieldMapping.deleteMany({
-        where: { integrationId: { equals: integrationId } },
+        where: { resourceId: { equals: resource.id } },
       });
       if (input.mappings.length > 0) {
         await tx.integrationFieldMapping.createMany({
           data: input.mappings.map((m) => ({
-            integrationId,
+            resourceId: resource.id,
             sourceField: m.sourceField.trim(),
             targetFieldId: m.targetFieldId,
             syncDirection: m.syncDirection,
@@ -537,10 +713,10 @@ export class IntegrationsService {
       ip: meta.ip,
       userAgent: meta.userAgent,
       before: null,
-      after: { mappings: input.mappings.length },
+      after: { resourceKey, mappings: input.mappings.length },
     });
 
-    return this.listFieldMappings(integrationId);
+    return this.listFieldMappings(integrationId, resourceKey);
   }
 
   // -------------------------------------------------------------------
@@ -551,6 +727,43 @@ export class IntegrationsService {
     const row = await this.prisma.integration.findUnique({ where: { id } });
     if (!row) throw new NotFoundException(`Integration ${id} not found`);
     return row;
+  }
+
+  private async findOrCreateResource(
+    integrationId: string,
+    resourceKey: string,
+  ) {
+    const existing = await this.prisma.integrationResource.findUnique({
+      where: { integrationId_resourceKey: { integrationId, resourceKey } },
+      include: {
+        assetLayout: { select: { name: true } },
+        _count: { select: { fieldMappings: true } },
+      },
+    });
+    if (existing) return existing;
+    return this.prisma.integrationResource.create({
+      data: {
+        integrationId,
+        resourceKey,
+        enabled: true,
+      },
+      include: {
+        assetLayout: { select: { name: true } },
+        _count: { select: { fieldMappings: true } },
+      },
+    });
+  }
+
+  private assertResourceKey(
+    descriptor: DriverDescriptor,
+    resourceKey: string,
+  ): void {
+    const ok = descriptor.resources.some((r) => r.key === resourceKey);
+    if (!ok) {
+      throw new BadRequestException(
+        `Driver "${descriptor.key}" does not declare a resource named "${resourceKey}".`,
+      );
+    }
   }
 
   private async assertLayout(assetLayoutId: string): Promise<void> {
@@ -612,26 +825,69 @@ export class IntegrationsService {
     }
   }
 
-  private toDto(
-    row: {
-      id: string;
-      driver: string;
-      name: string;
-      status: 'ACTIVE' | 'PAUSED' | 'DISABLED';
-      config: unknown;
-      syncCron: string | null;
-      assetLayoutId: string | null;
-      matchKeyFieldIds: string[];
-      lastRunAt: Date | null;
-      lastRunStatus: string | null;
-      createdBy: string | null;
-      createdAt: Date;
-      updatedAt: Date;
-      secret?: { ciphertext: string } | null;
-      assetLayout?: { name: string } | null;
-      _count?: { companyMappings?: number; fieldMappings?: number };
-    },
-  ): IntegrationDto {
+  private resourceInclude() {
+    return {
+      include: {
+        assetLayout: { select: { name: true } },
+        _count: { select: { fieldMappings: true } },
+      },
+    } as const;
+  }
+
+  private toResourceDto(
+    driver: { descriptor: DriverDescriptor },
+    row: ResourceRowWithIncludes,
+  ): IntegrationResourceDto {
+    const descriptor = driver.descriptor.resources.find(
+      (r) => r.key === row.resourceKey,
+    );
+    return {
+      id: row.id,
+      integrationId: row.integrationId,
+      resourceKey: row.resourceKey,
+      resourceLabel: descriptor?.label ?? row.resourceKey,
+      enabled: row.enabled,
+      assetLayoutId: row.assetLayoutId,
+      assetLayoutName: row.assetLayout?.name ?? null,
+      matchKeyFieldIds: row.matchKeyFieldIds,
+      fieldMappingCount: row._count?.fieldMappings ?? 0,
+      createdAt: row.createdAt.toISOString(),
+      updatedAt: row.updatedAt.toISOString(),
+    };
+  }
+
+  /**
+   * Stable resource ordering matches the driver descriptor so the UI
+   * tab strip renders in the same order across every page load,
+   * regardless of insert order in the table.
+   */
+  private sortResources(
+    driver: { descriptor: DriverDescriptor },
+    rows: IntegrationResourceDto[],
+  ): IntegrationResourceDto[] {
+    const order = new Map(
+      driver.descriptor.resources.map((r, i) => [r.key, i] as const),
+    );
+    return [...rows].sort(
+      (a, b) =>
+        (order.get(a.resourceKey) ?? Number.MAX_SAFE_INTEGER) -
+        (order.get(b.resourceKey) ?? Number.MAX_SAFE_INTEGER),
+    );
+  }
+
+  private toDto(row: IntegrationRowWithIncludes): IntegrationDto {
+    const driver = this.drivers.has(row.driver)
+      ? this.drivers.get(row.driver)
+      : null;
+    const descriptorResources: DriverResourceDescriptor[] =
+      driver?.descriptor.resources ?? [];
+    const driverShim = {
+      descriptor: {
+        ...(driver?.descriptor ?? {}),
+        resources: descriptorResources,
+      } as DriverDescriptor,
+    };
+
     let secretMask: Record<string, string> | null = null;
     if (row.secret) {
       try {
@@ -647,6 +903,12 @@ export class IntegrationsService {
         secretMask = { _: '••••' };
       }
     }
+
+    const resources = this.sortResources(
+      driverShim,
+      (row.resources ?? []).map((r) => this.toResourceDto(driverShim, r)),
+    );
+
     const rawDefault = this.env.values.INTEGRATION_SYNC_DEFAULT_CRON;
     const defaultCron =
       rawDefault.toLowerCase() === 'off' ? null : rawDefault;
@@ -660,10 +922,7 @@ export class IntegrationsService {
       effectiveSyncCron: row.syncCron ?? defaultCron,
       hasSecret: Boolean(row.secret),
       secretMask,
-      assetLayoutId: row.assetLayoutId,
-      assetLayoutName: row.assetLayout?.name ?? null,
-      matchKeyFieldIds: row.matchKeyFieldIds,
-      fieldMappingCount: row._count?.fieldMappings ?? 0,
+      resources,
       lastRunAt: row.lastRunAt ? row.lastRunAt.toISOString() : null,
       lastRunStatus: row.lastRunStatus,
       createdBy: row.createdBy,
@@ -672,4 +931,34 @@ export class IntegrationsService {
       mappingCount: row._count?.companyMappings ?? 0,
     };
   }
+}
+
+interface ResourceRowWithIncludes {
+  id: string;
+  integrationId: string;
+  resourceKey: string;
+  enabled: boolean;
+  assetLayoutId: string | null;
+  matchKeyFieldIds: string[];
+  createdAt: Date;
+  updatedAt: Date;
+  assetLayout?: { name: string } | null;
+  _count?: { fieldMappings?: number };
+}
+
+interface IntegrationRowWithIncludes {
+  id: string;
+  driver: string;
+  name: string;
+  status: 'ACTIVE' | 'PAUSED' | 'DISABLED';
+  config: unknown;
+  syncCron: string | null;
+  lastRunAt: Date | null;
+  lastRunStatus: string | null;
+  createdBy: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+  secret?: { ciphertext: string } | null;
+  resources?: ResourceRowWithIncludes[];
+  _count?: { companyMappings?: number };
 }

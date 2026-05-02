@@ -104,6 +104,7 @@ function makeFetchCtx(orgId = 'o-1'): FetchRecordsContext {
   return {
     ...makeCtx(),
     externalOrgId: orgId,
+    resourceKey: 'records',
     filter: {},
   } as FetchRecordsContext;
 }
@@ -282,6 +283,7 @@ describe('Action1Driver.listSourceFields', () => {
       const fields = await new Action1Driver().listSourceFields({
         ...makeCtx(),
         externalOrgId: 'o-1',
+        resourceKey: 'records',
       });
       const keys = fields.map((f) => f.key);
       expect(keys).toEqual(expect.arrayContaining([
@@ -343,6 +345,7 @@ describe('Action1Driver.listSourceFields', () => {
       const fields = await new Action1Driver().listSourceFields({
         ...makeCtx(),
         externalOrgId: 'o-1',
+        resourceKey: 'records',
       });
       // Curated catalogue is non-empty and uses Action1's actual
       // case-sensitive keys (OS / RAM / serial — NOT os / ram /

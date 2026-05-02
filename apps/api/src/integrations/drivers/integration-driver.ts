@@ -50,6 +50,13 @@ export interface IntegrationContext {
 export interface FetchRecordsContext extends IntegrationContext {
   /** External org id to scope the fetch to (always set for fan-out drivers). */
   readonly externalOrgId: string;
+  /**
+   * Resource key the runner is fetching for (e.g. 'devices', 'clients',
+   * 'records'). Multi-resource drivers branch on this to hit a different
+   * upstream endpoint and shape the records differently. Single-resource
+   * drivers can ignore it.
+   */
+  readonly resourceKey: string;
   /** Mapping-level filter blob (driver-validated). */
   readonly filter: Record<string, unknown>;
 }
@@ -118,12 +125,13 @@ export interface IntegrationDriver {
   listSourceOrgs(ctx: IntegrationContext): Promise<SourceOrgDto[]>;
 
   /**
-   * List the fields available on records pulled from `externalOrgId`.
-   * Drivers that have a static field catalogue can ignore the param;
-   * drivers that expose per-org custom fields read it.
+   * List the fields available on records pulled from `externalOrgId`
+   * for a specific `resourceKey`. Drivers with a static field catalogue
+   * can ignore both params; multi-resource drivers branch on
+   * `resourceKey` to return the right field set.
    */
   listSourceFields(
-    ctx: IntegrationContext & { externalOrgId: string },
+    ctx: IntegrationContext & { externalOrgId: string; resourceKey: string },
   ): Promise<SourceFieldDto[]>;
 
   /** Walk paginated records for a single org. */

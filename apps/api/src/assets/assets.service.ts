@@ -921,6 +921,12 @@ export class AssetsService {
    * supplies the bookkeeping that drives the per-asset / per-field
    * "synced" indicators in the UI without exposing checksums or run
    * ids that operators don't need.
+   *
+   * Phase 11.2 — an asset can be linked to multiple integrations
+   * simultaneously. For each asset we pick the MOST RECENT sync
+   * record's `lastSyncedAt` and union every record's per-field
+   * checksum keys, so the UI's "synced" badge accurately reflects
+   * every field touched by any active integration.
    */
   private async hydrateSyncMetadata(
     companyId: string,
@@ -937,16 +943,33 @@ export class AssetsService {
         lastSyncedFieldChecksums: true,
       },
     });
-    const byAssetId = new Map(rows.map((r) => [r.assetId, r] as const));
-    for (const a of assets) {
-      const r = byAssetId.get(a.id);
-      if (!r) continue;
-      a.lastSyncedAt = r.lastSyncedAt;
+    const aggregated = new Map<
+      string,
+      { lastSyncedAt: Date; syncedFieldIds: Set<string> }
+    >();
+    for (const r of rows) {
       const checksums = (r.lastSyncedFieldChecksums ?? {}) as Record<
         string,
         unknown
       >;
-      a.syncedFieldIds = Object.keys(checksums);
+      const entry = aggregated.get(r.assetId);
+      if (!entry) {
+        aggregated.set(r.assetId, {
+          lastSyncedAt: r.lastSyncedAt,
+          syncedFieldIds: new Set(Object.keys(checksums)),
+        });
+      } else {
+        if (r.lastSyncedAt > entry.lastSyncedAt) {
+          entry.lastSyncedAt = r.lastSyncedAt;
+        }
+        for (const k of Object.keys(checksums)) entry.syncedFieldIds.add(k);
+      }
+    }
+    for (const a of assets) {
+      const entry = aggregated.get(a.id);
+      if (!entry) continue;
+      a.lastSyncedAt = entry.lastSyncedAt;
+      a.syncedFieldIds = Array.from(entry.syncedFieldIds);
     }
   }
 

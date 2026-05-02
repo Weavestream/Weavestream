@@ -74,9 +74,7 @@ export default async function IntegrationDetailPage({
       <PageBody>
         <Panel noPad>
           <IntegrationTabs
-            initialTab={
-              (sp.tab as 'creds' | 'fields' | 'orgs' | 'runs') ?? 'creds'
-            }
+            initialTab={sp.tab ?? 'creds'}
             integration={integration}
             mappings={mappings}
             runs={runs}

@@ -138,8 +138,11 @@ export class IntegrationCompanyMappingService {
       filter: existing.filter,
     };
 
-    await this.prisma.integrationCompanyMapping.update({
-      where: { id: mappingId },
+    // `updateMany` rather than `update` so we can carry `companyId`
+    // in the `where` clause for the tenant guard. The mapping id is
+    // unique so this still touches at most one row.
+    await this.prisma.integrationCompanyMapping.updateMany({
+      where: { id: mappingId, companyId: existing.companyId },
       data: {
         companyId: input.companyId ?? undefined,
         externalOrgName:
@@ -197,18 +200,42 @@ export class IntegrationCompanyMappingService {
     await this.prisma.$transaction(async (tx) => {
       if (releasedAssetIds.length > 0) {
         const safeAssetIds = assertStringIdList(releasedAssetIds, 'releasedAssetIds');
+        // Tenant middleware requires `companyId` on every write to a
+        // tenant-scoped model; the mapping carries a single companyId
+        // so every sync record + asset under it shares it.
         await tx.integrationSyncRecord.deleteMany({
-          where: { assetId: { in: safeAssetIds } },
-        });
-        await tx.asset.updateMany({
           where: {
-            id: { in: safeAssetIds },
-            companyId: { equals: existing.companyId },
+            integrationCompanyMappingId: mappingId,
+            companyId: existing.companyId,
           },
-          data: { externalId: null, externalSource: null },
         });
+        // Phase 11.2 — multi-integration assets stay linked to their
+        // OTHER owners when this mapping disappears. Only the assets
+        // that no longer have any sync records get their denormalised
+        // externalId / externalSource cleared.
+        const stillLinked = await tx.integrationSyncRecord.findMany({
+          where: { assetId: { in: safeAssetIds } },
+          select: { assetId: true },
+        });
+        const stillLinkedIds = new Set(stillLinked.map((r) => r.assetId));
+        const releasableAssetIds = safeAssetIds.filter(
+          (id) => !stillLinkedIds.has(id),
+        );
+        if (releasableAssetIds.length > 0) {
+          await tx.asset.updateMany({
+            where: {
+              id: { in: releasableAssetIds },
+              companyId: { equals: existing.companyId },
+            },
+            data: { externalId: null, externalSource: null },
+          });
+        }
       }
-      await tx.integrationCompanyMapping.delete({ where: { id: mappingId } });
+      // `deleteMany` instead of `delete` so we can satisfy the tenant
+      // guard with the `companyId` filter in the `where` clause.
+      await tx.integrationCompanyMapping.deleteMany({
+        where: { id: mappingId, companyId: existing.companyId },
+      });
     });
 
     await this.audit.log({

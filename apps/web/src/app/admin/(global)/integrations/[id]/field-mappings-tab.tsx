@@ -4,9 +4,11 @@ import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import type {
   DriverDescriptor,
+  DriverResourceDescriptor,
   IntegrationCompanyMappingDto,
   IntegrationDto,
   IntegrationFieldMappingDto,
+  IntegrationResourceDto,
   IntegrationSyncDirectionValue,
   SourceFieldDto,
 } from '@weavestream/shared';
@@ -47,7 +49,6 @@ const DIRECTIONS: Array<{
 ];
 
 type FieldRow = {
-  /** Stable row id for keyed rendering. */
   rowId: string;
   sourceField: string;
   targetFieldId: string;
@@ -55,10 +56,10 @@ type FieldRow = {
 };
 
 /**
- * Phase 11 — GLOBAL field-mapping editor.
+ * Phase 11.1 — per-resource field-mapping editor.
  *
- * One configuration shared across every per-company mapping for this
- * integration:
+ * One configuration per `(integration, resourceKey)` pair shared across
+ * every per-company mapping for this integration:
  *   1. Asset layout (drives target field options).
  *   2. Match-key fields (which AssetField ids the resolver uses to
  *      claim unsynced Weavestream assets).
@@ -69,13 +70,138 @@ export function FieldMappingsTab({
   integration,
   mappings,
   driver,
+  resource,
 }: {
   integration: IntegrationDto;
   mappings: IntegrationCompanyMappingDto[];
   driver: DriverDescriptor | null;
+  resource: DriverResourceDescriptor;
 }) {
   const router = useRouter();
   const toast = useToast();
+
+  const resourceKey = resource.key;
+  const resourceLabel = resource.label;
+
+  // Locate the matching IntegrationResource row (may be absent if the
+  // driver descriptor was extended after the integration was created).
+  const initialResource = useMemo<IntegrationResourceDto | null>(
+    () =>
+      integration.resources.find((r) => r.resourceKey === resourceKey) ?? null,
+    [integration.resources, resourceKey],
+  );
+
+  const [resourceRow, setResourceRow] = useState<IntegrationResourceDto | null>(
+    initialResource,
+  );
+  useEffect(() => {
+    setResourceRow(initialResource);
+  }, [initialResource]);
+
+  const [enablePending, setEnablePending] = useState(false);
+  const [enableError, setEnableError] = useState<string | null>(null);
+
+  async function enableResource() {
+    setEnableError(null);
+    setEnablePending(true);
+    const res = await apiFetch<IntegrationResourceDto>(
+      `/admin/integrations/${integration.id}/resources`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ resourceKey }),
+      },
+    );
+    setEnablePending(false);
+    if (!res.ok || !res.data) {
+      const problem = res.problem as
+        | { detail?: string; title?: string }
+        | undefined;
+      setEnableError(
+        problem?.detail ??
+          problem?.title ??
+          `Could not enable ${resourceLabel}.`,
+      );
+      return;
+    }
+    setResourceRow(res.data);
+    router.refresh();
+  }
+
+  if (!resourceRow) {
+    return (
+      <div
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 14,
+          padding: '32px 18px',
+          alignItems: 'center',
+          textAlign: 'center',
+        }}
+      >
+        <h3
+          style={{
+            margin: 0,
+            fontFamily: 'var(--font-display)',
+            fontSize: 14,
+            fontWeight: 600,
+          }}
+        >
+          {resourceLabel} not enabled
+        </h3>
+        <p
+          style={{
+            margin: 0,
+            fontSize: 12.5,
+            color: 'var(--muted)',
+            maxWidth: 480,
+          }}
+        >
+          Enable {resourceLabel.toLowerCase()} to pick an asset layout, choose
+          match-key fields, and project upstream columns onto Weavestream
+          fields. Each resource binds to its own layout — devices and clients
+          can use different layouts in the same integration.
+        </p>
+        {enableError && <Tag tone="danger">{enableError}</Tag>}
+        <Btn kind="primary" onClick={enableResource} loading={enablePending}>
+          Enable {resourceLabel}
+        </Btn>
+      </div>
+    );
+  }
+
+  return (
+    <ResourceEditor
+      integration={integration}
+      mappings={mappings}
+      driver={driver}
+      resource={resource}
+      resourceRow={resourceRow}
+      onResourceUpdate={(next) => setResourceRow(next)}
+    />
+  );
+}
+
+function ResourceEditor({
+  integration,
+  mappings,
+  driver,
+  resource,
+  resourceRow,
+  onResourceUpdate,
+}: {
+  integration: IntegrationDto;
+  mappings: IntegrationCompanyMappingDto[];
+  driver: DriverDescriptor | null;
+  resource: DriverResourceDescriptor;
+  resourceRow: IntegrationResourceDto;
+  onResourceUpdate: (next: IntegrationResourceDto) => void;
+}) {
+  const router = useRouter();
+  const toast = useToast();
+
+  const resourceKey = resource.key;
+  const resourceLabel = resource.label;
 
   const [layouts, setLayouts] = useState<LayoutSummary[]>([]);
   const [layoutFields, setLayoutFields] = useState<LayoutFieldSummary[]>([]);
@@ -86,16 +212,24 @@ export function FieldMappingsTab({
   );
 
   const [assetLayoutId, setAssetLayoutId] = useState<string>(
-    integration.assetLayoutId ?? '',
+    resourceRow.assetLayoutId ?? '',
   );
   const [matchKeyFieldIds, setMatchKeyFieldIds] = useState<string[]>(
-    integration.matchKeyFieldIds,
+    resourceRow.matchKeyFieldIds,
   );
+  const [enabled, setEnabled] = useState<boolean>(resourceRow.enabled);
   const [fieldMappings, setFieldMappings] = useState<FieldRow[]>([]);
   const [loadingMappings, setLoadingMappings] = useState(true);
 
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Re-sync local state when the resource row changes (e.g. after refresh).
+  useEffect(() => {
+    setAssetLayoutId(resourceRow.assetLayoutId ?? '');
+    setMatchKeyFieldIds(resourceRow.matchKeyFieldIds);
+    setEnabled(resourceRow.enabled);
+  }, [resourceRow]);
 
   // -----------------------------------------------------------------
   // Layout list (drives the picker + AssetField options for the chosen
@@ -129,9 +263,7 @@ export function FieldMappingsTab({
       );
       if (cancelled) return;
       if (!res.ok || !res.data) return;
-      setLayoutFields(
-        res.data.layout.fields.filter((f) => !f.archivedAt),
-      );
+      setLayoutFields(res.data.layout.fields.filter((f) => !f.archivedAt));
     })();
     return () => {
       cancelled = true;
@@ -139,7 +271,7 @@ export function FieldMappingsTab({
   }, [assetLayoutId]);
 
   // -----------------------------------------------------------------
-  // Existing global field mappings.
+  // Existing field mappings (per resource).
   // -----------------------------------------------------------------
 
   useEffect(() => {
@@ -147,7 +279,7 @@ export function FieldMappingsTab({
     (async () => {
       setLoadingMappings(true);
       const res = await apiFetch<IntegrationFieldMappingDto[]>(
-        `/admin/integrations/${integration.id}/field-mappings`,
+        `/admin/integrations/${integration.id}/resources/${resourceKey}/field-mappings`,
       );
       if (cancelled) return;
       setLoadingMappings(false);
@@ -164,12 +296,10 @@ export function FieldMappingsTab({
     return () => {
       cancelled = true;
     };
-  }, [integration.id]);
+  }, [integration.id, resourceKey]);
 
   // -----------------------------------------------------------------
-  // Source fields from the driver. Most drivers (Action1) return a
-  // uniform schema regardless of org, so we don't pin a specific one
-  // — the API picks the first existing mapping if needed.
+  // Source fields from the driver, scoped to the chosen resource.
   // -----------------------------------------------------------------
 
   useEffect(() => {
@@ -178,7 +308,7 @@ export function FieldMappingsTab({
     (async () => {
       setSourceFieldsError(null);
       const res = await apiFetch<{ fields: SourceFieldDto[] }>(
-        `/admin/integrations/${integration.id}/source-fields`,
+        `/admin/integrations/${integration.id}/resources/${resourceKey}/source-fields`,
       );
       if (cancelled) return;
       if (!res.ok || !res.data) {
@@ -197,7 +327,7 @@ export function FieldMappingsTab({
     return () => {
       cancelled = true;
     };
-  }, [driver, integration.id, mappings.length]);
+  }, [driver, integration.id, mappings.length, resourceKey]);
 
   // -----------------------------------------------------------------
   // Handlers
@@ -232,10 +362,11 @@ export function FieldMappingsTab({
   }
 
   // -----------------------------------------------------------------
-  // Save: integration patch (layout + match-keys), then field mappings.
-  // The two writes are sequential but the field-mappings PATCH refuses
-  // to run when the integration has no layout, so a partial failure
-  // here always leaves the operator with a coherent state.
+  // Save: PATCH the resource (layout + match-keys + enabled), then
+  // PATCH its field mappings. The two writes are sequential but the
+  // field-mappings PATCH refuses to run when the resource has no
+  // layout, so a partial failure here always leaves the operator with
+  // a coherent state.
   // -----------------------------------------------------------------
 
   async function save() {
@@ -271,28 +402,34 @@ export function FieldMappingsTab({
       return;
     }
 
-    // 1. Patch integration with layout + match-keys.
-    const integrationPatch: Record<string, unknown> = {};
-    if ((integration.assetLayoutId ?? null) !== (assetLayoutId || null)) {
-      integrationPatch.assetLayoutId = assetLayoutId || null;
-    }
     const filteredKeys = matchKeyFieldIds.filter((id) =>
       targetFieldIndex.has(id),
     );
+
+    const resourcePatch: Record<string, unknown> = {};
+    if ((resourceRow.assetLayoutId ?? null) !== (assetLayoutId || null)) {
+      resourcePatch.assetLayoutId = assetLayoutId || null;
+    }
     if (
-      JSON.stringify(integration.matchKeyFieldIds) !==
+      JSON.stringify(resourceRow.matchKeyFieldIds) !==
       JSON.stringify(filteredKeys)
     ) {
-      integrationPatch.matchKeyFieldIds = filteredKeys;
+      resourcePatch.matchKeyFieldIds = filteredKeys;
+    }
+    if (resourceRow.enabled !== enabled) {
+      resourcePatch.enabled = enabled;
     }
 
-    if (Object.keys(integrationPatch).length > 0) {
-      const intRes = await apiFetch(`/admin/integrations/${integration.id}`, {
-        method: 'PATCH',
-        body: JSON.stringify(integrationPatch),
-      });
-      if (!intRes.ok) {
-        const problem = intRes.problem as
+    if (Object.keys(resourcePatch).length > 0) {
+      const resRes = await apiFetch<IntegrationResourceDto>(
+        `/admin/integrations/${integration.id}/resources/${resourceKey}`,
+        {
+          method: 'PATCH',
+          body: JSON.stringify(resourcePatch),
+        },
+      );
+      if (!resRes.ok || !resRes.data) {
+        const problem = resRes.problem as
           | { detail?: string; title?: string }
           | undefined;
         setPending(false);
@@ -303,11 +440,11 @@ export function FieldMappingsTab({
         );
         return;
       }
+      onResourceUpdate(resRes.data);
     }
 
-    // 2. Replace-all field mappings.
     const fmRes = await apiFetch(
-      `/admin/integrations/${integration.id}/field-mappings`,
+      `/admin/integrations/${integration.id}/resources/${resourceKey}/field-mappings`,
       {
         method: 'PATCH',
         body: JSON.stringify({ mappings: cleanedMappings }),
@@ -323,7 +460,7 @@ export function FieldMappingsTab({
       );
       return;
     }
-    toast.push('Field mappings saved.', 'ok');
+    toast.push(`${resourceLabel} mappings saved.`, 'ok');
     router.refresh();
   }
 
@@ -333,9 +470,7 @@ export function FieldMappingsTab({
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 22 }}>
-      <header
-        style={{ display: 'flex', flexDirection: 'column', gap: 4 }}
-      >
+      <header style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
         <h3
           style={{
             margin: 0,
@@ -345,21 +480,57 @@ export function FieldMappingsTab({
             letterSpacing: -0.2,
           }}
         >
-          Global field mappings
+          {resourceLabel} field mappings
         </h3>
         <p style={{ margin: 0, fontSize: 12.5, color: 'var(--muted)' }}>
           One configuration drives every per-company mapping for this
-          integration. Pick the target asset layout, choose which fields
-          identify an existing record, then map each upstream column.
+          integration’s {resourceLabel.toLowerCase()} resource. Pick the target
+          asset layout, choose which fields identify an existing record, then
+          map each upstream column.
         </p>
       </header>
+
+      <section
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 10,
+          padding: '8px 12px',
+          background: 'var(--panel-2)',
+          border: '1px solid var(--line-2)',
+          borderRadius: 6,
+        }}
+      >
+        <label
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            fontSize: 12.5,
+            color: 'var(--text-2)',
+            cursor: 'pointer',
+          }}
+        >
+          <input
+            type="checkbox"
+            checked={enabled}
+            onChange={(e) => setEnabled(e.target.checked)}
+          />
+          Sync this resource on every run
+        </label>
+        {!enabled && (
+          <Tag tone="warn">
+            Disabled — sync runs will skip {resourceLabel.toLowerCase()}.
+          </Tag>
+        )}
+      </section>
 
       <section>
         <h4 style={sectionHeader}>Target asset layout</h4>
         <p style={sectionHelp}>
-          Synced records will be written into this layout in every
-          mapped Weavestream company. AssetLayouts are global, so this
-          choice applies tenant-wide.
+          {resourceLabel} records will be written into this layout in every
+          mapped Weavestream company. Asset layouts are global, so this choice
+          applies tenant-wide.
         </p>
         {loadingLayouts ? (
           <Tag tone="default">Loading layouts…</Tag>
@@ -369,10 +540,6 @@ export function FieldMappingsTab({
             onChange={(e) => {
               const next = e.target.value;
               setAssetLayoutId(next);
-              // Switching layouts invalidates target field ids that
-              // belong to the old layout. Reset the rows + match keys
-              // so the operator can pick fresh ones — the API would
-              // reject the half-broken save otherwise.
               setFieldMappings([]);
               setMatchKeyFieldIds([]);
             }}
@@ -393,11 +560,20 @@ export function FieldMappingsTab({
           <section>
             <h4 style={sectionHeader}>Match keys</h4>
             <p style={sectionHelp}>
-              When upstream records match unclaimed Weavestream assets
-              on these fields, the integration will <strong>claim</strong>{' '}
-              the asset instead of creating a duplicate. Text / email /
-              URL fields match case-insensitively; everything else is
-              exact.
+              When upstream {resourceLabel.toLowerCase()} match unclaimed
+              Weavestream assets on these fields, the integration will{' '}
+              <strong>claim</strong> the asset instead of creating a duplicate.
+              Text / email / URL fields match case-insensitively; everything
+              else is exact.
+              {resource.defaultMatchKeyHint ? (
+                <>
+                  {' '}
+                  <span style={{ color: 'var(--muted)' }}>
+                    Suggested upstream key:{' '}
+                    <code>{resource.defaultMatchKeyHint}</code>.
+                  </span>
+                </>
+              ) : null}
             </p>
             <MatchKeyPicker
               available={layoutFields}
@@ -422,9 +598,7 @@ export function FieldMappingsTab({
               <Tag tone="default">Loading…</Tag>
             ) : fieldMappings.length === 0 ? (
               <div style={emptyState}>
-                No field mappings yet — add at least one (e.g.{' '}
-                <code>hostname</code> → <code>Hostname</code>) before
-                running a sync.
+                No field mappings yet — add at least one before running a sync.
               </div>
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>

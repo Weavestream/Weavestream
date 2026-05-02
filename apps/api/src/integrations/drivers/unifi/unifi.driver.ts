@@ -21,36 +21,50 @@ import {
 } from '../driver-utils.js';
 
 /**
- * UniFi Site Manager driver.
+ * UniFi Site Manager driver — multi-resource (devices + clients).
  *
- * The Site Manager API exposes hosts (consoles) and devices managed by
- * those hosts. From a Weavestream point of view a single host is a
- * "site": its `hostName` is the human-readable label the operator sees,
- * its `hostId` is the stable identifier used to filter devices.
+ * Two parallel sync streams share one set of credentials and one set
+ * of `host ↔ company` mappings:
  *
- * `/v1/sites` exists but its `name` / `meta.name` fields are typically
- * the slug "default" with no friendly label, so we don't call it.
- * `/v1/devices` returns the same hosts as `/v1/hosts` PLUS the host's
- * devices nested inside, which is exactly the shape we need for both
- * source-org enumeration and per-host record fetching.
+ *   1. `devices` — Site Manager API. `GET /v1/devices` returns hosts
+ *      (consoles) with their nested devices, paginated by `nextToken`.
+ *      External id = `device.id` (with MAC fallback).
+ *
+ *   2. `clients` — Network Integration API exposed through Site Manager
+ *      proxy:
+ *        a. `GET /v1/connector/consoles/{consoleId}/proxy/network/integration/v1/sites`
+ *           enumerates the sites managed by the console.
+ *        b. `GET .../sites/{siteId}/clients?offset=N&limit=N` pages
+ *           each site's clients.
+ *      External id = `client.id` (UniFi UUID — stable across syncs).
+ *      The list endpoint exposes a deliberately small field set
+ *      (`type`, `name`, `connectedAt`, `ipAddress`, `access`); MAC
+ *      lives on the per-client detail endpoint and is not fetched
+ *      here (would N+1 every sync). Operators match on `name` /
+ *      `ipAddress` / etc. — once claimed, the hidden
+ *      `IntegrationSyncRecord(externalId)` binding survives drift.
+ *
+ * `consoleId == hostId`: UniFi's terminology is inconsistent ("host"
+ * in the Site Manager surface, "console" in the connector proxy URL)
+ * but both refer to the same controller. The driver reuses the
+ * `IntegrationCompanyMapping.externalOrgId` (already a hostId) as the
+ * `consoleId` for the proxy URL.
  *
  * Auth: API key in `X-API-Key`.
- * Pagination: opaque `nextToken` cursor + `pageSize` query parameter.
  *
- * Response envelope (every endpoint):
- *   { data: [...], httpStatusCode, traceId, nextToken?: string|null }
- *
- * Per-host group shape (from `/v1/devices`):
- *   {
- *     hostId: "...",
- *     hostName: "Jaffe Chiropractic",
- *     updatedAt: "2026-04-26T04:10:17Z",
- *     devices: [ { id, mac, name, model, ip, status, version, ... } ]
- *   }
+ * Response envelope:
+ *   - `/v1/devices` and `/v1/sites` (Site Manager):
+ *       { data: [...], httpStatusCode, traceId, nextToken?: string|null }
+ *   - `/proxy/.../sites` and `/proxy/.../sites/{siteId}/clients`:
+ *       { offset, limit, count, totalCount, data: [...] }
  */
 
 const UNIFI_DEFAULT_BASE_URL = 'https://api.ui.com';
 const UNIFI_PAGE_SIZE = 200;
+const UNIFI_CLIENT_PAGE_SIZE = 200;
+
+const UNIFI_RESOURCE_DEVICES = 'devices' as const;
+const UNIFI_RESOURCE_CLIENTS = 'clients' as const;
 
 const unifiConfigSchema = z.object({
   baseUrl: z.string().url().default(UNIFI_DEFAULT_BASE_URL),
@@ -69,6 +83,14 @@ interface UniFiPage<T> {
   data?: T[];
   nextToken?: string | null;
   next_token?: string | null;
+}
+
+interface UniFiOffsetPage<T> {
+  data?: T[];
+  offset?: number;
+  limit?: number;
+  count?: number;
+  totalCount?: number;
 }
 
 interface UniFiHostGroup {
@@ -100,6 +122,35 @@ interface UniFiDevice {
   [key: string]: unknown;
 }
 
+interface UniFiSite {
+  id?: string;
+  name?: string;
+  [key: string]: unknown;
+}
+
+interface UniFiClient {
+  id?: string;
+  name?: string;
+  type?: string;
+  connectedAt?: string;
+  ipAddress?: string;
+  access?: { type?: string } | null;
+  [key: string]: unknown;
+}
+
+/**
+ * Opaque cursor encoding the multi-site walker state for the clients
+ * resource. Round-tripped through base64 so the runner sees a single
+ * string but the driver can resume across the (siteIdx, offset)
+ * dimensions on every page call.
+ */
+interface UniFiClientCursor {
+  siteIds: string[];
+  siteNames: Record<string, string | null>;
+  siteIdx: number;
+  offset: number;
+}
+
 export class UniFiSiteManagerDriver implements IntegrationDriver {
   private readonly logger = new Logger(UniFiSiteManagerDriver.name);
   readonly key = 'unifi';
@@ -108,7 +159,7 @@ export class UniFiSiteManagerDriver implements IntegrationDriver {
     key: 'unifi',
     label: 'UniFi Site Manager',
     description:
-      'Sync UniFi Site Manager devices from mapped UniFi sites into Weavestream asset layouts.',
+      'Sync UniFi Site Manager devices and Network clients into Weavestream asset layouts.',
     iconKey: null,
     configFields: [
       {
@@ -128,6 +179,22 @@ export class UniFiSiteManagerDriver implements IntegrationDriver {
         required: true,
         description:
           'UniFi Site Manager API key. Stored AES-256-GCM encrypted; never returned to the UI.',
+      },
+    ],
+    resources: [
+      {
+        key: UNIFI_RESOURCE_DEVICES,
+        label: 'Devices',
+        description:
+          'UniFi-managed network devices (switches, access points, gateways) reported by the Site Manager API.',
+        defaultMatchKeyHint: 'mac',
+      },
+      {
+        key: UNIFI_RESOURCE_CLIENTS,
+        label: 'Clients',
+        description:
+          'Connected client devices reported by the UniFi Network Integration API for every site under each mapped console.',
+        defaultMatchKeyHint: 'name',
       },
     ],
     capabilities: {
@@ -184,6 +251,68 @@ export class UniFiSiteManagerDriver implements IntegrationDriver {
   }
 
   async listSourceFields(
+    ctx: IntegrationContext & { externalOrgId: string; resourceKey: string },
+  ): Promise<SourceFieldDto[]> {
+    const resourceKey = ctx.resourceKey || UNIFI_RESOURCE_DEVICES;
+    if (resourceKey === UNIFI_RESOURCE_CLIENTS) {
+      return this.listClientSourceFields();
+    }
+    return this.listDeviceSourceFields(ctx);
+  }
+
+  async fetchRecords(
+    ctx: FetchRecordsContext,
+    cursor: string | null,
+  ): Promise<DriverFetchPage> {
+    const resourceKey = ctx.resourceKey || UNIFI_RESOURCE_DEVICES;
+    if (resourceKey === UNIFI_RESOURCE_CLIENTS) {
+      return this.fetchClientsRecords(ctx, cursor);
+    }
+    return this.fetchDeviceRecords(ctx, cursor);
+  }
+
+  // -------------------------------------------------------------------
+  // Devices
+  // -------------------------------------------------------------------
+
+  private async fetchDeviceRecords(
+    ctx: FetchRecordsContext,
+    cursor: string | null,
+  ): Promise<DriverFetchPage> {
+    const filter = unifiFilterSchema.parse(ctx.filter ?? {});
+    const body = await this.fetchDevicesPage(
+      ctx,
+      [ctx.externalOrgId],
+      UNIFI_PAGE_SIZE,
+      cursor,
+    );
+
+    const records: DriverRecord[] = [];
+    for (const group of pageItems(body)) {
+      const hostId = readString(group, ['hostId', 'host_id']);
+      if (hostId !== ctx.externalOrgId) continue;
+      const hostName = readString(group, ['hostName', 'host_name']);
+      const hostUpdatedAt = readString(group, ['updatedAt', 'updated_at']);
+      for (const device of group.devices ?? []) {
+        const record = this.toDeviceRecord(device, {
+          hostId: hostId ?? null,
+          hostName: hostName ?? null,
+          hostUpdatedAt: hostUpdatedAt ?? null,
+        });
+        if (!record) continue;
+        if (matchesFilter(record.fields, filter)) records.push(record);
+      }
+    }
+
+    const nextToken = pageNextToken(body);
+    return {
+      records,
+      hasMore: nextToken !== null,
+      cursor: nextToken,
+    };
+  }
+
+  private async listDeviceSourceFields(
     ctx: IntegrationContext & { externalOrgId: string },
   ): Promise<SourceFieldDto[]> {
     if (!ctx.externalOrgId) {
@@ -248,43 +377,6 @@ export class UniFiSiteManagerDriver implements IntegrationDriver {
     return sortByLabel(out);
   }
 
-  async fetchRecords(
-    ctx: FetchRecordsContext,
-    cursor: string | null,
-  ): Promise<DriverFetchPage> {
-    const filter = unifiFilterSchema.parse(ctx.filter ?? {});
-    const body = await this.fetchDevicesPage(
-      ctx,
-      [ctx.externalOrgId],
-      UNIFI_PAGE_SIZE,
-      cursor,
-    );
-
-    const records: DriverRecord[] = [];
-    for (const group of pageItems(body)) {
-      const hostId = readString(group, ['hostId', 'host_id']);
-      if (hostId !== ctx.externalOrgId) continue;
-      const hostName = readString(group, ['hostName', 'host_name']);
-      const hostUpdatedAt = readString(group, ['updatedAt', 'updated_at']);
-      for (const device of group.devices ?? []) {
-        const record = this.toDriverRecord(device, {
-          hostId: hostId ?? null,
-          hostName: hostName ?? null,
-          hostUpdatedAt: hostUpdatedAt ?? null,
-        });
-        if (!record) continue;
-        if (matchesFilter(record.fields, filter)) records.push(record);
-      }
-    }
-
-    const nextToken = pageNextToken(body);
-    return {
-      records,
-      hasMore: nextToken !== null,
-      cursor: nextToken,
-    };
-  }
-
   private async fetchDeviceSamples(
     ctx: IntegrationContext & { externalOrgId: string },
     limit: number,
@@ -304,7 +396,7 @@ export class UniFiSiteManagerDriver implements IntegrationDriver {
         if (hostId !== ctx.externalOrgId) continue;
         const hostName = readString(group, ['hostName', 'host_name']);
         for (const device of group.devices ?? []) {
-          samples.push(flattenDeviceFields(device, {
+          samples.push(flattenPrimitives(device, {
             hostId: hostId ?? null,
             hostName: hostName ?? null,
           }));
@@ -333,6 +425,215 @@ export class UniFiSiteManagerDriver implements IntegrationDriver {
     return this.callJson<UniFiPage<UniFiHostGroup>>(url.toString(), ctx);
   }
 
+  private toDeviceRecord(
+    device: UniFiDevice,
+    parent: {
+      hostId: string | null;
+      hostName: string | null;
+      hostUpdatedAt: string | null;
+    },
+  ): DriverRecord | null {
+    const fields = flattenPrimitives(device, {
+      hostId: parent.hostId,
+      hostName: parent.hostName,
+    });
+    const externalId = firstString(fields.id, fields.mac);
+    if (!externalId) {
+      this.logger.warn('UniFi device skipped because it had no stable id.');
+      return null;
+    }
+    return {
+      externalId,
+      displayName:
+        firstString(fields.name, fields.model, fields.shortname, fields.mac) ??
+        null,
+      fields,
+      updatedAt: normalizeTimestamp(
+        fields.startupTime ?? fields.adoptionTime ?? parent.hostUpdatedAt,
+      ),
+    };
+  }
+
+  // -------------------------------------------------------------------
+  // Clients
+  // -------------------------------------------------------------------
+
+  private listClientSourceFields(): SourceFieldDto[] {
+    return sortByLabel([...UNIFI_CLIENT_KNOWN_FIELDS]);
+  }
+
+  /**
+   * Walk every site under the mapped console and page through each
+   * site's clients. The cursor is opaque (base64-encoded JSON) so the
+   * runner keeps treating it as a single string, but the driver
+   * encodes the multi-site walker state internally:
+   *   - on first call (cursor=null) we list sites, then start at
+   *     site 0 / offset 0.
+   *   - each call returns at most one page of clients (UNIFI_CLIENT_PAGE_SIZE)
+   *     and advances `offset`. When a site is exhausted we move to the
+   *     next site (offset reset to 0).
+   *   - when every site is exhausted we return `hasMore=false`.
+   */
+  private async fetchClientsRecords(
+    ctx: FetchRecordsContext,
+    cursor: string | null,
+  ): Promise<DriverFetchPage> {
+    const consoleId = ctx.externalOrgId;
+    let walker = decodeClientCursor(cursor);
+    if (!walker) {
+      const sites = await this.listSites(ctx, consoleId);
+      walker = {
+        siteIds: sites.map((s) => s.id),
+        siteNames: Object.fromEntries(sites.map((s) => [s.id, s.name])),
+        siteIdx: 0,
+        offset: 0,
+      };
+    }
+
+    while (walker.siteIdx < walker.siteIds.length) {
+      const siteId = walker.siteIds[walker.siteIdx]!;
+      const siteName = walker.siteNames[siteId] ?? null;
+      const page = await this.fetchClientsPage(
+        ctx,
+        consoleId,
+        siteId,
+        UNIFI_CLIENT_PAGE_SIZE,
+        walker.offset,
+      );
+      const items = page.data ?? [];
+      const records: DriverRecord[] = [];
+      for (const client of items) {
+        const record = this.toClientRecord(client, {
+          consoleId,
+          siteId,
+          siteName,
+        });
+        if (record) records.push(record);
+      }
+
+      const newOffset: number = walker.offset + items.length;
+      const totalCount = Number.isFinite(page.totalCount as number)
+        ? Number(page.totalCount)
+        : null;
+      const siteExhausted =
+        items.length === 0 ||
+        items.length < UNIFI_CLIENT_PAGE_SIZE ||
+        (totalCount !== null && newOffset >= totalCount);
+
+      if (siteExhausted) {
+        walker = {
+          ...walker,
+          siteIdx: walker.siteIdx + 1,
+          offset: 0,
+        };
+      } else {
+        walker = { ...walker, offset: newOffset };
+      }
+
+      const moreSites = walker.siteIdx < walker.siteIds.length;
+
+      // Yield as soon as we have records on this page — the runner
+      // processes one page at a time and calls back for the next. If
+      // the page came back empty AND we still have sites/offsets to
+      // walk, loop locally so we don't bother the runner with an
+      // empty round-trip.
+      if (records.length > 0 || !moreSites) {
+        return {
+          records,
+          hasMore: moreSites,
+          cursor: moreSites ? encodeClientCursor(walker) : null,
+        };
+      }
+    }
+
+    return { records: [], hasMore: false, cursor: null };
+  }
+
+  private async listSites(
+    ctx: IntegrationContext,
+    consoleId: string,
+  ): Promise<Array<{ id: string; name: string | null }>> {
+    const { baseUrl } = parseConfig(ctx.config);
+    const url = `${baseUrl.replace(
+      /\/$/,
+      '',
+    )}/v1/connector/consoles/${encodeURIComponent(
+      consoleId,
+    )}/proxy/network/integration/v1/sites`;
+    const body = await this.callJson<UniFiOffsetPage<UniFiSite>>(url, ctx);
+    const items = Array.isArray(body?.data) ? body.data : [];
+    const out: Array<{ id: string; name: string | null }> = [];
+    for (const site of items) {
+      const id = readString(site, ['id', 'siteId']);
+      if (!id) continue;
+      const name = readString(site, ['name', 'displayName']);
+      out.push({ id, name });
+    }
+    return out;
+  }
+
+  private async fetchClientsPage(
+    ctx: IntegrationContext,
+    consoleId: string,
+    siteId: string,
+    limit: number,
+    offset: number,
+  ): Promise<UniFiOffsetPage<UniFiClient>> {
+    const { baseUrl } = parseConfig(ctx.config);
+    const url = new URL(
+      `${baseUrl.replace(
+        /\/$/,
+        '',
+      )}/v1/connector/consoles/${encodeURIComponent(
+        consoleId,
+      )}/proxy/network/integration/v1/sites/${encodeURIComponent(
+        siteId,
+      )}/clients`,
+    );
+    url.searchParams.set('limit', String(limit));
+    url.searchParams.set('offset', String(offset));
+    return this.callJson<UniFiOffsetPage<UniFiClient>>(url.toString(), ctx);
+  }
+
+  private toClientRecord(
+    client: UniFiClient,
+    parent: {
+      consoleId: string;
+      siteId: string;
+      siteName: string | null;
+    },
+  ): DriverRecord | null {
+    const fields = flattenPrimitives(client, {});
+    // The list endpoint exposes `access` as an object — unwrap it to
+    // a primitive `accessType` so it can be mapped to a TEXT field
+    // without nested-JSON support.
+    const access = client.access;
+    if (access && typeof access === 'object' && !Array.isArray(access)) {
+      const accessType = readString(access as Record<string, unknown>, ['type']);
+      if (accessType !== null) fields.accessType = accessType;
+    }
+    fields.consoleId = parent.consoleId;
+    fields.siteId = parent.siteId;
+    if (parent.siteName !== null) fields.siteName = parent.siteName;
+
+    const externalId = firstString(fields.id);
+    if (!externalId) {
+      this.logger.warn('UniFi client skipped because it had no stable id.');
+      return null;
+    }
+    return {
+      externalId,
+      displayName:
+        firstString(fields.name, fields.ipAddress, fields.id) ?? null,
+      fields,
+      updatedAt: normalizeTimestamp(fields.connectedAt ?? null),
+    };
+  }
+
+  // -------------------------------------------------------------------
+  // HTTP helper (shared)
+  // -------------------------------------------------------------------
+
   private async callJson<T>(url: string, ctx: IntegrationContext): Promise<T> {
     const { apiKey } = unifiSecretSchema.parse(ctx.secret);
     const res = await fetchWithRetry(url, {
@@ -357,35 +658,6 @@ export class UniFiSiteManagerDriver implements IntegrationDriver {
       throw new Error(`UniFi GET ${url} returned HTTP ${res.status}`);
     }
     return (await res.json()) as T;
-  }
-
-  private toDriverRecord(
-    device: UniFiDevice,
-    parent: {
-      hostId: string | null;
-      hostName: string | null;
-      hostUpdatedAt: string | null;
-    },
-  ): DriverRecord | null {
-    const fields = flattenDeviceFields(device, {
-      hostId: parent.hostId,
-      hostName: parent.hostName,
-    });
-    const externalId = firstString(fields.id, fields.mac);
-    if (!externalId) {
-      this.logger.warn('UniFi device skipped because it had no stable id.');
-      return null;
-    }
-    return {
-      externalId,
-      displayName:
-        firstString(fields.name, fields.model, fields.shortname, fields.mac) ??
-        null,
-      fields,
-      updatedAt: normalizeTimestamp(
-        fields.startupTime ?? fields.adoptionTime ?? parent.hostUpdatedAt,
-      ),
-    };
   }
 }
 
@@ -422,16 +694,23 @@ function firstString(...values: unknown[]): string | null {
   return null;
 }
 
-function flattenDeviceFields(
-  device: UniFiDevice,
-  parent: { hostId: string | null; hostName: string | null },
+/**
+ * Flatten an upstream record onto a primitive-only field map. Optional
+ * `parent` fields are appended last so the driver can stamp parent
+ * context (host / site / console) without it getting overwritten by
+ * a same-named primitive on the record itself.
+ */
+function flattenPrimitives(
+  record: Record<string, unknown>,
+  parent: Record<string, string | null>,
 ): Record<string, unknown> {
   const out: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(device)) {
+  for (const [key, value] of Object.entries(record)) {
     if (isPrimitive(value)) out[key] = value;
   }
-  if (parent.hostId !== null) out.hostId = parent.hostId;
-  if (parent.hostName !== null) out.hostName = parent.hostName;
+  for (const [key, value] of Object.entries(parent)) {
+    if (value !== null) out[key] = value;
+  }
   return out;
 }
 
@@ -471,6 +750,33 @@ function matchesFilter(
     if (!(isManaged === true || isManaged === 'true')) return false;
   }
   return true;
+}
+
+function encodeClientCursor(state: UniFiClientCursor): string {
+  return Buffer.from(JSON.stringify(state), 'utf8').toString('base64');
+}
+
+function decodeClientCursor(cursor: string | null): UniFiClientCursor | null {
+  if (!cursor) return null;
+  try {
+    const json = Buffer.from(cursor, 'base64').toString('utf8');
+    const parsed = JSON.parse(json) as UniFiClientCursor;
+    if (
+      Array.isArray(parsed.siteIds) &&
+      typeof parsed.siteIdx === 'number' &&
+      typeof parsed.offset === 'number'
+    ) {
+      return {
+        siteIds: parsed.siteIds,
+        siteNames: parsed.siteNames ?? {},
+        siteIdx: parsed.siteIdx,
+        offset: parsed.offset,
+      };
+    }
+  } catch {
+    // Invalid cursor — fall back to a fresh walk.
+  }
+  return null;
 }
 
 const UNIFI_KNOWN_FIELDS: SourceFieldDto[] = [
@@ -526,4 +832,44 @@ const UNIFI_KNOWN_FIELDS: SourceFieldDto[] = [
   { key: 'note', label: 'Note', hintType: 'TEXT', alwaysPresent: false },
   { key: 'hostId', label: 'Host ID', hintType: 'TEXT', alwaysPresent: false },
   { key: 'hostName', label: 'Host name', hintType: 'TEXT', alwaysPresent: false },
+];
+
+/**
+ * Curated catalogue for the UniFi Network Integration API client list
+ * endpoint (`GET /sites/{siteId}/clients`). The list endpoint exposes
+ * a deliberately small field set; richer fields like `macAddress`
+ * live on the per-client detail endpoint and require an extra HTTP
+ * call per client per sync, which we deliberately avoid (operators
+ * use `name` / `ipAddress` / `siteId` for the first-claim match key
+ * and the sync record's UUID binding for everything thereafter).
+ */
+const UNIFI_CLIENT_KNOWN_FIELDS: SourceFieldDto[] = [
+  { key: 'name', label: 'Client name', hintType: 'TEXT', alwaysPresent: false },
+  { key: 'type', label: 'Connection type', hintType: 'TEXT', alwaysPresent: true },
+  {
+    key: 'ipAddress',
+    label: 'IP address',
+    hintType: 'IP_ADDRESS',
+    alwaysPresent: false,
+  },
+  {
+    key: 'connectedAt',
+    label: 'Connected at',
+    hintType: 'DATETIME',
+    alwaysPresent: false,
+  },
+  {
+    key: 'accessType',
+    label: 'Access type',
+    hintType: 'TEXT',
+    alwaysPresent: false,
+  },
+  { key: 'siteId', label: 'UniFi site ID', hintType: 'TEXT', alwaysPresent: true },
+  { key: 'siteName', label: 'UniFi site name', hintType: 'TEXT', alwaysPresent: false },
+  {
+    key: 'consoleId',
+    label: 'UniFi console ID',
+    hintType: 'TEXT',
+    alwaysPresent: true,
+  },
 ];

@@ -84,10 +84,14 @@ function makeCtx(): IntegrationContext {
   } as IntegrationContext;
 }
 
-function makeFetchCtx(hostId = HOST_A): FetchRecordsContext {
+function makeFetchCtx(
+  hostId = HOST_A,
+  resourceKey: 'devices' | 'clients' = 'devices',
+): FetchRecordsContext {
   return {
     ...makeCtx(),
     externalOrgId: hostId,
+    resourceKey,
     filter: {},
   } as FetchRecordsContext;
 }
@@ -239,6 +243,7 @@ describe('UniFiSiteManagerDriver.listSourceFields', () => {
       const fields = await new UniFiSiteManagerDriver().listSourceFields({
         ...makeCtx(),
         externalOrgId: HOST_A,
+        resourceKey: 'devices',
       });
       const keys = fields.map((f) => f.key);
       expect(keys).toEqual(
@@ -289,6 +294,7 @@ describe('UniFiSiteManagerDriver.listSourceFields', () => {
       const fields = await new UniFiSiteManagerDriver().listSourceFields({
         ...makeCtx(),
         externalOrgId: HOST_A,
+        resourceKey: 'devices',
       });
       expect(fields.length).toBeGreaterThan(5);
       expect(fields.map((f) => f.key)).toEqual(
@@ -516,6 +522,270 @@ describe('UniFiSiteManagerDriver.fetchRecords', () => {
       await expect(
         new UniFiSiteManagerDriver().fetchRecords(makeFetchCtx(), null),
       ).rejects.toBeInstanceOf(DriverRateLimitError);
+    } finally {
+      fx.restore();
+    }
+  });
+});
+
+describe('UniFiSiteManagerDriver.descriptor', () => {
+  it('declares both devices and clients resources with sensible match-key hints', () => {
+    const desc = new UniFiSiteManagerDriver().descriptor;
+    expect(desc.resources.map((r) => r.key)).toEqual(['devices', 'clients']);
+    expect(desc.resources.find((r) => r.key === 'devices')).toMatchObject({
+      label: 'Devices',
+      defaultMatchKeyHint: 'mac',
+    });
+    expect(desc.resources.find((r) => r.key === 'clients')).toMatchObject({
+      label: 'Clients',
+      defaultMatchKeyHint: 'name',
+    });
+  });
+});
+
+describe('UniFiSiteManagerDriver.listSourceFields (clients)', () => {
+  it('returns the curated client catalogue without hitting the network', async () => {
+    const fx = installFetchScript([]);
+    try {
+      const fields = await new UniFiSiteManagerDriver().listSourceFields({
+        ...makeCtx(),
+        externalOrgId: HOST_A,
+        resourceKey: 'clients',
+      });
+      expect(fx.calls).toHaveLength(0);
+      const keys = fields.map((f) => f.key).sort();
+      expect(keys).toEqual(
+        [
+          'name',
+          'type',
+          'ipAddress',
+          'connectedAt',
+          'accessType',
+          'siteId',
+          'siteName',
+          'consoleId',
+        ].sort(),
+      );
+      expect(fields.find((f) => f.key === 'ipAddress')).toMatchObject({
+        hintType: 'IP_ADDRESS',
+      });
+      expect(fields.find((f) => f.key === 'connectedAt')).toMatchObject({
+        hintType: 'DATETIME',
+      });
+    } finally {
+      fx.restore();
+    }
+  });
+});
+
+describe('UniFiSiteManagerDriver.fetchRecords (clients)', () => {
+  const SITE_A = 'site-aaa-0000';
+  const SITE_B = 'site-bbb-1111';
+
+  it('walks every site, paginates each via offset/limit, and stamps console + site context', async () => {
+    const driver = new UniFiSiteManagerDriver();
+    // 3 calls: list sites, then site A page 0 (2 clients = exact page), site A page 1 (empty),
+    // then site B page 0 (1 client = partial = exhausted).
+    const fx = installFetchScript([
+      // list sites
+      {
+        kind: 'json',
+        body: {
+          offset: 0,
+          limit: 0,
+          count: 2,
+          totalCount: 2,
+          data: [
+            { id: SITE_A, name: 'Site A' },
+            { id: SITE_B, name: 'Site B' },
+          ],
+        },
+      },
+      // Site A page 0 (full page = 2 == UNIFI_CLIENT_PAGE_SIZE? No,
+      // we set totalCount so the driver knows exhaustion.)
+      {
+        kind: 'json',
+        body: {
+          offset: 0,
+          limit: 200,
+          count: 2,
+          totalCount: 2,
+          data: [
+            {
+              id: 'c1-uuid',
+              type: 'WIRED',
+              name: 'desk-1',
+              connectedAt: '2026-04-26T04:10:17Z',
+              ipAddress: '192.168.0.10',
+              access: { type: 'NETWORK' },
+            },
+            {
+              id: 'c2-uuid',
+              type: 'WIRELESS',
+              name: 'phone-1',
+              connectedAt: '2026-04-26T04:11:00Z',
+              ipAddress: '192.168.0.11',
+              access: null,
+            },
+          ],
+        },
+      },
+      // Site B page 0 (1 client, totalCount=1 = exhausted).
+      {
+        kind: 'json',
+        body: {
+          offset: 0,
+          limit: 200,
+          count: 1,
+          totalCount: 1,
+          data: [
+            {
+              id: 'c3-uuid',
+              type: 'WIRED',
+              name: 'printer',
+              connectedAt: '2026-04-26T05:00:00Z',
+              ipAddress: '192.168.1.5',
+              access: { type: 'GUEST' },
+            },
+          ],
+        },
+      },
+    ]);
+    try {
+      const page1 = await driver.fetchRecords(
+        makeFetchCtx(HOST_A, 'clients'),
+        null,
+      );
+      expect(page1.records).toHaveLength(2);
+      expect(page1.records.map((r) => r.externalId)).toEqual([
+        'c1-uuid',
+        'c2-uuid',
+      ]);
+      expect(page1.records[0]).toMatchObject({
+        externalId: 'c1-uuid',
+        displayName: 'desk-1',
+        updatedAt: '2026-04-26T04:10:17.000Z',
+      });
+      expect(page1.records[0]!.fields).toMatchObject({
+        type: 'WIRED',
+        name: 'desk-1',
+        ipAddress: '192.168.0.10',
+        accessType: 'NETWORK',
+        consoleId: HOST_A,
+        siteId: SITE_A,
+        siteName: 'Site A',
+      });
+      // `access` (object) must NOT leak through as a primitive.
+      expect(page1.records[0]!.fields).not.toHaveProperty('access');
+      // null `access` on c2 unwraps to no `accessType` rather than null.
+      expect(page1.records[1]!.fields).not.toHaveProperty('accessType');
+      expect(page1.hasMore).toBe(true);
+
+      const page2 = await driver.fetchRecords(
+        makeFetchCtx(HOST_A, 'clients'),
+        page1.cursor,
+      );
+      expect(page2.records).toHaveLength(1);
+      expect(page2.records[0]).toMatchObject({
+        externalId: 'c3-uuid',
+        displayName: 'printer',
+      });
+      expect(page2.records[0]!.fields).toMatchObject({
+        consoleId: HOST_A,
+        siteId: SITE_B,
+        siteName: 'Site B',
+        accessType: 'GUEST',
+      });
+      expect(page2.hasMore).toBe(false);
+      expect(page2.cursor).toBeNull();
+
+      // Verify URLs: list sites → site A clients → site B clients.
+      expect(fx.calls).toHaveLength(3);
+      expect(fx.calls[0]!.url).toContain(
+        `/v1/connector/consoles/${encodeURIComponent(HOST_A)}/proxy/network/integration/v1/sites`,
+      );
+      expect(fx.calls[0]!.url).not.toContain('/clients');
+      expect(fx.calls[1]!.url).toContain(
+        `/sites/${encodeURIComponent(SITE_A)}/clients`,
+      );
+      expect(fx.calls[1]!.url).toContain('offset=0');
+      expect(fx.calls[1]!.url).toContain('limit=200');
+      expect(fx.calls[2]!.url).toContain(
+        `/sites/${encodeURIComponent(SITE_B)}/clients`,
+      );
+    } finally {
+      fx.restore();
+    }
+  });
+
+  it('returns hasMore=false immediately when the console has no sites', async () => {
+    const fx = installFetchScript([
+      {
+        kind: 'json',
+        body: { offset: 0, limit: 0, count: 0, totalCount: 0, data: [] },
+      },
+    ]);
+    try {
+      const page = await new UniFiSiteManagerDriver().fetchRecords(
+        makeFetchCtx(HOST_A, 'clients'),
+        null,
+      );
+      expect(page).toEqual({ records: [], hasMore: false, cursor: null });
+      expect(fx.calls).toHaveLength(1);
+    } finally {
+      fx.restore();
+    }
+  });
+
+  it('maps 401/403 from the proxy URL to DriverAuthError', async () => {
+    const fx = installFetchScript([
+      { kind: 'text', status: 401, body: 'unauthorized' },
+    ]);
+    try {
+      await expect(
+        new UniFiSiteManagerDriver().fetchRecords(
+          makeFetchCtx(HOST_A, 'clients'),
+          null,
+        ),
+      ).rejects.toBeInstanceOf(DriverAuthError);
+    } finally {
+      fx.restore();
+    }
+  });
+
+  it('skips clients without a stable id but keeps the rest', async () => {
+    const fx = installFetchScript([
+      {
+        kind: 'json',
+        body: {
+          data: [{ id: 'site-only', name: 'Site' }],
+          offset: 0,
+          limit: 0,
+          count: 1,
+          totalCount: 1,
+        },
+      },
+      {
+        kind: 'json',
+        body: {
+          offset: 0,
+          limit: 200,
+          count: 2,
+          totalCount: 2,
+          data: [
+            { name: 'no-id-client', type: 'WIRED' },
+            { id: 'good-uuid', name: 'good', type: 'WIRELESS' },
+          ],
+        },
+      },
+    ]);
+    try {
+      const page = await new UniFiSiteManagerDriver().fetchRecords(
+        makeFetchCtx(HOST_A, 'clients'),
+        null,
+      );
+      expect(page.records.map((r) => r.externalId)).toEqual(['good-uuid']);
+      expect(page.hasMore).toBe(false);
     } finally {
       fx.restore();
     }

@@ -17,6 +17,7 @@ import { MatchResolverService } from './match-resolver.service.js';
  */
 type SyncRecord = {
   integrationCompanyMappingId: string;
+  resourceId?: string;
   externalId: string;
   assetId: string;
 };
@@ -26,7 +27,14 @@ type Asset = {
   externalSource: string | null;
   externalId: string | null;
   archivedAt: Date | null;
-  hasSyncRecord: boolean;
+  /**
+   * Phase 11.2 — every (mappingId, resourceId) pair that already
+   * owns a sync record on this asset. The matchByKey filter rejects
+   * a candidate iff there's an entry for the exact pair we're
+   * resolving for; entries for OTHER (mapping, resource) pairs are
+   * fine and represent cross-integration ownership.
+   */
+  ownerships?: Array<{ integrationCompanyMappingId: string; resourceId: string }>;
 };
 type AssetField = { id: string; fieldType: string };
 type AssetFieldValue = {
@@ -64,16 +72,18 @@ function makeStubPrisma(seed: {
     integrationSyncRecord: {
       async findUnique(args: {
         where: {
-          integrationCompanyMappingId_externalId: {
+          integrationCompanyMappingId_resourceId_externalId: {
             integrationCompanyMappingId: string;
+            resourceId: string;
             externalId: string;
           };
         };
       }) {
-        const k = args.where.integrationCompanyMappingId_externalId;
+        const k = args.where.integrationCompanyMappingId_resourceId_externalId;
         const hit = syncRecords.find(
           (r) =>
             r.integrationCompanyMappingId === k.integrationCompanyMappingId &&
+            (r.resourceId === undefined || r.resourceId === k.resourceId) &&
             r.externalId === k.externalId,
         );
         return hit ? { assetId: hit.assetId } : null;
@@ -112,32 +122,29 @@ function makeStubPrisma(seed: {
           OR: Array<{ value: { equals: unknown } }>;
           asset: {
             archivedAt: null;
-            integrationSyncRecord: { is: null };
-            OR: Array<{
-              externalSource: string | null;
-              externalId?: string | null;
-            }>;
+            integrationSyncRecords: {
+              none: {
+                integrationCompanyMappingId: string;
+                resourceId: string;
+              };
+            };
           };
         };
       }) {
         const w = args.where;
         const variants = w.OR.map((c) => c.value.equals);
+        const exclude = w.asset.integrationSyncRecords.none;
         const eligibleAssetIds = new Set(
           assets
             .filter((a) => {
               if (a.archivedAt !== null) return false;
-              if (a.hasSyncRecord) return false;
-              return w.asset.OR.some((branch) => {
-                if (branch.externalSource === null) {
-                  return a.externalSource === null;
-                }
-                return (
-                  a.externalSource === branch.externalSource &&
-                  ('externalId' in branch
-                    ? a.externalId === (branch.externalId ?? null)
-                    : true)
-                );
-              });
+              const ownedByThis = (a.ownerships ?? []).some(
+                (o) =>
+                  o.integrationCompanyMappingId ===
+                    exclude.integrationCompanyMappingId &&
+                  o.resourceId === exclude.resourceId,
+              );
+              return !ownedByThis;
             })
             .map((a) => a.id),
         );
@@ -198,6 +205,7 @@ describe('MatchResolverService.resolve', () => {
     const out = await svc.resolve({
       companyId: 'c-1',
       integrationCompanyMappingId: 'icm-1',
+      resourceId: 'res-1',
       integrationDriver: 'action1',
       externalId: 'ext-1',
       source: { hostname: 'host01' },
@@ -218,13 +226,13 @@ describe('MatchResolverService.resolve', () => {
           externalSource: 'action1',
           externalId: 'ext-2',
           archivedAt: null,
-          hasSyncRecord: false,
         },
       ],
     });
     const out = await svc.resolve({
       companyId: 'c-1',
       integrationCompanyMappingId: 'icm-1',
+      resourceId: 'res-1',
       integrationDriver: 'action1',
       externalId: 'ext-2',
       source: {},
@@ -239,6 +247,7 @@ describe('MatchResolverService.resolve', () => {
     const out = await svc.resolve({
       companyId: 'c-1',
       integrationCompanyMappingId: 'icm-1',
+      resourceId: 'res-1',
       integrationDriver: 'action1',
       externalId: 'ext-3',
       source: { hostname: 'newhost' },
@@ -260,7 +269,6 @@ describe('MatchResolverService.resolve', () => {
           externalSource: null,
           externalId: null,
           archivedAt: null,
-          hasSyncRecord: false,
         },
       ],
       values: [
@@ -275,6 +283,7 @@ describe('MatchResolverService.resolve', () => {
     const out = await svc.resolve({
       companyId: 'c-1',
       integrationCompanyMappingId: 'icm-1',
+      resourceId: 'res-1',
       integrationDriver: 'action1',
       externalId: 'ext-4',
       source: { hostname: 'HOST01.LAN' },
@@ -296,7 +305,6 @@ describe('MatchResolverService.resolve', () => {
           externalSource: null,
           externalId: null,
           archivedAt: null,
-          hasSyncRecord: false,
         },
         {
           id: 'asset-E',
@@ -304,7 +312,6 @@ describe('MatchResolverService.resolve', () => {
           externalSource: null,
           externalId: null,
           archivedAt: null,
-          hasSyncRecord: false,
         },
       ],
       values: [
@@ -325,6 +332,7 @@ describe('MatchResolverService.resolve', () => {
     const out = await svc.resolve({
       companyId: 'c-1',
       integrationCompanyMappingId: 'icm-1',
+      resourceId: 'res-1',
       integrationDriver: 'action1',
       externalId: 'ext-5',
       source: { hostname: 'shared.lan' },
@@ -339,7 +347,10 @@ describe('MatchResolverService.resolve', () => {
     }
   });
 
-  it('skips assets already pinned to a different IntegrationSyncRecord', async () => {
+  it('skips an asset that already carries a sync record from THIS (mapping, resource)', async () => {
+    // The (mapping, resource) for THIS resolve call already owns
+    // asset-F under a different externalId. Claiming it would corrupt
+    // the existing binding, so the resolver falls through to create.
     const svc = makeService({
       assetFields: [{ id: 'fid-host', fieldType: 'TEXT' }],
       assets: [
@@ -349,7 +360,9 @@ describe('MatchResolverService.resolve', () => {
           externalSource: 'action1',
           externalId: 'ext-other',
           archivedAt: null,
-          hasSyncRecord: true,
+          ownerships: [
+            { integrationCompanyMappingId: 'icm-1', resourceId: 'res-1' },
+          ],
         },
       ],
       values: [
@@ -364,6 +377,7 @@ describe('MatchResolverService.resolve', () => {
     const out = await svc.resolve({
       companyId: 'c-1',
       integrationCompanyMappingId: 'icm-1',
+      resourceId: 'res-1',
       integrationDriver: 'action1',
       externalId: 'ext-6',
       source: { hostname: 'host01.lan' },
@@ -373,6 +387,54 @@ describe('MatchResolverService.resolve', () => {
       matchKeyFieldIds: ['fid-host'],
     });
     expect(out).toEqual({ kind: 'create' });
+  });
+
+  it('CLAIMS an asset already owned by a DIFFERENT integration (cross-integration matching)', async () => {
+    // Phase 11.2 — an Action1 endpoint (asset-XI) and a UniFi client
+    // representing the same physical machine should resolve to the
+    // SAME Weavestream asset when their match key (e.g. IP address)
+    // lines up. The asset already has a sync record from the Action1
+    // (mapping, resource); a UniFi resolve should still claim it.
+    const svc = makeService({
+      assetFields: [{ id: 'fid-host', fieldType: 'TEXT' }],
+      assets: [
+        {
+          id: 'asset-XI',
+          companyId: 'c-1',
+          externalSource: 'action1',
+          externalId: 'ext-action1',
+          archivedAt: null,
+          ownerships: [
+            // Owned by Action1's (mapping, resource), NOT UniFi's.
+            {
+              integrationCompanyMappingId: 'icm-action1',
+              resourceId: 'res-action1',
+            },
+          ],
+        },
+      ],
+      values: [
+        {
+          companyId: 'c-1',
+          assetId: 'asset-XI',
+          assetFieldId: 'fid-host',
+          value: 'workstation-01.lan',
+        },
+      ],
+    });
+    const out = await svc.resolve({
+      companyId: 'c-1',
+      integrationCompanyMappingId: 'icm-unifi',
+      resourceId: 'res-unifi-clients',
+      integrationDriver: 'unifi',
+      externalId: 'unifi-client-uuid',
+      source: { hostname: 'workstation-01.lan' },
+      fieldMappings: [
+        { sourceField: 'hostname', targetField: FIELD_HOSTNAME },
+      ],
+      matchKeyFieldIds: ['fid-host'],
+    });
+    expect(out).toEqual({ kind: 'claim', assetId: 'asset-XI' });
   });
 
   it('intersects when multiple match-keys are configured', async () => {
@@ -388,7 +450,6 @@ describe('MatchResolverService.resolve', () => {
           externalSource: null,
           externalId: null,
           archivedAt: null,
-          hasSyncRecord: false,
         },
         {
           id: 'asset-H',
@@ -396,7 +457,6 @@ describe('MatchResolverService.resolve', () => {
           externalSource: null,
           externalId: null,
           archivedAt: null,
-          hasSyncRecord: false,
         },
       ],
       values: [
@@ -431,6 +491,7 @@ describe('MatchResolverService.resolve', () => {
     const out = await svc.resolve({
       companyId: 'c-1',
       integrationCompanyMappingId: 'icm-1',
+      resourceId: 'res-1',
       integrationDriver: 'action1',
       externalId: 'ext-7',
       source: { hostname: 'host01.lan', serial: 'SN-1234' },
@@ -453,7 +514,6 @@ describe('MatchResolverService.resolve', () => {
           externalSource: null,
           externalId: null,
           archivedAt: null,
-          hasSyncRecord: false,
         },
       ],
       values: [
@@ -469,6 +529,7 @@ describe('MatchResolverService.resolve', () => {
     const hit = await svc.resolve({
       companyId: 'c-1',
       integrationCompanyMappingId: 'icm-1',
+      resourceId: 'res-1',
       integrationDriver: 'action1',
       externalId: 'ext-8',
       source: { tag_number: '42' },
@@ -482,6 +543,7 @@ describe('MatchResolverService.resolve', () => {
     const miss = await svc.resolve({
       companyId: 'c-1',
       integrationCompanyMappingId: 'icm-1',
+      resourceId: 'res-1',
       integrationDriver: 'action1',
       externalId: 'ext-9',
       source: { tag_number: '43' },
@@ -500,6 +562,7 @@ describe('MatchResolverService.resolve', () => {
     const out = await svc.resolve({
       companyId: 'c-1',
       integrationCompanyMappingId: 'icm-1',
+      resourceId: 'res-1',
       integrationDriver: 'action1',
       externalId: 'ext-10',
       source: { hostname: '' },

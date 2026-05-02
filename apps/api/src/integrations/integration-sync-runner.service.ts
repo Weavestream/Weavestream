@@ -55,6 +55,8 @@ const SYSTEM_AUDIT_USER_AGENT = 'weavestream-worker/integration-sync';
 export interface MappingRunInput {
   syncRunId: string;
   integrationCompanyMappingId: string;
+  /** Phase 11.1 — single resource per job (orchestrator fans out per mapping × resource). */
+  resourceId: string;
   dryRun: boolean;
   /** Triggered-by user id for audit attribution; null on scheduled runs. */
   actorId: string | null;
@@ -62,10 +64,13 @@ export interface MappingRunInput {
 
 export interface MappingRunOutcome {
   status: 'succeeded' | 'failed';
+  /** Per-resource counters for this single (mapping, resource) job. */
   totals: SyncRunTotals;
   conflicts: SyncRunConflict[];
   error: string | null;
   companyId: string;
+  /** Resource key the job ran against — used by the per-mapping merge. */
+  resourceKey: string;
 }
 
 @Injectable()
@@ -89,55 +94,74 @@ export class IntegrationSyncRunnerService {
 
     const mapping = await this.prisma.integrationCompanyMapping.findUnique({
       where: { id: input.integrationCompanyMappingId },
-      include: {
-        integration: {
-          include: {
-            // Field mappings, target layout, and match-key fields all
-            // live on the parent Integration after the global-mapping
-            // refactor (D-021). Loading them here once means every
-            // per-company mapping job projects through the same
-            // schema — no risk of per-tenant drift.
-            fieldMappings: {
-              include: {
-                targetField: {
-                  select: {
-                    id: true,
-                    slug: true,
-                    fieldType: true,
-                    options: true,
-                    archivedAt: true,
-                  },
-                },
-              },
-            },
-            assetLayout: {
-              include: {
-                fields: { orderBy: { position: 'asc' } },
-              },
-            },
-          },
-        },
-      },
+      include: { integration: { select: { id: true, driver: true } } },
     });
     if (!mapping) {
       throw new NotFoundException(
         `IntegrationCompanyMapping ${input.integrationCompanyMappingId} not found`,
       );
     }
-    if (!mapping.integration.assetLayoutId || !mapping.integration.assetLayout) {
-      throw new BadRequestException(
-        `Integration ${mapping.integrationId} has no asset layout configured.`,
+
+    // Phase 11.1 — every (mapping, resource) pair is its own unit of
+    // work. The resource container carries the asset layout, match
+    // keys, and field mappings; the company mapping carries only the
+    // host↔company linkage shared across resources.
+    const resource = await this.prisma.integrationResource.findFirst({
+      where: { id: input.resourceId, integrationId: mapping.integrationId },
+      include: {
+        fieldMappings: {
+          include: {
+            targetField: {
+              select: {
+                id: true,
+                slug: true,
+                fieldType: true,
+                options: true,
+                archivedAt: true,
+              },
+            },
+          },
+        },
+        assetLayout: {
+          include: {
+            fields: { orderBy: { position: 'asc' } },
+          },
+        },
+      },
+    });
+    if (!resource) {
+      throw new NotFoundException(
+        `IntegrationResource ${input.resourceId} not found for integration ${mapping.integrationId}`,
       );
     }
-    if (mapping.integration.fieldMappings.length === 0) {
+    if (!resource.enabled) {
+      // Disabled resources are skipped silently with a zero-totals
+      // success — the orchestrator should not have enqueued the job
+      // in the first place, but we tolerate races where the operator
+      // disabled the resource between fan-out and execution.
+      return {
+        status: 'succeeded',
+        totals,
+        conflicts,
+        error: null,
+        companyId: mapping.companyId,
+        resourceKey: resource.resourceKey,
+      };
+    }
+    if (!resource.assetLayoutId || !resource.assetLayout) {
       throw new BadRequestException(
-        `Integration ${mapping.integrationId} has no field mappings configured.`,
+        `Integration ${mapping.integrationId} resource "${resource.resourceKey}" has no asset layout configured.`,
+      );
+    }
+    if (resource.fieldMappings.length === 0) {
+      throw new BadRequestException(
+        `Integration ${mapping.integrationId} resource "${resource.resourceKey}" has no field mappings configured.`,
       );
     }
 
     const companyId = mapping.companyId;
-    const assetLayoutId = mapping.integration.assetLayoutId;
-    const matchKeyFieldIds = mapping.integration.matchKeyFieldIds;
+    const assetLayoutId = resource.assetLayoutId;
+    const matchKeyFieldIds = resource.matchKeyFieldIds;
 
     // The worker runs outside a request context — Prisma's tenant
     // middleware sees `getTenantContext() === undefined` and bypasses
@@ -157,10 +181,11 @@ export class IntegrationSyncRunnerService {
       },
       correlationId: randomUUID(),
       externalOrgId: mapping.externalOrgId,
+      resourceKey: resource.resourceKey,
       filter: (mapping.filter ?? {}) as Record<string, unknown>,
     };
 
-    const writableMappings = mapping.integration.fieldMappings
+    const writableMappings = resource.fieldMappings
       .filter((m) => m.targetField.archivedAt === null)
       .filter((m) => m.syncDirection !== 'manual_only');
 
@@ -212,6 +237,7 @@ export class IntegrationSyncRunnerService {
                 companyId,
                 integrationId: mapping.integrationId,
                 integrationDriver: mapping.integration.driver,
+                resourceId: resource.id,
                 assetLayoutId,
                 matchKeyFieldIds,
               },
@@ -261,6 +287,7 @@ export class IntegrationSyncRunnerService {
       if (!input.dryRun) {
         await this.archiveDisappearedRecords({
           mappingId: mapping.id,
+          resourceId: resource.id,
           companyId,
           integrationDriver: mapping.integration.driver,
           seenExternalIds,
@@ -296,6 +323,7 @@ export class IntegrationSyncRunnerService {
         conflicts,
         error: null,
         companyId,
+        resourceKey: resource.resourceKey,
       };
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
@@ -310,6 +338,7 @@ export class IntegrationSyncRunnerService {
         conflicts,
         error: message.slice(0, 4_000),
         companyId,
+        resourceKey: resource.resourceKey,
       };
     }
   }
@@ -324,6 +353,7 @@ export class IntegrationSyncRunnerService {
       companyId: string;
       integrationId: string;
       integrationDriver: string;
+      resourceId: string;
       assetLayoutId: string;
       matchKeyFieldIds: string[];
     };
@@ -353,6 +383,7 @@ export class IntegrationSyncRunnerService {
     const resolution = await this.matchResolver.resolve({
       companyId: args.mapping.companyId,
       integrationCompanyMappingId: args.mapping.id,
+      resourceId: args.mapping.resourceId,
       integrationDriver: args.mapping.integrationDriver,
       externalId: args.record.externalId,
       source: args.record.fields,
@@ -424,6 +455,7 @@ export class IntegrationSyncRunnerService {
       id: string;
       companyId: string;
       integrationDriver: string;
+      resourceId: string;
       assetLayoutId: string;
     };
     syncRunId: string;
@@ -452,8 +484,9 @@ export class IntegrationSyncRunnerService {
     if (args.resolution.kind === 'reuse') {
       const sync = await this.prisma.integrationSyncRecord.findUnique({
         where: {
-          integrationCompanyMappingId_externalId: {
+          integrationCompanyMappingId_resourceId_externalId: {
             integrationCompanyMappingId: args.mapping.id,
+            resourceId: args.mapping.resourceId,
             externalId: args.record.externalId,
           },
         },
@@ -467,9 +500,11 @@ export class IntegrationSyncRunnerService {
         return;
       }
       await this.prisma.$transaction(async (tx) => {
+        const reuseAssetId =
+          args.resolution.kind === 'reuse' ? args.resolution.assetId : '';
         const writeResult = await this.writeFieldValues({
           tx,
-          assetId: args.resolution.kind === 'reuse' ? args.resolution.assetId : '',
+          assetId: reuseAssetId,
           companyId: args.mapping.companyId,
           projected: args.projected,
           writableMappings: args.writableMappings,
@@ -479,26 +514,30 @@ export class IntegrationSyncRunnerService {
           >,
           totals: args.totals,
         });
-        await tx.asset.updateMany({
-          where: {
-            id: args.resolution.kind === 'reuse' ? args.resolution.assetId : '',
-            companyId: args.mapping.companyId,
-          },
-          data: {
-            externalId: args.record.externalId,
-            externalSource: args.mapping.integrationDriver,
-            ...(args.record.displayName ? { name: args.record.displayName } : {}),
-          },
+        // Only the "primary" integration for this asset (the one that
+        // created or first claimed it) is allowed to overwrite the
+        // denormalised externalId/externalSource/name. Subsequent
+        // cross-integration syncs leave those alone — the asset's
+        // multi-integration ownership is fully expressed through the
+        // separate `IntegrationSyncRecord` rows.
+        await this.maybeUpdateAssetIdentity(tx, {
+          assetId: reuseAssetId,
+          companyId: args.mapping.companyId,
+          integrationDriver: args.mapping.integrationDriver,
+          externalId: args.record.externalId,
+          displayName: args.record.displayName,
         });
         await tx.integrationSyncRecord.upsert({
           where: {
-            integrationCompanyMappingId_externalId: {
+            integrationCompanyMappingId_resourceId_externalId: {
               integrationCompanyMappingId: args.mapping.id,
+              resourceId: args.mapping.resourceId,
               externalId: args.record.externalId,
             },
           },
           create: {
             integrationCompanyMappingId: args.mapping.id,
+            resourceId: args.mapping.resourceId,
             assetId: args.resolution.kind === 'reuse' ? args.resolution.assetId : '',
             companyId: args.mapping.companyId,
             externalId: args.record.externalId,
@@ -539,29 +578,32 @@ export class IntegrationSyncRunnerService {
 
     if (args.resolution.kind === 'claim') {
       await this.prisma.$transaction(async (tx) => {
+        const claimAssetId =
+          args.resolution.kind === 'claim' ? args.resolution.assetId : '';
         const writeResult = await this.writeFieldValues({
           tx,
-          assetId: args.resolution.kind === 'claim' ? args.resolution.assetId : '',
+          assetId: claimAssetId,
           companyId: args.mapping.companyId,
           projected: args.projected,
           writableMappings: args.writableMappings,
           previousChecksums: {},
           totals: args.totals,
         });
-        await tx.asset.updateMany({
-          where: {
-            id: args.resolution.kind === 'claim' ? args.resolution.assetId : '',
-            companyId: args.mapping.companyId,
-          },
-          data: {
-            externalId: args.record.externalId,
-            externalSource: args.mapping.integrationDriver,
-            ...(args.record.displayName ? { name: args.record.displayName } : {}),
-          },
+        // Same first-writer rule as the reuse path: stamp
+        // externalId/externalSource/name only if the asset is currently
+        // unowned, so a UniFi claim of an Action1-owned asset does not
+        // flip the asset's "primary" linkage.
+        await this.maybeUpdateAssetIdentity(tx, {
+          assetId: claimAssetId,
+          companyId: args.mapping.companyId,
+          integrationDriver: args.mapping.integrationDriver,
+          externalId: args.record.externalId,
+          displayName: args.record.displayName,
         });
         await tx.integrationSyncRecord.create({
           data: {
             integrationCompanyMappingId: args.mapping.id,
+            resourceId: args.mapping.resourceId,
             assetId: args.resolution.kind === 'claim' ? args.resolution.assetId : '',
             companyId: args.mapping.companyId,
             externalId: args.record.externalId,
@@ -617,6 +659,7 @@ export class IntegrationSyncRunnerService {
       await tx.integrationSyncRecord.create({
         data: {
           integrationCompanyMappingId: args.mapping.id,
+          resourceId: args.mapping.resourceId,
           assetId: created.id,
           companyId: args.mapping.companyId,
           externalId: args.record.externalId,
@@ -743,6 +786,51 @@ export class IntegrationSyncRunnerService {
    *                        what we wrote last time AND it's non-null,
    *                        skip the field (operator edited it).
    */
+  /**
+   * Phase 11.2 — refresh `Asset.externalId` / `externalSource` / `name`
+   * only when this integration is the "primary" owner of the asset:
+   *
+   *   - Asset is currently unowned (`externalSource IS NULL`) → claim
+   *     it as the primary; stamp our externalId / source / name.
+   *   - Asset is already owned by THIS driver with the same external
+   *     id → re-stamp (refreshes the displayName when upstream renames
+   *     the record).
+   *   - Otherwise (owned by a different driver / different external id)
+   *     → leave the denormalised columns alone. The cross-integration
+   *     binding is fully tracked in the per-resource
+   *     `IntegrationSyncRecord` row written separately.
+   */
+  private async maybeUpdateAssetIdentity(
+    tx: Prisma.TransactionClient,
+    args: {
+      assetId: string;
+      companyId: string;
+      integrationDriver: string;
+      externalId: string;
+      displayName: string | null;
+    },
+  ): Promise<void> {
+    if (!args.assetId) return;
+    const current = await tx.asset.findFirst({
+      where: { id: args.assetId, companyId: args.companyId },
+      select: { externalId: true, externalSource: true },
+    });
+    if (!current) return;
+    const isUnowned = current.externalSource === null;
+    const isSameOwner =
+      current.externalSource === args.integrationDriver &&
+      current.externalId === args.externalId;
+    if (!isUnowned && !isSameOwner) return;
+    await tx.asset.updateMany({
+      where: { id: args.assetId, companyId: args.companyId },
+      data: {
+        externalId: args.externalId,
+        externalSource: args.integrationDriver,
+        ...(args.displayName ? { name: args.displayName } : {}),
+      },
+    });
+  }
+
   private async writeFieldValues(args: {
     tx: Prisma.TransactionClient;
     assetId: string;
@@ -834,6 +922,8 @@ export class IntegrationSyncRunnerService {
    */
   private async archiveDisappearedRecords(args: {
     mappingId: string;
+    /** Phase 11.1 — only prune records owned by this resource. */
+    resourceId: string;
     companyId: string;
     integrationDriver: string;
     seenExternalIds: Set<string>;
@@ -841,7 +931,10 @@ export class IntegrationSyncRunnerService {
     actorId: string | null;
   }): Promise<void> {
     const stale = await this.prisma.integrationSyncRecord.findMany({
-      where: { integrationCompanyMappingId: args.mappingId },
+      where: {
+        integrationCompanyMappingId: args.mappingId,
+        resourceId: args.resourceId,
+      },
       select: { id: true, assetId: true, externalId: true },
     });
     const disappeared = stale.filter(
@@ -852,12 +945,35 @@ export class IntegrationSyncRunnerService {
     const assetIds = disappeared.map((s) => s.assetId);
     await this.prisma.$transaction(async (tx) => {
       await tx.integrationSyncRecord.deleteMany({
-        where: { id: { in: disappeared.map((d) => d.id) } },
+        where: {
+          id: { in: disappeared.map((d) => d.id) },
+          companyId: args.companyId,
+        },
       });
-      await tx.asset.updateMany({
-        where: { id: { in: assetIds }, companyId: args.companyId },
-        data: { externalId: null, externalSource: null },
-      });
+      // Phase 11.2 — only release the asset's denormalised
+      // externalId / externalSource if no other integration still
+      // owns it. An asset linked to BOTH Action1 and UniFi keeps its
+      // identity when one side disappears.
+      if (assetIds.length > 0) {
+        const stillLinked = await tx.integrationSyncRecord.findMany({
+          where: { assetId: { in: assetIds } },
+          select: { assetId: true },
+        });
+        const stillLinkedIds = new Set(stillLinked.map((r) => r.assetId));
+        const releasableAssetIds = assetIds.filter(
+          (id) => !stillLinkedIds.has(id),
+        );
+        if (releasableAssetIds.length > 0) {
+          await tx.asset.updateMany({
+            where: {
+              id: { in: releasableAssetIds },
+              companyId: args.companyId,
+              externalSource: args.integrationDriver,
+            },
+            data: { externalId: null, externalSource: null },
+          });
+        }
+      }
     });
     args.totals.archived += disappeared.length;
     for (const s of disappeared) {

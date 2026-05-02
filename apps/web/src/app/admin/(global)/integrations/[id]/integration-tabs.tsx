@@ -1,9 +1,10 @@
 'use client';
 
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import type {
   DriverDescriptor,
+  DriverResourceDescriptor,
   IntegrationCompanyMappingDto,
   IntegrationDto,
   IntegrationSyncRunDto,
@@ -13,30 +14,60 @@ import { FieldMappingsTab } from './field-mappings-tab';
 import { OrgsTab } from './orgs-tab';
 import { RunsTab } from './runs-tab';
 
-type TabId = 'creds' | 'fields' | 'orgs' | 'runs';
+type StaticTabId = 'creds' | 'orgs' | 'runs';
+type ResourceTabId = `fields:${string}`;
+type TabId = StaticTabId | ResourceTabId;
 
-const TABS: Array<{ id: TabId; label: string; help: string }> = [
+type TabDescriptor =
+  | {
+      id: StaticTabId;
+      label: string;
+      help: string;
+      kind: 'static';
+    }
+  | {
+      id: ResourceTabId;
+      label: string;
+      help: string;
+      kind: 'resource';
+      resource: DriverResourceDescriptor;
+    };
+
+const STATIC_TABS_HEAD: TabDescriptor[] = [
   {
     id: 'creds',
     label: 'Credentials & schedule',
     help: 'Update the secret, status, or cron expression.',
+    kind: 'static',
   },
   {
     id: 'orgs',
     label: 'Organizations',
     help: 'Map each upstream organization to a Weavestream company.',
+    kind: 'static',
   },
-  {
-    id: 'fields',
-    label: 'Field mappings',
-    help: 'Pick the target asset layout and project source fields onto Weavestream fields. Applies globally to every mapped company.',
-  },
+];
+
+const STATIC_TABS_TAIL: TabDescriptor[] = [
   {
     id: 'runs',
     label: 'Run history',
     help: 'Inspect totals, conflicts, and errors for every sync run.',
+    kind: 'static',
   },
 ];
+
+function resourceTabId(key: string): ResourceTabId {
+  return `fields:${key}` as ResourceTabId;
+}
+
+function isResourceTabId(id: string): id is ResourceTabId {
+  return id.startsWith('fields:');
+}
+
+function resourceKeyFromTab(id: ResourceTabId): string {
+  return id.slice('fields:'.length);
+}
 
 export function IntegrationTabs({
   initialTab,
@@ -45,7 +76,7 @@ export function IntegrationTabs({
   runs,
   driver,
 }: {
-  initialTab: TabId;
+  initialTab: string;
   integration: IntegrationDto;
   mappings: IntegrationCompanyMappingDto[];
   runs: IntegrationSyncRunDto[];
@@ -53,7 +84,38 @@ export function IntegrationTabs({
 }) {
   const router = useRouter();
   const sp = useSearchParams();
-  const [tab, setTab] = useState<TabId>(initialTab);
+
+  // Driver descriptor is the source of truth for which resource tabs
+  // to render. Drivers without an explicit `resources` array implicitly
+  // get a single `records` tab — we mirror that here.
+  const tabs = useMemo<TabDescriptor[]>(() => {
+    const resources: DriverResourceDescriptor[] =
+      driver?.resources && driver.resources.length > 0
+        ? driver.resources
+        : [{ key: 'records', label: 'Records' }];
+    const resourceTabs: TabDescriptor[] = resources.map((r) => ({
+      id: resourceTabId(r.key),
+      label: `${r.label} fields`,
+      help: `Layout, match keys, and field mappings for ${r.label.toLowerCase()}.`,
+      kind: 'resource',
+      resource: r,
+    }));
+    return [...STATIC_TABS_HEAD, ...resourceTabs, ...STATIC_TABS_TAIL];
+  }, [driver]);
+
+  // Resolve the initial tab against the descriptor list. Legacy `fields`
+  // (singular) routes default to the first resource tab so saved bookmarks
+  // keep working post-migration.
+  const resolvedInitialTab = useMemo<TabId>(() => {
+    if (tabs.find((t) => t.id === initialTab)) return initialTab as TabId;
+    if (initialTab === 'fields') {
+      const first = tabs.find((t) => t.kind === 'resource');
+      if (first) return first.id;
+    }
+    return 'creds';
+  }, [initialTab, tabs]);
+
+  const [tab, setTab] = useState<TabId>(resolvedInitialTab);
 
   function navigate(next: TabId) {
     setTab(next);
@@ -76,7 +138,7 @@ export function IntegrationTabs({
           overflowX: 'auto',
         }}
       >
-        {TABS.map((t) => {
+        {tabs.map((t) => {
           const active = t.id === tab;
           return (
             <button
@@ -114,13 +176,6 @@ export function IntegrationTabs({
             driver={driver}
           />
         )}
-        {tab === 'fields' && (
-          <FieldMappingsTab
-            integration={integration}
-            mappings={mappings}
-            driver={driver}
-          />
-        )}
         {tab === 'orgs' && (
           <OrgsTab
             integration={integration}
@@ -131,6 +186,24 @@ export function IntegrationTabs({
         {tab === 'runs' && (
           <RunsTab integration={integration} runs={runs} mappings={mappings} />
         )}
+        {isResourceTabId(tab) &&
+          (() => {
+            const key = resourceKeyFromTab(tab);
+            const descriptor =
+              driver?.resources?.find((r) => r.key === key) ??
+              (tabs.find((t) => t.id === tab && t.kind === 'resource') as
+                | (TabDescriptor & { kind: 'resource' })
+                | undefined)?.resource ??
+              { key, label: key };
+            return (
+              <FieldMappingsTab
+                integration={integration}
+                mappings={mappings}
+                driver={driver}
+                resource={descriptor}
+              />
+            );
+          })()}
       </div>
     </div>
   );

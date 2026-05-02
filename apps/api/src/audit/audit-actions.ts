@@ -130,6 +130,8 @@ export const AUDIT_ACTIONS = {
     companyMappingUpdate: 'integration.company_mapping.update',
     companyMappingDelete: 'integration.company_mapping.delete',
     fieldMappingsReplace: 'integration.field_mappings.replace',
+    resourceCreate: 'integration.resource.create',
+    resourceUpdate: 'integration.resource.update',
     syncRunStarted: 'integration.sync.started',
     syncRunFinished: 'integration.sync.finished',
     syncRunFailed: 'integration.sync.failed',

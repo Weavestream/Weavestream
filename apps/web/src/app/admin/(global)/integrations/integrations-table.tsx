@@ -80,37 +80,63 @@ export function IntegrationsTable({
         ),
       },
       {
-        id: 'layout',
-        header: 'Layout',
-        width: 200,
-        sortValue: (r) => r.assetLayoutName?.toLowerCase() ?? null,
-        render: (r) =>
-          r.assetLayoutId ? (
+        id: 'resources',
+        header: 'Resources',
+        width: 240,
+        sortValue: (r) =>
+          r.resources
+            .filter((res) => res.enabled && res.assetLayoutId)
+            .map((res) => res.resourceLabel.toLowerCase())
+            .join(', ') || null,
+        render: (r) => {
+          const configured = r.resources.filter(
+            (res) => res.enabled && res.assetLayoutId,
+          );
+          if (configured.length === 0) {
+            return (
+              <Tag tone="warn" dot>
+                not configured
+              </Tag>
+            );
+          }
+          return (
             <div
-              style={{ display: 'flex', flexDirection: 'column', gap: 1, minWidth: 0 }}
-              title={`${r.fieldMappingCount} field mapping${r.fieldMappingCount === 1 ? '' : 's'}`}
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 2,
+                minWidth: 0,
+              }}
+              title={configured
+                .map(
+                  (res) =>
+                    `${res.resourceLabel}: ${res.assetLayoutName ?? '—'} · ${res.fieldMappingCount} mapping${res.fieldMappingCount === 1 ? '' : 's'}`,
+                )
+                .join('\n')}
             >
-              <span style={{ color: 'var(--text-2)', fontSize: 12.5 }}>
-                {r.assetLayoutName ?? r.assetLayoutId.slice(0, 8)}
-              </span>
-              <span
-                style={{
-                  fontFamily: 'var(--font-mono)',
-                  fontSize: 11,
-                  color: 'var(--dim)',
-                }}
-              >
-                {r.fieldMappingCount} field map
-                {r.fieldMappingCount === 1 ? '' : 's'} ·{' '}
-                {r.matchKeyFieldIds.length} match key
-                {r.matchKeyFieldIds.length === 1 ? '' : 's'}
-              </span>
+              {configured.map((res) => (
+                <span
+                  key={res.id}
+                  style={{
+                    color: 'var(--text-2)',
+                    fontSize: 12.5,
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  <strong>{res.resourceLabel}</strong>
+                  <span style={{ color: 'var(--dim)' }}>
+                    {' '}
+                    · {res.assetLayoutName ?? res.assetLayoutId?.slice(0, 8)} ·{' '}
+                    {res.fieldMappingCount} map
+                    {res.fieldMappingCount === 1 ? '' : 's'}
+                  </span>
+                </span>
+              ))}
             </div>
-          ) : (
-            <Tag tone="warn" dot>
-              not configured
-            </Tag>
-          ),
+          );
+        },
       },
       {
         id: 'cron',
@@ -208,6 +234,20 @@ export function IntegrationsTable({
             )}
             <Tag tone="outline">{r.mappingCount} mappings</Tag>
           </div>
+          <MobileCardRow label="Resources">
+            {(() => {
+              const configured = r.resources.filter(
+                (res) => res.enabled && res.assetLayoutId,
+              );
+              if (configured.length === 0) return 'not configured';
+              return configured
+                .map(
+                  (res) =>
+                    `${res.resourceLabel} → ${res.assetLayoutName ?? 'layout'}`,
+                )
+                .join(', ');
+            })()}
+          </MobileCardRow>
           <MobileCardRow label="Last run">
             {r.lastRunAt ? (
               <>

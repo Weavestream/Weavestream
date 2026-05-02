@@ -146,6 +146,15 @@ export class Action1Driver implements IntegrationDriver {
           'Action1 OAuth2 Client Secret. Stored AES-256-GCM encrypted; never returned to the UI.',
       },
     ],
+    resources: [
+      {
+        key: 'records',
+        label: 'Endpoints',
+        description:
+          'Action1 managed endpoints (workstations / servers) per organisation.',
+        defaultMatchKeyHint: 'MAC',
+      },
+    ],
     capabilities: {
       listSourceOrgs: true,
       dryRun: true,
@@ -224,7 +233,7 @@ export class Action1Driver implements IntegrationDriver {
    *     back to the curated catalogue so the UI is never empty.
    */
   async listSourceFields(
-    ctx: IntegrationContext & { externalOrgId: string },
+    ctx: IntegrationContext & { externalOrgId: string; resourceKey: string },
   ): Promise<SourceFieldDto[]> {
     if (!ctx.externalOrgId) {
       return sortByLabel([...ACTION1_KNOWN_FIELDS]);

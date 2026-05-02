@@ -65,17 +65,30 @@ export function CredentialsTab({
     () => mappings.filter((m) => m.enabled).length,
     [mappings],
   );
-  const hasFieldMappings = integration.fieldMappingCount > 0;
+  // Phase 11.1 — at least one enabled resource must have a layout AND at
+  // least one field mapping for the runner to do anything.
+  const syncableResources = useMemo(
+    () =>
+      integration.resources.filter(
+        (r) => r.enabled && r.assetLayoutId && r.fieldMappingCount > 0,
+      ),
+    [integration.resources],
+  );
+  const hasSyncableResource = syncableResources.length > 0;
+  const totalFieldMappings = useMemo(
+    () =>
+      integration.resources.reduce((sum, r) => sum + r.fieldMappingCount, 0),
+    [integration.resources],
+  );
   const cannotSync =
     integration.status === 'DISABLED' ||
     !integration.hasSecret ||
-    !integration.assetLayoutId ||
-    !hasFieldMappings ||
+    !hasSyncableResource ||
     enabledMappingCount === 0;
   const syncBlockedReason: string | null = !integration.hasSecret
     ? 'Add credentials below before running a sync.'
-    : !integration.assetLayoutId || !hasFieldMappings
-      ? 'No global field mappings yet — open the “Field mappings” tab.'
+    : !hasSyncableResource
+      ? 'No resource is fully configured — open a resource tab to pick a layout and field mappings.'
       : enabledMappingCount === 0
         ? 'No enabled organization mappings — open the “Organizations” tab.'
         : integration.status === 'DISABLED'
@@ -332,8 +345,10 @@ export function CredentialsTab({
           <span style={{ fontSize: 11.5, color: 'var(--dim)' }}>
             {enabledMappingCount} enabled mapping
             {enabledMappingCount === 1 ? '' : 's'} ·{' '}
-            {integration.fieldMappingCount} field mapping
-            {integration.fieldMappingCount === 1 ? '' : 's'}
+            {syncableResources.length} of {integration.resources.length}{' '}
+            resource{integration.resources.length === 1 ? '' : 's'} ready ·{' '}
+            {totalFieldMappings} field mapping
+            {totalFieldMappings === 1 ? '' : 's'}
           </span>
         </div>
         <p style={runHelpStyle}>

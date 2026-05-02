@@ -245,6 +245,15 @@ export type IntegrationSyncOrchestratorJobName =
 export const integrationSyncMappingJobSchema = z.object({
   syncRunId: z.string().uuid(),
   integrationCompanyMappingId: z.string().uuid(),
+  /**
+   * Phase 11.1 — every per-mapping job is scoped to a single
+   * `IntegrationResource` so the orchestrator fans out
+   * (mappings × enabled-resources) jobs. Each job runs an
+   * independent `runMapping` against its resource's layout +
+   * field mappings; per-resource totals roll up into the
+   * mapping's `IntegrationSyncRunCompanyResult.totals.byResource`.
+   */
+  resourceId: z.string().uuid(),
   dryRun: z.boolean().default(false),
 });
 

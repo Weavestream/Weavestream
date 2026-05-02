@@ -96,7 +96,7 @@ export class IntegrationSyncMappingWorker implements OnModuleDestroy {
 
     const mapping = await this.prisma.integrationCompanyMapping.findUnique({
       where: { id: payload.integrationCompanyMappingId },
-      select: { id: true, companyId: true },
+      select: { id: true, companyId: true, integrationId: true },
     });
     if (!mapping) {
       this.logger.warn(
@@ -104,6 +104,30 @@ export class IntegrationSyncMappingWorker implements OnModuleDestroy {
       );
       return null;
     }
+
+    const resource = await this.prisma.integrationResource.findFirst({
+      where: { id: payload.resourceId, integrationId: mapping.integrationId },
+      select: { id: true, resourceKey: true },
+    });
+    if (!resource) {
+      this.logger.warn(
+        `Resource ${payload.resourceId} not found for mapping ${payload.integrationCompanyMappingId} — skipping`,
+      );
+      return null;
+    }
+
+    // How many enabled+configured resources we expect to see report
+    // back for this mapping. Used by mergeResourceResult to decide
+    // when the per-mapping row reaches a terminal state. Must match
+    // the orchestrator's fan-out filter.
+    const expectedResources = await this.prisma.integrationResource.count({
+      where: {
+        integrationId: mapping.integrationId,
+        enabled: true,
+        assetLayoutId: { not: null },
+        fieldMappings: { some: {} },
+      },
+    });
 
     await this.sync.markMappingRunning(run.id, mapping.id);
     await this.audit.log({
@@ -115,20 +139,27 @@ export class IntegrationSyncMappingWorker implements OnModuleDestroy {
       ip: '0.0.0.0',
       userAgent: SYSTEM_AUDIT_USER_AGENT,
       before: null,
-      after: { runId: run.id, dryRun: payload.dryRun },
+      after: {
+        runId: run.id,
+        dryRun: payload.dryRun,
+        resourceKey: resource.resourceKey,
+      },
     });
 
     try {
       const outcome = await this.runner.runMapping({
         syncRunId: run.id,
         integrationCompanyMappingId: mapping.id,
+        resourceId: resource.id,
         dryRun: payload.dryRun,
         actorId: run.triggeredBy,
       });
-      await this.sync.finishMapping({
+      await this.sync.mergeResourceResult({
         runId: run.id,
         mappingId: mapping.id,
+        resourceKey: outcome.resourceKey,
         companyId: outcome.companyId,
+        expectedResources,
         status: outcome.status,
         totals: outcome.totals,
         conflicts: outcome.conflicts,
@@ -141,10 +172,12 @@ export class IntegrationSyncMappingWorker implements OnModuleDestroy {
       return outcome;
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
-      await this.sync.finishMapping({
+      await this.sync.mergeResourceResult({
         runId: run.id,
         mappingId: mapping.id,
+        resourceKey: resource.resourceKey,
         companyId: mapping.companyId,
+        expectedResources,
         status: 'failed',
         totals: zeroTotals(),
         conflicts: [

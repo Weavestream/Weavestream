@@ -11,17 +11,23 @@ import { FieldTypesRegistry } from '../field-types/field-types.registry.js';
  *
  * Decision tree (encoded in `resolve()`):
  *   1. There is already an `IntegrationSyncRecord` for this
- *      `(companyMappingId, externalId)` → reuse it. The link is durable.
+ *      `(companyMappingId, resourceId, externalId)` → reuse it. The
+ *      link is durable.
  *   2. There is an asset whose `externalSource = integration.driver` and
  *      `externalId = externalId` (in the same company) → reuse it. This
  *      handles the case where an operator deleted the sync-record but
  *      the asset still carries the linkage.
- *   3. The mapping has `matchKeyFieldIds` configured → look for an
- *      unclaimed asset (no externalSource) whose stored values for those
- *      fields match the values the driver projected onto the same
- *      target fields. Comparison is case-insensitive for TEXT/EMAIL/URL,
- *      strict otherwise.
- *      - Single match → "claim" the asset.
+ *   3. The mapping has `matchKeyFieldIds` configured → look for any
+ *      asset in the same company whose stored values for those fields
+ *      match the values the driver projected onto the same target
+ *      fields, AND that does not already carry a sync record from THIS
+ *      `(mapping, resource)` pair. Comparison is case-insensitive for
+ *      TEXT/EMAIL/URL, strict otherwise.
+ *      - Single match → "claim" the asset (an asset can be claimed by
+ *        multiple integrations simultaneously — a UniFi client and an
+ *        Action1 endpoint with the same IP both link to one Weavestream
+ *        asset; only the FIRST integration to touch the asset writes
+ *        `Asset.externalId` / `externalSource`).
  *      - Two or more matches → ambiguous; return a conflict so the run
  *        viewer can surface the candidates without auto-mutating.
  *      - Zero matches → fall through.
@@ -50,6 +56,8 @@ export class MatchResolverService {
   async resolve(args: {
     companyId: string;
     integrationCompanyMappingId: string;
+    /** Phase 11.1 — sync-record namespace is per-resource. */
+    resourceId: string;
     integrationDriver: string;
     externalId: string;
     /** Raw source-field-keyed payload from the driver. */
@@ -72,8 +80,9 @@ export class MatchResolverService {
   }): Promise<MatchResolution> {
     const existing = await this.prisma.integrationSyncRecord.findUnique({
       where: {
-        integrationCompanyMappingId_externalId: {
+        integrationCompanyMappingId_resourceId_externalId: {
           integrationCompanyMappingId: args.integrationCompanyMappingId,
+          resourceId: args.resourceId,
           externalId: args.externalId,
         },
       },
@@ -98,7 +107,8 @@ export class MatchResolverService {
 
     const candidates = await this.matchByKey({
       companyId: args.companyId,
-      integrationDriver: args.integrationDriver,
+      integrationCompanyMappingId: args.integrationCompanyMappingId,
+      resourceId: args.resourceId,
       source: args.source,
       fieldMappings: args.fieldMappings,
       matchKeyFieldIds: args.matchKeyFieldIds,
@@ -113,18 +123,27 @@ export class MatchResolverService {
   }
 
   /**
-   * Searches for unclaimed assets in the same company whose stored
-   * values for every match-key field equal the projected source value.
+   * Searches for assets in the same company whose stored values for
+   * every match-key field equal the projected source value.
    *
-   * "Unclaimed" = `externalSource IS NULL` OR `externalSource =
-   * integrationDriver` AND no IntegrationSyncRecord exists for the
-   * asset. We exclude rows already pinned to a sync record because
-   * those belong to a different externalId in the same integration
-   * (claiming them would corrupt their existing sync linkage).
+   * Eligible candidate = ANY non-archived asset that does NOT already
+   * carry a sync record from THIS `(mapping, resource)` pair. Assets
+   * owned by other integrations (or other resources of the same
+   * integration) ARE eligible — that is the whole point of cross-
+   * integration matching: an Action1 endpoint and a UniFi client with
+   * the same IP should resolve to the SAME Weavestream asset.
+   *
+   * The exclusion guards against the only invariant the writer needs:
+   * a single (mapping, resource) cannot bind two different external
+   * ids to the same asset (the unique on
+   * `(integrationCompanyMappingId, resourceId, externalId)` would
+   * reject a colliding upsert anyway, but rejecting it here lets us
+   * surface a clean "ambiguous" conflict instead of a 500).
    */
   private async matchByKey(args: {
     companyId: string;
-    integrationDriver: string;
+    integrationCompanyMappingId: string;
+    resourceId: string;
     source: Record<string, unknown>;
     fieldMappings: Array<{
       sourceField: string;
@@ -175,11 +194,16 @@ export class MatchResolverService {
           OR: variants.map((v) => ({ value: { equals: v as Prisma.InputJsonValue } })),
           asset: {
             archivedAt: null,
-            integrationSyncRecord: { is: null },
-            OR: [
-              { externalSource: null },
-              { externalSource: args.integrationDriver, externalId: null },
-            ],
+            // Cross-integration matching: the asset is eligible as
+            // long as it does not already carry a sync record from
+            // THIS (mapping, resource). Assets owned by other
+            // integrations / other resources can still be claimed.
+            integrationSyncRecords: {
+              none: {
+                integrationCompanyMappingId: args.integrationCompanyMappingId,
+                resourceId: args.resourceId,
+              },
+            },
           },
         },
         select: { assetId: true },

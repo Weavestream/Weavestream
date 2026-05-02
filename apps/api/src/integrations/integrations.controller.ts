@@ -14,17 +14,21 @@ import {
 import type { Request } from 'express';
 import {
   createIntegrationCompanyMappingSchema,
+  createIntegrationResourceSchema,
   createIntegrationSchema,
   replaceFieldMappingsSchema,
   triggerSyncSchema,
   updateIntegrationCompanyMappingSchema,
+  updateIntegrationResourceSchema,
   updateIntegrationSchema,
   type CreateIntegrationCompanyMappingInput,
   type CreateIntegrationInput,
+  type CreateIntegrationResourceInput,
   type ReplaceFieldMappingsInput,
   type TriggerSyncInput,
   type UpdateIntegrationCompanyMappingInput,
   type UpdateIntegrationInput,
+  type UpdateIntegrationResourceInput,
 } from '@weavestream/shared';
 import { ZodBody } from '../common/zod-validation.pipe.js';
 import {
@@ -51,24 +55,30 @@ import { BadRequestException } from '@nestjs/common';
 /**
  * Phase 11 — admin integrations API.
  *
- * Two top-level resources mounted under `/v1/admin/integrations`:
- *   - GET    /drivers                                    — list available drivers
- *   - GET    /                                           — list integrations
- *   - POST   /                                           — create integration
- *   - GET    /:id                                        — get integration
- *   - PATCH  /:id                                        — update integration
- *   - DELETE /:id                                        — delete + release assets
- *   - POST   /:id/test                                   — driver.testConnection
- *   - GET    /:id/source-orgs                            — driver.listSourceOrgs
- *   - GET    /:id/source-fields?externalOrgId=…          — driver.listSourceFields
- *   - GET    /:id/mappings                               — list company mappings
- *   - POST   /:id/mappings                               — create mapping
+ * Top-level resources mounted under `/v1/admin/integrations`:
+ *   - GET    /drivers
+ *   - GET    /                                                    — list integrations
+ *   - POST   /                                                    — create integration
+ *   - GET    /:id
+ *   - PATCH  /:id
+ *   - DELETE /:id
+ *   - POST   /:id/test                                            — driver.testConnection
+ *   - GET    /:id/source-orgs                                     — driver.listSourceOrgs
+ *   - GET    /:id/mappings                                        — list company mappings
+ *   - POST   /:id/mappings
  *   - GET    /:id/mappings/:mappingId
  *   - PATCH  /:id/mappings/:mappingId
  *   - DELETE /:id/mappings/:mappingId
- *   - GET    /:id/field-mappings                         — list GLOBAL field mappings
- *   - PATCH  /:id/field-mappings                         — replace-all
- *   - POST   /:id/sync                                   — trigger manual sync
+ *
+ * Phase 11.1 — per-resource configuration:
+ *   - GET    /:id/resources                                       — list resources
+ *   - POST   /:id/resources                                       — enable a resource
+ *   - GET    /:id/resources/:resourceKey
+ *   - PATCH  /:id/resources/:resourceKey                          — layout / match keys / enabled
+ *   - GET    /:id/resources/:resourceKey/source-fields            — driver.listSourceFields
+ *   - GET    /:id/resources/:resourceKey/field-mappings
+ *   - PATCH  /:id/resources/:resourceKey/field-mappings           — replace-all per resource
+ *   - POST   /:id/sync                                            — trigger manual sync
  *   - GET    /:id/runs
  *   - GET    /:id/runs/:runId
  *
@@ -209,39 +219,6 @@ export class IntegrationsController {
     return { orgs: await driver.listSourceOrgs(integrationCtx) };
   }
 
-  @Get(':id/source-fields')
-  @RequirePermission('integration.manage')
-  async listSourceFields(
-    @Param('id', new ParseUUIDPipe()) id: string,
-    @Query('externalOrgId') externalOrgId?: string,
-  ) {
-    const ctx = await this.integrations.loadDriverContext(id);
-    const driver = this.drivers.get(ctx.driver);
-    // The global field-mapping editor doesn't always have a specific
-    // org in mind — most drivers (Action1, IT Glue) return a uniform
-    // schema regardless. If the caller didn't pass one, fall back to
-    // the first existing per-company mapping so the driver still gets
-    // a non-empty `externalOrgId` when it needs one.
-    let resolvedOrgId = externalOrgId;
-    if (!resolvedOrgId) {
-      const firstMapping = await this.mappings.list(id);
-      resolvedOrgId = firstMapping[0]?.externalOrgId;
-    }
-    if (!resolvedOrgId) {
-      throw new BadRequestException(
-        'No organization mappings exist yet. Map at least one upstream organization to load its source fields.',
-      );
-    }
-    const integrationCtx: IntegrationContext & { externalOrgId: string } = {
-      config: ctx.config,
-      secret: ctx.secret,
-      http: this.httpDefaults(),
-      correlationId: randomUUID(),
-      externalOrgId: resolvedOrgId,
-    };
-    return { fields: await driver.listSourceFields(integrationCtx) };
-  }
-
   // -------------------------------------------------------------------
   // Company mappings
   // -------------------------------------------------------------------
@@ -299,25 +276,112 @@ export class IntegrationsController {
   }
 
   // -------------------------------------------------------------------
-  // Field mappings (GLOBAL — one set per integration, replace-all)
+  // Resources (per-(integration, resourceKey) configuration container)
   // -------------------------------------------------------------------
 
-  @Get(':id/field-mappings')
+  @Get(':id/resources')
   @RequirePermission('integration.manage')
-  listFieldMappings(@Param('id', new ParseUUIDPipe()) id: string) {
-    return this.integrations.listFieldMappings(id);
+  listResources(@Param('id', new ParseUUIDPipe()) id: string) {
+    return this.integrations.listResources(id);
   }
 
-  @Patch(':id/field-mappings')
+  @Post(':id/resources')
   @RequirePermission('integration.manage')
-  replaceFieldMappings(
+  createResource(
     @CurrentUser() user: AuthedUser,
     @Param('id', new ParseUUIDPipe()) id: string,
+    @Body(new ZodBody(createIntegrationResourceSchema))
+    dto: CreateIntegrationResourceInput,
+    @Req() req: Request,
+  ) {
+    return this.integrations.createResource(user, id, dto, meta(req));
+  }
+
+  @Get(':id/resources/:resourceKey')
+  @RequirePermission('integration.manage')
+  getResource(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Param('resourceKey') resourceKey: string,
+  ) {
+    return this.integrations.getResource(id, resourceKey);
+  }
+
+  @Patch(':id/resources/:resourceKey')
+  @RequirePermission('integration.manage')
+  updateResource(
+    @CurrentUser() user: AuthedUser,
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Param('resourceKey') resourceKey: string,
+    @Body(new ZodBody(updateIntegrationResourceSchema))
+    dto: UpdateIntegrationResourceInput,
+    @Req() req: Request,
+  ) {
+    return this.integrations.updateResource(user, id, resourceKey, dto, meta(req));
+  }
+
+  @Get(':id/resources/:resourceKey/source-fields')
+  @RequirePermission('integration.manage')
+  async listResourceSourceFields(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Param('resourceKey') resourceKey: string,
+    @Query('externalOrgId') externalOrgId?: string,
+  ) {
+    const ctx = await this.integrations.loadDriverContext(id);
+    const driver = this.drivers.get(ctx.driver);
+    // Multi-resource drivers branch on `resourceKey`, but most still
+    // need an `externalOrgId` to probe a real tenant. Fall back to the
+    // first existing per-company mapping so the UI doesn't have to
+    // pre-pick one.
+    let resolvedOrgId = externalOrgId;
+    if (!resolvedOrgId) {
+      const firstMapping = await this.mappings.list(id);
+      resolvedOrgId = firstMapping[0]?.externalOrgId;
+    }
+    if (!resolvedOrgId) {
+      throw new BadRequestException(
+        'No organization mappings exist yet. Map at least one upstream organization to load its source fields.',
+      );
+    }
+    const integrationCtx: IntegrationContext & {
+      externalOrgId: string;
+      resourceKey: string;
+    } = {
+      config: ctx.config,
+      secret: ctx.secret,
+      http: this.httpDefaults(),
+      correlationId: randomUUID(),
+      externalOrgId: resolvedOrgId,
+      resourceKey,
+    };
+    return { fields: await driver.listSourceFields(integrationCtx) };
+  }
+
+  @Get(':id/resources/:resourceKey/field-mappings')
+  @RequirePermission('integration.manage')
+  listResourceFieldMappings(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Param('resourceKey') resourceKey: string,
+  ) {
+    return this.integrations.listFieldMappings(id, resourceKey);
+  }
+
+  @Patch(':id/resources/:resourceKey/field-mappings')
+  @RequirePermission('integration.manage')
+  replaceResourceFieldMappings(
+    @CurrentUser() user: AuthedUser,
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Param('resourceKey') resourceKey: string,
     @Body(new ZodBody(replaceFieldMappingsSchema))
     dto: ReplaceFieldMappingsInput,
     @Req() req: Request,
   ) {
-    return this.integrations.replaceFieldMappings(user, id, dto, meta(req));
+    return this.integrations.replaceFieldMappings(
+      user,
+      id,
+      resourceKey,
+      dto,
+      meta(req),
+    );
   }
 
   // -------------------------------------------------------------------
@@ -362,4 +426,3 @@ export class IntegrationsController {
     };
   }
 }
-

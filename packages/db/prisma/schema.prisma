@@ -455,12 +455,13 @@ model AssetLayout {
   createdAt  DateTime  @default(now()) @map("created_at")
   updatedAt  DateTime  @updatedAt @map("updated_at")
 
-  fields       AssetField[]
-  assets       Asset[]
-  // Phase 11: integrations target a layout for upserts. Layouts are
-  // GLOBAL, so a single layout choice on the parent `Integration`
-  // applies across every per-company mapping.
-  integrations Integration[]
+  fields              AssetField[]
+  assets              Asset[]
+  // Phase 11.1: integration resources target a layout for upserts.
+  // Each `(integration, resourceKey)` row picks its own layout, so a
+  // single integration (e.g. UniFi) can fan out to two distinct
+  // layouts (devices vs clients) via two `IntegrationResource` rows.
+  integrationResources IntegrationResource[]
 
   // Active-slug uniqueness enforced by a partial unique index on
   // (slug) WHERE archived_at IS NULL, added in the Phase 3 migration.
@@ -546,11 +547,14 @@ model Asset {
   fieldValues           AssetFieldValue[]
   passwords             Password[]
   starredBy             StarredAsset[]
-  // Phase 11: 0..1 link to the external record that produced or last
-  // updated this asset. The relation is nullable because an asset can
-  // be operator-created or have been "released" by a deleted
-  // integration mapping (see the deletion-safety rules in the plan).
-  integrationSyncRecord IntegrationSyncRecord?
+  // Phase 11.2: 0..N links to external records. An asset can be
+  // simultaneously linked to several integrations (e.g. an Action1
+  // endpoint and a UniFi client representing the same physical
+  // machine). Each `IntegrationSyncRecord` row scopes its binding by
+  // `(integrationCompanyMappingId, resourceId)` and the resolver
+  // refuses to claim an asset that already carries a sync record
+  // from the same `(mapping, resource)` pair.
+  integrationSyncRecords IntegrationSyncRecord[]
 
   @@index([companyId, assetLayoutId, archivedAt])
   @@index([companyId, name])
@@ -1003,19 +1007,6 @@ model Integration {
   /// BullMQ cron pattern (5-field). NULL disables scheduled syncs;
   /// manual `Run sync` from the admin UI still works.
   syncCron         String?           @map("sync_cron")
-  /// Phase 11 — GLOBAL target layout for this integration. Every
-  /// per-company mapping syncs into the same layout (AssetLayouts
-  /// themselves are global, see DECISIONS.md D-007). Field mappings
-  /// and match keys are validated against this layout. NULL while the
-  /// operator is still configuring credentials/orgs — runs short-
-  /// circuit with a "missing layout" error in that state.
-  assetLayoutId    String?           @map("asset_layout_id") @db.Uuid
-  /// Phase 11 — GLOBAL match-key fields used when claiming unsynced
-  /// Weavestream assets. AssetField ids must belong to
-  /// `assetLayoutId`. Empty array means "always create on miss".
-  /// Order is significant — drives tie-breaker ordering in conflict
-  /// logs.
-  matchKeyFieldIds String[]          @map("match_key_field_ids") @db.Uuid
   lastRunAt        DateTime?         @map("last_run_at")
   lastRunStatus    String?           @map("last_run_status")
   createdBy        String?           @map("created_by") @db.Uuid
@@ -1023,15 +1014,50 @@ model Integration {
   updatedAt        DateTime          @updatedAt @map("updated_at")
 
   secret          IntegrationSecret?
-  assetLayout     AssetLayout?                @relation(fields: [assetLayoutId], references: [id], onDelete: Restrict)
   companyMappings IntegrationCompanyMapping[]
-  fieldMappings   IntegrationFieldMapping[]
+  resources       IntegrationResource[]
   syncRuns        IntegrationSyncRun[]
 
   @@unique([driver, name])
   @@index([driver])
-  @@index([assetLayoutId])
   @@map("integrations")
+}
+
+/// Phase 11.1 — per-resource configuration owned by a single Integration.
+///
+/// A driver advertises one or more resources it can sync (UniFi:
+/// devices + clients, Action1: records). Each `(integration, resourceKey)`
+/// pair owns its own target asset layout, match keys, field mappings,
+/// and sync-record namespace, while `IntegrationCompanyMapping` rows
+/// (host ↔ company) remain shared across every resource of the
+/// integration.
+///
+/// `resourceKey` is validated by the driver descriptor's `resources`
+/// array; the API rejects writes for unknown keys.
+model IntegrationResource {
+  id               String   @id @default(uuid()) @db.Uuid
+  integrationId    String   @map("integration_id") @db.Uuid
+  /// Driver-validated short key (e.g. 'devices', 'clients', 'records').
+  resourceKey      String   @map("resource_key")
+  enabled          Boolean  @default(true)
+  /// Target layout for this resource. NULL while the operator is still
+  /// configuring it — runs short-circuit with a "missing layout" error
+  /// in that state.
+  assetLayoutId    String?  @map("asset_layout_id") @db.Uuid
+  /// Match-key AssetField ids (must belong to `assetLayoutId`). Empty
+  /// array means "always create on miss".
+  matchKeyFieldIds String[] @default([]) @map("match_key_field_ids") @db.Uuid
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  integration   Integration               @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+  assetLayout   AssetLayout?              @relation(fields: [assetLayoutId], references: [id], onDelete: Restrict)
+  fieldMappings IntegrationFieldMapping[]
+  syncRecords   IntegrationSyncRecord[]
+
+  @@unique([integrationId, resourceKey])
+  @@index([assetLayoutId])
+  @@map("integration_resources")
 }
 
 // Phase 11 — encrypted secret bundle for a single Integration. Stored
@@ -1106,7 +1132,10 @@ enum IntegrationSyncDirection {
 
 model IntegrationFieldMapping {
   id            String                   @id @default(uuid()) @db.Uuid
-  integrationId String                   @map("integration_id") @db.Uuid
+  /// Phase 11.1 — field mappings live on a per-resource container, so
+  /// devices vs clients (under the same UniFi integration) can map onto
+  /// different layouts with different source-field projections.
+  resourceId    String                   @map("resource_id") @db.Uuid
   sourceField   String                   @map("source_field")
   targetFieldId String                   @map("target_field_id") @db.Uuid
   syncDirection IntegrationSyncDirection @default(source_wins) @map("sync_direction")
@@ -1115,10 +1144,10 @@ model IntegrationFieldMapping {
   createdAt     DateTime                 @default(now()) @map("created_at")
   updatedAt     DateTime                 @updatedAt @map("updated_at")
 
-  integration Integration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
-  targetField AssetField  @relation(fields: [targetFieldId], references: [id], onDelete: Cascade)
+  resource    IntegrationResource @relation(fields: [resourceId], references: [id], onDelete: Cascade)
+  targetField AssetField          @relation(fields: [targetFieldId], references: [id], onDelete: Cascade)
 
-  @@unique([integrationId, sourceField])
+  @@unique([resourceId, sourceField])
   @@index([targetFieldId])
   @@map("integration_field_mappings")
 }
@@ -1204,6 +1233,11 @@ model IntegrationSyncRunCompanyResult {
 model IntegrationSyncRecord {
   id                          String   @id @default(uuid()) @db.Uuid
   integrationCompanyMappingId String   @map("integration_company_mapping_id") @db.Uuid
+  /// Phase 11.1 — scopes the binding to a single resource. A device
+  /// with the same external id as a client (rare, but possible across
+  /// resource namespaces) gets two distinct sync-records pointing at
+  /// two distinct assets in two distinct layouts.
+  resourceId                  String   @map("resource_id") @db.Uuid
   syncRunId                   String?  @map("sync_run_id") @db.Uuid
   companyId                   String   @map("company_id") @db.Uuid
   assetId                     String   @map("asset_id") @db.Uuid
@@ -1220,12 +1254,14 @@ model IntegrationSyncRecord {
   updatedAt                   DateTime @updatedAt @map("updated_at")
 
   companyMapping IntegrationCompanyMapping @relation(fields: [integrationCompanyMappingId], references: [id], onDelete: Cascade)
+  resource       IntegrationResource       @relation(fields: [resourceId], references: [id], onDelete: Cascade)
   asset          Asset                     @relation(fields: [assetId], references: [id], onDelete: Cascade)
   syncRun        IntegrationSyncRun?       @relation(fields: [syncRunId], references: [id], onDelete: SetNull)
 
-  @@unique([integrationCompanyMappingId, externalId])
-  @@unique([assetId])
+  @@unique([integrationCompanyMappingId, resourceId, externalId])
+  @@index([assetId])
   @@index([companyId, integrationCompanyMappingId])
+  @@index([resourceId])
   @@map("integration_sync_records")
 }
 

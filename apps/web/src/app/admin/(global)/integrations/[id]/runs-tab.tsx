@@ -95,6 +95,7 @@ export function RunsTab({
           integrationId={integration.id}
           runId={openRunId}
           mappings={mappings}
+          resourceLabelByKey={resourceLabelByKey(integration)}
           onClose={() => setOpenRunId(null)}
         />
       )}
@@ -102,15 +103,23 @@ export function RunsTab({
   );
 }
 
+function resourceLabelByKey(integration: IntegrationDto): Map<string, string> {
+  const m = new Map<string, string>();
+  for (const r of integration.resources) m.set(r.resourceKey, r.resourceLabel);
+  return m;
+}
+
 function RunDetailDialog({
   integrationId,
   runId,
   mappings,
+  resourceLabelByKey,
   onClose,
 }: {
   integrationId: string;
   runId: string;
   mappings: IntegrationCompanyMappingDto[];
+  resourceLabelByKey: Map<string, string>;
   onClose: () => void;
 }) {
   const [detail, setDetail] = useState<{
@@ -185,6 +194,10 @@ function RunDetailDialog({
             <div style={{ marginTop: 10 }}>
               <RunTotalsBreakdown totals={run.totals as SyncRunTotals | null} />
             </div>
+            <ResourceTotalsBreakdown
+              totals={run.totals as SyncRunTotals | null}
+              resourceLabelByKey={resourceLabelByKey}
+            />
             {run.error && (
               <Tag tone="danger" style={{ marginTop: 8 }}>
                 {run.error}
@@ -236,6 +249,10 @@ function RunDetailDialog({
                         <RunStatusTag status={r.status} />
                       </div>
                       <RunTotalsBreakdown totals={r.totals as SyncRunTotals | null} />
+                      <ResourceTotalsBreakdown
+                        totals={r.totals as SyncRunTotals | null}
+                        resourceLabelByKey={resourceLabelByKey}
+                      />
                       {r.error && (
                         <Tag tone="danger" style={{ marginTop: 6 }}>
                           {r.error}
@@ -353,6 +370,84 @@ function RunTotalsSummary({
       {totals.errors > 0 ? ` · ${totals.errors} errors` : ''}
       {dryRun ? ' · dry-run' : ''}
     </span>
+  );
+}
+
+function ResourceTotalsBreakdown({
+  totals,
+  resourceLabelByKey,
+}: {
+  totals: SyncRunTotals | null;
+  resourceLabelByKey: Map<string, string>;
+}) {
+  if (!totals?.byResource) return null;
+  const entries = Object.entries(totals.byResource).filter(([, v]) => {
+    return (
+      v &&
+      (v.fetched > 0 ||
+        v.created > 0 ||
+        v.updated > 0 ||
+        v.unchanged > 0 ||
+        v.claimed > 0 ||
+        v.archived > 0 ||
+        v.skippedAmbiguous > 0 ||
+        v.skippedManual > 0 ||
+        v.errors > 0)
+    );
+  });
+  if (entries.length === 0) return null;
+  return (
+    <div
+      style={{
+        marginTop: 10,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 8,
+        padding: 10,
+        background: 'var(--panel-2)',
+        border: '1px solid var(--line-2)',
+        borderRadius: 6,
+      }}
+    >
+      <div
+        style={{
+          fontSize: 11,
+          fontFamily: 'var(--font-mono)',
+          color: 'var(--muted)',
+          textTransform: 'uppercase',
+          letterSpacing: 0.6,
+        }}
+      >
+        Per resource
+      </div>
+      {entries.map(([key, sub]) => (
+        <div
+          key={key}
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 4,
+            flexWrap: 'wrap',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <strong style={{ fontSize: 12.5 }}>
+              {resourceLabelByKey.get(key) ?? key}
+            </strong>
+            <span
+              style={{
+                fontFamily: 'var(--font-mono)',
+                fontSize: 11,
+                color: 'var(--dim)',
+              }}
+            >
+              {key}
+            </span>
+          </div>
+          <RunTotalsBreakdown totals={sub as SyncRunTotals | null} />
+        </div>
+      ))}
+    </div>
   );
 }
 
