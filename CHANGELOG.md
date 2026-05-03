@@ -6,6 +6,15 @@ this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.6.3] - 2026-05-03
+
+### Added
+
+- **Password list columns.** Toggle to show or hide strength and visibility columns on password tables.
+- **UniFi clients.** UniFi integration now includes client devices alongside existing synced data.
+- **Bulk asset actions.** Bulk archive, delete, and restore from all-assets views.
+- **Company sticky note.** Per-company sticky note in the admin company shell for quick operator notes.
+
 ## [1.6.2] - 2026-05-01
 
 ### Changed
@@ -645,7 +654,8 @@ Initial public release.
   database-per-tenant.
 - English UI only.
 
-[Unreleased]: https://github.com/Weavestream/Weavestream/compare/v1.6.2...HEAD
+[Unreleased]: https://github.com/Weavestream/Weavestream/compare/v1.6.3...HEAD
+[1.6.3]: https://github.com/Weavestream/Weavestream/releases/tag/v1.6.3
 [1.6.2]: https://github.com/Weavestream/Weavestream/releases/tag/v1.6.2
 [1.6.0]: https://github.com/Weavestream/Weavestream/releases/tag/v1.6.0
 [1.5.6]: https://github.com/Weavestream/Weavestream/releases/tag/v1.5.6
