@@ -206,7 +206,14 @@ export function LayoutAssetsTable({
   }
 
   return (
-    <div>
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        flex: 1,
+        minHeight: 0,
+      }}
+    >
       {/* Filter bar */}
       <div
         style={{
@@ -216,6 +223,7 @@ export function LayoutAssetsTable({
           gap: 8,
           alignItems: 'center',
           flexWrap: 'wrap',
+          flexShrink: 0,
         }}
       >
         <div
@@ -300,34 +308,55 @@ export function LayoutAssetsTable({
         </button>
       </div>
 
-      {/* Table / cards */}
-      {visibleRows.length === 0 ? (
-        <div
-          style={{
-            padding: '40px 24px',
-            textAlign: 'center',
-            color: 'var(--muted)',
-            fontSize: 13,
-          }}
-        >
-          No {layout.name} match the current filters.
-        </div>
-      ) : (
-        <div style={{ opacity: pending ? 0.6 : 1, transition: 'opacity 120ms ease' }}>
-          <DataTable
-            columns={layoutColumns({ layout, extras: columns.extras, basePath })}
-            rows={visibleRows}
-            renderMobileCard={(r) => (
-              <LayoutAssetMobileBody
-                row={r}
-                layout={layout}
-                extras={columns.extras}
-                basePath={basePath}
-              />
-            )}
-          />
-        </div>
-      )}
+      {/* Table / cards — `flex: 1; min-height: 0` so the DataTable's
+          fillHeight scroll region claims the leftover viewport rather
+          than the whole page scrolling under it. */}
+      <div
+        style={{
+          flex: 1,
+          minHeight: 0,
+          display: 'flex',
+          flexDirection: 'column',
+        }}
+      >
+        {visibleRows.length === 0 ? (
+          <div
+            style={{
+              padding: '40px 24px',
+              textAlign: 'center',
+              color: 'var(--muted)',
+              fontSize: 13,
+            }}
+          >
+            No {layout.name} match the current filters.
+          </div>
+        ) : (
+          <div
+            style={{
+              opacity: pending ? 0.6 : 1,
+              transition: 'opacity 120ms ease',
+              flex: 1,
+              minHeight: 0,
+              display: 'flex',
+              flexDirection: 'column',
+            }}
+          >
+            <DataTable
+              fillHeight
+              columns={layoutColumns({ layout, extras: columns.extras, basePath })}
+              rows={visibleRows}
+              renderMobileCard={(r) => (
+                <LayoutAssetMobileBody
+                  row={r}
+                  layout={layout}
+                  extras={columns.extras}
+                  basePath={basePath}
+                />
+              )}
+            />
+          </div>
+        )}
+      </div>
     </div>
   );
 }

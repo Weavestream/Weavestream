@@ -56,7 +56,21 @@ export function PageBody({ children }: { children: ReactNode }) {
   return (
     <div
       className="page-body-tight"
-      style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 16, flex: 1 }}
+      style={{
+        padding: 20,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 16,
+        flex: 1,
+        // `min-height: 0` is what unlocks `flex: 1` for actually
+        // *constraining* a child's height (rather than just suggesting
+        // a starting size). Required so a child Panel with
+        // `fillHeight` can claim the remaining viewport and let its
+        // contents (typically a DataTable) scroll internally instead
+        // of pushing the whole page down. Safe for non-fillHeight
+        // pages — they continue to grow naturally.
+        minHeight: 0,
+      }}
     >
       {children}
     </div>

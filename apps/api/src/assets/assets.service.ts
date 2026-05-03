@@ -13,6 +13,7 @@ import type {
   AssetLayout,
 } from '@prisma/client';
 import type {
+  BulkAssetResult,
   CreateAssetInput,
   UpdateAssetInput,
   UserRole,
@@ -579,6 +580,7 @@ export class AssetsService {
     companyId: string,
     id: string,
     meta: AuditMeta,
+    opts: { skipArchivedCheck?: boolean } = {},
   ): Promise<{ id: string }> {
     const existing = await this.prisma.asset.findFirst({
       where: { id, companyId },
@@ -592,7 +594,10 @@ export class AssetsService {
       },
     });
     if (!existing) throw new NotFoundException();
-    if (!existing.archivedAt) {
+    // Single-item route keeps the archive-first safety. Bulk purge gates on
+    // an explicit confirmation dialog instead, so it opts out via
+    // `skipArchivedCheck`.
+    if (!existing.archivedAt && !opts.skipArchivedCheck) {
       throw new BadRequestException(
         'Archive the asset before permanently deleting it.',
       );
@@ -627,6 +632,85 @@ export class AssetsService {
     });
 
     return { id };
+  }
+
+  // --------------------------------------------------------------------
+  // Bulk archive / restore / purge
+  // --------------------------------------------------------------------
+
+  /**
+   * Bulk-archive assets. Iterates the input ids and reuses the per-item
+   * `archive` path so that side-effects (search index, password cascade,
+   * audit log) stay identical to single-item operations. Each id succeeds
+   * or fails independently — no transaction across the batch — and the
+   * caller receives a structured `{ ok, failed }` report so the UI can
+   * surface partial successes.
+   *
+   * Already-archived ids are reported as `code: "already_archived"`
+   * failures rather than throwing; the bulk caller usually has a mixed
+   * selection and treating "no-op" as a soft failure is the most useful
+   * UX (lets us count "8 archived, 2 already archived").
+   */
+  async archiveMany(
+    actor: AuthedUser,
+    companyId: string,
+    ids: string[],
+    meta: AuditMeta,
+  ): Promise<BulkAssetResult> {
+    return this.runBulk(ids, (id) => this.archive(actor, companyId, id, meta));
+  }
+
+  async restoreMany(
+    actor: AuthedUser,
+    companyId: string,
+    ids: string[],
+    meta: AuditMeta,
+  ): Promise<BulkAssetResult> {
+    return this.runBulk(ids, (id) => this.restore(actor, companyId, id, meta));
+  }
+
+  /**
+   * Bulk-purge. Bypasses the per-item "archive first" safety because the
+   * UI gates this action behind an explicit confirmation dialog (the user
+   * has to type `delete` to proceed); requiring a separate archive step
+   * for items the operator has already chosen for permanent deletion is
+   * unnecessary friction.
+   */
+  async purgeMany(
+    actor: AuthedUser,
+    companyId: string,
+    ids: string[],
+    meta: AuditMeta,
+  ): Promise<BulkAssetResult> {
+    return this.runBulk(ids, (id) =>
+      this.purge(actor, companyId, id, meta, { skipArchivedCheck: true }),
+    );
+  }
+
+  /**
+   * Internal helper: dedupe ids, run `op(id)` per item, and bucket the
+   * results into `{ ok, failed }`. Errors are converted to a stable
+   * `{ code, reason }` shape so the client can branch on the outcome
+   * (e.g. show "X were already archived" vs a generic failure).
+   */
+  private async runBulk(
+    ids: string[],
+    op: (id: string) => Promise<unknown>,
+  ): Promise<BulkAssetResult> {
+    const ok: string[] = [];
+    const failed: BulkAssetResult['failed'] = [];
+    const seen = new Set<string>();
+    for (const id of ids) {
+      if (seen.has(id)) continue;
+      seen.add(id);
+      try {
+        await op(id);
+        ok.push(id);
+      } catch (err) {
+        failed.push({ id, ...classifyBulkError(err) });
+      }
+    }
+    return { ok, failed };
   }
 
   // --------------------------------------------------------------------
@@ -1181,4 +1265,44 @@ export class AssetsService {
       isStarred: false, // populated separately for detail
     };
   }
+}
+
+/**
+ * Translate exceptions raised inside a bulk operation into a stable
+ * `{ code, reason }` shape. The codes are part of the public contract
+ * with the web client (see `BulkAssetFailure` in
+ * `packages/shared/src/schemas/asset.ts`); add new codes here rather
+ * than letting raw error messages leak through.
+ */
+function classifyBulkError(err: unknown): { code: string; reason: string } {
+  if (err instanceof NotFoundException) {
+    return { code: 'not_found', reason: 'Asset not found.' };
+  }
+  if (err instanceof ForbiddenException) {
+    return { code: 'forbidden', reason: 'Permission denied.' };
+  }
+  if (err instanceof BadRequestException) {
+    const msg = (err.getResponse() as { message?: string } | string) ?? err.message;
+    const reason =
+      typeof msg === 'string'
+        ? msg
+        : (msg.message ?? err.message);
+    if (/already archived/i.test(reason)) {
+      return { code: 'already_archived', reason };
+    }
+    if (/not archived/i.test(reason)) {
+      return { code: 'not_archived', reason };
+    }
+    if (/archive the asset before/i.test(reason)) {
+      return { code: 'not_archived', reason };
+    }
+    return { code: 'invalid', reason };
+  }
+  if (err instanceof ConflictException) {
+    return { code: 'conflict', reason: err.message };
+  }
+  if (err instanceof Error) {
+    return { code: 'error', reason: err.message };
+  }
+  return { code: 'error', reason: 'Unknown error.' };
 }

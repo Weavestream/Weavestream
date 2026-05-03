@@ -14,8 +14,10 @@ import {
 } from '@nestjs/common';
 import type { Request } from 'express';
 import {
+  bulkAssetIdsSchema,
   createAssetSchema,
   updateAssetSchema,
+  type BulkAssetIdsInput,
   type CreateAssetInput,
   type UpdateAssetInput,
 } from '@weavestream/shared';
@@ -81,6 +83,58 @@ export class AssetsController {
     @Param('companyId', new ParseUUIDPipe()) companyId: string,
   ) {
     return this.assets.countsByLayout(companyId);
+  }
+
+  /**
+   * Bulk-archive assets. Reuses the per-item archive path under the hood
+   * (so search index, password cascade, audit log all stay consistent)
+   * and returns a `{ ok, failed }` report rather than 4xx-ing on partial
+   * failure — the UI surfaces a "8 archived, 2 failed" toast.
+   *
+   * Routed before `:id` so the literal `bulk` segment doesn't get
+   * swallowed by the UUID-typed id matcher.
+   */
+  @Post('bulk/archive')
+  @HttpCode(HttpStatus.OK)
+  @RequirePermission('asset.archive', { companyIdFrom: 'params.companyId' })
+  async bulkArchive(
+    @CurrentUser() actor: AuthedUser,
+    @Param('companyId', new ParseUUIDPipe()) companyId: string,
+    @Body(new ZodBody(bulkAssetIdsSchema)) dto: BulkAssetIdsInput,
+    @Req() req: Request,
+  ) {
+    return this.assets.archiveMany(actor, companyId, dto.ids, meta(req));
+  }
+
+  @Post('bulk/restore')
+  @HttpCode(HttpStatus.OK)
+  @RequirePermission('asset.archive', { companyIdFrom: 'params.companyId' })
+  async bulkRestore(
+    @CurrentUser() actor: AuthedUser,
+    @Param('companyId', new ParseUUIDPipe()) companyId: string,
+    @Body(new ZodBody(bulkAssetIdsSchema)) dto: BulkAssetIdsInput,
+    @Req() req: Request,
+  ) {
+    return this.assets.restoreMany(actor, companyId, dto.ids, meta(req));
+  }
+
+  /**
+   * Bulk hard-delete. Bypasses the per-item "archive first" safety
+   * because the UI already gates this action behind a typed-confirmation
+   * dialog; making the operator archive twice (once before purge, once
+   * before bulk purge) would be unnecessary friction. Caller still needs
+   * `asset.purge` (FULL access).
+   */
+  @Post('bulk/purge')
+  @HttpCode(HttpStatus.OK)
+  @RequirePermission('asset.purge', { companyIdFrom: 'params.companyId' })
+  async bulkPurge(
+    @CurrentUser() actor: AuthedUser,
+    @Param('companyId', new ParseUUIDPipe()) companyId: string,
+    @Body(new ZodBody(bulkAssetIdsSchema)) dto: BulkAssetIdsInput,
+    @Req() req: Request,
+  ) {
+    return this.assets.purgeMany(actor, companyId, dto.ids, meta(req));
   }
 
   @Get(':id')

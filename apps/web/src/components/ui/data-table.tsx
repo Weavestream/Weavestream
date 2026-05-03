@@ -250,6 +250,7 @@ export function DataTable<T extends { id: string }>({
   defaultSort,
   disableSort = false,
   stickyFirstColumn = true,
+  fillHeight = false,
 }: {
   columns: DataColumn<T>[];
   rows: T[];
@@ -287,6 +288,17 @@ export function DataTable<T extends { id: string }>({
    * it doesn't, a 220 px fallback is used and a dev warning is logged.
    */
   stickyFirstColumn?: boolean;
+  /**
+   * Stretch the table wrapper to fill the available height of a flex
+   * parent and scroll the body internally. Combined with the existing
+   * sticky `<thead>`, this keeps column headers in view while the row
+   * area scrolls — and prevents the surrounding page chrome
+   * (PageHeader, filter bar, bulk action bar) from being pushed
+   * off-screen when the table grows tall. Requires the parent chain
+   * (`PageBody` → `Panel fillHeight` → table container) to be a
+   * properly-sized flex column with `min-height: 0`.
+   */
+  fillHeight?: boolean;
 }) {
   const isMobile = useIsMobile();
   const router = useRouter();
@@ -443,7 +455,18 @@ export function DataTable<T extends { id: string }>({
 
   if (isMobile && renderMobileCard) {
     return (
-      <div>
+      <div
+        style={
+          fillHeight
+            ? {
+                display: 'flex',
+                flexDirection: 'column',
+                flex: 1,
+                minHeight: 0,
+              }
+            : undefined
+        }
+      >
         {sortableColumns.length > 0 ? (
           <MobileSortBar
             columns={sortableColumns}
@@ -459,6 +482,9 @@ export function DataTable<T extends { id: string }>({
             display: 'flex',
             flexDirection: 'column',
             gap: 8,
+            ...(fillHeight
+              ? { flex: 1, minHeight: 0, overflowY: 'auto' }
+              : null),
           }}
         >
           {sortedRows.map((row) => {
@@ -506,7 +532,16 @@ export function DataTable<T extends { id: string }>({
       onScroll={handleScroll}
       data-scrolled="false"
       className="dt-wrap"
-      style={{ overflowX: 'auto' }}
+      style={
+        fillHeight
+          ? {
+              overflowX: 'auto',
+              overflowY: 'auto',
+              flex: 1,
+              minHeight: 0,
+            }
+          : { overflowX: 'auto' }
+      }
     >
       <table
         style={{

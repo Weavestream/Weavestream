@@ -92,6 +92,7 @@ export default async function PortalLayoutAssetsPage({
             </span>
           }
           noPad
+          fillHeight
         >
           <LayoutAssetsTable
             basePath={`/portal/${companySlug}`}

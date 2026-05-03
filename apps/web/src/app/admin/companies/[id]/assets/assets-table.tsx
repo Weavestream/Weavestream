@@ -3,18 +3,23 @@
 import { useEffect, useMemo, useState, useTransition } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
+import type { BulkAssetResult } from '@weavestream/shared';
 import type {
   AssetSummary,
   LayoutSummary,
 } from '../../../../../lib/server-api';
 import {
+  Btn,
   DataTable,
   type DataColumn,
+  Dialog,
   Icon,
   LayoutSwatch,
   MobileCardRow,
   Tag,
+  useToast,
 } from '../../../../../components/ui';
+import { apiFetch } from '../../../../../lib/api';
 import { vaultLinkLabel } from '../../../../../lib/vault-link';
 import { TagFilterMenu } from '../../../../../components/layouts/tag-filter-menu';
 
@@ -32,7 +37,7 @@ export function AssetsTable({
   layoutId,
   includeArchived,
   fieldFilters,
-  canManage: _canManage,
+  canManage,
 }: {
   companyId: string;
   rows: AssetSummary[];
@@ -44,9 +49,21 @@ export function AssetsTable({
   canManage: boolean;
 }) {
   const router = useRouter();
+  const toast = useToast();
   const [_pending, startTransition] = useTransition();
   const [draft, setDraft] = useState(q);
   const [tagFilter, setTagFilter] = useState<string | null>(null);
+
+  // Bulk selection. `selectionMode` toggles the checkbox column and bulk
+  // action bar; `selectedIds` persists across filter changes so a user
+  // can refine filters without losing their selection. The bulk action
+  // bar shows the full selection count even when some selected rows are
+  // hidden by the current filters.
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkPending, setBulkPending] = useState(false);
+  const [purgeOpen, setPurgeOpen] = useState(false);
+  const [purgeText, setPurgeText] = useState('');
 
   const activeLayout = useMemo(
     () => layouts.find((l) => l.id === layoutId) ?? null,
@@ -171,8 +188,125 @@ export function AssetsTable({
     pushParams({ q: draft.trim() || null });
   }
 
+  // ----- Bulk selection helpers -----
+
+  // Index for archived/non-archived classification of the *selection*
+  // (not just visible rows) — needed for action-bar disabled states even
+  // when filters hide some selected rows.
+  const rowsById = useMemo(() => {
+    const m = new Map<string, AssetSummary>();
+    for (const r of rows) m.set(r.id, r);
+    return m;
+  }, [rows]);
+
+  const selectedRows = useMemo(
+    () =>
+      Array.from(selectedIds)
+        .map((id) => rowsById.get(id))
+        .filter((r): r is AssetSummary => Boolean(r)),
+    [selectedIds, rowsById],
+  );
+
+  const archivedSelectedCount = selectedRows.filter((r) => r.archivedAt).length;
+  const activeSelectedCount = selectedRows.length - archivedSelectedCount;
+
+  const visibleIds = useMemo(() => visibleRows.map((r) => r.id), [visibleRows]);
+  const visibleSelectedCount = visibleIds.filter((id) => selectedIds.has(id)).length;
+  const allVisibleSelected =
+    visibleIds.length > 0 && visibleSelectedCount === visibleIds.length;
+  const someVisibleSelected =
+    visibleSelectedCount > 0 && visibleSelectedCount < visibleIds.length;
+
+  function toggleSelectionMode() {
+    setSelectionMode((on) => {
+      if (on) setSelectedIds(new Set());
+      return !on;
+    });
+  }
+
+  function toggleRowSelection(id: string) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function toggleSelectAllVisible() {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (allVisibleSelected) {
+        for (const id of visibleIds) next.delete(id);
+      } else {
+        for (const id of visibleIds) next.add(id);
+      }
+      return next;
+    });
+  }
+
+  function clearSelection() {
+    setSelectedIds(new Set());
+  }
+
+  async function runBulk(action: 'archive' | 'restore' | 'purge') {
+    if (selectedIds.size === 0) return;
+    setBulkPending(true);
+    const ids = Array.from(selectedIds);
+    const res = await apiFetch<BulkAssetResult>(
+      `/companies/${companyId}/assets/bulk/${action}`,
+      { method: 'POST', body: JSON.stringify({ ids }) },
+    );
+    setBulkPending(false);
+
+    if (!res.ok || !res.data) {
+      const problem = res.problem as { detail?: string; title?: string } | null;
+      toast.push(
+        problem?.detail ?? problem?.title ?? `Bulk ${action} failed.`,
+        'danger',
+      );
+      return;
+    }
+
+    const { ok, failed } = res.data;
+    const verb =
+      action === 'archive'
+        ? 'Archived'
+        : action === 'restore'
+          ? 'Restored'
+          : 'Deleted';
+    if (failed.length === 0) {
+      toast.push(`${verb} ${ok.length} asset${ok.length === 1 ? '' : 's'}.`, 'ok');
+      clearSelection();
+    } else if (ok.length === 0) {
+      toast.push(
+        `Bulk ${action} failed for all ${failed.length} asset${failed.length === 1 ? '' : 's'}.`,
+        'danger',
+      );
+    } else {
+      toast.push(
+        `${verb} ${ok.length}, ${failed.length} failed (${summariseFailures(failed)}).`,
+        'warn',
+      );
+      // Keep failed ids selected so the operator can inspect / retry.
+      setSelectedIds(new Set(failed.map((f) => f.id)));
+    }
+    setPurgeOpen(false);
+    setPurgeText('');
+    router.refresh();
+  }
+
+  const purgeConfirmReady = purgeText.trim().toLowerCase() === 'delete';
+
   return (
-    <div>
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        flex: 1,
+        minHeight: 0,
+      }}
+    >
       {/* Filter bar */}
       <div
         style={{
@@ -182,6 +316,7 @@ export function AssetsTable({
           gap: 8,
           alignItems: 'center',
           flexWrap: 'wrap',
+          flexShrink: 0,
         }}
       >
         <div
@@ -287,7 +422,48 @@ export function AssetsTable({
           <Icon.archive size={12} />
           {includeArchived ? 'Hide archived' : 'Show archived'}
         </button>
+
+        {canManage && (
+          <button
+            type="button"
+            onClick={toggleSelectionMode}
+            title={selectionMode ? 'Exit selection mode' : 'Select multiple'}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 6,
+              height: 28,
+              padding: '0 10px',
+              background: selectionMode ? 'var(--accent-soft)' : 'transparent',
+              border: `1px solid ${selectionMode ? 'var(--accent-line)' : 'var(--line-2)'}`,
+              borderRadius: 5,
+              fontSize: 12,
+              color: selectionMode ? 'var(--accent)' : 'var(--text-2)',
+              cursor: 'pointer',
+            }}
+          >
+            <Icon.checkSquare size={12} />
+            {selectionMode ? 'Exit select' : 'Select'}
+          </button>
+        )}
       </div>
+
+      {/* Bulk action bar */}
+      {selectionMode && selectedIds.size > 0 && (
+        <BulkActionBar
+          totalSelected={selectedIds.size}
+          activeSelected={activeSelectedCount}
+          archivedSelected={archivedSelectedCount}
+          pending={bulkPending}
+          onArchive={() => runBulk('archive')}
+          onRestore={() => runBulk('restore')}
+          onPurge={() => {
+            setPurgeText('');
+            setPurgeOpen(true);
+          }}
+          onClear={clearSelection}
+        />
+      )}
 
       {/* Chips row */}
       {(layoutId || Object.keys(fieldFilters).length > 0 || q) && (
@@ -300,6 +476,7 @@ export function AssetsTable({
             flexWrap: 'wrap',
             alignItems: 'center',
             background: 'var(--surface)',
+            flexShrink: 0,
           }}
         >
           <span
@@ -347,35 +524,360 @@ export function AssetsTable({
         </div>
       )}
 
-      {/* Table / cards */}
-      {visibleRows.length === 0 ? (
+      {/* Table / cards — `flex: 1; min-height: 0` so the DataTable's own
+          fillHeight scroll region can claim the leftover viewport
+          rather than the whole page scrolling under it. */}
+      <div
+        style={{
+          flex: 1,
+          minHeight: 0,
+          display: 'flex',
+          flexDirection: 'column',
+        }}
+      >
+        {visibleRows.length === 0 ? (
+          <div
+            style={{
+              padding: 36,
+              textAlign: 'center',
+              color: 'var(--muted)',
+              fontSize: 13,
+            }}
+          >
+            No assets match the current filters.
+          </div>
+        ) : (
+          <DataTable
+            fillHeight
+            columns={assetColumns({
+              companyId,
+              selectionMode,
+              selectedIds,
+              allVisibleSelected,
+              someVisibleSelected,
+              onToggleAllVisible: toggleSelectAllVisible,
+              onToggleRow: toggleRowSelection,
+            })}
+            rows={visibleRows}
+            renderMobileCard={(r) => (
+              <AssetMobileBody
+                row={r}
+                companyId={companyId}
+                selectionMode={selectionMode}
+                selected={selectedIds.has(r.id)}
+                onToggle={() => toggleRowSelection(r.id)}
+              />
+            )}
+          />
+        )}
+      </div>
+
+      <Dialog
+        open={purgeOpen}
+        onClose={() => !bulkPending && setPurgeOpen(false)}
+        title={`Permanently delete ${selectedIds.size} asset${selectedIds.size === 1 ? '' : 's'}?`}
+        footer={
+          <>
+            <Btn
+              kind="ghost"
+              onClick={() => setPurgeOpen(false)}
+              disabled={bulkPending}
+            >
+              Cancel
+            </Btn>
+            <Btn
+              kind="danger"
+              loading={bulkPending}
+              disabled={!purgeConfirmReady}
+              onClick={() => runBulk('purge')}
+            >
+              Delete forever
+            </Btn>
+          </>
+        }
+      >
         <div
           style={{
-            padding: 36,
-            textAlign: 'center',
-            color: 'var(--muted)',
-            fontSize: 13,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 12,
           }}
         >
-          No assets match the current filters.
+          <p
+            style={{
+              margin: 0,
+              fontSize: 13,
+              color: 'var(--text-2)',
+              lineHeight: 1.5,
+            }}
+          >
+            <strong>{selectedIds.size}</strong> asset
+            {selectedIds.size === 1 ? '' : 's'} will be permanently removed,
+            including all field values, sync records, and relation links. Any
+            embedded credentials are unlinked but preserved. This cannot be
+            undone.
+          </p>
+          <label
+            style={{
+              fontSize: 11.5,
+              fontFamily: 'var(--font-mono)',
+              color: 'var(--muted)',
+              textTransform: 'uppercase',
+              letterSpacing: 0.6,
+            }}
+          >
+            Type &ldquo;delete&rdquo; to confirm
+            <input
+              autoFocus
+              value={purgeText}
+              onChange={(e) => setPurgeText(e.target.value)}
+              placeholder="delete"
+              style={{
+                marginTop: 6,
+                width: '100%',
+                padding: '8px 10px',
+                fontSize: 13,
+                fontFamily: 'var(--font-mono)',
+                background: 'var(--panel-2)',
+                border: '1px solid var(--line-2)',
+                borderRadius: 6,
+                color: 'var(--text)',
+              }}
+            />
+          </label>
         </div>
-      ) : (
-        <DataTable
-          columns={assetColumns({ companyId })}
-          rows={visibleRows}
-          renderMobileCard={(r) => <AssetMobileBody row={r} companyId={companyId} />}
-        />
-      )}
+      </Dialog>
     </div>
+  );
+}
+
+function BulkActionBar({
+  totalSelected,
+  activeSelected,
+  archivedSelected,
+  pending,
+  onArchive,
+  onRestore,
+  onPurge,
+  onClear,
+}: {
+  totalSelected: number;
+  activeSelected: number;
+  archivedSelected: number;
+  pending: boolean;
+  onArchive: () => void;
+  onRestore: () => void;
+  onPurge: () => void;
+  onClear: () => void;
+}) {
+  // Mixed-state rules: Archive only does work on non-archived rows;
+  // Restore only does work on archived rows. Disable when there's nothing
+  // to do for that action — but never block Permanently Delete since
+  // bulk purge handles archived + non-archived alike.
+  const canArchive = activeSelected > 0;
+  const canRestore = archivedSelected > 0;
+  return (
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 8,
+        flexWrap: 'wrap',
+        padding: '8px 14px',
+        background: 'var(--accent-soft)',
+        borderBottom: '1px solid var(--accent-line)',
+        flexShrink: 0,
+      }}
+    >
+      <span
+        style={{
+          fontFamily: 'var(--font-mono)',
+          fontSize: 11,
+          color: 'var(--accent)',
+          fontWeight: 600,
+          letterSpacing: 0.3,
+          textTransform: 'uppercase',
+        }}
+      >
+        {totalSelected} selected
+      </span>
+      {(activeSelected > 0 || archivedSelected > 0) && (
+        <span
+          style={{
+            fontFamily: 'var(--font-mono)',
+            fontSize: 10.5,
+            color: 'var(--muted)',
+          }}
+        >
+          ({activeSelected} active, {archivedSelected} archived)
+        </span>
+      )}
+      <span style={{ flex: 1 }} />
+      <Btn
+        kind="outline"
+        size="sm"
+        icon={Icon.archive}
+        disabled={!canArchive || pending}
+        onClick={onArchive}
+      >
+        Archive
+      </Btn>
+      <Btn
+        kind="outline"
+        size="sm"
+        icon={Icon.check}
+        disabled={!canRestore || pending}
+        onClick={onRestore}
+      >
+        Restore
+      </Btn>
+      <Btn
+        kind="danger"
+        size="sm"
+        icon={Icon.trash}
+        disabled={pending}
+        onClick={onPurge}
+      >
+        Delete forever
+      </Btn>
+      <Btn kind="ghost" size="sm" disabled={pending} onClick={onClear}>
+        Clear
+      </Btn>
+    </div>
+  );
+}
+
+function summariseFailures(
+  failed: BulkAssetResult['failed'],
+): string {
+  // Compact "5 already_archived, 2 forbidden" — codes group naturally so
+  // the user can act on the dominant cause without us listing every item.
+  const counts = new Map<string, number>();
+  for (const f of failed) {
+    const key = f.code ?? 'error';
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  return Array.from(counts.entries())
+    .map(([code, n]) => `${n} ${code.replace(/_/g, ' ')}`)
+    .join(', ');
+}
+
+function HeaderCheckbox({
+  checked,
+  indeterminate,
+  onToggle,
+}: {
+  checked: boolean;
+  indeterminate: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <Checkbox
+      checked={checked}
+      indeterminate={indeterminate}
+      onChange={onToggle}
+      ariaLabel={checked ? 'Deselect all visible' : 'Select all visible'}
+    />
+  );
+}
+
+function Checkbox({
+  checked,
+  indeterminate = false,
+  onChange,
+  ariaLabel,
+}: {
+  checked: boolean;
+  indeterminate?: boolean;
+  onChange: () => void;
+  ariaLabel?: string;
+}) {
+  return (
+    <span
+      role="checkbox"
+      aria-checked={indeterminate ? 'mixed' : checked}
+      aria-label={ariaLabel}
+      tabIndex={0}
+      onClick={(e) => {
+        e.stopPropagation();
+        e.preventDefault();
+        onChange();
+      }}
+      onKeyDown={(e) => {
+        if (e.key === ' ' || e.key === 'Enter') {
+          e.preventDefault();
+          onChange();
+        }
+      }}
+      style={{
+        display: 'inline-grid',
+        placeItems: 'center',
+        width: 16,
+        height: 16,
+        borderRadius: 3,
+        border: `1px solid ${checked || indeterminate ? 'var(--accent)' : 'var(--line-2)'}`,
+        background:
+          checked || indeterminate ? 'var(--accent)' : 'var(--panel-2)',
+        color: 'var(--accent-ink)',
+        cursor: 'pointer',
+        transition: 'background-color 120ms ease, border-color 120ms ease',
+      }}
+    >
+      {indeterminate ? (
+        <span
+          style={{
+            width: 8,
+            height: 2,
+            background: 'var(--accent-ink)',
+            borderRadius: 1,
+          }}
+        />
+      ) : checked ? (
+        <Icon.check size={10} />
+      ) : null}
+    </span>
   );
 }
 
 function assetColumns({
   companyId,
+  selectionMode,
+  selectedIds,
+  allVisibleSelected,
+  someVisibleSelected,
+  onToggleAllVisible,
+  onToggleRow,
 }: {
   companyId: string;
+  selectionMode: boolean;
+  selectedIds: Set<string>;
+  allVisibleSelected: boolean;
+  someVisibleSelected: boolean;
+  onToggleAllVisible: () => void;
+  onToggleRow: (id: string) => void;
 }): DataColumn<AssetSummary>[] {
-  return [
+  const selectColumn: DataColumn<AssetSummary> | null = selectionMode
+    ? {
+        id: '_select',
+        header: (
+          <HeaderCheckbox
+            checked={allVisibleSelected}
+            indeterminate={someVisibleSelected}
+            onToggle={onToggleAllVisible}
+          />
+        ),
+        width: 40,
+        sortable: false,
+        render: (r) => (
+          <Checkbox
+            checked={selectedIds.has(r.id)}
+            onChange={() => onToggleRow(r.id)}
+            ariaLabel={`Select ${r.name}`}
+          />
+        ),
+      }
+    : null;
+  const baseColumns: DataColumn<AssetSummary>[] = [
     {
       id: 'name',
       header: 'Name',
@@ -511,6 +1013,7 @@ function assetColumns({
       ),
     },
   ];
+  return selectColumn ? [selectColumn, ...baseColumns] : baseColumns;
 }
 
 function primaryString(row: AssetSummary): string {
@@ -526,23 +1029,37 @@ function primaryString(row: AssetSummary): string {
 function AssetMobileBody({
   row,
   companyId,
+  selectionMode,
+  selected,
+  onToggle,
 }: {
   row: AssetSummary;
   companyId: string;
+  selectionMode: boolean;
+  selected: boolean;
+  onToggle: () => void;
 }) {
   const primaryValue = primaryString(row);
-  return (
-    <Link
-      href={`/admin/companies/${companyId}/assets/${row.id}`}
-      style={{
-        display: 'flex',
-        flexDirection: 'column',
-        gap: 8,
-        color: 'inherit',
-        opacity: row.archivedAt ? 0.7 : 1,
-      }}
-    >
+  // In selection mode the card itself becomes a tap-to-select target
+  // (no navigation). Out of selection mode we keep the original Link
+  // behaviour so the typical flow — tap card → open detail — is intact.
+  const containerStyle: React.CSSProperties = {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 8,
+    color: 'inherit',
+    opacity: row.archivedAt ? 0.7 : 1,
+  };
+  const inner = (
+    <>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        {selectionMode && (
+          <Checkbox
+            checked={selected}
+            onChange={onToggle}
+            ariaLabel={`Select ${row.name}`}
+          />
+        )}
         <LayoutSwatch icon={row.layoutIcon} color={row.layoutColor} size={24} />
         <div style={{ flex: 1, minWidth: 0 }}>
           <div
@@ -567,7 +1084,9 @@ function AssetMobileBody({
             {row.layoutName}
           </div>
         </div>
-        <Icon.chevron size={12} style={{ color: 'var(--dim)' }} />
+        {!selectionMode && (
+          <Icon.chevron size={12} style={{ color: 'var(--dim)' }} />
+        )}
       </div>
       {primaryValue && primaryValue !== '—' && (
         <MobileCardRow label="Primary" mono>
@@ -605,6 +1124,42 @@ function AssetMobileBody({
           {relative(new Date(row.updatedAt))}
         </span>
       </div>
+    </>
+  );
+  if (selectionMode) {
+    return (
+      <div
+        role="button"
+        tabIndex={0}
+        onClick={(e) => {
+          e.preventDefault();
+          onToggle();
+        }}
+        onKeyDown={(e) => {
+          if (e.key === ' ' || e.key === 'Enter') {
+            e.preventDefault();
+            onToggle();
+          }
+        }}
+        style={{
+          ...containerStyle,
+          cursor: 'pointer',
+          background: selected ? 'var(--accent-soft)' : undefined,
+          borderRadius: 6,
+          padding: selected ? 6 : undefined,
+          margin: selected ? -6 : undefined,
+        }}
+      >
+        {inner}
+      </div>
+    );
+  }
+  return (
+    <Link
+      href={`/admin/companies/${companyId}/assets/${row.id}`}
+      style={containerStyle}
+    >
+      {inner}
     </Link>
   );
 }

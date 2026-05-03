@@ -109,6 +109,7 @@ export default async function CompanyAssetsPage({
             </span>
           }
           noPad
+          fillHeight
         >
           <AssetsTable
             companyId={companyId}

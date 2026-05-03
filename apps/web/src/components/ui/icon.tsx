@@ -252,6 +252,12 @@ export const Icon = {
       <path d="M3 8l3 3 7-7" />
     </IconBase>
   ),
+  checkSquare: (p: IconProps) => (
+    <IconBase {...p}>
+      <rect x="2" y="2" width="12" height="12" rx="1.5" />
+      <path d="M5 8l2 2 4-4" />
+    </IconBase>
+  ),
   x: (p: IconProps) => (
     <IconBase {...p}>
       <path d="M3.5 3.5l9 9M12.5 3.5l-9 9" />

@@ -139,6 +139,7 @@ export default async function LayoutAssetsPage({
             </span>
           }
           noPad
+          fillHeight
         >
           <LayoutAssetsTable
             basePath={`/admin/companies/${companyId}`}
