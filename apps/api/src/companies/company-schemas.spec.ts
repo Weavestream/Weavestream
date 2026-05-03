@@ -126,4 +126,34 @@ describe('updateCompanySchema', () => {
       updateCompanySchema.safeParse({ phone: 'call me maybe' }).success,
     ).toBe(false);
   });
+
+  it('accepts a sticky note up to 300 characters', () => {
+    expect(
+      updateCompanySchema.safeParse({
+        stickyNoteText: 'a'.repeat(300),
+        stickyNoteSeverity: 'WARN',
+      }).success,
+    ).toBe(true);
+  });
+
+  it('rejects a sticky note over 300 characters', () => {
+    expect(
+      updateCompanySchema.safeParse({ stickyNoteText: 'a'.repeat(301) }).success,
+    ).toBe(false);
+  });
+
+  it('accepts null sticky note (clearing the banner)', () => {
+    const out = updateCompanySchema.parse({
+      stickyNoteText: null,
+      stickyNoteSeverity: null,
+    });
+    expect(out.stickyNoteText).toBeNull();
+    expect(out.stickyNoteSeverity).toBeNull();
+  });
+
+  it('rejects an unknown severity', () => {
+    expect(
+      updateCompanySchema.safeParse({ stickyNoteSeverity: 'BOGUS' }).success,
+    ).toBe(false);
+  });
 });

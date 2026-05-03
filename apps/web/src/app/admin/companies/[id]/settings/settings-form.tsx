@@ -27,6 +27,8 @@ import {
 import { LogoUploadField } from './logo-upload';
 import { ParentCompanyPicker } from './parent-company-picker';
 
+type StickyNoteSeverity = 'INFO' | 'WARN' | 'CRITICAL';
+
 type Draft = {
   name: string;
   slug: string;
@@ -50,6 +52,9 @@ type Draft = {
   region: string;
   postalCode: string;
   country: string;
+
+  stickyNoteText: string;
+  stickyNoteSeverity: StickyNoteSeverity;
 };
 
 function fromCompany(c: CompanyDetail): Draft {
@@ -74,6 +79,11 @@ function fromCompany(c: CompanyDetail): Draft {
     region: c.region ?? '',
     postalCode: c.postalCode ?? '',
     country: c.country ?? '',
+    stickyNoteText: c.stickyNoteText ?? '',
+    // Default severity to INFO when none is set on the row — the
+    // dropdown always needs a defined value, and the API ignores
+    // severity until text is non-empty.
+    stickyNoteSeverity: c.stickyNoteSeverity ?? 'INFO',
   };
 }
 
@@ -462,6 +472,45 @@ export function CompanySettingsForm({
         </div>
       </Panel>
 
+      {/* -------- Sticky note ---------- */}
+      <Panel title="Sticky note">
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <Field
+            label="Severity"
+            htmlFor="c-sticky-severity"
+            error={fieldErrors.stickyNoteSeverity}
+            help="Drives the banner colour. Critical notes also stay pinned while scrolling."
+            style={{ maxWidth: 220 }}
+          >
+            <Select
+              id="c-sticky-severity"
+              value={draft.stickyNoteSeverity}
+              onChange={(e) =>
+                set('stickyNoteSeverity', e.target.value as StickyNoteSeverity)
+              }
+            >
+              <option value="INFO">Info</option>
+              <option value="WARN">Warning</option>
+              <option value="CRITICAL">Critical</option>
+            </Select>
+          </Field>
+          <Field
+            label="Message"
+            htmlFor="c-sticky-text"
+            error={fieldErrors.stickyNoteText}
+            help="Shown as a coloured banner on every admin page for this company. Leave blank to hide. Max 300 characters."
+          >
+            <Textarea
+              id="c-sticky-text"
+              value={draft.stickyNoteText}
+              onChange={(e) => set('stickyNoteText', e.target.value)}
+              maxLength={300}
+              placeholder="Heads-up for anyone working this account…"
+            />
+          </Field>
+        </div>
+      </Panel>
+
       {/* -------- Save bar ---------- */}
       <div
         style={{
@@ -598,5 +647,26 @@ function computePatch(initial: Draft, draft: Draft): Record<string, unknown> {
   const parentBefore = initial.parent?.id ?? null;
   const parentAfter = draft.parent?.id ?? null;
   if (parentBefore !== parentAfter) out.parentCompanyId = parentAfter;
+
+  // Sticky note: send text on change. Severity rides along whenever
+  // the text is non-empty AND either changed or the text just turned
+  // on (so a fresh banner picks up the chosen colour). When text is
+  // cleared, the API reconciler will null severity itself, so we
+  // don't send it.
+  const stickyTextBefore = initial.stickyNoteText;
+  const stickyTextAfter = draft.stickyNoteText;
+  const stickyTextChanged = stickyTextBefore !== stickyTextAfter;
+  const stickySevChanged =
+    initial.stickyNoteSeverity !== draft.stickyNoteSeverity;
+  if (stickyTextChanged) {
+    out.stickyNoteText =
+      stickyTextAfter.trim() === '' ? null : stickyTextAfter;
+  }
+  if (
+    draft.stickyNoteText.trim() !== '' &&
+    (stickySevChanged || (stickyTextChanged && stickyTextBefore.trim() === ''))
+  ) {
+    out.stickyNoteSeverity = draft.stickyNoteSeverity;
+  }
   return out;
 }

@@ -589,7 +589,7 @@ function renderCover(doc: PDFKit.PDFDocument, data: CompanyExportData): void {
 
   doc.fillColor(C.white)
     .font(FONT_BOLD).fontSize(11)
-    .text('WEAVESTREAM · CONFIDENTIAL', MARGIN_X, 96, {
+    .text(`${data.workspaceName.toUpperCase()} · CONFIDENTIAL`, MARGIN_X, 96, {
       width: CONTENT_WIDTH,
       characterSpacing: 1.5,
     });
@@ -702,7 +702,6 @@ function renderCompanyDetails(doc: PDFKit.PDFDocument, data: CompanyExportData):
   const c = data.company;
 
   // Lead block — most important fields, full width
-  if (c.notes) field(doc, 'Notes', c.notes, TITLE);
   if (c.quickNotes) field(doc, 'Quick notes', c.quickNotes, TITLE);
 
   subheading(doc, 'Identity', TITLE);

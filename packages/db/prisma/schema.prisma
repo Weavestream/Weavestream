@@ -99,6 +99,15 @@ enum DomainStatus {
 // renderers can style each type consistently without another round-trip
 // to the DB. New values are cheap to add later via a follow-up migration
 // if operators request more granularity.
+// Per-company "sticky note" banner shown above the breadcrumbs on every
+// admin page for that company. Severity drives banner colour (and, for
+// CRITICAL, sticky positioning so it stays in view while scrolling).
+enum StickyNoteSeverity {
+  INFO
+  WARN
+  CRITICAL
+}
+
 enum CompanyType {
   CLIENT
   PROSPECT
@@ -259,6 +268,12 @@ model Company {
   // logo, one upload backs at most one company.
   logoUploadId String? @unique @map("logo_upload_id") @db.Uuid
   logoUpload   Upload? @relation("CompanyLogo", fields: [logoUploadId], references: [id], onDelete: SetNull)
+
+  // Per-company sticky note. Both columns nullable; the API enforces
+  // that severity is only set when text is also set (clearing text
+  // clears severity). When text is null, no banner renders.
+  stickyNoteText     String?             @map("sticky_note_text")
+  stickyNoteSeverity StickyNoteSeverity? @map("sticky_note_severity")
 
   memberships         Membership[]
   starredBy           StarredCompany[]

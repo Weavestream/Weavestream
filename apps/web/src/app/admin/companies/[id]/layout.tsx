@@ -102,6 +102,16 @@ export default async function CompanyScopedLayout({
     0,
   );
 
+  // Sticky note is admin-only by design; the pair (text + severity) is
+  // reconciled at the API layer so we just trust whatever came back.
+  const stickyNote =
+    company.stickyNoteText && company.stickyNoteSeverity
+      ? {
+          text: company.stickyNoteText,
+          severity: company.stickyNoteSeverity,
+        }
+      : null;
+
   return (
     <CompanyShell
       me={me}
@@ -115,6 +125,7 @@ export default async function CompanyScopedLayout({
       passwordStaleBadge={passwordStaleBadge}
       subnetCount={subnetCount}
       subnetConflictBadge={subnetConflictBadge}
+      stickyNote={stickyNote}
     >
       {children}
     </CompanyShell>

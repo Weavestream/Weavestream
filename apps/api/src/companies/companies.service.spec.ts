@@ -63,6 +63,8 @@ function makeCompany(overrides: Partial<CompanyRow> = {}): CompanyRow {
     region: null,
     postalCode: null,
     country: null,
+    stickyNoteText: null,
+    stickyNoteSeverity: null,
     ...overrides,
   };
 }
@@ -252,6 +254,95 @@ describe('CompaniesService slug uniqueness', () => {
     await expect(
       svc.update(ACTOR, 'a', { slug: 'b' }, META),
     ).rejects.toBeInstanceOf(ConflictException);
+  });
+});
+
+describe('CompaniesService sticky note reconciliation', () => {
+  it('defaults severity to INFO when text is set without one', async () => {
+    const companies = { c: makeCompany({ id: 'c' }) };
+    const prisma = makePrisma(companies);
+    const svc = new CompaniesService(
+      prisma as never,
+      makeAudit() as never,
+      makeCache() as never,
+    );
+
+    const out = await svc.update(
+      ACTOR,
+      'c',
+      { stickyNoteText: 'heads up' },
+      META,
+    );
+    expect(out.stickyNoteText).toBe('heads up');
+    expect(out.stickyNoteSeverity).toBe('INFO');
+  });
+
+  it('clears severity when text is cleared', async () => {
+    const companies = {
+      c: makeCompany({
+        id: 'c',
+        stickyNoteText: 'old' as never,
+        stickyNoteSeverity: 'WARN' as never,
+      }),
+    };
+    const prisma = makePrisma(companies);
+    const svc = new CompaniesService(
+      prisma as never,
+      makeAudit() as never,
+      makeCache() as never,
+    );
+
+    const out = await svc.update(
+      ACTOR,
+      'c',
+      { stickyNoteText: null },
+      META,
+    );
+    expect(out.stickyNoteText).toBeNull();
+    expect(out.stickyNoteSeverity).toBeNull();
+  });
+
+  it('honours an explicit severity', async () => {
+    const companies = { c: makeCompany({ id: 'c' }) };
+    const prisma = makePrisma(companies);
+    const svc = new CompaniesService(
+      prisma as never,
+      makeAudit() as never,
+      makeCache() as never,
+    );
+
+    const out = await svc.update(
+      ACTOR,
+      'c',
+      { stickyNoteText: 'urgent', stickyNoteSeverity: 'CRITICAL' },
+      META,
+    );
+    expect(out.stickyNoteSeverity).toBe('CRITICAL');
+  });
+
+  it('leaves an existing severity alone when only the text is updated', async () => {
+    const companies = {
+      c: makeCompany({
+        id: 'c',
+        stickyNoteText: 'old' as never,
+        stickyNoteSeverity: 'WARN' as never,
+      }),
+    };
+    const prisma = makePrisma(companies);
+    const svc = new CompaniesService(
+      prisma as never,
+      makeAudit() as never,
+      makeCache() as never,
+    );
+
+    const out = await svc.update(
+      ACTOR,
+      'c',
+      { stickyNoteText: 'new text' },
+      META,
+    );
+    expect(out.stickyNoteText).toBe('new text');
+    expect(out.stickyNoteSeverity).toBe('WARN');
   });
 });
 

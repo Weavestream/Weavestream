@@ -13,7 +13,6 @@ export interface ExportCompany {
   name: string;
   slug: string;
   type: string;
-  notes: string | null;
   quickNotes: string | null;
   contactName: string | null;
   contactTitle: string | null;
@@ -109,6 +108,8 @@ export interface ExportUpload {
 }
 
 export interface CompanyExportData {
+  /** Instance workspace name (admin Settings → Workspace name). */
+  workspaceName: string;
   company: ExportCompany;
   members: ExportMember[];
   assets: ExportAsset[];
@@ -135,9 +136,10 @@ export class CompanyExportDataService {
     companyId: string,
     opts: { includePasswords: boolean },
   ): Promise<CompanyExportData> {
-    const [company, memberships, assets, articles, passwords, domains, uploads] =
+    const [company, workspaceName, memberships, assets, articles, passwords, domains, uploads] =
       await Promise.all([
         this.fetchCompany(companyId),
+        this.fetchWorkspaceName(),
         this.fetchMembers(companyId),
         this.fetchAssets(companyId),
         this.fetchArticles(companyId),
@@ -149,6 +151,7 @@ export class CompanyExportDataService {
     if (!company) throw new Error(`Company ${companyId} not found`);
 
     return {
+      workspaceName,
       company,
       members: memberships,
       assets,
@@ -165,6 +168,15 @@ export class CompanyExportDataService {
   // Private fetchers
   // -------------------------------------------------------------------------
 
+  private async fetchWorkspaceName(): Promise<string> {
+    const row = await this.prisma.systemSetting.findUnique({
+      where: { id: 'singleton' },
+      select: { workspaceName: true },
+    });
+    const name = row?.workspaceName?.trim();
+    return name && name.length > 0 ? name : 'My Company';
+  }
+
   private async fetchCompany(companyId: string): Promise<ExportCompany | null> {
     const row = await this.prisma.company.findUnique({
       where: { id: companyId },
@@ -173,7 +185,6 @@ export class CompanyExportDataService {
         name: true,
         slug: true,
         type: true,
-        notes: true,
         quickNotes: true,
         contactName: true,
         contactTitle: true,

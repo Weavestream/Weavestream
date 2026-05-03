@@ -645,6 +645,8 @@ export type CompanyDetail = CompanyListItem & {
   addressLine1: string | null;
   addressLine2: string | null;
   postalCode: string | null;
+  stickyNoteText: string | null;
+  stickyNoteSeverity: 'INFO' | 'WARN' | 'CRITICAL' | null;
 };
 
 export type UserListItem = {

@@ -1,5 +1,9 @@
+'use client';
+
 import type { ReactNode } from 'react';
 import { Fragment } from 'react';
+import { CompanyStickyNote } from './company-sticky-note';
+import { useStickyNote } from './sticky-note-context';
 
 export type Crumb = {
   label: ReactNode;
@@ -23,6 +27,12 @@ export function TopBar({
    */
   subClassName?: string;
 }) {
+  // The per-company sticky note (when set) renders as the first row
+  // INSIDE this sticky container, not as a separate sticky sibling —
+  // two siblings with `top: 0` would overlap on scroll and the
+  // breadcrumbs would slide behind the banner. Outside a CompanyShell
+  // the context defaults to null and nothing renders.
+  const stickyNote = useStickyNote();
   return (
     <div
       style={{
@@ -33,6 +43,12 @@ export function TopBar({
         zIndex: 10,
       }}
     >
+      {stickyNote ? (
+        <CompanyStickyNote
+          text={stickyNote.text}
+          severity={stickyNote.severity}
+        />
+      ) : null}
       <div
         style={{
           height: 44,

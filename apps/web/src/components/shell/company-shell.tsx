@@ -21,6 +21,10 @@ import {
   type SidebarSwitcherEntry,
 } from './sidebar';
 import { MobileShellChrome } from './mobile-nav';
+import {
+  StickyNoteProvider,
+  type StickyNoteSeverity,
+} from './sticky-note-context';
 import { SearchPaletteProvider } from '../search/search-palette-provider';
 
 export type CompanyShellMode = 'admin' | 'portal';
@@ -68,6 +72,7 @@ export function CompanyShell({
   subnetCount,
   subnetConflictBadge,
   portalHasSubnets = true,
+  stickyNote,
 }: {
   me: Me;
   company: Pick<CompanyListItem, 'id' | 'name' | 'slug'>;
@@ -116,6 +121,12 @@ export function CompanyShell({
   subnetConflictBadge?: number;
   /** Hide IPAM entry on the portal when the tenant has no subnets. */
   portalHasSubnets?: boolean;
+  /**
+   * Optional per-company banner shown above the breadcrumbs on every
+   * page. Populated from the company settings — admin layout passes
+   * it through; portal layout omits it (admin-only feature).
+   */
+  stickyNote?: { text: string; severity: StickyNoteSeverity } | null;
 }) {
   const isAdmin = mode === 'admin';
   const base = isAdmin
@@ -339,6 +350,7 @@ export function CompanyShell({
     ) : undefined;
 
   return (
+    <StickyNoteProvider value={stickyNote ?? null}>
     <SearchPaletteProvider
       scopedCompany={{ id: company.id, name: company.name }}
       defaults={me.searchDefaults}
@@ -381,5 +393,6 @@ export function CompanyShell({
         </main>
       </div>
     </SearchPaletteProvider>
+    </StickyNoteProvider>
   );
 }

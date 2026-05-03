@@ -364,6 +364,21 @@ function HeaderMeta({ company }: { company: CompanyDetail }) {
           {company.quickNotes}
         </span>
       )}
+      {company.notes?.trim() && (
+        <span
+          style={{
+            fontSize: 12,
+            color: 'var(--text-2)',
+            maxWidth: 600,
+            whiteSpace: 'pre-wrap',
+            overflowWrap: 'anywhere',
+          }}
+        >
+          <strong>Internal</strong>
+          {' — '}
+          {company.notes}
+        </span>
+      )}
     </div>
   );
 }

@@ -60,6 +60,8 @@ const AUDITABLE_COMPANY_FIELDS = [
   'region',
   'postalCode',
   'country',
+  'stickyNoteText',
+  'stickyNoteSeverity',
 ] as const;
 
 const COMPANY_LIST_SELECT = {
@@ -113,6 +115,8 @@ const COMPANY_DETAIL_SELECT = {
   addressLine1: true,
   addressLine2: true,
   postalCode: true,
+  stickyNoteText: true,
+  stickyNoteSeverity: true,
 } as const;
 
 @Injectable()
@@ -284,6 +288,9 @@ export class CompaniesService {
       postalCode: company.postalCode,
       country: company.country,
 
+      stickyNoteText: company.stickyNoteText,
+      stickyNoteSeverity: company.stickyNoteSeverity,
+
       logoUploadId: company.logoUploadId,
       logo,
     };
@@ -377,6 +384,25 @@ export class CompaniesService {
         ? undefined
         : normalizeWebsite(input.website);
 
+    // Sticky note pair reconciliation. The two columns are coupled:
+    //   - Clearing the text (null) also clears the severity, otherwise
+    //     a stale severity would linger on a hidden banner.
+    //   - Setting text without specifying severity defaults to INFO so
+    //     forms that only edit one half don't have to remember to send
+    //     the other. An explicit severity in `input` always wins.
+    const stickyNoteText = input.stickyNoteText;
+    let stickyNoteSeverity: 'INFO' | 'WARN' | 'CRITICAL' | null | undefined =
+      input.stickyNoteSeverity;
+    if (stickyNoteText === null) {
+      stickyNoteSeverity = null;
+    } else if (
+      stickyNoteText !== undefined &&
+      stickyNoteSeverity === undefined &&
+      before.stickyNoteSeverity === null
+    ) {
+      stickyNoteSeverity = 'INFO';
+    }
+
     const company = await this.prisma.company.update({
       where: { id },
       data: {
@@ -405,6 +431,8 @@ export class CompaniesService {
         ...(input.region !== undefined ? { region: input.region } : {}),
         ...(input.postalCode !== undefined ? { postalCode: input.postalCode } : {}),
         ...(input.country !== undefined ? { country: input.country } : {}),
+        ...(stickyNoteText !== undefined ? { stickyNoteText } : {}),
+        ...(stickyNoteSeverity !== undefined ? { stickyNoteSeverity } : {}),
       },
     });
 

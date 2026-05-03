@@ -25,6 +25,12 @@ export const companyTypeValues = [
 export const companyTypeSchema = z.enum(companyTypeValues);
 export type CompanyType = z.infer<typeof companyTypeSchema>;
 
+// Mirrors the Prisma `StickyNoteSeverity` enum. Drives the sticky-note
+// banner colour and (for CRITICAL) sticky positioning.
+export const stickyNoteSeverityValues = ['INFO', 'WARN', 'CRITICAL'] as const;
+export const stickyNoteSeveritySchema = z.enum(stickyNoteSeverityValues);
+export type StickyNoteSeverity = z.infer<typeof stickyNoteSeveritySchema>;
+
 // ───────────────────────────────────────────────────────────────────
 // Field-level helpers
 // ───────────────────────────────────────────────────────────────────
@@ -132,6 +138,12 @@ const companyMutableFields = {
   region: shortText(120),
   postalCode: shortText(20),
   country: shortText(120),
+
+  // Sticky note. Service layer reconciles the pair: when text is
+  // null/empty, severity is forced to null too; when text is set
+  // without a severity, severity defaults to INFO.
+  stickyNoteText: nullableTrimmedText(z.string().max(300)),
+  stickyNoteSeverity: stickyNoteSeveritySchema.nullable(),
 } as const;
 
 export const updateCompanySchema = z
