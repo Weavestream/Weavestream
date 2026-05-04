@@ -101,7 +101,7 @@ jobs:
         image: [api, web, worker]
     steps:
       - name: Download digests
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: digests-${{ matrix.image }}-*
           path: /tmp/digests
