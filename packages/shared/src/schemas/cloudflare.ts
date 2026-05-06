@@ -165,6 +165,19 @@ export const cloudflareDriftDetailsSchema = z
       .default([]),
     /** Diagnostic from the last drift check, set when the check itself failed. */
     lastError: z.string().nullable().optional(),
+    /**
+     * Set when the last drift sweep auto-recovered a discrepancy by re-pushing
+     * the Weavestream view to Cloudflare. Surfaced in the UI so an operator
+     * can see when their Cloudflare-side hand-edit was undone (Weavestream is
+     * the source of truth).
+     */
+    lastSelfHeal: z
+      .object({
+        at: z.string(),
+        pushed: z.number().int().nonnegative(),
+        removed: z.number().int().nonnegative(),
+      })
+      .optional(),
   })
   .nullable();
 export type CloudflareDriftDetailsDto = z.infer<

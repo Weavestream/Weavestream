@@ -154,6 +154,7 @@ export const AUDIT_ACTIONS = {
     cloudflareEntryRemove: 'integration.cloudflare.entry.remove',
     cloudflareOverwrite: 'integration.cloudflare.overwrite',
     cloudflareDriftCheck: 'integration.cloudflare.drift_check',
+    cloudflareDriftSelfHealed: 'integration.cloudflare.drift_self_healed',
   },
   subnet: {
     create: 'subnet.create',

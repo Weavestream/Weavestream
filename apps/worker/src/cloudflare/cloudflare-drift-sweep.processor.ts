@@ -62,7 +62,13 @@ export class CloudflareDriftSweepWorker implements OnModuleDestroy {
         `invalid cloudflare-drift-sweep payload: ${parsed.error.message}`,
       );
     }
-    await this.lists.runDriftSweep(parsed.data.integrationId);
-    return { integrationId: parsed.data.integrationId };
+    const startedAt = Date.now();
+    const result = await this.lists.runDriftSweep(parsed.data.integrationId);
+    this.logger.log(
+      `Drift sweep job ${job.id ?? '<no-id>'} done in ${Date.now() - startedAt}ms ` +
+        `(integration=${parsed.data.integrationId} checked=${result.checked} ` +
+        `healed=${result.healed} errors=${result.errors})`,
+    );
+    return { integrationId: parsed.data.integrationId, ...result };
   }
 }

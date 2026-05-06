@@ -258,6 +258,20 @@ export class CloudflareListsService {
   // Drift check (also called by the worker drift-sweep processor)
   // -------------------------------------------------------------------
 
+  /**
+   * Compute drift between Weavestream and Cloudflare; if drift is detected
+   * AND this list is reconcilable, self-heal by pushing the local entries
+   * back to Cloudflare. Weavestream is the source of truth, so a manual
+   * edit on the Cloudflare dashboard is treated as out-of-band noise that
+   * we silently undo on the next sweep.
+   *
+   * The two callers differ in audit verbosity:
+   *   - `manual` (operator-clicked "Check drift now") → always audit the
+   *     check + any self-heal so the operator sees the action they took.
+   *   - `sweep`  (cron-driven) → audit only on transitions / errors / a
+   *     successful self-heal, so a healthy list doesn't fill the audit
+   *     log with one row per cron tick.
+   */
   async runDriftCheck(
     integrationId: string,
     listId: string,
@@ -265,6 +279,10 @@ export class CloudflareListsService {
     meta: AuditMeta | null,
   ): Promise<CloudflareIpListDto> {
     const row = await this.requireList(integrationId, listId);
+    const previousStatus: CloudflareDriftStatusValue = row.driftStatus;
+    const isManual = actor !== null && meta !== null;
+    const auditMeta: AuditMeta = meta ?? { ip: '127.0.0.1', userAgent: 'cron/cloudflare-drift-sweep' };
+    const auditActorId: string | null = actor?.id ?? null;
     const { driver, ctx } = await this.loadDriver(integrationId);
     const correlationId = randomUUID();
 
@@ -291,6 +309,22 @@ export class CloudflareListsService {
           } as unknown as Prisma.InputJsonValue,
         },
       });
+      if (isManual || previousStatus !== 'error') {
+        await this.audit.log({
+          actorId: auditActorId,
+          action: AUDIT_ACTIONS.integration.cloudflareDriftCheck,
+          entityType: 'CloudflareIpList',
+          entityId: listId,
+          ip: auditMeta.ip,
+          userAgent: auditMeta.userAgent,
+          before: null,
+          after: {
+            mode: isManual ? 'manual' : 'sweep',
+            status: 'error',
+            error: message.slice(0, 500),
+          },
+        });
+      }
       return this.toDto(updated);
     }
 
@@ -300,58 +334,182 @@ export class CloudflareListsService {
     const local = fresh ? readEntries(fresh.entries) : [];
     const diff = computeDrift(local, cfItems);
 
-    const status: CloudflareDriftStatusValue =
+    const detectedStatus: CloudflareDriftStatusValue =
       diff.missingOnCf.length === 0 && diff.extraOnCf.length === 0
         ? 'in_sync'
         : 'drift_detected';
 
+    // Self-heal: Weavestream is the source of truth, so when the sweep
+    // finds a discrepancy we re-push the local entries to Cloudflare.
+    // On success the post-heal state is `in_sync`; on failure we leave
+    // the row in `drift_detected` and let the next sweep retry — the
+    // banner in the UI will surface the failure for operator review.
+    let finalStatus: CloudflareDriftStatusValue = detectedStatus;
+    let healed = false;
+    let healError: string | null = null;
+    let driftDetails: Prisma.InputJsonValue = {
+      missingOnCf: diff.missingOnCf,
+      extraOnCf: diff.extraOnCf,
+    } as unknown as Prisma.InputJsonValue;
+    let reconciledEntries: StoredEntry[] | null = null;
+
+    if (detectedStatus === 'drift_detected') {
+      try {
+        const result = await driver.syncListItems(
+          ctx.config,
+          ctx.secret,
+          row.externalListId,
+          local.map((e) => ({ ip: e.ip })),
+          this.httpDefaults(),
+          correlationId,
+        );
+        const cfIps = new Set(result.items.map((i) => normaliseIp(i.ip)));
+        reconciledEntries = local.filter((e) => cfIps.has(normaliseIp(e.ip)));
+        finalStatus = 'in_sync';
+        healed = true;
+        driftDetails = {
+          missingOnCf: [],
+          extraOnCf: [],
+          lastSelfHeal: {
+            at: new Date().toISOString(),
+            pushed: diff.missingOnCf.length,
+            removed: diff.extraOnCf.length,
+          },
+        } as unknown as Prisma.InputJsonValue;
+      } catch (e) {
+        healError = e instanceof Error ? e.message : String(e);
+        driftDetails = {
+          missingOnCf: diff.missingOnCf,
+          extraOnCf: diff.extraOnCf,
+          lastError: `Auto-heal failed: ${healError.slice(0, 480)}`,
+        } as unknown as Prisma.InputJsonValue;
+      }
+    }
+
     const updated = await this.prisma.cloudflareIpList.update({
       where: { id: listId },
       data: {
-        driftStatus: status,
+        driftStatus: finalStatus,
         lastDriftCheckAt: new Date(),
-        driftDetails: {
-          missingOnCf: diff.missingOnCf,
-          extraOnCf: diff.extraOnCf,
-        } as unknown as Prisma.InputJsonValue,
+        driftDetails,
+        ...(healed
+          ? {
+              lastPushedAt: new Date(),
+              ...(reconciledEntries
+                ? {
+                    entries: reconciledEntries as unknown as Prisma.InputJsonValue,
+                  }
+                : {}),
+            }
+          : {}),
       },
     });
 
-    if (actor && meta) {
+    const statusChanged = previousStatus !== finalStatus;
+    const shouldAuditCheck = isManual || statusChanged;
+
+    if (shouldAuditCheck) {
       await this.audit.log({
-        actorId: actor.id,
+        actorId: auditActorId,
         action: AUDIT_ACTIONS.integration.cloudflareDriftCheck,
         entityType: 'CloudflareIpList',
         entityId: listId,
-        ip: meta.ip,
-        userAgent: meta.userAgent,
+        ip: auditMeta.ip,
+        userAgent: auditMeta.userAgent,
         before: null,
         after: {
-          status,
+          mode: isManual ? 'manual' : 'sweep',
+          previousStatus,
+          status: finalStatus,
           missingOnCf: diff.missingOnCf.length,
           extraOnCf: diff.extraOnCf.length,
         },
       });
     }
+
+    if (healed) {
+      await this.audit.log({
+        actorId: auditActorId,
+        action: AUDIT_ACTIONS.integration.cloudflareDriftSelfHealed,
+        entityType: 'CloudflareIpList',
+        entityId: listId,
+        ip: auditMeta.ip,
+        userAgent: auditMeta.userAgent,
+        before: null,
+        after: {
+          mode: isManual ? 'manual' : 'sweep',
+          pushed: diff.missingOnCf.length,
+          removed: diff.extraOnCf.length,
+          totalEntries: reconciledEntries?.length ?? local.length,
+        },
+      });
+    }
+    // Heal failure is implicitly covered by the audit above when
+    // `statusChanged` flips into drift_detected; subsequent ticks that
+    // keep failing are intentionally silent in sweep mode (the row's
+    // `driftDetails.lastError` keeps the operator-visible signal).
+    void healError;
+
     return this.toDto(updated);
   }
 
   /** Worker entrypoint: run drift check for every list under one integration. */
-  async runDriftSweep(integrationId: string): Promise<void> {
+  async runDriftSweep(integrationId: string): Promise<{
+    checked: number;
+    healed: number;
+    errors: number;
+  }> {
     const lists = await this.prisma.cloudflareIpList.findMany({
       where: { integrationId },
-      select: { id: true },
+      select: { id: true, driftStatus: true },
     });
+    let healed = 0;
+    let errors = 0;
     for (const l of lists) {
       try {
-        await this.runDriftCheck(integrationId, l.id, null, null);
+        const before = l.driftStatus;
+        const after = await this.runDriftCheck(integrationId, l.id, null, null);
+        if (before === 'drift_detected' && after.driftStatus === 'in_sync') {
+          healed += 1;
+        }
+        if (after.driftStatus === 'error' || after.driftStatus === 'drift_detected') {
+          errors += 1;
+        }
       } catch (e) {
+        errors += 1;
         this.logger.error(
           { err: (e as Error).message, listId: l.id },
           'drift check failed',
         );
       }
     }
+
+    // Stamp the parent Integration row so the admin table's "Last run"
+    // column reflects the cron sweep. Pull-drivers update these fields
+    // through `IntegrationSyncRun`; security drivers don't create runs,
+    // so we write directly here.
+    await this.prisma.integration
+      .update({
+        where: { id: integrationId },
+        data: {
+          lastRunAt: new Date(),
+          lastRunStatus: errors === 0 ? 'succeeded' : 'failed',
+        },
+      })
+      .catch((e: unknown) => {
+        this.logger.warn(
+          `Failed to stamp lastRunAt on integration ${integrationId}: ${
+            e instanceof Error ? e.message : String(e)
+          }`,
+        );
+      });
+
+    if (lists.length > 0) {
+      this.logger.log(
+        `Cloudflare drift sweep: integration=${integrationId} checked=${lists.length} healed=${healed} errors=${errors}`,
+      );
+    }
+    return { checked: lists.length, healed, errors };
   }
 
   // -------------------------------------------------------------------

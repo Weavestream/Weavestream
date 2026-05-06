@@ -244,9 +244,17 @@ export function CredentialsTab({
           </Field>
         </div>
         <Field
-          label="Sync schedule (cron)"
+          label={
+            driver?.capabilities.kind === 'security'
+              ? 'Drift sweep schedule (cron)'
+              : 'Sync schedule (cron)'
+          }
           htmlFor="i-cron"
-          help="5-field UTC cron, e.g. '0 */6 * * *'. Leave blank for manual-only."
+          help={
+            driver?.capabilities.kind === 'security'
+              ? "5-field UTC cron, e.g. '*/15 * * * *'. Drift between Cloudflare and Weavestream is auto-healed on every tick. Leave blank for manual-only. Schedule changes apply on the next API restart."
+              : "5-field UTC cron, e.g. '0 */6 * * *'. Leave blank for manual-only."
+          }
         >
           <Input
             id="i-cron"

@@ -122,8 +122,9 @@ export function RegisteredListsTab({
       >
         <p style={{ margin: 0, fontSize: 12.5, color: 'var(--muted)', maxWidth: 640 }}>
           Pick which Cloudflare IP lists Weavestream manages. Once registered,
-          edits made here are pushed to Cloudflare; edits made directly in the
-          Cloudflare dashboard show up as drift on the next check.
+          edits made here are pushed to Cloudflare; the periodic drift sweep
+          auto-heals any out-of-band edits made directly in the Cloudflare
+          dashboard by re-pushing Weavestream's view.
         </p>
         <Btn
           kind="primary"

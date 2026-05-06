@@ -21,18 +21,19 @@ import { useTerm } from '../../../../lib/term-context';
 
 const ACTION_PREFIXES = [
   { value: '', label: 'All actions' },
-  { value: 'auth', label: 'auth.*' },
-  { value: 'user', label: 'user.*' },
-  { value: 'company', label: 'company.*' },
-  { value: 'membership', label: 'membership.*' },
-  { value: 'layout', label: 'layout.*' },
-  { value: 'asset', label: 'asset.*' },
   { value: 'article', label: 'article.*' },
-  { value: 'folder', label: 'folder.*' },
-  { value: 'password', label: 'password.*' },
-  { value: 'upload', label: 'upload.*' },
+  { value: 'asset', label: 'asset.*' },
+  { value: 'auth', label: 'auth.*' },
+  { value: 'company', label: 'company.*' },
   { value: 'domain', label: 'domain.*' },
+  { value: 'folder', label: 'folder.*' },
+  { value: 'integration', label: 'integration.*' },
+  { value: 'layout', label: 'layout.*' },
+  { value: 'membership', label: 'membership.*' },
+  { value: 'password', label: 'password.*' },
   { value: 'settings', label: 'settings.*' },
+  { value: 'upload', label: 'upload.*' },
+  { value: 'user', label: 'user.*' },
 ];
 
 /**

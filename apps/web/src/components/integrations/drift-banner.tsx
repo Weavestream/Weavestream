@@ -5,11 +5,17 @@ import { Btn, Icon, Tag } from '../ui';
 
 /**
  * Banner that surfaces drift between Weavestream and Cloudflare for a
- * single registered list. Visible whenever Cloudflare's view differs
- * from Weavestream's; clicking "Overwrite Cloudflare" PATCHes the
- * Gateway list synchronously to match Weavestream's view. The diff
- * summary is read from `list.driftDetails` populated by the periodic
- * sweep or a manual "Check now" call.
+ * single registered list. Weavestream is the authoritative source, so
+ * the periodic drift sweep self-heals any discrepancy by re-pushing the
+ * local entries on the next cron tick. This banner therefore has three
+ * modes:
+ *
+ *   - in_sync (no banner) — optionally a subtle "auto-recovered N min ago"
+ *     note when the last sweep healed drift.
+ *   - drift_detected — only ever visible when self-heal failed (e.g. CF
+ *     unreachable mid-sweep). Includes a manual "Overwrite Cloudflare"
+ *     button so the operator can retry without waiting for the next tick.
+ *   - error — drift check itself errored (auth / network).
  */
 export function DriftBanner({
   list,
@@ -20,7 +26,49 @@ export function DriftBanner({
   onOverwrite: () => void;
   overwriting: boolean;
 }) {
-  if (list.driftStatus === 'in_sync' || list.driftStatus === 'unknown') return null;
+  const lastSelfHeal = list.driftDetails?.lastSelfHeal ?? null;
+
+  if (list.driftStatus === 'unknown') return null;
+
+  if (list.driftStatus === 'in_sync') {
+    if (!lastSelfHeal) return null;
+    const diff = Date.now() - new Date(lastSelfHeal.at).getTime();
+    if (diff > 15 * 60_000) return null;
+    const parts: string[] = [];
+    if (lastSelfHeal.pushed > 0) {
+      parts.push(
+        `re-added ${lastSelfHeal.pushed} entr${lastSelfHeal.pushed === 1 ? 'y' : 'ies'} to Cloudflare`,
+      );
+    }
+    if (lastSelfHeal.removed > 0) {
+      parts.push(
+        `removed ${lastSelfHeal.removed} unauthorised entr${lastSelfHeal.removed === 1 ? 'y' : 'ies'} from Cloudflare`,
+      );
+    }
+    return (
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 12,
+          padding: '10px 14px',
+          border: '1px solid var(--line)',
+          background: 'var(--panel-2)',
+          borderRadius: 6,
+        }}
+      >
+        <Tag tone="ok" dot>
+          auto-recovered
+        </Tag>
+        <span style={{ fontSize: 13, color: 'var(--text-2)', flex: 1 }}>
+          {parts.length === 0
+            ? 'Drift sweep self-healed a discrepancy.'
+            : `Drift sweep ${parts.join(' and ')}.`}{' '}
+          <span style={{ color: 'var(--muted)' }}>{relative(lastSelfHeal.at)}</span>
+        </span>
+      </div>
+    );
+  }
 
   if (list.driftStatus === 'error') {
     return (
@@ -59,6 +107,9 @@ export function DriftBanner({
       `${extra.length} entr${extra.length === 1 ? 'y was' : 'ies were'} added directly in Cloudflare`,
     );
   }
+  const healFailed = (list.driftDetails?.lastError ?? '').startsWith(
+    'Auto-heal failed',
+  );
 
   return (
     <div
@@ -73,14 +124,16 @@ export function DriftBanner({
       }}
     >
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-        <Tag tone="warn" dot>
-          drift detected
+        <Tag tone={healFailed ? 'danger' : 'warn'} dot>
+          {healFailed ? 'auto-heal failed' : 'drift detected'}
         </Tag>
         <span style={{ fontSize: 13, color: 'var(--text)', flex: 1 }}>
           {summary.length === 0
             ? 'Cloudflare and Weavestream do not match.'
-            : summary.join(' · ')}
-          .
+            : `${summary.join(' · ')}.`}
+          {healFailed
+            ? ' Auto-recovery will retry on the next sweep — use the button to retry now.'
+            : ' Auto-recovery will run on the next sweep.'}
         </span>
         <Btn
           kind="primary"
@@ -89,7 +142,7 @@ export function DriftBanner({
           onClick={onOverwrite}
           loading={overwriting}
         >
-          Overwrite Cloudflare
+          Overwrite Cloudflare now
         </Btn>
       </div>
       {extra.length > 0 && (
@@ -116,4 +169,11 @@ export function DriftBanner({
       )}
     </div>
   );
+}
+
+function relative(iso: string): string {
+  const diff = Date.now() - new Date(iso).getTime();
+  if (diff < 60_000) return 'just now';
+  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
+  return `${Math.floor(diff / 3_600_000)}h ago`;
 }
