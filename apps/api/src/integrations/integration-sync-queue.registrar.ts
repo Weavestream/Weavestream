@@ -4,12 +4,14 @@ import {
   OnApplicationBootstrap,
 } from '@nestjs/common';
 import {
+  CloudflareDriftSweepJobNames,
   IntegrationSyncOrchestratorJobNames,
   QueueNames,
 } from '@weavestream/shared';
 import { EnvService } from '../config/env.service.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { QueuesService } from '../queues/queues.service.js';
+import { IntegrationDriverRegistry } from './drivers/integration-driver.registry.js';
 
 /**
  * Phase 11 — registers / refreshes the per-integration scheduled cron
@@ -42,15 +44,26 @@ export class IntegrationSyncQueueRegistrar implements OnApplicationBootstrap {
     private readonly prisma: PrismaService,
     private readonly queues: QueuesService,
     private readonly env: EnvService,
+    private readonly drivers: IntegrationDriverRegistry,
   ) {}
 
   async onApplicationBootstrap(): Promise<void> {
-    const queue = this.queues.get(QueueNames.integrationSyncOrchestrator);
+    const orchQueue = this.queues.get(QueueNames.integrationSyncOrchestrator);
+    const cfQueue = this.queues.get(QueueNames.cloudflareDriftSweep);
 
-    const repeatables = await queue.getRepeatableJobs();
-    for (const r of repeatables) {
-      if (r.id?.startsWith('scheduled:')) {
-        await queue.removeRepeatableByKey(r.key).catch(() => undefined);
+    // Pull-driver schedules live in the orchestrator queue; security
+    // drivers (Cloudflare drift sweep) live in their own queue. Both
+    // use the same `scheduled-<integrationId>` jobId convention so a
+    // single repeatable maps 1:1 to an Integration row.
+    for (const queue of [orchQueue, cfQueue]) {
+      const repeatables = await queue.getRepeatableJobs();
+      for (const r of repeatables) {
+        if (
+          r.id?.startsWith('scheduled-') ||
+          r.id?.startsWith('scheduled:')
+        ) {
+          await queue.removeRepeatableByKey(r.key).catch(() => undefined);
+        }
       }
     }
 
@@ -73,18 +86,32 @@ export class IntegrationSyncQueueRegistrar implements OnApplicationBootstrap {
     for (const i of integrations) {
       const pattern = i.syncCron ?? defaultCron;
       if (!pattern) continue;
+      const kind = this.drivers.has(i.driver)
+        ? this.drivers.kindOf(i.driver)
+        : 'pull';
       try {
-        await queue.add(
-          IntegrationSyncOrchestratorJobNames.scheduled,
-          { kind: 'scheduled', integrationId: i.id },
-          {
-            jobId: `scheduled-${i.id}`,
-            repeat: { pattern },
-          },
-        );
+        if (kind === 'security') {
+          await cfQueue.add(
+            CloudflareDriftSweepJobNames.scheduled,
+            { integrationId: i.id },
+            {
+              jobId: `scheduled-${i.id}`,
+              repeat: { pattern },
+            },
+          );
+        } else {
+          await orchQueue.add(
+            IntegrationSyncOrchestratorJobNames.scheduled,
+            { kind: 'scheduled', integrationId: i.id },
+            {
+              jobId: `scheduled-${i.id}`,
+              repeat: { pattern },
+            },
+          );
+        }
         registered += 1;
         this.logger.log(
-          `Registered scheduled sync for "${i.driver}/${i.name}" with cron "${pattern}"${i.syncCron ? '' : ' (default)'}`,
+          `Registered scheduled ${kind} sync for "${i.driver}/${i.name}" with cron "${pattern}"${i.syncCron ? '' : ' (default)'}`,
         );
       } catch (e) {
         this.logger.error(

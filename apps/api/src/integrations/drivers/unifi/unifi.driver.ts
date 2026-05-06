@@ -198,6 +198,7 @@ export class UniFiSiteManagerDriver implements IntegrationDriver {
       },
     ],
     capabilities: {
+      kind: 'pull',
       listSourceOrgs: true,
       dryRun: true,
     },

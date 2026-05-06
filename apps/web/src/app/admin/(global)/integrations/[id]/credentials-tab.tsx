@@ -331,56 +331,58 @@ export function CredentialsTab({
         </section>
       )}
 
-      <section style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'baseline',
-            justifyContent: 'space-between',
-            gap: 12,
-            flexWrap: 'wrap',
-          }}
-        >
-          <h3 style={sectionHeaderStyle}>Run sync</h3>
-          <span style={{ fontSize: 11.5, color: 'var(--dim)' }}>
-            {enabledMappingCount} enabled mapping
-            {enabledMappingCount === 1 ? '' : 's'} ·{' '}
-            {syncableResources.length} of {integration.resources.length}{' '}
-            resource{integration.resources.length === 1 ? '' : 's'} ready ·{' '}
-            {totalFieldMappings} field mapping
-            {totalFieldMappings === 1 ? '' : 's'}
-          </span>
-        </div>
-        <p style={runHelpStyle}>
-          Trigger a one-off run across every enabled organization mapping.
-          Use <strong>Dry run</strong> to preview record counts and
-          conflicts without writing changes; <strong>Run sync now</strong>{' '}
-          persists results.
-        </p>
-        {syncBlockedReason && <Tag tone="warn">{syncBlockedReason}</Tag>}
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          <Btn
-            kind="outline"
-            size="sm"
-            icon={Icon.eye}
-            onClick={() => triggerSync(true)}
-            loading={syncing}
-            disabled={cannotSync}
+      {driver?.capabilities.kind !== 'security' && (
+        <section style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'baseline',
+              justifyContent: 'space-between',
+              gap: 12,
+              flexWrap: 'wrap',
+            }}
           >
-            Dry run
-          </Btn>
-          <Btn
-            kind="primary"
-            size="sm"
-            icon={Icon.sync}
-            onClick={() => triggerSync(false)}
-            loading={syncing}
-            disabled={cannotSync}
-          >
-            Run sync now
-          </Btn>
-        </div>
-      </section>
+            <h3 style={sectionHeaderStyle}>Run sync</h3>
+            <span style={{ fontSize: 11.5, color: 'var(--dim)' }}>
+              {enabledMappingCount} enabled mapping
+              {enabledMappingCount === 1 ? '' : 's'} ·{' '}
+              {syncableResources.length} of {integration.resources.length}{' '}
+              resource{integration.resources.length === 1 ? '' : 's'} ready ·{' '}
+              {totalFieldMappings} field mapping
+              {totalFieldMappings === 1 ? '' : 's'}
+            </span>
+          </div>
+          <p style={runHelpStyle}>
+            Trigger a one-off run across every enabled organization mapping.
+            Use <strong>Dry run</strong> to preview record counts and
+            conflicts without writing changes; <strong>Run sync now</strong>{' '}
+            persists results.
+          </p>
+          {syncBlockedReason && <Tag tone="warn">{syncBlockedReason}</Tag>}
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <Btn
+              kind="outline"
+              size="sm"
+              icon={Icon.eye}
+              onClick={() => triggerSync(true)}
+              loading={syncing}
+              disabled={cannotSync}
+            >
+              Dry run
+            </Btn>
+            <Btn
+              kind="primary"
+              size="sm"
+              icon={Icon.sync}
+              onClick={() => triggerSync(false)}
+              loading={syncing}
+              disabled={cannotSync}
+            >
+              Run sync now
+            </Btn>
+          </div>
+        </section>
+      )}
 
       {error && <Tag tone="danger">{error}</Tag>}
 

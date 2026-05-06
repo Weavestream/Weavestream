@@ -223,8 +223,8 @@ export function CreateIntegrationButton({
           </Field>
           {error && <Tag tone="danger">{error}</Tag>}
           <Tag tone="info">
-            New integrations start in <strong>paused</strong>. Configure
-            company mappings, then activate.
+            New integrations start <strong>paused</strong>. Finish setup,
+            then activate.
           </Tag>
         </div>
       </Dialog>

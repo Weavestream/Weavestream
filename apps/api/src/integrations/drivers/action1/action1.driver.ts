@@ -156,6 +156,7 @@ export class Action1Driver implements IntegrationDriver {
       },
     ],
     capabilities: {
+      kind: 'pull',
       listSourceOrgs: true,
       dryRun: true,
     },

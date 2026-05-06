@@ -144,6 +144,16 @@ export const AUDIT_ACTIONS = {
     assetArchived: 'integration.asset.archived',
     assetReleased: 'integration.asset.released',
     matchAmbiguous: 'integration.match.ambiguous',
+    // Cloudflare Rules Lists integration. `entityType: 'CloudflareIpList'`
+    // for list-level rows; entry-level mutations carry the same entityId
+    // (the list row) with the diff in `after`.
+    cloudflareListRegister: 'integration.cloudflare.list.register',
+    cloudflareListUnregister: 'integration.cloudflare.list.unregister',
+    cloudflareEntryAdd: 'integration.cloudflare.entry.add',
+    cloudflareEntryUpdate: 'integration.cloudflare.entry.update',
+    cloudflareEntryRemove: 'integration.cloudflare.entry.remove',
+    cloudflareOverwrite: 'integration.cloudflare.overwrite',
+    cloudflareDriftCheck: 'integration.cloudflare.drift_check',
   },
   subnet: {
     create: 'subnet.create',

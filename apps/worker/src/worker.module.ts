@@ -19,6 +19,7 @@ import { PwnedCheckWorker } from './pwned-check/pwned-check.processor.js';
 import { CompanyPdfExportWorker } from './company-pdf-export/company-pdf-export.processor.js';
 import { IntegrationSyncOrchestratorWorker } from './integration-sync/integration-sync-orchestrator.processor.js';
 import { IntegrationSyncMappingWorker } from './integration-sync/integration-sync-mapping.processor.js';
+import { CloudflareDriftSweepWorker } from './cloudflare/cloudflare-drift-sweep.processor.js';
 import { AlertsWorker } from './alerts/alerts.processor.js';
 import { BackupWorker } from './backup/backup.processor.js';
 
@@ -86,6 +87,7 @@ import { BackupWorker } from './backup/backup.processor.js';
     CompanyPdfExportWorker,
     IntegrationSyncOrchestratorWorker,
     IntegrationSyncMappingWorker,
+    CloudflareDriftSweepWorker,
     AlertsWorker,
     BackupWorker,
   ],

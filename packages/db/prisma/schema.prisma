@@ -470,8 +470,8 @@ model AssetLayout {
   createdAt  DateTime  @default(now()) @map("created_at")
   updatedAt  DateTime  @updatedAt @map("updated_at")
 
-  fields              AssetField[]
-  assets              Asset[]
+  fields               AssetField[]
+  assets               Asset[]
   // Phase 11.1: integration resources target a layout for upserts.
   // Each `(integration, resourceKey)` row picks its own layout, so a
   // single integration (e.g. UniFi) can fan out to two distinct
@@ -558,10 +558,10 @@ model Asset {
 
   // `onDelete: Restrict` — a layout with any asset cannot be hard-deleted,
   // only archived. This matches the builder's "archive" affordance.
-  assetLayout           AssetLayout            @relation(fields: [assetLayoutId], references: [id], onDelete: Restrict)
-  fieldValues           AssetFieldValue[]
-  passwords             Password[]
-  starredBy             StarredAsset[]
+  assetLayout            AssetLayout             @relation(fields: [assetLayoutId], references: [id], onDelete: Restrict)
+  fieldValues            AssetFieldValue[]
+  passwords              Password[]
+  starredBy              StarredAsset[]
   // Phase 11.2: 0..N links to external records. An asset can be
   // simultaneously linked to several integrations (e.g. an Action1
   // endpoint and a UniFi client representing the same physical
@@ -1012,26 +1012,27 @@ enum IntegrationStatus {
 }
 
 model Integration {
-  id               String            @id @default(uuid()) @db.Uuid
-  driver           String
-  name             String
-  status           IntegrationStatus @default(PAUSED)
+  id            String            @id @default(uuid()) @db.Uuid
+  driver        String
+  name          String
+  status        IntegrationStatus @default(PAUSED)
   /// Free-form JSON validated by the driver's `configSchema`. Never
   /// contains secrets — those live in `IntegrationSecret`.
-  config           Json              @default("{}")
+  config        Json              @default("{}")
   /// BullMQ cron pattern (5-field). NULL disables scheduled syncs;
   /// manual `Run sync` from the admin UI still works.
-  syncCron         String?           @map("sync_cron")
-  lastRunAt        DateTime?         @map("last_run_at")
-  lastRunStatus    String?           @map("last_run_status")
-  createdBy        String?           @map("created_by") @db.Uuid
-  createdAt        DateTime          @default(now()) @map("created_at")
-  updatedAt        DateTime          @updatedAt @map("updated_at")
+  syncCron      String?           @map("sync_cron")
+  lastRunAt     DateTime?         @map("last_run_at")
+  lastRunStatus String?           @map("last_run_status")
+  createdBy     String?           @map("created_by") @db.Uuid
+  createdAt     DateTime          @default(now()) @map("created_at")
+  updatedAt     DateTime          @updatedAt @map("updated_at")
 
-  secret          IntegrationSecret?
-  companyMappings IntegrationCompanyMapping[]
-  resources       IntegrationResource[]
-  syncRuns        IntegrationSyncRun[]
+  secret            IntegrationSecret?
+  companyMappings   IntegrationCompanyMapping[]
+  resources         IntegrationResource[]
+  syncRuns          IntegrationSyncRun[]
+  cloudflareIpLists CloudflareIpList[]
 
   @@unique([driver, name])
   @@index([driver])
@@ -1278,6 +1279,53 @@ model IntegrationSyncRecord {
   @@index([companyId, integrationCompanyMappingId])
   @@index([resourceId])
   @@map("integration_sync_records")
+}
+
+// Cloudflare Zero Trust Gateway Lists integration — a registered
+// IP-typed Gateway list managed by Weavestream. The parent `Integration`
+// row holds the API token (in IntegrationSecret) and the CF account id
+// (in config). One CloudflareIpList row per registered Gateway list.
+//
+// Unlike the asset-import drivers, this is a SECURITY-kind integration:
+// global, super-admin only, no `IntegrationCompanyMapping` rows. Entries
+// are stored as a JSON array — Weavestream is the source of truth and
+// PATCHes Cloudflare's view (append/remove diff) to bring it in line.
+//
+// `entries`: `[{ ip: string, description: string }, ...]`. Gateway items
+// have no per-item id — Cloudflare addresses them by string value.
+// `entriesVersion` is an optimistic-concurrency token bumped on every
+// successful local mutation; the API returns 409 on mismatch.
+enum CloudflareDriftStatus {
+  in_sync
+  drift_detected
+  unknown
+  error
+}
+
+model CloudflareIpList {
+  id                String                @id @default(uuid()) @db.Uuid
+  integrationId     String                @map("integration_id") @db.Uuid
+  externalAccountId String                @map("external_account_id")
+  externalListId    String                @map("external_list_id")
+  name              String
+  description       String?
+  /// `[{ ip: string, description: string }, ...]`
+  entries           Json                  @default("[]")
+  /// Optimistic-concurrency token — bumped on every successful local mutation.
+  entriesVersion    Int                   @default(1) @map("entries_version")
+  driftStatus       CloudflareDriftStatus @default(unknown) @map("drift_status")
+  /// `{ missingOnCf: [...], extraOnCf: [...], lastError?: string }`
+  driftDetails      Json?                 @map("drift_details")
+  lastDriftCheckAt  DateTime?             @map("last_drift_check_at")
+  lastPushedAt      DateTime?             @map("last_pushed_at")
+  createdAt         DateTime              @default(now()) @map("created_at")
+  updatedAt         DateTime              @updatedAt @map("updated_at")
+
+  integration Integration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+
+  @@unique([integrationId, externalListId])
+  @@index([integrationId])
+  @@map("cloudflare_ip_lists")
 }
 
 // User-configurable email alerts. Five disjoint shapes (the `type`

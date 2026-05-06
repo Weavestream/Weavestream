@@ -166,15 +166,20 @@ export class IntegrationsController {
     @Req() req: Request,
   ) {
     const ctx = await this.integrations.loadDriverContext(id);
-    const driver = this.drivers.get(ctx.driver);
-    const integrationCtx: IntegrationContext = {
-      config: ctx.config,
-      secret: ctx.secret,
-      http: this.httpDefaults(),
-      correlationId: randomUUID(),
-    };
+    const correlationId = randomUUID();
+    const http = this.httpDefaults();
     try {
-      const result = await driver.testConnection(integrationCtx);
+      const result =
+        this.drivers.kindOf(ctx.driver) === 'security'
+          ? await this.drivers
+              .getSecurity(ctx.driver)
+              .testConnection(ctx.config, ctx.secret, http, correlationId)
+          : await this.drivers.get(ctx.driver).testConnection({
+              config: ctx.config,
+              secret: ctx.secret,
+              http,
+              correlationId,
+            } satisfies IntegrationContext);
       await this.audit.log({
         actorId: user.id,
         action: AUDIT_ACTIONS.integration.testConnection,

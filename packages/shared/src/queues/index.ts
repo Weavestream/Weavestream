@@ -42,6 +42,11 @@ export const QueueNames = {
   //                itself on success so cleanup is part of the same
   //                lane and inherits the same advisory-lock guard.
   backup: 'backup',
+  // Cloudflare Zero Trust Gateway list integration. Cron-driven drift
+  // sweep (one job per integration, runs every registered list).
+  // Outbound pushes go through Cloudflare's synchronous PATCH endpoint
+  // so no async finalize queue is needed.
+  cloudflareDriftSweep: 'cloudflare-drift-sweep',
 } as const;
 
 export type QueueName = (typeof QueueNames)[keyof typeof QueueNames];
@@ -369,3 +374,28 @@ export const BackupJobNames = {
 } as const;
 export type BackupJobName =
   (typeof BackupJobNames)[keyof typeof BackupJobNames];
+
+// ---------------------------------------------------------------------
+// cloudflare-drift-sweep queue (Cloudflare Zero Trust Gateway Lists)
+// ---------------------------------------------------------------------
+//
+// One repeatable job per Cloudflare integration registered with a
+// non-null `syncCron`. The processor enumerates every CloudflareIpList
+// row owned by the integration, fetches Cloudflare's current items, and
+// stores `driftStatus` + `driftDetails` per list. Pushes use the
+// synchronous Gateway PATCH endpoint, so there's no async finalize lane.
+
+export const cloudflareDriftSweepJobSchema = z.object({
+  integrationId: z.string().uuid(),
+});
+export type CloudflareDriftSweepJob = z.infer<
+  typeof cloudflareDriftSweepJobSchema
+>;
+
+export const CloudflareDriftSweepJobNames = {
+  scheduled: 'scheduled',
+  manual: 'manual',
+} as const;
+export type CloudflareDriftSweepJobName =
+  (typeof CloudflareDriftSweepJobNames)[keyof typeof CloudflareDriftSweepJobNames];
+

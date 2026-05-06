@@ -20,6 +20,7 @@ import { PrismaService } from '../prisma/prisma.service.js';
 import { AuditLogService } from '../audit/audit.service.js';
 import { AUDIT_ACTIONS } from '../audit/audit-actions.js';
 import { QueuesService } from '../queues/queues.service.js';
+import { IntegrationDriverRegistry } from './drivers/integration-driver.registry.js';
 import type { AuditMeta } from './integrations.service.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
 
@@ -46,6 +47,7 @@ export class IntegrationSyncService {
     private readonly prisma: PrismaService,
     private readonly audit: AuditLogService,
     private readonly queues: QueuesService,
+    private readonly drivers: IntegrationDriverRegistry,
   ) {}
 
   // -------------------------------------------------------------------
@@ -122,6 +124,11 @@ export class IntegrationSyncService {
       where: { id: integrationId },
     });
     if (!integration) throw new NotFoundException(`Integration ${integrationId} not found`);
+    if (this.drivers.has(integration.driver) && this.drivers.kindOf(integration.driver) === 'security') {
+      throw new BadRequestException(
+        'This driver does not support manual sync — security drivers manage their target system directly.',
+      );
+    }
     if (integration.status === 'DISABLED') {
       throw new BadRequestException(
         'Integration is DISABLED — re-enable it before running a sync.',

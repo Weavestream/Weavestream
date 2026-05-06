@@ -3,7 +3,7 @@ import { DriverRateLimitError } from './integration-driver.js';
 import { safeFetch } from '../../common/egress/safe-fetch.js';
 
 export interface FetchWithRetryOpts {
-  method: 'GET' | 'POST';
+  method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
   headers?: Record<string, string>;
   body?: string;
   timeoutMs: number;

@@ -1,5 +1,6 @@
 import { redirect } from 'next/navigation';
 import type {
+  CloudflareIpListDto,
   DriverDescriptor,
   IntegrationCompanyMappingDto,
   IntegrationDto,
@@ -14,6 +15,7 @@ import { hasCapability } from '../../../../../lib/roles';
 import { PageBody, PageHeader } from '../../../../../components/shell/page-header';
 import { Panel } from '../../../../../components/ui';
 import { IntegrationTabs } from './integration-tabs';
+import { SecurityIntegrationTabs } from './cloudflare/security-integration-tabs';
 
 /**
  * Phase 11 — integration detail.
@@ -38,24 +40,43 @@ export default async function IntegrationDetailPage({
   const me = (await getMe())!;
   if (!hasCapability(me, 'INTEGRATION_MANAGE')) redirect('/admin');
 
-  const [intRes, mappingsRes, runsRes, driversRes] = await Promise.all([
+  const [intRes, driversRes] = await Promise.all([
     serverApiFetch<IntegrationDto>(`/admin/integrations/${id}`),
-    serverApiFetch<IntegrationCompanyMappingDto[]>(
-      `/admin/integrations/${id}/mappings`,
-    ),
-    serverApiFetch<IntegrationSyncRunDto[]>(
-      `/admin/integrations/${id}/runs`,
-    ),
     serverApiFetch<{ drivers: DriverDescriptor[] }>(
       '/admin/integrations/drivers',
     ),
   ]);
 
   const integration = throwUnlessFound(intRes, `/admin/integrations/${id}`);
-  const mappings = mappingsRes.data ?? [];
-  const runs = runsRes.data ?? [];
   const drivers = driversRes.data?.drivers ?? [];
   const driver = drivers.find((d) => d.key === integration.driver) ?? null;
+  const kind = driver?.capabilities.kind ?? 'pull';
+
+  // Asset-import drivers fetch the per-tenant mappings and run history
+  // up-front; security drivers (Cloudflare) instead need the registered
+  // lists. Splitting the fetch by kind avoids hitting endpoints that
+  // 400 for the wrong driver shape.
+  const [mappingsRes, runsRes, cfListsRes] = await Promise.all([
+    kind === 'pull'
+      ? serverApiFetch<IntegrationCompanyMappingDto[]>(
+          `/admin/integrations/${id}/mappings`,
+        )
+      : Promise.resolve({ data: [] as IntegrationCompanyMappingDto[] }),
+    kind === 'pull'
+      ? serverApiFetch<IntegrationSyncRunDto[]>(
+          `/admin/integrations/${id}/runs`,
+        )
+      : Promise.resolve({ data: [] as IntegrationSyncRunDto[] }),
+    kind === 'security'
+      ? serverApiFetch<CloudflareIpListDto[]>(
+          `/admin/integrations/${id}/cloudflare/lists`,
+        )
+      : Promise.resolve({ data: [] as CloudflareIpListDto[] }),
+  ]);
+
+  const mappings = mappingsRes.data ?? [];
+  const runs = runsRes.data ?? [];
+  const cloudflareLists = cfListsRes.data ?? [];
 
   return (
     <>
@@ -68,18 +89,27 @@ export default async function IntegrationDetailPage({
         title={integration.name}
         description={
           driver?.description ??
-          `Driver: ${integration.driver}. Manage credentials, organization mappings, and sync history below.`
+          `Driver: ${integration.driver}. Manage credentials below.`
         }
       />
       <PageBody>
         <Panel noPad>
-          <IntegrationTabs
-            initialTab={sp.tab ?? 'creds'}
-            integration={integration}
-            mappings={mappings}
-            runs={runs}
-            driver={driver}
-          />
+          {kind === 'security' ? (
+            <SecurityIntegrationTabs
+              initialTab={sp.tab ?? 'creds'}
+              integration={integration}
+              driver={driver}
+              cloudflareLists={cloudflareLists}
+            />
+          ) : (
+            <IntegrationTabs
+              initialTab={sp.tab ?? 'creds'}
+              integration={integration}
+              mappings={mappings}
+              runs={runs}
+              driver={driver}
+            />
+          )}
         </Panel>
       </PageBody>
     </>

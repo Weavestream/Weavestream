@@ -23,3 +23,4 @@ export * from './alert.js';
 export * from './subnet.js';
 export * from './ip-rule.js';
 export * from './backup.js';
+export * from './cloudflare.js';

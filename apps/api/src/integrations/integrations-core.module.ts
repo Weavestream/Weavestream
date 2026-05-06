@@ -5,6 +5,7 @@ import { IntegrationSyncService } from './integration-sync.service.js';
 import { IntegrationSyncRunnerService } from './integration-sync-runner.service.js';
 import { MatchResolverService } from './match-resolver.service.js';
 import { IntegrationDriverRegistry } from './drivers/integration-driver.registry.js';
+import { CloudflareListsService } from './cloudflare/cloudflare-lists.service.js';
 import { FieldTypesModule } from '../field-types/field-types.module.js';
 import { SearchModule } from '../search/search.module.js';
 import { QueuesProducerModule } from '../queues/queues-producer.module.js';
@@ -28,6 +29,7 @@ import { QueuesProducerModule } from '../queues/queues-producer.module.js';
     IntegrationSyncService,
     IntegrationSyncRunnerService,
     MatchResolverService,
+    CloudflareListsService,
   ],
   exports: [
     IntegrationDriverRegistry,
@@ -36,6 +38,7 @@ import { QueuesProducerModule } from '../queues/queues-producer.module.js';
     IntegrationSyncService,
     IntegrationSyncRunnerService,
     MatchResolverService,
+    CloudflareListsService,
   ],
 })
 export class IntegrationsCoreModule {}

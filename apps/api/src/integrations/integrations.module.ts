@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { IntegrationsController } from './integrations.controller.js';
 import { IntegrationsCoreModule } from './integrations-core.module.js';
 import { IntegrationSyncQueueRegistrar } from './integration-sync-queue.registrar.js';
+import { CloudflareListsController } from './cloudflare/cloudflare-lists.controller.js';
 
 /**
  * Phase 11 — universal integration framework module (API side).
@@ -15,7 +16,7 @@ import { IntegrationSyncQueueRegistrar } from './integration-sync-queue.registra
  */
 @Module({
   imports: [IntegrationsCoreModule],
-  controllers: [IntegrationsController],
+  controllers: [IntegrationsController, CloudflareListsController],
   providers: [IntegrationSyncQueueRegistrar],
   exports: [IntegrationsCoreModule],
 })

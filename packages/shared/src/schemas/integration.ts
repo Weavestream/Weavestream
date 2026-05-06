@@ -112,15 +112,22 @@ export const driverDescriptorSchema = z.object({
   /** Editable `IntegrationSecret` shape (write-only, never returned). */
   secretFields: z.array(driverFieldDescriptorSchema),
   /**
-   * Resources this driver knows how to fetch. Always non-empty;
-   * drivers that don't declare any resources implicitly get a single
-   * `{ key: 'records', label: 'Records' }` entry from the registry
-   * shim so the UI / sync runner have a uniform "one or more
-   * resources" model.
+   * Resources this driver knows how to fetch. Asset-import (`pull`) drivers
+   * declare at least one resource; security drivers (e.g. Cloudflare)
+   * carry an empty array — they don't sync records into Weavestream
+   * Assets, so per-resource layouts and field mappings don't apply.
    */
-  resources: z.array(driverResourceDescriptorSchema).min(1),
+  resources: z.array(driverResourceDescriptorSchema).default([]),
   /** Driver capabilities surfaced to the UI. */
   capabilities: z.object({
+    /**
+     * Distinguishes asset-import drivers from outbound/security drivers.
+     * `pull` (default): driver pages records from the upstream system
+     * and the framework projects them onto Asset rows. `security`:
+     * driver manages an external resource where Weavestream is the
+     * source of truth (e.g. Cloudflare IP lists).
+     */
+    kind: z.enum(['pull', 'security']).default('pull'),
     /** Driver can list source orgs to populate the matcher. */
     listSourceOrgs: z.boolean(),
     /** Driver supports `dryRun` semantics. */

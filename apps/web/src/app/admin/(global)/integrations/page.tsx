@@ -32,6 +32,16 @@ export default async function IntegrationsPage() {
   const integrations = listRes.data ?? [];
   const drivers = driversRes.data?.drivers ?? [];
 
+  const driverKindByKey = new Map(
+    drivers.map((d) => [d.key, d.capabilities.kind]),
+  );
+  const assetSyncRows = integrations.filter(
+    (r) => (driverKindByKey.get(r.driver) ?? 'pull') === 'pull',
+  );
+  const securityRows = integrations.filter(
+    (r) => driverKindByKey.get(r.driver) === 'security',
+  );
+
   return (
     <>
       <PageHeader
@@ -45,12 +55,20 @@ export default async function IntegrationsPage() {
       />
       <PageBody>
         <Panel
-          title={`${integrations.length} ${
-            integrations.length === 1 ? 'active integration' : 'active integrations'
+          title={`Asset sync · ${assetSyncRows.length} ${
+            assetSyncRows.length === 1 ? 'integration' : 'integrations'
           }`}
           noPad
         >
-          <IntegrationsTable rows={integrations} drivers={drivers} />
+          <IntegrationsTable rows={assetSyncRows} drivers={drivers} />
+        </Panel>
+        <Panel
+          title={`Security · ${securityRows.length} ${
+            securityRows.length === 1 ? 'integration' : 'integrations'
+          }`}
+          noPad
+        >
+          <IntegrationsTable rows={securityRows} drivers={drivers} />
         </Panel>
         <AvailableIntegrationsGallery drivers={drivers} />
       </PageBody>

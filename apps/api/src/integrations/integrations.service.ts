@@ -101,8 +101,8 @@ export class IntegrationsService {
     input: CreateIntegrationInput,
     meta: AuditMeta,
   ): Promise<IntegrationDto> {
-    const driver = this.drivers.get(input.driver);
-    this.validateDriverPayload(driver.descriptor, input.config, input.secret);
+    const descriptor = this.drivers.describe(input.driver);
+    this.validateDriverPayload(descriptor, input.config, input.secret);
 
     const created = await this.prisma.$transaction(async (tx) => {
       const row = await tx.integration.create({
@@ -120,7 +120,9 @@ export class IntegrationsService {
       // a separate "enable resource" round-trip. Newly added driver
       // resources (e.g. UniFi adds 'clients' later) are auto-seeded for
       // existing integrations on next API read via reconcileResources().
-      for (const r of driver.descriptor.resources) {
+      // Security drivers (e.g. Cloudflare) declare no resources — the
+      // loop is a no-op for them.
+      for (const r of descriptor.resources) {
         await tx.integrationResource.create({
           data: {
             integrationId: row.id,
@@ -153,7 +155,7 @@ export class IntegrationsService {
         name: created.name,
         status: created.status,
         hasSecret: Boolean(input.secret),
-        resources: driver.descriptor.resources.map((r) => r.key),
+        resources: descriptor.resources.map((r) => r.key),
       },
     });
 
@@ -171,12 +173,12 @@ export class IntegrationsService {
       include: { secret: true },
     });
     if (!existing) throw new NotFoundException(`Integration ${id} not found`);
-    const driver = this.drivers.get(existing.driver);
+    const descriptor = this.drivers.describe(existing.driver);
 
     if (input.config) {
-      this.validateDriverPayload(driver.descriptor, input.config, input.secret);
+      this.validateDriverPayload(descriptor, input.config, input.secret);
     } else if (input.secret) {
-      this.validateDriverPayload(driver.descriptor, null, input.secret);
+      this.validateDriverPayload(descriptor, null, input.secret);
     }
 
     const before = {
@@ -876,14 +878,14 @@ export class IntegrationsService {
   }
 
   private toDto(row: IntegrationRowWithIncludes): IntegrationDto {
-    const driver = this.drivers.has(row.driver)
-      ? this.drivers.get(row.driver)
+    const descriptor = this.drivers.has(row.driver)
+      ? this.drivers.describe(row.driver)
       : null;
     const descriptorResources: DriverResourceDescriptor[] =
-      driver?.descriptor.resources ?? [];
+      descriptor?.resources ?? [];
     const driverShim = {
       descriptor: {
-        ...(driver?.descriptor ?? {}),
+        ...(descriptor ?? {}),
         resources: descriptorResources,
       } as DriverDescriptor,
     };
