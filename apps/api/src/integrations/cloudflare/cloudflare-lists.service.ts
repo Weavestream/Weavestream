@@ -459,6 +459,20 @@ export class CloudflareListsService {
     healed: number;
     errors: number;
   }> {
+    // BullMQ may move a repeatable's next iteration into "active" right
+    // around the moment we remove the schedule on integration delete /
+    // pause, so the worker can still observe a job for a row that no
+    // longer exists or has been paused. Mirror the orchestrator's guard.
+    const integration = await this.prisma.integration.findUnique({
+      where: { id: integrationId },
+      select: { status: true },
+    });
+    if (!integration || integration.status !== 'ACTIVE') {
+      this.logger.log(
+        `Skipping drift sweep — integration ${integrationId} is not ACTIVE (or was deleted)`,
+      );
+      return { checked: 0, healed: 0, errors: 0 };
+    }
     const lists = await this.prisma.cloudflareIpList.findMany({
       where: { integrationId },
       select: { id: true, driftStatus: true },
