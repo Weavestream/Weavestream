@@ -30,7 +30,7 @@ audience without code changes.
 
 ## Highlights
 
-- **Tenant documentation.** Rich-text articles (Tiptap), folders, photo
+- **Tenant documentation.** Markdown and rich-text articles, folders, photo
   galleries, and configurable asset layouts per organization.
 - **Password management.** AES-256-GCM encrypted credential storage with
   TOTP support, breach detection, and role-based access control.

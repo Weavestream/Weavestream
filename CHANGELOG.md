@@ -6,6 +6,12 @@ this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.6.4] - 2026-05-06
+
+### Added
+
+- **Cloudflare integration.** New integration driver for updating Cloudflare Zero Trust IP lists. Manage Cloudflare Zero Trust IP lists directly from Weavestream via API token authentication. Managed under **Admin → Integrations** alongside existing Action1 and UniFi connectors.
+
 ## [1.6.3] - 2026-05-03
 
 ### Added
@@ -654,7 +660,8 @@ Initial public release.
   database-per-tenant.
 - English UI only.
 
-[Unreleased]: https://github.com/Weavestream/Weavestream/compare/v1.6.3...HEAD
+[Unreleased]: https://github.com/Weavestream/Weavestream/compare/v1.6.4...HEAD
+[1.6.4]: https://github.com/Weavestream/Weavestream/releases/tag/v1.6.4
 [1.6.3]: https://github.com/Weavestream/Weavestream/releases/tag/v1.6.3
 [1.6.2]: https://github.com/Weavestream/Weavestream/releases/tag/v1.6.2
 [1.6.0]: https://github.com/Weavestream/Weavestream/releases/tag/v1.6.0
