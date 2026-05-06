@@ -23,6 +23,7 @@ import { AuditLogService } from '../audit/audit.service.js';
 import { AUDIT_ACTIONS } from '../audit/audit-actions.js';
 import { EnvService } from '../config/env.service.js';
 import { IntegrationDriverRegistry } from './drivers/integration-driver.registry.js';
+import { IntegrationSyncSchedulerService } from './integration-sync-scheduler.service.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
 import { Prisma } from '@prisma/client';
 import { assertStringIdList } from '../common/safe-id-list.js';
@@ -57,6 +58,7 @@ export class IntegrationsService {
     private readonly audit: AuditLogService,
     private readonly drivers: IntegrationDriverRegistry,
     private readonly env: EnvService,
+    private readonly scheduler: IntegrationSyncSchedulerService,
   ) {}
 
   // -------------------------------------------------------------------
@@ -159,6 +161,8 @@ export class IntegrationsService {
       },
     });
 
+    await this.scheduler.refreshFor(created.id);
+
     return this.get(created.id);
   }
 
@@ -250,6 +254,7 @@ export class IntegrationsService {
         after: { cleared: input.clearSecret === true },
       });
     }
+    await this.scheduler.refreshFor(id);
     return fresh;
   }
 
@@ -323,6 +328,8 @@ export class IntegrationsService {
       }
       await tx.integration.delete({ where: { id } });
     });
+
+    await this.scheduler.refreshFor(id);
 
     await this.audit.log({
       actorId: actor.id,

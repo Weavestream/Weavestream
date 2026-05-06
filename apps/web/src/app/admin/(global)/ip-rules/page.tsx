@@ -1,8 +1,9 @@
+import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { getMe, listIpRules } from '../../../../lib/server-api';
 import { hasCapability } from '../../../../lib/roles';
 import { PageBody, PageHeader } from '../../../../components/shell/page-header';
-import { Panel, Btn, Icon } from '../../../../components/ui';
+import { Icon, Panel } from '../../../../components/ui';
 import { IpRulesTable } from './ip-rules-table';
 
 /**
@@ -31,6 +32,39 @@ export default async function IpRulesPage() {
         <Panel title={`${rules.length} rule${rules.length === 1 ? '' : 's'}`}>
           <IpRulesTable initialRules={rules} />
         </Panel>
+
+        <div
+          style={{
+            padding: 12,
+            background: 'var(--panel-2)',
+            border: '1px solid var(--line)',
+            borderRadius: 6,
+            fontSize: 12,
+            color: 'var(--muted)',
+          }}
+        >
+          <strong style={{ color: 'var(--text)' }}>Using Cloudflare Access?</strong>
+          <p style={{ margin: '8px 0 10px', lineHeight: 1.55 }}>
+            These IP allow and deny rules apply inside Weavestream. If your
+            organization manages access through Cloudflare application policies, you
+            can also configure the Cloudflare integration to sync approved IPs to a
+            Cloudflare IP list.
+          </p>
+          <Link
+            href="/admin/integrations"
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 6,
+              color: 'var(--accent)',
+              fontWeight: 600,
+              textDecoration: 'none',
+            }}
+          >
+            <Icon.plug size={13} />
+            Manage Cloudflare integration
+          </Link>
+        </div>
 
         <div
           style={{
