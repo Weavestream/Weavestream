@@ -6,6 +6,20 @@ this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-05-07
+
+### Added
+
+- **NinjaOne RMM integration.** New integration driver for syncing managed devices from NinjaOne organisations into Weavestream asset records, joining the existing Action1, UniFi, and Cloudflare drivers under **Admin → Integrations**. Authentication is OAuth2 `client_credentials` with the `monitoring` scope; the regional API base URL is configurable for US / EU / CA / OC tenants. Each NinjaOne organisation maps to a single Weavestream company, with an optional per-mapping location-ID filter.
+- **Rich NinjaOne field catalogue.** The driver flattens the `/v2/devices-detailed` payload — `os`, `system`, `memory`, `processors[0]`, `volumes[0]`, `references.*` (organisation, location, role, policy, role-policy, warranty, assigned owner) and `maintenance` subtrees — onto roughly seventy mappable top-level fields covering identity, OS, make / model / serial / BIOS, processor, memory, volumes, network, warranty, owner, role, policy, location, lifecycle, and maintenance state.
+- **Human-readable variants for byte and clock-speed fields.** `memoryCapacityHuman`, `systemTotalPhysicalMemoryHuman`, `firstVolumeCapacityHuman`, `firstVolumeFreeSpaceHuman`, `processorClockSpeedHuman`, `processorMaxClockSpeedHuman` render alongside the raw numeric fields, formatted like `127.5 GB` / `4.4 TB` / `2.10 GHz` for direct mapping onto TEXT and rich-text AssetFields.
+- **Multi-line `volumesSummary`.** TEXTAREA-typed field that renders every volume on the device as one line each — `<name>[ <label>] — <capacity> total, <freeSpace> free (<filesystem>)` — for asset layouts with a single storage textarea slot.
+- **Primary IP and MAC derivation.** `primaryIpAddress` (IP_ADDRESS) and `primaryMacAddress` (TEXT) are derived from NinjaOne's array-valued `ipAddresses` / `macAddresses` so single-value asset fields can be mapped directly. The IP heuristic splits the IPv6 GUA + link-local pairs NinjaOne packs into one slot, then prefers non-link-local IPv4, falling back to non-link-local IPv6 and finally the first entry.
+
+### Documentation
+
+- **Integrations page refreshed** to include the new NinjaOne section alongside Action1, UniFi, and Cloudflare, with a category-grouped list of synced data and a step-by-step setup walk-through.
+
 ## [1.6.4] - 2026-05-06
 
 ### Added
