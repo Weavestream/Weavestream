@@ -2,6 +2,7 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import type { DriverDescriptor } from '@weavestream/shared';
 import type { IntegrationDriver } from './integration-driver.js';
 import { Action1Driver } from './action1/action1.driver.js';
+import { NinjaOneDriver } from './ninjaone/ninjaone.driver.js';
 import { UniFiSiteManagerDriver } from './unifi/unifi.driver.js';
 import { CloudflareDriver } from './cloudflare/cloudflare.driver.js';
 import { CloudflareApiClient } from './cloudflare/cloudflare-api.client.js';
@@ -32,6 +33,7 @@ export class IntegrationDriverRegistry {
   constructor() {
     const pullDrivers: IntegrationDriver[] = [
       new Action1Driver(),
+      new NinjaOneDriver(),
       new UniFiSiteManagerDriver(),
     ];
     const securityDrivers: CloudflareDriver[] = [
