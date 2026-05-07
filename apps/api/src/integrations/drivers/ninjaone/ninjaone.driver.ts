@@ -731,6 +731,12 @@ function normalizeNinjaOneRecordFields(
         ['capacity', 'firstVolumeCapacity'],
         ['freeSpace', 'firstVolumeFreeSpace'],
       ]);
+      // Multi-line summary covering EVERY volume on the device, one
+      // line each. Map this onto a TEXTAREA / rich-text AssetField
+      // when the asset layout has a single "Storage" or "Volumes"
+      // multi-line slot.
+      const summary = formatVolumesSummary(volumes);
+      if (summary !== null) out.volumesSummary = summary;
     }
   }
 
@@ -813,6 +819,27 @@ function normalizeNinjaOneRecordFields(
     if (primaryMac) out.primaryMacAddress = primaryMac;
   }
 
+  // Derive human-readable formatted variants of the byte + Hz fields
+  // so they project cleanly onto TEXT / rich-text AssetFields. The
+  // raw numeric values remain available for anyone wiring them into
+  // NUMBER fields or analytics.
+  for (const [src, dst] of [
+    ['memoryCapacity', 'memoryCapacityHuman'],
+    ['systemTotalPhysicalMemory', 'systemTotalPhysicalMemoryHuman'],
+    ['firstVolumeCapacity', 'firstVolumeCapacityHuman'],
+    ['firstVolumeFreeSpace', 'firstVolumeFreeSpaceHuman'],
+  ] as const) {
+    const v = out[src];
+    if (typeof v === 'number') out[dst] = formatBytes(v);
+  }
+  for (const [src, dst] of [
+    ['processorClockSpeed', 'processorClockSpeedHuman'],
+    ['processorMaxClockSpeed', 'processorMaxClockSpeedHuman'],
+  ] as const) {
+    const v = out[src];
+    if (typeof v === 'number') out[dst] = formatHertz(v);
+  }
+
   return out;
 }
 
@@ -859,6 +886,88 @@ function isUsableIpv6(s: string): boolean {
   if (lower.startsWith('fe80')) return false; // link-local
   if (lower === '::1' || lower === '::') return false; // loopback / unspecified
   return true;
+}
+
+/**
+ * Format a byte count for display next to its raw numeric variant
+ * (so users mapping onto a TEXT / rich-text field see something
+ * readable). Uses a 1024 divisor with conventional `GB` / `TB`
+ * suffixes — matches how Windows and macOS surface storage / RAM
+ * sizes in their UIs, even though the suffix technically refers to
+ * the SI value. Operators wanting the exact byte count still have
+ * the raw `*Capacity` / `*FreeSpace` numeric field.
+ */
+function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes < 0) return String(bytes);
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ['KB', 'MB', 'GB', 'TB', 'PB'];
+  let val = bytes / 1024;
+  let i = 0;
+  while (val >= 1024 && i < units.length - 1) {
+    val /= 1024;
+    i += 1;
+  }
+  return `${val.toFixed(1)} ${units[i]}`;
+}
+
+/**
+ * Format a Hz count as a human-readable clock speed. Uses SI divisors
+ * (1000) since clock speeds are conventionally reported that way —
+ * a "2.1 GHz" CPU is exactly 2,100,000,000 Hz, not 2 * 2^30.
+ */
+function formatHertz(hz: number): string {
+  if (!Number.isFinite(hz) || hz < 0) return String(hz);
+  if (hz >= 1e9) return `${(hz / 1e9).toFixed(2)} GHz`;
+  if (hz >= 1e6) return `${(hz / 1e6).toFixed(0)} MHz`;
+  if (hz >= 1e3) return `${(hz / 1e3).toFixed(0)} kHz`;
+  return `${hz} Hz`;
+}
+
+/**
+ * Build a multi-line, human-readable summary of every volume on the
+ * device — one line per volume — for mapping onto a TEXTAREA / rich-
+ * text AssetField. Each line:
+ *
+ *   `<name>[ <label>] — <capacity> total, <freeSpace> free (<fs>)`
+ *
+ * Pieces are dropped silently when missing so partial volume records
+ * don't render as `"undefined"`. Returns `null` when the array is
+ * empty / no usable lines are produced (so the caller can leave the
+ * `volumesSummary` field unset rather than emitting an empty string).
+ */
+function formatVolumesSummary(volumes: unknown): string | null {
+  if (!Array.isArray(volumes) || volumes.length === 0) return null;
+  const lines: string[] = [];
+  for (const v of volumes) {
+    if (!v || typeof v !== 'object') continue;
+    const vol = v as Record<string, unknown>;
+    const name = typeof vol.name === 'string' ? vol.name.trim() : '';
+    const labelRaw = typeof vol.label === 'string' ? vol.label.trim() : '';
+    const fs = typeof vol.fileSystem === 'string' ? vol.fileSystem.trim() : '';
+    const cap =
+      typeof vol.capacity === 'number' ? formatBytes(vol.capacity) : null;
+    const free =
+      typeof vol.freeSpace === 'number' ? formatBytes(vol.freeSpace) : null;
+
+    const lhs = labelRaw ? `${name} ${labelRaw}`.trim() : name;
+    if (!lhs && !cap && !free && !fs) continue;
+
+    let sizes = '';
+    if (cap && free) sizes = `${cap} total, ${free} free`;
+    else if (cap) sizes = `${cap} total`;
+    else if (free) sizes = `${free} free`;
+
+    const fsTag = fs ? `(${fs})` : '';
+
+    const parts: string[] = [];
+    if (lhs) parts.push(lhs);
+    if (sizes) parts.push(`— ${sizes}`);
+    if (fsTag) parts.push(fsTag);
+
+    const line = parts.join(' ').replace(/\s+/g, ' ').trim();
+    if (line) lines.push(line);
+  }
+  return lines.length ? lines.join('\n') : null;
 }
 
 function flattenInto(
@@ -961,9 +1070,11 @@ const NINJAONE_KNOWN_FIELDS: SourceFieldDto[] = [
   { key: 'systemVirtualMachine', label: 'Is virtual machine', hintType: 'BOOLEAN', alwaysPresent: false },
   { key: 'systemNumberOfProcessors', label: 'Processor count', hintType: 'NUMBER', alwaysPresent: false },
   { key: 'systemTotalPhysicalMemory', label: 'Total physical memory (bytes)', hintType: 'NUMBER', alwaysPresent: false },
+  { key: 'systemTotalPhysicalMemoryHuman', label: 'Total physical memory', hintType: 'TEXT', alwaysPresent: false },
 
   // Memory (flattened from `memory`)
   { key: 'memoryCapacity', label: 'Memory capacity (bytes)', hintType: 'NUMBER', alwaysPresent: false },
+  { key: 'memoryCapacityHuman', label: 'Memory capacity', hintType: 'TEXT', alwaysPresent: false },
 
   // First processor (flattened from `processors[0]`)
   { key: 'processorName', label: 'Processor', hintType: 'TEXT', alwaysPresent: false },
@@ -971,20 +1082,26 @@ const NINJAONE_KNOWN_FIELDS: SourceFieldDto[] = [
   { key: 'processorNumCores', label: 'Processor cores', hintType: 'NUMBER', alwaysPresent: false },
   { key: 'processorNumLogicalCores', label: 'Processor logical cores', hintType: 'NUMBER', alwaysPresent: false },
   { key: 'processorClockSpeed', label: 'Processor clock speed (Hz)', hintType: 'NUMBER', alwaysPresent: false },
+  { key: 'processorClockSpeedHuman', label: 'Processor clock speed', hintType: 'TEXT', alwaysPresent: false },
   { key: 'processorMaxClockSpeed', label: 'Processor max clock speed (Hz)', hintType: 'NUMBER', alwaysPresent: false },
+  { key: 'processorMaxClockSpeedHuman', label: 'Processor max clock speed', hintType: 'TEXT', alwaysPresent: false },
 
   // Volumes — full per-volume detail isn't projectable onto primitive
   // AssetFields, so surface the count + the first volume's headline
-  // attributes. Operators wanting per-volume reporting can hit the
-  // NinjaOne /v2/queries/volumes endpoint directly.
+  // attributes + a multi-line text summary covering every volume.
+  // Operators wanting per-volume reporting can hit the NinjaOne
+  // /v2/queries/volumes endpoint directly.
   { key: 'volumeCount', label: 'Volume count', hintType: 'NUMBER', alwaysPresent: false },
+  { key: 'volumesSummary', label: 'Volumes summary', hintType: 'TEXTAREA', alwaysPresent: false },
   { key: 'firstVolumeName', label: 'First volume name', hintType: 'TEXT', alwaysPresent: false },
   { key: 'firstVolumeLabel', label: 'First volume label', hintType: 'TEXT', alwaysPresent: false },
   { key: 'firstVolumeFileSystem', label: 'First volume filesystem', hintType: 'TEXT', alwaysPresent: false },
   { key: 'firstVolumeDeviceType', label: 'First volume device type', hintType: 'TEXT', alwaysPresent: false },
   { key: 'firstVolumeSerialNumber', label: 'First volume serial number', hintType: 'TEXT', alwaysPresent: false },
   { key: 'firstVolumeCapacity', label: 'First volume capacity (bytes)', hintType: 'NUMBER', alwaysPresent: false },
+  { key: 'firstVolumeCapacityHuman', label: 'First volume capacity', hintType: 'TEXT', alwaysPresent: false },
   { key: 'firstVolumeFreeSpace', label: 'First volume free space (bytes)', hintType: 'NUMBER', alwaysPresent: false },
+  { key: 'firstVolumeFreeSpaceHuman', label: 'First volume free space', hintType: 'TEXT', alwaysPresent: false },
 
   // Lifecycle timestamps
   { key: 'lastContact', label: 'Last contact', hintType: 'DATETIME', alwaysPresent: false },

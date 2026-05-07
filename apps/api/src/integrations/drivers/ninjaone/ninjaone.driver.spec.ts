@@ -906,10 +906,13 @@ describe('NinjaOneDriver.fetchRecords', () => {
         systemName: 'ETVAPP4',
       });
 
-      // Memory.
+      // Memory — raw + human-readable.
       expect(fields.memoryCapacity).toBe(136928935936);
+      expect(fields.memoryCapacityHuman).toBe('127.5 GB');
+      expect(fields.systemTotalPhysicalMemoryHuman).toBe('127.5 GB');
 
-      // First processor.
+      // First processor — clock speed surfaced both as raw Hz and
+      // human-readable GHz.
       expect(fields).toMatchObject({
         processorName: 'Intel(R) Xeon(R) Gold 5412U',
         processorNumCores: 24,
@@ -918,8 +921,11 @@ describe('NinjaOneDriver.fetchRecords', () => {
         processorMaxClockSpeed: 2100000000,
         processorArchitecture: 'x64',
       });
+      expect(fields.processorClockSpeedHuman).toBe('2.10 GHz');
+      expect(fields.processorMaxClockSpeedHuman).toBe('2.10 GHz');
 
-      // Volumes — count + first-entry summary.
+      // Volumes — count + first-entry summary, with both raw bytes
+      // and human-readable variants for capacity / free space.
       expect(fields.volumeCount).toBe(2);
       expect(fields).toMatchObject({
         firstVolumeName: 'D:',
@@ -930,6 +936,18 @@ describe('NinjaOneDriver.fetchRecords', () => {
         firstVolumeCapacity: 4799607074816,
         firstVolumeFreeSpace: 3126422405120,
       });
+      expect(fields.firstVolumeCapacityHuman).toBe('4.4 TB');
+      expect(fields.firstVolumeFreeSpaceHuman).toBe('2.8 TB');
+
+      // Multi-line summary covering EVERY volume — drop this onto a
+      // TEXTAREA / rich-text AssetField. One line per volume, each
+      // with `<name>[ <label>] — <cap> total, <free> free (<fs>)`.
+      expect(fields.volumesSummary).toBe(
+        [
+          'D: — 4.4 TB total, 2.8 TB free (NTFS)',
+          'C: OS — 1.7 TB total, 755.3 GB free (NTFS)',
+        ].join('\n'),
+      );
 
       // Raw nested blocks must NOT leak through as un-mappable nested
       // objects.
@@ -1003,6 +1021,109 @@ describe('NinjaOneDriver.fetchRecords', () => {
       expect(c!.fields.primaryIpAddress).toBe('169.254.99.1');
       // No MACs → no derived primary.
       expect(c!.fields.primaryMacAddress).toBeUndefined();
+    } finally {
+      fx.restore();
+    }
+  });
+
+  it('formats bytes and Hz across unit boundaries (MB / GB / TB, MHz / GHz)', async () => {
+    // Probe the formatters at the unit boundaries that real NinjaOne
+    // hosts hit — sub-GB volumes on small embedded devices, multi-TB
+    // server volumes, MHz-only clocks on legacy hardware, multi-GHz
+    // clocks on modern silicon.
+    const fx = installFetchScript([
+      { kind: 'json', body: { access_token: 'tok-1' } },
+      {
+        kind: 'json',
+        body: [
+          {
+            id: 1,
+            systemName: 'small.lan',
+            organizationId: 7,
+            memory: { capacity: 4 * 1024 * 1024 * 1024 }, // 4 GB
+            processors: [{ clockSpeed: 800_000_000, maxClockSpeed: 1_200_000_000 }],
+            volumes: [{ capacity: 524_288_000, freeSpace: 100_000_000 }], // ~500 MB
+          },
+          {
+            id: 2,
+            systemName: 'big.lan',
+            organizationId: 7,
+            memory: { capacity: 256 * 1024 * 1024 * 1024 }, // 256 GB
+            system: { totalPhysicalMemory: 256 * 1024 * 1024 * 1024 },
+            processors: [{ clockSpeed: 3_500_000_000 }],
+            volumes: [{ capacity: 16 * 1024 * 1024 * 1024 * 1024, freeSpace: 1024 * 1024 * 1024 }], // 16 TB / 1 GB
+          },
+        ],
+      },
+    ]);
+    try {
+      const page = await new NinjaOneDriver().fetchRecords(makeFetchCtx('7'), null);
+      const [small, big] = page.records;
+      expect(small!.fields.memoryCapacityHuman).toBe('4.0 GB');
+      // Sub-1 GHz clocks render in MHz — clearer than "0.80 GHz".
+      expect(small!.fields.processorClockSpeedHuman).toBe('800 MHz');
+      expect(small!.fields.processorMaxClockSpeedHuman).toBe('1.20 GHz');
+      expect(small!.fields.firstVolumeCapacityHuman).toBe('500.0 MB');
+      expect(small!.fields.firstVolumeFreeSpaceHuman).toBe('95.4 MB');
+
+      expect(big!.fields.memoryCapacityHuman).toBe('256.0 GB');
+      expect(big!.fields.systemTotalPhysicalMemoryHuman).toBe('256.0 GB');
+      expect(big!.fields.processorClockSpeedHuman).toBe('3.50 GHz');
+      expect(big!.fields.firstVolumeCapacityHuman).toBe('16.0 TB');
+      expect(big!.fields.firstVolumeFreeSpaceHuman).toBe('1.0 GB');
+    } finally {
+      fx.restore();
+    }
+  });
+
+  it('formats volumesSummary across edge cases (empty label, missing fs, missing freeSpace, single volume)', async () => {
+    const fx = installFetchScript([
+      { kind: 'json', body: { access_token: 'tok-1' } },
+      {
+        kind: 'json',
+        body: [
+          // Single-volume host without a filesystem.
+          {
+            id: 1,
+            systemName: 'one.lan',
+            organizationId: 7,
+            volumes: [
+              { name: '/', label: '', capacity: 100_000_000_000, freeSpace: 50_000_000_000 },
+            ],
+          },
+          // Volume with no freeSpace (NinjaOne sometimes omits it on
+          // network shares / read-only mounts).
+          {
+            id: 2,
+            systemName: 'two.lan',
+            organizationId: 7,
+            volumes: [
+              { name: 'Z:', label: 'Network', capacity: 1_000_000_000_000, fileSystem: 'CIFS' },
+            ],
+          },
+          // Volume with only a name.
+          {
+            id: 3,
+            systemName: 'three.lan',
+            organizationId: 7,
+            volumes: [{ name: '/dev/sda1' }],
+          },
+        ],
+      },
+    ]);
+    try {
+      const page = await new NinjaOneDriver().fetchRecords(makeFetchCtx('7'), null);
+      const [a, b, c] = page.records;
+      // No filesystem → no `(fs)` tag, no double space.
+      expect(a!.fields.volumesSummary).toBe(
+        '/ — 93.1 GB total, 46.6 GB free',
+      );
+      // No freeSpace → still renders capacity-only line.
+      expect(b!.fields.volumesSummary).toBe(
+        'Z: Network — 931.3 GB total (CIFS)',
+      );
+      // Name-only → just the name.
+      expect(c!.fields.volumesSummary).toBe('/dev/sda1');
     } finally {
       fx.restore();
     }
