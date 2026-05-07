@@ -502,10 +502,23 @@ export class AssetLayoutsService {
           data: { archivedAt: now },
         });
         if (opts.force) {
-          // Delete their values + any relation rows sourced through them.
-          await tx.assetFieldValue.deleteMany({
+          // Tenant middleware requires a companyId filter on every write
+          // to AssetFieldValue. Layouts/fields are global but their values
+          // fan out across companies, so collect the distinct affected
+          // tenants first and scope the delete to them.
+          const affected = await tx.assetFieldValue.findMany({
             where: { assetFieldId: { in: safeRemovedIds } },
+            select: { companyId: true },
+            distinct: ['companyId'],
           });
+          if (affected.length > 0) {
+            await tx.assetFieldValue.deleteMany({
+              where: {
+                assetFieldId: { in: safeRemovedIds },
+                companyId: { in: affected.map((a) => a.companyId) },
+              },
+            });
+          }
         }
       }
 
