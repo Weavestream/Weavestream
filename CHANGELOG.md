@@ -6,6 +6,13 @@ this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.7.1] - 2026-05-08
+
+### Added
+
+- **NinjaOne agent / non-agent split.** The NinjaOne integration now exposes two independent resources: **Agent devices** (workstations and servers running the NinjaOne agent) and **Network & non-agent devices** (NMS-discovered switches / firewalls / printers, plus VMware / Hyper-V / Xen guest VMs and hypervisor management nodes). Each resource projects onto its own asset layout, has its own match key, and runs as a separate sync job — so MSPs can keep agented endpoints in their primary computers layout while routing SNMP gear and virtual machines into a dedicated network or VM layout, or skip the non-agent devices entirely. The new resource is optional and disabled until an operator picks a layout and configures field mappings. Default match-key suggestion changed from `systemName` to **`uid`** (NinjaOne's stable GUID) on both resources to avoid the IP / hostname churn issues that plagued IP-keyed mappings.
+- **`.key` file uploads.** Plain-text key files (PEM, SSH, certificate keys) can now be attached as file uploads alongside the existing image / document / archive / script / config types.
+
 ## [1.7.0] - 2026-05-07
 
 ### Added
