@@ -196,7 +196,7 @@ export class UploadError extends Error {
  * We intentionally summarise instead of dumping mime strings at the user.
  */
 export const SUPPORTED_FILE_KINDS =
-  'images (JPG, PNG, WebP, GIF, HEIC), PDFs, Word, Excel, Markdown, CSV, plain text, archives (ZIP, 7Z, TAR, GZ), installers (MSI), email messages (MSG, EML), scripts (PS1, CMD, BAT, SH, REG, PY), config files (JSON, XML, YAML, INI, CONF, LOG), or keys (KEY)';
+  'images (JPG, PNG, WebP, GIF, HEIC), PDFs, Word, Excel, Markdown, CSV, plain text, archives (ZIP, 7Z, TAR, GZ), installers (MSI), email messages (MSG, EML), scripts (PS1, CMD, BAT, SH, REG, PY), config files (JSON, XML, YAML, INI, CONF, LOG), or keys/certificates (KEY, PEM)';
 
 /**
  * Optimistic client-side allowlist used for pre-flight validation. It
@@ -285,6 +285,7 @@ const EXT_TO_MIME: Record<string, string> = {
   conf: 'text/plain',
   log: 'text/plain',
   key: 'text/plain',
+  pem: 'text/plain',
 };
 
 /** Best-effort MIME inference — browser-declared type wins, ext is fallback. */
