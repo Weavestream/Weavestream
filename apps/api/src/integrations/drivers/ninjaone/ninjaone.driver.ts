@@ -63,6 +63,32 @@ import {
 const NINJAONE_DEFAULT_BASE_URL = 'https://app.ninjarmm.com';
 const NINJAONE_OAUTH_PATH = '/ws/oauth/token';
 const NINJAONE_OAUTH_SCOPE = 'monitoring';
+/**
+ * Resource keys this driver advertises. The orchestrator fans out one
+ * sync job per `(mapping, resource)` pair, so any stale row with a
+ * key not in this set would silently double-process every device.
+ * `assertExpectedResourceKey` hard-fails on anything else.
+ *
+ * `records` — agented devices (Windows / Linux / macOS workstations
+ *   and servers with the NinjaOne agent installed). The kept-for-
+ *   backward-compat key on tenants who installed the integration
+ *   before the multi-resource split landed.
+ * `nms`     — NMS-discovered + virtualisation-sourced devices: SNMP
+ *   network gear (switches / firewalls / printers / VoIP), VMware /
+ *   Hyper-V / Xen guest VMs and host management nodes, and anything
+ *   else NinjaOne tracks without a local agent. Optional — operators
+ *   pick a layout + match keys + field mappings for this resource
+ *   only when they actually want non-agent devices in Weavestream.
+ */
+const NINJAONE_AGENT_RESOURCE_KEY = 'records';
+const NINJAONE_NMS_RESOURCE_KEY = 'nms';
+const NINJAONE_RESOURCE_KEYS = new Set<string>([
+  NINJAONE_AGENT_RESOURCE_KEY,
+  NINJAONE_NMS_RESOURCE_KEY,
+]);
+
+/** NinjaOne's `deviceType` value for agented devices. */
+const NINJAONE_AGENT_DEVICE_TYPE = 'AgentDevice';
 
 const ninjaoneConfigSchema = z.object({
   baseUrl: z.string().url().default(NINJAONE_DEFAULT_BASE_URL),
@@ -208,12 +234,30 @@ export class NinjaOneDriver implements IntegrationDriver {
       },
     ],
     resources: [
+      // Primary resource — agented endpoints (workstations / servers
+      // running the NinjaOne agent). Default match key suggestion is
+      // `uid` because IP / systemName are fragile across DHCP churn,
+      // multi-NIC, and cross-RMM matching scenarios.
       {
-        key: 'records',
-        label: 'Devices',
+        key: NINJAONE_AGENT_RESOURCE_KEY,
+        label: 'Agent devices',
         description:
-          'NinjaOne managed devices (workstations / servers / network gear) per organisation.',
-        defaultMatchKeyHint: 'systemName',
+          'Workstations, servers, and other endpoints with the NinjaOne agent installed (Windows, Linux, macOS).',
+        defaultMatchKeyHint: 'uid',
+      },
+      // Optional secondary resource — non-agent devices: NMS (SNMP-
+      // discovered switches / firewalls / printers / VoIP), plus
+      // VMware / Hyper-V / Xen guest VMs and hypervisor management
+      // nodes. Operators configure this resource (layout + match key
+      // + field mappings) only when they actively want these devices
+      // synced into Weavestream — otherwise it stays disabled and the
+      // orchestrator skips it.
+      {
+        key: NINJAONE_NMS_RESOURCE_KEY,
+        label: 'Network & non-agent devices',
+        description:
+          'NMS-discovered network gear (switches, firewalls, printers, VoIP) plus VMware / Hyper-V / Xen guest VMs and hypervisor management nodes — anything NinjaOne tracks without a local agent.',
+        defaultMatchKeyHint: 'uid',
       },
     ],
     capabilities: {
@@ -300,6 +344,7 @@ export class NinjaOneDriver implements IntegrationDriver {
   async listSourceFields(
     ctx: IntegrationContext & { externalOrgId: string; resourceKey: string },
   ): Promise<SourceFieldDto[]> {
+    assertExpectedResourceKey(ctx.resourceKey);
     if (!ctx.externalOrgId) {
       return sortByLabel([...NINJAONE_KNOWN_FIELDS]);
     }
@@ -386,8 +431,8 @@ export class NinjaOneDriver implements IntegrationDriver {
   }
 
   private async fetchDeviceSamples(
-    ctx: IntegrationContext & { externalOrgId: string },
-    pageSize: number,
+    ctx: IntegrationContext & { externalOrgId: string; resourceKey: string },
+    sampleSize: number,
   ): Promise<NinjaOneDevice[]> {
     const { baseUrl } = parseConfig(ctx.config);
     const token = await this.getAccessToken(ctx);
@@ -398,18 +443,24 @@ export class NinjaOneDriver implements IntegrationDriver {
     // otherwise return every device the API client can see — that
     // bug leaked all-orgs into the first tenant on initial sync.
     url.searchParams.set('df', `org=${ctx.externalOrgId}`);
-    url.searchParams.set('pageSize', String(pageSize));
+    // Over-fetch so the post-filter slice still has enough samples on
+    // tenants whose org is dominated by one device type (e.g. an MSP
+    // that's mostly agented endpoints with a handful of NMS switches —
+    // the `nms` probe would get 0 hits with a tight pageSize=5).
+    url.searchParams.set('pageSize', String(Math.max(sampleSize * 4, 20)));
     const items = await this.callJson<NinjaOneDevice[]>(url.toString(), {
       token,
       ctx,
     });
-    return Array.isArray(items) ? items : [];
+    const raw = Array.isArray(items) ? items : [];
+    return filterByResource(ctx.resourceKey, raw).slice(0, sampleSize);
   }
 
   async fetchRecords(
     ctx: FetchRecordsContext,
     cursor: string | null,
   ): Promise<DriverFetchPage> {
+    assertExpectedResourceKey(ctx.resourceKey);
     const { baseUrl } = parseConfig(ctx.config);
     const token = await this.getAccessToken(ctx);
     const filter = ninjaoneFilterSchema.parse(ctx.filter ?? {});
@@ -458,13 +509,20 @@ export class NinjaOneDriver implements IntegrationDriver {
         })
       : raw;
 
+    // Resource branch: the `records` resource only takes agented
+    // devices; the `nms` resource takes everything else (NMS gear,
+    // VMs, hypervisor management nodes). Stale rows would have
+    // already been rejected by `assertExpectedResourceKey` above, so
+    // any value reaching here is one of the two known keys.
+    const resourceScoped = filterByResource(ctx.resourceKey, orgScoped);
+
     const filtered = filter.locationIds?.length
-      ? orgScoped.filter(
+      ? resourceScoped.filter(
           (d) =>
             typeof d.locationId === 'number' &&
             filter.locationIds!.includes(d.locationId),
         )
-      : orgScoped;
+      : resourceScoped;
 
     const records: DriverRecord[] = filtered.map((d) => {
       const fields = normalizeNinjaOneRecordFields(d);
@@ -582,6 +640,44 @@ export class NinjaOneDriver implements IntegrationDriver {
 
 function parseConfig(raw: Record<string, unknown>): { baseUrl: string } {
   return ninjaoneConfigSchema.parse(raw ?? {});
+}
+
+function assertExpectedResourceKey(resourceKey: string): void {
+  if (NINJAONE_RESOURCE_KEYS.has(resourceKey)) return;
+  const known = [...NINJAONE_RESOURCE_KEYS].map((k) => `"${k}"`).join(', ');
+  throw new Error(
+    `NinjaOne driver received unexpected resourceKey "${resourceKey}". ` +
+      `This driver advertises ${known}; the only way to reach this code ` +
+      `is via a stale IntegrationResource row left behind by an earlier ` +
+      `driver iteration. Disable or remove that row to stop duplicate-` +
+      `asset creation on every sync.`,
+  );
+}
+
+/**
+ * Returns the subset of devices that belong on the resource the
+ * runner is currently syncing.
+ *
+ *   - `records` (agent devices)         → keep `deviceType === 'AgentDevice'`
+ *   - `nms`     (non-agent / NMS / VMs) → keep everything else
+ *
+ * Devices with no `deviceType` at all (NinjaOne occasionally omits
+ * the field on partially-onboarded rows) are treated as non-agent —
+ * `records` drops them, `nms` keeps them — so we never silently lose
+ * a managed endpoint to a missing-field bug, and operators see the
+ * stragglers in the NMS bucket where they can investigate.
+ */
+function filterByResource<T extends NinjaOneDevice>(
+  resourceKey: string,
+  devices: T[],
+): T[] {
+  if (resourceKey === NINJAONE_AGENT_RESOURCE_KEY) {
+    return devices.filter((d) => d.deviceType === NINJAONE_AGENT_DEVICE_TYPE);
+  }
+  if (resourceKey === NINJAONE_NMS_RESOURCE_KEY) {
+    return devices.filter((d) => d.deviceType !== NINJAONE_AGENT_DEVICE_TYPE);
+  }
+  return devices;
 }
 
 function isStringArray(v: unknown): v is string[] {

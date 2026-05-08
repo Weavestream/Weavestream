@@ -82,6 +82,19 @@ function installFetchScript(script: ScriptedResponse[]) {
 
 const HTTP = { timeoutMs: 5_000, maxRetries: 2, backoffMs: 1 };
 
+/**
+ * Tag a test device record as an agent device so it survives the
+ * `records` resource's `deviceType === 'AgentDevice'` filter. Most
+ * tests in this spec model agented endpoints; tests covering the
+ * resource-branching logic explicitly use raw `deviceType` values
+ * instead of going through this helper.
+ */
+function agent<T extends object>(rec: T): T & { deviceType: 'AgentDevice' } {
+  return { deviceType: 'AgentDevice', ...rec } as T & {
+    deviceType: 'AgentDevice';
+  };
+}
+
 function makeCtx(): IntegrationContext {
   return {
     integrationId: 'int-1',
@@ -256,7 +269,7 @@ describe('NinjaOneDriver.listSourceFields', () => {
             offline: true,
             customAgentField: null,
           },
-        ],
+        ].map(agent),
       },
     ]);
     try {
@@ -354,7 +367,7 @@ describe('NinjaOneDriver.listSourceFields', () => {
               location: { name: 'Datacenter West', address: '1 Server Lane' },
             },
           },
-        ],
+        ].map(agent),
       },
     ]);
     try {
@@ -420,15 +433,19 @@ describe('NinjaOneDriver.listSourceFields', () => {
 
 describe('NinjaOneDriver.fetchRecords', () => {
   it('paginates via after=<lastId> and stops on a short page', async () => {
-    const firstPage = Array.from({ length: 200 }, (_, i) => ({
-      id: i + 1,
-      systemName: `host-${i + 1}`,
-      lastContact: 1714000000,
-    }));
-    const secondPage = Array.from({ length: 20 }, (_, i) => ({
-      id: 201 + i,
-      systemName: `host-${201 + i}`,
-    }));
+    const firstPage = Array.from({ length: 200 }, (_, i) =>
+      agent({
+        id: i + 1,
+        systemName: `host-${i + 1}`,
+        lastContact: 1714000000,
+      }),
+    );
+    const secondPage = Array.from({ length: 20 }, (_, i) =>
+      agent({
+        id: 201 + i,
+        systemName: `host-${201 + i}`,
+      }),
+    );
     const fx = installFetchScript([
       { kind: 'json', body: { access_token: 'tok-1' } },
       { kind: 'json', body: firstPage },
@@ -490,7 +507,7 @@ describe('NinjaOneDriver.fetchRecords', () => {
           { id: 1, dnsName: 'a.lan' },
           { id: 2, displayName: 'Edge router' },
           { id: 3 },
-        ],
+        ].map(agent),
       },
     ]);
     try {
@@ -514,7 +531,7 @@ describe('NinjaOneDriver.fetchRecords', () => {
           { id: 1, systemName: 'a.lan', locationId: 10 },
           { id: 2, systemName: 'b.lan', locationId: 20 },
           { id: 3, systemName: 'c.lan', locationId: 10 },
-        ],
+        ].map(agent),
       },
     ]);
     try {
@@ -553,7 +570,7 @@ describe('NinjaOneDriver.fetchRecords', () => {
       },
       {
         kind: 'json',
-        body: [{ id: 99, systemName: 'x.lan' }],
+        body: [agent({ id: 99, systemName: 'x.lan' })],
       },
     ]);
     try {
@@ -562,7 +579,7 @@ describe('NinjaOneDriver.fetchRecords', () => {
         {
           externalId: '99',
           displayName: 'x.lan',
-          fields: { id: 99, systemName: 'x.lan' },
+          fields: { id: 99, systemName: 'x.lan', deviceType: 'AgentDevice' },
           updatedAt: null,
         },
       ]);
@@ -652,7 +669,7 @@ describe('NinjaOneDriver.fetchRecords', () => {
               backupBandwidthThrottle: { enabled: false },
             },
           },
-        ],
+        ].map(agent),
       },
     ]);
     try {
@@ -739,7 +756,7 @@ describe('NinjaOneDriver.fetchRecords', () => {
           { id: 2, systemName: 'b.lan', organizationId: 99 }, // wrong org!
           { id: 3, systemName: 'c.lan', organizationId: 7 },
           { id: 4, systemName: 'd.lan' /* missing organizationId — kept */ },
-        ],
+        ].map(agent),
       },
     ]);
     try {
@@ -1005,7 +1022,7 @@ describe('NinjaOneDriver.fetchRecords', () => {
             ipAddresses: ['169.254.99.1', 'fe80::1'],
             macAddresses: [],
           },
-        ],
+        ].map(agent),
       },
     ]);
     try {
@@ -1053,7 +1070,7 @@ describe('NinjaOneDriver.fetchRecords', () => {
             processors: [{ clockSpeed: 3_500_000_000 }],
             volumes: [{ capacity: 16 * 1024 * 1024 * 1024 * 1024, freeSpace: 1024 * 1024 * 1024 }], // 16 TB / 1 GB
           },
-        ],
+        ].map(agent),
       },
     ]);
     try {
@@ -1108,7 +1125,7 @@ describe('NinjaOneDriver.fetchRecords', () => {
             organizationId: 7,
             volumes: [{ name: '/dev/sda1' }],
           },
-        ],
+        ].map(agent),
       },
     ]);
     try {
@@ -1124,6 +1141,94 @@ describe('NinjaOneDriver.fetchRecords', () => {
       );
       // Name-only → just the name.
       expect(c!.fields.volumesSummary).toBe('/dev/sda1');
+    } finally {
+      fx.restore();
+    }
+  });
+
+  it('throws a clear error when called with an unexpected resourceKey (defensive guard against stale IntegrationResource rows)', async () => {
+    // Stale `IntegrationResource` rows from earlier driver iterations
+    // would silently double-process every device — once per resource
+    // — and create duplicate assets in parallel. The driver advertises
+    // only 'records' and 'nms'; anything else hard-fails so the
+    // regression surfaces in the run viewer instead of corrupting
+    // tenant data.
+    const fx = installFetchScript([
+      { kind: 'json', body: { access_token: 'tok-1' } },
+    ]);
+    try {
+      const ctx = {
+        ...makeFetchCtx('7'),
+        resourceKey: 'wat',
+      } as FetchRecordsContext;
+      await expect(
+        new NinjaOneDriver().fetchRecords(ctx, null),
+      ).rejects.toThrow(/unexpected resourceKey "wat"/);
+
+      await expect(
+        new NinjaOneDriver().listSourceFields({
+          ...makeCtx(),
+          externalOrgId: '7',
+          resourceKey: 'wat',
+        }),
+      ).rejects.toThrow(/unexpected resourceKey "wat"/);
+    } finally {
+      fx.restore();
+    }
+  });
+
+  it('records resource: yields only AgentDevice rows (NMS / VirtualMachine / missing-deviceType filtered out)', async () => {
+    // Mixed batch matching what NinjaOne returns when a tenant uses
+    // both the agent and SNMP / hypervisor discovery. The 'records'
+    // resource must yield only the agented endpoint and drop everything
+    // else — that's what stops the duplicate-asset pollution we hit
+    // when a single resource handled all device types and matchByKey
+    // raced across them.
+    const fx = installFetchScript([
+      { kind: 'json', body: { access_token: 'tok-1' } },
+      {
+        kind: 'json',
+        body: [
+          { id: 1, systemName: 'agented.lan', organizationId: 7, deviceType: 'AgentDevice' },
+          { id: 2, systemName: 'switch.lan', organizationId: 7, deviceType: 'NMSDevice' },
+          { id: 3, systemName: 'guestvm.lan', organizationId: 7, deviceType: 'VirtualMachine' },
+          { id: 4, systemName: 'unknown.lan', organizationId: 7 /* missing deviceType */ },
+        ],
+      },
+    ]);
+    try {
+      const page = await new NinjaOneDriver().fetchRecords(
+        { ...makeFetchCtx('7'), resourceKey: 'records' } as FetchRecordsContext,
+        null,
+      );
+      expect(page.records.map((r) => r.externalId)).toEqual(['1']);
+    } finally {
+      fx.restore();
+    }
+  });
+
+  it('nms resource: yields only non-AgentDevice rows (NMS, VirtualMachine, missing-deviceType all kept)', async () => {
+    const fx = installFetchScript([
+      { kind: 'json', body: { access_token: 'tok-1' } },
+      {
+        kind: 'json',
+        body: [
+          { id: 1, systemName: 'agented.lan', organizationId: 7, deviceType: 'AgentDevice' },
+          { id: 2, systemName: 'switch.lan', organizationId: 7, deviceType: 'NMSDevice' },
+          { id: 3, systemName: 'guestvm.lan', organizationId: 7, deviceType: 'VirtualMachine' },
+          { id: 4, systemName: 'unknown.lan', organizationId: 7 /* missing deviceType */ },
+        ],
+      },
+    ]);
+    try {
+      const page = await new NinjaOneDriver().fetchRecords(
+        { ...makeFetchCtx('7'), resourceKey: 'nms' } as FetchRecordsContext,
+        null,
+      );
+      // Agented device dropped; NMS, VirtualMachine, and the missing-
+      // deviceType straggler all kept so a managed endpoint never
+      // silently disappears because of a missing field on the upstream.
+      expect(page.records.map((r) => r.externalId)).toEqual(['2', '3', '4']);
     } finally {
       fx.restore();
     }
