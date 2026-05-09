@@ -80,7 +80,7 @@ export function AddLinkModal({
     const controller = new AbortController();
     const timer = setTimeout(async () => {
       const res = await apiFetch<{ items: MentionSearchItem[] }>(
-        `/search/mentions?q=${encodeURIComponent(needle)}&companyId=${companyId}&kinds=asset,article&limit=15`,
+        `/search/mentions?q=${encodeURIComponent(needle)}&companyId=${companyId}&kinds=asset,article,password&limit=15`,
         { signal: controller.signal },
       );
       // Another keystroke already invalidated this fetch — bail out so we
@@ -147,7 +147,7 @@ export function AddLinkModal({
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
         <Field
           label="Search"
-          help="Type to search assets and articles in this company."
+          help="Type to search assets, articles, and passwords in this company."
         >
           <Input
             ref={inputRef}
@@ -156,7 +156,7 @@ export function AddLinkModal({
               setQ(e.target.value);
               setSelected(null);
             }}
-            placeholder="Search assets or articles…"
+            placeholder="Search assets, articles, or passwords…"
             autoComplete="off"
           />
         </Field>
@@ -212,10 +212,21 @@ export function AddLinkModal({
                       height: 22,
                       display: 'grid',
                       placeItems: 'center',
-                      color: r.kind === 'asset' ? 'var(--accent)' : 'var(--info)',
+                      color:
+                        r.kind === 'asset'
+                          ? 'var(--accent)'
+                          : r.kind === 'password'
+                            ? 'var(--warn)'
+                            : 'var(--info)',
                     }}
                   >
-                    {r.kind === 'asset' ? <Icon.box size={14} /> : <Icon.doc size={14} />}
+                    {r.kind === 'asset' ? (
+                      <Icon.box size={14} />
+                    ) : r.kind === 'password' ? (
+                      <Icon.lock size={14} />
+                    ) : (
+                      <Icon.doc size={14} />
+                    )}
                   </span>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div
@@ -237,7 +248,11 @@ export function AddLinkModal({
                         marginTop: 2,
                       }}
                     >
-                      {r.kind === 'asset' ? (r.layoutName ?? 'asset') : 'article'}
+                      {r.kind === 'asset'
+                        ? (r.layoutName ?? 'asset')
+                        : r.kind === 'password'
+                          ? 'password'
+                          : 'article'}
                       {r.slug ? ` · ${r.slug}` : ''}
                     </div>
                   </div>

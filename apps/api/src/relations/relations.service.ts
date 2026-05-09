@@ -36,14 +36,15 @@ export interface CleanupForAssetInput {
 
 /**
  * Canonical casing for the polymorphic endpoints persisted on Relation rows.
- * REST inputs use lowercase (`asset` / `article`) for consistency with
- * `/search/mentions`; we normalize at the boundary.
+ * REST inputs use lowercase (`asset` / `article` / `password`) for consistency
+ * with `/search/mentions`; we normalize at the boundary.
  */
-export const RELATION_ENDPOINT_KINDS = ['asset', 'article'] as const;
+export const RELATION_ENDPOINT_KINDS = ['asset', 'article', 'password'] as const;
 export type RelationEndpointKind = (typeof RELATION_ENDPOINT_KINDS)[number];
 export const RELATION_ENTITY_TYPE: Record<RelationEndpointKind, string> = {
   asset: 'Asset',
   article: 'Article',
+  password: 'Password',
 };
 
 export interface ListRelatedInput {
@@ -88,6 +89,7 @@ export const MANUAL_RELATION_TYPE = 'manual';
 const TYPE_TO_KIND: Record<string, RelationEndpointKind> = {
   Asset: 'asset',
   Article: 'article',
+  Password: 'password',
 };
 
 /**
@@ -233,8 +235,9 @@ export class RelationsService implements RelationPort {
    * Return every Relation row where the given entity sits on either end,
    * hydrated with enough detail for the Linked Items UI and filtered for
    * archived entities + client visibility. Polymorphic endpoints other
-   * than `Asset` / `Article` are ignored so old rows (or future kinds not
-   * yet mapped) don't leak through the API before the UI can render them.
+   * than `Asset` / `Article` / `Password` are ignored so old rows (or
+   * future kinds not yet mapped) don't leak through the API before the
+   * UI can render them.
    */
   async listRelated(input: ListRelatedInput): Promise<ListRelatedResult> {
     const entityTypeDb = RELATION_ENTITY_TYPE[input.entityType];
@@ -269,8 +272,11 @@ export class RelationsService implements RelationPort {
     const articleIds = counterparts
       .filter((c) => c.counterpart.kind === 'article')
       .map((c) => c.counterpart.id);
+    const passwordIds = counterparts
+      .filter((c) => c.counterpart.kind === 'password')
+      .map((c) => c.counterpart.id);
 
-    const [assetRows, articleRows] = await Promise.all([
+    const [assetRows, articleRows, passwordRows] = await Promise.all([
       assetIds.length > 0
         ? this.prisma.asset.findMany({
             where: {
@@ -291,10 +297,41 @@ export class RelationsService implements RelationPort {
             },
           })
         : [],
+      passwordIds.length > 0
+        ? this.prisma.password.findMany({
+            where: {
+              companyId: input.companyId,
+              id: { in: passwordIds },
+              archivedAt: null,
+              ...(input.actor.role === 'CLIENT_USER' ? { visibleToClients: true } : {}),
+            },
+            select: {
+              id: true,
+              companyId: true,
+              name: true,
+              username: true,
+              color: true,
+              restrictedToUserIds: true,
+            },
+          })
+        : [],
     ]);
 
     const assetById = new Map(assetRows.map((a) => [a.id, a]));
     const articleById = new Map(articleRows.map((a) => [a.id, a]));
+    // Restricted credentials are hidden from non-allowlisted users so
+    // the link can't even be enumerated. SUPER_ADMIN bypasses (mirrors
+    // the read-side behaviour in PasswordsService.loadForReveal).
+    const passwordById = new Map(
+      passwordRows
+        .filter(
+          (p) =>
+            p.restrictedToUserIds.length === 0 ||
+            p.restrictedToUserIds.includes(input.actor.id) ||
+            input.actor.role === 'SUPER_ADMIN',
+        )
+        .map((p) => [p.id, p]),
+    );
 
     const items: LinkedItem[] = [];
     for (const { row, counterpart } of counterparts) {
@@ -335,12 +372,30 @@ export class RelationsService implements RelationPort {
           isFieldManaged,
           createdAt: row.createdAt,
         });
+      } else if (counterpart.kind === 'password') {
+        const password = passwordById.get(counterpart.id);
+        if (!password) continue; // archived, hidden-to-client, or restricted
+        items.push({
+          relationId: row.id,
+          kind: 'password',
+          id: password.id,
+          title: password.name,
+          subtitle: password.username ?? null,
+          href: `/admin/companies/${password.companyId}/passwords/${password.id}`,
+          icon: null,
+          color: password.color ?? null,
+          relationType: row.relationType,
+          direction: isOutgoing ? 'outgoing' : 'incoming',
+          isFieldManaged,
+          createdAt: row.createdAt,
+        });
       }
     }
 
     const groups: Record<RelationEndpointKind, LinkedItem[]> = {
       asset: items.filter((i) => i.kind === 'asset'),
       article: items.filter((i) => i.kind === 'article'),
+      password: items.filter((i) => i.kind === 'password'),
     };
 
     return { items, groups, totalCount: items.length };
@@ -414,8 +469,9 @@ export class RelationsService implements RelationPort {
   }
 
   /**
-   * Guard that both endpoints (Asset/Article) live in the same company as
-   * the relation record. Called by the controller before `link()`.
+   * Guard that both endpoints (Asset/Article/Password) live in the same
+   * company as the relation record. Called by the controller before
+   * `link()`.
    */
   async assertEndpointsInCompany(args: {
     companyId: string;
@@ -430,10 +486,9 @@ export class RelationsService implements RelationPort {
       { kind: args.targetType, id: args.targetId, label: 'target' as const },
     ];
     for (const endpoint of queue) {
-      if (endpoint.kind === 'asset') {
-        checks.push(
-          this.prisma.asset
-            .findFirst({
+      const lookup =
+        endpoint.kind === 'asset'
+          ? this.prisma.asset.findFirst({
               where: {
                 id: endpoint.id,
                 companyId: args.companyId,
@@ -441,42 +496,36 @@ export class RelationsService implements RelationPort {
               },
               select: { id: true },
             })
-            .then((row) => {
-              if (!row) {
-                throw new BadRequestException({
-                  error: 'RelationEndpointNotFound',
-                  endpoint: endpoint.label,
-                  kind: endpoint.kind,
+          : endpoint.kind === 'article'
+            ? this.prisma.article.findFirst({
+                where: {
                   id: endpoint.id,
-                  message: `${endpoint.label} asset does not exist in this company (or is archived).`,
-                });
-              }
-            }),
-        );
-      } else {
-        checks.push(
-          this.prisma.article
-            .findFirst({
-              where: {
-                id: endpoint.id,
-                companyId: args.companyId,
-                archivedAt: null,
-              },
-              select: { id: true },
-            })
-            .then((row) => {
-              if (!row) {
-                throw new BadRequestException({
-                  error: 'RelationEndpointNotFound',
-                  endpoint: endpoint.label,
-                  kind: endpoint.kind,
+                  companyId: args.companyId,
+                  archivedAt: null,
+                },
+                select: { id: true },
+              })
+            : this.prisma.password.findFirst({
+                where: {
                   id: endpoint.id,
-                  message: `${endpoint.label} article does not exist in this company (or is archived).`,
-                });
-              }
-            }),
-        );
-      }
+                  companyId: args.companyId,
+                  archivedAt: null,
+                },
+                select: { id: true },
+              });
+      checks.push(
+        lookup.then((row) => {
+          if (!row) {
+            throw new BadRequestException({
+              error: 'RelationEndpointNotFound',
+              endpoint: endpoint.label,
+              kind: endpoint.kind,
+              id: endpoint.id,
+              message: `${endpoint.label} ${endpoint.kind} does not exist in this company (or is archived).`,
+            });
+          }
+        }),
+      );
     }
     await Promise.all(checks);
   }

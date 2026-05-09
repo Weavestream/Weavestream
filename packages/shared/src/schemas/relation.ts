@@ -2,11 +2,11 @@ import { z } from 'zod';
 
 /**
  * Phase 5 polymorphic relation schemas. The `Relation` table stores the
- * endpoint types as free-text strings (`Asset`, `Article`, …), but the
- * Phase 5 API only accepts Asset + Article endpoints. New kinds graduate
+ * endpoint types as free-text strings (`Asset`, `Article`, `Password`, …);
+ * the API surface accepts the kinds enumerated below. New kinds graduate
  * by being added to `relationEndpointKinds` once the UI catches up.
  */
-export const relationEndpointKinds = ['asset', 'article'] as const;
+export const relationEndpointKinds = ['asset', 'article', 'password'] as const;
 export type RelationEndpointKind = (typeof relationEndpointKinds)[number];
 
 export const relationEndpointKindSchema = z.enum(relationEndpointKinds);

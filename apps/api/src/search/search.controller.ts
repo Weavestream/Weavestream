@@ -105,7 +105,7 @@ export class SearchController {
     @Query('limit') rawLimit?: string,
   ) {
     const kinds = (rawKinds?.split(',').filter(Boolean) as MentionKind[] | undefined)?.filter(
-      (k): k is MentionKind => k === 'asset' || k === 'article',
+      (k): k is MentionKind => k === 'asset' || k === 'article' || k === 'password',
     );
     const results = await this.search.mentions(actor, q, {
       companyId,

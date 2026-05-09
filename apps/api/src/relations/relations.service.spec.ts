@@ -93,6 +93,26 @@ describe('RelationsService', () => {
     return { svc, stub, tx: stub as unknown as { relation: typeof stub.relation; asset: typeof stub.asset } };
   }
 
+  it('link() persists Password targets with the right shape', async () => {
+    const { svc, stub } = makeService();
+    await svc.link({
+      companyId: 'c-1',
+      sourceType: 'Asset',
+      sourceId: 'a-1',
+      targetType: 'Password',
+      targetId: 'pw-1',
+      relationType: 'manual',
+      actorId: 'u-1',
+    });
+    expect(stub.rows()).toHaveLength(1);
+    expect(stub.rows()[0]).toMatchObject({
+      sourceType: 'Asset',
+      targetType: 'Password',
+      targetId: 'pw-1',
+      relationType: 'manual',
+    });
+  });
+
   it('link() is idempotent', async () => {
     const { svc, stub } = makeService();
     await svc.link({

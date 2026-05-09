@@ -22,9 +22,10 @@ interface Props {
 const GROUP_LABELS: Record<RelationEndpointKind, string> = {
   asset: 'Assets',
   article: 'Articles',
+  password: 'Passwords',
 };
 
-const GROUP_ORDER: RelationEndpointKind[] = ['asset', 'article'];
+const GROUP_ORDER: RelationEndpointKind[] = ['asset', 'article', 'password'];
 
 /**
  * Phase 5 right-rail panel: shows every Relation row where the given
@@ -198,7 +199,8 @@ function LinkedRow({
   editable: boolean;
   onUnlink: () => void;
 }) {
-  const KindIcon = item.kind === 'asset' ? Icon.box : Icon.doc;
+  const KindIcon =
+    item.kind === 'asset' ? Icon.box : item.kind === 'password' ? Icon.lock : Icon.doc;
   return (
     <div
       style={{
@@ -219,7 +221,13 @@ function LinkedRow({
           height: 20,
           display: 'grid',
           placeItems: 'center',
-          color: item.color ?? (item.kind === 'asset' ? 'var(--accent)' : 'var(--info)'),
+          color:
+            item.color ??
+            (item.kind === 'asset'
+              ? 'var(--accent)'
+              : item.kind === 'password'
+                ? 'var(--warn)'
+                : 'var(--info)'),
           flexShrink: 0,
         }}
       >

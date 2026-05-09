@@ -41,15 +41,28 @@ interface ArticleRow {
   visibleToClients: boolean;
 }
 
+interface PasswordRow {
+  id: string;
+  companyId: string;
+  name: string;
+  username: string | null;
+  color: string | null;
+  archivedAt: Date | null;
+  visibleToClients: boolean;
+  restrictedToUserIds: string[];
+}
+
 function makePrisma(fixtures: {
   relations: RelationRow[];
   assets: AssetRow[];
   articles: ArticleRow[];
+  passwords?: PasswordRow[];
 }) {
   const state = {
     relations: [...fixtures.relations],
     assets: [...fixtures.assets],
     articles: [...fixtures.articles],
+    passwords: [...(fixtures.passwords ?? [])],
   };
 
   function matchOrClause(r: RelationRow, or: Array<Record<string, unknown>>): boolean {
@@ -167,6 +180,30 @@ function makePrisma(fixtures: {
         );
       },
     },
+    password: {
+      async findMany(args: { where: Record<string, unknown> }) {
+        const w = args.where;
+        return state.passwords.filter((p) => {
+          if (w['companyId'] && p.companyId !== w['companyId']) return false;
+          const ids = (w['id'] as { in: string[] } | undefined)?.in;
+          if (ids && !ids.includes(p.id)) return false;
+          if (w['archivedAt'] === null && p.archivedAt !== null) return false;
+          if (w['visibleToClients'] === true && !p.visibleToClients) return false;
+          return true;
+        });
+      },
+      async findFirst(args: { where: Record<string, unknown> }) {
+        const w = args.where;
+        return (
+          state.passwords.find((p) => {
+            if (w['id'] && p.id !== w['id']) return false;
+            if (w['companyId'] && p.companyId !== w['companyId']) return false;
+            if (w['archivedAt'] === null && p.archivedAt !== null) return false;
+            return true;
+          }) ?? null
+        );
+      },
+    },
     __state: state,
   };
 }
@@ -186,6 +223,19 @@ function article(
     excerpt: null,
     archivedAt: null,
     visibleToClients: true,
+    ...partial,
+  };
+}
+
+function password(
+  partial: Partial<PasswordRow> & { id: string; companyId: string; name: string },
+): PasswordRow {
+  return {
+    username: null,
+    color: null,
+    archivedAt: null,
+    visibleToClients: false,
+    restrictedToUserIds: [],
     ...partial,
   };
 }
@@ -351,6 +401,148 @@ describe('RelationsService.listRelated', () => {
     ]);
   });
 
+  it('hydrates password counterparts under groups.password', async () => {
+    const prisma = makePrisma({
+      relations: [
+        relation({
+          id: 'r-1',
+          companyId: 'c-1',
+          sourceType: 'Asset',
+          sourceId: 'asset-root',
+          targetType: 'Password',
+          targetId: 'pw-1',
+          relationType: 'manual',
+        }),
+      ],
+      assets: [asset({ id: 'asset-root', companyId: 'c-1', name: 'Root' })],
+      articles: [],
+      passwords: [
+        password({
+          id: 'pw-1',
+          companyId: 'c-1',
+          name: 'Root admin',
+          username: 'admin',
+          color: '#fbbf24',
+        }),
+      ],
+    });
+    const svc = new RelationsService(prisma as never);
+    const res = await svc.listRelated({
+      actor: actor(),
+      companyId: 'c-1',
+      entityType: 'asset',
+      entityId: 'asset-root',
+    });
+    expect(res.totalCount).toBe(1);
+    expect(res.groups.password.map((i) => i.id)).toEqual(['pw-1']);
+    const item = res.groups.password[0]!;
+    expect(item.title).toBe('Root admin');
+    expect(item.subtitle).toBe('admin');
+    expect(item.href).toBe('/admin/companies/c-1/passwords/pw-1');
+    expect(item.color).toBe('#fbbf24');
+    expect(item.direction).toBe('outgoing');
+  });
+
+  it('hides passwords that are not visible to clients when actor is CLIENT_USER', async () => {
+    const prisma = makePrisma({
+      relations: [
+        relation({
+          id: 'r-1',
+          companyId: 'c-1',
+          sourceType: 'Asset',
+          sourceId: 'asset-root',
+          targetType: 'Password',
+          targetId: 'pw-public',
+        }),
+        relation({
+          id: 'r-2',
+          companyId: 'c-1',
+          sourceType: 'Asset',
+          sourceId: 'asset-root',
+          targetType: 'Password',
+          targetId: 'pw-internal',
+        }),
+      ],
+      assets: [asset({ id: 'asset-root', companyId: 'c-1', name: 'Root' })],
+      articles: [],
+      passwords: [
+        password({
+          id: 'pw-public',
+          companyId: 'c-1',
+          name: 'Shared portal',
+          visibleToClients: true,
+        }),
+        password({
+          id: 'pw-internal',
+          companyId: 'c-1',
+          name: 'Internal vault',
+          visibleToClients: false,
+        }),
+      ],
+    });
+    const svc = new RelationsService(prisma as never);
+    const client = await svc.listRelated({
+      actor: actor('CLIENT_USER'),
+      companyId: 'c-1',
+      entityType: 'asset',
+      entityId: 'asset-root',
+    });
+    expect(client.groups.password.map((i) => i.id)).toEqual(['pw-public']);
+
+    const op = await svc.listRelated({
+      actor: actor('OPERATOR'),
+      companyId: 'c-1',
+      entityType: 'asset',
+      entityId: 'asset-root',
+    });
+    expect(op.groups.password.map((i) => i.id).sort()).toEqual([
+      'pw-internal',
+      'pw-public',
+    ]);
+  });
+
+  it('hides passwords whose restrictedToUserIds excludes the actor', async () => {
+    const prisma = makePrisma({
+      relations: [
+        relation({
+          id: 'r-1',
+          companyId: 'c-1',
+          sourceType: 'Asset',
+          sourceId: 'asset-root',
+          targetType: 'Password',
+          targetId: 'pw-restricted',
+        }),
+      ],
+      assets: [asset({ id: 'asset-root', companyId: 'c-1', name: 'Root' })],
+      articles: [],
+      passwords: [
+        password({
+          id: 'pw-restricted',
+          companyId: 'c-1',
+          name: 'Locked',
+          restrictedToUserIds: ['someone-else'],
+        }),
+      ],
+    });
+    const svc = new RelationsService(prisma as never);
+    const stranger = await svc.listRelated({
+      actor: actor('OPERATOR'),
+      companyId: 'c-1',
+      entityType: 'asset',
+      entityId: 'asset-root',
+    });
+    expect(stranger.totalCount).toBe(0);
+
+    // SUPER_ADMIN bypasses the allow-list (parity with PasswordsService).
+    const sa = await svc.listRelated({
+      actor: actor('SUPER_ADMIN'),
+      companyId: 'c-1',
+      entityType: 'asset',
+      entityId: 'asset-root',
+    });
+    expect(sa.groups.password.map((i) => i.id)).toEqual(['pw-restricted']);
+  });
+
   it('never leaks counterparts from other companies', async () => {
     const prisma = makePrisma({
       relations: [
@@ -503,6 +695,56 @@ describe('RelationsService.assertEndpointsInCompany', () => {
         sourceId: 'asset-ok',
         targetType: 'article',
         targetId: 'article-ok',
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it('rejects passwords from another company / archived passwords', async () => {
+    const prisma = makePrisma({
+      relations: [],
+      assets: [asset({ id: 'asset-ok', companyId: 'c-1', name: 'OK' })],
+      articles: [],
+      passwords: [
+        password({ id: 'pw-ok', companyId: 'c-1', name: 'OK creds' }),
+        password({ id: 'pw-other', companyId: 'c-2', name: 'Other-co creds' }),
+        password({
+          id: 'pw-archived',
+          companyId: 'c-1',
+          name: 'Old creds',
+          archivedAt: new Date('2025-01-01'),
+        }),
+      ],
+    });
+    const svc = new RelationsService(prisma as never);
+
+    await expect(
+      svc.assertEndpointsInCompany({
+        companyId: 'c-1',
+        sourceType: 'asset',
+        sourceId: 'asset-ok',
+        targetType: 'password',
+        targetId: 'pw-other',
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+
+    await expect(
+      svc.assertEndpointsInCompany({
+        companyId: 'c-1',
+        sourceType: 'asset',
+        sourceId: 'asset-ok',
+        targetType: 'password',
+        targetId: 'pw-archived',
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+
+    // control: in-company live password resolves.
+    await expect(
+      svc.assertEndpointsInCompany({
+        companyId: 'c-1',
+        sourceType: 'asset',
+        sourceId: 'asset-ok',
+        targetType: 'password',
+        targetId: 'pw-ok',
       }),
     ).resolves.toBeUndefined();
   });

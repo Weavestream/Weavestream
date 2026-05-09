@@ -13,7 +13,7 @@ import { MentionList, type MentionListHandle } from './mention-list';
  */
 
 export type MentionSuggestionItem = {
-  kind: 'asset' | 'article';
+  kind: 'asset' | 'article' | 'password';
   id: string;
   title: string;
   companyId: string;
@@ -52,11 +52,12 @@ export function buildMentionExtension(opts: {
       const attrs = node.attrs as {
         id: string;
         label: string;
-        kind: 'asset' | 'article';
+        kind: 'asset' | 'article' | 'password';
         companyId: string;
       };
       const href = mentionHref(attrs, opts);
-      const prefix = attrs.kind === 'asset' ? '▥' : '¶';
+      const prefix =
+        attrs.kind === 'asset' ? '▥' : attrs.kind === 'password' ? '🔒' : '¶';
       return [
         'a',
         {
@@ -162,18 +163,22 @@ export function buildMentionExtension(opts: {
 }
 
 function mentionHref(
-  attrs: { id: string; kind: 'asset' | 'article'; companyId: string },
+  attrs: { id: string; kind: 'asset' | 'article' | 'password'; companyId: string },
   opts: { isAdmin: boolean; portalSlugForCompany?: (companyId: string) => string | null },
 ): string {
   if (opts.isAdmin) {
     if (attrs.kind === 'asset') {
       return `/admin/companies/${attrs.companyId}/assets/${attrs.id}`;
     }
+    if (attrs.kind === 'password') {
+      return `/admin/companies/${attrs.companyId}/passwords/${attrs.id}`;
+    }
     return `/admin/companies/${attrs.companyId}/articles/${attrs.id}`;
   }
   const slug = opts.portalSlugForCompany?.(attrs.companyId) ?? null;
   if (!slug) return '#';
   if (attrs.kind === 'asset') return `/portal/${slug}/assets/${attrs.id}`;
+  if (attrs.kind === 'password') return `/portal/${slug}/passwords/${attrs.id}`;
   return `/portal/${slug}/articles/${attrs.id}`;
 }
 

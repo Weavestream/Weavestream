@@ -64,7 +64,7 @@ export const MentionList = forwardRef<
           onClick={() => command(item)}
         >
           <span className="sd-popover-item-icon">
-            {item.kind === 'asset' ? '▥' : '¶'}
+            {item.kind === 'asset' ? '▥' : item.kind === 'password' ? '🔒' : '¶'}
           </span>
           <span className="sd-popover-item-label">
             <span>{item.title}</span>

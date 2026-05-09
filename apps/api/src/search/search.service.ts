@@ -9,7 +9,7 @@ import {
 import { PrismaService } from '../prisma/prisma.service.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
 
-export type MentionKind = 'asset' | 'article';
+export type MentionKind = 'asset' | 'article' | 'password';
 
 export interface MentionResult {
   kind: MentionKind;
@@ -72,10 +72,11 @@ interface SearchIndexRow {
  *    metadata the palette needs (company name/slug, layout
  *    icon/color, article slug, upload thumbnail).
  *
- *  - `mentions()`: the Tiptap internal-link picker. Uses the same
- *    index but only returns Asset + Article hits and skips snippet /
- *    comprehensive/archived machinery. Kept for compatibility with
- *    the editor code at
+ *  - `mentions()`: the Tiptap internal-link picker (also reused by
+ *    the Linked-Items "Add link" modal). Uses the same index but
+ *    only returns Asset, Article, and Password hits and skips
+ *    snippet / comprehensive/archived machinery. Kept for
+ *    compatibility with the editor code at
  *    `apps/web/src/components/rich-text/editor.tsx`.
  */
 @Injectable()
@@ -456,10 +457,11 @@ export class SearchService {
     const needle = q.trim();
     if (needle.length === 0) return [];
 
-    const kinds = new Set<MentionKind>(opts.kinds ?? ['asset', 'article']);
+    const kinds = new Set<MentionKind>(opts.kinds ?? ['asset', 'article', 'password']);
     const allowedKinds: SearchEntityKind[] = [];
     if (kinds.has('asset')) allowedKinds.push('asset');
     if (kinds.has('article')) allowedKinds.push('article');
+    if (kinds.has('password')) allowedKinds.push('password');
 
     const result = await this.search(actor, {
       q: needle,
@@ -472,8 +474,9 @@ export class SearchService {
     });
 
     return result.items
-      .filter((h): h is SearchHit & { kind: 'asset' | 'article' } =>
-        h.kind === 'asset' || h.kind === 'article',
+      .filter(
+        (h): h is SearchHit & { kind: MentionKind } =>
+          h.kind === 'asset' || h.kind === 'article' || h.kind === 'password',
       )
       .map((h) => ({
         kind: h.kind,
