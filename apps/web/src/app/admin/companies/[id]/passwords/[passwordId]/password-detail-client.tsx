@@ -1043,22 +1043,29 @@ function RadioPill({
 
 function fmtDate(iso: string | null): string {
   if (!iso) return '—';
-  return new Date(iso).toLocaleDateString(undefined, {
+  return new Date(iso).toLocaleDateString('en-US', {
     year: 'numeric',
     month: 'short',
     day: 'numeric',
   });
 }
 
+// Format date + time as two separate locale calls and join manually.
+// Avoids hydration mismatches caused by ICU version differences between
+// Node and the browser (e.g. newer ICU inserts "at" instead of ", ").
 function fmtDateTime(iso: string | null): string {
   if (!iso) return '—';
-  return new Date(iso).toLocaleString(undefined, {
+  const d = new Date(iso);
+  const datePart = d.toLocaleDateString('en-US', {
     year: 'numeric',
     month: 'short',
     day: 'numeric',
+  });
+  const timePart = d.toLocaleTimeString('en-US', {
     hour: '2-digit',
     minute: '2-digit',
   });
+  return `${datePart}, ${timePart}`;
 }
 
 /**
