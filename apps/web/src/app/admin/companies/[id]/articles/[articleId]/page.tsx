@@ -16,6 +16,7 @@ import { Icon, Panel, StarButton, Tag } from '../../../../../../components/ui';
 import { buildTerm } from '../../../../../../lib/term';
 import { companyCrumbs } from '../../../../../../lib/company-crumbs';
 import { ArticleBody } from '../../../../../../components/editor/article-body';
+import { ArticleChatContext } from '../../../../../../components/editor/article-chat-context';
 import { ArticleSideNav } from '../../../../../../components/editor/article-side-nav';
 import { ArticleToc } from '../../../../../../components/editor/article-toc';
 import { LinkedItemsPanel } from '../../../../../../components/relations';
@@ -52,6 +53,14 @@ export default async function ArticleReadPage({
 
   return (
     <>
+      <ArticleChatContext
+        companyId={companyId}
+        articleId={article.id}
+        title={article.title}
+        editorMode={article.editorMode}
+        content={article.content}
+        markdownSource={article.markdownSource}
+      />
       <TopBar
         crumbs={companyCrumbs(
           term,

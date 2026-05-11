@@ -1605,6 +1605,10 @@ model ChatMessage {
   role           ChatRole
   content        String
   createdAt      DateTime @default(now()) @map("created_at")
+  /// Proposed agentic actions attached to this assistant turn. Shape:
+  /// [{ id, name, arguments, status, result?, error? }]. Null on user
+  /// messages and on assistant messages that did not propose an action.
+  toolCalls      Json?    @map("tool_calls")
 
   conversation ChatConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
 

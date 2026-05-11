@@ -1,5 +1,9 @@
 'use client';
 
+import type {
+  ChatRequestContext,
+  ChatToolCallDto,
+} from '@weavestream/shared';
 import { ensureCsrf } from './csrf';
 
 /**
@@ -24,6 +28,12 @@ export type ChatStreamHandlers = {
    * reply on the first turn only.
    */
   onTitle?: (title: string) => void;
+  /**
+   * Fires when the assistant turn finished WITH one or more agentic
+   * tool calls attached. The DTOs are already in `pending` status and
+   * persisted server-side; the UI renders Apply / Reject cards.
+   */
+  onToolCalls?: (messageId: string, toolCalls: ChatToolCallDto[]) => void;
   onDone?: (finishReason: string | null) => void;
   onError?: (message: string) => void;
 };
@@ -40,6 +50,7 @@ export async function streamChatMessage(
   content: string,
   handlers: ChatStreamHandlers,
   signal?: AbortSignal,
+  context?: ChatRequestContext,
 ): Promise<void> {
   let token: string;
   try {
@@ -59,7 +70,7 @@ export async function streamChatMessage(
         Accept: 'text/event-stream',
         'X-CSRF-Token': token,
       },
-      body: JSON.stringify({ content }),
+      body: JSON.stringify({ content, ...(context ? { context } : {}) }),
       signal,
     });
   } catch (err) {
@@ -147,6 +158,21 @@ function dispatchEvent(block: string, handlers: ChatStreamHandlers): void {
     case 'title': {
       const title = (parsed as { title?: string })?.title;
       if (typeof title === 'string' && title.length > 0) handlers.onTitle?.(title);
+      return;
+    }
+    case 'tool_call': {
+      const payload = parsed as {
+        messageId?: string;
+        toolCalls?: ChatToolCallDto[];
+      };
+      if (
+        payload &&
+        typeof payload.messageId === 'string' &&
+        Array.isArray(payload.toolCalls) &&
+        payload.toolCalls.length > 0
+      ) {
+        handlers.onToolCalls?.(payload.messageId, payload.toolCalls);
+      }
       return;
     }
     case 'done': {

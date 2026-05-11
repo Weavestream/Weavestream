@@ -83,6 +83,13 @@ const nextConfig = {
   // Especially noticeable in Safari, whose dev-bundle parse time is several
   // times slower than V8.
   experimental: {
+    // Next.js dev rewrites have a hardcoded 30s proxy timeout that
+    // kills long-running streamed responses (chat SSE in particular —
+    // a slow LLM round-trip easily exceeds 30s before the first
+    // delta lands). We mirror the API's own `STREAM_TIMEOUT_MS`
+    // (120s) so the proxy never aborts before the server does.
+    // See https://github.com/vercel/next.js/issues/36251.
+    proxyTimeout: 120_000,
     optimizePackageImports: [
       '@tiptap/react',
       '@tiptap/starter-kit',

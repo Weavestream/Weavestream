@@ -3,6 +3,7 @@
 import type {
   ChatConversationDetail,
   ChatConversationSummary,
+  ChatToolCallDto,
 } from '@weavestream/shared';
 import { apiFetch } from './api';
 
@@ -42,4 +43,48 @@ export async function deleteChatConversation(id: string): Promise<boolean> {
     method: 'DELETE',
   });
   return res.ok;
+}
+
+export type ToolCallActionResponse = {
+  toolCall: ChatToolCallDto;
+  updatedToolCalls: ChatToolCallDto[];
+};
+
+/**
+ * Apply a pending tool call. The server re-validates the LLM-supplied
+ * arguments, re-checks `article.write` for the article's actual
+ * company, then mutates via the articles service.
+ */
+export async function applyChatToolCall(args: {
+  conversationId: string;
+  messageId: string;
+  toolCallId: string;
+  companyId?: string;
+}): Promise<ToolCallActionResponse | null> {
+  const res = await apiFetch<ToolCallActionResponse>(
+    `/chat/conversations/${args.conversationId}/messages/${args.messageId}/tool-calls/${encodeURIComponent(
+      args.toolCallId,
+    )}/apply`,
+    {
+      method: 'POST',
+      body: JSON.stringify(args.companyId ? { companyId: args.companyId } : {}),
+    },
+  );
+  if (!res.ok || !res.data) return null;
+  return res.data;
+}
+
+export async function rejectChatToolCall(args: {
+  conversationId: string;
+  messageId: string;
+  toolCallId: string;
+}): Promise<ToolCallActionResponse | null> {
+  const res = await apiFetch<ToolCallActionResponse>(
+    `/chat/conversations/${args.conversationId}/messages/${args.messageId}/tool-calls/${encodeURIComponent(
+      args.toolCallId,
+    )}/reject`,
+    { method: 'POST' },
+  );
+  if (!res.ok || !res.data) return null;
+  return res.data;
 }

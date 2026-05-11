@@ -113,6 +113,21 @@ export class ArticlesService {
     };
   }
 
+  /**
+   * Resolve the tenant company id for an article without requiring the
+   * caller to already know it. Used by callers that learned about the
+   * article id from a less-trusted source (e.g. an LLM tool call) and
+   * need to derive the canonical scope before running a permission
+   * check. Returns `null` when the article does not exist.
+   */
+  async findCompanyIdForArticle(id: string): Promise<string | null> {
+    const row = await this.prisma.article.findUnique({
+      where: { id },
+      select: { companyId: true },
+    });
+    return row?.companyId ?? null;
+  }
+
   async getById(
     actor: AuthedUser,
     companyId: string,

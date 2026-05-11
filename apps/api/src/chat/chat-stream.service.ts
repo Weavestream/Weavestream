@@ -6,11 +6,17 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import type { Response } from 'express';
+import type { Prisma } from '@prisma/client';
 import { ChatRole as PrismaChatRole } from '@prisma/client';
-import type { SendChatMessageInput } from '@weavestream/shared';
+import type {
+  ChatRequestContext,
+  ChatToolCallDto,
+  SendChatMessageInput,
+} from '@weavestream/shared';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { AiSettingsService } from '../ai/ai-settings.service.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
+import { ARTICLE_TOOLS, isArticleToolName } from './chat-tools.js';
 
 const STREAM_TIMEOUT_MS = 120_000;
 const HISTORY_TURN_CAP = 40;
@@ -147,13 +153,29 @@ export class ChatStreamService {
     // request size bounded — long-running conversations will silently
     // drop older messages from the context window rather than fail
     // with a 400 from the LLM.
-    const upstreamMessages = [
+    const systemPrompt = buildSystemPrompt(actor, input.context);
+    const upstreamMessages: Array<{ role: string; content: string }> = [];
+    if (systemPrompt) {
+      upstreamMessages.push({ role: 'system', content: systemPrompt });
+    }
+    upstreamMessages.push(
       ...conversation.messages.slice(-HISTORY_TURN_CAP).map((m) => ({
         role: m.role === PrismaChatRole.USER ? 'user' : 'assistant',
         content: m.content,
       })),
       { role: 'user', content: input.content },
-    ];
+    );
+
+    // Only attach the article tools when the caller actually has an
+    // article context. Two reasons:
+    //   1. Freeform chats ("what's the weather") have nothing to
+    //      update or create — sending `tools` just bloats the prompt.
+    //   2. Some self-hosted runtimes (LM Studio with gpt-oss /
+    //      Harmony-format models) crash their tool-call response
+    //      parser when a model emits reasoning channels it doesn't
+    //      recognise. Skipping tools entirely takes that code path
+    //      out of the request for the common case.
+    const includeTools = !!input.context?.companyId;
 
     const abort = new AbortController();
     const timeout = setTimeout(() => abort.abort(), STREAM_TIMEOUT_MS);
@@ -165,6 +187,7 @@ export class ChatStreamService {
 
     let assistantText = '';
     let finishReason: string | null = null;
+    const toolCallAccumulator = new ToolCallAccumulator();
     try {
       const upstream = await fetch(`${stripTrailingSlash(config.baseUrl)}/chat/completions`, {
         method: 'POST',
@@ -177,6 +200,9 @@ export class ChatStreamService {
           model: config.defaultModel,
           stream: true,
           messages: upstreamMessages,
+          ...(includeTools
+            ? { tools: ARTICLE_TOOLS, tool_choice: 'auto' }
+            : {}),
         }),
         signal: abort.signal,
       });
@@ -209,6 +235,9 @@ export class ChatStreamService {
           assistantText += delta;
           writeFrame(res, 'delta', { text: delta });
         }
+        if (choice?.delta?.tool_calls) {
+          toolCallAccumulator.ingest(choice.delta.tool_calls);
+        }
         if (choice?.finish_reason) {
           finishReason = choice.finish_reason;
         }
@@ -221,6 +250,12 @@ export class ChatStreamService {
       clearTimeout(timeout);
     }
 
+    // Finalise any tool calls the model emitted. Each accumulated
+    // fragment becomes a `pending` DTO; malformed JSON in arguments
+    // marks the call as `failed` up-front so the UI can show a clear
+    // error rather than a half-rendered card.
+    const toolCalls = toolCallAccumulator.finalize();
+
     // Strip leading whitespace once before persisting. Many
     // OpenAI-compatible endpoints emit a `\n` or `\n\n` priming
     // newline before the real content; saving it as-is causes
@@ -228,7 +263,7 @@ export class ChatStreamService {
     // top of the bubble. Trailing whitespace is left intact in case
     // the model intentionally ended on a newline.
     const persistedText = assistantText.replace(/^\s+/, '');
-    if (!persistedText) {
+    if (!persistedText && toolCalls.length === 0) {
       writeError(
         res,
         new BadRequestException(
@@ -251,6 +286,10 @@ export class ChatStreamService {
             conversationId,
             role: PrismaChatRole.ASSISTANT,
             content: persistedText,
+            toolCalls:
+              toolCalls.length > 0
+                ? (toolCalls as unknown as Prisma.InputJsonValue)
+                : undefined,
           },
         }),
         this.prisma.chatConversation.update({
@@ -266,6 +305,13 @@ export class ChatStreamService {
       writeError(res, err);
       res.end();
       return;
+    }
+
+    if (toolCalls.length > 0) {
+      writeFrame(res, 'tool_call', {
+        messageId: assistantMessageId,
+        toolCalls,
+      });
     }
 
     writeFrame(res, 'done', { finishReason: finishReason ?? 'stop' });
@@ -484,12 +530,155 @@ async function safeReadText(res: Response | globalThis.Response): Promise<string
   }
 }
 
+type OpenAiToolCallDelta = {
+  /** Position in the assistant's tool_calls array — chunks for the
+   *  same call all share this index. */
+  index?: number;
+  /** Sent on the first chunk; some providers also re-send it on later
+   *  chunks. */
+  id?: string;
+  type?: 'function' | string;
+  function?: {
+    name?: string;
+    /** OpenAI streams `arguments` as a sequence of JSON-string
+     *  fragments that need to be concatenated. */
+    arguments?: string;
+  };
+};
+
 type OpenAiStreamChunk = {
   choices?: Array<{
-    delta?: { content?: string; role?: string };
+    delta?: {
+      content?: string;
+      role?: string;
+      tool_calls?: OpenAiToolCallDelta[];
+    };
     finish_reason?: string | null;
   }>;
 };
+
+/**
+ * Accumulates tool-call fragments across the SSE stream into a single
+ * array of `ChatToolCallDto`s keyed by the `index` the provider sent.
+ *
+ * OpenAI sends the name on the first chunk per call and then streams
+ * `arguments` as JSON-string fragments; other providers (vLLM, some
+ * Ollama models) may send the whole `arguments` blob in one chunk.
+ * We handle both by concatenating fragments and `JSON.parse`-ing at
+ * `finalize` time.
+ */
+class ToolCallAccumulator {
+  private readonly byIndex = new Map<
+    number,
+    { id: string | null; name: string | null; argsBuf: string }
+  >();
+
+  ingest(deltas: OpenAiToolCallDelta[]): void {
+    for (const d of deltas) {
+      const idx = typeof d.index === 'number' ? d.index : 0;
+      let slot = this.byIndex.get(idx);
+      if (!slot) {
+        slot = { id: null, name: null, argsBuf: '' };
+        this.byIndex.set(idx, slot);
+      }
+      if (d.id && !slot.id) slot.id = d.id;
+      if (d.function?.name && !slot.name) slot.name = d.function.name;
+      if (d.function?.arguments) slot.argsBuf += d.function.arguments;
+    }
+  }
+
+  finalize(): ChatToolCallDto[] {
+    const out: ChatToolCallDto[] = [];
+    for (const [idx, slot] of [...this.byIndex.entries()].sort(
+      ([a], [b]) => a - b,
+    )) {
+      const name = slot.name;
+      if (!name || !isArticleToolName(name)) continue;
+      let args: Record<string, unknown> = {};
+      let parseError: string | null = null;
+      const buf = slot.argsBuf.trim();
+      if (buf) {
+        try {
+          const parsed: unknown = JSON.parse(buf);
+          if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+            args = parsed as Record<string, unknown>;
+          } else {
+            parseError = 'arguments JSON was not an object';
+          }
+        } catch (err) {
+          parseError = err instanceof Error ? err.message : 'invalid arguments JSON';
+        }
+      }
+      out.push({
+        id: slot.id ?? `call_${idx}_${Date.now()}`,
+        name,
+        arguments: args,
+        status: parseError ? 'failed' : 'pending',
+        result: null,
+        error: parseError ?? null,
+      });
+    }
+    return out;
+  }
+}
+
+/**
+ * Build the system message injected at the front of every chat turn.
+ * Pure string composition — no DB calls — so callers can decide
+ * whether to include it based on whether they have a context block to
+ * justify the extra tokens. We always include it when `context` is
+ * present so the model knows which company id to use for tool calls,
+ * even if no articles are attached.
+ */
+function buildSystemPrompt(
+  actor: AuthedUser,
+  context?: ChatRequestContext,
+): string | null {
+  if (!context) return null;
+  const lines: string[] = [];
+  lines.push(
+    'You are an AI assistant embedded in Weavestream, an MSP service-desk application.',
+  );
+  lines.push(
+    `Acting on behalf of: ${actor.email} (id ${actor.id}, role ${actor.role}).`,
+  );
+  if (context.companyId) {
+    lines.push(`Active company id: ${context.companyId}.`);
+    lines.push(
+      'Any tool call (update_article / create_article) you propose will be scoped to this company. Do not invent or guess company ids.',
+    );
+  }
+  if (context.currentArticleId) {
+    lines.push(
+      `The user is currently viewing article id ${context.currentArticleId}. When they say "this article" or "the page", they mean that one.`,
+    );
+  }
+  if (context.articles && context.articles.length > 0) {
+    lines.push('');
+    lines.push('--- Attached articles (read-only context) ---');
+    for (const a of context.articles) {
+      lines.push('');
+      lines.push(`### Article "${a.title}" (id ${a.id})`);
+      lines.push('```markdown');
+      lines.push(a.markdown);
+      lines.push('```');
+    }
+    lines.push('--- End attached articles ---');
+  }
+  lines.push('');
+  lines.push('Tools available:');
+  lines.push(
+    '- update_article(article_id, title?, markdown, summary?): propose an edit to one of the attached articles.',
+  );
+  lines.push(
+    '- create_article(title, markdown, folder_id?, visible_to_clients?, summary?): propose a brand-new article in the active company.',
+  );
+  lines.push('');
+  lines.push(
+    'Guidance: when the user asks for an edit, call update_article with the COMPLETE new markdown body — never a partial diff. Prefer markdown formatting (headings, lists, fenced code, tables). Keep chat replies concise; the diff in the Apply card is the main deliverable. Tool calls are PROPOSALS — the user must click Apply, so phrase your reply as a proposal ("Here is a revised version…"), not as completed work.',
+  );
+  return lines.join('\n');
+}
 
 type SseEvent = { event: string | null; data: string };
 

@@ -3,6 +3,7 @@
 import {
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type CSSProperties,
@@ -19,6 +20,9 @@ import {
 } from './chat-panel-provider';
 import { ResizeHandle } from './resize-handle';
 import { ChatHistoryPopover } from './chat-history-popover';
+import { ChatContextStrip } from './chat-context-strip';
+import { MentionPicker } from './mention-picker';
+import { ToolCallCard } from './tool-call-card';
 
 const MINIMIZED_WIDTH = 40;
 
@@ -311,12 +315,13 @@ function ChatArea({ tab }: { tab: ChatTab }) {
       {tab.messages.length === 0 ? (
         <ChatWelcome />
       ) : (
-        <MessageList messages={tab.messages} />
+        <MessageList tab={tab} />
       )}
+      <ChatContextStrip tab={tab} />
       {/* keyed on tab.id so the draft + autosize reset when switching tabs */}
       <Composer
         key={tab.id}
-        tabId={tab.id}
+        tab={tab}
         disabled={tab.streamingMessageId !== null}
       />
     </div>
@@ -347,7 +352,8 @@ function ChatWelcome() {
   );
 }
 
-function MessageList({ messages }: { messages: ChatMessage[] }) {
+function MessageList({ tab }: { tab: ChatTab }) {
+  const messages = tab.messages;
   const endRef = useRef<HTMLDivElement>(null);
   // Scroll on length changes (new message) and on the streaming
   // assistant's text growth, so the latest tokens stay in view.
@@ -365,20 +371,27 @@ function MessageList({ messages }: { messages: ChatMessage[] }) {
         padding: '12px 12px 8px',
         display: 'flex',
         flexDirection: 'column',
-        gap: 8,
+        gap: 12,
       }}
     >
       {messages.map((m) => (
-        <MessageBubble key={m.id} message={m} />
+        <MessageBubble key={m.id} tab={tab} message={m} />
       ))}
       <div ref={endRef} />
     </div>
   );
 }
 
-function MessageBubble({ message }: { message: ChatMessage }) {
+function MessageBubble({
+  tab,
+  message,
+}: {
+  tab: ChatTab;
+  message: ChatMessage;
+}) {
   const isUser = message.role === 'user';
   const hasError = !!message.error;
+  const toolCalls = message.toolCalls ?? [];
   // Many OpenAI-compatible servers (Ollama, llama.cpp, vLLM with some
   // chat templates) emit a leading `\n` or `\n\n` before the real
   // content. `whiteSpace: pre-wrap` faithfully renders that as an
@@ -388,26 +401,37 @@ function MessageBubble({ message }: { message: ChatMessage }) {
   const displayText = isUser ? message.text : message.text.replace(/^\s+/, '');
   const isEmptyPending =
     message.pending && displayText.length === 0 && !hasError;
-  const bubble: CSSProperties = {
-    maxWidth: '85%',
-    padding: '8px 10px',
-    borderRadius: 8,
-    fontSize: 13,
-    lineHeight: 1.45,
-    // User bubbles render plain text → preserve newlines. Assistant
-    // bubbles render Markdown, which provides its own block layout,
-    // so pre-wrap there would double-collapse.
-    whiteSpace: isUser ? 'pre-wrap' : 'normal',
-    wordBreak: 'break-word',
-    border: '1px solid var(--line)',
-    background: hasError
-      ? 'color-mix(in oklch, var(--danger, #c0392b) 12%, var(--panel))'
-      : isUser
-        ? 'color-mix(in oklch, var(--accent) 18%, var(--panel))'
-        : 'var(--surface)',
-    color: 'var(--text)',
-    alignSelf: isUser ? 'flex-end' : 'flex-start',
-  };
+  // Two distinct bubble styles. User: a compact, accent-tinted chip
+  // pinned to the right with a border. Assistant: a borderless,
+  // full-width block that lets prose / code / tables breathe in a
+  // narrow panel — no background fill so the panel chrome itself
+  // acts as the container.
+  const bubble: CSSProperties = isUser
+    ? {
+        maxWidth: '85%',
+        padding: '8px 10px',
+        borderRadius: 8,
+        fontSize: 13,
+        lineHeight: 1.45,
+        whiteSpace: 'pre-wrap',
+        wordBreak: 'break-word',
+        border: '1px solid var(--line)',
+        background: hasError
+          ? 'color-mix(in oklch, var(--danger, #c0392b) 12%, var(--panel))'
+          : 'color-mix(in oklch, var(--accent) 18%, var(--panel))',
+        color: 'var(--text)',
+        alignSelf: 'flex-end',
+      }
+    : {
+        alignSelf: 'stretch',
+        width: '100%',
+        padding: '2px 0 6px',
+        fontSize: 13,
+        lineHeight: 1.5,
+        whiteSpace: 'normal',
+        wordBreak: 'break-word',
+        color: hasError ? 'var(--danger, #c0392b)' : 'var(--text)',
+      };
   if (isEmptyPending) {
     return (
       <div style={bubble} aria-label="Assistant is typing">
@@ -431,6 +455,25 @@ function MessageBubble({ message }: { message: ChatMessage }) {
           {message.error}
         </div>
       ) : null}
+      {!isUser && toolCalls.length > 0 && (
+        <div
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 8,
+            marginTop: 10,
+          }}
+        >
+          {toolCalls.map((tc) => (
+            <ToolCallCard
+              key={tc.id}
+              tab={tab}
+              messageId={message.id}
+              toolCall={tc}
+            />
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -530,13 +573,27 @@ const CHAT_MD_STYLES = `
   font-size: 12px;
   display: block;
   overflow-x: auto;
+  /* Cancel the bubble's word-break inside tables so headers like
+     "Mission" don't get sliced into "Missio / n" when the auto-
+     layout algorithm tries to satisfy a narrow container. Long
+     content cells still wrap naturally on whitespace. */
+  word-break: normal;
+  overflow-wrap: normal;
 }
 .chat-md th, .chat-md td {
   border: 1px solid var(--line);
   padding: 4px 8px;
   text-align: left;
+  vertical-align: top;
 }
-.chat-md th { background: var(--panel-2); font-weight: 600; }
+.chat-md th {
+  background: var(--panel-2);
+  font-weight: 600;
+  /* Headers must stay on one line so the column is sized to the
+     header label; if the resulting table exceeds the bubble width,
+     the table's overflow-x: auto provides horizontal scroll. */
+  white-space: nowrap;
+}
 .chat-md img { max-width: 100%; height: auto; border-radius: 4px; }
 `;
 
@@ -596,10 +653,25 @@ const COMPOSER_PADDING_Y = 16; // top + bottom padding inside textarea
 const MAX_TEXTAREA_HEIGHT = LINE_HEIGHT * COMPOSER_LINES + COMPOSER_PADDING_Y;
 const MIN_TEXTAREA_HEIGHT = LINE_HEIGHT + COMPOSER_PADDING_Y;
 
-function Composer({ tabId, disabled }: { tabId: string; disabled: boolean }) {
-  const { sendMessage } = useChatPanel();
+function Composer({ tab, disabled }: { tab: ChatTab; disabled: boolean }) {
+  const { state, sendMessage, addMention } = useChatPanel();
   const [value, setValue] = useState('');
   const taRef = useRef<HTMLTextAreaElement>(null);
+  const tabId = tab.id;
+  const companyId = state.pageContext?.companyId ?? null;
+
+  // @-mention picker state. `query` is the substring after the active
+  // `@` and `tokenStart` is the index of that `@` in `value`.
+  const [mentionTokenStart, setMentionTokenStart] = useState<number | null>(null);
+  const [mentionQuery, setMentionQuery] = useState('');
+  const pageArticleId = state.pageContext?.articleId ?? null;
+  const mentions = tab.mentions;
+  const excludeIds = useMemo(() => {
+    const s = new Set<string>();
+    if (pageArticleId) s.add(pageArticleId);
+    for (const m of mentions) s.add(m.id);
+    return s;
+  }, [pageArticleId, mentions]);
 
   useLayoutEffect(() => {
     const ta = taRef.current;
@@ -616,14 +688,80 @@ function Composer({ tabId, disabled }: { tabId: string; disabled: boolean }) {
     if (!canSend) return;
     const text = value.trim();
     setValue('');
+    setMentionTokenStart(null);
     void sendMessage(tabId, text);
   }
 
+  /**
+   * Inspect the cursor position after every change. We're looking for
+   * an `@` token that:
+   *   - starts at the beginning of the input or after whitespace
+   *   - hasn't been closed by a space (since selection)
+   *   - has 0–40 chars after it (the substring is the query)
+   * When found, open the picker; when broken (space, deletion past
+   * the `@`, etc.) close it.
+   */
+  function detectMentionTrigger(nextValue: string, caret: number) {
+    if (!companyId) {
+      setMentionTokenStart(null);
+      return;
+    }
+    let i = caret - 1;
+    while (i >= 0 && nextValue[i] !== '@' && !/\s/.test(nextValue[i]!)) {
+      i--;
+      if (caret - i > 41) {
+        setMentionTokenStart(null);
+        return;
+      }
+    }
+    if (i < 0 || nextValue[i] !== '@') {
+      setMentionTokenStart(null);
+      return;
+    }
+    if (i > 0 && !/\s/.test(nextValue[i - 1]!)) {
+      setMentionTokenStart(null);
+      return;
+    }
+    setMentionTokenStart(i);
+    setMentionQuery(nextValue.slice(i + 1, caret));
+  }
+
+  function onChange(e: React.ChangeEvent<HTMLTextAreaElement>) {
+    const next = e.target.value;
+    setValue(next);
+    detectMentionTrigger(next, e.target.selectionStart ?? next.length);
+  }
+
+  function onKeyUp(e: React.KeyboardEvent<HTMLTextAreaElement>) {
+    if (e.key === 'ArrowLeft' || e.key === 'ArrowRight' || e.key === 'Home' || e.key === 'End') {
+      detectMentionTrigger(value, e.currentTarget.selectionStart ?? value.length);
+    }
+  }
+
   function onKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
+    // If the picker is open, it consumes Arrow/Enter/Escape via its
+    // own global keydown listener (added with capture: true), so we
+    // only handle the bare Enter→send path when the picker is closed.
+    if (mentionTokenStart !== null) return;
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       send();
     }
+  }
+
+  function handleMentionPick(article: { id: string; title: string }) {
+    if (mentionTokenStart === null) return;
+    addMention(tabId, article);
+    // Remove the active `@…` token from the textarea.
+    const before = value.slice(0, mentionTokenStart);
+    const afterStart = mentionTokenStart + 1 + mentionQuery.length;
+    const after = value.slice(afterStart);
+    const trimmedBefore = before.replace(/\s+$/, '');
+    const sep = trimmedBefore.length > 0 ? ' ' : '';
+    const next = `${trimmedBefore}${sep}${after.replace(/^\s+/, '')}`;
+    setValue(next);
+    setMentionTokenStart(null);
+    requestAnimationFrame(() => taRef.current?.focus());
   }
 
   return (
@@ -642,9 +780,22 @@ function Composer({ tabId, disabled }: { tabId: string; disabled: boolean }) {
         ref={taRef}
         rows={1}
         value={value}
-        onChange={(e) => setValue(e.target.value)}
+        onChange={onChange}
         onKeyDown={onKeyDown}
-        placeholder={disabled ? 'Waiting for reply…' : 'Message…'}
+        onKeyUp={onKeyUp}
+        onClick={(e) =>
+          detectMentionTrigger(
+            value,
+            (e.currentTarget as HTMLTextAreaElement).selectionStart ?? value.length,
+          )
+        }
+        placeholder={
+          disabled
+            ? 'Waiting for reply…'
+            : companyId
+              ? 'Message…  (type @ to attach an article)'
+              : 'Message…'
+        }
         disabled={disabled}
         style={{
           flex: 1,
@@ -687,6 +838,16 @@ function Composer({ tabId, disabled }: { tabId: string; disabled: boolean }) {
           style={{ transform: 'rotate(-90deg)' }}
         />
       </button>
+      {mentionTokenStart !== null && companyId && (
+        <MentionPicker
+          anchorRef={taRef}
+          companyId={companyId}
+          query={mentionQuery}
+          excludeIds={excludeIds}
+          onSelect={handleMentionPick}
+          onClose={() => setMentionTokenStart(null)}
+        />
+      )}
     </div>
   );
 }

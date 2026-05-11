@@ -1,7 +1,7 @@
 'use client';
 
 import { useRouter } from 'next/navigation';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ArticleEditorMode } from '@weavestream/shared';
 import { apiFetch } from '../../../../../lib/api';
 import type {
@@ -14,6 +14,7 @@ import { RichTextEditor } from '../../../../../components/editor/rich-text-edito
 import { MarkdownEditor } from '../../../../../components/editor/markdown-editor';
 import { LinkedItemsPanel } from '../../../../../components/relations';
 import { AttachmentsPanel } from '../../../../../components/upload/attachments-panel';
+import { useChatPageContext } from '../../../../../components/chat-panel/use-chat-page-context';
 import { useTerm } from '../../../../../lib/term-context';
 import { companyCrumbs } from '../../../../../lib/company-crumbs';
 import { useIsMobile } from '../../../../../lib/hooks/use-is-mobile';
@@ -89,7 +90,64 @@ export function ArticleForm({
 
   const flatFolders = useMemo(() => flattenFolders(folders), [folders]);
 
+  // Keep refs to the live editor state so the chat-panel context
+  // hook can sample the freshest body at send time without forcing a
+  // re-register on every keystroke.
+  const docRef = useRef(doc);
+  docRef.current = doc;
+  const markdownRef = useRef(markdownSource);
+  markdownRef.current = markdownSource;
+  const editorModeRef = useRef(editorMode);
+  editorModeRef.current = editorMode;
+  const getEditorMarkdown = useCallback((): string => {
+    if (editorModeRef.current === 'markdown') return markdownRef.current ?? '';
+    try {
+      return tiptapDocToMarkdown(docRef.current);
+    } catch {
+      return '';
+    }
+  }, []);
   const autoSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const onBeforeAiApply = useCallback(() => {
+    // Cancel any debounced autosave so the user-visible state and
+    // the AI-applied DB state can't race after the apply lands.
+    if (autoSaveTimer.current) {
+      clearTimeout(autoSaveTimer.current);
+      autoSaveTimer.current = null;
+    }
+  }, []);
+  /**
+   * Sync local React state to the body the AI just persisted. The
+   * `apply` endpoint always saves articles in Markdown editor mode
+   * (regardless of the article's prior mode), so we switch the form
+   * into Markdown mode + drop the proposed `markdown` directly. This
+   * lets the user see the change without a hard reload; the parent
+   * `router.refresh()` then picks up server-derived fields (slug,
+   * plaintext, updatedBy, etc.).
+   */
+  const onAfterAiApply = useCallback(
+    (changes: { markdown?: string; title?: string }) => {
+      if (typeof changes.title === 'string') setTitle(changes.title);
+      if (typeof changes.markdown === 'string') {
+        setEditorMode('markdown');
+        setMarkdownSource(changes.markdown);
+        setFormatSwitchPending(false);
+        setError(null);
+      }
+      setDirty(false);
+      setLastSavedAt(new Date());
+    },
+    [],
+  );
+  useChatPageContext({
+    companyId,
+    articleId: article?.id ?? null,
+    title: title || article?.title || 'Untitled article',
+    getMarkdown: getEditorMarkdown,
+    isDirty: dirty,
+    onBeforeAiApply,
+    onAfterAiApply,
+  });
   useEffect(() => {
     if (mode !== 'edit') return;
     if (!dirty) return;

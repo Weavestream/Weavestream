@@ -10,12 +10,21 @@ import {
   useRef,
   type ReactNode,
 } from 'react';
+import type {
+  ChatRequestContext,
+  ChatToolCallDto,
+} from '@weavestream/shared';
 import {
+  applyChatToolCall,
   createChatConversation,
   deleteChatConversation,
   getChatConversation,
+  rejectChatToolCall,
 } from '../../lib/chat-api';
+import { apiFetch } from '../../lib/api';
 import { streamChatMessage, type ChatStreamMeta } from '../../lib/chat-stream';
+import { tiptapDocToMarkdown } from '../../lib/article-format';
+import type { ArticleDetail } from '../../lib/server-api';
 
 export type ChatRole = 'user' | 'assistant';
 
@@ -25,9 +34,26 @@ export type ChatMessage = {
   text: string;
   pending?: boolean;
   error?: string;
+  /**
+   * Agentic actions the assistant proposed in this turn (Apply / Reject
+   * cards in the UI). Pending stream events keep this array fresh; on
+   * apply / reject the matching entry is replaced with the new status.
+   */
+  toolCalls?: ChatToolCallDto[];
 };
 
 export type ChatTabKind = 'freeform' | 'context';
+
+/**
+ * Pinned per-tab context. The "current page" entry (if any) is stored
+ * separately so it can be marked as the auto-attached one and cannot
+ * be removed by the user — only by leaving the page. Additional
+ * articles are the explicit @-mentions.
+ */
+export type ChatTabContextArticle = {
+  id: string;
+  title: string;
+};
 
 export type ChatTab = {
   id: string;
@@ -41,6 +67,42 @@ export type ChatTab = {
   loading: boolean;
   /** Assistant message id that is currently being streamed into, if any. */
   streamingMessageId: string | null;
+  /** Explicit @-mentioned articles, in insertion order. */
+  mentions: ChatTabContextArticle[];
+};
+
+/**
+ * Snapshot of "the page the chat panel currently sees". Set via the
+ * `useChatPageContext` hook from article view / edit / new pages. The
+ * `getMarkdown` callback is captured each render so the live editor
+ * state can be sampled at send time.
+ */
+export type ChatPageContextSnapshot = {
+  kind: 'article';
+  companyId: string;
+  /** Null while the article is being authored (the "new article" page). */
+  articleId: string | null;
+  title: string;
+  getMarkdown: () => string;
+  /**
+   * True when the page is an open editor with unsaved changes. The
+   * Apply path uses this to warn before overwriting the form's body.
+   * Default `false` when omitted.
+   */
+  isDirty?: boolean;
+  /**
+   * Hook the editor surfaces so a confirmed Apply can clear / accept
+   * any in-flight autosave timer before the route refreshes.
+   */
+  onBeforeAiApply?: () => void;
+  /**
+   * Called after a successful Apply that targeted this page. The
+   * form/view surface uses it to sync its own local React state to
+   * the freshly-persisted body so the user sees the change without
+   * needing a hard reload. Receives the body fields the LLM proposed
+   * (those are what landed on disk).
+   */
+  onAfterAiApply?: (changes: { markdown?: string; title?: string }) => void;
 };
 
 type State = {
@@ -50,6 +112,16 @@ type State = {
   tabs: ChatTab[];
   activeTabId: string | null;
   freeformCounter: number;
+  /**
+   * The current page's chat snapshot, registered via
+   * `useChatPageContext`. Lives at the provider level (not per-tab)
+   * so navigating between pages never auto-creates a tab — tabs are
+   * created only when the user explicitly clicks "+ new chat" or
+   * opens a previous conversation. Every send + Apply samples this
+   * value, so whichever page the user is currently on is the page
+   * the LLM grounds against.
+   */
+  pageContext: ChatPageContextSnapshot | null;
 };
 
 type Action =
@@ -62,6 +134,9 @@ type Action =
   | { type: 'addLoadedTab'; tab: ChatTab }
   | { type: 'closeTab'; id: string }
   | { type: 'setActiveTab'; id: string }
+  | { type: 'setPageContext'; pageContext: ChatPageContextSnapshot | null }
+  | { type: 'addMention'; tabId: string; article: ChatTabContextArticle }
+  | { type: 'removeMention'; tabId: string; articleId: string }
   | {
       type: 'sendStart';
       tabId: string;
@@ -84,6 +159,19 @@ type Action =
       tabId: string;
       assistantMsgId: string;
       message: string;
+    }
+  | {
+      type: 'setMessageToolCalls';
+      tabId: string;
+      messageId: string;
+      toolCalls: ChatToolCallDto[];
+    }
+  | {
+      type: 'patchToolCall';
+      tabId: string;
+      messageId: string;
+      toolCallId: string;
+      next: ChatToolCallDto;
     };
 
 export const MIN_WIDTH = 220;
@@ -112,6 +200,7 @@ function newFreeformTab(n: number): ChatTab {
     messages: [],
     loading: false,
     streamingMessageId: null,
+    mentions: [],
   };
 }
 
@@ -154,6 +243,67 @@ function reducer(state: State, action: Action): State {
         tabs: [...state.tabs, action.tab],
         activeTabId: action.tab.id,
         isMinimized: false,
+      };
+    case 'setPageContext':
+      return { ...state, pageContext: action.pageContext };
+    case 'addMention':
+      return {
+        ...state,
+        tabs: state.tabs.map((t) => {
+          if (t.id !== action.tabId) return t;
+          if (t.mentions.some((m) => m.id === action.article.id)) return t;
+          if (state.pageContext?.articleId === action.article.id) return t;
+          return { ...t, mentions: [...t.mentions, action.article] };
+        }),
+      };
+    case 'removeMention':
+      return {
+        ...state,
+        tabs: state.tabs.map((t) =>
+          t.id === action.tabId
+            ? {
+                ...t,
+                mentions: t.mentions.filter((m) => m.id !== action.articleId),
+              }
+            : t,
+        ),
+      };
+    case 'setMessageToolCalls':
+      return {
+        ...state,
+        tabs: state.tabs.map((t) =>
+          t.id === action.tabId
+            ? {
+                ...t,
+                messages: t.messages.map((m) =>
+                  m.id === action.messageId
+                    ? { ...m, toolCalls: action.toolCalls }
+                    : m,
+                ),
+              }
+            : t,
+        ),
+      };
+    case 'patchToolCall':
+      return {
+        ...state,
+        tabs: state.tabs.map((t) =>
+          t.id === action.tabId
+            ? {
+                ...t,
+                messages: t.messages.map((m) => {
+                  if (m.id !== action.messageId) return m;
+                  const calls = m.toolCalls ?? [];
+                  return {
+                    ...m,
+                    toolCalls: calls.map((c) =>
+                      c.id === action.toolCallId ? action.next : c,
+                    ),
+                  };
+                }),
+              }
+            : t,
+        ),
       };
     case 'closeTab': {
       const idx = state.tabs.findIndex((t) => t.id === action.id);
@@ -307,6 +457,35 @@ type Ctx = {
   openConversation: (id: string) => Promise<void>;
   deleteConversation: (id: string) => Promise<void>;
   activeTab: ChatTab | null;
+  /**
+   * Register a page-context snapshot. Called by `useChatPageContext`
+   * from any page that wants the AI to know what the user is looking
+   * at. If a matching context tab already exists it is reused; the
+   * snapshot's `getMarkdown` closure is refreshed each render.
+   * Returns a cleanup that clears the snapshot on the active tab when
+   * the page unmounts.
+   */
+  registerPageContext: (ctx: ChatPageContextSnapshot) => () => void;
+  /**
+   * Live channel for whether the active page has unsaved local edits.
+   * Read by the Apply path so we can warn before clobbering an
+   * in-progress draft. Written by `useChatPageContext` for any caller
+   * that opts into the form-aware dirty contract.
+   */
+  setPageDirty: (dirty: boolean) => void;
+  getPageDirty: () => boolean;
+  addMention: (tabId: string, article: ChatTabContextArticle) => void;
+  removeMention: (tabId: string, articleId: string) => void;
+  applyToolCall: (
+    tabId: string,
+    messageId: string,
+    toolCallId: string,
+  ) => Promise<void>;
+  rejectToolCall: (
+    tabId: string,
+    messageId: string,
+    toolCallId: string,
+  ) => Promise<void>;
 };
 
 const ChatPanelContext = createContext<Ctx | null>(null);
@@ -324,6 +503,7 @@ export function useChatPanel(): Ctx {
         tabs: [],
         activeTabId: null,
         freeformCounter: 1,
+        pageContext: null,
       },
       open: noop,
       close: noop,
@@ -337,6 +517,13 @@ export function useChatPanel(): Ctx {
       openConversation: asyncNoop,
       deleteConversation: asyncNoop,
       activeTab: null,
+      registerPageContext: () => () => {},
+      setPageDirty: noop,
+      getPageDirty: () => false,
+      addMention: noop,
+      removeMention: noop,
+      applyToolCall: asyncNoop,
+      rejectToolCall: asyncNoop,
     };
   }
   return v;
@@ -350,12 +537,22 @@ export function ChatPanelProvider({ children }: { children: ReactNode }) {
     tabs: [],
     activeTabId: null,
     freeformCounter: 1,
+    pageContext: null,
   }));
 
   // Active stream aborts per tab. Closing a tab or sending a new
   // message before the previous one settled cancels the in-flight
   // fetch so the server can stop talking to the LLM.
   const aborts = useRef(new Map<string, AbortController>());
+
+  // Whether the active page (set via `useChatPageContext`) has
+  // unsaved edits. Read by the Apply path so the chat can warn
+  // before overwriting a draft.
+  const pageDirtyRef = useRef(false);
+  const setPageDirty = useCallback((dirty: boolean) => {
+    pageDirtyRef.current = dirty;
+  }, []);
+  const getPageDirty = useCallback(() => pageDirtyRef.current, []);
 
   // Latest state for callbacks that need to peek inside without
   // refiring as dependencies — the callbacks themselves stay stable.
@@ -407,6 +604,22 @@ export function ChatPanelProvider({ children }: { children: ReactNode }) {
 
     const tab = stateRef.current.tabs.find((t) => t.id === tabId);
     if (!tab || tab.streamingMessageId) return;
+
+    // Resolve page-context + @-mentions to a `ChatRequestContext`
+    // BEFORE we kick off the stream. We do this here (rather than
+    // inside `streamChatMessage`) so the provider owns the cross-cut
+    // between "what the user is viewing" and "what the LLM sees". A
+    // mention that fails to resolve is silently dropped so a single
+    // dead reference can't sink the whole send.
+    let requestContext: ChatRequestContext | undefined;
+    try {
+      requestContext = await resolveChatRequestContext(
+        tab,
+        stateRef.current.pageContext,
+      );
+    } catch {
+      requestContext = undefined;
+    }
 
     let conversationId = tab.conversationId;
     if (!conversationId) {
@@ -474,6 +687,14 @@ export function ChatPanelProvider({ children }: { children: ReactNode }) {
         onTitle: (title) => {
           dispatch({ type: 'setTabTitle', tabId, title });
         },
+        onToolCalls: (messageId, toolCalls) => {
+          dispatch({
+            type: 'setMessageToolCalls',
+            tabId,
+            messageId,
+            toolCalls,
+          });
+        },
         onDone: () => {
           dispatch({
             type: 'sendDone',
@@ -491,6 +712,7 @@ export function ChatPanelProvider({ children }: { children: ReactNode }) {
         },
       },
       ctrl.signal,
+      requestContext,
     );
     aborts.current.delete(tabId);
   }, []);
@@ -513,9 +735,13 @@ export function ChatPanelProvider({ children }: { children: ReactNode }) {
         id: m.id,
         role: m.role,
         text: m.content,
+        ...(m.toolCalls && m.toolCalls.length > 0
+          ? { toolCalls: m.toolCalls }
+          : {}),
       })),
       loading: false,
       streamingMessageId: null,
+      mentions: [],
     };
     dispatch({ type: 'addLoadedTab', tab });
   }, []);
@@ -531,6 +757,85 @@ export function ChatPanelProvider({ children }: { children: ReactNode }) {
       dispatch({ type: 'closeTab', id: matching.id });
     }
   }, []);
+
+  /**
+   * Register a page-context snapshot for the lifetime of the calling
+   * component. This is provider-wide state — it does NOT create or
+   * activate a tab. Tabs are only opened by explicit user action
+   * (the "+ new chat" button or opening a saved conversation), so
+   * background navigation never adds noise to the tab strip.
+   *
+   * The latest snapshot is sampled at send + apply time, so whatever
+   * page the user is on when they click Send is what the LLM grounds
+   * against — regardless of which tab is active.
+   */
+  const registerPageContext = useCallback(
+    (ctx: ChatPageContextSnapshot): (() => void) => {
+      dispatch({ type: 'setPageContext', pageContext: ctx });
+      return () => {
+        dispatch({ type: 'setPageContext', pageContext: null });
+      };
+    },
+    [],
+  );
+
+  const addMention = useCallback(
+    (tabId: string, article: ChatTabContextArticle) => {
+      dispatch({ type: 'addMention', tabId, article });
+    },
+    [],
+  );
+
+  const removeMention = useCallback(
+    (tabId: string, articleId: string) => {
+      dispatch({ type: 'removeMention', tabId, articleId });
+    },
+    [],
+  );
+
+  const applyToolCall = useCallback(
+    async (tabId: string, messageId: string, toolCallId: string) => {
+      const tab = stateRef.current.tabs.find((t) => t.id === tabId);
+      if (!tab || !tab.conversationId) return;
+      const companyId = stateRef.current.pageContext?.companyId;
+      const res = await applyChatToolCall({
+        conversationId: tab.conversationId,
+        messageId,
+        toolCallId,
+        ...(companyId ? { companyId } : {}),
+      });
+      if (!res) return;
+      dispatch({
+        type: 'patchToolCall',
+        tabId,
+        messageId,
+        toolCallId,
+        next: res.toolCall,
+      });
+    },
+    [],
+  );
+
+  const rejectToolCall = useCallback(
+    async (tabId: string, messageId: string, toolCallId: string) => {
+      const tab = stateRef.current.tabs.find((t) => t.id === tabId);
+      if (!tab || !tab.conversationId) return;
+      const res = await rejectChatToolCall({
+        conversationId: tab.conversationId,
+        messageId,
+        toolCallId,
+      });
+      if (!res) return;
+      dispatch({
+        type: 'patchToolCall',
+        tabId,
+        messageId,
+        toolCallId,
+        next: res.toolCall,
+      });
+    },
+    [],
+  );
 
   const value = useMemo<Ctx>(() => {
     const activeTab =
@@ -554,12 +859,116 @@ export function ChatPanelProvider({ children }: { children: ReactNode }) {
       sendMessage,
       openConversation,
       deleteConversation,
+      registerPageContext,
+      setPageDirty,
+      getPageDirty,
+      addMention,
+      removeMention,
+      applyToolCall,
+      rejectToolCall,
     };
-  }, [state, sendMessage, openConversation, deleteConversation]);
+  }, [
+    state,
+    sendMessage,
+    openConversation,
+    deleteConversation,
+    registerPageContext,
+    setPageDirty,
+    getPageDirty,
+    addMention,
+    removeMention,
+    applyToolCall,
+    rejectToolCall,
+  ]);
 
   return (
     <ChatPanelContext.Provider value={value}>
       {children}
     </ChatPanelContext.Provider>
   );
+}
+
+/**
+ * Resolve the per-tab pinned context into the request body shape the
+ * API expects. The current page is always included first (so the
+ * model can disambiguate "this article" vs. the @-mentions), then
+ * each mention. Mentions are fetched + converted lazily; failures are
+ * swallowed so a stale or restricted reference doesn't block the send.
+ */
+async function resolveChatRequestContext(
+  tab: ChatTab,
+  pageCtx: ChatPageContextSnapshot | null,
+): Promise<ChatRequestContext | undefined> {
+  const articles: ChatRequestContext['articles'] = [];
+
+  // Only saved articles get inlined as context. Drafts (new-article
+  // page) intentionally do NOT travel along — we require the user to
+  // save first so the LLM is always grounded in a real row that
+  // `update_article` can target. companyId is still attached below
+  // so `create_article` works from the new-article page.
+  if (pageCtx && pageCtx.kind === 'article' && pageCtx.articleId) {
+    const markdown = safeGetMarkdown(pageCtx);
+    if (markdown) {
+      articles.push({
+        id: pageCtx.articleId,
+        title: pageCtx.title || 'Untitled',
+        markdown,
+      });
+    }
+  }
+  if (pageCtx?.kind === 'article') {
+    for (const mention of tab.mentions) {
+      const article = await fetchArticleAsMarkdown(
+        pageCtx.companyId,
+        mention.id,
+      );
+      if (article) articles.push(article);
+    }
+  }
+
+  const out: ChatRequestContext = {};
+  if (pageCtx?.kind === 'article') {
+    out.companyId = pageCtx.companyId;
+    if (pageCtx.articleId) out.currentArticleId = pageCtx.articleId;
+  }
+  if (articles.length > 0) out.articles = articles;
+  if (Object.keys(out).length === 0) return undefined;
+  return out;
+}
+
+function safeGetMarkdown(ctx: ChatPageContextSnapshot): string {
+  try {
+    return ctx.getMarkdown();
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * Fetch a referenced article and project it to markdown the LLM can
+ * consume. Tiptap docs are converted via the existing client-side
+ * helper (we don't want a server-side Tiptap engine in v1). Returns
+ * `null` on any failure so callers can skip the mention silently.
+ */
+async function fetchArticleAsMarkdown(
+  companyId: string,
+  articleId: string,
+): Promise<{ id: string; title: string; markdown: string } | null> {
+  const res = await apiFetch<ArticleDetail>(
+    `/companies/${companyId}/articles/${articleId}`,
+  );
+  if (!res.ok || !res.data) return null;
+  const a = res.data;
+  let markdown = '';
+  try {
+    if (a.editorMode === 'markdown') {
+      markdown = a.markdownSource ?? '';
+    } else if (a.content) {
+      markdown = tiptapDocToMarkdown(a.content);
+    }
+  } catch {
+    markdown = a.contentPlaintext ?? '';
+  }
+  if (!markdown.trim()) return null;
+  return { id: a.id, title: a.title, markdown };
 }

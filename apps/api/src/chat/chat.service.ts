@@ -3,11 +3,13 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import type { Prisma } from '@prisma/client';
 import type {
   ChatConversationDetail,
   ChatConversationSummary,
   ChatMessageDto,
   ChatRole,
+  ChatToolCallDto,
 } from '@weavestream/shared';
 import { ChatRole as PrismaChatRole } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service.js';
@@ -59,6 +61,57 @@ export class ChatService {
     return toDetail(row);
   }
 
+  /**
+   * Load a single message scoped to the actor's conversation. Used by
+   * the tool-call apply / reject endpoints so they share the same
+   * ownership check as the rest of the chat surface.
+   */
+  async getMessageForActor(
+    actor: AuthedUser,
+    conversationId: string,
+    messageId: string,
+  ): Promise<{
+    id: string;
+    conversationId: string;
+    role: PrismaChatRole;
+    content: string;
+    toolCalls: ChatToolCallDto[] | null;
+  }> {
+    const conversation = await this.prisma.chatConversation.findUnique({
+      where: { id: conversationId },
+      select: { id: true, userId: true },
+    });
+    if (!conversation) throw new NotFoundException('Conversation not found');
+    if (conversation.userId !== actor.id) throw new ForbiddenException();
+    const msg = await this.prisma.chatMessage.findFirst({
+      where: { id: messageId, conversationId },
+    });
+    if (!msg) throw new NotFoundException('Message not found');
+    return {
+      id: msg.id,
+      conversationId: msg.conversationId,
+      role: msg.role,
+      content: msg.content,
+      toolCalls: parseToolCalls(msg.toolCalls),
+    };
+  }
+
+  /**
+   * Persist a tool-call mutation back onto the assistant message. We
+   * deliberately rewrite the whole array (one JSONB write) rather than
+   * partial-patching the json — it's a single short array per row and
+   * sidesteps Postgres `jsonb_set` typing in Prisma.
+   */
+  async updateMessageToolCalls(
+    messageId: string,
+    toolCalls: ChatToolCallDto[],
+  ): Promise<void> {
+    await this.prisma.chatMessage.update({
+      where: { id: messageId },
+      data: { toolCalls: toolCalls as unknown as Prisma.InputJsonValue },
+    });
+  }
+
   async delete(actor: AuthedUser, id: string): Promise<void> {
     const row = await this.prisma.chatConversation.findUnique({
       where: { id },
@@ -84,6 +137,7 @@ type ConversationWithMessagesRow = ConversationRow & {
     role: PrismaChatRole;
     content: string;
     createdAt: Date;
+    toolCalls: Prisma.JsonValue | null;
   }>;
 };
 
@@ -112,15 +166,59 @@ export function toMessageDto(msg: {
   role: PrismaChatRole;
   content: string;
   createdAt: Date;
+  toolCalls?: Prisma.JsonValue | null;
 }): ChatMessageDto {
+  const toolCalls = parseToolCalls(msg.toolCalls ?? null);
   return {
     id: msg.id,
     role: prismaRoleToDto(msg.role),
     content: msg.content,
     createdAt: msg.createdAt.toISOString(),
+    ...(toolCalls ? { toolCalls } : {}),
   };
 }
 
 export function prismaRoleToDto(role: PrismaChatRole): ChatRole {
   return role === PrismaChatRole.USER ? 'user' : 'assistant';
+}
+
+/**
+ * Parse the JSONB `tool_calls` column into the strict DTO array. The
+ * column is written exclusively by our own code (chat-stream service)
+ * so we treat unexpected shapes as "no tool calls" rather than
+ * throwing — a corrupt row should still load.
+ */
+export function parseToolCalls(raw: Prisma.JsonValue | null): ChatToolCallDto[] | null {
+  if (!raw || !Array.isArray(raw)) return null;
+  const out: ChatToolCallDto[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) continue;
+    const obj = entry as Record<string, unknown>;
+    const id = typeof obj.id === 'string' ? obj.id : null;
+    const name = typeof obj.name === 'string' ? obj.name : null;
+    const status = typeof obj.status === 'string' ? obj.status : null;
+    const args =
+      obj.arguments && typeof obj.arguments === 'object' && !Array.isArray(obj.arguments)
+        ? (obj.arguments as Record<string, unknown>)
+        : {};
+    if (!id || !name || !status) continue;
+    if (name !== 'update_article' && name !== 'create_article') continue;
+    if (
+      status !== 'pending' &&
+      status !== 'applied' &&
+      status !== 'rejected' &&
+      status !== 'failed'
+    ) {
+      continue;
+    }
+    out.push({
+      id,
+      name,
+      arguments: args,
+      status,
+      result: typeof obj.result === 'string' ? obj.result : null,
+      error: typeof obj.error === 'string' ? obj.error : null,
+    });
+  }
+  return out.length > 0 ? out : null;
 }

@@ -9,11 +9,49 @@ import { z } from 'zod';
 export const chatRoleSchema = z.enum(['user', 'assistant']);
 export type ChatRole = z.infer<typeof chatRoleSchema>;
 
+/**
+ * Tool call status lifecycle:
+ *   pending  → emitted by the LLM, awaiting user decision
+ *   applied  → user clicked Apply, the action ran successfully
+ *   rejected → user dismissed without applying
+ *   failed   → user clicked Apply but the action threw server-side
+ */
+export const chatToolCallStatusSchema = z.enum([
+  'pending',
+  'applied',
+  'rejected',
+  'failed',
+]);
+export type ChatToolCallStatus = z.infer<typeof chatToolCallStatusSchema>;
+
+export const chatToolCallNameSchema = z.enum([
+  'update_article',
+  'create_article',
+]);
+export type ChatToolCallName = z.infer<typeof chatToolCallNameSchema>;
+
+/**
+ * A proposed agentic action attached to an assistant turn. `arguments`
+ * is whatever JSON the LLM produced — schema is enforced at apply time
+ * (see `applyToolCall` in apps/api/src/chat/chat-tool-call.service.ts)
+ * so we can persist malformed calls and still let the user reject them.
+ */
+export const chatToolCallSchema = z.object({
+  id: z.string(),
+  name: chatToolCallNameSchema,
+  arguments: z.record(z.unknown()),
+  status: chatToolCallStatusSchema,
+  result: z.string().nullable().optional(),
+  error: z.string().nullable().optional(),
+});
+export type ChatToolCallDto = z.infer<typeof chatToolCallSchema>;
+
 export const chatMessageSchema = z.object({
   id: z.string().uuid(),
   role: chatRoleSchema,
   content: z.string(),
   createdAt: z.string(),
+  toolCalls: z.array(chatToolCallSchema).nullable().optional(),
 });
 export type ChatMessageDto = z.infer<typeof chatMessageSchema>;
 
@@ -40,6 +78,36 @@ export type ChatConversationDetail = z.infer<
 >;
 
 /**
+ * Per-article markdown snapshot the client attaches to a turn. The
+ * server treats this as immutable, read-only context — it never falls
+ * back to fetching the article body from the DB based on `id` alone,
+ * because the client snapshot may include unsaved edits from the
+ * active form. The body cap is generous (60 KB ≈ ~10–15 k tokens for
+ * most models); the server-side request limiter still applies on top.
+ */
+export const chatContextArticleSchema = z.object({
+  id: z.string().uuid(),
+  title: z.string().max(300),
+  markdown: z.string().max(60_000),
+});
+export type ChatContextArticle = z.infer<typeof chatContextArticleSchema>;
+
+/**
+ * Request-scoped grounding for a single chat turn. All fields are
+ * optional — a freeform tab with no @-mentions and no page context
+ * sends nothing. The server uses this to (1) build a system prompt
+ * inlining the attached articles and (2) scope agentic tool calls
+ * (`create_article` / `update_article`) to the current company so the
+ * LLM cannot accidentally mutate a different tenant.
+ */
+export const chatRequestContextSchema = z.object({
+  companyId: z.string().uuid().optional(),
+  currentArticleId: z.string().uuid().optional(),
+  articles: z.array(chatContextArticleSchema).max(10).optional(),
+});
+export type ChatRequestContext = z.infer<typeof chatRequestContextSchema>;
+
+/**
  * `POST /chat/conversations/:id/messages` body. The server caps content
  * at 8 KB — well above any reasonable single chat turn, but tight
  * enough that a runaway client can't shovel novel-length prompts into
@@ -55,5 +123,17 @@ export const sendChatMessageSchema = z.object({
         .min(1, 'Message cannot be empty')
         .max(8000, 'Message is too long'),
     ),
+  context: chatRequestContextSchema.optional(),
 });
 export type SendChatMessageInput = z.infer<typeof sendChatMessageSchema>;
+
+/**
+ * `POST /chat/conversations/:convId/messages/:msgId/tool-calls/:id/apply`
+ * body. The client may send the company id of the page it's currently
+ * viewing as a sanity check; the server still ignores any LLM-supplied
+ * `company_id` argument and uses request scope only.
+ */
+export const applyChatToolCallSchema = z.object({
+  companyId: z.string().uuid().optional(),
+});
+export type ApplyChatToolCallInput = z.infer<typeof applyChatToolCallSchema>;

@@ -8,15 +8,23 @@ import {
   Param,
   ParseUUIDPipe,
   Post,
+  Req,
   Res,
 } from '@nestjs/common';
-import type { Response } from 'express';
-import { sendChatMessageSchema, type SendChatMessageInput } from '@weavestream/shared';
+import type { Request, Response } from 'express';
+import {
+  applyChatToolCallSchema,
+  sendChatMessageSchema,
+  type ApplyChatToolCallInput,
+  type SendChatMessageInput,
+} from '@weavestream/shared';
 import { CurrentUser, type AuthedUser } from '../common/current-user.decorator.js';
 import { AuthedOnly } from '../rbac/require-permission.decorator.js';
 import { ZodBody } from '../common/zod-validation.pipe.js';
+import { requestMetaOf as meta } from '../common/request-meta.js';
 import { ChatService } from './chat.service.js';
 import { ChatStreamService } from './chat-stream.service.js';
+import { ChatToolCallService } from './chat-tool-call.service.js';
 
 /**
  * Per-user AI chat. All routes are implicitly scoped to the caller via
@@ -34,6 +42,7 @@ export class ChatController {
   constructor(
     private readonly chat: ChatService,
     private readonly stream: ChatStreamService,
+    private readonly toolCalls: ChatToolCallService,
   ) {}
 
   @Get('conversations')
@@ -78,5 +87,47 @@ export class ChatController {
     @Res() res: Response,
   ): Promise<void> {
     await this.stream.stream(actor, id, dto, res);
+  }
+
+  /**
+   * Apply a pending tool call. The actual mutation happens here — the
+   * LLM streaming only PROPOSED the action. The `companyId` in the
+   * request body is the page the user was on when they clicked Apply;
+   * the service uses it as a tenancy sanity-check against the row the
+   * LLM picked. Permissions (`article.write`) are re-verified against
+   * the article's own company.
+   */
+  @Post('conversations/:convId/messages/:msgId/tool-calls/:toolCallId/apply')
+  @HttpCode(HttpStatus.OK)
+  async applyToolCall(
+    @CurrentUser() actor: AuthedUser,
+    @Param('convId', new ParseUUIDPipe()) convId: string,
+    @Param('msgId', new ParseUUIDPipe()) msgId: string,
+    @Param('toolCallId') toolCallId: string,
+    @Body(new ZodBody(applyChatToolCallSchema)) dto: ApplyChatToolCallInput,
+    @Req() req: Request,
+  ) {
+    return this.toolCalls.apply(actor, {
+      conversationId: convId,
+      messageId: msgId,
+      toolCallId,
+      requestCompanyId: dto.companyId,
+      auditMeta: meta(req),
+    });
+  }
+
+  @Post('conversations/:convId/messages/:msgId/tool-calls/:toolCallId/reject')
+  @HttpCode(HttpStatus.OK)
+  async rejectToolCall(
+    @CurrentUser() actor: AuthedUser,
+    @Param('convId', new ParseUUIDPipe()) convId: string,
+    @Param('msgId', new ParseUUIDPipe()) msgId: string,
+    @Param('toolCallId') toolCallId: string,
+  ) {
+    return this.toolCalls.reject(actor, {
+      conversationId: convId,
+      messageId: msgId,
+      toolCallId,
+    });
   }
 }
