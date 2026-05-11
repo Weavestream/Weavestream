@@ -26,6 +26,8 @@ import {
   type StickyNoteSeverity,
 } from './sticky-note-context';
 import { SearchPaletteProvider } from '../search/search-palette-provider';
+import { ChatPanelProvider } from '../chat-panel/chat-panel-provider';
+import { ChatPanel } from '../chat-panel/chat-panel';
 
 export type CompanyShellMode = 'admin' | 'portal';
 
@@ -340,14 +342,16 @@ export function CompanyShell({
   //             render either.
   const showStarred = isAdmin || operatorAccess;
   const showExpirations = isAdmin;
-  const footerToolbar =
-    showStarred || showExpirations ? (
-      <SidebarToolbar
-        companyId={company.id}
-        showStarred={showStarred}
-        showExpirations={showExpirations}
-      />
-    ) : undefined;
+  // The toolbar always renders so the chat-panel toggle is reachable on
+  // every shell, including client portals where the starred/expirations
+  // shortcuts are hidden.
+  const footerToolbar = (
+    <SidebarToolbar
+      companyId={company.id}
+      showStarred={showStarred}
+      showExpirations={showExpirations}
+    />
+  );
 
   return (
     <StickyNoteProvider value={stickyNote ?? null}>
@@ -355,6 +359,7 @@ export function CompanyShell({
       scopedCompany={{ id: company.id, name: company.name }}
       defaults={me.searchDefaults}
     >
+      <ChatPanelProvider>
       <div style={{ display: 'flex', height: '100vh', background: 'var(--bg)' }}>
         <Sidebar
           workspace={sidebarWorkspace}
@@ -391,7 +396,9 @@ export function CompanyShell({
           />
           {children}
         </main>
+        <ChatPanel />
       </div>
+      </ChatPanelProvider>
     </SearchPaletteProvider>
     </StickyNoteProvider>
   );

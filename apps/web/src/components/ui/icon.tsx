@@ -348,6 +348,25 @@ export const Icon = {
       <path d="M3 14v-3h3" />
     </IconBase>
   ),
+  chat: (p: IconProps) => (
+    <IconBase {...p}>
+      <path d="M2.5 4a1 1 0 0 1 1-1h9a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H7l-3 2.5V11h-0.5a1 1 0 0 1-1-1V4z" />
+    </IconBase>
+  ),
+  chatFilled: (p: IconProps) => (
+    <IconBase {...p}>
+      <path
+        d="M2.5 4a1 1 0 0 1 1-1h9a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H7l-3 2.5V11h-0.5a1 1 0 0 1-1-1V4z"
+        fill="currentColor"
+      />
+    </IconBase>
+  ),
+  panelRight: (p: IconProps) => (
+    <IconBase {...p}>
+      <rect x="2" y="3" width="12" height="10" rx="1" />
+      <path d="M10 3v10" />
+    </IconBase>
+  ),
 };
 
 export type IconName = keyof typeof Icon;

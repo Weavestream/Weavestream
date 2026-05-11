@@ -7,6 +7,8 @@ import { SidebarActions } from './sidebar-actions';
 import { SidebarToolbar } from './sidebar-toolbar';
 import { MobileShellChrome } from './mobile-nav';
 import { SearchPaletteProvider } from '../search/search-palette-provider';
+import { ChatPanelProvider } from '../chat-panel/chat-panel-provider';
+import { ChatPanel } from '../chat-panel/chat-panel';
 
 export function AdminShell({
   me,
@@ -189,6 +191,7 @@ export function AdminShell({
 
   return (
     <SearchPaletteProvider scopedCompany={null} defaults={me.searchDefaults}>
+      <ChatPanelProvider>
       <div style={{ display: 'flex', height: '100vh', background: 'var(--bg)' }}>
         <Sidebar
           workspace={sidebarWorkspace}
@@ -225,7 +228,9 @@ export function AdminShell({
           />
           {children}
         </main>
+        <ChatPanel />
       </div>
+      </ChatPanelProvider>
     </SearchPaletteProvider>
   );
 }

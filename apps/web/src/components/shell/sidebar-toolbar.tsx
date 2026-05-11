@@ -15,6 +15,7 @@ import { apiFetch } from '../../lib/api';
 import { companyAccent } from '../../lib/company-format';
 import type { StarredItem } from '../../lib/server-api';
 import { CompanyAvatar, Icon, LayoutSwatch, type IconName } from '../ui';
+import { ChatPanelToggle } from '../chat-panel/chat-panel-toggle';
 
 /**
  * Thin icon strip rendered in the sidebar footer, just above the user
@@ -60,6 +61,7 @@ export function SidebarToolbar({
         />
       )}
       {showStarred && <StarredQuickAccessTrigger />}
+      <ChatPanelToggle />
     </>
   );
 }
