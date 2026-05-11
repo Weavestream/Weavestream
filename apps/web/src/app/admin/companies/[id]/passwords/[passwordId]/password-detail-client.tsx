@@ -37,6 +37,10 @@ import {
 } from '../../../../../../components/tags/tags-input';
 import { LinkedItemsPanel } from '../../../../../../components/relations';
 import { AttachmentsPanel } from '../../../../../../components/upload/attachments-panel';
+import {
+  buildPasswordFolderOptions,
+  formatFolderOptionLabel,
+} from '../../../../../../lib/password-folder-tree';
 
 interface Props {
   companyId: string;
@@ -1011,13 +1015,11 @@ function EditPasswordDialog({
               onChange={(e) => setFolderId(e.target.value || null)}
             >
               <option value="">(no folder)</option>
-              {folders
-                .filter((f) => !f.archivedAt)
-                .map((f) => (
-                  <option key={f.id} value={f.id}>
-                    {f.name}
-                  </option>
-                ))}
+              {buildPasswordFolderOptions(folders).map((opt) => (
+                <option key={opt.id} value={opt.id}>
+                  {formatFolderOptionLabel(opt)}
+                </option>
+              ))}
             </Select>
           </Field>
           <Field label="Tags">

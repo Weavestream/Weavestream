@@ -4,6 +4,7 @@ import Link from 'next/link';
 export const metadata: Metadata = { title: 'Assets' };
 import {
   getActiveLayouts,
+  getCompanyActivePasswords,
   getCompanyDetail,
   getMe,
   getSettings,
@@ -47,7 +48,7 @@ export default async function CompanyAssetsPage({
     if (typeof v === 'string') fieldFilters[k.slice('field.'.length)] = v;
   }
 
-  const [layouts, assets] = await Promise.all([
+  const [layouts, assets, passwords] = await Promise.all([
     getActiveLayouts(),
     listAssets(companyId, {
       layoutId,
@@ -56,6 +57,11 @@ export default async function CompanyAssetsPage({
       fieldFilters,
       limit: 200,
     }),
+    // Passwords share the same global tag namespace as assets, so we load
+    // them here too. The table surfaces matching credentials inline when
+    // the operator picks a tag filter, since the per-company assets view
+    // is the natural "find everything tagged X" landing page.
+    getCompanyActivePasswords(companyId),
   ]);
 
   const activeLayout = layoutId
@@ -114,6 +120,7 @@ export default async function CompanyAssetsPage({
           <AssetsTable
             companyId={companyId}
             rows={assets.items}
+            passwords={passwords}
             layouts={layouts}
             q={q ?? ''}
             layoutId={layoutId ?? ''}

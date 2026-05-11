@@ -2,7 +2,14 @@
 
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { useEffect, useMemo, useRef, useState, useTransition } from 'react';
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useTransition,
+  type ReactNode,
+} from 'react';
 import type {
   PasswordFolderRow,
   PasswordSummary,
@@ -22,6 +29,11 @@ import { PasswordStrengthMeter } from '../../../../../components/passwords/passw
 import { CreatePasswordDialog } from '../../../../../components/passwords/create-password-dialog';
 import { PasswordRowActions } from '../../../../../components/passwords/password-row-actions';
 import { TotpCode } from '../../../../../components/passwords/totp-code';
+import { PasswordFolderSettingsDialog } from './password-folder-settings-dialog';
+import {
+  buildPasswordFolderOptions,
+  formatFolderOptionLabel,
+} from '../../../../../lib/password-folder-tree';
 
 interface BrowserProps {
   companyId: string;
@@ -91,6 +103,44 @@ export function PasswordsBrowser({
     DEFAULT_COLUMN_PREFS,
   );
   const [columnPrefsLoaded, setColumnPrefsLoaded] = useState(false);
+  const [editingFolder, setEditingFolder] = useState(false);
+  const [openFolders, setOpenFolders] = useState<Record<string, boolean>>(() => {
+    // Seed the tree with the first two levels expanded — matches the
+    // articles browser so a fresh page load shows the top of the
+    // hierarchy without requiring clicks.
+    const seed: Record<string, boolean> = {};
+    const byParent = new Map<string | null, PasswordFolderRow[]>();
+    for (const f of folders) {
+      if (f.archivedAt) continue;
+      const list = byParent.get(f.parentId) ?? [];
+      list.push(f);
+      byParent.set(f.parentId, list);
+    }
+    const walk = (parentId: string | null, depth: number) => {
+      const list = byParent.get(parentId) ?? [];
+      for (const f of list) {
+        if (depth < 2) seed[f.id] = true;
+        walk(f.id, depth + 1);
+      }
+    };
+    walk(null, 0);
+    return seed;
+  });
+
+  const selectedFolder = useMemo(
+    () =>
+      typeof folderId === 'string' && folderId !== 'ALL'
+        ? folders.find((f) => f.id === folderId) ?? null
+        : null,
+    [folderId, folders],
+  );
+  const selectedFolderPasswordCount = useMemo(
+    () =>
+      selectedFolder
+        ? rows.filter((r) => r.folderId === selectedFolder.id).length
+        : 0,
+    [rows, selectedFolder],
+  );
 
   const includeArchived = searchParams.get('archived') === '1';
 
@@ -158,14 +208,19 @@ export function PasswordsBrowser({
     router.push(`?${params.toString()}`);
   }
 
-  function openCreateFolder() {
+  function openCreateFolder(parent: string | null = null) {
     setErr(null);
     setNewFolderName('');
-    // Seed parent to the currently-selected folder when it's a real
-    // row (so "New folder" inside a selected folder nests it naturally).
-    setNewFolderParent(
-      typeof folderId === 'string' && folderId !== 'ALL' ? folderId : null,
-    );
+    // Per-folder "+" buttons pass an explicit parent; the header "+"
+    // falls back to the selected folder (if any) so adding "inside"
+    // the current view nests naturally.
+    if (parent !== null) {
+      setNewFolderParent(parent);
+    } else {
+      setNewFolderParent(
+        typeof folderId === 'string' && folderId !== 'ALL' ? folderId : null,
+      );
+    }
     setCreatingFolder(true);
   }
 
@@ -251,6 +306,17 @@ export function PasswordsBrowser({
         {includeArchived ? 'Hide archived' : 'Show archived'}
       </button>
       <PasswordColumnsMenu value={columnPrefs} onChange={setColumnPrefs} />
+      {canManage && selectedFolder && (
+        <Btn
+          kind="outline"
+          size="sm"
+          icon={Icon.edit}
+          onClick={() => setEditingFolder(true)}
+          title={`Edit folder "${selectedFolder.name}"`}
+        >
+          Edit
+        </Btn>
+      )}
       {canManage && (
         <Btn
           kind="primary"
@@ -278,7 +344,7 @@ export function PasswordsBrowser({
           setFolderId('ALL');
           if (isMobile) setMobileTab('passwords');
         }}
-        icon="box"
+        icon={<Icon.grid size={12} style={{ color: 'var(--dim)' }} />}
         label="All"
         count={rows.length}
       />
@@ -288,7 +354,7 @@ export function PasswordsBrowser({
           setFolderId(null);
           if (isMobile) setMobileTab('passwords');
         }}
-        icon="box"
+        icon={<Icon.folder size={12} style={{ color: 'var(--dim)' }} />}
         label="Unfiled"
         count={rows.filter((r) => !r.folderId).length}
       />
@@ -310,23 +376,12 @@ export function PasswordsBrowser({
         {canManage && !creatingFolder && (
           <button
             type="button"
-            onClick={openCreateFolder}
-            title="New folder"
-            style={{
-              background: 'transparent',
-              border: 0,
-              padding: 0,
-              cursor: 'pointer',
-              color: 'var(--accent)',
-              fontSize: 11,
-              textTransform: 'none',
-              letterSpacing: 0,
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: 2,
-            }}
+            onClick={() => openCreateFolder(null)}
+            title="New folder at root"
+            className="sd-editor-btn"
+            style={{ padding: 0, height: 18, width: 18 }}
           >
-            <Icon.plus size={11} /> New
+            <Icon.plus size={10} />
           </button>
         )}
       </div>
@@ -377,13 +432,11 @@ export function PasswordsBrowser({
               }}
             >
               <option value="">(top level)</option>
-              {folders
-                .filter((f) => !f.archivedAt)
-                .map((f) => (
-                  <option key={f.id} value={f.id}>
-                    {f.name}
-                  </option>
-                ))}
+              {buildPasswordFolderOptions(folders).map((opt) => (
+                <option key={opt.id} value={opt.id}>
+                  {formatFolderOptionLabel(opt)}
+                </option>
+              ))}
             </select>
           )}
           <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
@@ -420,6 +473,10 @@ export function PasswordsBrowser({
               setFolderId(v);
               if (isMobile) setMobileTab('passwords');
             }}
+            canManage={canManage}
+            onAddChild={(parentId) => openCreateFolder(parentId)}
+            open={openFolders}
+            setOpen={setOpenFolders}
           />
         ))}
     </aside>
@@ -536,6 +593,17 @@ export function PasswordsBrowser({
             setDialog(null);
             startTransition(() => router.refresh());
           }}
+        />
+      )}
+      {selectedFolder && (
+        <PasswordFolderSettingsDialog
+          companyId={companyId}
+          folder={selectedFolder}
+          allFolders={folders}
+          passwordCount={selectedFolderPasswordCount}
+          open={editingFolder}
+          onClose={() => setEditingFolder(false)}
+          onArchived={() => setFolderId('ALL')}
         />
       )}
       {isPending && <div style={{ display: 'none' }} aria-hidden />}
@@ -973,6 +1041,10 @@ function FolderSubtree({
   depth,
   active,
   setActive,
+  canManage,
+  onAddChild,
+  open,
+  setOpen,
 }: {
   folder: PasswordFolderRow;
   all: PasswordFolderRow[];
@@ -980,31 +1052,76 @@ function FolderSubtree({
   depth: number;
   active: string | null | 'ALL';
   setActive: (v: string | null | 'ALL') => void;
+  canManage: boolean;
+  onAddChild: (parentId: string) => void;
+  open: Record<string, boolean>;
+  setOpen: (next: Record<string, boolean>) => void;
 }) {
   const children = all.filter((f) => f.parentId === folder.id);
+  const hasChildren = children.length > 0;
+  const isOpen = !!open[folder.id];
   const count = rows.filter((r) => r.folderId === folder.id).length;
   return (
     <>
       <FolderRow
         active={active === folder.id}
-        onClick={() => setActive(folder.id)}
-        icon={(folder.icon as never) ?? 'box'}
+        onClick={() => {
+          if (hasChildren) setOpen({ ...open, [folder.id]: !isOpen });
+          setActive(folder.id);
+        }}
+        icon={
+          hasChildren ? (
+            <Icon.chevronD
+              size={10}
+              style={{
+                transform: isOpen ? 'none' : 'rotate(-90deg)',
+                color: folder.color ?? 'var(--dim)',
+                transition: 'transform 120ms ease',
+              }}
+            />
+          ) : (
+            <Icon.folder
+              size={12}
+              style={{ color: folder.color ?? 'var(--dim)' }}
+            />
+          )
+        }
         label={folder.name}
-        color={folder.color ?? undefined}
         count={count}
         depth={depth}
+        right={
+          canManage ? (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onAddChild(folder.id);
+              }}
+              className="sd-editor-btn"
+              style={{ padding: 0, height: 18, width: 18 }}
+              title="New subfolder"
+            >
+              <Icon.plus size={10} />
+            </button>
+          ) : undefined
+        }
       />
-      {children.map((c) => (
-        <FolderSubtree
-          key={c.id}
-          folder={c}
-          all={all}
-          rows={rows}
-          depth={depth + 1}
-          active={active}
-          setActive={setActive}
-        />
-      ))}
+      {isOpen &&
+        children.map((c) => (
+          <FolderSubtree
+            key={c.id}
+            folder={c}
+            all={all}
+            rows={rows}
+            depth={depth + 1}
+            active={active}
+            setActive={setActive}
+            canManage={canManage}
+            onAddChild={onAddChild}
+            open={open}
+            setOpen={setOpen}
+          />
+        ))}
     </>
   );
 }
@@ -1015,22 +1132,28 @@ function FolderRow({
   icon,
   label,
   count,
-  color,
   depth = 0,
+  right,
 }: {
   active: boolean;
   onClick: () => void;
-  icon: string;
+  icon: ReactNode;
   label: string;
   count: number;
-  color?: string;
   depth?: number;
+  right?: ReactNode;
 }) {
-  void icon;
   return (
-    <button
-      type="button"
+    <div
+      role="button"
+      tabIndex={0}
       onClick={onClick}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          onClick();
+        }
+      }}
       style={{
         width: '100%',
         display: 'flex',
@@ -1046,20 +1169,48 @@ function FolderRow({
         textAlign: 'left',
       }}
     >
-      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+      <span
+        style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 6,
+          flex: 1,
+          minWidth: 0,
+        }}
+      >
         <span
           aria-hidden
           style={{
-            display: 'inline-block',
-            width: 10,
-            height: 10,
-            borderRadius: 3,
-            background: color ?? 'var(--line-2)',
+            width: 14,
+            height: 14,
+            display: 'inline-grid',
+            placeItems: 'center',
+            flexShrink: 0,
           }}
-        />
-        {label}
+        >
+          {icon}
+        </span>
+        <span
+          style={{
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          {label}
+        </span>
       </span>
-      <span style={{ fontSize: 11, color: 'var(--muted)' }}>{count}</span>
-    </button>
+      <span
+        style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 6,
+          flexShrink: 0,
+        }}
+      >
+        <span style={{ fontSize: 11, color: 'var(--muted)' }}>{count}</span>
+        {right}
+      </span>
+    </div>
   );
 }

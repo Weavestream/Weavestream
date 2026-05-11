@@ -14,6 +14,10 @@ import {
 import { apiFetch } from '../../lib/api';
 import type { PasswordFolderRow } from '../../lib/server-api';
 import {
+  buildPasswordFolderOptions,
+  formatFolderOptionLabel,
+} from '../../lib/password-folder-tree';
+import {
   TagsInput,
   toPlainNameList,
   type TagChipDraft,
@@ -245,13 +249,11 @@ export function CreatePasswordDialog({
               onChange={(e) => setSelectedFolder(e.target.value || null)}
             >
               <option value="">(no folder)</option>
-              {folders
-                .filter((f) => !f.archivedAt)
-                .map((f) => (
-                  <option key={f.id} value={f.id}>
-                    {f.name}
-                  </option>
-                ))}
+              {buildPasswordFolderOptions(folders).map((opt) => (
+                <option key={opt.id} value={opt.id}>
+                  {formatFolderOptionLabel(opt)}
+                </option>
+              ))}
             </Select>
           </Field>
           <Field label="Tags">

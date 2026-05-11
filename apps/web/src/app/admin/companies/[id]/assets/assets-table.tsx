@@ -7,6 +7,7 @@ import type { BulkAssetResult } from '@weavestream/shared';
 import type {
   AssetSummary,
   LayoutSummary,
+  PasswordSummary,
 } from '../../../../../lib/server-api';
 import {
   Btn,
@@ -32,6 +33,7 @@ import { TagFilterMenu } from '../../../../../components/layouts/tag-filter-menu
 export function AssetsTable({
   companyId,
   rows,
+  passwords,
   layouts,
   q,
   layoutId,
@@ -41,6 +43,7 @@ export function AssetsTable({
 }: {
   companyId: string;
   rows: AssetSummary[];
+  passwords: PasswordSummary[];
   layouts: LayoutSummary[];
   q: string;
   layoutId: string;
@@ -97,11 +100,32 @@ export function AssetsTable({
     return out;
   }, [rows]);
 
-  // Distinct `{id, name}` chips referenced across the current row set.
-  // The server hydrates TAGS values into chip objects, so we just walk
-  // them. Sort alphabetically for stable ordering.
+  // Lowercase-keyed index of password tag names → password ids, so the
+  // tag filter can find credentials carrying the chosen tag without
+  // re-walking every password row on each render. Passwords store tags
+  // as plain strings, not Tag-table UUIDs, so the lookup is name-keyed.
+  const passwordTagIndex = useMemo(() => {
+    const out = new Map<string, Set<string>>();
+    for (const p of passwords) {
+      for (const t of p.tags) {
+        const key = t.trim().toLowerCase();
+        if (!key) continue;
+        if (!out.has(key)) out.set(key, new Set());
+        out.get(key)!.add(p.id);
+      }
+    }
+    return out;
+  }, [passwords]);
+
+  // Distinct `{id, name}` chips referenced across the current row set,
+  // merged with any tags that appear *only* on passwords. Asset chips
+  // are sourced from the global Tag table so their ids are real UUIDs;
+  // password-only tags get a `pw:<lc-name>` synthetic id so the filter
+  // menu still has a stable handle to select them by. Names matched
+  // case-insensitively to avoid duplicate entries for "Production" vs
+  // "production".
   const availableTags = useMemo(() => {
-    const byId = new Map<string, string>();
+    const byKey = new Map<string, { id: string; name: string }>();
     for (const r of rows) {
       for (const f of r.fields) {
         if (f.fieldType !== 'TAGS') continue;
@@ -115,15 +139,24 @@ export function AssetsTable({
             typeof (entry as { name?: unknown }).name === 'string'
           ) {
             const obj = entry as { id: string; name: string };
-            if (!byId.has(obj.id)) byId.set(obj.id, obj.name);
+            const key = obj.name.trim().toLowerCase();
+            if (!byKey.has(key)) byKey.set(key, { id: obj.id, name: obj.name });
           }
         }
       }
     }
-    return Array.from(byId.entries())
-      .map(([id, name]) => ({ id, name }))
-      .sort((a, b) => a.name.localeCompare(b.name));
-  }, [rows]);
+    for (const p of passwords) {
+      for (const t of p.tags) {
+        const name = t.trim();
+        if (!name) continue;
+        const key = name.toLowerCase();
+        if (!byKey.has(key)) byKey.set(key, { id: `pw:${key}`, name });
+      }
+    }
+    return Array.from(byKey.values()).sort((a, b) =>
+      a.name.localeCompare(b.name),
+    );
+  }, [rows, passwords]);
 
   // Drop the tagFilter selection if the underlying tag list no longer
   // contains it (e.g. server-side filters narrowed the rows past every
@@ -134,14 +167,26 @@ export function AssetsTable({
     }
   }, [availableTags, tagFilter]);
 
+  const activeTag = tagFilter
+    ? availableTags.find((t) => t.id === tagFilter) ?? null
+    : null;
+
   const visibleRows = useMemo(() => {
     if (!tagFilter) return rows;
     return rows.filter((r) => rowTagIndex.get(r.id)?.has(tagFilter));
   }, [rows, rowTagIndex, tagFilter]);
 
-  const activeTag = tagFilter
-    ? availableTags.find((t) => t.id === tagFilter) ?? null
-    : null;
+  // Credentials carrying the active tag name (case-insensitive). We
+  // match by name rather than id because password tags are plain
+  // strings, not Tag-table references. Empty when no tag filter is
+  // active so we skip the inline "Passwords" section.
+  const matchingPasswords = useMemo(() => {
+    if (!activeTag) return [] as PasswordSummary[];
+    const key = activeTag.name.trim().toLowerCase();
+    const ids = passwordTagIndex.get(key);
+    if (!ids || ids.size === 0) return [];
+    return passwords.filter((p) => ids.has(p.id));
+  }, [activeTag, passwordTagIndex, passwords]);
 
   function pushParams(next: Record<string, string | undefined | null>) {
     const params = new URLSearchParams();
@@ -522,6 +567,20 @@ export function AssetsTable({
             clear all
           </button>
         </div>
+      )}
+
+      {/* When a tag filter is active, surface passwords carrying the
+          same tag inline so the operator doesn't have to bounce to the
+          vault page to find them. Password tags share the global tag
+          namespace with assets (the chip input autocompletes against
+          the same `Tag` table), so this is the natural place to
+          collect "everything tagged X" under one view. */}
+      {activeTag && matchingPasswords.length > 0 && (
+        <PasswordTagSection
+          companyId={companyId}
+          tagName={activeTag.name}
+          passwords={matchingPasswords}
+        />
       )}
 
       {/* Table / cards — `flex: 1; min-height: 0` so the DataTable's own
@@ -1204,6 +1263,157 @@ function Chip({
         <Icon.x size={9} />
       </button>
     </span>
+  );
+}
+
+/**
+ * Inline "Passwords tagged X" section rendered above the asset table
+ * when a tag filter is active. We cap the displayed list at a small
+ * number so the section never dominates the asset view; an overflow
+ * link routes to the vault browser for the full set.
+ */
+function PasswordTagSection({
+  companyId,
+  tagName,
+  passwords,
+}: {
+  companyId: string;
+  tagName: string;
+  passwords: PasswordSummary[];
+}) {
+  const limit = 6;
+  const shown = passwords.slice(0, limit);
+  const overflow = passwords.length - shown.length;
+  return (
+    <div
+      style={{
+        padding: '10px 14px',
+        background: 'var(--surface)',
+        borderBottom: '1px solid var(--line)',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 8,
+        flexShrink: 0,
+      }}
+    >
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          flexWrap: 'wrap',
+        }}
+      >
+        <Icon.lock size={12} style={{ color: 'var(--muted)' }} />
+        <span
+          style={{
+            fontFamily: 'var(--font-mono)',
+            fontSize: 10.5,
+            color: 'var(--dim)',
+            textTransform: 'uppercase',
+            letterSpacing: 0.5,
+          }}
+        >
+          passwords tagged
+        </span>
+        <Tag tone="accent">{tagName}</Tag>
+        <span
+          style={{
+            fontFamily: 'var(--font-mono)',
+            fontSize: 11,
+            color: 'var(--muted)',
+          }}
+        >
+          {passwords.length}
+        </span>
+      </div>
+      <div
+        style={{
+          display: 'flex',
+          flexWrap: 'wrap',
+          gap: 6,
+        }}
+      >
+        {shown.map((p) => (
+          <Link
+            key={p.id}
+            href={`/admin/companies/${companyId}/passwords/${p.id}`}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 6,
+              maxWidth: 280,
+              padding: '4px 10px',
+              background: 'var(--panel-2)',
+              border: '1px solid var(--line-2)',
+              borderRadius: 5,
+              fontSize: 12,
+              color: 'var(--text)',
+              textDecoration: 'none',
+            }}
+          >
+            {p.color && (
+              <span
+                aria-hidden
+                style={{
+                  display: 'inline-block',
+                  width: 8,
+                  height: 8,
+                  borderRadius: 2,
+                  background: p.color,
+                  flexShrink: 0,
+                }}
+              />
+            )}
+            <span
+              style={{
+                fontWeight: 500,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+                minWidth: 0,
+              }}
+            >
+              {p.name}
+            </span>
+            {p.username && (
+              <span
+                style={{
+                  fontFamily: 'var(--font-mono)',
+                  fontSize: 11,
+                  color: 'var(--muted)',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                  minWidth: 0,
+                }}
+              >
+                · {p.username}
+              </span>
+            )}
+          </Link>
+        ))}
+        {overflow > 0 && (
+          <Link
+            href={`/admin/companies/${companyId}/passwords`}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 4,
+              padding: '4px 10px',
+              fontSize: 12,
+              fontFamily: 'var(--font-mono)',
+              color: 'var(--accent)',
+              textDecoration: 'none',
+              borderRadius: 5,
+            }}
+          >
+            +{overflow} more
+            <Icon.chevron size={10} />
+          </Link>
+        )}
+      </div>
+    </div>
   );
 }
 
