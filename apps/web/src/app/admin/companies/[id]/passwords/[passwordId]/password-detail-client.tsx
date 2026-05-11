@@ -30,6 +30,8 @@ import { PasswordRevealField } from '../../../../../../components/passwords/pass
 import { TotpCode } from '../../../../../../components/passwords/totp-code';
 import { PasswordStrengthMeter } from '../../../../../../components/passwords/password-strength-meter';
 import { SecretInput } from '../../../../../../components/passwords/secret-input';
+import { LinkedItemsPanel } from '../../../../../../components/relations';
+import { AttachmentsPanel } from '../../../../../../components/upload/attachments-panel';
 
 interface Props {
   companyId: string;
@@ -274,6 +276,20 @@ export function PasswordDetailClient({
         </div>
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <LinkedItemsPanel
+            companyId={companyId}
+            entityType="password"
+            entityId={password.id}
+            editable={canManage && !password.archivedAt}
+          />
+
+          <AttachmentsPanel
+            companyId={companyId}
+            entityType="password"
+            entityId={password.id}
+            editable={canManage && !password.archivedAt}
+          />
+
           <Panel title="Details">
             <dl
               style={{
@@ -285,6 +301,19 @@ export function PasswordDetailClient({
                 margin: 0,
               }}
             >
+              {password.assetId && (
+                <>
+                  <dt style={dt}>Asset</dt>
+                  <dd style={dd}>
+                    <Link
+                      href={`/admin/companies/${companyId}/assets/${password.assetId}`}
+                      style={{ color: 'var(--accent)' }}
+                    >
+                      {assetName ?? 'View asset'}
+                    </Link>
+                  </dd>
+                </>
+              )}
               <dt style={dt}>Folder</dt>
               <dd style={dd}>{folderName ?? 'Unfiled'}</dd>
               <dt style={dt}>Tags</dt>
@@ -327,28 +356,6 @@ export function PasswordDetailClient({
               <dd style={dd}>{fmtDateTime(password.updatedAt)}</dd>
             </dl>
           </Panel>
-
-          {password.assetId && (
-            <Panel title="Embedded on asset">
-              <Link
-                href={`/admin/companies/${companyId}/assets/${password.assetId}`}
-                style={{ color: 'var(--accent)', fontSize: 13 }}
-              >
-                {assetName ?? 'View asset'} →
-              </Link>
-              <p
-                style={{
-                  fontSize: 12,
-                  color: 'var(--muted)',
-                  marginTop: 6,
-                  lineHeight: 1.5,
-                }}
-              >
-                Permissions inherit from this asset. Archiving the asset will
-                automatically archive this credential.
-              </p>
-            </Panel>
-          )}
 
           {password.restrictedToUserIds.length > 0 && (
             <Panel title="Access restricted">

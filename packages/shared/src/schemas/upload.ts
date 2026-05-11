@@ -9,6 +9,7 @@ export const uploadAttachmentTypeSchema = z.enum([
   'asset',
   'article',
   'asset_field',
+  'password',
 ]);
 export type UploadAttachmentType = z.infer<typeof uploadAttachmentTypeSchema>;
 

@@ -91,7 +91,7 @@ export class UploadsController {
       throw new BadRequestException({
         error: 'MissingAttachmentFilters',
         message:
-          'attachedToType (asset|article|asset_field) and attachedToId are both required.',
+          'attachedToType (asset|article|asset_field|password) and attachedToId are both required.',
       });
     }
     return this.uploads.listAttachments(companyId, {

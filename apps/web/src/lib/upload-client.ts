@@ -37,7 +37,7 @@ export type UploadProgress = {
   percent: number;
 };
 
-export type UploadAttachmentType = 'asset' | 'article' | 'asset_field';
+export type UploadAttachmentType = 'asset' | 'article' | 'asset_field' | 'password';
 
 export async function uploadFile(opts: {
   companyId: string;
