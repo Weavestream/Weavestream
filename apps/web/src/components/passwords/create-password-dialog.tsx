@@ -173,21 +173,16 @@ export function CreatePasswordDialog({
             autoFocus
           />
         </Field>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-          <VaultField label="Account">
-            <Input
-              id={accountFieldId}
-              name={accountFieldName}
-              aria-label="Account"
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              autoComplete="off"
-            />
-          </VaultField>
-          <Field label="URL">
-            <Input value={url} onChange={(e) => setUrl(e.target.value)} />
-          </Field>
-        </div>
+        <VaultField label="Account">
+          <Input
+            id={accountFieldId}
+            name={accountFieldName}
+            aria-label="Account"
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+            autoComplete="off"
+          />
+        </VaultField>
         <VaultField label="Password">
           <SecretInput
             name={secretFieldName}
@@ -199,6 +194,9 @@ export function CreatePasswordDialog({
             onGenerate={setPassword}
           />
         </VaultField>
+        <Field label="URL">
+          <Input value={url} onChange={(e) => setUrl(e.target.value)} />
+        </Field>
         <Field label="Notes">
           <Textarea
             value={notes}

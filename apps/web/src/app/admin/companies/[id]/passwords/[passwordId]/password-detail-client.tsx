@@ -804,18 +804,13 @@ function EditPasswordDialog({
             autoFocus
           />
         </Field>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-          <Field label="Username">
-            <Input
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              autoComplete="off"
-            />
-          </Field>
-          <Field label="URL">
-            <Input value={url} onChange={(e) => setUrl(e.target.value)} />
-          </Field>
-        </div>
+        <Field label="Username">
+          <Input
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+            autoComplete="off"
+          />
+        </Field>
         <Field
           label="New password"
           help="Leave blank to keep the current password unchanged."
@@ -827,6 +822,9 @@ function EditPasswordDialog({
             generatorDefaults={generatorDefaults}
             onGenerate={setNewPassword}
           />
+        </Field>
+        <Field label="URL">
+          <Input value={url} onChange={(e) => setUrl(e.target.value)} />
         </Field>
         <Field
           label="One-time password (TOTP)"
