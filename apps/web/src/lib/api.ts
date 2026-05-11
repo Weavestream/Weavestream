@@ -1,22 +1,6 @@
 'use client';
 
-function readCookie(name: string): string | undefined {
-  if (typeof document === 'undefined') return undefined;
-  const match = document.cookie.match(new RegExp('(?:^|; )' + name + '=([^;]*)'));
-  return match ? decodeURIComponent(match[1]!) : undefined;
-}
-
-async function ensureCsrf(): Promise<string> {
-  const existing = readCookie('ws_csrf');
-  if (existing) return existing;
-  const res = await fetch('/api/v1/auth/csrf', {
-    method: 'POST',
-    credentials: 'include',
-  });
-  if (!res.ok) throw new Error('csrf-fetch-failed');
-  const data = (await res.json()) as { csrfToken: string };
-  return data.csrfToken;
-}
+import { ensureCsrf } from './csrf';
 
 export async function apiFetch<T>(
   path: string,

@@ -218,6 +218,7 @@ model User {
   starredPasswords  StarredPassword[]
   starredAssets     StarredAsset[]
   starredArticles   StarredArticle[]
+  chatConversations ChatConversation[]
 
   @@map("users")
 }
@@ -1575,4 +1576,43 @@ model BackupRun {
   @@index([configId, startedAt(sort: Desc)])
   @@index([status, createdAt])
   @@map("backup_run")
+}
+
+// Per-user AI chat conversations. Each conversation belongs to exactly
+// one user (no company / tenant scoping in this phase) and cascades on
+// user deletion. The `title` defaults to "New chat" and is filled in
+// from the first user message on the first turn. `model` records which
+// LLM model produced the assistant replies so future model swaps in
+// `AiSetting.defaultModel` don't retroactively change history.
+model ChatConversation {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  title     String   @default("New chat")
+  model     String?
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  user     User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  messages ChatMessage[]
+
+  @@index([userId, updatedAt])
+  @@map("chat_conversations")
+}
+
+model ChatMessage {
+  id             String   @id @default(uuid()) @db.Uuid
+  conversationId String   @map("conversation_id") @db.Uuid
+  role           ChatRole
+  content        String
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  conversation ChatConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId, createdAt])
+  @@map("chat_messages")
+}
+
+enum ChatRole {
+  USER
+  ASSISTANT
 }
