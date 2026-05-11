@@ -11,6 +11,7 @@ import type {
   CreateArticleInput,
   UpdateArticleInput,
 } from '@weavestream/shared';
+import { splitMarkdownTitleAndBody } from '@weavestream/shared';
 import { ArticlesService } from '../articles/articles.service.js';
 import { PermissionService } from '../rbac/permission.service.js';
 import type { AuditMeta } from '../articles/articles.service.js';
@@ -149,12 +150,26 @@ export class ChatToolCallService {
     }
     await this.assertArticleWrite(actor, targetCompanyId);
 
+    // Strip a duplicated leading `# Heading` so the rendered article
+    // doesn't show the title twice. If the LLM didn't explicitly
+    // propose a title we promote the parsed heading into one — the
+    // user already saw the heading in the chat panel preview, so
+    // applying with that heading as the title matches expectations.
+    const parsed =
+      args.markdown !== undefined
+        ? splitMarkdownTitleAndBody(args.markdown)
+        : null;
+
     const input: UpdateArticleInput = {
-      ...(args.title !== undefined ? { title: args.title } : {}),
-      ...(args.markdown !== undefined
+      ...(args.title !== undefined
+        ? { title: args.title }
+        : parsed?.hadLeadingHeading
+          ? { title: parsed.title }
+          : {}),
+      ...(parsed !== null
         ? {
             editorMode: 'markdown' as const,
-            markdownSource: args.markdown,
+            markdownSource: parsed.body,
           }
         : {}),
     };
@@ -186,10 +201,14 @@ export class ChatToolCallService {
     const args = createArgsSchema.parse(toolCall.arguments);
     await this.assertArticleWrite(actor, requestCompanyId);
 
+    // Same dedupe as `applyUpdate`: if the LLM's body opens with the
+    // same heading it also passed as `title`, drop the heading line
+    // so the rendered article doesn't show the title twice.
+    const parsed = splitMarkdownTitleAndBody(args.markdown);
     const input: CreateArticleInput = {
       editorMode: 'markdown',
       title: args.title,
-      markdownSource: args.markdown,
+      markdownSource: parsed.body,
       ...(args.folder_id ? { folderId: args.folder_id } : {}),
       ...(args.visible_to_clients !== undefined
         ? { visibleToClients: args.visible_to_clients }

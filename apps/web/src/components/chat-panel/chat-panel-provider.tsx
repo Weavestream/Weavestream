@@ -111,7 +111,6 @@ type State = {
   width: number;
   tabs: ChatTab[];
   activeTabId: string | null;
-  freeformCounter: number;
   /**
    * The current page's chat snapshot, registered via
    * `useChatPageContext`. Lives at the provider level (not per-tab)
@@ -126,12 +125,32 @@ type State = {
 
 type Action =
   | { type: 'open' }
+  | {
+      /**
+       * Used by the localStorage rehydration effect on every
+       * `ChatPanelProvider` mount. Re-opens the panel without the
+       * `open` action's "auto-create first tab" side-effect, so a
+       * cross-shell route change (CompanyShell remount, etc.) doesn't
+       * inject a phantom empty tab on every navigation.
+       */
+      type: 'restoreOpen';
+    }
   | { type: 'close' }
   | { type: 'toggle' }
   | { type: 'toggleMinimized' }
   | { type: 'setWidth'; width: number }
   | { type: 'addFreeformTab' }
   | { type: 'addLoadedTab'; tab: ChatTab }
+  | {
+      /**
+       * Bulk-restore the persisted tab list on mount. Replaces both the
+       * `tabs` array and the `activeTabId` atomically so the user
+       * doesn't see a half-rebuilt strip during the rehydration.
+       */
+      type: 'restoreTabs';
+      tabs: ChatTab[];
+      activeTabId: string | null;
+    }
   | { type: 'closeTab'; id: string }
   | { type: 'setActiveTab'; id: string }
   | { type: 'setPageContext'; pageContext: ChatPageContextSnapshot | null }
@@ -179,6 +198,80 @@ export const MAX_WIDTH = 600;
 export const DEFAULT_WIDTH = 320;
 const WIDTH_KEY = 'chatPanel.width';
 const OPEN_KEY = 'chatPanel.isOpen';
+// Tab list persistence. We only stash the minimal metadata needed to
+// rebuild a tab from server state on the next load — message bodies,
+// tool-call results, and in-flight stream ids are intentionally NOT
+// persisted. Conversations themselves already live in the chat DB so
+// `getChatConversation(conversationId)` rehydrates everything visible
+// in the bubble list.
+const TABS_KEY = 'chatPanel.tabs';
+
+type PersistedTab = {
+  id: string;
+  conversationId: string | null;
+  kind: ChatTabKind;
+  title: string;
+  icon: 'chat' | 'doc';
+  mentions: ChatTabContextArticle[];
+};
+
+type PersistedTabsPayload = {
+  tabs: PersistedTab[];
+  activeTabId: string | null;
+};
+
+function serializeTabs(state: State): PersistedTabsPayload {
+  return {
+    tabs: state.tabs.map((t) => ({
+      id: t.id,
+      conversationId: t.conversationId,
+      kind: t.kind,
+      title: t.title,
+      icon: t.icon,
+      mentions: t.mentions,
+    })),
+    activeTabId: state.activeTabId,
+  };
+}
+
+function readPersistedTabs(): PersistedTabsPayload | null {
+  try {
+    const raw = window.localStorage.getItem(TABS_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+    const p = parsed as { tabs?: unknown; activeTabId?: unknown };
+    if (!Array.isArray(p.tabs)) return null;
+    const tabs: PersistedTab[] = [];
+    for (const t of p.tabs) {
+      if (!t || typeof t !== 'object') continue;
+      const tt = t as Record<string, unknown>;
+      if (typeof tt.id !== 'string') continue;
+      const conversationId =
+        typeof tt.conversationId === 'string' ? tt.conversationId : null;
+      const kind: ChatTabKind = tt.kind === 'context' ? 'context' : 'freeform';
+      const title = typeof tt.title === 'string' ? tt.title : 'New chat';
+      const icon: 'chat' | 'doc' = tt.icon === 'doc' ? 'doc' : 'chat';
+      const mentions = Array.isArray(tt.mentions)
+        ? (tt.mentions
+            .filter(
+              (m): m is ChatTabContextArticle =>
+                !!m &&
+                typeof m === 'object' &&
+                typeof (m as { id?: unknown }).id === 'string' &&
+                typeof (m as { title?: unknown }).title === 'string',
+            )
+            .map((m) => ({ id: m.id, title: m.title })) as ChatTabContextArticle[])
+        : [];
+      tabs.push({ id: tt.id, conversationId, kind, title, icon, mentions });
+    }
+    const activeTabId =
+      typeof p.activeTabId === 'string' ? p.activeTabId : null;
+    return { tabs, activeTabId };
+  } catch {
+    return null;
+  }
+}
 
 function clampWidth(w: number): number {
   if (Number.isNaN(w)) return DEFAULT_WIDTH;
@@ -190,12 +283,12 @@ function newId(): string {
   return `id-${Math.random().toString(36).slice(2)}-${Date.now()}`;
 }
 
-function newFreeformTab(n: number): ChatTab {
+function newFreeformTab(): ChatTab {
   return {
     id: newId(),
     conversationId: null,
     kind: 'freeform',
-    title: `New chat ${n}`,
+    title: 'New chat',
     icon: 'chat',
     messages: [],
     loading: false,
@@ -209,15 +302,17 @@ function reducer(state: State, action: Action): State {
     case 'open':
       if (state.isOpen) return state;
       if (state.tabs.length === 0) {
-        const t = newFreeformTab(state.freeformCounter);
+        const t = newFreeformTab();
         return {
           ...state,
           isOpen: true,
           tabs: [t],
           activeTabId: t.id,
-          freeformCounter: state.freeformCounter + 1,
         };
       }
+      return { ...state, isOpen: true };
+    case 'restoreOpen':
+      if (state.isOpen) return state;
       return { ...state, isOpen: true };
     case 'close':
       return { ...state, isOpen: false };
@@ -228,12 +323,11 @@ function reducer(state: State, action: Action): State {
     case 'setWidth':
       return { ...state, width: clampWidth(action.width) };
     case 'addFreeformTab': {
-      const t = newFreeformTab(state.freeformCounter);
+      const t = newFreeformTab();
       return {
         ...state,
         tabs: [...state.tabs, t],
         activeTabId: t.id,
-        freeformCounter: state.freeformCounter + 1,
         isMinimized: false,
       };
     }
@@ -244,6 +338,17 @@ function reducer(state: State, action: Action): State {
         activeTabId: action.tab.id,
         isMinimized: false,
       };
+    case 'restoreTabs': {
+      const activeTabId =
+        action.activeTabId && action.tabs.some((t) => t.id === action.activeTabId)
+          ? action.activeTabId
+          : (action.tabs[0]?.id ?? null);
+      return {
+        ...state,
+        tabs: action.tabs,
+        activeTabId,
+      };
+    }
     case 'setPageContext':
       return { ...state, pageContext: action.pageContext };
     case 'addMention':
@@ -502,7 +607,6 @@ export function useChatPanel(): Ctx {
         width: DEFAULT_WIDTH,
         tabs: [],
         activeTabId: null,
-        freeformCounter: 1,
         pageContext: null,
       },
       open: noop,
@@ -536,7 +640,6 @@ export function ChatPanelProvider({ children }: { children: ReactNode }) {
     width: DEFAULT_WIDTH,
     tabs: [],
     activeTabId: null,
-    freeformCounter: 1,
     pageContext: null,
   }));
 
@@ -567,11 +670,94 @@ export function ChatPanelProvider({ children }: { children: ReactNode }) {
         if (Number.isFinite(n)) dispatch({ type: 'setWidth', width: n });
       }
       const o = window.localStorage.getItem(OPEN_KEY);
-      if (o === '1') dispatch({ type: 'open' });
+      if (o === '1') dispatch({ type: 'restoreOpen' });
     } catch {
       // localStorage may be unavailable (private mode / SSR). Safe to ignore.
     }
   }, []);
+
+  // Rehydrate the tab strip from localStorage. We only persisted the
+  // minimal metadata (id, conversationId, title, icon, mentions, kind
+  // + activeTabId); the message history is refetched per-tab from
+  // `/chat/conversations/:id` so a tab whose conversation was deleted
+  // server-side falls out cleanly. Draft tabs (no `conversationId`
+  // yet) round-trip as empty New chats.
+  useEffect(() => {
+    const persisted = readPersistedTabs();
+    if (!persisted || persisted.tabs.length === 0) return;
+    let cancelled = false;
+    void (async () => {
+      const restored = await Promise.all(
+        persisted.tabs.map(async (pt): Promise<ChatTab | null> => {
+          if (!pt.conversationId) {
+            return {
+              id: pt.id,
+              conversationId: null,
+              kind: pt.kind,
+              title: pt.title,
+              icon: pt.icon,
+              messages: [],
+              loading: false,
+              streamingMessageId: null,
+              mentions: pt.mentions,
+            };
+          }
+          const detail = await getChatConversation(pt.conversationId);
+          if (!detail) return null;
+          return {
+            id: pt.id,
+            conversationId: detail.id,
+            kind: pt.kind,
+            title: detail.title || pt.title,
+            icon: pt.icon,
+            messages: detail.messages.map((m) => ({
+              id: m.id,
+              role: m.role,
+              text: m.content,
+              ...(m.toolCalls && m.toolCalls.length > 0
+                ? { toolCalls: m.toolCalls }
+                : {}),
+            })),
+            loading: false,
+            streamingMessageId: null,
+            mentions: pt.mentions,
+          };
+        }),
+      );
+      if (cancelled) return;
+      const tabs = restored.filter((t): t is ChatTab => t !== null);
+      if (tabs.length === 0) return;
+      dispatch({
+        type: 'restoreTabs',
+        tabs,
+        activeTabId: persisted.activeTabId,
+      });
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // Mount only — subsequent state changes are persisted via the
+    // sibling effect below, never re-fetched.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Persist tab metadata whenever the tab list / active tab / per-tab
+  // title or mentions change. Cheap (one `JSON.stringify` of a tiny
+  // payload) so we don't bother debouncing. We intentionally key on
+  // the tabs + active id rather than the whole `state` so transient
+  // fields (streaming caret, in-flight messages, pageContext) don't
+  // schedule writes on every keystroke or stream chunk.
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        TABS_KEY,
+        JSON.stringify(serializeTabs(state)),
+      );
+    } catch {
+      // ignore
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.tabs, state.activeTabId]);
 
   useEffect(() => {
     try {

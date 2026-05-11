@@ -1,12 +1,15 @@
 'use client';
 
 import Link from 'next/link';
-import { useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import type {
   ArticleSummary,
   FolderNode,
 } from '../../lib/server-api';
 import { Icon } from '../ui';
+
+const STORAGE_KEY_PREFIX = 'weavestream.articleSideNav.openFolders';
+const UNFILED_KEY = '__unfiled__';
 
 /**
  * Left rail of the admin article read view.
@@ -45,17 +48,35 @@ export function ArticleSideNav({
     return map;
   }, [articles]);
 
-  // Walk the folder tree and seed every folder that contains the active
-  // article as `open`, plus all the top-level folders so the user sees
-  // the shape of the workspace on arrival.
-  const initialOpen = useMemo(() => {
-    const open: Record<string, boolean> = {};
-    const ancestorsOfActive = new Set<string>();
+  // Persist the open/closed state per company in `sessionStorage` so
+  // it survives both:
+  //   1. The route-segment remount that happens when the user clicks
+  //      from one article to another (cross-`page.tsx` navigation
+  //      inside the same `[articleId]` slot).
+  //   2. A casual page reload of the article view.
+  //
+  // First-mount defaults: depth-0 folders, every ancestor of the
+  // active article, and the synthetic "Unfiled" group (when it has
+  // articles) are seeded open. Subsequent toggles overwrite that
+  // seed exclusively — we never auto-collapse a folder the user has
+  // chosen to open, and we never auto-open a folder they've closed.
+  const storageKey = `${STORAGE_KEY_PREFIX}.${companyId}`;
+
+  const ancestorsOfActive = useMemo(() => {
+    const set = new Set<string>();
     const activeArticle = articles.find((a) => a.id === activeArticleId);
     if (activeArticle?.folderId) {
-      const pathIds = findFolderPath(folders, activeArticle.folderId);
-      for (const pid of pathIds) ancestorsOfActive.add(pid);
+      for (const pid of findFolderPath(folders, activeArticle.folderId)) {
+        set.add(pid);
+      }
     }
+    return set;
+  }, [folders, articles, activeArticleId]);
+
+  const unfiled = byFolder.get('root') ?? [];
+
+  const buildSeed = useCallback((): Record<string, boolean> => {
+    const open: Record<string, boolean> = {};
     const walk = (list: FolderNode[], depth: number) => {
       for (const f of list) {
         open[f.id] = depth === 0 || ancestorsOfActive.has(f.id);
@@ -63,16 +84,64 @@ export function ArticleSideNav({
       }
     };
     walk(folders, 0);
+    if (unfiled.length > 0) open[UNFILED_KEY] = true;
     return open;
-  }, [folders, articles, activeArticleId]);
+  }, [folders, ancestorsOfActive, unfiled.length]);
 
-  const [openState, setOpenState] = useState<Record<string, boolean>>(initialOpen);
-  const isOpen = (id: string) =>
-    openState[id] === undefined ? !!initialOpen[id] : openState[id];
+  const [openState, setOpenState] = useState<Record<string, boolean>>(buildSeed);
+
+  // Rehydrate from sessionStorage on mount. We can't read storage in
+  // the `useState` initializer because the component renders on the
+  // server first — touching `sessionStorage` there would crash.
+  useEffect(() => {
+    try {
+      const raw = window.sessionStorage.getItem(storageKey);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as unknown;
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        // Layer the persisted user choices on top of the freshly-built
+        // seed so newly-created folders default-open and removed
+        // folder ids are dropped silently.
+        setOpenState((seed) => ({ ...seed, ...(parsed as Record<string, boolean>) }));
+      }
+    } catch {
+      // Corrupt JSON or storage disabled — ignore.
+    }
+    // Only on mount: subsequent navigations rely on in-memory state.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Force-open the ancestor chain of the active article so the active
+  // row is always visible after a navigation, without clobbering the
+  // user's expand/collapse choices elsewhere in the tree.
+  useEffect(() => {
+    if (ancestorsOfActive.size === 0) return;
+    setOpenState((s) => {
+      let changed = false;
+      const next = { ...s };
+      for (const id of ancestorsOfActive) {
+        if (!next[id]) {
+          next[id] = true;
+          changed = true;
+        }
+      }
+      return changed ? next : s;
+    });
+  }, [ancestorsOfActive]);
+
+  // Persist after every change. The write is cheap (one JSON.stringify
+  // of a flat object) so we don't bother debouncing.
+  useEffect(() => {
+    try {
+      window.sessionStorage.setItem(storageKey, JSON.stringify(openState));
+    } catch {
+      // ignore
+    }
+  }, [storageKey, openState]);
+
+  const isOpen = (id: string) => !!openState[id];
   const toggle = (id: string) =>
-    setOpenState((s) => ({ ...s, [id]: !isOpen(id) }));
-
-  const unfiled = byFolder.get('root') ?? [];
+    setOpenState((s) => ({ ...s, [id]: !s[id] }));
 
   return (
     <aside
@@ -113,12 +182,12 @@ export function ArticleSideNav({
         <div style={{ marginTop: 8 }}>
           <FolderHeader
             label="Unfiled"
-            open={isOpen('__unfiled__')}
-            onToggle={() => toggle('__unfiled__')}
+            open={isOpen(UNFILED_KEY)}
+            onToggle={() => toggle(UNFILED_KEY)}
             depth={0}
             icon={<Icon.folder size={11} style={{ color: 'var(--dim)' }} />}
           />
-          {isOpen('__unfiled__') &&
+          {isOpen(UNFILED_KEY) &&
             unfiled.map((a) => (
               <ArticleLink
                 key={a.id}

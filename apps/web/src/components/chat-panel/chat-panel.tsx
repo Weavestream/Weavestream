@@ -12,7 +12,7 @@ import {
 } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { Icon } from '../ui';
+import { Icon, type IconComponent } from '../ui';
 import {
   useChatPanel,
   type ChatMessage,
@@ -23,6 +23,7 @@ import { ChatHistoryPopover } from './chat-history-popover';
 import { ChatContextStrip } from './chat-context-strip';
 import { MentionPicker } from './mention-picker';
 import { ToolCallCard } from './tool-call-card';
+import { SaveAsArticleDialog } from './save-as-article-dialog';
 
 const MINIMIZED_WIDTH = 40;
 
@@ -474,7 +475,124 @@ function MessageBubble({
           ))}
         </div>
       )}
+      {!isUser && !message.pending && !hasError && displayText.length > 0 && (
+        <AssistantActions markdown={displayText} />
+      )}
     </div>
+  );
+}
+
+/**
+ * Inline action row below a completed assistant message — copy the
+ * raw markdown to the clipboard, or open a confirmation dialog that
+ * turns the response into a brand-new article in the user's chosen
+ * company / folder. We always offer the actions on settled assistant
+ * turns regardless of any inline tool-call cards, since the actions
+ * target the response text itself, not the model's proposals.
+ */
+function AssistantActions({ markdown }: { markdown: string }) {
+  const { state } = useChatPanel();
+  const defaultCompanyId = state.pageContext?.companyId ?? null;
+  const [copied, setCopied] = useState(false);
+  const [saveOpen, setSaveOpen] = useState(false);
+
+  async function onCopy() {
+    try {
+      if (typeof navigator !== 'undefined' && navigator.clipboard) {
+        await navigator.clipboard.writeText(markdown);
+      } else {
+        const ta = document.createElement('textarea');
+        ta.value = markdown;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+      }
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // Best-effort copy — ignore failures (older browsers / blocked perms).
+    }
+  }
+
+  return (
+    <>
+      <div
+        style={{
+          display: 'flex',
+          gap: 4,
+          marginTop: 8,
+          alignItems: 'center',
+          opacity: 0.85,
+        }}
+      >
+        <ActionButton
+          icon={copied ? Icon.check : Icon.copy}
+          label={copied ? 'Copied' : 'Copy'}
+          onClick={onCopy}
+          title="Copy response to clipboard"
+        />
+        <ActionButton
+          icon={Icon.doc}
+          label="Save as article"
+          onClick={() => setSaveOpen(true)}
+          title="Create a new article from this response"
+        />
+      </div>
+      <SaveAsArticleDialog
+        open={saveOpen}
+        markdown={markdown}
+        defaultCompanyId={defaultCompanyId}
+        onClose={() => setSaveOpen(false)}
+      />
+    </>
+  );
+}
+
+function ActionButton({
+  icon: I,
+  label,
+  onClick,
+  title,
+}: {
+  icon: IconComponent;
+  label: string;
+  onClick: () => void;
+  title?: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={title}
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 4,
+        height: 24,
+        padding: '0 8px',
+        border: '1px solid var(--line)',
+        borderRadius: 5,
+        background: 'transparent',
+        color: 'var(--muted)',
+        fontSize: 11.5,
+        cursor: 'pointer',
+        transition: 'background 120ms ease, color 120ms ease',
+      }}
+      onMouseEnter={(e) => {
+        e.currentTarget.style.background = 'var(--panel-2)';
+        e.currentTarget.style.color = 'var(--text)';
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.background = 'transparent';
+        e.currentTarget.style.color = 'var(--muted)';
+      }}
+    >
+      <I size={11} />
+      <span>{label}</span>
+    </button>
   );
 }
 

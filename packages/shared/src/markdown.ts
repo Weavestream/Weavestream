@@ -85,6 +85,73 @@ export function markdownExcerpt(src: string, maxChars = 280): string {
 }
 
 /**
+ * Split an LLM markdown response into a `{ title, body }` pair.
+ *
+ * Models almost always open their response with a single `# Heading`
+ * (or any ATX heading) that semantically labels the article. If we
+ * persist that as the article body verbatim the renderer ends up
+ * showing the title twice — once as the page header, once as the H1
+ * at the top of the rendered Markdown.
+ *
+ * This helper:
+ *   - Skips leading blank lines.
+ *   - If the first non-blank line is an ATX heading (`#`–`######`,
+ *     optionally indented up to 3 spaces, optionally with trailing
+ *     `#`s), surfaces its text as the suggested title and removes
+ *     the heading line plus any immediately following blank lines
+ *     from the body.
+ *   - Otherwise, derives a title from the first prose-looking line
+ *     and returns the body untouched.
+ *
+ * Pure / dependency-free so it's safe to reuse on both the client
+ * (chat panel save dialog) and the server (chat tool-call apply
+ * path).
+ */
+export function splitMarkdownTitleAndBody(
+  src: string,
+  fallbackTitle = 'Untitled article',
+): { title: string; body: string; hadLeadingHeading: boolean } {
+  if (!src) return { title: fallbackTitle, body: '', hadLeadingHeading: false };
+  const lines = src.split(/\r?\n/);
+
+  let i = 0;
+  while (i < lines.length && lines[i]!.trim() === '') i++;
+
+  const heading =
+    i < lines.length ? lines[i]!.match(/^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$/) : null;
+  if (heading?.[1]) {
+    const title = cleanMarkdownTitle(heading[1]).slice(0, 200) || fallbackTitle;
+    let j = i + 1;
+    while (j < lines.length && lines[j]!.trim() === '') j++;
+    return { title, body: lines.slice(j).join('\n'), hadLeadingHeading: true };
+  }
+
+  return {
+    title: titleFromProse(src, fallbackTitle),
+    body: src,
+    hadLeadingHeading: false,
+  };
+}
+
+function titleFromProse(src: string, fallback: string): string {
+  for (const line of src.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    if (/^[`>\-*_=+|]/.test(trimmed)) continue;
+    return cleanMarkdownTitle(trimmed).slice(0, 80) || fallback;
+  }
+  return fallback;
+}
+
+function cleanMarkdownTitle(s: string): string {
+  return s
+    .replace(/^\*+|\*+$/g, '')
+    .replace(/^_+|_+$/g, '')
+    .replace(/`+/g, '')
+    .trim();
+}
+
+/**
  * Truncate already-extracted plaintext at a word boundary with an
  * ellipsis. Shared by `tiptapExcerpt` and `markdownExcerpt` so the two
  * formats produce identical-length card previews.

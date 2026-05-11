@@ -26,7 +26,6 @@ import {
   type StickyNoteSeverity,
 } from './sticky-note-context';
 import { SearchPaletteProvider } from '../search/search-palette-provider';
-import { ChatPanelProvider } from '../chat-panel/chat-panel-provider';
 import { ChatPanel } from '../chat-panel/chat-panel';
 
 export type CompanyShellMode = 'admin' | 'portal';
@@ -359,7 +358,6 @@ export function CompanyShell({
       scopedCompany={{ id: company.id, name: company.name }}
       defaults={me.searchDefaults}
     >
-      <ChatPanelProvider>
       <div style={{ display: 'flex', height: '100vh', background: 'var(--bg)' }}>
         <Sidebar
           workspace={sidebarWorkspace}
@@ -398,7 +396,6 @@ export function CompanyShell({
         </main>
         <ChatPanel />
       </div>
-      </ChatPanelProvider>
     </SearchPaletteProvider>
     </StickyNoteProvider>
   );

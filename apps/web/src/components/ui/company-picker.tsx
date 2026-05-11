@@ -1,6 +1,7 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { apiFetch } from '../../lib/api';
 import {
   companyAccent,
@@ -59,7 +60,16 @@ export function CompanyPicker({
   const [results, setResults] = useState<CompanyListItem[]>([]);
   const [loading, setLoading] = useState(false);
   const wrapperRef = useRef<HTMLDivElement>(null);
+  const popoverRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
+  // Anchored popover coordinates. We compute them imperatively so the
+  // dropdown can portal out of any `overflow: auto` ancestor (e.g. a
+  // Dialog body) without being clipped.
+  const [popover, setPopover] = useState<{
+    top: number;
+    left: number;
+    width: number;
+  } | null>(null);
 
   const excludeSet = useMemo(
     () => new Set(excludeCompanyIds ?? []),
@@ -68,16 +78,36 @@ export function CompanyPicker({
 
   useEffect(() => {
     function handleClickOutside(e: MouseEvent) {
-      if (
-        wrapperRef.current &&
-        !wrapperRef.current.contains(e.target as Node)
-      ) {
-        setOpen(false);
-      }
+      const target = e.target as Node;
+      if (wrapperRef.current?.contains(target)) return;
+      if (popoverRef.current?.contains(target)) return;
+      setOpen(false);
     }
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
+
+  // Track the input's screen position while the popover is open so it
+  // sticks to the anchor through scroll / resize / dialog reflow.
+  useLayoutEffect(() => {
+    if (!open || value) {
+      setPopover(null);
+      return;
+    }
+    function update() {
+      const el = wrapperRef.current;
+      if (!el) return;
+      const r = el.getBoundingClientRect();
+      setPopover({ top: r.bottom + 4, left: r.left, width: r.width });
+    }
+    update();
+    window.addEventListener('resize', update);
+    window.addEventListener('scroll', update, true);
+    return () => {
+      window.removeEventListener('resize', update);
+      window.removeEventListener('scroll', update, true);
+    };
+  }, [open, value]);
 
   useEffect(() => {
     if (!open) return;
@@ -196,95 +226,98 @@ export function CompanyPicker({
           />
         </div>
       )}
-      {open && !value && (
-        <div
-          style={{
-            position: 'absolute',
-            top: 'calc(100% + 4px)',
-            left: 0,
-            right: 0,
-            zIndex: 10,
-            background: 'var(--panel)',
-            border: '1px solid var(--line)',
-            borderRadius: 6,
-            boxShadow: 'var(--shadow-1)',
-            maxHeight: 260,
-            overflowY: 'auto',
-          }}
-        >
-          {loading && results.length === 0 ? (
-            <div style={{ padding: 10, fontSize: 12, color: 'var(--muted)' }}>
-              Searching…
-            </div>
-          ) : results.length === 0 ? (
-            <div style={{ padding: 10, fontSize: 12, color: 'var(--muted)' }}>
-              {query ? 'No matches.' : 'Start typing a company name.'}
-            </div>
-          ) : (
-            <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
-              {results.map((c) => (
-                <li key={c.id}>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      onChange({
-                        id: c.id,
-                        name: c.name,
-                        slug: c.slug,
-                        archivedAt: c.archivedAt,
-                      });
-                      setOpen(false);
-                      setQuery('');
-                    }}
-                    style={{
-                      display: 'flex',
-                      width: '100%',
-                      alignItems: 'center',
-                      gap: 10,
-                      padding: '8px 10px',
-                      background: 'transparent',
-                      border: 'none',
-                      textAlign: 'left',
-                      cursor: 'pointer',
-                      color: 'var(--text)',
-                    }}
-                    onMouseEnter={(e) => {
-                      e.currentTarget.style.background = 'var(--panel-2)';
-                    }}
-                    onMouseLeave={(e) => {
-                      e.currentTarget.style.background = 'transparent';
-                    }}
-                  >
-                    <CompanyAvatar
-                      name={c.name}
-                      color={companyAccent(c.id)}
-                      size={22}
-                      logoUrl={c.logo?.thumbnailUrl ?? null}
-                    />
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontSize: 13, fontWeight: 500 }}>
-                        {c.name}
+      {open && !value && popover && typeof document !== 'undefined' &&
+        createPortal(
+          <div
+            ref={popoverRef}
+            style={{
+              position: 'fixed',
+              top: popover.top,
+              left: popover.left,
+              width: popover.width,
+              zIndex: 1000,
+              background: 'var(--panel)',
+              border: '1px solid var(--line)',
+              borderRadius: 6,
+              boxShadow: 'var(--shadow-1)',
+              maxHeight: 260,
+              overflowY: 'auto',
+            }}
+          >
+            {loading && results.length === 0 ? (
+              <div style={{ padding: 10, fontSize: 12, color: 'var(--muted)' }}>
+                Searching…
+              </div>
+            ) : results.length === 0 ? (
+              <div style={{ padding: 10, fontSize: 12, color: 'var(--muted)' }}>
+                {query ? 'No matches.' : 'Start typing a company name.'}
+              </div>
+            ) : (
+              <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+                {results.map((c) => (
+                  <li key={c.id}>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onChange({
+                          id: c.id,
+                          name: c.name,
+                          slug: c.slug,
+                          archivedAt: c.archivedAt,
+                        });
+                        setOpen(false);
+                        setQuery('');
+                      }}
+                      style={{
+                        display: 'flex',
+                        width: '100%',
+                        alignItems: 'center',
+                        gap: 10,
+                        padding: '8px 10px',
+                        background: 'transparent',
+                        border: 'none',
+                        textAlign: 'left',
+                        cursor: 'pointer',
+                        color: 'var(--text)',
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.background = 'var(--panel-2)';
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.background = 'transparent';
+                      }}
+                    >
+                      <CompanyAvatar
+                        name={c.name}
+                        color={companyAccent(c.id)}
+                        size={22}
+                        logoUrl={c.logo?.thumbnailUrl ?? null}
+                      />
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 13, fontWeight: 500 }}>
+                          {c.name}
+                        </div>
+                        <div
+                          style={{
+                            fontFamily: 'var(--font-mono)',
+                            fontSize: 11,
+                            color: 'var(--dim)',
+                          }}
+                        >
+                          /{c.slug}
+                        </div>
                       </div>
-                      <div
-                        style={{
-                          fontFamily: 'var(--font-mono)',
-                          fontSize: 11,
-                          color: 'var(--dim)',
-                        }}
-                      >
-                        /{c.slug}
-                      </div>
-                    </div>
-                    <Tag tone={companyTypeTone(c.type)}>
-                      {companyTypeLabel(c.type)}
-                    </Tag>
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-      )}
+                      <Tag tone={companyTypeTone(c.type)}>
+                        {companyTypeLabel(c.type)}
+                      </Tag>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>,
+          document.body,
+        )}
     </div>
   );
 }

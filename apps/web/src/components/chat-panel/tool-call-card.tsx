@@ -3,6 +3,7 @@
 import { useRouter } from 'next/navigation';
 import { useState, type CSSProperties } from 'react';
 import type { ChatToolCallDto } from '@weavestream/shared';
+import { splitMarkdownTitleAndBody } from '@weavestream/shared';
 import { Icon } from '../ui';
 import {
   useChatPanel,
@@ -35,6 +36,11 @@ export function ToolCallCard({
   const router = useRouter();
   const [busy, setBusy] = useState<'apply' | 'reject' | null>(null);
   const [showDiff, setShowDiff] = useState(true);
+  // The created-article card stays collapsed by default to keep the
+  // chat history scannable, but the body is still recoverable on
+  // demand. Independent from the pending preview's `showDiff` so the
+  // user's expanded state survives the apply transition cleanly.
+  const [showCreatedBody, setShowCreatedBody] = useState(false);
   const pageContext = state.pageContext;
 
   const isUpdate = toolCall.name === 'update_article';
@@ -46,8 +52,16 @@ export function ToolCallCard({
     visible_to_clients?: boolean;
     summary?: string;
   };
+  // Preview the body exactly as the server will persist it on Apply —
+  // a leading `# Heading` is promoted to the article title and removed
+  // from the body so the rendered article doesn't show the title
+  // twice. Keep this client preview aligned with the server's
+  // `splitMarkdownTitleAndBody` strip so the user sees an accurate
+  // diff before clicking Apply.
   const proposedMarkdown =
-    typeof args.markdown === 'string' ? args.markdown : '';
+    typeof args.markdown === 'string'
+      ? splitMarkdownTitleAndBody(args.markdown).body
+      : '';
   const targetArticleId =
     isUpdate && typeof args.article_id === 'string' ? args.article_id : null;
   const targetIsCurrentPage =
@@ -97,9 +111,23 @@ export function ToolCallCard({
     //     the refresh is a belt-and-suspenders pickup of server-side
     //     fields (slug, updatedBy, plaintext excerpt).
     if (targetIsCurrentPage) {
+      // Mirror the server-side `splitMarkdownTitleAndBody` strip so
+      // the form's local state matches what was persisted: the body
+      // without the leading heading, and the parsed heading promoted
+      // to the title when the LLM didn't supply one explicitly.
+      const parsed =
+        typeof args.markdown === 'string'
+          ? splitMarkdownTitleAndBody(args.markdown)
+          : null;
+      const resolvedTitle =
+        typeof args.title === 'string'
+          ? args.title
+          : parsed?.hadLeadingHeading
+            ? parsed.title
+            : undefined;
       pageContext?.onAfterAiApply?.({
-        ...(typeof args.markdown === 'string' ? { markdown: args.markdown } : {}),
-        ...(typeof args.title === 'string' ? { title: args.title } : {}),
+        ...(parsed ? { markdown: parsed.body } : {}),
+        ...(resolvedTitle !== undefined ? { title: resolvedTitle } : {}),
       });
       router.refresh();
     }
@@ -113,6 +141,24 @@ export function ToolCallCard({
   }
 
   if (toolCall.status !== 'pending') {
+    // Keep the proposed body recoverable on a settled `create_article`
+    // so the chat history doesn't lose the AI's output once the user
+    // navigates away from the newly-created article. `update_article`
+    // status rows stay terse — the canonical body lives on the
+    // article itself, and the diff against the pre-apply version was
+    // already gone by then.
+    if (toolCall.name === 'create_article' && proposedMarkdown.trim()) {
+      return (
+        <CreatedArticleCard
+          toolCall={toolCall}
+          title={typeof args.title === 'string' ? args.title : 'new article'}
+          summary={typeof args.summary === 'string' ? args.summary : null}
+          markdown={proposedMarkdown}
+          expanded={showCreatedBody}
+          onToggle={() => setShowCreatedBody((v) => !v)}
+        />
+      );
+    }
     return <StatusRow toolCall={toolCall} />;
   }
 
@@ -221,6 +267,124 @@ export function ToolCallCard({
           {busy === 'apply' ? 'Applying…' : 'Apply'}
         </button>
       </div>
+    </div>
+  );
+}
+
+/**
+ * Settled-state card for a `create_article` tool call.
+ *
+ * Mirrors the visual chrome of the pending card so the assistant
+ * turn keeps the same vertical rhythm before/after Apply, but swaps
+ * the Apply/Reject footer for a status badge and starts collapsed
+ * so the history stays scannable. Expanding reveals the exact
+ * Markdown body that was persisted to the new article.
+ */
+function CreatedArticleCard({
+  toolCall,
+  title,
+  summary,
+  markdown,
+  expanded,
+  onToggle,
+}: {
+  toolCall: ChatToolCallDto;
+  title: string;
+  summary: string | null;
+  markdown: string;
+  expanded: boolean;
+  onToggle: () => void;
+}) {
+  const tone: 'ok' | 'danger' | 'muted' =
+    toolCall.status === 'applied'
+      ? 'ok'
+      : toolCall.status === 'failed'
+        ? 'danger'
+        : 'muted';
+  const StatusIcon =
+    tone === 'ok' ? Icon.check : tone === 'danger' ? Icon.x : Icon.chat;
+  const toneColor =
+    tone === 'ok'
+      ? 'var(--ok, #2ea043)'
+      : tone === 'danger'
+        ? 'var(--danger, #c0392b)'
+        : 'var(--muted)';
+  const statusLabel =
+    toolCall.status === 'applied'
+      ? toolCall.result ?? `Created article "${title}".`
+      : toolCall.status === 'rejected'
+        ? `Rejected: ${title}`
+        : `Failed: ${toolCall.error ?? 'unknown error'}`;
+  return (
+    <div
+      style={{
+        border: '1px solid var(--line)',
+        borderRadius: 6,
+        background: 'var(--panel-2)',
+        overflow: 'hidden',
+        fontSize: 12,
+      }}
+    >
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          padding: '8px 10px',
+          borderBottom: expanded ? '1px solid var(--line)' : 'none',
+          background: 'var(--panel)',
+        }}
+      >
+        <StatusIcon size={13} style={{ color: toneColor, flexShrink: 0 }} />
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div
+            style={{
+              fontWeight: 600,
+              color: 'var(--text)',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+            title={statusLabel}
+          >
+            {statusLabel}
+          </div>
+          {summary && summary.trim() && (
+            <div style={{ color: 'var(--muted)', fontSize: 11.5, marginTop: 2 }}>
+              {summary}
+            </div>
+          )}
+        </div>
+        <button
+          type="button"
+          onClick={onToggle}
+          aria-expanded={expanded}
+          aria-label={expanded ? 'Hide article content' : 'Show article content'}
+          title={expanded ? 'Hide article content' : 'Show article content'}
+          style={iconButtonStyle}
+        >
+          <Icon.chevron
+            size={11}
+            style={{
+              transform: expanded ? 'rotate(-90deg)' : 'rotate(90deg)',
+              transition: 'transform 0.15s',
+            }}
+          />
+        </button>
+      </div>
+      {expanded && (
+        <div
+          className="scroll"
+          style={{
+            maxHeight: 320,
+            overflow: 'auto',
+            padding: 8,
+            background: 'var(--panel-2)',
+          }}
+        >
+          <PreviewBlock markdown={markdown} />
+        </div>
+      )}
     </div>
   );
 }
