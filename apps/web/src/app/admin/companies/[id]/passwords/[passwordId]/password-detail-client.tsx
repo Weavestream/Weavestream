@@ -30,6 +30,11 @@ import { PasswordRevealField } from '../../../../../../components/passwords/pass
 import { TotpCode } from '../../../../../../components/passwords/totp-code';
 import { PasswordStrengthMeter } from '../../../../../../components/passwords/password-strength-meter';
 import { SecretInput } from '../../../../../../components/passwords/secret-input';
+import {
+  TagsInput,
+  toPlainNameList,
+  type TagChipDraft,
+} from '../../../../../../components/tags/tags-input';
 import { LinkedItemsPanel } from '../../../../../../components/relations';
 import { AttachmentsPanel } from '../../../../../../components/upload/attachments-panel';
 
@@ -316,24 +321,32 @@ export function PasswordDetailClient({
               )}
               <dt style={dt}>Folder</dt>
               <dd style={dd}>{folderName ?? 'Unfiled'}</dd>
-              <dt style={dt}>Tags</dt>
-              <dd style={dd}>
-                {password.tags.length === 0 ? (
-                  <span style={{ color: 'var(--muted)' }}>—</span>
-                ) : (
-                  <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-                    {password.tags.map((t) => (
-                      <Tag key={t} tone="outline">
-                        {t}
-                      </Tag>
-                    ))}
-                  </div>
-                )}
-              </dd>
-              <dt style={dt}>Last rotated</dt>
-              <dd style={dd}>{fmtDate(password.lastRotatedAt)}</dd>
-              <dt style={dt}>Expires</dt>
-              <dd style={dd}>{fmtDate(password.expiresAt)}</dd>
+              {password.tags.length > 0 && (
+                <>
+                  <dt style={dt}>Tags</dt>
+                  <dd style={dd}>
+                    <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                      {password.tags.map((t) => (
+                        <Tag key={t} tone="outline">
+                          {t}
+                        </Tag>
+                      ))}
+                    </div>
+                  </dd>
+                </>
+              )}
+              {password.lastRotatedAt && (
+                <>
+                  <dt style={dt}>Last rotated</dt>
+                  <dd style={dd}>{fmtDate(password.lastRotatedAt)}</dd>
+                </>
+              )}
+              {password.expiresAt && (
+                <>
+                  <dt style={dt}>Expires</dt>
+                  <dd style={dd}>{fmtDate(password.expiresAt)}</dd>
+                </>
+              )}
               {password.rotationReminderDays != null && (
                 <>
                   <dt style={dt}>Rotation reminder</dt>
@@ -691,6 +704,21 @@ function EditPasswordDialog({
     password.requireReasonToView,
   );
   const [reason, setReason] = useState('');
+  const [tags, setTags] = useState<TagChipDraft[]>(() =>
+    password.tags.map((t) => ({ name: t })),
+  );
+  const [expiresAt, setExpiresAt] = useState<string>(() =>
+    password.expiresAt ? password.expiresAt.slice(0, 10) : '',
+  );
+  const [rotationReminderDays, setRotationReminderDays] = useState<
+    number | null
+  >(password.rotationReminderDays);
+  const daysSinceRotation =
+    password.lastRotatedAt != null
+      ? Math.floor(
+          (Date.now() - new Date(password.lastRotatedAt).getTime()) / 86_400_000,
+        )
+      : null;
 
   // TOTP editor — `keep` leaves the existing secret untouched (omits
   // `totp` from the PATCH body), `set` replaces/adds, `clear` removes.
@@ -726,6 +754,15 @@ function EditPasswordDialog({
       folderId,
       visibleToClients,
       requireReasonToView: requireReason,
+      tags: toPlainNameList(tags),
+      // Calendar-day input → midnight UTC on the picked day. The
+      // server zeroes the time component anyway; this keeps the
+      // round-trip stable so the date displayed in the panel matches
+      // what the operator selected regardless of their timezone.
+      expiresAt: expiresAt
+        ? new Date(`${expiresAt}T00:00:00.000Z`).toISOString()
+        : null,
+      rotationReminderDays,
     };
     if (newPassword.length > 0) body.password = newPassword;
     if (reason.trim()) body.changeReason = reason.trim();
@@ -765,6 +802,9 @@ function EditPasswordDialog({
     requireReason,
     newPassword,
     reason,
+    tags,
+    expiresAt,
+    rotationReminderDays,
     totpMode,
     totpSecret,
     totpAlgorithm,
@@ -958,21 +998,65 @@ function EditPasswordDialog({
             rows={3}
           />
         </Field>
-        <Field label="Folder">
-          <Select
-            value={folderId ?? ''}
-            onChange={(e) => setFolderId(e.target.value || null)}
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+            gap: 10,
+          }}
+        >
+          <Field label="Folder">
+            <Select
+              value={folderId ?? ''}
+              onChange={(e) => setFolderId(e.target.value || null)}
+            >
+              <option value="">(no folder)</option>
+              {folders
+                .filter((f) => !f.archivedAt)
+                .map((f) => (
+                  <option key={f.id} value={f.id}>
+                    {f.name}
+                  </option>
+                ))}
+            </Select>
+          </Field>
+          <Field label="Tags">
+            <TagsInput value={tags} onChange={setTags} />
+          </Field>
+          <Field label="Expires">
+            <Input
+              type="date"
+              value={expiresAt}
+              onChange={(e) => setExpiresAt(e.target.value)}
+            />
+          </Field>
+          <Field
+            label="Rotation reminder"
+            help={
+              daysSinceRotation != null
+                ? `Last rotated ${daysSinceRotation === 0 ? 'today' : `${daysSinceRotation}d ago`}.`
+                : undefined
+            }
           >
-            <option value="">(no folder)</option>
-            {folders
-              .filter((f) => !f.archivedAt)
-              .map((f) => (
-                <option key={f.id} value={f.id}>
-                  {f.name}
-                </option>
-              ))}
-          </Select>
-        </Field>
+            <Select
+              value={
+                rotationReminderDays == null ? '' : String(rotationReminderDays)
+              }
+              onChange={(e) =>
+                setRotationReminderDays(
+                  e.target.value === '' ? null : Number(e.target.value),
+                )
+              }
+            >
+              <option value="">No reminder</option>
+              <option value="30">Every 30 days</option>
+              <option value="60">Every 60 days</option>
+              <option value="90">Every 90 days</option>
+              <option value="180">Every 180 days</option>
+              <option value="365">Every 365 days</option>
+            </Select>
+          </Field>
+        </div>
         <label style={checkboxLabel}>
           <input
             type="checkbox"

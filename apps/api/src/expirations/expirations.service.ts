@@ -57,7 +57,30 @@ export type DomainExpiration = {
   status: ExpirationStatus;
 };
 
-export type ExpirationRow = AssetFieldExpiration | DomainExpiration;
+export type PasswordExpiration = {
+  kind: 'password';
+  companyId: string;
+  companyName: string;
+  companySlug: string;
+  passwordId: string;
+  passwordName: string;
+  /**
+   * Two disjoint sources per password: `expiry` for the hard
+   * `expiresAt` cutoff (the credential should stop being used after
+   * this date) and `rotation` for the soft "should be rotated by now"
+   * date derived from `lastRotatedAt + rotationReminderDays`. A single
+   * credential can yield up to one row of each kind.
+   */
+  source: 'expiry' | 'rotation';
+  expiresAt: string;
+  daysUntil: number;
+  status: ExpirationStatus;
+};
+
+export type ExpirationRow =
+  | AssetFieldExpiration
+  | DomainExpiration
+  | PasswordExpiration;
 
 interface ComputeOptions {
   /** When set, results are limited to a single tenant. */
@@ -69,7 +92,7 @@ interface ComputeOptions {
 /**
  * ExpirationsService
  *
- * Read-only aggregator that surfaces two classes of upcoming/past
+ * Read-only aggregator that surfaces three classes of upcoming/past
  * deadlines on a single feed:
  *
  *   1. DATE/DATETIME asset fields flagged `options.isExpiry = true`
@@ -79,6 +102,9 @@ interface ComputeOptions {
  *   2. Monitored domains in EXPIRING/EXPIRED states, split by source
  *      (registrar WHOIS + TLS cert) so each upcoming renewal is its
  *      own row.
+ *   3. Password credentials — hard `expiresAt` and soft rotation-due
+ *      derived from `lastRotatedAt + rotationReminderDays`, each as
+ *      its own row so a single credential can surface twice.
  *
  * The service is a read-side composition over PrismaService + the
  * existing domain denormalisations — it adds no new tables, no new
@@ -89,13 +115,18 @@ export class ExpirationsService {
   constructor(private readonly prisma: PrismaService) {}
 
   async list(options: ComputeOptions): Promise<ExpirationRow[]> {
-    const [assetRows, domainRows] = await Promise.all([
+    const [assetRows, domainRows, passwordRows] = await Promise.all([
       this.listAssetFieldExpirations(options),
       this.listDomainExpirations(options),
+      this.listPasswordExpirations(options),
     ]);
     // Merge and order by imminence. Stable tiebreaker on company name
     // + row kind keeps the output deterministic for snapshot tests.
-    const merged: ExpirationRow[] = [...assetRows, ...domainRows];
+    const merged: ExpirationRow[] = [
+      ...assetRows,
+      ...domainRows,
+      ...passwordRows,
+    ];
     merged.sort((a, b) => {
       if (a.daysUntil !== b.daysUntil) return a.daysUntil - b.daysUntil;
       if (a.companyName !== b.companyName)
@@ -309,6 +340,129 @@ export class ExpirationsService {
       };
       emit(d.whoisExpiresAt, 'registrar');
       emit(d.tlsExpiresAt, 'tls');
+    }
+    return rows;
+  }
+
+  // ------------------------------------------------------------------
+  // Passwords
+  //
+  // Two disjoint sources contribute rows: the hard `expiresAt` cutoff
+  // (the credential should stop being used after this date) and the
+  // soft "rotation due" derived from `lastRotatedAt + rotationReminderDays`.
+  // One credential can yield up to two rows — same pattern as monitored
+  // domains' registrar + TLS split.
+  // ------------------------------------------------------------------
+
+  private async listPasswordExpirations(
+    options: ComputeOptions,
+  ): Promise<PasswordExpiration[]> {
+    const now = Date.now();
+    const dayMs = 86_400_000;
+    const cutoff = new Date(now + DEFAULT_WARN_WITHIN_DAYS * dayMs);
+
+    const passwords = await this.prisma.password.findMany({
+      where: {
+        archivedAt: null,
+        ...(options.companyId ? { companyId: options.companyId } : {}),
+        // CLIENT_USER must never see internal-only credentials.
+        ...(options.actor.role === 'CLIENT_USER'
+          ? { visibleToClients: true }
+          : {}),
+        // Either there's a hard expiry hitting the warn window, or
+        // rotation is even *eligible* (has a reminder cadence + a
+        // last-rotation timestamp). The rotation-due math runs in
+        // process below because the cutoff depends on the row's own
+        // `rotationReminderDays`.
+        OR: [
+          { expiresAt: { not: null, lte: cutoff } },
+          {
+            rotationReminderDays: { not: null },
+            lastRotatedAt: { not: null },
+          },
+        ],
+      },
+      select: {
+        id: true,
+        companyId: true,
+        name: true,
+        expiresAt: true,
+        lastRotatedAt: true,
+        rotationReminderDays: true,
+        restrictedToUserIds: true,
+      },
+    });
+
+    if (passwords.length === 0) return [];
+
+    // Mirror the reveal gate: a password with a non-empty allow list
+    // is invisible to anyone outside the list. SUPER_ADMIN bypasses
+    // — they need an unfiltered view to operate the platform.
+    const filtered = passwords.filter((p) => {
+      if (p.restrictedToUserIds.length === 0) return true;
+      if (options.actor.role === 'SUPER_ADMIN') return true;
+      return p.restrictedToUserIds.includes(options.actor.id);
+    });
+
+    if (filtered.length === 0) return [];
+
+    const companies = await this.prisma.company.findMany({
+      where: {
+        id: { in: Array.from(new Set(filtered.map((p) => p.companyId))) },
+      },
+      select: { id: true, name: true, slug: true },
+    });
+    const byCompany = new Map(companies.map((c) => [c.id, c] as const));
+
+    const rows: PasswordExpiration[] = [];
+    for (const p of filtered) {
+      const co = byCompany.get(p.companyId);
+      if (!co) continue;
+
+      // Hard expiry — within the warn window or already past.
+      if (p.expiresAt) {
+        const daysUntil = Math.floor(
+          (p.expiresAt.getTime() - now) / dayMs,
+        );
+        if (daysUntil <= DEFAULT_WARN_WITHIN_DAYS) {
+          rows.push({
+            kind: 'password',
+            companyId: co.id,
+            companyName: co.name,
+            companySlug: co.slug,
+            passwordId: p.id,
+            passwordName: p.name,
+            source: 'expiry',
+            expiresAt: p.expiresAt.toISOString(),
+            daysUntil,
+            status: daysUntil < 0 ? 'EXPIRED' : 'WARNING',
+          });
+        }
+      }
+
+      // Rotation due — only when both fields are set. `dueAt` is the
+      // wall-clock date by which the credential should have been
+      // rotated; `daysUntil` is signed and negative once overdue.
+      if (p.rotationReminderDays != null && p.lastRotatedAt) {
+        const dueAt = new Date(
+          p.lastRotatedAt.getTime() + p.rotationReminderDays * dayMs,
+        );
+        const daysUntil = Math.floor((dueAt.getTime() - now) / dayMs);
+        if (daysUntil <= DEFAULT_WARN_WITHIN_DAYS) {
+          rows.push({
+            kind: 'password',
+            companyId: co.id,
+            companyName: co.name,
+            companySlug: co.slug,
+            passwordId: p.id,
+            passwordName: p.name,
+            source: 'rotation',
+            expiresAt: dueAt.toISOString(),
+            daysUntil,
+            status: daysUntil < 0 ? 'EXPIRED' : 'WARNING',
+          });
+        }
+      }
     }
     return rows;
   }

@@ -81,10 +81,7 @@ export function ExpirationsTable({
       mono: true,
       render: (row) => (
         <span style={{ color: 'var(--text-2)' }}>
-          {formatExpires(
-            row.expiresAt,
-            row.kind === 'asset-field' ? row.fieldType : 'DATETIME',
-          )}
+          {formatExpires(row.expiresAt, expiresFormat(row))}
         </span>
       ),
     });
@@ -168,10 +165,7 @@ export function ExpirationsTable({
             )}
           </div>
           <MobileCardRow label="Expires" mono>
-            {formatExpires(
-              row.expiresAt,
-              row.kind === 'asset-field' ? row.fieldType : 'DATETIME',
-            )}
+            {formatExpires(row.expiresAt, expiresFormat(row))}
           </MobileCardRow>
           <MobileCardRow label="Days" mono>
             <span style={{ color: daysColor(row.daysUntil), fontWeight: 500 }}>
@@ -237,7 +231,7 @@ function ItemCell({
           </div>
         </div>
       </>
-    ) : (
+    ) : row.kind === 'domain' ? (
       <>
         <div
           style={{
@@ -276,6 +270,45 @@ function ItemCell({
           </div>
         </div>
       </>
+    ) : (
+      <>
+        <div
+          style={{
+            width: 22,
+            height: 22,
+            display: 'grid',
+            placeItems: 'center',
+            borderRadius: 5,
+            background: 'var(--warn-soft)',
+            color: 'var(--warn)',
+            flexShrink: 0,
+          }}
+        >
+          <Icon.lock size={13} />
+        </div>
+        <div style={{ minWidth: 0 }}>
+          <div
+            style={{
+              fontWeight: 500,
+              color: 'var(--text)',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {row.passwordName}
+          </div>
+          <div
+            style={{
+              fontFamily: 'var(--font-mono)',
+              fontSize: 10.5,
+              color: 'var(--dim)',
+            }}
+          >
+            Vault · {row.source === 'expiry' ? 'Hard expiry' : 'Rotation due'}
+          </div>
+        </div>
+      </>
     );
 
   const containerStyle = {
@@ -301,9 +334,16 @@ function SourceCell({ row }: { row: ExpirationRow }) {
   if (row.kind === 'asset-field') {
     return <Tag tone="outline">{row.fieldLabel}</Tag>;
   }
+  if (row.kind === 'domain') {
+    return (
+      <Tag tone="outline">
+        {row.source === 'registrar' ? 'Registrar' : 'TLS certificate'}
+      </Tag>
+    );
+  }
   return (
     <Tag tone="outline">
-      {row.source === 'registrar' ? 'Registrar' : 'TLS certificate'}
+      {row.source === 'expiry' ? 'Password expiry' : 'Password rotation'}
     </Tag>
   );
 }
@@ -312,7 +352,15 @@ function detailHref(row: ExpirationRow): string {
   if (row.kind === 'asset-field') {
     return `/admin/companies/${row.companyId}/assets/${row.assetId}`;
   }
-  return `/admin/companies/${row.companyId}/domains/${row.domainId}`;
+  if (row.kind === 'domain') {
+    return `/admin/companies/${row.companyId}/domains/${row.domainId}`;
+  }
+  return `/admin/companies/${row.companyId}/passwords/${row.passwordId}`;
+}
+
+function expiresFormat(row: ExpirationRow): 'DATE' | 'DATETIME' {
+  if (row.kind === 'asset-field') return row.fieldType;
+  return 'DATETIME';
 }
 
 function daysColor(n: number): string {
@@ -350,5 +398,8 @@ function rowKey(row: ExpirationRow): string {
   if (row.kind === 'asset-field') {
     return `af:${row.assetId}:${row.fieldId}`;
   }
-  return `dm:${row.domainId}:${row.source}`;
+  if (row.kind === 'domain') {
+    return `dm:${row.domainId}:${row.source}`;
+  }
+  return `pw:${row.passwordId}:${row.source}`;
 }

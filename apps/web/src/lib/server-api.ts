@@ -1360,7 +1360,29 @@ export type DomainExpiration = {
   status: ExpirationStatus;
 };
 
-export type ExpirationRow = AssetFieldExpiration | DomainExpiration;
+export type PasswordExpiration = {
+  kind: 'password';
+  companyId: string;
+  companyName: string;
+  companySlug: string;
+  passwordId: string;
+  passwordName: string;
+  /**
+   * `expiry` = hard `Password.expiresAt` cutoff; `rotation` = soft
+   * "should have been rotated by now" date derived from
+   * `lastRotatedAt + rotationReminderDays`. A single credential can
+   * surface up to one row of each kind.
+   */
+  source: 'expiry' | 'rotation';
+  expiresAt: string;
+  daysUntil: number;
+  status: ExpirationStatus;
+};
+
+export type ExpirationRow =
+  | AssetFieldExpiration
+  | DomainExpiration
+  | PasswordExpiration;
 
 /**
  * Fetch the unified expiring-soon feed. Pass `companyId` for a

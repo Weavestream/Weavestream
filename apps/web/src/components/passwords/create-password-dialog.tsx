@@ -13,6 +13,11 @@ import {
 } from '../ui';
 import { apiFetch } from '../../lib/api';
 import type { PasswordFolderRow } from '../../lib/server-api';
+import {
+  TagsInput,
+  toPlainNameList,
+  type TagChipDraft,
+} from '../tags/tags-input';
 import { SecretInput } from './secret-input';
 
 /**
@@ -62,6 +67,11 @@ export function CreatePasswordDialog({
   const [visibleToClients, setVisibleToClients] = useState(true);
   const [requireReason, setRequireReason] = useState(false);
   const [totpSecret, setTotpSecret] = useState('');
+  const [tags, setTags] = useState<TagChipDraft[]>([]);
+  const [expiresAt, setExpiresAt] = useState<string>('');
+  const [rotationReminderDays, setRotationReminderDays] = useState<
+    number | null
+  >(null);
   const fieldSeed = useId().replace(/:/g, '');
   const accountFieldId = `ws-acct-${fieldSeed}`;
   const accountFieldName = `ws-acct-${fieldSeed}`;
@@ -80,6 +90,14 @@ export function CreatePasswordDialog({
       assetId: assetId ?? null,
       visibleToClients,
       requireReasonToView: requireReason,
+      tags: toPlainNameList(tags),
+      // `<input type="date">` emits a yyyy-mm-dd local-date string. The
+      // API expects a full ISO timestamp; midnight UTC is the right
+      // anchor since the field carries calendar-day semantics.
+      expiresAt: expiresAt
+        ? new Date(`${expiresAt}T00:00:00.000Z`).toISOString()
+        : null,
+      rotationReminderDays,
     };
     if (totpSecret.trim()) {
       body.totp = {
@@ -114,6 +132,9 @@ export function CreatePasswordDialog({
     visibleToClients,
     requireReason,
     totpSecret,
+    tags,
+    expiresAt,
+    rotationReminderDays,
     onCreated,
   ]);
 
@@ -211,21 +232,56 @@ export function CreatePasswordDialog({
             autoComplete="off"
           />
         </Field>
-        <Field label="Folder">
-          <Select
-            value={selectedFolder ?? ''}
-            onChange={(e) => setSelectedFolder(e.target.value || null)}
-          >
-            <option value="">(no folder)</option>
-            {folders
-              .filter((f) => !f.archivedAt)
-              .map((f) => (
-                <option key={f.id} value={f.id}>
-                  {f.name}
-                </option>
-              ))}
-          </Select>
-        </Field>
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+            gap: 10,
+          }}
+        >
+          <Field label="Folder">
+            <Select
+              value={selectedFolder ?? ''}
+              onChange={(e) => setSelectedFolder(e.target.value || null)}
+            >
+              <option value="">(no folder)</option>
+              {folders
+                .filter((f) => !f.archivedAt)
+                .map((f) => (
+                  <option key={f.id} value={f.id}>
+                    {f.name}
+                  </option>
+                ))}
+            </Select>
+          </Field>
+          <Field label="Tags">
+            <TagsInput value={tags} onChange={setTags} />
+          </Field>
+          <Field label="Expires">
+            <Input
+              type="date"
+              value={expiresAt}
+              onChange={(e) => setExpiresAt(e.target.value)}
+            />
+          </Field>
+          <Field label="Rotation reminder">
+            <Select
+              value={rotationReminderDays == null ? '' : String(rotationReminderDays)}
+              onChange={(e) =>
+                setRotationReminderDays(
+                  e.target.value === '' ? null : Number(e.target.value),
+                )
+              }
+            >
+              <option value="">No reminder</option>
+              <option value="30">Every 30 days</option>
+              <option value="60">Every 60 days</option>
+              <option value="90">Every 90 days</option>
+              <option value="180">Every 180 days</option>
+              <option value="365">Every 365 days</option>
+            </Select>
+          </Field>
+        </div>
         <label style={checkboxLabel}>
           <input
             type="checkbox"

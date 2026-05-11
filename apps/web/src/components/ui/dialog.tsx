@@ -59,6 +59,14 @@ export function Dialog({
   const panel: CSSProperties = {
     width: '100%',
     maxWidth: width,
+    // Cap the panel to the viewport (minus the overlay's 16px padding
+    // on each side) and lay out as a column so the body can scroll
+    // independently of the sticky header/footer. Without this, dialogs
+    // with growing content (e.g. a tags field accumulating chips, a
+    // long notes block) push the action buttons below the fold.
+    maxHeight: 'calc(100vh - 32px)',
+    display: 'flex',
+    flexDirection: 'column',
     background: 'var(--panel)',
     border: '1px solid var(--line)',
     borderRadius: 8,
@@ -99,6 +107,7 @@ export function Dialog({
             display: 'flex',
             alignItems: 'center',
             gap: 10,
+            flexShrink: 0,
           }}
         >
           <h2
@@ -114,7 +123,7 @@ export function Dialog({
             {title}
           </h2>
         </header>
-        <div style={{ padding: 16 }}>{children}</div>
+        <div style={{ padding: 16, overflow: 'auto', flex: 1 }}>{children}</div>
         {footer && (
           <footer
             style={{
@@ -123,6 +132,7 @@ export function Dialog({
               display: 'flex',
               justifyContent: 'flex-end',
               gap: 8,
+              flexShrink: 0,
             }}
           >
             {footer}

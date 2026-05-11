@@ -95,7 +95,7 @@ export class AlertsRunnerService {
 
       await this.enqueueSend(config, {
         triggerKey,
-        subject: `[Weavestream] Expiring in ${item.daysUntil} day(s) — ${item.label}`,
+        subject: singleSubject(item),
         text: renderSingleExpirationText(config.name, item),
       });
       enqueued += 1;
@@ -247,31 +247,69 @@ export class AlertsRunnerService {
     }
 
     if (kinds.has('password')) {
+      // Both hard expiry and rotation-due reminders are surfaced under
+      // the single `password` kind (per the merged-kind decision). The
+      // rotation cutoff depends on each row's own `rotationReminderDays`
+      // so we can't pre-filter that arm in SQL — load every candidate
+      // that *might* match and reject in-process below.
       const cutoff = new Date(now + triggerDays * dayMs);
       const passwords = await this.prisma.password.findMany({
         where: {
           archivedAt: null,
-          expiresAt: { not: null, lte: cutoff },
           ...(config.companyId ? { companyId: config.companyId } : {}),
+          OR: [
+            { expiresAt: { not: null, lte: cutoff } },
+            {
+              rotationReminderDays: { not: null },
+              lastRotatedAt: { not: null },
+            },
+          ],
         },
         select: {
           id: true,
           name: true,
           companyId: true,
           expiresAt: true,
+          lastRotatedAt: true,
+          rotationReminderDays: true,
         },
       });
       for (const p of passwords) {
-        if (!p.expiresAt) continue;
-        const daysUntil = Math.floor((p.expiresAt.getTime() - now) / dayMs);
-        items.push({
-          id: p.id,
-          kind: 'password',
-          label: `Password "${p.name}"`,
-          expiresAt: p.expiresAt.toISOString(),
-          daysUntil,
-          companyId: p.companyId,
-        });
+        // Hard expiry row.
+        if (p.expiresAt) {
+          const daysUntil = Math.floor((p.expiresAt.getTime() - now) / dayMs);
+          if (daysUntil <= triggerDays) {
+            items.push({
+              id: `${p.id}:expiry`,
+              kind: 'password',
+              source: 'expiry',
+              label: `Password "${p.name}" (expires)`,
+              expiresAt: p.expiresAt.toISOString(),
+              daysUntil,
+              companyId: p.companyId,
+            });
+          }
+        }
+        // Rotation-due row — credential should have been rotated by
+        // `lastRotatedAt + rotationReminderDays`. Negative `daysUntil`
+        // means overdue.
+        if (p.rotationReminderDays != null && p.lastRotatedAt) {
+          const dueAt = new Date(
+            p.lastRotatedAt.getTime() + p.rotationReminderDays * dayMs,
+          );
+          const daysUntil = Math.floor((dueAt.getTime() - now) / dayMs);
+          if (daysUntil <= triggerDays) {
+            items.push({
+              id: `${p.id}:rotation`,
+              kind: 'password',
+              source: 'rotation',
+              label: `Password "${p.name}" (rotation due)`,
+              expiresAt: dueAt.toISOString(),
+              daysUntil,
+              companyId: p.companyId,
+            });
+          }
+        }
       }
     }
 
@@ -375,6 +413,12 @@ type AlertConfigRow =
 interface ExpirationItem {
   id: string;
   kind: AlertExpirationKind;
+  /**
+   * Sub-source within a kind. Currently only used by `password` to
+   * distinguish a hard `expiresAt` row from a rotation-due reminder
+   * derived from `lastRotatedAt + rotationReminderDays`.
+   */
+  source?: 'expiry' | 'rotation';
   label: string;
   expiresAt: string;
   daysUntil: number;
@@ -397,11 +441,34 @@ function todayUtc(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
+function singleSubject(item: ExpirationItem): string {
+  // Rotation reminders read awkwardly as "Expiring in N day(s)" — the
+  // credential isn't expiring, it just needs to be cycled. Branch the
+  // subject so the inbox preview matches what the operator should do.
+  if (item.kind === 'password' && item.source === 'rotation') {
+    if (item.daysUntil < 0) {
+      return `[Weavestream] Rotation overdue by ${Math.abs(item.daysUntil)} day(s) — ${item.label}`;
+    }
+    return `[Weavestream] Rotation due in ${item.daysUntil} day(s) — ${item.label}`;
+  }
+  if (item.daysUntil < 0) {
+    return `[Weavestream] Expired ${Math.abs(item.daysUntil)} day(s) ago — ${item.label}`;
+  }
+  return `[Weavestream] Expiring in ${item.daysUntil} day(s) — ${item.label}`;
+}
+
 function renderSingleExpirationText(
   configName: string,
   item: ExpirationItem,
 ): string {
-  const status = item.daysUntil < 0 ? 'expired' : 'expiring';
+  const isRotation = item.kind === 'password' && item.source === 'rotation';
+  const status = isRotation
+    ? item.daysUntil < 0
+      ? 'rotation overdue'
+      : 'rotation due'
+    : item.daysUntil < 0
+      ? 'expired'
+      : 'expiring';
   return [
     `Alert: ${configName}`,
     `Item:  ${item.label}`,
