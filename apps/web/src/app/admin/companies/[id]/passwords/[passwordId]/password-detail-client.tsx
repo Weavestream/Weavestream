@@ -146,8 +146,8 @@ export function PasswordDetailClient({
         className="detail-grid-main-aside"
         style={{
           display: 'grid',
-          gridTemplateColumns: 'minmax(0, 2fr) minmax(260px, 1fr)',
-          gap: 14,
+          gridTemplateColumns: 'minmax(0, 1fr) 320px',
+          gap: 16,
         }}
       >
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
