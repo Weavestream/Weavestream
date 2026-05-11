@@ -94,3 +94,58 @@ export type SmtpSecurityMode = z.infer<typeof smtpSecurityModeSchema>;
 export type EmailSettings = z.infer<typeof emailSettingsSchema>;
 export type UpdateEmailSettingsInput = z.infer<typeof updateEmailSettingsSchema>;
 export type TestEmailSettingsInput = z.infer<typeof testEmailSettingsSchema>;
+
+/**
+ * Workspace-wide OpenAI-compatible LLM endpoint (Ollama, LMStudio, vLLM,
+ * OpenAI itself, …). Foundation only — nothing in the app calls the LLM
+ * yet. The API key is encrypted server-side and never returned; clients
+ * only see the `apiKeyConfigured` boolean.
+ */
+export const aiSettingsSchema = z.object({
+  enabled: z.boolean(),
+  baseUrl: z.string().min(1).max(2048).nullable(),
+  defaultModel: z.string().min(1).max(120).nullable(),
+  apiKeyConfigured: z.boolean(),
+  updatedAt: z.string(),
+});
+
+export const updateAiSettingsSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    baseUrl: z
+      .union([
+        z.string().trim().url('Base URL must be a valid URL').max(2048),
+        z.null(),
+      ])
+      .optional(),
+    apiKey: z.string().min(1).max(1024, 'API key is too long').optional(),
+    clearApiKey: z.boolean().optional(),
+    defaultModel: nullableTrimmedString(1, 120, 'Default model').optional(),
+  })
+  .refine((v) => Object.keys(v).length > 0, 'At least one field must be provided')
+  .refine((v) => !(v.apiKey && v.clearApiKey), {
+    message: 'Cannot set and clear the API key in the same request',
+    path: ['apiKey'],
+  });
+
+export type AiSettings = z.infer<typeof aiSettingsSchema>;
+export type UpdateAiSettingsInput = z.infer<typeof updateAiSettingsSchema>;
+
+export const aiTestResultSchema = z.object({
+  ok: z.literal(true),
+  models: z.array(z.string()),
+});
+export type AiTestResult = z.infer<typeof aiTestResultSchema>;
+
+/**
+ * Optional overrides for `POST /settings/ai/test`. When omitted, the
+ * endpoint uses the persisted config; when provided, it tests the
+ * in-flight values without requiring a save first.
+ */
+export const testAiSettingsSchema = z
+  .object({
+    baseUrl: z.string().trim().url('Base URL must be a valid URL').max(2048).optional(),
+    apiKey: z.string().min(1).max(1024).optional(),
+  })
+  .optional();
+export type TestAiSettingsInput = z.infer<typeof testAiSettingsSchema>;

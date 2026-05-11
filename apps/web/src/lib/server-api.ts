@@ -2,6 +2,7 @@ import { cache } from 'react';
 import { cookies, headers } from 'next/headers';
 import { notFound } from 'next/navigation';
 import type {
+  AiSettings,
   AlertConfig,
   BackupConfig,
   BackupRunDto,
@@ -18,6 +19,7 @@ import type {
 import { DEFAULT_PASSWORD_GENERATOR_DEFAULTS } from '@weavestream/shared';
 
 export type {
+  AiSettings,
   AlertConfig,
   BackupConfig,
   BackupRunDto,
@@ -481,6 +483,20 @@ export const DEFAULT_EMAIL_SETTINGS: EmailSettings = {
 export const getEmailSettings = cache(async (): Promise<EmailSettings> => {
   const res = await serverApiFetch<EmailSettings>('/settings/email');
   if (!res.ok || !res.data) return DEFAULT_EMAIL_SETTINGS;
+  return res.data;
+});
+
+export const DEFAULT_AI_SETTINGS: AiSettings = {
+  enabled: false,
+  baseUrl: null,
+  defaultModel: null,
+  apiKeyConfigured: false,
+  updatedAt: new Date(0).toISOString(),
+};
+
+export const getAiSettings = cache(async (): Promise<AiSettings> => {
+  const res = await serverApiFetch<AiSettings>('/settings/ai');
+  if (!res.ok || !res.data) return DEFAULT_AI_SETTINGS;
   return res.data;
 });
 

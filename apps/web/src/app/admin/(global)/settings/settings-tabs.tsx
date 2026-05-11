@@ -2,12 +2,13 @@
 
 import { useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import type { EmailSettings } from '@weavestream/shared';
+import type { AiSettings, EmailSettings } from '@weavestream/shared';
 import type { Settings } from '../../../../lib/server-api';
 import { GeneralSettingsForm, SecuritySettingsForm } from './settings-form';
 import { EmailSettingsForm } from './email-settings-form';
+import { AiSettingsForm } from './ai-settings-form';
 
-type TabId = 'general' | 'security' | 'email';
+type TabId = 'general' | 'security' | 'email' | 'ai';
 
 const TABS: Array<{ id: TabId; label: string; help: string }> = [
   {
@@ -25,17 +26,24 @@ const TABS: Array<{ id: TabId; label: string; help: string }> = [
     label: 'Email',
     help: 'SMTP configuration and test emails.',
   },
+  {
+    id: 'ai',
+    label: 'AI',
+    help: 'OpenAI-compatible LLM endpoint (Ollama, LMStudio, …).',
+  },
 ];
 
 export function SettingsTabs({
   initialTab,
   settings,
   emailSettings,
+  aiSettings,
   currentUserEmail,
 }: {
   initialTab: TabId;
   settings: Settings;
   emailSettings: EmailSettings;
+  aiSettings: AiSettings;
   currentUserEmail: string;
 }) {
   const router = useRouter();
@@ -102,6 +110,7 @@ export function SettingsTabs({
             defaultRecipient={currentUserEmail}
           />
         )}
+        {tab === 'ai' && <AiSettingsForm initial={aiSettings} />}
       </div>
     </div>
   );

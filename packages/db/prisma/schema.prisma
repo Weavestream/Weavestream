@@ -802,6 +802,24 @@ model EmailSetting {
   @@map("email_settings")
 }
 
+// Global OpenAI-compatible LLM endpoint configuration (Ollama, LMStudio,
+// vLLM, OpenAI itself, etc.). Foundation only — actual model calls land
+// in a follow-up phase. `apiKeyCiphertext` is encrypted with the existing
+// `IntegrationSecretEncryptionService` (AES-GCM via `INTEGRATION_SECRET_KEY`)
+// since an LLM endpoint is conceptually one more integration; rotation
+// piggybacks on the integrations key.
+model AiSetting {
+  id               String   @id @default("singleton")
+  enabled          Boolean  @default(false)
+  baseUrl          String?  @map("base_url")
+  apiKeyCiphertext String?  @map("api_key_ciphertext")
+  defaultModel     String?  @map("default_model")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+  updatedBy        String?  @map("updated_by") @db.Uuid
+
+  @@map("ai_settings")
+}
+
 // Phase 8: tenant-scoped "watch this domain" record. One row per
 // hostname the MSP wants monitored. Check toggles + threshold are
 // operator-editable; `visibleToClients` controls whether CLIENT_*

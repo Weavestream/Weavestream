@@ -1,5 +1,10 @@
 import { redirect } from 'next/navigation';
-import { getEmailSettings, getMe, getSettings } from '../../../../lib/server-api';
+import {
+  getAiSettings,
+  getEmailSettings,
+  getMe,
+  getSettings,
+} from '../../../../lib/server-api';
 import { hasCapability } from '../../../../lib/roles';
 import { PageBody, PageHeader } from '../../../../components/shell/page-header';
 import { Panel } from '../../../../components/ui';
@@ -20,9 +25,10 @@ export default async function SettingsPage({
   const me = (await getMe())!;
   if (!hasCapability(me, 'SETTINGS_MANAGE')) redirect('/admin');
 
-  const [settings, emailSettings] = await Promise.all([
+  const [settings, emailSettings, aiSettings] = await Promise.all([
     getSettings(),
     getEmailSettings(),
+    getAiSettings(),
   ]);
 
   return (
@@ -38,9 +44,12 @@ export default async function SettingsPage({
       <PageBody>
         <Panel noPad>
           <SettingsTabs
-            initialTab={(sp.tab as 'general' | 'security' | 'email') ?? 'general'}
+            initialTab={
+              (sp.tab as 'general' | 'security' | 'email' | 'ai') ?? 'general'
+            }
             settings={settings}
             emailSettings={emailSettings}
+            aiSettings={aiSettings}
             currentUserEmail={me.email}
           />
         </Panel>

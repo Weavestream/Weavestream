@@ -51,6 +51,7 @@ import { IpamController } from './ipam/ipam.controller.js';
 import { UiModule } from './ui/ui.module.js';
 import { CryptoModule } from './crypto/crypto.module.js';
 import { EmailModule } from './email/email.module.js';
+import { AiModule } from './ai/ai.module.js';
 import { AlertsModule } from './alerts/alerts.module.js';
 import { AlertsController } from './alerts/alerts.controller.js';
 import { SecurityModule } from './security/security.module.js';
@@ -159,6 +160,7 @@ const httpSerializers = {
     IntegrationsModule,
     IpamModule,
     EmailModule,
+    AiModule,
     AlertsModule,
     SecurityModule,
     IpRulesModule,
