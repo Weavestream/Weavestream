@@ -770,7 +770,7 @@ function MatchKeyPicker({
 }
 
 function tempRowId(): string {
-  return `tmp_${Math.random().toString(36).slice(2, 10)}`;
+  return `tmp_${crypto.randomUUID()}`;
 }
 
 function duplicates<T>(arr: T[]): T[] {

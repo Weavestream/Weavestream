@@ -70,8 +70,7 @@ type BuilderField = {
   options: Record<string, unknown>;
 };
 
-const newKey = () =>
-  `new-${Math.random().toString(36).slice(2, 10)}`;
+const newKey = () => `new-${crypto.randomUUID()}`;
 
 function toBuilder(f: LayoutFieldSummary): BuilderField {
   return {
@@ -1850,7 +1849,7 @@ function ChoicesEditor({
   const choicesWithIds = useMemo(() => {
     return choices.map((c, i) => ({
       ...c,
-      id: c.id || `choice-${i}-${Math.random().toString(36).slice(2, 9)}`,
+      id: c.id || `choice-${i}-${crypto.randomUUID()}`,
     }));
   }, [choices]);
 
