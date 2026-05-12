@@ -9,7 +9,6 @@ import {
   canAccessAdminShell,
   initialsFromName,
   membershipRoleLabel,
-  roleLabel,
 } from '../../lib/roles';
 import type { Term } from '../../lib/term';
 import { LayoutSwatch } from '../ui';
@@ -330,7 +329,6 @@ export function CompanyShell({
   const sidebarUser = {
     initials: initialsFromName(me.name),
     name: me.name,
-    subtitle: `${roleLabel(me.role)} · ${me.mfaEnabled ? 'mfa' : 'no mfa'}`,
   };
 
   // Footer toolbar layout:

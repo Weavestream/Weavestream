@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import type { Me } from '../../lib/server-api';
-import { hasCapability, initialsFromName, roleLabel } from '../../lib/roles';
+import { hasCapability, initialsFromName } from '../../lib/roles';
 import type { Term } from '../../lib/term';
 import { Sidebar, type SidebarSection } from './sidebar';
 import { SidebarActions } from './sidebar-actions';
@@ -185,7 +185,6 @@ export function AdminShell({
   const sidebarUser = {
     initials: initialsFromName(me.name),
     name: me.name,
-    subtitle: `${roleLabel(me.role)} · ${me.mfaEnabled ? 'mfa' : 'no mfa'}`,
   };
 
   return (

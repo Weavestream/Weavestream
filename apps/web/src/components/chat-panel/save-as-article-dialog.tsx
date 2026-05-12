@@ -28,16 +28,64 @@ import type { CompanyDetail, FolderNode } from '../../lib/server-api';
  * the regular new-article form, in Markdown editor mode — so the
  * server-side validation, audit log, and folder-uniqueness checks all
  * stay identical to a manually-created article.
+ *
+ * The same dialog is also reused as the confirmation step for chat
+ * `create_article` tool calls: the caller passes `applyToolCall`,
+ * which routes the submission through the chat apply endpoint with
+ * the user-picked target instead of the regular `/articles` POST.
+ * That avoids the LLM's hallucinated `folder_id` reaching the
+ * articles service, while keeping the tool-call status bookkeeping
+ * intact in the chat history.
  */
+export type SaveAsArticleApplyHandler = (params: {
+  companyId: string;
+  title: string;
+  folderId: string | null;
+  visibleToClients: boolean;
+}) => Promise<
+  | { ok: true; articleId?: string }
+  | { ok: false; error: string }
+>;
+
 export function SaveAsArticleDialog({
   open,
   markdown,
   defaultCompanyId,
+  defaultTitle,
+  defaultVisibleToClients,
+  applyToolCall,
+  dialogTitle,
+  submitLabel,
   onClose,
 }: {
   open: boolean;
   markdown: string;
   defaultCompanyId: string | null;
+  /**
+   * Explicit title override. When set (e.g. the LLM-supplied
+   * `args.title` on a `create_article` proposal), it wins over the
+   * heading parsed from `markdown`. The user can still edit it before
+   * submitting.
+   */
+  defaultTitle?: string;
+  /**
+   * Initial value for the "Visible to clients" checkbox. Defaults to
+   * `false` to preserve the safer free-form save behavior. Tool-call
+   * callers can opt in when the LLM proposed `visible_to_clients: true`.
+   */
+  defaultVisibleToClients?: boolean;
+  /**
+   * When provided, the dialog calls this handler on submit instead of
+   * hitting `POST /companies/:id/articles` directly. Used by the chat
+   * `create_article` Apply flow so the article creation goes through
+   * the tool-call apply endpoint (which also flips the proposal to
+   * the `applied` state in the chat history).
+   */
+  applyToolCall?: SaveAsArticleApplyHandler;
+  /** Optional dialog header override (default: "Save as article"). */
+  dialogTitle?: string;
+  /** Optional submit-button label override (default: "Create article"). */
+  submitLabel?: string;
   onClose: () => void;
 }) {
   const router = useRouter();
@@ -48,20 +96,24 @@ export function SaveAsArticleDialog({
   // with the server-side `update_article` / `create_article` apply
   // path so the two ingestion routes stay consistent.
   const parsed = useMemo(() => splitMarkdownTitleAndBody(markdown), [markdown]);
-  const [title, setTitle] = useState(parsed.title);
+  const initialTitle = defaultTitle?.trim() || parsed.title;
+  const [title, setTitle] = useState(initialTitle);
   const [company, setCompany] = useState<CompanyPickerValue | null>(null);
   const [folders, setFolders] = useState<FolderNode[]>([]);
   const [folderId, setFolderId] = useState<string | null>(null);
-  const [visibleToClients, setVisibleToClients] = useState(false);
+  const [visibleToClients, setVisibleToClients] = useState(
+    defaultVisibleToClients ?? false,
+  );
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!open) return;
-    setTitle(parsed.title);
+    setTitle(initialTitle);
+    setVisibleToClients(defaultVisibleToClients ?? false);
     setError(null);
     setSaving(false);
-  }, [open, parsed.title]);
+  }, [open, initialTitle, defaultVisibleToClients]);
 
   useEffect(() => {
     if (!open) return;
@@ -128,6 +180,34 @@ export function SaveAsArticleDialog({
     }
     setError(null);
     setSaving(true);
+
+    if (applyToolCall) {
+      const result = await applyToolCall({
+        companyId: company.id,
+        title: t,
+        folderId,
+        visibleToClients,
+      });
+      setSaving(false);
+      if (!result.ok) {
+        setError(result.error || 'Could not create the article.');
+        return;
+      }
+      toast.push('Article created', 'ok');
+      onClose();
+      // Navigate to the new article when the apply path could resolve
+      // the id, otherwise just close — the chat-side "applied" badge
+      // already confirms the action and a follow-up route refresh
+      // keeps any company-scoped listings in sync.
+      if (result.articleId) {
+        router.push(
+          `/admin/companies/${company.id}/articles/${result.articleId}`,
+        );
+      }
+      router.refresh();
+      return;
+    }
+
     const res = await apiFetch<{ id: string }>(
       `/companies/${company.id}/articles`,
       {
@@ -159,7 +239,7 @@ export function SaveAsArticleDialog({
       onClose={() => {
         if (!saving) onClose();
       }}
-      title="Save as article"
+      title={dialogTitle ?? 'Save as article'}
       width={460}
       footer={
         <>
@@ -172,7 +252,7 @@ export function SaveAsArticleDialog({
             disabled={!canSubmit}
             loading={saving}
           >
-            Create article
+            {submitLabel ?? 'Create article'}
           </Btn>
         </>
       }

@@ -112,15 +112,19 @@ export function splitMarkdownTitleAndBody(
   fallbackTitle = 'Untitled article',
 ): { title: string; body: string; hadLeadingHeading: boolean } {
   if (!src) return { title: fallbackTitle, body: '', hadLeadingHeading: false };
-  const lines = src.split(/\r?\n/);
+  const safeSrc = src.length > MAX_MARKDOWN_SOURCE ? src.slice(0, MAX_MARKDOWN_SOURCE) : src;
+  const lines = safeSrc.split(/\r?\n/);
 
   let i = 0;
   while (i < lines.length && lines[i]!.trim() === '') i++;
 
-  const heading =
-    i < lines.length ? lines[i]!.match(/^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$/) : null;
+  // Match the heading prefix only; clean trailing close-`#`s separately so
+  // the regex has no overlapping quantifiers (avoids polynomial backtracking).
+  const trimmed = i < lines.length ? lines[i]!.replace(/[ \t]+$/, '') : '';
+  const heading = i < lines.length ? trimmed.match(/^\s{0,3}#{1,6}\s+(.*)$/) : null;
   if (heading?.[1]) {
-    const title = cleanMarkdownTitle(heading[1]).slice(0, 200) || fallbackTitle;
+    const rawTitle = heading[1].replace(/\s+#+$/, '').trimEnd();
+    const title = cleanMarkdownTitle(rawTitle).slice(0, 200) || fallbackTitle;
     let j = i + 1;
     while (j < lines.length && lines[j]!.trim() === '') j++;
     return { title, body: lines.slice(j).join('\n'), hadLeadingHeading: true };
@@ -144,11 +148,21 @@ function titleFromProse(src: string, fallback: string): string {
 }
 
 function cleanMarkdownTitle(s: string): string {
-  return s
-    .replace(/^\*+|\*+$/g, '')
-    .replace(/^_+|_+$/g, '')
-    .replace(/`+/g, '')
-    .trim();
+  // Linear character trim avoids the anchored-alternation regexes flagged
+  // as polynomial ReDoS on long runs of `*` / `_`.
+  let start = 0;
+  let end = s.length;
+  while (start < end) {
+    const c = s.charCodeAt(start);
+    if (c !== 42 /* * */ && c !== 95 /* _ */) break;
+    start++;
+  }
+  while (end > start) {
+    const c = s.charCodeAt(end - 1);
+    if (c !== 42 && c !== 95) break;
+    end--;
+  }
+  return s.slice(start, end).replace(/`/g, '').trim();
 }
 
 /**

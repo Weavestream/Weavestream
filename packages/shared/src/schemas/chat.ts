@@ -150,8 +150,24 @@ export type SendChatMessageInput = z.infer<typeof sendChatMessageSchema>;
  * body. The client may send the company id of the page it's currently
  * viewing as a sanity check; the server still ignores any LLM-supplied
  * `company_id` argument and uses request scope only.
+ *
+ * `createOverrides` is set by the Save-as-article confirmation dialog
+ * when the user clicks Apply on a `create_article` proposal — the LLM
+ * sometimes hallucinates a `folder_id` that doesn't belong to the
+ * request company, so the user picks the target explicitly in the UI
+ * and the server uses those values instead of `args.folder_id` /
+ * `args.title` / `args.visible_to_clients`. `companyId` still scopes
+ * the create (and is matched against the tenancy the actor can write
+ * into).
  */
 export const applyChatToolCallSchema = z.object({
   companyId: z.string().uuid().optional(),
+  createOverrides: z
+    .object({
+      title: z.string().min(1).max(200),
+      folderId: z.string().uuid().nullable(),
+      visibleToClients: z.boolean(),
+    })
+    .optional(),
 });
 export type ApplyChatToolCallInput = z.infer<typeof applyChatToolCallSchema>;

@@ -112,6 +112,7 @@ export class ChatController {
       messageId: msgId,
       toolCallId,
       requestCompanyId: dto.companyId,
+      ...(dto.createOverrides ? { createOverrides: dto.createOverrides } : {}),
       auditMeta: meta(req),
     });
   }

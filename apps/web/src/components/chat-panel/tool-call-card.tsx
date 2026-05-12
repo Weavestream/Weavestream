@@ -10,6 +10,7 @@ import {
   type ChatPageContextSnapshot,
   type ChatTab,
 } from './chat-panel-provider';
+import { SaveAsArticleDialog } from './save-as-article-dialog';
 
 /**
  * Apply / Reject card rendered inline inside an assistant message
@@ -41,6 +42,12 @@ export function ToolCallCard({
   // demand. Independent from the pending preview's `showDiff` so the
   // user's expanded state survives the apply transition cleanly.
   const [showCreatedBody, setShowCreatedBody] = useState(false);
+  // `create_article` Apply routes through the Save-as-article dialog
+  // so the user picks the target company / folder explicitly — the
+  // LLM's `folder_id` is treated as advisory only. `update_article`
+  // keeps the inline Apply flow because the target row is already
+  // pinned to a real article.
+  const [saveDialogOpen, setSaveDialogOpen] = useState(false);
   const pageContext = state.pageContext;
 
   const isUpdate = toolCall.name === 'update_article';
@@ -74,6 +81,28 @@ export function ToolCallCard({
     !!targetArticleId &&
     articlePageContext !== null &&
     articlePageContext.articleId === targetArticleId;
+  // The set of article ids the LLM legitimately knows about for this
+  // turn: the current page (if any) plus every explicitly @-mentioned
+  // article. The system prompt instructs the model to only reference
+  // ids it has seen there, so anything else is a hallucination and we
+  // should treat the proposal as a brand-new article instead of
+  // letting the apply path fail with "Article not found".
+  const knownArticleIds = (() => {
+    const ids = new Set<string>();
+    if (articlePageContext?.articleId) ids.add(articlePageContext.articleId);
+    for (const m of tab.mentions) {
+      if (m.kind === 'article') ids.add(m.id);
+    }
+    return ids;
+  })();
+  const updateTargetIsHallucinated =
+    isUpdate && !!targetArticleId && !knownArticleIds.has(targetArticleId);
+  // Treat hallucinated update targets exactly like a `create_article`
+  // proposal — the header, preview, and Apply flow all route through
+  // the Save-as-article dialog. The server-side fallback in
+  // `applyUpdate` matches this: a missing article + user-confirmed
+  // overrides becomes a create.
+  const treatAsCreate = !isUpdate || updateTargetIsHallucinated;
   // The "current" body comes from the page context if the LLM is
   // updating the article currently being viewed/edited. Otherwise we
   // don't have it client-side (we'd have to re-fetch); for v1 we just
@@ -83,12 +112,23 @@ export function ToolCallCard({
       ? safeGetMarkdown(articlePageContext.getMarkdown)
       : null;
 
-  const header = isUpdate
-    ? `Proposed: update "${resolvedArticleTitle(tab, pageContext, targetArticleId)}"`
-    : `Proposed: create "${args.title ?? 'new article'}"`;
+  const header = treatAsCreate
+    ? `Proposed: create "${args.title ?? 'new article'}"`
+    : `Proposed: update "${resolvedArticleTitle(tab, pageContext, targetArticleId)}"`;
 
   async function onApply() {
     if (busy) return;
+    // Anything that lands as a "create" — both genuine `create_article`
+    // proposals and `update_article` calls against an article the LLM
+    // hallucinated — goes through the Save-as-article dialog so the
+    // user picks the target company / folder / title / visibility.
+    // The server treats the dialog's overrides as the canonical
+    // target and falls back to creating when the update target
+    // doesn't exist.
+    if (treatAsCreate) {
+      setSaveDialogOpen(true);
+      return;
+    }
     // Unsaved-changes guard: if the user is in the middle of editing
     // the same article the AI wants to overwrite, make them
     // acknowledge the swap before we clobber the form's body.
@@ -147,13 +187,19 @@ export function ToolCallCard({
   }
 
   if (toolCall.status !== 'pending') {
-    // Keep the proposed body recoverable on a settled `create_article`
-    // so the chat history doesn't lose the AI's output once the user
-    // navigates away from the newly-created article. `update_article`
-    // status rows stay terse — the canonical body lives on the
-    // article itself, and the diff against the pre-apply version was
-    // already gone by then.
-    if (toolCall.name === 'create_article' && proposedMarkdown.trim()) {
+    // Keep the proposed body recoverable on a settled "create" call
+    // (either a real `create_article` or an `update_article` we
+    // promoted to a create because the LLM hallucinated the target
+    // id) so the chat history doesn't lose the AI's output once the
+    // user navigates away. Legitimate `update_article` status rows
+    // stay terse — the canonical body lives on the article itself,
+    // and the diff against the pre-apply version was already gone.
+    const settledAsCreate =
+      toolCall.name === 'create_article' ||
+      (toolCall.status === 'applied' &&
+        typeof toolCall.result === 'string' &&
+        toolCall.result.startsWith('Created article'));
+    if (settledAsCreate && proposedMarkdown.trim()) {
       return (
         <CreatedArticleCard
           toolCall={toolCall}
@@ -167,6 +213,20 @@ export function ToolCallCard({
     }
     return <StatusRow toolCall={toolCall} />;
   }
+
+  // Default the dialog company to the article snapshot when present;
+  // otherwise fall back to the broadcast company scope so the dialog
+  // opens with a sensible pre-pick on home / asset pages too.
+  const dialogDefaultCompanyId =
+    state.pageContext?.companyId ?? state.companyContext?.companyId ?? null;
+  const proposedTitle =
+    typeof args.title === 'string' && args.title.trim()
+      ? args.title
+      : undefined;
+  const proposedVisibleToClients =
+    typeof args.visible_to_clients === 'boolean'
+      ? args.visible_to_clients
+      : false;
 
   return (
     <div
@@ -235,7 +295,7 @@ export function ToolCallCard({
             background: 'var(--panel-2)',
           }}
         >
-          {isUpdate && currentMarkdown !== null ? (
+          {!treatAsCreate && currentMarkdown !== null ? (
             <DiffBlock
               before={currentMarkdown}
               after={proposedMarkdown}
@@ -273,6 +333,31 @@ export function ToolCallCard({
           {busy === 'apply' ? 'Applying…' : 'Apply'}
         </button>
       </div>
+      {treatAsCreate && (
+        <SaveAsArticleDialog
+          open={saveDialogOpen}
+          markdown={typeof args.markdown === 'string' ? args.markdown : ''}
+          {...(proposedTitle ? { defaultTitle: proposedTitle } : {})}
+          defaultCompanyId={dialogDefaultCompanyId}
+          defaultVisibleToClients={proposedVisibleToClients}
+          dialogTitle="Create article from suggestion"
+          submitLabel="Create article"
+          applyToolCall={async ({ companyId, title, folderId, visibleToClients }) => {
+            const error = await applyToolCall(tab.id, messageId, toolCall.id, {
+              companyId,
+              createOverrides: { title, folderId, visibleToClients },
+            });
+            if (error) return { ok: false, error };
+            // The tool-call apply endpoint surfaces a human-readable
+            // result string but doesn't expose the new article id, so
+            // we close without navigating — the chat history still
+            // shows the "applied" badge with the proposed body for
+            // recovery, and any company-scoped listings refresh.
+            return { ok: true };
+          }}
+          onClose={() => setSaveDialogOpen(false)}
+        />
+      )}
     </div>
   );
 }

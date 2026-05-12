@@ -56,6 +56,7 @@ export class ChatToolCallService {
       messageId: string;
       toolCallId: string;
       requestCompanyId: string | undefined;
+      createOverrides?: CreateArticleOverrides;
       auditMeta: AuditMeta;
     },
   ): Promise<{ toolCall: ChatToolCallDto; updatedToolCalls: ChatToolCallDto[] }> {
@@ -71,6 +72,7 @@ export class ChatToolCallService {
           actor,
           toolCall,
           params.requestCompanyId,
+          params.createOverrides,
           params.auditMeta,
         );
         next = { ...toolCall, status: 'applied', result, error: null };
@@ -79,6 +81,7 @@ export class ChatToolCallService {
           actor,
           toolCall,
           params.requestCompanyId,
+          params.createOverrides,
           params.auditMeta,
         );
         next = { ...toolCall, status: 'applied', result, error: null };
@@ -133,6 +136,7 @@ export class ChatToolCallService {
     actor: AuthedUser,
     toolCall: ChatToolCallDto,
     requestCompanyId: string | undefined,
+    overrides: CreateArticleOverrides | undefined,
     auditMeta: AuditMeta,
   ): Promise<string> {
     const args = updateArgsSchema.parse(toolCall.arguments);
@@ -142,7 +146,28 @@ export class ChatToolCallService {
     // request-scope `companyId` (the page the user was on) must match
     // it so the user can't be tricked into mutating another tenant
     // via a hallucinated article id.
-    const targetCompanyId = await this.resolveArticleCompany(args.article_id);
+    const targetCompanyId = await this.articles.findCompanyIdForArticle(
+      args.article_id,
+    );
+    if (targetCompanyId === null) {
+      // The LLM referenced an article that doesn't exist. The chat UI
+      // flags this client-side (no matching page-context / mention)
+      // and the user confirms a target via the Save-as-article
+      // dialog, which posts `createOverrides`. Promote the proposal
+      // to a create so the user's intent isn't lost to a hallucinated
+      // article id — but only when we have an explicit company scope
+      // AND the LLM emitted a body to seed the new article.
+      if (overrides && requestCompanyId && args.markdown) {
+        return this.applyCreateFromUpdateArgs(
+          actor,
+          args,
+          requestCompanyId,
+          overrides,
+          auditMeta,
+        );
+      }
+      throw new NotFoundException('Article not found.');
+    }
     if (requestCompanyId && requestCompanyId !== targetCompanyId) {
       throw new ForbiddenException(
         'Refusing to apply: article belongs to a different company than the one you were viewing.',
@@ -191,6 +216,7 @@ export class ChatToolCallService {
     actor: AuthedUser,
     toolCall: ChatToolCallDto,
     requestCompanyId: string | undefined,
+    overrides: CreateArticleOverrides | undefined,
     auditMeta: AuditMeta,
   ): Promise<string> {
     if (!requestCompanyId) {
@@ -205,16 +231,65 @@ export class ChatToolCallService {
     // same heading it also passed as `title`, drop the heading line
     // so the rendered article doesn't show the title twice.
     const parsed = splitMarkdownTitleAndBody(args.markdown);
+    // Prefer the user-confirmed values from the Save-as-article
+    // dialog over the LLM-supplied `args.folder_id` /
+    // `args.visible_to_clients` / `args.title`. The dialog forces a
+    // pick from the live company tree, so a stray LLM hallucination
+    // can never reach the articles service.
+    const title = overrides?.title ?? args.title;
+    const folderId =
+      overrides !== undefined ? overrides.folderId : args.folder_id ?? null;
+    const visibleToClients =
+      overrides !== undefined
+        ? overrides.visibleToClients
+        : args.visible_to_clients;
     const input: CreateArticleInput = {
       editorMode: 'markdown',
-      title: args.title,
+      title,
       markdownSource: parsed.body,
-      ...(args.folder_id ? { folderId: args.folder_id } : {}),
-      ...(args.visible_to_clients !== undefined
-        ? { visibleToClients: args.visible_to_clients }
+      ...(folderId ? { folderId } : {}),
+      ...(visibleToClients !== undefined
+        ? { visibleToClients }
         : {}),
     };
 
+    const created = await this.articles.create(
+      actor,
+      requestCompanyId,
+      input,
+      auditMeta,
+    );
+    return `Created article "${created.title}".`;
+  }
+
+  /**
+   * Promote an `update_article` proposal into a brand-new article when
+   * the LLM-supplied `article_id` doesn't exist. The Save-as-article
+   * dialog already collected an explicit company / folder / title /
+   * visibility from the user, so we use those as the canonical
+   * target and the LLM's body for the article content.
+   */
+  private async applyCreateFromUpdateArgs(
+    actor: AuthedUser,
+    args: { title?: string; markdown?: string },
+    requestCompanyId: string,
+    overrides: CreateArticleOverrides,
+    auditMeta: AuditMeta,
+  ): Promise<string> {
+    if (!args.markdown) {
+      throw new BadRequestException(
+        'Tool call did not include a body to create an article from.',
+      );
+    }
+    await this.assertArticleWrite(actor, requestCompanyId);
+    const parsed = splitMarkdownTitleAndBody(args.markdown);
+    const input: CreateArticleInput = {
+      editorMode: 'markdown',
+      title: overrides.title,
+      markdownSource: parsed.body,
+      ...(overrides.folderId ? { folderId: overrides.folderId } : {}),
+      visibleToClients: overrides.visibleToClients,
+    };
     const created = await this.articles.create(
       actor,
       requestCompanyId,
@@ -261,20 +336,6 @@ export class ChatToolCallService {
     return { toolCall, allToolCalls: calls, updatedToolCalls: calls };
   }
 
-  private async resolveArticleCompany(articleId: string): Promise<string> {
-    // The articles service does not expose a raw "find row" — its
-    // `getById` requires the actor's company-scope. We call it with
-    // the actor inside `applyUpdate` after this step, so here we just
-    // need the companyId. Inline a lightweight Prisma lookup via the
-    // articles service to keep the contract tight.
-    return this.articles
-      .findCompanyIdForArticle(articleId)
-      .then((id) => {
-        if (!id) throw new NotFoundException('Article not found.');
-        return id;
-      });
-  }
-
   private async assertArticleWrite(
     actor: AuthedUser,
     companyId: string,
@@ -308,6 +369,18 @@ const createArgsSchema = z.object({
   visible_to_clients: z.boolean().optional(),
   summary: z.string().max(1000).optional(),
 });
+
+/**
+ * User-confirmed overrides for `create_article` apply, posted by the
+ * Save-as-article dialog. Always replaces the LLM-supplied values
+ * when present so the article lands in the folder the user actually
+ * picked.
+ */
+export type CreateArticleOverrides = {
+  title: string;
+  folderId: string | null;
+  visibleToClients: boolean;
+};
 
 function replaceCall(
   calls: ChatToolCallDto[],

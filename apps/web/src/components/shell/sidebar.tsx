@@ -38,7 +38,6 @@ export type SidebarSection = {
 export type SidebarUser = {
   initials: string;
   name: string;
-  subtitle: string;
 };
 
 export type SidebarSwitcherEntry = {
@@ -282,15 +281,6 @@ export function Sidebar({
         </div>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontSize: 12, fontWeight: 500 }}>{user.name}</div>
-          <div
-            style={{
-              fontSize: 10.5,
-              color: 'var(--dim)',
-              fontFamily: 'var(--font-mono)',
-            }}
-          >
-            {user.subtitle}
-          </div>
         </div>
         {footerAction ?? <Icon.dotsV size={14} style={{ color: 'var(--dim)' }} />}
       </div>

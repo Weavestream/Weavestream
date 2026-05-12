@@ -667,11 +667,25 @@ type Ctx = {
   getPageDirty: () => boolean;
   addMention: (tabId: string, mention: ChatTabContextMention) => void;
   removeMention: (tabId: string, mentionId: string) => void;
+  /**
+   * Apply a pending tool call. `createOverrides` is forwarded for
+   * `create_article` proposals when the user confirmed the target via
+   * the Save-as-article dialog. Returns the user-facing error string
+   * on failure, or `null` on success.
+   */
   applyToolCall: (
     tabId: string,
     messageId: string,
     toolCallId: string,
-  ) => Promise<void>;
+    options?: {
+      createOverrides?: {
+        title: string;
+        folderId: string | null;
+        visibleToClients: boolean;
+      };
+      companyId?: string;
+    },
+  ) => Promise<string | null>;
   rejectToolCall: (
     tabId: string,
     messageId: string,
@@ -714,7 +728,7 @@ export function useChatPanel(): Ctx {
       getPageDirty: () => false,
       addMention: noop,
       removeMention: noop,
-      applyToolCall: asyncNoop,
+      applyToolCall: async () => null,
       rejectToolCall: asyncNoop,
     };
   }
@@ -1080,31 +1094,58 @@ export function ChatPanelProvider({ children }: { children: ReactNode }) {
   );
 
   const applyToolCall = useCallback(
-    async (tabId: string, messageId: string, toolCallId: string) => {
+    async (
+      tabId: string,
+      messageId: string,
+      toolCallId: string,
+      options?: {
+        createOverrides?: {
+          title: string;
+          folderId: string | null;
+          visibleToClients: boolean;
+        };
+        companyId?: string;
+      },
+    ): Promise<string | null> => {
       const tab = stateRef.current.tabs.find((t) => t.id === tabId);
-      if (!tab || !tab.conversationId) return;
+      if (!tab || !tab.conversationId) {
+        return 'Conversation not initialised yet.';
+      }
       // Same precedence as the picker / resolver: prefer the article
       // page snapshot when it's present (its companyId is the one the
       // user is actively editing in) and otherwise fall back to the
       // company shell broadcast so `create_article` works from any
-      // company-scoped page (home, asset detail, layouts, etc.).
+      // company-scoped page (home, asset detail, layouts, etc.). The
+      // dialog can also force a specific company via `options.companyId`
+      // when the user picked one explicitly.
       const companyId =
+        options?.companyId ??
         stateRef.current.pageContext?.companyId ??
         stateRef.current.companyContext?.companyId;
-      const res = await applyChatToolCall({
+      const result = await applyChatToolCall({
         conversationId: tab.conversationId,
         messageId,
         toolCallId,
         ...(companyId ? { companyId } : {}),
+        ...(options?.createOverrides
+          ? { createOverrides: options.createOverrides }
+          : {}),
       });
-      if (!res) return;
+      if (!result.ok) return result.error;
       dispatch({
         type: 'patchToolCall',
         tabId,
         messageId,
         toolCallId,
-        next: res.toolCall,
+        next: result.data.toolCall,
       });
+      // If the apply succeeded but the server marked the call as
+      // `failed` (e.g. permissions), surface that to the caller so the
+      // dialog can show the message instead of silently closing.
+      if (result.data.toolCall.status === 'failed') {
+        return result.data.toolCall.error ?? 'Apply failed.';
+      }
+      return null;
     },
     [],
   );
