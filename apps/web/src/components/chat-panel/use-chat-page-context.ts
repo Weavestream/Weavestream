@@ -3,11 +3,12 @@
 import { useEffect, useRef } from 'react';
 import {
   useChatPanel,
-  type ChatPageContextSnapshot,
+  type ChatArticlePageContext,
 } from './chat-panel-provider';
 
 /**
- * Register the calling page as the active chat panel "page context".
+ * Register the calling article page as the active chat panel "page
+ * context".
  *
  * Behaviour:
  *  - On mount: registers the snapshot. If a context tab for this
@@ -22,11 +23,11 @@ import {
  */
 export function useChatPageContext(
   snapshot:
-    | (Omit<ChatPageContextSnapshot, 'kind'> & { kind?: 'article' })
+    | (Omit<ChatArticlePageContext, 'kind'> & { kind?: 'article' })
     | null,
 ): void {
   const { registerPageContext, setPageDirty } = useChatPanel();
-  const snapRef = useRef<ChatPageContextSnapshot | null>(null);
+  const snapRef = useRef<ChatArticlePageContext | null>(null);
   // Always keep the freshest snapshot reachable for any in-flight
   // sendMessage; the provider closes over `snapRef.current` indirectly
   // via the `getMarkdown` thunk it captured at registration time.
@@ -68,6 +69,47 @@ export function useChatPageContext(
       onBeforeAiApply: () => snapRef.current?.onBeforeAiApply?.(),
       onAfterAiApply: (changes) =>
         snapRef.current?.onAfterAiApply?.(changes),
+    });
+    return cleanup;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [keyParts, registerPageContext]);
+}
+
+/**
+ * Register the calling asset detail page as the active chat panel
+ * "page context". Same mount/unmount semantics as the article hook:
+ * a fresh `getMarkdown` closure is rebound each render and sampled
+ * at send time, so the asset row's latest fields (after a route-
+ * refresh post-edit, say) are what the LLM sees.
+ *
+ * Unlike articles, the asset variant is purely read-only — no Apply
+ * path, no dirty tracking — so its surface is intentionally smaller.
+ */
+export function useChatAssetPageContext(
+  snapshot: {
+    companyId: string;
+    assetId: string;
+    name: string;
+    layoutName: string;
+    getMarkdown: () => string;
+  } | null,
+): void {
+  const { registerPageContext } = useChatPanel();
+  const getMarkdownRef = useRef<() => string>(() => '');
+  if (snapshot) getMarkdownRef.current = snapshot.getMarkdown;
+
+  const keyParts = snapshot
+    ? `${snapshot.companyId}|${snapshot.assetId}|${snapshot.name}|${snapshot.layoutName}`
+    : null;
+  useEffect(() => {
+    if (!snapshot) return;
+    const cleanup = registerPageContext({
+      kind: 'asset',
+      companyId: snapshot.companyId,
+      assetId: snapshot.assetId,
+      title: snapshot.name,
+      layoutName: snapshot.layoutName,
+      getMarkdown: () => getMarkdownRef.current(),
     });
     return cleanup;
     // eslint-disable-next-line react-hooks/exhaustive-deps

@@ -64,17 +64,23 @@ export function ToolCallCard({
       : '';
   const targetArticleId =
     isUpdate && typeof args.article_id === 'string' ? args.article_id : null;
+  // Narrow once — the article-specific page-context fields
+  // (`onBeforeAiApply`, `onAfterAiApply`, etc.) only exist on the
+  // article variant. The asset variant is read-only and never
+  // referenced by tool-call apply.
+  const articlePageContext =
+    pageContext && pageContext.kind === 'article' ? pageContext : null;
   const targetIsCurrentPage =
     !!targetArticleId &&
-    pageContext?.kind === 'article' &&
-    pageContext.articleId === targetArticleId;
+    articlePageContext !== null &&
+    articlePageContext.articleId === targetArticleId;
   // The "current" body comes from the page context if the LLM is
   // updating the article currently being viewed/edited. Otherwise we
   // don't have it client-side (we'd have to re-fetch); for v1 we just
   // show the proposed body as a preview without a side-by-side diff.
   const currentMarkdown =
-    targetIsCurrentPage && pageContext
-      ? safeGetMarkdown(pageContext.getMarkdown)
+    targetIsCurrentPage && articlePageContext
+      ? safeGetMarkdown(articlePageContext.getMarkdown)
       : null;
 
   const header = isUpdate
@@ -96,7 +102,7 @@ export function ToolCallCard({
       if (!ok) return;
     }
     setBusy('apply');
-    pageContext?.onBeforeAiApply?.();
+    articlePageContext?.onBeforeAiApply?.();
     await applyToolCall(tab.id, messageId, toolCall.id);
     setBusy(null);
     // If we just mutated the article the user is looking at, sync
@@ -125,7 +131,7 @@ export function ToolCallCard({
           : parsed?.hadLeadingHeading
             ? parsed.title
             : undefined;
-      pageContext?.onAfterAiApply?.({
+      articlePageContext?.onAfterAiApply?.({
         ...(parsed ? { markdown: parsed.body } : {}),
         ...(resolvedTitle !== undefined ? { title: resolvedTitle } : {}),
       });

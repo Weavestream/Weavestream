@@ -914,14 +914,21 @@ function Composer({ tab, disabled }: { tab: ChatTab; disabled: boolean }) {
   // `@` and `tokenStart` is the index of that `@` in `value`.
   const [mentionTokenStart, setMentionTokenStart] = useState<number | null>(null);
   const [mentionQuery, setMentionQuery] = useState('');
-  const pageArticleId = state.pageContext?.articleId ?? null;
+  // Auto-attached page-id (article or asset) — excluded from the
+  // picker so the user can't mention the same row twice.
+  const pageEntityId =
+    state.pageContext?.kind === 'article'
+      ? (state.pageContext.articleId ?? null)
+      : state.pageContext?.kind === 'asset'
+        ? state.pageContext.assetId
+        : null;
   const mentions = tab.mentions;
   const excludeIds = useMemo(() => {
     const s = new Set<string>();
-    if (pageArticleId) s.add(pageArticleId);
+    if (pageEntityId) s.add(pageEntityId);
     for (const m of mentions) s.add(m.id);
     return s;
-  }, [pageArticleId, mentions]);
+  }, [pageEntityId, mentions]);
 
   useLayoutEffect(() => {
     const ta = taRef.current;

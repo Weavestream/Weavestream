@@ -23,6 +23,14 @@ export function ChatContextStrip(_props: { tab: ChatTab }) {
   const { state } = useChatPanel();
   const pageContext = state.pageContext;
   if (!pageContext) return null;
+  const isAsset = pageContext.kind === 'asset';
+  const icon = isAsset ? <Icon.box size={11} /> : <Icon.doc size={11} />;
+  const label =
+    pageContext.title || (isAsset ? 'Current asset' : 'Current page');
+  const subtitle = isAsset ? pageContext.layoutName : null;
+  const tooltip = isAsset
+    ? `Auto-attached because you're viewing this asset (${pageContext.layoutName})`
+    : "Auto-attached because you're viewing this page";
   return (
     <div
       style={{
@@ -47,12 +55,7 @@ export function ChatContextStrip(_props: { tab: ChatTab }) {
       >
         Context
       </span>
-      <Pill
-        icon={<Icon.doc size={11} />}
-        label={pageContext.title || 'Current page'}
-        locked
-        title="Auto-attached because you're viewing this page"
-      />
+      <Pill icon={icon} label={label} subtitle={subtitle} locked title={tooltip} />
     </div>
   );
 }
@@ -60,12 +63,14 @@ export function ChatContextStrip(_props: { tab: ChatTab }) {
 function Pill({
   icon,
   label,
+  subtitle,
   onRemove,
   locked,
   title,
 }: {
   icon: React.ReactNode;
   label: string;
+  subtitle?: string | null;
   onRemove?: () => void;
   locked?: boolean;
   title?: string;
@@ -97,6 +102,21 @@ function Pill({
       >
         {label}
       </span>
+      {subtitle ? (
+        <span
+          style={{
+            color: 'var(--dim)',
+            fontSize: 10.5,
+            flexShrink: 0,
+            maxWidth: 80,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          {subtitle}
+        </span>
+      ) : null}
       {onRemove && (
         <button
           type="button"

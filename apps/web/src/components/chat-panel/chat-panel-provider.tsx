@@ -77,11 +77,16 @@ export type ChatTab = {
 
 /**
  * Snapshot of "the page the chat panel currently sees". Set via the
- * `useChatPageContext` hook from article view / edit / new pages. The
- * `getMarkdown` callback is captured each render so the live editor
- * state can be sampled at send time.
+ * `useChatPageContext` / `useChatAssetPageContext` hooks from article
+ * or asset pages. The `getMarkdown` callback is captured each render
+ * so the live editor / detail state can be sampled at send time.
+ *
+ * Discriminated union — the article variant is the original (saved or
+ * draft) article snapshot used by `update_article` / `create_article`
+ * tool calls; the asset variant is a read-only auto-attachment that
+ * travels alongside the user's request as a chat asset context entry.
  */
-export type ChatPageContextSnapshot = {
+export type ChatArticlePageContext = {
   kind: 'article';
   companyId: string;
   /** Null while the article is being authored (the "new article" page). */
@@ -108,6 +113,26 @@ export type ChatPageContextSnapshot = {
    */
   onAfterAiApply?: (changes: { markdown?: string; title?: string }) => void;
 };
+
+export type ChatAssetPageContext = {
+  kind: 'asset';
+  companyId: string;
+  assetId: string;
+  /** Asset display name (e.g. "dc-sv-01"). */
+  title: string;
+  /** Layout name (e.g. "Server") — surfaced in pills + LLM context. */
+  layoutName: string;
+  /**
+   * Thunk returning the asset projected to markdown (sorted, type-
+   * formatted bullet list). Captured by the asset detail page using
+   * the `AssetSummary` it already fetched server-side.
+   */
+  getMarkdown: () => string;
+};
+
+export type ChatPageContextSnapshot =
+  | ChatArticlePageContext
+  | ChatAssetPageContext;
 
 type State = {
   isOpen: boolean;
@@ -389,13 +414,24 @@ function reducer(state: State, action: Action): State {
           ) {
             return t;
           }
-          // Suppress an article mention if it points to the page the
-          // user is already viewing — pageContext already covers that
-          // grounding and the picker excludes the id, but a stale token
-          // could still race in.
+          // Suppress a mention that points to the auto-attached
+          // page the user is already viewing — pageContext already
+          // covers that grounding and the picker excludes the id,
+          // but a stale token could still race in.
+          const pc = state.pageContext;
           if (
+            pc &&
             action.mention.kind === 'article' &&
-            state.pageContext?.articleId === action.mention.id
+            pc.kind === 'article' &&
+            pc.articleId === action.mention.id
+          ) {
+            return t;
+          }
+          if (
+            pc &&
+            action.mention.kind === 'asset' &&
+            pc.kind === 'asset' &&
+            pc.assetId === action.mention.id
           ) {
             return t;
           }
@@ -1168,9 +1204,7 @@ async function resolveChatRequestContext(
   // Prefer the article snapshot when both are set so the existing
   // tool-call scoping behavior is preserved.
   const companyId =
-    (pageCtx?.kind === 'article' ? pageCtx.companyId : null) ??
-    companyCtx?.companyId ??
-    null;
+    pageCtx?.companyId ?? companyCtx?.companyId ?? null;
 
   // Only saved articles get inlined as context. Drafts (new-article
   // page) intentionally do NOT travel along — we require the user to
@@ -1183,6 +1217,21 @@ async function resolveChatRequestContext(
       articles.push({
         id: pageCtx.articleId,
         title: pageCtx.title || 'Untitled',
+        markdown,
+      });
+    }
+  }
+  // Auto-attach the current asset (when viewing an asset detail page)
+  // so the LLM has the same grounding as on article pages without the
+  // user having to manually @-mention it. Marked as read-only context
+  // server-side; never proposed as a tool-call target.
+  if (pageCtx && pageCtx.kind === 'asset') {
+    const markdown = safeGetMarkdown(pageCtx);
+    if (markdown) {
+      assets.push({
+        id: pageCtx.assetId,
+        name: pageCtx.title,
+        layoutName: pageCtx.layoutName,
         markdown,
       });
     }
@@ -1208,13 +1257,23 @@ async function resolveChatRequestContext(
     for (const a of assetResults) if (a) assets.push(a);
   }
 
+  // Dedupe: if the user also @-mentioned the auto-attached asset
+  // somehow (e.g. via persisted token), keep only the first instance
+  // — the auto-attached entry was pushed first so it wins.
+  const seenAssetIds = new Set<string>();
+  const dedupedAssets = assets.filter((a) => {
+    if (seenAssetIds.has(a.id)) return false;
+    seenAssetIds.add(a.id);
+    return true;
+  });
+
   const out: ChatRequestContext = {};
   if (companyId) out.companyId = companyId;
   if (pageCtx?.kind === 'article' && pageCtx.articleId) {
     out.currentArticleId = pageCtx.articleId;
   }
   if (articles.length > 0) out.articles = articles;
-  if (assets.length > 0) out.assets = assets;
+  if (dedupedAssets.length > 0) out.assets = dedupedAssets;
   if (Object.keys(out).length === 0) return undefined;
   return out;
 }

@@ -20,6 +20,7 @@ import { LinkedItemsPanel } from '../../../../../../components/relations';
 import { AttachmentsPanel } from '../../../../../../components/upload/attachments-panel';
 import { CredentialsPanel } from '../../../../../../components/passwords/credentials-panel';
 import { vaultLinkLabel, vaultLinkUrl } from '../../../../../../lib/vault-link';
+import { AssetChatContext } from '../../../../../../components/chat-panel/asset-chat-context';
 import { AssetActions } from './asset-actions';
 
 export async function generateMetadata({
@@ -64,6 +65,7 @@ export default async function AssetDetailPage({
 
   return (
     <>
+      <AssetChatContext asset={asset} />
       <PageHeader
         crumbs={companyCrumbs(
           term,
