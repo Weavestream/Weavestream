@@ -8,23 +8,21 @@ import {
 } from './chat-panel-provider';
 
 /**
- * Above-the-composer strip showing what context the LLM will see on
- * the next turn. Two kinds of pills:
- *  - "Page" pill: auto-attached, sourced from the provider-wide page
- *    context (set by `useChatPageContext`). Locked — can only be
- *    cleared by navigating away from the page that registered it.
- *  - "@-mention" pills: explicit user picks on this tab, removable
- *    via the × on each pill.
+ * Above-the-composer strip showing the current "page" context the LLM
+ * will see on the next turn. Locked — can only be cleared by navigating
+ * away from the page that registered it. Explicit @-mentions are NOT
+ * shown here; they live inline in the message text as `@[Title]`
+ * reference tokens (rendered with the accent color in user bubbles).
  *
- * Hidden entirely when there's neither a page context nor any
- * mentions, so freeform conversations stay visually clean.
+ * Hidden entirely when there's no page context.
  */
-export function ChatContextStrip({ tab }: { tab: ChatTab }) {
-  const { state, removeMention } = useChatPanel();
+// `tab` is unused for now but kept in the signature so the strip can be
+// extended later (per-tab pills, locked overrides, etc.) without
+// changing every call site.
+export function ChatContextStrip(_props: { tab: ChatTab }) {
+  const { state } = useChatPanel();
   const pageContext = state.pageContext;
-  const hasPage = !!pageContext;
-  const hasMentions = tab.mentions.length > 0;
-  if (!hasPage && !hasMentions) return null;
+  if (!pageContext) return null;
   return (
     <div
       style={{
@@ -49,23 +47,12 @@ export function ChatContextStrip({ tab }: { tab: ChatTab }) {
       >
         Context
       </span>
-      {pageContext && (
-        <Pill
-          icon={<Icon.doc size={11} />}
-          label={pageContext.title || 'Current page'}
-          locked
-          title="Auto-attached because you're viewing this page"
-        />
-      )}
-      {tab.mentions.map((m) => (
-        <Pill
-          key={m.id}
-          icon={<Icon.doc size={11} />}
-          label={m.title}
-          onRemove={() => removeMention(tab.id, m.id)}
-          title="Click × to remove"
-        />
-      ))}
+      <Pill
+        icon={<Icon.doc size={11} />}
+        label={pageContext.title || 'Current page'}
+        locked
+        title="Auto-attached because you're viewing this page"
+      />
     </div>
   );
 }

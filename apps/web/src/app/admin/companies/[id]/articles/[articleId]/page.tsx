@@ -17,7 +17,7 @@ import { buildTerm } from '../../../../../../lib/term';
 import { companyCrumbs } from '../../../../../../lib/company-crumbs';
 import { ArticleBody } from '../../../../../../components/editor/article-body';
 import { ArticleChatContext } from '../../../../../../components/editor/article-chat-context';
-import { ArticleSideNav } from '../../../../../../components/editor/article-side-nav';
+import { ArticleSideNavColumn } from '../../../../../../components/editor/article-side-nav-column';
 import { ArticleToc } from '../../../../../../components/editor/article-toc';
 import { LinkedItemsPanel } from '../../../../../../components/relations';
 import { AttachmentsPanel } from '../../../../../../components/upload/attachments-panel';
@@ -128,27 +128,17 @@ export default async function ArticleReadPage({
         className="article-read-grid"
         style={{
           display: 'grid',
-          gridTemplateColumns: '240px 1fr 320px',
+          gridTemplateColumns: 'var(--article-sidenav-w, 240px) 1fr 320px',
           flex: 1,
           minHeight: 0,
         }}
       >
-        <div
-          className="article-read-sidenav"
-          style={{
-            display: 'flex',
-            flexDirection: 'column',
-            minHeight: 0,
-            minWidth: 0,
-          }}
-        >
-          <ArticleSideNav
-            companyId={companyId}
-            folders={folders}
-            articles={articleList.items}
-            activeArticleId={article.id}
-          />
-        </div>
+        <ArticleSideNavColumn
+          companyId={companyId}
+          folders={folders}
+          articles={articleList.items}
+          activeArticleId={article.id}
+        />
 
         <div className="scroll article-read-main" style={{ overflow: 'auto', minWidth: 0 }}>
           <article
