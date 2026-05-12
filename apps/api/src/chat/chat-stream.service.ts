@@ -665,6 +665,25 @@ function buildSystemPrompt(
     }
     lines.push('--- End attached articles ---');
   }
+  if (context.assets && context.assets.length > 0) {
+    // Assets are inlined verbatim — the API already strips fields the
+    // requester isn't allowed to see, so what we got from the client
+    // already mirrors the requester's permissions. We never propose
+    // tool calls against assets (there is no `update_asset` /
+    // `create_asset` tool); the block is purely for grounding.
+    lines.push('');
+    lines.push('--- Attached assets (read-only context) ---');
+    for (const a of context.assets) {
+      lines.push('');
+      lines.push(
+        `### Asset "${a.name}" — layout "${a.layoutName}" (id ${a.id})`,
+      );
+      lines.push('```markdown');
+      lines.push(a.markdown);
+      lines.push('```');
+    }
+    lines.push('--- End attached assets ---');
+  }
   lines.push('');
   lines.push('Tools available:');
   lines.push(
@@ -672,6 +691,9 @@ function buildSystemPrompt(
   );
   lines.push(
     '- create_article(title, markdown, folder_id?, visible_to_clients?, summary?): propose a brand-new article in the active company.',
+  );
+  lines.push(
+    'You cannot create or modify assets — attached assets are read-only context. If the user asks to change an asset, describe the proposed change in prose rather than emitting a tool call.',
   );
   lines.push('');
   lines.push(

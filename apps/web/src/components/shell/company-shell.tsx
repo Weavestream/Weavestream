@@ -27,6 +27,7 @@ import {
 } from './sticky-note-context';
 import { SearchPaletteProvider } from '../search/search-palette-provider';
 import { ChatPanel } from '../chat-panel/chat-panel';
+import { CompanyChatContext } from '../chat-panel/company-chat-context';
 
 export type CompanyShellMode = 'admin' | 'portal';
 
@@ -394,6 +395,7 @@ export function CompanyShell({
           />
           {children}
         </main>
+        <CompanyChatContext companyId={company.id} />
         <ChatPanel />
       </div>
     </SearchPaletteProvider>

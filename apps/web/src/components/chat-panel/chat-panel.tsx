@@ -22,7 +22,7 @@ import {
 import { ResizeHandle } from './resize-handle';
 import { ChatHistoryPopover } from './chat-history-popover';
 import { ChatContextStrip } from './chat-context-strip';
-import { MentionPicker } from './mention-picker';
+import { MentionPicker, type MentionCandidate } from './mention-picker';
 import { ToolCallCard } from './tool-call-card';
 import { SaveAsArticleDialog } from './save-as-article-dialog';
 
@@ -903,7 +903,12 @@ function Composer({ tab, disabled }: { tab: ChatTab; disabled: boolean }) {
   const taRef = useRef<HTMLTextAreaElement>(null);
   const overlayRef = useRef<HTMLDivElement>(null);
   const tabId = tab.id;
-  const companyId = state.pageContext?.companyId ?? null;
+  // Prefer the article page snapshot's companyId (preserves tool-call
+  // scoping behavior) but fall back to the company shell's broadcast
+  // so the picker is available on every company-scoped page, not just
+  // article view / edit.
+  const companyId =
+    state.pageContext?.companyId ?? state.companyContext?.companyId ?? null;
 
   // @-mention picker state. `query` is the substring after the active
   // `@` and `tokenStart` is the index of that `@` in `value`.
@@ -1004,16 +1009,18 @@ function Composer({ tab, disabled }: { tab: ChatTab; disabled: boolean }) {
     }
   }
 
-  function handleMentionPick(article: { id: string; title: string }) {
+  function handleMentionPick(item: MentionCandidate) {
     if (mentionTokenStart === null) return;
-    addMention(tabId, article);
+    addMention(tabId, { kind: item.kind, id: item.id, title: item.title });
     // Replace the active `@…` token with an `@[Title]` reference token.
     // The token survives in the persisted message text and is rendered
     // with the accent color in the user bubble (see `renderUserText`).
+    // The bracket only carries display text; the kind is tracked on
+    // `tab.mentions` so we know which endpoint to hit at send time.
     const before = value.slice(0, mentionTokenStart);
     const afterStart = mentionTokenStart + 1 + mentionQuery.length;
     const after = value.slice(afterStart);
-    const token = `@[${article.title}]`;
+    const token = `@[${item.title}]`;
     const needsLeadingSpace =
       before.length > 0 && !/\s$/.test(before);
     const trailing = after.startsWith(' ') ? '' : ' ';
@@ -1096,7 +1103,7 @@ function Composer({ tab, disabled }: { tab: ChatTab; disabled: boolean }) {
             disabled
               ? 'Waiting for reply…'
               : companyId
-                ? 'Message…  (type @ to attach an article)'
+                ? 'Message…  (type @ to attach an article or asset)'
                 : 'Message…'
           }
           disabled={disabled}

@@ -93,17 +93,35 @@ export const chatContextArticleSchema = z.object({
 export type ChatContextArticle = z.infer<typeof chatContextArticleSchema>;
 
 /**
+ * Per-asset markdown snapshot the client attaches to a turn. Same
+ * size envelope as `chatContextArticleSchema`. Assets are strictly
+ * read-only context — the server never proposes asset tool calls,
+ * and the chat tool set does not include `update_asset` /
+ * `create_asset`. `layoutName` is included so the system prompt can
+ * disambiguate "Server" / "Workstation" / etc. without re-querying.
+ */
+export const chatContextAssetSchema = z.object({
+  id: z.string().uuid(),
+  name: z.string().max(300),
+  layoutName: z.string().max(120),
+  markdown: z.string().max(60_000),
+});
+export type ChatContextAsset = z.infer<typeof chatContextAssetSchema>;
+
+/**
  * Request-scoped grounding for a single chat turn. All fields are
  * optional — a freeform tab with no @-mentions and no page context
  * sends nothing. The server uses this to (1) build a system prompt
- * inlining the attached articles and (2) scope agentic tool calls
- * (`create_article` / `update_article`) to the current company so the
- * LLM cannot accidentally mutate a different tenant.
+ * inlining the attached articles + assets and (2) scope agentic tool
+ * calls (`create_article` / `update_article`) to the current company
+ * so the LLM cannot accidentally mutate a different tenant. Assets
+ * are read-only context and never travel as tool-call targets.
  */
 export const chatRequestContextSchema = z.object({
   companyId: z.string().uuid().optional(),
   currentArticleId: z.string().uuid().optional(),
   articles: z.array(chatContextArticleSchema).max(10).optional(),
+  assets: z.array(chatContextAssetSchema).max(10).optional(),
 });
 export type ChatRequestContext = z.infer<typeof chatRequestContextSchema>;
 

@@ -24,7 +24,8 @@ import {
 import { apiFetch } from '../../lib/api';
 import { streamChatMessage, type ChatStreamMeta } from '../../lib/chat-stream';
 import { tiptapDocToMarkdown } from '../../lib/article-format';
-import type { ArticleDetail } from '../../lib/server-api';
+import { assetToMarkdown } from '../../lib/asset-format';
+import type { ArticleDetail, AssetSummary } from '../../lib/server-api';
 
 export type ChatRole = 'user' | 'assistant';
 
@@ -45,12 +46,15 @@ export type ChatMessage = {
 export type ChatTabKind = 'freeform' | 'context';
 
 /**
- * Pinned per-tab context. The "current page" entry (if any) is stored
- * separately so it can be marked as the auto-attached one and cannot
- * be removed by the user — only by leaving the page. Additional
- * articles are the explicit @-mentions.
+ * Pinned per-tab @-mention. The "current page" entry is stored
+ * separately on `pageContext` so it can be marked as the auto-
+ * attached one and cannot be removed by the user — only by leaving
+ * the page. `kind` discriminates between article references (which
+ * may be edited via `update_article` tool calls) and asset
+ * references (strictly read-only context).
  */
-export type ChatTabContextArticle = {
+export type ChatTabContextMention = {
+  kind: 'article' | 'asset';
   id: string;
   title: string;
 };
@@ -67,8 +71,8 @@ export type ChatTab = {
   loading: boolean;
   /** Assistant message id that is currently being streamed into, if any. */
   streamingMessageId: string | null;
-  /** Explicit @-mentioned articles, in insertion order. */
-  mentions: ChatTabContextArticle[];
+  /** Explicit @-mentioned articles + assets, in insertion order. */
+  mentions: ChatTabContextMention[];
 };
 
 /**
@@ -121,6 +125,17 @@ type State = {
    * the LLM grounds against.
    */
   pageContext: ChatPageContextSnapshot | null;
+  /**
+   * Active company scope — broadcast once by `CompanyChatContext`
+   * inside the company shell. Independent of `pageContext` so the
+   * @-mention picker can resolve articles AND assets on any company-
+   * scoped page (home, asset detail, layout list, etc.), not only
+   * the article view / edit pages that register a richer
+   * `pageContext`. When both are set they refer to the same
+   * company; `pageContext.companyId` always wins for backwards
+   * compatibility with the article tool-call scoping.
+   */
+  companyContext: { companyId: string } | null;
 };
 
 type Action =
@@ -154,8 +169,9 @@ type Action =
   | { type: 'closeTab'; id: string }
   | { type: 'setActiveTab'; id: string }
   | { type: 'setPageContext'; pageContext: ChatPageContextSnapshot | null }
-  | { type: 'addMention'; tabId: string; article: ChatTabContextArticle }
-  | { type: 'removeMention'; tabId: string; articleId: string }
+  | { type: 'setCompanyContext'; companyContext: { companyId: string } | null }
+  | { type: 'addMention'; tabId: string; mention: ChatTabContextMention }
+  | { type: 'removeMention'; tabId: string; mentionId: string }
   | {
       type: 'sendStart';
       tabId: string;
@@ -212,7 +228,7 @@ type PersistedTab = {
   kind: ChatTabKind;
   title: string;
   icon: 'chat' | 'doc';
-  mentions: ChatTabContextArticle[];
+  mentions: ChatTabContextMention[];
 };
 
 type PersistedTabsPayload = {
@@ -252,16 +268,23 @@ function readPersistedTabs(): PersistedTabsPayload | null {
       const kind: ChatTabKind = tt.kind === 'context' ? 'context' : 'freeform';
       const title = typeof tt.title === 'string' ? tt.title : 'New chat';
       const icon: 'chat' | 'doc' = tt.icon === 'doc' ? 'doc' : 'chat';
-      const mentions = Array.isArray(tt.mentions)
-        ? (tt.mentions
+      const mentions: ChatTabContextMention[] = Array.isArray(tt.mentions)
+        ? tt.mentions
             .filter(
-              (m): m is ChatTabContextArticle =>
+              (m): m is Record<string, unknown> =>
                 !!m &&
                 typeof m === 'object' &&
                 typeof (m as { id?: unknown }).id === 'string' &&
                 typeof (m as { title?: unknown }).title === 'string',
             )
-            .map((m) => ({ id: m.id, title: m.title })) as ChatTabContextArticle[])
+            .map((m) => ({
+              // Pre-asset persistence entries don't carry `kind` — read as
+              // article so existing tab strips keep working after the
+              // migration.
+              kind: m.kind === 'asset' ? 'asset' : 'article',
+              id: String(m.id),
+              title: String(m.title),
+            }))
         : [];
       tabs.push({ id: tt.id, conversationId, kind, title, icon, mentions });
     }
@@ -351,14 +374,32 @@ function reducer(state: State, action: Action): State {
     }
     case 'setPageContext':
       return { ...state, pageContext: action.pageContext };
+    case 'setCompanyContext':
+      return { ...state, companyContext: action.companyContext };
     case 'addMention':
       return {
         ...state,
         tabs: state.tabs.map((t) => {
           if (t.id !== action.tabId) return t;
-          if (t.mentions.some((m) => m.id === action.article.id)) return t;
-          if (state.pageContext?.articleId === action.article.id) return t;
-          return { ...t, mentions: [...t.mentions, action.article] };
+          if (
+            t.mentions.some(
+              (m) =>
+                m.id === action.mention.id && m.kind === action.mention.kind,
+            )
+          ) {
+            return t;
+          }
+          // Suppress an article mention if it points to the page the
+          // user is already viewing — pageContext already covers that
+          // grounding and the picker excludes the id, but a stale token
+          // could still race in.
+          if (
+            action.mention.kind === 'article' &&
+            state.pageContext?.articleId === action.mention.id
+          ) {
+            return t;
+          }
+          return { ...t, mentions: [...t.mentions, action.mention] };
         }),
       };
     case 'removeMention':
@@ -368,7 +409,7 @@ function reducer(state: State, action: Action): State {
           t.id === action.tabId
             ? {
                 ...t,
-                mentions: t.mentions.filter((m) => m.id !== action.articleId),
+                mentions: t.mentions.filter((m) => m.id !== action.mentionId),
               }
             : t,
         ),
@@ -572,6 +613,16 @@ type Ctx = {
    */
   registerPageContext: (ctx: ChatPageContextSnapshot) => () => void;
   /**
+   * Broadcast the active company id for the chat panel. Called once
+   * per mount by `CompanyChatContext` from inside the company shell.
+   * Unlike `registerPageContext` this only carries `companyId` — it
+   * does not imply any article / page snapshot — but it's enough
+   * for the @-mention picker to query the right tenant from
+   * non-article surfaces (asset detail, layout listing, home).
+   * Returns a cleanup that clears the company scope.
+   */
+  registerCompanyContext: (companyId: string) => () => void;
+  /**
    * Live channel for whether the active page has unsaved local edits.
    * Read by the Apply path so we can warn before clobbering an
    * in-progress draft. Written by `useChatPageContext` for any caller
@@ -579,8 +630,8 @@ type Ctx = {
    */
   setPageDirty: (dirty: boolean) => void;
   getPageDirty: () => boolean;
-  addMention: (tabId: string, article: ChatTabContextArticle) => void;
-  removeMention: (tabId: string, articleId: string) => void;
+  addMention: (tabId: string, mention: ChatTabContextMention) => void;
+  removeMention: (tabId: string, mentionId: string) => void;
   applyToolCall: (
     tabId: string,
     messageId: string,
@@ -608,6 +659,7 @@ export function useChatPanel(): Ctx {
         tabs: [],
         activeTabId: null,
         pageContext: null,
+        companyContext: null,
       },
       open: noop,
       close: noop,
@@ -622,6 +674,7 @@ export function useChatPanel(): Ctx {
       deleteConversation: asyncNoop,
       activeTab: null,
       registerPageContext: () => () => {},
+      registerCompanyContext: () => () => {},
       setPageDirty: noop,
       getPageDirty: () => false,
       addMention: noop,
@@ -641,6 +694,7 @@ export function ChatPanelProvider({ children }: { children: ReactNode }) {
     tabs: [],
     activeTabId: null,
     pageContext: null,
+    companyContext: null,
   }));
 
   // Active stream aborts per tab. Closing a tab or sending a new
@@ -802,6 +856,7 @@ export function ChatPanelProvider({ children }: { children: ReactNode }) {
       requestContext = await resolveChatRequestContext(
         tab,
         stateRef.current.pageContext,
+        stateRef.current.companyContext,
       );
     } catch {
       requestContext = undefined;
@@ -965,16 +1020,26 @@ export function ChatPanelProvider({ children }: { children: ReactNode }) {
     [],
   );
 
+  const registerCompanyContext = useCallback(
+    (companyId: string): (() => void) => {
+      dispatch({ type: 'setCompanyContext', companyContext: { companyId } });
+      return () => {
+        dispatch({ type: 'setCompanyContext', companyContext: null });
+      };
+    },
+    [],
+  );
+
   const addMention = useCallback(
-    (tabId: string, article: ChatTabContextArticle) => {
-      dispatch({ type: 'addMention', tabId, article });
+    (tabId: string, mention: ChatTabContextMention) => {
+      dispatch({ type: 'addMention', tabId, mention });
     },
     [],
   );
 
   const removeMention = useCallback(
-    (tabId: string, articleId: string) => {
-      dispatch({ type: 'removeMention', tabId, articleId });
+    (tabId: string, mentionId: string) => {
+      dispatch({ type: 'removeMention', tabId, mentionId });
     },
     [],
   );
@@ -983,7 +1048,14 @@ export function ChatPanelProvider({ children }: { children: ReactNode }) {
     async (tabId: string, messageId: string, toolCallId: string) => {
       const tab = stateRef.current.tabs.find((t) => t.id === tabId);
       if (!tab || !tab.conversationId) return;
-      const companyId = stateRef.current.pageContext?.companyId;
+      // Same precedence as the picker / resolver: prefer the article
+      // page snapshot when it's present (its companyId is the one the
+      // user is actively editing in) and otherwise fall back to the
+      // company shell broadcast so `create_article` works from any
+      // company-scoped page (home, asset detail, layouts, etc.).
+      const companyId =
+        stateRef.current.pageContext?.companyId ??
+        stateRef.current.companyContext?.companyId;
       const res = await applyChatToolCall({
         conversationId: tab.conversationId,
         messageId,
@@ -1046,6 +1118,7 @@ export function ChatPanelProvider({ children }: { children: ReactNode }) {
       openConversation,
       deleteConversation,
       registerPageContext,
+      registerCompanyContext,
       setPageDirty,
       getPageDirty,
       addMention,
@@ -1059,6 +1132,7 @@ export function ChatPanelProvider({ children }: { children: ReactNode }) {
     openConversation,
     deleteConversation,
     registerPageContext,
+    registerCompanyContext,
     setPageDirty,
     getPageDirty,
     addMention,
@@ -1084,8 +1158,19 @@ export function ChatPanelProvider({ children }: { children: ReactNode }) {
 async function resolveChatRequestContext(
   tab: ChatTab,
   pageCtx: ChatPageContextSnapshot | null,
+  companyCtx: { companyId: string } | null,
 ): Promise<ChatRequestContext | undefined> {
-  const articles: ChatRequestContext['articles'] = [];
+  const articles: NonNullable<ChatRequestContext['articles']> = [];
+  const assets: NonNullable<ChatRequestContext['assets']> = [];
+
+  // The picker is enabled wherever we have a companyId — either the
+  // article page's richer snapshot or the company shell's broadcast.
+  // Prefer the article snapshot when both are set so the existing
+  // tool-call scoping behavior is preserved.
+  const companyId =
+    (pageCtx?.kind === 'article' ? pageCtx.companyId : null) ??
+    companyCtx?.companyId ??
+    null;
 
   // Only saved articles get inlined as context. Drafts (new-article
   // page) intentionally do NOT travel along — we require the user to
@@ -1102,22 +1187,34 @@ async function resolveChatRequestContext(
       });
     }
   }
-  if (pageCtx?.kind === 'article') {
-    for (const mention of tab.mentions) {
-      const article = await fetchArticleAsMarkdown(
-        pageCtx.companyId,
-        mention.id,
-      );
-      if (article) articles.push(article);
-    }
+  if (companyId) {
+    // Resolve mentions in parallel — articles and assets each hit
+    // their own endpoint, so a slow article fetch shouldn't gate the
+    // asset fetches. Order is preserved per kind by zipping the
+    // results back against the original mention list.
+    const articleMentions = tab.mentions.filter((m) => m.kind === 'article');
+    const assetMentions = tab.mentions.filter((m) => m.kind === 'asset');
+    const [articleResults, assetResults] = await Promise.all([
+      Promise.all(
+        articleMentions.map((m) =>
+          fetchArticleAsMarkdown(companyId, m.id),
+        ),
+      ),
+      Promise.all(
+        assetMentions.map((m) => fetchAssetAsMarkdown(companyId, m.id)),
+      ),
+    ]);
+    for (const a of articleResults) if (a) articles.push(a);
+    for (const a of assetResults) if (a) assets.push(a);
   }
 
   const out: ChatRequestContext = {};
-  if (pageCtx?.kind === 'article') {
-    out.companyId = pageCtx.companyId;
-    if (pageCtx.articleId) out.currentArticleId = pageCtx.articleId;
+  if (companyId) out.companyId = companyId;
+  if (pageCtx?.kind === 'article' && pageCtx.articleId) {
+    out.currentArticleId = pageCtx.articleId;
   }
   if (articles.length > 0) out.articles = articles;
+  if (assets.length > 0) out.assets = assets;
   if (Object.keys(out).length === 0) return undefined;
   return out;
 }
@@ -1157,4 +1254,28 @@ async function fetchArticleAsMarkdown(
   }
   if (!markdown.trim()) return null;
   return { id: a.id, title: a.title, markdown };
+}
+
+/**
+ * Fetch an attached asset and project it to markdown for the chat
+ * system prompt. The server already strips fields the requester
+ * isn't allowed to see (role-based), so client portal users get a
+ * naturally filtered payload — no extra masking needed here.
+ * Returns `null` on any fetch failure or empty body so a stale /
+ * out-of-scope reference doesn't block the send.
+ */
+async function fetchAssetAsMarkdown(
+  companyId: string,
+  assetId: string,
+): Promise<
+  { id: string; name: string; layoutName: string; markdown: string } | null
+> {
+  const res = await apiFetch<AssetSummary>(
+    `/companies/${companyId}/assets/${assetId}`,
+  );
+  if (!res.ok || !res.data) return null;
+  const asset = res.data;
+  const { markdown, layoutName } = assetToMarkdown(asset);
+  if (!markdown.trim()) return null;
+  return { id: asset.id, name: asset.name, layoutName, markdown };
 }
