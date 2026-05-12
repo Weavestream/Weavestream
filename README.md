@@ -40,6 +40,7 @@ audience without code changes.
   validity checks with aggregated expiration dashboards.
 - **Expiration tracking.** Monitor asset expiration dates (licenses,
   warranties, SSL certificates, passwords) with visibility into upcoming renewals.
+- **AI Chat.** Ask questions, draft documentation, and edit articles directly from a persistent chat panel. Powered by any OpenAI-compatible LLM you configure.
 - **Alert system.** Email notifications for expirations, website downtime,
   and record lifecycle events with flexible scheduling.
 - **Security Center.** Admin dashboard for login activity, active sessions,
