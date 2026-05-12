@@ -6,6 +6,35 @@ this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.8.0] - 2026-05-12
+
+### Added
+
+- **AI chat.** A new AI chat panel is available on every company page (toggle in the sidebar). Conversations are persisted as chat history. The AI is powered by any OpenAI-compatible LLM — configure the endpoint, model, and API key under **Admin → Settings → AI**. Chat supports multi-turn conversations with full history review and the ability to start fresh conversations at any time.
+
+- **Chat context — articles & assets.** Attach articles and assets to a chat conversation via `@`-mention. The currently viewed asset or article is automatically attached to the chat context when the panel is opened. Attached items appear in a context strip above the input field. A collapsible folder navigation panel inside chat lets you browse and attach items without leaving the conversation.
+
+- **AI article editing.** The AI can read and edit articles on your behalf via tool calls. When viewing an article, the AI has write access to the open document — accepted edits are applied directly. Chat responses can also be saved as new articles via a "Save as article" action.
+
+- **Passwords in Expirations.** Password expiry dates now surface alongside certificates and assets in the **Expirations** view, so upcoming credential renewals appear in the same dashboard as other lifecycle events.
+
+- **Password folder rename & archive.** Password folders can be renamed and archived from a new folder settings dialog, keeping the credential vault tidy as structures evolve.
+
+- **Password linking.** Passwords can be linked to articles and assets using the existing relations system. Linked items and file attachments are accessible directly from the password detail panel — consistent with how assets and articles handle relations.
+
+- **Redesigned password dialog.** The create / edit password dialog has been refreshed: tags are now managed with an inline tag-input chip component, the URL field has moved below the password field, and the overall layout is more consistent with asset and article forms.
+
+- **`.pem` file uploads.** `.pem` certificate files can now be attached as file uploads, extending the `.key` support shipped in 1.7.1.
+
+### Security
+
+- **`crypto.getRandomValues` replaces `Math.random`.** All internal ID / token generation now uses the cryptographically-secure `crypto.getRandomValues` API instead of `Math.random`.
+
+### Fixed
+
+- Fixed a bug where creating a new article via chat could fail due to an incorrect regular expression.
+- Fixed a remote property injection bug in the assets controller.
+
 ## [1.7.1] - 2026-05-08
 
 ### Added
