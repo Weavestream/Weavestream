@@ -16,6 +16,7 @@ import type { Request } from 'express';
 import {
   bulkAssetIdsSchema,
   createAssetSchema,
+  fieldSlugSchema,
   updateAssetSchema,
   type BulkAssetIdsInput,
   type CreateAssetInput,
@@ -52,15 +53,20 @@ export class AssetsController {
     @Param('companyId', new ParseUUIDPipe()) companyId: string,
     @Query() query: Record<string, string | undefined>,
   ) {
-    // Use a null-prototype object so attacker-supplied `field.<slug>` keys
-    // such as `__proto__` or `constructor` cannot pollute Object.prototype.
-    const fieldFilters: Record<string, string> = Object.create(null);
-    for (const [key, value] of Object.entries(query)) {
-      if (!key.startsWith('field.') || typeof value !== 'string') continue;
-      const slug = key.slice('field.'.length);
-      if (slug === '__proto__' || slug === 'prototype' || slug === 'constructor') continue;
-      fieldFilters[slug] = value;
-    }
+    // Build the filter map from a validated entry list rather than
+    // dynamic bracket-writes. `fieldSlugSchema` enforces the canonical
+    // lowercase snake_case shape used by `AssetField.slug`, which by
+    // construction rejects reserved keys like `__proto__`, `prototype`,
+    // and `constructor` — so prototype pollution is impossible.
+    const fieldFilters: Record<string, string> = Object.fromEntries(
+      Object.entries(query).flatMap(([key, value]) => {
+        if (!key.startsWith('field.') || typeof value !== 'string') return [];
+        const slug = key.slice('field.'.length);
+        return fieldSlugSchema.safeParse(slug).success
+          ? ([[slug, value]] as const)
+          : [];
+      }),
+    );
     return this.assets.list(actor, companyId, {
       layoutId: query['layout'],
       q: query['q'],
