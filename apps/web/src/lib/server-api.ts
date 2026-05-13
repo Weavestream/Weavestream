@@ -1247,10 +1247,126 @@ export type MonitoredDomain = {
   whoisExpiresAt: string | null;
   tlsExpiresAt: string | null;
   latestStatus: DomainStatus;
+  /** v2 — latest hygiene score (percentage 0-100). NULL if never scored. */
+  latestScore: number | null;
+  /** v2 — operator-supplied DKIM selectors (CSV). */
+  dkimSelectorOverride: string | null;
   archivedAt: string | null;
   createdBy: string | null;
   createdAt: string;
   updatedAt: string;
+};
+
+export type DomainScoreTier =
+  | 'excellent'
+  | 'good'
+  | 'fair'
+  | 'poor'
+  | 'critical';
+
+export type DomainScoreBreakdownItem = {
+  id: string;
+  label: string;
+  points: number;
+  max: number;
+  status: 'pass' | 'partial' | 'fail' | 'skip';
+  evidence?: string;
+};
+
+export type DomainCheckDetails = {
+  schemaVersion?: number;
+  whois?: {
+    registrar?: string | null;
+    registeredAt?: string | null;
+    expiresAt?: string | null;
+    source?: 'rdap' | 'whois43' | 'none';
+    statusCodes?: string[];
+    locked?: boolean;
+    hold?: boolean;
+    whoisNs?: string[];
+  };
+  dns?: {
+    a?: string[];
+    aaaa?: string[];
+    mx?: Array<{ preference: number; exchange: string }>;
+    ns?: string[];
+    txt?: string[];
+    caa?: Array<{ flag: number; tag: string; value: string }>;
+    dnssec?: {
+      signed: boolean;
+      source: 'rdap' | 'dnskey' | 'none';
+      dsRecordCount?: number;
+    };
+    nsMatch?: {
+      dnsNs: string[];
+      whoisNs: string[];
+      match: 'match' | 'mismatch' | 'unverifiable';
+    };
+  };
+  email?: {
+    hasMx: boolean;
+    spf?: {
+      present: boolean;
+      record?: string | null;
+      mechanisms?: string[];
+      all?: '+all' | '-all' | '~all' | '?all' | null;
+      lookupCount?: number;
+      valid: boolean;
+    };
+    dmarc?: {
+      present: boolean;
+      policy?: 'none' | 'quarantine' | 'reject' | null;
+      subdomainPolicy?: 'none' | 'quarantine' | 'reject' | null;
+      pct?: number | null;
+      rua?: string[];
+      ruf?: string[];
+      raw?: string | null;
+    };
+    dkim?: {
+      selectorsChecked: string[];
+      selectorsFound: string[];
+      provider?: 'google' | 'microsoft' | 'mailgun' | 'sendgrid' | 'unknown';
+    };
+  };
+  tls?: {
+    validFrom?: string | null;
+    validTo?: string | null;
+    issuer?: string | null;
+    subjectAltNames?: string[];
+    chainLength?: number;
+    protocol?: string | null;
+    authorized?: boolean | null;
+    authorizationError?: string | null;
+    cert?: {
+      keyAlgo?: string | null;
+      keyBits?: number | null;
+      sigAlgo?: string | null;
+      mustStaple?: boolean;
+      ocspStapled?: boolean;
+      daysUntilExpiry?: number | null;
+    };
+  };
+  http?: {
+    redirectsToHttps: boolean;
+    finalStatus?: number | null;
+    finalUrl?: string | null;
+    hsts?: {
+      present: boolean;
+      maxAge?: number | null;
+      includeSubDomains?: boolean;
+      preload?: boolean;
+    };
+    error?: string | null;
+  };
+  score?: {
+    version: number;
+    total: number;
+    max: number;
+    percent: number;
+    tier: DomainScoreTier;
+    breakdown: DomainScoreBreakdownItem[];
+    hardOverride?: { kind: 'force_critical' | 'cap_fair'; reason: string } | null;
+  };
 };
 
 export type DomainCheck = {
@@ -1263,8 +1379,12 @@ export type DomainCheck = {
   tlsStatus: 'OK' | 'WARN' | 'FAIL' | 'SKIP' | null;
   whoisExpiresAt: string | null;
   tlsExpiresAt: string | null;
-  details: Record<string, unknown>;
+  details: DomainCheckDetails;
   error: string | null;
+  /** v2 — denormalised percent score. NULL for legacy rows. */
+  score: number | null;
+  /** v2 — rubric version this row was scored under. */
+  schemaVersion: number | null;
 };
 
 export type DomainAlert = {
@@ -1277,6 +1397,8 @@ export type DomainAlert = {
   visibleToClients: boolean;
   whoisExpiresAt: string | null;
   tlsExpiresAt: string | null;
+  /** v2 — latest hygiene score (percent). NULL when never scored. */
+  latestScore: number | null;
 };
 
 export async function listDomains(

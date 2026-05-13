@@ -857,6 +857,14 @@ model MonitoredDomain {
   httpCheckEnabled   Boolean      @default(true) @map("http_check_enabled")
   latestHttpStatus   Int?         @map("latest_http_status")
   httpDownSince      DateTime?    @map("http_down_since")
+  // v2 — latest hygiene score (percentage 0-100). NULL until the first
+  // v2 check runs. Denormalised so list/alert views don't have to join
+  // the history table.
+  latestScore        Int?         @map("latest_score")
+  // v2 — DKIM selector override. Comma-separated list of selectors the
+  // engine probes in addition to its MX-keyed defaults. NULL = use
+  // defaults only.
+  dkimSelectorOverride String?    @map("dkim_selector_override")
   archivedAt         DateTime?    @map("archived_at")
   createdBy          String?      @map("created_by") @db.Uuid
   createdAt          DateTime     @default(now()) @map("created_at")
@@ -885,6 +893,15 @@ model DomainCheck {
   tlsExpiresAt      DateTime?    @map("tls_expires_at")
   details           Json
   error             String?
+  // v2 — denormalised percent score (0-100). NULL for legacy rows
+  // written before the scoring rubric existed. We index by it so the
+  // admin alerts panel can pull "< 35%" rows without scanning all
+  // history.
+  score             Int?
+  // v2 — rubric schema version. 1 = legacy (no score), 2 = current
+  // rubric. Each row keeps the version it was scored under so a
+  // future rubric bump never retro-grades old rows.
+  schemaVersion     Int          @default(1) @map("schema_version")
 
   domain MonitoredDomain @relation(fields: [monitoredDomainId], references: [id], onDelete: Cascade)
 

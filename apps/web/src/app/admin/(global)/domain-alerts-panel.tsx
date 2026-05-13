@@ -1,5 +1,6 @@
 'use client';
 
+import { useMemo, useState } from 'react';
 import Link from 'next/link';
 import {
   DataTable,
@@ -7,31 +8,66 @@ import {
   MobileCardRow,
   Panel,
   Tag,
+  type TagTone,
 } from '../../../components/ui';
 import type { DomainAlert } from '../../../lib/server-api';
 
+type ScoreFilter = 'all' | 'lt55' | 'lt35';
+
 /**
  * Cross-company domain alerts — surfaces EXPIRING / EXPIRED / FAIL
- * domains on the global dashboard so SUPER_ADMIN sees trouble at a
- * glance. Server pre-sorts by urgency; we keep that as the default
- * sort and let users override per column.
+ * domains AND low-score domains (v2) on the global dashboard so
+ * SUPER_ADMIN sees trouble at a glance. Filter chips let operators
+ * narrow the feed to critical/poor score buckets.
  */
 export function DomainAlertsPanel({ alerts }: { alerts: DomainAlert[] }) {
+  const [scoreFilter, setScoreFilter] = useState<ScoreFilter>('all');
+
+  const filtered = useMemo(() => {
+    if (scoreFilter === 'all') return alerts;
+    const ceiling = scoreFilter === 'lt35' ? 35 : 55;
+    return alerts.filter(
+      (a) => typeof a.latestScore === 'number' && a.latestScore < ceiling,
+    );
+  }, [alerts, scoreFilter]);
+
   return (
     <Panel
       title={
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 10 }}>
           Domain alerts
-          {alerts.length > 0 && (
+          {filtered.length > 0 && (
             <Tag tone="danger" dot>
-              {alerts.length}
+              {filtered.length}
             </Tag>
           )}
         </span>
       }
+      actions={
+        <div style={{ display: 'inline-flex', gap: 4 }}>
+          <FilterChip
+            active={scoreFilter === 'all'}
+            onClick={() => setScoreFilter('all')}
+          >
+            All
+          </FilterChip>
+          <FilterChip
+            active={scoreFilter === 'lt55'}
+            onClick={() => setScoreFilter('lt55')}
+          >
+            &lt; 55% poor
+          </FilterChip>
+          <FilterChip
+            active={scoreFilter === 'lt35'}
+            onClick={() => setScoreFilter('lt35')}
+          >
+            &lt; 35% critical
+          </FilterChip>
+        </div>
+      }
       noPad
     >
-      {alerts.length === 0 ? (
+      {filtered.length === 0 ? (
         <div
           style={{
             padding: 24,
@@ -39,12 +75,14 @@ export function DomainAlertsPanel({ alerts }: { alerts: DomainAlert[] }) {
             fontSize: 13,
           }}
         >
-          All monitored domains are healthy.
+          {alerts.length === 0
+            ? 'All monitored domains are healthy.'
+            : 'No domains match the selected filter.'}
         </div>
       ) : (
         <DataTable
           columns={alertColumns()}
-          rows={alerts.map((a) => ({ ...a, id: a.domainId }))}
+          rows={filtered.map((a) => ({ ...a, id: a.domainId }))}
           renderMobileCard={(a) => (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -62,6 +100,7 @@ export function DomainAlertsPanel({ alerts }: { alerts: DomainAlert[] }) {
                 >
                   {a.hostname}
                 </Link>
+                <ScoreChip score={a.latestScore} />
                 <AlertStatus status={a.status} />
               </div>
               <Link
@@ -88,6 +127,51 @@ export function DomainAlertsPanel({ alerts }: { alerts: DomainAlert[] }) {
       )}
     </Panel>
   );
+}
+
+function FilterChip({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      style={{
+        padding: '3px 8px',
+        fontSize: 11,
+        fontFamily: 'var(--font-mono)',
+        background: active ? 'var(--accent-soft)' : 'transparent',
+        color: active ? 'var(--accent)' : 'var(--muted)',
+        border: `1px solid ${active ? 'var(--accent-line)' : 'var(--line)'}`,
+        borderRadius: 4,
+        cursor: 'pointer',
+        textTransform: 'uppercase',
+        letterSpacing: 0.4,
+      }}
+    >
+      {children}
+    </button>
+  );
+}
+
+function scoreToTone(score: number): TagTone {
+  if (score >= 90) return 'ok';
+  if (score >= 75) return 'ok';
+  if (score >= 55) return 'warn';
+  return 'danger';
+}
+
+function ScoreChip({ score }: { score: number | null }) {
+  if (score === null) {
+    return <Tag tone="outline">—</Tag>;
+  }
+  return <Tag tone={scoreToTone(score)}>{score}%</Tag>;
 }
 
 type Row = DomainAlert & { id: string };
@@ -133,6 +217,13 @@ function alertColumns(): DataColumn<Row>[] {
       width: 110,
       sortValue: (a) => STATUS_RANK[a.status] ?? 99,
       render: (a) => <AlertStatus status={a.status} />,
+    },
+    {
+      id: 'score',
+      header: 'Score',
+      width: 90,
+      sortValue: (a) => a.latestScore ?? -1,
+      render: (a) => <ScoreChip score={a.latestScore} />,
     },
     {
       id: 'whois',

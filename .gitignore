@@ -6,6 +6,7 @@ build/
 out/
 coverage/
 *.tsbuildinfo
+CHANGELOG-SECURITY.md
 
 .env
 .env.local

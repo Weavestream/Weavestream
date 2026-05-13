@@ -4,6 +4,7 @@ import {
   DomainCheckJobNames,
   QueueNames,
   domainCheckJobSchema,
+  parseDkimSelectorOverride,
   type DomainCheckJob,
 } from '@weavestream/shared';
 import { EnvService } from '../../../api/src/config/env.service.js';
@@ -170,6 +171,12 @@ export class DomainChecksWorker implements OnModuleDestroy {
       checkTls: domain.checkTls,
       timeoutMs: this.env.values.DOMAIN_CHECK_TIMEOUT_MS,
       rdapCacheHours: this.env.values.RDAP_BOOTSTRAP_CACHE_HOURS,
+      // v2 — feed the operator-configured DKIM selector list into the
+      // engine so probes can hit org-specific selectors in addition to
+      // the MX-keyed defaults.
+      dkimSelectorOverride: parseDkimSelectorOverride(
+        domain.dkimSelectorOverride,
+      ),
     });
     const status = deriveDomainStatus(result, domain.alertThresholdDays);
 

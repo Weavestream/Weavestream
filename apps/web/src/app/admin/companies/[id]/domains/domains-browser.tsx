@@ -13,6 +13,7 @@ import {
   Icon,
   MobileCardRow,
   Tag,
+  type TagTone,
 } from '../../../../../components/ui';
 
 /**
@@ -56,6 +57,10 @@ export function DomainsBrowser({
       checkTls: form.checkTls,
       alertThresholdDays: form.alertThresholdDays,
       visibleToClients: form.visibleToClients,
+      // v2 — DKIM selector override is persisted as a trimmed CSV
+      // string (or `null` when empty) so the engine can probe these
+      // selectors in addition to the MX-keyed defaults.
+      dkimSelectorOverride: form.dkimSelectorOverride.trim() || null,
     };
     const res =
       mode === 'add'
@@ -202,6 +207,7 @@ export function DomainsBrowser({
                 >
                   {r.hostname}
                 </Link>
+                <ScoreChip score={r.latestScore} />
                 <StatusPill status={r.latestStatus} />
               </div>
               <MobileCardRow label="WHOIS" mono>
@@ -299,6 +305,8 @@ export interface FormState {
   checkTls: boolean;
   alertThresholdDays: number;
   visibleToClients: boolean;
+  /** v2 — operator-supplied DKIM selectors (comma-separated). */
+  dkimSelectorOverride: string;
 }
 
 function DomainDialog({
@@ -317,6 +325,7 @@ function DomainDialog({
     checkTls: initial?.checkTls ?? true,
     alertThresholdDays: initial?.alertThresholdDays ?? 30,
     visibleToClients: initial?.visibleToClients ?? false,
+    dkimSelectorOverride: initial?.dkimSelectorOverride ?? '',
   });
   const [submitting, setSubmitting] = useState(false);
 
@@ -400,6 +409,24 @@ function DomainDialog({
           onChange={(v) => setForm({ ...form, visibleToClients: v })}
           description="Clients on the portal will see this domain's hostname, status, and expiry. Keep off for MSP-internal entries."
         />
+
+        <label style={fieldStyle}>
+          <span style={fieldLabel}>DKIM selectors</span>
+          <input
+            type="text"
+            placeholder="e.g. mail2024, selector-prod"
+            value={form.dkimSelectorOverride}
+            onChange={(e) =>
+              setForm({ ...form, dkimSelectorOverride: e.target.value })
+            }
+            style={inputStyle}
+          />
+          <span style={hintStyle}>
+            Comma-separated. Only needed if your DKIM selectors don&apos;t match
+            our defaults (e.g. <code>google</code>, <code>selector1</code>).
+          </span>
+        </label>
+
 
         <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
           <button type="button" onClick={onCancel} style={secondaryBtn}>
@@ -517,6 +544,13 @@ function domainColumns({
       render: (r) => <StatusPill status={r.latestStatus} />,
     },
     {
+      id: 'score',
+      header: 'Score',
+      width: 100,
+      sortValue: (r) => r.latestScore ?? -1,
+      render: (r) => <ScoreChip score={r.latestScore} />,
+    },
+    {
       id: 'whois',
       header: 'WHOIS expires',
       width: 140,
@@ -625,6 +659,19 @@ function domainColumns({
 export function StatusPill({ status }: { status: MonitoredDomain['latestStatus'] }) {
   const tone = STATUS_TONE[status];
   return <Tag tone={tone.tone}>{tone.label}</Tag>;
+}
+
+function scoreToTone(score: number): TagTone {
+  if (score >= 75) return 'ok';
+  if (score >= 55) return 'warn';
+  return 'danger';
+}
+
+function ScoreChip({ score }: { score: number | null }) {
+  if (score === null) {
+    return <Tag tone="outline">—</Tag>;
+  }
+  return <Tag tone={scoreToTone(score)}>{score}%</Tag>;
 }
 
 const STATUS_TONE: Record<

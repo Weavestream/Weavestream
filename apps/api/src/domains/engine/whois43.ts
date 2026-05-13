@@ -76,11 +76,55 @@ export async function queryWhois43(
       /^\s*(?:Creation Date|Created(?: On)?|Registered(?: on)?):\s*(.+)$/im,
     );
 
-  if (!registrar && !expires && !registered) return null;
+  // v2 — best-effort extraction of EPP status codes + nameservers from
+  // the legacy text response. Registrars vary wildly here; we look for
+  // the canonical labels emitted by Verisign / IANA / common ccTLDs.
+  const statusCodes = Array.from(
+    new Set(
+      Array.from(lastResponse.matchAll(/^\s*(?:Domain )?Status:\s*([^\s]+)/gim))
+        .map((m) => m[1]?.toLowerCase().replace(/\s+/g, '') ?? '')
+        .filter(Boolean),
+    ),
+  );
+  const locked = statusCodes.some(
+    (s) =>
+      s === 'clienttransferprohibited' ||
+      s === 'servertransferprohibited' ||
+      s === 'clientdeleteprohibited' ||
+      s === 'serverdeleteprohibited' ||
+      s === 'clientupdateprohibited' ||
+      s === 'serverupdateprohibited',
+  );
+  const hold = statusCodes.some(
+    (s) => s === 'clienthold' || s === 'serverhold',
+  );
+
+  const whoisNs = Array.from(
+    new Set(
+      Array.from(lastResponse.matchAll(/^\s*Name Server:\s*([^\s]+)/gim))
+        .map((m) => m[1]?.toLowerCase().replace(/\.$/, '') ?? '')
+        .filter(Boolean),
+    ),
+  );
+
+  if (
+    !registrar &&
+    !expires &&
+    !registered &&
+    statusCodes.length === 0 &&
+    whoisNs.length === 0
+  ) {
+    return null;
+  }
   return {
     registrar,
     registeredAt: parseDate(registered),
     expiresAt: parseDate(expires),
     source: 'whois43',
+    statusCodes,
+    locked,
+    hold,
+    whoisNs,
+    secureDns: null,
   };
 }

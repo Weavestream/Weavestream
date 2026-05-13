@@ -100,6 +100,8 @@ function makeStubs(initial: { domains?: DomainRow[]; checks?: DomainCheckRow[] }
           httpCheckEnabled: d.httpCheckEnabled ?? true,
           latestHttpStatus: null,
           httpDownSince: null,
+          latestScore: null,
+          dkimSelectorOverride: d.dkimSelectorOverride ?? null,
           archivedAt: null,
           createdBy: d.createdBy ?? null,
           createdAt: new Date(),

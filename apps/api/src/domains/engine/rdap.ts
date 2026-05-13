@@ -112,6 +112,11 @@ function normaliseRdapBase(url: string): string {
  * from an RDAP response. RFC 9083 §5 defines the event actions but
  * registrars use wildly different labels; we look at several common
  * ones before giving up.
+ *
+ * v2 also extracts:
+ *   - `status` codes (EPP lock state)
+ *   - `nameservers` (for the WHOIS-vs-DNS NS reconciliation)
+ *   - `secureDNS` (authoritative DNSSEC delegation evidence)
  */
 function parseRdapResponse(raw: unknown): WhoisSubResult | null {
   if (!raw || typeof raw !== 'object') return null;
@@ -159,12 +164,83 @@ function parseRdapResponse(raw: unknown): WhoisSubResult | null {
     if (registrar) break;
   }
 
-  if (!expiresAt && !registeredAt && !registrar) return null;
+  // v2 — RDAP `status` is an array of EPP status code strings (RFC 9083
+  // §5.6 + RFC 8056). Lower-case + de-dup; downstream consumers look
+  // for `clienttransferprohibited` / `clienthold` / etc.
+  const rawStatus = Array.isArray(body.status) ? body.status : [];
+  const statusCodes = Array.from(
+    new Set(
+      rawStatus
+        .filter((s): s is string => typeof s === 'string')
+        // Some registries return "client transfer prohibited" with
+        // spaces; normalise to the canonical no-space form.
+        .map((s) => s.toLowerCase().replace(/\s+/g, '')),
+    ),
+  );
+  const locked = statusCodes.some(
+    (s) =>
+      s === 'clienttransferprohibited' ||
+      s === 'servertransferprohibited' ||
+      s === 'clientdeleteprohibited' ||
+      s === 'serverdeleteprohibited' ||
+      s === 'clientupdateprohibited' ||
+      s === 'serverupdateprohibited',
+  );
+  const hold = statusCodes.some(
+    (s) => s === 'clienthold' || s === 'serverhold',
+  );
+
+  // v2 — `nameservers` is an array of objects with `ldhName`. RFC 9083
+  // §5.2. Lower-case + strip trailing dot so `nsmatch` can compare
+  // against the DNS NS answer cleanly.
+  const rawNs = Array.isArray(body.nameservers) ? body.nameservers : [];
+  const whoisNs = Array.from(
+    new Set(
+      rawNs
+        .map((ns) => {
+          if (!ns || typeof ns !== 'object') return null;
+          const name = (ns as Record<string, unknown>).ldhName;
+          if (typeof name !== 'string' || name.length === 0) return null;
+          return name.toLowerCase().replace(/\.$/, '');
+        })
+        .filter((s): s is string => typeof s === 'string'),
+    ),
+  );
+
+  // v2 — `secureDNS` block. The relevant fields are
+  // `delegationSigned` (boolean) and `dsData` (array of DS records).
+  // When present, this is the authoritative DNSSEC signal — much more
+  // reliable than a DNSKEY probe against the host.
+  let secureDns: WhoisSubResult['secureDns'] = null;
+  const sec = body.secureDNS;
+  if (sec && typeof sec === 'object') {
+    const delegationSigned =
+      (sec as Record<string, unknown>).delegationSigned === true;
+    const dsData = (sec as Record<string, unknown>).dsData;
+    const dsRecordCount = Array.isArray(dsData) ? dsData.length : 0;
+    secureDns = { delegationSigned, dsRecordCount };
+  }
+
+  if (
+    !expiresAt &&
+    !registeredAt &&
+    !registrar &&
+    statusCodes.length === 0 &&
+    whoisNs.length === 0 &&
+    !secureDns
+  ) {
+    return null;
+  }
   return {
     registrar,
     registeredAt,
     expiresAt,
     source: 'rdap',
+    statusCodes,
+    locked,
+    hold,
+    whoisNs,
+    secureDns,
   };
 }
 

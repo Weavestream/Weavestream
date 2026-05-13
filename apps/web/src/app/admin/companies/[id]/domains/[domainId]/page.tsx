@@ -18,6 +18,9 @@ import { buildTerm } from '../../../../../../lib/term';
 import { companyCrumbs } from '../../../../../../lib/company-crumbs';
 import { DomainActions } from './domain-actions';
 import { DomainHistory } from './domain-history';
+import { ScoreCard } from './score-card';
+import { EmailAuthCard } from './email-auth-card';
+import { SecurityCard } from './security-card';
 import { StatusPill } from '../domains-browser';
 
 /**
@@ -43,6 +46,9 @@ export default async function DomainDetailPage({
   if (!domain) notFound();
 
   const manage = canWriteCompany(me, company.id);
+  const latestCheck = checks[0] ?? null;
+  const previousCheck = checks[1] ?? null;
+  const hasV2Data = latestCheck && (latestCheck.schemaVersion ?? 0) >= 2;
 
   return (
     <>
@@ -72,6 +78,17 @@ export default async function DomainDetailPage({
             companyId={companyId}
             domain={domain}
           />
+        )}
+
+        {latestCheck && (
+          <ScoreCard latest={latestCheck} previous={previousCheck} />
+        )}
+
+        {hasV2Data && latestCheck && (
+          <>
+            <EmailAuthCard details={latestCheck.details} />
+            <SecurityCard details={latestCheck.details} />
+          </>
         )}
 
         <Panel title="Summary">

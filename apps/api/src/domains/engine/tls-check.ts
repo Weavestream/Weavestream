@@ -30,16 +30,29 @@ export async function runTlsCheck(
     const info = await tls.probe(hostname, TLS_PORT, opts.timeoutMs);
     const validFrom = info.validFrom ? new Date(info.validFrom) : null;
     const validTo = info.validTo ? new Date(info.validTo) : null;
+    const validToDate =
+      validTo && !Number.isNaN(validTo.getTime()) ? validTo : null;
+    const daysUntilExpiry = validToDate
+      ? Math.floor(
+          (validToDate.getTime() - opts.now.getTime()) / 86_400_000,
+        )
+      : null;
 
     const data: TlsSubResult = {
       validFrom: validFrom && !Number.isNaN(validFrom.getTime()) ? validFrom : null,
-      validTo: validTo && !Number.isNaN(validTo.getTime()) ? validTo : null,
+      validTo: validToDate,
       issuer: info.issuer,
       subjectAltNames: info.subjectAltNames,
       chainLength: info.chainLength,
       protocol: info.protocol,
       authorized: info.authorized,
       authorizationError: info.authorizationError,
+      keyAlgo: info.keyAlgo,
+      keyBits: info.keyBits,
+      sigAlgo: info.sigAlgo,
+      mustStaple: info.mustStaple,
+      ocspStapled: info.ocspStapled,
+      daysUntilExpiry,
     };
 
     if (!data.validTo) {

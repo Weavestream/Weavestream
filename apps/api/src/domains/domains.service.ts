@@ -62,6 +62,10 @@ export interface SerializedMonitoredDomain {
   whoisExpiresAt: Date | null;
   tlsExpiresAt: Date | null;
   latestStatus: DomainStatus;
+  /** v2 — most-recent hygiene score (percentage 0-100). NULL if never scored. */
+  latestScore: number | null;
+  /** v2 — operator-supplied extra DKIM selectors to probe. */
+  dkimSelectorOverride: string | null;
   archivedAt: Date | null;
   createdBy: string | null;
   createdAt: Date;
@@ -80,6 +84,10 @@ export interface SerializedDomainCheck {
   tlsExpiresAt: Date | null;
   details: DomainCheckDetails;
   error: string | null;
+  /** v2 — denormalised percent score for this row (NULL on legacy rows). */
+  score: number | null;
+  /** v2 — rubric version this row was scored under. */
+  schemaVersion: number | null;
 }
 
 export interface DomainListOptions {
@@ -164,7 +172,10 @@ export class DomainsService {
    * Never exposed to CLIENT_USER callers (the controller guards that).
    * Returns domains in EXPIRING or EXPIRED status, newest problem first.
    */
-  async listAlertsAcrossCompanies(limit = 50): Promise<
+  async listAlertsAcrossCompanies(
+    limit = 50,
+    opts: { minScore?: number; maxScore?: number } = {},
+  ): Promise<
     Array<{
       companyId: string;
       companyName: string;
@@ -175,21 +186,37 @@ export class DomainsService {
       visibleToClients: boolean;
       whoisExpiresAt: Date | null;
       tlsExpiresAt: Date | null;
+      latestScore: number | null;
     }>
   > {
     const safe = Math.min(Math.max(limit, 1), 500);
+    // v2 — the alerts feed now also surfaces low-score domains (a
+    // domain can have OK latestStatus but a 35% score, e.g. cert
+    // valid but no DNSSEC / DMARC / HSTS). We OR the score bucket
+    // with the existing status bucket so the global dashboard sees
+    // both kinds of trouble. Callers can filter to a specific
+    // bucket via `minScore` / `maxScore`.
+    const orClauses: Prisma.MonitoredDomainWhereInput[] = [
+      { latestStatus: { in: ['EXPIRING', 'EXPIRED', 'FAIL'] } },
+    ];
+    if (opts.maxScore !== undefined) {
+      orClauses.push({ latestScore: { lte: opts.maxScore } });
+    } else {
+      // Default low-score bucket: anything below 55% (`fair` and
+      // below). Operators can tighten this with `maxScore` if the
+      // feed gets noisy.
+      orClauses.push({ latestScore: { lt: 55 } });
+    }
+    const where: Prisma.MonitoredDomainWhereInput = {
+      archivedAt: null,
+      OR: orClauses,
+    };
+    if (opts.minScore !== undefined) {
+      where.latestScore = { gte: opts.minScore };
+    }
     const rows = await this.prisma.monitoredDomain.findMany({
-      where: {
-        archivedAt: null,
-        latestStatus: { in: ['EXPIRING', 'EXPIRED', 'FAIL'] },
-      },
-      include: {
-        // Shallow company snapshot keeps the payload small.
-        // We can't use Prisma include typing without another query, so
-        // we denormalise inside a second batch read below. For now
-        // return only the fields we have, then hydrate names.
-      },
-      orderBy: [{ latestStatus: 'asc' }, { hostname: 'asc' }],
+      where,
+      orderBy: [{ latestStatus: 'asc' }, { latestScore: 'asc' }, { hostname: 'asc' }],
       take: safe,
     });
 
@@ -211,6 +238,7 @@ export class DomainsService {
       visibleToClients: r.visibleToClients,
       whoisExpiresAt: r.whoisExpiresAt,
       tlsExpiresAt: r.tlsExpiresAt,
+      latestScore: r.latestScore,
     }));
   }
 
@@ -253,6 +281,9 @@ export class DomainsService {
         checkTls: flags.checkTls,
         alertThresholdDays: input.alertThresholdDays ?? 30,
         visibleToClients: input.visibleToClients ?? false,
+        dkimSelectorOverride: normaliseSelectorOverride(
+          input.dkimSelectorOverride,
+        ),
         createdBy: actor.id,
       },
     });
@@ -273,6 +304,7 @@ export class DomainsService {
         checkTls: created.checkTls,
         alertThresholdDays: created.alertThresholdDays,
         visibleToClients: created.visibleToClients,
+        dkimSelectorOverride: created.dkimSelectorOverride,
       },
     });
     return this.serialize(created);
@@ -312,6 +344,11 @@ export class DomainsService {
     if (input.visibleToClients !== undefined) {
       data.visibleToClients = input.visibleToClients;
     }
+    if (input.dkimSelectorOverride !== undefined) {
+      data.dkimSelectorOverride = normaliseSelectorOverride(
+        input.dkimSelectorOverride,
+      );
+    }
 
     const nextFlags = {
       checkWhois: (data.checkWhois as boolean | undefined) ?? existing.checkWhois,
@@ -348,6 +385,7 @@ export class DomainsService {
         checkTls: existing.checkTls,
         alertThresholdDays: existing.alertThresholdDays,
         visibleToClients: existing.visibleToClients,
+        dkimSelectorOverride: existing.dkimSelectorOverride,
       },
       after: {
         hostname: updated.hostname,
@@ -356,6 +394,7 @@ export class DomainsService {
         checkTls: updated.checkTls,
         alertThresholdDays: updated.alertThresholdDays,
         visibleToClients: updated.visibleToClients,
+        dkimSelectorOverride: updated.dkimSelectorOverride,
       },
     });
     return this.serialize(updated);
@@ -459,6 +498,12 @@ export class DomainsService {
       meta,
     } = args;
 
+    // v2 — `result.score` is `null` when the engine couldn't produce a
+    // verdict (every sub-check failed). We persist NULL in that case
+    // so the UI can render "Ungraded" rather than a misleading 0%.
+    const scorePercent = result.score;
+    const schemaVersion = result.details.schemaVersion ?? 1;
+
     const checkData: Prisma.DomainCheckUncheckedCreateInput = {
       monitoredDomainId: domainId,
       companyId,
@@ -470,6 +515,8 @@ export class DomainsService {
       tlsExpiresAt: safeDate((result.tls as SubCheckResult<TlsSubResult>).data?.validTo),
       details: result.details as unknown as Prisma.InputJsonValue,
       error: result.aggregateError,
+      score: scorePercent,
+      schemaVersion,
     };
 
     const stored = await this.prisma.$transaction(async (tx) => {
@@ -481,6 +528,11 @@ export class DomainsService {
           whoisExpiresAt: checkData.whoisExpiresAt ?? null,
           tlsExpiresAt: checkData.tlsExpiresAt ?? null,
           latestStatus: status,
+          // Only update `latestScore` when we have a fresh verdict;
+          // leaving it untouched on null-result runs lets the UI keep
+          // showing the last good score instead of disappearing the
+          // chip on a transient resolver outage.
+          ...(scorePercent !== null ? { latestScore: scorePercent } : {}),
         },
       });
       return created;
@@ -504,6 +556,7 @@ export class DomainsService {
           whoisStatus: result.whois.status,
           dnsStatus: result.dns.status,
           tlsStatus: result.tls.status,
+          score: scorePercent,
         },
       });
     }
@@ -560,6 +613,8 @@ export class DomainsService {
       whoisExpiresAt: row.whoisExpiresAt,
       tlsExpiresAt: row.tlsExpiresAt,
       latestStatus: row.latestStatus,
+      latestScore: row.latestScore,
+      dkimSelectorOverride: row.dkimSelectorOverride,
       archivedAt: row.archivedAt,
       createdBy: row.createdBy,
       createdAt: row.createdAt,
@@ -580,6 +635,8 @@ export class DomainsService {
       tlsExpiresAt: row.tlsExpiresAt,
       details: (row.details ?? {}) as DomainCheckDetails,
       error: row.error,
+      score: row.score,
+      schemaVersion: row.schemaVersion,
     };
   }
 }
@@ -588,4 +645,21 @@ function safeDate(d: Date | null | undefined): Date | null {
   if (!d) return null;
   if (Number.isNaN(d.getTime())) return null;
   return d;
+}
+
+/**
+ * Trim + collapse whitespace inside the comma-separated selector list
+ * before persisting. Empty / whitespace-only input round-trips to
+ * `null` so the DB column stays semantically meaningful.
+ */
+function normaliseSelectorOverride(
+  raw: string | null | undefined,
+): string | null {
+  if (raw === undefined || raw === null) return null;
+  const cleaned = raw
+    .split(/[,\s]+/)
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean)
+    .join(',');
+  return cleaned.length === 0 ? null : cleaned;
 }

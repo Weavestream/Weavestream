@@ -33,6 +33,11 @@ interface StubOptions {
     protocol: string | null;
     authorized: boolean;
     authorizationError: string | null;
+    keyAlgo?: string | null;
+    keyBits?: number | null;
+    sigAlgo?: string | null;
+    mustStaple?: boolean;
+    ocspStapled?: boolean;
   };
   tlsThrows?: string;
   now?: Date;
@@ -71,22 +76,31 @@ function makePorts(opts: StubOptions = {}): EnginePorts {
       resolve6: jest.fn(async () => opts.aaaa ?? []),
       resolveMx: jest.fn(async () => opts.mx ?? [{ exchange: 'mx.example.test', priority: 10 }]),
       resolveNs: jest.fn(async () => opts.ns ?? ['ns1.example.test']),
+      resolveTxt: jest.fn(async () => [] as string[][]),
+      resolveCaa: jest.fn(async () => []),
+      resolve: jest.fn(async () => [] as unknown[]),
     },
     tls: {
       probe: jest.fn(async () => {
         if (opts.tlsThrows) throw new Error(opts.tlsThrows);
-        return (
-          opts.tls ?? {
-            validFrom: '2025-01-01T00:00:00.000Z',
-            validTo: '2027-01-01T00:00:00.000Z',
-            issuer: 'CN=Test CA',
-            subjectAltNames: ['example.com'],
-            chainLength: 3,
-            protocol: 'TLSv1.3',
-            authorized: true,
-            authorizationError: null,
-          }
-        );
+        const stub = opts.tls ?? {
+          validFrom: '2025-01-01T00:00:00.000Z',
+          validTo: '2027-01-01T00:00:00.000Z',
+          issuer: 'CN=Test CA',
+          subjectAltNames: ['example.com'],
+          chainLength: 3,
+          protocol: 'TLSv1.3',
+          authorized: true,
+          authorizationError: null,
+        };
+        return {
+          ...stub,
+          keyAlgo: stub.keyAlgo ?? 'RSA',
+          keyBits: stub.keyBits ?? 2048,
+          sigAlgo: stub.sigAlgo ?? 'RSA-SHA256',
+          mustStaple: stub.mustStaple ?? false,
+          ocspStapled: stub.ocspStapled ?? false,
+        };
       }),
     },
     whois43: {
@@ -258,11 +272,25 @@ describe('skipped sub-checks', () => {
     expect(res.whois.status).toBe('SKIP');
     expect(res.dns.status).toBe('SKIP');
     expect(res.tls.status).toBe('SKIP');
-    expect(res.details).toEqual({});
+    // v2 — `details.schemaVersion` and the `email.hasMx` shim are
+    // always emitted so the consumers don't have to null-check.
+    expect(res.details.whois).toBeUndefined();
+    expect(res.details.dns).toBeUndefined();
+    expect(res.details.tls).toBeUndefined();
   });
 });
 
 describe('deriveDomainStatus', () => {
+  // Stub for the v2 sub-checks. `deriveDomainStatus` only reads
+  // status / whois / tls fields so the placeholders are enough.
+  const emptyV2Subs = {
+    email: { status: 'SKIP' as const, data: null, error: null },
+    dnssec: { status: 'SKIP' as const, data: null, error: null },
+    nsMatch: { status: 'SKIP' as const, data: null, error: null },
+    http: { status: 'SKIP' as const, data: null, error: null },
+    score: null,
+  };
+
   it('returns EXPIRED when whois expiry is in the past', () => {
     const status = deriveDomainStatus(
       {
@@ -274,6 +302,11 @@ describe('deriveDomainStatus', () => {
             registeredAt: null,
             expiresAt: new Date('2026-05-01T00:00:00Z'),
             source: 'rdap',
+            statusCodes: [],
+            locked: false,
+            hold: false,
+            whoisNs: [],
+            secureDns: null,
           },
           error: null,
         },
@@ -281,6 +314,7 @@ describe('deriveDomainStatus', () => {
         tls: { status: 'SKIP', data: null, error: null },
         details: {},
         aggregateError: null,
+        ...emptyV2Subs,
       },
       30,
     );
@@ -298,6 +332,11 @@ describe('deriveDomainStatus', () => {
             registeredAt: null,
             expiresAt: new Date('2026-06-20T00:00:00Z'),
             source: 'rdap',
+            statusCodes: [],
+            locked: false,
+            hold: false,
+            whoisNs: [],
+            secureDns: null,
           },
           error: null,
         },
@@ -305,6 +344,7 @@ describe('deriveDomainStatus', () => {
         tls: { status: 'SKIP', data: null, error: null },
         details: {},
         aggregateError: null,
+        ...emptyV2Subs,
       },
       30,
     );
@@ -322,6 +362,11 @@ describe('deriveDomainStatus', () => {
             registeredAt: null,
             expiresAt: new Date('2028-01-01T00:00:00Z'),
             source: 'rdap',
+            statusCodes: [],
+            locked: false,
+            hold: false,
+            whoisNs: [],
+            secureDns: null,
           },
           error: null,
         },
@@ -337,11 +382,18 @@ describe('deriveDomainStatus', () => {
             protocol: null,
             authorized: true,
             authorizationError: null,
+            keyAlgo: 'RSA',
+            keyBits: 2048,
+            sigAlgo: 'RSA-SHA256',
+            mustStaple: false,
+            ocspStapled: false,
+            daysUntilExpiry: 365,
           },
           error: null,
         },
         details: {},
         aggregateError: null,
+        ...emptyV2Subs,
       },
       30,
     );

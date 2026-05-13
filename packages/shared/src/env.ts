@@ -194,6 +194,7 @@ export const envSchema = z.object({
   DOMAIN_CHECK_ATTEMPTS: intFromString(1, 10).default(3),
   DOMAIN_CHECK_BACKOFF_MS: intFromString(1_000, 600_000).default(30_000),
   RDAP_BOOTSTRAP_CACHE_HOURS: intFromString(1, 720).default(24),
+
   WORKER_CONCURRENCY_GLOBAL: intFromString(1, 500).default(10),
 
   // Alerts feature. Repeatable job that evaluates time/state-based

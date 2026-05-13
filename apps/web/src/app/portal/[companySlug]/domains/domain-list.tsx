@@ -5,6 +5,7 @@ import {
   type DataColumn,
   MobileCardRow,
   Tag,
+  type TagTone,
 } from '../../../../components/ui';
 import type { MonitoredDomain } from '../../../../lib/server-api';
 
@@ -33,6 +34,7 @@ export function DomainList({ items }: { items: MonitoredDomain[] }) {
             >
               {d.hostname}
             </span>
+            <ScoreChip score={d.latestScore} />
             <StatusTag status={d.latestStatus} />
           </div>
           <MobileCardRow label="WHOIS" mono>
@@ -74,6 +76,13 @@ function domainColumns(): DataColumn<MonitoredDomain>[] {
       render: (d) => <StatusTag status={d.latestStatus} />,
     },
     {
+      id: 'score',
+      header: 'Score',
+      width: 100,
+      sortValue: (d) => d.latestScore ?? -1,
+      render: (d) => <ScoreChip score={d.latestScore} />,
+    },
+    {
       id: 'whois',
       header: 'WHOIS expires',
       width: 140,
@@ -110,6 +119,19 @@ function domainColumns(): DataColumn<MonitoredDomain>[] {
       ),
     },
   ];
+}
+
+function scoreToTone(score: number): TagTone {
+  if (score >= 75) return 'ok';
+  if (score >= 55) return 'warn';
+  return 'danger';
+}
+
+function ScoreChip({ score }: { score: number | null }) {
+  if (score === null) {
+    return <Tag tone="outline">—</Tag>;
+  }
+  return <Tag tone={scoreToTone(score)}>{score}%</Tag>;
 }
 
 function StatusTag({ status }: { status: MonitoredDomain['latestStatus'] }) {
