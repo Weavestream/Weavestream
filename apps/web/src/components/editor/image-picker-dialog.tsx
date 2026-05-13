@@ -101,7 +101,20 @@ export function ImagePickerDialog({
 
   return (
     <Dialog open={open} onClose={onClose} title="Insert image" width={720}>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      {/* `height: 100%` + `minHeight: 0` lets the inner grid's
+          `overflow: auto` actually clip inside this flex column.
+          Without it, the tab body grows to fit all tiles and the
+          dialog panel ends up scrolling awkwardly (or not at all on
+          shorter viewports). */}
+      <div
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 14,
+          minHeight: 0,
+          height: '100%',
+        }}
+      >
         <Tabs tab={tab} setTab={setTab} />
         {tab === 'upload' && (
           <UploadTab
@@ -416,8 +429,23 @@ function LibraryTab({
   }, [items, query]);
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 10,
+        minHeight: 0,
+        flex: 1,
+      }}
+    >
+      <div
+        style={{
+          display: 'flex',
+          gap: 8,
+          alignItems: 'center',
+          flexShrink: 0,
+        }}
+      >
         <input
           type="search"
           value={query}
@@ -449,7 +477,7 @@ function LibraryTab({
         <Grid items={filtered} onPick={onPick} onCopy={onCopy} />
       )}
       {nextCursor && (
-        <div style={{ display: 'flex', justifyContent: 'center' }}>
+        <div style={{ display: 'flex', justifyContent: 'center', flexShrink: 0 }}>
           <Btn
             kind="ghost"
             loading={loadingMore}
@@ -478,8 +506,14 @@ function Grid({
         display: 'grid',
         gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))',
         gap: 10,
-        maxHeight: 480,
+        flex: 1,
+        minHeight: 0,
         overflowY: 'auto',
+        // `alignContent: start` keeps tiles at their natural square
+        // size when the grid is taller than the rows it contains —
+        // otherwise the default `stretch` blows up row heights and
+        // makes each thumbnail look squashed.
+        alignContent: 'start',
         paddingRight: 4,
       }}
     >

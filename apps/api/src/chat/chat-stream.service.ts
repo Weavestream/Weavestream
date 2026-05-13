@@ -723,8 +723,24 @@ function buildSystemPrompt(
     'You cannot create or modify assets or domains — attached assets and domains are read-only context. If the user asks to change one, describe the proposed change in prose rather than emitting a tool call.',
   );
   lines.push('');
+  lines.push('Guidance:');
   lines.push(
-    'Guidance: when the user asks for an edit, call update_article with the COMPLETE new markdown body — never a partial diff. Prefer markdown formatting (headings, lists, fenced code, tables). Keep chat replies concise; the diff in the Apply card is the main deliverable. Tool calls are PROPOSALS — the user must click Apply, so phrase your reply as a proposal ("Here is a revised version…"), not as completed work.',
+    '- Default to answering in prose. Most messages are questions ("explain this score", "what does this mean", "is this domain healthy") and want a direct answer using the attached context — NOT a new article.',
+  );
+  lines.push(
+    '- Only call create_article when the user EXPLICITLY asks to create, draft, write, or document a new article/page/runbook. Phrases like "explain", "what is", "why", "how does", "summarise", "is this …", "show me", or "look at" are questions, not article requests — answer them in chat.',
+  );
+  lines.push(
+    '- Only call update_article when the user EXPLICITLY asks to edit, change, update, fix, rewrite, or add to an attached article. If no article is attached, never call update_article.',
+  );
+  lines.push(
+    '- If you are unsure whether the user wants an article, ask a one-line clarifying question instead of emitting a tool call. An unwanted tool call costs the user a click to dismiss.',
+  );
+  lines.push(
+    '- When you DO call update_article, pass the COMPLETE new markdown body — never a partial diff. Prefer markdown formatting (headings, lists, fenced code, tables). Keep the chat reply concise; the diff in the Apply card is the main deliverable.',
+  );
+  lines.push(
+    '- Tool calls are PROPOSALS — the user must click Apply — so phrase the accompanying reply as a proposal ("Here is a revised version…"), not as completed work.',
   );
   return lines.join('\n');
 }

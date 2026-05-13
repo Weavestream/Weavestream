@@ -123,7 +123,14 @@ export function Dialog({
             {title}
           </h2>
         </header>
-        <div style={{ padding: 16, overflow: 'auto', flex: 1 }}>{children}</div>
+        {/* `minHeight: 0` is required for `overflow: auto` to actually
+            clip inside a flex column. Without it, the body's default
+            `min-height: auto` keeps it sized to content, so long
+            dialogs (e.g. the image picker grid) overflow the panel
+            instead of scrolling. */}
+        <div style={{ padding: 16, overflow: 'auto', flex: 1, minHeight: 0 }}>
+          {children}
+        </div>
         {footer && (
           <footer
             style={{
