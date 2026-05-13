@@ -6,6 +6,16 @@ this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.8.1] - 2026-05-13
+
+### Added
+
+- **Markdown article editor — image picker.** When editing an article as Markdown, **Insert image** opens a dialog with three tabs: upload a new image (drag-and-drop or file chooser), pick from images already referenced in the current draft, or browse the company’s article-attached image library with filename search and pagination. Inserted images use stable same-origin URLs so they survive saves and match the Markdown ↔ rich-text conversion pipeline.
+
+### Changed
+
+- **Domain hygiene checks and scoring.** Updates to monitored-domain checks and to how the hygiene score is computed and shown on domain detail and history views — clearer signals and more dependable results across DNS, TLS, email authentication, and HTTP checks.
+
 ## [1.8.0] - 2026-05-12
 
 ### Added
@@ -710,7 +720,8 @@ Initial public release.
   database-per-tenant.
 - English UI only.
 
-[Unreleased]: https://github.com/Weavestream/Weavestream/compare/v1.6.4...HEAD
+[Unreleased]: https://github.com/Weavestream/Weavestream/compare/v1.8.1...HEAD
+[1.8.1]: https://github.com/Weavestream/Weavestream/releases/tag/v1.8.1
 [1.6.4]: https://github.com/Weavestream/Weavestream/releases/tag/v1.6.4
 [1.6.3]: https://github.com/Weavestream/Weavestream/releases/tag/v1.6.3
 [1.6.2]: https://github.com/Weavestream/Weavestream/releases/tag/v1.6.2
