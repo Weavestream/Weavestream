@@ -13,6 +13,7 @@ import { IntegrationSyncMappingWorker } from './integration-sync/integration-syn
 import { CloudflareDriftSweepWorker } from './cloudflare/cloudflare-drift-sweep.processor.js';
 import { AlertsWorker } from './alerts/alerts.processor.js';
 import { BackupWorker } from './backup/backup.processor.js';
+import { UploadReaperWorker } from './uploads/upload-reaper.processor.js';
 import { configureEgressGuard } from '../../api/src/common/egress/safe-fetch.js';
 import { EnvService } from '../../api/src/config/env.service.js';
 import { AuditLogService } from '../../api/src/audit/audit.service.js';
@@ -100,6 +101,9 @@ async function bootstrap(): Promise<void> {
 
   const backup = app.get(BackupWorker);
   await backup.start();
+
+  const uploadReaper = app.get(UploadReaperWorker);
+  await uploadReaper.start();
 
   logger.log('Worker online — bullmq consumers started', 'WorkerBootstrap');
 

@@ -22,6 +22,7 @@ import { IntegrationSyncMappingWorker } from './integration-sync/integration-syn
 import { CloudflareDriftSweepWorker } from './cloudflare/cloudflare-drift-sweep.processor.js';
 import { AlertsWorker } from './alerts/alerts.processor.js';
 import { BackupWorker } from './backup/backup.processor.js';
+import { UploadReaperWorker } from './uploads/upload-reaper.processor.js';
 
 /**
  * Worker-side composition root. Imports only the service-only shared
@@ -90,6 +91,7 @@ import { BackupWorker } from './backup/backup.processor.js';
     CloudflareDriftSweepWorker,
     AlertsWorker,
     BackupWorker,
+    UploadReaperWorker,
   ],
 })
 export class WorkerModule {}

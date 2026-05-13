@@ -196,6 +196,13 @@ export const AUDIT_ACTIONS = {
     // matchedCidr }`.
     egressBlocked: 'security.egress.blocked',
   },
+  // Phase 7 — soft-deleted Upload reaper. One roll-up row per sweep
+  // tick (not per row) with totals in `after`. `actorId` is null
+  // because the worker fires this. `entityId` is null because the
+  // row aggregates many uploads.
+  upload: {
+    reap: 'upload.reap',
+  },
 } as const;
 
 export const ALL_AUDIT_ACTIONS: string[] = [
@@ -214,4 +221,5 @@ export const ALL_AUDIT_ACTIONS: string[] = [
   ...Object.values(AUDIT_ACTIONS.subnet),
   ...Object.values(AUDIT_ACTIONS.security),
   ...Object.values(AUDIT_ACTIONS.backup),
+  ...Object.values(AUDIT_ACTIONS.upload),
 ];

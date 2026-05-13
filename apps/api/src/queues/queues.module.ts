@@ -1,6 +1,7 @@
 import { Global, Module } from '@nestjs/common';
 import { QueuesProducerModule } from './queues-producer.module.js';
 import { DomainChecksQueueRegistrar } from './domain-checks-queue.registrar.js';
+import { UploadReaperQueueRegistrar } from './upload-reaper-queue.registrar.js';
 
 /**
  * Phase 8 — BullMQ producer module (API-side).
@@ -24,7 +25,7 @@ import { DomainChecksQueueRegistrar } from './domain-checks-queue.registrar.js';
 @Global()
 @Module({
   imports: [QueuesProducerModule],
-  providers: [DomainChecksQueueRegistrar],
+  providers: [DomainChecksQueueRegistrar, UploadReaperQueueRegistrar],
   exports: [QueuesProducerModule],
 })
 export class QueuesModule {}

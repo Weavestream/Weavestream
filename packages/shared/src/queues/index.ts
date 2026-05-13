@@ -47,6 +47,14 @@ export const QueueNames = {
   // Outbound pushes go through Cloudflare's synchronous PATCH endpoint
   // so no async finalize queue is needed.
   cloudflareDriftSweep: 'cloudflare-drift-sweep',
+  // Phase 7 — soft-deleted Upload reaper. One repeatable `scheduled`
+  // job sweeps Upload rows whose `deletedAt` is older than
+  // `UPLOAD_REAPER_RETENTION_DAYS`, removes the original + thumbnail
+  // bytes from local storage, then hard-deletes the row (the
+  // `uploads_search_index_delete` trigger purges the search row and
+  // `companies.logo_upload_id` is `ON DELETE SET NULL`). Set
+  // `UPLOAD_REAPER_CRON=off` to disable scheduled reaping.
+  uploadReaper: 'upload-reaper',
 } as const;
 
 export type QueueName = (typeof QueueNames)[keyof typeof QueueNames];
@@ -398,4 +406,30 @@ export const CloudflareDriftSweepJobNames = {
 } as const;
 export type CloudflareDriftSweepJobName =
   (typeof CloudflareDriftSweepJobNames)[keyof typeof CloudflareDriftSweepJobNames];
+
+// ---------------------------------------------------------------------
+// upload-reaper queue (Phase 7 — soft-delete cleanup)
+// ---------------------------------------------------------------------
+//
+// One repeatable `scheduled` job, registered on API boot. The processor
+// loads Upload rows whose `deletedAt` is older than the configured
+// retention window, removes the original + thumbnail bytes from local
+// storage, then hard-deletes the row. A Postgres advisory lock guards
+// concurrent sweeps so two workers can't race over the same batch.
+//
+// No payload fields today — the cron pattern, retention window, and
+// batch size all come from env at consume time. Wrapping in a schema
+// anyway keeps the consumer boundary uniform with other queues and
+// leaves room for a future ad-hoc "reap now" admin trigger.
+
+export const uploadReaperJobSchema = z.object({
+  kind: z.literal('scheduled'),
+});
+export type UploadReaperJob = z.infer<typeof uploadReaperJobSchema>;
+
+export const UploadReaperJobNames = {
+  scheduled: 'scheduled',
+} as const;
+export type UploadReaperJobName =
+  (typeof UploadReaperJobNames)[keyof typeof UploadReaperJobNames];
 

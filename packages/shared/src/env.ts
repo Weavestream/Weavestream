@@ -182,6 +182,15 @@ export const envSchema = z.object({
   // SSD-backed installs can lower it for quicker stall detection.
   BACKUP_JOB_LOCK_MINUTES: intFromString(5, 24 * 60).default(360),
 
+  // Phase 7 — soft-deleted Upload reaper. Same `'off'` semantics as
+  // `DOMAIN_CHECK_CRON`. Retention floor is 1 day so a misconfigured
+  // env can't reap freshly-deleted uploads. Batch size caps how many
+  // rows a single tick will process, keeping the advisory-lock hold
+  // window bounded on installs with backlog churn.
+  UPLOAD_REAPER_CRON: z.string().min(1).default('7 4 * * *'),
+  UPLOAD_REAPER_RETENTION_DAYS: intFromString(1, 365).default(30),
+  UPLOAD_REAPER_BATCH_SIZE: intFromString(1, 5000).default(500),
+
   // Phase 8: Domain & SSL monitor + BullMQ infra.
   //
   // `DOMAIN_CHECK_CRON` follows the BullMQ `repeat.pattern` syntax

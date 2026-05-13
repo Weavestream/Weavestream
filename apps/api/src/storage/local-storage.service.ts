@@ -169,6 +169,31 @@ export class LocalStorageService implements OnModuleInit {
     }
   }
 
+  /**
+   * Phase 7 reaper helper. After `deleteObject(uploadKey)` succeeds the
+   * `${companyId}/uploads/<uploadId>/` directory is left empty; remove
+   * it so we don't accumulate stale per-upload folders. Best-effort:
+   * ENOENT (already gone) and ENOTEMPTY (somehow not empty — e.g. a
+   * race with a fresh upload reusing the id, which shouldn't happen
+   * because ids are UUIDs but better safe) are swallowed. Anything
+   * else bubbles so the caller can decide whether to abort the row.
+   */
+  async removeUploadDirIfEmpty(companyId: string, uploadId: string): Promise<void> {
+    this.assertSafeId(companyId, 'companyId');
+    this.assertSafeId(uploadId, 'uploadId');
+    const abs = path.join(this.root, companyId, 'uploads', uploadId);
+    const tenantRoot = path.join(this.root, companyId);
+    if (abs !== tenantRoot && !abs.startsWith(`${tenantRoot}${path.sep}`)) {
+      throw new BadRequestException('Upload directory escapes tenant root');
+    }
+    try {
+      await fs.rmdir(abs);
+    } catch (err) {
+      if (isEnoent(err) || isEnotEmpty(err)) return;
+      throw err;
+    }
+  }
+
   // ------------------------------------------------------------------
   // Key builders — single place to compute storage paths. Every path
   // starts with `<companyId>/…` so a key alone is enough to know which
@@ -249,6 +274,14 @@ function isEnoent(err: unknown): boolean {
     err !== null &&
     (err as { code?: string }).code === 'ENOENT'
   );
+}
+
+function isEnotEmpty(err: unknown): boolean {
+  if (typeof err !== 'object' || err === null) return false;
+  const code = (err as { code?: string }).code;
+  // Linux returns ENOTEMPTY; some macOS / BSD setups surface EEXIST for
+  // a non-empty directory on `rmdir`.
+  return code === 'ENOTEMPTY' || code === 'EEXIST';
 }
 
 /**
