@@ -2,8 +2,33 @@ import {
   parseSpfRecord,
   parseDmarcRecord,
   runEmailAuthCheck,
+  hostMatchesSuffix,
 } from './email-check.js';
 import type { DnsPort, CaaRecord } from './types.js';
+
+describe('hostMatchesSuffix', () => {
+  it('matches exact host', () => {
+    expect(hostMatchesSuffix('sendgrid.net', 'sendgrid.net')).toBe(true);
+  });
+
+  it('matches proper subdomain', () => {
+    expect(hostMatchesSuffix('mx.sendgrid.net', 'sendgrid.net')).toBe(true);
+    expect(hostMatchesSuffix('a.b.c.sendgrid.net', 'sendgrid.net')).toBe(true);
+  });
+
+  it('rejects look-alike domains (no label boundary)', () => {
+    expect(hostMatchesSuffix('evilsendgrid.net', 'sendgrid.net')).toBe(false);
+    expect(hostMatchesSuffix('notgoogle.com', 'google.com')).toBe(false);
+  });
+
+  it('is case-insensitive and tolerates trailing dot', () => {
+    expect(hostMatchesSuffix('MX.SendGrid.NET.', 'sendgrid.net')).toBe(true);
+  });
+
+  it('rejects empty suffix', () => {
+    expect(hostMatchesSuffix('anything.com', '')).toBe(false);
+  });
+});
 
 describe('parseSpfRecord', () => {
   it('parses a typical Google Workspace SPF record', () => {
@@ -150,6 +175,21 @@ describe('runEmailAuthCheck', () => {
     expect(res.status).toBe('WARN');
     expect(res.data?.spf?.present).toBe(false);
     expect(res.data?.dmarc?.present).toBe(true);
+  });
+
+  it('does not classify look-alike MX hosts as known providers', async () => {
+    const dns = makeDns({
+      'example.com': [['v=spf1 -all']],
+      '_dmarc.example.com': [['v=DMARC1; p=reject']],
+    });
+    const res = await runEmailAuthCheck(dns, {
+      hostname: 'example.com',
+      mxHosts: ['mx.evilsendgrid.net'],
+    });
+    expect(res.data?.dkim?.provider).toBe('unknown');
+    // Should not probe sendgrid selectors when MX only looks like sendgrid.
+    expect(res.data?.dkim?.selectorsChecked).not.toContain('s1');
+    expect(res.data?.dkim?.selectorsChecked).not.toContain('s2');
   });
 
   it('honours user-supplied selector override', async () => {

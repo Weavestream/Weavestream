@@ -218,30 +218,43 @@ interface ProviderProfile {
   selectors: string[];
 }
 
+// Host suffix match with a domain-label boundary. Plain `endsWith` would
+// incorrectly classify `evilsendgrid.net` as SendGrid because the literal
+// characters match — see CodeQL "incomplete URL substring sanitization".
+// We require either an exact host match or a `.<suffix>` boundary.
+export function hostMatchesSuffix(host: string, suffix: string): boolean {
+  const h = host.toLowerCase().replace(/\.$/, '');
+  const s = suffix.toLowerCase().replace(/^\.+/, '').replace(/\.$/, '');
+  if (!s) return false;
+  return h === s || h.endsWith('.' + s);
+}
+
 const PROVIDER_PROFILES: ProviderProfile[] = [
   {
     provider: 'google',
     matches: (mx) =>
-      mx.endsWith('google.com') ||
-      mx.endsWith('googlemail.com') ||
-      mx.endsWith('aspmx.l.google.com'),
+      hostMatchesSuffix(mx, 'google.com') ||
+      hostMatchesSuffix(mx, 'googlemail.com') ||
+      hostMatchesSuffix(mx, 'aspmx.l.google.com'),
     selectors: ['google', '20161025'],
   },
   {
     provider: 'microsoft',
     matches: (mx) =>
-      mx.endsWith('outlook.com') ||
-      mx.endsWith('protection.outlook.com'),
+      hostMatchesSuffix(mx, 'outlook.com') ||
+      hostMatchesSuffix(mx, 'protection.outlook.com'),
     selectors: ['selector1', 'selector2'],
   },
   {
     provider: 'mailgun',
-    matches: (mx) => mx.endsWith('mailgun.org') || mx.endsWith('mailgun.com'),
+    matches: (mx) =>
+      hostMatchesSuffix(mx, 'mailgun.org') ||
+      hostMatchesSuffix(mx, 'mailgun.com'),
     selectors: ['k1', 'mailo'],
   },
   {
     provider: 'sendgrid',
-    matches: (mx) => mx.endsWith('sendgrid.net'),
+    matches: (mx) => hostMatchesSuffix(mx, 'sendgrid.net'),
     selectors: ['s1', 's2'],
   },
 ];
