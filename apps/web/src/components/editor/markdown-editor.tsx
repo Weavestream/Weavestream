@@ -12,12 +12,21 @@ import { indentWithTab } from '@codemirror/commands';
 import { HighlightStyle, syntaxHighlighting } from '@codemirror/language';
 import { tags as t } from '@lezer/highlight';
 import { Group, Panel, Separator, useDefaultLayout } from 'react-resizable-panels';
+import { Icon } from '../ui';
+import { ImagePickerDialog } from './image-picker-dialog';
 import './editor.css';
 
 export type MarkdownEditorProps = {
   value: string;
   onChange: (next: string) => void;
   autoFocus?: boolean;
+  /**
+   * Required when image insertion is enabled — the picker uploads via
+   * the company-scoped `/companies/:id/uploads/*` endpoints. Pass the
+   * same value you give the surrounding `RichTextEditor` so switching
+   * editor modes keeps the same upload tenant.
+   */
+  companyId: string;
   /**
    * Mirror of `RichTextEditor.toolbarPortalTarget`: when set, the
    * Edit / Split / Preview controls are rendered into the given element
@@ -59,11 +68,35 @@ export function MarkdownEditor({
   value,
   onChange,
   autoFocus = false,
+  companyId,
   toolbarPortalTarget,
 }: MarkdownEditorProps) {
   const [view, setView] = useState<ViewMode>('edit');
   const previewScrollRef = useRef<HTMLDivElement | null>(null);
   const [editorScrollEl, setEditorScrollEl] = useState<HTMLElement | null>(null);
+  const editorViewRef = useRef<EditorView | null>(null);
+  const [pickerOpen, setPickerOpen] = useState(false);
+
+  const insertAtCursor = useCallback((insert: string) => {
+    const v = editorViewRef.current;
+    if (!v) return;
+    const { from, to } = v.state.selection.main;
+    const needsLeadingNewline =
+      from > 0 && v.state.doc.sliceString(from - 1, from) !== '\n';
+    const needsTrailingNewline =
+      to < v.state.doc.length &&
+      v.state.doc.sliceString(to, to + 1) !== '\n';
+    const finalInsert =
+      (needsLeadingNewline ? '\n' : '') +
+      insert +
+      (needsTrailingNewline ? '\n' : '');
+    v.dispatch({
+      changes: { from, to, insert: finalInsert },
+      selection: { anchor: from + finalInsert.length },
+      scrollIntoView: true,
+    });
+    v.focus();
+  }, []);
 
   const showEditor = view === 'edit' || view === 'split';
   const showPreview = view === 'preview' || view === 'split';
@@ -183,7 +216,10 @@ export function MarkdownEditor({
         placeholder="Write Markdown…"
         aria-label="Markdown source"
         height="100%"
-        onCreateEditor={(nextView) => setEditorScrollEl(nextView.scrollDOM)}
+        onCreateEditor={(nextView) => {
+          editorViewRef.current = nextView;
+          setEditorScrollEl(nextView.scrollDOM);
+        }}
       />
     </div>
   );
@@ -224,6 +260,18 @@ export function MarkdownEditor({
           Preview
         </ToolbarButton>
       </div>
+      <div className="sd-editor-toolbar-group">
+        <ToolbarButton
+          onClick={() => setPickerOpen(true)}
+          title="Insert image"
+          aria-label="Insert image"
+        >
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+            <Icon.image size={12} />
+            <span>Image</span>
+          </span>
+        </ToolbarButton>
+      </div>
       <div style={{ flex: 1 }} />
       <span
         style={{
@@ -243,6 +291,17 @@ export function MarkdownEditor({
   return (
     <>
       {toolbarPortalTarget ? createPortal(toolbar, toolbarPortalTarget) : toolbar}
+
+      <ImagePickerDialog
+        open={pickerOpen}
+        onClose={() => setPickerOpen(false)}
+        companyId={companyId}
+        currentBody={value}
+        onPick={(md) => {
+          insertAtCursor(md);
+          setPickerOpen(false);
+        }}
+      />
 
       <div className="sd-md-shell" style={shellStyle}>
         {showEditor && showPreview ? (
@@ -401,10 +460,14 @@ function ToolbarButton({
   active,
   onClick,
   children,
+  title,
+  'aria-label': ariaLabel,
 }: {
   active?: boolean;
   onClick: () => void;
   children: React.ReactNode;
+  title?: string;
+  'aria-label'?: string;
 }) {
   return (
     <button
@@ -412,6 +475,8 @@ function ToolbarButton({
       className="sd-editor-btn"
       data-active={active ? 'true' : 'false'}
       onClick={onClick}
+      title={title}
+      aria-label={ariaLabel}
     >
       {children}
     </button>

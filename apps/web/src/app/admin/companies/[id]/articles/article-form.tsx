@@ -584,6 +584,7 @@ export function ArticleForm({
                 value={markdownSource}
                 onChange={onMarkdownChange}
                 autoFocus={mode === 'create'}
+                companyId={companyId}
                 toolbarPortalTarget={scrollEl}
               />
             </div>
