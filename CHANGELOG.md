@@ -6,6 +6,18 @@ this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.8.3] - 2026-05-13
+
+### Fixed
+
+- **Markdown image picker scrolling.** The image picker dialog in the Markdown editor now allows scrolling when content exceeds screen height.
+
+### Changed
+
+- **AI prompt clarity.** Tweaked LLM prompts with clearer instructions for better context handling.
+- **Mobile credential dialog layout.** The new credential dialog was exceeding screen height on mobile; adjusted to fit within viewport.
+- **Dashboard mobile layout.** Moved dashboard's "at a glance" items into columns for better mobile viewing.
+
 ## [1.8.1] - 2026-05-13
 
 ### Added
@@ -720,7 +732,8 @@ Initial public release.
   database-per-tenant.
 - English UI only.
 
-[Unreleased]: https://github.com/Weavestream/Weavestream/compare/v1.8.1...HEAD
+[Unreleased]: https://github.com/Weavestream/Weavestream/compare/v1.8.2...HEAD
+[1.8.2]: https://github.com/Weavestream/Weavestream/releases/tag/v1.8.2
 [1.8.1]: https://github.com/Weavestream/Weavestream/releases/tag/v1.8.1
 [1.6.4]: https://github.com/Weavestream/Weavestream/releases/tag/v1.6.4
 [1.6.3]: https://github.com/Weavestream/Weavestream/releases/tag/v1.6.3
