@@ -69,8 +69,11 @@ export default async function AdminDashboard() {
           <div
             style={{
               display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
-              gap: 24,
+              // On mobile, 2 columns (min 120px) so the panel doesn't stack
+              // vertically and eat half the viewport. Wider screens auto-fit
+              // more columns up to the natural 1fr cap.
+              gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))',
+              gap: 16,
             }}
           >
             <Stat label={term.other} value={activeCompanies} />

@@ -50,6 +50,12 @@ export function Dialog({
   const overlay: CSSProperties = {
     position: 'fixed',
     inset: 0,
+    // `inset: 0` resolves against the layout viewport on iOS Safari,
+    // so the overlay extends behind the URL/toolbar chrome. Pinning
+    // the height to `dvh` keeps centering within the *visible*
+    // viewport — otherwise a tall dialog's footer ends up below the
+    // mobile address bar.
+    height: '100dvh',
     zIndex: 60,
     background: 'rgba(0,0,0,0.55)',
     display: 'grid',
@@ -64,7 +70,11 @@ export function Dialog({
     // independently of the sticky header/footer. Without this, dialogs
     // with growing content (e.g. a tags field accumulating chips, a
     // long notes block) push the action buttons below the fold.
-    maxHeight: 'calc(100vh - 32px)',
+    // Uses `dvh` (dynamic viewport height) so mobile browsers cap
+    // against the *visible* viewport — `100vh` on iOS Safari /
+    // Android Chrome includes the area under the URL/toolbar overlay,
+    // which pushes the footer off-screen on tall dialogs.
+    maxHeight: 'calc(100dvh - 32px)',
     display: 'flex',
     flexDirection: 'column',
     background: 'var(--panel)',
