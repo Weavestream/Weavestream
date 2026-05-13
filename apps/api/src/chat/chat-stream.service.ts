@@ -653,6 +653,16 @@ function buildSystemPrompt(
       `The user is currently viewing article id ${context.currentArticleId}. When they say "this article" or "the page", they mean that one.`,
     );
   }
+  if (context.currentAssetId) {
+    lines.push(
+      `The user is currently viewing asset id ${context.currentAssetId}. When they say "this asset" or "the page", they mean that one — even if other assets are attached below.`,
+    );
+  }
+  if (context.currentDomainId) {
+    lines.push(
+      `The user is currently viewing domain id ${context.currentDomainId}. When they say "this domain" or "the page", they mean that one — even if other domains are attached below.`,
+    );
+  }
   if (context.articles && context.articles.length > 0) {
     lines.push('');
     lines.push('--- Attached articles (read-only context) ---');

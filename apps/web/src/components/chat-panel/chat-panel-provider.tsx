@@ -1373,6 +1373,12 @@ async function resolveChatRequestContext(
   if (pageCtx?.kind === 'article' && pageCtx.articleId) {
     out.currentArticleId = pageCtx.articleId;
   }
+  if (pageCtx?.kind === 'asset') {
+    out.currentAssetId = pageCtx.assetId;
+  }
+  if (pageCtx?.kind === 'domain') {
+    out.currentDomainId = pageCtx.domainId;
+  }
   if (articles.length > 0) out.articles = articles;
   if (dedupedAssets.length > 0) out.assets = dedupedAssets;
   if (dedupedDomains.length > 0) out.domains = dedupedDomains;

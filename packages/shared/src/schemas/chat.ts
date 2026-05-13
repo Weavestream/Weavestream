@@ -137,6 +137,19 @@ export type ChatContextDomain = z.infer<typeof chatContextDomainSchema>;
 export const chatRequestContextSchema = z.object({
   companyId: z.string().uuid().optional(),
   currentArticleId: z.string().uuid().optional(),
+  /**
+   * The asset the user is currently viewing, when applicable. Used by
+   * the system prompt to resolve deictic references like "this asset"
+   * even when other assets are @-mentioned in the same turn.
+   */
+  currentAssetId: z.string().uuid().optional(),
+  /**
+   * The domain the user is currently viewing, when applicable. Same
+   * role as `currentAssetId` — purely for deictic disambiguation;
+   * domains are read-only context and never travel as tool-call
+   * targets.
+   */
+  currentDomainId: z.string().uuid().optional(),
   articles: z.array(chatContextArticleSchema).max(10).optional(),
   assets: z.array(chatContextAssetSchema).max(10).optional(),
   domains: z.array(chatContextDomainSchema).max(10).optional(),
