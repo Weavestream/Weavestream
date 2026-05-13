@@ -115,3 +115,42 @@ export function useChatAssetPageContext(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [keyParts, registerPageContext]);
 }
+
+/**
+ * Register the calling domain detail page as the active chat panel
+ * "page context". Same mount/unmount semantics as the asset hook: a
+ * fresh `getMarkdown` closure is rebound each render and sampled at
+ * send time, so the latest WHOIS/DNS/TLS check (after a route refresh
+ * post "Check now", say) is what the LLM sees.
+ *
+ * Domains are purely read-only chat context — no Apply path, no
+ * dirty tracking — so the surface stays small.
+ */
+export function useChatDomainPageContext(
+  snapshot: {
+    companyId: string;
+    domainId: string;
+    hostname: string;
+    getMarkdown: () => string;
+  } | null,
+): void {
+  const { registerPageContext } = useChatPanel();
+  const getMarkdownRef = useRef<() => string>(() => '');
+  if (snapshot) getMarkdownRef.current = snapshot.getMarkdown;
+
+  const keyParts = snapshot
+    ? `${snapshot.companyId}|${snapshot.domainId}|${snapshot.hostname}`
+    : null;
+  useEffect(() => {
+    if (!snapshot) return;
+    const cleanup = registerPageContext({
+      kind: 'domain',
+      companyId: snapshot.companyId,
+      domainId: snapshot.domainId,
+      title: snapshot.hostname,
+      getMarkdown: () => getMarkdownRef.current(),
+    });
+    return cleanup;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [keyParts, registerPageContext]);
+}

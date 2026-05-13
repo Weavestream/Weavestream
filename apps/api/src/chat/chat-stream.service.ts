@@ -684,6 +684,23 @@ function buildSystemPrompt(
     }
     lines.push('--- End attached assets ---');
   }
+  if (context.domains && context.domains.length > 0) {
+    // Domains are inlined verbatim — the API already filters out
+    // non-`visibleToClients` rows for CLIENT_USER, so the client-side
+    // fetch that built this block already mirrors the requester's
+    // permissions. No tool calls target domains; the block is purely
+    // grounding for WHOIS/DNS/TLS/email-auth/HTTP questions.
+    lines.push('');
+    lines.push('--- Attached domains (read-only context) ---');
+    for (const d of context.domains) {
+      lines.push('');
+      lines.push(`### Domain "${d.hostname}" (id ${d.id})`);
+      lines.push('```markdown');
+      lines.push(d.markdown);
+      lines.push('```');
+    }
+    lines.push('--- End attached domains ---');
+  }
   lines.push('');
   lines.push('Tools available:');
   lines.push(
@@ -693,7 +710,7 @@ function buildSystemPrompt(
     '- create_article(title, markdown, folder_id?, visible_to_clients?, summary?): propose a brand-new article in the active company.',
   );
   lines.push(
-    'You cannot create or modify assets — attached assets are read-only context. If the user asks to change an asset, describe the proposed change in prose rather than emitting a tool call.',
+    'You cannot create or modify assets or domains — attached assets and domains are read-only context. If the user asks to change one, describe the proposed change in prose rather than emitting a tool call.',
   );
   lines.push('');
   lines.push(

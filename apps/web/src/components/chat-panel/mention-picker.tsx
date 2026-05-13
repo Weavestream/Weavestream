@@ -9,21 +9,25 @@ import {
   type RefObject,
 } from 'react';
 import { apiFetch } from '../../lib/api';
-import type { ArticlePage, AssetPage } from '../../lib/server-api';
+import type {
+  ArticlePage,
+  AssetPage,
+  MonitoredDomain,
+} from '../../lib/server-api';
 import { Icon } from '../ui';
 
 /**
- * Popover that lets the user pick an article or asset to attach as
- * @-mention context. Anchored to the composer textarea; positions
- * itself just above the textarea so it doesn't get clipped by the
- * chat panel's narrow width.
+ * Popover that lets the user pick an article, asset, or domain to
+ * attach as @-mention context. Anchored to the composer textarea;
+ * positions itself just above the textarea so it doesn't get clipped
+ * by the chat panel's narrow width.
  *
  * Search is debounced (180 ms) and scoped to the active company.
- * Articles and assets are fetched in parallel (`limit=5` each), so
- * the merged popover stays under ~10 items.
+ * Articles, assets, and domains are fetched in parallel (`limit=5`
+ * each), so the merged popover stays under ~15 items.
  */
 export type MentionCandidate = {
-  kind: 'article' | 'asset';
+  kind: 'article' | 'asset' | 'domain';
   id: string;
   title: string;
   /** Dim sub-label shown to the right of the title (e.g. layout name). */
@@ -52,6 +56,7 @@ export function MentionPicker({
   const popRef = useRef<HTMLDivElement>(null);
   const [articles, setArticles] = useState<MentionCandidate[]>([]);
   const [assets, setAssets] = useState<MentionCandidate[]>([]);
+  const [domains, setDomains] = useState<MentionCandidate[]>([]);
   const [loading, setLoading] = useState(false);
   const [highlight, setHighlight] = useState(0);
   const [pos, setPos] = useState<{ left: number; top: number; width: number } | null>(
@@ -89,10 +94,10 @@ export function MentionPicker({
     return () => window.removeEventListener('mousedown', onClick);
   }, [anchorRef, onClose]);
 
-  // Debounced parallel search across articles + assets. We use
+  // Debounced parallel search across articles + assets + domains.
   // `Promise.allSettled` so a transient failure in one endpoint
-  // doesn't blank out the other — e.g. a CLIENT_USER who lacks
-  // `asset.read` permission still sees article matches.
+  // doesn't blank out the others — e.g. a CLIENT_USER who lacks
+  // `asset.read` permission still sees article and domain matches.
   useEffect(() => {
     let cancelled = false;
     const id = setTimeout(async () => {
@@ -100,9 +105,12 @@ export function MentionPicker({
       const params = new URLSearchParams({ limit: '5' });
       if (query) params.set('q', query);
       const qs = params.toString();
-      const [articleRes, assetRes] = await Promise.allSettled([
+      const [articleRes, assetRes, domainRes] = await Promise.allSettled([
         apiFetch<ArticlePage>(`/companies/${companyId}/articles?${qs}`),
         apiFetch<AssetPage>(`/companies/${companyId}/assets?${qs}`),
+        apiFetch<{ items: MonitoredDomain[]; nextCursor: string | null }>(
+          `/companies/${companyId}/domains?${qs}`,
+        ),
       ]);
       if (cancelled) return;
       setLoading(false);
@@ -127,8 +135,23 @@ export function MentionPicker({
                 subtitle: a.layoutName,
               }))
           : [];
+      const nextDomains: MentionCandidate[] =
+        domainRes.status === 'fulfilled' && domainRes.value.data
+          ? domainRes.value.data.items
+              .filter((d) => !excludeIds.has(d.id))
+              .map((d) => ({
+                kind: 'domain' as const,
+                id: d.id,
+                title: d.hostname,
+                subtitle:
+                  d.latestScore !== null
+                    ? `${d.latestStatus} · ${d.latestScore}%`
+                    : d.latestStatus,
+              }))
+          : [];
       setArticles(nextArticles);
       setAssets(nextAssets);
+      setDomains(nextDomains);
       setHighlight(0);
     }, 180);
     return () => {
@@ -155,8 +178,14 @@ export function MentionPicker({
         out.push({ type: 'item', candidate: a, key: `s-${a.id}` });
       }
     }
+    if (domains.length > 0) {
+      out.push({ type: 'header', label: 'Domains', key: 'h-domains' });
+      for (const d of domains) {
+        out.push({ type: 'item', candidate: d, key: `d-${d.id}` });
+      }
+    }
     return out;
-  }, [articles, assets]);
+  }, [articles, assets, domains]);
 
   // Indexes of selectable rows (items only) — drives keyboard nav.
   const itemIndexes = useMemo(
@@ -231,7 +260,11 @@ export function MentionPicker({
     <div ref={popRef} role="listbox" aria-label="Mention suggestions" style={wrap}>
       {loading && isEmpty && <Empty label="Searching…" />}
       {!loading && isEmpty && (
-        <Empty label={query ? 'No matches' : 'Type to search articles & assets'} />
+        <Empty
+          label={
+            query ? 'No matches' : 'Type to search articles, assets & domains'
+          }
+        />
       )}
       {rows.map((row, i) => {
         if (row.type === 'header') {
@@ -281,7 +314,12 @@ function Candidate({
   onMouseEnter: () => void;
   onClick: () => void;
 }) {
-  const IconCmp = item.kind === 'asset' ? Icon.box : Icon.doc;
+  const IconCmp =
+    item.kind === 'asset'
+      ? Icon.box
+      : item.kind === 'domain'
+        ? Icon.globe
+        : Icon.doc;
   return (
     <button
       type="button"

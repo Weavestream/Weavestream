@@ -109,19 +109,37 @@ export const chatContextAssetSchema = z.object({
 export type ChatContextAsset = z.infer<typeof chatContextAssetSchema>;
 
 /**
+ * Per-domain markdown snapshot the client attaches to a turn. Same
+ * size envelope as `chatContextArticleSchema`. Domains are strictly
+ * read-only context — the server never proposes domain tool calls,
+ * and the chat tool set does not include `update_domain` /
+ * `create_domain`. `hostname` is included so the system prompt can
+ * disambiguate domains by their canonical DNS name without re-
+ * querying.
+ */
+export const chatContextDomainSchema = z.object({
+  id: z.string().uuid(),
+  hostname: z.string().max(253),
+  markdown: z.string().max(60_000),
+});
+export type ChatContextDomain = z.infer<typeof chatContextDomainSchema>;
+
+/**
  * Request-scoped grounding for a single chat turn. All fields are
  * optional — a freeform tab with no @-mentions and no page context
  * sends nothing. The server uses this to (1) build a system prompt
- * inlining the attached articles + assets and (2) scope agentic tool
- * calls (`create_article` / `update_article`) to the current company
- * so the LLM cannot accidentally mutate a different tenant. Assets
- * are read-only context and never travel as tool-call targets.
+ * inlining the attached articles + assets + domains and (2) scope
+ * agentic tool calls (`create_article` / `update_article`) to the
+ * current company so the LLM cannot accidentally mutate a different
+ * tenant. Assets and domains are read-only context and never travel
+ * as tool-call targets.
  */
 export const chatRequestContextSchema = z.object({
   companyId: z.string().uuid().optional(),
   currentArticleId: z.string().uuid().optional(),
   articles: z.array(chatContextArticleSchema).max(10).optional(),
   assets: z.array(chatContextAssetSchema).max(10).optional(),
+  domains: z.array(chatContextDomainSchema).max(10).optional(),
 });
 export type ChatRequestContext = z.infer<typeof chatRequestContextSchema>;
 

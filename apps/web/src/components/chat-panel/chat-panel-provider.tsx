@@ -25,7 +25,13 @@ import { apiFetch } from '../../lib/api';
 import { streamChatMessage, type ChatStreamMeta } from '../../lib/chat-stream';
 import { tiptapDocToMarkdown } from '../../lib/article-format';
 import { assetToMarkdown } from '../../lib/asset-format';
-import type { ArticleDetail, AssetSummary } from '../../lib/server-api';
+import { domainToMarkdown } from '../../lib/domain-format';
+import type {
+  ArticleDetail,
+  AssetSummary,
+  DomainCheck,
+  MonitoredDomain,
+} from '../../lib/server-api';
 
 export type ChatRole = 'user' | 'assistant';
 
@@ -50,11 +56,12 @@ export type ChatTabKind = 'freeform' | 'context';
  * separately on `pageContext` so it can be marked as the auto-
  * attached one and cannot be removed by the user — only by leaving
  * the page. `kind` discriminates between article references (which
- * may be edited via `update_article` tool calls) and asset
- * references (strictly read-only context).
+ * may be edited via `update_article` tool calls), asset references,
+ * and domain references — both assets and domains are strictly
+ * read-only context.
  */
 export type ChatTabContextMention = {
-  kind: 'article' | 'asset';
+  kind: 'article' | 'asset' | 'domain';
   id: string;
   title: string;
 };
@@ -130,9 +137,25 @@ export type ChatAssetPageContext = {
   getMarkdown: () => string;
 };
 
+export type ChatDomainPageContext = {
+  kind: 'domain';
+  companyId: string;
+  domainId: string;
+  /** Hostname (e.g. "example.com"). */
+  title: string;
+  /**
+   * Thunk returning the domain (+ latest WHOIS/DNS/TLS check)
+   * projected to markdown via `domainToMarkdown`. Captured by the
+   * admin domain detail page from the row + latest check it already
+   * fetched server-side.
+   */
+  getMarkdown: () => string;
+};
+
 export type ChatPageContextSnapshot =
   | ChatArticlePageContext
-  | ChatAssetPageContext;
+  | ChatAssetPageContext
+  | ChatDomainPageContext;
 
 type State = {
   isOpen: boolean;
@@ -305,8 +328,13 @@ function readPersistedTabs(): PersistedTabsPayload | null {
             .map((m) => ({
               // Pre-asset persistence entries don't carry `kind` — read as
               // article so existing tab strips keep working after the
-              // migration.
-              kind: m.kind === 'asset' ? 'asset' : 'article',
+              // migration. Domain is a later addition handled the same way.
+              kind:
+                m.kind === 'asset'
+                  ? 'asset'
+                  : m.kind === 'domain'
+                    ? 'domain'
+                    : 'article',
               id: String(m.id),
               title: String(m.title),
             }))
@@ -431,6 +459,14 @@ function reducer(state: State, action: Action): State {
             action.mention.kind === 'asset' &&
             pc.kind === 'asset' &&
             pc.assetId === action.mention.id
+          ) {
+            return t;
+          }
+          if (
+            pc &&
+            action.mention.kind === 'domain' &&
+            pc.kind === 'domain' &&
+            pc.domainId === action.mention.id
           ) {
             return t;
           }
@@ -1238,6 +1274,7 @@ async function resolveChatRequestContext(
 ): Promise<ChatRequestContext | undefined> {
   const articles: NonNullable<ChatRequestContext['articles']> = [];
   const assets: NonNullable<ChatRequestContext['assets']> = [];
+  const domains: NonNullable<ChatRequestContext['domains']> = [];
 
   // The picker is enabled wherever we have a companyId — either the
   // article page's richer snapshot or the company shell's broadcast.
@@ -1276,14 +1313,28 @@ async function resolveChatRequestContext(
       });
     }
   }
+  // Auto-attach the current domain (when viewing a domain detail page)
+  // for the same reason as assets — read-only context, never a tool-
+  // call target.
+  if (pageCtx && pageCtx.kind === 'domain') {
+    const markdown = safeGetMarkdown(pageCtx);
+    if (markdown) {
+      domains.push({
+        id: pageCtx.domainId,
+        hostname: pageCtx.title,
+        markdown,
+      });
+    }
+  }
   if (companyId) {
-    // Resolve mentions in parallel — articles and assets each hit
-    // their own endpoint, so a slow article fetch shouldn't gate the
-    // asset fetches. Order is preserved per kind by zipping the
+    // Resolve mentions in parallel — articles, assets, and domains
+    // each hit their own endpoint, so a slow article fetch shouldn't
+    // gate the others. Order is preserved per kind by zipping the
     // results back against the original mention list.
     const articleMentions = tab.mentions.filter((m) => m.kind === 'article');
     const assetMentions = tab.mentions.filter((m) => m.kind === 'asset');
-    const [articleResults, assetResults] = await Promise.all([
+    const domainMentions = tab.mentions.filter((m) => m.kind === 'domain');
+    const [articleResults, assetResults, domainResults] = await Promise.all([
       Promise.all(
         articleMentions.map((m) =>
           fetchArticleAsMarkdown(companyId, m.id),
@@ -1292,18 +1343,28 @@ async function resolveChatRequestContext(
       Promise.all(
         assetMentions.map((m) => fetchAssetAsMarkdown(companyId, m.id)),
       ),
+      Promise.all(
+        domainMentions.map((m) => fetchDomainAsMarkdown(companyId, m.id)),
+      ),
     ]);
     for (const a of articleResults) if (a) articles.push(a);
     for (const a of assetResults) if (a) assets.push(a);
+    for (const d of domainResults) if (d) domains.push(d);
   }
 
-  // Dedupe: if the user also @-mentioned the auto-attached asset
-  // somehow (e.g. via persisted token), keep only the first instance
-  // — the auto-attached entry was pushed first so it wins.
+  // Dedupe: if the user also @-mentioned the auto-attached asset /
+  // domain somehow (e.g. via persisted token), keep only the first
+  // instance — the auto-attached entry was pushed first so it wins.
   const seenAssetIds = new Set<string>();
   const dedupedAssets = assets.filter((a) => {
     if (seenAssetIds.has(a.id)) return false;
     seenAssetIds.add(a.id);
+    return true;
+  });
+  const seenDomainIds = new Set<string>();
+  const dedupedDomains = domains.filter((d) => {
+    if (seenDomainIds.has(d.id)) return false;
+    seenDomainIds.add(d.id);
     return true;
   });
 
@@ -1314,6 +1375,7 @@ async function resolveChatRequestContext(
   }
   if (articles.length > 0) out.articles = articles;
   if (dedupedAssets.length > 0) out.assets = dedupedAssets;
+  if (dedupedDomains.length > 0) out.domains = dedupedDomains;
   if (Object.keys(out).length === 0) return undefined;
   return out;
 }
@@ -1377,4 +1439,33 @@ async function fetchAssetAsMarkdown(
   const { markdown, layoutName } = assetToMarkdown(asset);
   if (!markdown.trim()) return null;
   return { id: asset.id, name: asset.name, layoutName, markdown };
+}
+
+/**
+ * Fetch a referenced domain (+ its single most recent check) and
+ * project both to markdown for the chat system prompt. The
+ * `DomainsService.getById` / `listChecks` endpoints already enforce
+ * `domain.read` and filter non-`visibleToClients` rows for client
+ * users, so the response naturally mirrors the requester's
+ * permissions. Returns `null` on any fetch failure / empty payload
+ * so a stale or out-of-scope reference doesn't block the send.
+ */
+async function fetchDomainAsMarkdown(
+  companyId: string,
+  domainId: string,
+): Promise<{ id: string; hostname: string; markdown: string } | null> {
+  const [domainRes, checksRes] = await Promise.all([
+    apiFetch<MonitoredDomain>(`/companies/${companyId}/domains/${domainId}`),
+    apiFetch<DomainCheck[]>(
+      `/companies/${companyId}/domains/${domainId}/checks?limit=1`,
+    ),
+  ]);
+  if (!domainRes.ok || !domainRes.data) return null;
+  const latest =
+    checksRes.ok && Array.isArray(checksRes.data) && checksRes.data.length > 0
+      ? checksRes.data[0] ?? null
+      : null;
+  const { markdown, hostname } = domainToMarkdown(domainRes.data, latest);
+  if (!markdown.trim()) return null;
+  return { id: domainRes.data.id, hostname, markdown };
 }

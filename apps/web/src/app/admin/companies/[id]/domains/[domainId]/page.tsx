@@ -22,6 +22,7 @@ import { ScoreCard } from './score-card';
 import { EmailAuthCard } from './email-auth-card';
 import { SecurityCard } from './security-card';
 import { StatusPill } from '../domains-browser';
+import { DomainChatContext } from '../../../../../../components/chat-panel/domain-chat-context';
 
 /**
  * Phase 8 — Admin domain detail. Shows the denormalized latest state
@@ -52,6 +53,7 @@ export default async function DomainDetailPage({
 
   return (
     <>
+      <DomainChatContext domain={domain} latestCheck={latestCheck} />
       <PageHeader
         crumbs={companyCrumbs(
           term,

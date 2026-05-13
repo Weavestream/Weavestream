@@ -24,13 +24,30 @@ export function ChatContextStrip(_props: { tab: ChatTab }) {
   const pageContext = state.pageContext;
   if (!pageContext) return null;
   const isAsset = pageContext.kind === 'asset';
-  const icon = isAsset ? <Icon.box size={11} /> : <Icon.doc size={11} />;
-  const label =
-    pageContext.title || (isAsset ? 'Current asset' : 'Current page');
-  const subtitle = isAsset ? pageContext.layoutName : null;
+  const isDomain = pageContext.kind === 'domain';
+  const icon = isAsset ? (
+    <Icon.box size={11} />
+  ) : isDomain ? (
+    <Icon.globe size={11} />
+  ) : (
+    <Icon.doc size={11} />
+  );
+  const fallbackLabel = isAsset
+    ? 'Current asset'
+    : isDomain
+      ? 'Current domain'
+      : 'Current page';
+  const label = pageContext.title || fallbackLabel;
+  const subtitle = isAsset
+    ? pageContext.layoutName
+    : isDomain
+      ? 'domain'
+      : null;
   const tooltip = isAsset
     ? `Auto-attached because you're viewing this asset (${pageContext.layoutName})`
-    : "Auto-attached because you're viewing this page";
+    : isDomain
+      ? "Auto-attached because you're viewing this domain"
+      : "Auto-attached because you're viewing this page";
   return (
     <div
       style={{
