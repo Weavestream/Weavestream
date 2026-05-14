@@ -93,13 +93,64 @@ export const ipv4HostSchema = z
   })
   .transform((v) => v.trim());
 
-export const createSubnetSchema = z.object({
-  name: z.string().min(1).max(200),
-  cidr: cidrV4Schema,
-  vlanId: z.number().int().min(1).max(4094).nullish(),
-  gateway: ipv4HostSchema.nullish(),
-  description: z.string().max(2000).nullish(),
-});
+function validateDhcpRange(
+  o: {
+    cidr?: string | null;
+    dhcpRangeStart?: string | null;
+    dhcpRangeEnd?: string | null;
+  },
+  ctx: z.RefinementCtx,
+): void {
+  const start = o.dhcpRangeStart ?? null;
+  const end = o.dhcpRangeEnd ?? null;
+  if (start == null && end == null) return;
+  if (start == null || end == null) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: [start == null ? 'dhcpRangeStart' : 'dhcpRangeEnd'],
+      message: 'DHCP range start and end must both be set',
+    });
+    return;
+  }
+  const startOctets = parseIpv4Octets(start);
+  const endOctets = parseIpv4Octets(end);
+  if (!startOctets || !endOctets) return; // ipv4HostSchema will have already flagged it
+  if (ipToUint32(startOctets) > ipToUint32(endOctets)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['dhcpRangeEnd'],
+      message: 'DHCP range end must be >= start',
+    });
+  }
+  if (o.cidr) {
+    if (!ipInCidr(start, o.cidr)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['dhcpRangeStart'],
+        message: `Outside subnet ${o.cidr}`,
+      });
+    }
+    if (!ipInCidr(end, o.cidr)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['dhcpRangeEnd'],
+        message: `Outside subnet ${o.cidr}`,
+      });
+    }
+  }
+}
+
+export const createSubnetSchema = z
+  .object({
+    name: z.string().min(1).max(200),
+    cidr: cidrV4Schema,
+    vlanId: z.number().int().min(1).max(4094).nullish(),
+    gateway: ipv4HostSchema.nullish(),
+    dhcpRangeStart: ipv4HostSchema.nullish(),
+    dhcpRangeEnd: ipv4HostSchema.nullish(),
+    description: z.string().max(2000).nullish(),
+  })
+  .superRefine(validateDhcpRange);
 export type CreateSubnetInput = z.input<typeof createSubnetSchema>;
 
 export const updateSubnetSchema = z
@@ -108,11 +159,14 @@ export const updateSubnetSchema = z
     cidr: cidrV4Schema.optional(),
     vlanId: z.number().int().min(1).max(4094).nullish(),
     gateway: ipv4HostSchema.nullish(),
+    dhcpRangeStart: ipv4HostSchema.nullish(),
+    dhcpRangeEnd: ipv4HostSchema.nullish(),
     description: z.string().max(2000).nullish(),
   })
   .refine((o) => Object.keys(o).length > 0, {
     message: 'At least one field must be provided',
-  });
+  })
+  .superRefine(validateDhcpRange);
 export type UpdateSubnetInput = z.input<typeof updateSubnetSchema>;
 
 export const createIpReservationSchema = z.object({

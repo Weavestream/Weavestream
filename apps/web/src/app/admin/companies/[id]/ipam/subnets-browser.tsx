@@ -41,6 +41,8 @@ export function SubnetsBrowser({
       cidr: form.cidr.trim(),
       vlanId: form.vlanId ? Number(form.vlanId) : null,
       gateway: form.gateway?.trim() || null,
+      dhcpRangeStart: form.dhcpRangeStart?.trim() || null,
+      dhcpRangeEnd: form.dhcpRangeEnd?.trim() || null,
       description: form.description?.trim() || null,
     };
     const res =
@@ -366,6 +368,8 @@ type SubnetForm = {
   cidr: string;
   vlanId: string;
   gateway: string;
+  dhcpRangeStart: string;
+  dhcpRangeEnd: string;
   description: string;
 };
 
@@ -385,6 +389,8 @@ function SubnetDialog({
     cidr: initial?.cidr ?? '',
     vlanId: initial?.vlanId != null ? String(initial.vlanId) : '',
     gateway: initial?.gateway ?? '',
+    dhcpRangeStart: initial?.dhcpRangeStart ?? '',
+    dhcpRangeEnd: initial?.dhcpRangeEnd ?? '',
     description: initial?.description ?? '',
   });
   const [saving, setSaving] = useState(false);
@@ -407,9 +413,35 @@ function SubnetDialog({
         ? `Outside subnet ${form.cidr.trim()}`
         : null;
 
+  const dhcpStart = form.dhcpRangeStart.trim();
+  const dhcpEnd = form.dhcpRangeEnd.trim();
+  const cidrValid = !!form.cidr.trim() && isValidCidr(form.cidr.trim());
+  const dhcpStartErr = dhcpStart
+    ? !isValidIpv4(dhcpStart)
+      ? 'Must be a valid IPv4 address'
+      : cidrValid && !ipInCidrV4(dhcpStart, form.cidr.trim())
+        ? `Outside subnet ${form.cidr.trim()}`
+        : !dhcpEnd
+          ? 'End is also required'
+          : null
+    : dhcpEnd
+      ? 'Start is also required'
+      : null;
+  const dhcpEndErr = dhcpEnd
+    ? !isValidIpv4(dhcpEnd)
+      ? 'Must be a valid IPv4 address'
+      : cidrValid && !ipInCidrV4(dhcpEnd, form.cidr.trim())
+        ? `Outside subnet ${form.cidr.trim()}`
+        : dhcpStart &&
+            isValidIpv4(dhcpStart) &&
+            ipToInt(dhcpStart) > ipToInt(dhcpEnd)
+          ? 'End must be ≥ start'
+          : null
+    : null;
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (cidrErr || gatewayErr) return;
+    if (cidrErr || gatewayErr || dhcpStartErr || dhcpEndErr) return;
     setSaving(true);
     await onSubmit(form);
     setSaving(false);
@@ -420,7 +452,9 @@ function SubnetDialog({
     !form.name.trim() ||
     !form.cidr.trim() ||
     !!cidrErr ||
-    !!gatewayErr;
+    !!gatewayErr ||
+    !!dhcpStartErr ||
+    !!dhcpEndErr;
 
   return (
     <Dialog
@@ -478,6 +512,39 @@ function SubnetDialog({
               autoComplete="off"
               style={{ fontFamily: 'var(--font-mono)' }}
               placeholder="10.0.0.1"
+            />
+          </Field>
+        </div>
+
+        <div style={{ display: 'flex', gap: 12 }}>
+          <Field
+            label="DHCP range start"
+            error={dhcpStartErr ?? undefined}
+            help="Optional. First IP of the DHCP scope."
+            style={{ flex: 1 }}
+          >
+            <Input
+              value={form.dhcpRangeStart}
+              onChange={(e) => patch('dhcpRangeStart', e.target.value)}
+              spellCheck={false}
+              autoComplete="off"
+              style={{ fontFamily: 'var(--font-mono)' }}
+              placeholder="10.0.0.100"
+            />
+          </Field>
+          <Field
+            label="DHCP range end"
+            error={dhcpEndErr ?? undefined}
+            help="Last IP of the DHCP scope."
+            style={{ flex: 1 }}
+          >
+            <Input
+              value={form.dhcpRangeEnd}
+              onChange={(e) => patch('dhcpRangeEnd', e.target.value)}
+              spellCheck={false}
+              autoComplete="off"
+              style={{ fontFamily: 'var(--font-mono)' }}
+              placeholder="10.0.0.199"
             />
           </Field>
         </div>

@@ -1764,6 +1764,8 @@ export type SubnetRow = {
   prefix: number;
   vlanId: number | null;
   gateway: string | null;
+  dhcpRangeStart: string | null;
+  dhcpRangeEnd: string | null;
   description: string | null;
   archivedAt: string | null;
   createdBy: string | null;

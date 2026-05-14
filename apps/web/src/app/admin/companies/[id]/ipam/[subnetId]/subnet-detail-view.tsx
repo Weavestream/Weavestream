@@ -328,6 +328,13 @@ export function SubnetDetailView({
           <MetaItem label="VLAN" value={String(subnet.vlanId)} />
         )}
         {subnet.gateway && <MetaItem label="Gateway" value={subnet.gateway} mono />}
+        {subnet.dhcpRangeStart && subnet.dhcpRangeEnd && (
+          <MetaItem
+            label="DHCP range"
+            value={`${subnet.dhcpRangeStart} – ${subnet.dhcpRangeEnd}`}
+            mono
+          />
+        )}
         <MetaItem label="Prefix" value={`/${subnet.prefix}`} mono />
       </div>
 
@@ -636,6 +643,8 @@ export function SubnetDetailView({
           prefix={subnet.prefix}
           occupants={occupants}
           reservations={reservations}
+          dhcpRangeStart={subnet.dhcpRangeStart}
+          dhcpRangeEnd={subnet.dhcpRangeEnd}
           companyId={companyId}
         />
       )}

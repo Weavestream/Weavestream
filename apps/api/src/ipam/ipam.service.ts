@@ -284,6 +284,8 @@ export class IpamService {
         prefix,
         vlanId: input.vlanId ?? null,
         gateway: input.gateway ?? null,
+        dhcpRangeStart: input.dhcpRangeStart ?? null,
+        dhcpRangeEnd: input.dhcpRangeEnd ?? null,
         description: input.description ?? null,
         createdBy: actor.id,
         updatedBy: actor.id,
@@ -318,6 +320,10 @@ export class IpamService {
     if (input.name !== undefined) data.name = input.name;
     if (input.vlanId !== undefined) data.vlanId = input.vlanId ?? null;
     if (input.gateway !== undefined) data.gateway = input.gateway ?? null;
+    if (input.dhcpRangeStart !== undefined)
+      data.dhcpRangeStart = input.dhcpRangeStart ?? null;
+    if (input.dhcpRangeEnd !== undefined)
+      data.dhcpRangeEnd = input.dhcpRangeEnd ?? null;
     if (input.description !== undefined) data.description = input.description ?? null;
 
     if (input.cidr !== undefined) {
@@ -328,10 +334,11 @@ export class IpamService {
       data.prefix = Number(cidr.split('/')[1]);
     }
 
-    const row = await this.prisma.subnet.update({
-      where: { id },
+    await this.prisma.subnet.updateMany({
+      where: { id, companyId },
       data,
     });
+    const row = await this.getSubnetById(actor, companyId, id);
 
     await this.audit.log({
       actorId: actor.id,
@@ -356,10 +363,11 @@ export class IpamService {
   ): Promise<Subnet> {
     const existing = await this.getSubnetById(actor, companyId, id);
     if (existing.archivedAt) return existing;
-    const row = await this.prisma.subnet.update({
-      where: { id },
+    await this.prisma.subnet.updateMany({
+      where: { id, companyId },
       data: { archivedAt: new Date(), updatedBy: actor.id },
     });
+    const row = await this.getSubnetById(actor, companyId, id);
 
     await this.audit.log({
       actorId: actor.id,
@@ -383,10 +391,11 @@ export class IpamService {
     const existing = await this.getSubnetById(actor, companyId, id);
     if (!existing.archivedAt) return existing;
     await this.assertCidrFree(companyId, existing.cidr, id);
-    const row = await this.prisma.subnet.update({
-      where: { id },
+    await this.prisma.subnet.updateMany({
+      where: { id, companyId },
       data: { archivedAt: null, updatedBy: actor.id },
     });
+    const row = await this.getSubnetById(actor, companyId, id);
 
     await this.audit.log({
       actorId: actor.id,
@@ -486,9 +495,12 @@ export class IpamService {
     }
 
     try {
-      const row = await this.prisma.ipReservation.update({
-        where: { id: reservationId },
+      await this.prisma.ipReservation.updateMany({
+        where: { id: reservationId, companyId },
         data,
+      });
+      const row = await this.prisma.ipReservation.findFirstOrThrow({
+        where: { id: reservationId, companyId },
       });
 
       await this.audit.log({
@@ -532,8 +544,8 @@ export class IpamService {
     });
     if (!existing) throw new NotFoundException('Reservation not found');
 
-    await this.prisma.ipReservation.delete({
-      where: { id: reservationId },
+    await this.prisma.ipReservation.deleteMany({
+      where: { id: reservationId, companyId },
     });
 
     await this.audit.log({

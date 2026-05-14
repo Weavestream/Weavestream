@@ -26,6 +26,7 @@ interface CellData {
   state: CellState;
   occupants: SubnetOccupant[];
   reservation: IpReservationRow | null;
+  inDhcp: boolean;
 }
 
 const PAGE_SIZE = 256;
@@ -36,12 +37,16 @@ export function AddressGrid({
   prefix,
   occupants,
   reservations,
+  dhcpRangeStart,
+  dhcpRangeEnd,
   companyId,
 }: {
   cidr: string;
   prefix: number;
   occupants: SubnetOccupant[];
   reservations: IpReservationRow[];
+  dhcpRangeStart: string | null;
+  dhcpRangeEnd: string | null;
   companyId: string;
 }) {
   const totalAddrs = Math.pow(2, 32 - prefix);
@@ -63,6 +68,14 @@ export function AddressGrid({
   }, [reservations]);
 
   const networkInt = useMemo(() => cidrToNetworkInt(cidr), [cidr]);
+
+  const dhcpRange = useMemo<{ start: number; end: number } | null>(() => {
+    if (!dhcpRangeStart || !dhcpRangeEnd) return null;
+    const start = ipToInt(dhcpRangeStart);
+    const end = ipToInt(dhcpRangeEnd);
+    if (start > end) return null;
+    return { start, end };
+  }, [dhcpRangeStart, dhcpRangeEnd]);
 
   const [page, setPage] = useState(0);
 
@@ -88,7 +101,8 @@ export function AddressGrid({
 
   const cells: CellData[] = [];
   for (let i = start; i < end; i++) {
-    const ip = uint32ToIp((networkInt + i) >>> 0);
+    const addrInt = (networkInt + i) >>> 0;
+    const ip = uint32ToIp(addrInt);
     const occ = occupantMap.get(ip) ?? [];
     const res = reservationMap.get(ip) ?? null;
     let state: CellState = 'free';
@@ -97,7 +111,13 @@ export function AddressGrid({
     else if (occ.length > 1) state = 'conflict';
     else if (occ.length === 1) state = 'asset';
     else if (res) state = 'reservation';
-    cells.push({ ip, state, occupants: occ, reservation: res });
+    const inDhcp =
+      !!dhcpRange &&
+      state !== 'network' &&
+      state !== 'broadcast' &&
+      addrInt >= dhcpRange.start &&
+      addrInt <= dhcpRange.end;
+    cells.push({ ip, state, occupants: occ, reservation: res, inDhcp });
   }
 
   return (
@@ -161,6 +181,7 @@ export function AddressGrid({
         {prefix <= 30 && (
           <LegendDot color="var(--panel-2)" label="Network / broadcast" />
         )}
+        {dhcpRange && <DhcpLegendSwatch />}
       </div>
     </div>
   );
@@ -177,7 +198,9 @@ function GridCell({ cell, companyId }: { cell: CellData; companyId: string }) {
           ? 'var(--info, #3b82f6)'
           : cell.state === 'network' || cell.state === 'broadcast'
             ? 'var(--panel-2)'
-            : 'var(--surface-2)';
+            : cell.inDhcp
+              ? 'color-mix(in srgb, var(--info, #3b82f6) 12%, var(--surface-2))'
+              : 'var(--surface-2)';
 
   const reservedLabel =
     cell.state === 'network'
@@ -223,6 +246,10 @@ function GridCell({ cell, companyId }: { cell: CellData; companyId: string }) {
               : undefined,
           opacity:
             cell.state === 'network' || cell.state === 'broadcast' ? 0.7 : 1,
+          outline: cell.inDhcp
+            ? '1px dashed var(--info, #3b82f6)'
+            : undefined,
+          outlineOffset: -1,
         }}
       >
         {cell.ip.split('.').pop()}
@@ -270,6 +297,14 @@ function GridCell({ cell, companyId }: { cell: CellData; companyId: string }) {
                 {cell.state}
               </Tag>{' '}
               not assignable
+            </div>
+          )}
+          {cell.inDhcp && (
+            <div style={{ fontSize: 11, color: 'var(--muted)' }}>
+              <Tag tone="outline" style={{ fontSize: 10 }}>
+                DHCP
+              </Tag>{' '}
+              within dynamic range
             </div>
           )}
         </div>
@@ -388,6 +423,25 @@ function LegendDot({ color, label }: { color: string; label: string }) {
     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
       <span style={{ width: 8, height: 8, borderRadius: '50%', background: color, display: 'inline-block' }} />
       {label}
+    </span>
+  );
+}
+
+function DhcpLegendSwatch() {
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+      <span
+        style={{
+          width: 10,
+          height: 10,
+          background:
+            'color-mix(in srgb, var(--info, #3b82f6) 12%, var(--surface-2))',
+          border: '1px dashed var(--info, #3b82f6)',
+          display: 'inline-block',
+          boxSizing: 'border-box',
+        }}
+      />
+      DHCP range
     </span>
   );
 }

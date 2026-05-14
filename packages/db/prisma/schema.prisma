@@ -1486,6 +1486,8 @@ model Subnet {
   prefix      Int
   vlanId      Int?      @map("vlan_id")
   gateway     String?
+  dhcpRangeStart String? @map("dhcp_range_start")
+  dhcpRangeEnd   String? @map("dhcp_range_end")
   description String?
   archivedAt  DateTime? @map("archived_at")
   createdBy   String?   @map("created_by") @db.Uuid
