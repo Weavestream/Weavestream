@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState, useTransition } from 'react';
+import { useEffect, useMemo, useRef, useState, useTransition } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
@@ -60,6 +60,22 @@ export function TicketsBrowser({
   const [draft, setDraft] = useState(filter.search ?? '');
 
   const base = `/admin/tickets`;
+
+  // Reset the DataTable's scroll position to the top whenever the
+  // active cursor changes (i.e., the operator clicked Next page /
+  // First page). React's router preserves scroll across same-route
+  // pushes, so without this the new page lands mid-scroll on long
+  // pages. DataTable owns its own overflow container — we look it
+  // up by the `data-scrolled` attribute it sets for its left-edge
+  // shadow.
+  const tableHostRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const host = tableHostRef.current;
+    if (!host) return;
+    const scroller = host.querySelector<HTMLElement>('[data-scrolled]');
+    if (scroller) scroller.scrollTop = 0;
+    else host.scrollTop = 0;
+  }, [activeCursor, cursor]);
 
   function pushParams(next: Record<string, string | undefined | null>) {
     const params = new URLSearchParams();
@@ -237,6 +253,7 @@ export function TicketsBrowser({
       )}
 
       <div
+        ref={tableHostRef}
         style={{
           flex: 1,
           minHeight: 0,
@@ -388,13 +405,31 @@ function ticketColumns(): DataColumn<TicketListItem>[] {
       ),
     },
     {
+      id: 'created',
+      header: 'Opened',
+      width: 110,
+      mono: true,
+      sortValue: (r) => (r.createdAt ? new Date(r.createdAt) : new Date(0)),
+      render: (r) => (
+        <span
+          style={{ color: 'var(--dim)' }}
+          title={r.createdAt ?? undefined}
+        >
+          {r.createdAt ? relative(new Date(r.createdAt)) : '—'}
+        </span>
+      ),
+    },
+    {
       id: 'updated',
       header: 'Updated',
-      width: 120,
+      width: 110,
       mono: true,
       sortValue: (r) => (r.updatedAt ? new Date(r.updatedAt) : new Date(0)),
       render: (r) => (
-        <span style={{ color: 'var(--dim)' }}>
+        <span
+          style={{ color: 'var(--dim)' }}
+          title={r.updatedAt ?? undefined}
+        >
           {r.updatedAt ? relative(new Date(r.updatedAt)) : '—'}
         </span>
       ),
@@ -539,6 +574,11 @@ function TicketMobileCard({ row }: { row: TicketListItem }) {
           </span>
         )}
       </MobileCardRow>
+      {row.createdAt && (
+        <MobileCardRow label="Opened">
+          <span title={row.createdAt}>{relative(new Date(row.createdAt))}</span>
+        </MobileCardRow>
+      )}
     </Link>
   );
 }
