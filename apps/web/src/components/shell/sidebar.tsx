@@ -699,6 +699,7 @@ function NavItem({
     height: 28,
     padding: '0 10px',
     borderRadius: 5,
+    fontWeight: 600,
     fontSize: 13,
     letterSpacing: -0.1,
     color: active ? 'var(--text)' : 'var(--muted)',
