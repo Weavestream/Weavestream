@@ -75,6 +75,8 @@ export const ActionValues = [
   'ip_rule.manage',
 
   'backup.manage',
+
+  'tickets.read.global',
 ] as const;
 
 export type Action = (typeof ActionValues)[number];
@@ -346,6 +348,15 @@ export const PERMISSIONS: Record<Action, PermissionRule> = {
     requireNonExpiredMembership: false,
     note: 'Create, edit, and run scheduled Postgres exports. Holders can download raw database dumps, so grant deliberately.',
   },
+
+  'tickets.read.global': {
+    scope: 'global',
+    requiredCapability: 'TICKETS_READ',
+    allowFull: false,
+    allowReadonly: false,
+    requireNonExpiredMembership: false,
+    note: 'Browse tickets from the integrated upstream helpdesk across every client. Read-only — no writes back to upstream. Admin / manager-only.',
+  },
 };
 
 export const ACTION_HUMAN_LABELS: Record<Action, string> = {
@@ -381,6 +392,7 @@ export const ACTION_HUMAN_LABELS: Record<Action, string> = {
   'security.read': 'View the Security Center (logins, lockouts, sessions)',
   'ip_rule.manage': 'Manage IP allow/deny rules',
   'backup.manage': 'Manage scheduled Postgres exports',
+  'tickets.read.global': 'Browse upstream helpdesk tickets (global)',
 };
 
 // Re-exported for callers that previously consumed the unused

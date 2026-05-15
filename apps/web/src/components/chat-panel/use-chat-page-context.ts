@@ -166,7 +166,9 @@ export function useChatDomainPageContext(
  */
 export function useChatTicketPageContext(
   snapshot: {
-    companyId: string;
+    /** Resolved Weavestream company; null on the global admin surface
+     *  when the upstream client id has no mapping. */
+    companyId: string | null;
     ticketId: string;
     provider: string;
     subject: string;
@@ -178,7 +180,7 @@ export function useChatTicketPageContext(
   if (snapshot) getMarkdownRef.current = snapshot.getMarkdown;
 
   const keyParts = snapshot
-    ? `${snapshot.companyId}|${snapshot.ticketId}|${snapshot.provider}|${snapshot.subject}`
+    ? `${snapshot.companyId ?? ''}|${snapshot.ticketId}|${snapshot.provider}|${snapshot.subject}`
     : null;
   useEffect(() => {
     if (!snapshot) return;

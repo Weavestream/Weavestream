@@ -9,7 +9,6 @@ import {
   getCompanyDetail,
   getCompanyDomainsBasic,
   getCompanySubnetsBasic,
-  getCompanyTicketingCapability,
   getMe,
   getSettings,
   throwUnlessFound,
@@ -65,7 +64,6 @@ export default async function CompanyScopedLayout({
     domainList,
     passwordList,
     subnetList,
-    hasTicketingIntegration,
   ] = await Promise.all([
     getMe(),
     getSettings(),
@@ -75,10 +73,6 @@ export default async function CompanyScopedLayout({
     getCompanyDomainsBasic(id),
     getCompanyActivePasswords(id),
     getCompanySubnetsBasic(id),
-    // Sidebar-only capability probe; returns false (silently) for any
-    // caller that lacks `article.write` on the company, so contractor /
-    // client users never see the entry — and never trigger a 403 here.
-    getCompanyTicketingCapability(id),
   ]);
   if (!me) notFound();
   // `throwUnlessFound` maps 404s to `notFound()`, 429s to a dedicated
@@ -139,7 +133,6 @@ export default async function CompanyScopedLayout({
       passwordStaleBadge={passwordStaleBadge}
       subnetCount={subnetCount}
       subnetConflictBadge={subnetConflictBadge}
-      hasTicketingIntegration={hasTicketingIntegration}
       stickyNote={stickyNote}
     >
       {children}

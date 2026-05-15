@@ -9,12 +9,11 @@ import {
   Icon,
   MobileCardRow,
   Tag,
-  type TagTone,
-} from '../../../../../components/ui';
+} from '../../../../components/ui';
 import type {
   TicketListFilters,
   TicketListItem,
-} from '../../../../../lib/server-api';
+} from '../../../../lib/server-api';
 import {
   formatTicketBoard,
   formatTicketPriority,
@@ -24,38 +23,49 @@ import {
 } from './ticket-formatting';
 
 /**
- * Phase 12 — interactive tickets list. URL is the source of truth for
- * every filter + the pagination cursor so deep links / back behave.
- * The table itself is read-only — selecting a ticket routes to the
- * detail page, where the chat panel auto-attaches it as context.
+ * Phase 12+ — global admin tickets browser. URL is the source of
+ * truth for every filter + the pagination cursor so deep links / back
+ * behave. The table itself is read-only — selecting a ticket routes
+ * to the detail page, where the chat panel auto-attaches it as
+ * context. Article creation uses the chat panel's existing
+ * "Save as article" dialog, which prompts the operator to pick the
+ * target company at save time.
+ *
+ * Differences vs the legacy per-company browser:
+ *   - Adds a **Company** column (resolved Weavestream name with a
+ *     link to that company's detail page, or a muted "(unmapped
+ *     client …)" label when the upstream client id has no mapping).
+ *   - Drops the **Assignee** and **Requester** columns — NinjaOne
+ *     returns opaque user ids that aren't useful to render without
+ *     an extra per-user fetch. The detail view keeps them for the
+ *     AI's context.
  */
 export function TicketsBrowser({
-  companyId,
   rows,
   cursor,
   filter,
   activeCursor,
   actorId: _actorId,
+  integrationEnabled,
 }: {
-  companyId: string;
   rows: TicketListItem[];
   cursor: string | null;
   filter: TicketListFilters;
   activeCursor: string | null;
   actorId: string;
+  integrationEnabled: boolean;
 }) {
   const router = useRouter();
   const [_pending, startTransition] = useTransition();
   const [draft, setDraft] = useState(filter.search ?? '');
 
-  const base = `/admin/companies/${companyId}/tickets`;
+  const base = `/admin/tickets`;
 
   function pushParams(next: Record<string, string | undefined | null>) {
     const params = new URLSearchParams();
     if (filter.status) params.set('status', filter.status);
     if (filter.priority) params.set('priority', filter.priority);
     if (filter.boardId) params.set('boardId', filter.boardId);
-    if (filter.assigneeId) params.set('assigneeId', filter.assigneeId);
     if (filter.search) params.set('search', filter.search);
     // Filter changes always reset the cursor — paginated results don't
     // make sense once the underlying list shape changes.
@@ -92,11 +102,7 @@ export function TicketsBrowser({
   const hasFilters = useMemo(
     () =>
       Boolean(
-        filter.status ||
-          filter.priority ||
-          filter.boardId ||
-          filter.assigneeId ||
-          filter.search,
+        filter.status || filter.priority || filter.boardId || filter.search,
       ),
     [filter],
   );
@@ -143,7 +149,7 @@ export function TicketsBrowser({
               if (e.key === 'Enter') commitSearch();
             }}
             onBlur={commitSearch}
-            placeholder="Search subject / requester…"
+            placeholder="Search subject…"
             style={{
               flex: 1,
               background: 'transparent',
@@ -199,7 +205,7 @@ export function TicketsBrowser({
         )}
       </div>
 
-      {(filter.assigneeId || filter.boardId) && (
+      {filter.boardId && (
         <div
           style={{
             padding: '8px 14px',
@@ -224,16 +230,9 @@ export function TicketsBrowser({
           >
             filters
           </span>
-          {filter.boardId && (
-            <Chip onRemove={() => pushParams({ boardId: null })}>
-              board: {filter.boardId}
-            </Chip>
-          )}
-          {filter.assigneeId && (
-            <Chip onRemove={() => pushParams({ assigneeId: null })}>
-              assignee: {filter.assigneeId}
-            </Chip>
-          )}
+          <Chip onRemove={() => pushParams({ boardId: null })}>
+            board: {filter.boardId}
+          </Chip>
         </div>
       )}
 
@@ -245,7 +244,22 @@ export function TicketsBrowser({
           flexDirection: 'column',
         }}
       >
-        {rows.length === 0 ? (
+        {!integrationEnabled ? (
+          <div
+            style={{
+              padding: 36,
+              textAlign: 'center',
+              color: 'var(--muted)',
+              fontSize: 13,
+            }}
+          >
+            No ticketing-capable integration is enabled. Configure one in{' '}
+            <Link href="/admin/integrations" style={{ color: 'var(--accent)' }}>
+              Integrations
+            </Link>{' '}
+            to start browsing tickets.
+          </div>
+        ) : rows.length === 0 ? (
           <div
             style={{
               padding: 36,
@@ -261,11 +275,9 @@ export function TicketsBrowser({
         ) : (
           <DataTable
             fillHeight
-            columns={ticketColumns({ companyId })}
+            columns={ticketColumns()}
             rows={rows}
-            renderMobileCard={(r) => (
-              <TicketMobileCard companyId={companyId} row={r} />
-            )}
+            renderMobileCard={(r) => <TicketMobileCard row={r} />}
           />
         )}
       </div>
@@ -306,11 +318,7 @@ export function TicketsBrowser({
   );
 }
 
-function ticketColumns({
-  companyId,
-}: {
-  companyId: string;
-}): DataColumn<TicketListItem>[] {
+function ticketColumns(): DataColumn<TicketListItem>[] {
   return [
     {
       id: 'subject',
@@ -327,7 +335,7 @@ function ticketColumns({
           }}
         >
           <Link
-            href={`/admin/companies/${companyId}/tickets/${encodeURIComponent(r.id)}`}
+            href={`/admin/tickets/${encodeURIComponent(r.id)}`}
             style={{
               color: 'inherit',
               fontWeight: 500,
@@ -355,15 +363,18 @@ function ticketColumns({
       ),
     },
     {
+      id: 'company',
+      header: 'Company',
+      width: 220,
+      sortValue: (r) => r.companyName?.toLowerCase() ?? '\uffff',
+      render: (r) => <CompanyCell row={r} />,
+    },
+    {
       id: 'status',
       header: 'Status',
       width: 140,
       sortValue: (r) => r.status,
-      render: (r) => (
-        <Tag tone={statusTone(r.status)}>
-          {formatTicketStatus(r)}
-        </Tag>
-      ),
+      render: (r) => <Tag tone={statusTone(r.status)}>{formatTicketStatus(r)}</Tag>,
     },
     {
       id: 'priority',
@@ -374,28 +385,6 @@ function ticketColumns({
         <Tag tone={priorityTone(r.priority)}>
           {formatTicketPriority(r.priority)}
         </Tag>
-      ),
-    },
-    {
-      id: 'assignee',
-      header: 'Assignee',
-      width: 180,
-      sortValue: (r) => r.assignee?.name?.toLowerCase() ?? '',
-      render: (r) => (
-        <span style={{ color: r.assignee ? 'var(--text-2)' : 'var(--dim)' }}>
-          {r.assignee?.name ?? 'Unassigned'}
-        </span>
-      ),
-    },
-    {
-      id: 'requester',
-      header: 'Requester',
-      width: 180,
-      sortValue: (r) => r.requester?.name?.toLowerCase() ?? '',
-      render: (r) => (
-        <span style={{ color: r.requester ? 'var(--text-2)' : 'var(--dim)' }}>
-          {r.requester?.name ?? '—'}
-        </span>
       ),
     },
     {
@@ -418,7 +407,7 @@ function ticketColumns({
       sortable: false,
       render: (r) => (
         <Link
-          href={`/admin/companies/${companyId}/tickets/${encodeURIComponent(r.id)}`}
+          href={`/admin/tickets/${encodeURIComponent(r.id)}`}
           style={{
             display: 'inline-flex',
             alignItems: 'center',
@@ -436,16 +425,43 @@ function ticketColumns({
   ];
 }
 
-function TicketMobileCard({
-  companyId,
-  row,
-}: {
-  companyId: string;
-  row: TicketListItem;
-}) {
+function CompanyCell({ row }: { row: TicketListItem }) {
+  if (row.companyId && row.companyName) {
+    return (
+      <Link
+        href={`/admin/companies/${row.companyId}`}
+        style={{
+          color: 'var(--text)',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+          display: 'inline-block',
+          maxWidth: 200,
+        }}
+      >
+        {row.companyName}
+      </Link>
+    );
+  }
+  return (
+    <span
+      style={{
+        color: 'var(--dim)',
+        fontStyle: 'italic',
+        fontSize: 12,
+      }}
+    >
+      {row.externalClientId
+        ? `unmapped client ${row.externalClientId}`
+        : 'unmapped'}
+    </span>
+  );
+}
+
+function TicketMobileCard({ row }: { row: TicketListItem }) {
   return (
     <Link
-      href={`/admin/companies/${companyId}/tickets/${encodeURIComponent(row.id)}`}
+      href={`/admin/tickets/${encodeURIComponent(row.id)}`}
       style={{
         display: 'flex',
         flexDirection: 'column',
@@ -512,12 +528,17 @@ function TicketMobileCard({
           {row.updatedAt ? relative(new Date(row.updatedAt)) : '—'}
         </span>
       </div>
-      {row.assignee?.name && (
-        <MobileCardRow label="Assignee">{row.assignee.name}</MobileCardRow>
-      )}
-      {row.requester?.name && (
-        <MobileCardRow label="Requester">{row.requester.name}</MobileCardRow>
-      )}
+      <MobileCardRow label="Company">
+        {row.companyId && row.companyName ? (
+          row.companyName
+        ) : (
+          <span style={{ color: 'var(--dim)', fontStyle: 'italic' }}>
+            {row.externalClientId
+              ? `unmapped client ${row.externalClientId}`
+              : 'unmapped'}
+          </span>
+        )}
+      </MobileCardRow>
     </Link>
   );
 }

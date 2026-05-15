@@ -3,7 +3,7 @@ import { IntegrationsController } from './integrations.controller.js';
 import { IntegrationsCoreModule } from './integrations-core.module.js';
 import { IntegrationSyncQueueRegistrar } from './integration-sync-queue.registrar.js';
 import { CloudflareListsController } from './cloudflare/cloudflare-lists.controller.js';
-import { TicketsController } from './tickets.controller.js';
+import { TicketsGlobalController } from './tickets-global.controller.js';
 
 /**
  * Phase 11 — universal integration framework module (API side).
@@ -20,7 +20,7 @@ import { TicketsController } from './tickets.controller.js';
   controllers: [
     IntegrationsController,
     CloudflareListsController,
-    TicketsController,
+    TicketsGlobalController,
   ],
   providers: [IntegrationSyncQueueRegistrar],
   exports: [IntegrationsCoreModule],

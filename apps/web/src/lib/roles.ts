@@ -244,6 +244,7 @@ const CAPABILITY_LABEL: Record<PlatformCapability, string> = {
   SECURITY_READ: 'View Security Center (logins, lockouts, sessions)',
   IP_RULE_MANAGE: 'Manage IP allow/deny rules',
   BACKUP_MANAGE: 'Manage scheduled Postgres exports',
+  TICKETS_READ: 'Browse helpdesk tickets (global)',
 };
 
 export function capabilityLabel(c: PlatformCapability): string {

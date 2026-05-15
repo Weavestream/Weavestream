@@ -73,7 +73,6 @@ export function CompanyShell({
   subnetCount,
   subnetConflictBadge,
   portalHasSubnets = true,
-  hasTicketingIntegration = false,
   stickyNote,
 }: {
   me: Me;
@@ -123,14 +122,6 @@ export function CompanyShell({
   subnetConflictBadge?: number;
   /** Hide IPAM entry on the portal when the tenant has no subnets. */
   portalHasSubnets?: boolean;
-  /**
-   * Phase 12 — does this company have an ACTIVE, ENABLED mapping to a
-   * ticketing-capable integration (NinjaOne today)? Resolved server-
-   * side in the company layout via `getCompanyTicketingCapability`.
-   * Gates the admin-only "Tickets" sidebar entry — portal never sees
-   * it regardless.
-   */
-  hasTicketingIntegration?: boolean;
   /**
    * Optional per-company banner shown above the breadcrumbs on every
    * page. Populated from the company settings — admin layout passes
@@ -231,19 +222,6 @@ export function CompanyShell({
                   passwordStaleBadge && passwordStaleBadge > 0
                     ? String(passwordStaleBadge)
                     : undefined,
-              },
-            ]
-          : []),
-        // Phase 12 — Tickets is admin-only AND gated on the company
-        // having a ticketing-capable integration mapped. The portal
-        // never sees it regardless of the capability flag.
-        ...(isAdmin && hasTicketingIntegration
-          ? [
-              {
-                id: 'tickets',
-                label: 'Tickets',
-                icon: 'chat' as const,
-                href: `${base}/tickets`,
               },
             ]
           : []),

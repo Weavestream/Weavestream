@@ -1,12 +1,12 @@
-import type { TagTone } from '../../../../../components/ui';
-import type { TicketDetail, TicketListItem } from '../../../../../lib/server-api';
+import type { TagTone } from '../../../../components/ui';
+import type { TicketDetail, TicketListItem } from '../../../../lib/server-api';
 
 /**
- * Shared display helpers for the ticket list + detail surfaces. The
- * driver normalises everything to `TicketListDto` / `TicketDetailDto`,
- * so these helpers stay provider-agnostic — they read the canonical
- * fields and fall back to the raw provider strings on the detail
- * chips when we have them.
+ * Shared display helpers for the global admin ticket list + detail
+ * surfaces. The driver normalises every upstream into
+ * `TicketListDto` / `TicketDetailDto`, so these helpers stay
+ * provider-agnostic — they read the canonical fields and fall back to
+ * the raw provider strings on the detail chips when we have them.
  */
 
 export function formatTicketStatus(row: TicketListItem | TicketDetail): string {

@@ -61,6 +61,12 @@ enum PlatformCapability {
   // senior operator; intentionally NOT part of MANAGER_PRESET because
   // holders of this capability can read and download full DB dumps.
   BACKUP_MANAGE
+  // Phase 12+: read-only global ticket browse across every client
+  // visible to the operator. Holders can view ticket subjects,
+  // bodies, and activity timelines from the integrated upstream
+  // helpdesk. Read-only; no writes back to upstream. Part of
+  // MANAGER_PRESET.
+  TICKETS_READ
 }
 
 // Phase 3: every AssetField has exactly one FieldType. The type is immutable

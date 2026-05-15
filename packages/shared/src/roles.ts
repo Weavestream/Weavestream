@@ -43,6 +43,11 @@ export const PlatformCapabilityValues = [
   // deliberately NOT in `MANAGER_PRESET` — it has to be granted
   // explicitly, the same way `SETTINGS_MANAGE` / `EXPORT_CREATE` are.
   'BACKUP_MANAGE',
+  // Phase 12+ — read-only global ticket browse across every client
+  // visible to the operator. Holders can view ticket subjects,
+  // bodies, and activity timelines from the integrated upstream
+  // helpdesk. Read-only; no writes back to upstream.
+  'TICKETS_READ',
 ] as const;
 export type PlatformCapability = (typeof PlatformCapabilityValues)[number];
 
@@ -61,4 +66,5 @@ export const MANAGER_PRESET: readonly PlatformCapability[] = [
   'AUDIT_READ',
   'SECURITY_READ',
   'IP_RULE_MANAGE',
+  'TICKETS_READ',
 ] as const;

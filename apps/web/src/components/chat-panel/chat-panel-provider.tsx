@@ -153,15 +153,20 @@ export type ChatDomainPageContext = {
 };
 
 /**
- * Phase 12 — read-only ticket page context. Captured by the ticket
- * detail page (NinjaOne today; provider-agnostic). The ticket
- * markdown is already normalised server-side via `ticketToMarkdown`
- * and passed in verbatim — there is no live editor surface to sample,
- * so the thunk just returns the captured markdown.
+ * Phase 12+ — read-only ticket page context. Captured by the
+ * (global admin) ticket detail page. The ticket markdown is already
+ * normalised server-side via `ticketToMarkdown` and passed in
+ * verbatim — there is no live editor surface to sample, so the thunk
+ * just returns the captured markdown.
+ *
+ * `companyId` is nullable because the global tickets surface may
+ * surface a ticket whose upstream client id has no Weavestream
+ * mapping — in that case the chat panel falls back to its existing
+ * company picker on save (see `SaveAsArticleDialog`).
  */
 export type ChatTicketPageContext = {
   kind: 'ticket';
-  companyId: string;
+  companyId: string | null;
   /**
    * Provider-side ticket id (opaque string — NinjaOne emits numeric
    * ids as strings, other providers may use UUIDs or short codes).

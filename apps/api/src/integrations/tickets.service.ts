@@ -60,33 +60,47 @@ export class TicketsService {
     private readonly drivers: IntegrationDriverRegistry,
   ) {}
 
+  // -------------------------------------------------------------------
+  // Phase 12+ — global admin browse
+  // -------------------------------------------------------------------
+
   /**
-   * Returns `true` when the company has at least one enabled mapping
-   * pointing at an ACTIVE integration whose driver advertises
-   * `capabilities.ticketing`. Used by the web layer to gate the
-   * "Tickets" sidebar item without exposing a separate full-resolve
-   * round-trip.
+   * Returns `true` when at least one enabled mapping in the system
+   * points at an ACTIVE integration whose driver advertises
+   * `capabilities.ticketing`. The admin sidebar uses this to decide
+   * whether to surface the global Tickets link.
    */
-  async companyHasTicketing(companyId: string): Promise<boolean> {
+  async anyCompanyHasTicketing(): Promise<boolean> {
     try {
-      await this.resolveTicketingMapping(companyId);
-      return true;
-    } catch (e) {
-      if (e instanceof NotFoundException || e instanceof BadRequestException) {
-        return false;
-      }
-      throw e;
+      const mapping = await this.resolveGlobalTicketingMapping();
+      return mapping !== null;
+    } catch {
+      return false;
     }
   }
 
-  async listTickets(
+  /**
+   * Global ticket browse: aggregate every visible ticket across the
+   * system, with each row stitched to its resolved Weavestream
+   * company (when an `IntegrationCompanyMapping` exists for the
+   * upstream client). This is admin-only by controller-level
+   * permission; the service intentionally does NOT check tenant
+   * scope because there is no tenant in the URL.
+   */
+  async listAllTickets(
     actor: AuthedUser,
-    companyId: string,
     filter: TicketListFilter,
     cursor: string | null,
     meta: TicketAuditMeta,
   ): Promise<TicketListResponse> {
-    const { driver, ctx, mapping } = await this.loadDriverFor(companyId);
+    const resolved = await this.resolveGlobalTicketingMapping();
+    if (!resolved) {
+      throw new NotFoundException(
+        'No ticketing-capable integration is enabled in this system.',
+      );
+    }
+    const { driver, integrationId, clientMap } = resolved;
+    const ctx = await this.integrations.loadDriverContext(integrationId);
     const correlationId = randomUUID();
     try {
       const result = await driver.listTickets(
@@ -96,45 +110,57 @@ export class TicketsService {
           http: this.httpDefaults(),
           correlationId,
           integrationId: ctx.integrationId,
-          externalOrgId: mapping.externalOrgId,
+          externalOrgId: null,
         } satisfies TicketContext,
         filter,
         cursor,
       );
+      // Stitch resolved company info onto each row in-place. Rows
+      // whose upstream client isn't mapped to a Weavestream company
+      // keep `companyId/companyName: null` and the UI renders an
+      // "unmapped client" label.
+      const stitched = result.records.map((r) => {
+        const company = r.externalClientId
+          ? (clientMap.get(r.externalClientId) ?? null)
+          : null;
+        return company
+          ? { ...r, companyId: company.id, companyName: company.name }
+          : r;
+      });
       await this.audit.log({
         actorId: actor.id,
         action: AUDIT_ACTIONS.tickets.list,
         entityType: 'Ticket',
         entityId: null,
-        companyId,
+        companyId: null,
         ip: meta.ip,
         userAgent: meta.userAgent,
         before: null,
         after: {
           driver: ctx.driver,
           integrationId: ctx.integrationId,
-          externalOrgId: mapping.externalOrgId,
+          scope: 'global',
           filter: this.sanitizeFilterForAudit(filter),
           cursor: cursor ? cursorFingerprint(cursor) : null,
-          rows: result.records.length,
+          rows: stitched.length,
           ok: true,
         },
       });
-      return result;
+      return { records: stitched, cursor: result.cursor };
     } catch (e) {
       await this.audit.log({
         actorId: actor.id,
         action: AUDIT_ACTIONS.tickets.list,
         entityType: 'Ticket',
         entityId: null,
-        companyId,
+        companyId: null,
         ip: meta.ip,
         userAgent: meta.userAgent,
         before: null,
         after: {
           driver: ctx.driver,
           integrationId: ctx.integrationId,
-          externalOrgId: mapping.externalOrgId,
+          scope: 'global',
           filter: this.sanitizeFilterForAudit(filter),
           cursor: cursor ? cursorFingerprint(cursor) : null,
           ok: false,
@@ -145,14 +171,25 @@ export class TicketsService {
     }
   }
 
-  async getTicket(
+  /**
+   * Global ticket detail: fetches one ticket from the system's
+   * ticketing integration, stitches the resolved Weavestream company
+   * onto the response. No IDOR check at this layer — admin-only.
+   */
+  async getAnyTicket(
     actor: AuthedUser,
-    companyId: string,
     ticketId: string,
     meta: TicketAuditMeta,
   ): Promise<TicketDetailDto> {
     const safeTicketId = sanitizeTicketId(ticketId);
-    const { driver, ctx, mapping } = await this.loadDriverFor(companyId);
+    const resolved = await this.resolveGlobalTicketingMapping();
+    if (!resolved) {
+      throw new NotFoundException(
+        'No ticketing-capable integration is enabled in this system.',
+      );
+    }
+    const { driver, integrationId, clientMap } = resolved;
+    const ctx = await this.integrations.loadDriverContext(integrationId);
     const correlationId = randomUUID();
     try {
       const detail = await driver.getTicket(
@@ -162,42 +199,49 @@ export class TicketsService {
           http: this.httpDefaults(),
           correlationId,
           integrationId: ctx.integrationId,
-          externalOrgId: mapping.externalOrgId,
+          externalOrgId: null,
         } satisfies TicketContext,
         safeTicketId,
       );
+      const company = detail.externalClientId
+        ? (clientMap.get(detail.externalClientId) ?? null)
+        : null;
+      const stitched: TicketDetailDto = company
+        ? { ...detail, companyId: company.id, companyName: company.name }
+        : detail;
       await this.audit.log({
         actorId: actor.id,
         action: AUDIT_ACTIONS.tickets.view,
         entityType: 'Ticket',
         entityId: safeTicketId,
-        companyId,
+        companyId: stitched.companyId,
         ip: meta.ip,
         userAgent: meta.userAgent,
         before: null,
         after: {
           driver: ctx.driver,
           integrationId: ctx.integrationId,
-          externalOrgId: mapping.externalOrgId,
-          activityCount: detail.activities.length,
+          scope: 'global',
+          externalClientId: detail.externalClientId,
+          activityCount: stitched.activities.length,
           ok: true,
         },
       });
-      return detail;
+      return stitched;
     } catch (e) {
       await this.audit.log({
         actorId: actor.id,
         action: AUDIT_ACTIONS.tickets.view,
         entityType: 'Ticket',
         entityId: safeTicketId,
-        companyId,
+        companyId: null,
         ip: meta.ip,
         userAgent: meta.userAgent,
         before: null,
         after: {
           driver: ctx.driver,
           integrationId: ctx.integrationId,
-          externalOrgId: mapping.externalOrgId,
+          scope: 'global',
           ok: false,
           error: shortError(e),
         },
@@ -206,78 +250,83 @@ export class TicketsService {
     }
   }
 
+  /**
+   * Resolves the single ACTIVE ticketing integration deployed in the
+   * system and builds a `{ externalClientId -> {companyId, companyName} }`
+   * map from every enabled mapping it owns. The map is the source of
+   * truth for converting NinjaOne `clientId` rows into Weavestream
+   * company chips on the admin UI.
+   *
+   * Returns null when there is no ticketing-capable integration.
+   * Multiple ticketing integrations: picks the first one
+   * alphabetically by `Integration.name` and logs a warning so a
+   * future multi-provider UX can replace this behaviour.
+   */
+  private async resolveGlobalTicketingMapping(): Promise<{
+    driver: ReturnType<IntegrationDriverRegistry['get']> &
+      Required<
+        Pick<
+          ReturnType<IntegrationDriverRegistry['get']>,
+          'listTickets' | 'getTicket'
+        >
+      >;
+    integrationId: string;
+    integrationName: string;
+    clientMap: Map<string, { id: string; name: string }>;
+  } | null> {
+    const integrations = await this.prisma.integration.findMany({
+      where: { status: 'ACTIVE' },
+      select: {
+        id: true,
+        driver: true,
+        name: true,
+        companyMappings: {
+          where: {
+            enabled: true,
+            company: { archivedAt: null },
+          },
+          select: {
+            externalOrgId: true,
+            company: { select: { id: true, name: true } },
+          },
+        },
+      },
+      orderBy: { name: 'asc' },
+    });
+    const ticketingIntegrations = integrations.filter((i) => {
+      if (!this.drivers.has(i.driver)) return false;
+      const descriptor = this.drivers.describe(i.driver);
+      return descriptor.capabilities.ticketing === true;
+    });
+    const [picked, ...extras] = ticketingIntegrations;
+    if (!picked) return null;
+    if (extras.length > 0) {
+      this.logger.warn(
+        `System has ${ticketingIntegrations.length} ticketing-capable integrations; admin browse picked "${picked.name}". Multi-provider UX is deferred.`,
+      );
+    }
+    const driver = this.drivers.get(picked.driver);
+    if (!isTicketingDriver(driver)) return null;
+    const clientMap = new Map<string, { id: string; name: string }>();
+    for (const m of picked.companyMappings) {
+      if (m.externalOrgId && m.company) {
+        clientMap.set(m.externalOrgId, {
+          id: m.company.id,
+          name: m.company.name,
+        });
+      }
+    }
+    return {
+      driver,
+      integrationId: picked.id,
+      integrationName: picked.name,
+      clientMap,
+    };
+  }
+
   // -------------------------------------------------------------------
   // Internal
   // -------------------------------------------------------------------
-
-  private async loadDriverFor(companyId: string) {
-    const mapping = await this.resolveTicketingMapping(companyId);
-    const ctx = await this.integrations.loadDriverContext(mapping.integrationId);
-    const driver = this.drivers.get(ctx.driver);
-    if (!isTicketingDriver(driver)) {
-      // Capability flipped off between the mapping resolution and the
-      // call. Surface as 400 — the operator can re-check the integration
-      // status from the admin UI.
-      throw new BadRequestException(
-        'The integration mapped to this company no longer advertises ticketing support.',
-      );
-    }
-    return { driver, ctx, mapping };
-  }
-
-  /**
-   * Resolve the single ACTIVE, ENABLED mapping for `companyId` that
-   * points at an integration whose driver advertises
-   * `capabilities.ticketing`. Throws 404 when no such mapping exists.
-   */
-  private async resolveTicketingMapping(companyId: string) {
-    // We verify the company exists up front so callers can distinguish
-    // "bad company id" (404) from "company exists but has no ticketing
-    // mapping" (also 404 but with a different message — the
-    // PermissionGuard still gates by tenant first).
-    const company = await this.prisma.company.findUnique({
-      where: { id: companyId },
-      select: { id: true, archivedAt: true },
-    });
-    if (!company) {
-      throw new NotFoundException(`Company ${companyId} not found`);
-    }
-    if (company.archivedAt) {
-      throw new BadRequestException(
-        `Company ${companyId} is archived; ticketing access is disabled.`,
-      );
-    }
-    const mappings = await this.prisma.integrationCompanyMapping.findMany({
-      where: {
-        companyId,
-        enabled: true,
-        integration: { status: 'ACTIVE' },
-      },
-      include: { integration: { select: { driver: true, name: true } } },
-      orderBy: [{ integration: { name: 'asc' } }, { externalOrgId: 'asc' }],
-    });
-    const ticketingMappings = mappings.filter((m) => {
-      if (!this.drivers.has(m.integration.driver)) return false;
-      const descriptor = this.drivers.describe(m.integration.driver);
-      return descriptor.capabilities.ticketing === true;
-    });
-    const [picked, ...extras] = ticketingMappings;
-    if (!picked) {
-      throw new NotFoundException(
-        'No ticketing-capable integration is mapped to this company.',
-      );
-    }
-    if (extras.length > 0) {
-      // Deterministic pick: alphabetically by integration name. The web
-      // sidebar gating uses the same resolver, so the same provider is
-      // picked everywhere for a given company. A future multi-provider
-      // UX can replace this with an explicit selector.
-      this.logger.warn(
-        `Company ${companyId} has ${ticketingMappings.length} ticketing-capable mappings; using "${picked.integration.name}".`,
-      );
-    }
-    return picked;
-  }
 
   private translateDriverError(e: unknown): Error {
     if (e instanceof DriverAuthError) {

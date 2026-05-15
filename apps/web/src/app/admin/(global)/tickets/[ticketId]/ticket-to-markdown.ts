@@ -1,4 +1,4 @@
-import type { TicketDetail } from '../../../../../../lib/server-api';
+import type { TicketDetail } from '../../../../../lib/server-api';
 
 /**
  * Project a `TicketDetailDto` to the markdown block the chat panel
@@ -18,6 +18,11 @@ export function ticketToMarkdown(ticket: TicketDetail): string {
   lines.push('');
   lines.push(`- ID: ${ticket.displayId ?? ticket.id}`);
   lines.push(`- Provider: ${ticket.provider}`);
+  if (ticket.companyName) {
+    lines.push(`- Company: ${ticket.companyName}`);
+  } else if (ticket.externalClientId) {
+    lines.push(`- Upstream client id: ${ticket.externalClientId} (unmapped)`);
+  }
   if (ticket.statusLabel) {
     lines.push(`- Status: ${ticket.statusLabel} (${ticket.status})`);
   } else {

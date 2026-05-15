@@ -121,10 +121,16 @@ export class DriverRateLimitError extends Error {
 /**
  * Read-only ticket browse context. Drivers implementing the optional
  * `listTickets` / `getTicket` methods receive this on every call.
+ *
+ * `externalOrgId` is nullable: when null, the call is a GLOBAL admin
+ * browse (Phase 12+) — the driver should return every ticket the API
+ * client can see and let the service layer resolve each row's upstream
+ * client id to a Weavestream company. When set, the driver MUST
+ * enforce that every returned row belongs to that single upstream org
+ * (IDOR backstop for the legacy per-company surface).
  */
 export interface TicketContext extends IntegrationContext {
-  /** External org id the tickets must belong to. Always set. */
-  readonly externalOrgId: string;
+  readonly externalOrgId: string | null;
 }
 
 export interface IntegrationDriver {

@@ -474,6 +474,37 @@ describe('PermissionService.evaluate — semantic checks', () => {
     ).toBe(true);
   });
 
+  it('tickets.read.global requires TICKETS_READ and works without a companyId', () => {
+    expect(
+      PermissionService.evaluate(
+        buildUser('OPERATOR', 'NONE', ['TICKETS_READ']),
+        'tickets.read.global',
+        [],
+      ).allowed,
+    ).toBe(true);
+    expect(
+      PermissionService.evaluate(
+        buildUser('OPERATOR', 'FULL'),
+        'tickets.read.global',
+        [],
+      ).allowed,
+    ).toBe(false);
+    expect(
+      PermissionService.evaluate(
+        buildUser('SUPER_ADMIN'),
+        'tickets.read.global',
+        [],
+      ).allowed,
+    ).toBe(true);
+    expect(
+      PermissionService.evaluate(
+        buildUser('CLIENT_USER', null),
+        'tickets.read.global',
+        [],
+      ).allowed,
+    ).toBe(false);
+  });
+
   it('layout.manage.global requires LAYOUT_MANAGE for OPERATOR', () => {
     expect(
       PermissionService.evaluate(

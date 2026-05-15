@@ -865,12 +865,12 @@ export class NinjaOneDriver implements IntegrationDriver {
       // We log a warning here (no PII) so operators can quickly tell
       // why the list is empty.
       this.logger.warn(
-        `NinjaOne returned zero ticketing boards for integration ${ctx.integrationId ?? '<unknown>'} (org ${ctx.externalOrgId}). Verify the API client has the "ticketing" scope and at least one ticket board exists.`,
+        `NinjaOne returned zero ticketing boards for integration ${ctx.integrationId ?? '<unknown>'} (org ${ctx.externalOrgId ?? 'global'}). Verify the API client has the "ticketing" scope and at least one ticket board exists.`,
       );
       return { records: [], cursor: null };
     }
     this.logger.debug(
-      `NinjaOne returned ${boards.length} ticketing board(s) for org ${ctx.externalOrgId}.`,
+      `NinjaOne returned ${boards.length} ticketing board(s) (org ${ctx.externalOrgId ?? 'global'}).`,
     );
 
     // Restrict to a single board when the operator filtered to one.
@@ -879,9 +879,12 @@ export class NinjaOneDriver implements IntegrationDriver {
       : boards;
 
     // Pagination cursor: "boardId:lastCursorId". A null cursor starts
-    // a fresh scan at the first board. When a board is exhausted we
-    // jump to the next board in `walkBoards`. The cursor returned to
-    // the UI always identifies the NEXT request's starting point.
+    // at the first board. The visible page corresponds 1:1 to one
+    // upstream board fetch (~50 rows). When a board is exhausted we
+    // advance to the next board on the following click. This is the
+    // pattern the user agreed to in the plan ("Call 50 tickets a time
+    // by page size") — no internal multi-fetch scanning.
+    const PAGE_SIZE = 50;
     let resumeBoardId: number | null = null;
     let resumeAfter = 0;
     if (cursor) {
@@ -898,66 +901,62 @@ export class NinjaOneDriver implements IntegrationDriver {
       else resumeAfter = 0; // Board vanished; resume from first board.
     }
 
-    // Target visible page size + upstream fetch budget. We keep
-    // scanning upstream pages until we either hit the visible target,
-    // exhaust every board, or hit the per-request fetch cap (latency
-    // backstop).
-    const TARGET_VISIBLE = 25;
-    const UPSTREAM_PAGE_SIZE = 100;
-    const MAX_UPSTREAM_FETCHES = 8;
-
-    const allRecords: TicketListDto[] = [];
-    let nextCursor: string | null = null;
-    let upstreamFetches = 0;
-
-    boardLoop: for (let bi = startIndex; bi < walkBoards.length; bi += 1) {
-      const board = walkBoards[bi]!;
-      let lastCursorId = bi === startIndex ? resumeAfter : 0;
-      for (;;) {
-        if (upstreamFetches >= MAX_UPSTREAM_FETCHES) {
-          // Latency backstop. Return what we have with a cursor
-          // pointing at the exact resume point so the next click
-          // continues seamlessly.
-          nextCursor = `${board.id}:${lastCursorId}`;
-          break boardLoop;
-        }
-        upstreamFetches += 1;
-        const page = await this.fetchBoardPage(
-          ctx,
-          headers,
-          baseUrl,
-          board,
-          lastCursorId,
-          UPSTREAM_PAGE_SIZE,
-          filter,
-          expectedOrgId,
-        );
-        for (const dto of page.records) {
-          if (allRecords.length >= TARGET_VISIBLE) break;
-          allRecords.push(dto);
-        }
-        // Stop conditions:
-        //  - visible target reached → cursor resumes at the current
-        //    board's next position (or next board if we just drained).
-        //  - board exhausted (returned < page size) → continue
-        //    to the next board.
-        //  - hard stop only if both target hit AND board has more.
-        if (allRecords.length >= TARGET_VISIBLE) {
-          if (page.exhausted) {
-            // Board done; resume at the NEXT board on next click.
-            const next = walkBoards[bi + 1];
-            nextCursor = next ? `${next.id}:0` : null;
-          } else {
-            nextCursor = `${board.id}:${page.lastCursorId ?? lastCursorId}`;
-          }
-          break boardLoop;
-        }
-        if (page.exhausted) break; // Move to next board.
-        lastCursorId = page.lastCursorId ?? lastCursorId;
-      }
+    if (startIndex >= walkBoards.length) {
+      return { records: [], cursor: null };
     }
 
-    return { records: allRecords, cursor: nextCursor };
+    // Walk forward through boards until we find one with rows (or
+    // one that has more pages to come). Empty boards return
+    // `{ records: [], exhausted: true }` and would otherwise burn a
+    // visible page click on zero rows — common on tenants that have
+    // an "Archived" or rarely-used board configured upstream. The
+    // upstream call against an empty board is cheap, so eagerly
+    // skipping them inside one page request keeps the UI consistent
+    // (50 rows per click, near-zero empty pages).
+    let bi = startIndex;
+    let resumeAt = resumeAfter;
+    let page: {
+      records: TicketListDto[];
+      lastCursorId: number | null;
+      exhausted: boolean;
+    } | null = null;
+    while (bi < walkBoards.length) {
+      const board = walkBoards[bi]!;
+      const p = await this.fetchBoardPage(
+        ctx,
+        headers,
+        baseUrl,
+        board,
+        resumeAt,
+        PAGE_SIZE,
+        filter,
+        expectedOrgId,
+      );
+      if (p.records.length > 0 || !p.exhausted) {
+        page = p;
+        break;
+      }
+      bi += 1;
+      resumeAt = 0;
+    }
+
+    if (!page) {
+      return { records: [], cursor: null };
+    }
+
+    // Compute the cursor for the next click:
+    //  - board has more rows (not exhausted) → resume at same board
+    //  - board exhausted → resume at next board (or null when done)
+    const pageBoard = walkBoards[bi]!;
+    let nextCursor: string | null = null;
+    if (!page.exhausted && page.lastCursorId != null) {
+      nextCursor = `${pageBoard.id}:${page.lastCursorId}`;
+    } else {
+      const next = walkBoards[bi + 1];
+      nextCursor = next ? `${next.id}:0` : null;
+    }
+
+    return { records: page.records, cursor: nextCursor };
   }
 
   /**
@@ -1036,6 +1035,10 @@ export class NinjaOneDriver implements IntegrationDriver {
     const rows = Array.isArray(payload?.data) ? payload.data : [];
 
     // Build candidates + flag rows needing canonical enrichment.
+    // We enrich whenever subject or clientId is missing — both are
+    // required for the UI (subject) AND service-side company
+    // resolution (clientId). Per-board "displayed fields"
+    // configuration in NinjaOne can omit either.
     type Candidate = {
       row: Record<string, unknown>;
       dto: TicketListDto;
@@ -1045,15 +1048,12 @@ export class NinjaOneDriver implements IntegrationDriver {
     for (const row of rows) {
       const dto = mapNinjaTicketListRow(row, board);
       if (!dto) continue;
-      const hasClientId =
-        pickNumber(row, ['clientId', 'clientID', 'organizationId', 'orgId']) !==
-        null;
       const subjectMissing = dto.subject === '(no subject)';
+      const clientIdMissing = dto.externalClientId === null;
       candidates.push({
         row,
         dto,
-        needsEnrich:
-          subjectMissing || (expectedOrgId !== null && !hasClientId),
+        needsEnrich: subjectMissing || clientIdMissing,
       });
     }
 
@@ -1084,7 +1084,7 @@ export class NinjaOneDriver implements IntegrationDriver {
             }
             if (enriched.subject) c.dto.subject = enriched.subject;
             if (enriched.clientId !== undefined) {
-              c.row['clientId'] = enriched.clientId;
+              c.dto.externalClientId = String(enriched.clientId);
             }
           }),
         );
@@ -1094,20 +1094,18 @@ export class NinjaOneDriver implements IntegrationDriver {
     // Filter + IDOR enforcement.
     const visible: TicketListDto[] = [];
     let droppedForOrgMismatch = 0;
-    let droppedForMissingClientId = 0;
-    for (const { row, dto } of candidates) {
+    for (const { dto } of candidates) {
+      // IDOR backstop for the legacy per-company surface: hard-reject
+      // rows whose clientId doesn't match the mapped org. In global
+      // mode (`expectedOrgId === null`) we keep every row regardless
+      // of clientId — the service layer resolves company affiliation
+      // for display, never for access control.
       if (expectedOrgId !== null) {
-        const rowClientId = pickNumber(row, [
-          'clientId',
-          'clientID',
-          'organizationId',
-          'orgId',
-        ]);
-        if (rowClientId === null) {
-          droppedForMissingClientId += 1;
-          continue;
-        }
-        if (rowClientId !== expectedOrgId) {
+        const rowClientId =
+          dto.externalClientId !== null
+            ? Number.parseInt(dto.externalClientId, 10)
+            : null;
+        if (rowClientId === null || rowClientId !== expectedOrgId) {
           droppedForOrgMismatch += 1;
           continue;
         }
@@ -1130,15 +1128,15 @@ export class NinjaOneDriver implements IntegrationDriver {
     }
     if (droppedForOrgMismatch > 0) {
       this.logger.debug(
-        `NinjaOne board ${board.id} dropped ${droppedForOrgMismatch} ticket(s) for org mismatch (kept for IDOR safety, expected org ${ctx.externalOrgId}).`,
+        `NinjaOne board ${board.id} dropped ${droppedForOrgMismatch} ticket(s) for org mismatch (expected org ${ctx.externalOrgId ?? 'n/a'}).`,
       );
     }
-    if (droppedForMissingClientId > 0) {
+    if (failureCounts.size > 0) {
       const breakdown = [...failureCounts.entries()]
         .map(([k, v]) => `${k}=${v}`)
         .join(', ');
       this.logger.warn(
-        `NinjaOne board ${board.id} dropped ${droppedForMissingClientId} ticket(s) with unresolved clientId. Enrichment failures: ${breakdown || 'none'} (corr=${ctx.correlationId}).`,
+        `NinjaOne board ${board.id} enrichment failures: ${breakdown} (corr=${ctx.correlationId}).`,
       );
     }
 
@@ -1252,6 +1250,12 @@ export class NinjaOneDriver implements IntegrationDriver {
     const description = extractDescription(logsRaw);
     const activities = mapActivities(logsRaw);
     const raw = stripCanonicalKeys(ticketRaw);
+    const clientId = pickNumber(ticketRaw, [
+      'clientId',
+      'clientID',
+      'organizationId',
+      'orgId',
+    ]);
 
     return {
       id: cleanId,
@@ -1271,6 +1275,9 @@ export class NinjaOneDriver implements IntegrationDriver {
       activities,
       attachments: [],
       raw,
+      companyId: null,
+      companyName: null,
+      externalClientId: clientId !== null ? String(clientId) : null,
     };
   }
 
@@ -1809,7 +1816,8 @@ function numberOf(v: unknown): number | null {
   return null;
 }
 
-function parseClientId(externalOrgId: string): number | null {
+function parseClientId(externalOrgId: string | null): number | null {
+  if (externalOrgId === null) return null;
   const parsed = Number.parseInt(externalOrgId, 10);
   return Number.isFinite(parsed) ? parsed : null;
 }
@@ -1903,6 +1911,12 @@ function mapNinjaTicketListRow(
   if (id === null) return null;
   const subject =
     pickString(row, ['subject', 'summary', 'name', 'title']) ?? '(no subject)';
+  const clientId = pickNumber(row, [
+    'clientId',
+    'clientID',
+    'organizationId',
+    'orgId',
+  ]);
   return {
     id: String(id),
     provider: 'ninjaone',
@@ -1923,6 +1937,12 @@ function mapNinjaTicketListRow(
     updatedAt: epochSecondsToIso(
       pickNumber(row, ['lastUpdated', 'updated', 'updatedAt']) ?? 0,
     ),
+    // The service layer resolves these from the upstream clientId
+    // when stitching the response. Drivers only know upstream tenants,
+    // not Weavestream companies.
+    companyId: null,
+    companyName: null,
+    externalClientId: clientId !== null ? String(clientId) : null,
   };
 }
 

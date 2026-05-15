@@ -1,15 +1,18 @@
 'use client';
 
 import { useMemo, useState } from 'react';
-import type { TicketActivity, TicketDetail } from '../../../../../../lib/server-api';
-import { Icon, Tag } from '../../../../../../components/ui';
+import type {
+  TicketActivity,
+  TicketDetail,
+} from '../../../../../lib/server-api';
+import { Icon, Tag } from '../../../../../components/ui';
 
 /**
- * Phase 12 — ticket detail surface. Description + chronological
- * activity timeline + attachments index + collapsible provider-
- * extras panel for the `raw` bag. Everything is read-only — the
- * chat panel auto-attaches this ticket so the operator can ask the
- * AI to draft an article from the same screen.
+ * Phase 12+ — global ticket detail surface. Description +
+ * chronological activity timeline + attachments index + collapsible
+ * provider-extras panel for the `raw` bag. Everything is read-only —
+ * the chat panel auto-attaches this ticket so the operator can ask
+ * the AI to draft an article from the same screen.
  */
 export function TicketDetailView({
   ticket,

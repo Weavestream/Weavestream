@@ -1,5 +1,8 @@
 import type { ReactNode } from 'react';
-import type { Me } from '../../lib/server-api';
+import {
+  hasAnyTicketingIntegration,
+  type Me,
+} from '../../lib/server-api';
 import { hasCapability, initialsFromName } from '../../lib/roles';
 import type { Term } from '../../lib/term';
 import { Sidebar, type SidebarSection } from './sidebar';
@@ -9,7 +12,7 @@ import { MobileShellChrome } from './mobile-nav';
 import { SearchPaletteProvider } from '../search/search-palette-provider';
 import { ChatPanel } from '../chat-panel/chat-panel';
 
-export function AdminShell({
+export async function AdminShell({
   me,
   workspace,
   term,
@@ -53,6 +56,18 @@ export function AdminShell({
   const showSecurity = hasCapability(me, 'SECURITY_READ');
   const showIpRules = hasCapability(me, 'IP_RULE_MANAGE');
   const showBackups = hasCapability(me, 'BACKUP_MANAGE');
+  // Tickets is gated on BOTH the capability AND a ticketing-capable
+  // integration being wired up. Without the second check the entry
+  // would land on an empty-state page for any operator on a fresh
+  // workspace; we'd rather just hide the link until it can do
+  // anything useful. The capability probe is cached per-request so
+  // there is no extra round-trip cost when the operator lacks the
+  // capability.
+  const ticketsCapability = hasCapability(me, 'TICKETS_READ');
+  const ticketingIntegrationActive = ticketsCapability
+    ? await hasAnyTicketingIntegration()
+    : false;
+  const showTickets = ticketsCapability && ticketingIntegrationActive;
 
   const primaryItems: SidebarSection['items'] = [
     { id: 'dashboard', label: 'Dashboard', icon: 'home', href: '/admin' },
@@ -65,6 +80,14 @@ export function AdminShell({
       label: term.other,
       icon: 'building',
       href: '/admin/companies',
+    });
+  }
+  if (showTickets) {
+    primaryItems.push({
+      id: 'tickets',
+      label: 'Ticket Browser',
+      icon: 'chat',
+      href: '/admin/tickets',
     });
   }
   if (showLayouts) {

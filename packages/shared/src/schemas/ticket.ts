@@ -81,6 +81,21 @@ export const ticketListDtoSchema = z.object({
   /** ISO timestamps; null when the upstream record didn't populate them. */
   createdAt: z.string().nullable(),
   updatedAt: z.string().nullable(),
+  /**
+   * Resolved Weavestream company UUID for the upstream tenant the
+   * ticket belongs to. Null when the upstream client id has no
+   * matching `IntegrationCompanyMapping` (and the UI renders an
+   * "unmapped client" label instead of a link).
+   */
+  companyId: z.string().uuid().nullable().default(null),
+  /** Display name for the resolved Weavestream company. */
+  companyName: z.string().nullable().default(null),
+  /**
+   * Raw upstream tenant id (NinjaOne `clientId`). Always surfaced so
+   * the UI can show "(unmapped client 123)" without leaking other
+   * upstream fields.
+   */
+  externalClientId: z.string().nullable().default(null),
 });
 export type TicketListDto = z.infer<typeof ticketListDtoSchema>;
 
