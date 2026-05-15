@@ -2,6 +2,9 @@ import type {
   DriverDescriptor,
   SourceFieldDto,
   SourceOrgDto,
+  TicketDetailDto,
+  TicketListFilter,
+  TicketListResponse,
 } from '@weavestream/shared';
 
 /**
@@ -45,6 +48,14 @@ export interface IntegrationContext {
   };
   /** Opaque correlation id stamped on every outbound log line. */
   readonly correlationId: string;
+  /**
+   * Stable Weavestream integration id. Optional so existing callers /
+   * tests that don't supply it keep working, but drivers that need to
+   * key process-wide caches (e.g. NinjaOne's OAuth token cache) read
+   * it here. NEVER use this as a tenant scope — the framework already
+   * resolves that from `IntegrationCompanyMapping`.
+   */
+  readonly integrationId?: string;
 }
 
 export interface FetchRecordsContext extends IntegrationContext {
@@ -107,6 +118,15 @@ export class DriverRateLimitError extends Error {
   }
 }
 
+/**
+ * Read-only ticket browse context. Drivers implementing the optional
+ * `listTickets` / `getTicket` methods receive this on every call.
+ */
+export interface TicketContext extends IntegrationContext {
+  /** External org id the tickets must belong to. Always set. */
+  readonly externalOrgId: string;
+}
+
 export interface IntegrationDriver {
   /** Stable id (matches `Integration.driver`). */
   readonly key: string;
@@ -139,4 +159,36 @@ export interface IntegrationDriver {
     ctx: FetchRecordsContext,
     cursor: string | null,
   ): Promise<DriverFetchPage>;
+
+  /**
+   * Phase 12 — optional read-only ticket browse surface. Only
+   * implemented by drivers whose descriptor advertises
+   * `capabilities.ticketing === true`. The framework dispatches to
+   * these via `TicketsService`; never call them directly from sync
+   * code paths.
+   */
+  listTickets?(
+    ctx: TicketContext,
+    filter: TicketListFilter,
+    cursor: string | null,
+  ): Promise<TicketListResponse>;
+
+  getTicket?(ctx: TicketContext, ticketId: string): Promise<TicketDetailDto>;
+}
+
+/**
+ * Type guard for drivers that advertise the optional ticket surface.
+ * The dispatcher uses this rather than poking at the descriptor
+ * directly so a driver that flips the `ticketing` flag but forgets to
+ * implement the methods fails loudly instead of crashing at call time.
+ */
+export function isTicketingDriver(
+  driver: IntegrationDriver,
+): driver is IntegrationDriver &
+  Required<Pick<IntegrationDriver, 'listTickets' | 'getTicket'>> {
+  return (
+    driver.descriptor.capabilities.ticketing === true &&
+    typeof driver.listTickets === 'function' &&
+    typeof driver.getTicket === 'function'
+  );
 }

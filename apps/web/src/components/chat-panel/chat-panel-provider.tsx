@@ -152,10 +152,33 @@ export type ChatDomainPageContext = {
   getMarkdown: () => string;
 };
 
+/**
+ * Phase 12 — read-only ticket page context. Captured by the ticket
+ * detail page (NinjaOne today; provider-agnostic). The ticket
+ * markdown is already normalised server-side via `ticketToMarkdown`
+ * and passed in verbatim — there is no live editor surface to sample,
+ * so the thunk just returns the captured markdown.
+ */
+export type ChatTicketPageContext = {
+  kind: 'ticket';
+  companyId: string;
+  /**
+   * Provider-side ticket id (opaque string — NinjaOne emits numeric
+   * ids as strings, other providers may use UUIDs or short codes).
+   */
+  ticketId: string;
+  /** Driver key the ticket came from ("ninjaone", …). */
+  provider: string;
+  /** Display subject. */
+  title: string;
+  getMarkdown: () => string;
+};
+
 export type ChatPageContextSnapshot =
   | ChatArticlePageContext
   | ChatAssetPageContext
-  | ChatDomainPageContext;
+  | ChatDomainPageContext
+  | ChatTicketPageContext;
 
 type State = {
   isOpen: boolean;
@@ -1275,6 +1298,7 @@ async function resolveChatRequestContext(
   const articles: NonNullable<ChatRequestContext['articles']> = [];
   const assets: NonNullable<ChatRequestContext['assets']> = [];
   const domains: NonNullable<ChatRequestContext['domains']> = [];
+  const tickets: NonNullable<ChatRequestContext['tickets']> = [];
 
   // The picker is enabled wherever we have a companyId — either the
   // article page's richer snapshot or the company shell's broadcast.
@@ -1322,6 +1346,22 @@ async function resolveChatRequestContext(
       domains.push({
         id: pageCtx.domainId,
         hostname: pageCtx.title,
+        markdown,
+      });
+    }
+  }
+  // Auto-attach the current ticket (when viewing a ticket detail
+  // page). Tickets are read-only context — they come from an external
+  // ticketing system and we don't propose write tool calls against
+  // them. They DO travel as their own markdown block so the LLM can
+  // ground a `create_article` proposal in the real customer thread.
+  if (pageCtx && pageCtx.kind === 'ticket') {
+    const markdown = safeGetMarkdown(pageCtx);
+    if (markdown) {
+      tickets.push({
+        id: pageCtx.ticketId,
+        provider: pageCtx.provider,
+        subject: pageCtx.title,
         markdown,
       });
     }
@@ -1379,9 +1419,13 @@ async function resolveChatRequestContext(
   if (pageCtx?.kind === 'domain') {
     out.currentDomainId = pageCtx.domainId;
   }
+  if (pageCtx?.kind === 'ticket') {
+    out.currentTicketId = pageCtx.ticketId;
+  }
   if (articles.length > 0) out.articles = articles;
   if (dedupedAssets.length > 0) out.assets = dedupedAssets;
   if (dedupedDomains.length > 0) out.domains = dedupedDomains;
+  if (tickets.length > 0) out.tickets = tickets;
   if (Object.keys(out).length === 0) return undefined;
   return out;
 }

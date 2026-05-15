@@ -154,3 +154,43 @@ export function useChatDomainPageContext(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [keyParts, registerPageContext]);
 }
+
+/**
+ * Register the calling ticket detail page as the active chat panel
+ * "page context". Same mount/unmount semantics as the asset / domain
+ * hooks. Tickets are real-time-fetched from the upstream system and
+ * never persisted — the markdown is therefore captured at server-
+ * render time and passed in verbatim; the closure just returns the
+ * captured value. Provider is included so the chat panel pill (and
+ * the system prompt) can attribute the ticket to the right system.
+ */
+export function useChatTicketPageContext(
+  snapshot: {
+    companyId: string;
+    ticketId: string;
+    provider: string;
+    subject: string;
+    getMarkdown: () => string;
+  } | null,
+): void {
+  const { registerPageContext } = useChatPanel();
+  const getMarkdownRef = useRef<() => string>(() => '');
+  if (snapshot) getMarkdownRef.current = snapshot.getMarkdown;
+
+  const keyParts = snapshot
+    ? `${snapshot.companyId}|${snapshot.ticketId}|${snapshot.provider}|${snapshot.subject}`
+    : null;
+  useEffect(() => {
+    if (!snapshot) return;
+    const cleanup = registerPageContext({
+      kind: 'ticket',
+      companyId: snapshot.companyId,
+      ticketId: snapshot.ticketId,
+      provider: snapshot.provider,
+      title: snapshot.subject,
+      getMarkdown: () => getMarkdownRef.current(),
+    });
+    return cleanup;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [keyParts, registerPageContext]);
+}

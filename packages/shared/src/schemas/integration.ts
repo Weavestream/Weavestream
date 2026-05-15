@@ -132,6 +132,16 @@ export const driverDescriptorSchema = z.object({
     listSourceOrgs: z.boolean(),
     /** Driver supports `dryRun` semantics. */
     dryRun: z.boolean(),
+    /**
+     * Phase 12 — driver exposes a read-only ticketing surface
+     * (`listTickets`, `getTicket`). When true the generic
+     * `/v1/companies/:companyId/tickets` route surfaces a Tickets
+     * sidebar entry for every company that has an active mapping for
+     * this integration. Default false: a driver that does not
+     * implement the optional ticket methods is silently skipped by
+     * the dispatcher.
+     */
+    ticketing: z.boolean().default(false),
   }),
 });
 

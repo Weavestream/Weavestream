@@ -9,6 +9,7 @@ import {
   getCompanyDetail,
   getCompanyDomainsBasic,
   getCompanySubnetsBasic,
+  getCompanyTicketingCapability,
   getMe,
   getSettings,
   throwUnlessFound,
@@ -55,17 +56,30 @@ export default async function CompanyScopedLayout({
 }) {
   const { id } = await params;
 
-  const [me, settings, companyRes, layouts, counts, domainList, passwordList, subnetList] =
-    await Promise.all([
-      getMe(),
-      getSettings(),
-      getCompanyDetail(id),
-      getActiveLayouts(),
-      getCompanyAssetCounts(id),
-      getCompanyDomainsBasic(id),
-      getCompanyActivePasswords(id),
-      getCompanySubnetsBasic(id),
-    ]);
+  const [
+    me,
+    settings,
+    companyRes,
+    layouts,
+    counts,
+    domainList,
+    passwordList,
+    subnetList,
+    hasTicketingIntegration,
+  ] = await Promise.all([
+    getMe(),
+    getSettings(),
+    getCompanyDetail(id),
+    getActiveLayouts(),
+    getCompanyAssetCounts(id),
+    getCompanyDomainsBasic(id),
+    getCompanyActivePasswords(id),
+    getCompanySubnetsBasic(id),
+    // Sidebar-only capability probe; returns false (silently) for any
+    // caller that lacks `article.write` on the company, so contractor /
+    // client users never see the entry — and never trigger a 403 here.
+    getCompanyTicketingCapability(id),
+  ]);
   if (!me) notFound();
   // `throwUnlessFound` maps 404s to `notFound()`, 429s to a dedicated
   // `RateLimitedError` boundary, and network outages to
@@ -125,6 +139,7 @@ export default async function CompanyScopedLayout({
       passwordStaleBadge={passwordStaleBadge}
       subnetCount={subnetCount}
       subnetConflictBadge={subnetConflictBadge}
+      hasTicketingIntegration={hasTicketingIntegration}
       stickyNote={stickyNote}
     >
       {children}

@@ -25,10 +25,13 @@ export function ChatContextStrip(_props: { tab: ChatTab }) {
   if (!pageContext) return null;
   const isAsset = pageContext.kind === 'asset';
   const isDomain = pageContext.kind === 'domain';
+  const isTicket = pageContext.kind === 'ticket';
   const icon = isAsset ? (
     <Icon.box size={11} />
   ) : isDomain ? (
     <Icon.globe size={11} />
+  ) : isTicket ? (
+    <Icon.chat size={11} />
   ) : (
     <Icon.doc size={11} />
   );
@@ -36,18 +39,24 @@ export function ChatContextStrip(_props: { tab: ChatTab }) {
     ? 'Current asset'
     : isDomain
       ? 'Current domain'
-      : 'Current page';
+      : isTicket
+        ? 'Current ticket'
+        : 'Current page';
   const label = pageContext.title || fallbackLabel;
   const subtitle = isAsset
     ? pageContext.layoutName
     : isDomain
       ? 'domain'
-      : null;
+      : isTicket
+        ? pageContext.provider
+        : null;
   const tooltip = isAsset
     ? `Auto-attached because you're viewing this asset (${pageContext.layoutName})`
     : isDomain
       ? "Auto-attached because you're viewing this domain"
-      : "Auto-attached because you're viewing this page";
+      : isTicket
+        ? `Auto-attached because you're viewing this ticket (${pageContext.provider})`
+        : "Auto-attached because you're viewing this page";
   return (
     <div
       style={{

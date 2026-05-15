@@ -4,7 +4,20 @@ import {
   type FetchRecordsContext,
   type IntegrationContext,
 } from '../integration-driver.js';
-import { NinjaOneDriver } from './ninjaone.driver.js';
+import {
+  NinjaOneDriver,
+  __resetNinjaOneTokenCacheForTests,
+} from './ninjaone.driver.js';
+
+// Phase 12 — the driver now keeps a process-wide OAuth token cache so
+// concurrent production callers share a single live token. The spec
+// must reset that cache between scripts, otherwise the second test
+// onwards would skip the OAuth exchange and the scripted "token" frame
+// would be consumed by the wrong fetch (or, more commonly, the
+// scripted data frame would be returned with no caller).
+beforeEach(() => {
+  __resetNinjaOneTokenCacheForTests();
+});
 
 /**
  * Phase 11 — NinjaOne driver behavioural tests.
@@ -446,10 +459,12 @@ describe('NinjaOneDriver.fetchRecords', () => {
         systemName: `host-${201 + i}`,
       }),
     );
+    // Phase 12 — the driver reuses a cached OAuth token across
+    // sequential `fetchRecords` calls on the same integration, so the
+    // second page fetch does NOT round-trip /ws/oauth/token again.
     const fx = installFetchScript([
       { kind: 'json', body: { access_token: 'tok-1' } },
       { kind: 'json', body: firstPage },
-      { kind: 'json', body: { access_token: 'tok-1' } },
       { kind: 'json', body: secondPage },
     ]);
     try {
@@ -481,7 +496,7 @@ describe('NinjaOneDriver.fetchRecords', () => {
       expect(fx.calls[1]!.url).toBe(
         'https://app.ninjarmm.com/v2/devices-detailed?df=org%3D7&pageSize=200',
       );
-      expect(fx.calls[3]!.url).toBe(
+      expect(fx.calls[2]!.url).toBe(
         'https://app.ninjarmm.com/v2/devices-detailed?df=org%3D7&pageSize=200&after=200',
       );
 
@@ -492,7 +507,7 @@ describe('NinjaOneDriver.fetchRecords', () => {
       expect(fx.calls[1]!.url).not.toContain('/v2/devices?');
       // The buggy `?of=` shortcut must never appear.
       expect(fx.calls[1]!.url).not.toContain('?of=');
-      expect(fx.calls[3]!.url).not.toContain('&of=');
+      expect(fx.calls[2]!.url).not.toContain('&of=');
     } finally {
       fx.restore();
     }

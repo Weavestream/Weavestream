@@ -3,6 +3,7 @@ import { IntegrationsController } from './integrations.controller.js';
 import { IntegrationsCoreModule } from './integrations-core.module.js';
 import { IntegrationSyncQueueRegistrar } from './integration-sync-queue.registrar.js';
 import { CloudflareListsController } from './cloudflare/cloudflare-lists.controller.js';
+import { TicketsController } from './tickets.controller.js';
 
 /**
  * Phase 11 — universal integration framework module (API side).
@@ -16,7 +17,11 @@ import { CloudflareListsController } from './cloudflare/cloudflare-lists.control
  */
 @Module({
   imports: [IntegrationsCoreModule],
-  controllers: [IntegrationsController, CloudflareListsController],
+  controllers: [
+    IntegrationsController,
+    CloudflareListsController,
+    TicketsController,
+  ],
   providers: [IntegrationSyncQueueRegistrar],
   exports: [IntegrationsCoreModule],
 })

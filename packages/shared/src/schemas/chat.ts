@@ -125,6 +125,28 @@ export const chatContextDomainSchema = z.object({
 export type ChatContextDomain = z.infer<typeof chatContextDomainSchema>;
 
 /**
+ * Per-ticket markdown snapshot the client attaches to a turn.
+ *
+ * Tickets are NEVER persisted in Weavestream — the markdown blob the
+ * client sends is whatever the upstream system returned at fetch time,
+ * already normalised by the provider driver. The server treats this
+ * as opaque read-only grounding for the LLM and never proposes a tool
+ * call against it (no `update_ticket` / `create_ticket`). The 120 KB
+ * envelope is generous because ticket activity timelines can be long;
+ * the API request limiter is the outer backstop.
+ *
+ * `id` is the provider-side ticket id (not a Weavestream UUID — this
+ * field is intentionally NOT typed as `z.string().uuid()`).
+ */
+export const chatContextTicketSchema = z.object({
+  id: z.string().min(1).max(200),
+  provider: z.string().min(1).max(64),
+  subject: z.string().max(500),
+  markdown: z.string().max(120_000),
+});
+export type ChatContextTicket = z.infer<typeof chatContextTicketSchema>;
+
+/**
  * Request-scoped grounding for a single chat turn. All fields are
  * optional — a freeform tab with no @-mentions and no page context
  * sends nothing. The server uses this to (1) build a system prompt
@@ -150,9 +172,22 @@ export const chatRequestContextSchema = z.object({
    * targets.
    */
   currentDomainId: z.string().uuid().optional(),
+  /**
+   * The ticket the user is currently viewing, when applicable. Same
+   * role as `currentAssetId` — used by the system prompt to resolve
+   * "this ticket". Provider-side id (not a UUID).
+   */
+  currentTicketId: z.string().min(1).max(200).optional(),
   articles: z.array(chatContextArticleSchema).max(10).optional(),
   assets: z.array(chatContextAssetSchema).max(10).optional(),
   domains: z.array(chatContextDomainSchema).max(10).optional(),
+  /**
+   * Read-only ticket context — auto-attached when the user is on a
+   * ticket detail page. The server inlines the markdown into the
+   * system prompt; there is no `update_ticket` / `create_ticket`
+   * tool, so this is grounding only.
+   */
+  tickets: z.array(chatContextTicketSchema).max(5).optional(),
 });
 export type ChatRequestContext = z.infer<typeof chatRequestContextSchema>;
 

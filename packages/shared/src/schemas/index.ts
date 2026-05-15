@@ -25,3 +25,4 @@ export * from './ip-rule.js';
 export * from './backup.js';
 export * from './cloudflare.js';
 export * from './chat.js';
+export * from './ticket.js';

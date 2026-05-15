@@ -663,6 +663,11 @@ function buildSystemPrompt(
       `The user is currently viewing domain id ${context.currentDomainId}. When they say "this domain" or "the page", they mean that one — even if other domains are attached below.`,
     );
   }
+  if (context.currentTicketId) {
+    lines.push(
+      `The user is currently viewing ticket id ${context.currentTicketId} (from an external ticketing system). When they say "this ticket", "the ticket", or "the page", they mean that one — and they almost certainly want a draft article based on it.`,
+    );
+  }
   if (context.articles && context.articles.length > 0) {
     lines.push('');
     lines.push('--- Attached articles (read-only context) ---');
@@ -710,6 +715,26 @@ function buildSystemPrompt(
       lines.push('```');
     }
     lines.push('--- End attached domains ---');
+  }
+  if (context.tickets && context.tickets.length > 0) {
+    // Tickets are fetched in real time from the upstream ticketing
+    // system (NinjaOne today) and inlined verbatim — including
+    // internal notes. The provider is included on the heading so the
+    // model can attribute behaviour to the right system. No tool
+    // calls target tickets; the block is grounding for a follow-up
+    // `create_article` proposal.
+    lines.push('');
+    lines.push('--- Attached tickets (read-only context) ---');
+    for (const t of context.tickets) {
+      lines.push('');
+      lines.push(
+        `### Ticket "${t.subject}" — ${t.provider} (id ${t.id})`,
+      );
+      lines.push('```markdown');
+      lines.push(t.markdown);
+      lines.push('```');
+    }
+    lines.push('--- End attached tickets ---');
   }
   lines.push('');
   lines.push('Tools available:');

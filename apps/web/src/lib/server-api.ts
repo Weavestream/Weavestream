@@ -1889,3 +1889,58 @@ export async function listBackupRuns(): Promise<BackupRunDto[]> {
   return res.data;
 }
 
+// ───────────────────────────────────────────────────────────────────
+// Phase 12: external ticket browse (read-only)
+//
+// Tickets live in the upstream system (NinjaOne today); these helpers
+// only proxy the API. The "capability" probe is used by the company
+// layout to gate the sidebar entry without disclosing mapping/driver
+// identity.
+// ───────────────────────────────────────────────────────────────────
+
+export type TicketListItem = import('@weavestream/shared').TicketListDto;
+export type TicketDetail = import('@weavestream/shared').TicketDetailDto;
+export type TicketActivity = import('@weavestream/shared').TicketActivityDto;
+export type TicketListPage = import('@weavestream/shared').TicketListResponse;
+export type TicketListFilters =
+  import('@weavestream/shared').TicketListFilter;
+
+export const getCompanyTicketingCapability = cache(
+  async (companyId: string): Promise<boolean> => {
+    const res = await serverApiFetch<{ enabled: boolean }>(
+      `/companies/${companyId}/tickets/_capability`,
+    );
+    return res.ok && res.data?.enabled === true;
+  },
+);
+
+export async function listCompanyTickets(
+  companyId: string,
+  params: TicketListFilters & { cursor?: string | null } = {},
+): Promise<TicketListPage> {
+  const q = new URLSearchParams();
+  if (params.status) q.set('status', params.status);
+  if (params.priority) q.set('priority', params.priority);
+  if (params.boardId) q.set('boardId', params.boardId);
+  if (params.assigneeId) q.set('assigneeId', params.assigneeId);
+  if (params.search) q.set('search', params.search);
+  if (params.cursor) q.set('cursor', params.cursor);
+  const path = `/companies/${companyId}/tickets${
+    q.toString() ? `?${q.toString()}` : ''
+  }`;
+  const res = await serverApiFetch<TicketListPage>(path);
+  if (!res.ok || !res.data) return { records: [], cursor: null };
+  return res.data;
+}
+
+export async function getCompanyTicket(
+  companyId: string,
+  ticketId: string,
+): Promise<TicketDetail | null> {
+  const res = await serverApiFetch<TicketDetail>(
+    `/companies/${companyId}/tickets/${encodeURIComponent(ticketId)}`,
+  );
+  if (!res.ok || !res.data) return null;
+  return res.data;
+}
+

@@ -4,6 +4,14 @@ import type {
   DriverDescriptor,
   SourceFieldDto,
   SourceOrgDto,
+  TicketActivityDto,
+  TicketActivityKind,
+  TicketDetailDto,
+  TicketListDto,
+  TicketListFilter,
+  TicketListResponse,
+  TicketPriority,
+  TicketStatusBucket,
 } from '@weavestream/shared';
 import {
   DriverAuthError,
@@ -12,6 +20,7 @@ import {
   type FetchRecordsContext,
   type IntegrationContext,
   type IntegrationDriver,
+  type TicketContext,
 } from '../integration-driver.js';
 import {
   fetchWithRetry,
@@ -62,7 +71,14 @@ import {
  */
 const NINJAONE_DEFAULT_BASE_URL = 'https://app.ninjarmm.com';
 const NINJAONE_OAUTH_PATH = '/ws/oauth/token';
-const NINJAONE_OAUTH_SCOPE = 'monitoring';
+// NinjaOne OAuth2 client_credentials scopes. We always try the full
+// set first (monitoring + ticketing). If the API client wasn't granted
+// `ticketing`, NinjaOne replies 400 invalid_scope and we transparently
+// fall back to the legacy `monitoring`-only token so the pre-existing
+// sync flow keeps working — ticketing endpoints will then return
+// empty / 403 and the UI surfaces a clean "no boards" message.
+const NINJAONE_OAUTH_FULL_SCOPE = 'monitoring ticketing';
+const NINJAONE_OAUTH_FALLBACK_SCOPE = 'monitoring';
 /**
  * Resource keys this driver advertises. The orchestrator fans out one
  * sync job per `(mapping, resource)` pair, so any stale row with a
@@ -194,6 +210,62 @@ interface NinjaOneDevice {
   [key: string]: unknown;
 }
 
+/**
+ * Process-wide OAuth token cache. Keyed by either the Weavestream
+ * `integrationId` (preferred — stable across config edits when only
+ * unrelated fields change) OR a `${baseUrl}::${apiKey}` fingerprint
+ * for callers that don't plumb the integration id through
+ * (`testConnection` from the global admin UI, driver tests).
+ *
+ * NinjaOne tokens are valid for an hour; we expire on a ~50-minute
+ * TTL so a request right at the edge still has runway to complete.
+ * A 401 from any downstream NinjaOne call invalidates the cached
+ * token and the next request mints a fresh one — handles the case
+ * where the secret was rotated server-side without a Weavestream
+ * config push.
+ */
+interface CachedToken {
+  token: string;
+  expiresAt: number;
+  /** Fingerprint of the (baseUrl + apiKey + apiSecret) tuple that
+   * produced this token, so a credential change invalidates without
+   * waiting for the TTL. */
+  fingerprint: string;
+}
+const NINJAONE_TOKEN_TTL_MS = 50 * 60 * 1_000;
+const ninjaoneTokenCache = new Map<string, CachedToken>();
+
+/**
+ * Test-only helper: drop every cached OAuth token. Production code
+ * MUST NOT call this — the cache is keyed so that production
+ * concurrent callers benefit from a single live access token.
+ *
+ * @internal — only `*.spec.ts` should import this.
+ */
+export function __resetNinjaOneTokenCacheForTests(): void {
+  ninjaoneTokenCache.clear();
+}
+
+function ninjaoneTokenCacheKey(
+  ctx: IntegrationContext,
+  baseUrl: string,
+  apiKey: string,
+): string {
+  if (ctx.integrationId) return `id:${ctx.integrationId}`;
+  return `fp:${baseUrl}::${apiKey}`;
+}
+
+function ninjaoneTokenFingerprint(
+  baseUrl: string,
+  apiKey: string,
+  apiSecret: string,
+): string {
+  // We never log this string; it lives in process memory only. Using
+  // a non-cryptographic concat is fine for "did the credential change"
+  // — we're not authenticating with it.
+  return `${baseUrl}|${apiKey}|${apiSecret.length}|${apiSecret.slice(-4)}`;
+}
+
 export class NinjaOneDriver implements IntegrationDriver {
   private readonly logger = new Logger(NinjaOneDriver.name);
   readonly key = 'ninjaone';
@@ -264,6 +336,11 @@ export class NinjaOneDriver implements IntegrationDriver {
       kind: 'pull',
       listSourceOrgs: true,
       dryRun: true,
+      // Phase 12 — NinjaOne exposes the optional ticketing surface. The
+      // driver gracefully degrades when the tenant doesn't have the
+      // Ticketing add-on (404s from `/v2/ticketing/*` map to an empty
+      // list / clear "not enabled" error rather than crashing).
+      ticketing: true,
     },
   };
 
@@ -564,17 +641,94 @@ export class NinjaOneDriver implements IntegrationDriver {
   // HTTP helpers
   // -------------------------------------------------------------------
 
-  private async getAccessToken(ctx: IntegrationContext): Promise<string> {
+  /**
+   * Returns a valid OAuth2 access token. Reads from the process-wide
+   * cache first; mints a new one on miss / expiry / fingerprint change.
+   *
+   * `forceRefresh` is set internally when a downstream NinjaOne call
+   * returned 401 and the caller wants to retry once with a fresh
+   * token — see `callJson` below.
+   */
+  private async getAccessToken(
+    ctx: IntegrationContext,
+    forceRefresh = false,
+  ): Promise<string> {
     const { baseUrl } = parseConfig(ctx.config);
     const { apiKey, apiSecret } = ninjaoneSecretSchema.parse(ctx.secret);
 
+    const cacheKey = ninjaoneTokenCacheKey(ctx, baseUrl, apiKey);
+    const fingerprint = ninjaoneTokenFingerprint(baseUrl, apiKey, apiSecret);
+    if (!forceRefresh) {
+      const cached = ninjaoneTokenCache.get(cacheKey);
+      if (
+        cached &&
+        cached.fingerprint === fingerprint &&
+        cached.expiresAt > Date.now()
+      ) {
+        return cached.token;
+      }
+    }
+
     const tokenUrl = `${baseUrl.replace(/\/$/, '')}${NINJAONE_OAUTH_PATH}`;
 
+    // Try the full scope set first; on `invalid_scope` fall back to
+    // monitoring-only. Two attempts max — if both fail we surface a
+    // single DriverAuthError with the upstream body.
+    let token = await this.exchangeForToken(
+      tokenUrl,
+      apiKey,
+      apiSecret,
+      NINJAONE_OAUTH_FULL_SCOPE,
+      ctx,
+      cacheKey,
+      { failOnInvalidScope: true },
+    );
+    if (token === null) {
+      this.logger.warn(
+        `NinjaOne API client lacks the "ticketing" scope (integration ${ctx.integrationId ?? '<unknown>'}); falling back to monitoring-only. Ticket browsing will be empty until the operator enables ticketing on the NinjaOne API client.`,
+      );
+      token = await this.exchangeForToken(
+        tokenUrl,
+        apiKey,
+        apiSecret,
+        NINJAONE_OAUTH_FALLBACK_SCOPE,
+        ctx,
+        cacheKey,
+        { failOnInvalidScope: false },
+      );
+    }
+    if (!token) {
+      // Should be unreachable: the second call throws on failure.
+      throw new DriverAuthError('NinjaOne token exchange failed.');
+    }
+    ninjaoneTokenCache.set(cacheKey, {
+      token,
+      expiresAt: Date.now() + NINJAONE_TOKEN_TTL_MS,
+      fingerprint,
+    });
+    return token;
+  }
+
+  /**
+   * Single OAuth2 token exchange round-trip. Returns the token on
+   * success, `null` ONLY when `failOnInvalidScope` is true and the
+   * upstream responded with `invalid_scope` (so the caller can retry
+   * with a narrower scope set). Any other failure throws.
+   */
+  private async exchangeForToken(
+    tokenUrl: string,
+    apiKey: string,
+    apiSecret: string,
+    scope: string,
+    ctx: IntegrationContext,
+    cacheKey: string,
+    opts: { failOnInvalidScope: boolean },
+  ): Promise<string | null> {
     const body = new URLSearchParams({
       grant_type: 'client_credentials',
       client_id: apiKey,
       client_secret: apiSecret,
-      scope: NINJAONE_OAUTH_SCOPE,
+      scope,
     });
 
     const res = await fetchWithRetry(tokenUrl, {
@@ -592,12 +746,37 @@ export class NinjaOneDriver implements IntegrationDriver {
     });
 
     if (res.status === 401 || res.status === 403) {
+      ninjaoneTokenCache.delete(cacheKey);
       throw new DriverAuthError(
         `NinjaOne token exchange failed (${res.status}). Check the Client ID, Client Secret, and that the API client has the "monitoring" scope.`,
       );
     }
+    if (res.status === 400 && opts.failOnInvalidScope) {
+      // Body is JSON: { "error": "invalid_scope", "error_description": "..." }
+      const bodyText = await res
+        .text()
+        .catch(() => '')
+        .then((t) => t.slice(0, 500));
+      if (/invalid_scope/i.test(bodyText)) {
+        return null;
+      }
+      ninjaoneTokenCache.delete(cacheKey);
+      throw new DriverAuthError(
+        `NinjaOne token exchange returned HTTP 400${
+          bodyText ? `: ${bodyText.slice(0, 200)}` : ''
+        }`,
+      );
+    }
     if (!res.ok) {
-      throw new Error(`NinjaOne token exchange returned HTTP ${res.status}`);
+      const bodyText = await res
+        .text()
+        .catch(() => '')
+        .then((t) => t.slice(0, 500));
+      throw new Error(
+        `NinjaOne token exchange returned HTTP ${res.status}${
+          bodyText ? `: ${bodyText.slice(0, 200)}` : ''
+        }`,
+      );
     }
 
     const json = (await res.json()) as { access_token?: string };
@@ -607,6 +786,12 @@ export class NinjaOneDriver implements IntegrationDriver {
       );
     }
     return json.access_token;
+  }
+
+  private invalidateToken(ctx: IntegrationContext): void {
+    const { baseUrl } = parseConfig(ctx.config);
+    const { apiKey } = ninjaoneSecretSchema.parse(ctx.secret);
+    ninjaoneTokenCache.delete(ninjaoneTokenCacheKey(ctx, baseUrl, apiKey));
   }
 
   private async callJson<T>(
@@ -627,6 +812,9 @@ export class NinjaOneDriver implements IntegrationDriver {
     });
 
     if (res.status === 401 || res.status === 403) {
+      // Token may have been revoked or expired sooner than our TTL.
+      // Drop the cached entry so the next call mints fresh credentials.
+      this.invalidateToken(opts.ctx);
       throw new DriverAuthError(
         `NinjaOne GET ${url} returned ${res.status}. Token rejected.`,
       );
@@ -636,6 +824,497 @@ export class NinjaOneDriver implements IntegrationDriver {
     }
     return (await res.json()) as T;
   }
+
+  // -------------------------------------------------------------------
+  // Phase 12 — ticketing surface (read-only)
+  // -------------------------------------------------------------------
+
+  /**
+   * Lists tickets for a single NinjaOne organisation. NinjaOne returns
+   * tickets via a per-board scrolling endpoint
+   * (`POST /v2/ticketing/trigger/board/{boardId}/run`), which means
+   * we must walk every visible board and union the rows.
+   *
+   * We scope to the mapped `externalOrgId` via a `clientId` filter on
+   * each board's request body so devices from other tenants never leak
+   * — the API will silently include all tenants the caller can see if
+   * the filter is missing.
+   *
+   * Pagination is cursor-based but per-board; for simplicity v1 fetches
+   * the first page (200 rows) per board and stops there. Subsequent
+   * pages are surfaced via the returned cursor (`board-id:lastCursorId`).
+   */
+  async listTickets(
+    ctx: TicketContext,
+    filter: TicketListFilter,
+    cursor: string | null,
+  ): Promise<TicketListResponse> {
+    const { baseUrl } = parseConfig(ctx.config);
+    const expectedOrgId = parseClientId(ctx.externalOrgId);
+    const token = await this.getAccessToken(ctx);
+    const headers = {
+      Authorization: `Bearer ${token}`,
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+    };
+
+    const boards = await this.fetchTicketBoards(ctx, headers, baseUrl);
+    if (boards.length === 0) {
+      // Most common cause: the API client in NinjaOne wasn't granted
+      // the `ticketing` scope, or the tenant has no boards configured.
+      // We log a warning here (no PII) so operators can quickly tell
+      // why the list is empty.
+      this.logger.warn(
+        `NinjaOne returned zero ticketing boards for integration ${ctx.integrationId ?? '<unknown>'} (org ${ctx.externalOrgId}). Verify the API client has the "ticketing" scope and at least one ticket board exists.`,
+      );
+      return { records: [], cursor: null };
+    }
+    this.logger.debug(
+      `NinjaOne returned ${boards.length} ticketing board(s) for org ${ctx.externalOrgId}.`,
+    );
+
+    // Restrict to a single board when the operator filtered to one.
+    const walkBoards = filter.boardId
+      ? boards.filter((b) => String(b.id) === filter.boardId)
+      : boards;
+
+    // Pagination cursor: "boardId:lastCursorId". A null cursor starts
+    // a fresh scan at the first board. When a board is exhausted we
+    // jump to the next board in `walkBoards`. The cursor returned to
+    // the UI always identifies the NEXT request's starting point.
+    let resumeBoardId: number | null = null;
+    let resumeAfter = 0;
+    if (cursor) {
+      const m = /^(\d+):(\d+)$/.exec(cursor);
+      if (m) {
+        resumeBoardId = Number.parseInt(m[1] ?? '', 10);
+        resumeAfter = Number.parseInt(m[2] ?? '0', 10);
+      }
+    }
+    let startIndex = 0;
+    if (resumeBoardId !== null) {
+      const idx = walkBoards.findIndex((b) => b.id === resumeBoardId);
+      if (idx >= 0) startIndex = idx;
+      else resumeAfter = 0; // Board vanished; resume from first board.
+    }
+
+    // Target visible page size + upstream fetch budget. We keep
+    // scanning upstream pages until we either hit the visible target,
+    // exhaust every board, or hit the per-request fetch cap (latency
+    // backstop).
+    const TARGET_VISIBLE = 25;
+    const UPSTREAM_PAGE_SIZE = 100;
+    const MAX_UPSTREAM_FETCHES = 8;
+
+    const allRecords: TicketListDto[] = [];
+    let nextCursor: string | null = null;
+    let upstreamFetches = 0;
+
+    boardLoop: for (let bi = startIndex; bi < walkBoards.length; bi += 1) {
+      const board = walkBoards[bi]!;
+      let lastCursorId = bi === startIndex ? resumeAfter : 0;
+      for (;;) {
+        if (upstreamFetches >= MAX_UPSTREAM_FETCHES) {
+          // Latency backstop. Return what we have with a cursor
+          // pointing at the exact resume point so the next click
+          // continues seamlessly.
+          nextCursor = `${board.id}:${lastCursorId}`;
+          break boardLoop;
+        }
+        upstreamFetches += 1;
+        const page = await this.fetchBoardPage(
+          ctx,
+          headers,
+          baseUrl,
+          board,
+          lastCursorId,
+          UPSTREAM_PAGE_SIZE,
+          filter,
+          expectedOrgId,
+        );
+        for (const dto of page.records) {
+          if (allRecords.length >= TARGET_VISIBLE) break;
+          allRecords.push(dto);
+        }
+        // Stop conditions:
+        //  - visible target reached → cursor resumes at the current
+        //    board's next position (or next board if we just drained).
+        //  - board exhausted (returned < page size) → continue
+        //    to the next board.
+        //  - hard stop only if both target hit AND board has more.
+        if (allRecords.length >= TARGET_VISIBLE) {
+          if (page.exhausted) {
+            // Board done; resume at the NEXT board on next click.
+            const next = walkBoards[bi + 1];
+            nextCursor = next ? `${next.id}:0` : null;
+          } else {
+            nextCursor = `${board.id}:${page.lastCursorId ?? lastCursorId}`;
+          }
+          break boardLoop;
+        }
+        if (page.exhausted) break; // Move to next board.
+        lastCursorId = page.lastCursorId ?? lastCursorId;
+      }
+    }
+
+    return { records: allRecords, cursor: nextCursor };
+  }
+
+  /**
+   * Fetches one upstream page from a single board, enriches incomplete
+   * rows, applies client-side filtering + IDOR enforcement, and
+   * returns the visible records plus the upstream cursor for the next
+   * page (if any). Marks the board as exhausted when the upstream
+   * returned fewer rows than the requested page size.
+   */
+  private async fetchBoardPage(
+    ctx: TicketContext,
+    headers: Record<string, string>,
+    baseUrl: string,
+    board: { id: number; name: string },
+    lastCursorId: number,
+    pageSize: number,
+    filter: TicketListFilter,
+    expectedOrgId: number | null,
+  ): Promise<{
+    records: TicketListDto[];
+    lastCursorId: number | null;
+    exhausted: boolean;
+  }> {
+    // NinjaOne's `/trigger/board/{id}/run` is finicky about the body
+    // shape — `filters` with the wrong operator returns HTTP 500.
+    // The community-proven minimal body (sortBy + pageSize + optional
+    // lastCursorId/searchCriteria) is what we send; all filtering
+    // happens client-side.
+    const requestBody: Record<string, unknown> = {
+      pageSize,
+      sortBy: [{ field: 'lastUpdated', direction: 'DESC' }],
+      ...(lastCursorId > 0 ? { lastCursorId } : {}),
+      ...(filter.search ? { searchCriteria: filter.search } : {}),
+    };
+
+    const url = `${baseUrl.replace(/\/$/, '')}/v2/ticketing/trigger/board/${board.id}/run`;
+    const res = await fetchWithRetry(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(requestBody),
+      timeoutMs: ctx.http.timeoutMs,
+      maxRetries: ctx.http.maxRetries,
+      backoffMs: ctx.http.backoffMs,
+      correlationId: ctx.correlationId,
+      serviceName: 'NinjaOne',
+    });
+
+    if (res.status === 401 || res.status === 403) {
+      this.invalidateToken(ctx);
+      throw new DriverAuthError(
+        `NinjaOne ticketing list failed (${res.status}). Token rejected.`,
+      );
+    }
+    if (res.status === 404) {
+      return { records: [], lastCursorId: null, exhausted: true };
+    }
+    if (!res.ok) {
+      const bodyText = await res
+        .text()
+        .catch(() => '')
+        .then((t) => t.slice(0, 500));
+      this.logger.warn(
+        `NinjaOne ticketing list returned HTTP ${res.status} for board ${board.id} (corr=${ctx.correlationId}): ${bodyText}`,
+      );
+      throw new Error(
+        `NinjaOne ticketing list returned HTTP ${res.status}${
+          bodyText ? `: ${bodyText.slice(0, 200)}` : ''
+        }`,
+      );
+    }
+
+    const payload = (await res.json()) as {
+      data?: Array<Record<string, unknown>>;
+      metadata?: { lastCursorId?: number };
+    };
+    const rows = Array.isArray(payload?.data) ? payload.data : [];
+
+    // Build candidates + flag rows needing canonical enrichment.
+    type Candidate = {
+      row: Record<string, unknown>;
+      dto: TicketListDto;
+      needsEnrich: boolean;
+    };
+    const candidates: Candidate[] = [];
+    for (const row of rows) {
+      const dto = mapNinjaTicketListRow(row, board);
+      if (!dto) continue;
+      const hasClientId =
+        pickNumber(row, ['clientId', 'clientID', 'organizationId', 'orgId']) !==
+        null;
+      const subjectMissing = dto.subject === '(no subject)';
+      candidates.push({
+        row,
+        dto,
+        needsEnrich:
+          subjectMissing || (expectedOrgId !== null && !hasClientId),
+      });
+    }
+
+    // Enrich incomplete rows. NinjaOne rate-limits aggressively, so
+    // we cap concurrency at 4 here. Failed enrichments aggregate by
+    // failure reason so the operator can see WHY (e.g., 429 rate
+    // limit vs missing field on the upstream detail).
+    const toEnrich = candidates.filter((c) => c.needsEnrich);
+    const failureCounts = new Map<string, number>();
+    if (toEnrich.length > 0) {
+      const concurrency = 4;
+      for (let i = 0; i < toEnrich.length; i += concurrency) {
+        const batch = toEnrich.slice(i, i + concurrency);
+        await Promise.all(
+          batch.map(async (c) => {
+            const enriched = await this.fetchTicketEnrichment(
+              ctx,
+              headers,
+              baseUrl,
+              c.dto.id,
+            );
+            if ('failure' in enriched) {
+              failureCounts.set(
+                enriched.failure,
+                (failureCounts.get(enriched.failure) ?? 0) + 1,
+              );
+              return;
+            }
+            if (enriched.subject) c.dto.subject = enriched.subject;
+            if (enriched.clientId !== undefined) {
+              c.row['clientId'] = enriched.clientId;
+            }
+          }),
+        );
+      }
+    }
+
+    // Filter + IDOR enforcement.
+    const visible: TicketListDto[] = [];
+    let droppedForOrgMismatch = 0;
+    let droppedForMissingClientId = 0;
+    for (const { row, dto } of candidates) {
+      if (expectedOrgId !== null) {
+        const rowClientId = pickNumber(row, [
+          'clientId',
+          'clientID',
+          'organizationId',
+          'orgId',
+        ]);
+        if (rowClientId === null) {
+          droppedForMissingClientId += 1;
+          continue;
+        }
+        if (rowClientId !== expectedOrgId) {
+          droppedForOrgMismatch += 1;
+          continue;
+        }
+      }
+      if (filter.status && dto.status !== filter.status) continue;
+      if (
+        filter.priority &&
+        filter.priority !== 'none' &&
+        dto.priority !== filter.priority
+      ) {
+        continue;
+      }
+      if (
+        filter.assigneeId &&
+        (dto.assignee?.id ?? null) !== filter.assigneeId
+      ) {
+        continue;
+      }
+      visible.push(dto);
+    }
+    if (droppedForOrgMismatch > 0) {
+      this.logger.debug(
+        `NinjaOne board ${board.id} dropped ${droppedForOrgMismatch} ticket(s) for org mismatch (kept for IDOR safety, expected org ${ctx.externalOrgId}).`,
+      );
+    }
+    if (droppedForMissingClientId > 0) {
+      const breakdown = [...failureCounts.entries()]
+        .map(([k, v]) => `${k}=${v}`)
+        .join(', ');
+      this.logger.warn(
+        `NinjaOne board ${board.id} dropped ${droppedForMissingClientId} ticket(s) with unresolved clientId. Enrichment failures: ${breakdown || 'none'} (corr=${ctx.correlationId}).`,
+      );
+    }
+
+    const exhausted = rows.length < pageSize;
+    return {
+      records: visible,
+      lastCursorId: payload.metadata?.lastCursorId ?? null,
+      exhausted,
+    };
+  }
+
+  /**
+   * Lightweight enrichment helper for the list flow. Fetches only the
+   * canonical fields needed to render the row and enforce org
+   * scoping; does NOT fetch logs. Returns `null` on any failure so
+   * the caller can decide to drop the row. Failures bubble up the
+   * upstream status code so the caller can aggregate diagnostics.
+   */
+  private async fetchTicketEnrichment(
+    ctx: TicketContext,
+    headers: Record<string, string>,
+    baseUrl: string,
+    ticketId: string,
+  ): Promise<
+    | { subject: string | null; clientId: number | undefined }
+    | { failure: string }
+  > {
+    const url = `${baseUrl.replace(/\/$/, '')}/v2/ticketing/ticket/${ticketId}`;
+    try {
+      const res = await fetchWithRetry(url, {
+        method: 'GET',
+        headers,
+        timeoutMs: ctx.http.timeoutMs,
+        maxRetries: ctx.http.maxRetries,
+        backoffMs: ctx.http.backoffMs,
+        correlationId: ctx.correlationId,
+        serviceName: 'NinjaOne',
+      });
+      if (!res.ok) {
+        if (res.status === 401 || res.status === 403) {
+          this.invalidateToken(ctx);
+        }
+        return { failure: `http_${res.status}` };
+      }
+      const json = (await res.json()) as Record<string, unknown>;
+      if (!json || typeof json !== 'object') return { failure: 'empty_body' };
+      return {
+        subject: pickString(json, ['subject', 'summary', 'name', 'title']),
+        clientId:
+          pickNumber(json, ['clientId', 'clientID', 'organizationId', 'orgId']) ??
+          undefined,
+      };
+    } catch (e) {
+      return { failure: e instanceof Error ? e.message.slice(0, 80) : 'unknown' };
+    }
+  }
+
+  /**
+   * Fetches a single ticket's full detail + log entries and projects
+   * them onto the canonical TicketDetailDto shape.
+   */
+  async getTicket(ctx: TicketContext, ticketId: string): Promise<TicketDetailDto> {
+    const cleanId = String(ticketId).trim();
+    if (!/^\d+$/.test(cleanId)) {
+      throw new Error(`Invalid NinjaOne ticket id: ${ticketId}`);
+    }
+    const { baseUrl } = parseConfig(ctx.config);
+    const token = await this.getAccessToken(ctx);
+    const expectedOrgId = parseClientId(ctx.externalOrgId);
+
+    const ticketUrl = `${baseUrl.replace(/\/$/, '')}/v2/ticketing/ticket/${cleanId}`;
+    const logsUrl = `${baseUrl.replace(/\/$/, '')}/v2/ticketing/ticket/${cleanId}/log-entry`;
+    const [ticketRaw, logsRaw] = await Promise.all([
+      this.callJson<Record<string, unknown>>(ticketUrl, { token, ctx }),
+      this.callJson<Array<Record<string, unknown>>>(logsUrl, {
+        token,
+        ctx,
+      }).catch(() => [] as Array<Record<string, unknown>>),
+    ]);
+
+    if (!ticketRaw || typeof ticketRaw !== 'object') {
+      throw new Error(`NinjaOne ticket ${cleanId} returned an empty payload`);
+    }
+
+    // IDOR backstop: NinjaOne lets the API caller fetch any ticket id
+    // by direct URL regardless of the configured org mapping. We
+    // reject any ticket whose `clientId` doesn't match the mapping's
+    // upstream org so a hand-crafted URL can't leak cross-tenant
+    // tickets into the wrong Weavestream company.
+    if (expectedOrgId !== null) {
+      const rowClientId = pickNumber(ticketRaw, [
+        'clientId',
+        'clientID',
+        'organizationId',
+        'orgId',
+      ]);
+      if (rowClientId === null || rowClientId !== expectedOrgId) {
+        throw new DriverAuthError(
+          `NinjaOne ticket ${cleanId} belongs to a different organisation than the configured mapping.`,
+        );
+      }
+    }
+
+    const subject =
+      pickString(ticketRaw, ['subject', 'summary', 'name', 'title']) ??
+      '(no subject)';
+    const status = mapStatusBucket(ticketRaw['status']);
+    const priority = mapPriority(ticketRaw['priority']);
+    const requester = mapParty(ticketRaw['requesterUid']);
+    const assignee = mapAssignee(ticketRaw['assignedAppUserId']);
+    const description = extractDescription(logsRaw);
+    const activities = mapActivities(logsRaw);
+    const raw = stripCanonicalKeys(ticketRaw);
+
+    return {
+      id: cleanId,
+      provider: 'ninjaone',
+      displayId: `T-${cleanId}`,
+      subject,
+      status,
+      statusLabel: extractStatusLabel(ticketRaw['status']),
+      priority,
+      boardName: typeof raw['boardName'] === 'string' ? (raw['boardName'] as string) : null,
+      typeLabel: typeof ticketRaw['type'] === 'string' ? (ticketRaw['type'] as string) : null,
+      requester,
+      assignee,
+      createdAt: epochSecondsToIso(numberOf(ticketRaw['createTime']) ?? 0),
+      updatedAt: epochSecondsToIso(numberOf(ticketRaw['lastUpdated']) ?? 0),
+      description,
+      activities,
+      attachments: [],
+      raw,
+    };
+  }
+
+  private async fetchTicketBoards(
+    ctx: IntegrationContext,
+    headers: Record<string, string>,
+    baseUrl: string,
+  ): Promise<Array<{ id: number; name: string }>> {
+    const url = `${baseUrl.replace(/\/$/, '')}/v2/ticketing/trigger/boards`;
+    const res = await fetchWithRetry(url, {
+      method: 'GET',
+      headers,
+      timeoutMs: ctx.http.timeoutMs,
+      maxRetries: ctx.http.maxRetries,
+      backoffMs: ctx.http.backoffMs,
+      correlationId: ctx.correlationId,
+      serviceName: 'NinjaOne',
+    });
+    if (res.status === 401 || res.status === 403) {
+      this.invalidateToken(ctx);
+      throw new DriverAuthError(
+        `NinjaOne ticketing boards failed (${res.status}). Token rejected.`,
+      );
+    }
+    if (res.status === 404) {
+      // No ticketing add-on for this tenant — surface as a clean
+      // "not enabled" path. The controller maps this to a 400 with a
+      // helpful message rather than a generic 5xx.
+      return [];
+    }
+    if (!res.ok) {
+      throw new Error(`NinjaOne ticketing boards returned HTTP ${res.status}`);
+    }
+    const json = (await res.json()) as Array<Record<string, unknown>>;
+    if (!Array.isArray(json)) return [];
+    const boards: Array<{ id: number; name: string }> = [];
+    for (const b of json) {
+      const id = numberOf(b['id']);
+      const name = typeof b['name'] === 'string' ? (b['name'] as string) : '';
+      if (id !== null) boards.push({ id, name });
+    }
+    return boards;
+  }
+
 }
 
 function parseConfig(raw: Record<string, unknown>): { baseUrl: string } {
@@ -1087,6 +1766,293 @@ function epochSecondsToIso(seconds: number): string | null {
   const d = new Date(ms);
   if (Number.isNaN(d.getTime())) return null;
   return d.toISOString();
+}
+
+// ---------------------------------------------------------------------
+// Ticketing — helpers
+// ---------------------------------------------------------------------
+
+/**
+ * Keys lifted onto the canonical TicketDetailDto. Stripped from the
+ * `raw` bag so the "Provider details" panel doesn't duplicate them.
+ */
+const TICKET_CANONICAL_KEYS = new Set([
+  'id',
+  'subject',
+  'status',
+  'priority',
+  'type',
+  'createTime',
+  'lastUpdated',
+  'requesterUid',
+  'assignedAppUserId',
+  'boardName',
+]);
+
+function stripCanonicalKeys(
+  raw: Record<string, unknown>,
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(raw)) {
+    if (TICKET_CANONICAL_KEYS.has(k)) continue;
+    out[k] = v;
+  }
+  return out;
+}
+
+function numberOf(v: unknown): number | null {
+  if (typeof v === 'number' && Number.isFinite(v)) return v;
+  if (typeof v === 'string') {
+    const parsed = Number.parseFloat(v);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+function parseClientId(externalOrgId: string): number | null {
+  const parsed = Number.parseInt(externalOrgId, 10);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function mapStatusBucket(raw: unknown): TicketStatusBucket {
+  if (!raw || typeof raw !== 'object') return 'open';
+  const parentId = numberOf((raw as Record<string, unknown>)['parentId']);
+  const statusId = numberOf((raw as Record<string, unknown>)['statusId']);
+  const id = parentId ?? statusId;
+  if (id === 5) return 'closed';
+  if (id === 4) return 'resolved';
+  if (id === 3) return 'pending';
+  return 'open';
+}
+
+function extractStatusLabel(raw: unknown): string | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const dn = (raw as Record<string, unknown>)['displayName'];
+  if (typeof dn === 'string' && dn.length > 0) return dn;
+  const name = (raw as Record<string, unknown>)['name'];
+  if (typeof name === 'string' && name.length > 0) return name;
+  return null;
+}
+
+function mapPriority(raw: unknown): TicketPriority {
+  if (typeof raw !== 'string') return 'none';
+  switch (raw.toUpperCase()) {
+    case 'LOW':
+      return 'low';
+    case 'MEDIUM':
+    case 'NORMAL':
+      return 'normal';
+    case 'HIGH':
+      return 'high';
+    case 'CRITICAL':
+    case 'URGENT':
+      return 'urgent';
+    default:
+      return 'none';
+  }
+}
+
+function mapParty(uid: unknown): { id: string | null; name: string | null } | null {
+  if (typeof uid !== 'string' || !uid) return null;
+  return { id: uid, name: null };
+}
+
+function mapAssignee(
+  appUserId: unknown,
+): { id: string | null; name: string | null } | null {
+  const n = numberOf(appUserId);
+  if (n === null) return null;
+  return { id: String(n), name: null };
+}
+
+/**
+ * Pulls a value from `row` by trying each candidate key in order.
+ * NinjaOne's `/trigger/board/{id}/run` response shape varies with
+ * the board's "displayed fields" configuration — fields not enabled
+ * on the board view are omitted entirely. We try the canonical key
+ * first, then a few common aliases so we don't render "(no subject)"
+ * just because a board uses `summary` instead of `subject`.
+ */
+function pickString(
+  row: Record<string, unknown>,
+  keys: readonly string[],
+): string | null {
+  for (const k of keys) {
+    const v = row[k];
+    if (typeof v === 'string' && v.length > 0) return v;
+  }
+  return null;
+}
+
+function pickNumber(
+  row: Record<string, unknown>,
+  keys: readonly string[],
+): number | null {
+  for (const k of keys) {
+    const v = numberOf(row[k]);
+    if (v !== null) return v;
+  }
+  return null;
+}
+
+function mapNinjaTicketListRow(
+  row: Record<string, unknown>,
+  board: { id: number; name: string },
+): TicketListDto | null {
+  const id = pickNumber(row, ['id', 'ticketId', 'ticketID']);
+  if (id === null) return null;
+  const subject =
+    pickString(row, ['subject', 'summary', 'name', 'title']) ?? '(no subject)';
+  return {
+    id: String(id),
+    provider: 'ninjaone',
+    displayId: `T-${id}`,
+    subject,
+    status: mapStatusBucket(row['status']),
+    statusLabel: extractStatusLabel(row['status']),
+    priority: mapPriority(row['priority']),
+    boardName: board.name || null,
+    typeLabel: pickString(row, ['type', 'ticketType']),
+    requester: mapParty(row['requesterUid'] ?? row['requestorUid']),
+    assignee: mapAssignee(
+      row['assignedAppUserId'] ?? row['assignedAppUserID'],
+    ),
+    createdAt: epochSecondsToIso(
+      pickNumber(row, ['createTime', 'created', 'createdAt']) ?? 0,
+    ),
+    updatedAt: epochSecondsToIso(
+      pickNumber(row, ['lastUpdated', 'updated', 'updatedAt']) ?? 0,
+    ),
+  };
+}
+
+/**
+ * NinjaOne keeps the original ticket description as the FIRST log
+ * entry with type `DESCRIPTION`. Subsequent comments / system events
+ * append to the same log. We surface the description separately so
+ * the UI's header block has the body without duplicating it in the
+ * activity timeline.
+ */
+function extractDescription(
+  logs: Array<Record<string, unknown>>,
+): string | null {
+  if (!Array.isArray(logs) || logs.length === 0) return null;
+  for (const entry of logs) {
+    const type = typeof entry['type'] === 'string' ? entry['type'] : '';
+    if (type !== 'DESCRIPTION') continue;
+    const body = entry['body'];
+    if (typeof body === 'string' && body.trim().length > 0) return body;
+    const html = entry['htmlBody'];
+    if (typeof html === 'string' && html.trim().length > 0) {
+      return htmlToPlain(html);
+    }
+  }
+  return null;
+}
+
+function mapActivities(
+  logs: Array<Record<string, unknown>>,
+): TicketActivityDto[] {
+  if (!Array.isArray(logs)) return [];
+  const out: TicketActivityDto[] = [];
+  for (const entry of logs) {
+    const id = numberOf(entry['id']);
+    if (id === null) continue;
+    const rawKind =
+      typeof entry['type'] === 'string' ? (entry['type'] as string) : 'OTHER';
+    // Skip the description — it's surfaced via the header block.
+    if (rawKind === 'DESCRIPTION') continue;
+    const kind = mapActivityKind(rawKind, entry);
+    const body =
+      typeof entry['body'] === 'string' && (entry['body'] as string).trim().length > 0
+        ? (entry['body'] as string)
+        : typeof entry['htmlBody'] === 'string' &&
+            (entry['htmlBody'] as string).trim().length > 0
+          ? htmlToPlain(entry['htmlBody'] as string)
+          : null;
+    const occurredAt =
+      epochSecondsToIso(numberOf(entry['createTime']) ?? 0) ??
+      new Date().toISOString();
+    const authorUid =
+      typeof entry['appUserContactUid'] === 'string'
+        ? (entry['appUserContactUid'] as string)
+        : null;
+    out.push({
+      id: String(id),
+      kind,
+      label: humanizeActivityKind(kind, rawKind),
+      body,
+      author: authorUid ? { id: authorUid, name: null } : null,
+      occurredAt,
+      rawKind,
+    });
+  }
+  // Sort oldest first — `createTime` may not always come back in order.
+  out.sort((a, b) => a.occurredAt.localeCompare(b.occurredAt));
+  return out;
+}
+
+function mapActivityKind(
+  rawKind: string,
+  entry: Record<string, unknown>,
+): TicketActivityKind {
+  const isPublic = entry['publicEntry'] === true;
+  const isSystem = entry['system'] === true;
+  switch (rawKind) {
+    case 'COMMENT':
+      return isPublic ? 'comment' : 'internal_note';
+    case 'CONDITION':
+    case 'INFO':
+      return 'status_change';
+    case 'SAVE':
+      return isSystem ? 'system' : 'status_change';
+    case 'DELETE':
+      return 'system';
+    default:
+      return 'other';
+  }
+}
+
+function humanizeActivityKind(
+  kind: TicketActivityKind,
+  rawKind: string,
+): string {
+  switch (kind) {
+    case 'comment':
+      return 'Comment';
+    case 'internal_note':
+      return 'Internal note';
+    case 'status_change':
+      return 'Status change';
+    case 'assignment':
+      return 'Assignment change';
+    case 'system':
+      return 'System event';
+    default:
+      return rawKind ? rawKind.charAt(0) + rawKind.slice(1).toLowerCase() : 'Event';
+  }
+}
+
+/**
+ * Minimal HTML → plain conversion for ticket bodies. NinjaOne's
+ * `htmlBody` is operator-authored HTML; we only ever surface it
+ * inside our own UI (which renders it as markdown) and as LLM
+ * context, so stripping to text is safe. We never inject it as HTML
+ * into the page.
+ */
+function htmlToPlain(html: string): string {
+  return html
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/p>/gi, '\n\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
 }
 
 /**

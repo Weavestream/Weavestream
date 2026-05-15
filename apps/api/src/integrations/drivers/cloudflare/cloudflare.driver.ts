@@ -69,6 +69,7 @@ export class CloudflareDriver {
       kind: 'security',
       listSourceOrgs: false,
       dryRun: false,
+      ticketing: false,
     },
   };
 

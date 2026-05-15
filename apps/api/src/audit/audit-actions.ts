@@ -203,6 +203,17 @@ export const AUDIT_ACTIONS = {
   upload: {
     reap: 'upload.reap',
   },
+  // Phase 12 — real-time external ticket browse (NinjaOne first).
+  // Tickets are NEVER persisted, so the audit log is the only record
+  // that a given operator looked at a given ticket id. `entityType`
+  // is 'Ticket'; `entityId` is the provider ticket id (opaque string,
+  // never a Weavestream uuid). `companyId` is always set. We log the
+  // identifiers only — never the ticket subject/body — so audit
+  // entries don't leak customer-supplied content into a second store.
+  tickets: {
+    list: 'tickets.list',
+    view: 'tickets.view',
+  },
 } as const;
 
 export const ALL_AUDIT_ACTIONS: string[] = [
@@ -222,4 +233,5 @@ export const ALL_AUDIT_ACTIONS: string[] = [
   ...Object.values(AUDIT_ACTIONS.security),
   ...Object.values(AUDIT_ACTIONS.backup),
   ...Object.values(AUDIT_ACTIONS.upload),
+  ...Object.values(AUDIT_ACTIONS.tickets),
 ];
