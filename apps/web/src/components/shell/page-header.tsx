@@ -6,6 +6,7 @@ export function PageHeader({
   title,
   description,
   actions,
+  leading,
 }: {
   crumbs: Crumb[];
   // Widened to ReactNode so pages can compose the title with an
@@ -17,28 +18,53 @@ export function PageHeader({
   // page renders a type tag + parent company chip here).
   description?: ReactNode;
   actions?: ReactNode;
+  // Optional left-side decoration (icon, swatch, avatar) that spans
+  // the full height of the title + description block. Use when an
+  // inline element next to the title alone would leave the
+  // description visually unanchored.
+  leading?: ReactNode;
 }) {
-  const sub = (
-    <>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 }}>
-        <h1
+  const titleBlock = (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 }}>
+      <h1
+        style={{
+          margin: 0,
+          fontFamily: 'var(--font-display)',
+          fontSize: 22,
+          lineHeight: 1.2,
+          fontWeight: 600,
+          letterSpacing: -0.5,
+          color: 'var(--text)',
+        }}
+      >
+        {title}
+      </h1>
+      {description && (
+        <div
           style={{
-            margin: 0,
-            fontFamily: 'var(--font-display)',
-            fontSize: 22,
-            fontWeight: 600,
-            letterSpacing: -0.5,
-            color: 'var(--text)',
+            fontSize: 12.5,
+            lineHeight: 1.4,
+            color: 'var(--muted)',
+            maxWidth: 640,
           }}
         >
-          {title}
-        </h1>
-        {description && (
-          <div style={{ fontSize: 12.5, color: 'var(--muted)', maxWidth: 640 }}>
-            {description}
+          {description}
+        </div>
+      )}
+    </div>
+  );
+  const sub = (
+    <>
+      {leading ? (
+        <div style={{ display: 'flex', gap: 12, alignItems: 'center', minWidth: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', flexShrink: 0 }}>
+            {leading}
           </div>
-        )}
-      </div>
+          {titleBlock}
+        </div>
+      ) : (
+        titleBlock
+      )}
       {actions && (
         <div
           className="page-header-actions"

@@ -77,8 +77,20 @@ export default async function PortalAssetDetailPage({
           },
           { label: asset.name },
         ]}
-        title={asset.name}
-        description={`${asset.layoutName} · updated ${new Date(asset.updatedAt).toLocaleDateString()}`}
+        leading={
+          <LayoutSwatch
+            icon={asset.layoutIcon}
+            color={asset.layoutColor}
+            size={48}
+          />
+        }
+        title={
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 10 }}>
+            {asset.name}
+            {asset.archivedAt && <Tag tone="warn">archived</Tag>}
+          </span>
+        }
+        description={`${asset.layoutName} · updated ${relative(new Date(asset.updatedAt))}`}
       />
       <PageBody>
         <div
@@ -94,66 +106,6 @@ export default async function PortalAssetDetailPage({
           <Panel>
               <div
                 style={{
-                  display: 'flex',
-                  gap: 14,
-                  alignItems: 'flex-start',
-                }}
-              >
-                <LayoutSwatch
-                  icon={asset.layoutIcon}
-                  color={asset.layoutColor}
-                  size={44}
-                />
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div
-                    style={{
-                      display: 'flex',
-                      gap: 8,
-                      alignItems: 'center',
-                      flexWrap: 'wrap',
-                    }}
-                  >
-                    <Tag tone="info" dot>
-                      {asset.layoutName}
-                    </Tag>
-                    {asset.externalId && (
-                      <span
-                        style={{
-                          fontFamily: 'var(--font-mono)',
-                          fontSize: 10.5,
-                          color: 'var(--dim)',
-                        }}
-                      >
-                        {asset.externalId}
-                      </span>
-                    )}
-                    {asset.archivedAt && <Tag tone="warn">archived</Tag>}
-                  </div>
-                  <h2
-                    style={{
-                      fontSize: 22,
-                      fontWeight: 550,
-                      margin: '6px 0 3px',
-                      letterSpacing: -0.3,
-                    }}
-                  >
-                    {asset.name}
-                  </h2>
-                  <div
-                    style={{
-                      fontSize: 12,
-                      color: 'var(--muted)',
-                      fontFamily: 'var(--font-mono)',
-                    }}
-                  >
-                    updated {relative(new Date(asset.updatedAt))}
-                  </div>
-                </div>
-              </div>
-
-              <div
-                style={{
-                  marginTop: 20,
                   display: 'grid',
                   gridTemplateColumns: '140px minmax(0, 1fr)',
                   gap: '10px 20px',
