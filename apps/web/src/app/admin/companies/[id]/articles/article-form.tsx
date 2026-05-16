@@ -355,6 +355,7 @@ export function ArticleForm({
             {dirty && <Tag tone="warn">unsaved</Tag>}
             <Btn
               kind="outline"
+              size="md"
               disabled={saving}
               onClick={() => {
                 if (mode === 'edit' && article) {
@@ -371,6 +372,7 @@ export function ArticleForm({
             {mode === 'edit' && article && (
               <Btn
                 kind="outline"
+                size="md"
                 icon={Icon.ext}
                 onClick={() => {
                   window.open(
@@ -398,6 +400,7 @@ export function ArticleForm({
             )}
             <Btn
               kind="primary"
+              size="md"
               icon={Icon.check}
               loading={saving}
               onClick={() => submit('publish')}

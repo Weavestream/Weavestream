@@ -114,8 +114,10 @@ export function StarButton({
         display: 'inline-flex',
         alignItems: 'center',
         gap: 6,
-        height: showLabel ? 32 : 24,
-        padding: showLabel ? '0 10px' : 0,
+        // `showLabel` puts this button in the detail-header action row;
+        // height + padding match `Btn` `md` so heights line up.
+        height: showLabel ? 30 : 24,
+        padding: showLabel ? '0 11px' : 0,
         width: showLabel ? undefined : 24,
         justifyContent: 'center',
         background: showLabel

@@ -16,7 +16,7 @@ import {
   PageBody,
   PageHeader,
 } from '../../../../../../components/shell/page-header';
-import { Panel, StarButton, Tag } from '../../../../../../components/ui';
+import { Tag } from '../../../../../../components/ui';
 import { buildTerm } from '../../../../../../lib/term';
 import { companyCrumbs } from '../../../../../../lib/company-crumbs';
 import { PasswordDetailClient } from './password-detail-client';
@@ -104,15 +104,6 @@ export default async function PasswordDetailPage({
             )}
             {password.archivedAt && <Tag tone="default">archived</Tag>}
           </span>
-        }
-        actions={
-          <StarButton
-            entityType="password"
-            entityId={password.id}
-            initialStarred={password.isStarred}
-            showLabel
-            iconSize={14}
-          />
         }
       />
       <PageBody>

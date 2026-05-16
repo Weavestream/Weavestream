@@ -22,6 +22,7 @@ import {
   MobileCardRow,
   Panel,
   Select,
+  StarButton,
   Tag,
   Textarea,
   useToast,
@@ -126,30 +127,54 @@ export function PasswordDetailClient({
 
   return (
     <>
-      {canManage && (
-        <div
-          style={{
-            display: 'flex',
-            gap: 8,
-            justifyContent: 'flex-end',
-            marginBottom: 14,
-            flexWrap: 'wrap',
-          }}
-        >
-          <Btn size="sm" onClick={() => setEditing(true)}>
-            <Icon.edit size={14} /> Edit
-          </Btn>
-          {password.archivedAt ? (
-            <Btn size="sm" onClick={() => void restore()}>
-              Restore
+      <div
+        style={{
+          display: 'flex',
+          gap: 8,
+          justifyContent: 'flex-end',
+          marginBottom: 14,
+          flexWrap: 'wrap',
+        }}
+      >
+        <StarButton
+          entityType="password"
+          entityId={password.id}
+          initialStarred={password.isStarred}
+          showLabel
+          iconSize={14}
+        />
+        {canManage && (
+          <>
+            <Btn
+              kind="outline"
+              size="md"
+              icon={Icon.edit}
+              onClick={() => setEditing(true)}
+            >
+              Edit
             </Btn>
-          ) : (
-            <Btn size="sm" onClick={() => void archive()}>
-              Archive
-            </Btn>
-          )}
-        </div>
-      )}
+            {password.archivedAt ? (
+              <Btn
+                kind="solid"
+                size="md"
+                icon={Icon.check}
+                onClick={() => void restore()}
+              >
+                Restore
+              </Btn>
+            ) : (
+              <Btn
+                kind="outline"
+                size="md"
+                icon={Icon.archive}
+                onClick={() => void archive()}
+              >
+                Archive
+              </Btn>
+            )}
+          </>
+        )}
+      </div>
 
       <div
         className="detail-grid-main-aside"

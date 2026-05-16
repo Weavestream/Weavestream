@@ -1,19 +1,31 @@
-import type { ButtonHTMLAttributes, CSSProperties, ReactNode } from 'react';
+import type {
+  ButtonHTMLAttributes,
+  CSSProperties,
+  ReactNode,
+} from 'react';
 import type { IconComponent, IconProps } from './icon';
 
-type BtnKind = 'primary' | 'solid' | 'ghost' | 'outline' | 'danger';
-type BtnSize = 'sm' | 'md';
+export type BtnKind = 'primary' | 'solid' | 'ghost' | 'outline' | 'danger';
+export type BtnSize = 'sm' | 'md';
 
 const sizeMap: Record<BtnSize, { h: number; px: number; fs: number }> = {
   sm: { h: 26, px: 9, fs: 12 },
   md: { h: 30, px: 11, fs: 12.5 },
 };
 
-const kindMap: Record<BtnKind, { bg: string; fg: string; bd: string; hover: string }> = {
+// Every kind carries a visible 1px border in its own tone so a row of
+// mixed-kind buttons (primary / outline / danger / ghost) lines up at
+// the same outer dimensions — see the "all 4 same height + border"
+// audit. `ghost` is the deliberate exception: it should still feel
+// chrome-less for inline secondary actions.
+export const btnKindMap: Record<
+  BtnKind,
+  { bg: string; fg: string; bd: string; hover: string }
+> = {
   primary: {
     bg: 'var(--accent)',
     fg: 'var(--accent-ink)',
-    bd: 'transparent',
+    bd: 'var(--accent)',
     hover: 'color-mix(in oklch, var(--accent) 90%, black)',
   },
   solid: {
@@ -37,7 +49,7 @@ const kindMap: Record<BtnKind, { bg: string; fg: string; bd: string; hover: stri
   danger: {
     bg: 'var(--danger-soft)',
     fg: 'var(--danger)',
-    bd: 'transparent',
+    bd: 'var(--danger)',
     hover: 'color-mix(in oklch, var(--danger) 14%, transparent)',
   },
 };
@@ -52,22 +64,26 @@ export type BtnProps = Omit<ButtonHTMLAttributes<HTMLButtonElement>, 'children'>
   iconOnly?: boolean;
 };
 
-export function Btn({
-  children,
+/**
+ * Computed style object shared between `Btn` (button) and `LinkBtn`
+ * (anchor). Kept exported so one-off header chips that need to be a
+ * Next `Link` can render with the exact same dimensions/borders as a
+ * sibling `Btn` without duplicating the token math.
+ */
+export function btnStyle({
   kind = 'ghost',
   size = 'sm',
-  icon: I,
-  iconAfter: IA,
-  loading,
   iconOnly,
   disabled,
-  style,
-  ...rest
-}: BtnProps) {
+}: {
+  kind?: BtnKind;
+  size?: BtnSize;
+  iconOnly?: boolean;
+  disabled?: boolean;
+} = {}): CSSProperties {
   const s = sizeMap[size];
-  const tone = kindMap[kind];
-  const iconSize: IconProps['size'] = size === 'sm' ? 12 : 13;
-  const css: CSSProperties = {
+  const tone = btnKindMap[kind];
+  return {
     height: s.h,
     padding: iconOnly ? 0 : `0 ${s.px}px`,
     width: iconOnly ? s.h : undefined,
@@ -83,9 +99,34 @@ export function Btn({
     fontWeight: kind === 'primary' ? 600 : 500,
     letterSpacing: -0.1,
     whiteSpace: 'nowrap',
-    cursor: disabled || loading ? 'not-allowed' : 'pointer',
+    cursor: disabled ? 'not-allowed' : 'pointer',
     opacity: disabled ? 0.5 : 1,
+    textDecoration: 'none',
     transition: 'background-color 120ms ease, color 120ms ease',
+  };
+}
+
+export function btnIconSize(size: BtnSize = 'sm'): IconProps['size'] {
+  return size === 'sm' ? 12 : 13;
+}
+
+export function Btn({
+  children,
+  kind = 'ghost',
+  size = 'sm',
+  icon: I,
+  iconAfter: IA,
+  loading,
+  iconOnly,
+  disabled,
+  style,
+  ...rest
+}: BtnProps) {
+  const tone = btnKindMap[kind];
+  const iconSize = btnIconSize(size);
+  const css: CSSProperties = {
+    ...btnStyle({ kind, size, iconOnly, disabled: disabled || loading }),
+    cursor: disabled || loading ? 'not-allowed' : 'pointer',
     ...style,
   };
   return (

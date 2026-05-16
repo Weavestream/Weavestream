@@ -1,5 +1,4 @@
 import type { Metadata } from 'next';
-import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import {
   getArticle,
@@ -12,7 +11,7 @@ import {
 } from '../../../../../../lib/server-api';
 import { canWriteCompany } from '../../../../../../lib/roles';
 import { TopBar } from '../../../../../../components/shell/top-bar';
-import { Icon, Panel, StarButton, Tag } from '../../../../../../components/ui';
+import { Icon, LinkBtn, Panel, StarButton, Tag } from '../../../../../../components/ui';
 import { buildTerm } from '../../../../../../lib/term';
 import { companyCrumbs } from '../../../../../../lib/company-crumbs';
 import { ArticleBody } from '../../../../../../components/editor/article-body';
@@ -69,71 +68,72 @@ export default async function ArticleReadPage({
           { label: 'Articles', href: `/admin/companies/${companyId}/articles` },
           { label: article.title },
         )}
-        right={
+        sub={
           <>
-            {!article.visibleToClients && <Tag tone="outline">internal</Tag>}
-            {article.archivedAt && <Tag tone="warn">archived</Tag>}
-            <StarButton
-              entityType="article"
-              entityId={article.id}
-              initialStarred={article.isStarred}
-              showLabel
-              iconSize={14}
-            />
-            {manage && (
-              <>
-                {!article.archivedAt && (
-                  <Link
-                    href={`/admin/companies/${companyId}/articles/${article.id}/edit`}
-                    style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: 6,
-                      height: 28,
-                      padding: '0 10px',
-                      border: '1px solid var(--line)',
-                      background: 'var(--bg)',
-                      color: 'var(--text)',
-                      borderRadius: 5,
-                      fontSize: 12.5,
-                      fontWeight: 600,
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 6,
+                flexWrap: 'wrap',
+                minWidth: 0,
+              }}
+            >
+              {!article.visibleToClients && <Tag tone="outline">internal</Tag>}
+              {article.archivedAt && <Tag tone="warn">archived</Tag>}
+            </div>
+            <div
+              className="page-header-actions"
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                flexWrap: 'wrap',
+                justifyContent: 'flex-end',
+              }}
+            >
+              <StarButton
+                entityType="article"
+                entityId={article.id}
+                initialStarred={article.isStarred}
+                showLabel
+                iconSize={14}
+              />
+              {manage && (
+                <>
+                  {!article.archivedAt && (
+                    <LinkBtn
+                      href={`/admin/companies/${companyId}/articles/${article.id}/edit`}
+                      kind="outline"
+                      size="md"
+                      icon={<Icon.edit size={13} />}
+                    >
+                      Edit
+                    </LinkBtn>
+                  )}
+                  <ArticleActions
+                    article={{
+                      id: article.id,
+                      companyId,
+                      title: article.title,
+                      archivedAt: article.archivedAt,
                     }}
+                    layout="topbar"
+                  />
+                  <LinkBtn
+                    href={`/admin/companies/${companyId}/articles/new${article.folderId ? `?folderId=${article.folderId}` : ''}`}
+                    kind="primary"
+                    size="md"
+                    icon={<Icon.plus size={13} />}
                   >
-                    <Icon.edit size={12} />
-                    Edit
-                  </Link>
-                )}
-                <ArticleActions
-                  article={{
-                    id: article.id,
-                    companyId,
-                    title: article.title,
-                    archivedAt: article.archivedAt,
-                  }}
-                  layout="topbar"
-                />
-                <Link
-                  href={`/admin/companies/${companyId}/articles/new${article.folderId ? `?folderId=${article.folderId}` : ''}`}
-                  style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: 6,
-                    height: 28,
-                    padding: '0 10px',
-                    background: 'var(--accent)',
-                    color: 'var(--accent-ink)',
-                    borderRadius: 5,
-                    fontSize: 12.5,
-                    fontWeight: 600,
-                  }}
-                >
-                  <Icon.plus size={13} />
-                  New article
-                </Link>
-              </>
-            )}
+                    New article
+                  </LinkBtn>
+                </>
+              )}
+            </div>
           </>
         }
+        subClassName="page-header-sub"
       />
 
       <div
