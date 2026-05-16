@@ -2061,16 +2061,25 @@ function humanizeActivityKind(
  * into the page.
  */
 function htmlToPlain(html: string): string {
-  return html
-    .replace(/<br\s*\/?>/gi, '\n')
-    .replace(/<\/p>/gi, '\n\n')
-    .replace(/<[^>]+>/g, '')
+  let stripped = html.replace(/<br\s*\/?>/gi, '\n').replace(/<\/p>/gi, '\n\n');
+
+  // Loop until no more tag-like sequences remain. A single pass of
+  // `/<[^>]+>/g` is vulnerable to nested patterns like `<scr<script>ipt>`
+  // collapsing back into `<script>` after one substitution, so we keep
+  // stripping until the string is stable.
+  let prev: string;
+  do {
+    prev = stripped;
+    stripped = stripped.replace(/<[^>]*>?/g, '');
+  } while (stripped !== prev);
+
+  return stripped
     .replace(/&nbsp;/g, ' ')
-    .replace(/&amp;/g, '&')
     .replace(/&lt;/g, '<')
     .replace(/&gt;/g, '>')
     .replace(/&quot;/g, '"')
     .replace(/&#39;/g, "'")
+    .replace(/&amp;/g, '&')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
 }
