@@ -10,7 +10,7 @@ import {
   PageBody,
   PageHeader,
 } from '../../../../components/shell/page-header';
-import { Icon, Panel, Tag } from '../../../../components/ui';
+import { Icon, LayoutSwatch, Panel, Tag } from '../../../../components/ui';
 
 export const metadata: Metadata = { title: 'Passwords' };
 
@@ -43,6 +43,7 @@ export default async function PortalPasswordsPage({
           { label: membership.company.name, href: `/portal/${companySlug}` },
           { label: 'Passwords' },
         ]}
+        leading={<LayoutSwatch icon="lock" color="var(--accent)" size={48} />}
         title="Passwords"
         description="Credentials shared with your account. Clicking a row lets you reveal the password; every reveal is audit-logged."
       />

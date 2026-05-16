@@ -12,7 +12,7 @@ import {
 } from '../../../../../lib/server-api';
 import { canWriteCompany } from '../../../../../lib/roles';
 import { PageBody, PageHeader } from '../../../../../components/shell/page-header';
-import { Panel, Tag } from '../../../../../components/ui';
+import { LayoutSwatch, Panel, Tag } from '../../../../../components/ui';
 import { buildTerm, lower } from '../../../../../lib/term';
 import { companyCrumbs } from '../../../../../lib/company-crumbs';
 import { DomainsBrowser } from './domains-browser';
@@ -52,6 +52,7 @@ export default async function CompanyDomainsPage({
     <>
       <PageHeader
         crumbs={companyCrumbs(term, company, { label: 'Domains' })}
+        leading={<LayoutSwatch icon="globe" color="var(--accent)" size={48} />}
         title="Domains"
         description={`WHOIS expiry, SSL/TLS certificate health, and DNS records for this ${lower(
           term.one,

@@ -7,7 +7,7 @@ import {
   type UploadSummary,
 } from '../../../../lib/server-api';
 import { PageBody, PageHeader } from '../../../../components/shell/page-header';
-import { Icon, Panel, Tag } from '../../../../components/ui';
+import { Icon, LayoutSwatch, Panel, Tag } from '../../../../components/ui';
 
 /**
  * Portal photos gallery — read-only view of the company's image
@@ -49,6 +49,7 @@ export default async function PortalPhotosPage({
           { label: membership.company.name },
           { label: 'Photos' },
         ]}
+        leading={<LayoutSwatch icon="image" color="var(--accent)" size={48} />}
         title="Photos"
         description="Images stored against this workspace's assets and articles."
       />

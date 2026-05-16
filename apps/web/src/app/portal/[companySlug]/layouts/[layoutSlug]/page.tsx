@@ -71,12 +71,10 @@ export default async function PortalLayoutAssetsPage({
           { label: membership.company.name, href: `/portal/${companySlug}` },
           { label: layout.name },
         ]}
-        title={
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 10 }}>
-            <LayoutSwatch icon={layout.icon} color={layout.color} size={28} />
-            {layout.name}
-          </span>
+        leading={
+          <LayoutSwatch icon={layout.icon} color={layout.color} size={48} />
         }
+        title={layout.name}
         description={`Every ${layout.name} record shared with you for ${membership.company.name}.`}
       />
       <PageBody>

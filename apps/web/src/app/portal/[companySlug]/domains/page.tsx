@@ -5,7 +5,7 @@ export const metadata: Metadata = { title: 'Domains' };
 
 import { getMe, listDomains } from '../../../../lib/server-api';
 import { PageBody, PageHeader } from '../../../../components/shell/page-header';
-import { Icon, Panel } from '../../../../components/ui';
+import { Icon, LayoutSwatch, Panel } from '../../../../components/ui';
 import { DomainList } from './domain-list';
 
 /**
@@ -34,6 +34,7 @@ export default async function PortalDomainsPage({
           { label: membership.company.name },
           { label: 'Domains' },
         ]}
+        leading={<LayoutSwatch icon="globe" color="var(--accent)" size={48} />}
         title="Domains"
         description="Health of the domains your team uses — WHOIS expiry, SSL/TLS certificate validity, and DNS."
       />

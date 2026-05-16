@@ -12,7 +12,7 @@ import {
 } from '../../../../../lib/server-api';
 import { canWriteCompany } from '../../../../../lib/roles';
 import { PageBody, PageHeader } from '../../../../../components/shell/page-header';
-import { Icon, Panel, Tag } from '../../../../../components/ui';
+import { Icon, LayoutSwatch, Panel, Tag } from '../../../../../components/ui';
 import { buildTerm, lower } from '../../../../../lib/term';
 import { companyCrumbs } from '../../../../../lib/company-crumbs';
 import { ArticlesBrowser } from './articles-browser';
@@ -63,6 +63,7 @@ export default async function CompanyArticlesPage({
     <>
       <PageHeader
         crumbs={companyCrumbs(term, company, { label: 'Articles' })}
+        leading={<LayoutSwatch icon="doc" color="var(--accent)" size={48} />}
         title="Knowledge base"
         description={`Runbooks, guides, and internal documentation scoped to this ${lower(
           term.one,

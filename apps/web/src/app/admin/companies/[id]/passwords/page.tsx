@@ -9,7 +9,7 @@ import {
 } from '../../../../../lib/server-api';
 import { canWriteCompany } from '../../../../../lib/roles';
 import { PageBody, PageHeader } from '../../../../../components/shell/page-header';
-import { Panel, Tag } from '../../../../../components/ui';
+import { LayoutSwatch, Panel, Tag } from '../../../../../components/ui';
 import { companyCrumbs } from '../../../../../lib/company-crumbs';
 import { buildTerm, lower } from '../../../../../lib/term';
 import { getSettings } from '../../../../../lib/server-api';
@@ -60,6 +60,7 @@ export default async function CompanyPasswordsPage({
     <>
       <PageHeader
         crumbs={companyCrumbs(term, company, { label: 'Passwords' })}
+        leading={<LayoutSwatch icon="lock" color="var(--accent)" size={48} />}
         title="Passwords"
         description={`Encrypted credential vault for this ${lower(
           term.one,

@@ -13,7 +13,7 @@ import {
 } from '../../../../../lib/server-api';
 import { canWriteCompany } from '../../../../../lib/roles';
 import { PageBody, PageHeader } from '../../../../../components/shell/page-header';
-import { Icon, Panel, Tag } from '../../../../../components/ui';
+import { Icon, LayoutSwatch, Panel, Tag } from '../../../../../components/ui';
 import { buildTerm, lower } from '../../../../../lib/term';
 import { companyCrumbs } from '../../../../../lib/company-crumbs';
 import { AssetsTable } from './assets-table';
@@ -72,6 +72,7 @@ export default async function CompanyAssetsPage({
     <>
       <PageHeader
         crumbs={companyCrumbs(term, company, { label: 'Assets' })}
+        leading={<LayoutSwatch icon="box" color="var(--accent)" size={48} />}
         title="Assets"
         description={
           activeLayout

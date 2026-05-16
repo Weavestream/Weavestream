@@ -200,7 +200,7 @@ export function CompanyShell({
               {
                 id: 'ipam',
                 label: 'IPAM',
-                icon: 'globe' as const,
+                icon: 'network' as const,
                 href: `${base}/ipam`,
                 count: subnetCount,
                 badge:

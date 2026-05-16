@@ -12,7 +12,7 @@ import {
   type UploadSummary,
 } from '../../../../../lib/server-api';
 import { PageBody, PageHeader } from '../../../../../components/shell/page-header';
-import { Icon, Panel, Tag } from '../../../../../components/ui';
+import { Icon, LayoutSwatch, Panel, Tag } from '../../../../../components/ui';
 import { buildTerm, lower } from '../../../../../lib/term';
 import { companyCrumbs } from '../../../../../lib/company-crumbs';
 
@@ -54,6 +54,7 @@ export default async function CompanyPhotosPage({
     <>
       <PageHeader
         crumbs={companyCrumbs(term, company, { label: 'Photos' })}
+        leading={<LayoutSwatch icon="image" color="var(--accent)" size={48} />}
         title="Photos"
         description={`Every image uploaded to this ${lower(
           term.one,

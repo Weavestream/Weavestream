@@ -5,7 +5,7 @@ export const metadata: Metadata = { title: 'IPAM' };
 
 import { getMe, listSubnets } from '../../../../lib/server-api';
 import { PageBody, PageHeader } from '../../../../components/shell/page-header';
-import { Panel } from '../../../../components/ui';
+import { LayoutSwatch, Panel } from '../../../../components/ui';
 import { SubnetList } from './subnet-list';
 
 export default async function PortalIpamPage({
@@ -25,6 +25,7 @@ export default async function PortalIpamPage({
     <>
       <PageHeader
         crumbs={[{ label: membership.company.name }, { label: 'IPAM' }]}
+        leading={<LayoutSwatch icon="network" color="var(--accent)" size={48} />}
         title="IPAM"
         description="IPv4 subnet overview for this company."
       />

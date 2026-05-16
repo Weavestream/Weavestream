@@ -11,7 +11,7 @@ import {
 } from '../../../../../lib/server-api';
 import { canWriteCompany } from '../../../../../lib/roles';
 import { PageBody, PageHeader } from '../../../../../components/shell/page-header';
-import { Panel, Tag } from '../../../../../components/ui';
+import { LayoutSwatch, Panel, Tag } from '../../../../../components/ui';
 import { buildTerm, lower } from '../../../../../lib/term';
 import { companyCrumbs } from '../../../../../lib/company-crumbs';
 import { SubnetsBrowser } from './subnets-browser';
@@ -44,6 +44,7 @@ export default async function CompanyIpamPage({
     <>
       <PageHeader
         crumbs={companyCrumbs(term, company, { label: 'IPAM' })}
+        leading={<LayoutSwatch icon="network" color="var(--accent)" size={48} />}
         title="IPAM"
         description={`IPv4 subnet management for this ${lower(term.one)}. Subnets auto-discover assets by their IP address fields.`}
       />

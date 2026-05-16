@@ -8,7 +8,7 @@ import {
   type FolderNode,
 } from '../../../../lib/server-api';
 import { PageBody, PageHeader } from '../../../../components/shell/page-header';
-import { Icon, Panel, Tag } from '../../../../components/ui';
+import { Icon, LayoutSwatch, Panel, Tag } from '../../../../components/ui';
 
 /**
  * Portal articles index — read-only for CLIENT_USER. Folder tree mirrors
@@ -52,6 +52,7 @@ export default async function PortalArticlesPage({
           { label: membership.company.name },
           { label: 'Articles' },
         ]}
+        leading={<LayoutSwatch icon="doc" color="var(--accent)" size={48} />}
         title="Knowledge base"
         description="Runbooks, how-tos, and reference material for your workspace."
       />
