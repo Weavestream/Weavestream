@@ -118,6 +118,21 @@ const optionalCompanyId = z.string().uuid().nullable();
 const triggerDaysSchema = z.number().int().min(1).max(365);
 
 /**
+ * Lightweight company ref bundled with `AlertConfig.company`. Keeps
+ * the admin edit dialog and the list summary from having to resolve
+ * UUIDs on the client just to render a name. Shape mirrors the
+ * `CompanyParentRef` used elsewhere in the web app so the picker
+ * value can be hydrated directly.
+ */
+export const alertConfigCompanyRefSchema = z.object({
+  id: z.string().uuid(),
+  name: z.string(),
+  slug: z.string(),
+  archivedAt: z.string().nullable(),
+});
+export type AlertConfigCompanyRef = z.infer<typeof alertConfigCompanyRefSchema>;
+
+/**
  * Output shape — the full row as the API returns it. `archivedAt` is
  * never returned (archived rows are filtered out by the controller),
  * but we keep `enabled` so the list view can render the toggle.
@@ -129,6 +144,10 @@ export const alertConfigSchema = z.object({
   enabled: z.boolean(),
   recipientEmails: z.array(z.string()),
   companyId: z.string().uuid().nullable(),
+  // Resolved company display fields — populated server-side when
+  // `companyId` is set. `null` when the alert is unscoped (or, very
+  // rarely, when the referenced company has been hard-deleted).
+  company: alertConfigCompanyRefSchema.nullable(),
   triggerDays: z.number().int().nullable(),
   stopAfterTrigger: z.boolean(),
   expirationKinds: z.array(expirationKindSchema),

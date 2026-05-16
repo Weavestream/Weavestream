@@ -6,6 +6,7 @@ import {
 import type { AlertConfig as AlertConfigRow } from '@prisma/client';
 import {
   type AlertConfig,
+  type AlertConfigCompanyRef,
   type AlertConfigInput,
   type AlertConfigPatch,
   type AlertExpirationKind,
@@ -48,7 +49,10 @@ export class AlertsService {
       where: { archivedAt: null },
       orderBy: [{ enabled: 'desc' }, { createdAt: 'desc' }],
     });
-    return rows.map(toDto);
+    const companies = await this.loadCompanyRefs(
+      rows.map((r) => r.companyId),
+    );
+    return rows.map((r) => toDto(r, companies.get(r.companyId ?? '') ?? null));
   }
 
   async getById(id: string): Promise<AlertConfig> {
@@ -56,7 +60,8 @@ export class AlertsService {
       where: { id, archivedAt: null },
     });
     if (!row) throw new NotFoundException('Alert configuration not found');
-    return toDto(row);
+    const company = await this.loadCompanyRef(row.companyId);
+    return toDto(row, company);
   }
 
   async create(
@@ -83,7 +88,8 @@ export class AlertsService {
       after: toAuditPayload(row),
     });
     await this.emitter.invalidate();
-    return toDto(row);
+    const company = await this.loadCompanyRef(row.companyId);
+    return toDto(row, company);
   }
 
   async update(
@@ -137,7 +143,8 @@ export class AlertsService {
       after: toAuditPayload(after),
     });
     await this.emitter.invalidate();
-    return toDto(after);
+    const company = await this.loadCompanyRef(after.companyId);
+    return toDto(after, company);
   }
 
   async archive(
@@ -167,6 +174,50 @@ export class AlertsService {
     });
     await this.emitter.invalidate();
     return { ok: true };
+  }
+
+  /**
+   * Resolve one company ref for the DTO. Returns null when the alert
+   * is unscoped, or when the referenced company has been hard-deleted
+   * (defensive — the FK is not enforced because there's no Prisma
+   * relation, so we degrade gracefully instead of throwing).
+   */
+  private async loadCompanyRef(
+    companyId: string | null,
+  ): Promise<AlertConfigCompanyRef | null> {
+    if (!companyId) return null;
+    const map = await this.loadCompanyRefs([companyId]);
+    return map.get(companyId) ?? null;
+  }
+
+  /**
+   * Bulk-load company refs for the list view in a single query. Uses
+   * a Map keyed by id so callers can do a constant-time lookup per
+   * alert row. De-dupes / filters nulls in the input array so the
+   * caller can pass `rows.map((r) => r.companyId)` directly.
+   */
+  private async loadCompanyRefs(
+    companyIds: ReadonlyArray<string | null>,
+  ): Promise<Map<string, AlertConfigCompanyRef>> {
+    const unique = Array.from(
+      new Set(companyIds.filter((id): id is string => !!id)),
+    );
+    if (unique.length === 0) return new Map();
+    const rows = await this.prisma.company.findMany({
+      where: { id: { in: unique } },
+      select: { id: true, name: true, slug: true, archivedAt: true },
+    });
+    return new Map(
+      rows.map((r) => [
+        r.id,
+        {
+          id: r.id,
+          name: r.name,
+          slug: r.slug,
+          archivedAt: r.archivedAt ? r.archivedAt.toISOString() : null,
+        },
+      ]),
+    );
   }
 
   /**
@@ -255,7 +306,10 @@ function sanitiseForPersist(input: AlertConfigInput) {
   };
 }
 
-function toDto(row: AlertConfigRow): AlertConfig {
+function toDto(
+  row: AlertConfigRow,
+  company: AlertConfigCompanyRef | null,
+): AlertConfig {
   return {
     id: row.id,
     name: row.name,
@@ -263,6 +317,7 @@ function toDto(row: AlertConfigRow): AlertConfig {
     enabled: row.enabled,
     recipientEmails: row.recipientEmails,
     companyId: row.companyId,
+    company,
     triggerDays: row.triggerDays,
     stopAfterTrigger: row.stopAfterTrigger,
     expirationKinds: row.expirationKinds as AlertExpirationKind[],

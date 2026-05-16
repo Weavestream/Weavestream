@@ -697,9 +697,20 @@ function toDraft(a: AlertConfig): DraftState {
     type: a.type,
     enabled: a.enabled,
     recipientEmails: a.recipientEmails.join(', '),
-    company: a.companyId
-      ? { id: a.companyId, name: a.companyId, slug: '', archivedAt: null }
-      : null,
+    // Prefer the resolved company ref from the API so the picker shows
+    // the real name/slug. Fall back to a UUID-only stub only when the
+    // referenced company has been hard-deleted — the picker will still
+    // render, just without a friendly label.
+    company: a.company
+      ? {
+          id: a.company.id,
+          name: a.company.name,
+          slug: a.company.slug,
+          archivedAt: a.company.archivedAt,
+        }
+      : a.companyId
+        ? { id: a.companyId, name: a.companyId, slug: '', archivedAt: null }
+        : null,
     triggerDays: a.triggerDays != null ? String(a.triggerDays) : '',
     stopAfterTrigger: a.stopAfterTrigger,
     expirationKinds: a.expirationKinds,
