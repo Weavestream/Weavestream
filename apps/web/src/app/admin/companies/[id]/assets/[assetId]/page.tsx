@@ -59,9 +59,10 @@ export default async function AssetDetailPage({
   const updatedBy = asset.updatedByUser;
 
   const primaryField = asset.fields.find((f) => f.isPrimary);
-  const noteField = asset.fields.find(
+  const noteFields = asset.fields.filter(
     (f) => f.fieldType === 'RICH_TEXT' || f.fieldType === 'TEXTAREA',
   );
+  const noteFieldSlugs = new Set(noteFields.map((f) => f.slug));
 
   return (
     <>
@@ -155,7 +156,7 @@ export default async function AssetDetailPage({
                 }}
               >
                 {asset.fields
-                  .filter((f) => f.slug !== noteField?.slug)
+                  .filter((f) => !noteFieldSlugs.has(f.slug))
                   .map((f) => (
                     <Fragment key={f.id}>
                       <div
@@ -196,26 +197,30 @@ export default async function AssetDetailPage({
               </div>
             </Panel>
 
-            {noteField && !!asset.fieldValues[noteField.slug] && (
-              <Panel title={noteField.name}>
-                {noteField.fieldType === 'RICH_TEXT' ? (
-                  <RichTextView value={asset.fieldValues[noteField.slug]} />
-                ) : (
-                  <div
-                    style={{
-                      fontSize: 13.5,
-                      lineHeight: 1.6,
-                      color: 'var(--text-2)',
-                      whiteSpace: 'pre-wrap',
-                      overflowWrap: 'anywhere',
-                      wordBreak: 'break-word',
-                    }}
-                  >
-                    {String(asset.fieldValues[noteField.slug] ?? '')}
-                  </div>
-                )}
-              </Panel>
-            )}
+            {noteFields.map((noteField) => {
+              const value = asset.fieldValues[noteField.slug];
+              if (!value) return null;
+              return (
+                <Panel key={noteField.id} title={noteField.name}>
+                  {noteField.fieldType === 'RICH_TEXT' ? (
+                    <RichTextView value={value} />
+                  ) : (
+                    <div
+                      style={{
+                        fontSize: 13.5,
+                        lineHeight: 1.6,
+                        color: 'var(--text-2)',
+                        whiteSpace: 'pre-wrap',
+                        overflowWrap: 'anywhere',
+                        wordBreak: 'break-word',
+                      }}
+                    >
+                      {String(value ?? '')}
+                    </div>
+                  )}
+                </Panel>
+              );
+            })}
           </div>
 
           <aside style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
