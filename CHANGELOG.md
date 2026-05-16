@@ -6,6 +6,13 @@ this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.8.4] - 2026-05-16
+
+### Added
+
+- **DHCP scope in IPAM.** Subnets can now record a DHCP scope (start / end range) alongside their CIDR, so the IPAM view can distinguish DHCP-assigned ranges from statically-reserved space at a glance.
+- **Ticket browser.** New read-only ticket browser for searching and filtering tickets across the platform. Tickets can be handed to the AI chat to turn the resolution into a new article in one step.
+
 ## [1.8.3] - 2026-05-13
 
 ### Fixed
@@ -732,7 +739,9 @@ Initial public release.
   database-per-tenant.
 - English UI only.
 
-[Unreleased]: https://github.com/Weavestream/Weavestream/compare/v1.8.2...HEAD
+[Unreleased]: https://github.com/Weavestream/Weavestream/compare/v1.8.4...HEAD
+[1.8.4]: https://github.com/Weavestream/Weavestream/releases/tag/v1.8.4
+[1.8.3]: https://github.com/Weavestream/Weavestream/releases/tag/v1.8.3
 [1.8.2]: https://github.com/Weavestream/Weavestream/releases/tag/v1.8.2
 [1.8.1]: https://github.com/Weavestream/Weavestream/releases/tag/v1.8.1
 [1.6.4]: https://github.com/Weavestream/Weavestream/releases/tag/v1.6.4
