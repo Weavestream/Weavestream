@@ -11,6 +11,7 @@ import { apiFetch } from '../../../../../lib/api';
 import { Btn, Icon, Tag, useToast } from '../../../../../components/ui';
 import { useIsMobile } from '../../../../../lib/hooks/use-is-mobile';
 import { FolderSettingsDialog } from './folder-settings-dialog';
+import { ArticleActions } from './article-actions';
 
 /**
  * Two-column article browser:
@@ -269,6 +270,26 @@ export function ArticlesBrowser({
                 >
                   {new Date(a.updatedAt).toLocaleDateString()}
                 </span>
+                {canManage && (
+                  <div
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 4,
+                      marginLeft: 4,
+                    }}
+                  >
+                    <ArticleActions
+                      article={{
+                        id: a.id,
+                        companyId,
+                        title: a.title,
+                        archivedAt: a.archivedAt,
+                      }}
+                      layout="row"
+                    />
+                  </div>
+                )}
               </li>
             ))}
           </ul>

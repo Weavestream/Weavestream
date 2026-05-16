@@ -22,6 +22,7 @@ import {
   markdownToTiptapDoc,
   tiptapDocToMarkdown,
 } from '../../../../../lib/article-format';
+import { ArticleActions } from './article-actions';
 
 /**
  * Shared create + edit form. A single client component handles both
@@ -382,6 +383,18 @@ export function ArticleForm({
               >
                 Preview
               </Btn>
+            )}
+            {mode === 'edit' && article && (
+              <ArticleActions
+                article={{
+                  id: article.id,
+                  companyId,
+                  title: article.title,
+                  archivedAt: article.archivedAt,
+                }}
+                layout="topbar"
+                dirty={dirty}
+              />
             )}
             <Btn
               kind="primary"

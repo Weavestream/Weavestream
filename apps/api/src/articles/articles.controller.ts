@@ -131,5 +131,24 @@ export class ArticlesController {
   ) {
     return this.articles.restore(actor, companyId, id, meta(req));
   }
+
+  /**
+   * Hard-deletes an archived article. Mirrors `POST /assets/:id/purge` —
+   * separate verb from `DELETE` so the soft archive route stays the
+   * default destructive action and operators must opt in to the
+   * irreversible purge from an explicit confirmation dialog. Caller
+   * needs `article.purge` (FULL access).
+   */
+  @Post(':id/purge')
+  @HttpCode(HttpStatus.OK)
+  @RequirePermission('article.purge', { companyIdFrom: 'params.companyId' })
+  async purge(
+    @CurrentUser() actor: AuthedUser,
+    @Param('companyId', new ParseUUIDPipe()) companyId: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Req() req: Request,
+  ) {
+    return this.articles.purge(actor, companyId, id, meta(req));
+  }
 }
 

@@ -20,7 +20,8 @@ import { PrismaService } from '../prisma/prisma.service.js';
 import { AuditLogService } from '../audit/audit.service.js';
 import { StarsService } from '../stars/stars.service.js';
 import { UploadsService } from '../uploads/uploads.service.js';
-import { diffRemovedUploadIds } from './article-uploads.js';
+import { RelationsService } from '../relations/relations.service.js';
+import { diffRemovedUploadIds, extractEmbeddedUploadIds } from './article-uploads.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
 
 export interface AuditMeta {
@@ -78,6 +79,7 @@ export class ArticlesService {
     private readonly audit: AuditLogService,
     private readonly stars: StarsService,
     private readonly uploads: UploadsService,
+    private readonly relations: RelationsService,
   ) {}
 
   // ------------------------------------------------------------------
@@ -446,6 +448,82 @@ export class ArticlesService {
     const out = this.serialize(updated, actor.role);
     await this.hydrateActors([out]);
     return out;
+  }
+
+  /**
+   * Hard-deletes an archived article and its dependent rows. Mirrors
+   * `AssetsService.purge` (see [apps/api/src/assets/assets.service.ts]):
+   *
+   * Guarded:
+   *   - The article must already be archived. The archive -> purge gate
+   *     forces the operator to look at the row once more and lets the UI
+   *     surface a Restore escape hatch up until the purge confirmation.
+   *   - Caller must hold `article.purge` (FULL access).
+   *
+   * Cascade:
+   *   - `StarredArticle` drops with the row (FK ON DELETE CASCADE).
+   *   - `search_index` row is removed by the `articles_search_index_delete`
+   *     trigger (see migration 0009_phase6_search_index).
+   *   - `Relation` is polymorphic (no FK) -> cleaned manually inside the tx.
+   *   - `Upload` rows that were still embedded in the body are soft-deleted
+   *     so the photos gallery / attachments panel match the now-gone article.
+   */
+  async purge(
+    actor: AuthedUser,
+    companyId: string,
+    id: string,
+    meta: AuditMeta,
+  ): Promise<{ id: string }> {
+    const existing = await this.prisma.article.findFirst({
+      where: { id, companyId },
+    });
+    if (!existing) throw new NotFoundException();
+    if (!existing.archivedAt) {
+      throw new BadRequestException(
+        'Archive the article before permanently deleting it.',
+      );
+    }
+
+    const embeddedUploadIds = Array.from(
+      extractEmbeddedUploadIds(existing.content ?? existing.markdownSource),
+    );
+
+    await this.prisma.$transaction(async (tx) => {
+      await this.relations.cleanupForArticle({ tx, companyId, articleId: id });
+      if (embeddedUploadIds.length > 0) {
+        await tx.upload.updateMany({
+          where: {
+            id: { in: embeddedUploadIds },
+            companyId,
+            attachedToType: 'article',
+            deletedAt: null,
+          },
+          data: { deletedAt: new Date() },
+        });
+      }
+      const result = await tx.article.deleteMany({ where: { id, companyId } });
+      if (result.count === 0) {
+        // Defence in depth: another request already purged the row.
+        throw new NotFoundException();
+      }
+    });
+
+    await this.audit.log({
+      actorId: actor.id,
+      action: 'article.purge',
+      entityType: 'Article',
+      entityId: id,
+      companyId,
+      ip: meta.ip,
+      userAgent: meta.userAgent,
+      before: {
+        ...this.auditFields(existing),
+        archivedAt: existing.archivedAt,
+      },
+      after: null,
+    });
+
+    return { id };
   }
 
   // ------------------------------------------------------------------

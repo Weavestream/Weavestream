@@ -34,6 +34,12 @@ export interface CleanupForAssetInput {
   tx: Prisma.TransactionClient;
 }
 
+export interface CleanupForArticleInput {
+  companyId: string;
+  articleId: string;
+  tx: Prisma.TransactionClient;
+}
+
 /**
  * Canonical casing for the polymorphic endpoints persisted on Relation rows.
  * REST inputs use lowercase (`asset` / `article` / `password`) for consistency
@@ -222,6 +228,23 @@ export class RelationsService implements RelationPort {
         OR: [
           { sourceType: 'Asset', sourceId: input.assetId },
           { targetType: 'Asset', targetId: input.assetId },
+        ],
+      },
+    });
+  }
+
+  /**
+   * Sibling to `cleanupForAsset` for the article hard-delete path. Polymorphic
+   * relations carry no FK back to Article, so we must drop them explicitly
+   * before the article row is removed.
+   */
+  async cleanupForArticle(input: CleanupForArticleInput): Promise<void> {
+    await input.tx.relation.deleteMany({
+      where: {
+        companyId: input.companyId,
+        OR: [
+          { sourceType: 'Article', sourceId: input.articleId },
+          { targetType: 'Article', targetId: input.articleId },
         ],
       },
     });

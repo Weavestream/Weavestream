@@ -21,6 +21,7 @@ import { ArticleSideNavColumn } from '../../../../../../components/editor/articl
 import { ArticleToc } from '../../../../../../components/editor/article-toc';
 import { LinkedItemsPanel } from '../../../../../../components/relations';
 import { AttachmentsPanel } from '../../../../../../components/upload/attachments-panel';
+import { ArticleActions } from '../article-actions';
 
 export async function generateMetadata({
   params,
@@ -81,25 +82,36 @@ export default async function ArticleReadPage({
             />
             {manage && (
               <>
-                <Link
-                  href={`/admin/companies/${companyId}/articles/${article.id}/edit`}
-                  style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: 6,
-                    height: 28,
-                    padding: '0 10px',
-                    border: '1px solid var(--line)',
-                    background: 'var(--bg)',
-                    color: 'var(--text)',
-                    borderRadius: 5,
-                    fontSize: 12.5,
-                    fontWeight: 600,
+                {!article.archivedAt && (
+                  <Link
+                    href={`/admin/companies/${companyId}/articles/${article.id}/edit`}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 6,
+                      height: 28,
+                      padding: '0 10px',
+                      border: '1px solid var(--line)',
+                      background: 'var(--bg)',
+                      color: 'var(--text)',
+                      borderRadius: 5,
+                      fontSize: 12.5,
+                      fontWeight: 600,
+                    }}
+                  >
+                    <Icon.edit size={12} />
+                    Edit
+                  </Link>
+                )}
+                <ArticleActions
+                  article={{
+                    id: article.id,
+                    companyId,
+                    title: article.title,
+                    archivedAt: article.archivedAt,
                   }}
-                >
-                  <Icon.edit size={12} />
-                  Edit
-                </Link>
+                  layout="topbar"
+                />
                 <Link
                   href={`/admin/companies/${companyId}/articles/new${article.folderId ? `?folderId=${article.folderId}` : ''}`}
                   style={{

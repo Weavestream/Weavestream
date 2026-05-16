@@ -121,6 +121,7 @@ export const AUDIT_ACTIONS = {
     move: 'article.move',
     archive: 'article.archive',
     restore: 'article.restore',
+    purge: 'article.purge',
   },
   integration: {
     create: 'integration.create',

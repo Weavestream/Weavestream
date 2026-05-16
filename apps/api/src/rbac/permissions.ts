@@ -47,6 +47,7 @@ export const ActionValues = [
 
   'article.write',
   'article.read',
+  'article.purge',
 
   'upload.create',
   'upload.read',
@@ -217,6 +218,13 @@ export const PERMISSIONS: Record<Action, PermissionRule> = {
     allowReadonly: true,
     requireNonExpiredMembership: false,
   },
+  'article.purge': {
+    scope: 'company',
+    allowFull: true,
+    allowReadonly: false,
+    requireNonExpiredMembership: true,
+    note: 'Hard-deletes an article row (and its polymorphic relations + search-index entry). Irreversible — used to permanently expunge an archived draft. FULL company access only; the article must be archived first so the operator confirms intent.',
+  },
 
   'upload.create': {
     scope: 'company',
@@ -375,6 +383,7 @@ export const ACTION_HUMAN_LABELS: Record<Action, string> = {
   'asset.purge': 'Permanently delete archived assets',
   'article.write': 'Create/edit articles',
   'article.read': 'View articles',
+  'article.purge': 'Permanently delete archived articles',
   'upload.create': 'Upload files',
   'upload.read': 'Download files',
   'relation.read': 'View linked items',
