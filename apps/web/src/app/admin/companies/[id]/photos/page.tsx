@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import type { ReactNode } from 'react';
 import Link from 'next/link';
 
 export const metadata: Metadata = { title: 'Photos' };
@@ -315,34 +316,99 @@ function PhotoTile({
             </span>
           )}
         </div>
-        {photo.attachedToType && photo.attachedToId && (
-          <div
-            style={{
-              display: 'flex',
-              flexDirection: 'column',
-              gap: 2,
-              fontSize: 10.5,
-              fontFamily: 'var(--font-mono)',
-            }}
-          >
-            {sourceHref(companyId, photo.attachedToType, photo.attachedToId) && (
-              <Link
-                href={sourceHref(companyId, photo.attachedToType, photo.attachedToId)!}
-                style={{ color: 'var(--accent)', textDecoration: 'underline' }}
-              >
-                open source {attachmentLabel(photo.attachedToType).toLowerCase()} →
-              </Link>
-            )}
-            <Link
-              href={filterHref(companyId, photo.attachedToType, photo.attachedToId)}
-              style={{ color: 'var(--muted)', textDecoration: 'underline' }}
+        {(() => {
+          const linkInfo = resolveSourceLink(companyId, photo);
+          if (!linkInfo) return null;
+          return (
+            <div
+              style={{
+                display: 'flex',
+                flexWrap: 'wrap',
+                gap: 4,
+              }}
             >
-              view all for this {attachmentLabel(photo.attachedToType).toLowerCase()}
-            </Link>
-          </div>
-        )}
+              <ActionChip
+                href={linkInfo.sourceHref}
+                icon={<Icon.ext size={10} />}
+                label="Open"
+                tone="accent"
+                title={
+                  linkInfo.sourceTitle
+                    ? `Open ${linkInfo.label}: ${linkInfo.sourceTitle}`
+                    : `Open source ${linkInfo.label}`
+                }
+              />
+              {linkInfo.filterHref && (
+                <ActionChip
+                  href={linkInfo.filterHref}
+                  icon={<Icon.grid size={10} />}
+                  label="Related"
+                  tone="muted"
+                  title={`View all photos for this ${linkInfo.label}`}
+                />
+              )}
+            </div>
+          );
+        })()}
       </div>
     </div>
+  );
+}
+
+/**
+ * Compact chip-style link used inside photo tiles. Renders an icon
+ * plus a single short word (e.g. "Open", "Related") so we don't waste
+ * a 160px-wide tile on a full sentence. Two tones — `accent` for the
+ * primary jump-to-source action, `muted` for the secondary "filter to
+ * peers" action — keep the visual hierarchy obvious at tile scale.
+ */
+function ActionChip({
+  href,
+  icon,
+  label,
+  tone,
+  title,
+}: {
+  href: string;
+  icon: ReactNode;
+  label: string;
+  tone: 'accent' | 'muted';
+  title: string;
+}) {
+  const styles =
+    tone === 'accent'
+      ? {
+          color: 'var(--accent)',
+          background: 'var(--accent-soft)',
+          border: '1px solid var(--accent-line)',
+        }
+      : {
+          color: 'var(--muted)',
+          background: 'var(--panel)',
+          border: '1px solid var(--line)',
+        };
+  return (
+    <Link
+      href={href}
+      title={title}
+      aria-label={title}
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 4,
+        padding: '2px 6px',
+        borderRadius: 4,
+        fontSize: 10.5,
+        fontFamily: 'var(--font-mono)',
+        lineHeight: 1,
+        textDecoration: 'none',
+        whiteSpace: 'nowrap',
+        ...styles,
+      }}
+    >
+      {icon}
+      <span>{label}</span>
+    </Link>
   );
 }
 
@@ -352,6 +418,48 @@ function filterHref(
   attachedToId: string,
 ): string {
   return `/admin/companies/${companyId}/photos?attachedToType=${encodeURIComponent(attachedToType)}&attachedToId=${encodeURIComponent(attachedToId)}`;
+}
+
+/**
+ * Pick the best "open source X" / "view all for this X" link for a
+ * photo tile. Asset and asset_field uploads ship with an
+ * `attachedToId` and can deep-link directly. Article uploads never
+ * carry an id — the owning article is resolved server-side via
+ * `sourceArticle` (a body-scan of active articles), so we use that
+ * here instead. Returns null when no usable link can be built (e.g.
+ * an article image that no longer appears in any article body).
+ */
+function resolveSourceLink(
+  companyId: string,
+  photo: UploadSummary,
+): {
+  label: string;
+  sourceHref: string;
+  filterHref: string | null;
+  sourceTitle: string | null;
+} | null {
+  if (!photo.attachedToType) return null;
+  const label = attachmentLabel(photo.attachedToType).toLowerCase();
+  if (photo.attachedToType === 'article') {
+    if (!photo.sourceArticle) return null;
+    return {
+      label,
+      sourceHref: `/admin/companies/${companyId}/articles/${encodeURIComponent(
+        photo.sourceArticle.id,
+      )}`,
+      filterHref: null,
+      sourceTitle: photo.sourceArticle.title,
+    };
+  }
+  if (!photo.attachedToId) return null;
+  const href = sourceHref(companyId, photo.attachedToType, photo.attachedToId);
+  if (!href) return null;
+  return {
+    label,
+    sourceHref: href,
+    filterHref: filterHref(companyId, photo.attachedToType, photo.attachedToId),
+    sourceTitle: null,
+  };
 }
 
 /**

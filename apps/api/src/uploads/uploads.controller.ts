@@ -282,6 +282,7 @@ export class PhotosController {
   @Get()
   @RequirePermission('upload.read', { companyIdFrom: 'params.companyId' })
   async list(
+    @CurrentUser() actor: AuthedUser,
     @Param('companyId', new ParseUUIDPipe()) companyId: string,
     @Query('attachedToType') rawType?: string,
     @Query('attachedToId') rawId?: string,
@@ -298,6 +299,7 @@ export class PhotosController {
       attachedToId: rawId,
       limit: rawLimit ? parseInt(rawLimit, 10) : undefined,
       cursor,
+      actor,
     });
   }
 }

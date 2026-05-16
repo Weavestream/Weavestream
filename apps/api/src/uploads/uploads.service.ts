@@ -37,12 +37,14 @@ import type {
   InitUploadInput,
   UploadAttachmentType,
 } from '@weavestream/shared';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { AuditLogService } from '../audit/audit.service.js';
 import { LocalStorageService } from '../storage/local-storage.service.js';
 import { RedisService } from '../redis/redis.service.js';
 import { EnvService } from '../config/env.service.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
+import { extractEmbeddedUploadIds } from '../articles/article-uploads.js';
 import { mimesAreCompatible } from './mime-compat.js';
 import { startsWithTextBom } from './text-bom.js';
 
@@ -56,6 +58,12 @@ export type HydratedFileFieldEntry = FileFieldEntry & {
   thumbnailUrl: string | null;
   downloadUrl: string | null;
 };
+
+export interface UploadSourceArticle {
+  id: string;
+  slug: string;
+  title: string;
+}
 
 export interface SerializedUpload {
   id: string;
@@ -73,6 +81,16 @@ export interface SerializedUpload {
   thumbnailUrl: string | null;
   createdAt: Date;
   uploaderId: string | null;
+  /**
+   * Article that embeds this upload, when applicable. Populated only by
+   * read paths (photos gallery / attachments lookups) for uploads whose
+   * `attachedToType` is `article` — those rows never carry an
+   * `attachedToId` (the article may not have existed at upload time),
+   * so the source is resolved by scanning article bodies for the upload
+   * URL. `null` for non-article uploads and for orphaned article
+   * images that don't appear in any active article body.
+   */
+  sourceArticle: UploadSourceArticle | null;
 }
 
 const PENDING_TTL_SECONDS = 15 * 60;
@@ -623,6 +641,7 @@ export class UploadsService {
       attachedToId?: string;
       limit?: number;
       cursor?: string;
+      actor?: AuthedUser;
     } = {},
   ): Promise<{ items: SerializedUpload[]; nextCursor: string | null }> {
     return this.paginatedList(companyId, { ...opts, onlyImages: true });
@@ -643,6 +662,7 @@ export class UploadsService {
       attachedToId: string;
       limit?: number;
       cursor?: string;
+      actor?: AuthedUser;
     },
   ): Promise<{ items: SerializedUpload[]; nextCursor: string | null }> {
     if (!opts.attachedToType || !opts.attachedToId) {
@@ -662,6 +682,7 @@ export class UploadsService {
       limit?: number;
       cursor?: string;
       onlyImages?: boolean;
+      actor?: AuthedUser;
     },
   ): Promise<{ items: SerializedUpload[]; nextCursor: string | null }> {
     const limit = Math.min(Math.max(opts.limit ?? 60, 1), 200);
@@ -693,10 +714,99 @@ export class UploadsService {
       base.downloadUrl = this.apiUploadUrl(companyId, row.id);
       return base;
     });
+
+    // Article-attached uploads never carry an `attachedToId`, so the
+    // owning article must be resolved by scanning article bodies for
+    // the upload's same-origin URL. We batch the lookup across the
+    // whole page so a single regex sweep covers up to `limit` photos.
+    const articleUploadIds = serialized
+      .filter((p) => p.attachedToType === 'article' && !p.attachedToId)
+      .map((p) => p.id);
+    if (articleUploadIds.length > 0) {
+      const sources = await this.findUploadSourceArticles(
+        companyId,
+        articleUploadIds,
+        { visibleToClientsOnly: opts.actor?.role === 'CLIENT_USER' },
+      );
+      for (const item of serialized) {
+        if (item.attachedToType !== 'article' || item.attachedToId) continue;
+        item.sourceArticle = sources.get(item.id) ?? null;
+      }
+    }
     return {
       items: serialized,
       nextCursor: hasMore ? slice[slice.length - 1]!.id : null,
     };
+  }
+
+  /**
+   * Resolve the article that embeds each upload in `uploadIds`. Used
+   * by the photos gallery to surface a "back to article" link for
+   * images whose `attachedToType` is `article` (those rows are stored
+   * without an `attachedToId` — see `article-uploads.ts` for why). The
+   * scan is bounded to the company's active (non-archived) articles
+   * and is filtered to `visibleToClients` when the caller is a
+   * CLIENT_USER, so we never leak titles/slugs from articles the user
+   * can't otherwise read.
+   *
+   * SQL safety: `uploadIds` is filtered to canonical UUIDs before being
+   * inlined as a regex alternation. The company id and the regex
+   * pattern itself are still bound as parameters via `Prisma.sql`.
+   */
+  async findUploadSourceArticles(
+    companyId: string,
+    uploadIds: string[],
+    opts: { visibleToClientsOnly?: boolean } = {},
+  ): Promise<Map<string, UploadSourceArticle>> {
+    const out = new Map<string, UploadSourceArticle>();
+    if (uploadIds.length === 0) return out;
+
+    const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    const uniqueIds = Array.from(
+      new Set(uploadIds.filter((id) => uuidRe.test(id))),
+    ).map((id) => id.toLowerCase());
+    if (uniqueIds.length === 0) return out;
+
+    // `/uploads/<uuid>` is the URL shape the rich-text editor embeds
+    // (see `extractEmbeddedUploadIds`). Anchoring on the path prefix
+    // avoids false positives where the bare UUID appears elsewhere in
+    // the article body (e.g. prose referencing an asset id).
+    const pattern = `/uploads/(${uniqueIds.join('|')})`;
+
+    const visibilityFilter = opts.visibleToClientsOnly
+      ? Prisma.sql`AND visible_to_clients = TRUE`
+      : Prisma.empty;
+
+    const rows = await this.prisma.$queryRaw<
+      Array<{
+        id: string;
+        slug: string;
+        title: string;
+        content_text: string | null;
+        markdown_source: string | null;
+      }>
+    >(Prisma.sql`
+      SELECT id, slug, title,
+             content::text AS content_text,
+             markdown_source
+        FROM articles
+       WHERE company_id = ${companyId}::uuid
+         AND archived_at IS NULL
+         ${visibilityFilter}
+         AND (content::text ~ ${pattern} OR markdown_source ~ ${pattern})
+    `);
+
+    const wanted = new Set(uniqueIds);
+    for (const row of rows) {
+      const ids = extractEmbeddedUploadIds(
+        row.content_text ?? row.markdown_source,
+      );
+      for (const id of ids) {
+        if (!wanted.has(id) || out.has(id)) continue;
+        out.set(id, { id: row.id, slug: row.slug, title: row.title });
+      }
+    }
+    return out;
   }
 
   // ------------------------------------------------------------------
@@ -775,6 +885,7 @@ export class UploadsService {
       thumbnailUrl: null,
       createdAt: row.createdAt,
       uploaderId: row.uploaderId,
+      sourceArticle: null,
     };
   }
 }

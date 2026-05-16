@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import {
@@ -62,7 +63,7 @@ export default async function PortalPhotosPage({
           {page.items.length === 0 ? (
             <EmptyState />
           ) : (
-            <PhotoGrid items={page.items} />
+            <PhotoGrid items={page.items} companySlug={companySlug} />
           )}
           <Pagination
             basePath={basePath}
@@ -194,7 +195,13 @@ function FilterBar({
   );
 }
 
-function PhotoGrid({ items }: { items: UploadSummary[] }) {
+function PhotoGrid({
+  items,
+  companySlug,
+}: {
+  items: UploadSummary[];
+  companySlug: string;
+}) {
   return (
     <div
       style={{
@@ -205,13 +212,19 @@ function PhotoGrid({ items }: { items: UploadSummary[] }) {
       }}
     >
       {items.map((photo) => (
-        <PhotoTile key={photo.id} photo={photo} />
+        <PhotoTile key={photo.id} photo={photo} companySlug={companySlug} />
       ))}
     </div>
   );
 }
 
-function PhotoTile({ photo }: { photo: UploadSummary }) {
+function PhotoTile({
+  photo,
+  companySlug,
+}: {
+  photo: UploadSummary;
+  companySlug: string;
+}) {
   const kindLabel = photo.attachedToType
     ? attachmentLabel(photo.attachedToType)
     : 'detached';
@@ -296,8 +309,70 @@ function PhotoTile({ photo }: { photo: UploadSummary }) {
             </span>
           )}
         </div>
+        {photo.attachedToType === 'article' && photo.sourceArticle && (
+          <div
+            style={{
+              display: 'flex',
+              flexWrap: 'wrap',
+              gap: 4,
+            }}
+          >
+            <ActionChip
+              href={`/portal/${companySlug}/articles/${encodeURIComponent(
+                photo.sourceArticle.slug,
+              )}`}
+              icon={<Icon.ext size={10} />}
+              label="Open"
+              title={`Open article: ${photo.sourceArticle.title}`}
+            />
+          </div>
+        )}
       </div>
     </div>
+  );
+}
+
+/**
+ * Compact chip-style link rendered inside photo tiles. Mirrors the
+ * admin photos page so the visual language is identical across admin
+ * and portal views. Icon + single-word label keeps the action visible
+ * without consuming the tile's narrow width.
+ */
+function ActionChip({
+  href,
+  icon,
+  label,
+  title,
+}: {
+  href: string;
+  icon: ReactNode;
+  label: string;
+  title: string;
+}) {
+  return (
+    <Link
+      href={href}
+      title={title}
+      aria-label={title}
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 4,
+        padding: '2px 6px',
+        borderRadius: 4,
+        fontSize: 10.5,
+        fontFamily: 'var(--font-mono)',
+        lineHeight: 1,
+        textDecoration: 'none',
+        whiteSpace: 'nowrap',
+        color: 'var(--accent)',
+        background: 'var(--accent-soft)',
+        border: '1px solid var(--accent-line)',
+      }}
+    >
+      {icon}
+      <span>{label}</span>
+    </Link>
   );
 }
 

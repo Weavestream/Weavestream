@@ -1226,6 +1226,13 @@ export type UploadSummary = {
   createdAt: string;
   thumbnailUrl: string | null;
   downloadUrl: string | null;
+  /**
+   * Article that embeds this upload, resolved server-side by scanning
+   * article bodies. Populated only for `attachedToType === 'article'`
+   * uploads — those rows store no `attachedToId` so the photos gallery
+   * needs this to build a "back to article" link.
+   */
+  sourceArticle: { id: string; slug: string; title: string } | null;
 };
 
 // ---------------------------------------------------------------------
