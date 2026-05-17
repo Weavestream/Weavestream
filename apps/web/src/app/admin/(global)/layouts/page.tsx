@@ -44,9 +44,9 @@ export default async function LayoutsPage({
           { label: 'Layouts' },
         ]}
         title="Layouts"
-        description={`Global asset layouts. Shared by every ${lower(
-          term.one,
-        )}; mutating the catalog requires the LAYOUT_MANAGE capability. Use the up/down controls to order how layouts appear in the sidebar.`}
+        description={`Define and structure global asset templates across all ${lower(
+          term.other,
+        )}. Rearrange the list to change how they appear in the navigation sidebar.`}
         actions={canEdit ? <CreateLayoutButton /> : null}
       />
       <PageBody>
