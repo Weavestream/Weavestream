@@ -194,7 +194,7 @@ export function ArticlesBrowser({
               title={`Edit folder “${selectedFolder.name}”`}
               style={{ marginLeft: 'auto' }}
             >
-              Edit
+              Edit Folder
             </Btn>
           )}
         </div>
@@ -567,9 +567,15 @@ function FolderRow({
   onClick: () => void;
   right?: React.ReactNode;
 }) {
+  const [hovered, setHovered] = useState(false);
+  const showRight = hovered || active;
   return (
     <div
       onClick={onClick}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      onFocus={() => setHovered(true)}
+      onBlur={() => setHovered(false)}
       style={{
         display: 'flex',
         alignItems: 'center',
@@ -577,7 +583,11 @@ function FolderRow({
         padding: '5px 8px',
         fontSize: 12,
         color: active ? 'var(--text)' : 'var(--text-2)',
-        background: active ? 'var(--panel-2)' : 'transparent',
+        background: active
+          ? 'var(--panel-2)'
+          : hovered
+            ? 'var(--panel-2)'
+            : 'transparent',
         borderRadius: 4,
         cursor: 'pointer',
         position: 'relative',
@@ -609,7 +619,19 @@ function FolderRow({
       >
         {label}
       </span>
-      {right}
+      {right && (
+        <span
+          style={{
+            opacity: showRight ? 1 : 0,
+            visibility: showRight ? 'visible' : 'hidden',
+            transition: 'opacity 120ms ease',
+            display: 'inline-flex',
+            alignItems: 'center',
+          }}
+        >
+          {right}
+        </span>
+      )}
     </div>
   );
 }
