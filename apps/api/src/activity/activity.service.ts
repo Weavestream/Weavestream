@@ -10,6 +10,13 @@ export interface RecentActivityItem {
   companyId: string;
   companyName: string;
   companySlug: string;
+  /**
+   * Synthetic verb derived from `createdAt` vs `updatedAt` — `created`
+   * when the row hasn't been touched since insertion, `updated`
+   * otherwise. Cheap signal; richer actions (archive/move/etc.) would
+   * require trawling the audit log.
+   */
+  action: 'created' | 'updated';
   updatedAt: string;
   updatedByName: string | null;
 }
@@ -68,6 +75,7 @@ export class ActivityService {
           id: true,
           name: true,
           companyId: true,
+          createdAt: true,
           updatedAt: true,
           updatedBy: true,
         },
@@ -80,6 +88,7 @@ export class ActivityService {
           id: true,
           title: true,
           companyId: true,
+          createdAt: true,
           updatedAt: true,
           updatedBy: true,
         },
@@ -115,6 +124,19 @@ export class ActivityService {
     const companyById = new Map(companies.map((c) => [c.id, c]));
     const userById = new Map(users.map((u) => [u.id, u]));
 
+    // Treat anything updated within a second of insertion as "just
+    // created" — Prisma `@updatedAt` fires on insert too, so the two
+    // timestamps are typically equal for never-touched rows but can
+    // drift by a microsecond on some Postgres clocks.
+    const CREATE_WINDOW_MS = 1_000;
+    const deriveAction = (
+      createdAt: Date,
+      updatedAt: Date,
+    ): 'created' | 'updated' =>
+      updatedAt.getTime() - createdAt.getTime() <= CREATE_WINDOW_MS
+        ? 'created'
+        : 'updated';
+
     const items: RecentActivityItem[] = [];
     for (const a of assets) {
       const c = companyById.get(a.companyId);
@@ -126,6 +148,7 @@ export class ActivityService {
         companyId: a.companyId,
         companyName: c.name,
         companySlug: c.slug,
+        action: deriveAction(a.createdAt, a.updatedAt),
         updatedAt: a.updatedAt.toISOString(),
         updatedByName: a.updatedBy ? userById.get(a.updatedBy)?.name ?? null : null,
       });
@@ -140,6 +163,7 @@ export class ActivityService {
         companyId: a.companyId,
         companyName: c.name,
         companySlug: c.slug,
+        action: deriveAction(a.createdAt, a.updatedAt),
         updatedAt: a.updatedAt.toISOString(),
         updatedByName: a.updatedBy ? userById.get(a.updatedBy)?.name ?? null : null,
       });

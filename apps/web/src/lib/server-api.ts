@@ -1676,6 +1676,7 @@ export type RecentActivityItem = {
   companyId: string;
   companyName: string;
   companySlug: string;
+  action: 'created' | 'updated';
   updatedAt: string;
   updatedByName: string | null;
 };

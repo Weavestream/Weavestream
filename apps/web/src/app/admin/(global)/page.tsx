@@ -609,6 +609,16 @@ function RecentActivityCard({ item }: { item: RecentActivityItem }) {
             whiteSpace: 'nowrap',
           }}
         >
+          <span
+            style={{
+              color:
+                item.action === 'created' ? 'var(--ok)' : 'var(--accent)',
+              fontWeight: 500,
+            }}
+          >
+            {item.action}
+          </span>
+          {' · '}
           {item.companyName} · {relative(item.updatedAt)}
         </div>
       </div>
