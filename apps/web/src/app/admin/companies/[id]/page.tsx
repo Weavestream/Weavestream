@@ -159,6 +159,7 @@ export default async function CompanyDetailPage({
           <ContactPanel company={company} manage={manage} />
           <AddressPanel company={company} manage={manage} />
           <ClassificationPanel company={company} manage={manage} />
+          <NotesPanel company={company} manage={manage} />
         </div>
 
         {alertCount(domains) > 0 && (
@@ -351,33 +352,6 @@ function HeaderMeta({ company }: { company: CompanyDetail }) {
         <Tag tone="outline">
           {company.childrenCount} child{company.childrenCount === 1 ? '' : 'ren'}
         </Tag>
-      )}
-      {company.quickNotes && (
-        <span
-          style={{
-            fontSize: 12,
-            color: 'var(--text-2)',
-            fontStyle: 'italic',
-            maxWidth: 600,
-          }}
-        >
-          {company.quickNotes}
-        </span>
-      )}
-      {company.notes?.trim() && (
-        <span
-          style={{
-            fontSize: 12,
-            color: 'var(--text-2)',
-            maxWidth: 600,
-            whiteSpace: 'pre-wrap',
-            overflowWrap: 'anywhere',
-          }}
-        >
-          <strong>Internal</strong>
-          {' — '}
-          {company.notes}
-        </span>
       )}
     </div>
   );
@@ -578,6 +552,150 @@ function ClassificationPanel({
           }
         />
       </div>
+    </Panel>
+  );
+}
+
+function NotesPanel({
+  company,
+  manage,
+}: {
+  company: CompanyDetail;
+  manage: boolean;
+}) {
+  const quick = company.quickNotes?.trim();
+  const internal = company.notes?.trim();
+  const hasAny = !!quick || !!internal;
+  const editHref = `/admin/companies/${company.id}/settings`;
+  return (
+    <Panel
+      title="Notes"
+      actions={
+        manage ? (
+          <Link
+            href={editHref}
+            aria-label="Edit notes"
+            title="Edit notes"
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 4,
+              fontSize: 11.5,
+              color: 'var(--accent)',
+              fontFamily: 'var(--font-mono)',
+              textDecoration: 'none',
+            }}
+          >
+            <Icon.edit size={12} />
+            edit
+          </Link>
+        ) : null
+      }
+    >
+      {!hasAny ? (
+        <EmptyCTA
+          label="No notes yet."
+          href={manage ? editHref : undefined}
+          hint={manage ? 'Add in Settings' : undefined}
+        />
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          {quick && (
+            <div
+              style={{
+                display: 'flex',
+                gap: 8,
+                padding: '8px 10px',
+                background: 'color-mix(in oklch, var(--accent) 8%, transparent)',
+                border:
+                  '1px solid color-mix(in oklch, var(--accent) 25%, transparent)',
+                borderRadius: 5,
+              }}
+            >
+              <Icon.zap
+                size={12}
+                style={{
+                  color: 'var(--accent)',
+                  flexShrink: 0,
+                  marginTop: 3,
+                }}
+              />
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div
+                  style={{
+                    fontFamily: 'var(--font-mono)',
+                    fontSize: 10,
+                    color: 'var(--accent)',
+                    letterSpacing: 0.6,
+                    textTransform: 'uppercase',
+                    marginBottom: 2,
+                  }}
+                >
+                  Quick
+                </div>
+                <div
+                  style={{
+                    fontSize: 12.5,
+                    color: 'var(--text)',
+                    fontStyle: 'italic',
+                    whiteSpace: 'pre-wrap',
+                    overflowWrap: 'anywhere',
+                    lineHeight: 1.5,
+                  }}
+                >
+                  {quick}
+                </div>
+              </div>
+            </div>
+          )}
+          {internal && (
+            <div
+              style={{
+                display: 'flex',
+                gap: 8,
+                padding: '8px 10px',
+                background: 'var(--panel-2)',
+                border: '1px solid var(--line)',
+                borderRadius: 5,
+              }}
+            >
+              <Icon.lock
+                size={12}
+                style={{
+                  color: 'var(--muted)',
+                  flexShrink: 0,
+                  marginTop: 3,
+                }}
+              />
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div
+                  style={{
+                    fontFamily: 'var(--font-mono)',
+                    fontSize: 10,
+                    color: 'var(--muted)',
+                    letterSpacing: 0.6,
+                    textTransform: 'uppercase',
+                    marginBottom: 2,
+                  }}
+                >
+                  Internal
+                </div>
+                <div
+                  style={{
+                    fontSize: 12.5,
+                    color: 'var(--text)',
+                    whiteSpace: 'pre-wrap',
+                    overflowWrap: 'anywhere',
+                    lineHeight: 1.5,
+                  }}
+                >
+                  {internal}
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
     </Panel>
   );
 }
