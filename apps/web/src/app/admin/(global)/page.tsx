@@ -11,6 +11,7 @@ import {
 } from '../../../components/ui';
 import type { EntityType } from '../../../components/ui/star-button';
 import {
+  getAdminStats,
   getMe,
   getSettings,
   listDomainAlerts,
@@ -22,7 +23,6 @@ import {
   type DomainAlert,
   type RecentActivityItem,
   type StarredItem,
-  type UserPage,
 } from '../../../lib/server-api';
 import { buildTerm, lower } from '../../../lib/term';
 import { companyAccent } from '../../../lib/company-format';
@@ -34,28 +34,19 @@ export default async function AdminDashboard() {
   // Parallelise every data source — none depends on any of the others
   // and each hit is independently cheap. A single `Promise.all` keeps
   // the dashboard well under the 500 ms first-paint budget.
-  const [
-    companiesRes,
-    usersRes,
-    recentCompaniesRes,
-    starred,
-    alerts,
-    recent,
-  ] = await Promise.all([
-    serverApiFetch<CompanyPage>('/companies?limit=200&includeArchived=true'),
-    serverApiFetch<UserPage>('/users?limit=200'),
-    // Phase 9b.3: "Recent companies" widget — ten most recently
-    // updated in the caller's scope, excluding archived.
-    serverApiFetch<CompanyPage>('/companies?limit=10&sort=updatedAt&order=desc'),
-    listStarred(),
-    listDomainAlerts(30),
-    listRecentActivity(10),
-  ]);
-  const companies = companiesRes.data?.items ?? [];
-  const users = usersRes.data?.items ?? [];
+  const [stats, recentCompaniesRes, starred, alerts, recent] =
+    await Promise.all([
+      getAdminStats(),
+      // Phase 9b.3: "Recent companies" widget — ten most recently
+      // updated in the caller's scope, excluding archived.
+      serverApiFetch<CompanyPage>(
+        '/companies?limit=10&sort=updatedAt&order=desc',
+      ),
+      listStarred(),
+      listDomainAlerts(30),
+      listRecentActivity(10),
+    ]);
   const recentCompanies = recentCompaniesRes.data?.items ?? [];
-  const activeCompanies = companies.filter((c) => !c.archivedAt).length;
-  const activeUsers = users.filter((u) => u.isActive).length;
 
   return (
     <>
@@ -65,30 +56,26 @@ export default async function AdminDashboard() {
         description="Welcome back to Weavestream. Select a tool from the sidebar to manage your workspace."
       />
       <PageBody>
-        <Panel title="At a glance">
-          <div
-            style={{
-              display: 'grid',
-              // On mobile, 2 columns (min 120px) so the panel doesn't stack
-              // vertically and eat half the viewport. Wider screens auto-fit
-              // more columns up to the natural 1fr cap.
-              gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))',
-              gap: 16,
-            }}
-          >
-            <Stat label={term.other} value={activeCompanies} />
-            <Stat label="Users" value={activeUsers} />
-            <Stat
-              label={`Archived ${lower(term.other)}`}
-              value={companies.length - activeCompanies}
-            />
-            <Stat label="Inactive users" value={users.length - activeUsers} />
-            <Stat
-              label="Memberships"
-              value={companies.reduce((acc, c) => acc + c.memberCount, 0)}
-            />
-          </div>
-        </Panel>
+        {stats && (
+          <Panel title="At a glance">
+            <div
+              style={{
+                display: 'grid',
+                // 2 columns on mobile (even count → no orphan tile in the
+                // last row), auto-fit to more columns on wider viewports.
+                gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))',
+                gap: 16,
+              }}
+            >
+              <Stat label={term.other} value={stats.companies} />
+              <Stat label="Users" value={stats.users} />
+              <Stat label="Assets" value={stats.assets} />
+              <Stat label="Passwords" value={stats.passwords} />
+              <Stat label="Articles" value={stats.articles} />
+              <Stat label="Domains" value={stats.domains} />
+            </div>
+          </Panel>
+        )}
 
         {/*
           Three "what's happening" widgets share a single responsive

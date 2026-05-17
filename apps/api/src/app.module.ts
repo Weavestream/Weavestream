@@ -59,6 +59,7 @@ import { SecurityModule } from './security/security.module.js';
 import { IpRulesModule } from './ip-rules/ip-rules.module.js';
 import { IpRuleGuard } from './ip-rules/ip-rule.guard.js';
 import { BackupsModule } from './backups/backups.module.js';
+import { AdminModule } from './admin/admin.module.js';
 import { AuthGuard } from './auth/guards/auth.guard.js';
 import { MfaEnrollmentGuard } from './auth/guards/mfa-enrollment.guard.js';
 import { CsrfGuard } from './auth/guards/csrf.guard.js';
@@ -167,6 +168,7 @@ const httpSerializers = {
     SecurityModule,
     IpRulesModule,
     BackupsModule,
+    AdminModule,
     UiModule,
     HealthModule,
   ],

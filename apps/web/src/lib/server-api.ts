@@ -1531,6 +1531,26 @@ export async function listDomainAlerts(
 }
 
 // ---------------------------------------------------------------------
+// Admin stats — totals shown on the global dashboard's "At a glance"
+// panel. Endpoint is gated to SUPER_ADMIN + OPERATOR with non-NONE
+// globalAccess; for any other viewer it 403s and we return `null` so
+// the dashboard can degrade gracefully.
+// ---------------------------------------------------------------------
+export type AdminStats = {
+  companies: number;
+  users: number;
+  assets: number;
+  passwords: number;
+  articles: number;
+  domains: number;
+};
+
+export async function getAdminStats(): Promise<AdminStats | null> {
+  const res = await serverApiFetch<AdminStats>('/admin/stats');
+  return res.ok ? res.data : null;
+}
+
+// ---------------------------------------------------------------------
 // Expirations — unified feed across asset-field (isExpiry) dates and
 // domain (registrar/TLS) expiries. Read-only; no mutating endpoints.
 // ---------------------------------------------------------------------
