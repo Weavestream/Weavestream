@@ -480,58 +480,80 @@ export function ArticleForm({
                 { label: 'editing', mono: true },
               ] as const)),
         )}
-        right={
+        sub={
           <>
-            {dirty && <Tag tone="warn">unsaved</Tag>}
-            {hasServerDraft && !dirty && <Tag tone="warn">draft</Tag>}
-            <Btn
-              kind="outline"
-              size="md"
-              disabled={saving}
-              onClick={handleCancelClick}
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 6,
+                flexWrap: 'wrap',
+                minWidth: 0,
+              }}
             >
-              {mode === 'create' ? 'Discard' : 'Cancel'}
-            </Btn>
-            {mode === 'edit' && article && (
+              {dirty && <Tag tone="warn">unsaved</Tag>}
+              {hasServerDraft && !dirty && <Tag tone="warn">draft</Tag>}
+            </div>
+            <div
+              className="page-header-actions"
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                flexWrap: 'wrap',
+                justifyContent: 'flex-end',
+              }}
+            >
               <Btn
                 kind="outline"
                 size="md"
-                icon={Icon.ext}
-                onClick={() => {
-                  window.open(
-                    `/admin/companies/${companyId}/articles/${article.id}`,
-                    '_blank',
-                    'noopener,noreferrer',
-                  );
-                }}
-                title="Open the read view in a new tab"
+                disabled={saving}
+                onClick={handleCancelClick}
               >
-                Preview
+                {mode === 'create' ? 'Discard' : 'Cancel'}
               </Btn>
-            )}
-            {mode === 'edit' && article && (
-              <ArticleActions
-                article={{
-                  id: article.id,
-                  companyId,
-                  title: article.title,
-                  archivedAt: article.archivedAt,
-                }}
-                layout="topbar"
-                dirty={dirty}
-              />
-            )}
-            <Btn
-              kind="primary"
-              size="md"
-              icon={Icon.check}
-              loading={saving}
-              onClick={() => submit('publish')}
-            >
-              {mode === 'create' ? 'Publish' : 'Save'}
-            </Btn>
+              {mode === 'edit' && article && (
+                <Btn
+                  kind="outline"
+                  size="md"
+                  icon={Icon.ext}
+                  onClick={() => {
+                    window.open(
+                      `/admin/companies/${companyId}/articles/${article.id}`,
+                      '_blank',
+                      'noopener,noreferrer',
+                    );
+                  }}
+                  title="Open the read view in a new tab"
+                >
+                  Preview
+                </Btn>
+              )}
+              {mode === 'edit' && article && (
+                <ArticleActions
+                  article={{
+                    id: article.id,
+                    companyId,
+                    title: article.title,
+                    archivedAt: article.archivedAt,
+                  }}
+                  layout="topbar"
+                  dirty={dirty}
+                />
+              )}
+              <Btn
+                kind="primary"
+                size="md"
+                icon={Icon.check}
+                loading={saving}
+                onClick={() => submit('publish')}
+              >
+                {mode === 'create' ? 'Publish' : 'Save'}
+              </Btn>
+            </div>
           </>
         }
+        subClassName="page-header-sub"
       />
 
       {error && (
