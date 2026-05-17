@@ -44,9 +44,9 @@ export default async function AdminDashboard() {
   ] = await Promise.all([
     serverApiFetch<CompanyPage>('/companies?limit=200&includeArchived=true'),
     serverApiFetch<UserPage>('/users?limit=200'),
-    // Phase 9b.3: "Recent companies" widget — six most recently
+    // Phase 9b.3: "Recent companies" widget — ten most recently
     // updated in the caller's scope, excluding archived.
-    serverApiFetch<CompanyPage>('/companies?limit=6&sort=updatedAt&order=desc'),
+    serverApiFetch<CompanyPage>('/companies?limit=10&sort=updatedAt&order=desc'),
     listStarred(),
     listDomainAlerts(30),
     listRecentActivity(10),
@@ -62,7 +62,7 @@ export default async function AdminDashboard() {
       <PageHeader
         crumbs={[{ label: 'Admin', href: '/admin' }, { label: 'Dashboard' }]}
         title={`Hello, ${me.name.split(' ')[0] ?? me.name}`}
-        description="The operator control plane for Weavestream. Pick an area from the sidebar to get started."
+        description="Welcome back to Weavestream. Select a tool from the sidebar to manage your workspace."
       />
       <PageBody>
         <Panel title="At a glance">
@@ -174,11 +174,12 @@ function StarredPanel({
   starred: StarredItem[];
   termOne: string;
 }) {
-  // Starred is uncapped (users curate their own list), so the panel
-  // must scroll internally — otherwise a heavy-starrer blows up the
-  // equal-height row. `style` makes the outer section a flex column;
-  // `bodyStyle` lets the body grow to fill the grid-row height; the
-  // inner `<div>` below then becomes the scroll container.
+  // Starred is uncapped (users curate their own list). To keep the
+  // equal-height widget row stable, the scroll container is taken out
+  // of flow with `position: absolute` so its contents don't grow the
+  // panel — the section is sized purely by the other widgets via
+  // `alignItems: stretch`, and anything that doesn't fit scrolls
+  // inside the absolutely-positioned grid.
   return (
     <Panel
       title={
@@ -199,12 +200,17 @@ function StarredPanel({
         </span>
       }
       style={{ display: 'flex', flexDirection: 'column' }}
-      bodyStyle={{ flex: 1, minHeight: 0, display: 'flex' }}
+      bodyStyle={{
+        flex: 1,
+        minHeight: 0,
+        padding: 0,
+        position: 'relative',
+      }}
     >
       {starred.length === 0 ? (
         <div
           style={{
-            padding: 6,
+            padding: 12,
             color: 'var(--muted)',
             fontSize: 13,
             lineHeight: 1.5,
@@ -216,8 +222,9 @@ function StarredPanel({
       ) : (
         <div
           style={{
-            flex: 1,
-            minHeight: 0,
+            position: 'absolute',
+            inset: 0,
+            padding: 12,
             overflowY: 'auto',
             display: 'grid',
             gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))',
@@ -514,7 +521,8 @@ function RecentCompanyCard({ company }: { company: CompanyListItem }) {
  * and articles in the caller's scope. Deliberately simple: a merged
  * list, timestamp + author, link into the thing itself. No filtering
  * or pagination here; operators who want more detail use the Audit
- * page.
+ * page. Rendered as a card grid to match the Starred and Recent
+ * companies widgets that sit beside it.
  */
 function RecentActivityPanel({
   items,
@@ -524,11 +532,11 @@ function RecentActivityPanel({
   termOther: string;
 }) {
   return (
-    <Panel title="Recent activity" noPad>
+    <Panel title="Recent activity">
       {items.length === 0 ? (
         <div
           style={{
-            padding: 20,
+            padding: 8,
             color: 'var(--muted)',
             fontSize: 13,
           }}
@@ -536,82 +544,75 @@ function RecentActivityPanel({
           Nothing's been updated across your {lower(termOther)} yet.
         </div>
       ) : (
-        <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
-          {items.map((it, i) => (
-            <li
-              key={`${it.type}:${it.id}`}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 10,
-                padding: '10px 14px',
-                borderBottom:
-                  i === items.length - 1 ? 'none' : '1px solid var(--line)',
-              }}
-            >
-              <span
-                aria-hidden
-                style={{
-                  color: 'var(--accent)',
-                  display: 'inline-flex',
-                  width: 22,
-                  height: 22,
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  background: 'var(--panel-2)',
-                  border: '1px solid var(--line-2)',
-                  borderRadius: 5,
-                }}
-              >
-                {it.type === 'asset' ? (
-                  <Icon.box size={12} />
-                ) : (
-                  <Icon.doc size={12} />
-                )}
-              </span>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <Link
-                  href={activityHref(it)}
-                  style={{
-                    fontSize: 13,
-                    fontWeight: 500,
-                    color: 'var(--text)',
-                    textDecoration: 'none',
-                  }}
-                >
-                  {it.name}
-                </Link>
-                <div
-                  style={{
-                    fontFamily: 'var(--font-mono)',
-                    fontSize: 10.5,
-                    color: 'var(--dim)',
-                  }}
-                >
-                  <Link
-                    href={`/admin/companies/${it.companyId}`}
-                    style={{ color: 'var(--muted)', textDecoration: 'none' }}
-                  >
-                    {it.companyName}
-                  </Link>
-                  {it.updatedByName ? ` · by ${it.updatedByName}` : ''}
-                </div>
-              </div>
-              <span
-                style={{
-                  fontFamily: 'var(--font-mono)',
-                  fontSize: 10.5,
-                  color: 'var(--dim)',
-                  flexShrink: 0,
-                }}
-              >
-                {relative(it.updatedAt)}
-              </span>
-            </li>
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))',
+            gap: 10,
+          }}
+        >
+          {items.map((it) => (
+            <RecentActivityCard key={`${it.type}:${it.id}`} item={it} />
           ))}
-        </ul>
+        </div>
       )}
     </Panel>
+  );
+}
+
+function RecentActivityCard({ item }: { item: RecentActivityItem }) {
+  return (
+    <Link
+      href={activityHref(item)}
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 10,
+        padding: '10px 12px',
+        background: 'var(--panel)',
+        border: '1px solid var(--line)',
+        borderRadius: 6,
+        color: 'var(--text)',
+        textDecoration: 'none',
+        minWidth: 0,
+      }}
+    >
+      <TypeChip
+        icon={
+          item.type === 'asset' ? (
+            <Icon.box size={14} />
+          ) : (
+            <Icon.doc size={14} />
+          )
+        }
+        color={item.type === 'asset' ? 'var(--info)' : 'var(--accent)'}
+      />
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div
+          style={{
+            fontSize: 13,
+            fontWeight: 500,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          {item.name}
+        </div>
+        <div
+          style={{
+            fontFamily: 'var(--font-mono)',
+            fontSize: 10.5,
+            color: 'var(--dim)',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          {item.companyName} · {relative(item.updatedAt)}
+        </div>
+      </div>
+    </Link>
   );
 }
 
