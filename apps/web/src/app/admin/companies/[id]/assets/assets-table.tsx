@@ -22,6 +22,7 @@ import {
 } from '../../../../../components/ui';
 import { apiFetch } from '../../../../../lib/api';
 import { vaultLinkLabel } from '../../../../../lib/vault-link';
+import { LayoutFilterMenu } from '../../../../../components/layouts/layout-filter-menu';
 import { TagFilterMenu } from '../../../../../components/layouts/tag-filter-menu';
 
 /**
@@ -396,47 +397,14 @@ export function AssetsTable({
               color: 'var(--text)',
             }}
           />
-          <span
-            style={{
-              width: 1,
-              height: 14,
-              background: 'var(--line-2)',
-            }}
-          />
-          <span
-            style={{
-              fontFamily: 'var(--font-mono)',
-              fontSize: 11,
-              color: 'var(--muted)',
-              whiteSpace: 'nowrap',
-            }}
-          >
-            {visibleRows.length === rows.length
-              ? `${rows.length} results`
-              : `${visibleRows.length} of ${rows.length}`}
-          </span>
         </div>
 
-        <select
-          value={layoutId}
-          onChange={(e) => pushParams({ layout: e.target.value || null })}
-          style={{
-            height: 28,
-            padding: '0 8px',
-            background: 'var(--panel-2)',
-            border: '1px solid var(--line-2)',
-            borderRadius: 5,
-            fontSize: 12,
-            color: 'var(--text)',
-          }}
-        >
-          <option value="">All layouts</option>
-          {layouts.map((l) => (
-            <option key={l.id} value={l.id}>
-              {l.name}
-            </option>
-          ))}
-        </select>
+        <LayoutFilterMenu
+          layouts={layouts}
+          value={layoutId || null}
+          activeLayout={activeLayout}
+          onChange={(next) => pushParams({ layout: next })}
+        />
 
         {availableTags.length > 0 && (
           <TagFilterMenu
