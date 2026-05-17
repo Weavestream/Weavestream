@@ -1,10 +1,12 @@
 import { Injectable } from '@nestjs/common';
 import type {
+  ArticleEditorMode,
   PasswordGeneratorDefaults,
   UpdateSettingsInput,
 } from '@weavestream/shared';
 import {
   DEFAULT_PASSWORD_GENERATOR_DEFAULTS,
+  articleEditorModeSchema,
   passwordGeneratorDefaultsSchema,
 } from '@weavestream/shared';
 import { PrismaService } from '../prisma/prisma.service.js';
@@ -23,6 +25,8 @@ export interface SystemSettingsDTO {
   tenantTermPlural: string;
   tenantTermPossessive: string | null;
   passwordGeneratorDefaults: PasswordGeneratorDefaults;
+  articleAutosaveEnabled: boolean;
+  articleDefaultEditorMode: ArticleEditorMode;
   updatedAt: string;
 }
 
@@ -73,6 +77,10 @@ export class SettingsService {
       data.tenantTermPossessive = input.tenantTermPossessive;
     if (input.passwordGeneratorDefaults !== undefined)
       data.passwordGeneratorDefaults = input.passwordGeneratorDefaults;
+    if (input.articleAutosaveEnabled !== undefined)
+      data.articleAutosaveEnabled = input.articleAutosaveEnabled;
+    if (input.articleDefaultEditorMode !== undefined)
+      data.articleDefaultEditorMode = input.articleDefaultEditorMode;
 
     const after = await this.prisma.systemSetting.update({
       where: { id: SINGLETON_ID },
@@ -123,8 +131,22 @@ type SystemSettingRow = {
   tenantTermPlural: string;
   tenantTermPossessive: string | null;
   passwordGeneratorDefaults?: unknown;
+  articleAutosaveEnabled: boolean;
+  articleDefaultEditorMode: string;
   updatedAt: Date;
 };
+
+/**
+ * Coerce the persisted free-form string back through the discriminator
+ * schema so a stray legacy or hand-edited value can never poison the
+ * settings DTO. The DB-side CHECK constraint (migration 0047) already
+ * prevents this on writes, but readers should still defend against a
+ * pre-constraint row showing up after a partial restore.
+ */
+function readDefaultEditorMode(value: string): ArticleEditorMode {
+  const parsed = articleEditorModeSchema.safeParse(value);
+  return parsed.success ? parsed.data : 'tiptap';
+}
 
 /**
  * Reads the JSONB column through the zod schema and falls back to the
@@ -148,6 +170,8 @@ function toDto(row: SystemSettingRow): SystemSettingsDTO {
     passwordGeneratorDefaults: readGeneratorDefaults(
       row.passwordGeneratorDefaults,
     ),
+    articleAutosaveEnabled: row.articleAutosaveEnabled,
+    articleDefaultEditorMode: readDefaultEditorMode(row.articleDefaultEditorMode),
     updatedAt: row.updatedAt.toISOString(),
   };
 }
@@ -162,5 +186,7 @@ function stripForAudit(row: SystemSettingRow) {
     passwordGeneratorDefaults: readGeneratorDefaults(
       row.passwordGeneratorDefaults,
     ),
+    articleAutosaveEnabled: row.articleAutosaveEnabled,
+    articleDefaultEditorMode: readDefaultEditorMode(row.articleDefaultEditorMode),
   };
 }

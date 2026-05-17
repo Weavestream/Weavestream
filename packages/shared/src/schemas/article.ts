@@ -98,8 +98,19 @@ export const updateArticleSchema = z
     markdownSource: markdownSourceSchema.optional(),
     excerpt: z.string().max(1000).nullable().optional(),
     visibleToClients: z.boolean().optional(),
+    // When `true`, the API coalesces this write into the article's
+    // single rolling draft `ArticleVersion` row instead of producing
+    // a new published version. Sent by the web editor's autosave
+    // timer; explicit Save omits the flag. The server does NOT verify
+    // the workspace autosave setting before honouring this flag —
+    // worst case is the same draft row a legitimate autosave would
+    // create.
+    draft: z.boolean().optional(),
   })
-  .refine((v) => Object.keys(v).length > 0, 'At least one field must be provided')
+  .refine(
+    (v) => Object.keys(v).filter((k) => k !== 'draft').length > 0,
+    'At least one field must be provided',
+  )
   .refine(
     (v) => !(v.content !== undefined && v.markdownSource !== undefined),
     { message: 'Cannot provide both content and markdownSource' },
@@ -125,3 +136,35 @@ export type CreateArticleInput = z.infer<typeof createArticleSchema>;
 export type UpdateArticleInput = z.infer<typeof updateArticleSchema>;
 export type MoveArticleInput = z.infer<typeof moveArticleSchema>;
 export type ArticleEditorMode = z.infer<typeof articleEditorModeSchema>;
+
+/**
+ * Metadata-only shape returned from `GET /articles/:id/versions`. The
+ * body is omitted so the history list stays cheap; callers fetch
+ * `GET /articles/:id/versions/:version` for the full snapshot when a
+ * user opens the preview drawer or restores.
+ */
+export const articleVersionSummarySchema = z.object({
+  version: z.number().int().min(1),
+  isDraft: z.boolean(),
+  title: z.string(),
+  slug: z.string(),
+  editorMode: articleEditorModeSchema,
+  changedFields: z.array(z.string()),
+  changedBy: z.string().uuid(),
+  changedByName: z.string().nullable(),
+  changeReason: z.string().nullable(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+
+export const articleVersionDetailSchema = articleVersionSummarySchema.extend({
+  folderId: z.string().uuid().nullable(),
+  visibleToClients: z.boolean(),
+  content: z.unknown().nullable(),
+  markdownSource: z.string().nullable(),
+  contentPlaintext: z.string(),
+  excerpt: z.string().nullable(),
+});
+
+export type ArticleVersionSummary = z.infer<typeof articleVersionSummarySchema>;
+export type ArticleVersionDetail = z.infer<typeof articleVersionDetailSchema>;

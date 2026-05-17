@@ -4,13 +4,15 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { Prisma, type Article } from '@prisma/client';
+import { Prisma, type Article, type ArticleVersion } from '@prisma/client';
 import {
   markdownExcerpt,
   markdownToPlaintext,
   tiptapExcerpt,
   tiptapToPlaintext,
   isValidTiptapDoc,
+  type ArticleVersionDetail,
+  type ArticleVersionSummary,
   type CreateArticleInput,
   type MoveArticleInput,
   type UpdateArticleInput,
@@ -18,6 +20,7 @@ import {
 } from '@weavestream/shared';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { AuditLogService } from '../audit/audit.service.js';
+import { AUDIT_ACTIONS } from '../audit/audit-actions.js';
 import { StarsService } from '../stars/stars.service.js';
 import { UploadsService } from '../uploads/uploads.service.js';
 import { RelationsService } from '../relations/relations.service.js';
@@ -62,7 +65,33 @@ export interface SerializedArticle {
    * True if the signed-in user has starred this article.
    */
   isStarred: boolean;
+  /**
+   * True if there is an in-progress autosave draft for this article.
+   * Populated on detail-returning endpoints (`getById`, `getBySlug`,
+   * mutation responses). List responses always set this to `false` to
+   * avoid an N+1 — the editor is the only consumer that needs the
+   * accurate value, and it always loads a detail before opening.
+   */
+  hasDraft: boolean;
 }
+
+/**
+ * Fields whose changes are tracked by version history. `companyId`,
+ * `archivedAt`, audit columns, and computed mirrors (`contentPlaintext`,
+ * `excerpt`) are deliberately excluded — they're either tenant scope
+ * (not "content") or derived state that always rides along with the
+ * primary fields.
+ */
+const VERSIONED_FIELDS = [
+  'title',
+  'slug',
+  'folderId',
+  'visibleToClients',
+  'editorMode',
+  'content',
+  'markdownSource',
+] as const;
+type VersionedField = (typeof VERSIONED_FIELDS)[number];
 
 export interface ArticleListOptions {
   folderId?: string | 'root' | null;
@@ -142,6 +171,7 @@ export class ArticlesService {
     }
     const out = this.serialize(row, actor.role);
     out.isStarred = await this.stars.isStarred(actor.id, 'article', id);
+    out.hasDraft = await this.resolveHasDraft(companyId, id);
     await this.hydrateActors([out]);
     return out;
   }
@@ -160,6 +190,7 @@ export class ArticlesService {
     }
     const out = this.serialize(row, actor.role);
     out.isStarred = await this.stars.isStarred(actor.id, 'article', row.id);
+    out.hasDraft = await this.resolveHasDraft(companyId, row.id);
     await this.hydrateActors([out]);
     return out;
   }
@@ -203,11 +234,33 @@ export class ArticlesService {
       ...body,
     };
 
-    const created = await this.prisma.article.create({ data });
+    // Single transaction: insert the article and its first published
+    // version atomically. Mirrors `PasswordsService.create` so an
+    // operator who reads history immediately after creating the article
+    // is guaranteed to see v1 (rather than an empty list driven by a
+    // half-committed row). The version row carries the full set of
+    // VERSIONED_FIELDS in `changedFields` — every authoring field
+    // started somewhere.
+    const created = await this.prisma.$transaction(async (tx) => {
+      const row = await tx.article.create({ data });
+      await tx.articleVersion.create({
+        data: {
+          articleId: row.id,
+          companyId,
+          version: 1,
+          isDraft: false,
+          ...this.versionRowBodyFromArticle(row),
+          changedFields: [...VERSIONED_FIELDS],
+          changedBy: actor.id,
+          changeReason: 'initial version',
+        },
+      });
+      return row;
+    });
 
     await this.audit.log({
       actorId: actor.id,
-      action: 'article.create',
+      action: AUDIT_ACTIONS.article.create,
       entityType: 'Article',
       entityId: created.id,
       companyId,
@@ -217,6 +270,9 @@ export class ArticlesService {
       after: this.auditFields(created),
     });
     const out = this.serialize(created, actor.role);
+    // No autosave path on create — the brand-new article cannot have
+    // a draft row.
+    out.hasDraft = false;
     await this.hydrateActors([out]);
     return out;
   }
@@ -228,6 +284,7 @@ export class ArticlesService {
     input: UpdateArticleInput,
     meta: AuditMeta,
   ): Promise<SerializedArticle> {
+    const isDraftWrite = input.draft === true;
     const existing = await this.prisma.article.findFirst({ where: { id, companyId } });
     if (!existing) throw new NotFoundException();
     if (existing.archivedAt) {
@@ -298,19 +355,135 @@ export class ArticlesService {
     if (input.excerpt !== undefined) data.excerpt = input.excerpt;
     if (input.visibleToClients !== undefined) data.visibleToClients = input.visibleToClients;
 
-    // `updateMany` + refetch so the tenant-scope middleware sees a
-    // `companyId` filter in the `where` clause. Plain `update` only
-    // accepts unique keys in `where` (i.e. `id`), which would miss the
-    // scope guard. See assets.service for the same idiom.
-    await this.prisma.article.updateMany({ where: { id, companyId }, data });
-    const updated = await this.prisma.article.findFirstOrThrow({
-      where: { id, companyId },
+    // Single transaction wraps the article row update + version row
+    // write so a partial commit cannot leave the live article ahead
+    // of (or behind) its history. `updateMany` + refetch keeps the
+    // tenant middleware's `companyId` filter in the `where` clause —
+    // plain `update` would only accept `{ id }`. See assets.service
+    // for the same idiom.
+    const txResult = await this.prisma.$transaction(async (tx) => {
+      await tx.article.updateMany({ where: { id, companyId }, data });
+      const updated = await tx.article.findFirstOrThrow({
+        where: { id, companyId },
+      });
+
+      const changedFields = this.computeChangedFields(existing, updated);
+
+      // No-op edits do not produce a version row OR an audit row.
+      // Matches today's silent no-op semantics so a stray PATCH from
+      // the chat-apply flow with identical body doesn't bloat history
+      // or audit.
+      if (changedFields.length === 0) {
+        return { updated, versionKind: null as 'draft' | 'publish' | null };
+      }
+
+      const existingDraft = await tx.articleVersion.findFirst({
+        where: { articleId: id, companyId, isDraft: true },
+      });
+
+      const versionBody = this.versionRowBodyFromArticle(updated);
+
+      if (isDraftWrite) {
+        // Autosave path: coalesce successive PATCHes into a single
+        // rolling draft row. The partial unique index
+        // `article_versions_one_draft_per_article_uniq` is our
+        // backstop against a race producing two drafts.
+        if (existingDraft) {
+          // `updateMany` keeps the Prisma tenant-scope middleware happy
+          // (it requires `where.companyId` or `data.companyId` on every
+          // write to a tenant-scoped model). `update`'s where shape is
+          // restricted to the model's unique keys, which excludes
+          // `companyId` since the table's only unique is `(articleId,
+          // version)`. `id` is still unique so the row count is always 1.
+          await tx.articleVersion.updateMany({
+            where: { id: existingDraft.id, companyId },
+            data: {
+              ...versionBody,
+              isDraft: true,
+              changedFields: this.unionFields(
+                existingDraft.changedFields,
+                changedFields,
+              ),
+              changedBy: actor.id,
+              changeReason: existingDraft.changeReason ?? 'autosave draft',
+            },
+          });
+        } else {
+          const max = await tx.articleVersion.aggregate({
+            where: { articleId: id, companyId },
+            _max: { version: true },
+          });
+          await tx.articleVersion.create({
+            data: {
+              articleId: id,
+              companyId,
+              version: (max._max.version ?? 0) + 1,
+              isDraft: true,
+              ...versionBody,
+              changedFields,
+              changedBy: actor.id,
+              changeReason: 'autosave draft',
+            },
+          });
+        }
+        return { updated, versionKind: 'draft' as const };
+      }
+
+      // Explicit Save: promote any existing draft (reuse its version
+      // number — matches the spec'd "Save → version 2" workflow) or
+      // insert a fresh published row.
+      if (existingDraft) {
+        await tx.articleVersion.updateMany({
+          where: { id: existingDraft.id, companyId },
+          data: {
+            ...versionBody,
+            isDraft: false,
+            changedFields: this.unionFields(
+              existingDraft.changedFields,
+              changedFields,
+            ),
+            changedBy: actor.id,
+            changeReason: null,
+          },
+        });
+      } else {
+        const max = await tx.articleVersion.aggregate({
+          where: { articleId: id, companyId },
+          _max: { version: true },
+        });
+        await tx.articleVersion.create({
+          data: {
+            articleId: id,
+            companyId,
+            version: (max._max.version ?? 0) + 1,
+            isDraft: false,
+            ...versionBody,
+            changedFields,
+            changedBy: actor.id,
+          },
+        });
+      }
+      return { updated, versionKind: 'publish' as const };
     });
+
+    const { updated, versionKind } = txResult;
+
+    // No-op silent return — preserves pre-versioning behavior.
+    if (versionKind === null) {
+      const out = this.serialize(updated, actor.role);
+      out.hasDraft = await this.resolveHasDraft(companyId, id);
+      await this.hydrateActors([out]);
+      return out;
+    }
 
     // Tombstone any upload the operator just unembedded so it leaves
     // the photos gallery / attachment panels alongside the image they
     // removed. We diff both Tiptap and Markdown bodies — the URL
     // shape is identical, so a single regex sweep covers either mode.
+    // Done outside the tx because `UploadsService.softDeleteManyForArticle`
+    // owns its own audit + tenant checks; in the worst case (article
+    // tx commits, upload tombstone tx fails) the upload reaper will
+    // clean up later.
     let removedUploads = 0;
     if (input.content !== undefined || input.markdownSource !== undefined) {
       const removed = diffRemovedUploadIds(
@@ -318,29 +491,52 @@ export class ArticlesService {
         updated.content ?? updated.markdownSource,
       );
       if (removed.length > 0) {
-        const result = await this.uploads.softDeleteManyForArticle(
+        // An upload that was removed from the *live* body may still be
+        // referenced by a historical `ArticleVersion` row (typical when
+        // the operator restores an older version that pre-dates the
+        // image, or undoes a delete by saving the prior body again). In
+        // either case, soft-deleting the upload here would make the
+        // image disappear from the photos gallery *and* from any
+        // history-panel preview of versions that still embed it — even
+        // though those versions are still restorable. We only tombstone
+        // uploads that are truly orphaned: not in the new live body,
+        // and not in any non-draft version row.
+        const stillReferenced = await this.findUploadsReferencedInHistory(
           companyId,
+          id,
           removed,
         );
-        removedUploads = result.softDeleted;
+        const orphaned = removed.filter((u) => !stillReferenced.has(u));
+        if (orphaned.length > 0) {
+          const result = await this.uploads.softDeleteManyForArticle(
+            companyId,
+            orphaned,
+          );
+          removedUploads = result.softDeleted;
+        }
       }
     }
 
     await this.audit.log({
       actorId: actor.id,
-      action: 'article.update',
+      action: AUDIT_ACTIONS.article.update,
       entityType: 'Article',
       entityId: id,
       companyId,
       ip: meta.ip,
       userAgent: meta.userAgent,
       before: this.auditFields(existing),
-      after:
-        removedUploads > 0
-          ? { ...this.auditFields(updated), removedUploads }
-          : this.auditFields(updated),
+      // `kind` distinguishes coalesced draft writes from explicit Save
+      // promotions, which would otherwise be indistinguishable in the
+      // audit log (both run through the same code path).
+      after: {
+        ...this.auditFields(updated),
+        kind: versionKind,
+        ...(removedUploads > 0 ? { removedUploads } : {}),
+      },
     });
     const out = this.serialize(updated, actor.role);
+    out.hasDraft = versionKind === 'draft';
     await this.hydrateActors([out]);
     return out;
   }
@@ -369,7 +565,7 @@ export class ArticlesService {
     });
     await this.audit.log({
       actorId: actor.id,
-      action: 'article.move',
+      action: AUDIT_ACTIONS.article.move,
       entityType: 'Article',
       entityId: id,
       companyId,
@@ -379,6 +575,7 @@ export class ArticlesService {
       after: { folderId: updated.folderId },
     });
     const out = this.serialize(updated, actor.role);
+    out.hasDraft = await this.resolveHasDraft(companyId, id);
     await this.hydrateActors([out]);
     return out;
   }
@@ -393,25 +590,85 @@ export class ArticlesService {
     if (!existing) throw new NotFoundException();
     if (existing.archivedAt) throw new BadRequestException('Already archived');
 
-    await this.prisma.article.updateMany({
-      where: { id, companyId },
-      data: { archivedAt: new Date(), updatedBy: actor.id },
-    });
-    const updated = await this.prisma.article.findFirstOrThrow({
-      where: { id, companyId },
-    });
+    // Single tx so a draft-discard can't half-commit (drop the draft
+    // row without setting archivedAt, or vice versa). The article row
+    // ends up holding either:
+    //   - the last published version's body (if a draft was active —
+    //     we revert before setting archivedAt so a Restore later
+    //     surfaces the "real" content, not the dropped autosave), OR
+    //   - its current body (no draft was in flight).
+    const { updated, discardedDraftVersion, removedUploadIds } =
+      await this.prisma.$transaction(async (tx) => {
+        const draft = await tx.articleVersion.findFirst({
+          where: { articleId: id, companyId, isDraft: true },
+        });
+        let discardedDraftVersion: number | null = null;
+        let removedUploadIds: string[] = [];
+
+        if (draft) {
+          const lastPublished = await tx.articleVersion.findFirst({
+            where: { articleId: id, companyId, isDraft: false },
+            orderBy: { version: 'desc' },
+          });
+          if (lastPublished) {
+            await tx.article.updateMany({
+              where: { id, companyId },
+              data: this.articleRowFromVersion(lastPublished, actor.id),
+            });
+            // Uploads embedded only in the draft must follow it into
+            // the bin; otherwise the photos gallery shows orphans
+            // after the article is archived.
+            removedUploadIds = diffRemovedUploadIds(
+              draft.content ?? draft.markdownSource,
+              lastPublished.content ?? lastPublished.markdownSource,
+            );
+          }
+          // If no published row exists (pathological — migration
+          // backfilled v1 for every article), leave the article row
+          // alone and just drop the draft.
+          // `deleteMany` keeps tenant scoping (see `update()` for the
+          // same idiom — `delete`'s where is unique-only so it can't
+          // carry `companyId`).
+          await tx.articleVersion.deleteMany({
+            where: { id: draft.id, companyId },
+          });
+          discardedDraftVersion = draft.version;
+        }
+
+        await tx.article.updateMany({
+          where: { id, companyId },
+          data: { archivedAt: new Date(), updatedBy: actor.id },
+        });
+        const updated = await tx.article.findFirstOrThrow({
+          where: { id, companyId },
+        });
+        return { updated, discardedDraftVersion, removedUploadIds };
+      });
+
+    // Upload tombstoning + audit live outside the tx — same shape as
+    // `update()`. A failure here at worst leaves uploads to the reaper.
+    if (removedUploadIds.length > 0) {
+      await this.uploads.softDeleteManyForArticle(companyId, removedUploadIds);
+    }
+
     await this.audit.log({
       actorId: actor.id,
-      action: 'article.archive',
+      action: AUDIT_ACTIONS.article.archive,
       entityType: 'Article',
       entityId: id,
       companyId,
       ip: meta.ip,
       userAgent: meta.userAgent,
       before: { archivedAt: null },
-      after: { archivedAt: updated.archivedAt },
+      after: {
+        archivedAt: updated.archivedAt,
+        ...(discardedDraftVersion !== null
+          ? { discardedDraftVersion }
+          : {}),
+      },
     });
     const out = this.serialize(updated, actor.role);
+    out.hasDraft = false;
     await this.hydrateActors([out]);
     return out;
   }
@@ -436,7 +693,7 @@ export class ArticlesService {
     });
     await this.audit.log({
       actorId: actor.id,
-      action: 'article.restore',
+      action: AUDIT_ACTIONS.article.restore,
       entityType: 'Article',
       entityId: id,
       companyId,
@@ -446,6 +703,9 @@ export class ArticlesService {
       after: { archivedAt: null },
     });
     const out = this.serialize(updated, actor.role);
+    // Archive always discards the draft, so a restored article cannot
+    // have one. Avoid the EXISTS query.
+    out.hasDraft = false;
     await this.hydrateActors([out]);
     return out;
   }
@@ -465,8 +725,13 @@ export class ArticlesService {
    *   - `search_index` row is removed by the `articles_search_index_delete`
    *     trigger (see migration 0009_phase6_search_index).
    *   - `Relation` is polymorphic (no FK) -> cleaned manually inside the tx.
-   *   - `Upload` rows that were still embedded in the body are soft-deleted
-   *     so the photos gallery / attachments panel match the now-gone article.
+   *   - `Upload` rows embedded in the live body **or in any
+   *     `ArticleVersion` row** for this article are soft-deleted so the
+   *     photos gallery / attachments panel match the now-gone article.
+   *     Live-body-only would miss images that were deleted from a later
+   *     version: `update()` deliberately preserves those uploads while
+   *     the article is alive (so Restore stays lossless), and they only
+   *     become orphans at purge time.
    */
   async purge(
     actor: AuthedUser,
@@ -484,33 +749,66 @@ export class ArticlesService {
       );
     }
 
-    const embeddedUploadIds = Array.from(
+    // Union of upload ids embedded in the live body + every history
+    // row (drafts included — archive normally drops them, but a
+    // pathological row would still need to be cleaned). Versions
+    // cascade-delete with the article, so this is our only chance to
+    // tombstone the upload rows they reference.
+    const embeddedUploadIdSet = new Set<string>(
       extractEmbeddedUploadIds(existing.content ?? existing.markdownSource),
     );
-
-    await this.prisma.$transaction(async (tx) => {
-      await this.relations.cleanupForArticle({ tx, companyId, articleId: id });
-      if (embeddedUploadIds.length > 0) {
-        await tx.upload.updateMany({
-          where: {
-            id: { in: embeddedUploadIds },
-            companyId,
-            attachedToType: 'article',
-            deletedAt: null,
-          },
-          data: { deletedAt: new Date() },
-        });
-      }
-      const result = await tx.article.deleteMany({ where: { id, companyId } });
-      if (result.count === 0) {
-        // Defence in depth: another request already purged the row.
-        throw new NotFoundException();
-      }
+    const versionBodies = await this.prisma.articleVersion.findMany({
+      where: { articleId: id, companyId },
+      select: { content: true, markdownSource: true },
     });
+    for (const v of versionBodies) {
+      for (const uid of extractEmbeddedUploadIds(
+        v.content ?? v.markdownSource,
+      )) {
+        embeddedUploadIdSet.add(uid);
+      }
+    }
+    const embeddedUploadIds = Array.from(embeddedUploadIdSet);
+
+    const { versionCount, softDeletedUploads } = await this.prisma.$transaction(
+      async (tx) => {
+        // Count history rows *before* the article delete so the cascade
+        // doesn't take them away first. Cheap (single COUNT with the
+        // tenant filter) and only useful for the audit forensics trail
+        // since the rows themselves are irrecoverable.
+        const versionCount = await tx.articleVersion.count({
+          where: { articleId: id, companyId },
+        });
+
+        await this.relations.cleanupForArticle({ tx, companyId, articleId: id });
+        let softDeletedUploads = 0;
+        if (embeddedUploadIds.length > 0) {
+          const result = await tx.upload.updateMany({
+            where: {
+              id: { in: embeddedUploadIds },
+              companyId,
+              attachedToType: 'article',
+              deletedAt: null,
+            },
+            data: { deletedAt: new Date() },
+          });
+          softDeletedUploads = result.count;
+        }
+        // `ArticleVersion.article` has ON DELETE CASCADE, so this
+        // deleteMany also drops every history row for the article. No
+        // orphans, no extra query.
+        const result = await tx.article.deleteMany({ where: { id, companyId } });
+        if (result.count === 0) {
+          // Defence in depth: another request already purged the row.
+          throw new NotFoundException();
+        }
+        return { versionCount, softDeletedUploads };
+      },
+    );
 
     await this.audit.log({
       actorId: actor.id,
-      action: 'article.purge',
+      action: AUDIT_ACTIONS.article.purge,
       entityType: 'Article',
       entityId: id,
       companyId,
@@ -519,11 +817,274 @@ export class ArticlesService {
       before: {
         ...this.auditFields(existing),
         archivedAt: existing.archivedAt,
+        versionCount,
+        ...(softDeletedUploads > 0 ? { softDeletedUploads } : {}),
       },
       after: null,
     });
 
     return { id };
+  }
+
+  // ------------------------------------------------------------------
+  // Versioning
+  // ------------------------------------------------------------------
+
+  /**
+   * Drop the in-progress autosave draft (if any) and revert the
+   * article row to the most recent published version. Idempotent — if
+   * there is no draft, returns the current article unchanged. The
+   * "draft branch" never escapes history: the draft row is hard-
+   * deleted, freeing its version number for reuse by the next save.
+   */
+  async discardDraft(
+    actor: AuthedUser,
+    companyId: string,
+    id: string,
+    meta: AuditMeta,
+  ): Promise<SerializedArticle> {
+    const existing = await this.prisma.article.findFirst({
+      where: { id, companyId },
+    });
+    if (!existing) throw new NotFoundException();
+    if (existing.archivedAt) {
+      throw new BadRequestException(
+        'Restore the article before discarding a draft.',
+      );
+    }
+
+    const { updated, discardedVersion, removedUploadIds } =
+      await this.prisma.$transaction(async (tx) => {
+        const draft = await tx.articleVersion.findFirst({
+          where: { articleId: id, companyId, isDraft: true },
+        });
+        if (!draft) {
+          // No draft to discard. Return the article as-is so the
+          // client's optimistic refresh sees a consistent state.
+          const noOp = await tx.article.findFirstOrThrow({
+            where: { id, companyId },
+          });
+          return {
+            updated: noOp,
+            discardedVersion: null as number | null,
+            removedUploadIds: [] as string[],
+          };
+        }
+
+        const lastPublished = await tx.articleVersion.findFirst({
+          where: { articleId: id, companyId, isDraft: false },
+          orderBy: { version: 'desc' },
+        });
+        if (!lastPublished) {
+          // Should be impossible: every article has v=1 backfilled by
+          // migration 0046 and `create()` writes v=1 in the same tx
+          // as the article row. If we see this in production it means
+          // the schema invariant broke; refuse to drop the draft
+          // rather than orphan the article body.
+          throw new BadRequestException(
+            'Cannot discard draft: no published version exists.',
+          );
+        }
+
+        await tx.article.updateMany({
+          where: { id, companyId },
+          data: this.articleRowFromVersion(lastPublished, actor.id),
+        });
+        const removed = diffRemovedUploadIds(
+          draft.content ?? draft.markdownSource,
+          lastPublished.content ?? lastPublished.markdownSource,
+        );
+        await tx.articleVersion.deleteMany({
+          where: { id: draft.id, companyId },
+        });
+        const updated = await tx.article.findFirstOrThrow({
+          where: { id, companyId },
+        });
+        return {
+          updated,
+          discardedVersion: draft.version,
+          removedUploadIds: removed,
+        };
+      });
+
+    if (discardedVersion === null) {
+      const out = this.serialize(updated, actor.role);
+      out.hasDraft = false;
+      await this.hydrateActors([out]);
+      return out;
+    }
+
+    if (removedUploadIds.length > 0) {
+      await this.uploads.softDeleteManyForArticle(companyId, removedUploadIds);
+    }
+
+    await this.audit.log({
+      actorId: actor.id,
+      action: AUDIT_ACTIONS.article.draftDiscard,
+      entityType: 'Article',
+      entityId: id,
+      companyId,
+      ip: meta.ip,
+      userAgent: meta.userAgent,
+      before: null,
+      after: { discardedVersion },
+    });
+
+    const out = this.serialize(updated, actor.role);
+    out.hasDraft = false;
+    await this.hydrateActors([out]);
+    return out;
+  }
+
+  /**
+   * List the published version history for an article (newest first).
+   * Excludes the in-progress draft — UIs that need it ask
+   * `getById`/`getBySlug` for `hasDraft`. Allowed on archived
+   * articles so compliance reviewers can still read history after
+   * archival.
+   */
+  async listVersions(
+    actor: AuthedUser,
+    companyId: string,
+    id: string,
+  ): Promise<ArticleVersionSummary[]> {
+    const article = await this.prisma.article.findFirst({
+      where: { id, companyId },
+      select: { id: true, visibleToClients: true },
+    });
+    if (!article) throw new NotFoundException();
+    if (actor.role === 'CLIENT_USER' && !article.visibleToClients) {
+      throw new NotFoundException();
+    }
+
+    const rows = await this.prisma.articleVersion.findMany({
+      where: { articleId: id, companyId, isDraft: false },
+      orderBy: { version: 'desc' },
+    });
+    if (rows.length === 0) return [];
+
+    const userIds = Array.from(new Set(rows.map((r) => r.changedBy)));
+    const users = await this.prisma.user.findMany({
+      where: { id: { in: userIds } },
+      select: { id: true, name: true, email: true },
+    });
+    const nameById = new Map(
+      users.map((u) => [u.id, u.name || u.email] as const),
+    );
+    return rows.map((r) => this.serializeVersionSummary(r, nameById));
+  }
+
+  /**
+   * Full snapshot of a single version. Used by the history UI when an
+   * operator clicks "View" or "Restore". Published-only — the
+   * coalescing draft is exposed via the article detail's `hasDraft`
+   * flag and not addressable by version number from the API.
+   */
+  async getVersion(
+    actor: AuthedUser,
+    companyId: string,
+    id: string,
+    version: number,
+  ): Promise<ArticleVersionDetail> {
+    const article = await this.prisma.article.findFirst({
+      where: { id, companyId },
+      select: { id: true, visibleToClients: true },
+    });
+    if (!article) throw new NotFoundException();
+    if (actor.role === 'CLIENT_USER' && !article.visibleToClients) {
+      throw new NotFoundException();
+    }
+
+    const row = await this.prisma.articleVersion.findFirst({
+      where: { articleId: id, companyId, version, isDraft: false },
+    });
+    if (!row) throw new NotFoundException();
+
+    const user = await this.prisma.user.findUnique({
+      where: { id: row.changedBy },
+      select: { id: true, name: true, email: true },
+    });
+    const nameById = new Map<string, string>();
+    if (user) nameById.set(user.id, user.name || user.email);
+    return this.serializeVersionDetail(row, nameById);
+  }
+
+  /**
+   * Re-apply version `version`'s body as a new published version. Any
+   * in-progress draft is discarded first (same semantics as a fresh
+   * Save would impose). The resulting history reads as:
+   *   v1, v2, …, vN (target), …, vM (current), vM+1 (this restore)
+   * — i.e. forward-only, no rewriting of the timeline.
+   */
+  async restoreVersion(
+    actor: AuthedUser,
+    companyId: string,
+    id: string,
+    version: number,
+    meta: AuditMeta,
+  ): Promise<SerializedArticle> {
+    const existing = await this.prisma.article.findFirst({
+      where: { id, companyId },
+    });
+    if (!existing) throw new NotFoundException();
+    if (existing.archivedAt) {
+      throw new BadRequestException(
+        'Restore the article before restoring a version.',
+      );
+    }
+
+    const target = await this.prisma.articleVersion.findFirst({
+      where: { articleId: id, companyId, version, isDraft: false },
+    });
+    if (!target) throw new NotFoundException('Version not found.');
+
+    // Drop any in-flight autosave draft first so the new published
+    // row reflects the operator's deliberate "go back to vN" intent
+    // and not a half-merged draft body. `discardDraft` is a no-op
+    // when no draft exists.
+    await this.discardDraft(actor, companyId, id, meta);
+
+    // Build an UpdateArticleInput from the version row and let the
+    // standard update path do the rest: validation, audit, upload
+    // diff, and the published version row write. Slug must skip the
+    // uniqueness check against itself — that's already handled by
+    // `assertSlugFree(..., excludeId: id)` inside `update`.
+    const input: UpdateArticleInput =
+      target.editorMode === 'markdown'
+        ? {
+            title: target.title,
+            slug: target.slug,
+            folderId: target.folderId,
+            editorMode: 'markdown',
+            markdownSource: target.markdownSource ?? '',
+            excerpt: target.excerpt,
+            visibleToClients: target.visibleToClients,
+          }
+        : {
+            title: target.title,
+            slug: target.slug,
+            folderId: target.folderId,
+            editorMode: 'tiptap',
+            content: (target.content as Prisma.JsonValue) as never,
+            excerpt: target.excerpt,
+            visibleToClients: target.visibleToClients,
+          };
+
+    const updated = await this.update(actor, companyId, id, input, meta);
+
+    await this.audit.log({
+      actorId: actor.id,
+      action: AUDIT_ACTIONS.article.versionRestored,
+      entityType: 'Article',
+      entityId: id,
+      companyId,
+      ip: meta.ip,
+      userAgent: meta.userAgent,
+      before: null,
+      after: { restoredFromVersion: version },
+    });
+
+    return updated;
   }
 
   // ------------------------------------------------------------------
@@ -629,6 +1190,186 @@ export class ArticlesService {
     };
   }
 
+  /**
+   * Diff two article rows, returning the names of the
+   * `VERSIONED_FIELDS` that differ. JSON body equality is compared by
+   * serialized form because Prisma may give us `JsonValue` objects
+   * with reference inequality even when shape-equal — and a deep
+   * structural compare is exactly what we'd otherwise write here.
+   */
+  private computeChangedFields(prev: Article, next: Article): VersionedField[] {
+    const out: VersionedField[] = [];
+    for (const field of VERSIONED_FIELDS) {
+      if (field === 'content') {
+        const a = prev.content == null ? null : JSON.stringify(prev.content);
+        const b = next.content == null ? null : JSON.stringify(next.content);
+        if (a !== b) out.push(field);
+        continue;
+      }
+      if (prev[field] !== next[field]) out.push(field);
+    }
+    return out;
+  }
+
+  /** Stable union of two field-name lists (order-insensitive). */
+  private unionFields(a: readonly string[], b: readonly string[]): string[] {
+    const seen = new Set<string>();
+    for (const v of a) seen.add(v);
+    for (const v of b) seen.add(v);
+    return Array.from(seen);
+  }
+
+  /**
+   * `EXISTS` query for "does an in-progress draft exist for this
+   * article?". Cheap — uses the partial unique index. The detail
+   * endpoints surface this as `hasDraft` so the editor can prompt the
+   * user with the right Cancel behavior.
+   */
+  private async resolveHasDraft(
+    companyId: string,
+    articleId: string,
+  ): Promise<boolean> {
+    const count = await this.prisma.articleVersion.count({
+      where: { articleId, companyId, isDraft: true },
+    });
+    return count > 0;
+  }
+
+  /**
+   * Given a list of upload ids that have been removed from an article's
+   * live body, return the subset that is still embedded in at least one
+   * non-draft `ArticleVersion` row for the same article. Callers use
+   * the difference (`removed \ stillReferenced`) to decide which
+   * uploads can be soft-deleted; uploads kept in history must survive
+   * so the history-panel preview and a later Restore still render the
+   * image.
+   *
+   * The scan runs in JS (rather than a Postgres regex over `content::text`)
+   * because it's bounded by the number of versions for a single
+   * article — well under 1000 in any realistic case — and reusing
+   * `extractEmbeddedUploadIds` here keeps the live and history scans
+   * in lock-step on URL shape.
+   */
+  private async findUploadsReferencedInHistory(
+    companyId: string,
+    articleId: string,
+    uploadIds: string[],
+  ): Promise<Set<string>> {
+    const referenced = new Set<string>();
+    if (uploadIds.length === 0) return referenced;
+    const versions = await this.prisma.articleVersion.findMany({
+      where: { articleId, companyId, isDraft: false },
+      select: { content: true, markdownSource: true },
+    });
+    const wanted = new Set(uploadIds);
+    for (const v of versions) {
+      const ids = extractEmbeddedUploadIds(v.content ?? v.markdownSource);
+      for (const id of ids) {
+        if (wanted.has(id)) referenced.add(id);
+      }
+    }
+    return referenced;
+  }
+
+  /**
+   * Build the body subset of an `ArticleVersion` row from a live
+   * Article. Reused by `create()` (v1), `update()` (autosave draft +
+   * promotion), and `archive()` (when reverting before discarding a
+   * draft). Avoids `archivedAt`/audit columns — versions are pure
+   * content snapshots, lifecycle state lives on the parent row.
+   */
+  private versionRowBodyFromArticle(row: Article): {
+    title: string;
+    slug: string;
+    folderId: string | null;
+    visibleToClients: boolean;
+    editorMode: string;
+    content: Prisma.InputJsonValue | typeof Prisma.DbNull;
+    markdownSource: string | null;
+    contentPlaintext: string;
+    excerpt: string | null;
+  } {
+    return {
+      title: row.title,
+      slug: row.slug,
+      folderId: row.folderId,
+      visibleToClients: row.visibleToClients,
+      editorMode: row.editorMode,
+      content:
+        row.content == null
+          ? Prisma.DbNull
+          : (row.content as Prisma.InputJsonValue),
+      markdownSource: row.markdownSource,
+      contentPlaintext: row.contentPlaintext,
+      excerpt: row.excerpt,
+    };
+  }
+
+  /**
+   * Inverse of `versionRowBodyFromArticle`: project a version row
+   * onto the columns of an `Article.updateMany` payload. Used by
+   * `discardDraft` and `archive` when reverting the live row to the
+   * last published snapshot. `updatedBy` carries the actor performing
+   * the revert (not the original version's author) so the audit
+   * trail reflects who undid the change.
+   */
+  private articleRowFromVersion(
+    v: ArticleVersion,
+    updatedBy: string,
+  ): Prisma.ArticleUncheckedUpdateManyInput {
+    return {
+      title: v.title,
+      slug: v.slug,
+      folderId: v.folderId,
+      visibleToClients: v.visibleToClients,
+      editorMode: v.editorMode,
+      content:
+        v.content == null
+          ? Prisma.DbNull
+          : (v.content as Prisma.InputJsonValue),
+      markdownSource: v.markdownSource,
+      contentPlaintext: v.contentPlaintext,
+      excerpt: v.excerpt,
+      updatedBy,
+    };
+  }
+
+  /** Public-facing version summary (metadata only; no body). */
+  private serializeVersionSummary(
+    v: ArticleVersion,
+    nameById: Map<string, string>,
+  ): ArticleVersionSummary {
+    return {
+      version: v.version,
+      isDraft: v.isDraft,
+      title: v.title,
+      slug: v.slug,
+      editorMode: v.editorMode as 'tiptap' | 'markdown',
+      changedFields: v.changedFields,
+      changedBy: v.changedBy,
+      changedByName: nameById.get(v.changedBy) ?? null,
+      changeReason: v.changeReason,
+      createdAt: v.createdAt.toISOString(),
+      updatedAt: v.updatedAt.toISOString(),
+    };
+  }
+
+  /** Public-facing version detail (includes the full body). */
+  private serializeVersionDetail(
+    v: ArticleVersion,
+    nameById: Map<string, string>,
+  ): ArticleVersionDetail {
+    return {
+      ...this.serializeVersionSummary(v, nameById),
+      folderId: v.folderId,
+      visibleToClients: v.visibleToClients,
+      content: v.content as Prisma.JsonValue | null,
+      markdownSource: v.markdownSource,
+      contentPlaintext: v.contentPlaintext,
+      excerpt: v.excerpt,
+    };
+  }
+
   private slugifyTitle(title: string): string {
     return (
       title
@@ -666,6 +1407,11 @@ export class ArticlesService {
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
       isStarred: false, // populated separately for detail
+      // List responses leave `hasDraft` at its default `false` so we
+      // can keep listing cheap. Detail / mutation responses overwrite
+      // this with the real value via `resolveHasDraft` or knowledge
+      // local to the tx.
+      hasDraft: false,
     };
   }
 

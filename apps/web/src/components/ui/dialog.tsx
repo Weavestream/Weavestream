@@ -56,7 +56,10 @@ export function Dialog({
     // viewport — otherwise a tall dialog's footer ends up below the
     // mobile address bar.
     height: '100dvh',
-    zIndex: 60,
+    // Dialogs must render above Sheets (zIndex 80) so confirm-modals
+    // launched from inside a Sheet (e.g. the article history panel's
+    // Restore confirmation) aren't masked by the drawer's overlay.
+    zIndex: 90,
     background: 'rgba(0,0,0,0.55)',
     display: 'grid',
     placeItems: 'center',

@@ -6,6 +6,7 @@ import {
   HttpCode,
   HttpStatus,
   Param,
+  ParseIntPipe,
   ParseUUIDPipe,
   Patch,
   Post,
@@ -149,6 +150,81 @@ export class ArticlesController {
     @Req() req: Request,
   ) {
     return this.articles.purge(actor, companyId, id, meta(req));
+  }
+
+  // --------------------------------------------------------------
+  // Versioning
+  // --------------------------------------------------------------
+
+  /**
+   * Discard the article's in-progress autosave draft and revert the
+   * live row to the most recent published version. Idempotent — a
+   * `DELETE` against an article with no draft returns the current
+   * state unchanged. Mirrors the soft-delete verb for an action that
+   * removes operator-visible state (the unsaved edits).
+   */
+  @Delete(':id/draft')
+  @HttpCode(HttpStatus.OK)
+  @RequirePermission('article.write', { companyIdFrom: 'params.companyId' })
+  async discardDraft(
+    @CurrentUser() actor: AuthedUser,
+    @Param('companyId', new ParseUUIDPipe()) companyId: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Req() req: Request,
+  ) {
+    return this.articles.discardDraft(actor, companyId, id, meta(req));
+  }
+
+  /**
+   * List the published version history for an article (newest first).
+   * Excludes any in-progress draft — the article detail response
+   * carries that signal via `hasDraft`. Accessible to readers; the
+   * tenant check inside the service rejects hidden articles for
+   * CLIENT_USER.
+   */
+  @Get(':id/versions')
+  @RequirePermission('article.read', { companyIdFrom: 'params.companyId' })
+  async listVersions(
+    @CurrentUser() actor: AuthedUser,
+    @Param('companyId', new ParseUUIDPipe()) companyId: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
+  ) {
+    return this.articles.listVersions(actor, companyId, id);
+  }
+
+  /**
+   * Full snapshot of a single version. Returns the version body
+   * (Tiptap JSON / Markdown source) for the preview drawer in the
+   * history panel.
+   */
+  @Get(':id/versions/:version')
+  @RequirePermission('article.read', { companyIdFrom: 'params.companyId' })
+  async getVersion(
+    @CurrentUser() actor: AuthedUser,
+    @Param('companyId', new ParseUUIDPipe()) companyId: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Param('version', ParseIntPipe) version: number,
+  ) {
+    return this.articles.getVersion(actor, companyId, id, version);
+  }
+
+  /**
+   * Re-apply a historical version's body, producing a new published
+   * version (forward-only history — same shape as
+   * `password.version.restored`). Any in-progress draft is dropped
+   * first.
+   */
+  @Post(':id/versions/:version/restore')
+  @HttpCode(HttpStatus.OK)
+  @RequirePermission('article.write', { companyIdFrom: 'params.companyId' })
+  async restoreVersion(
+    @CurrentUser() actor: AuthedUser,
+    @Param('companyId', new ParseUUIDPipe()) companyId: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Param('version', ParseIntPipe) version: number,
+    @Req() req: Request,
+  ) {
+    return this.articles.restoreVersion(actor, companyId, id, version, meta(req));
   }
 }
 

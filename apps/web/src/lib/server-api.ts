@@ -4,6 +4,7 @@ import { notFound } from 'next/navigation';
 import type {
   AiSettings,
   AlertConfig,
+  ArticleEditorMode,
   BackupConfig,
   BackupRunDto,
   FieldType,
@@ -21,6 +22,7 @@ import { DEFAULT_PASSWORD_GENERATOR_DEFAULTS } from '@weavestream/shared';
 export type {
   AiSettings,
   AlertConfig,
+  ArticleEditorMode,
   BackupConfig,
   BackupRunDto,
   FieldType,
@@ -434,6 +436,14 @@ export type Settings = {
   tenantTermPlural: string;
   tenantTermPossessive: string | null;
   passwordGeneratorDefaults: PasswordGeneratorDefaults;
+  articleAutosaveEnabled: boolean;
+  /**
+   * Workspace-wide default editor mode applied to *newly created*
+   * articles. Existing articles keep their own `editorMode`. Resolved
+   * server-side from `SystemSetting.articleDefaultEditorMode` and
+   * piped into `ArticleForm` via the create-page server component.
+   */
+  articleDefaultEditorMode: ArticleEditorMode;
   updatedAt: string;
 };
 
@@ -450,6 +460,8 @@ export const DEFAULT_SETTINGS: Settings = {
   tenantTermPlural: 'Companies',
   tenantTermPossessive: null,
   passwordGeneratorDefaults: DEFAULT_PASSWORD_GENERATOR_DEFAULTS,
+  articleAutosaveEnabled: false,
+  articleDefaultEditorMode: 'tiptap',
   updatedAt: new Date(0).toISOString(),
 };
 
@@ -1127,6 +1139,14 @@ export type ArticleDetail = ArticleSummary & {
    * True if the signed-in user has starred this article.
    */
   isStarred: boolean;
+  /**
+   * True if there is an in-progress autosave draft for this article.
+   * Drives the editor's Cancel-with-revert path and the "draft in
+   * progress" badge in the history panel. List responses always
+   * report `false` (omitted server-side to avoid an N+1) — this is
+   * only meaningful on detail loads.
+   */
+  hasDraft: boolean;
 };
 
 export type ArticlePage = { items: ArticleSummary[]; nextCursor: string | null };
@@ -1173,6 +1193,52 @@ export async function getArticleBySlug(
 ): Promise<ArticleDetail | null> {
   const res = await serverApiFetch<ArticleDetail>(
     `/companies/${companyId}/articles/by-slug/${encodeURIComponent(slug)}`,
+  );
+  if (!res.ok || !res.data) return null;
+  return res.data;
+}
+
+export type ArticleVersionSummary = {
+  version: number;
+  isDraft: boolean;
+  title: string;
+  slug: string;
+  editorMode: 'tiptap' | 'markdown';
+  changedFields: string[];
+  changedBy: string;
+  changedByName: string | null;
+  changeReason: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ArticleVersionDetail = ArticleVersionSummary & {
+  folderId: string | null;
+  visibleToClients: boolean;
+  content: unknown | null;
+  markdownSource: string | null;
+  contentPlaintext: string;
+  excerpt: string | null;
+};
+
+export async function listArticleVersions(
+  companyId: string,
+  id: string,
+): Promise<ArticleVersionSummary[]> {
+  const res = await serverApiFetch<ArticleVersionSummary[]>(
+    `/companies/${companyId}/articles/${id}/versions`,
+  );
+  if (!res.ok || !res.data) return [];
+  return res.data;
+}
+
+export async function getArticleVersion(
+  companyId: string,
+  id: string,
+  version: number,
+): Promise<ArticleVersionDetail | null> {
+  const res = await serverApiFetch<ArticleVersionDetail>(
+    `/companies/${companyId}/articles/${id}/versions/${version}`,
   );
   if (!res.ok || !res.data) return null;
   return res.data;

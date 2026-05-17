@@ -20,7 +20,11 @@ export const TENANT_SCOPED_MODELS = new Set<string>([
   // (non-null) companyId — see DECISIONS.md D-010 for why there is no
   // "global" escape hatch and no nullable companyId here. "Internal"
   // MSP docs live in a regular Company tenant like any other client.
+  // `ArticleVersion` denormalises the parent article's companyId so
+  // the middleware can scope it without traversing a relation, same
+  // pattern as `PasswordVersion` / `AssetFieldValue`.
   'Article',
+  'ArticleVersion',
   'Folder',
   'Upload',
   // Phase 8: domain & SSL monitor. Both rows carry a required

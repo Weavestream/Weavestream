@@ -39,7 +39,9 @@ export function ToastProvider({ children }: { children: ReactNode }) {
           display: 'flex',
           flexDirection: 'column',
           gap: 8,
-          zIndex: 80,
+          // Above Sheet (80) and Dialog (90) so success/error feedback
+          // remains visible regardless of what modal is on screen.
+          zIndex: 100,
           pointerEvents: 'none',
         }}
       >

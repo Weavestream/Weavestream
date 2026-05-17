@@ -6,6 +6,7 @@ import {
   PASSWORD_GENERATOR_PRESET_DEFAULTS,
   passwordGeneratorPresetValues,
   passwordGeneratorSeparatorValues,
+  type ArticleEditorMode,
   type PasswordGeneratorDefaults,
   type PasswordGeneratorPreset,
   type PasswordGeneratorSeparator,
@@ -45,7 +46,11 @@ export function SecuritySettingsForm({ initial }: { initial: Settings }) {
   return <SettingsForm initial={initial} section="security" />;
 }
 
-type SettingsSection = 'general' | 'security';
+export function ArticleSettingsForm({ initial }: { initial: Settings }) {
+  return <SettingsForm initial={initial} section="articles" />;
+}
+
+type SettingsSection = 'general' | 'security' | 'articles';
 
 function SettingsForm({
   initial,
@@ -79,6 +84,11 @@ function SettingsForm({
   const [generator, setGenerator] = useState<PasswordGeneratorDefaults>(
     initial.passwordGeneratorDefaults,
   );
+  const [articleAutosaveEnabled, setArticleAutosaveEnabled] = useState(
+    initial.articleAutosaveEnabled,
+  );
+  const [articleDefaultEditorMode, setArticleDefaultEditorMode] =
+    useState<ArticleEditorMode>(initial.articleDefaultEditorMode);
 
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -115,7 +125,16 @@ function SettingsForm({
     (possessive.trim() || null) !==
       (baseline.current.tenantTermPossessive ?? null);
 
-  const dirty = section === 'general' ? generalDirty : generatorDirty;
+  const articlesDirty =
+    articleAutosaveEnabled !== baseline.current.articleAutosaveEnabled ||
+    articleDefaultEditorMode !== baseline.current.articleDefaultEditorMode;
+
+  const dirty =
+    section === 'general'
+      ? generalDirty
+      : section === 'articles'
+        ? articlesDirty
+        : generatorDirty;
 
   function applyPreset(id: TermPresetId) {
     setPresetId(id);
@@ -152,7 +171,9 @@ function SettingsForm({
             tenantTermPossessive:
               possessive.trim() === '' ? null : possessive.trim(),
           }
-        : { passwordGeneratorDefaults: generator };
+        : section === 'articles'
+          ? { articleAutosaveEnabled, articleDefaultEditorMode }
+          : { passwordGeneratorDefaults: generator };
     const res = await apiFetch<Settings>('/settings', {
       method: 'PATCH',
       body: JSON.stringify(payload),
@@ -183,6 +204,8 @@ function SettingsForm({
       ),
     );
     setGenerator(b.passwordGeneratorDefaults);
+    setArticleAutosaveEnabled(b.articleAutosaveEnabled);
+    setArticleDefaultEditorMode(b.articleDefaultEditorMode);
     setError(null);
   }
 
@@ -327,6 +350,79 @@ function SettingsForm({
               </PreviewLine>
             </div>
           </section>
+
+        </>
+      )}
+
+      {section === 'articles' && (
+        <>
+          <section
+            style={{ display: 'flex', flexDirection: 'column', gap: 14 }}
+          >
+            <SectionHeader
+              label="Default editor format"
+              help="Applied when an operator clicks New article. Each article remembers its own format after creation, so this only seeds the initial choice."
+            />
+            <EditorModePicker
+              value={articleDefaultEditorMode}
+              onChange={setArticleDefaultEditorMode}
+            />
+          </section>
+
+          <section
+            style={{ display: 'flex', flexDirection: 'column', gap: 14 }}
+          >
+            <SectionHeader
+              label="Autosave"
+              help="Controls whether the article editor silently persists in-progress edits while typing."
+            />
+            <label
+              style={{
+                display: 'flex',
+                alignItems: 'flex-start',
+                gap: 10,
+                padding: 12,
+                background: 'var(--panel-2)',
+                border: '1px solid var(--line-2)',
+                borderRadius: 6,
+                cursor: 'pointer',
+                userSelect: 'none',
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={articleAutosaveEnabled}
+                onChange={(e) => setArticleAutosaveEnabled(e.target.checked)}
+                style={{ marginTop: 3, accentColor: 'var(--accent)' }}
+              />
+              <span
+                style={{ display: 'flex', flexDirection: 'column', gap: 4 }}
+              >
+                <span
+                  style={{
+                    fontSize: 13,
+                    color: 'var(--text)',
+                    fontWeight: 500,
+                  }}
+                >
+                  Enable article autosave (drafts every ~4 s)
+                </span>
+                <span
+                  style={{
+                    fontSize: 12,
+                    color: 'var(--muted)',
+                    lineHeight: 1.5,
+                  }}
+                >
+                  When on, the editor stores work-in-progress edits as a
+                  single rolling draft version. Clicking Save promotes the
+                  draft to a numbered version; Cancel discards the draft and
+                  restores the article to its last saved version. Off by
+                  default — operators must click Save to persist any change.
+                </span>
+              </span>
+            </label>
+          </section>
         </>
       )}
 
@@ -395,6 +491,93 @@ function SectionHeader({ label, help }: { label: string; help?: string }) {
 
 function PreviewLine({ children }: { children: React.ReactNode }) {
   return <div>{children}</div>;
+}
+
+const EDITOR_MODE_OPTIONS: ReadonlyArray<{
+  id: ArticleEditorMode;
+  label: string;
+  help: string;
+}> = [
+  {
+    id: 'tiptap',
+    label: 'WYSIWYG',
+    help: 'Rich-text editor with toolbar — what most operators expect.',
+  },
+  {
+    id: 'markdown',
+    label: 'Markdown',
+    help: 'Source editor with live preview — better for technical teams.',
+  },
+];
+
+/**
+ * Segmented control mirroring the password-generator preset picker so
+ * the two article-settings sections feel visually consistent. Selected
+ * tile uses the accent colour; helper copy under each label tells the
+ * admin which UX their operators will land in on "New article".
+ */
+function EditorModePicker({
+  value,
+  onChange,
+}: {
+  value: ArticleEditorMode;
+  onChange: (next: ArticleEditorMode) => void;
+}) {
+  return (
+    <div
+      role="radiogroup"
+      aria-label="Default article editor format"
+      style={{
+        display: 'grid',
+        gridTemplateColumns: '1fr 1fr',
+        gap: 10,
+      }}
+    >
+      {EDITOR_MODE_OPTIONS.map((opt) => {
+        const active = opt.id === value;
+        return (
+          <button
+            key={opt.id}
+            type="button"
+            role="radio"
+            aria-checked={active}
+            onClick={() => onChange(opt.id)}
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'flex-start',
+              gap: 4,
+              textAlign: 'left',
+              padding: '12px 14px',
+              borderRadius: 6,
+              border: '1px solid',
+              borderColor: active ? 'var(--accent)' : 'var(--line-2)',
+              background: active ? 'var(--accent-soft)' : 'var(--panel-2)',
+              color: 'var(--text)',
+              cursor: 'pointer',
+              transition:
+                'background 120ms ease, border-color 120ms ease, color 120ms ease',
+            }}
+          >
+            <span
+              style={{
+                fontSize: 13,
+                fontWeight: 600,
+                color: active ? 'var(--accent)' : 'var(--text)',
+              }}
+            >
+              {opt.label}
+            </span>
+            <span
+              style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.4 }}
+            >
+              {opt.help}
+            </span>
+          </button>
+        );
+      })}
+    </div>
+  );
 }
 
 function detectPreset(

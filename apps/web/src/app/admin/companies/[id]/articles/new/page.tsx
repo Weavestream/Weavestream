@@ -1,6 +1,7 @@
 import {
   getCompanyDetail,
   getCompanyFolderTree,
+  getSettings,
   throwUnlessFound,
 } from '../../../../../../lib/server-api';
 import { ArticleForm } from '../article-form';
@@ -15,9 +16,10 @@ export default async function NewArticlePage({
   const { id: companyId } = await params;
   const sp = await searchParams;
 
-  const [companyRes, folders] = await Promise.all([
+  const [companyRes, folders, settings] = await Promise.all([
     getCompanyDetail(companyId),
     getCompanyFolderTree(companyId),
+    getSettings(),
   ]);
   const company = throwUnlessFound(companyRes, `/companies/${companyId}`);
 
@@ -33,6 +35,14 @@ export default async function NewArticlePage({
       mode="create"
       folders={folders}
       initialFolderId={initialFolderId}
+      // Autosave doesn't run in Create mode (we don't have an article
+      // id to PATCH against until Publish), but we still pass the
+      // resolved setting through so the status label can show the
+      // right copy on first edit.
+      autosaveEnabled={settings.articleAutosaveEnabled}
+      // Workspace-wide default editor format. Only meaningful in
+      // Create mode — edit mode honours the article's own stored mode.
+      defaultEditorMode={settings.articleDefaultEditorMode}
     />
   );
 }

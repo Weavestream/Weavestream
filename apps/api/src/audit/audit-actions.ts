@@ -122,6 +122,15 @@ export const AUDIT_ACTIONS = {
     archive: 'article.archive',
     restore: 'article.restore',
     purge: 'article.purge',
+    // Version control. `versionRestored` mirrors the password vault
+    // pattern: vN's body is re-applied via the normal update path,
+    // which records a fresh published version + an extra
+    // `restoredFromVersion` field in `after`. `draftDiscard` fires
+    // when an operator clicks Cancel after autosave had created a
+    // draft — `after.discardedVersion` carries the version number
+    // the autosave was holding.
+    versionRestored: 'article.version.restored',
+    draftDiscard: 'article.draft.discard',
   },
   integration: {
     create: 'integration.create',

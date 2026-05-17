@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { articleEditorModeSchema } from './article.js';
 import { passwordGeneratorDefaultsSchema } from './password-generator.js';
 
 /**
@@ -29,6 +30,8 @@ export const systemSettingsSchema = z.object({
   tenantTermPlural: z.string().min(1).max(40),
   tenantTermPossessive: z.string().min(1).max(40).nullable(),
   passwordGeneratorDefaults: passwordGeneratorDefaultsSchema,
+  articleAutosaveEnabled: z.boolean(),
+  articleDefaultEditorMode: articleEditorModeSchema,
   updatedAt: z.string(),
 });
 
@@ -44,6 +47,8 @@ export const updateSettingsSchema = z
       .union([trimmedString(1, 40, 'Possessive term'), z.null()])
       .optional(),
     passwordGeneratorDefaults: passwordGeneratorDefaultsSchema.optional(),
+    articleAutosaveEnabled: z.boolean().optional(),
+    articleDefaultEditorMode: articleEditorModeSchema.optional(),
   })
   .refine((v) => Object.keys(v).length > 0, 'At least one field must be provided');
 

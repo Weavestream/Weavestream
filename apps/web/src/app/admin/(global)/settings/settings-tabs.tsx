@@ -4,11 +4,15 @@ import { useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import type { AiSettings, EmailSettings } from '@weavestream/shared';
 import type { Settings } from '../../../../lib/server-api';
-import { GeneralSettingsForm, SecuritySettingsForm } from './settings-form';
+import {
+  ArticleSettingsForm,
+  GeneralSettingsForm,
+  SecuritySettingsForm,
+} from './settings-form';
 import { EmailSettingsForm } from './email-settings-form';
 import { AiSettingsForm } from './ai-settings-form';
 
-type TabId = 'general' | 'security' | 'email' | 'ai';
+type TabId = 'general' | 'security' | 'articles' | 'email' | 'ai';
 
 const TABS: Array<{ id: TabId; label: string; help: string }> = [
   {
@@ -20,6 +24,11 @@ const TABS: Array<{ id: TabId; label: string; help: string }> = [
     id: 'security',
     label: 'Security',
     help: 'Password generator defaults and security-related settings.',
+  },
+  {
+    id: 'articles',
+    label: 'Articles',
+    help: 'Article editor behaviour, including autosave.',
   },
   {
     id: 'email',
@@ -104,6 +113,7 @@ export function SettingsTabs({
       <div style={{ padding: 18 }}>
         {tab === 'general' && <GeneralSettingsForm initial={settings} />}
         {tab === 'security' && <SecuritySettingsForm initial={settings} />}
+        {tab === 'articles' && <ArticleSettingsForm initial={settings} />}
         {tab === 'email' && (
           <EmailSettingsForm
             initial={emailSettings}

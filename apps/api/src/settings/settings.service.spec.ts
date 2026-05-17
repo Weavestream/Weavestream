@@ -32,6 +32,8 @@ function baseRow(overrides: Partial<Record<string, unknown>> = {}) {
     tenantTermSingular: 'Company',
     tenantTermPlural: 'Companies',
     tenantTermPossessive: null as string | null,
+    articleAutosaveEnabled: false,
+    articleDefaultEditorMode: 'tiptap',
     updatedAt: NOW,
     updatedBy: null as string | null,
     ...overrides,
@@ -67,6 +69,8 @@ describe('SettingsService.get', () => {
       tenantTermPlural: 'Companies',
       tenantTermPossessive: null,
       passwordGeneratorDefaults: DEFAULT_PASSWORD_GENERATOR_DEFAULTS,
+      articleAutosaveEnabled: false,
+      articleDefaultEditorMode: 'tiptap',
       updatedAt: NOW.toISOString(),
     });
     expect(prisma.systemSetting.findUnique).toHaveBeenCalledTimes(1);

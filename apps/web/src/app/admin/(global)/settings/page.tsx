@@ -45,7 +45,12 @@ export default async function SettingsPage({
         <Panel noPad>
           <SettingsTabs
             initialTab={
-              (sp.tab as 'general' | 'security' | 'email' | 'ai') ?? 'general'
+              (sp.tab as
+                | 'general'
+                | 'security'
+                | 'articles'
+                | 'email'
+                | 'ai') ?? 'general'
             }
             settings={settings}
             emailSettings={emailSettings}

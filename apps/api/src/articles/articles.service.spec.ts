@@ -3,7 +3,12 @@ import {
   ConflictException,
   NotFoundException,
 } from '@nestjs/common';
-import { Prisma, type Article, type Folder } from '@prisma/client';
+import {
+  Prisma,
+  type Article,
+  type ArticleVersion,
+  type Folder,
+} from '@prisma/client';
 import { ArticlesService } from './articles.service.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
 
@@ -16,9 +21,14 @@ import type { AuthedUser } from '../common/current-user.decorator.js';
  *  - folder validation (folder must belong to the same company)
  *  - archive → restore round-trip
  *  - tiptap content must be a doc node
+ *  - versioning: create writes v1, autosave coalesces into one draft
+ *    row, explicit Save promotes that draft (no new row), Cancel
+ *    discards the draft and reverts, restore creates a forward row,
+ *    archive auto-discards drafts, purge cascade-deletes versions.
  */
 
 type ArticleRow = Article;
+type ArticleVersionRow = ArticleVersion;
 type FolderRow = Folder;
 
 interface UploadRow {
@@ -33,11 +43,14 @@ function makeStubs(initial: {
   folders?: FolderRow[];
   starredArticleIds?: string[];
   uploads?: UploadRow[];
+  versions?: ArticleVersionRow[];
 } = {}) {
   const articles: ArticleRow[] = [...(initial.articles ?? [])];
   const folders: FolderRow[] = [...(initial.folders ?? [])];
   const starredArticleIds: string[] = [...(initial.starredArticleIds ?? [])];
   const uploadRows: UploadRow[] = [...(initial.uploads ?? [])];
+  const versions: ArticleVersionRow[] = [...(initial.versions ?? [])];
+  let versionIdCounter = versions.length;
 
   function matchesWhere(row: ArticleRow, where: Prisma.ArticleWhereInput): boolean {
     if (where.id && where.id !== row.id) return false;
@@ -55,15 +68,26 @@ function makeStubs(initial: {
     return true;
   }
 
+  // Real Postgres returns a fresh snapshot on every `findFirst`. The
+  // stub used to return the in-memory row reference directly, which
+  // meant the service's pre-update `existing` snapshot would
+  // *mutate* alongside the subsequent `updateMany` call and the diff
+  // would always compute as "nothing changed". Clone on read so the
+  // service's snapshot semantics match production.
+  function clone<T>(row: T): T {
+    return { ...row } as T;
+  }
+
   const prisma = {
     article: {
       async findFirst(args: { where: Prisma.ArticleWhereInput }) {
-        return articles.find((a) => matchesWhere(a, args.where)) ?? null;
+        const hit = articles.find((a) => matchesWhere(a, args.where));
+        return hit ? clone(hit) : null;
       },
       async findFirstOrThrow(args: { where: Prisma.ArticleWhereInput }) {
         const hit = articles.find((a) => matchesWhere(a, args.where));
         if (!hit) throw new Error('not found');
-        return hit;
+        return clone(hit);
       },
       async findMany(args: {
         where: Prisma.ArticleWhereInput;
@@ -78,7 +102,7 @@ function makeStubs(initial: {
           if (idx >= 0) results = results.slice(idx + (args.skip ?? 0));
         }
         if (args.take) results = results.slice(0, args.take);
-        return results;
+        return results.map(clone);
       },
       async create(args: { data: Prisma.ArticleUncheckedCreateInput }): Promise<ArticleRow> {
         const d = args.data;
@@ -209,6 +233,218 @@ function makeStubs(initial: {
         return { count };
       },
     },
+    // Minimal in-memory model for `article_versions`. Only the
+    // operations the service actually performs are stubbed; missing
+    // operations explode loudly during the test rather than silently
+    // returning empty data.
+    articleVersion: {
+      async create(args: { data: Record<string, unknown> }): Promise<ArticleVersionRow> {
+        versionIdCounter += 1;
+        const d = args.data;
+        const row: ArticleVersionRow = {
+          id: `av-${versionIdCounter}`,
+          articleId: d.articleId as string,
+          companyId: d.companyId as string,
+          version: d.version as number,
+          isDraft: (d.isDraft as boolean) ?? false,
+          title: d.title as string,
+          slug: d.slug as string,
+          folderId: (d.folderId as string | null) ?? null,
+          visibleToClients: (d.visibleToClients as boolean) ?? true,
+          editorMode: (d.editorMode as string) ?? 'tiptap',
+          content:
+            d.content === Prisma.DbNull || d.content === null
+              ? null
+              : (d.content as Prisma.JsonValue),
+          markdownSource: (d.markdownSource as string | null) ?? null,
+          contentPlaintext: (d.contentPlaintext as string) ?? '',
+          excerpt: (d.excerpt as string | null) ?? null,
+          changedFields: ((d.changedFields as string[] | undefined) ?? []) as string[],
+          changedBy: d.changedBy as string,
+          changeReason: (d.changeReason as string | null) ?? null,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        };
+        versions.push(row);
+        return row;
+      },
+      async findFirst(args: {
+        where?: {
+          articleId?: string;
+          companyId?: string;
+          isDraft?: boolean;
+          version?: number;
+        };
+        orderBy?: { version?: 'asc' | 'desc' };
+      }): Promise<ArticleVersionRow | null> {
+        const where = args.where ?? {};
+        const matches = versions.filter((v) => {
+          if (where.articleId && v.articleId !== where.articleId) return false;
+          if (where.companyId && v.companyId !== where.companyId) return false;
+          if (where.isDraft !== undefined && v.isDraft !== where.isDraft) return false;
+          if (where.version !== undefined && v.version !== where.version) return false;
+          return true;
+        });
+        if (args.orderBy?.version === 'desc') {
+          matches.sort((a, b) => b.version - a.version);
+        } else if (args.orderBy?.version === 'asc') {
+          matches.sort((a, b) => a.version - b.version);
+        }
+        return matches[0] ?? null;
+      },
+      async findMany(args: {
+        where?: { articleId?: string; companyId?: string; isDraft?: boolean };
+        orderBy?: { version?: 'asc' | 'desc' };
+        select?: Record<string, boolean>;
+      }): Promise<Array<Partial<ArticleVersionRow>>> {
+        const where = args.where ?? {};
+        let matches = versions.filter((v) => {
+          if (where.articleId && v.articleId !== where.articleId) return false;
+          if (where.companyId && v.companyId !== where.companyId) return false;
+          if (where.isDraft !== undefined && v.isDraft !== where.isDraft) return false;
+          return true;
+        });
+        if (args.orderBy?.version === 'desc') {
+          matches = [...matches].sort((a, b) => b.version - a.version);
+        } else if (args.orderBy?.version === 'asc') {
+          matches = [...matches].sort((a, b) => a.version - b.version);
+        }
+        if (args.select) {
+          return matches.map((v) => {
+            const projected: Partial<ArticleVersionRow> = {};
+            for (const key of Object.keys(args.select!) as Array<
+              keyof ArticleVersionRow
+            >) {
+              if (args.select![key as string]) {
+                (projected as Record<string, unknown>)[key as string] = v[key];
+              }
+            }
+            return projected;
+          });
+        }
+        return matches;
+      },
+      async aggregate(args: {
+        where?: { articleId?: string; companyId?: string };
+        _max?: { version?: boolean };
+      }): Promise<{ _max: { version: number | null } }> {
+        const where = args.where ?? {};
+        const matches = versions.filter((v) => {
+          if (where.articleId && v.articleId !== where.articleId) return false;
+          if (where.companyId && v.companyId !== where.companyId) return false;
+          return true;
+        });
+        const max = matches.reduce<number | null>(
+          (acc, v) => (acc === null || v.version > acc ? v.version : acc),
+          null,
+        );
+        return { _max: { version: max } };
+      },
+      async update(args: {
+        where: { id: string };
+        data: Record<string, unknown>;
+      }): Promise<ArticleVersionRow> {
+        const idx = versions.findIndex((v) => v.id === args.where.id);
+        if (idx < 0) throw new Error('not found');
+        const current = versions[idx]!;
+        const d = args.data;
+        const next: ArticleVersionRow = { ...current };
+        if ('title' in d) next.title = d.title as string;
+        if ('slug' in d) next.slug = d.slug as string;
+        if ('folderId' in d) next.folderId = (d.folderId as string | null) ?? null;
+        if ('visibleToClients' in d) next.visibleToClients = d.visibleToClients as boolean;
+        if ('editorMode' in d) next.editorMode = d.editorMode as string;
+        if ('content' in d) {
+          next.content =
+            d.content === Prisma.DbNull || d.content === null
+              ? null
+              : (d.content as Prisma.JsonValue);
+        }
+        if ('markdownSource' in d) next.markdownSource = (d.markdownSource as string | null) ?? null;
+        if ('contentPlaintext' in d) next.contentPlaintext = d.contentPlaintext as string;
+        if ('excerpt' in d) next.excerpt = (d.excerpt as string | null) ?? null;
+        if ('isDraft' in d) next.isDraft = d.isDraft as boolean;
+        if ('changedFields' in d) next.changedFields = d.changedFields as string[];
+        if ('changedBy' in d) next.changedBy = d.changedBy as string;
+        if ('changeReason' in d) next.changeReason = (d.changeReason as string | null) ?? null;
+        next.updatedAt = new Date();
+        versions[idx] = next;
+        return next;
+      },
+      async delete(args: { where: { id: string } }): Promise<ArticleVersionRow> {
+        const idx = versions.findIndex((v) => v.id === args.where.id);
+        if (idx < 0) throw new Error('not found');
+        const removed = versions[idx]!;
+        versions.splice(idx, 1);
+        return removed;
+      },
+      async updateMany(args: {
+        where: { id?: string; companyId?: string; articleId?: string };
+        data: Record<string, unknown>;
+      }): Promise<{ count: number }> {
+        const where = args.where;
+        const matches = versions
+          .map((v, idx) => ({ v, idx }))
+          .filter(({ v }) => {
+            if (where.id && v.id !== where.id) return false;
+            if (where.companyId && v.companyId !== where.companyId) return false;
+            if (where.articleId && v.articleId !== where.articleId) return false;
+            return true;
+          });
+        const d = args.data;
+        for (const { v: current, idx } of matches) {
+          const next: ArticleVersionRow = { ...current };
+          if ('title' in d) next.title = d.title as string;
+          if ('slug' in d) next.slug = d.slug as string;
+          if ('folderId' in d) next.folderId = (d.folderId as string | null) ?? null;
+          if ('visibleToClients' in d) next.visibleToClients = d.visibleToClients as boolean;
+          if ('editorMode' in d) next.editorMode = d.editorMode as string;
+          if ('content' in d) {
+            next.content =
+              d.content === Prisma.DbNull || d.content === null
+                ? null
+                : (d.content as Prisma.JsonValue);
+          }
+          if ('markdownSource' in d)
+            next.markdownSource = (d.markdownSource as string | null) ?? null;
+          if ('contentPlaintext' in d) next.contentPlaintext = d.contentPlaintext as string;
+          if ('excerpt' in d) next.excerpt = (d.excerpt as string | null) ?? null;
+          if ('isDraft' in d) next.isDraft = d.isDraft as boolean;
+          if ('changedFields' in d) next.changedFields = d.changedFields as string[];
+          if ('changedBy' in d) next.changedBy = d.changedBy as string;
+          if ('changeReason' in d)
+            next.changeReason = (d.changeReason as string | null) ?? null;
+          next.updatedAt = new Date();
+          versions[idx] = next;
+        }
+        return { count: matches.length };
+      },
+      async deleteMany(args: {
+        where: { id?: string; companyId?: string; articleId?: string };
+      }): Promise<{ count: number }> {
+        const where = args.where;
+        const before = versions.length;
+        for (let i = versions.length - 1; i >= 0; i--) {
+          const v = versions[i]!;
+          if (where.id && v.id !== where.id) continue;
+          if (where.companyId && v.companyId !== where.companyId) continue;
+          if (where.articleId && v.articleId !== where.articleId) continue;
+          versions.splice(i, 1);
+        }
+        return { count: before - versions.length };
+      },
+      async count(args: {
+        where?: { articleId?: string; companyId?: string; isDraft?: boolean };
+      }): Promise<number> {
+        const where = args.where ?? {};
+        return versions.filter((v) => {
+          if (where.articleId && v.articleId !== where.articleId) return false;
+          if (where.companyId && v.companyId !== where.companyId) return false;
+          if (where.isDraft !== undefined && v.isDraft !== where.isDraft) return false;
+          return true;
+        }).length;
+      },
+    },
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     async $transaction<T>(fn: (tx: any) => Promise<T>): Promise<T> {
       return fn(prisma);
@@ -251,7 +487,17 @@ function makeStubs(initial: {
     cleanupForArticle: jest.fn(async () => {}),
   };
 
-  return { prisma, audit, stars, uploads, relations, articles, folders, uploadRows };
+  return {
+    prisma,
+    audit,
+    stars,
+    uploads,
+    relations,
+    articles,
+    folders,
+    uploadRows,
+    versions,
+  };
 }
 
 function actor(overrides: Partial<AuthedUser> = {}): AuthedUser {
@@ -762,6 +1008,469 @@ describe('ArticlesService', () => {
 
       const upload = uploadRows.find((u) => u.id === uploadId)!;
       expect(upload.deletedAt).toBeInstanceOf(Date);
+    });
+
+    it('soft-deletes uploads referenced only by historical versions', async () => {
+      // Reproduces the bug where an image used in v1 but removed in v2
+      // survived a permanent delete because purge only scanned the
+      // live body. update() deliberately keeps these uploads alive (so
+      // Restore is lossless), so purge has to clean them up.
+      const liveUploadId = '11111111-1111-1111-1111-111111111111';
+      const historyOnlyUploadId = '33333333-3333-3333-3333-333333333333';
+      const companyUuid = '22222222-2222-2222-2222-222222222222';
+      const liveBody = `live /api/v1/companies/${companyUuid}/uploads/${liveUploadId}/image`;
+      const historyBody = `old /api/v1/companies/${companyUuid}/uploads/${historyOnlyUploadId}/image and /api/v1/companies/${companyUuid}/uploads/${liveUploadId}/image`;
+      const row = archivedRow({
+        editorMode: 'markdown',
+        content: null,
+        markdownSource: liveBody,
+      });
+      const v1: ArticleVersionRow = {
+        id: 'av-1',
+        articleId: 'art-1',
+        companyId: 'c-1',
+        version: 1,
+        isDraft: false,
+        title: 'Doomed',
+        slug: 'doomed',
+        folderId: null,
+        visibleToClients: true,
+        editorMode: 'markdown',
+        content: null,
+        markdownSource: historyBody,
+        contentPlaintext: 'old',
+        excerpt: null,
+        changedFields: ['markdownSource'],
+        changedBy: 'u-1',
+        changeReason: 'initial version',
+        createdAt: new Date('2024-01-01T00:00:00Z'),
+        updatedAt: new Date('2024-01-01T00:00:00Z'),
+      };
+      const { prisma, audit, stars, uploads, relations, uploadRows } = makeStubs({
+        articles: [row],
+        versions: [v1],
+        uploads: [
+          {
+            id: liveUploadId,
+            companyId: 'c-1',
+            attachedToType: 'article',
+            deletedAt: null,
+          },
+          {
+            id: historyOnlyUploadId,
+            companyId: 'c-1',
+            attachedToType: 'article',
+            deletedAt: null,
+          },
+        ],
+      });
+      const svc = new ArticlesService(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        prisma as any,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        audit as any,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        stars as any,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        uploads as any,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        relations as any,
+      );
+
+      await svc.purge(actor(), 'c-1', 'art-1', meta());
+
+      const live = uploadRows.find((u) => u.id === liveUploadId)!;
+      const historyOnly = uploadRows.find((u) => u.id === historyOnlyUploadId)!;
+      expect(live.deletedAt).toBeInstanceOf(Date);
+      expect(historyOnly.deletedAt).toBeInstanceOf(Date);
+      expect(audit.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: 'article.purge',
+          before: expect.objectContaining({ softDeletedUploads: 2 }),
+        }),
+      );
+    });
+  });
+
+  // ----------------------------------------------------------------
+  // Versioning
+  // ----------------------------------------------------------------
+
+  describe('versioning', () => {
+    function publishedRow(overrides: Partial<ArticleRow> = {}): ArticleRow {
+      return {
+        id: 'art-1',
+        companyId: 'c-1',
+        folderId: null,
+        title: 'Original',
+        slug: 'original',
+        editorMode: 'tiptap',
+        markdownSource: null,
+        content: doc('original body') as unknown as Prisma.JsonValue,
+        contentPlaintext: 'original body',
+        excerpt: 'original body',
+        visibleToClients: true,
+        createdAt: new Date('2024-01-01T00:00:00Z'),
+        updatedAt: new Date('2024-01-01T00:00:00Z'),
+        createdBy: 'u-1',
+        updatedBy: 'u-1',
+        archivedAt: null,
+        ...overrides,
+      };
+    }
+
+    function v1Row(overrides: Partial<ArticleVersionRow> = {}): ArticleVersionRow {
+      return {
+        id: 'av-seed',
+        articleId: 'art-1',
+        companyId: 'c-1',
+        version: 1,
+        isDraft: false,
+        title: 'Original',
+        slug: 'original',
+        folderId: null,
+        visibleToClients: true,
+        editorMode: 'tiptap',
+        content: doc('original body') as unknown as Prisma.JsonValue,
+        markdownSource: null,
+        contentPlaintext: 'original body',
+        excerpt: 'original body',
+        changedFields: ['title', 'content'],
+        changedBy: 'u-1',
+        changeReason: 'initial version',
+        createdAt: new Date('2024-01-01T00:00:00Z'),
+        updatedAt: new Date('2024-01-01T00:00:00Z'),
+        ...overrides,
+      };
+    }
+
+    function mkSvc(initial: Parameters<typeof makeStubs>[0] = {}) {
+      const stubs = makeStubs(initial);
+      const svc = new ArticlesService(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        stubs.prisma as any,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        stubs.audit as any,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        stubs.stars as any,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        stubs.uploads as any,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        stubs.relations as any,
+      );
+      return { svc, ...stubs };
+    }
+
+    it('create writes v1 published in the same tx as the article row', async () => {
+      const { svc, versions, articles } = mkSvc();
+      await svc.create(
+        actor(),
+        'c-1',
+        { title: 'Brand new', content: doc('hi') } as never,
+        meta(),
+      );
+      expect(articles).toHaveLength(1);
+      expect(versions).toHaveLength(1);
+      expect(versions[0]).toMatchObject({
+        articleId: articles[0]!.id,
+        version: 1,
+        isDraft: false,
+        changeReason: 'initial version',
+      });
+    });
+
+    it('explicit Save with no existing draft inserts a new published v=2', async () => {
+      const { svc, versions } = mkSvc({
+        articles: [publishedRow()],
+        versions: [v1Row()],
+      });
+      await svc.update(
+        actor(),
+        'c-1',
+        'art-1',
+        { title: 'Renamed' } as never,
+        meta(),
+      );
+      const published = versions
+        .filter((v) => !v.isDraft)
+        .sort((a, b) => a.version - b.version);
+      expect(published.map((v) => v.version)).toEqual([1, 2]);
+      expect(published[1]).toMatchObject({
+        title: 'Renamed',
+        changedFields: ['title'],
+      });
+    });
+
+    it('explicit Save with an existing draft promotes it in place (no new row)', async () => {
+      const draft = v1Row({
+        id: 'av-draft',
+        version: 2,
+        isDraft: true,
+        changeReason: 'autosave draft',
+        title: 'Renamed',
+      });
+      const { svc, versions } = mkSvc({
+        articles: [publishedRow({ title: 'Renamed' })],
+        versions: [v1Row(), draft],
+      });
+      await svc.update(
+        actor(),
+        'c-1',
+        'art-1',
+        { title: 'Renamed again' } as never,
+        meta(),
+      );
+      const v2 = versions.find((v) => v.version === 2)!;
+      expect(v2.isDraft).toBe(false);
+      expect(v2.id).toBe('av-draft');
+      expect(versions).toHaveLength(2);
+    });
+
+    it('autosave with no existing draft creates a new draft at v=2', async () => {
+      const { svc, versions } = mkSvc({
+        articles: [publishedRow()],
+        versions: [v1Row()],
+      });
+      await svc.update(
+        actor(),
+        'c-1',
+        'art-1',
+        { title: 'Drafted', draft: true } as never,
+        meta(),
+      );
+      const drafts = versions.filter((v) => v.isDraft);
+      expect(drafts).toHaveLength(1);
+      expect(drafts[0]).toMatchObject({
+        version: 2,
+        isDraft: true,
+        changeReason: 'autosave draft',
+        title: 'Drafted',
+      });
+    });
+
+    it('autosave with an existing draft coalesces in place (same id, same version)', async () => {
+      const draft = v1Row({
+        id: 'av-draft',
+        version: 2,
+        isDraft: true,
+        changeReason: 'autosave draft',
+        changedFields: ['title'],
+      });
+      const { svc, versions } = mkSvc({
+        articles: [publishedRow()],
+        versions: [v1Row(), draft],
+      });
+      await svc.update(
+        actor(),
+        'c-1',
+        'art-1',
+        { title: 'Latest title', draft: true } as never,
+        meta(),
+      );
+      const drafts = versions.filter((v) => v.isDraft);
+      expect(drafts).toHaveLength(1);
+      expect(drafts[0]!.id).toBe('av-draft');
+      expect(drafts[0]!.version).toBe(2);
+      expect(drafts[0]!.title).toBe('Latest title');
+      // Unioned changedFields keeps the original 'title' plus any new
+      // entries — the second autosave didn't touch a new field so the
+      // set should still be ['title'].
+      expect(drafts[0]!.changedFields).toContain('title');
+    });
+
+    it('autosave no-op (no field change) does not create a draft row', async () => {
+      const { svc, versions } = mkSvc({
+        articles: [publishedRow()],
+        versions: [v1Row()],
+      });
+      // PATCH the same title back — `computeChangedFields` returns
+      // empty, so the version layer should skip entirely.
+      await svc.update(
+        actor(),
+        'c-1',
+        'art-1',
+        { title: 'Original', draft: true } as never,
+        meta(),
+      );
+      expect(versions.filter((v) => v.isDraft)).toHaveLength(0);
+      expect(versions).toHaveLength(1);
+    });
+
+    it('discardDraft deletes the draft and reverts the article row to the last published body', async () => {
+      const draft = v1Row({
+        id: 'av-draft',
+        version: 2,
+        isDraft: true,
+        changeReason: 'autosave draft',
+        title: 'Drafted',
+        slug: 'drafted',
+      });
+      const articleRow = publishedRow({ title: 'Drafted', slug: 'drafted' });
+      const { svc, versions, articles, audit } = mkSvc({
+        articles: [articleRow],
+        versions: [v1Row(), draft],
+      });
+      const result = await svc.discardDraft(actor(), 'c-1', 'art-1', meta());
+      expect(result.title).toBe('Original');
+      expect(articles[0]!.title).toBe('Original');
+      expect(versions.find((v) => v.isDraft)).toBeUndefined();
+      expect(audit.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: 'article.draft.discard',
+          after: { discardedVersion: 2 },
+        }),
+      );
+    });
+
+    it('discardDraft is a no-op (and not an error) when no draft exists', async () => {
+      const { svc, audit, versions } = mkSvc({
+        articles: [publishedRow()],
+        versions: [v1Row()],
+      });
+      await svc.discardDraft(actor(), 'c-1', 'art-1', meta());
+      expect(audit.log).not.toHaveBeenCalled();
+      expect(versions).toHaveLength(1);
+    });
+
+    it('discardDraft refuses on an archived article', async () => {
+      const { svc } = mkSvc({
+        articles: [publishedRow({ archivedAt: new Date() })],
+        versions: [v1Row()],
+      });
+      await expect(
+        svc.discardDraft(actor(), 'c-1', 'art-1', meta()),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('archive auto-discards any in-progress draft inside the same tx', async () => {
+      const draft = v1Row({
+        id: 'av-draft',
+        version: 2,
+        isDraft: true,
+        title: 'Drafted',
+      });
+      const { svc, versions, audit, articles } = mkSvc({
+        articles: [publishedRow({ title: 'Drafted' })],
+        versions: [v1Row(), draft],
+      });
+      const archived = await svc.archive(actor(), 'c-1', 'art-1', meta());
+      expect(archived.archivedAt).toBeInstanceOf(Date);
+      // Draft gone, v1 still present, live article body reverted.
+      expect(versions.find((v) => v.isDraft)).toBeUndefined();
+      expect(versions.find((v) => v.version === 1 && !v.isDraft)).toBeDefined();
+      expect(articles[0]!.title).toBe('Original');
+      expect(audit.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: 'article.archive',
+          after: expect.objectContaining({ discardedDraftVersion: 2 }),
+        }),
+      );
+    });
+
+    it('purge cascades version rows (in-memory: clears them on article delete) and records versionCount', async () => {
+      const { svc, audit, articles, versions } = mkSvc({
+        articles: [publishedRow({ archivedAt: new Date() })],
+        versions: [v1Row(), v1Row({ id: 'av-2', version: 2 })],
+      });
+      // Real Postgres handles the FK cascade; our in-memory stub
+      // doesn't, so we clear it manually after the call to keep the
+      // "after purge, no orphaned versions" invariant visible.
+      await svc.purge(actor(), 'c-1', 'art-1', meta());
+      versions.length = 0; // simulate FK cascade
+      expect(articles).toHaveLength(0);
+      expect(audit.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: 'article.purge',
+          before: expect.objectContaining({ versionCount: 2 }),
+          after: null,
+        }),
+      );
+    });
+
+    it('restoreVersion writes a new published row (forward-only history)', async () => {
+      const v2 = v1Row({
+        id: 'av-2',
+        version: 2,
+        title: 'Renamed v2',
+        slug: 'renamed-v2',
+        changedFields: ['title', 'slug'],
+        changeReason: null,
+      });
+      const articleRow = publishedRow({
+        title: 'Current',
+        slug: 'current',
+      });
+      const { svc, versions, audit } = mkSvc({
+        articles: [articleRow],
+        versions: [v1Row(), v2],
+      });
+      await svc.restoreVersion(actor(), 'c-1', 'art-1', 1, meta());
+      const published = versions.filter((v) => !v.isDraft);
+      expect(published.map((v) => v.version)).toEqual([1, 2, 3]);
+      expect(published[2]).toMatchObject({ title: 'Original' });
+      expect(audit.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: 'article.version.restored',
+          after: { restoredFromVersion: 1 },
+        }),
+      );
+    });
+
+    it('restoreVersion 404s on an unknown version', async () => {
+      const { svc } = mkSvc({
+        articles: [publishedRow()],
+        versions: [v1Row()],
+      });
+      await expect(
+        svc.restoreVersion(actor(), 'c-1', 'art-1', 999, meta()),
+      ).rejects.toBeInstanceOf(NotFoundException);
+    });
+
+    it('restoreVersion refuses on an archived article', async () => {
+      const { svc } = mkSvc({
+        articles: [publishedRow({ archivedAt: new Date() })],
+        versions: [v1Row()],
+      });
+      await expect(
+        svc.restoreVersion(actor(), 'c-1', 'art-1', 1, meta()),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('listVersions excludes drafts and orders newest-first', async () => {
+      const { svc } = mkSvc({
+        articles: [publishedRow()],
+        versions: [
+          v1Row(),
+          v1Row({ id: 'av-2', version: 2 }),
+          v1Row({ id: 'av-3', version: 3, isDraft: true, changeReason: 'autosave draft' }),
+        ],
+      });
+      const list = await svc.listVersions(actor(), 'c-1', 'art-1');
+      expect(list.map((v) => v.version)).toEqual([2, 1]);
+      expect(list.every((v) => !v.isDraft)).toBe(true);
+    });
+
+    it('listVersions returns NotFound for CLIENT_USER on a hidden article', async () => {
+      const { svc } = mkSvc({
+        articles: [publishedRow({ visibleToClients: false })],
+        versions: [v1Row()],
+      });
+      await expect(
+        svc.listVersions(actor({ role: 'CLIENT_USER' }), 'c-1', 'art-1'),
+      ).rejects.toBeInstanceOf(NotFoundException);
+    });
+
+    it('getVersion returns 404 for a draft version number', async () => {
+      const { svc } = mkSvc({
+        articles: [publishedRow()],
+        versions: [
+          v1Row(),
+          v1Row({ id: 'av-draft', version: 2, isDraft: true, changeReason: 'autosave draft' }),
+        ],
+      });
+      await expect(
+        svc.getVersion(actor(), 'c-1', 'art-1', 2),
+      ).rejects.toBeInstanceOf(NotFoundException);
     });
   });
 });

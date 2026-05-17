@@ -21,6 +21,7 @@ import { ArticleToc } from '../../../../../../components/editor/article-toc';
 import { LinkedItemsPanel } from '../../../../../../components/relations';
 import { AttachmentsPanel } from '../../../../../../components/upload/attachments-panel';
 import { ArticleActions } from '../article-actions';
+import { HistoryTrigger } from './history-trigger';
 
 export async function generateMetadata({
   params,
@@ -98,6 +99,16 @@ export default async function ArticleReadPage({
                 initialStarred={article.isStarred}
                 showLabel
                 iconSize={14}
+              />
+              <HistoryTrigger
+                companyId={companyId}
+                articleId={article.id}
+                hasDraft={article.hasDraft}
+                // Restore is only meaningful when the article is
+                // editable. Archived articles still expose the
+                // history list (compliance reads), but the restore
+                // action is locked behind unarchive.
+                canRestore={manage && !article.archivedAt}
               />
               {manage && (
                 <>

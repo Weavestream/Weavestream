@@ -26,9 +26,13 @@ import { ArticleActions } from './article-actions';
 
 /**
  * Shared create + edit form. A single client component handles both
- * modes; the editor auto-saves a draft every 4s after mutations quiet
- * down. Publishing = calling POST/PATCH with the current body
- * (Tiptap doc or Markdown source) + `editorMode`.
+ * modes. Autosave is OFF by default and gated by the workspace-wide
+ * `SystemSetting.articleAutosaveEnabled` toggle (see
+ * /admin/settings → Article editor). When enabled, edits coalesce
+ * into a single rolling draft `ArticleVersion` row on the server via
+ * `PATCH /articles/:id { draft: true }`; clicking Save promotes that
+ * draft to a published version, Cancel discards it and reverts the
+ * article row to the last published version.
  */
 type Mode = 'create' | 'edit';
 
@@ -41,6 +45,8 @@ export function ArticleForm({
   folders,
   article,
   initialFolderId,
+  autosaveEnabled,
+  defaultEditorMode,
 }: {
   companyId: string;
   companyLabel: string;
@@ -48,6 +54,20 @@ export function ArticleForm({
   folders: FolderNode[];
   article?: ArticleDetail;
   initialFolderId?: string | null;
+  /**
+   * Resolved server-side from `SystemSetting.articleAutosaveEnabled`.
+   * Drives the 4 s debounce timer below; when `false`, no PATCH ever
+   * fires automatically and the operator must click Save explicitly.
+   */
+  autosaveEnabled: boolean;
+  /**
+   * Resolved server-side from `SystemSetting.articleDefaultEditorMode`.
+   * Only seeds the initial format toggle in Create mode — edit mode
+   * always honours the article's own `editorMode`. Operators can flip
+   * between WYSIWYG and Markdown after the form mounts; this is just
+   * the workspace-wide starting point.
+   */
+  defaultEditorMode: ArticleEditorMode;
 }) {
   const router = useRouter();
   const toast = useToast();
@@ -60,7 +80,7 @@ export function ArticleForm({
     article?.visibleToClients ?? true,
   );
   const [editorMode, setEditorMode] = useState<ArticleEditorMode>(
-    article?.editorMode ?? 'tiptap',
+    article?.editorMode ?? defaultEditorMode,
   );
   const [doc, setDoc] = useState<unknown>(
     article?.editorMode === 'markdown'
@@ -76,6 +96,16 @@ export function ArticleForm({
     article ? new Date(article.updatedAt) : null,
   );
   const [dirty, setDirty] = useState(false);
+  // Tracks whether the server is currently holding an in-progress
+  // autosave draft for this article. Seeded from the detail load and
+  // flipped by autosave success / publish / discard. Drives the
+  // Cancel dialog (must call the discard endpoint when true) and the
+  // "Discard draft" affordance in the topbar.
+  const [hasServerDraft, setHasServerDraft] = useState<boolean>(
+    article?.hasDraft ?? false,
+  );
+  const [confirmDiscardOpen, setConfirmDiscardOpen] = useState(false);
+  const [discarding, setDiscarding] = useState(false);
   // Format switches are deliberate, potentially-lossy operations: the
   // user should review the converted body and click Save explicitly
   // rather than have autosave persist it 4s later. We still flip
@@ -150,7 +180,12 @@ export function ArticleForm({
     onAfterAiApply,
   });
   useEffect(() => {
+    // Autosave is gated by the workspace-wide system setting. When
+    // disabled (the default), no PATCH ever fires automatically — the
+    // operator must click Save to persist anything. This also covers
+    // the Create mode case because `mode !== 'edit'` returns early.
     if (mode !== 'edit') return;
+    if (!autosaveEnabled) return;
     if (!dirty) return;
     if (formatSwitchPending) return;
     if (autoSaveTimer.current) clearTimeout(autoSaveTimer.current);
@@ -171,7 +206,26 @@ export function ArticleForm({
     dirty,
     formatSwitchPending,
     mode,
+    autosaveEnabled,
   ]);
+
+  // Browsers nudge the user with a generic "unsaved changes" prompt
+  // when they navigate away (close tab, hit Back) while we're holding
+  // a dirty form OR a server-side draft that they haven't explicitly
+  // committed or discarded. The exact message text is controlled by
+  // the browser and can't be customised, but the prompt itself is
+  // what matters — it's the only thing standing between the operator
+  // and an autosaved-but-unreviewed body becoming the live article.
+  useEffect(() => {
+    if (mode !== 'edit') return;
+    if (!dirty && !hasServerDraft) return;
+    const handler = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = '';
+    };
+    window.addEventListener('beforeunload', handler);
+    return () => window.removeEventListener('beforeunload', handler);
+  }, [dirty, hasServerDraft, mode]);
 
   function canAutosaveBody(): boolean {
     if (editorMode === 'markdown' && !markdownSource.trim()) return false;
@@ -196,7 +250,10 @@ export function ArticleForm({
    *     uses its default;
    *   - PATCH: send `null` to explicitly unfile the article.
    * Returns `null` when the user is in Markdown mode with no body —
-   * autosave skips and publish surfaces a validation error.
+   * autosave skips and publish surfaces a validation error. The
+   * caller appends the optional `draft: true` flag for autosave
+   * PATCHes (omitted otherwise so the server treats it as an
+   * explicit Save).
    */
   function buildBody(forMode: Mode) {
     const base = {
@@ -259,12 +316,17 @@ export function ArticleForm({
     if (!payload) {
       return;
     }
+    // Tell the API to coalesce into the rolling draft instead of
+    // producing a new published version. Explicit Save omits the
+    // flag so the server's `update(draft=false)` path runs.
+    const body =
+      kind === 'autosave' ? { ...payload, draft: true } : payload;
     if (kind === 'publish') setSaving(true);
     const res = await apiFetch(
       `/companies/${companyId}/articles/${article.id}`,
       {
         method: 'PATCH',
-        body: JSON.stringify(payload),
+        body: JSON.stringify(body),
       },
     );
     if (kind === 'publish') setSaving(false);
@@ -275,6 +337,10 @@ export function ArticleForm({
     setLastSavedAt(new Date());
     setDirty(false);
     setFormatSwitchPending(false);
+    // Server-side draft state mirrors what the API just did with
+    // this PATCH: autosaves leave a draft row in place; an explicit
+    // Save promotes/clears it.
+    setHasServerDraft(kind === 'autosave');
     if (kind === 'publish') {
       toast.push('Article saved', 'ok');
       router.push(`/admin/companies/${companyId}/articles/${article.id}`);
@@ -329,9 +395,73 @@ export function ArticleForm({
     }
   }
 
-  const autosaveLabel = lastSavedAt
-    ? `auto-saved ${timeAgo(lastSavedAt)}`
-    : 'draft · unsaved';
+  // Status label tracks both the autosave setting (so operators know
+  // whether their work is being silently persisted) and the actual
+  // last-saved timestamp. Three states matter:
+  //   - editing a fresh form (no saves yet) → "draft · unsaved"
+  //   - autosave off → "saved Xs ago" (factual; no auto label)
+  //   - autosave on → "auto-saved Xs ago" (signals continuous persistence)
+  const autosaveLabel = !lastSavedAt
+    ? 'draft · unsaved'
+    : autosaveEnabled && mode === 'edit'
+      ? `auto-saved ${timeAgo(lastSavedAt)}`
+      : `saved ${timeAgo(lastSavedAt)}`;
+
+  function navigateAway() {
+    if (mode === 'edit' && article) {
+      router.push(`/admin/companies/${companyId}/articles/${article.id}`);
+    } else {
+      router.push(`/admin/companies/${companyId}/articles`);
+    }
+    router.refresh();
+  }
+
+  /**
+   * Cancel/Discard click handler. The button shows "Discard" in
+   * Create mode and "Cancel" in Edit mode, but both go through here.
+   *
+   * If the form is clean AND there is no server-side draft, navigate
+   * straight away — there's nothing to lose. Otherwise open the
+   * confirmation dialog and let the operator decide.
+   */
+  function handleCancelClick() {
+    if (!dirty && !hasServerDraft) {
+      navigateAway();
+      return;
+    }
+    setConfirmDiscardOpen(true);
+  }
+
+  /**
+   * "Discard" inside the confirm dialog. When the server is holding
+   * an autosave draft, we hit `DELETE /articles/:id/draft` first so
+   * the live row reverts to the last published version before the
+   * read view re-renders; otherwise the user lands on the
+   * autosaved-but-unreviewed body, defeating the whole point of the
+   * dialog.
+   */
+  async function performDiscard() {
+    setDiscarding(true);
+    if (mode === 'edit' && article && hasServerDraft) {
+      const res = await apiFetch(
+        `/companies/${companyId}/articles/${article.id}/draft`,
+        { method: 'DELETE' },
+      );
+      if (!res.ok) {
+        setDiscarding(false);
+        setError(extractErr(res.problem) ?? 'Could not discard draft.');
+        return;
+      }
+    }
+    setDirty(false);
+    setHasServerDraft(false);
+    setConfirmDiscardOpen(false);
+    setDiscarding(false);
+    if (hasServerDraft) {
+      toast.push('Draft discarded — reverted to last saved version.', 'ok');
+    }
+    navigateAway();
+  }
 
   return (
     <>
@@ -353,19 +483,12 @@ export function ArticleForm({
         right={
           <>
             {dirty && <Tag tone="warn">unsaved</Tag>}
+            {hasServerDraft && !dirty && <Tag tone="warn">draft</Tag>}
             <Btn
               kind="outline"
               size="md"
               disabled={saving}
-              onClick={() => {
-                if (mode === 'edit' && article) {
-                  router.push(
-                    `/admin/companies/${companyId}/articles/${article.id}`,
-                  );
-                } else {
-                  router.push(`/admin/companies/${companyId}/articles`);
-                }
-              }}
+              onClick={handleCancelClick}
             >
               {mode === 'create' ? 'Discard' : 'Cancel'}
             </Btn>
@@ -743,6 +866,41 @@ export function ArticleForm({
           Converting may change formatting. Mentions, custom image layout,
           and complex tables can lose fidelity. You can still undo before
           saving.
+        </p>
+      </Dialog>
+
+      <Dialog
+        open={confirmDiscardOpen}
+        onClose={() => {
+          if (!discarding) setConfirmDiscardOpen(false);
+        }}
+        title={hasServerDraft ? 'Discard autosaved draft?' : 'Discard unsaved changes?'}
+        width={460}
+        footer={
+          <div
+            style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}
+          >
+            <Btn
+              kind="outline"
+              onClick={() => setConfirmDiscardOpen(false)}
+              disabled={discarding}
+            >
+              Keep editing
+            </Btn>
+            <Btn
+              kind="danger"
+              onClick={performDiscard}
+              loading={discarding}
+            >
+              Discard
+            </Btn>
+          </div>
+        }
+      >
+        <p style={{ margin: 0, lineHeight: 1.5, color: 'var(--text)' }}>
+          {hasServerDraft
+            ? 'This article has unsaved autosave changes on the server. Discarding will delete them and revert the article to the last published version.'
+            : 'You have unsaved changes. Discarding will lose them.'}
         </p>
       </Dialog>
     </>

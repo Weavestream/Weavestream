@@ -665,12 +665,58 @@ model Article {
 
   folder    Folder?          @relation(fields: [folderId], references: [id], onDelete: SetNull)
   starredBy StarredArticle[]
+  versions  ArticleVersion[]
 
   // Active-slug uniqueness per company enforced by a partial unique index
   // (company_id, slug) WHERE archived_at IS NULL.
   @@index([companyId, folderId])
   @@index([companyId, updatedAt])
   @@map("articles")
+}
+
+// Article history. Two kinds of rows:
+//   - `isDraft = false` (published) — created on every explicit Save and
+//     on `create()`. Monotonic per article (`@@unique([articleId,
+//     version])`).
+//   - `isDraft = true` (in-progress autosave) — at most one per article,
+//     enforced by a partial unique index in migration. Coalesces across
+//     successive autosaves so a typing session yields one row, not one
+//     per 4 s tick. Cancel deletes the draft; explicit Save flips it to
+//     published.
+//
+// `companyId` is denormalised so the Prisma tenant middleware can scope
+// queries without joining (see TENANT_SCOPED_MODELS).
+// `ON DELETE CASCADE` on the Article relation guarantees `purge()`
+// removes every history row alongside the article — no orphans.
+model ArticleVersion {
+  id               String   @id @default(uuid()) @db.Uuid
+  articleId        String   @map("article_id") @db.Uuid
+  companyId        String   @map("company_id") @db.Uuid
+  version          Int
+  isDraft          Boolean  @default(false) @map("is_draft")
+  title            String
+  slug             String
+  folderId         String?  @map("folder_id") @db.Uuid
+  visibleToClients Boolean  @map("visible_to_clients")
+  editorMode       String   @map("editor_mode")
+  /// Tiptap/ProseMirror JSON snapshot; null when `editorMode` is `markdown`.
+  content          Json?
+  /// Raw Markdown snapshot; null when `editorMode` is `tiptap`.
+  markdownSource   String?  @map("markdown_source")
+  contentPlaintext String   @map("content_plaintext")
+  excerpt          String?
+  changedFields    String[] @default([]) @map("changed_fields")
+  changedBy        String   @map("changed_by") @db.Uuid
+  changeReason     String?  @map("change_reason")
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  article Article @relation(fields: [articleId], references: [id], onDelete: Cascade)
+
+  @@unique([articleId, version])
+  @@index([articleId, isDraft, createdAt])
+  @@index([companyId, createdAt])
+  @@map("article_versions")
 }
 
 // Phase 4: every Upload is hard-scoped to a company (D-012). Storage keys
@@ -784,6 +830,18 @@ model SystemSetting {
   // generator. Shape validated by passwordGeneratorDefaultsSchema —
   // NULL falls back to DEFAULT_PASSWORD_GENERATOR_DEFAULTS on read.
   passwordGeneratorDefaults Json?    @map("password_generator_defaults")
+  // Article editor: when true, the web editor debounces unsaved changes
+  // and PATCHes with `draft: true` every ~4 s. Default off to avoid
+  // surprise persistence; toggled from /admin/settings (security.mdc:
+  // never trust the client's claim about this — the API treats
+  // `draft: true` identically regardless of this setting).
+  articleAutosaveEnabled    Boolean  @default(false) @map("article_autosave_enabled")
+  // Default body editor for newly-created articles. Persisted as the
+  // free-form string the discriminator schema accepts (`tiptap` |
+  // `markdown`); a CHECK constraint in migration 0047 prevents a stray
+  // value from being saved. Existing articles ignore this and keep
+  // their own `editor_mode`.
+  articleDefaultEditorMode  String   @default("tiptap") @map("article_default_editor_mode")
   updatedAt                 DateTime @updatedAt @map("updated_at")
   updatedBy                 String?  @map("updated_by") @db.Uuid
 
