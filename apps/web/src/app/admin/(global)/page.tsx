@@ -235,13 +235,13 @@ function StarredCard({ item }: { item: StarredItem }) {
     (item.type !== 'company' && item.companyArchivedAt !== null);
   return (
     <div
+      className="ws-card-clickable"
       style={{
         position: 'relative',
         display: 'flex',
         alignItems: 'center',
         gap: 10,
         padding: '10px 12px',
-        background: 'var(--panel)',
         border: '1px solid var(--line)',
         borderRadius: 6,
       }}
@@ -450,12 +450,12 @@ function RecentCompanyCard({ company }: { company: CompanyListItem }) {
   return (
     <Link
       href={`/admin/companies/${company.id}`}
+      className="ws-card-clickable"
       style={{
         display: 'flex',
         alignItems: 'center',
         gap: 10,
         padding: '10px 12px',
-        background: 'var(--panel)',
         border: '1px solid var(--line)',
         borderRadius: 6,
         color: 'var(--text)',
@@ -551,12 +551,12 @@ function RecentActivityCard({ item }: { item: RecentActivityItem }) {
   return (
     <Link
       href={activityHref(item)}
+      className="ws-card-clickable"
       style={{
         display: 'flex',
         alignItems: 'center',
         gap: 10,
         padding: '10px 12px',
-        background: 'var(--panel)',
         border: '1px solid var(--line)',
         borderRadius: 6,
         color: 'var(--text)',

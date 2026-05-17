@@ -117,6 +117,7 @@ export function NewAssetFlow({
                     <button
                       key={l.id}
                       type="button"
+                      className="ws-card-clickable"
                       onClick={() => {
                         setChosen(l);
                         const sp = new URLSearchParams();
@@ -131,7 +132,6 @@ export function NewAssetFlow({
                         flexDirection: 'column',
                         gap: 8,
                         alignItems: 'flex-start',
-                        background: 'var(--panel)',
                         border: '1px solid var(--line)',
                         borderRadius: 6,
                         cursor: 'pointer',

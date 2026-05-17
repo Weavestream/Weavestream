@@ -600,12 +600,12 @@ function QuickLink({
   return (
     <Link
       href={href}
+      className="ws-card-clickable"
       style={{
         display: 'flex',
         alignItems: 'center',
         gap: 10,
         padding: '10px 14px',
-        background: 'var(--panel)',
         border: '1px solid var(--line)',
         borderRadius: 6,
         color: 'var(--text)',

@@ -227,6 +227,26 @@
   color: var(--text);
 }
 
+/* Clickable navigation cards (dashboard tiles, hub QuickLinks, etc.).
+ * Very subtle background shift on hover — same notch as the sidebar
+ * hover rules — so any operator-clickable tile gives consistent
+ * feedback without pulling an accent color or shifting the border.
+ * The class owns the resting background so inline `background` on
+ * call sites doesn't shadow the hover via specificity. Border /
+ * border-radius stay on the call site since the class deliberately
+ * doesn't touch them. */
+.ws-card-clickable {
+  background: var(--panel);
+  transition: background-color 140ms ease;
+}
+.ws-card-clickable:hover {
+  background: var(--panel-2);
+}
+.ws-card-clickable:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 /* Phase 6 command palette. `cmdk` tags the currently-highlighted
  * row (via keyboard nav or hover) with `aria-selected="true"` and
  * puts `cmdk-*` data attributes on its primitives. We lean on both
