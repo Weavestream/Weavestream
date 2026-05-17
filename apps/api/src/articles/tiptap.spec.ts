@@ -183,6 +183,27 @@ describe('tiptapExcerpt', () => {
     };
     expect(tiptapExcerpt(doc, 80)).toBe('short');
   });
+
+  it('skips image alt text so filename-as-alt does not pollute card previews', () => {
+    const doc = {
+      type: 'doc',
+      content: [
+        {
+          type: 'paragraph',
+          content: [
+            { type: 'image', attrs: { src: 'https://…', alt: 'image.jpg' } },
+          ],
+        },
+        {
+          type: 'paragraph',
+          content: [{ type: 'text', text: 'Real prose for the card.' }],
+        },
+      ],
+    };
+    const ex = tiptapExcerpt(doc, 200);
+    expect(ex).not.toContain('image.jpg');
+    expect(ex).toContain('Real prose for the card.');
+  });
 });
 
 describe('stringToTiptapDoc', () => {

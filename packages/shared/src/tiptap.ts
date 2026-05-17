@@ -55,19 +55,36 @@ const BLOCK_TYPES = new Set([
 
 const HARD_BREAK_TYPES = new Set(['hardBreak', 'horizontalRule']);
 
+export interface TiptapPlaintextOptions {
+  /**
+   * Skip `image` node alt text. Editors auto-populate `alt` with the
+   * uploaded filename (e.g. `image.jpg`), which is noise in card
+   * previews. Search indexing still benefits from the alt text, so
+   * this defaults to `false`; `tiptapExcerpt` opts in.
+   */
+  skipImages?: boolean;
+}
+
 /**
  * Extract plaintext from a Tiptap document. Returns `''` for empty /
  * missing / malformed docs rather than throwing — callers are happier
  * with an empty excerpt than a 500.
  */
-export function tiptapToPlaintext(input: unknown): string {
+export function tiptapToPlaintext(
+  input: unknown,
+  options: TiptapPlaintextOptions = {},
+): string {
   if (!input || typeof input !== 'object') return '';
   const out: string[] = [];
-  walk(input as TiptapNode, out);
+  walk(input as TiptapNode, out, options);
   return out.join('').replace(/[ \t]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim();
 }
 
-function walk(node: TiptapNode | undefined, out: string[]): void {
+function walk(
+  node: TiptapNode | undefined,
+  out: string[],
+  options: TiptapPlaintextOptions,
+): void {
   if (!node || typeof node !== 'object') return;
 
   if (node.type === 'text' && typeof node.text === 'string') {
@@ -89,6 +106,7 @@ function walk(node: TiptapNode | undefined, out: string[]): void {
   }
 
   if (node.type === 'image') {
+    if (options.skipImages) return;
     const alt = node.attrs?.['alt'] as string | undefined;
     if (alt) out.push(alt);
     return;
@@ -97,7 +115,7 @@ function walk(node: TiptapNode | undefined, out: string[]): void {
   const isBlock = BLOCK_TYPES.has(node.type);
   const children = Array.isArray(node.content) ? node.content : [];
   for (const child of children) {
-    walk(child, out);
+    walk(child, out, options);
   }
   if (isBlock) out.push('\n');
 }
@@ -120,9 +138,16 @@ export function stringToTiptapDoc(text: string): TiptapDoc {
   };
 }
 
-/** Crude character counter for excerpt generation. */
+/**
+ * Crude character counter for excerpt generation. Images are skipped
+ * because Tiptap auto-fills `alt` with the upload's filename, which
+ * shows up as e.g. `image.jpg` in card previews.
+ */
 export function tiptapExcerpt(input: unknown, maxChars = 280): string {
-  return excerptFromPlaintext(tiptapToPlaintext(input), maxChars);
+  return excerptFromPlaintext(
+    tiptapToPlaintext(input, { skipImages: true }),
+    maxChars,
+  );
 }
 
 /**

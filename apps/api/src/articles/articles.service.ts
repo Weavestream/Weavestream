@@ -1173,6 +1173,26 @@ export class ArticlesService {
     };
   }
 
+  /**
+   * Compute the card-preview excerpt for an article row at read time.
+   * Mirrors `projectArticleBody` but is read-only — we don't write
+   * back to the DB. Falls back to the stored `excerpt` if the body
+   * is missing, so the existing semantics for malformed rows is
+   * preserved.
+   */
+  private deriveExcerpt(row: Article): string | null {
+    if (row.editorMode === 'markdown') {
+      if (typeof row.markdownSource === 'string' && row.markdownSource.length > 0) {
+        return markdownExcerpt(row.markdownSource);
+      }
+      return row.excerpt;
+    }
+    if (row.content != null) {
+      return tiptapExcerpt(row.content);
+    }
+    return row.excerpt;
+  }
+
   /** Subset of fields recorded in the audit log for create/update. */
   private auditFields(row: Article): {
     title: string;
@@ -1397,7 +1417,12 @@ export class ArticlesService {
       content: row.content,
       markdownSource: row.markdownSource,
       contentPlaintext: row.contentPlaintext,
-      excerpt: row.excerpt,
+      // Re-derive on read so legacy rows whose stored `excerpt` was
+      // generated from image alt text (e.g. `"image.jpg"`) render
+      // cleanly without a destructive backfill. New writes go through
+      // `projectArticleBody`, which already uses the image-aware
+      // excerpt helpers.
+      excerpt: this.deriveExcerpt(row),
       visibleToClients: row.visibleToClients,
       archivedAt: row.archivedAt,
       createdBy: row.createdBy,

@@ -21,4 +21,11 @@ describe('markdownExcerpt', () => {
     expect(ex.length).toBeLessThanOrEqual(281);
     expect(ex.endsWith('…')).toBe(true);
   });
+
+  it('strips image references so filename-as-alt does not leak into previews', () => {
+    const src = '![image.jpg](https://cdn/x.jpg)\n\nReal prose for the card.';
+    const ex = markdownExcerpt(src);
+    expect(ex).not.toContain('image.jpg');
+    expect(ex).toContain('Real prose for the card.');
+  });
 });

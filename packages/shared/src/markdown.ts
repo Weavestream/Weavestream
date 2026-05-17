@@ -6,12 +6,26 @@
 
 export const MAX_MARKDOWN_SOURCE = 500_000;
 
+export interface MarkdownPlaintextOptions {
+  /**
+   * Drop `![alt](url)` image references entirely instead of preserving
+   * the alt text. Editors auto-populate alt with the uploaded filename
+   * (e.g. `image.jpg`), which is noise in card previews. Search
+   * indexing still benefits from the alt text, so this defaults to
+   * `false`; `markdownExcerpt` opts in.
+   */
+  skipImages?: boolean;
+}
+
 /**
  * Strip Markdown syntax to approximate visible text for full-text search
  * and `ts_headline` snippets. Not a perfect renderer — good enough for
  * indexing and matching user queries.
  */
-export function markdownToPlaintext(src: string): string {
+export function markdownToPlaintext(
+  src: string,
+  options: MarkdownPlaintextOptions = {},
+): string {
   if (!src || typeof src !== 'string') return '';
   let s = src.replace(/\r\n?/g, '\n');
 
@@ -22,10 +36,12 @@ export function markdownToPlaintext(src: string): string {
   // Footnote / reference link definitions: [^id]: url
   s = s.replace(/^\[[^\]]+\]:\s*.+$/gm, ' ');
 
-  // Link / image: keep visible label, drop URL
-  s = s.replace(/!\[([^\]]*)\]\s*\([^)]+\)/g, '$1');
+  // Link / image: keep visible label, drop URL.
+  // Images may be dropped entirely when the caller asked to skip them.
+  const imageReplacement = options.skipImages ? ' ' : '$1';
+  s = s.replace(/!\[([^\]]*)\]\s*\([^)]+\)/g, imageReplacement);
   s = s.replace(/\[([^\]]+)\]\s*\([^)]+\)/g, '$1');
-  s = s.replace(/!\[([^\]]*)\]\s*\[[^\]]*\]/g, '$1');
+  s = s.replace(/!\[([^\]]*)\]\s*\[[^\]]*\]/g, imageReplacement);
   s = s.replace(/\[([^\]]+)\]\s*\[[^\]]*\]/g, '$1');
 
   // Autolinks <https://...>
@@ -81,7 +97,10 @@ export function markdownToPlaintext(src: string): string {
 
 /** Same semantics as `tiptapExcerpt` but for Markdown source. */
 export function markdownExcerpt(src: string, maxChars = 280): string {
-  return excerptFromPlaintext(markdownToPlaintext(src), maxChars);
+  return excerptFromPlaintext(
+    markdownToPlaintext(src, { skipImages: true }),
+    maxChars,
+  );
 }
 
 /**
