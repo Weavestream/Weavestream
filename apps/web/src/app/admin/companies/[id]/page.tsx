@@ -52,7 +52,7 @@ type MembershipListing = {
 /**
  * Company "home" / glance overview. Phase 9a layout:
  *
- *   Quick links row (Assets / Articles / Photos / Domains)
+ *   Quick links row (Assets / Articles / Passwords / Domains)
  *   → Contact / Address / Classification panels (3-up)
  *   → Domain alert banner (only when something is actually failing)
  *   → Recent assets + Memberships
@@ -136,10 +136,10 @@ export default async function CompanyDetailPage({
             hint="Runbooks, how-tos, KB"
           />
           <QuickLink
-            href={`/admin/companies/${company.id}/photos`}
-            icon={<Icon.image size={14} />}
-            label="Photos"
-            hint="Every uploaded image"
+            href={`/admin/companies/${company.id}/passwords`}
+            icon={<Icon.lock size={14} />}
+            label="Passwords"
+            hint="Credentials & secrets"
           />
           <QuickLink
             href={`/admin/companies/${company.id}/domains`}
