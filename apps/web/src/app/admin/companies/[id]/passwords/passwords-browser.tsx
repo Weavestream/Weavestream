@@ -208,6 +208,20 @@ export function PasswordsBrowser({
     router.push(`?${params.toString()}`);
   }
 
+  function closeDialog() {
+    setDialog(null);
+    if (searchParams.has('new')) {
+      const params = new URLSearchParams(Array.from(searchParams.entries()));
+      params.delete('new');
+      const qs = params.toString();
+      router.replace(qs ? `?${qs}` : '?', { scroll: false });
+    }
+  }
+
+  useEffect(() => {
+    if (openNew && canManage) setDialog({ kind: 'add', prefillAssetId });
+  }, [openNew, canManage, prefillAssetId]);
+
   function openCreateFolder(parent: string | null = null) {
     setErr(null);
     setNewFolderName('');
@@ -315,15 +329,6 @@ export function PasswordsBrowser({
           title={`Edit folder "${selectedFolder.name}"`}
         >
           Edit
-        </Btn>
-      )}
-      {canManage && (
-        <Btn
-          kind="primary"
-          size="sm"
-          onClick={() => setDialog({ kind: 'add', prefillAssetId })}
-        >
-          <Icon.plus size={14} /> New password
         </Btn>
       )}
     </div>
@@ -588,9 +593,9 @@ export function PasswordsBrowser({
           folderId={folderId === 'ALL' ? null : folderId}
           assetId={dialog.prefillAssetId}
           generatorDefaults={generatorDefaults}
-          onClose={() => setDialog(null)}
+          onClose={closeDialog}
           onCreated={() => {
-            setDialog(null);
+            closeDialog();
             startTransition(() => router.refresh());
           }}
         />

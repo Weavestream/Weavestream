@@ -14,6 +14,7 @@ import { companyCrumbs } from '../../../../../lib/company-crumbs';
 import { buildTerm, lower } from '../../../../../lib/term';
 import { getSettings } from '../../../../../lib/server-api';
 import { PasswordsBrowser } from './passwords-browser';
+import { NewPasswordAction } from './new-password-action';
 
 export const metadata: Metadata = { title: 'Passwords' };
 
@@ -62,9 +63,10 @@ export default async function CompanyPasswordsPage({
         crumbs={companyCrumbs(term, company, { label: 'Passwords' })}
         leading={<LayoutSwatch icon="lock" color="var(--accent)" size={48} />}
         title="Passwords"
-        description={`Encrypted credential vault for this ${lower(
+        description={`Access and manage shared passwords and logins for this ${lower(
           term.one,
-        )}. Passwords are stored AES-256-GCM at rest; reveals are audit-logged.`}
+        )}.`}
+        actions={manage ? <NewPasswordAction /> : null}
       />
       <PageBody>
         <Panel

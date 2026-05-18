@@ -1,8 +1,8 @@
 'use client';
 
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
-import { useState, useTransition } from 'react';
+import { useEffect, useState, useTransition } from 'react';
 import type { MonitoredDomain } from '../../../../../lib/server-api';
 import { apiFetch } from '../../../../../lib/api';
 import {
@@ -29,20 +29,37 @@ export function DomainsBrowser({
   companyId,
   rows,
   canManage,
+  openNew = false,
 }: {
   companyId: string;
   rows: MonitoredDomain[];
   canManage: boolean;
+  openNew?: boolean;
 }) {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [isPending, startTransition] = useTransition();
   const [dialog, setDialog] = useState<
     | { kind: 'add' }
     | { kind: 'edit'; row: MonitoredDomain }
     | null
-  >(null);
+  >(openNew && canManage ? { kind: 'add' } : null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  function closeDialog() {
+    setDialog(null);
+    if (searchParams.has('new')) {
+      const params = new URLSearchParams(Array.from(searchParams.entries()));
+      params.delete('new');
+      const qs = params.toString();
+      router.replace(qs ? `?${qs}` : '?', { scroll: false });
+    }
+  }
+
+  useEffect(() => {
+    if (openNew && canManage) setDialog({ kind: 'add' });
+  }, [openNew, canManage]);
 
   async function submit(
     form: FormState,
@@ -76,7 +93,7 @@ export function DomainsBrowser({
       setError(problemMessage(res.problem) ?? 'Save failed');
       return;
     }
-    setDialog(null);
+    closeDialog();
     startTransition(() => router.refresh());
   }
 
@@ -118,31 +135,6 @@ export function DomainsBrowser({
 
   return (
     <div>
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 12,
-          padding: '10px 14px',
-          borderBottom: '1px solid var(--line)',
-          fontSize: 12,
-        }}
-      >
-        <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--muted)' }}>
-          {rows.length} domain{rows.length === 1 ? '' : 's'}
-        </span>
-        <div style={{ flex: 1 }} />
-        {canManage && (
-          <button
-            type="button"
-            onClick={() => setDialog({ kind: 'add' })}
-            style={addButtonStyle}
-          >
-            <Icon.plus size={12} /> Add domain
-          </button>
-        )}
-      </div>
-
       {error && (
         <div
           style={{
@@ -165,9 +157,6 @@ export function DomainsBrowser({
             fontSize: 13,
           }}
         >
-          <div style={{ fontSize: 24, marginBottom: 8 }}>
-            <Icon.globe size={24} />
-          </div>
           No monitored domains yet.
         </div>
       ) : (
@@ -284,7 +273,7 @@ export function DomainsBrowser({
       {dialog && canManage && (
         <DomainDialog
           initial={dialog.kind === 'edit' ? dialog.row : null}
-          onCancel={() => setDialog(null)}
+          onCancel={closeDialog}
           onSubmit={(form) =>
             submit(
               form,
@@ -709,21 +698,6 @@ function problemMessage(problem: unknown): string | null {
   if (typeof record.detail === 'string') return record.detail;
   return null;
 }
-
-const addButtonStyle: React.CSSProperties = {
-  display: 'inline-flex',
-  alignItems: 'center',
-  gap: 6,
-  height: 28,
-  padding: '0 10px',
-  background: 'var(--accent)',
-  color: 'var(--accent-ink)',
-  borderRadius: 5,
-  fontSize: 12,
-  fontWeight: 600,
-  border: 'none',
-  cursor: 'pointer',
-};
 
 const fieldStyle: React.CSSProperties = {
   display: 'flex',

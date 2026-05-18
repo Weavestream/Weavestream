@@ -1,7 +1,7 @@
 'use client';
 
-import { useRouter } from 'next/navigation';
-import { useState, useTransition } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
+import { useEffect, useState, useTransition } from 'react';
 import type { SubnetRow } from '../../../../../lib/server-api';
 import { apiFetch } from '../../../../../lib/api';
 import {
@@ -21,18 +21,36 @@ export function SubnetsBrowser({
   companyId,
   rows,
   canManage,
+  openNew = false,
 }: {
   companyId: string;
   rows: SubnetRow[];
   canManage: boolean;
+  openNew?: boolean;
 }) {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [, startTransition] = useTransition();
   const [dialog, setDialog] = useState<
     { kind: 'add' } | { kind: 'edit'; row: SubnetRow } | null
-  >(null);
+  >(openNew && canManage ? { kind: 'add' } : null);
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+
+  function closeDialog() {
+    setDialog(null);
+    setError(null);
+    if (searchParams.has('new')) {
+      const params = new URLSearchParams(Array.from(searchParams.entries()));
+      params.delete('new');
+      const qs = params.toString();
+      router.replace(qs ? `?${qs}` : '?', { scroll: false });
+    }
+  }
+
+  useEffect(() => {
+    if (openNew && canManage) setDialog({ kind: 'add' });
+  }, [openNew, canManage]);
 
   async function submit(form: SubnetForm, mode: 'add' | 'edit', id: string | null) {
     setError(null);
@@ -59,7 +77,7 @@ export function SubnetsBrowser({
       setError(problemMsg(res.problem) ?? 'Save failed');
       return;
     }
-    setDialog(null);
+    closeDialog();
     startTransition(() => router.refresh());
   }
 
@@ -189,26 +207,6 @@ export function SubnetsBrowser({
 
   return (
     <div>
-      {canManage && (
-        <div
-          style={{
-            padding: '10px 12px',
-            display: 'flex',
-            justifyContent: 'flex-end',
-            borderBottom: '1px solid var(--line)',
-          }}
-        >
-          <Btn
-            kind="primary"
-            size="sm"
-            icon={Icon.plus}
-            onClick={() => setDialog({ kind: 'add' })}
-          >
-            New subnet
-          </Btn>
-        </div>
-      )}
-
       {error && (
         <div role="alert" style={{ padding: '8px 16px', color: 'var(--danger)', fontSize: 13 }}>
           {error}
@@ -306,10 +304,7 @@ export function SubnetsBrowser({
               dialog.kind === 'edit' ? dialog.row.id : null,
             )
           }
-          onClose={() => {
-            setDialog(null);
-            setError(null);
-          }}
+          onClose={closeDialog}
           error={error}
         />
       )}

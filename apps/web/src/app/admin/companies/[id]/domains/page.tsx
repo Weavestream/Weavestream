@@ -16,6 +16,7 @@ import { LayoutSwatch, Panel, Tag } from '../../../../../components/ui';
 import { buildTerm, lower } from '../../../../../lib/term';
 import { companyCrumbs } from '../../../../../lib/company-crumbs';
 import { DomainsBrowser } from './domains-browser';
+import { NewDomainAction } from './new-domain-action';
 
 /**
  * Phase 8 — Admin domains list. Operators see every domain (active +
@@ -39,6 +40,7 @@ export default async function CompanyDomainsPage({
   const company = throwUnlessFound(companyRes, `/companies/${companyId}`);
 
   const includeArchived = sp.archived === '1';
+  const openNew = sp.new === '1';
   // Default "active only" view reuses the cached list fetched by the
   // layout. Opting in to archived rows hits the un-cached helper since
   // that query is not layout-shared.
@@ -57,6 +59,7 @@ export default async function CompanyDomainsPage({
         description={`WHOIS expiry, SSL/TLS certificate health, and DNS records for this ${lower(
           term.one,
         )}.`}
+        actions={manage ? <NewDomainAction /> : null}
       />
       <PageBody>
         <Panel
@@ -77,6 +80,7 @@ export default async function CompanyDomainsPage({
             companyId={companyId}
             rows={page.items}
             canManage={manage}
+            openNew={openNew}
           />
         </Panel>
       </PageBody>
