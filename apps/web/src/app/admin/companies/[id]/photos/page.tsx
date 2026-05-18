@@ -15,6 +15,7 @@ import { PageBody, PageHeader } from '../../../../../components/shell/page-heade
 import { Icon, LayoutSwatch, Panel, Tag } from '../../../../../components/ui';
 import { buildTerm, lower } from '../../../../../lib/term';
 import { companyCrumbs } from '../../../../../lib/company-crumbs';
+import { PhotoDeleteChip } from './photo-delete-chip';
 
 /**
  * Phase 4 per-company photo gallery. `Upload` rows with `isImage=true`
@@ -40,12 +41,14 @@ export default async function CompanyPhotosPage({
   const attachedToType = readString(sp.attachedToType);
   const attachedToId = readString(sp.attachedToId);
   const cursor = readString(sp.cursor);
+  const includeNonLatest = readBool(sp.includeNonLatest);
 
   const page = await listPhotos(companyId, {
     attachedToType,
     attachedToId,
     limit: 60,
     cursor,
+    includeNonLatest,
   });
 
   const basePath = `/admin/companies/${companyId}/photos`;
@@ -66,6 +69,7 @@ export default async function CompanyPhotosPage({
             basePath={basePath}
             attachedToType={attachedToType}
             attachedToId={attachedToId}
+            includeNonLatest={includeNonLatest}
             count={page.items.length}
           />
           {page.items.length === 0 ? (
@@ -78,6 +82,7 @@ export default async function CompanyPhotosPage({
             nextCursor={page.nextCursor}
             attachedToType={attachedToType}
             attachedToId={attachedToId}
+            includeNonLatest={includeNonLatest}
           />
         </Panel>
       </PageBody>
@@ -90,15 +95,40 @@ function readString(v: string | string[] | undefined): string | undefined {
   return v.length > 0 ? v : undefined;
 }
 
+function readBool(v: string | string[] | undefined): boolean {
+  if (typeof v !== 'string') return false;
+  return v === '1' || v.toLowerCase() === 'true';
+}
+
+function buildPhotosHref(
+  basePath: string,
+  params: {
+    attachedToType?: string;
+    attachedToId?: string;
+    includeNonLatest?: boolean;
+    cursor?: string;
+  },
+): string {
+  const q = new URLSearchParams();
+  if (params.attachedToType) q.set('attachedToType', params.attachedToType);
+  if (params.attachedToId) q.set('attachedToId', params.attachedToId);
+  if (params.includeNonLatest) q.set('includeNonLatest', '1');
+  if (params.cursor) q.set('cursor', params.cursor);
+  const s = q.toString();
+  return s ? `${basePath}?${s}` : basePath;
+}
+
 function FilterBar({
   basePath,
   attachedToType,
   attachedToId,
+  includeNonLatest,
   count,
 }: {
   basePath: string;
   attachedToType?: string;
   attachedToId?: string;
+  includeNonLatest: boolean;
   count: number;
 }) {
   const kinds: Array<{ value?: string; label: string }> = [
@@ -129,9 +159,11 @@ function FilterBar({
       >
         {kinds.map((k) => {
           const active = (attachedToType ?? '') === (k.value ?? '');
-          const href = k.value
-            ? `${basePath}?attachedToType=${k.value}${attachedToId ? `&attachedToId=${attachedToId}` : ''}`
-            : basePath;
+          const href = buildPhotosHref(basePath, {
+            attachedToType: k.value,
+            attachedToId,
+            includeNonLatest,
+          });
           return (
             <Link
               key={k.label}
@@ -152,6 +184,32 @@ function FilterBar({
           );
         })}
       </div>
+      <Link
+        href={buildPhotosHref(basePath, {
+          attachedToType,
+          attachedToId,
+          includeNonLatest: !includeNonLatest,
+        })}
+        title={
+          includeNonLatest
+            ? 'Show only images from the current live article body'
+            : 'Reveal images that are orphaned, archived, or only in older versions'
+        }
+        style={{
+          padding: '4px 10px',
+          borderRadius: 4,
+          fontSize: 11.5,
+          fontFamily: 'var(--font-mono)',
+          whiteSpace: 'nowrap',
+          background: includeNonLatest
+            ? 'var(--accent-soft)'
+            : 'transparent',
+          color: includeNonLatest ? 'var(--accent)' : 'var(--muted)',
+          border: `1px solid ${includeNonLatest ? 'var(--accent-line)' : 'var(--line)'}`,
+        }}
+      >
+        Show orphaned &amp; archived
+      </Link>
       {attachedToId && (
         <div
           style={{
@@ -175,11 +233,10 @@ function FilterBar({
             </span>
           </span>
           <Link
-            href={
-              attachedToType
-                ? `${basePath}?attachedToType=${attachedToType}`
-                : basePath
-            }
+            href={buildPhotosHref(basePath, {
+              attachedToType,
+              includeNonLatest,
+            })}
             style={{ color: 'var(--dim)' }}
             title="Clear id filter"
           >
@@ -198,6 +255,7 @@ function FilterBar({
         }}
       >
         {count} photo{count === 1 ? '' : 's'}
+        {includeNonLatest ? ' (incl. non-live)' : ''}
       </span>
     </div>
   );
@@ -236,6 +294,10 @@ function PhotoTile({
   const kindLabel = photo.attachedToType
     ? attachmentLabel(photo.attachedToType)
     : 'detached';
+  const stateBadge = stateBadgeFor(photo);
+  const deletable =
+    photo.articleLinkState === 'orphan' ||
+    photo.articleLinkState === 'archived';
   return (
     <div
       style={{
@@ -311,6 +373,9 @@ function PhotoTile({
           }}
         >
           <Tag tone="outline">{kindLabel}</Tag>
+          {stateBadge && (
+            <Tag tone={stateBadge.tone}>{stateBadge.label}</Tag>
+          )}
           {photo.width && photo.height && (
             <span>
               {photo.width}×{photo.height}
@@ -319,7 +384,7 @@ function PhotoTile({
         </div>
         {(() => {
           const linkInfo = resolveSourceLink(companyId, photo);
-          if (!linkInfo) return null;
+          if (!linkInfo && !deletable) return null;
           return (
             <div
               style={{
@@ -328,18 +393,20 @@ function PhotoTile({
                 gap: 4,
               }}
             >
-              <ActionChip
-                href={linkInfo.sourceHref}
-                icon={<Icon.ext size={10} />}
-                label="Open"
-                tone="accent"
-                title={
-                  linkInfo.sourceTitle
-                    ? `Open ${linkInfo.label}: ${linkInfo.sourceTitle}`
-                    : `Open source ${linkInfo.label}`
-                }
-              />
-              {linkInfo.filterHref && (
+              {linkInfo && (
+                <ActionChip
+                  href={linkInfo.sourceHref}
+                  icon={<Icon.ext size={10} />}
+                  label="Open"
+                  tone="accent"
+                  title={
+                    linkInfo.sourceTitle
+                      ? `Open ${linkInfo.label}: ${linkInfo.sourceTitle}`
+                      : `Open source ${linkInfo.label}`
+                  }
+                />
+              )}
+              {linkInfo?.filterHref && (
                 <ActionChip
                   href={linkInfo.filterHref}
                   icon={<Icon.grid size={10} />}
@@ -348,12 +415,40 @@ function PhotoTile({
                   title={`View all photos for this ${linkInfo.label}`}
                 />
               )}
+              {deletable && (
+                <PhotoDeleteChip
+                  photo={photo}
+                  state={photo.articleLinkState as 'orphan' | 'archived'}
+                />
+              )}
             </div>
           );
         })()}
       </div>
     </div>
   );
+}
+
+/**
+ * Visual badge that summarises an article-attached image's link state
+ * for the photos grid. `live` images don't get a badge (they're the
+ * default state); the other states all warrant a tag so operators can
+ * see at a glance why a photo lacks an Open chip or carries a Delete
+ * affordance. `null` for non-article uploads and any unknown state.
+ */
+function stateBadgeFor(
+  photo: UploadSummary,
+): { tone: 'warn' | 'danger'; label: string } | null {
+  switch (photo.articleLinkState) {
+    case 'archived':
+      return { tone: 'warn', label: 'Archived' };
+    case 'versioned':
+      return { tone: 'warn', label: 'Old version' };
+    case 'orphan':
+      return { tone: 'danger', label: 'Orphan' };
+    default:
+      return null;
+  }
 }
 
 /**
@@ -426,9 +521,15 @@ function filterHref(
  * photo tile. Asset and asset_field uploads ship with an
  * `attachedToId` and can deep-link directly. Article uploads never
  * carry an id — the owning article is resolved server-side via
- * `sourceArticle` (a body-scan of active articles), so we use that
- * here instead. Returns null when no usable link can be built (e.g.
- * an article image that no longer appears in any article body).
+ * `sourceArticle` (a body-scan of active + archived articles and
+ * non-draft version snapshots), so we use that here instead.
+ *
+ * For article images: `live` and `archived` get an Open link to the
+ * owning article (the archived detail page still loads and shows the
+ * banner). `versioned` skips Open because the history-restore UI
+ * lives inside the article detail page and there's no stable URL to
+ * a specific version preview. `orphan` has no destination by
+ * definition.
  */
 function resolveSourceLink(
   companyId: string,
@@ -443,8 +544,15 @@ function resolveSourceLink(
   const label = attachmentLabel(photo.attachedToType).toLowerCase();
   if (photo.attachedToType === 'article') {
     if (!photo.sourceArticle) return null;
+    if (
+      photo.articleLinkState !== 'live' &&
+      photo.articleLinkState !== 'archived'
+    ) {
+      return null;
+    }
     return {
-      label,
+      label:
+        photo.articleLinkState === 'archived' ? 'archived article' : label,
       sourceHref: `/admin/companies/${companyId}/articles/${encodeURIComponent(
         photo.sourceArticle.id,
       )}`,
@@ -538,17 +646,21 @@ function Pagination({
   nextCursor,
   attachedToType,
   attachedToId,
+  includeNonLatest,
 }: {
   basePath: string;
   nextCursor: string | null;
   attachedToType?: string;
   attachedToId?: string;
+  includeNonLatest: boolean;
 }) {
   if (!nextCursor) return null;
-  const params = new URLSearchParams();
-  if (attachedToType) params.set('attachedToType', attachedToType);
-  if (attachedToId) params.set('attachedToId', attachedToId);
-  params.set('cursor', nextCursor);
+  const href = buildPhotosHref(basePath, {
+    attachedToType,
+    attachedToId,
+    includeNonLatest,
+    cursor: nextCursor,
+  });
   return (
     <div
       style={{
@@ -559,7 +671,7 @@ function Pagination({
       }}
     >
       <Link
-        href={`${basePath}?${params.toString()}`}
+        href={href}
         style={{
           fontSize: 11.5,
           fontFamily: 'var(--font-mono)',

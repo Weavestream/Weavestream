@@ -288,19 +288,43 @@ export class PhotosController {
     @Query('attachedToId') rawId?: string,
     @Query('limit') rawLimit?: string,
     @Query('cursor') cursor?: string,
+    @Query('includeNonLatest') rawIncludeNonLatest?: string,
   ) {
     let attachedToType: UploadAttachmentType | undefined;
     if (rawType) {
       const parsed = uploadAttachmentTypeSchema.safeParse(rawType);
       if (parsed.success) attachedToType = parsed.data;
     }
+    const includeNonLatest =
+      rawIncludeNonLatest === '1' || rawIncludeNonLatest === 'true';
     return this.uploads.listPhotos(companyId, {
       attachedToType,
       attachedToId: rawId,
       limit: rawLimit ? parseInt(rawLimit, 10) : undefined,
       cursor,
       actor,
+      includeNonLatest,
     });
+  }
+
+  /**
+   * Photos-page delete. Wrapper around `uploads.softDelete` that
+   * re-checks the article link state for article-attached uploads so
+   * the UI affordance (which only shows the button for orphan +
+   * archived tiles) can never be tricked into removing a `live` or
+   * `versioned` image. Non-article uploads delegate straight to the
+   * generic soft-delete.
+   */
+  @Delete(':id')
+  @HttpCode(HttpStatus.OK)
+  @RequirePermission('upload.create', { companyIdFrom: 'params.companyId' })
+  async delete(
+    @CurrentUser() actor: AuthedUser,
+    @Param('companyId', new ParseUUIDPipe()) companyId: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Req() req: Request,
+  ) {
+    return this.uploads.softDeleteFromPhotos(actor, companyId, id, meta(req));
   }
 }
 

@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Injectable,
   Logger,
@@ -65,6 +66,19 @@ export interface UploadSourceArticle {
   title: string;
 }
 
+/**
+ * Where an article-attached upload is currently reachable from. Drives
+ * the photos gallery badges and the photos-page delete gate:
+ *   live      — embedded in the live body of a non-archived article
+ *   versioned — only in a non-draft `ArticleVersion` of a live article
+ *   archived  — only reachable through an archived article (body or
+ *               any of its version rows)
+ *   orphan    — not referenced anywhere
+ *
+ * Computed only for `attachedToType === 'article'` uploads on read.
+ */
+export type ArticleLinkState = 'live' | 'versioned' | 'archived' | 'orphan';
+
 export interface SerializedUpload {
   id: string;
   companyId: string;
@@ -88,9 +102,18 @@ export interface SerializedUpload {
    * `attachedToId` (the article may not have existed at upload time),
    * so the source is resolved by scanning article bodies for the upload
    * URL. `null` for non-article uploads and for orphaned article
-   * images that don't appear in any active article body.
+   * images that don't appear in any article body.
+   *
+   * Non-null for `live`, `versioned`, and `archived` link states; the
+   * `archived` payload still carries the archived article's id+slug+
+   * title so the UI can deep-link to the archived detail page.
    */
   sourceArticle: UploadSourceArticle | null;
+  /**
+   * Link state for article-attached uploads (see `ArticleLinkState`).
+   * `null` for non-article uploads.
+   */
+  articleLinkState: ArticleLinkState | null;
 }
 
 const PENDING_TTL_SECONDS = 15 * 60;
@@ -566,6 +589,7 @@ export class UploadsService {
     companyId: string,
     uploadId: string,
     meta: AuditMeta,
+    auditExtras?: Record<string, unknown>,
   ): Promise<SerializedUpload> {
     const upload = await this.prisma.upload.findFirst({
       where: { id: uploadId, companyId },
@@ -590,11 +614,60 @@ export class UploadsService {
       companyId,
       ip: meta.ip,
       userAgent: meta.userAgent,
-      before: { deletedAt: null },
+      before: { deletedAt: null, ...auditExtras },
       after: { deletedAt: updated.deletedAt },
     });
 
     return this.serialize(updated);
+  }
+
+  /**
+   * Photos-page soft-delete with a server-side state gate. Re-runs the
+   * article link-state classifier at the moment of deletion so a stale
+   * UI affordance (the delete chip should only render for `orphan`
+   * and `archived` tiles) cannot bypass the rule and tombstone a
+   * `live` image (which would break the article it embeds) or a
+   * `versioned` image (which would break older-version restore
+   * previews — see `findUploadsReferencedInHistory` in articles.service).
+   *
+   * Non-article uploads bypass the gate and delegate to the generic
+   * soft-delete, since the photos page already supports deleting
+   * detached / asset-attached images and no equivalent state exists
+   * for those.
+   */
+  async softDeleteFromPhotos(
+    actor: AuthedUser,
+    companyId: string,
+    uploadId: string,
+    meta: AuditMeta,
+  ): Promise<SerializedUpload> {
+    const upload = await this.prisma.upload.findFirst({
+      where: { id: uploadId, companyId },
+    });
+    if (!upload) throw new NotFoundException();
+    if (upload.deletedAt) {
+      return this.serialize(upload);
+    }
+    let auditState: ArticleLinkState | null = null;
+    if (upload.attachedToType === 'article' && upload.attachedToId == null) {
+      const classified = await this.classifyArticleUpload(companyId, upload.id);
+      const state = classified?.state ?? 'orphan';
+      auditState = state;
+      if (state === 'live' || state === 'versioned') {
+        throw new ConflictException({
+          error: 'ArticleImageStillReferenced',
+          articleLinkState: state,
+          message:
+            state === 'live'
+              ? 'This image is still embedded in a live article and cannot be deleted from the photos page.'
+              : 'This image is referenced by a published article version and cannot be deleted from the photos page.',
+        });
+      }
+    }
+    return this.softDelete(actor, companyId, uploadId, meta, {
+      articleLinkState: auditState,
+      via: 'photos',
+    });
   }
 
   // ------------------------------------------------------------------
@@ -642,6 +715,7 @@ export class UploadsService {
       limit?: number;
       cursor?: string;
       actor?: AuthedUser;
+      includeNonLatest?: boolean;
     } = {},
   ): Promise<{ items: SerializedUpload[]; nextCursor: string | null }> {
     return this.paginatedList(companyId, { ...opts, onlyImages: true });
@@ -683,6 +757,13 @@ export class UploadsService {
       cursor?: string;
       onlyImages?: boolean;
       actor?: AuthedUser;
+      /**
+       * When false (default), drop article-attached uploads whose link
+       * state is not `live` from the response. The cursor still
+       * advances on the underlying `Upload.id` order so the page may
+       * be smaller than `limit`. Non-article rows are always shown.
+       */
+      includeNonLatest?: boolean;
     },
   ): Promise<{ items: SerializedUpload[]; nextCursor: string | null }> {
     const limit = Math.min(Math.max(opts.limit ?? 60, 1), 200);
@@ -723,49 +804,101 @@ export class UploadsService {
       .filter((p) => p.attachedToType === 'article' && !p.attachedToId)
       .map((p) => p.id);
     if (articleUploadIds.length > 0) {
-      const sources = await this.findUploadSourceArticles(
+      const classified = await this.classifyArticleUploads(
         companyId,
         articleUploadIds,
         { visibleToClientsOnly: opts.actor?.role === 'CLIENT_USER' },
       );
       for (const item of serialized) {
         if (item.attachedToType !== 'article' || item.attachedToId) continue;
-        item.sourceArticle = sources.get(item.id) ?? null;
+        const c = classified.get(item.id);
+        if (c) {
+          item.sourceArticle = c.sourceArticle;
+          item.articleLinkState = c.state;
+        } else {
+          item.sourceArticle = null;
+          item.articleLinkState = 'orphan';
+        }
       }
     }
+
+    // Photos gallery: by default hide article uploads whose link state
+    // isn't `live` so the grid is dominated by current content. Pass
+    // `includeNonLatest` to surface orphan/archived/versioned for
+    // audit + cleanup workflows. Non-article rows (assets,
+    // attachments, asset-field captures) are unaffected by this
+    // toggle — they have no link state concept.
+    const items =
+      opts.includeNonLatest === false || opts.includeNonLatest === undefined
+        ? serialized.filter(
+            (p) =>
+              p.attachedToType !== 'article' ||
+              p.attachedToId != null ||
+              p.articleLinkState === null ||
+              p.articleLinkState === 'live',
+          )
+        : serialized;
+
     return {
-      items: serialized,
+      items,
       nextCursor: hasMore ? slice[slice.length - 1]!.id : null,
     };
   }
 
   /**
-   * Resolve the article that embeds each upload in `uploadIds`. Used
-   * by the photos gallery to surface a "back to article" link for
-   * images whose `attachedToType` is `article` (those rows are stored
-   * without an `attachedToId` — see `article-uploads.ts` for why). The
-   * scan is bounded to the company's active (non-archived) articles
-   * and is filtered to `visibleToClients` when the caller is a
-   * CLIENT_USER, so we never leak titles/slugs from articles the user
-   * can't otherwise read.
+   * Classify each article-attached upload in `uploadIds` into one of
+   * `live | versioned | archived | orphan` and resolve the owning
+   * article when one exists. The photos gallery uses the state to
+   * decide which badges, links, and delete affordances to render; the
+   * photos-page delete handler uses it as a server-side gate so a
+   * stale UI cannot delete a live image.
+   *
+   * Priority when an upload appears in multiple places:
+   *   live (live body of active article)
+   *     > versioned (non-draft `ArticleVersion` of active article)
+   *     > archived (any reference under an archived article)
+   *
+   * The two scans run in parallel — each is a single regex SQL over
+   * the candidate set, so the total cost is two queries regardless of
+   * how many uploads are on the page.
+   *
+   * Visibility: when `visibleToClientsOnly`, both scans require the
+   * owning article to be `visible_to_clients = TRUE` so portal
+   * responses never leak titles/slugs.
    *
    * SQL safety: `uploadIds` is filtered to canonical UUIDs before being
    * inlined as a regex alternation. The company id and the regex
    * pattern itself are still bound as parameters via `Prisma.sql`.
    */
-  async findUploadSourceArticles(
+  async classifyArticleUploads(
     companyId: string,
     uploadIds: string[],
     opts: { visibleToClientsOnly?: boolean } = {},
-  ): Promise<Map<string, UploadSourceArticle>> {
-    const out = new Map<string, UploadSourceArticle>();
+  ): Promise<
+    Map<
+      string,
+      { state: ArticleLinkState; sourceArticle: UploadSourceArticle | null }
+    >
+  > {
+    const out = new Map<
+      string,
+      { state: ArticleLinkState; sourceArticle: UploadSourceArticle | null }
+    >();
     if (uploadIds.length === 0) return out;
 
     const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     const uniqueIds = Array.from(
       new Set(uploadIds.filter((id) => uuidRe.test(id))),
     ).map((id) => id.toLowerCase());
-    if (uniqueIds.length === 0) return out;
+    if (uniqueIds.length === 0) {
+      // Caller still needs an entry per requested id so the read path
+      // can render the orphan badge. We mark anything we couldn't even
+      // shape into a UUID as orphan — there's nothing to scan against.
+      for (const id of uploadIds) {
+        out.set(id, { state: 'orphan', sourceArticle: null });
+      }
+      return out;
+    }
 
     // `/uploads/<uuid>` is the URL shape the rich-text editor embeds
     // (see `extractEmbeddedUploadIds`). Anchoring on the path prefix
@@ -774,37 +907,148 @@ export class UploadsService {
     const pattern = `/uploads/(${uniqueIds.join('|')})`;
 
     const visibilityFilter = opts.visibleToClientsOnly
-      ? Prisma.sql`AND visible_to_clients = TRUE`
+      ? Prisma.sql`AND a.visible_to_clients = TRUE`
       : Prisma.empty;
 
-    const rows = await this.prisma.$queryRaw<
-      Array<{
-        id: string;
-        slug: string;
-        title: string;
-        content_text: string | null;
-        markdown_source: string | null;
-      }>
-    >(Prisma.sql`
-      SELECT id, slug, title,
-             content::text AS content_text,
-             markdown_source
-        FROM articles
-       WHERE company_id = ${companyId}::uuid
-         AND archived_at IS NULL
-         ${visibilityFilter}
-         AND (content::text ~ ${pattern} OR markdown_source ~ ${pattern})
-    `);
-
     const wanted = new Set(uniqueIds);
-    for (const row of rows) {
+
+    type LiveRow = {
+      id: string;
+      slug: string;
+      title: string;
+      archived_at: Date | null;
+      content_text: string | null;
+      markdown_source: string | null;
+    };
+    type VersionRow = {
+      article_id: string;
+      slug: string;
+      title: string;
+      archived_at: Date | null;
+      content_text: string | null;
+      markdown_source: string | null;
+    };
+
+    const [liveRows, versionRows] = await Promise.all([
+      this.prisma.$queryRaw<LiveRow[]>(Prisma.sql`
+        SELECT a.id, a.slug, a.title, a.archived_at,
+               a.content::text AS content_text,
+               a.markdown_source
+          FROM articles a
+         WHERE a.company_id = ${companyId}::uuid
+           ${visibilityFilter}
+           AND (a.content::text ~ ${pattern} OR a.markdown_source ~ ${pattern})
+      `),
+      this.prisma.$queryRaw<VersionRow[]>(Prisma.sql`
+        SELECT a.id          AS article_id,
+               a.slug,
+               a.title,
+               a.archived_at,
+               v.content::text AS content_text,
+               v.markdown_source
+          FROM article_versions v
+          JOIN articles a ON a.id = v.article_id
+         WHERE v.company_id = ${companyId}::uuid
+           AND v.is_draft = FALSE
+           ${visibilityFilter}
+           AND (v.content::text ~ ${pattern} OR v.markdown_source ~ ${pattern})
+      `),
+    ]);
+
+    // Aggregate by priority. We don't `break` after the first hit
+    // because an upload can match against multiple article bodies and
+    // we want the highest-priority owner to win.
+    for (const row of liveRows) {
       const ids = extractEmbeddedUploadIds(
         row.content_text ?? row.markdown_source,
       );
       for (const id of ids) {
-        if (!wanted.has(id) || out.has(id)) continue;
-        out.set(id, { id: row.id, slug: row.slug, title: row.title });
+        if (!wanted.has(id)) continue;
+        const candidate: ArticleLinkState =
+          row.archived_at == null ? 'live' : 'archived';
+        const existing = out.get(id);
+        if (
+          !existing ||
+          statePriority(candidate) > statePriority(existing.state)
+        ) {
+          out.set(id, {
+            state: candidate,
+            sourceArticle: { id: row.id, slug: row.slug, title: row.title },
+          });
+        }
       }
+    }
+    for (const row of versionRows) {
+      const ids = extractEmbeddedUploadIds(
+        row.content_text ?? row.markdown_source,
+      );
+      for (const id of ids) {
+        if (!wanted.has(id)) continue;
+        const candidate: ArticleLinkState =
+          row.archived_at == null ? 'versioned' : 'archived';
+        const existing = out.get(id);
+        if (
+          !existing ||
+          statePriority(candidate) > statePriority(existing.state)
+        ) {
+          out.set(id, {
+            state: candidate,
+            sourceArticle: {
+              id: row.article_id,
+              slug: row.slug,
+              title: row.title,
+            },
+          });
+        }
+      }
+    }
+
+    for (const id of uploadIds) {
+      if (!out.has(id)) out.set(id, { state: 'orphan', sourceArticle: null });
+    }
+    return out;
+  }
+
+  /**
+   * Single-upload wrapper around `classifyArticleUploads` used by the
+   * photos-page delete gate. Recomputes link state at the moment of
+   * deletion (inside the same Prisma client / transaction) so a stale
+   * UI cannot trick the server into removing a live or history-only
+   * image. Returns `null` when the upload is not an article-attached
+   * row (caller proceeds without the gate).
+   */
+  async classifyArticleUpload(
+    companyId: string,
+    uploadId: string,
+  ): Promise<{
+    state: ArticleLinkState;
+    sourceArticle: UploadSourceArticle | null;
+  } | null> {
+    const result = await this.classifyArticleUploads(companyId, [uploadId]);
+    return result.get(uploadId) ?? null;
+  }
+
+  /**
+   * @deprecated Prefer `classifyArticleUploads` which also reports the
+   * link state. Kept as a back-compat shim that returns only the
+   * `sourceArticle` map for callers that don't need state. Note that
+   * the state-aware classifier now includes archived articles in the
+   * source resolution as well, so this returns sources for any state
+   * other than `orphan`.
+   */
+  async findUploadSourceArticles(
+    companyId: string,
+    uploadIds: string[],
+    opts: { visibleToClientsOnly?: boolean } = {},
+  ): Promise<Map<string, UploadSourceArticle>> {
+    const classified = await this.classifyArticleUploads(
+      companyId,
+      uploadIds,
+      opts,
+    );
+    const out = new Map<string, UploadSourceArticle>();
+    for (const [id, entry] of classified) {
+      if (entry.sourceArticle) out.set(id, entry.sourceArticle);
     }
     return out;
   }
@@ -886,12 +1130,31 @@ export class UploadsService {
       createdAt: row.createdAt,
       uploaderId: row.uploaderId,
       sourceArticle: null,
+      articleLinkState: null,
     };
   }
 }
 
 function pendingKey(uploadId: string): string {
   return `upload:pending:${uploadId}`;
+}
+
+/**
+ * Resolution priority when an article upload appears in multiple
+ * places. Higher wins; `orphan` is the implicit floor so it never
+ * needs to compete against a found state.
+ */
+function statePriority(state: ArticleLinkState): number {
+  switch (state) {
+    case 'live':
+      return 3;
+    case 'versioned':
+      return 2;
+    case 'archived':
+      return 1;
+    case 'orphan':
+      return 0;
+  }
 }
 
 /**

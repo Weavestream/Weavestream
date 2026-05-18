@@ -335,6 +335,13 @@ export class AssetsService {
         actor.id,
         meta,
       );
+      await this.linkFileFieldUploadsToAsset(
+        tx,
+        companyId,
+        created.id,
+        layout,
+        validated,
+      );
       // Phase 6: rebuild search_index inside the same tx so the row
       // only becomes discoverable after its field values are visible
       // to the rest of the app.
@@ -434,6 +441,7 @@ export class AssetsService {
         },
       });
       await this.persistFieldValues(tx, layout, id, companyId, validated, actor.id, meta);
+      await this.linkFileFieldUploadsToAsset(tx, companyId, id, layout, validated);
       // Phase 6: rewrite the denormalised plaintext so the asset's
       // updated field values and name surface in the next search
       // query. Same-tx so a rollback cleans both sides up together.
@@ -946,6 +954,56 @@ export class AssetsService {
         });
       }
     }
+  }
+
+  /**
+   * Backfill `Upload.attachedToId` for FILE-field uploads that were
+   * confirmed before the owning asset existed.
+   *
+   * The dropzone on the new-asset form (see `asset-form.tsx`) has no
+   * `assetId` yet, so it calls `upload.init` with
+   * `{ type: 'asset' }` and no id. Once the asset save lands, the
+   * upload id ends up inside `asset_field_values.value` but the
+   * `Upload` row's `attachedToId` is still null — which means the
+   * photos gallery's `resolveSourceLink` can't build an Open link
+   * back to the asset.
+   *
+   * This step runs in the same Prisma transaction as the asset write
+   * so a rollback cleans both sides up together. The `where` clause
+   * pins `companyId` so we never patch a cross-tenant row, and pins
+   * `attachedToId: null` so we never reattach an upload that already
+   * belongs to a different asset (single-ownership wins on first
+   * write).
+   */
+  private async linkFileFieldUploadsToAsset(
+    tx: Prisma.TransactionClient,
+    companyId: string,
+    assetId: string,
+    layout: LayoutWithFields,
+    values: Record<string, unknown>,
+  ): Promise<void> {
+    const ids = new Set<string>();
+    for (const field of layout.fields) {
+      if (field.fieldType !== 'FILE') continue;
+      const value = values[field.slug];
+      if (!Array.isArray(value)) continue;
+      for (const entry of value as FileFieldEntry[]) {
+        if (entry && typeof entry === 'object' && entry.uploadId) {
+          ids.add(entry.uploadId);
+        }
+      }
+    }
+    if (ids.size === 0) return;
+    await tx.upload.updateMany({
+      where: {
+        id: { in: Array.from(ids) },
+        companyId,
+        attachedToType: 'asset',
+        attachedToId: null,
+        deletedAt: null,
+      },
+      data: { attachedToId: assetId },
+    });
   }
 
   private coerceFilterValue(fieldType: string, raw: string): unknown {
