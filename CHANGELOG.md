@@ -6,6 +6,55 @@ this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.8.5] - 2026-05-18
+
+### Added
+
+- **Article version history.** Every explicit Save creates a numbered version. A new History panel on each article lets you browse the version list (newest first, changed-field chips, author + timestamp), preview any past version's body in a drawer, and Restore it as a new forward-only version. Archiving an article auto-discards any in-progress draft; permanently deleting an article cascade-deletes its history rows.
+- **Opt-in article autosave drafts.** Autosave is now off by default and gated by a workspace-wide toggle under **Admin → Settings → Articles**. When enabled, autosaves write to a separate draft row rather than the live article body; Cancel opens a confirmation that discards the draft and reverts the article to its last published version.
+- **Workspace default article editor.** New "Default editor format" picker (WYSIWYG / Markdown) under **Admin → Settings → Articles** seeds the format for new articles. Existing articles continue to open in whatever mode they were saved in.
+- **Archive / restore / permanently delete articles from the UI.** Archive and Restore buttons appear on the article read page, edit page, and inline on each list row. A separate **Delete forever** action (requires the article to be archived first and the operator to type the article title) cascades the article and its history. Backed by a new `article.purge` FULL-membership permission.
+- **Clickable `@`-mentions** in articles and rich-text asset fields. Mentions render as anchor pills that navigate to the referenced article / asset / password on Cmd/Ctrl+click inside the editor and on plain click in the read view; admin vs portal routing is chosen from the viewer's memberships and unauthorized destinations still 404 / 403 at the API.
+- **Photos gallery link states.** Every photo now carries one of four states — `Live`, `Versioned`, `Archived`, or `Orphan` — surfaced as tags on each tile, with a "Show orphaned & archived" toggle (default off). Orphan and archived tiles get a delete chip that tombstones the upload after a confirmation; live and versioned images are blocked from deletion to keep embedded content intact. Article-attached images also expose an "open source article" deep link.
+- **`/admin/stats` for the dashboard "At a glance" panel.** Six tiles (Companies, Users, Assets, Passwords, Articles, Domains) replace the previous five-tile mix and are sourced from a single dedicated endpoint instead of paginated list scans.
+- **Notes side panel.** Per-company sticky notes moved out of the header into a dedicated side panel.
+
+### Changed
+
+- **Action buttons unified into page headers.** Domains, IPAM, Passwords "New" actions and article / asset builder Save / Cancel actions now live in the page header alongside the breadcrumbs, matching the existing pattern used elsewhere.
+- **Top header for global actions.** Expirations, Starred, Chat, and Profile entries moved out of the sidebar into the top header.
+- **Passwords on the company dashboard.** The per-company dashboard "Photos" card has been replaced with a Passwords summary card.
+- **Recent activity panel surfaces created vs updated.** The admin dashboard's Recent Activity now labels each entry as created or updated.
+- **Recent companies and starred items capped at 10 with internal scroll** on the admin dashboard.
+- **All-assets search box.** Dropped the inline record count and refreshed the layout-filter dropdown styling.
+- **Section icons** added to Articles, Photos, Domains, IPAM, and Passwords list pages.
+- **Folder browser.** The `+` action only appears on hover, and the "Edit" button was renamed to "Edit Folder" for clarity.
+- **Clickable cards** got a subtler hover affordance.
+- **Pills.** Dropped the leading dot from pill chips across the platform.
+- **Asset layout description copy** refreshed for consistency.
+- **AI prompt clarity.** Further tweaks to LLM prompts for better context handling and article-drafting accuracy.
+
+### Fixed
+
+- **Asset FILE-field uploads lost their owning-asset back-link** when uploaded from the new-asset form (the dropzone fires before the asset exists). The owning asset is now stamped onto the upload inside the same Prisma transaction as the field-value write; a one-time idempotent migration repairs rows created under the old behaviour.
+- **Permanent article delete left orphan images** in the photos gallery when those images were embedded only in older versions. `purge` now unions the live body with every non-draft `ArticleVersion` body and tombstones every upload referenced by any of them.
+- **Restoring a previous article version no longer soft-deletes images** that the older version (or any other historical version) still embeds. Truly orphaned uploads are still tombstoned.
+- **Discard draft and autosave coalesce paths could 500** because the `articleVersion` writes were missing a tenant filter the Prisma middleware can see. Switched to `updateMany`/`deleteMany` with `{ id, companyId }` so the middleware can enforce isolation on every history-row write.
+- **Rich text fields beyond the first** rendered inline on the asset detail page instead of in their own panels. All `rich_text` fields now render as separate panels below the top panel.
+- **Article editor action buttons** were sharing a row with the breadcrumbs in some layouts; moved into a dedicated row below.
+- **Alert config picker showed a UUID** instead of the company name when editing a company-scoped alert. The Alert DTO now carries a resolved `company` ref (`id`, `name`, `slug`, `archivedAt`).
+- **Article excerpt previews leaked embedded image filenames** in the preview text; filenames are now stripped before the excerpt is rendered.
+- **Duplicate asset titles** on the asset detail page have been removed.
+- **History-panel Restore confirmation** was hidden behind the drawer overlay; the Dialog and Toast z-index were bumped so confirms always sit above the Sheet that launched them.
+
+### Security
+
+- **Tenant-scoped writes on `ArticleVersion`.** All draft, discard, restore, and archive paths now go through `updateMany` / `deleteMany` with `{ id, companyId }`, so the Prisma tenant middleware enforces a `companyId` filter on every history-row write.
+- **TOCTOU re-check on photo delete.** The photos-page delete endpoint re-runs the link-state classifier at the moment of deletion and rejects `live` / `versioned` uploads even if the UI affordance was stale.
+- **`article.purge` permission gating.** New FULL-membership permission with `requireNonExpiredMembership: true`; archive-before-purge is enforced server-side and the type-the-title client-side defends against accidental and tool-call-driven deletes. Every purge is audited with `before.versionCount` and `before.softDeletedUploads`.
+- **NinjaOne `htmlToPlain` hardened against nested-tag bypass.** The HTML-to-plain-text helper now strips tags in a fixed-point loop so nested or overlapping patterns (e.g. `<scr<script>ipt>`) can't survive sanitization.
+- **Photos source-article lookup respects client visibility.** The new source-article resolver scans only active articles and applies `visible_to_clients = TRUE` for `CLIENT_USER` callers; collected upload ids are filtered to canonical UUIDs before being interpolated into the regex alternation, with `companyId` bound via `Prisma.sql`.
+
 ## [1.8.4] - 2026-05-16
 
 ### Added
@@ -739,7 +788,8 @@ Initial public release.
   database-per-tenant.
 - English UI only.
 
-[Unreleased]: https://github.com/Weavestream/Weavestream/compare/v1.8.4...HEAD
+[Unreleased]: https://github.com/Weavestream/Weavestream/compare/v1.8.5...HEAD
+[1.8.5]: https://github.com/Weavestream/Weavestream/releases/tag/v1.8.5
 [1.8.4]: https://github.com/Weavestream/Weavestream/releases/tag/v1.8.4
 [1.8.3]: https://github.com/Weavestream/Weavestream/releases/tag/v1.8.3
 [1.8.2]: https://github.com/Weavestream/Weavestream/releases/tag/v1.8.2
