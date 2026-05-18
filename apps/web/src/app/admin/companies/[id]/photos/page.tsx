@@ -518,9 +518,6 @@ function EmptyState() {
         fontSize: 13,
       }}
     >
-      <div style={{ fontSize: 24, marginBottom: 8 }}>
-        <Icon.doc size={24} />
-      </div>
       <div>No photos yet for the current filter.</div>
       <div
         style={{
