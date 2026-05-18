@@ -626,34 +626,67 @@ export function LayoutBuilder({
           { label: layout.name },
           { label: 'edit', mono: true },
         ]}
-        right={
+        subClassName="page-header-sub"
+        sub={
           canEdit ? (
             <>
-              {isArchived && <Tag tone="warn">archived</Tag>}
-              {!isArchived && dirty && <Tag tone="warn">unsaved</Tag>}
-              <Btn
-                kind="outline"
-                size="md"
-                onClick={() => router.push('/admin/layouts')}
-                disabled={saving}
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  flexWrap: 'wrap',
+                  minWidth: 0,
+                }}
               >
-                Cancel
-              </Btn>
-              {!isArchived && (
+                {isArchived && <Tag tone="warn">archived</Tag>}
+                {!isArchived && dirty && <Tag tone="warn">unsaved</Tag>}
+              </div>
+              <div
+                className="page-header-actions"
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  flexWrap: 'wrap',
+                  justifyContent: 'flex-end',
+                }}
+              >
                 <Btn
-                  kind="primary"
+                  kind="outline"
                   size="md"
-                  icon={Icon.check}
-                  loading={saving}
-                  disabled={!dirty || saving}
-                  onClick={() => save(false)}
+                  onClick={() => router.push('/admin/layouts')}
+                  disabled={saving}
                 >
-                  Save layout
+                  Cancel
                 </Btn>
-              )}
+                {!isArchived && (
+                  <Btn
+                    kind="primary"
+                    size="md"
+                    icon={Icon.check}
+                    loading={saving}
+                    disabled={!dirty || saving}
+                    onClick={() => save(false)}
+                  >
+                    Save layout
+                  </Btn>
+                )}
+              </div>
             </>
           ) : (
-            <Tag tone="outline">read only</Tag>
+            <>
+              <div />
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'flex-end',
+                }}
+              >
+                <Tag tone="outline">read only</Tag>
+              </div>
+            </>
           )
         }
       />
