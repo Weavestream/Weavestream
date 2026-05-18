@@ -309,7 +309,7 @@ export function AssetForm({
                 }}
               >
                 {activeFields.length} field{activeFields.length === 1 ? '' : 's'} ·
-                v{layout.version} · global template
+                v{layout.version}
               </div>
             </div>
             {onPickLayout && (

@@ -43,7 +43,7 @@ import {
   Tag,
   useToast,
 } from '../../../../../../components/ui';
-import { TopBar } from '../../../../../../components/shell/top-bar';
+import { PageHeader } from '../../../../../../components/shell/page-header';
 import { useIsMobile } from '../../../../../../lib/hooks/use-is-mobile';
 import { LayoutSettingsDialog } from '../../layout-settings-dialog';
 import { LayoutArchiveDialog } from '../../layout-archive-dialog';
@@ -477,13 +477,27 @@ export function LayoutBuilder({
   if (isMobile) {
     return (
       <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-        <TopBar
+        <PageHeader
           crumbs={[
             { label: 'Layouts', href: '/admin/layouts' },
             { label: layout.name },
             { label: 'edit', mono: true },
           ]}
-          right={<Tag tone="outline">read only</Tag>}
+          leading={
+            <LayoutSwatch icon={layout.icon} color={layout.color} size={48} />
+          }
+          title={layout.name}
+          description={
+            <>
+              v{layout.version} · {activeFields.length} field
+              {activeFields.length === 1 ? '' : 's'}
+              {stats &&
+                ` · used by ${stats.assetCount} asset${stats.assetCount === 1 ? '' : 's'} in ${stats.companyCount} ${
+                  stats.companyCount === 1 ? lower(term.one) : lower(term.other)
+                }`}
+            </>
+          }
+          actions={<Tag tone="outline">read only</Tag>}
         />
         <div
           style={{
@@ -517,34 +531,6 @@ export function LayoutBuilder({
                 The layout builder is drag-and-drop and needs a desktop viewport.
                 A read-only preview of the current fields is below.
               </span>
-            </div>
-          </div>
-
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 10,
-              padding: '10px 12px',
-              background: 'var(--panel)',
-              border: '1px solid var(--line)',
-              borderRadius: 8,
-            }}
-          >
-            <LayoutSwatch icon={layout.icon} color={layout.color} size={28} />
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontSize: 14, fontWeight: 600 }}>{layout.name}</div>
-              <div
-                style={{
-                  fontSize: 11,
-                  color: 'var(--muted)',
-                  fontFamily: 'var(--font-mono)',
-                }}
-              >
-                /{layout.slug} · v{layout.version} ·{' '}
-                {activeFields.length} field{activeFields.length === 1 ? '' : 's'}
-                {stats ? ` · ${stats.assetCount} assets` : ''}
-              </div>
             </div>
           </div>
 
@@ -618,77 +604,96 @@ export function LayoutBuilder({
     );
   }
 
+  const tableColumnCount = fields.filter(
+    (f) => f.isPrimary || (f.showInTable && canShowInTable(f.fieldType)),
+  ).length;
+
+  const headerDescription = (
+    <>
+      v{layout.version} · {fields.length} field{fields.length === 1 ? '' : 's'}
+      {stats &&
+        ` · used by ${stats.assetCount} asset${stats.assetCount === 1 ? '' : 's'} in ${stats.companyCount} ${
+          stats.companyCount === 1 ? lower(term.one) : lower(term.other)
+        }`}
+    </>
+  );
+
+  const titleNode = (
+    <span
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 10,
+        flexWrap: 'wrap',
+        minWidth: 0,
+      }}
+    >
+      <span style={{ minWidth: 0 }}>{layout.name}</span>
+      {isArchived && <Tag tone="warn">archived</Tag>}
+      {!isArchived && dirty && <Tag tone="warn">unsaved</Tag>}
+    </span>
+  );
+
+  const headerActions = canEdit ? (
+    <>
+      <Btn
+        kind="outline"
+        size="md"
+        onClick={() => router.push('/admin/layouts')}
+        disabled={saving}
+      >
+        Cancel
+      </Btn>
+      <Btn
+        kind="outline"
+        size="md"
+        icon={Icon.edit}
+        onClick={() => setSettingsOpen(true)}
+        disabled={saving}
+        title="Rename layout or change icon/color"
+      >
+        Settings
+      </Btn>
+      <Btn
+        kind="outline"
+        size="md"
+        icon={isArchived ? Icon.check : Icon.archive}
+        onClick={() => setArchiveOpen(true)}
+        disabled={saving}
+      >
+        {isArchived ? 'Restore' : 'Archive'}
+      </Btn>
+      {!isArchived && (
+        <Btn
+          kind="primary"
+          size="md"
+          icon={Icon.check}
+          loading={saving}
+          disabled={!dirty || saving}
+          onClick={() => save(false)}
+        >
+          Save layout
+        </Btn>
+      )}
+    </>
+  ) : (
+    <Tag tone="outline">read only</Tag>
+  );
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-      <TopBar
+      <PageHeader
         crumbs={[
           { label: 'Layouts', href: '/admin/layouts' },
           { label: layout.name },
           { label: 'edit', mono: true },
         ]}
-        subClassName="page-header-sub"
-        sub={
-          canEdit ? (
-            <>
-              <div
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 6,
-                  flexWrap: 'wrap',
-                  minWidth: 0,
-                }}
-              >
-                {isArchived && <Tag tone="warn">archived</Tag>}
-                {!isArchived && dirty && <Tag tone="warn">unsaved</Tag>}
-              </div>
-              <div
-                className="page-header-actions"
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 8,
-                  flexWrap: 'wrap',
-                  justifyContent: 'flex-end',
-                }}
-              >
-                <Btn
-                  kind="outline"
-                  size="md"
-                  onClick={() => router.push('/admin/layouts')}
-                  disabled={saving}
-                >
-                  Cancel
-                </Btn>
-                {!isArchived && (
-                  <Btn
-                    kind="primary"
-                    size="md"
-                    icon={Icon.check}
-                    loading={saving}
-                    disabled={!dirty || saving}
-                    onClick={() => save(false)}
-                  >
-                    Save layout
-                  </Btn>
-                )}
-              </div>
-            </>
-          ) : (
-            <>
-              <div />
-              <div
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'flex-end',
-                }}
-              >
-                <Tag tone="outline">read only</Tag>
-              </div>
-            </>
-          )
+        leading={
+          <LayoutSwatch icon={layout.icon} color={layout.color} size={48} />
         }
+        title={titleNode}
+        description={headerDescription}
+        actions={headerActions}
       />
 
       {error && (
@@ -772,6 +777,28 @@ export function LayoutBuilder({
         </div>
       )}
 
+      {tableColumnCount > 10 && (
+        <div
+          role="note"
+          style={{
+            padding: '10px 20px',
+            background: 'var(--warn-soft)',
+            color: 'var(--warn)',
+            borderBottom: '1px solid var(--line)',
+            fontSize: 12.5,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 10,
+          }}
+        >
+          <Icon.warn size={13} />
+          <div style={{ flex: 1 }}>
+            Large column count ({tableColumnCount}). The table view may scroll
+            horizontally on narrow screens.
+          </div>
+        </div>
+      )}
+
       <DndContext
         id="layout-builder-dnd"
         sensors={sensors}
@@ -797,26 +824,6 @@ export function LayoutBuilder({
             <FieldTypePalette disabled={!canEdit} />
 
             <div style={{ padding: '20px 24px', minWidth: 0 }}>
-              <LayoutMetaStrip
-                layout={layout}
-                stats={stats}
-                fieldCount={fields.length}
-                columnCount={
-                  // Primary is always shown as a column, plus any
-                  // non-primary field with `showInTable` on a tabular
-                  // type. Mirrors the table renderer's predicate so the
-                  // builder and the view can never disagree.
-                  fields.filter(
-                    (f) =>
-                      f.isPrimary ||
-                      (f.showInTable && canShowInTable(f.fieldType)),
-                  ).length
-                }
-                canEdit={canEdit}
-                onOpenSettings={() => setSettingsOpen(true)}
-                onOpenArchive={() => setArchiveOpen(true)}
-              />
-
               <div
                 style={{
                   fontSize: 11,
@@ -824,7 +831,7 @@ export function LayoutBuilder({
                   fontFamily: 'var(--font-mono)',
                   textTransform: 'uppercase',
                   letterSpacing: 0.5,
-                  margin: '18px 0 8px',
+                  margin: '0 0 8px',
                   padding: '0 4px',
                 }}
               >
@@ -892,119 +899,6 @@ export function LayoutBuilder({
             onClose={() => setArchiveOpen(false)}
           />
         </>
-      )}
-    </div>
-  );
-}
-
-// ────────────────────────────────────────────────────────────────────
-// Meta strip
-// ────────────────────────────────────────────────────────────────────
-
-function LayoutMetaStrip({
-  layout,
-  stats,
-  fieldCount,
-  columnCount,
-  canEdit,
-  onOpenSettings,
-  onOpenArchive,
-}: {
-  layout: LayoutSummary;
-  stats: LayoutStats | null;
-  fieldCount: number;
-  columnCount: number;
-  canEdit: boolean;
-  onOpenSettings: () => void;
-  onOpenArchive: () => void;
-}) {
-  const term = useTerm();
-  const isArchived = layout.archivedAt !== null;
-  return (
-    <div
-      style={{
-        display: 'flex',
-        gap: 14,
-        alignItems: 'center',
-        padding: '14px 16px',
-        background: 'var(--panel)',
-        border: '1px solid var(--line)',
-        borderRadius: 6,
-      }}
-    >
-      <LayoutSwatch icon={layout.icon} color={layout.color} size={36} />
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          <div style={{ fontSize: 18, fontWeight: 550, letterSpacing: -0.2 }}>
-            {layout.name}
-          </div>
-          <Tag tone="accent">global template</Tag>
-          {isArchived && <Tag tone="warn">archived</Tag>}
-        </div>
-        <div
-          style={{
-            fontFamily: 'var(--font-mono)',
-            fontSize: 11,
-            color: 'var(--muted)',
-            marginTop: 3,
-          }}
-        >
-          slug: {layout.slug} · v{layout.version} · {fieldCount} field
-          {fieldCount === 1 ? '' : 's'} · {columnCount} table column
-          {columnCount === 1 ? '' : 's'}
-          {stats &&
-            ` · used by ${stats.assetCount} asset${stats.assetCount === 1 ? '' : 's'} in ${stats.companyCount} ${
-              stats.companyCount === 1 ? lower(term.one) : lower(term.other)
-            }`}
-        </div>
-        {columnCount > 10 && (
-          // Soft warning only — no hard limit. A table with >10
-          // columns usually ends up unreadable at typical viewport
-          // widths, so we nudge operators toward trimming.
-          <div
-            role="note"
-            style={{
-              marginTop: 6,
-              fontSize: 11,
-              color: 'var(--warn)',
-              display: 'flex',
-              alignItems: 'center',
-              gap: 6,
-            }}
-          >
-            <Icon.warn size={11} />
-            Large column count ({columnCount}). The table view may scroll
-            horizontally on narrow screens.
-          </div>
-        )}
-      </div>
-      {canEdit && (
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 6,
-            flexShrink: 0,
-          }}
-        >
-          <Btn
-            kind="outline"
-            size="sm"
-            icon={Icon.edit}
-            onClick={onOpenSettings}
-            title="Rename layout or change icon/color"
-          >
-            Settings
-          </Btn>
-          <Btn
-            kind={isArchived ? 'primary' : 'outline'}
-            size="sm"
-            icon={isArchived ? Icon.check : Icon.archive}
-            onClick={onOpenArchive}
-          >
-            {isArchived ? 'Restore' : 'Archive'}
-          </Btn>
-        </div>
       )}
     </div>
   );
