@@ -35,11 +35,6 @@ export type SidebarSection = {
   items: SidebarItem[];
 };
 
-export type SidebarUser = {
-  initials: string;
-  name: string;
-};
-
 export type SidebarSwitcherEntry = {
   id: string;
   name: string;
@@ -94,18 +89,14 @@ export type SidebarWorkspace = {
 export function Sidebar({
   workspace,
   sections,
-  user,
   activeId,
   onSearch,
-  footerAction,
-  footerToolbar,
   variant = 'fixed',
   onNavigate,
   className,
 }: {
   workspace: SidebarWorkspace;
   sections: SidebarSection[];
-  user: SidebarUser;
   activeId?: string;
   /**
    * Optional class piped to the outer `<aside>`. Used by `AdminShell`
@@ -120,15 +111,6 @@ export function Sidebar({
    * having to thread the callback through.
    */
   onSearch?: () => void;
-  footerAction?: ReactNode;
-  /**
-   * Thin icon strip rendered just above the user block, inside the
-   * same footer cluster. Used for quick-access glyph links like the
-   * "Expiring soon" shortcut — a scope-aware toolbar row that sits
-   * outside the main nav sections so it doesn't clutter navigation
-   * but is always visible regardless of scroll position.
-   */
-  footerToolbar?: ReactNode;
   /**
    * `fixed` — the traditional 232 px aside that sits beside the main
    * content. Used on desktop.
@@ -240,50 +222,6 @@ export function Sidebar({
         ))}
       </div>
 
-      {footerToolbar && (
-        <div
-          style={{
-            borderTop: '1px solid var(--line)',
-            padding: '6px 8px',
-            display: 'flex',
-            alignItems: 'center',
-            gap: 4,
-          }}
-        >
-          {footerToolbar}
-        </div>
-      )}
-
-      <div
-        style={{
-          borderTop: '1px solid var(--line)',
-          padding: 10,
-          display: 'flex',
-          alignItems: 'center',
-          gap: 9,
-        }}
-      >
-        <div
-          style={{
-            width: 22,
-            height: 22,
-            borderRadius: '50%',
-            background: 'linear-gradient(135deg, var(--line-3), var(--panel-2))',
-            border: '1px solid var(--line-2)',
-            fontSize: 10,
-            fontWeight: 600,
-            display: 'grid',
-            placeItems: 'center',
-            color: 'var(--text-2)',
-          }}
-        >
-          {user.initials}
-        </div>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: 12, fontWeight: 500 }}>{user.name}</div>
-        </div>
-        {footerAction ?? <Icon.dotsV size={14} style={{ color: 'var(--dim)' }} />}
-      </div>
     </aside>
   );
 }

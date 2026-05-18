@@ -12,8 +12,6 @@ import {
 } from '../../lib/roles';
 import type { Term } from '../../lib/term';
 import { LayoutSwatch } from '../ui';
-import { SidebarActions } from './sidebar-actions';
-import { SidebarToolbar } from './sidebar-toolbar';
 import {
   Sidebar,
   type SidebarSection,
@@ -27,6 +25,7 @@ import {
 import { SearchPaletteProvider } from '../search/search-palette-provider';
 import { ChatPanel } from '../chat-panel/chat-panel';
 import { CompanyChatContext } from '../chat-panel/company-chat-context';
+import { ShellScopeProvider } from './shell-scope-context';
 
 export type CompanyShellMode = 'admin' | 'portal';
 
@@ -263,10 +262,9 @@ export function CompanyShell({
     });
   }
 
-  sections.push({
-    title: 'Account',
-    items: [{ id: 'me', label: 'Profile', icon: 'person', href: '/me' }],
-  });
+  // Profile / theme / sign-out moved to the top-bar avatar menu —
+  // identity now lives in a single surface so we don't duplicate it
+  // in the sidebar footer too.
 
   // Header link targets diverge by mode:
   //   admin   : logo -> /admin,                  title -> /admin/companies
@@ -326,33 +324,33 @@ export function CompanyShell({
       ? { label: 'Your companies', entries: switcherEntries }
       : undefined,
   };
-  const sidebarUser = {
-    initials: initialsFromName(me.name),
-    name: me.name,
-  };
 
-  // Footer toolbar layout:
+  // Top-bar action cluster visibility:
   //   admin   : Expiring-soon shortcut + Starred drawer.
   //   portal  : Expiring-soon links to /admin (gated by AdminLayout) so
-  //             we hide it for clients; Starred is admin-only too. When
-  //             nothing remains (CLIENT_USER without operator access),
-  //             we omit the whole row so the divider above it doesn't
-  //             render either.
+  //             we hide it for clients; Starred is admin-only too.
+  // The Chat toggle is always rendered by `TopBarActions` so it's
+  // reachable on every shell, including client portals.
   const showStarred = isAdmin || operatorAccess;
   const showExpirations = isAdmin;
-  // The toolbar always renders so the chat-panel toggle is reachable on
-  // every shell, including client portals where the starred/expirations
-  // shortcuts are hidden.
-  const footerToolbar = (
-    <SidebarToolbar
-      companyId={company.id}
-      showStarred={showStarred}
-      showExpirations={showExpirations}
-    />
-  );
 
   return (
     <StickyNoteProvider value={stickyNote ?? null}>
+    <ShellScopeProvider
+      value={{
+        companyId: company.id,
+        // Same gating as the sidebar footer toolbar — operators see
+        // Starred everywhere, Expirations is admin-mode only since the
+        // destination lives under `/admin` and bounces CLIENT_USERs.
+        showStarred,
+        showExpirations,
+        me: {
+          name: me.name,
+          email: me.email,
+          initials: initialsFromName(me.name),
+        },
+      }}
+    >
     <SearchPaletteProvider
       scopedCompany={{ id: company.id, name: company.name }}
       defaults={me.searchDefaults}
@@ -361,10 +359,7 @@ export function CompanyShell({
         <Sidebar
           workspace={sidebarWorkspace}
           sections={sections}
-          user={sidebarUser}
           activeId={activeId}
-          footerAction={<SidebarActions />}
-          footerToolbar={footerToolbar}
           className="hide-on-mobile"
         />
         <main
@@ -383,10 +378,7 @@ export function CompanyShell({
               <Sidebar
                 workspace={sidebarWorkspace}
                 sections={sections}
-                user={sidebarUser}
                 activeId={activeId}
-                footerAction={<SidebarActions />}
-                footerToolbar={footerToolbar}
                 variant="drawer"
               />
             }
@@ -397,6 +389,7 @@ export function CompanyShell({
         <ChatPanel />
       </div>
     </SearchPaletteProvider>
+    </ShellScopeProvider>
     </StickyNoteProvider>
   );
 }

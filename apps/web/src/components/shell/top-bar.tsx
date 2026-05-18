@@ -4,6 +4,8 @@ import type { ReactNode } from 'react';
 import { Fragment } from 'react';
 import { CompanyStickyNote } from './company-sticky-note';
 import { useStickyNote } from './sticky-note-context';
+import { useShellScope } from './shell-scope-context';
+import { TopBarActions } from './top-bar-actions';
 
 export type Crumb = {
   label: ReactNode;
@@ -33,6 +35,12 @@ export function TopBar({
   // breadcrumbs would slide behind the banner. Outside a CompanyShell
   // the context defaults to null and nothing renders.
   const stickyNote = useStickyNote();
+  // Global action cluster (Expirations, Starred, Chat, Profile) lives
+  // here so every authenticated page gets it without threading props
+  // through `PageHeader`. `useShellScope()` returns `null` outside an
+  // authenticated shell — in that case `TopBarActions` itself short-
+  // circuits to `null` so the right slot stays empty (login, setup).
+  const shellScope = useShellScope();
   return (
     <div
       style={{
@@ -126,9 +134,10 @@ export function TopBar({
             );
           })}
         </div>
-        {right && (
+        {(right || shellScope) && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             {right}
+            {shellScope && <TopBarActions />}
           </div>
         )}
       </div>

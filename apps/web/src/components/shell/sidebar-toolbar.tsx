@@ -17,21 +17,40 @@ import type { StarredItem } from '../../lib/server-api';
 import { CompanyAvatar, Icon, LayoutSwatch, type IconName } from '../ui';
 import { ChatPanelToggle } from '../chat-panel/chat-panel-toggle';
 
+export type ToolbarVariant = 'sidebar' | 'topbar';
+
 /**
- * Thin icon strip rendered in the sidebar footer, just above the user
- * block. Think "tray" — quick-access, scope-aware shortcuts that
- * don't belong in the main nav but should be a single click away from
- * every page in the shell.
+ * Per-variant geometry shared by every icon button in the toolbar.
+ * `sidebar` keeps the original 26×26 / 14px / 1.5 stroke that fits
+ * the 232px footer. `topbar` is the slightly larger 30×30 / 18px /
+ * 1.75 stroke used by the global header cluster — a touch thicker so
+ * the glyphs read at a glance next to the breadcrumbs.
+ */
+const VARIANT_DIMS: Record<
+  ToolbarVariant,
+  { box: number; glyph: number; stroke: number; radius: number }
+> = {
+  sidebar: { box: 26, glyph: 14, stroke: 1.5, radius: 5 },
+  topbar: { box: 30, glyph: 18, stroke: 1.75, radius: 6 },
+};
+
+/**
+ * Thin icon strip rendered both in the sidebar footer and in the
+ * global top-bar action cluster. Think "tray" — quick-access,
+ * scope-aware shortcuts that don't belong in the main nav but should
+ * be a single click away from every page in the shell.
  *
- * Icons are 26×26 tappable targets (meets Apple HIG minimum), spaced
- * so the whole row fits comfortably in the 232px sidebar even with
- * five shortcuts. The active page gets an accent tint to match the
- * main `NavItem` treatment.
+ * The `variant` prop picks the geometry: `sidebar` keeps the original
+ * 26×26 targets that fit the 232px aside; `topbar` bumps to 30×30
+ * with a slightly thicker stroke so the glyphs read at breadcrumb
+ * eye-level. The active page gets an accent tint to match the main
+ * `NavItem` treatment.
  */
 export function SidebarToolbar({
   companyId,
   showStarred = true,
   showExpirations = true,
+  variant = 'sidebar',
 }: {
   /**
    * When present, all scoped shortcuts target the company routes
@@ -48,6 +67,8 @@ export function SidebarToolbar({
    * dead link.
    */
   showExpirations?: boolean;
+  /** Geometry preset — see `VARIANT_DIMS`. */
+  variant?: ToolbarVariant;
 }) {
   const base = companyId ? `/admin/companies/${companyId}` : '/admin';
 
@@ -58,15 +79,20 @@ export function SidebarToolbar({
           href={`${base}/expirations`}
           icon="clock"
           label="Expiring soon"
+          variant={variant}
         />
       )}
-      {showStarred && <StarredQuickAccessTrigger />}
-      <ChatPanelToggle />
+      {showStarred && <StarredQuickAccessTrigger variant={variant} />}
+      <ChatPanelToggle variant={variant} />
     </>
   );
 }
 
-function StarredQuickAccessTrigger() {
+function StarredQuickAccessTrigger({
+  variant = 'sidebar',
+}: {
+  variant?: ToolbarVariant;
+}) {
   const buttonRef = useRef<HTMLButtonElement>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
   const [open, setOpen] = useState(false);
@@ -75,7 +101,10 @@ function StarredQuickAccessTrigger() {
   const [error, setError] = useState<string | null>(null);
   const [position, setPosition] = useState<{
     left: number;
-    bottom: number;
+    /** Set for the sidebar variant — popover grows upward from the tray. */
+    bottom?: number;
+    /** Set for the topbar variant — popover grows downward from the button. */
+    top?: number;
     width: number;
   } | null>(null);
 
@@ -86,6 +115,20 @@ function StarredQuickAccessTrigger() {
     const gap = 8;
     const viewportPad = 12;
     const width = Math.min(340, window.innerWidth - viewportPad * 2);
+
+    if (variant === 'topbar') {
+      // Anchor under the button, flushed to its right edge so it
+      // doesn't drift offscreen on narrow viewports.
+      const left = Math.max(
+        viewportPad,
+        Math.min(rect.right - width, window.innerWidth - width - viewportPad),
+      );
+      setPosition({ left, top: rect.bottom + gap, width });
+      return;
+    }
+
+    // Sidebar: open horizontally next to the footer tray, anchored to
+    // its bottom edge so the popover grows upward.
     const opensRight = rect.right + gap + width <= window.innerWidth - viewportPad;
     const left = opensRight
       ? rect.right + gap
@@ -93,12 +136,10 @@ function StarredQuickAccessTrigger() {
 
     setPosition({
       left,
-      // Align the popover's lower edge with the footer icon row so it
-      // opens upward from the tray instead of taking over the viewport.
       bottom: Math.max(viewportPad, window.innerHeight - rect.bottom),
       width,
     });
-  }, []);
+  }, [variant]);
 
   useEffect(() => {
     if (!open) return;
@@ -164,6 +205,7 @@ function StarredQuickAccessTrigger() {
         icon="star"
         label="Open starred items"
         active={open}
+        variant={variant}
         onClick={() => {
           updatePosition();
           setOpen((v) => !v);
@@ -177,7 +219,8 @@ function StarredQuickAccessTrigger() {
           style={{
             position: 'fixed',
             left: position?.left ?? 12,
-            bottom: position?.bottom ?? 64,
+            top: position?.top,
+            bottom: position?.bottom,
             width: position?.width ?? 340,
             maxWidth: 'calc(100vw - 24px)',
             maxHeight: 'min(460px, calc(100vh - 24px))',
@@ -444,23 +487,26 @@ function ToolbarIconLink({
   icon,
   label,
   badge,
+  variant = 'sidebar',
 }: {
   href: string;
   icon: IconName;
   label: string;
   /** Optional red dot for "has items" affordance — rendered when `> 0`. */
   badge?: number;
+  variant?: ToolbarVariant;
 }) {
   const pathname = usePathname();
   const active = pathname === href || pathname.startsWith(`${href}/`);
   const IconCmp = Icon[icon];
+  const dims = VARIANT_DIMS[variant];
 
   const style: CSSProperties = {
-    width: 26,
-    height: 26,
+    width: dims.box,
+    height: dims.box,
     display: 'grid',
     placeItems: 'center',
-    borderRadius: 5,
+    borderRadius: dims.radius,
     color: active ? 'var(--text)' : 'var(--muted)',
     background: active ? 'var(--panel-2)' : 'transparent',
     position: 'relative',
@@ -476,7 +522,7 @@ function ToolbarIconLink({
       style={style}
       prefetch={false}
     >
-      <IconCmp size={14} stroke={1.5} />
+      <IconCmp size={dims.glyph} stroke={dims.stroke} />
       {badge !== undefined && badge > 0 && <BadgeDot />}
     </Link>
   );
@@ -488,14 +534,17 @@ function ToolbarIconButton({
   label,
   active = false,
   onClick,
+  variant = 'sidebar',
 }: {
   buttonRef?: Ref<HTMLButtonElement>;
   icon: IconName;
   label: string;
   active?: boolean;
   onClick: () => void;
+  variant?: ToolbarVariant;
 }) {
   const IconCmp = Icon[icon];
+  const dims = VARIANT_DIMS[variant];
 
   return (
     <button
@@ -507,19 +556,19 @@ function ToolbarIconButton({
       onClick={onClick}
       className="sidebar-toolbar-icon"
       style={{
-        width: 26,
-        height: 26,
+        width: dims.box,
+        height: dims.box,
         border: 'none',
         display: 'grid',
         placeItems: 'center',
-        borderRadius: 5,
+        borderRadius: dims.radius,
         color: active ? 'var(--text)' : 'var(--muted)',
         background: active ? 'var(--panel-2)' : 'transparent',
         position: 'relative',
         cursor: 'pointer',
       }}
     >
-      <IconCmp size={14} stroke={1.5} />
+      <IconCmp size={dims.glyph} stroke={dims.stroke} />
     </button>
   );
 }

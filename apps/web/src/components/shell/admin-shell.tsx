@@ -6,11 +6,10 @@ import {
 import { hasCapability, initialsFromName } from '../../lib/roles';
 import type { Term } from '../../lib/term';
 import { Sidebar, type SidebarSection } from './sidebar';
-import { SidebarActions } from './sidebar-actions';
-import { SidebarToolbar } from './sidebar-toolbar';
 import { MobileShellChrome } from './mobile-nav';
 import { SearchPaletteProvider } from '../search/search-palette-provider';
 import { ChatPanel } from '../chat-panel/chat-panel';
+import { ShellScopeProvider } from './shell-scope-context';
 
 export async function AdminShell({
   me,
@@ -189,12 +188,9 @@ export async function AdminShell({
     sections.push({ title: 'Admin', items: adminItems });
   }
 
-  sections.push({
-    title: 'Account',
-    items: [
-      { id: 'me', label: 'Profile', icon: 'person', href: '/me' },
-    ],
-  });
+  // Profile / theme / sign-out moved to the top-bar avatar menu —
+  // identity now lives in a single surface so we don't duplicate it
+  // in the sidebar footer too.
 
   const sidebarWorkspace = {
     ...workspace,
@@ -205,21 +201,32 @@ export async function AdminShell({
     homeHref: '/admin',
     titleHref: '/admin/companies',
   };
-  const sidebarUser = {
-    initials: initialsFromName(me.name),
-    name: me.name,
-  };
 
   return (
+    <ShellScopeProvider
+      value={{
+        // Admin shell is global — no per-company filtering on the
+        // top-bar Expirations/Starred shortcuts.
+        companyId: undefined,
+        // Matches `SidebarToolbar`'s admin-shell defaults today (both
+        // shortcuts default to visible). When we add finer RBAC for
+        // these we'll swap to a capability check here, same place we
+        // do it for everything else in this shell.
+        showStarred: true,
+        showExpirations: true,
+        me: {
+          name: me.name,
+          email: me.email,
+          initials: initialsFromName(me.name),
+        },
+      }}
+    >
     <SearchPaletteProvider scopedCompany={null} defaults={me.searchDefaults}>
       <div style={{ display: 'flex', height: '100vh', background: 'var(--bg)' }}>
         <Sidebar
           workspace={sidebarWorkspace}
           sections={sections}
-          user={sidebarUser}
           activeId={activeId}
-          footerAction={<SidebarActions />}
-          footerToolbar={<SidebarToolbar />}
           className="hide-on-mobile"
         />
         <main
@@ -238,10 +245,7 @@ export async function AdminShell({
               <Sidebar
                 workspace={sidebarWorkspace}
                 sections={sections}
-                user={sidebarUser}
                 activeId={activeId}
-                footerAction={<SidebarActions />}
-                footerToolbar={<SidebarToolbar />}
                 variant="drawer"
               />
             }
@@ -251,5 +255,6 @@ export async function AdminShell({
         <ChatPanel />
       </div>
     </SearchPaletteProvider>
+    </ShellScopeProvider>
   );
 }

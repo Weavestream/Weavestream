@@ -4,14 +4,30 @@ import { Icon } from '../ui';
 import { useChatPanel } from './chat-panel-provider';
 
 /**
- * Sparkle button in the sidebar bottom toolbar. Toggles the chat panel
- * open/closed. Lights up when the panel is open (matches the
- * `ToolbarIconButton` active treatment in sidebar-toolbar.tsx).
+ * Geometry presets shared with `SidebarToolbar` so the chat toggle
+ * blends visually with the rest of the icon strip in either container.
  */
-export function ChatPanelToggle() {
+const VARIANT_DIMS = {
+  sidebar: { box: 26, glyph: 14, stroke: 1.5, radius: 5 },
+  topbar: { box: 30, glyph: 18, stroke: 1.75, radius: 6 },
+} as const;
+
+/**
+ * Sparkle button rendered alongside the rest of the shell toolbar.
+ * Toggles the chat panel open/closed and lights up when the panel is
+ * open (matches the `ToolbarIconButton` active treatment in
+ * sidebar-toolbar.tsx). The `variant` prop selects sidebar (compact)
+ * or topbar (slightly larger / thicker) geometry.
+ */
+export function ChatPanelToggle({
+  variant = 'sidebar',
+}: {
+  variant?: 'sidebar' | 'topbar';
+}) {
   const { state, toggle } = useChatPanel();
   const active = state.isOpen;
   const ChatIcon = active ? Icon.chatFilled : Icon.chat;
+  const dims = VARIANT_DIMS[variant];
   return (
     <button
       type="button"
@@ -21,19 +37,19 @@ export function ChatPanelToggle() {
       onClick={toggle}
       className="sidebar-toolbar-icon"
       style={{
-        width: 26,
-        height: 26,
+        width: dims.box,
+        height: dims.box,
         border: 'none',
         display: 'grid',
         placeItems: 'center',
-        borderRadius: 5,
+        borderRadius: dims.radius,
         color: active ? 'var(--text)' : 'var(--muted)',
         background: 'transparent',
         position: 'relative',
         cursor: 'pointer',
       }}
     >
-      <ChatIcon size={14} stroke={1.5} />
+      <ChatIcon size={dims.glyph} stroke={dims.stroke} />
     </button>
   );
 }
