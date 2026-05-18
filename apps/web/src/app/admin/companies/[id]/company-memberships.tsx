@@ -358,7 +358,7 @@ function ExpirationTag({ date }: { date: string }) {
   const ms = when.getTime() - Date.now();
   if (ms < 0) {
     return (
-      <Tag tone="danger" dot>
+      <Tag tone="danger">
         expired
       </Tag>
     );
@@ -366,7 +366,7 @@ function ExpirationTag({ date }: { date: string }) {
   const days = Math.ceil(ms / 86_400_000);
   const tone = days < 14 ? 'warn' : 'info';
   return (
-    <Tag tone={tone} dot>
+    <Tag tone={tone}>
       in {days}d
     </Tag>
   );

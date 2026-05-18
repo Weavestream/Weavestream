@@ -155,11 +155,11 @@ export function MeTabs({
                     label="Two-factor"
                     value={
                       me.mfaEnabled ? (
-                        <Tag tone="ok" dot>
+                        <Tag tone="ok">
                           enabled
                         </Tag>
                       ) : (
-                        <Tag tone="warn" dot>
+                        <Tag tone="warn">
                           pending
                         </Tag>
                       )

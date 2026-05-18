@@ -378,11 +378,11 @@ export function LayoutsList({
                 <MobileCardRow label="Status">
                   <span style={{ display: 'inline-flex', flexWrap: 'wrap', gap: 6 }}>
                     {l.archivedAt ? (
-                      <Tag tone="warn" dot>
+                      <Tag tone="warn">
                         archived
                       </Tag>
                     ) : l.isActive ? (
-                      <Tag tone="ok" dot>
+                      <Tag tone="ok">
                         active
                       </Tag>
                     ) : (

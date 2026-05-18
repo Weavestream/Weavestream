@@ -57,7 +57,7 @@ export function DriftBanner({
           borderRadius: 6,
         }}
       >
-        <Tag tone="ok" dot>
+        <Tag tone="ok">
           auto-recovered
         </Tag>
         <span style={{ fontSize: 13, color: 'var(--text-2)', flex: 1 }}>
@@ -83,7 +83,7 @@ export function DriftBanner({
           borderRadius: 6,
         }}
       >
-        <Tag tone="danger" dot>
+        <Tag tone="danger">
           drift check error
         </Tag>
         <span style={{ fontSize: 13, color: 'var(--text)', flex: 1 }}>
@@ -124,7 +124,7 @@ export function DriftBanner({
       }}
     >
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-        <Tag tone={healFailed ? 'danger' : 'warn'} dot>
+        <Tag tone={healFailed ? 'danger' : 'warn'}>
           {healFailed ? 'auto-heal failed' : 'drift detected'}
         </Tag>
         <span style={{ fontSize: 13, color: 'var(--text)', flex: 1 }}>

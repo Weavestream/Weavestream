@@ -336,7 +336,7 @@ function RunStatusTag({ status }: { status: string }) {
     }
   })();
   return (
-    <Tag tone={tone} dot>
+    <Tag tone={tone}>
       {status}
     </Tag>
   );

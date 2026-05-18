@@ -37,7 +37,7 @@ export function DomainAlertsPanel({ alerts }: { alerts: DomainAlert[] }) {
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 10 }}>
           Domain alerts
           {filtered.length > 0 && (
-            <Tag tone="danger" dot>
+            <Tag tone="danger">
               {filtered.length}
             </Tag>
           )}

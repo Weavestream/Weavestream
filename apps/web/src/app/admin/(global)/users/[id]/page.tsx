@@ -57,11 +57,11 @@ export default async function UserDetailPage({
               label="Status"
               value={
                 user.isActive ? (
-                  <Tag tone="ok" dot>
+                  <Tag tone="ok">
                     active
                   </Tag>
                 ) : (
-                  <Tag tone="warn" dot>
+                  <Tag tone="warn">
                     deactivated
                   </Tag>
                 )
@@ -71,11 +71,11 @@ export default async function UserDetailPage({
               label="Two-factor"
               value={
                 user.mfaEnabled ? (
-                  <Tag tone="ok" dot>
+                  <Tag tone="ok">
                     enabled
                   </Tag>
                 ) : (
-                  <Tag tone="warn" dot>
+                  <Tag tone="warn">
                     pending
                   </Tag>
                 )

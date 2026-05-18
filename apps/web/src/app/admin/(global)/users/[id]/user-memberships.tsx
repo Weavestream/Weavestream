@@ -210,7 +210,7 @@ export function UserMembershipsList({
         const ms = new Date(r.expiresAt).getTime() - Date.now();
         if (ms < 0) {
           return (
-            <Tag tone="danger" dot>
+            <Tag tone="danger">
               expired
             </Tag>
           );
@@ -218,7 +218,7 @@ export function UserMembershipsList({
         const days = Math.ceil(ms / 86_400_000);
         const tone = days < 14 ? 'warn' : 'info';
         return (
-          <Tag tone={tone} dot>
+          <Tag tone={tone}>
             in {days}d
           </Tag>
         );
@@ -231,11 +231,11 @@ export function UserMembershipsList({
       sortValue: (r) => (r.company.archivedAt ? 1 : 0),
       render: (r) =>
         r.company.archivedAt ? (
-          <Tag tone="warn" dot>
+          <Tag tone="warn">
             archived
           </Tag>
         ) : (
-          <Tag tone="ok" dot>
+          <Tag tone="ok">
             active
           </Tag>
         ),
@@ -330,7 +330,7 @@ export function UserMembershipsList({
             const ms = new Date(r.expiresAt).getTime() - Date.now();
             if (ms < 0) {
               expiresNode = (
-                <Tag tone="danger" dot>
+                <Tag tone="danger">
                   expired
                 </Tag>
               );
@@ -338,7 +338,7 @@ export function UserMembershipsList({
               const days = Math.ceil(ms / 86_400_000);
               const tone = days < 14 ? 'warn' : 'info';
               expiresNode = (
-                <Tag tone={tone} dot>
+                <Tag tone={tone}>
                   in {days}d
                 </Tag>
               );
@@ -369,11 +369,11 @@ export function UserMembershipsList({
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
                 <Tag tone="accent">{membershipRoleLabel(r.role)}</Tag>
                 {r.company.archivedAt ? (
-                  <Tag tone="warn" dot>
+                  <Tag tone="warn">
                     archived
                   </Tag>
                 ) : (
-                  <Tag tone="ok" dot>
+                  <Tag tone="ok">
                     active
                   </Tag>
                 )}

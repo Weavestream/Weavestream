@@ -293,7 +293,7 @@ function RegisterListDialog({
                     only IP lists supported
                   </span>
                 ) : l.alreadyRegistered ? (
-                  <Tag tone="ok" dot>
+                  <Tag tone="ok">
                     registered
                   </Tag>
                 ) : (
@@ -321,27 +321,27 @@ function DriftStatusTag({
 }) {
   if (status === 'in_sync') {
     return (
-      <Tag tone="ok" dot>
+      <Tag tone="ok">
         in sync
       </Tag>
     );
   }
   if (status === 'drift_detected') {
     return (
-      <Tag tone="warn" dot>
+      <Tag tone="warn">
         drift
       </Tag>
     );
   }
   if (status === 'error') {
     return (
-      <Tag tone="danger" dot>
+      <Tag tone="danger">
         error
       </Tag>
     );
   }
   return (
-    <Tag tone="default" dot>
+    <Tag tone="default">
       unknown
     </Tag>
   );

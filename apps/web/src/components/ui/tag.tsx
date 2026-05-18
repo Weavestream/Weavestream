@@ -27,13 +27,11 @@ export function Tag({
   children,
   tone = 'default',
   mono = true,
-  dot,
   style,
 }: {
   children: ReactNode;
   tone?: TagTone;
   mono?: boolean;
-  dot?: boolean;
   style?: CSSProperties;
 }) {
   const t = tones[tone];
@@ -42,7 +40,6 @@ export function Tag({
       style={{
         display: 'inline-flex',
         alignItems: 'center',
-        gap: 5,
         height: 18,
         padding: '0 6px',
         background: t.bg,
@@ -57,16 +54,6 @@ export function Tag({
         ...style,
       }}
     >
-      {dot && (
-        <span
-          style={{
-            width: 5,
-            height: 5,
-            borderRadius: '50%',
-            background: t.fg,
-          }}
-        />
-      )}
       {children}
     </span>
   );

@@ -356,7 +356,7 @@ function renderValue(
   switch (field.fieldType) {
     case 'BOOLEAN':
       return (
-        <Tag tone={value ? 'ok' : 'outline'} dot>
+        <Tag tone={value ? 'ok' : 'outline'}>
           {value ? 'true' : 'false'}
         </Tag>
       );
@@ -504,7 +504,6 @@ function renderValue(
               >
                 <Tag
                   tone="info"
-                  dot
                   style={
                     hit.archivedAt
                       ? { textDecoration: 'line-through', opacity: 0.75 }

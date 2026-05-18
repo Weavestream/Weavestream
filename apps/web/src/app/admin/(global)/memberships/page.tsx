@@ -69,12 +69,12 @@ export default async function MembershipsPage({
             <span style={{ display: 'inline-flex', gap: 8, alignItems: 'center' }}>
               {rows.length} active
               {expiringCount > 0 && (
-                <Tag tone="warn" dot>
+                <Tag tone="warn">
                   {expiringCount} expiring ≤14d
                 </Tag>
               )}
               {expiredCount > 0 && (
-                <Tag tone="danger" dot>
+                <Tag tone="danger">
                   {expiredCount} expired
                 </Tag>
               )}

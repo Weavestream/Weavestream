@@ -311,15 +311,15 @@ function HeaderMeta({ company }: { company: CompanyDetail }) {
         marginTop: 4,
       }}
     >
-      <Tag tone={companyTypeTone(company.type)} dot>
+      <Tag tone={companyTypeTone(company.type)}>
         {companyTypeLabel(company.type)}
       </Tag>
       {company.archivedAt ? (
-        <Tag tone="warn" dot>
+        <Tag tone="warn">
           archived
         </Tag>
       ) : (
-        <Tag tone="ok" dot>
+        <Tag tone="ok">
           active
         </Tag>
       )}
@@ -494,7 +494,7 @@ function ClassificationPanel({
         <Row
           label="Type"
           value={
-            <Tag tone={companyTypeTone(company.type)} dot>
+            <Tag tone={companyTypeTone(company.type)}>
               {companyTypeLabel(company.type)}
             </Tag>
           }

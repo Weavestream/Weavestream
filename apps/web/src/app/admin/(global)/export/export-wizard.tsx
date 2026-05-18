@@ -598,21 +598,21 @@ function ExportRow({
 function StatusBadge({ status }: { status: ExportStatus }) {
   if (status === 'working') {
     return (
-      <Tag tone="info" mono={false} dot>
+      <Tag tone="info" mono={false}>
         Working
       </Tag>
     );
   }
   if (status === 'ready') {
     return (
-      <Tag tone="ok" mono={false} dot>
+      <Tag tone="ok" mono={false}>
         Ready
       </Tag>
     );
   }
   if (status === 'failed') {
     return (
-      <Tag tone="danger" mono={false} dot>
+      <Tag tone="danger" mono={false}>
         Failed
       </Tag>
     );

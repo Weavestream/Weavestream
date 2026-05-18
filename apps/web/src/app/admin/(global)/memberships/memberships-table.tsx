@@ -101,7 +101,7 @@ export function MembershipsTable({
           const ms = new Date(r.expiresAt).getTime() - Date.now();
           if (ms < 0) {
             return (
-              <Tag tone="danger" dot>
+              <Tag tone="danger">
                 expired
               </Tag>
             );
@@ -109,7 +109,7 @@ export function MembershipsTable({
           const days = Math.ceil(ms / 86_400_000);
           const tone = days < 14 ? 'warn' : 'info';
           return (
-            <Tag tone={tone} dot>
+            <Tag tone={tone}>
               in {days}d
             </Tag>
           );
@@ -215,7 +215,7 @@ export function MembershipsTable({
             const ms = new Date(r.expiresAt).getTime() - Date.now();
             if (ms < 0) {
               expiresNode = (
-                <Tag tone="danger" dot>
+                <Tag tone="danger">
                   expired
                 </Tag>
               );
@@ -223,7 +223,7 @@ export function MembershipsTable({
               const days = Math.ceil(ms / 86_400_000);
               const tone = days < 14 ? 'warn' : 'info';
               expiresNode = (
-                <Tag tone={tone} dot>
+                <Tag tone={tone}>
                   in {days}d
                 </Tag>
               );

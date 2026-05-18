@@ -105,16 +105,16 @@ export default async function AdminDashboard() {
         <Panel title="You">
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10, fontSize: 13 }}>
             <Row label="Email" value={<code style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>{me.email}</code>} />
-            <Row label="Role" value={<Tag tone="accent" dot>{me.role}</Tag>} />
+            <Row label="Role" value={<Tag tone="accent">{me.role}</Tag>} />
             <Row
               label="Two-factor"
               value={
                 me.mfaEnabled ? (
-                  <Tag tone="ok" dot>
+                  <Tag tone="ok">
                     enabled
                   </Tag>
                 ) : (
-                  <Tag tone="warn" dot>
+                  <Tag tone="warn">
                     pending
                   </Tag>
                 )

@@ -39,7 +39,7 @@ export default async function GlobalExpirationsPage() {
             <span style={{ display: 'inline-flex', gap: 8, alignItems: 'center' }}>
               {rows.length} item{rows.length === 1 ? '' : 's'}
               {expiredCount > 0 && (
-                <Tag tone="danger" dot>
+                <Tag tone="danger">
                   {expiredCount} expired
                 </Tag>
               )}

@@ -181,14 +181,14 @@ export function ExpirationsTable({
 function StatusPill({ row }: { row: ExpirationRow }) {
   if (row.status === 'EXPIRED') {
     return (
-      <Tag tone="danger" dot>
+      <Tag tone="danger">
         Expired
       </Tag>
     );
   }
   const urgent = row.daysUntil <= 7;
   return (
-    <Tag tone={urgent ? 'warn' : 'outline'} dot={urgent}>
+    <Tag tone={urgent ? 'warn' : 'outline'}>
       {row.daysUntil === 0 ? 'Today' : `${row.daysUntil}d`}
     </Tag>
   );

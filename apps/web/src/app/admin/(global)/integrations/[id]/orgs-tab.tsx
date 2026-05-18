@@ -158,7 +158,7 @@ export function OrgsTab({
                     {m.companyName ?? m.companyId.slice(0, 8)}
                   </strong>
                   {!m.enabled && (
-                    <Tag tone="warn" dot>
+                    <Tag tone="warn">
                       paused
                     </Tag>
                   )}

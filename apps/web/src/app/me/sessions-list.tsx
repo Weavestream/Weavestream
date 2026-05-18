@@ -62,7 +62,7 @@ export function SessionsList({ sessions }: { sessions: Session[] }) {
       sortValue: (s) => (s.current ? 1 : 0),
       render: (s) =>
         s.current ? (
-          <Tag tone="ok" dot>
+          <Tag tone="ok">
             this device
           </Tag>
         ) : (
@@ -128,7 +128,7 @@ export function SessionsList({ sessions }: { sessions: Session[] }) {
             </div>
             <div>
               {s.current ? (
-                <Tag tone="ok" dot>
+                <Tag tone="ok">
                   this device
                 </Tag>
               ) : (

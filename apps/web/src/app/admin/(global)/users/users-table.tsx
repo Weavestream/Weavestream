@@ -84,11 +84,11 @@ export function UsersTable({
         sortValue: (r) => (r.mfaEnabled ? 1 : 0),
         render: (r) =>
           r.mfaEnabled ? (
-            <Tag tone="ok" dot>
+            <Tag tone="ok">
               on
             </Tag>
           ) : (
-            <Tag tone="warn" dot>
+            <Tag tone="warn">
               off
             </Tag>
           ),
@@ -100,11 +100,11 @@ export function UsersTable({
         sortValue: (r) => (r.isActive ? 1 : 0),
         render: (r) =>
           r.isActive ? (
-            <Tag tone="ok" dot>
+            <Tag tone="ok">
               active
             </Tag>
           ) : (
-            <Tag tone="warn" dot>
+            <Tag tone="warn">
               inactive
             </Tag>
           ),
@@ -238,20 +238,20 @@ export function UsersTable({
                 </Tag>
               ) : null}
               {r.mfaEnabled ? (
-                <Tag tone="ok" dot>
+                <Tag tone="ok">
                   mfa on
                 </Tag>
               ) : (
-                <Tag tone="warn" dot>
+                <Tag tone="warn">
                   mfa off
                 </Tag>
               )}
               {r.isActive ? (
-                <Tag tone="ok" dot>
+                <Tag tone="ok">
                   active
                 </Tag>
               ) : (
-                <Tag tone="warn" dot>
+                <Tag tone="warn">
                   inactive
                 </Tag>
               )}

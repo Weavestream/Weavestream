@@ -94,7 +94,7 @@ export function IntegrationsTable({
           );
           if (configured.length === 0) {
             return (
-              <Tag tone="warn" dot>
+              <Tag tone="warn">
                 not configured
               </Tag>
             );
@@ -184,11 +184,11 @@ export function IntegrationsTable({
         sortValue: (r) => (r.hasSecret ? 1 : 0),
         render: (r) =>
           r.hasSecret ? (
-            <Tag tone="ok" dot>
+            <Tag tone="ok">
               configured
             </Tag>
           ) : (
-            <Tag tone="warn" dot>
+            <Tag tone="warn">
               missing
             </Tag>
           ),
@@ -224,11 +224,11 @@ export function IntegrationsTable({
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
             <StatusTag status={r.status} />
             {r.hasSecret ? (
-              <Tag tone="ok" dot>
+              <Tag tone="ok">
                 creds
               </Tag>
             ) : (
-              <Tag tone="warn" dot>
+              <Tag tone="warn">
                 no creds
               </Tag>
             )}
@@ -272,20 +272,20 @@ export function IntegrationsTable({
 function StatusTag({ status }: { status: 'ACTIVE' | 'PAUSED' | 'DISABLED' }) {
   if (status === 'ACTIVE') {
     return (
-      <Tag tone="ok" dot>
+      <Tag tone="ok">
         active
       </Tag>
     );
   }
   if (status === 'PAUSED') {
     return (
-      <Tag tone="warn" dot>
+      <Tag tone="warn">
         paused
       </Tag>
     );
   }
   return (
-    <Tag tone="default" dot>
+    <Tag tone="default">
       disabled
     </Tag>
   );
@@ -295,27 +295,27 @@ function RunStatusTag({ status }: { status: string | null }) {
   if (!status) return null;
   if (status === 'succeeded') {
     return (
-      <Tag tone="ok" dot>
+      <Tag tone="ok">
         ok
       </Tag>
     );
   }
   if (status === 'failed') {
     return (
-      <Tag tone="danger" dot>
+      <Tag tone="danger">
         failed
       </Tag>
     );
   }
   if (status === 'running' || status === 'queued') {
     return (
-      <Tag tone="accent" dot>
+      <Tag tone="accent">
         {status}
       </Tag>
     );
   }
   return (
-    <Tag tone="default" dot>
+    <Tag tone="default">
       {status}
     </Tag>
   );

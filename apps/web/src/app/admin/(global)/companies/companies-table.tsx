@@ -87,7 +87,7 @@ export function CompaniesTable({
         width: 120,
         sortValue: (r) => companyTypeLabel(r.type).toLowerCase(),
         render: (r) => (
-          <Tag tone={companyTypeTone(r.type)} dot>
+          <Tag tone={companyTypeTone(r.type)}>
             {companyTypeLabel(r.type)}
           </Tag>
         ),
@@ -126,11 +126,11 @@ export function CompaniesTable({
         sortValue: (r) => (r.archivedAt ? 1 : 0),
         render: (r) =>
           r.archivedAt ? (
-            <Tag tone="warn" dot>
+            <Tag tone="warn">
               archived
             </Tag>
           ) : (
-            <Tag tone="ok" dot>
+            <Tag tone="ok">
               active
             </Tag>
           ),
@@ -264,16 +264,16 @@ export function CompaniesTable({
                   alignItems: 'center',
                 }}
               >
-                <Tag tone={companyTypeTone(r.type)} dot>
+                <Tag tone={companyTypeTone(r.type)}>
                   {companyTypeLabel(r.type)}
                 </Tag>
                 {canManage &&
                   (r.archivedAt ? (
-                    <Tag tone="warn" dot>
+                    <Tag tone="warn">
                       archived
                     </Tag>
                   ) : (
-                    <Tag tone="ok" dot>
+                    <Tag tone="ok">
                       active
                     </Tag>
                   ))}

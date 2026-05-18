@@ -290,7 +290,7 @@ export function CredentialsTab({
           </div>
           {!rotateSecret ? (
             <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-              <Tag tone={integration.hasSecret ? 'ok' : 'warn'} dot>
+              <Tag tone={integration.hasSecret ? 'ok' : 'warn'}>
                 {integration.hasSecret ? 'configured' : 'missing'}
               </Tag>
               <Btn
