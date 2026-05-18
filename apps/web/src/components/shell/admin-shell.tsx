@@ -214,6 +214,7 @@ export async function AdminShell({
         // do it for everything else in this shell.
         showStarred: true,
         showExpirations: true,
+        showChat: true,
         me: {
           name: me.name,
           email: me.email,

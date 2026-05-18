@@ -165,7 +165,7 @@ export default async function AssetDetailPage({
               return (
                 <Panel key={noteField.id} title={noteField.name}>
                   {noteField.fieldType === 'RICH_TEXT' ? (
-                    <RichTextView value={value} />
+                    <RichTextView value={value} isAdmin fallbackCompanyId={companyId} />
                   ) : (
                     <div
                       style={{
@@ -534,7 +534,7 @@ function renderValue(
       );
     }
     case 'RICH_TEXT':
-      return <RichTextView value={value} />;
+      return <RichTextView value={value} isAdmin fallbackCompanyId={companyId} />;
     case 'FILE': {
       const entries = Array.isArray(value) ? (value as FileFieldValue[]) : [];
       if (entries.length === 0) return <span style={{ color: 'var(--dim)' }}>—</span>;

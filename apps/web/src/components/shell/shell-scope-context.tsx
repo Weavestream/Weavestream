@@ -20,6 +20,13 @@ export type ShellScopeValue = {
   showStarred: boolean;
   /** Mirrors the server-computed sidebar flag — gates Expirations link. */
   showExpirations: boolean;
+  /**
+   * Gates the AI chat toggle in the top-bar action cluster. Hidden on
+   * client portal shells where the chat panel has no scoped context
+   * and isn't useful to end users. The provider/keyboard shortcut
+   * still mounts so the panel can be opened manually if needed.
+   */
+  showChat: boolean;
   /** Avatar + profile-menu copy. Sourced from the authenticated `Me`. */
   me: ShellScopeMe;
 };

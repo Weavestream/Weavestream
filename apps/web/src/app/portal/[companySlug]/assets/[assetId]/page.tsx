@@ -60,6 +60,10 @@ export default async function PortalAssetDetailPage({
 
   const portalBase = `/portal/${companySlug}`;
 
+  const portalSlugByCompanyId = Object.fromEntries(
+    me.memberships.map((m) => [m.company.id, m.company.slug]),
+  );
+
   const primaryField = asset.fields.find((f) => f.isPrimary);
   const noteField = asset.fields.find(
     (f) => f.fieldType === 'RICH_TEXT' || f.fieldType === 'TEXTAREA',
@@ -146,6 +150,10 @@ export default async function PortalAssetDetailPage({
                           asset.fieldValues[f.slug],
                           asset.references,
                           portalBase,
+                          {
+                            portalSlugByCompanyId,
+                            companyId: asset.companyId,
+                          },
                         )}
                       </div>
                     </Fragment>
@@ -156,7 +164,12 @@ export default async function PortalAssetDetailPage({
             {noteField && !!asset.fieldValues[noteField.slug] && (
               <Panel title={noteField.name}>
                 {noteField.fieldType === 'RICH_TEXT' ? (
-                  <RichTextView value={asset.fieldValues[noteField.slug]} />
+                  <RichTextView
+                    value={asset.fieldValues[noteField.slug]}
+                    isAdmin={false}
+                    portalSlugByCompanyId={portalSlugByCompanyId}
+                    fallbackCompanyId={asset.companyId}
+                  />
                 ) : (
                   <div
                     style={{
@@ -206,6 +219,10 @@ function renderValue(
   value: unknown,
   references: AssetSummary['references'],
   portalBase: string,
+  mentionCtx: {
+    portalSlugByCompanyId: Record<string, string>;
+    companyId: string;
+  },
 ): React.ReactNode {
   if (value === null || value === undefined || value === '') {
     return <span style={{ color: 'var(--dim)' }}>—</span>;
@@ -390,7 +407,14 @@ function renderValue(
       );
     }
     case 'RICH_TEXT':
-      return <RichTextView value={value} />;
+      return (
+        <RichTextView
+          value={value}
+          isAdmin={false}
+          portalSlugByCompanyId={mentionCtx.portalSlugByCompanyId}
+          fallbackCompanyId={mentionCtx.companyId}
+        />
+      );
     case 'FILE': {
       const entries = Array.isArray(value) ? (value as FileFieldValue[]) : [];
       if (entries.length === 0) return <span style={{ color: 'var(--dim)' }}>—</span>;

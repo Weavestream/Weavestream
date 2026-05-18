@@ -79,6 +79,11 @@ export default async function PortalArticleReadPage({
               editorMode={article.editorMode}
               content={article.content}
               markdownSource={article.markdownSource}
+              isAdmin={false}
+              portalSlugByCompanyId={Object.fromEntries(
+                me.memberships.map((m) => [m.company.id, m.company.slug]),
+              )}
+              fallbackCompanyId={membership.company.id}
             />
           </article>
         </div>

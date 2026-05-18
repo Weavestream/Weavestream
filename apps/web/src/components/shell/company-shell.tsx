@@ -326,13 +326,15 @@ export function CompanyShell({
   };
 
   // Top-bar action cluster visibility:
-  //   admin   : Expiring-soon shortcut + Starred drawer.
+  //   admin   : Expiring-soon shortcut + Starred drawer + AI chat.
   //   portal  : Expiring-soon links to /admin (gated by AdminLayout) so
-  //             we hide it for clients; Starred is admin-only too.
-  // The Chat toggle is always rendered by `TopBarActions` so it's
-  // reachable on every shell, including client portals.
+  //             we hide it for clients; Starred is admin-only too;
+  //             AI chat has no scoped context for end clients, so we
+  //             hide the toggle (the panel itself still mounts for
+  //             operators browsing portal routes if they reopen it).
   const showStarred = isAdmin || operatorAccess;
   const showExpirations = isAdmin;
+  const showChat = isAdmin;
 
   return (
     <StickyNoteProvider value={stickyNote ?? null}>
@@ -344,6 +346,7 @@ export function CompanyShell({
         // destination lives under `/admin` and bounces CLIENT_USERs.
         showStarred,
         showExpirations,
+        showChat,
         me: {
           name: me.name,
           email: me.email,
@@ -385,7 +388,7 @@ export function CompanyShell({
           />
           {children}
         </main>
-        <CompanyChatContext companyId={company.id} />
+        {isAdmin && <CompanyChatContext companyId={company.id} />}
         <ChatPanel />
       </div>
     </SearchPaletteProvider>

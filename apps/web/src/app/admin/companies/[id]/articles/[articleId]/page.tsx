@@ -188,6 +188,8 @@ export default async function ArticleReadPage({
               editorMode={article.editorMode}
               content={article.content}
               markdownSource={article.markdownSource}
+              isAdmin
+              fallbackCompanyId={companyId}
             />
           </article>
         </div>

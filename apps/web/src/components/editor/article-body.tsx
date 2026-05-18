@@ -13,14 +13,28 @@ export function ArticleBody({
   content,
   markdownSource,
   className,
+  isAdmin,
+  portalSlugByCompanyId,
+  fallbackCompanyId,
 }: {
   editorMode: ArticleEditorMode;
   content: unknown;
   markdownSource: string | null;
   className?: string;
+  isAdmin?: boolean;
+  portalSlugByCompanyId?: Record<string, string>;
+  fallbackCompanyId?: string;
 }) {
   if (editorMode === 'markdown') {
     return <MarkdownView source={markdownSource ?? ''} className={className} />;
   }
-  return <RichTextView value={content} className={className} />;
+  return (
+    <RichTextView
+      value={content}
+      className={className}
+      isAdmin={isAdmin}
+      portalSlugByCompanyId={portalSlugByCompanyId}
+      fallbackCompanyId={fallbackCompanyId}
+    />
+  );
 }

@@ -355,6 +355,8 @@ export function HistoryPanel({
                 editorMode={preview.editorMode}
                 content={preview.content}
                 markdownSource={preview.markdownSource}
+                isAdmin
+                fallbackCompanyId={companyId}
               />
             </article>
           )}

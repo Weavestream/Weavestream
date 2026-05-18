@@ -50,6 +50,7 @@ export function SidebarToolbar({
   companyId,
   showStarred = true,
   showExpirations = true,
+  showChat = true,
   variant = 'sidebar',
 }: {
   /**
@@ -67,6 +68,13 @@ export function SidebarToolbar({
    * dead link.
    */
   showExpirations?: boolean;
+  /**
+   * Hide the AI chat toggle on client portal shells. The chat panel
+   * is an operator-side tool with no scoped context for clients, so
+   * portals omit the entry point entirely. The provider still mounts
+   * so the panel can be opened via other affordances.
+   */
+  showChat?: boolean;
   /** Geometry preset — see `VARIANT_DIMS`. */
   variant?: ToolbarVariant;
 }) {
@@ -83,7 +91,7 @@ export function SidebarToolbar({
         />
       )}
       {showStarred && <StarredQuickAccessTrigger variant={variant} />}
-      <ChatPanelToggle variant={variant} />
+      {showChat && <ChatPanelToggle variant={variant} />}
     </>
   );
 }

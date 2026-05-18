@@ -19,6 +19,13 @@ export function TopBarActions() {
   const scope = useShellScope();
   if (!scope) return null;
 
+  // Skip the divider when no scope-aware shortcuts are visible (e.g.
+  // client portal shells where Expirations/Starred/Chat are all
+  // hidden) — a vertical rule floating next to a lone avatar reads as
+  // a visual glitch.
+  const hasToolbarShortcuts =
+    scope.showExpirations || scope.showStarred || scope.showChat;
+
   return (
     <div
       className="hide-on-mobile"
@@ -32,17 +39,20 @@ export function TopBarActions() {
         companyId={scope.companyId}
         showStarred={scope.showStarred}
         showExpirations={scope.showExpirations}
+        showChat={scope.showChat}
         variant="topbar"
       />
-      <span
-        aria-hidden
-        style={{
-          width: 1,
-          height: 18,
-          background: 'var(--line)',
-          margin: '0 4px',
-        }}
-      />
+      {hasToolbarShortcuts && (
+        <span
+          aria-hidden
+          style={{
+            width: 1,
+            height: 18,
+            background: 'var(--line)',
+            margin: '0 4px',
+          }}
+        />
+      )}
       <ProfileMenu me={scope.me} />
     </div>
   );

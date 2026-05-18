@@ -9,13 +9,31 @@ import TableRow from '@tiptap/extension-table-row';
 import TableHeader from '@tiptap/extension-table-header';
 import TableCell from '@tiptap/extension-table-cell';
 import { ResizableImage } from './image-extension';
+import { mentionHref, type MentionLinkOpts } from './mention-extension';
+
+export type ArticleBodyExtensionOpts = {
+  isAdmin?: boolean;
+  portalSlugForCompany?: (companyId: string) => string | null;
+  fallbackCompanyId?: string;
+};
 
 /**
  * Extension set for article body HTML generation / JSON import — must
  * match [rich-text-view.tsx](./rich-text-view.tsx) for lossless
  * Tiptap ↔ Markdown round-tripping in `article-format.ts`.
+ *
+ * The optional `opts` parameter tells the Mention renderer how to build
+ * hrefs (admin route vs portal slug). Without opts, mentions degrade to
+ * `href="#"` so they are still visible but inert.
  */
-export function getArticleBodyExtensions(): Extensions {
+export function getArticleBodyExtensions(
+  opts?: ArticleBodyExtensionOpts,
+): Extensions {
+  const linkOpts: MentionLinkOpts = {
+    isAdmin: opts?.isAdmin ?? true,
+    portalSlugForCompany: opts?.portalSlugForCompany,
+  };
+  const fallbackCompanyId = opts?.fallbackCompanyId ?? '';
   return [
     StarterKit.configure({
       heading: { levels: [1, 2, 3] },
@@ -44,15 +62,29 @@ export function getArticleBodyExtensions(): Extensions {
         const attrs = node.attrs as {
           id: string;
           label: string;
-          kind?: string;
+          kind?: 'asset' | 'article' | 'password';
+          companyId?: string;
+          slug?: string | null;
         };
-        const prefix = attrs.kind === 'asset' ? '▥' : '¶';
+        const kind = attrs.kind ?? 'article';
+        const companyId = attrs.companyId || fallbackCompanyId;
+        const href = companyId
+          ? mentionHref(
+              { id: attrs.id, kind, companyId, slug: attrs.slug ?? null },
+              linkOpts,
+            )
+          : '#';
+        const prefix =
+          kind === 'asset' ? '▥' : kind === 'password' ? '🔒' : '¶';
         return [
-          'span',
+          'a',
           {
             class: 'sd-mention',
-            'data-kind': attrs.kind ?? 'article',
+            href,
+            'data-kind': kind,
             'data-id': attrs.id,
+            'data-company-id': companyId,
+            ...(attrs.slug ? { 'data-slug': attrs.slug } : {}),
           },
           `${prefix} ${attrs.label}`,
         ];
@@ -64,6 +96,7 @@ export function getArticleBodyExtensions(): Extensions {
           label: { default: '' },
           kind: { default: 'article' },
           companyId: { default: '' },
+          slug: { default: null },
         };
       },
     }),
