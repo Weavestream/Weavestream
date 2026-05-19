@@ -6,6 +6,11 @@ this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Cloudflare integration IP entry validator now reliably accepts IPv6 CIDR prefixes** (e.g. `2601:280:5280:7bc0::/64`). The brittle multi-alternative IPv6 regex was replaced with a structural parser that handles every RFC 4291 zero-compression placement (bare `::`, leading, middle, trailing) with arbitrary prefix lengths 0–128, and rejects zone identifiers / IPv4-mapped forms that Cloudflare won't accept anyway. The entry dialog's help text and validation error now show an IPv6 prefix example so the supported shape is obvious.
+
+
 ## [1.8.5] - 2026-05-18
 
 ### Added

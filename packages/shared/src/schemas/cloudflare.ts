@@ -22,14 +22,63 @@ import { z } from 'zod';
 const IPV4_OCTET = '(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])';
 const IPV4_RE = new RegExp(`^(?:${IPV4_OCTET}\\.){3}${IPV4_OCTET}$`);
 
+const HEXTET_RE = /^[0-9a-fA-F]{1,4}$/;
+
 /**
- * Permissive IPv6 matcher. Covers all common shapes (full, compressed,
- * IPv4-mapped) but not zone identifiers like `fe80::1%eth0` — Cloudflare
- * doesn't accept those for rules lists. False positives are caught by
- * Cloudflare on push and surfaced to the operator.
+ * Structural IPv6 validator. Accepts every RFC 4291 textual form we
+ * care about for Cloudflare Gateway lists — full eight-group, any
+ * zero-compressed `::` placement (including bare `::` and prefixes
+ * like `2601:280:5280:7bc0::`), and arbitrary CIDR prefix lengths.
+ *
+ * Intentionally rejects zone identifiers (`fe80::1%eth0`) and
+ * IPv4-mapped/embedded forms (`::ffff:192.0.2.1`); Cloudflare doesn't
+ * accept those for Gateway lists either.
  */
-const IPV6_RE =
-  /^(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}$|^::(?:[0-9a-fA-F]{1,4}:){0,6}[0-9a-fA-F]{1,4}$|^(?:[0-9a-fA-F]{1,4}:){1,7}:$|^(?:[0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}$|^(?:[0-9a-fA-F]{1,4}:){1,5}(?::[0-9a-fA-F]{1,4}){1,2}$|^(?:[0-9a-fA-F]{1,4}:){1,4}(?::[0-9a-fA-F]{1,4}){1,3}$|^(?:[0-9a-fA-F]{1,4}:){1,3}(?::[0-9a-fA-F]{1,4}){1,4}$|^(?:[0-9a-fA-F]{1,4}:){1,2}(?::[0-9a-fA-F]{1,4}){1,5}$|^[0-9a-fA-F]{1,4}:(?::[0-9a-fA-F]{1,4}){1,6}$|^::$/;
+function isIpv6Address(address: string): boolean {
+  if (address.length === 0) return false;
+  if (address === '::') return true;
+
+  // A valid IPv6 string has at most one `::`.
+  const firstDc = address.indexOf('::');
+  if (firstDc !== address.lastIndexOf('::')) return false;
+
+  let leftPart: string;
+  let rightPart: string;
+  const compressed = firstDc !== -1;
+
+  if (compressed) {
+    leftPart = address.slice(0, firstDc);
+    rightPart = address.slice(firstDc + 2);
+  } else {
+    leftPart = address;
+    rightPart = '';
+  }
+
+  // After splitting on `::`, neither half may carry a stray leading or
+  // trailing single colon — that would mean three colons in a row or a
+  // bare `:` at an edge of the address.
+  if (
+    leftPart.startsWith(':') ||
+    leftPart.endsWith(':') ||
+    rightPart.startsWith(':') ||
+    rightPart.endsWith(':')
+  ) {
+    return false;
+  }
+
+  const leftGroups = leftPart === '' ? [] : leftPart.split(':');
+  const rightGroups = rightPart === '' ? [] : rightPart.split(':');
+
+  for (const g of leftGroups) if (!HEXTET_RE.test(g)) return false;
+  for (const g of rightGroups) if (!HEXTET_RE.test(g)) return false;
+
+  const total = leftGroups.length + rightGroups.length;
+  if (compressed) {
+    // `::` must stand in for at least one zero group.
+    return total < 8;
+  }
+  return total === 8;
+}
 
 export type IpEntryKind = 'ipv4' | 'ipv6';
 
@@ -70,7 +119,7 @@ export function parseIpEntry(input: string): IpEntryParseResult | null {
       prefix,
     };
   }
-  if (IPV6_RE.test(address)) {
+  if (isIpv6Address(address)) {
     if (prefix !== null && (prefix < 0 || prefix > 128)) return null;
     const lower = address.toLowerCase();
     return {

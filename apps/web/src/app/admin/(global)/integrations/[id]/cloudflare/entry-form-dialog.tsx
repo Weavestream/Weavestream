@@ -40,7 +40,7 @@ export function EntryFormDialog({
     const parsed = parseIpEntry(ip);
     if (!parsed) {
       setLocalError(
-        'Enter a valid IPv4 or IPv6 address or CIDR range (e.g. 203.0.113.42 or 2001:db8::/32).',
+        'Enter a valid IPv4 or IPv6 address or CIDR range (e.g. 203.0.113.42, 203.0.113.0/24, or 2601:280:5280:7bc0::/64).',
       );
       return;
     }
@@ -69,7 +69,7 @@ export function EntryFormDialog({
         <Field
           label="IP / CIDR"
           htmlFor="cf-entry-ip"
-          help="IPv4, IPv6, or CIDR range. Single addresses (203.0.113.42) and ranges (203.0.113.0/24) are both accepted."
+          help="IPv4 or IPv6, single addresses or CIDR ranges. Examples: 203.0.113.42, 203.0.113.0/24, 2001:db8::1, 2601:280:5280:7bc0::/64."
         >
           <Input
             id="cf-entry-ip"
