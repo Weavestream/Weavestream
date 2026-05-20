@@ -6,10 +6,17 @@ this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.8.6] - 2026-05-20
+
+### Changed
+
+- **IPAM address space grid** styling refreshed for clearer subnet layout at a glance.
+- **Password reveal "auto hide" control** keeps its label and icon on one row when space is tight.
+- **Password detail "embedded on asset" pill** spacing tightened so the label reads cleanly on narrow layouts.
+
 ### Fixed
 
 - **Cloudflare integration IP entry validator now reliably accepts IPv6 CIDR prefixes** (e.g. `2601:280:5280:7bc0::/64`). The brittle multi-alternative IPv6 regex was replaced with a structural parser that handles every RFC 4291 zero-compression placement (bare `::`, leading, middle, trailing) with arbitrary prefix lengths 0–128, and rejects zone identifiers / IPv4-mapped forms that Cloudflare won't accept anyway. The entry dialog's help text and validation error now show an IPv6 prefix example so the supported shape is obvious.
-
 
 ## [1.8.5] - 2026-05-18
 
@@ -793,7 +800,8 @@ Initial public release.
   database-per-tenant.
 - English UI only.
 
-[Unreleased]: https://github.com/Weavestream/Weavestream/compare/v1.8.5...HEAD
+[Unreleased]: https://github.com/Weavestream/Weavestream/compare/v1.8.6...HEAD
+[1.8.6]: https://github.com/Weavestream/Weavestream/releases/tag/v1.8.6
 [1.8.5]: https://github.com/Weavestream/Weavestream/releases/tag/v1.8.5
 [1.8.4]: https://github.com/Weavestream/Weavestream/releases/tag/v1.8.4
 [1.8.3]: https://github.com/Weavestream/Weavestream/releases/tag/v1.8.3
