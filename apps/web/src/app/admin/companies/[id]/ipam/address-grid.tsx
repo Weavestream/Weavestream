@@ -125,8 +125,10 @@ export function AddressGrid({
       <div
         style={{
           display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fill, minmax(110px, 1fr))',
-          gap: 4,
+          gridTemplateColumns: 'repeat(auto-fill, minmax(40px, 1fr))',
+          gap: 6,
+          padding: 3, // Absorb the outer -3px margin of edge cells so they don't clip
+          margin: '-3px 0 13px 0',
         }}
       >
         {cells.map((cell) => (
@@ -166,20 +168,28 @@ export function AddressGrid({
       )}
       <div
         style={{
-          marginTop: 8,
+          marginTop: 16,
           display: 'flex',
           gap: 16,
+          justifyContent: 'center',
           flexWrap: 'wrap',
           fontSize: 12,
           color: 'var(--muted)',
         }}
       >
-        <LegendDot color="var(--surface-2)" label="Free" />
-        <LegendDot color="var(--accent)" label="Asset" />
-        <LegendDot color="var(--info, #3b82f6)" label="Reservation" />
-        <LegendDot color="var(--danger)" label="Conflict" />
+        <LegendDot bg="var(--panel-2)" color="var(--muted)" label="Free" />
+        <LegendDot
+          bg="var(--ok)"
+          color="var(--ok)"
+          label="Taken"
+        />
+        <LegendDot
+          bg="var(--danger)"
+          color="var(--danger)"
+          label="Conflict"
+        />
         {prefix <= 30 && (
-          <LegendDot color="var(--panel-2)" label="Network / broadcast" />
+          <LegendDot bg="var(--panel-2)" color="var(--dim)" label="Network / broadcast" />
         )}
         {dhcpRange && <DhcpLegendSwatch />}
       </div>
@@ -189,18 +199,23 @@ export function AddressGrid({
 
 function GridCell({ cell, companyId }: { cell: CellData; companyId: string }) {
   const [hover, setHover] = useState(false);
+
+  // Solid, 100% opaque theme-aware colors
   const bg =
     cell.state === 'conflict'
       ? 'var(--danger)'
-      : cell.state === 'asset'
-        ? 'var(--accent)'
-        : cell.state === 'reservation'
-          ? 'var(--info, #3b82f6)'
-          : cell.state === 'network' || cell.state === 'broadcast'
-            ? 'var(--panel-2)'
-            : cell.inDhcp
-              ? 'color-mix(in srgb, var(--info, #3b82f6) 12%, var(--surface-2))'
-              : 'var(--surface-2)';
+      : cell.state === 'asset' || cell.state === 'reservation'
+        ? 'var(--ok)'
+        : 'var(--panel-2)';
+
+  const color =
+    cell.state === 'conflict' || cell.state === 'asset' || cell.state === 'reservation'
+      ? '#ffffff'
+      : cell.state === 'network' || cell.state === 'broadcast'
+        ? 'var(--dim)'
+        : 'var(--muted)';
+
+  const border = '1px solid transparent';
 
   const reservedLabel =
     cell.state === 'network'
@@ -218,38 +233,41 @@ function GridCell({ cell, companyId }: { cell: CellData; companyId: string }) {
 
   return (
     <div
-      style={{ position: 'relative' }}
+      style={{
+        position: 'relative',
+        background: cell.inDhcp ? 'color-mix(in srgb, var(--info) 18%, transparent)' : undefined,
+        padding: 3,
+        margin: -3,
+      }}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
     >
       <div
         style={{
-          padding: '4px 6px',
-          borderRadius: 4,
+          position: 'relative',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          aspectRatio: '1 / 1',
+          borderRadius: 6,
           background: bg,
-          color:
-            cell.state === 'free'
-              ? 'var(--muted)'
-              : cell.state === 'network' || cell.state === 'broadcast'
-                ? 'var(--dim)'
-                : 'var(--on-accent, #fff)',
+          color: color,
+          border: border,
           fontSize: 11,
           fontFamily: 'var(--font-mono, monospace)',
-          textAlign: 'center',
+          fontWeight: cell.state !== 'free' && cell.state !== 'network' && cell.state !== 'broadcast' ? 600 : 400,
           cursor: cell.state === 'free' ? 'default' : 'pointer',
-          overflow: 'hidden',
-          textOverflow: 'ellipsis',
-          whiteSpace: 'nowrap',
           textDecoration:
             cell.state === 'network' || cell.state === 'broadcast'
               ? 'line-through'
               : undefined,
           opacity:
-            cell.state === 'network' || cell.state === 'broadcast' ? 0.7 : 1,
-          outline: cell.inDhcp
-            ? '1px dashed var(--info, #3b82f6)'
-            : undefined,
-          outlineOffset: -1,
+            cell.state === 'network' || cell.state === 'broadcast' ? 0.5 : 1,
+          boxSizing: 'border-box',
+          transform: hover && cell.state !== 'free' ? 'scale(1.08)' : 'scale(1)',
+          boxShadow: hover && cell.state !== 'free' ? '0 4px 12px rgba(0,0,0,0.15)' : 'none',
+          transition: 'all 0.15s cubic-bezier(0.4, 0, 0.2, 1)',
+          zIndex: hover ? 2 : 1,
         }}
       >
         {cell.ip.split('.').pop()}
@@ -268,8 +286,8 @@ function GridCell({ cell, companyId }: { cell: CellData; companyId: string }) {
             fontSize: 12,
             whiteSpace: 'nowrap',
             zIndex: 10,
-            boxShadow: '0 2px 8px rgba(0,0,0,.15)',
-            marginBottom: 4,
+            boxShadow: '0 4px 12px rgba(0,0,0,.15)',
+            marginBottom: 6,
           }}
         >
           <div style={{ fontFamily: 'var(--font-mono, monospace)', fontWeight: 600 }}>
@@ -418,30 +436,49 @@ function CompactList({
   );
 }
 
-function LegendDot({ color, label }: { color: string; label: string }) {
+function LegendDot({
+  bg,
+  color,
+  border,
+  label,
+}: {
+  bg: string;
+  color: string;
+  border?: string;
+  label: string;
+}) {
   return (
-    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-      <span style={{ width: 8, height: 8, borderRadius: '50%', background: color, display: 'inline-block' }} />
-      {label}
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+      <span
+        style={{
+          width: 14,
+          height: 14,
+          borderRadius: 3,
+          background: bg,
+          border: border || '1px solid transparent',
+          display: 'inline-block',
+        }}
+      />
+      <span style={{ color: color }}>{label}</span>
     </span>
   );
 }
 
 function DhcpLegendSwatch() {
   return (
-    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
       <span
         style={{
-          width: 10,
-          height: 10,
-          background:
-            'color-mix(in srgb, var(--info, #3b82f6) 12%, var(--surface-2))',
-          border: '1px dashed var(--info, #3b82f6)',
+          width: 14,
+          height: 14,
+          borderRadius: 3,
+          background: 'color-mix(in srgb, var(--info) 18%, transparent)',
+          border: '1px solid color-mix(in srgb, var(--info) 30%, transparent)',
           display: 'inline-block',
           boxSizing: 'border-box',
         }}
       />
-      DHCP range
+      <span style={{ color: 'var(--info)' }}>DHCP range</span>
     </span>
   );
 }
