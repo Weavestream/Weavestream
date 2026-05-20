@@ -323,8 +323,15 @@ export function PasswordRevealField(props: PasswordRevealFieldProps) {
             justifyContent: 'space-between',
           }}
         >
-          <span>
-            <Icon.clock size={11} /> Auto-hides in {remainingS}s
+          <span
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 4,
+            }}
+          >
+            <Icon.clock size={11} />
+            Auto-hides in {remainingS}s
           </span>
           <button
             type="button"
