@@ -85,10 +85,14 @@ export default async function PasswordDetailPage({
             {password.name}
             {password.assetId && (
               <Tag tone="accent">
-                embedded on{' '}
+                embedded on
                 <Link
                   href={`/admin/companies/${companyId}/assets/${password.assetId}`}
-                  style={{ color: 'inherit', textDecoration: 'underline' }}
+                  style={{
+                    color: 'inherit',
+                    textDecoration: 'underline',
+                    marginLeft: 4,
+                  }}
                 >
                   asset
                 </Link>
