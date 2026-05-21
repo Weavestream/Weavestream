@@ -514,13 +514,20 @@ export class UploadsService {
   async download(
     companyId: string,
     uploadId: string,
-    opts: { asAttachment?: boolean } = {},
+    opts: { asAttachment?: boolean; actor?: AuthedUser } = {},
   ): Promise<{ url: string; filename: string; mimeType: string }> {
     const upload = await this.prisma.upload.findFirst({
       where: { id: uploadId, companyId, deletedAt: null },
-      select: { id: true, filename: true, mimeType: true },
+      select: {
+        id: true,
+        filename: true,
+        mimeType: true,
+        attachedToType: true,
+        attachedToId: true,
+      },
     });
     if (!upload) throw new NotFoundException();
+    await this.assertReadable(companyId, upload, opts.actor);
     return {
       url: this.apiUploadUrl(companyId, upload.id, {
         attachment: opts.asAttachment,
@@ -530,12 +537,23 @@ export class UploadsService {
     };
   }
 
-  async thumbnailUrl(companyId: string, uploadId: string): Promise<string | null> {
+  async thumbnailUrl(
+    companyId: string,
+    uploadId: string,
+    actor?: AuthedUser,
+  ): Promise<string | null> {
     const upload = await this.prisma.upload.findFirst({
       where: { id: uploadId, companyId, deletedAt: null },
-      select: { id: true, thumbnailKey: true },
+      select: {
+        id: true,
+        thumbnailKey: true,
+        attachedToType: true,
+        attachedToId: true,
+      },
     });
-    if (!upload || !upload.thumbnailKey) return null;
+    if (!upload) throw new NotFoundException();
+    await this.assertReadable(companyId, upload, actor);
+    if (!upload.thumbnailKey) return null;
     return this.apiUploadUrl(companyId, upload.id, { variant: 'thumb' });
   }
 
@@ -549,6 +567,7 @@ export class UploadsService {
     companyId: string,
     uploadId: string,
     variant: 'original' | 'thumb',
+    actor?: AuthedUser,
   ): Promise<{
     body: AsyncIterable<Uint8Array>;
     contentType: string;
@@ -561,6 +580,7 @@ export class UploadsService {
       where: { id: uploadId, companyId, deletedAt: null },
     });
     if (!upload) return null;
+    await this.assertReadable(companyId, upload, actor);
     const key = variant === 'thumb' ? upload.thumbnailKey : upload.storageKey;
     if (!key) return null;
     const stream = await this.storage.getObjectStream(companyId, key);
@@ -699,11 +719,16 @@ export class UploadsService {
   // Queries
   // ------------------------------------------------------------------
 
-  async get(companyId: string, uploadId: string): Promise<SerializedUpload> {
+  async get(
+    companyId: string,
+    uploadId: string,
+    actor?: AuthedUser,
+  ): Promise<SerializedUpload> {
     const upload = await this.prisma.upload.findFirst({
       where: { id: uploadId, companyId, deletedAt: null },
     });
     if (!upload) throw new NotFoundException();
+    await this.assertReadable(companyId, upload, actor);
     return this.serialize(upload);
   }
 
@@ -822,6 +847,16 @@ export class UploadsService {
       }
     }
 
+    // CLIENT_USER parent-visibility filter. The cursor still advances on
+    // the underlying `Upload.id` order, so the response page may be
+    // smaller than `limit` — same property as the article link-state
+    // filter below. Mirrors `assertReadable` rules for single-upload
+    // reads so the list and the detail endpoints agree.
+    const clientFiltered =
+      opts.actor?.role === 'CLIENT_USER'
+        ? await this.filterForClientUser(companyId, serialized)
+        : serialized;
+
     // Photos gallery: by default hide article uploads whose link state
     // isn't `live` so the grid is dominated by current content. Pass
     // `includeNonLatest` to surface orphan/archived/versioned for
@@ -830,19 +865,115 @@ export class UploadsService {
     // toggle — they have no link state concept.
     const items =
       opts.includeNonLatest === false || opts.includeNonLatest === undefined
-        ? serialized.filter(
+        ? clientFiltered.filter(
             (p) =>
               p.attachedToType !== 'article' ||
               p.attachedToId != null ||
               p.articleLinkState === null ||
               p.articleLinkState === 'live',
           )
-        : serialized;
+        : clientFiltered;
 
     return {
       items,
       nextCursor: hasMore ? slice[slice.length - 1]!.id : null,
     };
+  }
+
+  /**
+   * Drop entries whose parent entity isn't visible to a CLIENT_USER.
+   * Batches one query per parent type so the cost is bounded regardless
+   * of page size. Mirrors `assertReadable`:
+   *   - `asset` rows pass through (no Asset.visibleToClients flag).
+   *   - `article` with attachedToId → require visible non-archived article.
+   *   - `article` without attachedToId → require `state === 'live'`
+   *     (already classified above for the same page).
+   *   - `password` / `asset_field` → require visible non-archived parent.
+   *   - null `attachedToType` → dropped.
+   */
+  private async filterForClientUser(
+    companyId: string,
+    serialized: SerializedUpload[],
+  ): Promise<SerializedUpload[]> {
+    if (serialized.length === 0) return serialized;
+
+    const articleIds = Array.from(
+      new Set(
+        serialized
+          .filter((p) => p.attachedToType === 'article' && p.attachedToId)
+          .map((p) => p.attachedToId as string),
+      ),
+    );
+    const passwordIds = Array.from(
+      new Set(
+        serialized
+          .filter((p) => p.attachedToType === 'password' && p.attachedToId)
+          .map((p) => p.attachedToId as string),
+      ),
+    );
+    const assetFieldIds = Array.from(
+      new Set(
+        serialized
+          .filter((p) => p.attachedToType === 'asset_field' && p.attachedToId)
+          .map((p) => p.attachedToId as string),
+      ),
+    );
+
+    const [visibleArticles, visiblePasswords, visibleAssetFields] =
+      await Promise.all([
+        articleIds.length
+          ? this.prisma.article.findMany({
+              where: {
+                id: { in: articleIds },
+                companyId,
+                visibleToClients: true,
+                archivedAt: null,
+              },
+              select: { id: true },
+            })
+          : Promise.resolve([] as { id: string }[]),
+        passwordIds.length
+          ? this.prisma.password.findMany({
+              where: {
+                id: { in: passwordIds },
+                companyId,
+                visibleToClients: true,
+                archivedAt: null,
+              },
+              select: { id: true },
+            })
+          : Promise.resolve([] as { id: string }[]),
+        assetFieldIds.length
+          ? this.prisma.assetField.findMany({
+              where: {
+                id: { in: assetFieldIds },
+                visibleToClients: true,
+                archivedAt: null,
+              },
+              select: { id: true },
+            })
+          : Promise.resolve([] as { id: string }[]),
+      ]);
+
+    const articleOk = new Set(visibleArticles.map((r) => r.id));
+    const passwordOk = new Set(visiblePasswords.map((r) => r.id));
+    const assetFieldOk = new Set(visibleAssetFields.map((r) => r.id));
+
+    return serialized.filter((p) => {
+      switch (p.attachedToType) {
+        case 'asset':
+          return true;
+        case 'article':
+          if (p.attachedToId) return articleOk.has(p.attachedToId);
+          return p.articleLinkState === 'live';
+        case 'password':
+          return p.attachedToId ? passwordOk.has(p.attachedToId) : false;
+        case 'asset_field':
+          return p.attachedToId ? assetFieldOk.has(p.attachedToId) : false;
+        default:
+          return false;
+      }
+    });
   }
 
   /**
@@ -1096,6 +1227,97 @@ export class UploadsService {
         downloadUrl: this.apiUploadUrl(companyId, row.id),
       };
     });
+  }
+
+  /**
+   * Parent-visibility gate for CLIENT_USER on every upload read path.
+   * Other roles pass through. The upload row's `companyId` + `upload.read`
+   * permission already proves tenant membership; this check ensures a
+   * client portal member cannot fetch bytes/metadata for an upload
+   * attached to content that is hidden from them.
+   *
+   *   article + attachedToId  → require visible, non-archived article
+   *   article + null attached → require live-state embed in a visible
+   *                             article body (no archived/versioned)
+   *   password                → require visible, non-archived password
+   *   asset_field             → require visible, non-archived field
+   *   asset                   → allowed (Asset has no visibleToClients)
+   *   null attachedToType     → denied (no parent to authorize against)
+   *
+   * All failures throw NotFoundException to avoid leaking existence,
+   * matching the pattern used by ArticlesService and PasswordsService.
+   */
+  private async assertReadable(
+    companyId: string,
+    upload: {
+      id: string;
+      attachedToType: string | null;
+      attachedToId: string | null;
+    },
+    actor?: AuthedUser,
+  ): Promise<void> {
+    if (!actor || actor.role !== 'CLIENT_USER') return;
+
+    const deny = () => {
+      throw new NotFoundException();
+    };
+
+    switch (upload.attachedToType) {
+      case 'asset':
+        return;
+      case 'password': {
+        if (!upload.attachedToId) return deny();
+        const row = await this.prisma.password.findFirst({
+          where: {
+            id: upload.attachedToId,
+            companyId,
+            visibleToClients: true,
+            archivedAt: null,
+          },
+          select: { id: true },
+        });
+        if (!row) return deny();
+        return;
+      }
+      case 'asset_field': {
+        if (!upload.attachedToId) return deny();
+        const row = await this.prisma.assetField.findFirst({
+          where: {
+            id: upload.attachedToId,
+            visibleToClients: true,
+            archivedAt: null,
+          },
+          select: { id: true },
+        });
+        if (!row) return deny();
+        return;
+      }
+      case 'article': {
+        if (upload.attachedToId) {
+          const row = await this.prisma.article.findFirst({
+            where: {
+              id: upload.attachedToId,
+              companyId,
+              visibleToClients: true,
+              archivedAt: null,
+            },
+            select: { id: true },
+          });
+          if (!row) return deny();
+          return;
+        }
+        const classified = await this.classifyArticleUploads(
+          companyId,
+          [upload.id],
+          { visibleToClientsOnly: true },
+        );
+        const entry = classified.get(upload.id);
+        if (!entry || entry.state !== 'live') return deny();
+        return;
+      }
+      default:
+        return deny();
+    }
   }
 
   private serialize(row: {

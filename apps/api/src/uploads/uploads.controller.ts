@@ -80,6 +80,7 @@ export class UploadsController {
   @Get()
   @RequirePermission('upload.read', { companyIdFrom: 'params.companyId' })
   async list(
+    @CurrentUser() actor: AuthedUser,
     @Param('companyId', new ParseUUIDPipe()) companyId: string,
     @Query('attachedToType') rawType?: string,
     @Query('attachedToId') rawId?: string,
@@ -99,6 +100,7 @@ export class UploadsController {
       attachedToId: rawId,
       limit: rawLimit ? parseInt(rawLimit, 10) : undefined,
       cursor,
+      actor,
     });
   }
 
@@ -156,31 +158,35 @@ export class UploadsController {
   @Get(':id')
   @RequirePermission('upload.read', { companyIdFrom: 'params.companyId' })
   async get(
+    @CurrentUser() actor: AuthedUser,
     @Param('companyId', new ParseUUIDPipe()) companyId: string,
     @Param('id', new ParseUUIDPipe()) id: string,
   ) {
-    return this.uploads.get(companyId, id);
+    return this.uploads.get(companyId, id, actor);
   }
 
   @Get(':id/download')
   @RequirePermission('upload.read', { companyIdFrom: 'params.companyId' })
   async download(
+    @CurrentUser() actor: AuthedUser,
     @Param('companyId', new ParseUUIDPipe()) companyId: string,
     @Param('id', new ParseUUIDPipe()) id: string,
     @Query('attachment') attachment?: string,
   ) {
     return this.uploads.download(companyId, id, {
       asAttachment: attachment === 'true' || attachment === '1',
+      actor,
     });
   }
 
   @Get(':id/thumbnail')
   @RequirePermission('upload.read', { companyIdFrom: 'params.companyId' })
   async thumbnail(
+    @CurrentUser() actor: AuthedUser,
     @Param('companyId', new ParseUUIDPipe()) companyId: string,
     @Param('id', new ParseUUIDPipe()) id: string,
   ) {
-    const url = await this.uploads.thumbnailUrl(companyId, id);
+    const url = await this.uploads.thumbnailUrl(companyId, id, actor);
     return { url };
   }
 
@@ -206,6 +212,7 @@ export class UploadsController {
   @Header('Cache-Control', 'private, max-age=300')
   @RequirePermission('upload.read', { companyIdFrom: 'params.companyId' })
   async image(
+    @CurrentUser() actor: AuthedUser,
     @Param('companyId', new ParseUUIDPipe()) companyId: string,
     @Param('id', new ParseUUIDPipe()) id: string,
     @Res({ passthrough: true }) res: Response,
@@ -217,6 +224,7 @@ export class UploadsController {
       companyId,
       id,
       wantThumb ? 'thumb' : 'original',
+      actor,
     );
     if (!stream) {
       throw new NotFoundException({

@@ -643,3 +643,456 @@ describe('UploadsService.softDeleteFromPhotos (state gate)', () => {
     expect(updateMany).toHaveBeenCalledTimes(1);
   });
 });
+
+/**
+ * Parent-visibility gate for CLIENT_USER on every upload read path.
+ * The full ruleset lives in `assertReadable`; these specs cover one
+ * branch per parent type via the public `openImageStream` entry point
+ * so the controller wiring is exercised too. The matching list-side
+ * filter is exercised below in `paginatedList`.
+ */
+describe('UploadsService.assertReadable (CLIENT_USER gate)', () => {
+  function makeService(opts: {
+    upload: {
+      id: string;
+      companyId: string;
+      attachedToType: string | null;
+      attachedToId: string | null;
+      [k: string]: unknown;
+    } | null;
+    article?: { id: string } | null;
+    password?: { id: string } | null;
+    assetField?: { id: string } | null;
+    classify?: () => Promise<
+      Map<
+        string,
+        { state: 'live' | 'versioned' | 'archived' | 'orphan'; sourceArticle: unknown }
+      >
+    >;
+  }) {
+    const upload = opts.upload;
+    const storageStream = {
+      body: (async function* () {})(),
+      contentType: 'image/png',
+      contentLength: 0,
+    };
+    const prisma = {
+      upload: {
+        findFirst: jest.fn().mockResolvedValue(upload),
+      },
+      article: {
+        findFirst: jest.fn().mockResolvedValue(opts.article ?? null),
+      },
+      password: {
+        findFirst: jest.fn().mockResolvedValue(opts.password ?? null),
+      },
+      assetField: {
+        findFirst: jest.fn().mockResolvedValue(opts.assetField ?? null),
+      },
+    };
+    const storage = {
+      getObjectStream: jest.fn().mockResolvedValue(storageStream),
+    };
+    const service = new UploadsService(
+      prisma as never,
+      storage as never,
+      { client: {} } as never,
+      { log: jest.fn() } as never,
+      { values: { MAX_UPLOAD_MB: 1, ALLOWED_UPLOAD_MIME: '' } } as never,
+    );
+    if (opts.classify) {
+      (
+        service as unknown as { classifyArticleUploads: typeof opts.classify }
+      ).classifyArticleUploads = opts.classify;
+    }
+    return { service, prisma, storage };
+  }
+
+  const clientActor = { id: 'u1', role: 'CLIENT_USER' } as never;
+  const operatorActor = { id: 'u1', role: 'OPERATOR' } as never;
+
+  it('allows OPERATOR to stream an upload attached to an invisible article', async () => {
+    const { service, storage } = makeService({
+      upload: {
+        id: 'u1',
+        companyId: 'c1',
+        attachedToType: 'article',
+        attachedToId: 'art-hidden',
+        storageKey: 'k',
+        thumbnailKey: null,
+        mimeType: 'image/png',
+        filename: 'a.png',
+      },
+      article: null, // hidden / archived
+    });
+    const result = await service.openImageStream(
+      'c1',
+      'u1',
+      'original',
+      operatorActor,
+    );
+    expect(result).not.toBeNull();
+    expect(storage.getObjectStream).toHaveBeenCalled();
+  });
+
+  it('denies CLIENT_USER on an upload attached to a hidden article', async () => {
+    const { service, storage } = makeService({
+      upload: {
+        id: 'u1',
+        companyId: 'c1',
+        attachedToType: 'article',
+        attachedToId: 'art-hidden',
+        storageKey: 'k',
+        thumbnailKey: null,
+        mimeType: 'image/png',
+        filename: 'a.png',
+      },
+      article: null,
+    });
+    await expect(
+      service.openImageStream('c1', 'u1', 'original', clientActor),
+    ).rejects.toBeInstanceOf(NotFoundException);
+    expect(storage.getObjectStream).not.toHaveBeenCalled();
+  });
+
+  it('allows CLIENT_USER on an upload attached to a visible non-archived article', async () => {
+    const { service } = makeService({
+      upload: {
+        id: 'u1',
+        companyId: 'c1',
+        attachedToType: 'article',
+        attachedToId: 'art-visible',
+        storageKey: 'k',
+        thumbnailKey: null,
+        mimeType: 'image/png',
+        filename: 'a.png',
+      },
+      article: { id: 'art-visible' },
+    });
+    const result = await service.openImageStream(
+      'c1',
+      'u1',
+      'original',
+      clientActor,
+    );
+    expect(result).not.toBeNull();
+  });
+
+  it("allows CLIENT_USER on a body-embedded image when classifier reports 'live'", async () => {
+    const { service } = makeService({
+      upload: {
+        id: 'u1',
+        companyId: 'c1',
+        attachedToType: 'article',
+        attachedToId: null,
+        storageKey: 'k',
+        thumbnailKey: null,
+        mimeType: 'image/png',
+        filename: 'a.png',
+      },
+      classify: async () =>
+        new Map([['u1', { state: 'live', sourceArticle: null }]]),
+    });
+    const result = await service.openImageStream(
+      'c1',
+      'u1',
+      'original',
+      clientActor,
+    );
+    expect(result).not.toBeNull();
+  });
+
+  it("denies CLIENT_USER on a body-embedded image when classifier reports 'archived'", async () => {
+    const { service } = makeService({
+      upload: {
+        id: 'u1',
+        companyId: 'c1',
+        attachedToType: 'article',
+        attachedToId: null,
+        storageKey: 'k',
+        thumbnailKey: null,
+        mimeType: 'image/png',
+        filename: 'a.png',
+      },
+      classify: async () =>
+        new Map([['u1', { state: 'archived', sourceArticle: null }]]),
+    });
+    await expect(
+      service.openImageStream('c1', 'u1', 'original', clientActor),
+    ).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  it("denies CLIENT_USER on a body-embedded image when classifier reports 'orphan'", async () => {
+    const { service } = makeService({
+      upload: {
+        id: 'u1',
+        companyId: 'c1',
+        attachedToType: 'article',
+        attachedToId: null,
+        storageKey: 'k',
+        thumbnailKey: null,
+        mimeType: 'image/png',
+        filename: 'a.png',
+      },
+      classify: async () =>
+        new Map([['u1', { state: 'orphan', sourceArticle: null }]]),
+    });
+    await expect(
+      service.openImageStream('c1', 'u1', 'original', clientActor),
+    ).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  it('denies CLIENT_USER on an upload attached to a hidden password', async () => {
+    const { service } = makeService({
+      upload: {
+        id: 'u1',
+        companyId: 'c1',
+        attachedToType: 'password',
+        attachedToId: 'pw-hidden',
+        storageKey: 'k',
+        thumbnailKey: null,
+        mimeType: 'image/png',
+        filename: 'a.png',
+      },
+      password: null,
+    });
+    await expect(
+      service.openImageStream('c1', 'u1', 'original', clientActor),
+    ).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  it('allows CLIENT_USER on an upload attached to a visible password', async () => {
+    const { service } = makeService({
+      upload: {
+        id: 'u1',
+        companyId: 'c1',
+        attachedToType: 'password',
+        attachedToId: 'pw-ok',
+        storageKey: 'k',
+        thumbnailKey: null,
+        mimeType: 'image/png',
+        filename: 'a.png',
+      },
+      password: { id: 'pw-ok' },
+    });
+    const result = await service.openImageStream(
+      'c1',
+      'u1',
+      'original',
+      clientActor,
+    );
+    expect(result).not.toBeNull();
+  });
+
+  it('denies CLIENT_USER on an upload attached to a hidden asset field', async () => {
+    const { service } = makeService({
+      upload: {
+        id: 'u1',
+        companyId: 'c1',
+        attachedToType: 'asset_field',
+        attachedToId: 'fld-hidden',
+        storageKey: 'k',
+        thumbnailKey: null,
+        mimeType: 'image/png',
+        filename: 'a.png',
+      },
+      assetField: null,
+    });
+    await expect(
+      service.openImageStream('c1', 'u1', 'original', clientActor),
+    ).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  it('allows CLIENT_USER on an upload attached to a general asset (no flag)', async () => {
+    const { service, prisma } = makeService({
+      upload: {
+        id: 'u1',
+        companyId: 'c1',
+        attachedToType: 'asset',
+        attachedToId: 'asset-1',
+        storageKey: 'k',
+        thumbnailKey: null,
+        mimeType: 'image/png',
+        filename: 'a.png',
+      },
+    });
+    const result = await service.openImageStream(
+      'c1',
+      'u1',
+      'original',
+      clientActor,
+    );
+    expect(result).not.toBeNull();
+    expect(prisma.article.findFirst).not.toHaveBeenCalled();
+    expect(prisma.password.findFirst).not.toHaveBeenCalled();
+    expect(prisma.assetField.findFirst).not.toHaveBeenCalled();
+  });
+
+  it('denies CLIENT_USER on an orphan upload with null attachedToType', async () => {
+    const { service } = makeService({
+      upload: {
+        id: 'u1',
+        companyId: 'c1',
+        attachedToType: null,
+        attachedToId: null,
+        storageKey: 'k',
+        thumbnailKey: null,
+        mimeType: 'image/png',
+        filename: 'a.png',
+      },
+    });
+    await expect(
+      service.openImageStream('c1', 'u1', 'original', clientActor),
+    ).rejects.toBeInstanceOf(NotFoundException);
+  });
+});
+
+describe('UploadsService.paginatedList CLIENT_USER filter', () => {
+  function build(rows: Array<Partial<Upload> & { id: string }>) {
+    const uploads = rows.map((r) => baseUpload(r));
+    const findMany = jest
+      .fn()
+      .mockImplementation(async (args: { where: Record<string, unknown> }) => {
+        const w = args.where;
+        return uploads.filter((u) => {
+          if (w.companyId && u.companyId !== w.companyId) return false;
+          if (w.deletedAt === null && u.deletedAt !== null) return false;
+          if (w.onlyImages || w.isImage === true) {
+            if (!u.isImage) return false;
+          }
+          return true;
+        });
+      });
+    const articleFindMany = jest.fn().mockResolvedValue([{ id: 'art-ok' }]);
+    const passwordFindMany = jest.fn().mockResolvedValue([{ id: 'pw-ok' }]);
+    const assetFieldFindMany = jest.fn().mockResolvedValue([{ id: 'fld-ok' }]);
+    const prisma = {
+      upload: { findMany },
+      article: { findMany: articleFindMany },
+      password: { findMany: passwordFindMany },
+      assetField: { findMany: assetFieldFindMany },
+    };
+    const service = new UploadsService(
+      prisma as never,
+      {} as never,
+      { client: {} } as never,
+      { log: jest.fn() } as never,
+      { values: { MAX_UPLOAD_MB: 1, ALLOWED_UPLOAD_MIME: '' } } as never,
+    );
+    (
+      service as unknown as {
+        classifyArticleUploads: (
+          c: string,
+          ids: string[],
+        ) => Promise<
+          Map<string, { state: string; sourceArticle: unknown }>
+        >;
+      }
+    ).classifyArticleUploads = async (_c, ids) =>
+      new Map(
+        ids.map((id) => [
+          id,
+          {
+            state: id === 'u-live-body' ? 'live' : 'archived',
+            sourceArticle: null,
+          },
+        ]),
+      );
+    return { service };
+  }
+
+  it('drops uploads attached to hidden parents for CLIENT_USER', async () => {
+    const { service } = build([
+      { id: 'u-asset', isImage: true, attachedToType: 'asset', attachedToId: 'a' },
+      {
+        id: 'u-art-ok',
+        isImage: true,
+        attachedToType: 'article',
+        attachedToId: 'art-ok',
+      },
+      {
+        id: 'u-art-hidden',
+        isImage: true,
+        attachedToType: 'article',
+        attachedToId: 'art-hidden',
+      },
+      {
+        id: 'u-pw-ok',
+        isImage: true,
+        attachedToType: 'password',
+        attachedToId: 'pw-ok',
+      },
+      {
+        id: 'u-pw-hidden',
+        isImage: true,
+        attachedToType: 'password',
+        attachedToId: 'pw-hidden',
+      },
+      {
+        id: 'u-fld-ok',
+        isImage: true,
+        attachedToType: 'asset_field',
+        attachedToId: 'fld-ok',
+      },
+      {
+        id: 'u-fld-hidden',
+        isImage: true,
+        attachedToType: 'asset_field',
+        attachedToId: 'fld-hidden',
+      },
+      {
+        id: 'u-orphan',
+        isImage: true,
+        attachedToType: null,
+        attachedToId: null,
+      },
+      {
+        id: 'u-live-body',
+        isImage: true,
+        attachedToType: 'article',
+        attachedToId: null,
+      },
+      {
+        id: 'u-archived-body',
+        isImage: true,
+        attachedToType: 'article',
+        attachedToId: null,
+      },
+    ]);
+
+    const res = await service.listPhotos('c1', {
+      actor: { id: 'cu', role: 'CLIENT_USER' } as never,
+      limit: 50,
+    });
+    const ids = res.items.map((i) => i.id).sort();
+    expect(ids).toEqual(['u-art-ok', 'u-asset', 'u-fld-ok', 'u-live-body', 'u-pw-ok']);
+  });
+
+  it('does not filter for non-CLIENT_USER actors', async () => {
+    const { service } = build([
+      { id: 'u-asset', isImage: true, attachedToType: 'asset', attachedToId: 'a' },
+      {
+        id: 'u-pw-hidden',
+        isImage: true,
+        attachedToType: 'password',
+        attachedToId: 'pw-hidden',
+      },
+      {
+        id: 'u-orphan',
+        isImage: true,
+        attachedToType: null,
+        attachedToId: null,
+      },
+    ]);
+    const res = await service.listPhotos('c1', {
+      actor: { id: 'op', role: 'OPERATOR' } as never,
+      limit: 50,
+      includeNonLatest: true,
+    });
+    expect(res.items.map((i) => i.id).sort()).toEqual([
+      'u-asset',
+      'u-orphan',
+      'u-pw-hidden',
+    ]);
+  });
+});

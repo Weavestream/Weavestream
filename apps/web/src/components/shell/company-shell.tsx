@@ -153,24 +153,26 @@ export function CompanyShell({
   const showDomains = isAdmin || portalHasDomains;
   const showPasswords = isAdmin || portalHasPasswords;
   const showIpam = isAdmin || (portalHasSubnets ?? false);
-  // Portal nav is intentionally a subset: no Photos, no All-assets
-  // catch-all. Each content surface shows up only when the tenant
-  // actually has something in it (layouts are filtered by count above,
-  // Domains by `portalHasDomains`). Admin keeps the full set so
+  // Portal nav is intentionally a subset: no All-assets catch-all.
+  // Photos is shared between admin and portal — the API filters out
+  // uploads whose parent isn't visible to CLIENT_USER, so the gallery
+  // is safe to expose. Each content surface shows up only when the
+  // tenant actually has something in it (layouts are filtered by count
+  // above, Domains by `portalHasDomains`). Admin keeps the full set so
   // operators can navigate to empty surfaces and seed them.
   const sections: SidebarSection[] = [
     {
       items: [
         { id: 'overview', label: 'Home', icon: 'home', href: base },
         { id: 'articles', label: 'Articles', icon: 'doc', href: `${base}/articles` },
+        {
+          id: 'photos',
+          label: 'Photos',
+          icon: 'image' as const,
+          href: `${base}/photos`,
+        },
         ...(isAdmin
           ? [
-              {
-                id: 'photos',
-                label: 'Photos',
-                icon: 'image' as const,
-                href: `${base}/photos`,
-              },
               {
                 id: 'assets',
                 label: 'All assets',
