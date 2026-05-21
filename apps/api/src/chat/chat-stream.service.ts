@@ -16,6 +16,7 @@ import type {
 import { PrismaService } from '../prisma/prisma.service.js';
 import { AiSettingsService } from '../ai/ai-settings.service.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
+import { safeFetch } from '../common/egress/safe-fetch.js';
 import { ARTICLE_TOOLS, isArticleToolName } from './chat-tools.js';
 
 const STREAM_TIMEOUT_MS = 120_000;
@@ -45,10 +46,11 @@ const DEFAULT_TITLE = 'New chat';
  *      `conversation.updatedAt`. On the first turn, derives the title
  *      from the user message.
  *
- * `safeFetch` (the SSRF guard) wraps responses in a max-bytes counter
- * that fights long streams; the LLM endpoint is admin-configured and
- * already trusted by `AiService.listModels`, so we use the global
- * `fetch` directly for the same trust boundary.
+ * Both upstream calls (stream + title) go through `safeFetch` so the
+ * admin-configured `baseUrl` can't be aimed at cloud metadata or an
+ * internal service. The streaming call sets `maxResponseBytes` to
+ * Infinity since SSE bodies can run for many MB; the title call uses
+ * the default cap.
  */
 @Injectable()
 export class ChatStreamService {
@@ -189,7 +191,7 @@ export class ChatStreamService {
     let finishReason: string | null = null;
     const toolCallAccumulator = new ToolCallAccumulator();
     try {
-      const upstream = await fetch(`${stripTrailingSlash(config.baseUrl)}/chat/completions`, {
+      const upstream = await safeFetch(`${stripTrailingSlash(config.baseUrl)}/chat/completions`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -205,6 +207,12 @@ export class ChatStreamService {
             : {}),
         }),
         signal: abort.signal,
+        timeoutMs: STREAM_TIMEOUT_MS,
+        // SSE streams can run for many minutes and many MB; the
+        // upstream is admin-configured so the body-size cap exists
+        // only to defend against runaway non-LLM origins, not the
+        // expected long-stream case.
+        maxResponseBytes: Number.POSITIVE_INFINITY,
       });
 
       if (!upstream.ok || !upstream.body) {
@@ -369,7 +377,7 @@ export class ChatStreamService {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), TITLE_TIMEOUT_MS);
     try {
-      const res = await fetch(`${stripTrailingSlash(config.baseUrl)}/chat/completions`, {
+      const res = await safeFetch(`${stripTrailingSlash(config.baseUrl)}/chat/completions`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -403,6 +411,7 @@ export class ChatStreamService {
           ],
         }),
         signal: ctrl.signal,
+        timeoutMs: TITLE_TIMEOUT_MS,
       });
       if (!res.ok) {
         this.logger.warn(`Title LLM call returned ${res.status}`);

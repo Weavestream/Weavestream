@@ -5,6 +5,7 @@ import { AuditLogService } from '../audit/audit.service.js';
 import { AUDIT_ACTIONS } from '../audit/audit-actions.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
 import type { RequestMeta } from '../common/request-meta.js';
+import { EgressBlockedError, safeFetch } from '../common/egress/safe-fetch.js';
 
 const TEST_TIMEOUT_MS = 8_000;
 
@@ -57,11 +58,17 @@ export class AiService {
 
     let res: Response;
     try {
-      res = await fetch(url, {
+      res = await safeFetch(url, {
+        method: 'GET',
         headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : undefined,
-        signal: AbortSignal.timeout(TEST_TIMEOUT_MS),
+        timeoutMs: TEST_TIMEOUT_MS,
       });
     } catch (err) {
+      if (err instanceof EgressBlockedError) {
+        throw new BadRequestException(
+          `The configured AI endpoint is not allowed: ${err.reason}.`,
+        );
+      }
       throw new BadRequestException(
         `Could not reach ${url}: ${messageOf(err)}`,
       );

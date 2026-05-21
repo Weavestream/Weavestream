@@ -225,6 +225,101 @@ describe('safeFetch — egress guard', () => {
     });
   });
 
+  describe('redirect re-validation', () => {
+    // Builds a `fetch` stub that returns the queued responses in order.
+    const queueFetch = (responses: Response[]) => {
+      let i = 0;
+      return ((_url: string, _init?: RequestInit) => {
+        const next = responses[i++];
+        if (!next) throw new Error('queueFetch exhausted');
+        return Promise.resolve(next);
+      }) as unknown as typeof fetch;
+    };
+
+    it('follows a redirect when both hops resolve to public IPs', async () => {
+      const fetchImpl = queueFetch([
+        new Response(null, {
+          status: 302,
+          headers: { location: 'https://final.example/done' },
+        }),
+        new Response('ok', { status: 200 }),
+      ]);
+      const res = await safeFetch('https://start.example/go', {
+        timeoutMs: 1000,
+        fetchImpl,
+        // Both hostnames resolve to the same public IP for the test.
+        resolve: resolveTo(['8.8.8.8']),
+      });
+      expect(res.status).toBe(200);
+      await expect(res.text()).resolves.toBe('ok');
+    });
+
+    it('blocks a redirect that points at a private IP', async () => {
+      // First hop returns a 302 → http://internal.example/. The resolve
+      // stub returns a public IP for the first lookup and a private IP
+      // for the destination, so the second safeFetch entry must reject
+      // with EgressBlockedError instead of performing the request.
+      let call = 0;
+      const fetchImpl = (() =>
+        Promise.resolve(
+          new Response(null, {
+            status: 302,
+            headers: { location: 'http://internal.example/admin' },
+          }),
+        )) as unknown as typeof fetch;
+      const resolve = async () => {
+        call += 1;
+        return call === 1 ? ['8.8.8.8'] : ['10.0.0.1'];
+      };
+      await expect(
+        safeFetch('https://public.example/login', {
+          timeoutMs: 1000,
+          fetchImpl,
+          resolve,
+        }),
+      ).rejects.toBeInstanceOf(EgressBlockedError);
+    });
+
+    it('caps the redirect chain at MAX_REDIRECT_HOPS', async () => {
+      // Endless redirect to a new public URL each hop. The guard must
+      // abort the chain rather than spin forever.
+      let hop = 0;
+      const fetchImpl = (() => {
+        hop += 1;
+        return Promise.resolve(
+          new Response(null, {
+            status: 302,
+            headers: { location: `https://hop${hop}.example/next` },
+          }),
+        );
+      }) as unknown as typeof fetch;
+      await expect(
+        safeFetch('https://hop0.example/start', {
+          timeoutMs: 1000,
+          fetchImpl,
+          resolve: resolveTo(['8.8.8.8']),
+        }),
+      ).rejects.toThrow(/redirect hops/);
+    });
+
+    it('returns the 3xx response when caller opts out via redirect: manual', async () => {
+      const fetchImpl = queueFetch([
+        new Response(null, {
+          status: 302,
+          headers: { location: 'https://elsewhere.example/' },
+        }),
+      ]);
+      const res = await safeFetch('https://start.example/go', {
+        timeoutMs: 1000,
+        fetchImpl,
+        resolve: resolveTo(['8.8.8.8']),
+        redirect: 'manual',
+      });
+      expect(res.status).toBe(302);
+      expect(res.headers.get('location')).toBe('https://elsewhere.example/');
+    });
+  });
+
   describe('DNS resolution failures', () => {
     it('surfaces a clean error when the resolver throws', async () => {
       await expect(

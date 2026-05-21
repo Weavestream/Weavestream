@@ -78,15 +78,33 @@ async function fetchWithTimeout(
   method: 'HEAD' | 'GET',
   timeoutMs: number,
 ): Promise<{ status: number }> {
-  // safeFetch enforces the timeout, blocks SSRF targets, and caps the
-  // response body. We never read the body of a HEAD/GET probe.
-  const res = await safeFetch(url, {
-    method,
-    redirect: 'follow',
-    timeoutMs,
-    headers: { 'User-Agent': 'weavestream-alerts/1.0 (+https://weavestream.io)' },
-  });
-  return { status: res.status };
+  // Walk redirects manually so the SSRF guard re-validates every hop's
+  // resolved IP rather than letting a public origin redirect us to a
+  // private address. safeFetch itself also re-validates on
+  // `redirect: 'follow'`, but doing the loop here keeps this probe
+  // independent of that behaviour.
+  let current = url;
+  for (let hop = 0; hop < 5; hop++) {
+    const res = await safeFetch(current, {
+      method,
+      redirect: 'manual',
+      timeoutMs,
+      headers: { 'User-Agent': 'weavestream-alerts/1.0 (+https://weavestream.io)' },
+    });
+    if (res.status >= 300 && res.status < 400) {
+      const location = res.headers.get('location');
+      if (location) {
+        try {
+          current = new URL(location, current).toString();
+          continue;
+        } catch {
+          return { status: res.status };
+        }
+      }
+    }
+    return { status: res.status };
+  }
+  throw new Error('too many redirects');
 }
 
 // =====================================================================
