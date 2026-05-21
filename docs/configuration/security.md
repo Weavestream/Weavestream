@@ -42,20 +42,19 @@ The auth rate limits protect against credential stuffing and brute-force attacks
 
 | Variable | Default | Notes |
 |---|---|---|
-| `TRUST_PROXY_HOPS` | `1` | Number of trusted reverse-proxy hops between the client and API. |
+| `TRUST_PROXY_HOPS` | `1` | Number of trusted reverse-proxy hops **between the internet and the `web` container** (i.e. the operator-managed edge tier). |
 
-`req.ip` is resolved from the verified `X-Forwarded-For` chain using `TRUST_PROXY_HOPS`.
-Set this to match your real topology (for example: `2` for edge proxy -> web -> api, `3` for CDN -> edge -> web -> api).
+The web tier reads `TRUST_PROXY_HOPS` to resolve the real client IP from the inbound `X-Forwarded-For` chain — which is the only chain an attacker can influence — and then forwards a single sanitized entry to the API. The API does not use this knob: it honors `X-Forwarded-For` only when the TCP peer is on the private docker bridge (loopback / link-local / unique-local), which only the `web` container is. An attacker who somehow reaches `api:4000` directly has their `X-Forwarded-For` ignored and falls back to the socket peer.
 
-Setting it too high can allow forged client IP attribution. Setting it too low collapses traffic behind one proxy IP, weakening rate-limit and lockout protections.
+Count proxies **in front of `web`** when setting this value:
 
 | Topology | `TRUST_PROXY_HOPS` |
 |---|---|
-| `compose.yml` default: `web` -> `api` | `1` |
-| Edge proxy: Caddy, Traefik, or Nginx -> `web` -> `api` | `2` |
-| CDN -> edge proxy -> `web` -> `api` | `3` |
+| Edge proxy (Caddy, Traefik, Nginx, …) → `web` → `api` | `1` (default) |
+| CDN (Cloudflare, …) → edge proxy → `web` → `api` | `2` |
+| `web` is directly internet-facing (no edge) | `0` — IP attribution degrades to a sentinel since Next.js doesn't expose the socket peer in App Router server contexts. Run an edge proxy in production. |
 
-Every trusted proxy hop must overwrite or append to `X-Forwarded-For` and set `X-Forwarded-Proto` correctly.
+Setting this too high lets a malicious upstream forge the client IP; setting it too low collapses every request behind your edge into a single throttler bucket. Every trusted edge proxy must set `X-Forwarded-Proto` and either overwrite or append to `X-Forwarded-For`.
 
 ## Content Security Policy
 

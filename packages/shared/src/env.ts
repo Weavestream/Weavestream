@@ -110,18 +110,25 @@ export const envSchema = z.object({
   LOCKOUT_MAX_FAILURES: intFromString(1, 100).default(5),
   LOCKOUT_WINDOW_MIN: intFromString(1, 1440).default(15),
 
-  // How many proxy hops between the client and the API are trusted to
-  // append to `X-Forwarded-For`. Express resolves `req.ip` to the
-  // (N+1)th-from-rightmost entry of the chain — every controller, the
-  // throttler, the lockout service, and the audit log read from
-  // `req.ip` only, so this knob is the single source of truth for IP
-  // attribution. Topology guide:
-  //   1 → web (Next.js) → api          (default; matches `compose.yml`)
-  //   2 → edge proxy → web → api       (Caddy/Traefik in front of compose)
-  //   3 → CDN → edge → web → api       (e.g. Cloudflare in front)
+  // How many trusted reverse-proxy hops sit between the internet and
+  // the `web` (Next.js) container — i.e. the edge tier the operator
+  // runs (Caddy, Nginx, Traefik, Cloudflare, …). The web tier reads
+  // this knob to resolve the real client IP from inbound
+  // `X-Forwarded-For` before forwarding a single, sanitized entry to
+  // the API. Topology guide (count proxies **in front of `web`**):
+  //   0 → web is directly internet-facing (no edge — IP attribution
+  //       degrades to a sentinel since Next.js doesn't expose the
+  //       socket peer in App Router server contexts).
+  //   1 → edge proxy → web → api       (default; one operator-managed
+  //       reverse proxy in front of compose).
+  //   2 → CDN → edge → web → api       (e.g. Cloudflare in front of a
+  //       Caddy/Traefik edge).
   // Setting this too high lets a malicious upstream forge the client
-  // IP; setting it too low collapses every request behind your proxy
-  // into a single bucket. Production deploys MUST count their hops.
+  // IP; setting it too low collapses every request behind your edge
+  // into a single throttler bucket. The API itself no longer reads
+  // this — it trusts only requests arriving from the private docker
+  // bridge (loopback / link-local / unique-local), where the only
+  // client is the web container. See `apps/api/src/main.ts`.
   TRUST_PROXY_HOPS: intFromString(0, 10).default(1),
 
   // Phase 6 — egress / SSRF guard.

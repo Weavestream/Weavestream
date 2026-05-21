@@ -27,7 +27,6 @@ const { dirname, resolve } = require('node:path');
 })();
 
 /** @type {import('next').NextConfig} */
-const API_URL = process.env.API_INTERNAL_URL ?? 'http://api:4000';
 
 // Dev-only: allow the dev server's HMR / dev-resource endpoints to be reached
 // from non-localhost origins (e.g. testing the UI on a phone over the LAN).
@@ -83,13 +82,6 @@ const nextConfig = {
   // Especially noticeable in Safari, whose dev-bundle parse time is several
   // times slower than V8.
   experimental: {
-    // Next.js dev rewrites have a hardcoded 30s proxy timeout that
-    // kills long-running streamed responses (chat SSE in particular —
-    // a slow LLM round-trip easily exceeds 30s before the first
-    // delta lands). We mirror the API's own `STREAM_TIMEOUT_MS`
-    // (120s) so the proxy never aborts before the server does.
-    // See https://github.com/vercel/next.js/issues/36251.
-    proxyTimeout: 120_000,
     optimizePackageImports: [
       '@tiptap/react',
       '@tiptap/starter-kit',
@@ -107,25 +99,14 @@ const nextConfig = {
       '@dnd-kit/utilities',
     ],
   },
-  async rewrites() {
-    return [
-      {
-        source: '/api/:path*',
-        destination: `${API_URL}/api/:path*`,
-      },
-      // `/health` (anonymous liveness) and `/health/:path*` (authenticated
-      // readiness/queue diagnostics) both proxy to the API. The API
-      // enforces auth on the sub-paths, so opening this rewrite is safe.
-      {
-        source: '/health',
-        destination: `${API_URL}/health`,
-      },
-      {
-        source: '/health/:path*',
-        destination: `${API_URL}/health/:path*`,
-      },
-    ];
-  },
+  // Browser → API traffic now flows through the App Router proxy at
+  // `src/app/api/[...path]/route.ts` (and the matching `/health`
+  // handlers) instead of a Next.js rewrite. The route handler is the
+  // only place we can rewrite inbound `X-Forwarded-For` / `X-Real-IP`
+  // to a single sanitized entry, which is required to prevent an
+  // internet client from spoofing their apparent IP for the API's
+  // rate limit, lockout, IP-rule, and audit attribution code paths.
+  // See `apps/web/src/lib/api-proxy.ts` and `apps/web/src/proxy.ts`.
   // Short-circuit the unauthenticated root hit at the routing layer instead
   // of letting the root Server Component call `redirect('/login')`. An RSC
   // redirect emits a 307 with an HTML/RSC payload body (ZAP flags this as

@@ -24,19 +24,21 @@ async function bootstrap() {
 
   const env = app.get(EnvService).values;
 
-  // Trust N upstream hops from the configured topology. The Next.js
-  // `web` container acts as the reverse proxy for browser → API traffic
-  // (1 hop, default). A Traefik/Caddy edge or a CDN like Cloudflare in
-  // front of compose adds more hops — set `TRUST_PROXY_HOPS=2` or `3`
-  // accordingly. Express resolves `req.ip` to the (N+1)th entry from
-  // the right of the verified `X-Forwarded-For` chain; every IP-based
-  // control in the API (rate limiting, login lockouts, audit attribution)
-  // reads from `req.ip` only, so this knob is the single source of
-  // truth. Without it Express returns its own socket peer
-  // (`192.168.160.x` in Docker) and collapses every SSR call into a
-  // single throttler bucket. `X-Forwarded-Proto` is also respected so
-  // `req.secure` is correct when the edge terminates TLS.
-  app.set('trust proxy', env.TRUST_PROXY_HOPS);
+  // Trust `X-Forwarded-For` / `X-Forwarded-Proto` only when the TCP
+  // peer is on the private docker bridge — that's the `web` container,
+  // which is the only thing that can reach this port in the standard
+  // compose deployment (api:4000 is never exposed publicly). The web
+  // tier resolves the real client IP from inbound XFF using
+  // `TRUST_PROXY_HOPS` and emits a single sanitized entry on the
+  // outbound request, so the chain Express sees here is always
+  // exactly one trusted hop. An internet attacker who somehow reached
+  // this port directly (mis-exposed in a custom deployment) would land
+  // outside `uniquelocal` and have their XFF ignored — `req.ip` would
+  // fall back to the socket peer. `'loopback'` covers 127.0.0.1/::1,
+  // `'linklocal'` covers 169.254/16 + fe80::/10, and `'uniquelocal'`
+  // covers RFC1918 (10/8, 172.16/12, 192.168/16) plus IPv6 fc00::/7 —
+  // i.e. every realistic private-network deployment of api↔web.
+  app.set('trust proxy', ['loopback', 'linklocal', 'uniquelocal']);
 
   // Phase 6 — wire the egress / SSRF guard. Every server-side outbound
   // HTTP call goes through `safeFetch`, which refuses to dial private

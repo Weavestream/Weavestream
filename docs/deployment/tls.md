@@ -26,7 +26,9 @@ Restart the stack after changing these: `docker compose up -d`
 
 Weavestream records client IPs for audit entries, rate limiting, lockouts, and Security Center views. Your reverse proxy must set `X-Forwarded-Proto: https` and must control the `X-Forwarded-For` chain.
 
-Set `TRUST_PROXY_HOPS` to the number of trusted proxy hops between the browser and the API. The default `1` is correct for the standard stack. If you put Weavestream behind an additional proxy or CDN, review [Security Configuration](/configuration/security/#client-ip-attribution).
+Set `TRUST_PROXY_HOPS` to the number of trusted reverse-proxy hops **between the internet and the `web` container** — i.e. the edge tier you run in front of compose. The default `1` matches a single operator-managed proxy (Caddy, Nginx, Traefik, …). Set `2` if you also have a CDN (e.g. Cloudflare) in front of that edge.
+
+The web tier reads `TRUST_PROXY_HOPS` to resolve the real client IP from the inbound `X-Forwarded-For` chain and then forwards a single sanitized entry to the API. The API itself does not use this knob — it honors `X-Forwarded-For` only when the TCP peer is on the private docker bridge (loopback / link-local / unique-local), which is automatically true for the `web` container. See [Security Configuration](/configuration/security/#client-ip-attribution) for the full model.
 
 ## Nginx
 
@@ -110,4 +112,4 @@ For internal deployments where Let's Encrypt isn't available:
 | Login redirects to `http://` | `APP_URL` is set to `https://` but cookie was set with wrong domain |
 | 413 Request Entity Too Large | Proxy upload size limit lower than `MAX_UPLOAD_MB` |
 | 502 Bad Gateway | `web` container not running or proxy pointing at wrong port |
-| Audit log shows the proxy IP for every request | `TRUST_PROXY_HOPS` is too low, or the proxy is not setting `X-Forwarded-For` correctly |
+| Audit log shows the proxy IP for every request | `TRUST_PROXY_HOPS` is too low for your edge tier, or the proxy is not setting `X-Forwarded-For` correctly |

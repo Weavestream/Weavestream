@@ -1,4 +1,10 @@
 import { NextResponse, type NextRequest } from 'next/server';
+import {
+  RESOLVED_CLIENT_IP_HEADER,
+  UNKNOWN_CLIENT_IP,
+  normalizeClientIp,
+  resolveClientIpFromXff,
+} from './lib/client-ip';
 
 /**
  * CSP + security headers. Strict by default; no 'unsafe-eval' in production.
@@ -55,6 +61,24 @@ export function proxy(req: NextRequest) {
 
   const requestHeaders = new Headers(req.headers);
   requestHeaders.set('x-nonce', nonce);
+
+  // Resolve the real client IP from inbound `X-Forwarded-For` using
+  // `TRUST_PROXY_HOPS` (number of edge proxies in front of this web
+  // container) and stash it on the request headers so downstream
+  // handlers — the `/api/[...path]` route handler proxy and any SSR
+  // fetch through `server-api.ts` — can forward a single sanitized
+  // entry to the API instead of letting an attacker-controlled chain
+  // flow through. We also overwrite `x-forwarded-for` / `x-real-ip`
+  // on the propagated request headers so any downstream code that
+  // forgets to use the resolved header can't be tricked.
+  const inboundXff =
+    req.headers.get('x-forwarded-for') ?? req.headers.get('x-real-ip');
+  const resolvedClientIp = normalizeClientIp(
+    resolveClientIpFromXff(inboundXff) ?? UNKNOWN_CLIENT_IP,
+  );
+  requestHeaders.set(RESOLVED_CLIENT_IP_HEADER, resolvedClientIp);
+  requestHeaders.set('x-forwarded-for', resolvedClientIp);
+  requestHeaders.delete('x-real-ip');
 
   const res = NextResponse.next({ request: { headers: requestHeaders } });
   res.headers.set('Content-Security-Policy', csp);

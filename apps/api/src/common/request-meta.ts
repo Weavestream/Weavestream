@@ -7,14 +7,16 @@ import type { Request } from 'express';
  * The IP comes from {@link ipOf}, which trusts only what Express has
  * already resolved via its `trust proxy` setting. We deliberately do
  * NOT re-parse the raw `X-Forwarded-For` header here — when the API
- * is reachable directly (no reverse proxy in front, misconfigured
- * `TRUST_PROXY_HOPS`, contractor poking at the host port), a client
+ * is reachable directly (no reverse proxy in front, mis-exposed
+ * api:4000 port, contractor poking at the host port), a client
  * can set whatever XFF value they like and previous code would have
  * accepted it as ground truth, defeating per-IP rate limiting,
- * lockouts, and audit attribution. With Express's `trust proxy`
- * model `req.ip` is the leftmost untrusted hop of the verified
- * forwarded chain (or the socket peer if no proxy is trusted), which
- * is the value we actually want everywhere.
+ * lockouts, and audit attribution. The current `trust proxy` config
+ * (private-bridge CIDRs, see `apps/api/src/main.ts`) means XFF is
+ * honored only when the TCP peer is the `web` container, which
+ * itself emits a sanitized single-entry chain — so `req.ip` is
+ * either the real resolved client IP (bridge peer) or the socket
+ * peer (anyone else).
  */
 export type RequestMeta = { ip: string; userAgent: string };
 

@@ -1,6 +1,7 @@
 import { cache } from 'react';
 import { cookies, headers } from 'next/headers';
 import { notFound } from 'next/navigation';
+import { getResolvedClientIp } from './client-ip';
 import type {
   AiSettings,
   AlertConfig,
@@ -256,25 +257,19 @@ export async function serverApiFetch<T>(
   if (!outgoing.has('Accept')) outgoing.set('Accept', 'application/json');
   if (cookieHeader) outgoing.set('cookie', cookieHeader);
 
-  // Forward the browser's identifying headers to the API so Express's
-  // `req.ip` reflects the real client rather than the `web` container's
-  // internal bridge address. Needed for correct per-IP throttling, audit
-  // logs, and any future IP-based policy. `app.set('trust proxy', 1)` on
-  // the API is the other half of this fix — it tells Express to honour
-  // these headers.
-  //
-  // We append rather than replace so chained proxies (e.g. Traefik →
-  // web → api) don't lose upstream hops. `headers()` throws outside a
-  // request scope (scripts / build), which we catch and ignore.
+  // Forward a single sanitized `X-Forwarded-For` entry to the API.
+  // `proxy.ts` already resolved the real client IP from the inbound
+  // chain using `TRUST_PROXY_HOPS` and stashed it on the request
+  // headers; we pass only that one entry through so an attacker who
+  // controls the inbound XFF can't spoof their apparent IP for the
+  // API's rate-limit, lockout, IP-rule, and audit code paths. The
+  // API trusts XFF only when the TCP peer is on the private docker
+  // bridge — see `apps/api/src/main.ts`. `headers()` throws outside
+  // a request scope (scripts / build), which we catch and ignore.
   try {
     const incoming = await headers();
-    const clientXff = incoming.get('x-forwarded-for');
-    const remoteIp = incoming.get('x-real-ip');
-    if (clientXff) {
-      outgoing.set('x-forwarded-for', clientXff);
-    } else if (remoteIp) {
-      outgoing.set('x-forwarded-for', remoteIp);
-    }
+    const resolvedIp = getResolvedClientIp(incoming);
+    outgoing.set('x-forwarded-for', resolvedIp);
     const proto = incoming.get('x-forwarded-proto');
     if (proto) outgoing.set('x-forwarded-proto', proto);
     const host = incoming.get('x-forwarded-host') ?? incoming.get('host');
