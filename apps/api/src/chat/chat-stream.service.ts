@@ -213,6 +213,10 @@ export class ChatStreamService {
         // only to defend against runaway non-LLM origins, not the
         // expected long-stream case.
         maxResponseBytes: Number.POSITIVE_INFINITY,
+        // baseUrl is admin-pasted in Settings → AI — treat private
+        // IPs as authorised so LAN-hosted LLMs (LM Studio, Ollama)
+        // work without an EGRESS_ALLOWED_PRIVATE_CIDRS env tweak.
+        allowPrivateNetworks: true,
       });
 
       if (!upstream.ok || !upstream.body) {
@@ -412,6 +416,7 @@ export class ChatStreamService {
         }),
         signal: ctrl.signal,
         timeoutMs: TITLE_TIMEOUT_MS,
+        allowPrivateNetworks: true,
       });
       if (!res.ok) {
         this.logger.warn(`Title LLM call returned ${res.status}`);

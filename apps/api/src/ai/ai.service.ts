@@ -62,6 +62,11 @@ export class AiService {
         method: 'GET',
         headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : undefined,
         timeoutMs: TEST_TIMEOUT_MS,
+        // The baseUrl is admin-pasted in Settings → AI, so we treat it
+        // as authorised even when it points at a private/LAN address
+        // (LM Studio, on-prem Ollama, etc.). The SSRF guard still
+        // applies its timeout, body cap, and protocol/URL validation.
+        allowPrivateNetworks: true,
       });
     } catch (err) {
       if (err instanceof EgressBlockedError) {
