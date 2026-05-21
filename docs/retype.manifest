@@ -1,0 +1,810 @@
+{
+  "version": "4.5.3",
+  "created": "2026-05-21T13:04:37Z",
+  "files": [
+    {
+      "path": ".nojekyll"
+    },
+    {
+      "path": "404.html"
+    },
+    {
+      "path": "about.md",
+      "old": true
+    },
+    {
+      "path": "about/index.html",
+      "old": true
+    },
+    {
+      "path": "blog/2/index.html",
+      "old": true
+    },
+    {
+      "path": "blog/2026-05-03-hudu-alternative.md",
+      "old": true
+    },
+    {
+      "path": "blog/2026-05-03-hudu-alternative/index.html",
+      "old": true
+    },
+    {
+      "path": "blog/2026-05-03-itglue-alternative.md",
+      "old": true
+    },
+    {
+      "path": "blog/2026-05-03-itglue-alternative/index.html",
+      "old": true
+    },
+    {
+      "path": "blog/2026-05-04-itglue-alternative.md",
+      "old": true
+    },
+    {
+      "path": "blog/2026-05-04-itglue-alternative/index.html",
+      "old": true
+    },
+    {
+      "path": "blog/2026-05-06-homelab-documentation-tool.md",
+      "old": true
+    },
+    {
+      "path": "blog/2026-05-06-homelab-documentation-tool/index.html",
+      "old": true
+    },
+    {
+      "path": "blog/2026-05-06-msp-client-credential-vault.md",
+      "old": true
+    },
+    {
+      "path": "blog/2026-05-06-msp-client-credential-vault/index.html",
+      "old": true
+    },
+    {
+      "path": "blog/2026-05-07-self-hosted-ipam-for-msps.md",
+      "old": true
+    },
+    {
+      "path": "blog/2026-05-07-self-hosted-ipam-for-msps/index.html",
+      "old": true
+    },
+    {
+      "path": "blog/2026-05-08-msp-client-credential-vault.md",
+      "old": true
+    },
+    {
+      "path": "blog/2026-05-08-msp-client-credential-vault/index.html",
+      "old": true
+    },
+    {
+      "path": "blog/2026-05-08-ssl-domain-monitoring-for-msps.md",
+      "old": true
+    },
+    {
+      "path": "blog/2026-05-08-ssl-domain-monitoring-for-msps/index.html",
+      "old": true
+    },
+    {
+      "path": "blog/2026-05-09-self-hosted-msp-client-portal.md",
+      "old": true
+    },
+    {
+      "path": "blog/2026-05-09-self-hosted-msp-client-portal/index.html",
+      "old": true
+    },
+    {
+      "path": "blog/2026-05-10-self-hosted-it-asset-management-for-msps.md",
+      "old": true
+    },
+    {
+      "path": "blog/2026-05-10-self-hosted-it-asset-management-for-msps/index.html",
+      "old": true
+    },
+    {
+      "path": "blog/2026-05-11-rbac-msp-documentation-platform.md",
+      "old": true
+    },
+    {
+      "path": "blog/2026-05-11-rbac-msp-documentation-platform/index.html",
+      "old": true
+    },
+    {
+      "path": "blog/2026-05-12-passportal-alternative-self-hosted.md",
+      "old": true
+    },
+    {
+      "path": "blog/2026-05-12-passportal-alternative-self-hosted/index.html",
+      "old": true
+    },
+    {
+      "path": "blog/2026-05-14-open-source-it-documentation-small-teams.md",
+      "old": true
+    },
+    {
+      "path": "blog/2026-05-14-open-source-it-documentation-small-teams/index.html",
+      "old": true
+    },
+    {
+      "path": "blog/2026-05-18-msp-documentation-vendor-lock-in.md",
+      "old": true
+    },
+    {
+      "path": "blog/2026-05-18-msp-documentation-vendor-lock-in/index.html",
+      "old": true
+    },
+    {
+      "path": "blog/assets/ab-testing.png",
+      "old": true
+    },
+    {
+      "path": "blog/assets/cluttered-homelab-vs-unified-solution.png",
+      "old": true
+    },
+    {
+      "path": "blog/assets/compare.png",
+      "old": true
+    },
+    {
+      "path": "blog/assets/credential-vault-belongs-in-your-documentation.png",
+      "old": true
+    },
+    {
+      "path": "blog/assets/domain-monitor.png",
+      "old": true
+    },
+    {
+      "path": "blog/assets/self-hosted-client-portal.png",
+      "old": true
+    },
+    {
+      "path": "blog/assets/unified-ipam-management.png",
+      "old": true
+    },
+    {
+      "path": "blog/feed.xml",
+      "old": true
+    },
+    {
+      "path": "blog/hudu-alternative/index.html",
+      "old": true
+    },
+    {
+      "path": "blog/index.html",
+      "old": true
+    },
+    {
+      "path": "blog/index.md",
+      "old": true
+    },
+    {
+      "path": "categories/comparisons/index.html",
+      "old": true
+    },
+    {
+      "path": "categories/guides/index.html",
+      "old": true
+    },
+    {
+      "path": "categories/index.html",
+      "old": true
+    },
+    {
+      "path": "CNAME"
+    },
+    {
+      "path": "configuration/environment.md"
+    },
+    {
+      "path": "configuration/environment/index.html"
+    },
+    {
+      "path": "configuration/index.html"
+    },
+    {
+      "path": "configuration/index.md"
+    },
+    {
+      "path": "configuration/key-rotation.md"
+    },
+    {
+      "path": "configuration/key-rotation/index.html"
+    },
+    {
+      "path": "configuration/security.md"
+    },
+    {
+      "path": "configuration/security/index.html"
+    },
+    {
+      "path": "configuration/workspace-settings.md"
+    },
+    {
+      "path": "configuration/workspace-settings/index.html"
+    },
+    {
+      "path": "deployment/backup.md"
+    },
+    {
+      "path": "deployment/backup/index.html"
+    },
+    {
+      "path": "deployment/docker-compose.md"
+    },
+    {
+      "path": "deployment/docker-compose/index.html"
+    },
+    {
+      "path": "deployment/index.html"
+    },
+    {
+      "path": "deployment/index.md"
+    },
+    {
+      "path": "deployment/tls.md"
+    },
+    {
+      "path": "deployment/tls/index.html"
+    },
+    {
+      "path": "deployment/upgrades.md"
+    },
+    {
+      "path": "deployment/upgrades/index.html"
+    },
+    {
+      "path": "features/ai-chat.md"
+    },
+    {
+      "path": "features/ai-chat/index.html"
+    },
+    {
+      "path": "features/articles.md"
+    },
+    {
+      "path": "features/articles/index.html"
+    },
+    {
+      "path": "features/assets.md"
+    },
+    {
+      "path": "features/assets/.ds_store"
+    },
+    {
+      "path": "features/assets/article-editor.png"
+    },
+    {
+      "path": "features/assets/article-viewer.png"
+    },
+    {
+      "path": "features/assets/asset-layout-editor.png"
+    },
+    {
+      "path": "features/assets/audit-log.png"
+    },
+    {
+      "path": "features/assets/company-overview.png"
+    },
+    {
+      "path": "features/assets/domain-monitor.png"
+    },
+    {
+      "path": "features/assets/index.html"
+    },
+    {
+      "path": "features/assets/integrations.png"
+    },
+    {
+      "path": "features/assets/ipam.png"
+    },
+    {
+      "path": "features/assets/passwords.png"
+    },
+    {
+      "path": "features/assets/search.png"
+    },
+    {
+      "path": "features/audit.md"
+    },
+    {
+      "path": "features/audit/index.html"
+    },
+    {
+      "path": "features/client-portal.md"
+    },
+    {
+      "path": "features/client-portal/index.html"
+    },
+    {
+      "path": "features/companies.md"
+    },
+    {
+      "path": "features/companies/index.html"
+    },
+    {
+      "path": "features/domains.md"
+    },
+    {
+      "path": "features/domains/index.html"
+    },
+    {
+      "path": "features/files.md"
+    },
+    {
+      "path": "features/files/index.html"
+    },
+    {
+      "path": "features/index.html"
+    },
+    {
+      "path": "features/index.md"
+    },
+    {
+      "path": "features/integrations.md"
+    },
+    {
+      "path": "features/integrations/index.html"
+    },
+    {
+      "path": "features/ipam.md"
+    },
+    {
+      "path": "features/ipam/index.html"
+    },
+    {
+      "path": "features/passwords.md"
+    },
+    {
+      "path": "features/passwords/index.html"
+    },
+    {
+      "path": "features/search.md"
+    },
+    {
+      "path": "features/search/index.html"
+    },
+    {
+      "path": "features/starred.md"
+    },
+    {
+      "path": "features/starred/index.html"
+    },
+    {
+      "path": "features/users.md"
+    },
+    {
+      "path": "features/users/index.html"
+    },
+    {
+      "path": "getting-started/first-login.md"
+    },
+    {
+      "path": "getting-started/first-login/index.html"
+    },
+    {
+      "path": "getting-started/index.html"
+    },
+    {
+      "path": "getting-started/index.md"
+    },
+    {
+      "path": "getting-started/invite-users.md"
+    },
+    {
+      "path": "getting-started/invite-users/index.html"
+    },
+    {
+      "path": "getting-started/quickstart.md"
+    },
+    {
+      "path": "getting-started/quickstart/index.html"
+    },
+    {
+      "path": "guides/alert-system-setup.md"
+    },
+    {
+      "path": "guides/alert-system-setup/index.html"
+    },
+    {
+      "path": "guides/asset-layouts.md"
+    },
+    {
+      "path": "guides/asset-layouts/index.html"
+    },
+    {
+      "path": "guides/backup-and-restore.md",
+      "old": true
+    },
+    {
+      "path": "guides/backup-and-restore/index.html",
+      "old": true
+    },
+    {
+      "path": "guides/client-portal-setup.md"
+    },
+    {
+      "path": "guides/client-portal-setup/index.html"
+    },
+    {
+      "path": "guides/cloudflare-zero-trust-ip-lists.md"
+    },
+    {
+      "path": "guides/cloudflare-zero-trust-ip-lists/index.html"
+    },
+    {
+      "path": "guides/index.html"
+    },
+    {
+      "path": "guides/index.md"
+    },
+    {
+      "path": "guides/managing-passwords.md"
+    },
+    {
+      "path": "guides/managing-passwords/index.html"
+    },
+    {
+      "path": "guides/monitoring-domains.md"
+    },
+    {
+      "path": "guides/monitoring-domains/index.html"
+    },
+    {
+      "path": "guides/permissions.md"
+    },
+    {
+      "path": "guides/permissions/index.html"
+    },
+    {
+      "path": "guides/security-center.md"
+    },
+    {
+      "path": "guides/security-center/index.html"
+    },
+    {
+      "path": "guides/writing-articles.md"
+    },
+    {
+      "path": "guides/writing-articles/index.html"
+    },
+    {
+      "path": "index.html"
+    },
+    {
+      "path": "index.md"
+    },
+    {
+      "path": "llms.txt"
+    },
+    {
+      "path": "overview/architecture.md"
+    },
+    {
+      "path": "overview/architecture/index.html"
+    },
+    {
+      "path": "overview/assets/.ds_store"
+    },
+    {
+      "path": "overview/assets/articles.png"
+    },
+    {
+      "path": "overview/assets/asset-layout-editor.png"
+    },
+    {
+      "path": "overview/assets/assets.png"
+    },
+    {
+      "path": "overview/assets/passwords.png"
+    },
+    {
+      "path": "overview/changelog.md"
+    },
+    {
+      "path": "overview/changelog/index.html"
+    },
+    {
+      "path": "overview/concepts.md"
+    },
+    {
+      "path": "overview/concepts/index.html"
+    },
+    {
+      "path": "overview/index.html"
+    },
+    {
+      "path": "overview/index.md"
+    },
+    {
+      "path": "resources/css/retype.css"
+    },
+    {
+      "path": "resources/fonts/Inter-italic-latin-var.woff2"
+    },
+    {
+      "path": "resources/fonts/Inter-roman-latin-var.woff2"
+    },
+    {
+      "path": "resources/js/config.js"
+    },
+    {
+      "path": "resources/js/instagram.js"
+    },
+    {
+      "path": "resources/js/lunr.js"
+    },
+    {
+      "path": "resources/js/prism.js"
+    },
+    {
+      "path": "resources/js/retype.js"
+    },
+    {
+      "path": "resources/js/search.json"
+    },
+    {
+      "path": "resources/lunr.js.LICENSE.txt"
+    },
+    {
+      "path": "resources/mermaid.js.LICENSE.txt"
+    },
+    {
+      "path": "resources/prism.js.LICENSE.txt"
+    },
+    {
+      "path": "resources/retype.js.LICENSE.txt"
+    },
+    {
+      "path": "resources/retype.LICENSE.txt"
+    },
+    {
+      "path": "robots.txt"
+    },
+    {
+      "path": "screenshots/assets/ai-integration.png"
+    },
+    {
+      "path": "screenshots/assets/alerts.png"
+    },
+    {
+      "path": "screenshots/assets/articles.png"
+    },
+    {
+      "path": "screenshots/assets/asset-layout-editor.png"
+    },
+    {
+      "path": "screenshots/assets/asset-layout.png"
+    },
+    {
+      "path": "screenshots/assets/asset-layouts.png"
+    },
+    {
+      "path": "screenshots/assets/assets.png"
+    },
+    {
+      "path": "screenshots/assets/companies.png"
+    },
+    {
+      "path": "screenshots/assets/company-dashboard.png"
+    },
+    {
+      "path": "screenshots/assets/dark-mode.png"
+    },
+    {
+      "path": "screenshots/assets/dashboard.png"
+    },
+    {
+      "path": "screenshots/assets/domain-health-score.png"
+    },
+    {
+      "path": "screenshots/assets/domains.png"
+    },
+    {
+      "path": "screenshots/assets/expirations.png"
+    },
+    {
+      "path": "screenshots/assets/ipam-address-space.png"
+    },
+    {
+      "path": "screenshots/assets/ipam-occupants.png"
+    },
+    {
+      "path": "screenshots/assets/ipam.png"
+    },
+    {
+      "path": "screenshots/assets/ninjaone-integration.png"
+    },
+    {
+      "path": "screenshots/assets/password-details.png"
+    },
+    {
+      "path": "screenshots/assets/passwords.png"
+    },
+    {
+      "path": "screenshots/assets/profile.png"
+    },
+    {
+      "path": "screenshots/assets/security-center.png"
+    },
+    {
+      "path": "screenshots/assets/settings.png"
+    },
+    {
+      "path": "screenshots/assets/tags.png"
+    },
+    {
+      "path": "screenshots/assets/users.png"
+    },
+    {
+      "path": "screenshots/index.html"
+    },
+    {
+      "path": "screenshots/index.md"
+    },
+    {
+      "path": "security/audit-log.md"
+    },
+    {
+      "path": "security/audit-log/index.html"
+    },
+    {
+      "path": "security/authentication.md"
+    },
+    {
+      "path": "security/authentication/index.html"
+    },
+    {
+      "path": "security/disclosure.md"
+    },
+    {
+      "path": "security/disclosure/index.html"
+    },
+    {
+      "path": "security/encryption.md"
+    },
+    {
+      "path": "security/encryption/index.html"
+    },
+    {
+      "path": "security/index.html"
+    },
+    {
+      "path": "security/index.md"
+    },
+    {
+      "path": "security/threat-model.md"
+    },
+    {
+      "path": "security/threat-model/index.html"
+    },
+    {
+      "path": "sitemap.xml"
+    },
+    {
+      "path": "static/.ds_store"
+    },
+    {
+      "path": "static/favicon.ico"
+    },
+    {
+      "path": "static/logo.svg"
+    },
+    {
+      "path": "tags/asset-management/index.html",
+      "old": true
+    },
+    {
+      "path": "tags/client-portal/index.html",
+      "old": true
+    },
+    {
+      "path": "tags/credential-vault/index.html",
+      "old": true
+    },
+    {
+      "path": "tags/data-ownership/index.html",
+      "old": true
+    },
+    {
+      "path": "tags/documentation/index.html",
+      "old": true
+    },
+    {
+      "path": "tags/domain-monitoring/index.html",
+      "old": true
+    },
+    {
+      "path": "tags/homelab/index.html",
+      "old": true
+    },
+    {
+      "path": "tags/hudu-alternative/index.html",
+      "old": true
+    },
+    {
+      "path": "tags/hudu/index.html",
+      "old": true
+    },
+    {
+      "path": "tags/index.html",
+      "old": true
+    },
+    {
+      "path": "tags/ipam/index.html",
+      "old": true
+    },
+    {
+      "path": "tags/it-documentation/index.html",
+      "old": true
+    },
+    {
+      "path": "tags/it-glue-alternative/index.html",
+      "old": true
+    },
+    {
+      "path": "tags/it-glue/index.html",
+      "old": true
+    },
+    {
+      "path": "tags/knowledge-base/index.html",
+      "old": true
+    },
+    {
+      "path": "tags/msp-documentation/index.html",
+      "old": true
+    },
+    {
+      "path": "tags/msp/index.html",
+      "old": true
+    },
+    {
+      "path": "tags/network-management/index.html",
+      "old": true
+    },
+    {
+      "path": "tags/open-source/index.html",
+      "old": true
+    },
+    {
+      "path": "tags/passportal-alternative/index.html",
+      "old": true
+    },
+    {
+      "path": "tags/password-management/index.html",
+      "old": true
+    },
+    {
+      "path": "tags/rbac/index.html",
+      "old": true
+    },
+    {
+      "path": "tags/self-hosted/index.html",
+      "old": true
+    },
+    {
+      "path": "tags/small-teams/index.html",
+      "old": true
+    },
+    {
+      "path": "tags/snipe-it-alternative/index.html",
+      "old": true
+    },
+    {
+      "path": "tags/ssl-monitoring/index.html",
+      "old": true
+    },
+    {
+      "path": "tags/vendor-lock-in/index.html",
+      "old": true
+    },
+    {
+      "path": "weavestream_logo.png"
+    },
+    {
+      "path": "weavestream-company-dashboard.png"
+    },
+    {
+      "path": "weavestream-dashboard.png",
+      "old": true
+    }
+  ]
+}

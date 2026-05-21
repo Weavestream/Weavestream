@@ -58,8 +58,8 @@ audience without code changes.
 - **Docker-first.** Three containers (`api`, `web`, `worker`) plus
   Postgres and Redis. Pulled, not built.
 
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the threat model,
-branding/terminology system, and repo layout.
+See the [architecture docs](https://docs.weavestream.io/overview/architecture/) for the topology,
+RBAC model, storage layout, terminology system, and repo layout.
 
 ## Quickstart
 
@@ -83,21 +83,21 @@ Open <http://localhost:3000/login> and sign in. On Windows, use
 [`scripts/keygen.ps1`](scripts/keygen.ps1) instead.
 
 Full walkthrough — pinning a version, upgrades, reverse-proxy/TLS,
-backups — in [docs/INSTALL.md](docs/INSTALL.md).
+backups — in the [Docker install docs](https://docs.weavestream.io/getting-started/quickstart/).
 
-Full guided walkthrough on the website: [weavestream.io/getting-started](https://weavestream.io/getting-started)
+Full guided walkthrough on the docs site: [docs.weavestream.io/getting-started](https://docs.weavestream.io/getting-started/)
 
 ## Documentation
 
 | Guide                                         | Audience          |
 | --------------------------------------------- | ----------------- |
-| [docs/INSTALL.md](docs/INSTALL.md)            | Operators         |
-| [docs/CONFIGURATION.md](docs/CONFIGURATION.md)| Operators         |
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)  | Operators + devs  |
-| [docs/DEVELOPING.md](docs/DEVELOPING.md)      | Contributors      |
-| [docs/RELEASING.md](docs/RELEASING.md)        | Maintainers       |
+| [Docker install docs](https://docs.weavestream.io/getting-started/quickstart/) | Operators         |
+| [Configuration docs](https://docs.weavestream.io/configuration/) | Operators         |
+| [Architecture docs](https://docs.weavestream.io/overview/architecture/) | Operators + devs  |
+| [Development setup](https://docs.weavestream.io/development/) | Contributors      |
+| [Releasing docs](https://docs.weavestream.io/development/releasing/) | Maintainers       |
 | [CHANGELOG.md](CHANGELOG.md)                  | Everyone          |
-| [weavestream.io/getting-started](https://weavestream.io/getting-started) | New operators |
+| [docs.weavestream.io/getting-started](https://docs.weavestream.io/getting-started/) | New operators |
 | [weavestream.io/features/assets](https://weavestream.io/features/assets) | Everyone |
 | [weavestream.io/features/passwords](https://weavestream.io/features/passwords) | Everyone |
 | [weavestream.io/features/articles](https://weavestream.io/features/articles) | Everyone |
