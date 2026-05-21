@@ -18,7 +18,7 @@ _Your knowledge base, your infrastructure._
 
 ---
 
-→ **Full feature docs and guides at [weavestream.io](https://weavestream.io)**
+→ **Full feature docs and guides at [docs.weavestream.io](https://docs.weavestream.io)**
 
 Weavestream is a Postgres-backed IT documentation platform designed for
 small teams, MSPs, and homelabs. One codebase, one distribution — the
@@ -82,8 +82,8 @@ docker compose exec api node dist/cli.js create-admin
 Open <http://localhost:3000/login> and sign in. On Windows, use
 [`scripts/keygen.ps1`](scripts/keygen.ps1) instead.
 
-Full walkthrough — pinning a version, upgrades, reverse-proxy/TLS,
-backups — in the [Docker install docs](https://docs.weavestream.io/getting-started/quickstart/).
+Full deployment walkthrough — pinning a version, upgrades, reverse-proxy/TLS,
+backups — in the [deployment docs](https://docs.weavestream.io/deployment/).
 
 Full guided walkthrough on the docs site: [docs.weavestream.io/getting-started](https://docs.weavestream.io/getting-started/)
 
@@ -91,27 +91,29 @@ Full guided walkthrough on the docs site: [docs.weavestream.io/getting-started](
 
 | Guide                                         | Audience          |
 | --------------------------------------------- | ----------------- |
-| [Docker install docs](https://docs.weavestream.io/getting-started/quickstart/) | Operators         |
+| [Quickstart](https://docs.weavestream.io/getting-started/quickstart/) | Operators         |
+| [Deployment docs](https://docs.weavestream.io/deployment/) | Operators         |
 | [Configuration docs](https://docs.weavestream.io/configuration/) | Operators         |
 | [Architecture docs](https://docs.weavestream.io/overview/architecture/) | Operators + devs  |
 | [Development setup](https://docs.weavestream.io/development/) | Contributors      |
 | [Releasing docs](https://docs.weavestream.io/development/releasing/) | Maintainers       |
-| [CHANGELOG.md](CHANGELOG.md)                  | Everyone          |
+| [Changelog](https://docs.weavestream.io/overview/changelog/) | Everyone          |
 | [docs.weavestream.io/getting-started](https://docs.weavestream.io/getting-started/) | New operators |
-| [weavestream.io/features/assets](https://weavestream.io/features/assets) | Everyone |
-| [weavestream.io/features/passwords](https://weavestream.io/features/passwords) | Everyone |
-| [weavestream.io/features/articles](https://weavestream.io/features/articles) | Everyone |
-| [weavestream.io/features/ipam](https://weavestream.io/features/ipam) | Everyone |
-| [weavestream.io/features/integrations](https://weavestream.io/features/integrations) | Everyone |
-| [weavestream.io/guides/security-center](https://weavestream.io/guides/security-center) | Everyone |
-| [weavestream.io/overview/changelog](https://weavestream.io/overview/changelog) | Everyone |
+| [docs.weavestream.io/features/assets](https://docs.weavestream.io/features/assets/) | Everyone |
+| [docs.weavestream.io/features/passwords](https://docs.weavestream.io/features/passwords/) | Everyone |
+| [docs.weavestream.io/features/articles](https://docs.weavestream.io/features/articles/) | Everyone |
+| [docs.weavestream.io/features/ipam](https://docs.weavestream.io/features/ipam/) | Everyone |
+| [docs.weavestream.io/features/integrations](https://docs.weavestream.io/features/integrations/) | Everyone |
+| [docs.weavestream.io/guides/security-center](https://docs.weavestream.io/guides/security-center/) | Everyone |
 
 ## Project status
 
-Weavestream is tagged releases only — pin `WEAVESTREAM_VERSION` in your
-`.env` and treat `:latest` as unstable. The first public release is
-**v1.0.0**. See the [releases page](https://github.com/Weavestream/Weavestream/releases)
-for published images.
+Use `:latest` to try the newest release quickly. For production, pin
+`WEAVESTREAM_VERSION` in your `.env` so upgrades are deliberate and
+repeatable. See the
+[releases page](https://github.com/Weavestream/Weavestream/releases) and
+[changelog](https://docs.weavestream.io/overview/changelog/) for published
+images, upgrade notes, and release history.
 
 ## Contributing
 
@@ -122,7 +124,7 @@ contributions are accepted under the project's AGPL-3.0 license.
 Security issues go through [SECURITY.md](SECURITY.md), not the public
 issue tracker.
 
-See also [weavestream.io/security/disclosure](https://weavestream.io/security/disclosure).
+See also [docs.weavestream.io/security/disclosure](https://docs.weavestream.io/security/disclosure/).
 
 ## License
 

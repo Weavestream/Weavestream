@@ -13,6 +13,24 @@ All notable changes to Weavestream are documented here. The format follows [Keep
 
 ## [Unreleased]
 
+## [1.8.7] - 2026-05-21
+
+### Changed
+
+- **IP rules now block page renders, not just API calls.** A DENY rule for a given IP/CIDR returns `403 Access denied by IP rule` for both API requests (immediate) and Next.js HTML pages (within ~30 s, the page-layer cache refresh window). A blocked IP no longer sees a login form. Static asset paths under `/_next/*` remain reachable by design.
+- **Self-block guard on IP rule changes.** Creating, editing, or deleting an IP rule in `/admin/ip-rules` is refused with a 400 if the resulting ruleset would block the requesting admin's current IP. The error names the offending CIDR. To deliberately block your own range, add a higher-priority ALLOW for your specific IP first.
+
+### Fixed
+
+- **Failed logins are now recorded regardless of password length.** Wrong-password attempts with a password shorter than 8 characters used to short-circuit at the request validator before the auth service ran, so the security center showed no failure even though the operator had clearly typed a bad password. Removing the login-side length check makes every credential attempt flow through the lockout counters and the audit trail. A consequence is that a locked IP now returns `429 Too many failed attempts` consistently for any payload, instead of leaking lockout state via a 400-vs-429 split.
+
+### Security
+
+- **SSRF guard hardening (`safe-fetch.ts`).** AI / chat endpoints (`AiService.listModels`, the chat-completion stream, the title-generation post-call) now route through `safeFetch` with `allowPrivateNetworks: true` so LAN LLMs (LM Studio, on-prem Ollama) work out of the box while every other egress surface keeps the private-IP block. The `redirect: 'follow'` loophole is closed in-process — every 3xx hop re-resolves and re-validates against the block-list, capped at 5 hops. DNS rebinding is closed by pinning each fetch's TCP connect to the IP that was validated, while preserving SNI + `Host` for certificate verification. The alerts HTTP probe drops `redirect: 'follow'` and uses a manual follow loop. Tests added for all three windows.
+- **Egress exception for the AI base URL.** The URL pasted in **Settings → AI** is now treated as authorised regardless of address class, so LAN LLM endpoints don't require operator-level `EGRESS_ALLOWED_PRIVATE_CIDRS` configuration. The exception is scoped per call site (visible in `git grep allowPrivateNetworks`); every other admin-configurable URL keeps the existing private-IP block.
+- **Upload reads gated by parent visibility for CLIENT_USER.** Portal users can no longer fetch an upload by id when its parent record (asset / article / company) is not visible to them, even if the upload id is known.
+- **Recovery documentation for self-imposed IP blocks.** `docs/configuration/security.md` adds a "Recovering from a self-imposed IP block" section with concrete shell + SQL recipes for the three escape paths (connect from a different network, curl the API on `localhost` from the host, modify the database directly).
+
 ## [1.8.6] - 2026-05-20
 
 ### Changed
