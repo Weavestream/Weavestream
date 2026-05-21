@@ -104,6 +104,48 @@ Detailed diagnostics moved to authenticated endpoints:
 - Changes are audited (`security.ip_rule.create`, `security.ip_rule.update`, `security.ip_rule.delete`).
 - Rules are enforced at **both** layers: the API rejects every API call from a denied IP with `403`, and the Next.js proxy rejects HTML page renders with `403` (so a blocked IP doesn't see a login form). The page-layer enforcement polls the API every 30 seconds, so admin changes propagate to page renders within that window; API enforcement is immediate. If the API is unreachable the page layer fails open (last-known ruleset, or no rules on cold start) — matching the API's own fail-open posture so a broken backend can't lock everyone out.
 - Static asset paths under `/_next/*` are excluded from the page-layer block (they bypass the Next.js proxy by design). A blocked IP can still pull anonymous JS/CSS bundles but cannot reach any HTML page or API endpoint. The internal poll endpoint (`GET /api/v1/ip-rules/active`) is unauthenticated but restricted to private TCP peers (loopback, link-local, RFC1918, IPv6 ULA) — a deployment where `web` and `api` share a Docker bridge or private network already satisfies this; routing `web → api` over the public internet is not supported.
+- **Self-block guard:** create / update / delete refuses any change that would leave the requesting admin's own IP under a DENY rule. The 400 error names the offending CIDR. To deliberately block your own range, add a higher-priority ALLOW for your specific IP first.
+
+### Recovering from a self-imposed IP block
+
+The self-block guard catches the obvious mistakes (typo'd CIDR, accidentally deleting the ALLOW that was shielding you), but it isn't bulletproof — long-running tabs, multi-instance race windows, and rules added programmatically can all still land you on the wrong side of a DENY. If you find yourself locked out of `/admin/ip-rules`, use whichever of the three escape paths matches what you have to hand. They're listed easiest first.
+
+**1. Connect from a different IP.** A phone hotspot, VPN to a different exit, a coffee-shop network, or any other path that gives you a different public IP is the lowest-friction recovery. Sign in normally and edit or disable the offending rule in `/admin/ip-rules`. The page-layer cache means your old IP starts being blocked within ~30 seconds, and removing the rule lets you back in within the same window.
+
+**2. Shell into the API host and call the API on `localhost`.** `IpRuleGuard` evaluates the IP that Express resolves from the request — and for a request whose TCP peer is `127.0.0.1` with no `X-Forwarded-For`, that resolved IP is `127.0.0.1`. As long as you haven't deliberately authored a DENY rule for loopback, a curl from inside the API container or the host bypasses the block entirely. Recipe:
+
+```bash
+# 1. SSH into the host, then exec into the API container
+docker exec -it weavestream-api sh
+
+# 2. Authenticate (this hits IpRuleGuard with peer=127.0.0.1, which is not in your DENY rule)
+TOKEN=$(curl -s -X POST http://localhost:4000/api/v1/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"you@example.com","password":"your-password"}' \
+  | jq -r '.accessToken')
+
+# 3. List rules and delete (or disable) the offending one
+curl -s -H "Authorization: Bearer $TOKEN" http://localhost:4000/api/v1/ip-rules | jq '.items'
+curl -X DELETE -H "Authorization: Bearer $TOKEN" \
+  http://localhost:4000/api/v1/ip-rules/<rule-id>
+```
+
+The cache invalidates on delete so the change takes effect immediately on the API; the page-layer catches up within 30 seconds.
+
+**3. Modify the database directly.** If you have no other network and no shell on the API host but you do have database access, you can fix it in SQL:
+
+```sql
+-- Find the offending rule
+SELECT id, cidr, action, priority, enabled FROM "IpRule" ORDER BY priority;
+
+-- Either disable it (preferred — preserves the audit trail)
+UPDATE "IpRule" SET enabled = false WHERE id = '<rule-id>';
+
+-- Or delete it outright
+DELETE FROM "IpRule" WHERE id = '<rule-id>';
+```
+
+The API caches the enabled-rules list for 30 seconds, so your change takes effect within that window. To force immediate effect, restart the API container — the in-memory cache is rebuilt from the database on the next request.
 
 ## HIBP Breach Checking
 
