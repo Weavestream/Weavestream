@@ -146,6 +146,22 @@ export class IpRulesService {
       select: { cidr: true, action: true, priority: true },
     });
   }
+
+  /**
+   * Same as `loadEnabledRules()` but routes through `IpRuleCacheService`
+   * so callers share a single in-memory copy with `IpRuleGuard`. Used
+   * by the `/ip-rules/active` endpoint the Next.js `proxy.ts` polls so
+   * that DENY rules also block page renders, not just API calls.
+   */
+  async getActiveRulesCached(): Promise<
+    Array<{ cidr: string; action: string; priority: number }>
+  > {
+    const cached = this.cache.get();
+    if (cached !== null) return cached;
+    const rules = await this.loadEnabledRules();
+    this.cache.set(rules);
+    return rules;
+  }
 }
 
 function toDto(row: IpRuleRow): IpRule {

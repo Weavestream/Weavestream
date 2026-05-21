@@ -102,6 +102,8 @@ Detailed diagnostics moved to authenticated endpoints:
 - **IP rules (`/admin/ip-rules`)** allow global ALLOW/DENY rules for IPv4/CIDR with priority ordering.
 - Managing IP rules requires `IP_RULE_MANAGE` capability.
 - Changes are audited (`security.ip_rule.create`, `security.ip_rule.update`, `security.ip_rule.delete`).
+- Rules are enforced at **both** layers: the API rejects every API call from a denied IP with `403`, and the Next.js proxy rejects HTML page renders with `403` (so a blocked IP doesn't see a login form). The page-layer enforcement polls the API every 30 seconds, so admin changes propagate to page renders within that window; API enforcement is immediate. If the API is unreachable the page layer fails open (last-known ruleset, or no rules on cold start) — matching the API's own fail-open posture so a broken backend can't lock everyone out.
+- Static asset paths under `/_next/*` are excluded from the page-layer block (they bypass the Next.js proxy by design). A blocked IP can still pull anonymous JS/CSS bundles but cannot reach any HTML page or API endpoint. The internal poll endpoint (`GET /api/v1/ip-rules/active`) is unauthenticated but restricted to private TCP peers (loopback, link-local, RFC1918, IPv6 ULA) — a deployment where `web` and `api` share a Docker bridge or private network already satisfies this; routing `web → api` over the public internet is not supported.
 
 ## HIBP Breach Checking
 

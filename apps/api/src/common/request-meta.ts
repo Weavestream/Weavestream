@@ -1,4 +1,5 @@
 import type { Request } from 'express';
+import { matchIpRule, type IpRuleLike } from '@weavestream/shared';
 
 /**
  * Audit-row metadata extracted from an Express request: the resolved
@@ -51,4 +52,34 @@ export function normalizeIp(ip: string | null | undefined): string {
 
 export function userAgentOf(req: Request): string {
   return (req.headers['user-agent'] ?? 'unknown').toString().slice(0, 500);
+}
+
+const PRIVATE_PEER_RULES: IpRuleLike[] = [
+  { cidr: '127.0.0.0/8', action: 'ALLOW', priority: 0 },
+  { cidr: '169.254.0.0/16', action: 'ALLOW', priority: 0 },
+  { cidr: '10.0.0.0/8', action: 'ALLOW', priority: 0 },
+  { cidr: '172.16.0.0/12', action: 'ALLOW', priority: 0 },
+  { cidr: '192.168.0.0/16', action: 'ALLOW', priority: 0 },
+];
+
+/**
+ * Returns true if `ip` is a loopback, link-local, RFC1918 (IPv4) or
+ * IPv6 loopback / link-local / unique-local address — i.e. the same
+ * peer-trust families used by Express's `trust proxy` setting in
+ * `main.ts`.
+ *
+ * Used to gate the internal `GET /api/v1/ip-rules/active` endpoint
+ * that the Next.js `proxy.ts` calls so it can mirror the IP allow/
+ * deny rules at the page-render layer. The TCP peer address can't
+ * be spoofed by `X-Forwarded-For` headers, so this is a stronger
+ * boundary than an `X-Internal-Token` shared secret would be (and
+ * needs no env var).
+ */
+export function isPrivatePeer(ip: string | undefined | null): boolean {
+  if (!ip) return false;
+  const normalized = normalizeIp(ip).toLowerCase();
+  if (normalized === '::1') return true;
+  if (normalized.startsWith('fe80:')) return true;
+  if (/^f[cd][0-9a-f]{2}:/.test(normalized)) return true;
+  return matchIpRule(normalized, PRIVATE_PEER_RULES) !== null;
 }

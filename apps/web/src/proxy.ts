@@ -1,10 +1,12 @@
 import { NextResponse, type NextRequest } from 'next/server';
+import { matchIpRule } from '@weavestream/shared';
 import {
   RESOLVED_CLIENT_IP_HEADER,
   UNKNOWN_CLIENT_IP,
   normalizeClientIp,
   resolveClientIpFromXff,
 } from './lib/client-ip';
+import { getActiveIpRules } from './lib/ip-rules-cache';
 
 /**
  * CSP + security headers. Strict by default; no 'unsafe-eval' in production.
@@ -14,7 +16,7 @@ import {
  * Runs at the edge-runtime proxy layer (Next.js 16+ renamed this convention
  * from `middleware.ts` to `proxy.ts` — same API, clearer name).
  */
-export function proxy(req: NextRequest) {
+export async function proxy(req: NextRequest) {
   const nonce = cryptoRandomNonce();
   // HSTS + upgrade-insecure-requests only make sense when the current request
   // was actually HTTPS. On plain http://localhost:3000 both would force the
@@ -79,6 +81,21 @@ export function proxy(req: NextRequest) {
   requestHeaders.set(RESOLVED_CLIENT_IP_HEADER, resolvedClientIp);
   requestHeaders.set('x-forwarded-for', resolvedClientIp);
   requestHeaders.delete('x-real-ip');
+
+  // Mirror the API's `IpRuleGuard` at the page-render layer so a DENY
+  // rule blocks HTML responses too — not just API calls. Without this,
+  // a banned IP would still see `/login` and could be confused into
+  // thinking the block isn't working. Fail-open is intentional and
+  // matches the guard: a broken API shouldn't lock everyone out of the
+  // login page.
+  const rules = await getActiveIpRules();
+  const ipRuleHit = matchIpRule(resolvedClientIp, rules);
+  if (ipRuleHit?.action === 'DENY') {
+    return new NextResponse('Access denied by IP rule', {
+      status: 403,
+      headers: { 'content-type': 'text/plain; charset=utf-8' },
+    });
+  }
 
   const res = NextResponse.next({ request: { headers: requestHeaders } });
   res.headers.set('Content-Security-Policy', csp);

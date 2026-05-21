@@ -6,6 +6,7 @@ import {
   Logger,
 } from '@nestjs/common';
 import type { Request } from 'express';
+import { matchIpRule, type IpRuleLike } from '@weavestream/shared';
 import { IpRulesService } from './ip-rules.service.js';
 import {
   IpRuleCacheService,
@@ -37,8 +38,8 @@ import { normalizeIp } from '../common/request-meta.js';
  * invalidated by `IpRulesService` writes for instant propagation within
  * a single API instance.
  *
- * Supports IPv4 single addresses (192.168.1.1) and CIDR ranges
- * (10.0.0.0/8). IPv6 is accepted but won't match any IPv4 CIDR rules.
+ * The CIDR matcher itself lives in `@weavestream/shared` so the Next.js
+ * `proxy.ts` can apply the same rules to page renders.
  */
 @Injectable()
 export class IpRuleGuard implements CanActivate {
@@ -51,7 +52,7 @@ export class IpRuleGuard implements CanActivate {
 
   async canActivate(ctx: ExecutionContext): Promise<boolean> {
     const req = ctx.switchToHttp().getRequest<Request>();
-    const clientIp = this.extractClientIp(req);
+    const clientIp = normalizeIp(req.ip);
 
     let rules: CachedRule[];
     try {
@@ -65,24 +66,14 @@ export class IpRuleGuard implements CanActivate {
       return true;
     }
 
-    if (rules.length === 0) {
-      return true; // default-allow when no rules exist
+    const hit = matchIpRule(clientIp, rules as IpRuleLike[]);
+    if (!hit) return true;
+    if (hit.action === 'DENY') {
+      this.log.warn(
+        `IP ${clientIp} blocked by rule ${hit.cidr} (priority ${hit.priority})`,
+      );
+      throw new ForbiddenException('Access denied by IP rule');
     }
-
-    for (const rule of rules) {
-      if (this.matches(clientIp, rule.cidr)) {
-        if (rule.action === 'DENY') {
-          this.log.warn(
-            `IP ${clientIp} blocked by rule ${rule.cidr} (priority ${rule.priority})`,
-          );
-          throw new ForbiddenException('Access denied by IP rule');
-        }
-        // ALLOW: proceed to next guard
-        return true;
-      }
-    }
-
-    // No rule matched: default-allow
     return true;
   }
 
@@ -92,63 +83,5 @@ export class IpRuleGuard implements CanActivate {
     const rules = await this.ipRules.loadEnabledRules();
     this.cache.set(rules);
     return rules;
-  }
-
-  /**
-   * Extract the client IP from the request. Uses req.ip (set by
-   * Express trust proxy) consistently with the rest of the codebase
-   * and collapses IPv4-mapped IPv6 (`::ffff:1.2.3.4`) down to plain
-   * v4 so rules like `192.168.1.50/32` match dual-stack clients.
-   */
-  private extractClientIp(req: Request): string {
-    return normalizeIp(req.ip);
-  }
-
-  /**
-   * Check if an IP matches a CIDR or single IP pattern.
-   */
-  private matches(ip: string, cidr: string): boolean {
-    // Normalize to lowercase for consistency
-    const target = ip.trim().toLowerCase();
-    const pattern = cidr.trim().toLowerCase();
-
-    // Single IP exact match
-    if (!pattern.includes('/')) {
-      return target === pattern;
-    }
-
-    // CIDR range match
-    const [subnet, prefixStr] = pattern.split('/');
-    if (!subnet || !prefixStr) return false;
-
-    const prefix = parseInt(prefixStr, 10);
-    if (!Number.isFinite(prefix) || prefix < 0 || prefix > 32) return false;
-
-    return this.isIpInCidr(target, subnet, prefix);
-  }
-
-  /**
-   * Check if an IPv4 address falls within a CIDR range.
-   */
-  private isIpInCidr(ip: string, subnet: string, prefix: number): boolean {
-    const ipNum = this.ipToNumber(ip);
-    const subnetNum = this.ipToNumber(subnet);
-    if (ipNum === null || subnetNum === null) return false;
-
-    const mask = 0xffffffff << (32 - prefix);
-    return (ipNum & mask) === (subnetNum & mask);
-  }
-
-  /**
-   * Convert IPv4 address to 32-bit number.
-   */
-  private ipToNumber(ip: string): number | null {
-    const parts = ip.split('.').map((p) => parseInt(p, 10));
-    if (parts.length !== 4 || parts.some((p) => !Number.isFinite(p) || p < 0 || p > 255)) {
-      return null;
-    }
-    // Safe to cast after the length check
-    const [a, b, c, d] = parts as [number, number, number, number];
-    return (a << 24) | (b << 16) | (c << 8) | d;
   }
 }
