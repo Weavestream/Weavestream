@@ -9,6 +9,10 @@ description: Configure HTTPS with Nginx, Caddy, or Traefik in front of Weavestre
 
 Weavestream does not terminate TLS. Place a reverse proxy in front of the `web` container (port 3000) to handle HTTPS.
 
+:::warning
+Running `web` directly internet-facing (no reverse proxy) forces `TRUST_PROXY_HOPS=0`, which disables meaningful per-IP rate limiting, lockout, audit attribution, and IP allow/deny rules. See [Client IP Attribution](/configuration/security/#client-ip-attribution) for the trade-off. For any production deployment, run a trusted TLS proxy in front of `web`.
+:::
+
 ## Required Environment Variables
 
 Before configuring your proxy, update `.env` with the public HTTPS URLs:

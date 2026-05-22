@@ -52,9 +52,20 @@ Count proxies **in front of `web`** when setting this value:
 |---|---|
 | Edge proxy (Caddy, Traefik, Nginx, …) → `web` → `api` | `1` (default) |
 | CDN (Cloudflare, …) → edge proxy → `web` → `api` | `2` |
-| `web` is directly internet-facing (no edge) | `0` — IP attribution degrades to a sentinel since Next.js doesn't expose the socket peer in App Router server contexts. Run an edge proxy in production. |
+| `web` is directly internet-facing (no edge) | `0` — see warning below. |
 
 Setting this too high lets a malicious upstream forge the client IP; setting it too low collapses every request behind your edge into a single throttler bucket. Every trusted edge proxy must set `X-Forwarded-Proto` and either overwrite or append to `X-Forwarded-For`.
+
+:::warning Direct-web deployments
+If `web` is reachable directly from the internet with no reverse proxy in front, `TRUST_PROXY_HOPS=0` is the only safe value — anything higher lets a client choose their own `X-Forwarded-For` and bypass IP-based controls. With `0`, every request is attributed to the `0.0.0.0` sentinel, which means:
+
+- Per-IP login lockout (`login:fail:ip:0.0.0.0`) is shared across all anonymous traffic — five failed logins from anywhere on the internet locks **every** anonymous client out for the lockout window. This is a denial-of-service amplifier.
+- The anonymous throttler bucket is shared, so one client's traffic counts against everyone's quota.
+- IP allow/deny rules cannot target real CIDRs.
+- Audit rows show `0.0.0.0` for every actor.
+
+The recommended production shape is to put a trusted reverse proxy (Caddy, Nginx, Traefik, …) in front of `web` that terminates TLS and overwrites `X-Forwarded-For`, and keep `TRUST_PROXY_HOPS=1`. See [TLS & Reverse Proxy](/deployment/tls/).
+:::
 
 ## Content Security Policy
 
