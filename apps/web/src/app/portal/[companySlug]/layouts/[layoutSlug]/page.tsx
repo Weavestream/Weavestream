@@ -5,6 +5,7 @@ import {
   listAssets,
   listLayouts,
 } from '../../../../../lib/server-api';
+import { resolvePortalCompany } from '../../../../../lib/portal-company';
 import {
   PageBody,
   PageHeader,
@@ -21,12 +22,17 @@ import { LayoutAssetsTable } from '../../../../../components/layouts/layout-asse
  */
 async function loadContext(companySlug: string, layoutSlug: string) {
   const me = await getMe();
-  const membership = me?.memberships.find((m) => m.company.slug === companySlug);
-  if (!membership) return null;
+  if (!me) return null;
+  let company: { id: string; name: string; slug: string };
+  try {
+    company = await resolvePortalCompany(me, companySlug);
+  } catch {
+    return null;
+  }
   const layouts = await listLayouts({ includeArchived: false });
   const layout = layouts.find((l) => l.slug === layoutSlug);
   if (!layout) return null;
-  return { membership, layout };
+  return { company, layout };
 }
 
 export async function generateMetadata({
@@ -51,8 +57,8 @@ export default async function PortalLayoutAssetsPage({
 
   const ctx = await loadContext(companySlug, layoutSlug);
   if (!ctx) notFound();
-  const { membership, layout } = ctx;
-  const companyId = membership.company.id;
+  const { company, layout } = ctx;
+  const companyId = company.id;
 
   const q = typeof sp.q === 'string' ? sp.q : undefined;
   const includeArchived = sp.archived === '1';
@@ -68,14 +74,14 @@ export default async function PortalLayoutAssetsPage({
     <>
       <PageHeader
         crumbs={[
-          { label: membership.company.name, href: `/portal/${companySlug}` },
+          { label: company.name, href: `/portal/${companySlug}` },
           { label: layout.name },
         ]}
         leading={
           <LayoutSwatch icon={layout.icon} color={layout.color} size={48} />
         }
         title={layout.name}
-        description={`Every ${layout.name} record shared with you for ${membership.company.name}.`}
+        description={`Every ${layout.name} record shared with you for ${company.name}.`}
       />
       <PageBody>
         <Panel

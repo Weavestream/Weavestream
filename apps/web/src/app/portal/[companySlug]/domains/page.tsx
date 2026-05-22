@@ -1,9 +1,9 @@
 import type { Metadata } from 'next';
-import { notFound } from 'next/navigation';
 
 export const metadata: Metadata = { title: 'Domains' };
 
 import { getMe, listDomains } from '../../../../lib/server-api';
+import { resolvePortalCompany } from '../../../../lib/portal-company';
 import { PageBody, PageHeader } from '../../../../components/shell/page-header';
 import { Icon, LayoutSwatch, Panel } from '../../../../components/ui';
 import { DomainList } from './domain-list';
@@ -21,9 +21,8 @@ export default async function PortalDomainsPage({
 }) {
   const { companySlug } = await params;
   const me = (await getMe())!;
-  const membership = me.memberships.find((m) => m.company.slug === companySlug);
-  if (!membership) notFound();
-  const companyId = membership.company.id;
+  const company = await resolvePortalCompany(me, companySlug);
+  const companyId = company.id;
 
   const page = await listDomains(companyId, { limit: 100 });
 
@@ -31,7 +30,7 @@ export default async function PortalDomainsPage({
     <>
       <PageHeader
         crumbs={[
-          { label: membership.company.name },
+          { label: company.name },
           { label: 'Domains' },
         ]}
         leading={<LayoutSwatch icon="globe" color="var(--accent)" size={48} />}

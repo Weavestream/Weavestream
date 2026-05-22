@@ -1,11 +1,11 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
-import { notFound } from 'next/navigation';
 import {
   getMe,
   listPasswords,
   type PasswordSummary,
 } from '../../../../lib/server-api';
+import { resolvePortalCompany } from '../../../../lib/portal-company';
 import {
   PageBody,
   PageHeader,
@@ -30,17 +30,16 @@ export default async function PortalPasswordsPage({
 }) {
   const { companySlug } = await params;
   const me = (await getMe())!;
-  const membership = me.memberships.find((m) => m.company.slug === companySlug);
-  if (!membership) notFound();
+  const company = await resolvePortalCompany(me, companySlug);
 
-  const rows = await listPasswords(membership.company.id);
+  const rows = await listPasswords(company.id);
   const active = rows.filter((r) => !r.archivedAt);
 
   return (
     <>
       <PageHeader
         crumbs={[
-          { label: membership.company.name, href: `/portal/${companySlug}` },
+          { label: company.name, href: `/portal/${companySlug}` },
           { label: 'Passwords' },
         ]}
         leading={<LayoutSwatch icon="lock" color="var(--accent)" size={48} />}

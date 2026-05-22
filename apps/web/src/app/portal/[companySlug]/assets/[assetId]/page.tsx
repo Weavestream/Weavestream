@@ -7,6 +7,7 @@ import {
   getMe,
   type AssetSummary,
 } from '../../../../../lib/server-api';
+import { resolvePortalCompany } from '../../../../../lib/portal-company';
 import {
   PageBody,
   PageHeader,
@@ -39,9 +40,14 @@ export async function generateMetadata({
 }): Promise<Metadata> {
   const { companySlug, assetId } = await params;
   const me = await getMe();
-  const membership = me?.memberships.find((m) => m.company.slug === companySlug);
-  if (!membership) return {};
-  const asset = await getAsset(membership.company.id, assetId);
+  if (!me) return {};
+  let company: { id: string; name: string; slug: string };
+  try {
+    company = await resolvePortalCompany(me, companySlug);
+  } catch {
+    return {};
+  }
+  const asset = await getAsset(company.id, assetId);
   return asset ? { title: asset.name } : {};
 }
 
@@ -52,17 +58,17 @@ export default async function PortalAssetDetailPage({
 }) {
   const { companySlug, assetId } = await params;
   const me = (await getMe())!;
-  const membership = me.memberships.find((m) => m.company.slug === companySlug);
-  if (!membership) notFound();
+  const company = await resolvePortalCompany(me, companySlug);
 
-  const asset = await getAsset(membership.company.id, assetId);
+  const asset = await getAsset(company.id, assetId);
   if (!asset) notFound();
 
   const portalBase = `/portal/${companySlug}`;
 
-  const portalSlugByCompanyId = Object.fromEntries(
-    me.memberships.map((m) => [m.company.id, m.company.slug]),
-  );
+  const portalSlugByCompanyId = Object.fromEntries([
+    ...me.memberships.map((m) => [m.company.id, m.company.slug]),
+    [company.id, company.slug],
+  ]);
 
   const primaryField = asset.fields.find((f) => f.isPrimary);
   const noteField = asset.fields.find(
@@ -73,7 +79,7 @@ export default async function PortalAssetDetailPage({
     <>
       <PageHeader
         crumbs={[
-          { label: membership.company.name, href: portalBase },
+          { label: company.name, href: portalBase },
           {
             label: asset.layoutName,
             href: `${portalBase}/layouts/${asset.layoutSlug}`,
@@ -190,13 +196,13 @@ export default async function PortalAssetDetailPage({
 
           <aside style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
             <CredentialsPanel
-              companyId={membership.company.id}
+              companyId={company.id}
               assetId={asset.id}
               mode="portal"
               companySlug={companySlug}
             />
             <AttachmentsPanel
-              companyId={membership.company.id}
+              companyId={company.id}
               entityType="asset"
               entityId={asset.id}
               editable={false}

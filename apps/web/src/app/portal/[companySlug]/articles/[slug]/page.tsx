@@ -1,5 +1,6 @@
 import { notFound } from 'next/navigation';
 import { getArticleBySlug, getMe } from '../../../../../lib/server-api';
+import { resolvePortalCompany } from '../../../../../lib/portal-company';
 import { TopBar } from '../../../../../components/shell/top-bar';
 import { Tag } from '../../../../../components/ui';
 import { ArticleBody } from '../../../../../components/editor/article-body';
@@ -21,16 +22,15 @@ export default async function PortalArticleReadPage({
 }) {
   const { companySlug, slug } = await params;
   const me = (await getMe())!;
-  const membership = me.memberships.find((m) => m.company.slug === companySlug);
-  if (!membership) notFound();
-  const article = await getArticleBySlug(membership.company.id, slug);
+  const company = await resolvePortalCompany(me, companySlug);
+  const article = await getArticleBySlug(company.id, slug);
   if (!article) notFound();
 
   return (
     <>
       <TopBar
         crumbs={[
-          { label: membership.company.name },
+          { label: company.name },
           {
             label: 'Articles',
             href: `/portal/${companySlug}/articles`,
@@ -80,10 +80,11 @@ export default async function PortalArticleReadPage({
               content={article.content}
               markdownSource={article.markdownSource}
               isAdmin={false}
-              portalSlugByCompanyId={Object.fromEntries(
-                me.memberships.map((m) => [m.company.id, m.company.slug]),
-              )}
-              fallbackCompanyId={membership.company.id}
+              portalSlugByCompanyId={Object.fromEntries([
+                ...me.memberships.map((m) => [m.company.id, m.company.slug]),
+                [company.id, company.slug],
+              ])}
+              fallbackCompanyId={company.id}
             />
           </article>
         </div>
@@ -100,7 +101,7 @@ export default async function PortalArticleReadPage({
           }}
         >
           <AttachmentsPanel
-            companyId={membership.company.id}
+            companyId={company.id}
             entityType="article"
             entityId={article.id}
             editable={false}

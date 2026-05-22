@@ -4,6 +4,7 @@ import {
   getMe,
   getSubnetDetail,
 } from '../../../../../lib/server-api';
+import { resolvePortalCompany } from '../../../../../lib/portal-company';
 import { PageBody, PageHeader } from '../../../../../components/shell/page-header';
 import { Tag } from '../../../../../components/ui';
 import { SubnetDetailView } from '../../../../admin/companies/[id]/ipam/[subnetId]/subnet-detail-view';
@@ -15,9 +16,14 @@ export async function generateMetadata({
 }): Promise<Metadata> {
   const { companySlug, subnetId } = await params;
   const me = await getMe();
-  const membership = me?.memberships.find((m) => m.company.slug === companySlug);
-  if (!membership) return {};
-  const detail = await getSubnetDetail(membership.company.id, subnetId);
+  if (!me) return {};
+  let company: { id: string; name: string; slug: string };
+  try {
+    company = await resolvePortalCompany(me, companySlug);
+  } catch {
+    return {};
+  }
+  const detail = await getSubnetDetail(company.id, subnetId);
   return { title: detail?.subnet.name ?? 'Subnet' };
 }
 
@@ -28,17 +34,16 @@ export default async function PortalSubnetDetailPage({
 }) {
   const { companySlug, subnetId } = await params;
   const me = (await getMe())!;
-  const membership = me.memberships.find((m) => m.company.slug === companySlug);
-  if (!membership) notFound();
+  const company = await resolvePortalCompany(me, companySlug);
 
-  const detail = await getSubnetDetail(membership.company.id, subnetId);
+  const detail = await getSubnetDetail(company.id, subnetId);
   if (!detail) notFound();
 
   return (
     <>
       <PageHeader
         crumbs={[
-          { label: membership.company.name },
+          { label: company.name },
           { label: 'IPAM', href: `/portal/${companySlug}/ipam` },
           { label: detail.subnet.name },
         ]}
@@ -60,7 +65,7 @@ export default async function PortalSubnetDetailPage({
       />
       <PageBody>
         <SubnetDetailView
-          companyId={membership.company.id}
+          companyId={company.id}
           detail={detail}
           canManage={false}
         />

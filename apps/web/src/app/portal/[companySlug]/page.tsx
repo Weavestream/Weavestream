@@ -1,5 +1,5 @@
-import { notFound } from 'next/navigation';
 import { getMe } from '../../../lib/server-api';
+import { resolvePortalCompany } from '../../../lib/portal-company';
 import { PageBody, PageHeader } from '../../../components/shell/page-header';
 import { Panel } from '../../../components/ui';
 
@@ -21,10 +21,9 @@ export default async function PortalHome({
 }) {
   const { companySlug } = await params;
   const me = (await getMe())!;
-  const membership = me.memberships.find((m) => m.company.slug === companySlug);
-  if (!membership) notFound();
+  const company = await resolvePortalCompany(me, companySlug);
 
-  const companyName = membership.company.name;
+  const companyName = company.name;
 
   return (
     <>

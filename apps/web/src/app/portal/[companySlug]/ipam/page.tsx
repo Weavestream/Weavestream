@@ -1,9 +1,9 @@
 import type { Metadata } from 'next';
-import { notFound } from 'next/navigation';
 
 export const metadata: Metadata = { title: 'IPAM' };
 
 import { getMe, listSubnets } from '../../../../lib/server-api';
+import { resolvePortalCompany } from '../../../../lib/portal-company';
 import { PageBody, PageHeader } from '../../../../components/shell/page-header';
 import { LayoutSwatch, Panel } from '../../../../components/ui';
 import { SubnetList } from './subnet-list';
@@ -15,16 +15,15 @@ export default async function PortalIpamPage({
 }) {
   const { companySlug } = await params;
   const me = (await getMe())!;
-  const membership = me.memberships.find((m) => m.company.slug === companySlug);
-  if (!membership) notFound();
-  const companyId = membership.company.id;
+  const company = await resolvePortalCompany(me, companySlug);
+  const companyId = company.id;
 
   const subnets = await listSubnets(companyId);
 
   return (
     <>
       <PageHeader
-        crumbs={[{ label: membership.company.name }, { label: 'IPAM' }]}
+        crumbs={[{ label: company.name }, { label: 'IPAM' }]}
         leading={<LayoutSwatch icon="network" color="var(--accent)" size={48} />}
         title="IPAM"
         description="IPv4 subnet overview for this company."

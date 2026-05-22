@@ -1,11 +1,11 @@
 import type { ReactNode } from 'react';
 import Link from 'next/link';
-import { notFound } from 'next/navigation';
 import {
   getMe,
   listPhotos,
   type UploadSummary,
 } from '../../../../lib/server-api';
+import { resolvePortalCompany } from '../../../../lib/portal-company';
 import { PageBody, PageHeader } from '../../../../components/shell/page-header';
 import { Icon, LayoutSwatch, Panel, Tag } from '../../../../components/ui';
 
@@ -25,9 +25,8 @@ export default async function PortalPhotosPage({
   const { companySlug } = await params;
   const sp = await searchParams;
   const me = (await getMe())!;
-  const membership = me.memberships.find((m) => m.company.slug === companySlug);
-  if (!membership) notFound();
-  const companyId = membership.company.id;
+  const company = await resolvePortalCompany(me, companySlug);
+  const companyId = company.id;
 
   const attachedToType = readString(sp.attachedToType);
   const attachedToId = readString(sp.attachedToId);
@@ -46,7 +45,7 @@ export default async function PortalPhotosPage({
     <>
       <PageHeader
         crumbs={[
-          { label: membership.company.name },
+          { label: company.name },
           { label: 'Photos' },
         ]}
         leading={<LayoutSwatch icon="image" color="var(--accent)" size={48} />}

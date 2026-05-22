@@ -189,7 +189,11 @@ function StarredPanel({
       style={{ display: 'flex', flexDirection: 'column' }}
       bodyStyle={{
         flex: 1,
-        minHeight: 0,
+        // On desktop the grid row stretches all panels to equal height,
+        // so the absolute scroll container always has room. On mobile the
+        // panel is alone in its row with no siblings to drive height, so
+        // we need an explicit minimum or the body collapses to zero.
+        minHeight: starred.length > 0 ? 280 : 0,
         padding: 0,
         position: 'relative',
       }}

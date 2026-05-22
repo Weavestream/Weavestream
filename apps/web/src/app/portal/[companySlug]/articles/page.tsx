@@ -1,5 +1,4 @@
 import Link from 'next/link';
-import { notFound } from 'next/navigation';
 import {
   getMe,
   listArticles,
@@ -7,6 +6,7 @@ import {
   type ArticleSummary,
   type FolderNode,
 } from '../../../../lib/server-api';
+import { resolvePortalCompany } from '../../../../lib/portal-company';
 import { PageBody, PageHeader } from '../../../../components/shell/page-header';
 import { Icon, LayoutSwatch, Panel, Tag } from '../../../../components/ui';
 
@@ -26,9 +26,8 @@ export default async function PortalArticlesPage({
   const { companySlug } = await params;
   const sp = await searchParams;
   const me = (await getMe())!;
-  const membership = me.memberships.find((m) => m.company.slug === companySlug);
-  if (!membership) notFound();
-  const companyId = membership.company.id;
+  const company = await resolvePortalCompany(me, companySlug);
+  const companyId = company.id;
 
   const folderId =
     typeof sp.folderId === 'string' && sp.folderId !== 'all'
@@ -49,7 +48,7 @@ export default async function PortalArticlesPage({
     <>
       <PageHeader
         crumbs={[
-          { label: membership.company.name },
+          { label: company.name },
           { label: 'Articles' },
         ]}
         leading={<LayoutSwatch icon="doc" color="var(--accent)" size={48} />}

@@ -1,6 +1,6 @@
 import type { Metadata } from 'next';
 import { cookies } from 'next/headers';
-import { notFound, redirect } from 'next/navigation';
+import { redirect } from 'next/navigation';
 import type { ReactNode } from 'react';
 import { CompanyShell } from '../../../components/shell/company-shell';
 import {
@@ -12,7 +12,7 @@ import {
   listPasswords,
   listSubnets,
 } from '../../../lib/server-api';
-import { canAccessAdminShell } from '../../../lib/roles';
+import { resolvePortalCompany } from '../../../lib/portal-company';
 import { buildTerm } from '../../../lib/term';
 
 export async function generateMetadata({
@@ -22,13 +22,17 @@ export async function generateMetadata({
 }): Promise<Metadata> {
   const { companySlug } = await params;
   const me = await getMe();
-  const membership = me?.memberships.find((m) => m.company.slug === companySlug);
-  if (!membership) return {};
-  const name = membership.company.name;
+  if (!me) return {};
+  let company: { id: string; name: string; slug: string };
+  try {
+    company = await resolvePortalCompany(me, companySlug);
+  } catch {
+    return {};
+  }
   return {
     title: {
-      default: name,
-      template: `%s · ${name}`,
+      default: company.name,
+      template: `%s · ${company.name}`,
     },
   };
 }
@@ -56,20 +60,15 @@ export default async function PortalLayout({
   const me = await getMe();
   if (!me) redirect('/login');
 
-  const membership = me.memberships.find((m) => m.company.slug === companySlug);
-  if (!membership) {
-    // SUPER_ADMINs and operators with admin-shell access can read any
-    // company without an explicit membership, but the portal shell is
-    // membership-scoped by design. Bounce them into the admin view so
-    // they get their full operator chrome instead of a degenerate
-    // single-tenant sidebar with no membership context.
-    if (canAccessAdminShell(me)) {
-      redirect('/admin/companies');
-    }
-    notFound();
-  }
+  // `resolvePortalCompany` returns the company for either a real
+  // membership or an admin preview (gated by `canAccessAdminShell` +
+  // server-side `/companies` permission filter). Callers that aren't
+  // entitled fall through to `notFound()` inside the helper.
+  const company = await resolvePortalCompany(me, companySlug);
+  const membership = me.memberships.find((m) => m.company.id === company.id);
+  const expiresAt = membership?.expiresAt ?? null;
 
-  if (membership.expiresAt && new Date(membership.expiresAt) <= new Date()) {
+  if (expiresAt && new Date(expiresAt) <= new Date()) {
     return (
       <div
         style={{
@@ -95,8 +94,8 @@ export default async function PortalLayout({
             Access expired
           </h1>
           <p style={{ color: 'var(--muted)', fontSize: 13, marginTop: 8 }}>
-            Your access to <strong>{membership.company.name}</strong> ended on{' '}
-            {new Date(membership.expiresAt).toLocaleDateString()}. Contact an
+            Your access to <strong>{company.name}</strong> ended on{' '}
+            {new Date(expiresAt).toLocaleDateString()}. Contact an
             administrator if you still need access.
           </p>
         </div>
@@ -108,10 +107,10 @@ export default async function PortalLayout({
     await Promise.all([
       getSettings(),
       listLayouts(),
-      getAssetCountsByLayout(membership.company.id),
-      listDomains(membership.company.id, { limit: 1 }),
-      listPasswords(membership.company.id),
-      listSubnets(membership.company.id),
+      getAssetCountsByLayout(company.id),
+      listDomains(company.id, { limit: 1 }),
+      listPasswords(company.id),
+      listSubnets(company.id),
     ]);
   const term = buildTerm(settings);
   const passwordCount = passwordList.filter((p) => !p.archivedAt).length;
@@ -119,7 +118,7 @@ export default async function PortalLayout({
   return (
     <CompanyShell
       me={me}
-      company={membership.company}
+      company={company}
       layouts={layouts}
       counts={counts}
       term={term}

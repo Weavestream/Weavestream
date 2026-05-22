@@ -1,5 +1,6 @@
 import { notFound, redirect } from 'next/navigation';
 import { getArticle, getMe } from '../../../../../../lib/server-api';
+import { resolvePortalCompany } from '../../../../../../lib/portal-company';
 
 /**
  * Portal id→slug resolver for `@`-mention links. The portal article
@@ -18,9 +19,8 @@ export default async function PortalArticleByIdRedirectPage({
   const { companySlug, articleId } = await params;
   const me = await getMe();
   if (!me) notFound();
-  const membership = me.memberships.find((m) => m.company.slug === companySlug);
-  if (!membership) notFound();
-  const article = await getArticle(membership.company.id, articleId);
+  const company = await resolvePortalCompany(me, companySlug);
+  const article = await getArticle(company.id, articleId);
   if (!article) notFound();
   redirect(
     `/portal/${companySlug}/articles/${encodeURIComponent(article.slug)}`,

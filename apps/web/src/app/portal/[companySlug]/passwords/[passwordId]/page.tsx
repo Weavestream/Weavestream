@@ -4,6 +4,7 @@ import {
   getMe,
   getPasswordDetail,
 } from '../../../../../lib/server-api';
+import { resolvePortalCompany } from '../../../../../lib/portal-company';
 import {
   PageBody,
   PageHeader,
@@ -28,17 +29,16 @@ export default async function PortalPasswordDetailPage({
 }) {
   const { companySlug, passwordId } = await params;
   const me = (await getMe())!;
-  const membership = me.memberships.find((m) => m.company.slug === companySlug);
-  if (!membership) notFound();
+  const company = await resolvePortalCompany(me, companySlug);
 
-  const password = await getPasswordDetail(membership.company.id, passwordId);
+  const password = await getPasswordDetail(company.id, passwordId);
   if (!password) notFound();
 
   return (
     <>
       <PageHeader
         crumbs={[
-          { label: membership.company.name, href: `/portal/${companySlug}` },
+          { label: company.name, href: `/portal/${companySlug}` },
           { label: 'Passwords', href: `/portal/${companySlug}/passwords` },
           { label: password.name },
         ]}
@@ -77,7 +77,7 @@ export default async function PortalPasswordDetailPage({
 
               <Label>Password</Label>
               <PasswordRevealField
-                companyId={membership.company.id}
+                companyId={company.id}
                 passwordId={password.id}
                 requiresReason={password.requireReasonToView}
                 resetKey={password.updatedAt}
@@ -87,7 +87,7 @@ export default async function PortalPasswordDetailPage({
                 <>
                   <Label>TOTP</Label>
                   <TotpCode
-                    companyId={membership.company.id}
+                    companyId={company.id}
                     passwordId={password.id}
                     resetKey={password.updatedAt}
                   />
