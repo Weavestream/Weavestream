@@ -13,6 +13,16 @@ All notable changes to Weavestream are documented here. The format follows [Keep
 
 ## [Unreleased]
 
+## [1.8.8] - 2026-05-22
+
+### Changed
+
+- **Admins can now preview the client portal.** Operators with admin-shell access (SUPER_ADMIN, or OPERATOR with non-NONE `globalAccess` / platform capabilities) who don't hold a membership on a company can now load `/portal/<slug>` and walk the portal in the exact shape a client would see it, instead of being bounced to `/admin/companies`. Read-only by design — no edit affordances are surfaced under preview, and every per-company data fetch still runs through the same `RequirePermission` checks at the API.
+
+### Fixed
+
+- **Operator home "Starred" panel was empty on mobile.** The panel body collapsed to zero pixels on phone-width layouts because it relied on the desktop grid's equal-row stretch for height. The body now reserves a minimum height when the list is non-empty so starred items render on every viewport.
+
 ## [1.8.7] - 2026-05-21
 
 ### Changed
