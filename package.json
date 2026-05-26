@@ -19,7 +19,7 @@
     "prisma:deploy": "pnpm --filter @weavestream/db prisma:deploy"
   },
   "devDependencies": {
-    "@types/node": "^24.0.0",
+    "@types/node": "^25.9.1",
     "prettier": "^3.3.3",
     "typescript": "^5.9.0"
   },
