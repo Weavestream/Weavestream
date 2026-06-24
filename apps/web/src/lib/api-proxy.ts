@@ -78,11 +78,23 @@ export async function proxyToApi(
   const upstream = await fetch(url, init);
 
   // Pass response headers through unchanged except for hop-by-hop
-  // markers, which would confuse the browser if relayed. Content-
-  // length is fine to keep since we stream the same bytes.
+  // markers, which would confuse the browser if relayed.
+  //
+  // `content-encoding` / `content-length` MUST be dropped: undici (the
+  // runtime `fetch`) transparently decompresses a `Content-Encoding:
+  // gzip|br|deflate` response, so `upstream.body` is already the
+  // *decoded* byte stream — but `upstream.headers` still advertises the
+  // original encoding and the original (compressed) length. Relaying
+  // either makes the browser try to gunzip plain bytes, which fails with
+  // `ERR_CONTENT_DECODING_FAILED` ("cannot decode raw data") and aborts
+  // the body read. Because the API only compresses responses past a size
+  // threshold, this silently corrupted just the larger JSON payloads
+  // (e.g. `/me/stars`, relation lists) while small ones slipped through.
   const responseHeaders = new Headers();
   upstream.headers.forEach((value, key) => {
-    if (HOP_BY_HOP_HEADERS.has(key.toLowerCase())) return;
+    const lower = key.toLowerCase();
+    if (HOP_BY_HOP_HEADERS.has(lower)) return;
+    if (lower === 'content-encoding' || lower === 'content-length') return;
     responseHeaders.append(key, value);
   });
 
