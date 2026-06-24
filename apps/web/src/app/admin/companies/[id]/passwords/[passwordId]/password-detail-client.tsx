@@ -1,11 +1,12 @@
 'use client';
 
-import { useCallback, useMemo, useState, useTransition } from 'react';
+import { useCallback, useEffect, useMemo, useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import type { PasswordGeneratorDefaults } from '@weavestream/shared';
 import type {
   PasswordDetail,
+  PasswordAccessUser,
   PasswordFolderRow,
   PasswordVersionRow,
 } from '../../../../../../lib/server-api';
@@ -49,6 +50,7 @@ interface Props {
   versions: PasswordVersionRow[];
   folders: PasswordFolderRow[];
   canManage: boolean;
+  canManageInternalAccess: boolean;
   folderName: string | null;
   assetName: string | null;
   me: { id: string; role: string };
@@ -70,6 +72,7 @@ export function PasswordDetailClient({
   versions,
   folders,
   canManage,
+  canManageInternalAccess,
   folderName,
   assetName,
   me,
@@ -79,6 +82,7 @@ export function PasswordDetailClient({
   const toast = useToast();
   const [, startTransition] = useTransition();
   const [editing, setEditing] = useState(false);
+  const [editingInternalAccess, setEditingInternalAccess] = useState(false);
 
   async function archive() {
     const res = await apiFetch(
@@ -399,18 +403,12 @@ export function PasswordDetailClient({
             </dl>
           </Panel>
 
-          {password.restrictedToUserIds.length > 0 && (
-            <Panel title="Access restricted">
-              <p style={{ fontSize: 12.5, color: 'var(--muted)' }}>
-                {password.restrictedToUserIds.length} user
-                {password.restrictedToUserIds.length === 1 ? '' : 's'} allowed
-                to reveal this credential.
-                {password.restrictedToUserIds.includes(me.id) && (
-                  <> You&apos;re on the allow list.</>
-                )}
-              </p>
-            </Panel>
-          )}
+          <InternalAccessPanel
+            password={password}
+            canManage={canManageInternalAccess && !password.archivedAt}
+            currentUserId={me.id}
+            onEdit={() => setEditingInternalAccess(true)}
+          />
         </div>
       </div>
 
@@ -428,6 +426,19 @@ export function PasswordDetailClient({
           }}
         />
       )}
+
+      {editingInternalAccess && (
+        <InternalAccessDialog
+          companyId={companyId}
+          password={password}
+          onClose={() => setEditingInternalAccess(false)}
+          onSaved={() => {
+            setEditingInternalAccess(false);
+            toast.push('Internal access updated', 'ok');
+            startTransition(() => router.refresh());
+          }}
+        />
+      )}
     </>
   );
 }
@@ -440,6 +451,321 @@ const dt = {
   fontSize: 11,
 };
 const dd = { margin: 0, color: 'var(--text)' };
+
+function InternalAccessPanel({
+  password,
+  canManage,
+  currentUserId,
+  onEdit,
+}: {
+  password: PasswordDetail;
+  canManage: boolean;
+  currentUserId: string;
+  onEdit: () => void;
+}) {
+  const restrictedCount = password.restrictedToUserIds.length;
+  const restricted = restrictedCount > 0;
+
+  return (
+    <Panel title="Internal access">
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'flex-start',
+            justifyContent: 'space-between',
+            gap: 10,
+          }}
+        >
+          <div style={{ minWidth: 0 }}>
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 6,
+                flexWrap: 'wrap',
+                fontSize: 13,
+                color: 'var(--text)',
+                fontWeight: 600,
+              }}
+            >
+              {restricted ? 'Restricted' : 'All internal users'}
+              {restricted && <Tag tone="warn">{restrictedCount} allowed</Tag>}
+            </div>
+            <p
+              style={{
+                margin: '4px 0 0',
+                fontSize: 12.5,
+                color: 'var(--muted)',
+                lineHeight: 1.45,
+              }}
+            >
+              {restricted
+                ? 'Only selected internal users can see this credential.'
+                : 'Any internal user with normal company access can see this credential.'}
+              {restricted && password.restrictedToUserIds.includes(currentUserId) && (
+                <> You&apos;re included.</>
+              )}
+            </p>
+          </div>
+          {canManage && (
+            <Btn size="sm" kind="ghost" icon={Icon.edit} onClick={onEdit}>
+              Edit
+            </Btn>
+          )}
+        </div>
+      </div>
+    </Panel>
+  );
+}
+
+function InternalAccessDialog({
+  companyId,
+  password,
+  onClose,
+  onSaved,
+}: {
+  companyId: string;
+  password: PasswordDetail;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+  const [users, setUsers] = useState<PasswordAccessUser[]>([]);
+  const [restricted, setRestricted] = useState(
+    password.restrictedToUserIds.length > 0,
+  );
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(
+    () => new Set(password.restrictedToUserIds),
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    apiFetch<{ items: PasswordAccessUser[] }>(
+      `/companies/${companyId}/passwords/internal-access-users`,
+    ).then((res) => {
+      if (cancelled) return;
+      setLoading(false);
+      if (!res.ok || !res.data) {
+        setErr(problemMessage(res.problem) ?? 'Could not load internal users.');
+        return;
+      }
+      const data = res.data;
+      setUsers(data.items);
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        for (const user of data.items) {
+          if (user.alwaysIncluded) next.add(user.id);
+        }
+        return next;
+      });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [companyId]);
+
+  const selectableIds = useMemo(() => new Set(users.map((u) => u.id)), [users]);
+  const alwaysIncludedIds = useMemo(
+    () => new Set(users.filter((u) => u.alwaysIncluded).map((u) => u.id)),
+    [users],
+  );
+  const unavailableIds = useMemo(
+    () => Array.from(selectedIds).filter((id) => !selectableIds.has(id)),
+    [selectedIds, selectableIds],
+  );
+
+  const toggleUser = (userId: string) => {
+    if (alwaysIncludedIds.has(userId)) return;
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(userId)) next.delete(userId);
+      else next.add(userId);
+      return next;
+    });
+  };
+
+  const submit = async () => {
+    setErr(null);
+    const nextIds = restricted
+      ? Array.from(new Set([...Array.from(selectedIds), ...Array.from(alwaysIncludedIds)]))
+      : [];
+    if (restricted && nextIds.length === 0) {
+      setErr('No always-included super admin was available for this restriction.');
+      return;
+    }
+    setBusy(true);
+    const res = await apiFetch(`/companies/${companyId}/passwords/${password.id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ restrictedToUserIds: nextIds }),
+    });
+    setBusy(false);
+    if (!res.ok) {
+      setErr(problemMessage(res.problem) ?? 'Update failed');
+      return;
+    }
+    onSaved();
+  };
+
+  return (
+    <Dialog
+      open
+      onClose={onClose}
+      title="Internal access"
+      width={520}
+      footer={
+        <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+          <Btn size="sm" onClick={onClose}>
+            Cancel
+          </Btn>
+          <Btn
+            size="sm"
+            kind="primary"
+            onClick={() => void submit()}
+            disabled={busy || loading}
+          >
+            Save
+          </Btn>
+        </div>
+      }
+    >
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <label style={checkboxLabel}>
+          <input
+            type="radio"
+            checked={!restricted}
+            onChange={() => setRestricted(false)}
+          />
+          All internal users with company access
+        </label>
+        <label style={checkboxLabel}>
+          <input
+            type="radio"
+            checked={restricted}
+            onChange={() => setRestricted(true)}
+          />
+          Restrict to selected internal users
+        </label>
+
+        {restricted && (
+          <div
+            style={{
+              border: '1px solid var(--line)',
+              borderRadius: 6,
+              maxHeight: 260,
+              overflow: 'auto',
+            }}
+          >
+            {loading ? (
+              <div style={{ padding: 12, fontSize: 13, color: 'var(--muted)' }}>
+                Loading internal users...
+              </div>
+            ) : users.length === 0 ? (
+              <div style={{ padding: 12, fontSize: 13, color: 'var(--muted)' }}>
+                No eligible internal users found.
+              </div>
+            ) : (
+              users.map((user) => (
+                <label
+                  key={user.id}
+                  style={{
+                    display: 'flex',
+                    gap: 10,
+                    alignItems: 'flex-start',
+                    padding: '9px 12px',
+                    borderBottom: '1px solid var(--line)',
+                    cursor: user.alwaysIncluded ? 'default' : 'pointer',
+                    opacity: user.alwaysIncluded ? 0.78 : 1,
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={selectedIds.has(user.id)}
+                    disabled={user.alwaysIncluded}
+                    onChange={() => toggleUser(user.id)}
+                    style={{ marginTop: 2 }}
+                  />
+                  <span style={{ minWidth: 0 }}>
+                    <span
+                      style={{
+                        display: 'block',
+                        fontSize: 13,
+                        color: 'var(--text)',
+                        fontWeight: 600,
+                      }}
+                    >
+                      {user.name}
+                      {user.alwaysIncluded && (
+                        <span style={{ color: 'var(--muted)', fontWeight: 400 }}>
+                          {' '}
+                          (always included)
+                        </span>
+                      )}
+                    </span>
+                    <span
+                      style={{
+                        display: 'block',
+                        fontSize: 12,
+                        color: 'var(--muted)',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
+                      {user.email} · {roleLabel(user.role)} ·{' '}
+                      {accessSourceLabel(user.accessSource)}
+                    </span>
+                  </span>
+                </label>
+              ))
+            )}
+          </div>
+        )}
+
+        {restricted && unavailableIds.length > 0 && (
+          <div
+            style={{
+              fontSize: 12,
+              color: 'var(--warn, #b45309)',
+              background: 'var(--warn-soft, rgba(245,158,11,0.12))',
+              borderRadius: 6,
+              padding: 8,
+            }}
+          >
+            {unavailableIds.length} existing user
+            {unavailableIds.length === 1 ? '' : 's'} can no longer be selected.
+            Clear the restriction or remove unavailable users before saving.
+            <div style={{ marginTop: 6 }}>
+              <Btn
+                size="sm"
+                kind="ghost"
+                onClick={() =>
+                  setSelectedIds(
+                    (prev) =>
+                      new Set(
+                        Array.from(prev).filter(
+                          (id) => selectableIds.has(id) || alwaysIncludedIds.has(id),
+                        ),
+                      ),
+                  )
+                }
+              >
+                Remove unavailable
+              </Btn>
+            </div>
+          </div>
+        )}
+
+        {err && (
+          <div style={{ fontSize: 12, color: 'var(--danger)' }}>{err}</div>
+        )}
+      </div>
+    </Dialog>
+  );
+}
 
 function Label({ children }: { children: React.ReactNode }) {
   return (
@@ -1184,6 +1510,39 @@ function fmtDateTime(iso: string | null): string {
     minute: '2-digit',
   });
   return `${datePart}, ${timePart}`;
+}
+
+function problemMessage(problem: unknown): string | null {
+  if (!problem || typeof problem !== 'object') return null;
+  const p = problem as { message?: unknown; detail?: unknown; title?: unknown };
+  if (typeof p.message === 'string') return p.message;
+  if (typeof p.detail === 'string') return p.detail;
+  if (typeof p.title === 'string') return p.title;
+  return null;
+}
+
+function roleLabel(role: PasswordAccessUser['role']): string {
+  switch (role) {
+    case 'SUPER_ADMIN':
+      return 'super admin';
+    case 'OPERATOR':
+      return 'operator';
+    case 'CONTRACTOR':
+      return 'contractor';
+  }
+}
+
+function accessSourceLabel(
+  source: PasswordAccessUser['accessSource'],
+): string {
+  switch (source) {
+    case 'super_admin':
+      return 'always included';
+    case 'global':
+      return 'global access';
+    case 'membership':
+      return 'membership';
+  }
 }
 
 /**

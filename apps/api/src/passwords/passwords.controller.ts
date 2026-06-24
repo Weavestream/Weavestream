@@ -61,6 +61,15 @@ export class PasswordsController {
     return { items };
   }
 
+  @Get('internal-access-users')
+  @RequirePermission('membership.manage', { companyIdFrom: 'params.companyId' })
+  async internalAccessUsers(
+    @Param('companyId', new ParseUUIDPipe()) companyId: string,
+  ) {
+    const items = await this.passwords.listInternalAccessUsers(companyId);
+    return { items };
+  }
+
   @Get(':id')
   @RequirePermission('password.read', { companyIdFrom: 'params.companyId' })
   async get(
@@ -244,4 +253,3 @@ export class PasswordFoldersController {
     return this.passwords.archiveFolder(actor, companyId, id, meta(req));
   }
 }
-

@@ -82,6 +82,12 @@ function matchPassword(
   row: StoredPassword,
   where: Prisma.PasswordWhereInput,
 ): boolean {
+  if (Array.isArray(where.AND)) {
+    if (!where.AND.every((w) => matchPassword(row, w))) return false;
+  }
+  if (Array.isArray(where.OR)) {
+    if (!where.OR.some((w) => matchPassword(row, w))) return false;
+  }
   if (where.id && (where.id as string) !== row.id) return false;
   if (where.companyId && (where.companyId as string) !== row.companyId)
     return false;
@@ -113,11 +119,44 @@ function matchPassword(
   ) {
     return false;
   }
+  if (
+    where.restrictedToUserIds &&
+    typeof where.restrictedToUserIds === 'object'
+  ) {
+    const filter = where.restrictedToUserIds as {
+      isEmpty?: boolean;
+      has?: string;
+    };
+    if (
+      filter.isEmpty === true &&
+      row.restrictedToUserIds.length !== 0
+    ) {
+      return false;
+    }
+    if (filter.has && !row.restrictedToUserIds.includes(filter.has)) {
+      return false;
+    }
+  }
   return true;
 }
 
-function makeStubs(initial: { passwords?: StoredPassword[] } = {}) {
+type StubAccessUser = {
+  id: string;
+  email: string;
+  name: string;
+  role: 'OPERATOR' | 'CONTRACTOR' | 'CLIENT_USER' | 'SUPER_ADMIN';
+  isActive?: boolean;
+  globalAccess?: 'FULL' | 'READONLY' | 'NONE' | null;
+};
+
+function makeStubs(
+  initial: {
+    passwords?: StoredPassword[];
+    accessUsers?: StubAccessUser[];
+  } = {},
+) {
   const passwords: StoredPassword[] = [...(initial.passwords ?? [])];
+  const accessUsers: StubAccessUser[] = [...(initial.accessUsers ?? [])];
   const versions: StoredVersion[] = [];
   const folders: PasswordFolder[] = [];
   let versionSeq = 0;
@@ -129,6 +168,7 @@ function makeStubs(initial: { passwords?: StoredPassword[] } = {}) {
     passwordVersion: Record<string, (...args: never[]) => Promise<unknown>>;
     passwordFolder: Record<string, (...args: never[]) => Promise<unknown>>;
     user: Record<string, (...args: never[]) => Promise<unknown>>;
+    membership: Record<string, (...args: never[]) => Promise<unknown>>;
     asset: Record<string, (...args: never[]) => Promise<unknown>>;
   };
   const prisma: PrismaStub = {
@@ -221,8 +261,33 @@ function makeStubs(initial: { passwords?: StoredPassword[] } = {}) {
       },
     },
     user: {
-      async findMany() {
+      async findMany(args?: { where?: Record<string, unknown> }) {
+        const where = args?.where ?? {};
+        if (where.role === 'SUPER_ADMIN') {
+          return accessUsers.filter(
+            (u) => u.isActive !== false && u.role === 'SUPER_ADMIN',
+          );
+        }
+        if (where.role === 'OPERATOR' && where.globalAccess) {
+          return accessUsers.filter(
+            (u) =>
+              u.isActive !== false &&
+              u.role === 'OPERATOR' &&
+              (u.globalAccess === 'FULL' || u.globalAccess === 'READONLY'),
+          );
+        }
         return [];
+      },
+    },
+    membership: {
+      async findMany() {
+        return accessUsers
+          .filter(
+            (u) =>
+              u.isActive !== false &&
+              (u.role === 'OPERATOR' || u.role === 'CONTRACTOR'),
+          )
+          .map((user) => ({ user }));
       },
     },
     asset: {
@@ -273,6 +338,13 @@ const OTHER_OPERATOR: AuthedUser = {
   email: 'op2@acme.test',
   sessionId: 'sess-op2',
 };
+const MEMBERSHIP_MANAGER: AuthedUser = {
+  ...OPERATOR,
+  id: 'user-manager',
+  email: 'manager@acme.test',
+  platformCapabilities: ['MEMBERSHIP_MANAGE'],
+  sessionId: 'sess-manager',
+};
 const SUPER: AuthedUser = {
   ...OPERATOR,
   id: 'user-root',
@@ -314,6 +386,35 @@ describe('PasswordsService — list', () => {
     const list = await svc.list(CLIENT, 'co-1', {});
     expect(list.map((p) => p.id)).toEqual(['pwd-a']);
   });
+
+  it('filters internally restricted rows for non-allowlisted internal users', async () => {
+    const { svc } = makeStubs({
+      passwords: [
+        passwordRow({ id: 'pwd-a', restrictedToUserIds: ['user-op'] }),
+        passwordRow({ id: 'pwd-b', restrictedToUserIds: ['someone-else'] }),
+        passwordRow({ id: 'pwd-c', restrictedToUserIds: [] }),
+      ],
+    });
+
+    const list = await svc.list(OPERATOR, 'co-1', {});
+    expect(list.map((p) => p.id)).toEqual(['pwd-a', 'pwd-c']);
+  });
+
+  it('does not apply internal restrictions to CLIENT_USER portal reads', async () => {
+    const { svc } = makeStubs({
+      passwords: [
+        passwordRow({
+          id: 'pwd-a',
+          visibleToClients: true,
+          restrictedToUserIds: ['someone-else'],
+        }),
+      ],
+    });
+
+    const list = await svc.list(CLIENT, 'co-1', {});
+    expect(list.map((p) => p.id)).toEqual(['pwd-a']);
+    expect(list[0]?.restrictedToUserIds).toEqual([]);
+  });
 });
 
 describe('PasswordsService — detail', () => {
@@ -342,6 +443,126 @@ describe('PasswordsService — detail', () => {
     expect(crypto.decrypt).toHaveBeenCalledWith(
       'ENC({"type":"doc","text":"hi"})',
     );
+  });
+
+  it('denies internal detail reads outside the allow-list', async () => {
+    const { svc } = makeStubs({
+      passwords: [
+        passwordRow({
+          id: 'pwd-a',
+          restrictedToUserIds: ['user-op'],
+        }),
+      ],
+    });
+
+    await expect(svc.getDetail(OTHER_OPERATOR, 'co-1', 'pwd-a')).rejects.toThrow(
+      ForbiddenException,
+    );
+  });
+
+  it('allows CLIENT_USER detail reads for visible restricted credentials', async () => {
+    const { svc } = makeStubs({
+      passwords: [
+        passwordRow({
+          id: 'pwd-a',
+          visibleToClients: true,
+          restrictedToUserIds: ['someone-else'],
+        }),
+      ],
+    });
+
+    const detail = await svc.getDetail(CLIENT, 'co-1', 'pwd-a');
+    expect(detail.id).toBe('pwd-a');
+    expect(detail.restrictedToUserIds).toEqual([]);
+  });
+});
+
+describe('PasswordsService — create / update', () => {
+  it('defaults new passwords to client-visible when omitted', async () => {
+    const { svc } = makeStubs();
+
+    const created = await svc.create(
+      OPERATOR,
+      'co-1',
+      { name: 'Portal VPN', password: 'super-secret' },
+      META,
+    );
+
+    expect(created.visibleToClients).toBe(true);
+  });
+
+  it('requires MEMBERSHIP_MANAGE to update internal access', async () => {
+    const { svc } = makeStubs({
+      passwords: [passwordRow({ id: 'pwd-a' })],
+      accessUsers: [
+        {
+          id: 'user-op',
+          email: 'op@acme.test',
+          name: 'Operator',
+          role: 'OPERATOR',
+        },
+      ],
+    });
+
+    await expect(
+      svc.update(
+        OPERATOR,
+        'co-1',
+        'pwd-a',
+        { restrictedToUserIds: ['user-op'] },
+        META,
+      ),
+    ).rejects.toThrow(ForbiddenException);
+
+    await expect(
+      svc.update(
+        MEMBERSHIP_MANAGER,
+        'co-1',
+        'pwd-a',
+        { restrictedToUserIds: ['user-op'] },
+        META,
+      ),
+    ).resolves.toMatchObject({ restrictedToUserIds: ['user-op'] });
+  });
+
+  it('normalizes restricted saves to include active super admins', async () => {
+    const { svc } = makeStubs({
+      passwords: [passwordRow({ id: 'pwd-a' })],
+      accessUsers: [
+        {
+          id: 'user-root',
+          email: 'root@acme.test',
+          name: 'Root',
+          role: 'SUPER_ADMIN',
+        },
+        {
+          id: 'user-op',
+          email: 'op@acme.test',
+          name: 'Operator',
+          role: 'OPERATOR',
+        },
+      ],
+    });
+
+    const users = await svc.listInternalAccessUsers('co-1');
+    expect(users[0]).toMatchObject({
+      id: 'user-root',
+      role: 'SUPER_ADMIN',
+      alwaysIncluded: true,
+      accessSource: 'super_admin',
+    });
+
+    await expect(
+      svc.update(
+        MEMBERSHIP_MANAGER,
+        'co-1',
+        'pwd-a',
+        { restrictedToUserIds: ['user-op'] },
+        META,
+      ),
+    ).resolves.toMatchObject({
+      restrictedToUserIds: ['user-op', 'user-root'],
+    });
   });
 });
 

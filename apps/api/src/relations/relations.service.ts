@@ -6,6 +6,7 @@ import type {
   RelationPort,
   RelationReplaceCtx,
 } from '../field-types/field-type-strategy.js';
+import { canReadPassword } from '../passwords/password-access-policy.js';
 
 export interface LinkInput {
   companyId: string;
@@ -342,17 +343,12 @@ export class RelationsService implements RelationPort {
 
     const assetById = new Map(assetRows.map((a) => [a.id, a]));
     const articleById = new Map(articleRows.map((a) => [a.id, a]));
-    // Restricted credentials are hidden from non-allowlisted users so
-    // the link can't even be enumerated. SUPER_ADMIN bypasses (mirrors
-    // the read-side behaviour in PasswordsService.loadForReveal).
+    // Restricted internal credentials are hidden from non-allowlisted
+    // internal users so the link can't even be enumerated. Client portal
+    // users are governed only by visibleToClients.
     const passwordById = new Map(
       passwordRows
-        .filter(
-          (p) =>
-            p.restrictedToUserIds.length === 0 ||
-            p.restrictedToUserIds.includes(input.actor.id) ||
-            input.actor.role === 'SUPER_ADMIN',
-        )
+        .filter((p) => canReadPassword(input.actor, { ...p, visibleToClients: true }))
         .map((p) => [p.id, p]),
     );
 

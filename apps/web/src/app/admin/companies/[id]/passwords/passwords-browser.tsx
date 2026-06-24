@@ -630,7 +630,7 @@ function passwordColumns({
       width: 240,
       sortValue: (p) => p.name.toLowerCase(),
       render: (p) => (
-        <div style={{ opacity: p.archivedAt ? 0.55 : 1 }}>
+        <div style={{ opacity: p.archivedAt ? 0.55 : 1, minWidth: 0 }}>
           <Link
             href={`/admin/companies/${companyId}/passwords/${p.id}`}
             style={{
@@ -674,10 +674,15 @@ function passwordColumns({
           </div>
           {p.url && (
             <div
+              title={p.url}
               style={{
                 fontSize: 11,
                 color: 'var(--muted)',
                 marginTop: 2,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+                maxWidth: '100%',
               }}
             >
               {p.url}

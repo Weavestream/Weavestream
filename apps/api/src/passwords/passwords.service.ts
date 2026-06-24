@@ -26,6 +26,10 @@ import { EnvService } from '../config/env.service.js';
 import { QueuesService } from '../queues/queues.service.js';
 import { StarsService } from '../stars/stars.service.js';
 import { computePasswordStrength } from './password-strength.js';
+import {
+  canReadPassword,
+  passwordReadWhereFor,
+} from './password-access-policy.js';
 
 export interface AuditMeta {
   ip: string;
@@ -121,6 +125,15 @@ export interface SerializedPasswordFolder {
   updatedAt: Date;
 }
 
+export interface PasswordAccessUser {
+  id: string;
+  name: string;
+  email: string;
+  role: 'SUPER_ADMIN' | 'OPERATOR' | 'CONTRACTOR';
+  accessSource: 'super_admin' | 'membership' | 'global';
+  alwaysIncluded: boolean;
+}
+
 /**
  * Phase 10 — PasswordsService.
  *
@@ -158,35 +171,37 @@ export class PasswordsService {
     filters: PasswordFilterInput = {},
   ): Promise<SerializedPasswordSummary[]> {
     const where: Prisma.PasswordWhereInput = { companyId };
+    const and: Prisma.PasswordWhereInput[] = [];
+    const searchOr: Prisma.PasswordWhereInput[] = [];
     if (!filters.archived) where.archivedAt = null;
     if (filters.folderId) where.folderId = filters.folderId;
     if (filters.assetId) where.assetId = filters.assetId;
     if (filters.tag) where.tags = { has: filters.tag };
     if (filters.q) {
-      where.OR = [
+      searchOr.push(
         { name: { contains: filters.q, mode: 'insensitive' } },
         { username: { contains: filters.q, mode: 'insensitive' } },
         { url: { contains: filters.q, mode: 'insensitive' } },
-      ];
+      );
     }
-    if (actor.role === 'CLIENT_USER') where.visibleToClients = true;
     if (filters.stale) {
       // Stale = either rotation reminder has elapsed since lastRotatedAt
       // or expiresAt is in the past. Done entirely in SQL to keep the
       // list query single-shot.
       // Callers pass stale=true as a coarse filter; UI refines per row.
-      where.OR = [
-        ...(where.OR ?? []),
-        { expiresAt: { lte: new Date() } },
-      ];
+      searchOr.push({ expiresAt: { lte: new Date() } });
     }
+    if (searchOr.length > 0) and.push({ OR: searchOr });
+    const accessWhere = passwordReadWhereFor(actor);
+    if (Object.keys(accessWhere).length > 0) and.push(accessWhere);
+    if (and.length > 0) where.AND = and;
 
     const rows = await this.prisma.password.findMany({
       where,
       orderBy: [{ archivedAt: 'asc' }, { name: 'asc' }],
       select: this.listSelect,
     });
-    return rows.map(this.toSummary);
+    return rows.map((row) => this.toSummary(row, actor));
   }
 
   async getDetail(
@@ -200,7 +215,7 @@ export class PasswordsService {
       : null;
     const isStarred = await this.stars.isStarred(actor.id, 'password', id);
     return {
-      ...this.toSummary(row),
+      ...this.toSummary(row, actor),
       notes,
       totpAlgorithm: row.totpAlgorithm,
       totpDigits: row.totpDigits,
@@ -248,6 +263,14 @@ export class PasswordsService {
   ): Promise<SerializedPasswordDetail> {
     await this.assertFolderBelongs(companyId, input.folderId ?? null);
     await this.assertAssetBelongs(companyId, input.assetId ?? null);
+    let restrictedToUserIds = input.restrictedToUserIds ?? [];
+    if (input.restrictedToUserIds !== undefined) {
+      await this.assertCanManageInternalAccess(actor);
+      restrictedToUserIds = await this.validateAndNormalizeInternalAccessUsers(
+        companyId,
+        input.restrictedToUserIds,
+      );
+    }
 
     const passwordCiphertext = this.crypto.encrypt(input.password);
     const notesCiphertext = this.encodeNotes(input.notes ?? null);
@@ -287,9 +310,9 @@ export class PasswordsService {
           expiresAt: input.expiresAt ? new Date(input.expiresAt) : null,
           color: input.color ?? null,
           tags: input.tags ?? [],
-          visibleToClients: input.visibleToClients ?? false,
+          visibleToClients: input.visibleToClients ?? true,
           requireReasonToView: input.requireReasonToView ?? false,
-          restrictedToUserIds: input.restrictedToUserIds ?? [],
+          restrictedToUserIds,
           createdBy: actor.id,
           updatedBy: actor.id,
         },
@@ -341,7 +364,7 @@ export class PasswordsService {
     this.enqueuePwnedCheck(created.id, companyId, input.password);
 
     return {
-      ...this.toSummary(created),
+      ...this.toSummary(created, actor),
       notes: input.notes ?? null,
       totpAlgorithm: created.totpAlgorithm,
       totpDigits: created.totpDigits,
@@ -357,10 +380,7 @@ export class PasswordsService {
     input: UpdatePasswordInput,
     meta: AuditMeta,
   ): Promise<SerializedPasswordDetail> {
-    const existing = await this.prisma.password.findFirst({
-      where: { id, companyId },
-    });
-    if (!existing) throw new NotFoundException();
+    const existing = await this.loadForRead(actor, companyId, id);
     if (existing.archivedAt) {
       throw new BadRequestException(
         'Cannot edit an archived password — restore it first.',
@@ -371,6 +391,14 @@ export class PasswordsService {
     }
     if (input.assetId !== undefined) {
       await this.assertAssetBelongs(companyId, input.assetId);
+    }
+    let restrictedToUserIds = input.restrictedToUserIds;
+    if (input.restrictedToUserIds !== undefined) {
+      await this.assertCanManageInternalAccess(actor);
+      restrictedToUserIds = await this.validateAndNormalizeInternalAccessUsers(
+        companyId,
+        input.restrictedToUserIds,
+      );
     }
 
     // Build the next-value map + changedFields (versioned subset).
@@ -456,9 +484,9 @@ export class PasswordsService {
       data.requireReasonToView = input.requireReasonToView;
       metaChanges.requireReasonToView = input.requireReasonToView;
     }
-    if (input.restrictedToUserIds !== undefined) {
-      data.restrictedToUserIds = input.restrictedToUserIds;
-      metaChanges.restrictedToUserIds = input.restrictedToUserIds;
+    if (restrictedToUserIds !== undefined) {
+      data.restrictedToUserIds = restrictedToUserIds;
+      metaChanges.restrictedToUserIds = restrictedToUserIds;
     }
     if (
       input.rotationReminderDays !== undefined &&
@@ -539,7 +567,7 @@ export class PasswordsService {
 
     const isStarred = await this.stars.isStarred(actor.id, 'password', id);
     return {
-      ...this.toSummary(updated),
+      ...this.toSummary(updated, actor),
       notes: updated.notesCiphertext ? this.safeDecryptNotes(updated.notesCiphertext) : null,
       totpAlgorithm: updated.totpAlgorithm,
       totpDigits: updated.totpDigits,
@@ -554,8 +582,7 @@ export class PasswordsService {
     id: string,
     meta: AuditMeta,
   ): Promise<SerializedPasswordSummary> {
-    const existing = await this.prisma.password.findFirst({ where: { id, companyId } });
-    if (!existing) throw new NotFoundException();
+    const existing = await this.loadForRead(actor, companyId, id);
     if (existing.archivedAt) throw new BadRequestException('Already archived');
     await this.prisma.password.updateMany({
       where: { id, companyId },
@@ -575,7 +602,7 @@ export class PasswordsService {
       before: { archivedAt: null },
       after: { archivedAt: updated.archivedAt },
     });
-    return this.toSummary(updated);
+    return this.toSummary(updated, actor);
   }
 
   async restore(
@@ -584,8 +611,7 @@ export class PasswordsService {
     id: string,
     meta: AuditMeta,
   ): Promise<SerializedPasswordSummary> {
-    const existing = await this.prisma.password.findFirst({ where: { id, companyId } });
-    if (!existing) throw new NotFoundException();
+    const existing = await this.loadForRead(actor, companyId, id);
     if (!existing.archivedAt) throw new BadRequestException('Not archived');
     await this.prisma.password.updateMany({
       where: { id, companyId },
@@ -605,7 +631,7 @@ export class PasswordsService {
       before: { archivedAt: existing.archivedAt },
       after: { archivedAt: null },
     });
-    return this.toSummary(updated);
+    return this.toSummary(updated, actor);
   }
 
   // ------------------------------------------------------------------
@@ -749,10 +775,7 @@ export class PasswordsService {
     version: number,
     meta: AuditMeta,
   ): Promise<SerializedPasswordDetail> {
-    const existing = await this.prisma.password.findFirst({
-      where: { id, companyId },
-    });
-    if (!existing) throw new NotFoundException();
+    const existing = await this.loadForRead(actor, companyId, id);
     if (existing.archivedAt) {
       throw new BadRequestException(
         'Cannot restore a version on an archived password — restore the password first.',
@@ -810,6 +833,84 @@ export class PasswordsService {
     });
 
     return result;
+  }
+
+  async listInternalAccessUsers(
+    companyId: string,
+  ): Promise<PasswordAccessUser[]> {
+    const now = new Date();
+    const [superAdmins, memberships, globalOperators] = await Promise.all([
+      this.prisma.user.findMany({
+        where: {
+          isActive: true,
+          role: 'SUPER_ADMIN',
+        },
+        select: { id: true, name: true, email: true, role: true },
+      }),
+      this.prisma.membership.findMany({
+        where: {
+          companyId,
+          revokedAt: null,
+          OR: [{ expiresAt: null }, { expiresAt: { gt: now } }],
+          user: {
+            isActive: true,
+            role: { in: ['OPERATOR', 'CONTRACTOR'] },
+          },
+        },
+        select: {
+          user: { select: { id: true, name: true, email: true, role: true } },
+        },
+      }),
+      this.prisma.user.findMany({
+        where: {
+          isActive: true,
+          role: 'OPERATOR',
+          globalAccess: { in: ['FULL', 'READONLY'] },
+        },
+        select: { id: true, name: true, email: true, role: true },
+      }),
+    ]);
+
+    const byId = new Map<string, PasswordAccessUser>();
+    for (const user of superAdmins) {
+      byId.set(user.id, {
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        role: 'SUPER_ADMIN',
+        accessSource: 'super_admin',
+        alwaysIncluded: true,
+      });
+    }
+    for (const membership of memberships) {
+      const user = membership.user;
+      byId.set(user.id, {
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        role: user.role as 'OPERATOR' | 'CONTRACTOR',
+        accessSource: 'membership',
+        alwaysIncluded: false,
+      });
+    }
+    for (const user of globalOperators) {
+      if (byId.has(user.id)) continue;
+      byId.set(user.id, {
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        role: 'OPERATOR',
+        accessSource: 'global',
+        alwaysIncluded: false,
+      });
+    }
+
+    return Array.from(byId.values()).sort((a, b) => {
+      if (a.alwaysIncluded !== b.alwaysIncluded) {
+        return a.alwaysIncluded ? -1 : 1;
+      }
+      return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
+    });
   }
 
   // ------------------------------------------------------------------
@@ -1030,9 +1131,7 @@ export class PasswordsService {
   ): Promise<Password> {
     const row = await this.prisma.password.findFirst({ where: { id, companyId } });
     if (!row) throw new NotFoundException();
-    if (actor.role === 'CLIENT_USER' && !row.visibleToClients) {
-      throw new NotFoundException();
-    }
+    if (!canReadPassword(actor, row)) throw this.passwordAccessDenied(actor);
     return row;
   }
 
@@ -1044,16 +1143,6 @@ export class PasswordsService {
     const row = await this.loadForRead(actor, companyId, id);
     if (row.archivedAt) {
       throw new BadRequestException('cannot reveal an archived password');
-    }
-    if (
-      row.restrictedToUserIds.length > 0 &&
-      !row.restrictedToUserIds.includes(actor.id) &&
-      actor.role !== 'SUPER_ADMIN'
-    ) {
-      throw new ForbiddenException('you are not on this credential\'s allow-list');
-    }
-    if (actor.role === 'CLIENT_USER' && !row.visibleToClients) {
-      throw new NotFoundException();
     }
     return row;
   }
@@ -1082,7 +1171,7 @@ export class PasswordsService {
     updatedBy: string;
     createdAt: Date;
     updatedAt: Date;
-  }): SerializedPasswordSummary => ({
+  }, actor?: AuthedUser): SerializedPasswordSummary => ({
     id: row.id,
     companyId: row.companyId,
     folderId: row.folderId,
@@ -1100,13 +1189,57 @@ export class PasswordsService {
     expiresAt: row.expiresAt,
     visibleToClients: row.visibleToClients,
     requireReasonToView: row.requireReasonToView,
-    restrictedToUserIds: row.restrictedToUserIds,
+    restrictedToUserIds:
+      actor?.role === 'CLIENT_USER' ? [] : row.restrictedToUserIds,
     archivedAt: row.archivedAt,
     createdBy: row.createdBy,
     updatedBy: row.updatedBy,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   });
+
+  private passwordAccessDenied(actor: AuthedUser) {
+    if (actor.role === 'CLIENT_USER') return new NotFoundException();
+    return new ForbiddenException('you are not on this credential\'s allow-list');
+  }
+
+  private async assertCanManageInternalAccess(actor: AuthedUser): Promise<void> {
+    if (actor.role === 'SUPER_ADMIN') return;
+    if (actor.platformCapabilities.includes('MEMBERSHIP_MANAGE')) return;
+    throw new ForbiddenException(
+      'membership management permission is required to update internal access',
+    );
+  }
+
+  private async validateAndNormalizeInternalAccessUsers(
+    companyId: string,
+    userIds: string[],
+  ): Promise<string[]> {
+    const uniqueIds = Array.from(new Set(userIds));
+    if (uniqueIds.length !== userIds.length) {
+      throw new BadRequestException('restrictedToUserIds contains duplicate users');
+    }
+    if (uniqueIds.length === 0) return [];
+
+    const eligible = await this.listInternalAccessUsers(companyId);
+    const eligibleIds = new Set(eligible.map((u) => u.id));
+    const invalid = uniqueIds.filter((id) => !eligibleIds.has(id));
+    if (invalid.length > 0) {
+      throw new BadRequestException({
+        error: 'InvalidInternalAccessUsers',
+        message:
+          'Internal access can only include active non-client users with company access.',
+        userIds: invalid,
+      });
+    }
+    for (const user of eligible) {
+      if (user.alwaysIncluded && !uniqueIds.includes(user.id)) {
+        uniqueIds.push(user.id);
+      }
+    }
+    uniqueIds.sort();
+    return uniqueIds;
+  }
 
   private toFolder = (row: PasswordFolder): SerializedPasswordFolder => ({
     id: row.id,

@@ -661,7 +661,11 @@ describe('UploadsService.assertReadable (CLIENT_USER gate)', () => {
       [k: string]: unknown;
     } | null;
     article?: { id: string } | null;
-    password?: { id: string } | null;
+    password?: {
+      id: string;
+      visibleToClients: boolean;
+      restrictedToUserIds: string[];
+    } | null;
     assetField?: { id: string } | null;
     classify?: () => Promise<
       Map<
@@ -710,6 +714,7 @@ describe('UploadsService.assertReadable (CLIENT_USER gate)', () => {
 
   const clientActor = { id: 'u1', role: 'CLIENT_USER' } as never;
   const operatorActor = { id: 'u1', role: 'OPERATOR' } as never;
+  const otherOperatorActor = { id: 'u2', role: 'OPERATOR' } as never;
 
   it('allows OPERATOR to stream an upload attached to an invisible article', async () => {
     const { service, storage } = makeService({
@@ -873,7 +878,7 @@ describe('UploadsService.assertReadable (CLIENT_USER gate)', () => {
         mimeType: 'image/png',
         filename: 'a.png',
       },
-      password: { id: 'pw-ok' },
+      password: { id: 'pw-ok', visibleToClients: true, restrictedToUserIds: [] },
     });
     const result = await service.openImageStream(
       'c1',
@@ -882,6 +887,30 @@ describe('UploadsService.assertReadable (CLIENT_USER gate)', () => {
       clientActor,
     );
     expect(result).not.toBeNull();
+  });
+
+  it('denies OPERATOR on an upload attached to a credential restricted to someone else', async () => {
+    const { service, storage } = makeService({
+      upload: {
+        id: 'u1',
+        companyId: 'c1',
+        attachedToType: 'password',
+        attachedToId: 'pw-restricted',
+        storageKey: 'k',
+        thumbnailKey: null,
+        mimeType: 'image/png',
+        filename: 'a.png',
+      },
+      password: {
+        id: 'pw-restricted',
+        visibleToClients: true,
+        restrictedToUserIds: ['u1'],
+      },
+    });
+    await expect(
+      service.openImageStream('c1', 'u1', 'original', otherOperatorActor),
+    ).rejects.toBeInstanceOf(NotFoundException);
+    expect(storage.getObjectStream).not.toHaveBeenCalled();
   });
 
   it('denies CLIENT_USER on an upload attached to a hidden asset field', async () => {
@@ -964,7 +993,13 @@ describe('UploadsService.paginatedList CLIENT_USER filter', () => {
         });
       });
     const articleFindMany = jest.fn().mockResolvedValue([{ id: 'art-ok' }]);
-    const passwordFindMany = jest.fn().mockResolvedValue([{ id: 'pw-ok' }]);
+    const passwordFindMany = jest.fn().mockImplementation(async (args: { where: { id?: { in?: string[] } } }) => {
+      const ids = new Set(args.where.id?.in ?? []);
+      return [
+        { id: 'pw-ok', visibleToClients: true, restrictedToUserIds: [] },
+        { id: 'pw-hidden', visibleToClients: false, restrictedToUserIds: [] },
+      ].filter((row) => ids.has(row.id));
+    });
     const assetFieldFindMany = jest.fn().mockResolvedValue([{ id: 'fld-ok' }]);
     const prisma = {
       upload: { findMany },

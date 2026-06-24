@@ -1781,6 +1781,15 @@ export type PasswordVersionRow = {
   createdAt: string;
 };
 
+export type PasswordAccessUser = {
+  id: string;
+  name: string;
+  email: string;
+  role: 'SUPER_ADMIN' | 'OPERATOR' | 'CONTRACTOR';
+  accessSource: 'super_admin' | 'membership' | 'global';
+  alwaysIncluded: boolean;
+};
+
 export async function listPasswords(
   companyId: string,
   params: {
@@ -2039,4 +2048,3 @@ export async function getTicket(
   if (!res.ok || !res.data) return null;
   return res.data;
 }
-

@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
+import { canReadPassword } from '../passwords/password-access-policy.js';
 
 /**
  * Default warning window (days) used when a DATE/DATETIME field is
@@ -386,6 +387,7 @@ export class ExpirationsService {
         id: true,
         companyId: true,
         name: true,
+        visibleToClients: true,
         expiresAt: true,
         lastRotatedAt: true,
         rotationReminderDays: true,
@@ -395,14 +397,7 @@ export class ExpirationsService {
 
     if (passwords.length === 0) return [];
 
-    // Mirror the reveal gate: a password with a non-empty allow list
-    // is invisible to anyone outside the list. SUPER_ADMIN bypasses
-    // — they need an unfiltered view to operate the platform.
-    const filtered = passwords.filter((p) => {
-      if (p.restrictedToUserIds.length === 0) return true;
-      if (options.actor.role === 'SUPER_ADMIN') return true;
-      return p.restrictedToUserIds.includes(options.actor.id);
-    });
+    const filtered = passwords.filter((p) => canReadPassword(options.actor, p));
 
     if (filtered.length === 0) return [];
 

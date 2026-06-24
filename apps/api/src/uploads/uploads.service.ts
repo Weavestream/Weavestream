@@ -48,6 +48,7 @@ import type { AuthedUser } from '../common/current-user.decorator.js';
 import { extractEmbeddedUploadIds } from '../articles/article-uploads.js';
 import { mimesAreCompatible } from './mime-compat.js';
 import { startsWithTextBom } from './text-bom.js';
+import { canReadPassword } from '../passwords/password-access-policy.js';
 
 export interface AuditMeta {
   ip: string;
@@ -847,15 +848,14 @@ export class UploadsService {
       }
     }
 
-    // CLIENT_USER parent-visibility filter. The cursor still advances on
+    // Actor parent-visibility filter. The cursor still advances on
     // the underlying `Upload.id` order, so the response page may be
     // smaller than `limit` — same property as the article link-state
     // filter below. Mirrors `assertReadable` rules for single-upload
     // reads so the list and the detail endpoints agree.
-    const clientFiltered =
-      opts.actor?.role === 'CLIENT_USER'
-        ? await this.filterForClientUser(companyId, serialized)
-        : serialized;
+    const clientFiltered = opts.actor
+      ? await this.filterForActor(companyId, serialized, opts.actor)
+      : serialized;
 
     // Photos gallery: by default hide article uploads whose link state
     // isn't `live` so the grid is dominated by current content. Pass
@@ -881,7 +881,7 @@ export class UploadsService {
   }
 
   /**
-   * Drop entries whose parent entity isn't visible to a CLIENT_USER.
+   * Drop entries whose parent entity isn't readable to the actor.
    * Batches one query per parent type so the cost is bounded regardless
    * of page size. Mirrors `assertReadable`:
    *   - `asset` rows pass through (no Asset.visibleToClients flag).
@@ -891,9 +891,10 @@ export class UploadsService {
    *   - `password` / `asset_field` → require visible non-archived parent.
    *   - null `attachedToType` → dropped.
    */
-  private async filterForClientUser(
+  private async filterForActor(
     companyId: string,
     serialized: SerializedUpload[],
+    actor: AuthedUser,
   ): Promise<SerializedUpload[]> {
     if (serialized.length === 0) return serialized;
 
@@ -937,12 +938,22 @@ export class UploadsService {
               where: {
                 id: { in: passwordIds },
                 companyId,
-                visibleToClients: true,
                 archivedAt: null,
+                ...(actor.role === 'CLIENT_USER' ? { visibleToClients: true } : {}),
               },
-              select: { id: true },
+              select: {
+                id: true,
+                visibleToClients: true,
+                restrictedToUserIds: true,
+              },
             })
-          : Promise.resolve([] as { id: string }[]),
+          : Promise.resolve(
+              [] as Array<{
+                id: string;
+                visibleToClients: boolean;
+                restrictedToUserIds: string[];
+              }>,
+            ),
         assetFieldIds.length
           ? this.prisma.assetField.findMany({
               where: {
@@ -956,7 +967,9 @@ export class UploadsService {
       ]);
 
     const articleOk = new Set(visibleArticles.map((r) => r.id));
-    const passwordOk = new Set(visiblePasswords.map((r) => r.id));
+    const passwordOk = new Set(
+      visiblePasswords.filter((r) => canReadPassword(actor, r)).map((r) => r.id),
+    );
     const assetFieldOk = new Set(visibleAssetFields.map((r) => r.id));
 
     return serialized.filter((p) => {
@@ -964,14 +977,16 @@ export class UploadsService {
         case 'asset':
           return true;
         case 'article':
+          if (actor.role !== 'CLIENT_USER') return true;
           if (p.attachedToId) return articleOk.has(p.attachedToId);
           return p.articleLinkState === 'live';
         case 'password':
           return p.attachedToId ? passwordOk.has(p.attachedToId) : false;
         case 'asset_field':
+          if (actor.role !== 'CLIENT_USER') return true;
           return p.attachedToId ? assetFieldOk.has(p.attachedToId) : false;
         default:
-          return false;
+          return actor.role !== 'CLIENT_USER';
       }
     });
   }
@@ -1256,7 +1271,7 @@ export class UploadsService {
     },
     actor?: AuthedUser,
   ): Promise<void> {
-    if (!actor || actor.role !== 'CLIENT_USER') return;
+    if (!actor) return;
 
     const deny = () => {
       throw new NotFoundException();
@@ -1271,15 +1286,20 @@ export class UploadsService {
           where: {
             id: upload.attachedToId,
             companyId,
-            visibleToClients: true,
             archivedAt: null,
+            ...(actor.role === 'CLIENT_USER' ? { visibleToClients: true } : {}),
           },
-          select: { id: true },
+          select: {
+            id: true,
+            visibleToClients: true,
+            restrictedToUserIds: true,
+          },
         });
-        if (!row) return deny();
+        if (!row || !canReadPassword(actor, row)) return deny();
         return;
       }
       case 'asset_field': {
+        if (actor.role !== 'CLIENT_USER') return;
         if (!upload.attachedToId) return deny();
         const row = await this.prisma.assetField.findFirst({
           where: {
@@ -1293,6 +1313,7 @@ export class UploadsService {
         return;
       }
       case 'article': {
+        if (actor.role !== 'CLIENT_USER') return;
         if (upload.attachedToId) {
           const row = await this.prisma.article.findFirst({
             where: {
@@ -1316,7 +1337,7 @@ export class UploadsService {
         return;
       }
       default:
-        return deny();
+        return actor.role === 'CLIENT_USER' ? deny() : undefined;
     }
   }
 

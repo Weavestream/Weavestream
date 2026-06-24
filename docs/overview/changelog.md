@@ -16,6 +16,11 @@ All notable changes to Weavestream are documented here. The format follows [Keep
 ### Changed
 
 - **pnpm 11 is now the workspace package manager.** `packageManager` in root `package.json` is pinned to the current exact pnpm 11 release (`pnpm@11.9.0`), CI runs the same version, and pnpm configuration now lives in `pnpm-workspace.yaml` using pnpm 11's `allowBuilds` map. Production containers continue to run prebuilt Node apps; pnpm is only used while installing and building images.
+- **Password internal access now has a dedicated sidebar control.** Credential visibility in the client portal remains controlled by the existing "Visible to client portal users" checkbox, while internal per-user restrictions are managed from the password detail sidebar. The default remains all internal users; restricted credentials can now also be limited to super admins only.
+
+### Security
+
+- **Password internal restrictions now apply consistently.** Internal users outside a credential's allow-list can no longer read its metadata, notes, versions, TOTP, reveal response, relations, expiration rows, or password-attached uploads. Super admins are always included in restricted credential access and are shown as non-removable entries in the picker.
 
 ## [1.8.8] - 2026-05-22
 
