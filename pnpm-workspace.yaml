@@ -4,6 +4,9 @@ packages:
 
 confirmModulesPurge: false
 
+overrides:
+  multer: 2.2.0
+
 supportedArchitectures:
   os:
     - linux
