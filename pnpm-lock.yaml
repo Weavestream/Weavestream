@@ -120,8 +120,8 @@ importers:
         specifier: ^8.3.0
         version: 8.3.0
       zod:
-        specifier: ^3.25.0
-        version: 3.25.76
+        specifier: ^4.4.3
+        version: 4.4.3
     devDependencies:
       '@nestjs/cli':
         specifier: ^11.0.21
@@ -389,8 +389,8 @@ importers:
         specifier: ^8.3.0
         version: 8.3.0
       zod:
-        specifier: ^3.25.0
-        version: 3.25.76
+        specifier: ^4.4.3
+        version: 4.4.3
     devDependencies:
       '@nestjs/cli':
         specifier: ^11.0.21
@@ -447,8 +447,8 @@ importers:
   packages/shared:
     dependencies:
       zod:
-        specifier: ^3.25.0
-        version: 3.25.76
+        specifier: ^4.4.3
+        version: 4.4.3
     devDependencies:
       '@types/node':
         specifier: ^24.0.0
@@ -745,6 +745,9 @@ packages:
 
   '@codemirror/view@6.41.1':
     resolution: {integrity: sha512-ToDnWKbBnke+ZLrP6vgTTDScGi5H37YYuZGniQaBzxMVdtCxMrslsmtnOvbPZk4RX9bvkQqnWR/WS/35tJA0qg==}
+
+  '@codemirror/view@6.43.0':
+    resolution: {integrity: sha512-V7ZCLQO3Jus9hzh2jVCCPW3mO4IBMr43O37PqSUYautJSnnJF41YlgLw21x0fLJTYvJ+Vkm6Gp+qKGH9pltgXA==}
 
   '@colors/colors@1.5.0':
     resolution: {integrity: sha512-ooWCrlZP11i8GImSjTHYHLkvFDP48nS4+204nGb1RiX/WXYHmJA2III9/e2DWVabCESdW7hBAEzHRqUn9OUVvQ==}
@@ -2125,6 +2128,9 @@ packages:
   '@types/node@24.12.2':
     resolution: {integrity: sha512-A1sre26ke7HDIuY/M23nd9gfB+nrmhtYyMINbjI1zHJxYteKR6qSMX56FsmjMcDb3SMcjJg5BiRRgOCC/yBD0g==}
 
+  '@types/node@24.12.4':
+    resolution: {integrity: sha512-GUUEShf+PBCGW2KaXwcIt3Yk+e3pkKwWKb9GSyM9WQVE+ep2jzmHdGsHzu4wgcZy5fN9FBdVzjpBQsYlpfpgLA==}
+
   '@types/nodemailer@8.0.0':
     resolution: {integrity: sha512-fyf8jWULsCo0d0BuoQ75i6IeoHs47qcqxWc7yUdUcV0pOZGjUTTOvwdG1PRXUDqN/8A64yQdQdnA2pZgcdi+cA==}
 
@@ -2276,6 +2282,7 @@ packages:
 
   '@ungap/structured-clone@1.3.0':
     resolution: {integrity: sha512-WmoN8qaIAo7WTYWbAZuG8PYEhn5fkz7dZrqTBZ7dtt//lL2Gwms1IcnQ5yHqjDfX8Ft5j4YzDM23f87zBfDe9g==}
+    deprecated: Potential CWE-502 - Update to 1.3.1 or higher
 
   '@unrs/resolver-binding-android-arm-eabi@1.11.1':
     resolution: {integrity: sha512-ppLRUgHVaGRWUx0R0Ut06Mjo9gBaBkg3v/8AxusGLhsIotbBLuRk51rAzqLC8gq6NyyAojEXglNjzf6R948DNw==}
@@ -5786,8 +5793,8 @@ packages:
     resolution: {integrity: sha512-+QU2zd6OTD8XWIJCbffaiQeH9U73qIqafo1x6V1snCWYGJf6cVE0cDR4D8xRzcEnfI21IFrUPzPGtcPf8AC+Rw==}
     engines: {node: ^14.17.0 || ^16.13.0 || >=18.0.0}
 
-  ws@8.20.0:
-    resolution: {integrity: sha512-sAt8BhgNbzCtgGbt2OxmpuryO63ZoDk/sqaB/znQm94T4fCEsy/yV+7CdC1kJhOU9lboAEU7R3kquuycDoibVA==}
+  ws@8.21.0:
+    resolution: {integrity: sha512-Vsp28b7DRcimFQvrqu2Wek3z1iYxDCWqHYB8Qsnk/S4RfaCQzPGPyBNuVjJV3cd6UiKtUtp6sNM77gWvzcCH+g==}
     engines: {node: '>=10.0.0'}
     peerDependencies:
       bufferutil: ^4.0.1
@@ -5842,8 +5849,8 @@ packages:
     peerDependencies:
       zod: ^3.25.0 || ^4.0.0
 
-  zod@3.25.76:
-    resolution: {integrity: sha512-gzUt/qt81nXsFGKIFcC3YnfEAx5NkunCfnDlvuBSSFS02bcXu4Lmea0AFIUwbLWxWPx3d9p8S5QoaujKcNQxcQ==}
+  zod@4.4.3:
+    resolution: {integrity: sha512-ytENFjIJFl2UwYglde2jchW2Hwm4GJFLDiSXWdTrJQBIN9Fcyp7n4DhxJEiWNAJMV1/BqWfW/kkg71UDcHJyTQ==}
 
   zwitch@2.0.4:
     resolution: {integrity: sha512-bXE4cR/kVZhKZX/RjPEflHaKVhUVl85noU3v6b8apfQEc1x4A+zBxjZ4lN8LqGd6WZ3dl98pY4o717VFmoPp+A==}
@@ -6315,7 +6322,7 @@ snapshots:
   '@codemirror/search@6.7.0':
     dependencies:
       '@codemirror/state': 6.6.0
-      '@codemirror/view': 6.41.1
+      '@codemirror/view': 6.43.0
       crelt: 1.0.6
 
   '@codemirror/state@6.6.0':
@@ -6326,10 +6333,17 @@ snapshots:
     dependencies:
       '@codemirror/language': 6.12.3
       '@codemirror/state': 6.6.0
-      '@codemirror/view': 6.41.1
+      '@codemirror/view': 6.43.0
       '@lezer/highlight': 1.2.3
 
   '@codemirror/view@6.41.1':
+    dependencies:
+      '@codemirror/state': 6.6.0
+      crelt: 1.0.6
+      style-mod: 4.1.3
+      w3c-keyname: 2.2.8
+
+  '@codemirror/view@6.43.0':
     dependencies:
       '@codemirror/state': 6.6.0
       crelt: 1.0.6
@@ -7790,6 +7804,10 @@ snapshots:
     dependencies:
       undici-types: 7.16.0
 
+  '@types/node@24.12.4':
+    dependencies:
+      undici-types: 7.16.0
+
   '@types/nodemailer@8.0.0':
     dependencies:
       '@types/node': 24.12.2
@@ -7856,7 +7874,7 @@ snapshots:
 
   '@types/ws@8.18.1':
     dependencies:
-      '@types/node': 24.12.2
+      '@types/node': 24.12.4
 
   '@types/yargs-parser@21.0.3': {}
 
@@ -8611,7 +8629,7 @@ snapshots:
       '@codemirror/lint': 6.9.5
       '@codemirror/search': 6.7.0
       '@codemirror/state': 6.6.0
-      '@codemirror/view': 6.41.1
+      '@codemirror/view': 6.43.0
 
   collect-v8-coverage@1.0.3: {}
 
@@ -9072,8 +9090,8 @@ snapshots:
       '@babel/parser': 7.29.2
       eslint: 9.39.4(jiti@1.21.7)
       hermes-parser: 0.25.1
-      zod: 3.25.76
-      zod-validation-error: 4.0.2(zod@3.25.76)
+      zod: 4.4.3
+      zod-validation-error: 4.0.2(zod@4.4.3)
     transitivePeerDependencies:
       - supports-color
 
@@ -9513,12 +9531,12 @@ snapshots:
 
   happy-dom@20.9.0:
     dependencies:
-      '@types/node': 24.12.2
+      '@types/node': 24.12.4
       '@types/whatwg-mimetype': 3.0.2
       '@types/ws': 8.18.1
       entities: 7.0.1
       whatwg-mimetype: 3.0.0
-      ws: 8.20.0
+      ws: 8.21.0
     transitivePeerDependencies:
       - bufferutil
       - utf-8-validate
@@ -12332,7 +12350,7 @@ snapshots:
       imurmurhash: 0.1.4
       signal-exit: 4.1.0
 
-  ws@8.20.0: {}
+  ws@8.21.0: {}
 
   y18n@4.0.3: {}
 
@@ -12377,10 +12395,10 @@ snapshots:
 
   yoctocolors-cjs@2.1.3: {}
 
-  zod-validation-error@4.0.2(zod@3.25.76):
+  zod-validation-error@4.0.2(zod@4.4.3):
     dependencies:
-      zod: 3.25.76
+      zod: 4.4.3
 
-  zod@3.25.76: {}
+  zod@4.4.3: {}
 
   zwitch@2.0.4: {}
