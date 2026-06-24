@@ -20,16 +20,27 @@ const TONES = [
 export function PasswordStrengthMeter({
   score,
   width = '100%',
+  inline = false,
   style,
 }: {
   score: number | null;
   width?: string | number;
+  inline?: boolean;
   style?: CSSProperties;
 }) {
   const s = score ?? -1;
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, width, ...style }}>
-      <div style={{ display: 'flex', gap: 4 }}>
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: inline ? 'row' : 'column',
+        alignItems: inline ? 'center' : 'stretch',
+        gap: inline ? 8 : 4,
+        width,
+        ...style,
+      }}
+    >
+      <div style={{ display: 'flex', gap: 4, flex: inline ? 1 : undefined }}>
         {[0, 1, 2, 3, 4].map((i) => (
           <div
             key={i}
@@ -50,7 +61,8 @@ export function PasswordStrengthMeter({
         style={{
           fontSize: 11,
           color: 'var(--muted, #6b7280)',
-          textAlign: 'right',
+          textAlign: inline ? 'left' : 'right',
+          whiteSpace: 'nowrap',
         }}
       >
         {score === null ? '—' : LABELS[s]}

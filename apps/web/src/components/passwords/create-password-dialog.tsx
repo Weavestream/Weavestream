@@ -23,6 +23,14 @@ import {
   type TagChipDraft,
 } from '../tags/tags-input';
 import { SecretInput } from './secret-input';
+import {
+  PasswordAdvancedDisclosure,
+  PasswordFieldGrid,
+  PasswordFormSection,
+  PasswordGhostAction,
+  PasswordSettingChoice,
+  PasswordTotpCard,
+} from './password-form-layout';
 
 /**
  * Shared "new credential" dialog.
@@ -71,6 +79,8 @@ export function CreatePasswordDialog({
   const [visibleToClients, setVisibleToClients] = useState(true);
   const [requireReason, setRequireReason] = useState(false);
   const [totpSecret, setTotpSecret] = useState('');
+  const [totpEnabled, setTotpEnabled] = useState(false);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   const [tags, setTags] = useState<TagChipDraft[]>([]);
   const [expiresAt, setExpiresAt] = useState<string>('');
   const [rotationReminderDays, setRotationReminderDays] = useState<
@@ -83,6 +93,18 @@ export function CreatePasswordDialog({
 
   const submit = useCallback(async () => {
     setErr(null);
+    const normalizedTotpSecret = totpSecret.replace(/\s+/g, '').toUpperCase();
+    if (totpEnabled) {
+      if (normalizedTotpSecret.length < 8) {
+        setErr('TOTP secret must be at least 8 base32 characters.');
+        return;
+      }
+      if (!/^[A-Z2-7=]+$/.test(normalizedTotpSecret)) {
+        setErr('TOTP secret must be base32 (A-Z, 2-7).');
+        return;
+      }
+    }
+
     setBusy(true);
     const body: Record<string, unknown> = {
       name: name.trim(),
@@ -103,9 +125,9 @@ export function CreatePasswordDialog({
         : null,
       rotationReminderDays,
     };
-    if (totpSecret.trim()) {
+    if (totpEnabled) {
       body.totp = {
-        secret: totpSecret.trim().replace(/\s+/g, '').toUpperCase(),
+        secret: normalizedTotpSecret,
         algorithm: 'SHA1',
         digits: 6,
         period: 30,
@@ -135,6 +157,7 @@ export function CreatePasswordDialog({
     assetId,
     visibleToClients,
     requireReason,
+    totpEnabled,
     totpSecret,
     tags,
     expiresAt,
@@ -164,7 +187,7 @@ export function CreatePasswordDialog({
           </Btn>
         </div>
       }
-      width={480}
+      width={560}
     >
       <div
         onKeyDown={(e) => {
@@ -173,7 +196,7 @@ export function CreatePasswordDialog({
             if (valid && !busy) void submit();
           }
         }}
-        style={{ display: 'flex', flexDirection: 'column', gap: 10 }}
+        style={{ display: 'flex', flexDirection: 'column', gap: 16 }}
       >
         {assetId && (
           <div
@@ -191,155 +214,177 @@ export function CreatePasswordDialog({
             <Icon.lock size={12} /> Attached to this asset — archives with it.
           </div>
         )}
-        <Field label="Name">
-          <Input
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            autoFocus
-          />
-        </Field>
-        <VaultField label="Account">
-          <Input
-            id={accountFieldId}
-            name={accountFieldName}
-            aria-label="Account"
-            value={username}
-            onChange={(e) => setUsername(e.target.value)}
-            autoComplete="off"
-          />
-        </VaultField>
-        <VaultField label="Password">
-          <SecretInput
-            name={secretFieldName}
-            aria-label="Secret"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            allowReveal
-            generatorDefaults={generatorDefaults}
-            onGenerate={setPassword}
-          />
-        </VaultField>
-        <Field label="URL">
-          <Input value={url} onChange={(e) => setUrl(e.target.value)} />
-        </Field>
-        <Field label="Notes">
+        <PasswordFormSection title="Credential">
+          <Field label="Name" labelVariant="plain">
+            <Input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              autoFocus
+            />
+          </Field>
+          <PasswordFieldGrid>
+            <Field label="Username" labelVariant="plain">
+              <Input
+                id={accountFieldId}
+                name={accountFieldName}
+                aria-label="Username"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                autoComplete="off"
+              />
+            </Field>
+            <Field label="Password" labelVariant="plain">
+              <SecretInput
+                name={secretFieldName}
+                aria-label="Password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                allowReveal
+                generatorDefaults={generatorDefaults}
+                onGenerate={setPassword}
+              />
+            </Field>
+          </PasswordFieldGrid>
+          <Field label="URL" labelVariant="plain">
+            <Input value={url} onChange={(e) => setUrl(e.target.value)} />
+          </Field>
+        </PasswordFormSection>
+
+        <PasswordFormSection title="Two-Factor Authentication">
+          <PasswordTotpCard
+            status={
+              totpEnabled
+                ? 'Authenticator setup'
+                : 'No authenticator configured'
+            }
+            description={
+              totpEnabled
+                ? 'Paste the base32 secret from the authenticator setup flow.'
+                : 'Add a TOTP secret when this credential also needs live codes.'
+            }
+            actions={
+              totpEnabled ? (
+                <PasswordGhostAction
+                  onClick={() => {
+                    setTotpEnabled(false);
+                    setTotpSecret('');
+                  }}
+                >
+                  Remove
+                </PasswordGhostAction>
+              ) : (
+                <PasswordGhostAction onClick={() => setTotpEnabled(true)}>
+                  Add Authenticator
+                </PasswordGhostAction>
+              )
+            }
+          >
+            {totpEnabled ? (
+              <Field label="Base32 secret" labelVariant="plain">
+                <Input
+                  value={totpSecret}
+                  onChange={(e) => setTotpSecret(e.target.value)}
+                  placeholder="JBSWY3DPEHPK3PXP"
+                  autoComplete="off"
+                  spellCheck={false}
+                  style={{ fontFamily: 'var(--font-mono)', letterSpacing: 1 }}
+                />
+              </Field>
+            ) : null}
+          </PasswordTotpCard>
+        </PasswordFormSection>
+
+        <PasswordFormSection title="Notes">
           <Textarea
             value={notes}
             onChange={(e) => setNotes(e.target.value)}
             rows={3}
+            aria-label="Notes"
           />
-        </Field>
-        <Field label="TOTP secret (base32, optional)">
-          <Input
-            value={totpSecret}
-            onChange={(e) => setTotpSecret(e.target.value)}
-            autoComplete="off"
-          />
-        </Field>
-        <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
-            gap: 10,
-          }}
+        </PasswordFormSection>
+
+        <PasswordAdvancedDisclosure
+          open={advancedOpen}
+          onToggle={() => setAdvancedOpen((open) => !open)}
         >
-          <Field label="Folder">
-            <Select
-              value={selectedFolder ?? ''}
-              onChange={(e) => setSelectedFolder(e.target.value || null)}
-            >
-              <option value="">(no folder)</option>
-              {buildPasswordFolderOptions(folders).map((opt) => (
-                <option key={opt.id} value={opt.id}>
-                  {formatFolderOptionLabel(opt)}
-                </option>
-              ))}
-            </Select>
-          </Field>
-          <Field label="Tags">
-            <TagsInput value={tags} onChange={setTags} />
-          </Field>
-          <Field label="Expires">
-            <Input
-              type="date"
-              value={expiresAt}
-              onChange={(e) => setExpiresAt(e.target.value)}
+          <PasswordFormSection title="Organization">
+            <PasswordFieldGrid>
+              <Field label="Folder" labelVariant="plain">
+                <Select
+                  value={selectedFolder ?? ''}
+                  onChange={(e) => setSelectedFolder(e.target.value || null)}
+                >
+                  <option value="">(no folder)</option>
+                  {buildPasswordFolderOptions(folders).map((opt) => (
+                    <option key={opt.id} value={opt.id}>
+                      {formatFolderOptionLabel(opt)}
+                    </option>
+                  ))}
+                </Select>
+              </Field>
+              <Field label="Tags" labelVariant="plain">
+                <TagsInput value={tags} onChange={setTags} />
+              </Field>
+            </PasswordFieldGrid>
+          </PasswordFormSection>
+
+          <PasswordFormSection title="Security Policy">
+            <PasswordFieldGrid>
+              <Field label="Expires" labelVariant="plain">
+                <Input
+                  type="date"
+                  value={expiresAt}
+                  onChange={(e) => setExpiresAt(e.target.value)}
+                />
+              </Field>
+              <Field label="Rotation reminder" labelVariant="plain">
+                <Select
+                  value={
+                    rotationReminderDays == null
+                      ? ''
+                      : String(rotationReminderDays)
+                  }
+                  onChange={(e) =>
+                    setRotationReminderDays(
+                      e.target.value === '' ? null : Number(e.target.value),
+                    )
+                  }
+                >
+                  <option value="">No reminder</option>
+                  <option value="30">Every 30 days</option>
+                  <option value="60">Every 60 days</option>
+                  <option value="90">Every 90 days</option>
+                  <option value="180">Every 180 days</option>
+                  <option value="365">Every 365 days</option>
+                </Select>
+              </Field>
+            </PasswordFieldGrid>
+            <PasswordSettingChoice
+              title="Client Portal Access"
+              description="Controls whether client portal users can see this credential."
+              value={visibleToClients ? 'visible' : 'hidden'}
+              options={[
+                { value: 'visible', label: 'Visible' },
+                { value: 'hidden', label: 'Hidden' },
+              ]}
+              onChange={(value) => setVisibleToClients(value === 'visible')}
             />
-          </Field>
-          <Field label="Rotation reminder">
-            <Select
-              value={rotationReminderDays == null ? '' : String(rotationReminderDays)}
-              onChange={(e) =>
-                setRotationReminderDays(
-                  e.target.value === '' ? null : Number(e.target.value),
-                )
-              }
-            >
-              <option value="">No reminder</option>
-              <option value="30">Every 30 days</option>
-              <option value="60">Every 60 days</option>
-              <option value="90">Every 90 days</option>
-              <option value="180">Every 180 days</option>
-              <option value="365">Every 365 days</option>
-            </Select>
-          </Field>
-        </div>
-        <label style={checkboxLabel}>
-          <input
-            type="checkbox"
-            checked={visibleToClients}
-            onChange={(e) => setVisibleToClients(e.target.checked)}
-          />
-          Visible to client portal users
-        </label>
-        <label style={checkboxLabel}>
-          <input
-            type="checkbox"
-            checked={requireReason}
-            onChange={(e) => setRequireReason(e.target.checked)}
-          />
-          Require a reason to reveal
-        </label>
+            <PasswordSettingChoice
+              title="Reveal Protection"
+              description="Controls whether internal users must enter a reason before reveal."
+              value={requireReason ? 'required' : 'not-required'}
+              options={[
+                { value: 'not-required', label: 'No reason' },
+                { value: 'required', label: 'Require reason' },
+              ]}
+              onChange={(value) => setRequireReason(value === 'required')}
+            />
+          </PasswordFormSection>
+        </PasswordAdvancedDisclosure>
         {err && (
           <div style={{ fontSize: 12, color: 'var(--danger)' }}>{err}</div>
         )}
       </div>
     </Dialog>
-  );
-}
-
-const checkboxLabel = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 6,
-  fontSize: 13,
-  color: 'var(--text)',
-} as const;
-
-function VaultField({
-  label,
-  children,
-}: {
-  label: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column' }}>
-      <div
-        aria-hidden="true"
-        style={{
-          display: 'block',
-          fontSize: 11,
-          fontFamily: 'var(--font-mono)',
-          color: 'var(--muted)',
-          textTransform: 'uppercase',
-          letterSpacing: 0.6,
-          marginBottom: 6,
-        }}
-      >
-        {label}
-      </div>
-      {children}
-    </div>
   );
 }

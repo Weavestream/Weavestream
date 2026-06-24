@@ -14,13 +14,10 @@ import { apiFetch } from '../../../../../../lib/api';
 import { copyToClipboard } from '../../../../../../lib/clipboard';
 import {
   Btn,
-  DataTable,
-  type DataColumn,
   Dialog,
   Field,
   Icon,
   Input,
-  MobileCardRow,
   Panel,
   Select,
   StarButton,
@@ -32,6 +29,14 @@ import { PasswordRevealField } from '../../../../../../components/passwords/pass
 import { TotpCode } from '../../../../../../components/passwords/totp-code';
 import { PasswordStrengthMeter } from '../../../../../../components/passwords/password-strength-meter';
 import { SecretInput } from '../../../../../../components/passwords/secret-input';
+import {
+  PasswordAdvancedDisclosure,
+  PasswordFieldGrid,
+  PasswordFormSection,
+  PasswordGhostAction,
+  PasswordSettingChoice,
+  PasswordTotpCard,
+} from '../../../../../../components/passwords/password-form-layout';
 import {
   TagsInput,
   toPlainNameList,
@@ -48,41 +53,30 @@ interface Props {
   companyId: string;
   password: PasswordDetail;
   versions: PasswordVersionRow[];
-  folders: PasswordFolderRow[];
   canManage: boolean;
   canManageInternalAccess: boolean;
   folderName: string | null;
   assetName: string | null;
   me: { id: string; role: string };
-  generatorDefaults: PasswordGeneratorDefaults;
 }
 
-/**
- * Phase 10 — password detail client shell.
- *
- * Renders the read-only summary panels + a reveal field + live TOTP
- * code + versions list. An "Edit" button opens the dialog for
- * modifying metadata; the password field inside the edit dialog is
- * optional — omitting it preserves the current ciphertext without
- * bumping a new version.
- */
-export function PasswordDetailClient({
+export function PasswordHeaderActions({
   companyId,
   password,
-  versions,
   folders,
   canManage,
-  canManageInternalAccess,
-  folderName,
-  assetName,
-  me,
   generatorDefaults,
-}: Props) {
+}: {
+  companyId: string;
+  password: PasswordDetail;
+  folders: PasswordFolderRow[];
+  canManage: boolean;
+  generatorDefaults: PasswordGeneratorDefaults;
+}) {
   const router = useRouter();
   const toast = useToast();
   const [, startTransition] = useTransition();
   const [editing, setEditing] = useState(false);
-  const [editingInternalAccess, setEditingInternalAccess] = useState(false);
 
   async function archive() {
     const res = await apiFetch(
@@ -118,68 +112,113 @@ export function PasswordDetailClient({
     startTransition(() => router.refresh());
   }
 
+  return (
+    <>
+      <StarButton
+        entityType="password"
+        entityId={password.id}
+        initialStarred={password.isStarred}
+        showLabel
+        iconSize={14}
+      />
+      {canManage && (
+        <>
+          <Btn
+            kind="outline"
+            size="md"
+            icon={Icon.edit}
+            onClick={() => setEditing(true)}
+          >
+            Edit
+          </Btn>
+          {password.archivedAt ? (
+            <Btn
+              kind="solid"
+              size="md"
+              icon={Icon.check}
+              onClick={() => void restore()}
+            >
+              Restore
+            </Btn>
+          ) : (
+            <Btn
+              kind="outline"
+              size="md"
+              icon={Icon.archive}
+              onClick={() => void archive()}
+            >
+              Archive
+            </Btn>
+          )}
+        </>
+      )}
+
+      {editing && (
+        <EditPasswordDialog
+          companyId={companyId}
+          password={password}
+          folders={folders}
+          generatorDefaults={generatorDefaults}
+          onClose={() => setEditing(false)}
+          onSaved={() => {
+            setEditing(false);
+            toast.push('Password updated', 'ok');
+            startTransition(() => router.refresh());
+          }}
+        />
+      )}
+    </>
+  );
+}
+
+/**
+ * Phase 10 — password detail client shell.
+ *
+ * Renders the read-only summary panels + a reveal field + live TOTP
+ * code + sidebar metadata. Header actions live in PasswordHeaderActions
+ * so the page header can follow the same icon/title/actions layout as
+ * other detail pages.
+ */
+export function PasswordDetailClient({
+  companyId,
+  password,
+  versions,
+  canManage,
+  canManageInternalAccess,
+  folderName,
+  assetName,
+  me,
+}: Props) {
+  const router = useRouter();
+  const toast = useToast();
+  const [, startTransition] = useTransition();
+  const [editingInternalAccess, setEditingInternalAccess] = useState(false);
+  const [detailsExpanded, setDetailsExpanded] = useState(false);
+  const [versionsExpanded, setVersionsExpanded] = useState(false);
+
   async function copyUsername() {
     if (!password.username) return;
     const ok = await copyToClipboard(password.username);
     toast.push(ok ? 'Username copied' : 'Clipboard unavailable', ok ? 'ok' : 'danger');
   }
 
+  async function copyUrl() {
+    if (!password.url) return;
+    const ok = await copyToClipboard(password.url);
+    toast.push(ok ? 'URL copied' : 'Clipboard unavailable', ok ? 'ok' : 'danger');
+  }
+
   const notesHtml = useMemo(
     () => renderNotes(password.notes ?? null),
     [password.notes],
   );
+  const displayUrl = useMemo(
+    () => formatCredentialUrl(password.url),
+    [password.url],
+  );
 
   return (
     <>
-      <div
-        style={{
-          display: 'flex',
-          gap: 8,
-          justifyContent: 'flex-end',
-          marginBottom: 14,
-          flexWrap: 'wrap',
-        }}
-      >
-        <StarButton
-          entityType="password"
-          entityId={password.id}
-          initialStarred={password.isStarred}
-          showLabel
-          iconSize={14}
-        />
-        {canManage && (
-          <>
-            <Btn
-              kind="outline"
-              size="md"
-              icon={Icon.edit}
-              onClick={() => setEditing(true)}
-            >
-              Edit
-            </Btn>
-            {password.archivedAt ? (
-              <Btn
-                kind="solid"
-                size="md"
-                icon={Icon.check}
-                onClick={() => void restore()}
-              >
-                Restore
-              </Btn>
-            ) : (
-              <Btn
-                kind="outline"
-                size="md"
-                icon={Icon.archive}
-                onClick={() => void archive()}
-              >
-                Archive
-              </Btn>
-            )}
-          </>
-        )}
-      </div>
-
       <div
         className="detail-grid-main-aside"
         style={{
@@ -200,19 +239,35 @@ export function PasswordDetailClient({
               }}
             >
               <Label>Username</Label>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  minWidth: 0,
+                }}
+              >
                 <code
                   style={{
                     fontFamily: 'var(--font-mono)',
                     fontSize: 13,
                     color: 'var(--text)',
+                    minWidth: 0,
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
                   }}
                 >
                   {password.username ?? '—'}
                 </code>
                 {password.username && (
-                  <Btn size="sm" onClick={() => void copyUsername()} title="Copy">
-                    <Icon.copy size={12} />
+                  <Btn
+                    size="sm"
+                    onClick={() => void copyUsername()}
+                    title="Copy"
+                    style={{ marginLeft: 'auto', flexShrink: 0 }}
+                  >
+                    <Icon.copy size={14} />
                   </Btn>
                 )}
               </div>
@@ -237,6 +292,7 @@ export function PasswordDetailClient({
                 <PasswordStrengthMeter
                   score={password.passwordStrength}
                   width={220}
+                  inline
                 />
               </div>
 
@@ -254,16 +310,41 @@ export function PasswordDetailClient({
               )}
 
               <Label>URL</Label>
-              <div>
+              <div style={{ minWidth: 0 }}>
                 {password.url ? (
-                  <a
-                    href={password.url}
-                    target="_blank"
-                    rel="noreferrer"
-                    style={{ color: 'var(--accent)', wordBreak: 'break-all' }}
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 8,
+                      minWidth: 0,
+                    }}
                   >
-                    {password.url}
-                  </a>
+                    <a
+                      href={password.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      title={password.url}
+                      style={{
+                        color: 'var(--accent)',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                        minWidth: 0,
+                        flex: 1,
+                      }}
+                    >
+                      {displayUrl}
+                    </a>
+                    <Btn
+                      size="sm"
+                      onClick={() => void copyUrl()}
+                      title="Copy URL"
+                      style={{ marginLeft: 'auto', flexShrink: 0 }}
+                    >
+                      <Icon.copy size={14} />
+                    </Btn>
+                  </div>
                 ) : (
                   <span style={{ color: 'var(--muted)' }}>—</span>
                 )}
@@ -290,27 +371,6 @@ export function PasswordDetailClient({
             )}
           </Panel>
 
-          <Panel title="Version history" noPad>
-            {versions.length === 0 ? (
-              <div
-                style={{
-                  padding: 24,
-                  color: 'var(--muted)',
-                  fontSize: 13,
-                  textAlign: 'center',
-                }}
-              >
-                No versions yet — edits create an append-only history.
-              </div>
-            ) : (
-              <VersionsTable
-                companyId={companyId}
-                passwordId={password.id}
-                versions={versions}
-                canManage={canManage}
-              />
-            )}
-          </Panel>
         </div>
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
@@ -328,7 +388,26 @@ export function PasswordDetailClient({
             editable={canManage && !password.archivedAt}
           />
 
-          <Panel title="Details">
+          <Panel
+            title="Details"
+            actions={
+              <button
+                type="button"
+                onClick={() => setDetailsExpanded((v) => !v)}
+                style={{
+                  border: 0,
+                  background: 'transparent',
+                  color: 'var(--accent)',
+                  fontSize: 11,
+                  cursor: 'pointer',
+                  padding: 0,
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {detailsExpanded ? 'Show less' : 'Show more'}
+              </button>
+            }
+          >
             <dl
               style={{
                 display: 'grid',
@@ -368,38 +447,42 @@ export function PasswordDetailClient({
                   </dd>
                 </>
               )}
-              {password.lastRotatedAt && (
-                <>
-                  <dt style={dt}>Last rotated</dt>
-                  <dd style={dd}>{fmtDate(password.lastRotatedAt)}</dd>
-                </>
-              )}
-              {password.expiresAt && (
-                <>
-                  <dt style={dt}>Expires</dt>
-                  <dd style={dd}>{fmtDate(password.expiresAt)}</dd>
-                </>
-              )}
-              {password.rotationReminderDays != null && (
-                <>
-                  <dt style={dt}>Rotation reminder</dt>
-                  <dd style={dd}>{password.rotationReminderDays} days</dd>
-                </>
-              )}
-              {(password.pwnedCount ?? 0) > 0 && (
-                <>
-                  <dt style={dt}>HIBP</dt>
-                  <dd style={dd}>
-                    <Tag tone="danger">
-                      seen in {password.pwnedCount?.toLocaleString()} breaches
-                    </Tag>
-                  </dd>
-                </>
-              )}
-              <dt style={dt}>Created</dt>
-              <dd style={dd}>{fmtDateTime(password.createdAt)}</dd>
               <dt style={dt}>Updated</dt>
               <dd style={dd}>{fmtDateTime(password.updatedAt)}</dd>
+              {detailsExpanded && (
+                <>
+                  {password.lastRotatedAt && (
+                    <>
+                      <dt style={dt}>Last rotated</dt>
+                      <dd style={dd}>{fmtDate(password.lastRotatedAt)}</dd>
+                    </>
+                  )}
+                  {password.expiresAt && (
+                    <>
+                      <dt style={dt}>Expires</dt>
+                      <dd style={dd}>{fmtDate(password.expiresAt)}</dd>
+                    </>
+                  )}
+                  {password.rotationReminderDays != null && (
+                    <>
+                      <dt style={dt}>Rotation reminder</dt>
+                      <dd style={dd}>{password.rotationReminderDays} days</dd>
+                    </>
+                  )}
+                  {(password.pwnedCount ?? 0) > 0 && (
+                    <>
+                      <dt style={dt}>HIBP</dt>
+                      <dd style={dd}>
+                        <Tag tone="danger">
+                          seen in {password.pwnedCount?.toLocaleString()} breaches
+                        </Tag>
+                      </dd>
+                    </>
+                  )}
+                  <dt style={dt}>Created</dt>
+                  <dd style={dd}>{fmtDateTime(password.createdAt)}</dd>
+                </>
+              )}
             </dl>
           </Panel>
 
@@ -409,23 +492,18 @@ export function PasswordDetailClient({
             currentUserId={me.id}
             onEdit={() => setEditingInternalAccess(true)}
           />
+
+          <VersionHistoryPanel
+            companyId={companyId}
+            passwordId={password.id}
+            versions={versions}
+            canManage={canManage}
+            requiresReason={password.requireReasonToView}
+            expanded={versionsExpanded}
+            onToggleExpanded={() => setVersionsExpanded((v) => !v)}
+          />
         </div>
       </div>
-
-      {editing && (
-        <EditPasswordDialog
-          companyId={companyId}
-          password={password}
-          folders={folders}
-          generatorDefaults={generatorDefaults}
-          onClose={() => setEditing(false)}
-          onSaved={() => {
-            setEditing(false);
-            toast.push('Password updated', 'ok');
-            startTransition(() => router.refresh());
-          }}
-        />
-      )}
 
       {editingInternalAccess && (
         <InternalAccessDialog
@@ -543,7 +621,6 @@ function InternalAccessDialog({
 
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
     apiFetch<{ items: PasswordAccessUser[] }>(
       `/companies/${companyId}/passwords/internal-access-users`,
     ).then((res) => {
@@ -784,18 +861,22 @@ function Label({ children }: { children: React.ReactNode }) {
   );
 }
 
-type VersionRow = PasswordVersionRow & { id: string };
-
-function VersionsTable({
+function VersionHistoryPanel({
   companyId,
   passwordId,
   versions,
   canManage,
+  requiresReason,
+  expanded,
+  onToggleExpanded,
 }: {
   companyId: string;
   passwordId: string;
   versions: PasswordVersionRow[];
   canManage: boolean;
+  requiresReason: boolean;
+  expanded: boolean;
+  onToggleExpanded: () => void;
 }) {
   const [, startTransition] = useTransition();
   const router = useRouter();
@@ -827,203 +908,282 @@ function VersionsTable({
     startTransition(() => router.refresh());
   }
 
-  // DataTable rows require a string `id`. Versions key naturally on the
-  // numeric `version` column so we map to `${passwordId}-v${version}`.
-  const rows: VersionRow[] = useMemo(
-    () =>
-      versions.map((v) => ({ ...v, id: `${passwordId}-v${v.version}` })),
-    [versions, passwordId],
+  const sorted = useMemo(
+    () => [...versions].sort((a, b) => b.version - a.version),
+    [versions],
   );
+  const visible = expanded ? sorted : sorted.slice(0, 1);
 
-  const columns: DataColumn<VersionRow>[] = [
-    {
-      id: 'version',
-      header: '#',
-      width: 60,
-      mono: true,
-      sortValue: (v) => v.version,
-      render: (v) => `v${v.version}`,
-    },
-    {
-      id: 'changedBy',
-      header: 'Changed by',
-      width: 180,
-      sortValue: (v) => (v.changedByName ?? v.changedBy ?? '').toLowerCase(),
-      render: (v) => (
-        <span
-          style={{
-            whiteSpace: 'nowrap',
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            display: 'inline-block',
-            maxWidth: '100%',
-          }}
-        >
-          {v.changedByName ?? v.changedBy}
-        </span>
-      ),
-    },
-    {
-      id: 'fields',
-      header: 'Fields',
-      width: 220,
-      sortValue: (v) => v.changedFields.length,
-      render: (v) => (
-        <div
-          style={{
-            display: 'flex',
-            gap: 4,
-            flexWrap: 'wrap',
-            maxWidth: 200,
-          }}
-        >
-          {v.changedFields.map((f) => (
-            <Tag key={f} tone="outline" style={{ fontSize: 10 }}>
-              {f}
-            </Tag>
+  return (
+    <Panel
+      title="Version history"
+      actions={
+        sorted.length > 1 ? (
+          <button
+            type="button"
+            onClick={onToggleExpanded}
+            style={{
+              border: 0,
+              background: 'transparent',
+              color: 'var(--accent)',
+              fontSize: 11,
+              cursor: 'pointer',
+              padding: 0,
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {expanded ? 'Show latest' : 'View full history'}
+          </button>
+        ) : null
+      }
+    >
+      {sorted.length === 0 ? (
+        <div style={{ color: 'var(--muted)', fontSize: 12.5 }}>
+          No versions yet.
+        </div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          {visible.map((version) => (
+            <VersionHistoryItem
+              key={version.version}
+              companyId={companyId}
+              passwordId={passwordId}
+              version={version}
+              canManage={canManage}
+              requiresReason={requiresReason}
+              busy={busy === version.version}
+              onRestore={() => void restore(version.version)}
+            />
           ))}
         </div>
-      ),
-    },
-    {
-      id: 'reason',
-      header: 'Reason',
-      sortValue: (v) => v.changeReason?.toLowerCase() ?? null,
-      render: (v) => (
-        <span
-          style={{
-            color: 'var(--muted)',
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            display: 'inline-block',
-            maxWidth: '100%',
-          }}
-        >
-          {v.changeReason ?? '—'}
-        </span>
-      ),
-    },
-    {
-      id: 'when',
-      header: 'When',
-      width: 180,
-      mono: true,
-      sortValue: (v) => new Date(v.createdAt),
-      render: (v) => (
-        <span style={{ whiteSpace: 'nowrap' }}>{fmtDateTime(v.createdAt)}</span>
-      ),
-    },
-  ];
+      )}
+    </Panel>
+  );
+}
 
-  if (canManage) {
-    columns.push({
-      id: 'actions',
-      header: '',
-      width: 120,
-      align: 'right',
-      sortable: false,
-      render: (v) => (
-        <Btn
-          size="sm"
-          kind="ghost"
-          icon={Icon.refresh}
-          disabled={busy === v.version}
-          onClick={() => void restore(v.version)}
-        >
-          Restore
-        </Btn>
-      ),
-    });
+function VersionHistoryItem({
+  companyId,
+  passwordId,
+  version,
+  canManage,
+  requiresReason,
+  busy,
+  onRestore,
+}: {
+  companyId: string;
+  passwordId: string;
+  version: PasswordVersionRow;
+  canManage: boolean;
+  requiresReason: boolean;
+  busy: boolean;
+  onRestore: () => void;
+}) {
+  const toast = useToast();
+  const [plaintext, setPlaintext] = useState<string | null>(null);
+  const [revealBusy, setRevealBusy] = useState(false);
+
+  useEffect(() => {
+    if (!plaintext) return;
+    const timer = window.setTimeout(() => setPlaintext(null), 30_000);
+    return () => window.clearTimeout(timer);
+  }, [plaintext]);
+
+  async function revealVersionPassword() {
+    let reason: string | undefined;
+    if (requiresReason) {
+      const entered = window.prompt('Reason for revealing this historical password');
+      if (entered === null) return;
+      reason = entered.trim();
+      if (!reason) {
+        toast.push('A reason is required.', 'danger');
+        return;
+      }
+    }
+    setRevealBusy(true);
+    const res = await apiFetch<{ password: string }>(
+      `/companies/${companyId}/passwords/${passwordId}/versions/${version.version}/reveal`,
+      { method: 'POST', body: JSON.stringify(reason ? { reason } : {}) },
+    );
+    setRevealBusy(false);
+    if (!res.ok || !res.data) {
+      toast.push(problemMessage(res.problem) ?? 'Reveal failed', 'danger');
+      return;
+    }
+    setPlaintext(res.data.password);
+  }
+
+  async function copyVersionPassword() {
+    if (!plaintext) return;
+    const ok = await copyToClipboard(plaintext);
+    toast.push(ok ? 'Historical password copied' : 'Clipboard unavailable', ok ? 'ok' : 'danger');
   }
 
   return (
-    <DataTable
-      columns={columns}
-      rows={rows}
-      defaultSort={{ columnId: 'version', direction: 'desc' }}
-      renderMobileCard={(v) => (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          <div
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 5,
+      }}
+    >
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'baseline',
+          justifyContent: 'space-between',
+          gap: 8,
+        }}
+      >
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'baseline',
+            gap: 6,
+            minWidth: 0,
+          }}
+        >
+          <span
             style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              gap: 8,
+              fontFamily: 'var(--font-mono)',
+              fontSize: 12,
+              color: 'var(--text)',
+              fontWeight: 600,
             }}
           >
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'baseline',
-                gap: 8,
-                minWidth: 0,
-              }}
-            >
-              <span
-                style={{
-                  fontFamily: 'var(--font-mono)',
-                  fontSize: 13,
-                  fontWeight: 600,
-                  color: 'var(--text)',
-                }}
-              >
-                v{v.version}
-              </span>
-              <span
-                style={{
-                  fontSize: 13,
-                  color: 'var(--text)',
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
-                }}
-              >
-                {v.changedByName ?? v.changedBy}
-              </span>
-            </div>
-            <span
-              style={{
-                fontFamily: 'var(--font-mono)',
-                fontSize: 11,
-                color: 'var(--dim)',
-                whiteSpace: 'nowrap',
-              }}
-            >
-              {fmtDateTime(v.createdAt)}
-            </span>
-          </div>
-          {v.changedFields.length > 0 && (
-            <MobileCardRow label="Fields">
-              <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-                {v.changedFields.map((f) => (
-                  <Tag key={f} tone="outline" style={{ fontSize: 10 }}>
-                    {f}
-                  </Tag>
-                ))}
-              </div>
-            </MobileCardRow>
-          )}
-          {v.changeReason && (
-            <MobileCardRow label="Reason">
-              <span style={{ color: 'var(--muted)' }}>{v.changeReason}</span>
-            </MobileCardRow>
-          )}
+            v{version.version}
+          </span>
+          <span
+            title={version.changedByName ?? version.changedBy}
+            style={{
+              fontSize: 12,
+              color: 'var(--muted)',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {version.changedByName ?? version.changedBy}
+          </span>
+        </div>
+        <span
+          style={{
+            fontFamily: 'var(--font-mono)',
+            fontSize: 10.5,
+            color: 'var(--dim)',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          {fmtShortDateTime(version.createdAt)}
+        </span>
+      </div>
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          gap: 8,
+        }}
+      >
+        <div
+          title={version.changeReason ?? undefined}
+          style={{
+            minWidth: 0,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+            fontSize: 11.5,
+            color: 'var(--muted)',
+          }}
+        >
+          {version.changedFields.length > 0
+            ? version.changedFields.join(', ')
+            : 'metadata'}
+          {version.changeReason ? ` · ${version.changeReason}` : ''}
+        </div>
+        <div
+          style={{
+            display: 'flex',
+            gap: 8,
+            alignItems: 'center',
+            flexShrink: 0,
+          }}
+        >
+          <TextAction
+            disabled={revealBusy}
+            onClick={() =>
+              plaintext ? setPlaintext(null) : void revealVersionPassword()
+            }
+          >
+            {plaintext ? 'Hide' : revealBusy ? 'Revealing...' : 'Reveal'}
+          </TextAction>
           {canManage && (
-            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-              <Btn
-                size="sm"
-                kind="ghost"
-                icon={Icon.refresh}
-                disabled={busy === v.version}
-                onClick={() => void restore(v.version)}
-              >
-                Restore
-              </Btn>
-            </div>
+            <TextAction disabled={busy} onClick={onRestore}>
+              Restore
+            </TextAction>
           )}
         </div>
+      </div>
+      {plaintext && (
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 6,
+            minWidth: 0,
+            padding: '5px 7px',
+            borderRadius: 6,
+            background: 'var(--elev)',
+            border: '1px solid var(--line)',
+          }}
+        >
+          <code
+            style={{
+              flex: 1,
+              minWidth: 0,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+              fontSize: 12,
+              color: 'var(--text)',
+            }}
+          >
+            {plaintext}
+          </code>
+          <Btn size="sm" onClick={() => void copyVersionPassword()} title="Copy historical password">
+            <Icon.copy size={14} />
+          </Btn>
+        </div>
       )}
-    />
+    </div>
+  );
+}
+
+function TextAction({
+  children,
+  disabled,
+  onClick,
+}: {
+  children: React.ReactNode;
+  disabled?: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={onClick}
+      style={{
+        border: 0,
+        background: 'transparent',
+        padding: 0,
+        color: disabled ? 'var(--muted)' : 'var(--accent)',
+        fontSize: 11.5,
+        cursor: disabled ? 'default' : 'pointer',
+        whiteSpace: 'nowrap',
+      }}
+    >
+      {children}
+    </button>
   );
 }
 
@@ -1044,6 +1204,7 @@ function EditPasswordDialog({
 }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   const [name, setName] = useState(password.name);
   const [username, setUsername] = useState(password.username ?? '');
   const [url, setUrl] = useState(password.url ?? '');
@@ -1068,10 +1229,11 @@ function EditPasswordDialog({
   const [rotationReminderDays, setRotationReminderDays] = useState<
     number | null
   >(password.rotationReminderDays);
+  const [renderedAt] = useState(() => Date.now());
   const daysSinceRotation =
     password.lastRotatedAt != null
       ? Math.floor(
-          (Date.now() - new Date(password.lastRotatedAt).getTime()) / 86_400_000,
+          (renderedAt - new Date(password.lastRotatedAt).getTime()) / 86_400_000,
         )
       : null;
 
@@ -1080,11 +1242,6 @@ function EditPasswordDialog({
   type TotpMode = 'keep' | 'set' | 'clear';
   const [totpMode, setTotpMode] = useState<TotpMode>('keep');
   const [totpSecret, setTotpSecret] = useState('');
-  const [totpAlgorithm, setTotpAlgorithm] = useState<
-    'SHA1' | 'SHA256' | 'SHA512'
-  >(password.totpAlgorithm);
-  const [totpDigits, setTotpDigits] = useState<number>(password.totpDigits);
-  const [totpPeriod, setTotpPeriod] = useState<number>(password.totpPeriod);
 
   const submit = useCallback(async () => {
     setErr(null);
@@ -1124,9 +1281,9 @@ function EditPasswordDialog({
     if (totpMode === 'set') {
       body.totp = {
         secret: normalizedTotpSecret,
-        algorithm: totpAlgorithm,
-        digits: totpDigits,
-        period: totpPeriod,
+        algorithm: password.hasTotp ? password.totpAlgorithm : 'SHA1',
+        digits: password.hasTotp ? password.totpDigits : 6,
+        period: password.hasTotp ? password.totpPeriod : 30,
       };
     } else if (totpMode === 'clear') {
       body.totp = null;
@@ -1162,18 +1319,38 @@ function EditPasswordDialog({
     rotationReminderDays,
     totpMode,
     totpSecret,
-    totpAlgorithm,
-    totpDigits,
-    totpPeriod,
+    password.hasTotp,
+    password.totpAlgorithm,
+    password.totpDigits,
+    password.totpPeriod,
     onSaved,
   ]);
+
+  const totpStatus =
+    totpMode === 'clear'
+      ? 'Authenticator will be removed'
+      : totpMode === 'set'
+        ? password.hasTotp
+          ? 'Replacing authenticator'
+          : 'Authenticator setup'
+        : password.hasTotp
+          ? 'Configured'
+          : 'No authenticator configured';
+  const totpDescription =
+    totpMode === 'clear'
+      ? 'The current TOTP secret will be removed on save.'
+      : totpMode === 'set'
+        ? 'Paste the base32 secret from the authenticator setup flow.'
+        : password.hasTotp
+          ? 'Authenticator codes are enabled for this credential.'
+          : 'Add a TOTP secret when this credential also needs live codes.';
 
   return (
     <Dialog
       open
       onClose={onClose}
       title="Edit password"
-      width={480}
+      width={560}
       footer={
         <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
           <Btn size="sm" onClick={onClose}>
@@ -1197,242 +1374,191 @@ function EditPasswordDialog({
             if (!busy && name.trim().length > 0) void submit();
           }
         }}
-        style={{ display: 'flex', flexDirection: 'column', gap: 10 }}
+        style={{ display: 'flex', flexDirection: 'column', gap: 16 }}
       >
-        <Field label="Name">
-          <Input
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            autoFocus
-          />
-        </Field>
-        <Field label="Username">
-          <Input
-            value={username}
-            onChange={(e) => setUsername(e.target.value)}
-            autoComplete="off"
-          />
-        </Field>
-        <Field
-          label="New password"
-          help="Leave blank to keep the current password unchanged."
-        >
-          <SecretInput
-            value={newPassword}
-            onChange={(e) => setNewPassword(e.target.value)}
-            allowReveal
-            generatorDefaults={generatorDefaults}
-            onGenerate={setNewPassword}
-          />
-        </Field>
-        <Field label="URL">
-          <Input value={url} onChange={(e) => setUrl(e.target.value)} />
-        </Field>
-        <Field
-          label="One-time password (TOTP)"
-          help={
-            password.hasTotp
-              ? 'Current record has a TOTP configured. Replace or remove it here.'
-              : 'Add a TOTP secret from your authenticator to generate live codes.'
-          }
-        >
-          <div
-            style={{
-              display: 'flex',
-              flexDirection: 'column',
-              gap: 8,
-            }}
+        <PasswordFormSection title="Credential">
+          <Field label="Name" labelVariant="plain">
+            <Input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              autoFocus
+            />
+          </Field>
+          <PasswordFieldGrid>
+            <Field label="Username" labelVariant="plain">
+              <Input
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                autoComplete="off"
+              />
+            </Field>
+            <Field
+              label="New password"
+              labelVariant="plain"
+              help="Leave blank to keep the current password unchanged."
+            >
+              <SecretInput
+                value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)}
+                allowReveal
+                generatorDefaults={generatorDefaults}
+                onGenerate={setNewPassword}
+              />
+            </Field>
+          </PasswordFieldGrid>
+          <Field label="URL" labelVariant="plain">
+            <Input value={url} onChange={(e) => setUrl(e.target.value)} />
+          </Field>
+        </PasswordFormSection>
+
+        <PasswordFormSection title="Two-Factor Authentication">
+          <PasswordTotpCard
+            status={totpStatus}
+            description={totpDescription}
+            tone={totpMode === 'clear' ? 'danger' : 'default'}
+            actions={
+              <>
+                {totpMode !== 'keep' && (
+                  <PasswordGhostAction onClick={() => setTotpMode('keep')}>
+                    {password.hasTotp ? 'Keep current' : 'None'}
+                  </PasswordGhostAction>
+                )}
+                {totpMode !== 'set' && (
+                  <PasswordGhostAction onClick={() => setTotpMode('set')}>
+                    {password.hasTotp ? 'Replace' : 'Add Authenticator'}
+                  </PasswordGhostAction>
+                )}
+                {password.hasTotp && totpMode !== 'clear' && (
+                  <PasswordGhostAction onClick={() => setTotpMode('clear')}>
+                    Remove
+                  </PasswordGhostAction>
+                )}
+              </>
+            }
           >
-            <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-              <RadioPill
-                checked={totpMode === 'keep'}
-                onChange={() => setTotpMode('keep')}
-                label={password.hasTotp ? 'Keep current' : 'None'}
-              />
-              <RadioPill
-                checked={totpMode === 'set'}
-                onChange={() => setTotpMode('set')}
-                label={password.hasTotp ? 'Replace' : 'Add TOTP'}
-              />
-              {password.hasTotp && (
-                <RadioPill
-                  checked={totpMode === 'clear'}
-                  onChange={() => setTotpMode('clear')}
-                  label="Remove"
-                />
-              )}
-            </div>
-            {totpMode === 'set' && (
-              <div
-                style={{
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: 8,
-                  padding: 10,
-                  border: '1px solid var(--line)',
-                  borderRadius: 6,
-                  background: 'var(--panel-2)',
-                }}
-              >
-                <Field label="Base32 secret">
-                  <Input
-                    value={totpSecret}
-                    onChange={(e) => setTotpSecret(e.target.value)}
-                    placeholder="JBSWY3DPEHPK3PXP"
-                    autoComplete="off"
-                    spellCheck={false}
-                    style={{
-                      fontFamily: 'var(--font-mono)',
-                      letterSpacing: 1,
-                    }}
-                  />
-                </Field>
-                <div
+            {totpMode === 'set' ? (
+              <Field label="Base32 secret" labelVariant="plain">
+                <Input
+                  value={totpSecret}
+                  onChange={(e) => setTotpSecret(e.target.value)}
+                  placeholder="JBSWY3DPEHPK3PXP"
+                  autoComplete="off"
+                  spellCheck={false}
                   style={{
-                    display: 'grid',
-                    gridTemplateColumns: '1fr 1fr 1fr',
-                    gap: 8,
+                    fontFamily: 'var(--font-mono)',
+                    letterSpacing: 1,
                   }}
-                >
-                  <Field label="Algorithm">
-                    <Select
-                      value={totpAlgorithm}
-                      onChange={(e) =>
-                        setTotpAlgorithm(
-                          e.target.value as 'SHA1' | 'SHA256' | 'SHA512',
-                        )
-                      }
-                    >
-                      <option value="SHA1">SHA1</option>
-                      <option value="SHA256">SHA256</option>
-                      <option value="SHA512">SHA512</option>
-                    </Select>
-                  </Field>
-                  <Field label="Digits">
-                    <Select
-                      value={String(totpDigits)}
-                      onChange={(e) => setTotpDigits(Number(e.target.value))}
-                    >
-                      <option value="6">6</option>
-                      <option value="7">7</option>
-                      <option value="8">8</option>
-                    </Select>
-                  </Field>
-                  <Field label="Period (s)">
-                    <Select
-                      value={String(totpPeriod)}
-                      onChange={(e) => setTotpPeriod(Number(e.target.value))}
-                    >
-                      <option value="30">30</option>
-                      <option value="60">60</option>
-                    </Select>
-                  </Field>
-                </div>
-              </div>
-            )}
-            {totpMode === 'clear' && (
-              <div
-                style={{
-                  fontSize: 12,
-                  color: 'var(--danger)',
-                  padding: '6px 10px',
-                  background: 'var(--danger-soft, rgba(220,38,38,0.08))',
-                  borderRadius: 6,
-                }}
-              >
-                The current TOTP secret will be removed on save. A new
-                version row is written so it stays recoverable from history.
-              </div>
-            )}
-          </div>
-        </Field>
-        <Field label="Notes">
+                />
+              </Field>
+            ) : null}
+          </PasswordTotpCard>
+        </PasswordFormSection>
+
+        <PasswordFormSection title="Notes">
           <Textarea
             value={notes}
             onChange={(e) => setNotes(e.target.value)}
             rows={3}
+            aria-label="Notes"
           />
-        </Field>
-        <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
-            gap: 10,
-          }}
+        </PasswordFormSection>
+
+        <PasswordAdvancedDisclosure
+          open={advancedOpen}
+          onToggle={() => setAdvancedOpen((open) => !open)}
         >
-          <Field label="Folder">
-            <Select
-              value={folderId ?? ''}
-              onChange={(e) => setFolderId(e.target.value || null)}
-            >
-              <option value="">(no folder)</option>
-              {buildPasswordFolderOptions(folders).map((opt) => (
-                <option key={opt.id} value={opt.id}>
-                  {formatFolderOptionLabel(opt)}
-                </option>
-              ))}
-            </Select>
-          </Field>
-          <Field label="Tags">
-            <TagsInput value={tags} onChange={setTags} />
-          </Field>
-          <Field label="Expires">
-            <Input
-              type="date"
-              value={expiresAt}
-              onChange={(e) => setExpiresAt(e.target.value)}
+          <PasswordFormSection title="Organization">
+            <PasswordFieldGrid>
+              <Field label="Folder" labelVariant="plain">
+                <Select
+                  value={folderId ?? ''}
+                  onChange={(e) => setFolderId(e.target.value || null)}
+                >
+                  <option value="">(no folder)</option>
+                  {buildPasswordFolderOptions(folders).map((opt) => (
+                    <option key={opt.id} value={opt.id}>
+                      {formatFolderOptionLabel(opt)}
+                    </option>
+                  ))}
+                </Select>
+              </Field>
+              <Field label="Tags" labelVariant="plain">
+                <TagsInput value={tags} onChange={setTags} />
+              </Field>
+            </PasswordFieldGrid>
+          </PasswordFormSection>
+
+          <PasswordFormSection title="Security Policy">
+            <PasswordFieldGrid>
+              <Field label="Expires" labelVariant="plain">
+                <Input
+                  type="date"
+                  value={expiresAt}
+                  onChange={(e) => setExpiresAt(e.target.value)}
+                />
+              </Field>
+              <Field
+                label="Rotation reminder"
+                labelVariant="plain"
+                help={
+                  daysSinceRotation != null
+                    ? `Last rotated ${daysSinceRotation === 0 ? 'today' : `${daysSinceRotation}d ago`}.`
+                    : undefined
+                }
+              >
+                <Select
+                  value={
+                    rotationReminderDays == null
+                      ? ''
+                      : String(rotationReminderDays)
+                  }
+                  onChange={(e) =>
+                    setRotationReminderDays(
+                      e.target.value === '' ? null : Number(e.target.value),
+                    )
+                  }
+                >
+                  <option value="">No reminder</option>
+                  <option value="30">Every 30 days</option>
+                  <option value="60">Every 60 days</option>
+                  <option value="90">Every 90 days</option>
+                  <option value="180">Every 180 days</option>
+                  <option value="365">Every 365 days</option>
+                </Select>
+              </Field>
+            </PasswordFieldGrid>
+            <PasswordSettingChoice
+              title="Client Portal Access"
+              description="Controls whether client portal users can see this credential."
+              value={visibleToClients ? 'visible' : 'hidden'}
+              options={[
+                { value: 'visible', label: 'Visible' },
+                { value: 'hidden', label: 'Hidden' },
+              ]}
+              onChange={(value) => setVisibleToClients(value === 'visible')}
             />
-          </Field>
-          <Field
-            label="Rotation reminder"
-            help={
-              daysSinceRotation != null
-                ? `Last rotated ${daysSinceRotation === 0 ? 'today' : `${daysSinceRotation}d ago`}.`
-                : undefined
-            }
-          >
-            <Select
-              value={
-                rotationReminderDays == null ? '' : String(rotationReminderDays)
-              }
-              onChange={(e) =>
-                setRotationReminderDays(
-                  e.target.value === '' ? null : Number(e.target.value),
-                )
-              }
-            >
-              <option value="">No reminder</option>
-              <option value="30">Every 30 days</option>
-              <option value="60">Every 60 days</option>
-              <option value="90">Every 90 days</option>
-              <option value="180">Every 180 days</option>
-              <option value="365">Every 365 days</option>
-            </Select>
-          </Field>
-        </div>
-        <label style={checkboxLabel}>
-          <input
-            type="checkbox"
-            checked={visibleToClients}
-            onChange={(e) => setVisibleToClients(e.target.checked)}
-          />
-          Visible to client portal users
-        </label>
-        <label style={checkboxLabel}>
-          <input
-            type="checkbox"
-            checked={requireReason}
-            onChange={(e) => setRequireReason(e.target.checked)}
-          />
-          Require a reason to reveal
-        </label>
-        <Field label="Change reason (optional)">
+            <PasswordSettingChoice
+              title="Reveal Protection"
+              description="Controls whether internal users must enter a reason before reveal."
+              value={requireReason ? 'required' : 'not-required'}
+              options={[
+                { value: 'not-required', label: 'No reason' },
+                { value: 'required', label: 'Require reason' },
+              ]}
+              onChange={(value) => setRequireReason(value === 'required')}
+            />
+          </PasswordFormSection>
+        </PasswordAdvancedDisclosure>
+
+        <PasswordFormSection title="Audit">
+          <Field label="Change reason (optional)" labelVariant="plain">
           <Input
             value={reason}
             onChange={(e) => setReason(e.target.value)}
             placeholder="e.g. Quarterly rotation"
           />
-        </Field>
+          </Field>
+        </PasswordFormSection>
         {err && (
           <div style={{ fontSize: 12, color: 'var(--danger)' }}>{err}</div>
         )}
@@ -1448,42 +1574,6 @@ const checkboxLabel = {
   fontSize: 13,
   color: 'var(--text)',
 } as const;
-
-function RadioPill({
-  checked,
-  onChange,
-  label,
-}: {
-  checked: boolean;
-  onChange: () => void;
-  label: string;
-}) {
-  return (
-    <label
-      style={{
-        display: 'inline-flex',
-        alignItems: 'center',
-        gap: 6,
-        padding: '4px 10px',
-        borderRadius: 999,
-        border: `1px solid ${checked ? 'var(--accent)' : 'var(--line)'}`,
-        background: checked ? 'var(--accent-soft, rgba(37,99,235,0.12))' : 'transparent',
-        color: checked ? 'var(--accent)' : 'var(--text)',
-        fontSize: 12,
-        cursor: 'pointer',
-        userSelect: 'none',
-      }}
-    >
-      <input
-        type="radio"
-        checked={checked}
-        onChange={onChange}
-        style={{ margin: 0 }}
-      />
-      {label}
-    </label>
-  );
-}
 
 function fmtDate(iso: string | null): string {
   if (!iso) return '—';
@@ -1510,6 +1600,82 @@ function fmtDateTime(iso: string | null): string {
     minute: '2-digit',
   });
   return `${datePart}, ${timePart}`;
+}
+
+function fmtShortDateTime(iso: string | null): string {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  const datePart = d.toLocaleDateString('en-US', {
+    month: 'short',
+    day: 'numeric',
+  });
+  const timePart = d.toLocaleTimeString('en-US', {
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+  return `${datePart}, ${timePart}`;
+}
+
+function formatCredentialUrl(value: string | null): string {
+  if (!value) return '';
+  const parse = (candidate: string) => {
+    try {
+      return new URL(candidate);
+    } catch {
+      return null;
+    }
+  };
+
+  const parsed = parse(value) ?? parse(`https://${value}`);
+  if (!parsed) return shortenPath(value.split(/[?#]/)[0] ?? value);
+
+  const path = shortenPath(parsed.pathname);
+  return `${parsed.hostname}${path === '/' ? '' : path}`;
+}
+
+function shortenPath(path: string): string {
+  const clean = path.split(/[?#]/)[0] ?? path;
+  const segments = clean
+    .split('/')
+    .filter(Boolean)
+    .filter((segment) => !isOpaqueUrlSegment(segment))
+    .map((segment) => shortenUrlSegment(segment));
+
+  const collapsed = segments.filter(
+    (segment, index) => segment !== segments[index - 1],
+  );
+  return collapsed.length > 0 ? `/${collapsed.join('/')}` : '/';
+}
+
+function isOpaqueUrlSegment(segment: string): boolean {
+  const decoded = decodeURIComponentSafe(segment);
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(decoded)) {
+    return true;
+  }
+  if (/^[0-9a-f]{24,}$/i.test(decoded)) return true;
+  if (/^[0-9a-f-]{24,}$/i.test(decoded) && /[0-9a-f]/i.test(decoded)) {
+    return true;
+  }
+  if (/^[0-9A-HJKMNP-TV-Z]{26}$/.test(decoded)) return true;
+  if (/^c[a-z0-9]{20,}$/i.test(decoded)) return true;
+  return false;
+}
+
+function decodeURIComponentSafe(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
+function shortenUrlSegment(segment: string): string {
+  if (segment.length <= 32) return segment;
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(segment)) {
+    return `${segment.slice(0, 8)}...`;
+  }
+  if (/^[0-9a-f-]{24,}$/i.test(segment)) return `${segment.slice(0, 8)}...`;
+  return `${segment.slice(0, 24)}...${segment.slice(-8)}`;
 }
 
 function problemMessage(problem: unknown): string | null {

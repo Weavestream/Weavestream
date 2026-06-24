@@ -24,6 +24,15 @@ const labelBase: CSSProperties = {
   marginBottom: 6,
 };
 
+const plainLabel: CSSProperties = {
+  display: 'block',
+  fontSize: 12.5,
+  fontFamily: 'var(--font-sans)',
+  color: 'var(--text-2)',
+  fontWeight: 600,
+  marginBottom: 6,
+};
+
 const errorStyle: CSSProperties = {
   marginTop: 6,
   fontSize: 11.5,
@@ -38,6 +47,7 @@ const helpStyle: CSSProperties = {
 
 export function Field({
   label,
+  labelVariant = 'caps',
   htmlFor,
   error,
   help,
@@ -45,6 +55,7 @@ export function Field({
   style,
 }: {
   label?: string;
+  labelVariant?: 'caps' | 'plain';
   htmlFor?: string;
   error?: string;
   help?: string;
@@ -54,7 +65,10 @@ export function Field({
   return (
     <div style={{ display: 'flex', flexDirection: 'column', ...style }}>
       {label && (
-        <label htmlFor={htmlFor} style={labelBase}>
+        <label
+          htmlFor={htmlFor}
+          style={labelVariant === 'plain' ? plainLabel : labelBase}
+        >
           {label}
         </label>
       )}

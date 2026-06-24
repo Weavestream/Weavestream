@@ -16,10 +16,13 @@ import {
   PageBody,
   PageHeader,
 } from '../../../../../../components/shell/page-header';
-import { Tag } from '../../../../../../components/ui';
+import { LayoutSwatch, Tag } from '../../../../../../components/ui';
 import { buildTerm } from '../../../../../../lib/term';
 import { companyCrumbs } from '../../../../../../lib/company-crumbs';
-import { PasswordDetailClient } from './password-detail-client';
+import {
+  PasswordDetailClient,
+  PasswordHeaderActions,
+} from './password-detail-client';
 
 export const metadata: Metadata = { title: 'Password' };
 
@@ -69,21 +72,25 @@ export default async function PasswordDetailPage({
           { label: 'Passwords', href: `/admin/companies/${companyId}/passwords` },
           { label: password.name },
         )}
-        title={
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 10 }}>
-            {password.color && (
-              <span
-                aria-hidden
-                style={{
-                  display: 'inline-block',
-                  width: 10,
-                  height: 10,
-                  borderRadius: 3,
-                  background: password.color,
-                }}
-              />
+        leading={
+          <LayoutSwatch
+            icon="lock"
+            color={password.color ?? 'var(--accent)'}
+            size={48}
+          />
+        }
+        title={password.name}
+        description={
+          <span style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+            {password.visibleToClients ? (
+              <Tag tone="accent">client-visible</Tag>
+            ) : (
+              <Tag tone="outline">internal</Tag>
             )}
-            {password.name}
+            {password.requireReasonToView && (
+              <Tag tone="warn">reason required</Tag>
+            )}
+            {password.archivedAt && <Tag tone="default">archived</Tag>}
             {password.assetId && (
               <Tag tone="accent">
                 embedded on
@@ -99,16 +106,16 @@ export default async function PasswordDetailPage({
                 </Link>
               </Tag>
             )}
-            {password.visibleToClients ? (
-              <Tag tone="accent">client-visible</Tag>
-            ) : (
-              <Tag tone="outline">internal</Tag>
-            )}
-            {password.requireReasonToView && (
-              <Tag tone="warn">reason required</Tag>
-            )}
-            {password.archivedAt && <Tag tone="default">archived</Tag>}
           </span>
+        }
+        actions={
+          <PasswordHeaderActions
+            companyId={companyId}
+            password={password}
+            folders={folders}
+            canManage={manage}
+            generatorDefaults={settings.passwordGeneratorDefaults}
+          />
         }
       />
       <PageBody>
@@ -116,13 +123,11 @@ export default async function PasswordDetailPage({
           companyId={companyId}
           password={password}
           versions={versions}
-          folders={folders}
           canManage={manage}
           canManageInternalAccess={manageInternalAccess}
           folderName={folder?.name ?? null}
           assetName={linkedAsset?.name ?? null}
           me={{ id: me.id, role: me.role }}
-          generatorDefaults={settings.passwordGeneratorDefaults}
         />
       </PageBody>
     </>
