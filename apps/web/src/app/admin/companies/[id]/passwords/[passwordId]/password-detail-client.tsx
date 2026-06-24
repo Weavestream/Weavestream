@@ -447,8 +447,6 @@ export function PasswordDetailClient({
                   </dd>
                 </>
               )}
-              <dt style={dt}>Updated</dt>
-              <dd style={dd}>{fmtDateTime(password.updatedAt)}</dd>
               {detailsExpanded && (
                 <>
                   {password.lastRotatedAt && (
@@ -481,6 +479,8 @@ export function PasswordDetailClient({
                   )}
                   <dt style={dt}>Created</dt>
                   <dd style={dd}>{fmtDateTime(password.createdAt)}</dd>
+                  <dt style={dt}>Updated</dt>
+                  <dd style={dd}>{fmtDateTime(password.updatedAt)}</dd>
                 </>
               )}
             </dl>
