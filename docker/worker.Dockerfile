@@ -38,7 +38,7 @@ RUN pnpm --filter @weavestream/db prisma:generate \
  && pnpm --filter @weavestream/db build \
  && pnpm --filter @weavestream/worker build
 
-# Prune dev deps for the runner. CI=true tells pnpm 10 it's safe to
+# Prune dev deps for the runner. CI=true tells pnpm it may
 # remove/recreate node_modules non-interactively.
 RUN --mount=type=cache,id=pnpm,target=/pnpm/store \
     CI=true pnpm install --frozen-lockfile --prod

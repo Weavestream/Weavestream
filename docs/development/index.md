@@ -14,7 +14,7 @@ End users deploying published images should use the [Quickstart](/getting-starte
 ## Prerequisites
 
 - **Node.js 24+** managed with nvm, fnm, Volta, or a similar version manager.
-- **pnpm 10+** via Corepack. Run `corepack enable` once; later `pnpm` commands use the version declared in `package.json`.
+- **pnpm 11.x** via Corepack. Run `corepack enable` once; later `pnpm` commands use the exact 11.x version declared in `package.json`. Keep that pin current with the latest pnpm 11 release rather than using a floating range.
 - **Docker Engine 24+** with Docker Compose v2.
 - **openssl** on macOS, Linux, or WSL; Windows users can use the PowerShell keygen script.
 

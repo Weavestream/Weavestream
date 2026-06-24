@@ -13,6 +13,10 @@ All notable changes to Weavestream are documented here. The format follows [Keep
 
 ## [Unreleased]
 
+### Changed
+
+- **pnpm 11 is now the workspace package manager.** `packageManager` in root `package.json` is pinned to the current exact pnpm 11 release (`pnpm@11.9.0`), CI runs the same version, and pnpm configuration now lives in `pnpm-workspace.yaml` using pnpm 11's `allowBuilds` map. Production containers continue to run prebuilt Node apps; pnpm is only used while installing and building images.
+
 ## [1.8.8] - 2026-05-22
 
 ### Changed
