@@ -957,8 +957,20 @@ export class ArticlesService {
       throw new NotFoundException();
     }
 
+    // A client may reach this point for a currently-visible article whose
+    // history still contains versions that were internal/private when
+    // written. Each version row snapshots its own visibility at publish
+    // time (see `versionRowBodyFromArticle`), so filter on the version's
+    // own flag — not the article's — to keep historical hidden content
+    // out of the client response. This is a WHERE clause, not a
+    // post-filter (WS-002).
     const rows = await this.prisma.articleVersion.findMany({
-      where: { articleId: id, companyId, isDraft: false },
+      where: {
+        articleId: id,
+        companyId,
+        isDraft: false,
+        ...(actor.role === 'CLIENT_USER' ? { visibleToClients: true } : {}),
+      },
       orderBy: { version: 'desc' },
     });
     if (rows.length === 0) return [];
@@ -995,8 +1007,20 @@ export class ArticlesService {
       throw new NotFoundException();
     }
 
+    // Authorize against the requested version's own visibility snapshot,
+    // not the article's current flag: a now-visible article can have
+    // historical versions that were never meant to be client-visible.
+    // Folding the flag into the WHERE makes a hidden version
+    // indistinguishable from a missing one (404), avoiding existence
+    // disclosure (WS-002).
     const row = await this.prisma.articleVersion.findFirst({
-      where: { articleId: id, companyId, version, isDraft: false },
+      where: {
+        articleId: id,
+        companyId,
+        version,
+        isDraft: false,
+        ...(actor.role === 'CLIENT_USER' ? { visibleToClients: true } : {}),
+      },
     });
     if (!row) throw new NotFoundException();
 

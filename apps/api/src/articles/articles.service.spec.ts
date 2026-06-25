@@ -274,6 +274,7 @@ function makeStubs(initial: {
           companyId?: string;
           isDraft?: boolean;
           version?: number;
+          visibleToClients?: boolean;
         };
         orderBy?: { version?: 'asc' | 'desc' };
       }): Promise<ArticleVersionRow | null> {
@@ -283,6 +284,11 @@ function makeStubs(initial: {
           if (where.companyId && v.companyId !== where.companyId) return false;
           if (where.isDraft !== undefined && v.isDraft !== where.isDraft) return false;
           if (where.version !== undefined && v.version !== where.version) return false;
+          if (
+            where.visibleToClients !== undefined &&
+            v.visibleToClients !== where.visibleToClients
+          )
+            return false;
           return true;
         });
         if (args.orderBy?.version === 'desc') {
@@ -293,7 +299,12 @@ function makeStubs(initial: {
         return matches[0] ?? null;
       },
       async findMany(args: {
-        where?: { articleId?: string; companyId?: string; isDraft?: boolean };
+        where?: {
+          articleId?: string;
+          companyId?: string;
+          isDraft?: boolean;
+          visibleToClients?: boolean;
+        };
         orderBy?: { version?: 'asc' | 'desc' };
         select?: Record<string, boolean>;
       }): Promise<Array<Partial<ArticleVersionRow>>> {
@@ -302,6 +313,11 @@ function makeStubs(initial: {
           if (where.articleId && v.articleId !== where.articleId) return false;
           if (where.companyId && v.companyId !== where.companyId) return false;
           if (where.isDraft !== undefined && v.isDraft !== where.isDraft) return false;
+          if (
+            where.visibleToClients !== undefined &&
+            v.visibleToClients !== where.visibleToClients
+          )
+            return false;
           return true;
         });
         if (args.orderBy?.version === 'desc') {
@@ -467,6 +483,12 @@ function makeStubs(initial: {
     user: {
       async findMany() {
         return [] as Array<{ id: string; name: string; email: string }>;
+      },
+      async findUnique(_args: {
+        where: { id: string };
+        select?: Record<string, boolean>;
+      }) {
+        return null as { id: string; name: string; email: string } | null;
       },
     },
   };
@@ -1471,6 +1493,97 @@ describe('ArticlesService', () => {
       await expect(
         svc.getVersion(actor(), 'c-1', 'art-1', 2),
       ).rejects.toBeInstanceOf(NotFoundException);
+    });
+
+    // WS-002: version-level visibility must gate client access, not just
+    // the article's current flag. An article that is visible now can have
+    // historical versions that were internal when written.
+    describe('WS-002 version-level visibility for client users', () => {
+      // current-visible / history-hidden: the client may read the article
+      // and its visible versions, but hidden historical versions must not
+      // appear in the list or be fetchable by version number.
+      it('listVersions hides history-hidden versions of a now-visible article from CLIENT_USER', async () => {
+        const { svc } = mkSvc({
+          articles: [publishedRow({ visibleToClients: true })],
+          versions: [
+            v1Row({ id: 'av-1', version: 1, visibleToClients: false }),
+            v1Row({ id: 'av-2', version: 2, visibleToClients: true }),
+          ],
+        });
+        const list = await svc.listVersions(
+          actor({ role: 'CLIENT_USER' }),
+          'c-1',
+          'art-1',
+        );
+        expect(list.map((v) => v.version)).toEqual([2]);
+      });
+
+      it('getVersion 404s a history-hidden version of a now-visible article for CLIENT_USER', async () => {
+        const { svc } = mkSvc({
+          articles: [publishedRow({ visibleToClients: true })],
+          versions: [
+            v1Row({ id: 'av-1', version: 1, visibleToClients: false }),
+            v1Row({ id: 'av-2', version: 2, visibleToClients: true }),
+          ],
+        });
+        await expect(
+          svc.getVersion(actor({ role: 'CLIENT_USER' }), 'c-1', 'art-1', 1),
+        ).rejects.toBeInstanceOf(NotFoundException);
+        // The client-visible version is still reachable.
+        const v2 = await svc.getVersion(
+          actor({ role: 'CLIENT_USER' }),
+          'c-1',
+          'art-1',
+          2,
+        );
+        expect(v2.version).toBe(2);
+      });
+
+      // current-hidden / history-visible: the article is now private, so
+      // the whole history (even formerly-visible versions) is off-limits.
+      it('listVersions 404s a now-hidden article for CLIENT_USER even with visible history', async () => {
+        const { svc } = mkSvc({
+          articles: [publishedRow({ visibleToClients: false })],
+          versions: [v1Row({ id: 'av-1', version: 1, visibleToClients: true })],
+        });
+        await expect(
+          svc.listVersions(actor({ role: 'CLIENT_USER' }), 'c-1', 'art-1'),
+        ).rejects.toBeInstanceOf(NotFoundException);
+      });
+
+      it('getVersion 404s a now-hidden article for CLIENT_USER even for a formerly-visible version', async () => {
+        const { svc } = mkSvc({
+          articles: [publishedRow({ visibleToClients: false })],
+          versions: [v1Row({ id: 'av-1', version: 1, visibleToClients: true })],
+        });
+        await expect(
+          svc.getVersion(actor({ role: 'CLIENT_USER' }), 'c-1', 'art-1', 1),
+        ).rejects.toBeInstanceOf(NotFoundException);
+      });
+
+      // Operators/admins are unaffected: full history regardless of the
+      // per-version visibility snapshot.
+      it('listVersions returns history-hidden versions to non-client actors', async () => {
+        const { svc } = mkSvc({
+          articles: [publishedRow({ visibleToClients: true })],
+          versions: [
+            v1Row({ id: 'av-1', version: 1, visibleToClients: false }),
+            v1Row({ id: 'av-2', version: 2, visibleToClients: true }),
+          ],
+        });
+        const list = await svc.listVersions(actor(), 'c-1', 'art-1');
+        expect(list.map((v) => v.version)).toEqual([2, 1]);
+      });
+
+      it('getVersion returns a history-hidden version to non-client actors', async () => {
+        const { svc } = mkSvc({
+          articles: [publishedRow({ visibleToClients: true })],
+          versions: [v1Row({ id: 'av-1', version: 1, visibleToClients: false })],
+        });
+        const v1 = await svc.getVersion(actor(), 'c-1', 'art-1', 1);
+        expect(v1.version).toBe(1);
+        expect(v1.visibleToClients).toBe(false);
+      });
     });
   });
 });
