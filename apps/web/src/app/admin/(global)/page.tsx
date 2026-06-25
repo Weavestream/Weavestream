@@ -20,7 +20,6 @@ import {
   serverApiFetch,
   type CompanyListItem,
   type CompanyPage,
-  type DomainAlert,
   type RecentActivityItem,
   type StarredItem,
 } from '../../../lib/server-api';
@@ -95,7 +94,6 @@ export default async function AdminDashboard() {
           <StarredPanel starred={starred} termOne={term.one} />
           <RecentCompaniesPanel
             rows={recentCompanies}
-            termOne={term.one}
             termOther={term.other}
           />
           <RecentActivityPanel items={recent} termOther={term.other} />
@@ -394,11 +392,9 @@ function starredSubline(item: StarredItem): string {
 
 function RecentCompaniesPanel({
   rows,
-  termOne,
   termOther,
 }: {
   rows: CompanyListItem[];
-  termOne: string;
   termOther: string;
 }) {
   return (
