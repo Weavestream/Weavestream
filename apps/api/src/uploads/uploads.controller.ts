@@ -4,7 +4,6 @@ import {
   Controller,
   Delete,
   Get,
-  Header,
   HttpCode,
   HttpStatus,
   NotFoundException,
@@ -61,9 +60,12 @@ import { requestMetaOf as meta } from '../common/request-meta.js';
  *      → stream the original (or thumbnail) bytes back through the API.
  *        Stable, embeddable, same-origin URL for `<img src>` and
  *        `<a href>` — the canonical browser-facing read endpoint.
- *        `attachment=1` switches `Content-Disposition` to `attachment`
- *        with the original filename so a click triggers a download
- *        instead of inline rendering.
+ *        Only image bytes (thumbnails, image originals) are served
+ *        `inline` and allowed into the browser disk cache; every
+ *        non-image original (PDF, Office doc, archive, script,
+ *        text/config) is forced to `attachment` with `no-store`.
+ *        `attachment=1` forces `attachment` for images too, so a
+ *        click on an image triggers a save-as instead of inline view.
  *   DELETE /companies/:companyId/uploads/:id
  *      → soft-delete.
  */
@@ -197,19 +199,26 @@ export class UploadsController {
    * to reach the storage layer directly. A single host-level reverse-
    * proxy entry covers the whole app.
    *
-   * `attachment=1` flips `Content-Disposition` to `attachment` with
-   * the original filename, turning the URL into a save-as link
-   * (used by the photos tile / attachments panel "download" actions).
-   * Without it the response is `inline`, so an image renders in an
-   * `<img>` tag and a click on a PDF/doc opens it in a new tab.
+   * Disposition and caching are decided by what we actually serve:
+   *   - Images (thumbnails are always WebP; image originals render in
+   *     `<img>`) are sent `inline` with `private, max-age=300`, so a
+   *     single user's browser can reuse the bytes for the page session.
+   *   - Every non-image original (PDF, Office doc, archive, script,
+   *     text/config) is forced to `Content-Disposition: attachment`
+   *     with `Cache-Control: private, no-store`. Sensitive document
+   *     bytes never render inline (where a content-type quirk could be
+   *     abused) and are never written to the browser disk cache.
+   * `attachment=1` additionally forces `attachment` for images, turning
+   * the URL into a save-as link (used by the photos tile / attachments
+   * panel "download" actions).
    *
-   * Sets a private `Cache-Control` so a single user's browser can
-   * reuse the bytes for the lifetime of the page session, while
-   * shared/CDN caches are forbidden — uploaded media is tenant-scoped
-   * and must always go through the API for permission enforcement.
+   * `Cache-Control` is always `private` regardless of variant — uploaded
+   * media is tenant-scoped and must always go through the API for
+   * permission enforcement, so shared/CDN caches are forbidden.
+   * `X-Content-Type-Options: nosniff` is set on the stream itself so the
+   * declared `Content-Type` is honoured even if the web layer is bypassed.
    */
   @Get(':id/image')
-  @Header('Cache-Control', 'private, max-age=300')
   @RequirePermission('upload.read', { companyIdFrom: 'params.companyId' })
   async image(
     @CurrentUser() actor: AuthedUser,
@@ -232,6 +241,7 @@ export class UploadsController {
       });
     }
     res.setHeader('Content-Type', stream.contentType);
+    res.setHeader('X-Content-Type-Options', 'nosniff');
     if (typeof stream.contentLength === 'number') {
       res.setHeader('Content-Length', stream.contentLength.toString());
     }
@@ -241,10 +251,20 @@ export class UploadsController {
     if (stream.etag) {
       res.setHeader('ETag', stream.etag);
     }
-    const asAttachment = attachment === '1' || attachment === 'true';
+    // Decide disposition + cache from the bytes we actually serve. Only
+    // images are safe to render inline and worth disk-caching; every
+    // non-image original is forced to download and kept out of the
+    // browser cache. `attachment=1` forces a download for images too.
+    const servesImage = stream.contentType.startsWith('image/');
+    const asAttachment =
+      attachment === '1' || attachment === 'true' || !servesImage;
     res.setHeader(
       'Content-Disposition',
       contentDispositionFor(stream.filename, asAttachment ? 'attachment' : 'inline'),
+    );
+    res.setHeader(
+      'Cache-Control',
+      servesImage ? 'private, max-age=300' : 'private, no-store',
     );
     return new StreamableFile(Readable.from(stream.body));
   }

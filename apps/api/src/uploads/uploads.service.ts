@@ -809,10 +809,11 @@ export class UploadsService {
     const hasMore = rows.length > limit;
     const slice = hasMore ? rows.slice(0, limit) : rows;
     // Stable same-origin URLs pointing at the API streaming endpoint.
-    // `image` (no `attachment=1`) sends inline Content-Disposition, so
-    // clicking a tile opens the file in a new tab's native viewer
-    // (image renders, PDF previews, etc.) just like the previous
-    // presigned URL flow did, while staying on the app's own origin.
+    // `image` renders image bytes inline (so an image tile opens in a
+    // new tab's native viewer); non-image originals are forced to
+    // download by the streaming route regardless of `attachment`, so a
+    // PDF/doc tile saves rather than previewing inline. Everything stays
+    // on the app's own origin, unlike the previous presigned URL flow.
     const serialized = slice.map((row) => {
       const base = this.serialize(row);
       base.thumbnailUrl = row.thumbnailKey
