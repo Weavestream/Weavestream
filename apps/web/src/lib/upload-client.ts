@@ -400,6 +400,8 @@ export function describeUploadError(
         return `The upload session for ${who} expired. Please try again.`;
       case 'CompanyScopeMismatch':
         return `${who} couldn't be attached to this ${tenantTerm}. Please reload and try again.`;
+      case 'AttachmentParentInvalid':
+        return `${who} couldn't be attached — the item it belongs to no longer exists in this ${tenantTerm}. Please reload and try again.`;
       default:
         break;
     }

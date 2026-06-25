@@ -976,6 +976,264 @@ describe('UploadsService.assertReadable (CLIENT_USER gate)', () => {
   });
 });
 
+/**
+ * WS-013: upload confirmation and attachment-parent invariants.
+ *   - `confirm` repeats the uploader-ownership check `relayPut` enforces,
+ *     so a confirm with a known UUID can't be driven by another user.
+ *   - `init` and `confirm` both reject an attachment whose parent is
+ *     missing or belongs to a different company, and apply the
+ *     password read policy (`canReadPassword`) to password attachments.
+ */
+describe('UploadsService attachment parent invariants (WS-013)', () => {
+  type Parents = {
+    asset?: { id: string } | null;
+    article?: { id: string } | null;
+    assetField?: { id: string } | null;
+    password?: {
+      id: string;
+      visibleToClients: boolean;
+      restrictedToUserIds: string[];
+    } | null;
+  };
+
+  function makeService(parents: Parents = {}) {
+    const prisma = {
+      upload: { create: jest.fn() },
+      asset: { findFirst: jest.fn().mockResolvedValue(parents.asset ?? null) },
+      article: {
+        findFirst: jest.fn().mockResolvedValue(parents.article ?? null),
+      },
+      assetField: {
+        findFirst: jest.fn().mockResolvedValue(parents.assetField ?? null),
+      },
+      password: {
+        findFirst: jest.fn().mockResolvedValue(parents.password ?? null),
+      },
+    };
+    const storage = {
+      ensureBucket: jest.fn().mockResolvedValue('/files/c1'),
+      uploadKey: jest
+        .fn()
+        .mockImplementation(
+          (cid: string, uid: string, name: string) =>
+            `${cid}/uploads/${uid}/${name}`,
+        ),
+      headObject: jest.fn(),
+      getObjectBody: jest.fn(),
+      deleteObject: jest.fn(),
+      putObject: jest.fn(),
+      thumbnailKey: jest.fn(),
+    };
+    const redis = {
+      client: {
+        get: jest.fn(),
+        set: jest.fn().mockResolvedValue('OK'),
+        del: jest.fn(),
+      },
+    };
+    const service = new UploadsService(
+      prisma as never,
+      storage as never,
+      redis as never,
+      { log: jest.fn() } as never,
+      {
+        values: {
+          MAX_UPLOAD_MB: 25,
+          ALLOWED_UPLOAD_MIME: 'image/png,application/zip',
+        },
+      } as never,
+    );
+    return { service, prisma, storage, redis };
+  }
+
+  const operator = { id: 'user-1', role: 'OPERATOR' } as never;
+  const baseInit = { filename: 'a.png', mimeType: 'image/png', sizeBytes: 100 };
+  const meta = { ip: '127.0.0.1', userAgent: 'jest' };
+
+  describe('init parent validation', () => {
+    it('allows an upload with no attachment target', async () => {
+      const { service, redis } = makeService();
+      const res = await service.init(operator, 'c1', { ...baseInit } as never);
+      expect(res.relayUrl).toContain('/uploads/');
+      expect(redis.client.set).toHaveBeenCalled();
+    });
+
+    it('allows an article attachment with no id (parent may not exist yet)', async () => {
+      const { service, prisma, redis } = makeService();
+      await service.init(operator, 'c1', {
+        ...baseInit,
+        attachedToType: 'article',
+      } as never);
+      expect(prisma.article.findFirst).not.toHaveBeenCalled();
+      expect(redis.client.set).toHaveBeenCalled();
+    });
+
+    it('accepts an asset attachment that exists in the company', async () => {
+      const { service, redis } = makeService({ asset: { id: 'asset-1' } });
+      await service.init(operator, 'c1', {
+        ...baseInit,
+        attachedToType: 'asset',
+        attachedToId: 'asset-1',
+      } as never);
+      expect(redis.client.set).toHaveBeenCalled();
+    });
+
+    it('rejects an asset attachment that is missing or cross-company', async () => {
+      const { service, storage, redis } = makeService({ asset: null });
+      await expect(
+        service.init(operator, 'c1', {
+          ...baseInit,
+          attachedToType: 'asset',
+          attachedToId: 'asset-x',
+        } as never),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      // Rejected before any storage / pending-session side effects.
+      expect(storage.ensureBucket).not.toHaveBeenCalled();
+      expect(redis.client.set).not.toHaveBeenCalled();
+    });
+
+    it('rejects an article attachment that is missing or cross-company', async () => {
+      const { service, redis } = makeService({ article: null });
+      await expect(
+        service.init(operator, 'c1', {
+          ...baseInit,
+          attachedToType: 'article',
+          attachedToId: 'art-x',
+        } as never),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(redis.client.set).not.toHaveBeenCalled();
+    });
+
+    it('rejects an asset_field attachment whose field does not exist', async () => {
+      const { service, redis } = makeService({ assetField: null });
+      await expect(
+        service.init(operator, 'c1', {
+          ...baseInit,
+          attachedToType: 'asset_field',
+          attachedToId: 'fld-x',
+        } as never),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(redis.client.set).not.toHaveBeenCalled();
+    });
+
+    it('accepts an asset_field attachment whose field exists', async () => {
+      const { service, redis } = makeService({ assetField: { id: 'fld-1' } });
+      await service.init(operator, 'c1', {
+        ...baseInit,
+        attachedToType: 'asset_field',
+        attachedToId: 'fld-1',
+      } as never);
+      expect(redis.client.set).toHaveBeenCalled();
+    });
+
+    it('rejects a password attachment that is missing or cross-company', async () => {
+      const { service, redis } = makeService({ password: null });
+      await expect(
+        service.init(operator, 'c1', {
+          ...baseInit,
+          attachedToType: 'password',
+          attachedToId: 'pw-x',
+        } as never),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(redis.client.set).not.toHaveBeenCalled();
+    });
+
+    it('rejects a password attachment the actor cannot read (restricted to others)', async () => {
+      const { service, redis } = makeService({
+        password: {
+          id: 'pw-restricted',
+          visibleToClients: true,
+          restrictedToUserIds: ['someone-else'],
+        },
+      });
+      await expect(
+        service.init(operator, 'c1', {
+          ...baseInit,
+          attachedToType: 'password',
+          attachedToId: 'pw-restricted',
+        } as never),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(redis.client.set).not.toHaveBeenCalled();
+    });
+
+    it('accepts a password attachment the actor can read', async () => {
+      const { service, redis } = makeService({
+        password: {
+          id: 'pw-ok',
+          visibleToClients: true,
+          restrictedToUserIds: [],
+        },
+      });
+      await service.init(operator, 'c1', {
+        ...baseInit,
+        attachedToType: 'password',
+        attachedToId: 'pw-ok',
+      } as never);
+      expect(redis.client.set).toHaveBeenCalled();
+    });
+  });
+
+  describe('confirm ownership + parent validation', () => {
+    function pendingJson(over: Record<string, unknown> = {}) {
+      return JSON.stringify({
+        companyId: 'c1',
+        filename: 'a.png',
+        mimeType: 'image/png',
+        sizeBytes: 5,
+        storageKey: 'c1/uploads/u-1/a.png',
+        uploaderId: 'user-1',
+        attachedToType: null,
+        attachedToId: null,
+        ...over,
+      });
+    }
+
+    it('rejects a confirm driven by a different user than the uploader', async () => {
+      const { service, storage, redis } = makeService();
+      redis.client.get.mockResolvedValue(
+        pendingJson({ uploaderId: 'someone-else' }),
+      );
+      await expect(
+        service.confirm(operator, 'c1', { uploadId: 'u-1' } as never, meta),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+      // Short-circuits before any storage / body work.
+      expect(storage.headObject).not.toHaveBeenCalled();
+    });
+
+    it('rejects a confirm whose attachment target is missing or cross-company', async () => {
+      const { service, storage, redis } = makeService({ password: null });
+      redis.client.get.mockResolvedValue(
+        pendingJson({ attachedToType: 'password', attachedToId: 'pw-x' }),
+      );
+      await expect(
+        service.confirm(operator, 'c1', { uploadId: 'u-1' } as never, meta),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(storage.headObject).not.toHaveBeenCalled();
+    });
+
+    it('validates an attachment target supplied at confirm time (overriding init)', async () => {
+      const { service, storage, redis, prisma } = makeService({ asset: null });
+      // The pending session carried no attachment; confirm attempts to
+      // attach to a missing asset — the override is still validated.
+      redis.client.get.mockResolvedValue(pendingJson());
+      await expect(
+        service.confirm(
+          operator,
+          'c1',
+          {
+            uploadId: 'u-1',
+            attachedToType: 'asset',
+            attachedToId: 'asset-x',
+          } as never,
+          meta,
+        ),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(prisma.asset.findFirst).toHaveBeenCalled();
+      expect(storage.headObject).not.toHaveBeenCalled();
+    });
+  });
+});
+
 describe('UploadsService.paginatedList CLIENT_USER filter', () => {
   function build(rows: Array<Partial<Upload> & { id: string }>) {
     const uploads = rows.map((r) => baseUpload(r));

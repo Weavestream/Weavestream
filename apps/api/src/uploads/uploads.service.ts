@@ -175,6 +175,17 @@ export class UploadsService {
       });
     }
 
+    // Reject an attachment that names a missing or cross-company parent
+    // up front, before we hand out a relay URL or write any bytes
+    // (WS-013). `confirm` re-validates the resolved target, since it may
+    // override what init stored.
+    await this.assertAttachmentParent(
+      actor,
+      companyId,
+      input.attachedToType ?? null,
+      input.attachedToId ?? null,
+    );
+
     const uploadId = randomUUID();
     const storageKey = this.storage.uploadKey(companyId, uploadId, input.filename);
     // Make sure the bucket exists *before* we hand the client a relay URL,
@@ -318,6 +329,31 @@ export class UploadsService {
       });
     }
 
+    // Only the user who registered the pending session may confirm it.
+    // `relayPut` already enforces this on the body PUT; repeating it here
+    // means a confirm with a known (UUID) upload ID still cannot be
+    // driven by a different user (WS-013). The controller already gated
+    // on `upload.create`, so this narrows ownership rather than being the
+    // primary authorization decision.
+    if (pending.uploaderId && pending.uploaderId !== actor.id) {
+      throw new ForbiddenException({
+        error: 'UploadNotOwned',
+        message: 'This upload session belongs to a different user.',
+      });
+    }
+
+    // Resolve the final attachment target (confirm may override what
+    // init stored) and validate the parent exists and is in scope before
+    // we spend any work fetching/hashing/thumbnailing the body (WS-013).
+    const attachedToType = input.attachedToType ?? pending.attachedToType;
+    const attachedToId = input.attachedToId ?? pending.attachedToId;
+    await this.assertAttachmentParent(
+      actor,
+      companyId,
+      attachedToType,
+      attachedToId,
+    );
+
     const head = await this.storage.headObject(companyId, pending.storageKey);
     if (!head) {
       throw new BadRequestException({
@@ -425,9 +461,6 @@ export class UploadsService {
         );
       }
     }
-
-    const attachedToType = input.attachedToType ?? pending.attachedToType;
-    const attachedToId = input.attachedToId ?? pending.attachedToId;
 
     const upload = await this.prisma.upload.create({
       data: {
@@ -1243,6 +1276,89 @@ export class UploadsService {
         downloadUrl: this.apiUploadUrl(companyId, row.id),
       };
     });
+  }
+
+  /**
+   * Validate an upload's declared attachment parent before we persist
+   * the pointer. Upload IDs are unguessable UUIDs, but server-side
+   * invariants must not lean on unguessability (WS-013) — an attachment
+   * naming a missing or cross-company parent is rejected here rather
+   * than producing an orphaned or misleading row.
+   *
+   *   asset       → Asset must exist in this company.
+   *   article     → Article must exist in this company.
+   *   asset_field → AssetField must exist. The field is a global,
+   *                 company-agnostic template (no `companyId` column of
+   *                 its own), so existence is the only invariant
+   *                 available here; company scope for FILE-field uploads
+   *                 is carried by the owning asset, which is backfilled
+   *                 into `attachedToId` once the asset saves.
+   *   password    → Password must exist in this company AND be readable
+   *                 by the actor, matching the password-detail read
+   *                 policy (`canReadPassword`, see WS-001). A credential
+   *                 the actor cannot read must not gain an attachment
+   *                 pointing at it.
+   *
+   * A null `attachedToId` is always allowed: every article image and any
+   * asset uploaded from the new-asset form is confirmed before its
+   * owning row exists (the id is linked/resolved afterwards), so there
+   * is nothing to validate against yet.
+   */
+  private async assertAttachmentParent(
+    actor: AuthedUser,
+    companyId: string,
+    attachedToType: UploadAttachmentType | null,
+    attachedToId: string | null,
+  ): Promise<void> {
+    if (!attachedToType || !attachedToId) return;
+
+    const reject = (): never => {
+      throw new BadRequestException({
+        error: 'AttachmentParentInvalid',
+        attachedToType,
+        message:
+          'The attachment target does not exist or is not in this company.',
+      });
+    };
+
+    switch (attachedToType) {
+      case 'asset': {
+        const row = await this.prisma.asset.findFirst({
+          where: { id: attachedToId, companyId },
+          select: { id: true },
+        });
+        if (!row) reject();
+        return;
+      }
+      case 'article': {
+        const row = await this.prisma.article.findFirst({
+          where: { id: attachedToId, companyId },
+          select: { id: true },
+        });
+        if (!row) reject();
+        return;
+      }
+      case 'asset_field': {
+        const row = await this.prisma.assetField.findFirst({
+          where: { id: attachedToId },
+          select: { id: true },
+        });
+        if (!row) reject();
+        return;
+      }
+      case 'password': {
+        const row = await this.prisma.password.findFirst({
+          where: { id: attachedToId, companyId },
+          select: {
+            id: true,
+            visibleToClients: true,
+            restrictedToUserIds: true,
+          },
+        });
+        if (!row || !canReadPassword(actor, row)) reject();
+        return;
+      }
+    }
   }
 
   /**
