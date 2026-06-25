@@ -593,8 +593,8 @@ export function PasswordsBrowser({
           folderId={folderId === 'ALL' ? null : folderId}
           assetId={dialog.prefillAssetId}
           generatorDefaults={generatorDefaults}
-          onClose={closeDialog}
-          onCreated={() => {
+          onCloseAction={closeDialog}
+          onCreatedAction={() => {
             closeDialog();
             startTransition(() => router.refresh());
           }}

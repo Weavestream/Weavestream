@@ -50,8 +50,8 @@ export function CreatePasswordDialog({
   folderId = null,
   assetId,
   generatorDefaults,
-  onClose,
-  onCreated,
+  onCloseAction,
+  onCreatedAction,
   title = 'New password',
 }: {
   companyId: string;
@@ -64,8 +64,12 @@ export function CreatePasswordDialog({
    * button is only rendered when this is supplied.
    */
   generatorDefaults?: PasswordGeneratorDefaults;
-  onClose: () => void;
-  onCreated: () => void;
+  // Next.js 16 RSC boundary: this dialog is reachable from Server
+  // Components (e.g. the asset CredentialsPanel), so callback props must
+  // use the `Action` suffix to satisfy the "use client" serializable-
+  // props check. They remain ordinary client-side callbacks.
+  onCloseAction: () => void;
+  onCreatedAction: () => void;
   title?: string;
 }) {
   const [busy, setBusy] = useState(false);
@@ -76,7 +80,9 @@ export function CreatePasswordDialog({
   const [password, setPassword] = useState('');
   const [notes, setNotes] = useState('');
   const [selectedFolder, setSelectedFolder] = useState<string | null>(folderId);
-  const [visibleToClients, setVisibleToClients] = useState(true);
+  // Secure-by-default (WS-003): new credentials start internal/private.
+  // Sharing with the client portal is an explicit opt-in below.
+  const [visibleToClients, setVisibleToClients] = useState(false);
   const [requireReason, setRequireReason] = useState(false);
   const [totpSecret, setTotpSecret] = useState('');
   const [totpEnabled, setTotpEnabled] = useState(false);
@@ -145,7 +151,7 @@ export function CreatePasswordDialog({
       );
       return;
     }
-    onCreated();
+    onCreatedAction();
   }, [
     companyId,
     name,
@@ -162,7 +168,7 @@ export function CreatePasswordDialog({
     tags,
     expiresAt,
     rotationReminderDays,
-    onCreated,
+    onCreatedAction,
   ]);
 
   const valid = name.trim().length > 0 && password.length > 0;
@@ -170,11 +176,11 @@ export function CreatePasswordDialog({
   return (
     <Dialog
       open
-      onClose={onClose}
+      onClose={onCloseAction}
       title={title}
       footer={
         <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
-          <Btn size="sm" onClick={onClose}>
+          <Btn size="sm" onClick={onCloseAction}>
             Cancel
           </Btn>
           <Btn
@@ -369,6 +375,28 @@ export function CreatePasswordDialog({
               ]}
               onChange={(value) => setVisibleToClients(value === 'visible')}
             />
+            {visibleToClients && (
+              <div
+                role="alert"
+                style={{
+                  display: 'flex',
+                  alignItems: 'flex-start',
+                  gap: 6,
+                  fontSize: 12,
+                  color: 'var(--warn)',
+                  padding: '6px 8px',
+                  background: 'var(--warn-soft)',
+                  borderRadius: 6,
+                }}
+              >
+                <Icon.warn size={12} />
+                <span>
+                  Client portal users will be able to see and reveal this
+                  credential. Only enable this for credentials you intend to
+                  share.
+                </span>
+              </div>
+            )}
             <PasswordSettingChoice
               title="Reveal Protection"
               description="Controls whether internal users must enter a reason before reveal."

@@ -478,13 +478,28 @@ describe('PasswordsService — detail', () => {
 });
 
 describe('PasswordsService — create / update', () => {
-  it('defaults new passwords to client-visible when omitted', async () => {
+  it('defaults new passwords to internal/private when omitted', async () => {
     const { svc } = makeStubs();
 
     const created = await svc.create(
       OPERATOR,
       'co-1',
       { name: 'Portal VPN', password: 'super-secret' },
+      META,
+    );
+
+    // Secure-by-default: omitting visibleToClients must NOT expose the
+    // credential to the client portal (WS-003).
+    expect(created.visibleToClients).toBe(false);
+  });
+
+  it('honors an explicit visibleToClients=true opt-in', async () => {
+    const { svc } = makeStubs();
+
+    const created = await svc.create(
+      OPERATOR,
+      'co-1',
+      { name: 'Portal VPN', password: 'super-secret', visibleToClients: true },
       META,
     );
 

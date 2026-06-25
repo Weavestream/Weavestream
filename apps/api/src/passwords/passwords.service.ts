@@ -310,7 +310,10 @@ export class PasswordsService {
           expiresAt: input.expiresAt ? new Date(input.expiresAt) : null,
           color: input.color ?? null,
           tags: input.tags ?? [],
-          visibleToClients: input.visibleToClients ?? true,
+          // Secure-by-default: when the client omits the flag, the
+          // credential is private. Client-portal exposure must be an
+          // explicit opt-in, never the fallback on a fast/imported create.
+          visibleToClients: input.visibleToClients ?? false,
           requireReasonToView: input.requireReasonToView ?? false,
           restrictedToUserIds,
           createdBy: actor.id,

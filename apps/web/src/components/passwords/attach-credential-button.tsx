@@ -68,8 +68,8 @@ export function AttachCredentialButton({
           folders={folders}
           assetId={assetId}
           generatorDefaults={generatorDefaults}
-          onClose={() => setOpen(false)}
-          onCreated={() => {
+          onCloseAction={() => setOpen(false)}
+          onCreatedAction={() => {
             setOpen(false);
             startTransition(() => router.refresh());
           }}
