@@ -1,6 +1,6 @@
 {
-  "version": "4.5.3",
-  "created": "2026-05-21T19:29:01Z",
+  "version": "4.6.0",
+  "created": "2026-06-25T14:03:50Z",
   "files": [
     {
       "path": ".nojekyll"
@@ -279,7 +279,8 @@
       "path": "features/assets.md"
     },
     {
-      "path": "features/assets/.ds_store"
+      "path": "features/assets/.ds_store",
+      "old": true
     },
     {
       "path": "features/assets/article-editor.png"
@@ -494,7 +495,8 @@
       "path": "overview/architecture/index.html"
     },
     {
-      "path": "overview/assets/.ds_store"
+      "path": "overview/assets/.ds_store",
+      "old": true
     },
     {
       "path": "overview/assets/articles.png"
@@ -692,7 +694,8 @@
       "path": "sitemap.xml"
     },
     {
-      "path": "static/.ds_store"
+      "path": "static/.ds_store",
+      "old": true
     },
     {
       "path": "static/favicon.ico"

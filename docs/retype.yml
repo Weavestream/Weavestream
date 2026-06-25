@@ -1,14 +1,14 @@
 name: Weavestream
 description: Self-hosted IT documentation platform for teams, MSPs, and homelabs.
 url: https://docs.weavestream.io
-output: ./dist   # or any path you prefer
+output: ./dist # or any path you prefer
 favicon: static/favicon.ico
 
 branding:
   logo: ./static/logo.svg
   logoDark: ./static/logo.svg
-  label: v1.8.8
-  color: "#65a30d"
+  label: v1.8.9
+  color: '#65a30d'
 
 links:
   - text: Website
@@ -27,13 +27,12 @@ links:
     link: https://github.com/Weavestream/Weavestream
     icon: mark-github
 
-
 integrations:
   googleAnalytics:
     id: G-YBX3J82S1X
 
 footer:
-  copyright: "© 2026 Weavestream. [AGPL-3.0-or-later](https://github.com/Weavestream/Weavestream/blob/main/LICENSE)."
+  copyright: '© 2026 Weavestream. [AGPL-3.0-or-later](https://github.com/Weavestream/Weavestream/blob/main/LICENSE).'
   links:
     - text: Website
       link: https://weavestream.io

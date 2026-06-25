@@ -13,14 +13,30 @@ All notable changes to Weavestream are documented here. The format follows [Keep
 
 ## [Unreleased]
 
+## [1.8.9] - 2026-06-25
+
 ### Changed
 
-- **pnpm 11 is now the workspace package manager.** `packageManager` in root `package.json` is pinned to the current exact pnpm 11 release (`pnpm@11.9.0`), CI runs the same version, and pnpm configuration now lives in `pnpm-workspace.yaml` using pnpm 11's `allowBuilds` map. Production containers continue to run prebuilt Node apps; pnpm is only used while installing and building images.
+- **New passwords now default to internal/private.** Both the "New password" dialog and the API now default new credentials to *not* visible in the client portal; sharing to the portal requires an explicit opt-in. Switching the toggle to "Visible" shows an inline warning that client portal users will be able to see and reveal the credential. Existing credentials are unchanged.
 - **Password internal access now has a dedicated sidebar control.** Credential visibility in the client portal remains controlled by the existing "Visible to client portal users" checkbox, while internal per-user restrictions are managed from the password detail sidebar. The default remains all internal users; restricted credentials can now also be limited to super admins only.
+- **pnpm 11 is now the workspace package manager.** `packageManager` in root `package.json` is pinned to the current exact pnpm 11 release (`pnpm@11.9.0`), CI runs the same version, and pnpm configuration now lives in `pnpm-workspace.yaml` using pnpm 11's `allowBuilds` map. Production containers continue to run prebuilt Node apps; pnpm is only used while installing and building images.
+
+### Fixed
+
+- **Starred items and Linked Items panels could silently load empty.** The browser-facing proxy relayed a stale `Content-Encoding: gzip` header on responses the runtime had already decompressed, so the browser failed to decode larger JSON payloads (`ERR_CONTENT_DECODING_FAILED`) and callers mis-rendered as empty. The proxy now drops the stale `Content-Encoding`/`Content-Length` headers.
+- **Expired or missing sessions now redirect to the login page instead of erroring.** Auth-gated admin and portal pages previously could crash with a server error when a session was null; they now consistently route to `/login`.
+- **Scheduled RMM integration syncs no longer fail in a retry loop on NUL bytes.** Upstream data from integrations (e.g. Action1, NinjaOne) containing a NUL byte (`U+0000`) was rejected by Postgres and retried indefinitely. Such bytes are now stripped from third-party data before it is persisted.
+- **Removed a deprecation warning on API boot** by updating the `/health` route-prefix exclusion to the current Express 5 / Nest 11 wildcard syntax. The public, ready, and queue health endpoints resolve at the same paths as before.
 
 ### Security
 
+- **Auth, CSRF, and UI cookies now set `Secure` based on the deployment URL scheme.** The `Secure` cookie attribute is derived from whether `APP_URL` is `https://` rather than from `NODE_ENV`, so HTTPS deployments always issue secure cookies and fail closed regardless of environment settings. Plain-HTTP local development is unaffected. A new startup warning flags a public HTTPS deployment running in a non-production environment.
+- **Article version history is now gated per version's own client visibility.** Portal (client) users viewing an article's version history only see historical versions that were themselves marked client-visible at the time they were written, even if the article is currently client-visible. Hidden versions return 404 with no existence disclosure; operators still see full history.
+- **Stronger server-side checks on upload confirmation and attachments.** Confirming a pending upload now re-verifies uploader ownership, and an upload's declared attachment parent (asset, article, asset field, or password) must exist, be in the same company, and — for passwords — be readable by the actor before the link is persisted. Password attachments are now governed by the same read policy as the password detail view.
+- **Non-image uploads now download as attachments and are not browser-cached.** PDFs, Office docs, archives, scripts, and other non-image originals are served with `Content-Disposition: attachment` and `Cache-Control: private, no-store` so they download instead of rendering inline and are never written to the browser disk cache. Images still render inline. `X-Content-Type-Options: nosniff` is now set on the stream itself.
 - **Password internal restrictions now apply consistently.** Internal users outside a credential's allow-list can no longer read its metadata, notes, versions, TOTP, reveal response, relations, expiration rows, or password-attached uploads. Super admins are always included in restricted credential access and are shown as non-removable entries in the picker.
+- **Safer reverse-proxy topology is harder to misconfigure unnoticed.** Startup now emits a log-only warning when `APP_URL` points at a public host over plain HTTP or with collapsed proxy trust (`TRUST_PROXY_HOPS=0`), and the Compose file, `.env.example`, and deployment docs now call out that exposing the web port directly is for local/LAN use only, with a verification recipe for confirming a forged `X-Forwarded-For` is ignored. No IP-trust behavior or defaults changed.
+- **Documented dependency patch SLA.** `SECURITY.md` now records target times from a confirmed dependency advisory to a tagged patch release (Critical 72h, High 7d, Moderate 30d, Low next cycle) alongside the existing CI `pnpm audit` gate and grouped Dependabot updates.
 
 ## [1.8.8] - 2026-05-22
 
