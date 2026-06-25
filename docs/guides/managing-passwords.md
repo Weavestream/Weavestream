@@ -60,7 +60,7 @@ No full passwords leave your server — only the first 5 characters of the SHA-1
 
 1. Open the credential's detail page
 2. Click **Reveal** next to the password field
-3. If an access restriction is configured, enter the required reason
+3. If **Reason to view** is enabled on the credential, enter the required justification
 4. The plaintext password is displayed for 30 seconds, then re-masked
 
 Every reveal is logged to the audit trail with your username, IP address, and timestamp.
@@ -114,8 +114,40 @@ For sensitive credentials, you can add restrictions:
 | Restriction | Effect |
 |---|---|
 | **Reason to view** | User must enter a justification before revealing the secret |
-| **User whitelist** | Only listed users can reveal the secret |
+| **Internal access** | Limits which internal (staff) users can see the credential at all — see below |
 | **Visible to clients** | Controls whether the credential appears in the client portal |
+
+## Controlling Internal User Access
+
+Every credential has an **Internal access** panel on its detail page that controls which of your internal (non-client) users can see it. By default a credential is visible to **all internal users with company access**. You can instead restrict it to a hand-picked list.
+
+Restriction here controls **visibility**, not just reveal: a user who is not on the list does not see the credential in the list, cannot open its detail page, and cannot reveal it. Reason-to-view (above) is a separate control that prompts for a justification before showing the secret to users who *do* have access.
+
+### Setting Internal Access
+
+1. Open the credential's detail page
+2. In the **Internal access** panel, click **Edit**
+3. Choose one of:
+   - **All internal users with company access** — the default; anyone with normal access to the company can see the credential
+   - **Restrict to selected internal users** — only the users you tick can see it
+4. When restricting, tick the users who should retain access
+5. Click **Save**
+
+The panel summarises the current state: **All internal users** or **Restricted** with a count of how many users are allowed. When you are one of the allowed users, the panel notes that you're included.
+
+### Who Can Be Selected
+
+The user list is drawn from people who already have a path to the company:
+
+- **Super admins** — always included and cannot be unticked (shown as *always included*)
+- **Members** — operators and contractors with an active, unexpired membership for this company
+- **Operators with global access** — operators whose global access setting already grants them every company
+
+Each row shows the user's role and where their access comes from (membership, global access, or always included). If a previously selected user later loses eligibility (for example, their membership is revoked), the dialog flags them and offers a **Remove unavailable** action so you can save a clean list.
+
+### Who Can Manage Internal Access
+
+Editing internal access requires both write access to the company **and** the membership-management permission. Super admins always qualify. Other users without that permission can see the panel's current state but not the **Edit** button. The panel is also read-only on archived credentials.
 
 ## Linking to Articles and Assets
 

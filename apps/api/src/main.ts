@@ -15,6 +15,7 @@ import { EnvService } from './config/env.service.js';
 import { configureEgressGuard } from './common/egress/safe-fetch.js';
 import { AuditLogService } from './audit/audit.service.js';
 import { AUDIT_ACTIONS } from './audit/audit-actions.js';
+import { topologyWarnings } from '@weavestream/shared/server';
 
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
@@ -39,6 +40,18 @@ async function bootstrap() {
   // covers RFC1918 (10/8, 172.16/12, 192.168/16) plus IPv6 fc00::/7 —
   // i.e. every realistic private-network deployment of api↔web.
   app.set('trust proxy', ['loopback', 'linklocal', 'uniquelocal']);
+
+  // Log-only deployment-topology sanity check. Purely informational — it
+  // never blocks startup and changes no behavior. It flags the env shapes
+  // (a public HTTP `APP_URL`, or `TRUST_PROXY_HOPS=0` on a public host)
+  // that indicate `web` may be exposed directly to the internet, which
+  // silently degrades audit / lockout / rate-limit / IP-rule attribution.
+  // The safe topology is a trusted TLS reverse proxy in front of `web`;
+  // see docs/deployment/tls. Defaults (`http://localhost:3000`) stay quiet.
+  const topologyLogger = app.get(Logger);
+  for (const warning of topologyWarnings(env)) {
+    topologyLogger.warn(warning, 'Topology');
+  }
 
   // Phase 6 — wire the egress / SSRF guard. Every server-side outbound
   // HTTP call goes through `safeFetch`, which refuses to dial private

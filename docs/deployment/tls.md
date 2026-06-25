@@ -13,6 +13,28 @@ Weavestream does not terminate TLS. Place a reverse proxy in front of the `web` 
 Running `web` directly internet-facing (no reverse proxy) forces `TRUST_PROXY_HOPS=0`, which disables meaningful per-IP rate limiting, lockout, audit attribution, and IP allow/deny rules. See [Client IP Attribution](/configuration/security/#client-ip-attribution) for the trade-off. For any production deployment, run a trusted TLS proxy in front of `web`.
 :::
 
+## Deployment topology
+
+The supported production shape puts a trusted proxy you control in front of `web`:
+
+```
+Internet → trusted TLS proxy (Nginx/Caddy/Traefik) → web:3000 → api:4000
+                                                          ↓
+                                                     postgres / redis
+```
+
+**Direct exposure of the `web` port (default `3000`) is for local/LAN use only.** `compose.yml` publishes that port on every host interface so a fresh `docker compose up` works out of the box, but that is not a safe internet-facing posture on its own:
+
+- With a trusted proxy in front and `TRUST_PROXY_HOPS=1` (the default), `web` resolves the real client IP from the proxy's `X-Forwarded-For` and forwards a single sanitized entry to the API. IP-based controls work correctly.
+- With **no** proxy and `TRUST_PROXY_HOPS=1`, a client can send their own `X-Forwarded-For` and choose the IP that audit logs, per-IP lockout, rate limiting, and IP allow/deny rules see.
+- With **no** proxy and `TRUST_PROXY_HOPS=0`, forging is prevented but every request collapses to the `0.0.0.0` sentinel, disabling those same controls. See [Client IP Attribution](/configuration/security/#client-ip-attribution).
+
+Either direct-public shape is weak, so run the proxy.
+
+:::note
+The API emits a `[Topology]` warning in its startup logs when it detects a likely-unsafe public configuration — a plain-HTTP `APP_URL` on a public host, or `TRUST_PROXY_HOPS=0` on a public host. It is informational only and never blocks startup, but it makes a misconfigured direct-public deployment visible in `docker compose logs api`. The default `http://localhost:3000` stays quiet.
+:::
+
 ## Required Environment Variables
 
 Before configuring your proxy, update `.env` with the public HTTPS URLs:
@@ -98,6 +120,40 @@ services:
       - "traefik.http.routers.weavestream.tls.certresolver=letsencrypt"
       - "traefik.http.services.weavestream.loadbalancer.server.port=3000"
 ```
+
+## Bind `web` to loopback (proxy on the same host)
+
+If your reverse proxy runs on the **same host** as the Compose stack, there's no reason to publish `web` on every interface. Bind it to loopback so the port is reachable only by the local proxy, not by anything else on the network. In `compose.yml`, change the `web` port mapping to:
+
+```yaml
+services:
+  web:
+    ports:
+      - "127.0.0.1:${WEB_HOST_PORT:-3000}:3000"
+```
+
+Then point the proxy at `127.0.0.1:3000` (the examples above already do). The default mapping (`"${WEB_HOST_PORT:-3000}:3000"`) binds all interfaces, which is only appropriate when the proxy lives on a different host and reaches `web` over the LAN.
+
+## Verify forged `X-Forwarded-For` is ignored
+
+After your proxy is in place, confirm that a client cannot choose their own audit IP. From a machine **outside** your network, drive a failed login through the proxy with a forged header, then check what Weavestream recorded. The login endpoint is CSRF-protected, so fetch a token first and replay it with the spoofed request:
+
+```bash
+# 1. Get a CSRF token + cookie into a jar.
+TOKEN=$(curl -k -s -c cookies.txt -X POST https://your-domain.com/api/v1/auth/csrf \
+  | sed -E 's/.*"csrfToken":"([^"]+)".*/\1/')
+
+# 2. Attempt a failed login through the proxy with a spoofed X-Forwarded-For.
+curl -k -i -b cookies.txt -X POST https://your-domain.com/api/v1/auth/login \
+  -H 'Content-Type: application/json' \
+  -H "X-CSRF-Token: $TOKEN" \
+  -H 'X-Forwarded-For: 1.2.3.4' \
+  --data '{"email":"nobody@example.com","password":"wrong"}'
+```
+
+Then open **Security Center → Audit log** (or query the audit table) and find the resulting `auth.login.failure` row. With the supported single-proxy topology and `TRUST_PROXY_HOPS=1`, the recorded IP is your **real** public address — not `1.2.3.4`. The proxy overwrites `X-Forwarded-For` with the real peer, `web` resolves and re-sanitizes it to a single entry, and the API trusts that entry only because it arrived from the private docker bridge.
+
+If you instead see `1.2.3.4`, your proxy is not overwriting `X-Forwarded-For`, or `TRUST_PROXY_HOPS` is higher than the number of proxies actually in front of `web`. If you see `0.0.0.0`, `TRUST_PROXY_HOPS=0` is in effect (expected only for an intentional direct-internet deployment). See [Client IP Attribution](/configuration/security/#client-ip-attribution).
 
 ## Self-Signed Certificates (Internal)
 

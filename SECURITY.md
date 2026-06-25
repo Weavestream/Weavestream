@@ -13,6 +13,27 @@ latest minor release line.
 We recommend pinning `WEAVESTREAM_VERSION` to a specific patch release in
 production and following the [CHANGELOG](CHANGELOG.md) for upgrade notes.
 
+## Dependency patch SLA
+
+Production dependency advisories are surfaced two ways: the CI `audit` job
+(`pnpm audit --prod --audit-level=high`) blocks merges on new high/critical
+production advisories, and Dependabot opens grouped update PRs weekly. Once an
+advisory affecting a production dependency is confirmed, we target the
+following times from confirmation to a tagged patch release:
+
+| Severity | Target to patched release       |
+| -------- | ------------------------------- |
+| Critical | 72 hours                        |
+| High     | 7 days                          |
+| Moderate | 30 days                         |
+| Low      | next scheduled dependency cycle |
+
+These targets apply to advisories with a realistic exploitation path against a
+default deployment. An advisory that is not reachable in our configuration (for
+example, a build-time-only dependency) may be deferred to the next dependency
+cycle with a note recorded in
+[CHANGELOG-SECURITY.md](CHANGELOG-SECURITY.md).
+
 ## Reporting a vulnerability
 
 **Please do not open a public issue for suspected security problems.**

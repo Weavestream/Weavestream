@@ -169,5 +169,20 @@ services:
     depends_on:
       api:
         condition: service_healthy
+    # Publishes the Next.js UI on the host. By default this binds every
+    # host interface (0.0.0.0), so the port is reachable from anywhere
+    # that can route to this host.
+    #
+    # Direct exposure of this port is for LOCAL / LAN use only. For any
+    # internet-facing deployment, run a trusted TLS reverse proxy (Caddy,
+    # Nginx, Traefik, …) in front of `web` and keep TRUST_PROXY_HOPS=1.
+    # Without a trusted proxy a client can forge X-Forwarded-For and poison
+    # audit IPs, per-IP lockout / rate-limit buckets, and IP allow/deny
+    # rules. See docs/deployment/tls.
+    #
+    # If your reverse proxy runs on this same host, bind the port to
+    # loopback so it is never directly reachable from the network — replace
+    # the mapping below with:
+    #   - "127.0.0.1:${WEB_HOST_PORT:-3000}:3000"
     ports:
       - "${WEB_HOST_PORT:-3000}:3000"

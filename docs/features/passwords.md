@@ -93,7 +93,15 @@ Per-password controls:
 
 - **Visible to clients** — whether the password appears in the client portal
 - **Reason to view** — prompt the user for a justification before revealing the secret
-- **User whitelist** — restrict reveal access to a specific list of users
+- **Internal access** — restrict which internal (non-client) users can see the credential at all
+
+### Internal Access
+
+By default a credential is visible to every internal user with access to the company. It can instead be restricted to a selected list of users, managed from the **Internal access** panel on the password detail page.
+
+The restriction governs **visibility**, not just reveal: users who are not on the list do not see the credential in lists, cannot open its detail page, and cannot reveal it. The eligible-user list is derived server-side from people who already have a path to the company — **super admins** (always included), **members** (operators and contractors with an active, unexpired membership), and **operators with global access**. Super admins always retain access regardless of the list.
+
+Managing internal access requires write access to the company plus the membership-management permission; the API rejects any attempt to add a user who is not an eligible internal user for that company.
 
 ## Reveal Audit Trail
 

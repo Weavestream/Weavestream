@@ -67,6 +67,8 @@ If `web` is reachable directly from the internet with no reverse proxy in front,
 The recommended production shape is to put a trusted reverse proxy (Caddy, Nginx, Traefik, …) in front of `web` that terminates TLS and overwrites `X-Forwarded-For`, and keep `TRUST_PROXY_HOPS=1`. See [TLS & Reverse Proxy](/deployment/tls/).
 :::
 
+The API logs a `[Topology]` warning at startup when it detects a likely-unsafe public configuration (a plain-HTTP `APP_URL` on a public host, or `TRUST_PROXY_HOPS=0` on a public host). It never blocks startup, but it surfaces a misconfigured direct-public deployment in `docker compose logs api`. To confirm forged `X-Forwarded-For` headers are ignored through your proxy, follow [Verify forged `X-Forwarded-For` is ignored](/deployment/tls/#verify-forged-x-forwarded-for-is-ignored).
+
 ## Content Security Policy
 
 Weavestream configures a strict CSP via Helmet:

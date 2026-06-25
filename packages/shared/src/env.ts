@@ -372,5 +372,104 @@ export function parsePreviousKeys(
     });
 }
 
+// ── Deployment topology sanity warnings ──────────────────────────────────
+//
+// Best-effort, log-only heads-up emitted at boot (see `apps/api/src/main.ts`).
+// These never throw and never change behavior — they only surface the env
+// "smells" of an unsafe direct-public deployment so an operator who never
+// opened the docs still gets told in the container logs.
+//
+// Detection is deliberately conservative (zero false positives on the
+// default `http://localhost:3000`): if `APP_URL` is HTTPS, something in
+// front of `web` already terminates TLS — the container itself serves only
+// plain HTTP on its port — so a trusted edge necessarily exists and
+// `TRUST_PROXY_HOPS >= 1` is the correct, non-warned shape. The only
+// env-detectable unsafe shapes are therefore a public **HTTP** `APP_URL`
+// (no TLS terminator → `web` is almost certainly exposed directly) and
+// `TRUST_PROXY_HOPS=0` on a public host (IP attribution disabled).
+
+function isPrivateIpv4(host: string): boolean {
+  const m = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (!m) return false;
+  const a = Number(m[1]);
+  const b = Number(m[2]);
+  if (a === 0 || a === 127) return true; // unspecified / loopback
+  if (a === 10) return true; // RFC1918
+  if (a === 192 && b === 168) return true; // RFC1918
+  if (a === 172 && b >= 16 && b <= 31) return true; // RFC1918
+  if (a === 169 && b === 254) return true; // link-local
+  return false;
+}
+
+/**
+ * Best-effort check for whether a URL host looks reachable from the public
+ * internet. Returns `false` for loopback, `*.local` / `*.lan` /
+ * `*.internal` / `*.home.arpa`, RFC1918, IPv4 link-local, and IPv6
+ * loopback / link-local / unique-local hosts — the same private families
+ * Express's `trust proxy` setting uses in `apps/api/src/main.ts`. Used only
+ * to scope the topology warnings below; it is NOT a security boundary.
+ */
+export function looksPublicHost(host: string): boolean {
+  const h = host
+    .trim()
+    .toLowerCase()
+    .replace(/^\[/, '')
+    .replace(/\]$/, '');
+  if (!h) return false;
+  if (h === 'localhost' || h === '::1' || h === '::' || h === '0.0.0.0') return false;
+  if (/\.(local|localhost|internal|lan)$|\.home\.arpa$/.test(h)) return false;
+  if (isPrivateIpv4(h)) return false;
+  if (/^fe[89ab][0-9a-f]:/.test(h)) return false; // IPv6 link-local fe80::/10
+  if (/^f[cd][0-9a-f]{2}:/.test(h)) return false; // IPv6 unique-local fc00::/7
+  return true;
+}
+
+/**
+ * Returns log-only warnings about an unsafe public deployment topology.
+ * Pure and side-effect free — the caller decides whether and where to log.
+ * Never throws. An empty array means nothing looks wrong (or `APP_URL`
+ * points at a local/LAN host, where direct exposure is expected).
+ */
+export function topologyWarnings(env: Env): string[] {
+  const warnings: string[] = [];
+
+  let host: string;
+  let protocol: string;
+  try {
+    const url = new URL(env.APP_URL);
+    host = url.hostname;
+    protocol = url.protocol;
+  } catch {
+    // APP_URL is already URL-validated by the schema; be defensive anyway.
+    return warnings;
+  }
+
+  if (!looksPublicHost(host)) return warnings;
+
+  if (protocol === 'http:') {
+    warnings.push(
+      'APP_URL is plain HTTP on a public host (' +
+        host +
+        '). Weavestream does not terminate TLS — put a trusted reverse proxy ' +
+        '(Caddy, Nginx, Traefik, …) in front of the `web` container for HTTPS. ' +
+        'Exposing the web port directly to the internet is intended for ' +
+        'local/LAN use only. See docs/deployment/tls.',
+    );
+  }
+
+  if (env.TRUST_PROXY_HOPS === 0) {
+    warnings.push(
+      'TRUST_PROXY_HOPS=0 on a public host: per-IP login lockout, rate ' +
+        'limiting, IP allow/deny rules, and audit attribution are disabled — ' +
+        'every request is recorded as the 0.0.0.0 sentinel. This is only safe ' +
+        'when `web` is directly internet-facing with no proxy. Behind a trusted ' +
+        'reverse proxy, set TRUST_PROXY_HOPS to the number of hops in front of ' +
+        '`web` (default 1). See docs/deployment/tls.',
+    );
+  }
+
+  return warnings;
+}
+
 // Re-export the boolish helper for downstream apps that parse additional env vars.
 export { boolish };
