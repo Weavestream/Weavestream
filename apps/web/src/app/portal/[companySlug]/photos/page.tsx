@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import Link from 'next/link';
 import {
-  getMe,
+  requireMe,
   listPhotos,
   type UploadSummary,
 } from '../../../../lib/server-api';
@@ -24,7 +24,7 @@ export default async function PortalPhotosPage({
 }) {
   const { companySlug } = await params;
   const sp = await searchParams;
-  const me = (await getMe())!;
+  const me = await requireMe();
   const company = await resolvePortalCompany(me, companySlug);
   const companyId = company.id;
 

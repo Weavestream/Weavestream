@@ -12,11 +12,11 @@ import {
 import type { EntityType } from '../../../components/ui/star-button';
 import {
   getAdminStats,
-  getMe,
   getSettings,
   listDomainAlerts,
   listRecentActivity,
   listStarred,
+  requireMe,
   serverApiFetch,
   type CompanyListItem,
   type CompanyPage,
@@ -29,7 +29,7 @@ import { companyAccent } from '../../../lib/company-format';
 import { DomainAlertsPanel } from './domain-alerts-panel';
 
 export default async function AdminDashboard() {
-  const me = (await getMe())!;
+  const me = await requireMe();
   const term = buildTerm(await getSettings());
   // Parallelise every data source — none depends on any of the others
   // and each hit is independently cheap. A single `Promise.all` keeps

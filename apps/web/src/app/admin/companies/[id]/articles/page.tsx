@@ -5,7 +5,7 @@ export const metadata: Metadata = { title: 'Articles' };
 import {
   getCompanyDetail,
   getCompanyFolderTree,
-  getMe,
+  requireMe,
   getSettings,
   listArticles,
   throwUnlessFound,
@@ -34,7 +34,7 @@ export default async function CompanyArticlesPage({
 }) {
   const { id: companyId } = await params;
   const sp = await searchParams;
-  const me = (await getMe())!;
+  const me = await requireMe();
   const term = buildTerm(await getSettings());
 
   const companyRes = await getCompanyDetail(companyId);

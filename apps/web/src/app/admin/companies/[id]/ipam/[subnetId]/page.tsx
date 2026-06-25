@@ -2,7 +2,7 @@ import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
 import {
   getCompanyDetail,
-  getMe,
+  requireMe,
   getSettings,
   getSubnetDetail,
   throwUnlessFound,
@@ -30,7 +30,7 @@ export default async function SubnetDetailPage({
   params: Promise<{ id: string; subnetId: string }>;
 }) {
   const { id: companyId, subnetId } = await params;
-  const me = (await getMe())!;
+  const me = await requireMe();
   const term = buildTerm(await getSettings());
 
   const companyRes = await getCompanyDetail(companyId);

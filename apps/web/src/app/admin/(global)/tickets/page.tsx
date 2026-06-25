@@ -1,7 +1,7 @@
 import type { Metadata } from 'next';
 import { redirect } from 'next/navigation';
 import {
-  getMe,
+  requireMe,
   hasAnyTicketingIntegration,
   listTickets,
   type TicketListFilters,
@@ -29,7 +29,7 @@ export default async function AdminTicketsPage({
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
-  const me = (await getMe())!;
+  const me = await requireMe();
   if (!hasCapability(me, 'TICKETS_READ')) redirect('/admin');
 
   const sp = await searchParams;

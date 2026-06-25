@@ -4,7 +4,7 @@ import type { MembershipRole } from '@weavestream/shared';
 import {
   getCompanyDetail,
   getCompanyDomainsBasic,
-  getMe,
+  requireMe,
   getSettings,
   listAssets,
   serverApiFetch,
@@ -66,7 +66,7 @@ export default async function CompanyDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const me = (await getMe())!;
+  const me = await requireMe();
   const term = buildTerm(await getSettings());
 
   const [companyRes, membershipsRes, assetsPage, domainPage] =

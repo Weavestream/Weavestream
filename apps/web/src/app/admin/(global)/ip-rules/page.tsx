@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
-import { getMe, listIpRules } from '../../../../lib/server-api';
+import { requireMe, listIpRules } from '../../../../lib/server-api';
 import { hasCapability } from '../../../../lib/roles';
 import { PageBody, PageHeader } from '../../../../components/shell/page-header';
 import { Icon, Panel } from '../../../../components/ui';
@@ -13,7 +13,7 @@ import { IpRulesTable } from './ip-rules-table';
  * dialogs are client components for interactivity.
  */
 export default async function IpRulesPage() {
-  const me = (await getMe())!;
+  const me = await requireMe();
   if (!hasCapability(me, 'IP_RULE_MANAGE')) redirect('/admin');
 
   const rules = await listIpRules();

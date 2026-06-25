@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { AdminShell } from '../../../components/shell/admin-shell';
-import { getMe, getSettings } from '../../../lib/server-api';
+import { getSettings, requireMe } from '../../../lib/server-api';
 import { buildTerm } from '../../../lib/term';
 
 /**
@@ -16,7 +16,11 @@ export default async function AdminGlobalLayout({
 }: {
   children: ReactNode;
 }) {
-  const me = (await getMe())!;
+  // Auth is enforced by the parent `/admin/layout.tsx`, but App Router
+  // renders layouts and pages in parallel, so `requireMe()` guards here
+  // too — a transient null `me` redirects to /login instead of crashing
+  // a child that reads `me` before the parent's redirect lands.
+  const me = await requireMe();
   const settings = await getSettings();
   const term = buildTerm(settings);
 

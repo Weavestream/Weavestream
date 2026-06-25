@@ -1,6 +1,6 @@
 import { cache } from 'react';
 import { cookies, headers } from 'next/headers';
-import { notFound } from 'next/navigation';
+import { notFound, redirect } from 'next/navigation';
 import { getResolvedClientIp } from './client-ip';
 import type {
   AiSettings,
@@ -418,6 +418,25 @@ export const getMe = cache(async (): Promise<Me | null> => {
   if (!res.ok || !res.data) return null;
   return res.data;
 });
+
+/**
+ * Auth-gated convenience around {@link getMe} for pages and layouts that
+ * must have a signed-in user. Redirects to `/login` when `getMe` returns
+ * null and otherwise returns a non-null `Me`.
+ *
+ * Use this instead of the `(await getMe())!` non-null assertion: the App
+ * Router renders layouts and their child pages in parallel, so even
+ * though `/admin/layout.tsx` already redirects on a null `me`, a child
+ * page evaluating `me.name` concurrently would throw a TypeError before
+ * that redirect lands whenever `/me` momentarily fails or the session
+ * has expired. `redirect()` returns `never`, so callers get a value
+ * typed as `Me` with no assertion.
+ */
+export async function requireMe(): Promise<Me> {
+  const me = await getMe();
+  if (!me) redirect('/login');
+  return me;
+}
 
 /**
  * Workspace branding + tenant terminology, fed from the singleton

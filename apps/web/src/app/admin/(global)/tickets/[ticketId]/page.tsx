@@ -2,7 +2,7 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import { notFound, redirect } from 'next/navigation';
 import {
-  getMe,
+  requireMe,
   getTicket,
 } from '../../../../../lib/server-api';
 import { hasCapability } from '../../../../../lib/roles';
@@ -42,7 +42,7 @@ export default async function AdminTicketDetailPage({
   params: Promise<{ ticketId: string }>;
 }) {
   const { ticketId } = await params;
-  const me = (await getMe())!;
+  const me = await requireMe();
   if (!hasCapability(me, 'TICKETS_READ')) redirect('/admin');
 
   const ticket = await getTicket(ticketId);

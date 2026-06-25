@@ -4,7 +4,7 @@ import { notFound } from 'next/navigation';
 import {
   getActiveLayouts,
   getCompanyDetail,
-  getMe,
+  requireMe,
   getSettings,
   listAssets,
   throwUnlessFound,
@@ -63,7 +63,7 @@ export default async function LayoutAssetsPage({
 }) {
   const { id: companyId, layoutSlug } = await params;
   const sp = await searchParams;
-  const me = (await getMe())!;
+  const me = await requireMe();
   const term = buildTerm(await getSettings());
 
   // For the page render we intentionally bypass `loadContext` so 429/

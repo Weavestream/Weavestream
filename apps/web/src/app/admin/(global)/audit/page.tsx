@@ -1,5 +1,5 @@
 import {
-  getMe,
+  requireMe,
   getSettings,
   serverApiFetch,
   type AuditPage,
@@ -26,7 +26,7 @@ export default async function AuditPage({
     pageSize?: string;
   }>;
 }) {
-  const me = (await getMe())!;
+  const me = await requireMe();
   const sp = await searchParams;
   const term = buildTerm(await getSettings());
 

@@ -5,7 +5,7 @@ import {
   getAsset,
   getCompanyDetail,
   getCompanyPasswordFolders,
-  getMe,
+  requireMe,
   getPasswordDetail,
   getSettings,
   listPasswordVersions,
@@ -40,7 +40,7 @@ export default async function PasswordDetailPage({
   params: Promise<{ id: string; passwordId: string }>;
 }) {
   const { id: companyId, passwordId } = await params;
-  const me = (await getMe())!;
+  const me = await requireMe();
   const settings = await getSettings();
   const term = buildTerm(settings);
 

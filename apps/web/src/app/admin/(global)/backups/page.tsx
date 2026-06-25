@@ -1,6 +1,6 @@
 import { redirect } from 'next/navigation';
 import {
-  getMe,
+  requireMe,
   listBackupConfigs,
   listBackupRuns,
 } from '../../../../lib/server-api';
@@ -17,7 +17,7 @@ import { BackupsAdminClient } from './backups-admin-client';
  * "Run now" polling, and the History tab refresh loop.
  */
 export default async function BackupsPage() {
-  const me = (await getMe())!;
+  const me = await requireMe();
   if (!hasCapability(me, 'BACKUP_MANAGE')) redirect('/admin');
 
   const [configs, runs] = await Promise.all([

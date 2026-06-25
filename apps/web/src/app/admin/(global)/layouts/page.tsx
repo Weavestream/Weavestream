@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { getMe, getSettings, listLayouts } from '../../../../lib/server-api';
+import { requireMe, getSettings, listLayouts } from '../../../../lib/server-api';
 import { hasCapability } from '../../../../lib/roles';
 import { PageBody, PageHeader } from '../../../../components/shell/page-header';
 import { Icon, Panel, Tag } from '../../../../components/ui';
@@ -26,7 +26,7 @@ export default async function LayoutsPage({
   searchParams: Promise<{ includeArchived?: string }>;
 }) {
   const sp = await searchParams;
-  const me = (await getMe())!;
+  const me = await requireMe();
   const term = buildTerm(await getSettings());
   // RBAC v2 — layouts are global; mutation is gated on `LAYOUT_MANAGE`.
   // SUPER_ADMIN holds it implicitly, OPERATORs can be granted it.

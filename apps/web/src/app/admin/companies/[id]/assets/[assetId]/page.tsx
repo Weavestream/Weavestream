@@ -5,7 +5,7 @@ import React, { Fragment } from 'react';
 import {
   getAsset,
   getCompanyDetail,
-  getMe,
+  requireMe,
   getSettings,
   throwUnlessFound,
   type AssetSummary,
@@ -45,7 +45,7 @@ export default async function AssetDetailPage({
   params: Promise<{ id: string; assetId: string }>;
 }) {
   const { id: companyId, assetId } = await params;
-  const me = (await getMe())!;
+  const me = await requireMe();
   const term = buildTerm(await getSettings());
   const [companyRes, asset] = await Promise.all([
     getCompanyDetail(companyId),

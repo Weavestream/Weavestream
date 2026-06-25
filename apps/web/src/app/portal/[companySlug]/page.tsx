@@ -1,4 +1,4 @@
-import { getMe } from '../../../lib/server-api';
+import { requireMe } from '../../../lib/server-api';
 import { resolvePortalCompany } from '../../../lib/portal-company';
 import { PageBody, PageHeader } from '../../../components/shell/page-header';
 import { Panel } from '../../../components/ui';
@@ -20,7 +20,7 @@ export default async function PortalHome({
   params: Promise<{ companySlug: string }>;
 }) {
   const { companySlug } = await params;
-  const me = (await getMe())!;
+  const me = await requireMe();
   const company = await resolvePortalCompany(me, companySlug);
 
   const companyName = company.name;

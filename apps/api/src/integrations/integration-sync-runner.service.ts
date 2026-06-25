@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { createHash, randomUUID } from 'node:crypto';
+import { stripNul } from '@weavestream/shared';
 import type { SyncRunConflict, SyncRunTotals } from '@weavestream/shared';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { AuditLogService } from '../audit/audit.service.js';
@@ -218,7 +219,12 @@ export class IntegrationSyncRunnerService {
           cursor,
         );
         pageCount += 1;
-        for (const record of page.records) {
+        for (const rawRecord of page.records) {
+          // Strip NUL bytes (U+0000) up front: Postgres rejects them in
+          // text/jsonb (SQLSTATE 22P05), and upstream RMM records can carry
+          // stray NULs in externalIds, display names, or field values. This
+          // keeps both the asset write and the run-result bookkeeping safe.
+          const record = stripNul(rawRecord);
           totals.fetched += 1;
           seenExternalIds.add(record.externalId);
           for (const fm of writableMappings) {

@@ -1,6 +1,6 @@
 import { redirect } from 'next/navigation';
 import type { DriverDescriptor, IntegrationDto } from '@weavestream/shared';
-import { getMe, serverApiFetch } from '../../../../lib/server-api';
+import { requireMe, serverApiFetch } from '../../../../lib/server-api';
 import { hasCapability } from '../../../../lib/roles';
 import { PageBody, PageHeader } from '../../../../components/shell/page-header';
 import { Panel } from '../../../../components/ui';
@@ -20,7 +20,7 @@ import { CreateIntegrationButton } from './create-integration-button';
  * OPERATORs can be granted the capability for delegated platform admin.
  */
 export default async function IntegrationsPage() {
-  const me = (await getMe())!;
+  const me = await requireMe();
   if (!hasCapability(me, 'INTEGRATION_MANAGE')) redirect('/admin');
 
   const [listRes, driversRes] = await Promise.all([

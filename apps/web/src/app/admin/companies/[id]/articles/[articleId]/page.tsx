@@ -4,7 +4,7 @@ import {
   getArticle,
   getCompanyDetail,
   getCompanyFolderTree,
-  getMe,
+  requireMe,
   getSettings,
   listArticles,
   throwUnlessFound,
@@ -39,7 +39,7 @@ export default async function ArticleReadPage({
   params: Promise<{ id: string; articleId: string }>;
 }) {
   const { id: companyId, articleId } = await params;
-  const me = (await getMe())!;
+  const me = await requireMe();
   const term = buildTerm(await getSettings());
 
   const [companyRes, article, folders, articleList] = await Promise.all([

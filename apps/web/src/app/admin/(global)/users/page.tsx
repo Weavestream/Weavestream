@@ -1,4 +1,4 @@
-import { getMe, serverApiFetch, type UserPage } from '../../../../lib/server-api';
+import { requireMe, serverApiFetch, type UserPage } from '../../../../lib/server-api';
 import { hasCapability } from '../../../../lib/roles';
 import { PageBody, PageHeader } from '../../../../components/shell/page-header';
 import { Panel } from '../../../../components/ui';
@@ -11,7 +11,7 @@ export default async function UsersPage({
   searchParams: Promise<{ q?: string; role?: string; isActive?: string }>;
 }) {
   const sp = await searchParams;
-  const me = (await getMe())!;
+  const me = await requireMe();
   const params = new URLSearchParams();
   params.set('limit', '200');
   if (sp.q) params.set('q', sp.q);

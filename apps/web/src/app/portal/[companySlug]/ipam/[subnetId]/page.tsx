@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
 import {
   getMe,
+  requireMe,
   getSubnetDetail,
 } from '../../../../../lib/server-api';
 import { resolvePortalCompany } from '../../../../../lib/portal-company';
@@ -33,7 +34,7 @@ export default async function PortalSubnetDetailPage({
   params: Promise<{ companySlug: string; subnetId: string }>;
 }) {
   const { companySlug, subnetId } = await params;
-  const me = (await getMe())!;
+  const me = await requireMe();
   const company = await resolvePortalCompany(me, companySlug);
 
   const detail = await getSubnetDetail(company.id, subnetId);

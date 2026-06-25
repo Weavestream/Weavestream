@@ -1,6 +1,6 @@
 import { notFound } from 'next/navigation';
 import {
-  getMe,
+  requireMe,
   serverApiFetch,
   type UserDetail,
 } from '../../../../../lib/server-api';
@@ -21,7 +21,7 @@ export default async function UserDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const me = (await getMe())!;
+  const me = await requireMe();
   const res = await serverApiFetch<UserDetail>(`/users/${id}`);
   if (!res.ok || !res.data) notFound();
   const user = res.data;

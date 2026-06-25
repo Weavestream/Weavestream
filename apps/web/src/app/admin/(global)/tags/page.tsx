@@ -1,5 +1,5 @@
 import { redirect } from 'next/navigation';
-import { getMe } from '../../../../lib/server-api';
+import { requireMe } from '../../../../lib/server-api';
 import { hasCapability } from '../../../../lib/roles';
 import { PageBody, PageHeader } from '../../../../components/shell/page-header';
 import { Panel } from '../../../../components/ui';
@@ -14,7 +14,7 @@ import { TagsAdminClient } from './tags-admin-client';
  * an asset edit button.
  */
 export default async function TagsAdminPage() {
-  const me = (await getMe())!;
+  const me = await requireMe();
   if (!hasCapability(me, 'TAG_MANAGE')) redirect('/admin');
 
   return (

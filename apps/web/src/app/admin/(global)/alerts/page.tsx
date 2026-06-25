@@ -1,5 +1,5 @@
 import { redirect } from 'next/navigation';
-import { getAlerts, getMe } from '../../../../lib/server-api';
+import { getAlerts, requireMe } from '../../../../lib/server-api';
 import { hasCapability } from '../../../../lib/roles';
 import { PageBody, PageHeader } from '../../../../components/shell/page-header';
 import { Panel } from '../../../../components/ui';
@@ -14,7 +14,7 @@ import { AlertsAdminClient } from './alerts-admin-client';
  * the BullMQ `alerts:scan` cron.
  */
 export default async function AlertsPage() {
-  const me = (await getMe())!;
+  const me = await requireMe();
   if (!hasCapability(me, 'ALERT_MANAGE')) redirect('/admin');
 
   const alerts = await getAlerts();

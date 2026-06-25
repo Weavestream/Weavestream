@@ -5,6 +5,7 @@ import { Fragment } from 'react';
 import {
   getAsset,
   getMe,
+  requireMe,
   type AssetSummary,
 } from '../../../../../lib/server-api';
 import { resolvePortalCompany } from '../../../../../lib/portal-company';
@@ -57,7 +58,7 @@ export default async function PortalAssetDetailPage({
   params: Promise<{ companySlug: string; assetId: string }>;
 }) {
   const { companySlug, assetId } = await params;
-  const me = (await getMe())!;
+  const me = await requireMe();
   const company = await resolvePortalCompany(me, companySlug);
 
   const asset = await getAsset(company.id, assetId);

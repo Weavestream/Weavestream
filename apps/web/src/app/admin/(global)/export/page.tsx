@@ -1,5 +1,5 @@
 import { redirect } from 'next/navigation';
-import { getMe } from '../../../../lib/server-api';
+import { requireMe } from '../../../../lib/server-api';
 import { hasCapability } from '../../../../lib/roles';
 import { PageBody, PageHeader } from '../../../../components/shell/page-header';
 import { ExportWizard } from './export-wizard';
@@ -10,7 +10,7 @@ import { ExportWizard } from './export-wizard';
  * every operator by default, only those an admin has elevated.
  */
 export default async function ExportPage() {
-  const me = (await getMe())!;
+  const me = await requireMe();
   if (!hasCapability(me, 'EXPORT_CREATE')) redirect('/admin');
 
   return (

@@ -4,7 +4,7 @@ import type {
   IntegrationDto,
 } from '@weavestream/shared';
 import {
-  getMe,
+  requireMe,
   serverApiFetch,
   throwUnlessFound,
 } from '../../../../../../../lib/server-api';
@@ -22,7 +22,7 @@ export default async function CloudflareListDetailPage({
   params: Promise<{ id: string; listId: string }>;
 }) {
   const { id, listId } = await params;
-  const me = (await getMe())!;
+  const me = await requireMe();
   if (!hasCapability(me, 'INTEGRATION_MANAGE')) redirect('/admin');
 
   const [intRes, listRes] = await Promise.all([

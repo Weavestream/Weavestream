@@ -7,7 +7,7 @@ import type {
   IntegrationSyncRunDto,
 } from '@weavestream/shared';
 import {
-  getMe,
+  requireMe,
   serverApiFetch,
   throwUnlessFound,
 } from '../../../../../lib/server-api';
@@ -37,7 +37,7 @@ export default async function IntegrationDetailPage({
 }) {
   const { id } = await params;
   const sp = await searchParams;
-  const me = (await getMe())!;
+  const me = await requireMe();
   if (!hasCapability(me, 'INTEGRATION_MANAGE')) redirect('/admin');
 
   const [intRes, driversRes] = await Promise.all([

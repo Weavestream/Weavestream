@@ -1,7 +1,7 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import {
-  getMe,
+  requireMe,
   listPasswords,
   type PasswordSummary,
 } from '../../../../lib/server-api';
@@ -29,7 +29,7 @@ export default async function PortalPasswordsPage({
   params: Promise<{ companySlug: string }>;
 }) {
   const { companySlug } = await params;
-  const me = (await getMe())!;
+  const me = await requireMe();
   const company = await resolvePortalCompany(me, companySlug);
 
   const rows = await listPasswords(company.id);

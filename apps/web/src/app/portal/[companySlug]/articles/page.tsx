@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import {
-  getMe,
+  requireMe,
   listArticles,
   listFolderTree,
   type ArticleSummary,
@@ -25,7 +25,7 @@ export default async function PortalArticlesPage({
 }) {
   const { companySlug } = await params;
   const sp = await searchParams;
-  const me = (await getMe())!;
+  const me = await requireMe();
   const company = await resolvePortalCompany(me, companySlug);
   const companyId = company.id;
 

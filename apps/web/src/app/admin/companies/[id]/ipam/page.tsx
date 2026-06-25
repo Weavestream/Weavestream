@@ -5,7 +5,7 @@ export const metadata: Metadata = { title: 'IPAM' };
 import {
   getCompanyDetail,
   getCompanySubnetsBasic,
-  getMe,
+  requireMe,
   getSettings,
   throwUnlessFound,
 } from '../../../../../lib/server-api';
@@ -26,7 +26,7 @@ export default async function CompanyIpamPage({
 }) {
   const { id: companyId } = await params;
   const sp = await searchParams;
-  const me = (await getMe())!;
+  const me = await requireMe();
   const term = buildTerm(await getSettings());
 
   const companyRes = await getCompanyDetail(companyId);

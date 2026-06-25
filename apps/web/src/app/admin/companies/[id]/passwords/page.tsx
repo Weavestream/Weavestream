@@ -3,7 +3,7 @@ import {
   getCompanyActivePasswords,
   getCompanyDetail,
   getCompanyPasswordFolders,
-  getMe,
+  requireMe,
   listPasswords,
   throwUnlessFound,
 } from '../../../../../lib/server-api';
@@ -34,7 +34,7 @@ export default async function CompanyPasswordsPage({
 }) {
   const { id: companyId } = await params;
   const sp = await searchParams;
-  const me = (await getMe())!;
+  const me = await requireMe();
   const settings = await getSettings();
   const term = buildTerm(settings);
 

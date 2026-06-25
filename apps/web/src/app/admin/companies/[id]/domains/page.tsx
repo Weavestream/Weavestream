@@ -5,7 +5,7 @@ export const metadata: Metadata = { title: 'Domains' };
 import {
   getCompanyDetail,
   getCompanyDomainsBasic,
-  getMe,
+  requireMe,
   getSettings,
   listDomains,
   throwUnlessFound,
@@ -33,7 +33,7 @@ export default async function CompanyDomainsPage({
 }) {
   const { id: companyId } = await params;
   const sp = await searchParams;
-  const me = (await getMe())!;
+  const me = await requireMe();
   const term = buildTerm(await getSettings());
 
   const companyRes = await getCompanyDetail(companyId);

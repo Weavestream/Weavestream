@@ -1,6 +1,6 @@
 import { redirect } from 'next/navigation';
 import {
-  getMe,
+  requireMe,
   getSecurityEgressBlocks,
   getSecurityLockouts,
   getSecurityLoginActivity,
@@ -27,7 +27,7 @@ export default async function SecurityCenterPage({
 }: {
   searchParams: Promise<{ tab?: string; window?: string }>;
 }) {
-  const me = (await getMe())!;
+  const me = await requireMe();
   if (!hasCapability(me, 'SECURITY_READ')) redirect('/admin');
 
   const sp = await searchParams;

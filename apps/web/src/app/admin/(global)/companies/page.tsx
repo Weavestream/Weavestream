@@ -1,5 +1,5 @@
 import {
-  getMe,
+  requireMe,
   getSettings,
   serverApiFetch,
   type CompanyPage,
@@ -17,7 +17,7 @@ export default async function CompaniesPage({
   searchParams: Promise<{ q?: string; showArchived?: string }>;
 }) {
   const sp = await searchParams;
-  const me = (await getMe())!;
+  const me = await requireMe();
   const manage = hasCapability(me, 'COMPANY_MANAGE');
   const term = buildTerm(await getSettings());
   const params = new URLSearchParams();

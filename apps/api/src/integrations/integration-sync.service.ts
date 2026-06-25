@@ -8,6 +8,7 @@ import {
   IntegrationSyncMappingJobNames,
   IntegrationSyncOrchestratorJobNames,
   QueueNames,
+  stripNul,
   syncRunTotalsSchema,
   type IntegrationSyncRunCompanyResultDto,
   type IntegrationSyncRunDto,
@@ -395,23 +396,30 @@ export class IntegrationSyncService {
             ? 'succeeded'
             : 'running';
 
+      const mergedError =
+        args.error && current?.error
+          ? `${current.error}\n[${args.resourceKey}] ${args.error}`.slice(
+              0,
+              4_000,
+            )
+          : args.error
+            ? `[${args.resourceKey}] ${args.error}`.slice(0, 4_000)
+            : current?.error ?? null;
+
       await tx.integrationSyncRunCompanyResult.update({
         where: { id: current!.id },
         data: {
           status: nextStatus,
           startedAt: current?.startedAt ?? new Date(),
           finishedAt: allDone ? new Date() : null,
-          totals: existingTotals as unknown as Prisma.InputJsonValue,
-          conflicts: existingConflicts as unknown as Prisma.InputJsonValue,
-          error:
-            args.error && current?.error
-              ? `${current.error}\n[${args.resourceKey}] ${args.error}`.slice(
-                  0,
-                  4_000,
-                )
-              : args.error
-                ? `[${args.resourceKey}] ${args.error}`.slice(0, 4_000)
-                : current?.error ?? null,
+          // Postgres text/jsonb columns reject U+0000 (SQLSTATE 22P05);
+          // upstream driver records can carry stray NUL bytes, so strip
+          // them from every persisted string (shared stripNul()).
+          totals: stripNul(existingTotals) as unknown as Prisma.InputJsonValue,
+          conflicts: stripNul(
+            existingConflicts,
+          ) as unknown as Prisma.InputJsonValue,
+          error: stripNul(mergedError),
         },
       });
     });

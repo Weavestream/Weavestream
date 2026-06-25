@@ -2,7 +2,7 @@ import { redirect } from 'next/navigation';
 import {
   getAiSettings,
   getEmailSettings,
-  getMe,
+  requireMe,
   getSettings,
 } from '../../../../lib/server-api';
 import { hasCapability } from '../../../../lib/roles';
@@ -22,7 +22,7 @@ export default async function SettingsPage({
   searchParams: Promise<{ tab?: string }>;
 }) {
   const sp = await searchParams;
-  const me = (await getMe())!;
+  const me = await requireMe();
   if (!hasCapability(me, 'SETTINGS_MANAGE')) redirect('/admin');
 
   const [settings, emailSettings, aiSettings] = await Promise.all([

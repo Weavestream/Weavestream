@@ -1,5 +1,5 @@
 import { notFound } from 'next/navigation';
-import { getArticleBySlug, getMe } from '../../../../../lib/server-api';
+import { getArticleBySlug, requireMe } from '../../../../../lib/server-api';
 import { resolvePortalCompany } from '../../../../../lib/portal-company';
 import { TopBar } from '../../../../../components/shell/top-bar';
 import { Tag } from '../../../../../components/ui';
@@ -21,7 +21,7 @@ export default async function PortalArticleReadPage({
   params: Promise<{ companySlug: string; slug: string }>;
 }) {
   const { companySlug, slug } = await params;
-  const me = (await getMe())!;
+  const me = await requireMe();
   const company = await resolvePortalCompany(me, companySlug);
   const article = await getArticleBySlug(company.id, slug);
   if (!article) notFound();

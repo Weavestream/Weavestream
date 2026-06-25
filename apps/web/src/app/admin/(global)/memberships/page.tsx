@@ -1,6 +1,6 @@
 import { redirect } from 'next/navigation';
 import type { MembershipRole } from '@weavestream/shared';
-import { getMe, serverApiFetch } from '../../../../lib/server-api';
+import { requireMe, serverApiFetch } from '../../../../lib/server-api';
 import { hasCapability } from '../../../../lib/roles';
 import { PageBody, PageHeader } from '../../../../components/shell/page-header';
 import { Panel, Tag } from '../../../../components/ui';
@@ -28,7 +28,7 @@ export default async function MembershipsPage({
     expiringWithinDays?: string;
   }>;
 }) {
-  const me = (await getMe())!;
+  const me = await requireMe();
   if (!hasCapability(me, 'MEMBERSHIP_MANAGE')) {
     // Operators without MEMBERSHIP_MANAGE still see scoped memberships
     // through each company's Users tab; the global view is gated.

@@ -6,7 +6,7 @@ export const metadata: Metadata = { title: 'Domain' };
 import {
   getCompanyDetail,
   getDomain,
-  getMe,
+  requireMe,
   getSettings,
   listDomainChecks,
   throwUnlessFound,
@@ -35,7 +35,7 @@ export default async function DomainDetailPage({
   params: Promise<{ id: string; domainId: string }>;
 }) {
   const { id: companyId, domainId } = await params;
-  const me = (await getMe())!;
+  const me = await requireMe();
   const term = buildTerm(await getSettings());
 
   const [companyRes, domain, checks] = await Promise.all([

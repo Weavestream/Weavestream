@@ -145,10 +145,11 @@ async function bootstrap() {
   // and /health/queues (audit.read-gated) all sit at top-level paths a
   // reverse proxy / orchestrator can hit without baking in a version.
   // Note: Express paths are matched as-is — `'health'` only excludes the
-  // exact path, so we pass an explicit RouteInfo for the `:path*`
-  // wildcard as well.
+  // exact path, so we pass an explicit named-wildcard route to cover the
+  // sub-paths. `health/*path` is the path-to-regexp v8 syntax (Express 5 /
+  // Nest 11); the old `health/(.*)` form is deprecated and warns on boot.
   app.setGlobalPrefix('api', {
-    exclude: ['health', 'health/(.*)'],
+    exclude: ['health', 'health/*path'],
   });
 
   await app.listen(4000, '0.0.0.0');

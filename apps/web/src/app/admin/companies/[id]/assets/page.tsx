@@ -6,7 +6,7 @@ import {
   getActiveLayouts,
   getCompanyActivePasswords,
   getCompanyDetail,
-  getMe,
+  requireMe,
   getSettings,
   listAssets,
   throwUnlessFound,
@@ -32,7 +32,7 @@ export default async function CompanyAssetsPage({
 }) {
   const { id: companyId } = await params;
   const sp = await searchParams;
-  const me = (await getMe())!;
+  const me = await requireMe();
   const term = buildTerm(await getSettings());
 
   const companyRes = await getCompanyDetail(companyId);

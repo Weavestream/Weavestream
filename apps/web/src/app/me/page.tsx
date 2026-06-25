@@ -1,4 +1,4 @@
-import { getMe, serverApiFetch } from '../../lib/server-api';
+import { requireMe, serverApiFetch } from '../../lib/server-api';
 import { PageBody, PageHeader } from '../../components/shell/page-header';
 import { Panel } from '../../components/ui';
 import { MeTabs } from './me-tabs';
@@ -21,7 +21,7 @@ export default async function MePage({
   searchParams: Promise<{ tab?: string }>;
 }) {
   const sp = await searchParams;
-  const me = (await getMe())!;
+  const me = await requireMe();
   const sessionsRes = await serverApiFetch<Session[]>('/me/sessions');
   const sessions = sessionsRes.data ?? [];
 

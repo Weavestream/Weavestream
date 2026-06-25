@@ -1,7 +1,7 @@
 import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
 import {
-  getMe,
+  requireMe,
   getPasswordDetail,
 } from '../../../../../lib/server-api';
 import { resolvePortalCompany } from '../../../../../lib/portal-company';
@@ -28,7 +28,7 @@ export default async function PortalPasswordDetailPage({
   params: Promise<{ companySlug: string; passwordId: string }>;
 }) {
   const { companySlug, passwordId } = await params;
-  const me = (await getMe())!;
+  const me = await requireMe();
   const company = await resolvePortalCompany(me, companySlug);
 
   const password = await getPasswordDetail(company.id, passwordId);
