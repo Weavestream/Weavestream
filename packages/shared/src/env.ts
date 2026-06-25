@@ -383,10 +383,12 @@ export function parsePreviousKeys(
 // default `http://localhost:3000`): if `APP_URL` is HTTPS, something in
 // front of `web` already terminates TLS — the container itself serves only
 // plain HTTP on its port — so a trusted edge necessarily exists and
-// `TRUST_PROXY_HOPS >= 1` is the correct, non-warned shape. The only
-// env-detectable unsafe shapes are therefore a public **HTTP** `APP_URL`
-// (no TLS terminator → `web` is almost certainly exposed directly) and
-// `TRUST_PROXY_HOPS=0` on a public host (IP attribution disabled).
+// `TRUST_PROXY_HOPS >= 1` is the correct, non-warned shape. The
+// env-detectable unsafe shapes are a public **HTTP** `APP_URL` (no TLS
+// terminator → `web` is almost certainly exposed directly), `TRUST_PROXY_HOPS=0`
+// on a public host (IP attribution disabled), and a public **HTTPS** `APP_URL`
+// running with `NODE_ENV !== 'production'` (WS-008 — dev/test mode relaxes the
+// web CSP to permit `unsafe-eval` and skips production hardening/optimizations).
 
 function isPrivateIpv4(host: string): boolean {
   const m = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
@@ -454,6 +456,20 @@ export function topologyWarnings(env: Env): string[] {
         '(Caddy, Nginx, Traefik, …) in front of the `web` container for HTTPS. ' +
         'Exposing the web port directly to the internet is intended for ' +
         'local/LAN use only. See docs/deployment/tls.',
+    );
+  }
+
+  if (protocol === 'https:' && env.NODE_ENV !== 'production') {
+    warnings.push(
+      'APP_URL is HTTPS on a public host (' +
+        host +
+        ') but NODE_ENV is "' +
+        env.NODE_ENV +
+        '", not "production". A public deployment should run with ' +
+        'NODE_ENV=production: development/test mode relaxes the web ' +
+        "Content-Security-Policy (permits 'unsafe-eval'), emits verbose error " +
+        'output, and skips production optimizations. Set NODE_ENV=production. ' +
+        'See docs/deployment/tls.',
     );
   }
 
