@@ -110,6 +110,14 @@ export const envSchema = z.object({
   LOCKOUT_MAX_FAILURES: intFromString(1, 100).default(5),
   LOCKOUT_WINDOW_MIN: intFromString(1, 1440).default(15),
 
+  // Step-up (re-authentication) validity window. After an admin
+  // re-confirms a credential (MFA code or password) on a sensitive
+  // action, the proof is cached in Redis keyed by session id for this
+  // many seconds before another confirmation is required. Kept short so
+  // a stolen/idle session can't keep exfiltrating after one prompt;
+  // default 15 min balances that against re-prompting on every action.
+  STEP_UP_TTL_SEC: intFromString(60, 3600).default(900),
+
   // How many trusted reverse-proxy hops sit between the internet and
   // the `web` (Next.js) container — i.e. the edge tier the operator
   // runs (Caddy, Nginx, Traefik, Cloudflare, …). The web tier reads

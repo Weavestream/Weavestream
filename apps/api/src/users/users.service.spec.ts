@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { UsersService } from './users.service.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
 
@@ -370,9 +370,6 @@ describe('UsersService.resetMfa', () => {
       mfaEnabled: true,
       mfaEnforcementCompletedAt: new Date(),
     });
-    prisma.user.findUnique.mockResolvedValueOnce({
-      lastLoginAt: new Date(),
-    });
     prisma.user.update.mockResolvedValue({ id: 'u-1' });
 
     const svc = new UsersService(
@@ -400,28 +397,8 @@ describe('UsersService.resetMfa', () => {
     expect(actions).toContain('user.mfa.reset');
   });
 
-  it('requires the acting admin to have signed in recently', async () => {
-    const prisma = makePrisma();
-    prisma.user.findUnique.mockResolvedValueOnce({
-      id: 'u-1',
-      mfaEnabled: true,
-      mfaEnforcementCompletedAt: new Date(),
-    });
-    prisma.user.findUnique.mockResolvedValueOnce({
-      lastLoginAt: new Date(Date.now() - 10 * 60 * 1000),
-    });
-
-    const svc = new UsersService(
-      prisma as never,
-      makeAudit() as never,
-      makeCache() as never,
-      makeSetupTokens() as never,
-    );
-
-    await expect(svc.resetMfa(ACTOR, 'u-1', META)).rejects.toBeInstanceOf(
-      ForbiddenException,
-    );
-    expect(prisma.user.update).not.toHaveBeenCalled();
-    expect(prisma.session.updateMany).not.toHaveBeenCalled();
-  });
+  // The actor's recent-sign-in gate that used to live in `resetMfa` was
+  // replaced by the unified step-up mechanism (the route now carries
+  // `@RequireStepUp()`), so that enforcement is covered by the
+  // StepUpGuard tests rather than here.
 });

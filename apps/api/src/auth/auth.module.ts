@@ -7,11 +7,13 @@ import { MfaBackupCodeService } from './mfa-backup-code.service.js';
 import { LockoutService } from './lockout.service.js';
 import { PasswordService } from './password.service.js';
 import { CsrfService } from './csrf.service.js';
+import { StepUpService } from './step-up/step-up.service.js';
+import { StepUpController } from './step-up/step-up.controller.js';
 import { UsersModule } from '../users/users.module.js';
 
 @Module({
   imports: [UsersModule],
-  controllers: [AuthController],
+  controllers: [AuthController, StepUpController],
   providers: [
     AuthService,
     TokenService,
@@ -20,6 +22,7 @@ import { UsersModule } from '../users/users.module.js';
     LockoutService,
     PasswordService,
     CsrfService,
+    StepUpService,
   ],
   exports: [
     AuthService,
@@ -28,6 +31,9 @@ import { UsersModule } from '../users/users.module.js';
     MfaBackupCodeService,
     PasswordService,
     CsrfService,
+    // Exported so the globally-registered StepUpGuard (app.module) and
+    // SecurityService (revoke cleanup) can inject it.
+    StepUpService,
   ],
 })
 export class AuthModule {}

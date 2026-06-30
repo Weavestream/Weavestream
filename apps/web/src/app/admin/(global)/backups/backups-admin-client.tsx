@@ -8,6 +8,7 @@ import type {
   BackupRunStatus,
 } from '@weavestream/shared';
 import { apiFetch } from '../../../../lib/api';
+import { downloadWithStepUp } from '../../../../lib/step-up';
 import {
   Btn,
   DataTable,
@@ -502,15 +503,18 @@ function HistoryTab({ runs }: { runs: BackupRunDto[] }) {
           }}
         >
           {r.status === 'success' && r.dumpFilename && (
-            <a
-              href={`/api/v1/backups/runs/${r.id}/download`}
-              download={r.dumpFilename}
-              style={{ textDecoration: 'none' }}
+            <Btn
+              kind="ghost"
+              icon={Icon.box}
+              onClick={() =>
+                void downloadWithStepUp(
+                  `/api/v1/backups/runs/${r.id}/download`,
+                  r.dumpFilename ?? undefined,
+                )
+              }
             >
-              <Btn kind="ghost" icon={Icon.box}>
-                Download
-              </Btn>
-            </a>
+              Download
+            </Btn>
           )}
           {r.manifest != null && <ManifestButton run={r} />}
         </div>
@@ -552,15 +556,19 @@ function HistoryTab({ runs }: { runs: BackupRunDto[] }) {
             </div>
           )}
           {r.status === 'success' && r.dumpFilename && (
-            <a
-              href={`/api/v1/backups/runs/${r.id}/download`}
-              download={r.dumpFilename}
-              style={{ textDecoration: 'none' }}
+            <Btn
+              kind="outline"
+              size="sm"
+              icon={Icon.box}
+              onClick={() =>
+                void downloadWithStepUp(
+                  `/api/v1/backups/runs/${r.id}/download`,
+                  r.dumpFilename ?? undefined,
+                )
+              }
             >
-              <Btn kind="outline" size="sm" icon={Icon.box}>
-                Download dump
-              </Btn>
-            </a>
+              Download dump
+            </Btn>
           )}
         </div>
       )}

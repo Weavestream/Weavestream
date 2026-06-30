@@ -462,14 +462,11 @@ export class UsersService {
     const before = await this.prisma.user.findUnique({ where: { id } });
     if (!before) throw new NotFoundException();
 
-    const actorRow = await this.prisma.user.findUnique({
-      where: { id: actor.id },
-      select: { lastLoginAt: true },
-    });
-    const fiveMinutesAgo = Date.now() - 5 * 60 * 1000;
-    if (!actorRow?.lastLoginAt || actorRow.lastLoginAt.getTime() < fiveMinutesAgo) {
-      throw new ForbiddenException('Recent sign-in required to reset MFA');
-    }
+    // The actor's recent-sign-in gate that used to live here was replaced
+    // by the unified step-up mechanism: this route now carries
+    // `@RequireStepUp()` (see users.controller.ts), which re-confirms a
+    // fresh credential bound to the session — strictly stronger than
+    // trusting a 5-minute-old `lastLoginAt`.
 
     await this.prisma.$transaction(async (tx) => {
       await tx.user.update({

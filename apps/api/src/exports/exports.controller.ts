@@ -19,6 +19,7 @@ import { Readable } from 'node:stream';
 import { z } from 'zod';
 import { ExportsService } from './exports.service.js';
 import { RequirePermission } from '../rbac/require-permission.decorator.js';
+import { RequireStepUp } from '../auth/step-up/require-step-up.decorator.js';
 import { ZodBody, ZodParam } from '../common/zod-validation.pipe.js';
 import { CurrentUser, type AuthedUser } from '../common/current-user.decorator.js';
 import { requestMetaOf as meta } from '../common/request-meta.js';
@@ -51,6 +52,15 @@ export class ExportsController {
   @HttpCode(HttpStatus.ACCEPTED)
   @Throttle({ global: { limit: 5, ttl: 60_000 } })
   @RequirePermission('export.create')
+  // Step-up only when the export embeds plaintext passwords — the
+  // sensitive case. `req.body` here is the raw JSON (guards run before
+  // the Zod pipe), so an omitted flag reads as `undefined`, not the
+  // schema default `false` — `=== true` handles both correctly.
+  @RequireStepUp({
+    when: (req) =>
+      (req.body as { includePasswords?: unknown } | undefined)
+        ?.includePasswords === true,
+  })
   async trigger(
     @CurrentUser() actor: AuthedUser,
     @Param('companyId', new ParseUUIDPipe()) companyId: string,
@@ -76,6 +86,7 @@ export class ExportsController {
   @Get('job/:jobId/download')
   @Header('Cache-Control', 'private, no-store')
   @RequirePermission('export.create')
+  @RequireStepUp()
   async download(
     @Param('jobId', new ZodParam(jobIdSchema)) jobId: string,
     @Res({ passthrough: true }) res: Response,

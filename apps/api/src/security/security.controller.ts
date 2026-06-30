@@ -12,6 +12,7 @@ import {
 import type { Request } from 'express';
 import { CurrentUser, type AuthedUser } from '../common/current-user.decorator.js';
 import { RequirePermission } from '../rbac/require-permission.decorator.js';
+import { RequireStepUp } from '../auth/step-up/require-step-up.decorator.js';
 import { ipOf, userAgentOf as uaOf } from '../common/request-meta.js';
 import { SecurityService } from './security.service.js';
 
@@ -73,6 +74,7 @@ export class SecurityController {
   @Delete('sessions/:id')
   @HttpCode(HttpStatus.OK)
   @RequirePermission('user.manage')
+  @RequireStepUp()
   async revokeSession(
     @CurrentUser() actor: AuthedUser,
     @Param('id', new ParseUUIDPipe()) id: string,

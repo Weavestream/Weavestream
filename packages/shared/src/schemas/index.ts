@@ -26,3 +26,4 @@ export * from './backup.js';
 export * from './cloudflare.js';
 export * from './chat.js';
 export * from './ticket.js';
+export * from './step-up.js';

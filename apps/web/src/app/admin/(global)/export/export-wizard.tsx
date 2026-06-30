@@ -9,6 +9,7 @@ import {
   type CSSProperties,
 } from 'react';
 import { apiFetch } from '../../../../lib/api';
+import { ensureStepUp } from '../../../../lib/step-up';
 import {
   Btn,
   Field,
@@ -259,6 +260,11 @@ function VaultArchiveWizard() {
       return;
     }
     if (poll.data.status === 'completed' && poll.data.downloadUrl) {
+      // Vault PDFs may contain plaintext passwords — the download
+      // endpoint requires step-up. Open the re-auth modal first (a 403
+      // on a new-tab navigation can't be surfaced cleanly), then open.
+      const ready = await ensureStepUp();
+      if (!ready) return;
       window.open(poll.data.downloadUrl, '_blank', 'noopener,noreferrer');
       return;
     }

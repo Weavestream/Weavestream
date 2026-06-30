@@ -5,6 +5,7 @@ import './globals.css';
 import { ToastProvider } from '../components/ui/toast';
 import { ThemePreferenceWatcher } from '../components/ui/theme-preference-watcher';
 import { ChatPanelProvider } from '../components/chat-panel/chat-panel-provider';
+import { StepUpProvider } from '../components/auth/step-up-provider';
 import { getSettings } from '../lib/server-api';
 // `buildTerm` comes from the server-safe `./lib/term` module; re-exporting
 // it through `./lib/term-context` ('use client') would tag it as a client
@@ -97,12 +98,18 @@ export default async function RootLayout({
         <ThemePreferenceWatcher mode={prefs.uiTheme} />
         <TermProvider term={term}>
           <ToastProvider>
-            {/* Mounted at the root so the chat panel's tabs + in-flight
-                streams survive cross-shell navigations (admin → company
-                → portal → me). The provider only owns state; the
-                visual `<ChatPanel />` is still rendered inside the
-                shells that should show it. */}
-            <ChatPanelProvider>{children}</ChatPanelProvider>
+            {/* StepUpProvider mounts the single re-auth modal at the root
+                so every shell (admin/company/portal/me) shares it — both
+                the reactive 403 path (apiFetch) and the proactive
+                download path (ensureStepUp) drive this one dialog. */}
+            <StepUpProvider>
+              {/* Mounted at the root so the chat panel's tabs + in-flight
+                  streams survive cross-shell navigations (admin → company
+                  → portal → me). The provider only owns state; the
+                  visual `<ChatPanel />` is still rendered inside the
+                  shells that should show it. */}
+              <ChatPanelProvider>{children}</ChatPanelProvider>
+            </StepUpProvider>
           </ToastProvider>
         </TermProvider>
       </body>

@@ -36,6 +36,7 @@ import {
   type AuthedUser,
 } from '../common/current-user.decorator.js';
 import { RequirePermission } from '../rbac/require-permission.decorator.js';
+import { RequireStepUp } from '../auth/step-up/require-step-up.decorator.js';
 import { IntegrationsService } from './integrations.service.js';
 import { requestMetaOf as meta } from '../common/request-meta.js';
 import { IntegrationCompanyMappingService } from './company-mapping.service.js';
@@ -118,6 +119,7 @@ export class IntegrationsController {
 
   @Post()
   @RequirePermission('integration.manage')
+  @RequireStepUp()
   create(
     @CurrentUser() user: AuthedUser,
     @Body(new ZodBody(createIntegrationSchema)) dto: CreateIntegrationInput,
@@ -134,6 +136,7 @@ export class IntegrationsController {
 
   @Patch(':id')
   @RequirePermission('integration.manage')
+  @RequireStepUp()
   update(
     @CurrentUser() user: AuthedUser,
     @Param('id', new ParseUUIDPipe()) id: string,
@@ -145,6 +148,7 @@ export class IntegrationsController {
 
   @Delete(':id')
   @RequirePermission('integration.manage')
+  @RequireStepUp()
   @HttpCode(204)
   async delete(
     @CurrentUser() user: AuthedUser,

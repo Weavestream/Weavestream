@@ -123,11 +123,13 @@ function makeService(args: {
   // Cast through unknown — these mocks intentionally duck-type the
   // shape the service actually uses without re-declaring the full
   // Prisma / Redis surfaces.
+  const stepUp = { clear: jest.fn().mockResolvedValue(undefined) };
   const service = new SecurityService(
     prisma as unknown as ConstructorParameters<typeof SecurityService>[0],
     redis as unknown as ConstructorParameters<typeof SecurityService>[1],
     env as unknown as ConstructorParameters<typeof SecurityService>[2],
     auditService as unknown as ConstructorParameters<typeof SecurityService>[3],
+    stepUp as unknown as ConstructorParameters<typeof SecurityService>[4],
   );
   return { service, prisma, audit };
 }

@@ -41,6 +41,7 @@ function makeService(backupOk: boolean) {
       recordFailure: jest.fn().mockResolvedValue(undefined),
       clear: jest.fn().mockResolvedValue(undefined),
     } as never,
+    { clear: jest.fn().mockResolvedValue(undefined) } as never,
     { values: { SESSION_MAX_AGE_DAYS: 30 } } as never,
     audit as never,
     {} as never,

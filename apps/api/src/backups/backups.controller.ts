@@ -30,6 +30,7 @@ import { BackupsService } from './backups.service.js';
 import { CurrentUser, type AuthedUser } from '../common/current-user.decorator.js';
 import { ZodBody } from '../common/zod-validation.pipe.js';
 import { RequirePermission } from '../rbac/require-permission.decorator.js';
+import { RequireStepUp } from '../auth/step-up/require-step-up.decorator.js';
 import { requestMetaOf } from '../common/request-meta.js';
 
 const listRunsQuerySchema = z
@@ -69,6 +70,7 @@ export class BackupsController {
 
   @Post('configs')
   @RequirePermission('backup.manage')
+  @RequireStepUp()
   async createConfig(
     @CurrentUser() actor: AuthedUser,
     @Body(new ZodBody(backupConfigInputSchema)) dto: BackupConfigInput,
@@ -79,6 +81,7 @@ export class BackupsController {
 
   @Patch('configs/:id')
   @RequirePermission('backup.manage')
+  @RequireStepUp()
   async updateConfig(
     @CurrentUser() actor: AuthedUser,
     @Param('id', new ParseUUIDPipe()) id: string,
@@ -90,6 +93,7 @@ export class BackupsController {
 
   @Delete('configs/:id')
   @RequirePermission('backup.manage')
+  @RequireStepUp()
   async deleteConfig(
     @CurrentUser() actor: AuthedUser,
     @Param('id', new ParseUUIDPipe()) id: string,
@@ -106,6 +110,7 @@ export class BackupsController {
   @HttpCode(HttpStatus.ACCEPTED)
   @Throttle({ global: { limit: 5, ttl: 60_000 } })
   @RequirePermission('backup.manage')
+  @RequireStepUp()
   async runNow(
     @CurrentUser() actor: AuthedUser,
     @Param('id', new ParseUUIDPipe()) id: string,
@@ -143,6 +148,7 @@ export class BackupsController {
   @Header('Cache-Control', 'private, no-store')
   @Throttle({ global: { limit: 10, ttl: 60_000 } })
   @RequirePermission('backup.manage')
+  @RequireStepUp()
   async download(
     @CurrentUser() actor: AuthedUser,
     @Param('id', new ParseUUIDPipe()) id: string,

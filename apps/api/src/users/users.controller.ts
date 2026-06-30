@@ -24,6 +24,7 @@ import {
 import { UsersService } from './users.service.js';
 import { CurrentUser, type AuthedUser } from '../common/current-user.decorator.js';
 import { RequirePermission } from '../rbac/require-permission.decorator.js';
+import { RequireStepUp } from '../auth/step-up/require-step-up.decorator.js';
 import { ZodBody } from '../common/zod-validation.pipe.js';
 import {
   ipOf,
@@ -62,6 +63,25 @@ export class UsersController {
 
   @Post()
   @RequirePermission('user.manage')
+  // Step-up when creating a privileged account (admin/operator, any
+  // platform capability, or non-NONE global access). Raw body — guards
+  // run before the Zod pipe, so optional-chain and compare explicitly.
+  @RequireStepUp({
+    when: (req) => {
+      const b = (req.body ?? {}) as {
+        role?: unknown;
+        platformCapabilities?: unknown;
+        globalAccess?: unknown;
+      };
+      return (
+        b.role === 'SUPER_ADMIN' ||
+        b.role === 'OPERATOR' ||
+        (Array.isArray(b.platformCapabilities) &&
+          b.platformCapabilities.length > 0) ||
+        (typeof b.globalAccess === 'string' && b.globalAccess !== 'NONE')
+      );
+    },
+  })
   async create(
     @CurrentUser() user: AuthedUser,
     @Body(new ZodBody(createUserSchema)) dto: CreateUserInput,
@@ -75,6 +95,19 @@ export class UsersController {
 
   @Patch(':id')
   @RequirePermission('user.manage')
+  // Step-up only on a privilege change — a plain name/timezone edit
+  // does not challenge. Raw body (guards run before the Zod pipe).
+  @RequireStepUp({
+    when: (req) => {
+      const b = (req.body ?? {}) as Record<string, unknown>;
+      return (
+        'role' in b ||
+        'isActive' in b ||
+        'globalAccess' in b ||
+        'platformCapabilities' in b
+      );
+    },
+  })
   async update(
     @CurrentUser() actor: AuthedUser,
     @Param('id', new ParseUUIDPipe()) id: string,
@@ -87,6 +120,7 @@ export class UsersController {
   @Delete(':id')
   @HttpCode(HttpStatus.OK)
   @RequirePermission('user.manage')
+  @RequireStepUp()
   async deactivate(
     @CurrentUser() actor: AuthedUser,
     @Param('id', new ParseUUIDPipe()) id: string,
@@ -109,6 +143,7 @@ export class UsersController {
   @Post(':id/reset-mfa')
   @HttpCode(HttpStatus.OK)
   @RequirePermission('user.manage')
+  @RequireStepUp()
   async resetMfa(
     @CurrentUser() actor: AuthedUser,
     @Param('id', new ParseUUIDPipe()) id: string,

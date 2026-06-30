@@ -11,6 +11,7 @@ import { EmailService } from './email.service.js';
 import { CurrentUser, type AuthedUser } from '../common/current-user.decorator.js';
 import { ZodBody } from '../common/zod-validation.pipe.js';
 import { RequirePermission } from '../rbac/require-permission.decorator.js';
+import { RequireStepUp } from '../auth/step-up/require-step-up.decorator.js';
 import { requestMetaOf } from '../common/request-meta.js';
 
 @Controller({ path: 'settings/email', version: '1' })
@@ -28,6 +29,7 @@ export class EmailSettingsController {
 
   @Patch()
   @RequirePermission('settings.manage')
+  @RequireStepUp()
   async update(
     @CurrentUser() user: AuthedUser,
     @Body(new ZodBody(updateEmailSettingsSchema)) dto: UpdateEmailSettingsInput,

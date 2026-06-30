@@ -65,6 +65,7 @@ import { MfaEnrollmentGuard } from './auth/guards/mfa-enrollment.guard.js';
 import { CsrfGuard } from './auth/guards/csrf.guard.js';
 import { UserThrottlerGuard } from './auth/guards/user-throttler.guard.js';
 import { PermissionGuard } from './rbac/permission.guard.js';
+import { StepUpGuard } from './auth/step-up/step-up.guard.js';
 import { ContractorAccessGuard } from './rbac/contractor-access.guard.js';
 import { TenantContextInterceptor } from './auth/interceptors/tenant-context.interceptor.js';
 import { AuditInterceptor } from './audit/audit.interceptor.js';
@@ -197,6 +198,9 @@ const httpSerializers = {
     { provide: APP_GUARD, useClass: MfaEnrollmentGuard },
     { provide: APP_GUARD, useClass: CsrfGuard },
     { provide: APP_GUARD, useClass: PermissionGuard },
+    // 7. `StepUpGuard` runs after the permission check so step-up is a
+    //    second factor on top of an already-authorized sensitive action.
+    { provide: APP_GUARD, useClass: StepUpGuard },
     { provide: APP_GUARD, useClass: ContractorAccessGuard },
     { provide: APP_INTERCEPTOR, useClass: TenantContextInterceptor },
     { provide: APP_INTERCEPTOR, useClass: AuditInterceptor },

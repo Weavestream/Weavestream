@@ -199,6 +199,14 @@ export const AUDIT_ACTIONS = {
     ipRuleCreate: 'security.ip_rule.create',
     ipRuleUpdate: 'security.ip_rule.update',
     ipRuleDelete: 'security.ip_rule.delete',
+    // Step-up (re-authentication) on highly sensitive admin actions.
+    // `verified` / `failed` carry `{ factor, method?, sessionId }` in
+    // `after` — never the submitted credential. `anomaly` flags an
+    // inconsistent MFA state (mfaEnabled with no stored secret) that
+    // forced a password fallback; it should never fire in practice.
+    stepUpVerified: 'security.stepup.verified',
+    stepUpFailed: 'security.stepup.failed',
+    stepUpAnomaly: 'security.stepup.anomaly',
     // Phase 6 — every rejection from `safeFetch` is recorded so an
     // operator can see exactly which integration / driver / job tried
     // to talk to a private address. `entityType: 'Egress'`, `entityId`

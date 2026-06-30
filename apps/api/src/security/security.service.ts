@@ -3,6 +3,7 @@ import { PrismaService } from '../prisma/prisma.service.js';
 import { RedisService } from '../redis/redis.service.js';
 import { AuditLogService } from '../audit/audit.service.js';
 import { EnvService } from '../config/env.service.js';
+import { StepUpService } from '../auth/step-up/step-up.service.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
 
 /**
@@ -42,6 +43,7 @@ export class SecurityService {
     private readonly redis: RedisService,
     private readonly env: EnvService,
     private readonly audit: AuditLogService,
+    private readonly stepUp: StepUpService,
   ) {}
 
   // ────────────────────────────────────────────────────────────────
@@ -388,6 +390,8 @@ export class SecurityService {
       where: { id: session.id },
       data: { revokedAt: new Date() },
     });
+    // Drop any step-up window bound to the revoked session (TTL backstop).
+    await this.stepUp.clear(session.id);
     await this.audit.log({
       actorId: actor.id,
       action: 'security.session.revoke',

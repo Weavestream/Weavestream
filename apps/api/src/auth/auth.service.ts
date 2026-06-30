@@ -13,6 +13,7 @@ import { TokenService } from './token.service.js';
 import { MfaService } from './mfa.service.js';
 import { MfaBackupCodeService } from './mfa-backup-code.service.js';
 import { LockoutService } from './lockout.service.js';
+import { StepUpService } from './step-up/step-up.service.js';
 import { EnvService } from '../config/env.service.js';
 import { AuditLogService } from '../audit/audit.service.js';
 import { SetupTokenService } from '../users/setup-token.service.js';
@@ -37,6 +38,7 @@ export class AuthService {
     private readonly mfa: MfaService,
     private readonly backupCodes: MfaBackupCodeService,
     private readonly lockout: LockoutService,
+    private readonly stepUp: StepUpService,
     private readonly env: EnvService,
     private readonly audit: AuditLogService,
     private readonly setupTokens: SetupTokenService,
@@ -134,6 +136,8 @@ export class AuthService {
       where: { id: sessionId, revokedAt: null },
       data: { revokedAt: new Date() },
     });
+    // Drop any step-up window bound to this session (TTL is the backstop).
+    await this.stepUp.clear(sessionId);
     await this.audit.log({
       actorId,
       action: 'auth.logout',
