@@ -33,18 +33,15 @@ export default async function AdminDashboard() {
   // Parallelise every data source — none depends on any of the others
   // and each hit is independently cheap. A single `Promise.all` keeps
   // the dashboard well under the 500 ms first-paint budget.
-  const [stats, recentCompaniesRes, starred, alerts, recent] =
-    await Promise.all([
-      getAdminStats(),
-      // Phase 9b.3: "Recent companies" widget — ten most recently
-      // updated in the caller's scope, excluding archived.
-      serverApiFetch<CompanyPage>(
-        '/companies?limit=10&sort=updatedAt&order=desc',
-      ),
-      listStarred(),
-      listDomainAlerts(30),
-      listRecentActivity(10),
-    ]);
+  const [stats, recentCompaniesRes, starred, alerts, recent] = await Promise.all([
+    getAdminStats(),
+    // Phase 9b.3: "Recent companies" widget — ten most recently
+    // updated in the caller's scope, excluding archived.
+    serverApiFetch<CompanyPage>('/companies?limit=10&sort=updatedAt&order=desc'),
+    listStarred(),
+    listDomainAlerts(30),
+    listRecentActivity(10),
+  ]);
   const recentCompanies = recentCompaniesRes.data?.items ?? [];
 
   return (
@@ -92,31 +89,23 @@ export default async function AdminDashboard() {
           }}
         >
           <StarredPanel starred={starred} termOne={term.one} />
-          <RecentCompaniesPanel
-            rows={recentCompanies}
-            termOther={term.other}
-          />
+          <RecentCompaniesPanel rows={recentCompanies} termOther={term.other} />
           <RecentActivityPanel items={recent} termOther={term.other} />
         </div>
 
         <DomainAlertsPanel alerts={alerts} />
         <Panel title="You">
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10, fontSize: 13 }}>
-            <Row label="Email" value={<code style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>{me.email}</code>} />
+            <Row
+              label="Email"
+              value={
+                <code style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>{me.email}</code>
+              }
+            />
             <Row label="Role" value={<Tag tone="accent">{me.role}</Tag>} />
             <Row
               label="Two-factor"
-              value={
-                me.mfaEnabled ? (
-                  <Tag tone="ok">
-                    enabled
-                  </Tag>
-                ) : (
-                  <Tag tone="warn">
-                    pending
-                  </Tag>
-                )
-              }
+              value={me.mfaEnabled ? <Tag tone="ok">enabled</Tag> : <Tag tone="warn">pending</Tag>}
             />
             <Row
               label="Memberships"
@@ -152,13 +141,7 @@ export default async function AdminDashboard() {
  * of its type. Each row picks its own glyph, sub-line, and link target
  * based on the discriminated `type`.
  */
-function StarredPanel({
-  starred,
-  termOne,
-}: {
-  starred: StarredItem[];
-  termOne: string;
-}) {
+function StarredPanel({ starred, termOne }: { starred: StarredItem[]; termOne: string }) {
   // Starred is uncapped (users curate their own list). To keep the
   // equal-height widget row stable, the scroll container is taken out
   // of flow with `position: absolute` so its contents don't grow the
@@ -205,8 +188,8 @@ function StarredPanel({
             lineHeight: 1.5,
           }}
         >
-          Star a {lower(termOne)}, password, asset, or article from its page to
-          pin it here for faster access.
+          Star a {lower(termOne)}, password, asset, or article from its page to pin it here for
+          faster access.
         </div>
       ) : (
         <div
@@ -233,8 +216,7 @@ function StarredPanel({
 function StarredCard({ item }: { item: StarredItem }) {
   const href = starredHref(item);
   const isArchived =
-    item.archivedAt !== null ||
-    (item.type !== 'company' && item.companyArchivedAt !== null);
+    item.archivedAt !== null || (item.type !== 'company' && item.companyArchivedAt !== null);
   return (
     <div
       className="ws-card-clickable"
@@ -308,23 +290,10 @@ function StarredGlyph({ item }: { item: StarredItem }) {
   switch (item.type) {
     case 'company': {
       const accent = companyAccent(item.id);
-      return (
-        <CompanyAvatar
-          name={item.name}
-          color={accent}
-          size={28}
-          logoUrl={item.logo?.thumbnailUrl ?? item.logo?.url ?? null}
-        />
-      );
+      return <CompanyAvatar name={item.name} color={accent} size={28} />;
     }
     case 'asset':
-      return (
-        <LayoutSwatch
-          icon={item.layoutIcon ?? 'box'}
-          color="var(--info)"
-          size={28}
-        />
-      );
+      return <LayoutSwatch icon={item.layoutIcon ?? 'box'} color="var(--info)" size={28} />;
     case 'password':
       return <TypeChip icon={<Icon.key size={14} />} color="var(--warn)" />;
     case 'article':
@@ -332,13 +301,7 @@ function StarredGlyph({ item }: { item: StarredItem }) {
   }
 }
 
-function TypeChip({
-  icon,
-  color,
-}: {
-  icon: React.ReactNode;
-  color: string;
-}) {
+function TypeChip({ icon, color }: { icon: React.ReactNode; color: string }) {
   return (
     <div
       style={{
@@ -376,9 +339,7 @@ function starredSubline(item: StarredItem): string {
     case 'company':
       return `${item.memberCount} member${item.memberCount === 1 ? '' : 's'}`;
     case 'asset':
-      return item.layoutName
-        ? `${item.layoutName} · ${item.companyName}`
-        : item.companyName;
+      return item.layoutName ? `${item.layoutName} · ${item.companyName}` : item.companyName;
     case 'password':
       return `Password · ${item.companyName}`;
     case 'article':
@@ -390,13 +351,7 @@ function starredSubline(item: StarredItem): string {
 // Recent companies
 // ───────────────────────────────────────────────────────────────────
 
-function RecentCompaniesPanel({
-  rows,
-  termOther,
-}: {
-  rows: CompanyListItem[];
-  termOther: string;
-}) {
+function RecentCompaniesPanel({ rows, termOther }: { rows: CompanyListItem[]; termOther: string }) {
   return (
     <Panel
       title={`Recent ${lower(termOther)}`}
@@ -462,12 +417,7 @@ function RecentCompanyCard({ company }: { company: CompanyListItem }) {
         textDecoration: 'none',
       }}
     >
-      <CompanyAvatar
-        name={company.name}
-        color={accent}
-        size={28}
-        logoUrl={company.logo?.thumbnailUrl ?? company.logo?.url ?? null}
-      />
+      <CompanyAvatar name={company.name} color={accent} size={28} />
       <div style={{ flex: 1, minWidth: 0 }}>
         <div
           style={{
@@ -489,9 +439,7 @@ function RecentCompanyCard({ company }: { company: CompanyListItem }) {
         >
           {relative(company.updatedAt)}
           {company.memberCount > 0
-            ? ` · ${company.memberCount} member${
-                company.memberCount === 1 ? '' : 's'
-              }`
+            ? ` · ${company.memberCount} member${company.memberCount === 1 ? '' : 's'}`
             : ''}
         </div>
       </div>
@@ -565,13 +513,7 @@ function RecentActivityCard({ item }: { item: RecentActivityItem }) {
       }}
     >
       <TypeChip
-        icon={
-          item.type === 'asset' ? (
-            <Icon.box size={14} />
-          ) : (
-            <Icon.doc size={14} />
-          )
-        }
+        icon={item.type === 'asset' ? <Icon.box size={14} /> : <Icon.doc size={14} />}
         color={item.type === 'asset' ? 'var(--info)' : 'var(--accent)'}
       />
       <div style={{ flex: 1, minWidth: 0 }}>
@@ -598,8 +540,7 @@ function RecentActivityCard({ item }: { item: RecentActivityItem }) {
         >
           <span
             style={{
-              color:
-                item.action === 'created' ? 'var(--ok)' : 'var(--accent)',
+              color: item.action === 'created' ? 'var(--ok)' : 'var(--accent)',
               fontWeight: 500,
             }}
           >

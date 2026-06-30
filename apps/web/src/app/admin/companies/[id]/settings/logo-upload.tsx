@@ -85,6 +85,7 @@ export function LogoUploadField({ company }: { company: CompanyDetail }) {
         name={company.name}
         color={companyAccent(company.id)}
         size={56}
+        logoMaxWidth={180}
         logoUrl={previewUrl}
       />
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>

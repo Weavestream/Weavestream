@@ -154,8 +154,7 @@ export function Sidebar({
     return prefixed[0]?.id;
   })();
 
-  const isActive = (it: SidebarItem) =>
-    bestMatchId !== undefined && it.id === bestMatchId;
+  const isActive = (it: SidebarItem) => bestMatchId !== undefined && it.id === bestMatchId;
 
   return (
     <aside
@@ -172,7 +171,6 @@ export function Sidebar({
       }}
     >
       <SidebarHeader workspace={workspace} onNavigate={onNavigate} />
-
 
       <div style={{ padding: 10 }}>
         <button
@@ -194,9 +192,7 @@ export function Sidebar({
           }}
         >
           <Icon.search size={12} />
-          <span style={{ flex: 1, fontSize: 12, textAlign: 'left' }}>
-            Search everything
-          </span>
+          <span style={{ flex: 1, fontSize: 12, textAlign: 'left' }}>Search everything</span>
           <Kbd>⌘K</Kbd>
         </button>
       </div>
@@ -221,7 +217,6 @@ export function Sidebar({
           </div>
         ))}
       </div>
-
     </aside>
   );
 }
@@ -298,8 +293,7 @@ function SidebarHeader({
     </div>
   );
 
-  const hasInteractiveTitle =
-    !!workspace.titleSwitcher || !!workspace.titleHref;
+  const hasInteractiveTitle = !!workspace.titleSwitcher || !!workspace.titleHref;
   const titleGlyph =
     workspace.titleGlyph === undefined ? (
       hasInteractiveTitle ? (
@@ -432,10 +426,7 @@ function TitleSwitcher({
   useEffect(() => {
     if (!open) return;
     const onMouseDown = (e: MouseEvent) => {
-      if (
-        containerRef.current &&
-        !containerRef.current.contains(e.target as Node)
-      ) {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
         setOpen(false);
       }
     };
@@ -527,13 +518,7 @@ function TitleSwitcher({
   );
 }
 
-function SwitcherEntry({
-  entry,
-  onSelect,
-}: {
-  entry: SidebarSwitcherEntry;
-  onSelect: () => void;
-}) {
+function SwitcherEntry({ entry, onSelect }: { entry: SidebarSwitcherEntry; onSelect: () => void }) {
   const body = (
     <>
       <CompanyMark name={entry.name} size={22} />
@@ -565,9 +550,7 @@ function SwitcherEntry({
           </div>
         )}
       </div>
-      {entry.active && (
-        <Icon.check size={14} style={{ color: 'var(--accent)' }} />
-      )}
+      {entry.active && <Icon.check size={14} style={{ color: 'var(--accent)' }} />}
     </>
   );
 
@@ -660,10 +643,11 @@ function NavItem({
           }}
         />
       )}
-      {item.leading ?? (() => {
-        const IconCmp = Icon[item.icon];
-        return <IconCmp size={14} stroke={1.5} />;
-      })()}
+      {item.leading ??
+        (() => {
+          const IconCmp = Icon[item.icon];
+          return <IconCmp size={14} stroke={1.5} />;
+        })()}
       <span style={{ flex: 1 }}>{item.label}</span>
       {item.count !== undefined && (
         <span
@@ -694,12 +678,7 @@ function NavItem({
   );
   if (item.href) {
     return (
-      <Link
-        href={item.href}
-        style={content}
-        onClick={onNavigate}
-        prefetch={false}
-      >
+      <Link href={item.href} style={content} onClick={onNavigate} prefetch={false}>
         {inner}
       </Link>
     );

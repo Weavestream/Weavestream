@@ -60,26 +60,21 @@ type MembershipListing = {
  * Editing all the expanded fields happens on the dedicated
  * `/admin/companies/:id/settings` page — keeps this one scannable.
  */
-export default async function CompanyDetailPage({
-  params,
-}: {
-  params: Promise<{ id: string }>;
-}) {
+export default async function CompanyDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const me = await requireMe();
   const term = buildTerm(await getSettings());
 
-  const [companyRes, membershipsRes, assetsPage, domainPage] =
-    await Promise.all([
-      // Deduped against the parent layout's `getCompanyDetail(id)` by
-      // React's per-request `cache()`. Same for `getCompanyDomainsBasic`
-      // below. See `lib/server-api.ts` for the full list of
-      // layout-shared cached reads.
-      getCompanyDetail(id),
-      serverApiFetch<MembershipListing[]>(`/companies/${id}/memberships`),
-      listAssets(id, { limit: 5 }),
-      getCompanyDomainsBasic(id),
-    ]);
+  const [companyRes, membershipsRes, assetsPage, domainPage] = await Promise.all([
+    // Deduped against the parent layout's `getCompanyDetail(id)` by
+    // React's per-request `cache()`. Same for `getCompanyDomainsBasic`
+    // below. See `lib/server-api.ts` for the full list of
+    // layout-shared cached reads.
+    getCompanyDetail(id),
+    serverApiFetch<MembershipListing[]>(`/companies/${id}/memberships`),
+    listAssets(id, { limit: 5 }),
+    getCompanyDomainsBasic(id),
+  ]);
   const company = throwUnlessFound(companyRes, `/companies/${id}`);
   const memberships = membershipsRes.data ?? [];
   const membershipsError = !membershipsRes.ok ? membershipsRes : null;
@@ -97,16 +92,15 @@ export default async function CompanyDetailPage({
   return (
     <>
       <PageHeader
-        crumbs={[
-          { label: term.other, href: '/admin/companies' },
-          { label: company.name },
-        ]}
+        crumbs={[{ label: term.other, href: '/admin/companies' }, { label: company.name }]}
         title={
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 12 }}>
             <CompanyAvatar
               name={company.name}
               color={accent}
-              size={32}
+              size={64}
+              logoMaxWidth={180}
+              logoFrame={false}
               logoUrl={logoUrl}
             />
             <span>{company.name}</span>
@@ -116,7 +110,7 @@ export default async function CompanyDetailPage({
         actions={manage ? <CompanyActions company={company} /> : null}
       />
       <PageBody>
-        <div
+        {/*<div
           style={{
             display: 'grid',
             gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
@@ -147,7 +141,7 @@ export default async function CompanyDetailPage({
             label="Domains"
             hint={domainHint(domains)}
           />
-        </div>
+        </div>*/}
 
         <div
           style={{
@@ -162,9 +156,7 @@ export default async function CompanyDetailPage({
           <NotesPanel company={company} manage={manage} />
         </div>
 
-        {alertCount(domains) > 0 && (
-          <DomainAlertBanner domains={domains} companyId={company.id} />
-        )}
+        {alertCount(domains) > 0 && <DomainAlertBanner domains={domains} companyId={company.id} />}
 
         <Panel
           title="Recent assets"
@@ -214,10 +206,7 @@ export default async function CompanyDetailPage({
                     display: 'flex',
                     alignItems: 'center',
                     gap: 10,
-                    borderBottom:
-                      i === recentAssets.length - 1
-                        ? 'none'
-                        : '1px solid var(--line)',
+                    borderBottom: i === recentAssets.length - 1 ? 'none' : '1px solid var(--line)',
                   }}
                 >
                   <LayoutSwatch icon={a.layoutIcon} color={a.layoutColor} size={22} />
@@ -243,9 +232,7 @@ export default async function CompanyDetailPage({
                       {(() => {
                         const drivers =
                           a.syncSources.length > 0
-                            ? Array.from(
-                                new Set(a.syncSources.map((s) => s.driver)),
-                              )
+                            ? Array.from(new Set(a.syncSources.map((s) => s.driver)))
                             : a.externalSource
                               ? [a.externalSource]
                               : [];
@@ -274,8 +261,7 @@ export default async function CompanyDetailPage({
             <ErrorBanner
               title="Couldn't load memberships."
               detail={
-                (membershipsError.problem as { detail?: string } | undefined)
-                  ?.detail ??
+                (membershipsError.problem as { detail?: string } | undefined)?.detail ??
                 `The memberships endpoint returned HTTP ${membershipsError.status}.`
               }
             />
@@ -311,18 +297,8 @@ function HeaderMeta({ company }: { company: CompanyDetail }) {
         marginTop: 4,
       }}
     >
-      <Tag tone={companyTypeTone(company.type)}>
-        {companyTypeLabel(company.type)}
-      </Tag>
-      {company.archivedAt ? (
-        <Tag tone="warn">
-          archived
-        </Tag>
-      ) : (
-        <Tag tone="ok">
-          active
-        </Tag>
-      )}
+      <Tag tone={companyTypeTone(company.type)}>{companyTypeLabel(company.type)}</Tag>
+      {company.archivedAt ? <Tag tone="warn">archived</Tag> : <Tag tone="ok">active</Tag>}
       <span
         style={{
           fontFamily: 'var(--font-mono)',
@@ -361,13 +337,7 @@ function HeaderMeta({ company }: { company: CompanyDetail }) {
 // Panels
 // ───────────────────────────────────────────────────────────────────
 
-function ContactPanel({
-  company,
-  manage,
-}: {
-  company: CompanyDetail;
-  manage: boolean;
-}) {
+function ContactPanel({ company, manage }: { company: CompanyDetail; manage: boolean }) {
   const hasAny =
     company.contactName ||
     company.contactEmail ||
@@ -415,22 +385,14 @@ function ContactPanel({
           )}
           {company.phone && <Row label="Main phone" value={telLink(company.phone)} />}
           {company.fax && <Row label="Fax" value={telLink(company.fax)} />}
-          {company.website && (
-            <Row label="Website" value={externalLink(company.website)} />
-          )}
+          {company.website && <Row label="Website" value={externalLink(company.website)} />}
         </div>
       )}
     </Panel>
   );
 }
 
-function AddressPanel({
-  company,
-  manage,
-}: {
-  company: CompanyDetail;
-  manage: boolean;
-}) {
+function AddressPanel({ company, manage }: { company: CompanyDetail; manage: boolean }) {
   const lines = formatAddressLines(company);
   const mapUrl = buildMapsUrl(company);
   return (
@@ -481,23 +443,13 @@ function AddressPanel({
   );
 }
 
-function ClassificationPanel({
-  company,
-  manage,
-}: {
-  company: CompanyDetail;
-  manage: boolean;
-}) {
+function ClassificationPanel({ company, manage }: { company: CompanyDetail; manage: boolean }) {
   return (
     <Panel title="Classification">
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
         <Row
           label="Type"
-          value={
-            <Tag tone={companyTypeTone(company.type)}>
-              {companyTypeLabel(company.type)}
-            </Tag>
-          }
+          value={<Tag tone={companyTypeTone(company.type)}>{companyTypeLabel(company.type)}</Tag>}
         />
         <Row
           label="Parent"
@@ -556,13 +508,7 @@ function ClassificationPanel({
   );
 }
 
-function NotesPanel({
-  company,
-  manage,
-}: {
-  company: CompanyDetail;
-  manage: boolean;
-}) {
+function NotesPanel({ company, manage }: { company: CompanyDetail; manage: boolean }) {
   const quick = company.quickNotes?.trim();
   const internal = company.notes?.trim();
   const hasAny = !!quick || !!internal;
@@ -607,8 +553,7 @@ function NotesPanel({
                 gap: 8,
                 padding: '8px 10px',
                 background: 'color-mix(in oklch, var(--accent) 8%, transparent)',
-                border:
-                  '1px solid color-mix(in oklch, var(--accent) 25%, transparent)',
+                //border: '1px solid color-mix(in oklch, var(--accent) 25%, transparent)',
                 borderRadius: 5,
               }}
             >
@@ -654,9 +599,9 @@ function NotesPanel({
                 display: 'flex',
                 gap: 8,
                 padding: '8px 10px',
-                background: 'var(--panel-2)',
-                border: '1px solid var(--line)',
-                borderRadius: 5,
+                //background: 'var(--panel-2)',
+                //border: '1px solid var(--line)',
+                //borderRadius: 5,
               }}
             >
               <Icon.lock
@@ -780,15 +725,7 @@ function Row({ label, value }: { label: string; value: ReactNode }) {
   );
 }
 
-function EmptyCTA({
-  label,
-  hint,
-  href,
-}: {
-  label: string;
-  hint?: string;
-  href?: string;
-}) {
+function EmptyCTA({ label, hint, href }: { label: string; hint?: string; href?: string }) {
   return (
     <div
       style={{
@@ -820,10 +757,7 @@ function EmptyCTA({
 
 function emailLink(email: string) {
   return (
-    <a
-      href={`mailto:${email}`}
-      style={{ color: 'var(--accent)', textDecoration: 'none' }}
-    >
+    <a href={`mailto:${email}`} style={{ color: 'var(--accent)', textDecoration: 'none' }}>
       {email}
     </a>
   );
@@ -868,9 +802,7 @@ function domainHint(domains: MonitoredDomain[]): string {
 function alertCount(domains: MonitoredDomain[]): number {
   return domains.filter(
     (d) =>
-      d.latestStatus === 'EXPIRING' ||
-      d.latestStatus === 'EXPIRED' ||
-      d.latestStatus === 'FAIL',
+      d.latestStatus === 'EXPIRING' || d.latestStatus === 'EXPIRED' || d.latestStatus === 'FAIL',
   ).length;
 }
 
@@ -908,8 +840,7 @@ function DomainAlertBanner({
     >
       <Icon.warn size={14} style={{ color: 'var(--danger)' }} />
       <span style={{ fontSize: 13, color: 'var(--text)', flex: 1 }}>
-        <strong>{total}</strong> domain{total === 1 ? '' : 's'} need attention
-        {' '}
+        <strong>{total}</strong> domain{total === 1 ? '' : 's'} need attention{' '}
         <span
           style={{
             fontFamily: 'var(--font-mono)',
@@ -917,8 +848,8 @@ function DomainAlertBanner({
             fontSize: 11.5,
           }}
         >
-          · {(counts.EXPIRING ?? 0)} expiring · {(counts.EXPIRED ?? 0)} expired ·{' '}
-          {(counts.FAIL ?? 0)} failed
+          · {counts.EXPIRING ?? 0} expiring · {counts.EXPIRED ?? 0} expired · {counts.FAIL ?? 0}{' '}
+          failed
         </span>
       </span>
       <Link
