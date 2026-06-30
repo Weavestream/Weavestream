@@ -13,6 +13,32 @@ All notable changes to Weavestream are documented here. The format follows [Keep
 
 ## [Unreleased]
 
+## [1.8.10] - 2026-06-30
+
+### Added
+
+- **Configurable LLM token budgets.** Admins can now tune the AI chat's maximum output tokens and context-window size under **Admin -> Settings -> AI**. The chat service uses those values to reserve reply space, trim older context predictably, and avoid sending prompts that exceed the configured model's limits.
+- **AI article actions now include a short intent preview.** When chat is likely to propose creating or editing an article, the assistant first streams a brief user-facing summary of what it is about to draft. General questions skip the prelude and continue to answer directly.
+
+### Changed
+
+- **Chat composer layout refreshed.** The company/article context display and question/edit/create intent controls now live directly in the composer, with a taller input, clearer context pill, and cleaner action layout.
+- **Article tool calls are stricter and more reliable.** Article create/update tools now use strict schemas, explicit null handling, and turn-bound context so apply/reject actions stay tied to the company and article scope that produced the proposal. The chat history also carries prior tool outcomes so follow-up turns do not blindly repeat already-applied actions.
+- **Environment configuration is slimmer and better documented.** `.env.example` now focuses on the values most installs must set, while optional and advanced variables moved into the environment documentation. JWT, password, integration, and SMTP key IDs now default to `1`, reducing first-run boilerplate while keeping rotation explicit.
+- **Company logos render more flexibly.** `CompanyAvatar` now supports wider custom logos in detail views while preserving the existing square avatar behavior in compact navigation and list contexts.
+
+### Fixed
+
+- **Explicit article saves now clear existing autosave drafts.** A manual Save, including an AI chat-apply save, now promotes and clears an in-progress autosave draft even when the submitted article body is identical to the live row.
+- **Truncated or malformed AI article proposals are surfaced clearly.** Tool-call failures caused by model length limits, empty arguments, or malformed JSON now carry machine-readable error codes and show a softer warning in the UI instead of a generic hard failure.
+- **File upload MIME inference is more consistent** across browser-supported upload types.
+
+### Security
+
+- **Sensitive admin actions now require step-up re-authentication.** Backup downloads, company exports, AI/email/integration settings changes, selected user administration actions, and security-session revocation routes now require a fresh session-bound confirmation before proceeding. MFA-enabled users confirm with TOTP or a backup code; other users confirm with their password. The confirmation window is Redis-backed, defaults to 15 minutes, is configurable with `STEP_UP_TTL_SEC`, and is cleared on logout/session revoke.
+- **Refresh tokens now rotate on use.** Refresh tokens are single-use, with a 15-second grace window for benign concurrent browser requests. Reuse after that window revokes the session, clears any step-up window, and records an `auth.refresh.reused` audit event with only a short token-hash prefix for correlation.
+- **Blocked egress logs now redact query strings.** `safeFetch` writes blocked outbound URLs through the shared redaction helper so audit logs keep host/path context without storing query parameters that may contain tokens or credentials.
+
 ## [1.8.9] - 2026-06-25
 
 ### Changed
