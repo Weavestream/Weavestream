@@ -2,6 +2,7 @@ import type { ChatRequestContext } from '@weavestream/shared';
 import {
   buildTurnContext,
   estimateTokens,
+  inferToolIntentPrelude,
   planBudget,
   resolveTurnTools,
   synthesizeActionHistory,
@@ -119,6 +120,19 @@ describe('resolveTurnTools', () => {
     expect(r.tools.map((t) => t.function.name)).toEqual(['create_article']);
   });
 
+  it('forces create_article for explicit create intent even when the wording is vague', () => {
+    const r = resolveTurnTools({
+      hasCompany: true,
+      targetArticleRetained: true,
+      intent: 'create',
+    });
+    expect(r.toolChoice).toEqual({
+      type: 'function',
+      function: { name: 'create_article' },
+    });
+    expect(r.tools.map((t) => t.function.name)).toEqual(['create_article']);
+  });
+
   it('forces named update only when the target body is retained', () => {
     const ok = resolveTurnTools({
       hasCompany: true,
@@ -147,6 +161,90 @@ describe('resolveTurnTools', () => {
     });
     expect(r.toolChoice).toBe('auto');
     expect(r.tools.map((t) => t.function.name)).toEqual(['create_article']);
+  });
+});
+
+describe('inferToolIntentPrelude', () => {
+  it('emits a create prelude for explicit create intent', () => {
+    expect(
+      inferToolIntentPrelude({
+        hasCompany: true,
+        targetArticleRetained: false,
+        userMessage: 'Please create a brief summary.',
+        intent: 'create',
+      }),
+    ).toBe('create');
+  });
+
+  it('emits an edit prelude only when an edit target body is retained', () => {
+    expect(
+      inferToolIntentPrelude({
+        hasCompany: true,
+        targetArticleRetained: true,
+        userMessage: 'Tighten up this page.',
+        intent: 'edit',
+      }),
+    ).toBe('edit');
+    expect(
+      inferToolIntentPrelude({
+        hasCompany: true,
+        targetArticleRetained: false,
+        userMessage: 'Tighten up this page.',
+        intent: 'edit',
+      }),
+    ).toBeNull();
+  });
+
+  it('detects strong auto-mode create requests', () => {
+    expect(
+      inferToolIntentPrelude({
+        hasCompany: true,
+        targetArticleRetained: false,
+        userMessage: 'Review this ticket and draft a runbook article.',
+      }),
+    ).toBe('create');
+    expect(
+      inferToolIntentPrelude({
+        hasCompany: true,
+        targetArticleRetained: false,
+        userMessage: 'Can you explain what this ticket means?',
+      }),
+    ).toBeNull();
+  });
+
+  it('detects strong auto-mode edit requests without triggering on questions', () => {
+    expect(
+      inferToolIntentPrelude({
+        hasCompany: true,
+        targetArticleRetained: true,
+        userMessage: 'Please rewrite this article so it is clearer.',
+      }),
+    ).toBe('edit');
+    expect(
+      inferToolIntentPrelude({
+        hasCompany: true,
+        targetArticleRetained: true,
+        userMessage: 'How should I update this article?',
+      }),
+    ).toBeNull();
+  });
+
+  it('does not emit a prelude without company scope or for question mode', () => {
+    expect(
+      inferToolIntentPrelude({
+        hasCompany: false,
+        targetArticleRetained: true,
+        userMessage: 'Draft a runbook article.',
+      }),
+    ).toBeNull();
+    expect(
+      inferToolIntentPrelude({
+        hasCompany: true,
+        targetArticleRetained: true,
+        userMessage: 'Draft a runbook article.',
+        intent: 'question',
+      }),
+    ).toBeNull();
   });
 });
 

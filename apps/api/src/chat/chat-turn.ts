@@ -137,6 +137,45 @@ export function resolveTurnTools(input: {
 }
 
 /**
+ * Decide whether to ask the LLM for a short, user-facing intent line
+ * before a likely write-tool turn. Explicit mode selections are
+ * authoritative; Auto mode only triggers on strong article-action
+ * language so ordinary questions keep their direct reply.
+ */
+export function inferToolIntentPrelude(input: {
+  hasCompany: boolean;
+  targetArticleRetained: boolean;
+  userMessage: string;
+  intent?: TurnIntent;
+}): 'create' | 'edit' | null {
+  if (!input.hasCompany) return null;
+  if (input.intent === 'question') return null;
+  if (input.intent === 'create') return 'create';
+  if (input.intent === 'edit') {
+    return input.targetArticleRetained ? 'edit' : null;
+  }
+
+  const text = input.userMessage.toLowerCase();
+  if (/^\s*(how|what|why|when|where|who|is|are|does|do|did)\b/.test(text)) {
+    return null;
+  }
+  const createLikely =
+    /\b(create|draft|write|document|turn\s+this\s+into|make)\b/.test(text) &&
+    /\b(article|page|doc|document|documentation|runbook|guide|kb|knowledge\s+base)\b/.test(
+      text,
+    );
+  if (createLikely) return 'create';
+
+  const editLikely =
+    input.targetArticleRetained &&
+    /\b(edit|change|update|fix|rewrite|revise|expand|add\s+to|clean\s+up)\b/.test(
+      text,
+    ) &&
+    /\b(article|page|doc|document|documentation|runbook|this)\b/.test(text);
+  return editLikely ? 'edit' : null;
+}
+
+/**
  * Trim history + attached context to fit the prompt budget while
  * reserving output room. Drops oldest history first, then attached
  * context by priority (tickets → domains → assets → non-target

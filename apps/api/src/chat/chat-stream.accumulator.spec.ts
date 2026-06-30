@@ -1,4 +1,7 @@
-import { ToolCallAccumulator } from './chat-stream.service.js';
+import {
+  sanitizeIntentPrelude,
+  ToolCallAccumulator,
+} from './chat-stream.service.js';
 
 const ART = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
 
@@ -86,5 +89,36 @@ describe('ToolCallAccumulator', () => {
     ]);
     const calls = acc.finalize('stop');
     expect(calls.map((c) => c.name)).toEqual(['update_article', 'create_article']);
+  });
+});
+
+describe('sanitizeIntentPrelude', () => {
+  it('keeps a normal user-facing intent sentence', () => {
+    expect(
+      sanitizeIntentPrelude(
+        "I'll review the attached ticket and draft a brief summary for approval.",
+      ),
+    ).toBe("I'll review the attached ticket and draft a brief summary for approval.");
+  });
+
+  it('drops reasoning or prompt-echo text instead of showing it to users', () => {
+    expect(
+      sanitizeIntentPrelude(
+        'We need to produce a short assistant sentence before a proposed article tool action.',
+      ),
+    ).toBeNull();
+    expect(
+      sanitizeIntentPrelude(
+        'The sentence should be specific to the user request and available context.',
+      ),
+    ).toBeNull();
+  });
+
+  it('strips tagged thinking and keeps the final sentence', () => {
+    expect(
+      sanitizeIntentPrelude(
+        "<think>We need to produce a short assistant sentence.</think>I'll draft a brief article summary for review.",
+      ),
+    ).toBe("I'll draft a brief article summary for review.");
   });
 });
