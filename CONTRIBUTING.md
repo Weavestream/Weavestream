@@ -44,8 +44,14 @@ Before opening a PR, please make sure:
 - [ ] `pnpm typecheck` passes.
 - [ ] `pnpm test` passes (or you've added tests covering the new behavior).
 - [ ] `pnpm install --frozen-lockfile` passes (if you changed any `package.json`, commit the updated `pnpm-lock.yaml`).
-- [ ] If you added or changed environment variables, both `.env.example`
-      and [docs/CONFIGURATION.md](docs/CONFIGURATION.md) are updated.
+- [ ] If you added or changed environment variables, the docs are in sync.
+      A new **required** variable goes in both `.env.example` and
+      [docs/configuration/environment.md](docs/configuration/environment.md);
+      a new **optional** variable (one with a safe default in
+      `packages/shared/src/env.ts`) goes in
+      [docs/configuration/environment.md](docs/configuration/environment.md)
+      only — add it to the commented "Optional tuning" block in `.env.example`
+      just for the handful that are commonly tuned.
 - [ ] If you added a new Prisma migration, it's included and CI's
       `prisma-migrate-dry-run` job is green.
 - [ ] The PR description explains **why** the change is needed, not only

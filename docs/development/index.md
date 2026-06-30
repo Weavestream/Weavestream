@@ -35,7 +35,7 @@ cp .env.example .env
 
 Then edit `.env`:
 
-- Delete the `REPLACEME` rows at the top. The keygen output below supersedes them.
+- Delete the `REPLACEME` rows. The keygen output appended at the bottom supersedes them.
 - Replace the placeholder `REPLACEME` inside `DATABASE_URL` and `REDIS_URL` with the generated `POSTGRES_PASSWORD` and `REDIS_PASSWORD` values.
 - For local `pnpm dev`, point URLs at the host-mapped ports from `compose.build.yml`:
 
@@ -69,6 +69,16 @@ This runs `apps/web`, `apps/api`, and `apps/worker` in watch mode.
 |---|---|
 | Web UI | `http://localhost:3000` |
 | API | `http://localhost:4000` |
+
+### Accessing the dev server from another device
+
+To open the dev UI from another device on your LAN (e.g. testing on a phone), set `WEB_ALLOWED_DEV_ORIGINS` in `.env` to the host or `host:port` you browse to — comma-separate multiple entries:
+
+```env
+WEB_ALLOWED_DEV_ORIGINS=192.168.1.88,my-laptop.local
+```
+
+Without it, Next.js blocks dev resources (HMR, `/_next/static`) for non-localhost origins and the bundle never finishes hydrating, which silently breaks form submission. This setting is ignored in production builds.
 
 ## 5. Bootstrap An Admin
 

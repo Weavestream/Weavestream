@@ -59,6 +59,8 @@ describe('env validation', () => {
     }
     expect(message).toMatch(/Missing required encryption key/);
     expect(message).toMatch(/SMTP_SECRET_KEY=[A-Za-z0-9+/=]{40,}/);
-    expect(message).toMatch(/SMTP_SECRET_KEY_KID=\d{4}-\d{2}/);
+    // SMTP_SECRET_KEY_KID now has a schema default ('1'), so deleting it does
+    // not make it "missing" and no paste-ready KID line is suggested.
+    expect(message).not.toMatch(/SMTP_SECRET_KEY_KID=/);
   });
 });

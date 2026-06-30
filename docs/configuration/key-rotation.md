@@ -22,12 +22,14 @@ JWT keys sign the access tokens that authenticate API requests.
 
 2. **Update `.env`:**
    ```bash
-   # Move the old key to the previous-keys list
-   JWT_PREVIOUS_KEYS=<old-kid>:<old-key>
-   
-   # Set the new key and increment the KID
+   # Move the old key to the previous-keys list, tagged with its kid.
+   # If you never set JWT_SIGNING_KEY_KID, the old kid is the default "1".
+   JWT_PREVIOUS_KEYS=1:<old-key>
+
+   # Set the new key and a new kid (any stable label — bump the number,
+   # use a date, etc.). JWT_SIGNING_KEY_KID defaults to "1", so set it now.
    JWT_SIGNING_KEY=<new-key>
-   JWT_SIGNING_KEY_KID=2026-02   # bump this
+   JWT_SIGNING_KEY_KID=2
    ```
 
 3. **Restart the stack:**
@@ -57,12 +59,14 @@ Password encryption keys protect credential secrets, TOTP secrets, and notes sto
 
 2. **Update `.env`:**
    ```bash
-   # Move the old key to the previous-keys list
-   PASSWORD_PREVIOUS_KEYS=<old-kid>:<old-key>
-   
-   # Set the new key and increment the KID
+   # Move the old key to the previous-keys list, tagged with its kid.
+   # If you never set PASSWORD_ENCRYPTION_KEY_KID, the old kid is the default "1".
+   PASSWORD_PREVIOUS_KEYS=1:<old-key>
+
+   # Set the new key and a new kid. PASSWORD_ENCRYPTION_KEY_KID defaults
+   # to "1", so set it now.
    PASSWORD_ENCRYPTION_KEY=<new-key>
-   PASSWORD_ENCRYPTION_KEY_KID=2026-02   # bump this
+   PASSWORD_ENCRYPTION_KEY_KID=2
    ```
 
 3. **Restart the stack:**

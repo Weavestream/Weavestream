@@ -7,7 +7,14 @@ description: Complete reference for all Weavestream environment variables.
 
 # Environment Variables
 
-All runtime configuration is environment-driven. The `.env.example` file in the repository is the authoritative template. This page explains every variable and its operational impact.
+All runtime configuration is environment-driven. This page is the **complete reference** for every variable Weavestream reads; the `.env.example` file in the repository is the minimal getting-started template.
+
+Variables fall into two tiers:
+
+- **Required** — the app refuses to boot without them: `APP_URL`, `API_URL`, `DATABASE_URL`, `REDIS_URL`, and the encryption/signing keys (with their `_KID`s). These ship in `.env.example`.
+- **Optional** — everything else has a safe built-in default and can be omitted. `.env.example` carries a short commented block of the most commonly-tuned ones; the rest are documented here and only need to be set to override a default.
+
+Each table lists the default (where one exists) and its operational impact. Valid ranges are enforced at boot by the schema in `packages/shared/src/env.ts`.
 
 ## Release Pinning
 
@@ -58,7 +65,7 @@ Generate all signing keys with `./scripts/keygen.sh`. Each key is 32 random byte
 | Variable | Notes |
 |---|---|
 | `JWT_SIGNING_KEY` | HS256 signing key for access tokens. |
-| `JWT_SIGNING_KEY_KID` | Key ID embedded in the JWT header. Bump on rotation. |
+| `JWT_SIGNING_KEY_KID` | Key ID embedded in the JWT header. Optional; default `1`. Bump on rotation. |
 | `JWT_PREVIOUS_KEYS` | Comma-separated `kid:key` pairs kept valid during rotation. |
 | `SESSION_COOKIE_NAME` | Cookie name. Default: `ws_session`. |
 | `SESSION_MAX_AGE_DAYS` | Session cookie lifetime in days. |
@@ -66,14 +73,17 @@ Generate all signing keys with `./scripts/keygen.sh`. Each key is 32 random byte
 | `MFA_ENCRYPTION_KEY` | AES-256 key for TOTP secrets at rest. |
 | `COOKIE_SIGNING_KEY` | HMAC key for signed cookies. |
 | `CSRF_SIGNING_KEY` | HMAC key for double-submit CSRF tokens. |
+| `STEP_UP_TTL_SEC` | Optional. Seconds a step-up re-authentication stays valid before a sensitive admin action re-prompts. Default: `900` (15 min). Range: 60–3600. |
 
 ## Argon2 (Password Hashing)
 
+Advanced; the defaults follow OWASP guidance and rarely need tuning.
+
 | Variable | Default | Notes |
 |---|---|---|
-| `ARGON2_MEMORY_KB` | `65536` | Memory cost. Do not lower below `65536` in production. |
-| `ARGON2_ITERATIONS` | `3` | Time cost (iterations). |
-| `ARGON2_PARALLELISM` | `1` | Parallelism factor. |
+| `ARGON2_MEMORY_KB` | `65536` | Memory cost in KiB. Do not lower below `65536` in production. Range: 16,384–1,048,576. |
+| `ARGON2_ITERATIONS` | `3` | Time cost (iterations). Range: 1–20. |
+| `ARGON2_PARALLELISM` | `4` | Parallelism factor (lanes). Range: 1–16. |
 
 ## Rate Limiting
 
@@ -88,13 +98,39 @@ Generate all signing keys with `./scripts/keygen.sh`. Each key is 32 random byte
 The global throttler keys on `req.user.id` for authenticated requests. For unauthenticated requests, it falls back to the real client IP. Configure `TRUST_PROXY_HOPS` to match the number of trusted proxy hops between the browser and API.
 !!!
 
+## Reverse Proxy & Network
+
+| Variable | Default | Notes |
+|---|---|---|
+| `TRUST_PROXY_HOPS` | `1` | Trusted reverse-proxy hops in front of the `web` container. `1` = one reverse proxy (default), `2` = CDN → proxy, `0` = `web` exposed directly. Setting it too high lets an upstream forge the client IP; too low collapses every request into one rate-limit bucket. Range: 0–10. See [TLS & Reverse Proxy](/deployment/tls/). |
+| `WEB_ALLOWED_DEV_ORIGINS` | _(empty)_ | **Dev only**, ignored in production builds. Comma-separated origins allowed to fetch Next.js dev resources (HMR) from a non-localhost host. See [Development Setup](/development/). |
+
+## Egress / SSRF Guard
+
+Every server-side outbound HTTP request (integration drivers, RDAP/HIBP probes, domain checks) flows through `safeFetch`, which refuses to connect to loopback, RFC1918, link-local, or cloud-metadata (`169.254.169.254`) targets. Each refusal is recorded in the audit log as `security.egress.blocked` and surfaced under **Admin → Security → Egress blocks**.
+
+| Variable | Default | Notes |
+|---|---|---|
+| `EGRESS_ALLOW_PRIVATE_NETWORKS` | `false` | Set to `true` to disable the entire guard. Use only on lab / single-host installs where the API legitimately talks to sibling containers over a flat private network and there are no operator-supplied URLs. |
+| `EGRESS_ALLOWED_PRIVATE_CIDRS` | _(empty)_ | Surgical alternative — comma-separated CIDRs permitted even when the global block is on, e.g. `10.42.0.0/16,192.168.50.0/24` for on-prem RMM endpoints. |
+
 ## Password Vault Encryption
 
 | Variable | Notes |
 |---|---|
 | `PASSWORD_ENCRYPTION_KEY` | AES-256-GCM key for credential encryption. 32 bytes, base64-encoded. |
-| `PASSWORD_ENCRYPTION_KEY_KID` | Key ID stamped on each ciphertext blob (e.g. `2026-01`). Bump on rotation. |
+| `PASSWORD_ENCRYPTION_KEY_KID` | Key ID stamped on each ciphertext blob. Optional; default `1`. Bump on rotation. |
 | `PASSWORD_PREVIOUS_KEYS` | Comma-separated `kid:key` pairs from previous rotations. |
+
+## Email (SMTP) Credential Encryption
+
+The SMTP password configured under **Admin → Settings → Email** is encrypted at rest with the same kid-tagged AES-256-GCM scheme as the password vault, under a separate key so mail credentials rotate independently. Generate the key with `./scripts/keygen.sh`.
+
+| Variable | Notes |
+|---|---|
+| `SMTP_SECRET_KEY` | AES-256-GCM key for the saved SMTP password. 32 bytes, base64-encoded. |
+| `SMTP_SECRET_KEY_KID` | Key ID stamped on the ciphertext. Optional; default `1`. Bump on rotation. |
+| `SMTP_PREVIOUS_KEYS` | Comma-separated `kid:key` pairs from previous rotations. |
 
 ## HaveIBeenPwned
 
@@ -149,7 +185,7 @@ Integration credential bundles (API tokens, secrets) are encrypted with the same
 | Variable | Notes |
 |---|---|
 | `INTEGRATION_SECRET_KEY` | AES-256-GCM key for integration credentials. 32 bytes, base64-encoded. |
-| `INTEGRATION_SECRET_KEY_KID` | Key ID stamped on each ciphertext blob (e.g. `2026-01`). Bump on rotation. Default: `2026-01`. |
+| `INTEGRATION_SECRET_KEY_KID` | Key ID stamped on each ciphertext blob. Optional; default `1`. Bump on rotation. |
 | `INTEGRATION_PREVIOUS_KEYS` | Comma-separated `kid:key` pairs from previous rotations. Old blobs decrypt seamlessly and re-encrypt on next mutation. |
 
 ### Sync Scheduling
@@ -174,3 +210,48 @@ These settings apply to every outbound HTTP call made by integration drivers (e.
 | `INTEGRATION_HTTP_TIMEOUT_MS` | `30000` | Socket timeout per request in milliseconds. Valid range: 1,000–120,000. |
 | `INTEGRATION_HTTP_MAX_RETRIES` | `5` | Maximum retry attempts after a retriable failure. Valid range: 0–10. |
 | `INTEGRATION_HTTP_BACKOFF_MS` | `1000` | Base backoff in milliseconds. Each retry sleeps `backoffMs × 2ⁿ`. Valid range: 100–60,000. |
+
+## Backups
+
+Scheduled Postgres dumps (admin **Backups** page) and their `*.manifest.json` sidecars.
+
+| Variable | Default | Notes |
+|---|---|---|
+| `BACKUP_STORAGE_DIR` | `./data/backup` | Destination for dumps. Like `FILE_STORAGE_DIR`, `compose.yml` bind-mounts `${DATA_DIR}/backup` and sets this for you — leave unset on the standard install. The API mounts it read-only (downloads); the worker mounts it read-write (dump + prune). |
+| `BACKUP_JOB_LOCK_MINUTES` | `360` | Minutes a single backup job may run before BullMQ treats its lock as stalled. The 6 h default covers sub-GB up to tens-of-GB databases on slow/NAS disks. Range: 5–1440. |
+
+## Background Jobs & Schedulers
+
+Repeatable BullMQ jobs. Every `*_CRON` takes a standard 5-field cron expression, or the literal string `off` to disable scheduled runs (manual / on-demand runs still work).
+
+### Domain & SSL Monitor
+
+| Variable | Default | Notes |
+|---|---|---|
+| `DOMAIN_CHECK_CRON` | `17 3 * * *` | Schedule for the WHOIS/DNS/TLS expiry sweep. `off` disables it. |
+| `DOMAIN_CHECK_CONCURRENCY` | `5` | Parallel domain checks. Range: 1–100. |
+| `DOMAIN_CHECK_TIMEOUT_MS` | `10000` | Per-check WHOIS/DNS/TLS timeout (ms). Range: 1,000–60,000. |
+| `DOMAIN_CHECK_ATTEMPTS` | `3` | Retry attempts per check. Range: 1–10. |
+| `DOMAIN_CHECK_BACKOFF_MS` | `30000` | Base retry backoff (ms). Range: 1,000–600,000. |
+| `RDAP_BOOTSTRAP_CACHE_HOURS` | `24` | How long to cache the IANA RDAP bootstrap registry. Range: 1–720. |
+| `HTTP_CHECK_TIMEOUT_MS` | `8000` | HTTP probe timeout for the `WEBSITE_DOWN` evaluator and domain checks (ms). Range: 1,000–60,000. |
+
+### Alerts
+
+| Variable | Default | Notes |
+|---|---|---|
+| `ALERTS_SCAN_CRON` | `*/5 * * * *` | Schedule for time/state-based alert evaluation (expiration lists, website-down). Real-time record/password alerts do not depend on this. `off` disables scheduled scans. |
+
+### Upload Reaper
+
+| Variable | Default | Notes |
+|---|---|---|
+| `UPLOAD_REAPER_CRON` | `7 4 * * *` | Schedule for purging soft-deleted uploads. `off` disables it. |
+| `UPLOAD_REAPER_RETENTION_DAYS` | `30` | Grace period before a soft-deleted upload is purged. Range: 1–365. |
+| `UPLOAD_REAPER_BATCH_SIZE` | `500` | Max rows purged per tick (bounds the advisory-lock hold window). Range: 1–5,000. |
+
+### Worker Concurrency
+
+| Variable | Default | Notes |
+|---|---|---|
+| `WORKER_CONCURRENCY_GLOBAL` | `10` | Global cap on concurrent jobs the worker process runs. Range: 1–500. |

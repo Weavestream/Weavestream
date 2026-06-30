@@ -48,7 +48,15 @@ export const envSchema = z.object({
   REDIS_PASSWORD: z.string().min(1).optional(),
 
   JWT_SIGNING_KEY: base64Key(32),
-  JWT_SIGNING_KEY_KID: z.string().min(1),
+  // Key-id label stamped on each signed/encrypted record so keys can be
+  // rotated later (the active key, plus historical keys in *_PREVIOUS_KEYS,
+  // are looked up by this tag). The value is opaque — a fresh install just
+  // needs *a* stable label, so it defaults to '1' and is not surfaced in
+  // .env.example. On rotation, bump it (to '2', a date, etc.) and move the
+  // old key into the matching *_PREVIOUS_KEYS. The default must stay a fixed
+  // constant across releases: existing data is tagged with it, so changing
+  // it would orphan those records unless the old kid is in *_PREVIOUS_KEYS.
+  JWT_SIGNING_KEY_KID: z.string().min(1).default('1'),
   JWT_PREVIOUS_KEYS: z.string().optional().default(''),
   SESSION_COOKIE_NAME: z.string().min(1).default('ws_session'),
   SESSION_MAX_AGE_DAYS: intFromString(1, 365).default(30),
@@ -67,7 +75,7 @@ export const envSchema = z.object({
   // under the current kid on next update, or eagerly via
   // `cli reencrypt-passwords`.
   PASSWORD_ENCRYPTION_KEY: base64Key(32),
-  PASSWORD_ENCRYPTION_KEY_KID: z.string().min(1).max(32),
+  PASSWORD_ENCRYPTION_KEY_KID: z.string().min(1).max(32).default('1'),
   PASSWORD_PREVIOUS_KEYS: z.string().optional().default(''),
   HIBP_ENABLED: boolish.default(true),
 
@@ -79,13 +87,13 @@ export const envSchema = z.object({
   // PASSWORD_ENCRYPTION_KEY so password and integration ciphertexts
   // can be rotated independently.
   INTEGRATION_SECRET_KEY: base64Key(32),
-  INTEGRATION_SECRET_KEY_KID: z.string().min(1).max(32),
+  INTEGRATION_SECRET_KEY_KID: z.string().min(1).max(32).default('1'),
   INTEGRATION_PREVIOUS_KEYS: z.string().optional().default(''),
 
   // Global SMTP credential encryption. Kept separate from password vault
   // and integration keys so mail credentials can be rotated independently.
   SMTP_SECRET_KEY: base64Key(32),
-  SMTP_SECRET_KEY_KID: z.string().min(1).max(32),
+  SMTP_SECRET_KEY_KID: z.string().min(1).max(32).default('1'),
   SMTP_PREVIOUS_KEYS: z.string().optional().default(''),
 
   // Phase 11: integration sync scheduling + concurrency.

@@ -39,7 +39,7 @@ Invoke-WebRequest `
 .\keygen.ps1 | Out-File -Append -Encoding ascii .env
 ```
 
-Open `.env` in a text editor, delete the `REPLACEME` placeholder rows at the top, then update `DATABASE_URL` and `REDIS_URL` to use the newly generated `POSTGRES_PASSWORD` and `REDIS_PASSWORD` values.
+Open `.env` in a text editor and delete the `REPLACEME` placeholder rows — the keygen output appended at the bottom supersedes them. Then update `DATABASE_URL` and `REDIS_URL` to use the newly generated `POSTGRES_PASSWORD` and `REDIS_PASSWORD` values.
 
 !!!Many built-in NAS editors hide files starting with a dot. If you need to make changes, rename the file to env.txt, edit your settings, and then rename it back to .env when finished.
 !!!

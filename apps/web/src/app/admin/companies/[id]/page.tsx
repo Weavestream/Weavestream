@@ -52,8 +52,7 @@ type MembershipListing = {
 /**
  * Company "home" / glance overview. Phase 9a layout:
  *
- *   Quick links row (Assets / Articles / Passwords / Domains)
- *   → Contact / Address / Classification panels (3-up)
+ *   Contact / Address / Classification panels
  *   → Domain alert banner (only when something is actually failing)
  *   → Recent assets + Memberships
  *
@@ -110,39 +109,6 @@ export default async function CompanyDetailPage({ params }: { params: Promise<{ 
         actions={manage ? <CompanyActions company={company} /> : null}
       />
       <PageBody>
-        {/*<div
-          style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
-            gap: 10,
-          }}
-        >
-          <QuickLink
-            href={`/admin/companies/${company.id}/assets`}
-            icon={<Icon.box size={14} />}
-            label="Assets"
-            hint="Dynamic-field records"
-          />
-          <QuickLink
-            href={`/admin/companies/${company.id}/articles`}
-            icon={<Icon.doc size={14} />}
-            label="Articles"
-            hint="Runbooks, how-tos, KB"
-          />
-          <QuickLink
-            href={`/admin/companies/${company.id}/passwords`}
-            icon={<Icon.lock size={14} />}
-            label="Passwords"
-            hint="Credentials & secrets"
-          />
-          <QuickLink
-            href={`/admin/companies/${company.id}/domains`}
-            icon={<Icon.globe size={14} />}
-            label="Domains"
-            hint={domainHint(domains)}
-          />
-        </div>*/}
-
         <div
           style={{
             display: 'grid',
@@ -649,63 +615,6 @@ function NotesPanel({ company, manage }: { company: CompanyDetail; manage: boole
 // Helpers
 // ───────────────────────────────────────────────────────────────────
 
-function QuickLink({
-  href,
-  icon,
-  label,
-  hint,
-}: {
-  href: string;
-  icon: ReactNode;
-  label: string;
-  hint: string;
-}) {
-  return (
-    <Link
-      href={href}
-      className="ws-card-clickable"
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: 10,
-        padding: '10px 14px',
-        border: '1px solid var(--line)',
-        borderRadius: 6,
-        color: 'var(--text)',
-        textDecoration: 'none',
-      }}
-    >
-      <div
-        style={{
-          width: 26,
-          height: 26,
-          borderRadius: 5,
-          background: 'var(--panel-2)',
-          border: '1px solid var(--line-2)',
-          display: 'grid',
-          placeItems: 'center',
-          color: 'var(--accent)',
-        }}
-      >
-        {icon}
-      </div>
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: 13, fontWeight: 500 }}>{label}</div>
-        <div
-          style={{
-            fontSize: 10.5,
-            color: 'var(--dim)',
-            fontFamily: 'var(--font-mono)',
-          }}
-        >
-          {hint}
-        </div>
-      </div>
-      <Icon.chevron size={11} style={{ color: 'var(--dim)' }} />
-    </Link>
-  );
-}
-
 function Row({ label, value }: { label: string; value: ReactNode }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
@@ -790,13 +699,6 @@ function externalLink(url: string) {
       {url.replace(/^https?:\/\//i, '')}
     </a>
   );
-}
-
-function domainHint(domains: MonitoredDomain[]): string {
-  if (domains.length === 0) return 'No domains yet';
-  const bad = alertCount(domains);
-  if (bad === 0) return `${domains.length} healthy`;
-  return `${bad} need attention`;
 }
 
 function alertCount(domains: MonitoredDomain[]): number {
