@@ -10,6 +10,7 @@ import type {
   ChatMessageDto,
   ChatRole,
   ChatToolCallDto,
+  ChatTurnContext,
 } from '@weavestream/shared';
 import { ChatRole as PrismaChatRole } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service.js';
@@ -76,6 +77,7 @@ export class ChatService {
     role: PrismaChatRole;
     content: string;
     toolCalls: ChatToolCallDto[] | null;
+    turnContext: ChatTurnContext | null;
   }> {
     const conversation = await this.prisma.chatConversation.findUnique({
       where: { id: conversationId },
@@ -93,6 +95,7 @@ export class ChatService {
       role: msg.role,
       content: msg.content,
       toolCalls: parseToolCalls(msg.toolCalls),
+      turnContext: parseTurnContext(msg.turnContext),
     };
   }
 
@@ -211,6 +214,12 @@ export function parseToolCalls(raw: Prisma.JsonValue | null): ChatToolCallDto[] 
     ) {
       continue;
     }
+    const errorCode =
+      obj.errorCode === 'truncated' ||
+      obj.errorCode === 'malformed' ||
+      obj.errorCode === 'empty'
+        ? obj.errorCode
+        : null;
     out.push({
       id,
       name,
@@ -218,7 +227,36 @@ export function parseToolCalls(raw: Prisma.JsonValue | null): ChatToolCallDto[] 
       status,
       result: typeof obj.result === 'string' ? obj.result : null,
       error: typeof obj.error === 'string' ? obj.error : null,
+      errorCode,
     });
   }
   return out.length > 0 ? out : null;
+}
+
+/**
+ * Parse the JSONB `turn_context` column into the metadata-only DTO. Like
+ * {@link parseToolCalls}, the column is written exclusively by our own
+ * code, so unexpected shapes degrade to `null` rather than throwing.
+ * This is descriptive context only — never an authorization source.
+ */
+export function parseTurnContext(
+  raw: Prisma.JsonValue | null,
+): ChatTurnContext | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const obj = raw as Record<string, unknown>;
+  const out: ChatTurnContext = {};
+  if (typeof obj.companyId === 'string') out.companyId = obj.companyId;
+  if (typeof obj.currentArticleId === 'string') {
+    out.currentArticleId = obj.currentArticleId;
+  }
+  if (typeof obj.currentTicketId === 'string') {
+    out.currentTicketId = obj.currentTicketId;
+  }
+  if (Array.isArray(obj.articleIds)) {
+    const ids = obj.articleIds.filter(
+      (x): x is string => typeof x === 'string',
+    );
+    if (ids.length > 0) out.articleIds = ids;
+  }
+  return Object.keys(out).length > 0 ? out : null;
 }

@@ -13,6 +13,7 @@ import {
 } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import type { ChatTurnIntent } from '@weavestream/shared';
 import { Icon, type IconComponent } from '../ui';
 import {
   useChatPanel,
@@ -914,6 +915,11 @@ function Composer({ tab, disabled }: { tab: ChatTab; disabled: boolean }) {
   // `@` and `tokenStart` is the index of that `@` in `value`.
   const [mentionTokenStart, setMentionTokenStart] = useState<number | null>(null);
   const [mentionQuery, setMentionQuery] = useState('');
+  // Opt-in routing hint for the next send. '' = Auto (let the model
+  // decide). Reset to Auto after each send so a one-off Edit/Draft can't
+  // silently force a tool on a later question. Advisory only — the server
+  // re-checks all permissions at apply regardless.
+  const [intent, setIntent] = useState<ChatTurnIntent | ''>('');
   // Auto-attached page-id (article or asset) — excluded from the
   // picker so the user can't mention the same row twice.
   const pageEntityId =
@@ -949,7 +955,8 @@ function Composer({ tab, disabled }: { tab: ChatTab; disabled: boolean }) {
     const text = value.trim();
     setValue('');
     setMentionTokenStart(null);
-    void sendMessage(tabId, text);
+    void sendMessage(tabId, text, intent || undefined);
+    setIntent('');
   }
 
   /**
@@ -1050,12 +1057,38 @@ function Composer({ tab, disabled }: { tab: ChatTab; disabled: boolean }) {
         borderTop: '1px solid var(--line)',
         padding: 10,
         display: 'flex',
-        alignItems: 'flex-end',
-        gap: 8,
+        flexDirection: 'column',
+        gap: 6,
         background: 'var(--panel)',
         flexShrink: 0,
       }}
     >
+      {companyId && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 11, color: 'var(--dim)' }}>Mode</span>
+          <select
+            aria-label="Assistant mode for the next message"
+            value={intent}
+            disabled={disabled}
+            onChange={(e) => setIntent(e.target.value as ChatTurnIntent | '')}
+            style={{
+              fontSize: 11,
+              padding: '2px 6px',
+              borderRadius: 6,
+              border: '1px solid var(--line)',
+              background: 'var(--surface)',
+              color: 'var(--text)',
+              cursor: disabled ? 'not-allowed' : 'pointer',
+            }}
+          >
+            <option value="">Auto</option>
+            <option value="question">Question (no edits)</option>
+            <option value="edit">Edit article</option>
+            <option value="create">Draft new article</option>
+          </select>
+        </div>
+      )}
+      <div style={{ display: 'flex', alignItems: 'flex-end', gap: 8 }}>
       <div
         style={{
           position: 'relative',
@@ -1159,6 +1192,7 @@ function Composer({ tab, disabled }: { tab: ChatTab; disabled: boolean }) {
           style={{ transform: 'rotate(-90deg)' }}
         />
       </button>
+      </div>
       {mentionTokenStart !== null && companyId && (
         <MentionPicker
           anchorRef={taRef}

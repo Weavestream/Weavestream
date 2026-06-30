@@ -31,6 +31,25 @@ export const chatToolCallNameSchema = z.enum([
 export type ChatToolCallName = z.infer<typeof chatToolCallNameSchema>;
 
 /**
+ * Machine-readable reason a tool call could not be produced, kept
+ * SEPARATE from `status` (which stays the 4-value lifecycle enum) and
+ * from `error` (human display text). Set at stream-finalize time:
+ *   truncated → the completion hit the model's length cap mid-JSON, so
+ *               the streamed `arguments` blob was cut off
+ *   malformed → the arguments blob parsed as invalid JSON for another
+ *               reason (not length)
+ *   empty     → the model emitted a tool call with no arguments
+ * The UI switches its tone/icon on this instead of string-matching the
+ * display text; tests assert on it directly.
+ */
+export const chatToolCallErrorCodeSchema = z.enum([
+  'truncated',
+  'malformed',
+  'empty',
+]);
+export type ChatToolCallErrorCode = z.infer<typeof chatToolCallErrorCodeSchema>;
+
+/**
  * A proposed agentic action attached to an assistant turn. `arguments`
  * is whatever JSON the LLM produced — schema is enforced at apply time
  * (see `applyToolCall` in apps/api/src/chat/chat-tool-call.service.ts)
@@ -43,6 +62,10 @@ export const chatToolCallSchema = z.object({
   status: chatToolCallStatusSchema,
   result: z.string().nullable().optional(),
   error: z.string().nullable().optional(),
+  /** Machine-readable failure reason (see `chatToolCallErrorCodeSchema`).
+   *  Independent of `status`/`error`; only set when a call could not be
+   *  produced cleanly. */
+  errorCode: chatToolCallErrorCodeSchema.nullable().optional(),
 });
 export type ChatToolCallDto = z.infer<typeof chatToolCallSchema>;
 
@@ -54,6 +77,28 @@ export const chatMessageSchema = z.object({
   toolCalls: z.array(chatToolCallSchema).nullable().optional(),
 });
 export type ChatMessageDto = z.infer<typeof chatMessageSchema>;
+
+/**
+ * Snapshot of the request scope that produced a turn, persisted on the
+ * assistant message (column `chat_messages.turn_context`) so apply and
+ * follow-up behaviour are bound to the turn that proposed the action
+ * rather than re-sampled from whatever page is open later.
+ *
+ * METADATA ONLY — ids/titles, never full markdown bodies (size/privacy).
+ * This is descriptive context, NOT an authorization source: apply still
+ * derives the writable company from the article row for `update_article`
+ * and re-checks `article.write`. `companyId` here only ever acts as a
+ * reject-only cross-check (update) or the create scope (still gated by
+ * `article.write`).
+ */
+export const chatTurnContextSchema = z.object({
+  companyId: z.string().uuid().optional(),
+  currentArticleId: z.string().uuid().optional(),
+  currentTicketId: z.string().min(1).max(200).optional(),
+  /** Ids of articles attached as read-only context on the turn. */
+  articleIds: z.array(z.string().uuid()).max(10).optional(),
+});
+export type ChatTurnContext = z.infer<typeof chatTurnContextSchema>;
 
 /**
  * Lightweight list-row shape: no messages, no model. Used by the
@@ -197,6 +242,16 @@ export type ChatRequestContext = z.infer<typeof chatRequestContextSchema>;
  * enough that a runaway client can't shovel novel-length prompts into
  * the DB or the LLM.
  */
+/**
+ * Optional, opt-in routing hint sent by an explicit UI affordance
+ * ("draft this edit" / "draft an article from this"). Advisory only —
+ * the server uses it to pick `tool_choice`/which tool to offer, and it
+ * NEVER affects authorization (apply re-checks tenant + article.write
+ * regardless). Omitted on ordinary sends, which default to `auto`.
+ */
+export const chatTurnIntentSchema = z.enum(['question', 'edit', 'create']);
+export type ChatTurnIntent = z.infer<typeof chatTurnIntentSchema>;
+
 export const sendChatMessageSchema = z.object({
   content: z
     .string()
@@ -208,6 +263,7 @@ export const sendChatMessageSchema = z.object({
         .max(8000, 'Message is too long'),
     ),
   context: chatRequestContextSchema.optional(),
+  intent: chatTurnIntentSchema.optional(),
 });
 export type SendChatMessageInput = z.infer<typeof sendChatMessageSchema>;
 

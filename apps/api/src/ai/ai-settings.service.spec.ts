@@ -1,5 +1,9 @@
 import { BadRequestException, ConflictException } from '@nestjs/common';
-import { AiSettingsService } from './ai-settings.service.js';
+import {
+  AiSettingsService,
+  DEFAULT_CONTEXT_WINDOW_TOKENS,
+  DEFAULT_MAX_OUTPUT_TOKENS,
+} from './ai-settings.service.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
 
 const ACTOR: AuthedUser = {
@@ -23,6 +27,8 @@ function baseRow(overrides: Partial<Record<string, unknown>> = {}) {
     baseUrl: null as string | null,
     apiKeyCiphertext: null as string | null,
     defaultModel: null as string | null,
+    maxOutputTokens: null as number | null,
+    contextWindowTokens: null as number | null,
     updatedAt: NOW,
     updatedBy: null as string | null,
     ...overrides,
@@ -161,8 +167,92 @@ describe('AiSettingsService', () => {
       baseUrl: 'http://localhost:11434/v1',
       apiKey: 'sk-test',
       defaultModel: 'llama3:latest',
+      maxOutputTokens: DEFAULT_MAX_OUTPUT_TOKENS,
+      contextWindowTokens: DEFAULT_CONTEXT_WINDOW_TOKENS,
     });
     expect(crypto.decrypt).toHaveBeenCalledWith('ENC(sk-test)');
+  });
+
+  it('persists token limits and resolves configured values over defaults', async () => {
+    const prisma = makePrisma();
+    prisma.aiSetting.findUnique.mockResolvedValue(baseRow());
+    prisma.aiSetting.update.mockResolvedValue(
+      baseRow({
+        enabled: true,
+        baseUrl: 'http://localhost:11434/v1',
+        maxOutputTokens: 16_000,
+        contextWindowTokens: 131_072,
+      }),
+    );
+    const svc = new AiSettingsService(
+      prisma as never,
+      makeAudit() as never,
+      makeCrypto() as never,
+    );
+
+    const out = await svc.update(
+      ACTOR,
+      { maxOutputTokens: 16_000, contextWindowTokens: 131_072 },
+      META,
+    );
+    expect(prisma.aiSetting.update.mock.calls[0]![0].data).toEqual(
+      expect.objectContaining({
+        maxOutputTokens: 16_000,
+        contextWindowTokens: 131_072,
+      }),
+    );
+    expect(out).toEqual(
+      expect.objectContaining({
+        maxOutputTokens: 16_000,
+        contextWindowTokens: 131_072,
+      }),
+    );
+
+    const cfgPrisma = makePrisma();
+    cfgPrisma.aiSetting.findUnique.mockResolvedValue(
+      baseRow({
+        enabled: true,
+        baseUrl: 'http://localhost:11434/v1',
+        maxOutputTokens: 16_000,
+        contextWindowTokens: 131_072,
+      }),
+    );
+    const cfgSvc = new AiSettingsService(
+      cfgPrisma as never,
+      makeAudit() as never,
+      makeCrypto() as never,
+    );
+    await expect(cfgSvc.getConfig()).resolves.toEqual(
+      expect.objectContaining({
+        maxOutputTokens: 16_000,
+        contextWindowTokens: 131_072,
+      }),
+    );
+  });
+
+  it('clamps resolved max output tokens to half the context window', async () => {
+    const prisma = makePrisma();
+    prisma.aiSetting.findUnique.mockResolvedValue(
+      baseRow({
+        enabled: true,
+        baseUrl: 'http://localhost:11434/v1',
+        // Tiny window, output left blank → default (8192) would exceed it.
+        contextWindowTokens: 4096,
+        maxOutputTokens: null,
+      }),
+    );
+    const svc = new AiSettingsService(
+      prisma as never,
+      makeAudit() as never,
+      makeCrypto() as never,
+    );
+
+    await expect(svc.getConfig()).resolves.toEqual(
+      expect.objectContaining({
+        contextWindowTokens: 4096,
+        maxOutputTokens: 2048, // floor(4096 / 2), not the 8192 default
+      }),
+    );
   });
 
   it('allows config with no API key (local Ollama / LMStudio)', async () => {

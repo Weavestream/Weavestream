@@ -10,6 +10,15 @@ import type { RequestMeta } from '../common/request-meta.js';
 const SINGLETON_ID = 'singleton';
 
 /**
+ * Conservative fallbacks used when an admin hasn't tuned the limits.
+ * `maxOutputTokens` doubles as the reply budget reserved by the chat
+ * prompt builder; `contextWindowTokens` sizes the prompt budget so the
+ * reply fits. Picked low enough to be safe on small self-hosted models.
+ */
+export const DEFAULT_MAX_OUTPUT_TOKENS = 8_192;
+export const DEFAULT_CONTEXT_WINDOW_TOKENS = 32_768;
+
+/**
  * Workspace-wide config for an OpenAI-compatible LLM endpoint (Ollama,
  * LMStudio, vLLM, OpenAI itself, …). Foundation only — `getConfig()`
  * exists for the connection-test endpoint and future LLM consumers, but
@@ -50,6 +59,14 @@ export class AiSettingsService {
     if (input.clearApiKey) data.apiKeyCiphertext = null;
     if (input.apiKey !== undefined) {
       data.apiKeyCiphertext = this.crypto.encrypt(input.apiKey);
+    }
+    // `null` explicitly resets to the server default; `undefined` (field
+    // omitted) leaves the saved value untouched.
+    if (input.maxOutputTokens !== undefined) {
+      data.maxOutputTokens = input.maxOutputTokens;
+    }
+    if (input.contextWindowTokens !== undefined) {
+      data.contextWindowTokens = input.contextWindowTokens;
     }
 
     const after = await this.prisma.aiSetting.update({
@@ -115,10 +132,24 @@ export class AiSettingsService {
         );
       }
     }
+    const contextWindowTokens =
+      row.contextWindowTokens ?? DEFAULT_CONTEXT_WINDOW_TOKENS;
+    const requestedOutput = row.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS;
+    // Cross-field guard, applied AFTER defaults resolve (per-field schema
+    // validation can't see the resolved pair, and one side may be a
+    // null→default while the other is an explicit value). The reply may
+    // use at most half the context window, guaranteeing a positive prompt
+    // budget and that `max_tokens` never exceeds the window — so an admin
+    // who saves a tiny window (or an oversized output cap) can't collapse
+    // budgeting to zero or trigger upstream rejections.
+    const outputCap = Math.max(256, Math.floor(contextWindowTokens / 2));
+    const maxOutputTokens = Math.min(requestedOutput, outputCap);
     return {
       baseUrl: row.baseUrl!,
       apiKey,
       defaultModel: row.defaultModel,
+      maxOutputTokens,
+      contextWindowTokens,
     };
   }
 
@@ -155,6 +186,10 @@ export interface AiResolvedConfig {
   baseUrl: string;
   apiKey: string | null;
   defaultModel: string | null;
+  /** Resolved (defaults applied) — never null. */
+  maxOutputTokens: number;
+  /** Resolved (defaults applied) — never null. */
+  contextWindowTokens: number;
 }
 
 type AiSettingRow = {
@@ -162,6 +197,8 @@ type AiSettingRow = {
   baseUrl: string | null;
   apiKeyCiphertext: string | null;
   defaultModel: string | null;
+  maxOutputTokens: number | null;
+  contextWindowTokens: number | null;
   updatedAt: Date;
 };
 
@@ -171,6 +208,8 @@ function toDto(row: AiSettingRow): AiSettings {
     baseUrl: row.baseUrl,
     defaultModel: row.defaultModel,
     apiKeyConfigured: Boolean(row.apiKeyCiphertext),
+    maxOutputTokens: row.maxOutputTokens,
+    contextWindowTokens: row.contextWindowTokens,
     updatedAt: row.updatedAt.toISOString(),
   };
 }
@@ -181,5 +220,7 @@ function stripForAudit(row: AiSettingRow) {
     baseUrl: row.baseUrl,
     defaultModel: row.defaultModel,
     apiKeyConfigured: Boolean(row.apiKeyCiphertext),
+    maxOutputTokens: row.maxOutputTokens,
+    contextWindowTokens: row.contextWindowTokens,
   };
 }

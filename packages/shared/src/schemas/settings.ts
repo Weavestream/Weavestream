@@ -111,6 +111,18 @@ export const aiSettingsSchema = z.object({
   baseUrl: z.string().min(1).max(2048).nullable(),
   defaultModel: z.string().min(1).max(120).nullable(),
   apiKeyConfigured: z.boolean(),
+  /**
+   * Output-token ceiling for chat completions and the budget reserved
+   * for the model's reply (e.g. a full article rewrite). `null` falls
+   * back to a conservative server default.
+   */
+  maxOutputTokens: z.number().int().min(256).max(200_000).nullable(),
+  /**
+   * Total context window of the configured model, used to size the
+   * prompt budget so the reply fits. `null` falls back to a
+   * conservative server default.
+   */
+  contextWindowTokens: z.number().int().min(1_024).max(2_000_000).nullable(),
   updatedAt: z.string(),
 });
 
@@ -126,12 +138,37 @@ export const updateAiSettingsSchema = z
     apiKey: z.string().min(1).max(1024, 'API key is too long').optional(),
     clearApiKey: z.boolean().optional(),
     defaultModel: nullableTrimmedString(1, 120, 'Default model').optional(),
+    // Null explicitly resets to the server default; omitted leaves as-is.
+    maxOutputTokens: z.number().int().min(256).max(200_000).nullable().optional(),
+    contextWindowTokens: z
+      .number()
+      .int()
+      .min(1_024)
+      .max(2_000_000)
+      .nullable()
+      .optional(),
   })
   .refine((v) => Object.keys(v).length > 0, 'At least one field must be provided')
   .refine((v) => !(v.apiKey && v.clearApiKey), {
     message: 'Cannot set and clear the API key in the same request',
     path: ['apiKey'],
-  });
+  })
+  // When both limits are set explicitly in the same request, the output
+  // ceiling must leave room for a prompt. (Partial updates and
+  // null→default cases are additionally clamped server-side at resolve
+  // time so a stored pair can never collapse the budget.)
+  .refine(
+    (v) =>
+      !(
+        v.maxOutputTokens != null &&
+        v.contextWindowTokens != null &&
+        v.maxOutputTokens >= v.contextWindowTokens
+      ),
+    {
+      message: 'Max output tokens must be less than the context window.',
+      path: ['maxOutputTokens'],
+    },
+  );
 
 export type AiSettings = z.infer<typeof aiSettingsSchema>;
 export type UpdateAiSettingsInput = z.infer<typeof updateAiSettingsSchema>;

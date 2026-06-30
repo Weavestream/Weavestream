@@ -879,6 +879,12 @@ model AiSetting {
   baseUrl          String?  @map("base_url")
   apiKeyCiphertext String?  @map("api_key_ciphertext")
   defaultModel     String?  @map("default_model")
+  // Output-token ceiling for chat completions / reserved reply budget.
+  // Null → conservative server default.
+  maxOutputTokens     Int?  @map("max_output_tokens")
+  // Total model context window, used to size the prompt budget. Null →
+  // conservative server default.
+  contextWindowTokens Int?  @map("context_window_tokens")
   updatedAt        DateTime @updatedAt @map("updated_at")
   updatedBy        String?  @map("updated_by") @db.Uuid
 
@@ -1689,9 +1695,16 @@ model ChatMessage {
   content        String
   createdAt      DateTime @default(now()) @map("created_at")
   /// Proposed agentic actions attached to this assistant turn. Shape:
-  /// [{ id, name, arguments, status, result?, error? }]. Null on user
-  /// messages and on assistant messages that did not propose an action.
+  /// [{ id, name, arguments, status, result?, error?, errorCode? }]. Null
+  /// on user messages and on assistant messages that did not propose an
+  /// action.
   toolCalls      Json?    @map("tool_calls")
+  /// Snapshot of the request scope that produced this turn (companyId,
+  /// currentArticleId, attached article ids — METADATA ONLY, never
+  /// bodies). Bound to the turn so apply/follow-up don't re-sample
+  /// whatever page is open later. Descriptive only; never an
+  /// authorization source. Null on legacy rows and turns with no scope.
+  turnContext    Json?    @map("turn_context")
 
   conversation ChatConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
 

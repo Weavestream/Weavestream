@@ -481,11 +481,19 @@ function CreatedArticleCard({
 }
 
 function StatusRow({ toolCall }: { toolCall: ChatToolCallDto }) {
+  // A truncated/empty proposal is a "couldn't finish" warning, not a
+  // hard failure — the server already put a friendly explanation in
+  // `error`, so we show it without the alarming "Failed:" prefix.
+  const isSoftFailure =
+    toolCall.status === 'failed' &&
+    (toolCall.errorCode === 'truncated' || toolCall.errorCode === 'empty');
   const tone =
     toolCall.status === 'applied'
       ? 'ok'
       : toolCall.status === 'failed'
-        ? 'danger'
+        ? isSoftFailure
+          ? 'warn'
+          : 'danger'
         : 'muted';
   const label =
     toolCall.status === 'applied'
@@ -493,16 +501,20 @@ function StatusRow({ toolCall }: { toolCall: ChatToolCallDto }) {
       : toolCall.status === 'rejected'
         ? 'Rejected.'
         : toolCall.status === 'failed'
-          ? `Failed: ${toolCall.error ?? 'unknown error'}`
+          ? isSoftFailure
+            ? toolCall.error ?? 'The draft could not be completed.'
+            : `Failed: ${toolCall.error ?? 'unknown error'}`
           : 'Pending.';
   const color =
     tone === 'ok'
       ? 'var(--ok, #2ea043)'
       : tone === 'danger'
         ? 'var(--danger, #c0392b)'
-        : 'var(--muted)';
+        : tone === 'warn'
+          ? 'var(--warn, #b7791f)'
+          : 'var(--muted)';
   const IconCmp =
-    tone === 'ok' ? Icon.check : tone === 'danger' ? Icon.x : Icon.chat;
+    tone === 'ok' ? Icon.check : tone === 'muted' ? Icon.chat : Icon.x;
   return (
     <div
       style={{

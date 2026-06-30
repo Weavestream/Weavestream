@@ -8,6 +8,7 @@ import {
 import { z } from 'zod';
 import type {
   ChatToolCallDto,
+  ChatTurnContext,
   CreateArticleInput,
   UpdateArticleInput,
 } from '@weavestream/shared';
@@ -60,10 +61,17 @@ export class ChatToolCallService {
       auditMeta: AuditMeta;
     },
   ): Promise<{ toolCall: ChatToolCallDto; updatedToolCalls: ChatToolCallDto[] }> {
-    const { toolCall, updatedToolCalls, allToolCalls } = await this.loadPending(
-      actor,
-      params,
-    );
+    const { toolCall, updatedToolCalls, allToolCalls, turnContext } =
+      await this.loadPending(actor, params);
+
+    // Bind the apply to the scope that PRODUCED the proposal, not
+    // whatever page the client is on now. The persisted `turnContext`
+    // wins; the client-supplied `requestCompanyId` is a legacy fallback
+    // for rows saved before turn-binding. For `update_article` this is
+    // only a reject-only cross-check — the writable company is still
+    // derived from the article row. For `create_article` it is the
+    // scope, still gated by `article.write`.
+    const scopeCompanyId = turnContext?.companyId ?? params.requestCompanyId;
 
     let next: ChatToolCallDto;
     try {
@@ -71,7 +79,7 @@ export class ChatToolCallService {
         const result = await this.applyUpdate(
           actor,
           toolCall,
-          params.requestCompanyId,
+          scopeCompanyId,
           params.createOverrides,
           params.auditMeta,
         );
@@ -80,7 +88,7 @@ export class ChatToolCallService {
         const result = await this.applyCreate(
           actor,
           toolCall,
-          params.requestCompanyId,
+          scopeCompanyId,
           params.createOverrides,
           params.auditMeta,
         );
@@ -139,7 +147,7 @@ export class ChatToolCallService {
     overrides: CreateArticleOverrides | undefined,
     auditMeta: AuditMeta,
   ): Promise<string> {
-    const args = updateArgsSchema.parse(toolCall.arguments);
+    const args = updateArgsSchema.parse(stripNullArgs(toolCall.arguments));
 
     // Look the article up FIRST. We don't trust the LLM's company
     // scope — the article's own row is the source of truth, and the
@@ -224,7 +232,7 @@ export class ChatToolCallService {
         'Cannot create an article without a company context. Open the chat from a company page first.',
       );
     }
-    const args = createArgsSchema.parse(toolCall.arguments);
+    const args = createArgsSchema.parse(stripNullArgs(toolCall.arguments));
     await this.assertArticleWrite(actor, requestCompanyId);
 
     // Same dedupe as `applyUpdate`: if the LLM's body opens with the
@@ -316,6 +324,7 @@ export class ChatToolCallService {
     toolCall: ChatToolCallDto;
     allToolCalls: ChatToolCallDto[];
     updatedToolCalls: ChatToolCallDto[];
+    turnContext: ChatTurnContext | null;
   }> {
     const msg = await this.chat.getMessageForActor(
       actor,
@@ -333,7 +342,12 @@ export class ChatToolCallService {
         `Tool call is already ${toolCall.status}; only pending calls can be acted on.`,
       );
     }
-    return { toolCall, allToolCalls: calls, updatedToolCalls: calls };
+    return {
+      toolCall,
+      allToolCalls: calls,
+      updatedToolCalls: calls,
+      turnContext: msg.turnContext,
+    };
   }
 
   private async assertArticleWrite(
@@ -381,6 +395,24 @@ export type CreateArticleOverrides = {
   folderId: string | null;
   visibleToClients: boolean;
 };
+
+/**
+ * Drop `null`-valued keys from LLM tool arguments before apply-time
+ * validation. The strict tool schemas (`strict: true`) require every
+ * property to be present, so the model emits `null` for fields it isn't
+ * setting; the apply-time schemas use `.optional()` (which accepts
+ * `undefined`, not `null`), so an un-stripped `{ summary: null }` would
+ * throw a ZodError and fail the apply.
+ */
+function stripNullArgs(
+  args: Record<string, unknown>,
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(args)) {
+    if (value !== null) out[key] = value;
+  }
+  return out;
+}
 
 function replaceCall(
   calls: ChatToolCallDto[],

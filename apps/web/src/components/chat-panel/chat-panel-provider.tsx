@@ -13,6 +13,7 @@ import {
 import type {
   ChatRequestContext,
   ChatToolCallDto,
+  ChatTurnIntent,
 } from '@weavestream/shared';
 import {
   applyChatToolCall,
@@ -698,7 +699,11 @@ type Ctx = {
   addFreeformTab: () => void;
   closeTab: (id: string) => void;
   setActiveTab: (id: string) => void;
-  sendMessage: (tabId: string, text: string) => Promise<void>;
+  sendMessage: (
+    tabId: string,
+    text: string,
+    intent?: ChatTurnIntent,
+  ) => Promise<void>;
   openConversation: (id: string) => Promise<void>;
   deleteConversation: (id: string) => Promise<void>;
   activeTab: ChatTab | null;
@@ -951,7 +956,11 @@ export function ChatPanelProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
-  const sendMessage = useCallback(async (tabId: string, text: string) => {
+  const sendMessage = useCallback(async (
+    tabId: string,
+    text: string,
+    intent?: ChatTurnIntent,
+  ) => {
     const trimmed = text.trim();
     if (!trimmed) return;
 
@@ -1064,9 +1073,16 @@ export function ChatPanelProvider({ children }: { children: ReactNode }) {
             message,
           });
         },
+        onNotice: (message) => {
+          // Non-fatal (e.g. context trimmed to fit the model). The stream
+          // continues; surface for diagnostics without disrupting the
+          // reply. A visible inline banner can be layered on later.
+          if (typeof console !== 'undefined') console.debug(`[chat] ${message}`);
+        },
       },
       ctrl.signal,
       requestContext,
+      intent,
     );
     aborts.current.delete(tabId);
   }, []);

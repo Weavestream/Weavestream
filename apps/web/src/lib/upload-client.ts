@@ -54,7 +54,14 @@ export async function uploadFile(opts: {
       method: 'POST',
       body: JSON.stringify({
         filename: file.name,
-        mimeType: file.type || 'application/octet-stream',
+        // Use the same extension-aware inference as `preflightFile` so the
+        // declared type the server validates matches what the preflight
+        // approved. Browsers leave `File.type` empty for extensions they
+        // don't recognise (e.g. `.ps1`), which would otherwise reach the
+        // server as `application/octet-stream` and fail the confirm step's
+        // magic-bytes/text gate. `inferMime` returns the browser type
+        // unchanged whenever it's present, so known types are unaffected.
+        mimeType: inferMime(file),
         sizeBytes: file.size,
         attachedToType: opts.attachTo?.type,
         attachedToId: opts.attachTo?.id,
@@ -106,7 +113,9 @@ function putWithProgress(
   return new Promise<void>((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open('PUT', url);
-    xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
+    // Keep the relay PUT's Content-Type in lockstep with the inferred type
+    // declared at `init` above.
+    xhr.setRequestHeader('Content-Type', inferMime(file));
     xhr.withCredentials = isSameOriginUrl(url);
     if (opts.csrfToken && isSameOriginUrl(url)) {
       xhr.setRequestHeader('X-CSRF-Token', opts.csrfToken);

@@ -11,19 +11,40 @@ import { ChatRole as PrismaChatRole } from '@prisma/client';
 import type {
   ChatRequestContext,
   ChatToolCallDto,
+  ChatToolCallErrorCode,
   SendChatMessageInput,
 } from '@weavestream/shared';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { AiSettingsService } from '../ai/ai-settings.service.js';
+import type { AiResolvedConfig } from '../ai/ai-settings.service.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
 import { safeFetch } from '../common/egress/safe-fetch.js';
-import { ARTICLE_TOOLS, isArticleToolName } from './chat-tools.js';
+import { isArticleToolName } from './chat-tools.js';
+import { parseToolCalls } from './chat.service.js';
+import {
+  buildTurnContext,
+  estimateTokens,
+  planBudget,
+  resolveTurnTools,
+  synthesizeActionHistory,
+} from './chat-turn.js';
 
 const STREAM_TIMEOUT_MS = 120_000;
 const HISTORY_TURN_CAP = 40;
 const TITLE_MAX = 60;
 const TITLE_TIMEOUT_MS = 15_000;
 const DEFAULT_TITLE = 'New chat';
+// Low but non-zero — article edits want fidelity, not creativity, and a
+// deterministic-ish temperature reduces malformed tool JSON.
+const CHAT_TEMPERATURE = 0.2;
+// Rough allowance (tokens) for the system-prompt boilerplate that is
+// never trimmed, so the budget reserves room beyond the attached
+// context + history it measures directly.
+const SYSTEM_PREAMBLE_RESERVE_TOKENS = 512;
+// Shown when a tool call's arguments were cut off by the model's length
+// cap (finish_reason: 'length') — surfaced instead of a raw JSON error.
+const TRUNCATED_MESSAGE =
+  'The draft was cut off before it finished — try a shorter edit or a smaller selection.';
 
 /**
  * Streams an assistant reply to a chat conversation.
@@ -81,7 +102,7 @@ export class ChatStreamService {
         title: true,
         messages: {
           orderBy: { createdAt: 'asc' },
-          select: { role: true, content: true },
+          select: { role: true, content: true, toolCalls: true },
         },
       },
     });
@@ -100,7 +121,7 @@ export class ChatStreamService {
     // configured an endpoint yet (`enabled === false` or missing
     // `baseUrl`), surface the error before any DB write so we don't
     // leave a dangling user turn with no assistant reply.
-    let config: { baseUrl: string; apiKey: string | null; defaultModel: string | null };
+    let config: AiResolvedConfig;
     try {
       config = await this.aiSettings.getConfig();
     } catch (err) {
@@ -150,34 +171,75 @@ export class ChatStreamService {
       title: newTitle,
     });
 
-    // Assemble the message list for the upstream call. We cap the
-    // history at the most recent `HISTORY_TURN_CAP` turns to keep the
-    // request size bounded — long-running conversations will silently
-    // drop older messages from the context window rather than fail
-    // with a 400 from the LLM.
-    const systemPrompt = buildSystemPrompt(actor, input.context);
+    // Bind this turn's scope (companyId, current article, attached ids —
+    // metadata only) so apply/follow-up don't re-sample whatever page is
+    // open later. Persisted on the assistant row below.
+    const turnContext = buildTurnContext(input.context);
+
+    // Multi-turn action history: a compact, read-only note telling the
+    // model what it already proposed and whether it was applied/rejected
+    // so follow-ups don't blindly re-edit. Built from the persisted
+    // tool-call status, not replayed as raw tool messages.
+    const priorTurns = conversation.messages.map((m) => ({
+      role: m.role === PrismaChatRole.USER ? 'user' : 'assistant',
+      content: m.content,
+      toolCalls: parseToolCalls(m.toolCalls),
+    }));
+    const actionHistory = synthesizeActionHistory(priorTurns);
+
+    // Budget the prompt so the model's reply (potentially a full article
+    // rewrite) fits the context window. We cap history at the most
+    // recent `HISTORY_TURN_CAP` turns, then trim oldest history and
+    // least-relevant attached context — never the article the user is
+    // viewing — until the prompt + reserved output fit.
+    const cappedHistory = priorTurns
+      .slice(-HISTORY_TURN_CAP)
+      .map((m) => ({ role: m.role, content: m.content }));
+    const fixedTokens =
+      estimateTokens(input.content) +
+      estimateTokens(actionHistory ?? '') +
+      SYSTEM_PREAMBLE_RESERVE_TOKENS;
+    const budgeted = planBudget({
+      contextWindowTokens: config.contextWindowTokens,
+      maxOutputTokens: config.maxOutputTokens,
+      fixedTokens,
+      ...(input.context?.currentArticleId
+        ? { currentArticleId: input.context.currentArticleId }
+        : {}),
+      ...(input.context ? { context: input.context } : {}),
+      history: cappedHistory,
+    });
+    if (budgeted.trimmedHistory > 0 || budgeted.trimmedContextItems > 0) {
+      // Non-fatal: tell the panel some grounding didn't fit. Clients
+      // that don't handle `notice` simply ignore the frame.
+      writeFrame(res, 'notice', {
+        message: 'Some attached context was trimmed to fit the model’s limit.',
+      });
+    }
+
+    const systemPrompt = buildSystemPrompt(actor, budgeted.context);
     const upstreamMessages: Array<{ role: string; content: string }> = [];
     if (systemPrompt) {
       upstreamMessages.push({ role: 'system', content: systemPrompt });
     }
+    if (actionHistory) {
+      upstreamMessages.push({ role: 'system', content: actionHistory });
+    }
     upstreamMessages.push(
-      ...conversation.messages.slice(-HISTORY_TURN_CAP).map((m) => ({
-        role: m.role === PrismaChatRole.USER ? 'user' : 'assistant',
-        content: m.content,
-      })),
+      ...budgeted.history,
       { role: 'user', content: input.content },
     );
 
-    // Only attach the article tools when the caller actually has an
-    // article context. Two reasons:
-    //   1. Freeform chats ("what's the weather") have nothing to
-    //      update or create — sending `tools` just bloats the prompt.
-    //   2. Some self-hosted runtimes (LM Studio with gpt-oss /
-    //      Harmony-format models) crash their tool-call response
-    //      parser when a model emits reasoning channels it doesn't
-    //      recognise. Skipping tools entirely takes that code path
-    //      out of the request for the common case.
-    const includeTools = !!input.context?.companyId;
+    // Decide which tools to offer and the `tool_choice`. Default is
+    // `auto` + the strict tool schemas (the model self-selects). An
+    // explicit `intent` hint forces a single named tool; when the target
+    // article body couldn't be retained, `update_article` is withheld so
+    // the model can't be asked for a body it can no longer see.
+    const routed = resolveTurnTools({
+      hasCompany: !!input.context?.companyId,
+      targetArticleRetained: budgeted.targetArticleRetained,
+      ...(input.intent ? { intent: input.intent } : {}),
+    });
 
     const abort = new AbortController();
     const timeout = setTimeout(() => abort.abort(), STREAM_TIMEOUT_MS);
@@ -201,9 +263,14 @@ export class ChatStreamService {
         body: JSON.stringify({
           model: config.defaultModel,
           stream: true,
+          // Deterministic-ish + an explicit output ceiling. Without
+          // `max_tokens` the model can run to its default cap mid-JSON
+          // and the tool arguments arrive truncated.
+          temperature: CHAT_TEMPERATURE,
+          max_tokens: config.maxOutputTokens,
           messages: upstreamMessages,
-          ...(includeTools
-            ? { tools: ARTICLE_TOOLS, tool_choice: 'auto' }
+          ...(routed.tools.length > 0
+            ? { tools: routed.tools, tool_choice: routed.toolChoice }
             : {}),
         }),
         signal: abort.signal,
@@ -266,7 +333,7 @@ export class ChatStreamService {
     // fragment becomes a `pending` DTO; malformed JSON in arguments
     // marks the call as `failed` up-front so the UI can show a clear
     // error rather than a half-rendered card.
-    const toolCalls = toolCallAccumulator.finalize();
+    const toolCalls = toolCallAccumulator.finalize(finishReason);
 
     // Strip leading whitespace once before persisting. Many
     // OpenAI-compatible endpoints emit a `\n` or `\n\n` priming
@@ -302,6 +369,9 @@ export class ChatStreamService {
               toolCalls.length > 0
                 ? (toolCalls as unknown as Prisma.InputJsonValue)
                 : undefined,
+            turnContext: turnContext
+              ? (turnContext as unknown as Prisma.InputJsonValue)
+              : undefined,
           },
         }),
         this.prisma.chatConversation.update({
@@ -581,7 +651,7 @@ type OpenAiStreamChunk = {
  * We handle both by concatenating fragments and `JSON.parse`-ing at
  * `finalize` time.
  */
-class ToolCallAccumulator {
+export class ToolCallAccumulator {
   private readonly byIndex = new Map<
     number,
     { id: string | null; name: string | null; argsBuf: string }
@@ -601,7 +671,14 @@ class ToolCallAccumulator {
     }
   }
 
-  finalize(): ChatToolCallDto[] {
+  /**
+   * @param finishReason the stream's `finish_reason`. When `'length'`,
+   *   an unparsable / empty arguments blob is reported as `truncated`
+   *   (the completion was cut off mid-JSON) rather than a raw escape
+   *   error, so the card can show a useful message.
+   */
+  finalize(finishReason?: string | null): ChatToolCallDto[] {
+    const truncated = finishReason === 'length';
     const out: ChatToolCallDto[] = [];
     for (const [idx, slot] of [...this.byIndex.entries()].sort(
       ([a], [b]) => a - b,
@@ -610,26 +687,48 @@ class ToolCallAccumulator {
       if (!name || !isArticleToolName(name)) continue;
       let args: Record<string, unknown> = {};
       let parseError: string | null = null;
+      let errorCode: ChatToolCallErrorCode | null = null;
       const buf = slot.argsBuf.trim();
-      if (buf) {
+      if (!buf) {
+        // A named tool call with no arguments at all. If the stream was
+        // cut short, that's truncation; otherwise the model proposed an
+        // action without any details.
+        if (truncated) {
+          parseError = TRUNCATED_MESSAGE;
+          errorCode = 'truncated';
+        } else {
+          parseError = 'The model proposed an action but sent no details.';
+          errorCode = 'empty';
+        }
+      } else {
         try {
           const parsed: unknown = JSON.parse(buf);
           if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
             args = parsed as Record<string, unknown>;
           } else {
-            parseError = 'arguments JSON was not an object';
+            parseError = 'The model’s tool arguments were not a JSON object.';
+            errorCode = 'malformed';
           }
         } catch (err) {
-          parseError = err instanceof Error ? err.message : 'invalid arguments JSON';
+          if (truncated) {
+            parseError = TRUNCATED_MESSAGE;
+            errorCode = 'truncated';
+          } else {
+            parseError = `The proposed change could not be parsed (${
+              err instanceof Error ? err.message : 'invalid JSON'
+            }).`;
+            errorCode = 'malformed';
+          }
         }
       }
       out.push({
-        id: slot.id ?? `call_${idx}_${Date.now()}`,
+        id: slot.id ?? `call_${idx}_${cryptoRandomUuid()}`,
         name,
         arguments: args,
         status: parseError ? 'failed' : 'pending',
         result: null,
         error: parseError ?? null,
+        errorCode,
       });
     }
     return out;

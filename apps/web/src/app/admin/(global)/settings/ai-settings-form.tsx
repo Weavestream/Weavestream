@@ -13,6 +13,14 @@ export function AiSettingsForm({ initial }: { initial: AiSettings }) {
   const [apiKey, setApiKey] = useState('');
   const [clearApiKey, setClearApiKey] = useState(false);
   const [defaultModel, setDefaultModel] = useState(initial.defaultModel ?? '');
+  const [maxOutputTokens, setMaxOutputTokens] = useState(
+    initial.maxOutputTokens != null ? String(initial.maxOutputTokens) : '',
+  );
+  const [contextWindowTokens, setContextWindowTokens] = useState(
+    initial.contextWindowTokens != null
+      ? String(initial.contextWindowTokens)
+      : '',
+  );
   const [models, setModels] = useState<string[] | null>(null);
   const [pending, setPending] = useState(false);
   const [testing, setTesting] = useState(false);
@@ -29,6 +37,8 @@ export function AiSettingsForm({ initial }: { initial: AiSettings }) {
     enabled !== baseline.current.enabled ||
     clean(baseUrl) !== baseline.current.baseUrl ||
     clean(defaultModel) !== baseline.current.defaultModel ||
+    numOrNull(maxOutputTokens) !== baseline.current.maxOutputTokens ||
+    numOrNull(contextWindowTokens) !== baseline.current.contextWindowTokens ||
     apiKey.length > 0 ||
     clearApiKey;
 
@@ -39,6 +49,8 @@ export function AiSettingsForm({ initial }: { initial: AiSettings }) {
       enabled,
       baseUrl: clean(baseUrl),
       defaultModel: clean(defaultModel),
+      maxOutputTokens: numOrNull(maxOutputTokens),
+      contextWindowTokens: numOrNull(contextWindowTokens),
     };
     if (apiKey) payload.apiKey = apiKey;
     if (clearApiKey) payload.clearApiKey = true;
@@ -92,6 +104,10 @@ export function AiSettingsForm({ initial }: { initial: AiSettings }) {
     setApiKey('');
     setClearApiKey(false);
     setDefaultModel(b.defaultModel ?? '');
+    setMaxOutputTokens(b.maxOutputTokens != null ? String(b.maxOutputTokens) : '');
+    setContextWindowTokens(
+      b.contextWindowTokens != null ? String(b.contextWindowTokens) : '',
+    );
     setModels(null);
     setError(null);
   }
@@ -208,6 +224,50 @@ export function AiSettingsForm({ initial }: { initial: AiSettings }) {
         )}
       </Field>
 
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+          gap: 16,
+        }}
+      >
+        <Field
+          label="Max output tokens"
+          htmlFor="ai-max-output-tokens"
+          help="Ceiling on the model's reply / reserved room for a full article rewrite. Blank uses a safe default."
+        >
+          <Input
+            id="ai-max-output-tokens"
+            type="number"
+            inputMode="numeric"
+            min={256}
+            max={200000}
+            value={maxOutputTokens}
+            onChange={(e) => setMaxOutputTokens(e.target.value)}
+            placeholder="8192 (default)"
+            autoComplete="off"
+          />
+        </Field>
+
+        <Field
+          label="Context window tokens"
+          htmlFor="ai-context-window-tokens"
+          help="Total context window of your model; sizes the prompt budget so the reply fits. Blank uses a safe default."
+        >
+          <Input
+            id="ai-context-window-tokens"
+            type="number"
+            inputMode="numeric"
+            min={1024}
+            max={2000000}
+            value={contextWindowTokens}
+            onChange={(e) => setContextWindowTokens(e.target.value)}
+            placeholder="32768 (default)"
+            autoComplete="off"
+          />
+        </Field>
+      </div>
+
       <section
         style={{
           display: 'grid',
@@ -268,6 +328,15 @@ export function AiSettingsForm({ initial }: { initial: AiSettings }) {
 function clean(value: string): string | null {
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : null;
+}
+
+// Empty input → null (reset to server default); otherwise the parsed
+// integer. NaN also collapses to null so a stray "abc" doesn't post.
+function numOrNull(value: string): number | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const n = Number(trimmed);
+  return Number.isFinite(n) ? Math.trunc(n) : null;
 }
 
 function problemText(problem: unknown, fallback: string): string {

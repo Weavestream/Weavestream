@@ -3,6 +3,7 @@
 import type {
   ChatRequestContext,
   ChatToolCallDto,
+  ChatTurnIntent,
 } from '@weavestream/shared';
 import { ensureCsrf } from './csrf';
 
@@ -36,6 +37,9 @@ export type ChatStreamHandlers = {
   onToolCalls?: (messageId: string, toolCalls: ChatToolCallDto[]) => void;
   onDone?: (finishReason: string | null) => void;
   onError?: (message: string) => void;
+  /** Non-fatal server notice (e.g. attached context was trimmed to fit
+   *  the model's limit). The stream continues normally. */
+  onNotice?: (message: string) => void;
 };
 
 export type ChatStreamMeta = {
@@ -51,6 +55,7 @@ export async function streamChatMessage(
   handlers: ChatStreamHandlers,
   signal?: AbortSignal,
   context?: ChatRequestContext,
+  intent?: ChatTurnIntent,
 ): Promise<void> {
   let token: string;
   try {
@@ -70,7 +75,11 @@ export async function streamChatMessage(
         Accept: 'text/event-stream',
         'X-CSRF-Token': token,
       },
-      body: JSON.stringify({ content, ...(context ? { context } : {}) }),
+      body: JSON.stringify({
+        content,
+        ...(context ? { context } : {}),
+        ...(intent ? { intent } : {}),
+      }),
       signal,
     });
   } catch (err) {
@@ -185,6 +194,13 @@ function dispatchEvent(block: string, handlers: ChatStreamHandlers): void {
       const message =
         (parsed as { message?: string })?.message ?? 'Unknown error';
       handlers.onError?.(message);
+      return;
+    }
+    case 'notice': {
+      const message = (parsed as { message?: string })?.message;
+      if (typeof message === 'string' && message.length > 0) {
+        handlers.onNotice?.(message);
+      }
       return;
     }
     default:
