@@ -8,18 +8,46 @@ import {
 } from './chat-panel-provider';
 
 /**
- * Above-the-composer strip showing the current "page" context the LLM
- * will see on the next turn. Locked — can only be cleared by navigating
- * away from the page that registered it. Explicit @-mentions are NOT
- * shown here; they live inline in the message text as `@[Title]`
- * reference tokens (rendered with the accent color in user bubbles).
- *
- * Hidden entirely when there's no page context.
+ * Current "page" context the LLM will see on the next turn. Locked
+ * context can only be cleared by navigating away from the page that
+ * registered it. Explicit @-mentions are NOT shown here; they live
+ * inline in the message text as `@[Title]` reference tokens.
  */
-// `tab` is unused for now but kept in the signature so the strip can be
-// extended later (per-tab pills, locked overrides, etc.) without
-// changing every call site.
+// Kept for any older strip-style call sites; the composer now uses the
+// pill directly so context can sit beside the mode control.
 export function ChatContextStrip(_props: { tab: ChatTab }) {
+  const { state } = useChatPanel();
+  if (!state.pageContext) return null;
+  return (
+    <div
+      style={{
+        display: 'flex',
+        flexWrap: 'wrap',
+        gap: 6,
+        alignItems: 'center',
+        padding: '8px 10px',
+        borderTop: '1px solid var(--line)',
+        background: 'var(--panel-2)',
+      }}
+    >
+      <span
+        style={{
+          fontFamily: 'var(--font-mono)',
+          fontSize: 10,
+          color: 'var(--dim)',
+          textTransform: 'uppercase',
+          letterSpacing: 0.4,
+          marginRight: 2,
+        }}
+      >
+        Context
+      </span>
+      <ChatContextPill />
+    </div>
+  );
+}
+
+export function ChatContextPill() {
   const { state } = useChatPanel();
   const pageContext = state.pageContext;
   if (!pageContext) return null;
@@ -57,33 +85,7 @@ export function ChatContextStrip(_props: { tab: ChatTab }) {
       : isTicket
         ? `Auto-attached because you're viewing this ticket (${pageContext.provider})`
         : "Auto-attached because you're viewing this page";
-  return (
-    <div
-      style={{
-        display: 'flex',
-        flexWrap: 'wrap',
-        gap: 6,
-        alignItems: 'center',
-        padding: '8px 10px',
-        borderTop: '1px solid var(--line)',
-        background: 'var(--panel-2)',
-      }}
-    >
-      <span
-        style={{
-          fontFamily: 'var(--font-mono)',
-          fontSize: 10,
-          color: 'var(--dim)',
-          textTransform: 'uppercase',
-          letterSpacing: 0.4,
-          marginRight: 2,
-        }}
-      >
-        Context
-      </span>
-      <Pill icon={icon} label={label} subtitle={subtitle} locked title={tooltip} />
-    </div>
-  );
+  return <Pill icon={icon} label={label} subtitle={subtitle} locked title={tooltip} />;
 }
 
 function Pill({

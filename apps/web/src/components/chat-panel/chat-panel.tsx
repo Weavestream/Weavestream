@@ -22,7 +22,7 @@ import {
 } from './chat-panel-provider';
 import { ResizeHandle } from './resize-handle';
 import { ChatHistoryPopover } from './chat-history-popover';
-import { ChatContextStrip } from './chat-context-strip';
+import { ChatContextPill } from './chat-context-strip';
 import { MentionPicker, type MentionCandidate } from './mention-picker';
 import { ToolCallCard } from './tool-call-card';
 import { SaveAsArticleDialog } from './save-as-article-dialog';
@@ -320,7 +320,6 @@ function ChatArea({ tab }: { tab: ChatTab }) {
       ) : (
         <MessageList tab={tab} />
       )}
-      <ChatContextStrip tab={tab} />
       {/* keyed on tab.id so the draft + autosize reset when switching tabs */}
       <Composer
         key={tab.id}
@@ -872,10 +871,10 @@ function parseReferenceTitles(text: string): Set<string> {
 }
 
 const LINE_HEIGHT = 18;
-const COMPOSER_LINES = 4;
-const COMPOSER_PADDING_Y = 16; // top + bottom padding inside textarea
+const COMPOSER_LINES = 6;
+const COMPOSER_PADDING_Y = 24; // top + bottom padding inside textarea
 const MAX_TEXTAREA_HEIGHT = LINE_HEIGHT * COMPOSER_LINES + COMPOSER_PADDING_Y;
-const MIN_TEXTAREA_HEIGHT = LINE_HEIGHT + COMPOSER_PADDING_Y;
+const MIN_TEXTAREA_HEIGHT = 88;
 
 // The composer renders the textarea with transparent text and an
 // absolutely-positioned mirror div underneath, so `@[Title]` reference
@@ -885,6 +884,28 @@ const MIN_TEXTAREA_HEIGHT = LINE_HEIGHT + COMPOSER_PADDING_Y;
 const COMPOSER_STYLES = `
 .chat-composer-textarea::placeholder { color: var(--dim); opacity: 1; }
 .chat-composer-textarea::-webkit-input-placeholder { color: var(--dim); }
+.chat-mode-button {
+  outline: none;
+}
+.chat-mode-button:focus,
+.chat-mode-button:focus-visible {
+  outline: none;
+}
+.chat-mode-button:hover:not(:disabled),
+.chat-mode-button[aria-expanded="true"] {
+  background: var(--panel-2) !important;
+  color: var(--text) !important;
+}
+.chat-mode-button[data-mode-active="true"],
+.chat-mode-button[data-mode-active="true"]:hover:not(:disabled),
+.chat-mode-button[data-mode-active="true"][aria-expanded="true"] {
+  color: var(--accent) !important;
+}
+.chat-mode-option:hover,
+.chat-mode-option:focus-visible {
+  background: var(--panel-2) !important;
+  outline: none;
+}
 `;
 
 function renderComposerHighlight(text: string): ReactNode {
@@ -920,6 +941,13 @@ function Composer({ tab, disabled }: { tab: ChatTab; disabled: boolean }) {
   // silently force a tool on a later question. Advisory only — the server
   // re-checks all permissions at apply regardless.
   const [intent, setIntent] = useState<ChatTurnIntent | ''>('');
+  const canEditCurrentContext =
+    state.pageContext?.kind === 'article' && state.pageContext.articleId !== null;
+
+  useEffect(() => {
+    if (intent === 'edit' && !canEditCurrentContext) setIntent('');
+  }, [canEditCurrentContext, intent]);
+
   // Auto-attached page-id (article or asset) — excluded from the
   // picker so the user can't mention the same row twice.
   const pageEntityId =
@@ -1054,144 +1082,147 @@ function Composer({ tab, disabled }: { tab: ChatTab; disabled: boolean }) {
   return (
     <div
       style={{
-        borderTop: '1px solid var(--line)',
-        padding: 10,
-        display: 'flex',
-        flexDirection: 'column',
-        gap: 6,
-        background: 'var(--panel)',
+        padding: '18px 24px 24px',
         flexShrink: 0,
       }}
     >
-      {companyId && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-          <span style={{ fontSize: 11, color: 'var(--dim)' }}>Mode</span>
-          <select
-            aria-label="Assistant mode for the next message"
-            value={intent}
-            disabled={disabled}
-            onChange={(e) => setIntent(e.target.value as ChatTurnIntent | '')}
-            style={{
-              fontSize: 11,
-              padding: '2px 6px',
-              borderRadius: 6,
-              border: '1px solid var(--line)',
-              background: 'var(--surface)',
-              color: 'var(--text)',
-              cursor: disabled ? 'not-allowed' : 'pointer',
-            }}
-          >
-            <option value="">Auto</option>
-            <option value="question">Question (no edits)</option>
-            <option value="edit">Edit article</option>
-            <option value="create">Draft new article</option>
-          </select>
-        </div>
-      )}
-      <div style={{ display: 'flex', alignItems: 'flex-end', gap: 8 }}>
       <div
         style={{
-          position: 'relative',
-          flex: 1,
           border: '1px solid var(--line)',
-          borderRadius: 6,
+          borderRadius: 14,
           background: 'var(--surface)',
           overflow: 'hidden',
           opacity: disabled ? 0.6 : 1,
+          boxShadow: '0 10px 24px color-mix(in oklch, var(--text) 6%, transparent)',
         }}
       >
-        <style>{COMPOSER_STYLES}</style>
         <div
-          ref={overlayRef}
-          aria-hidden
           style={{
-            position: 'absolute',
-            inset: 0,
-            padding: '8px 10px',
-            boxSizing: 'border-box',
-            color: 'var(--text)',
-            fontSize: 13,
-            lineHeight: `${LINE_HEIGHT}px`,
-            fontFamily: 'inherit',
-            whiteSpace: 'pre-wrap',
-            wordBreak: 'break-word',
-            overflow: 'hidden',
-            pointerEvents: 'none',
+            position: 'relative',
+            minHeight: MIN_TEXTAREA_HEIGHT,
           }}
         >
-          {renderComposerHighlight(value)}
-        </div>
-        <textarea
-          ref={taRef}
-          rows={1}
-          value={value}
-          onChange={onChange}
-          onKeyDown={onKeyDown}
-          onKeyUp={onKeyUp}
-          onScroll={(e) => {
-            if (overlayRef.current) {
-              overlayRef.current.scrollTop = e.currentTarget.scrollTop;
+          <style>{COMPOSER_STYLES}</style>
+          <div
+            ref={overlayRef}
+            aria-hidden
+            style={{
+              position: 'absolute',
+              inset: 0,
+              padding: '14px 16px 8px',
+              boxSizing: 'border-box',
+              color: 'var(--text)',
+              fontSize: 13,
+              lineHeight: `${LINE_HEIGHT}px`,
+              fontFamily: 'inherit',
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-word',
+              overflow: 'hidden',
+              pointerEvents: 'none',
+            }}
+          >
+            {renderComposerHighlight(value)}
+          </div>
+          <textarea
+            ref={taRef}
+            rows={1}
+            value={value}
+            onChange={onChange}
+            onKeyDown={onKeyDown}
+            onKeyUp={onKeyUp}
+            onScroll={(e) => {
+              if (overlayRef.current) {
+                overlayRef.current.scrollTop = e.currentTarget.scrollTop;
+              }
+            }}
+            onClick={(e) =>
+              detectMentionTrigger(
+                value,
+                (e.currentTarget as HTMLTextAreaElement).selectionStart ?? value.length,
+              )
             }
-          }}
-          onClick={(e) =>
-            detectMentionTrigger(
-              value,
-              (e.currentTarget as HTMLTextAreaElement).selectionStart ?? value.length,
-            )
-          }
-          placeholder={
-            disabled
-              ? 'Waiting for reply…'
-              : companyId
-                ? 'Message…  (type @ to attach an article or asset)'
-                : 'Message…'
-          }
-          disabled={disabled}
-          className="chat-composer-textarea"
+            placeholder={
+              disabled
+                ? 'Waiting for reply…'
+                : companyId
+                  ? 'Message…  (type @ to attach an article or asset)'
+                  : 'Message…'
+            }
+            disabled={disabled}
+            className="chat-composer-textarea"
+            style={{
+              display: 'block',
+              position: 'relative',
+              width: '100%',
+              resize: 'none',
+              padding: '14px 16px 8px',
+              boxSizing: 'border-box',
+              border: 'none',
+              background: 'transparent',
+              color: 'transparent',
+              caretColor: 'var(--text)',
+              fontSize: 13,
+              lineHeight: `${LINE_HEIGHT}px`,
+              minHeight: MIN_TEXTAREA_HEIGHT,
+              maxHeight: MAX_TEXTAREA_HEIGHT,
+              fontFamily: 'inherit',
+              outline: 'none',
+            }}
+          />
+        </div>
+        <div
           style={{
-            display: 'block',
-            position: 'relative',
-            width: '100%',
-            resize: 'none',
-            padding: '8px 10px',
-            boxSizing: 'border-box',
-            border: 'none',
-            background: 'transparent',
-            color: 'transparent',
-            caretColor: 'var(--text)',
-            fontSize: 13,
-            lineHeight: `${LINE_HEIGHT}px`,
-            minHeight: MIN_TEXTAREA_HEIGHT,
-            maxHeight: MAX_TEXTAREA_HEIGHT,
-            fontFamily: 'inherit',
-            outline: 'none',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 8,
+            padding: '6px 8px 8px',
           }}
-        />
-      </div>
-      <button
-        type="button"
-        onClick={send}
-        disabled={!canSend}
-        aria-label="Send message"
-        title="Send"
-        style={{
-          height: 32,
-          width: 32,
-          display: 'grid',
-          placeItems: 'center',
-          border: '1px solid var(--line)',
-          borderRadius: 6,
-          background: canSend ? 'var(--accent)' : 'var(--surface)',
-          color: canSend ? 'var(--accent-ink)' : 'var(--dim)',
-          cursor: canSend ? 'pointer' : 'not-allowed',
-          flexShrink: 0,
-        }}
-      >
-        <Icon.chevron
-          size={14}
-          style={{ transform: 'rotate(-90deg)' }}
-        />
-      </button>
+        >
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6,
+              flexWrap: 'wrap',
+              flex: '1 1 auto',
+              minWidth: 0,
+            }}
+          >
+            <ChatContextPill />
+            {companyId && (
+              <ModePicker
+                value={intent}
+                onChange={setIntent}
+                disabled={disabled}
+              />
+            )}
+          </div>
+          <button
+            type="button"
+            onClick={send}
+            disabled={!canSend}
+            aria-label="Send message"
+            title="Send"
+            style={{
+              height: 34,
+              width: 34,
+              display: 'grid',
+              placeItems: 'center',
+              border: '1px solid var(--line)',
+              borderRadius: 17,
+              background: canSend ? 'var(--accent)' : 'var(--panel)',
+              color: canSend ? 'var(--accent-ink)' : 'var(--dim)',
+              cursor: canSend ? 'pointer' : 'not-allowed',
+              flexShrink: 0,
+            }}
+          >
+            <Icon.chevron
+              size={15}
+              style={{ transform: 'rotate(-90deg)' }}
+            />
+          </button>
+        </div>
       </div>
       {mentionTokenStart !== null && companyId && (
         <MentionPicker
@@ -1204,6 +1235,264 @@ function Composer({ tab, disabled }: { tab: ChatTab; disabled: boolean }) {
         />
       )}
     </div>
+  );
+}
+
+type ModeOption = {
+  value: ChatTurnIntent | '';
+  label: string;
+  description: string;
+  icon: IconComponent;
+};
+
+const BASE_MODE_OPTIONS: ModeOption[] = [
+  {
+    value: '',
+    label: 'Auto',
+    description: 'Let the assistant choose how to handle the current context',
+    icon: Icon.sparkles,
+  },
+  {
+    value: 'question',
+    label: 'Question',
+    description: 'Answer using the current context',
+    icon: Icon.chat,
+  },
+  {
+    value: 'create',
+    label: 'Draft article',
+    description: 'Prefer creating a new article draft',
+    icon: Icon.doc,
+  },
+];
+
+const EDIT_ARTICLE_MODE_OPTION: ModeOption = {
+  value: 'edit',
+  label: 'Edit current article',
+  description: 'Prefer proposing changes to the article you are viewing',
+  icon: Icon.edit,
+};
+
+function contextLabelForMode(kind: string | undefined): string {
+  if (kind === 'article') return 'current article';
+  if (kind === 'asset') return 'current asset';
+  if (kind === 'domain') return 'current domain';
+  if (kind === 'ticket') return 'current ticket';
+  return 'current context';
+}
+
+function modeOptionsForContext({
+  contextLabel,
+  canEditCurrentContext,
+}: {
+  contextLabel: string;
+  canEditCurrentContext: boolean;
+}): ModeOption[] {
+  const options: ModeOption[] = [
+    {
+      ...BASE_MODE_OPTIONS[0]!,
+      description: `Let the assistant choose how to handle the ${contextLabel}`,
+    },
+    {
+      ...BASE_MODE_OPTIONS[1]!,
+      description: `Answer using the ${contextLabel}`,
+    },
+  ];
+  if (canEditCurrentContext) options.push(EDIT_ARTICLE_MODE_OPTION);
+  options.push({
+    ...BASE_MODE_OPTIONS[2]!,
+    description: `Create a new article draft from the ${contextLabel}`,
+  });
+  return options;
+}
+
+function ModePicker({
+  value,
+  onChange,
+  disabled,
+}: {
+  value: ChatTurnIntent | '';
+  onChange: (value: ChatTurnIntent | '') => void;
+  disabled: boolean;
+}) {
+  const { state } = useChatPanel();
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const popRef = useRef<HTMLDivElement>(null);
+  const [open, setOpen] = useState(false);
+  const [pos, setPos] = useState<{ left: number; top: number; width: number } | null>(
+    null,
+  );
+  const canEditCurrentContext =
+    state.pageContext?.kind === 'article' && state.pageContext.articleId !== null;
+  const modeOptions = modeOptionsForContext({
+    contextLabel: contextLabelForMode(state.pageContext?.kind),
+    canEditCurrentContext,
+  });
+  const selected = modeOptions.find((o) => o.value === value) ?? modeOptions[0]!;
+  const SelectedIcon = selected.icon;
+  const modeActive = selected.value !== '';
+
+  useLayoutEffect(() => {
+    if (!open) {
+      setPos(null);
+      return;
+    }
+    const button = buttonRef.current;
+    if (!button) return;
+    const place = () => {
+      const r = button.getBoundingClientRect();
+      const width = Math.min(340, window.innerWidth - 16);
+      const left = Math.min(Math.max(8, r.left), window.innerWidth - width - 8);
+      setPos({ left, top: r.top - 8, width });
+    };
+    place();
+    window.addEventListener('resize', place);
+    window.addEventListener('scroll', place, true);
+    return () => {
+      window.removeEventListener('resize', place);
+      window.removeEventListener('scroll', place, true);
+    };
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    function onMouseDown(e: MouseEvent) {
+      const target = e.target as Node;
+      if (popRef.current?.contains(target)) return;
+      if (buttonRef.current?.contains(target)) return;
+      setOpen(false);
+    }
+    function onKeyDown(e: globalThis.KeyboardEvent) {
+      if (e.key === 'Escape') setOpen(false);
+    }
+    document.addEventListener('mousedown', onMouseDown);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', onMouseDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [open]);
+
+  return (
+    <>
+      <button
+        ref={buttonRef}
+        type="button"
+        aria-label="Assistant mode for the next message"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        title="Assistant mode"
+        disabled={disabled}
+        onClick={() => setOpen((v) => !v)}
+        className="chat-mode-button"
+        data-mode-active={modeActive ? 'true' : 'false'}
+        style={{
+          height: 30,
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 6,
+          padding: '0 8px',
+          border: 'none',
+          borderRadius: 8,
+          background: open ? 'var(--panel-2)' : 'transparent',
+          color: disabled
+            ? 'var(--dim)'
+            : modeActive
+              ? 'var(--accent)'
+              : 'var(--muted)',
+          fontSize: 12.5,
+          cursor: disabled ? 'not-allowed' : 'pointer',
+          outline: 'none',
+        }}
+      >
+        <SelectedIcon size={13} />
+        <span>{selected.label}</span>
+        <Icon.chevronD size={12} style={{ color: 'var(--dim)' }} />
+      </button>
+      {open && pos ? (
+        <div
+          ref={popRef}
+          role="menu"
+          aria-label="Assistant mode"
+          style={{
+            position: 'fixed',
+            left: pos.left,
+            top: pos.top,
+            width: pos.width,
+            transform: 'translateY(-100%)',
+            padding: 8,
+            border: '1px solid var(--line)',
+            borderRadius: 14,
+            background: 'var(--panel)',
+            boxShadow: '0 18px 42px rgba(0,0,0,0.22)',
+            zIndex: 1000,
+          }}
+        >
+          {modeOptions.map((option) => {
+            const isSelected = option.value === value;
+            const OptionIcon = option.icon;
+            return (
+              <button
+                key={option.label}
+                type="button"
+                role="menuitemradio"
+                aria-checked={isSelected}
+                className="chat-mode-option"
+                onClick={() => {
+                  onChange(option.value);
+                  setOpen(false);
+                  buttonRef.current?.focus();
+                }}
+                style={{
+                  width: '100%',
+                  display: 'grid',
+                  gridTemplateColumns: '22px 1fr 18px',
+                  alignItems: 'center',
+                  gap: 10,
+                  padding: '10px 8px',
+                  border: 'none',
+                  borderRadius: 10,
+                  background: isSelected ? 'var(--panel-2)' : 'transparent',
+                  color: 'var(--text)',
+                  cursor: 'pointer',
+                  textAlign: 'left',
+                }}
+              >
+                <OptionIcon size={16} style={{ color: 'var(--muted)' }} />
+                <span style={{ minWidth: 0 }}>
+                  <span
+                    style={{
+                      display: 'block',
+                      fontSize: 13,
+                      fontWeight: 500,
+                      lineHeight: 1.25,
+                    }}
+                  >
+                    {option.label}
+                  </span>
+                  <span
+                    style={{
+                      display: 'block',
+                      marginTop: 3,
+                      fontSize: 12,
+                      lineHeight: 1.3,
+                      color: 'var(--muted)',
+                    }}
+                  >
+                    {option.description}
+                  </span>
+                </span>
+                {isSelected ? (
+                  <Icon.check size={15} style={{ color: 'var(--accent)' }} />
+                ) : (
+                  <span />
+                )}
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
+    </>
   );
 }
 
