@@ -182,6 +182,26 @@ describe('safeFetch — egress guard', () => {
       expect(block.url).not.toContain('user:pass');
     });
 
+    it('strips userinfo and the query string from the blocked URL', async () => {
+      // The blocked URL lands in the durable, append-only audit log, so it
+      // must never carry credentials — neither `user:pass@` userinfo nor
+      // query-string secrets (API keys, signed-URL tokens, webhook creds).
+      const blocks: EgressBlockedInfo[] = [];
+      configureEgressGuard({
+        allowPrivateNetworks: false,
+        allowedPrivateCidrs: '',
+        onBlocked: (info) => blocks.push(info),
+      });
+      await expect(
+        safeFetch('http://user:pass@127.0.0.1/probe?token=secret&key=abc', {
+          timeoutMs: 1000,
+          fetchImpl: okFetch,
+        }),
+      ).rejects.toBeInstanceOf(EgressBlockedError);
+      expect(blocks).toHaveLength(1);
+      expect(blocks[0]!.url).toBe('http://127.0.0.1/probe');
+    });
+
     it('telemetry that throws does not break the block', async () => {
       configureEgressGuard({
         allowPrivateNetworks: false,

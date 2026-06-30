@@ -40,6 +40,7 @@ import {
   parseCidrList,
   type Cidr,
 } from './private-cidrs.js';
+import { redactUrl } from '../redact-url.js';
 
 export class EgressBlockedError extends Error {
   readonly url: string;
@@ -176,7 +177,14 @@ async function safeFetchInternal(
   try {
     parsed = new URL(url);
   } catch {
-    throw block(url, '', [], 'invalid_url', `not a valid URL: ${url}`, null);
+    throw block(
+      url,
+      '',
+      [],
+      'invalid_url',
+      `not a valid URL: ${redactUrl(url)}`,
+      null,
+    );
   }
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
     throw block(
@@ -446,7 +454,7 @@ function block(
   matchedCidr: string | null,
 ): EgressBlockedError {
   const info: EgressBlockedInfo = {
-    url: redactCredentials(url),
+    url: redactUrl(url),
     hostname,
     resolvedIps,
     reason,
@@ -472,24 +480,4 @@ function isIpLiteral(hostname: string): boolean {
 async function defaultResolve(hostname: string): Promise<readonly string[]> {
   const all = await dnsLookup(hostname, { all: true });
   return all.map((entry) => entry.address);
-}
-
-/**
- * Strip `user:pass@` from URLs before they land in the audit log so we
- * don't store integration credentials in plaintext. Query strings are
- * left intact — operators routinely paste tokens there but the audit
- * row only fires on the `block` path so the URL exists transiently.
- */
-function redactCredentials(url: string): string {
-  try {
-    const u = new URL(url);
-    if (u.username || u.password) {
-      u.username = '';
-      u.password = '';
-      return u.toString();
-    }
-  } catch {
-    // fall through
-  }
-  return url;
 }
