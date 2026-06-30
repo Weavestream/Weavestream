@@ -166,6 +166,11 @@ export function ArticleForm({
         setError(null);
       }
       setDirty(false);
+      // The AI apply endpoint saves explicitly (never `draft: true`),
+      // which promotes/clears any in-progress autosave draft on the
+      // server. Mirror that here so the editor's "draft" tag doesn't
+      // linger after an apply.
+      setHasServerDraft(false);
       setLastSavedAt(new Date());
     },
     [],

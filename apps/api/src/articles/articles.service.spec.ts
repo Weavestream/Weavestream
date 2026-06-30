@@ -1248,6 +1248,38 @@ describe('ArticlesService', () => {
       expect(versions).toHaveLength(2);
     });
 
+    it('explicit Save promotes an existing draft even when the body is unchanged (no-op)', async () => {
+      // Autosave writes the live article row AND the draft row to the
+      // same body, so a later explicit Save (manual, or the AI
+      // chat-apply path) reports no changed fields. It must still
+      // promote the draft — otherwise the article stays stuck on
+      // "draft in progress" forever.
+      const draft = v1Row({
+        id: 'av-draft',
+        version: 2,
+        isDraft: true,
+        changeReason: 'autosave draft',
+        changedFields: ['title'],
+      });
+      const { svc, versions } = mkSvc({
+        articles: [publishedRow({ title: 'Original' })],
+        versions: [v1Row(), draft],
+      });
+      const out = await svc.update(
+        actor(),
+        'c-1',
+        'art-1',
+        { title: 'Original' } as never, // same as the live row → no field change
+        meta(),
+      );
+      expect(versions.filter((v) => v.isDraft)).toHaveLength(0);
+      expect(out.hasDraft).toBe(false);
+      const v2 = versions.find((v) => v.version === 2)!;
+      expect(v2.id).toBe('av-draft');
+      expect(v2.isDraft).toBe(false);
+      expect(versions).toHaveLength(2);
+    });
+
     it('autosave with no existing draft creates a new draft at v=2', async () => {
       const { svc, versions } = mkSvc({
         articles: [publishedRow()],

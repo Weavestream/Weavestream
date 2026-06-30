@@ -369,17 +369,22 @@ export class ArticlesService {
 
       const changedFields = this.computeChangedFields(existing, updated);
 
-      // No-op edits do not produce a version row OR an audit row.
-      // Matches today's silent no-op semantics so a stray PATCH from
-      // the chat-apply flow with identical body doesn't bloat history
-      // or audit.
-      if (changedFields.length === 0) {
-        return { updated, versionKind: null as 'draft' | 'publish' | null };
-      }
-
       const existingDraft = await tx.articleVersion.findFirst({
         where: { articleId: id, companyId, isDraft: true },
       });
+
+      // No-op edits normally produce neither a version row nor an audit
+      // row, so a stray PATCH with an identical body doesn't bloat
+      // history or audit. The one exception is an explicit Save landing
+      // on an article that still holds an in-progress autosave draft:
+      // autosave writes the live article row AND the draft row to the
+      // same body, so a later Save (manual, or via the AI chat-apply
+      // path which always saves explicitly) reports no field change yet
+      // must still promote/clear that draft. Skipping it here is what
+      // left an article stuck showing "draft in progress" after saving.
+      if (changedFields.length === 0 && !(existingDraft && !isDraftWrite)) {
+        return { updated, versionKind: null as 'draft' | 'publish' | null };
+      }
 
       const versionBody = this.versionRowBodyFromArticle(updated);
 
