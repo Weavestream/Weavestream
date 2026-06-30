@@ -211,12 +211,17 @@ export class AuthController {
     const names = cookieNames(this.env);
     const refresh = req.signedCookies[names.session] as string | undefined;
     if (!refresh) throw new UnauthorizedException();
-    const out = await this.auth.refresh(refresh, ipOf(req), userAgentOf(req));
+    const out = await this.auth.rotateRefresh(refresh, ipOf(req), userAgentOf(req), {
+      audit: true,
+    });
     if (!out) {
       clearAuthCookies(res, this.env);
       throw new UnauthorizedException();
     }
     setAccessCookie(res, this.env, out.accessToken);
+    // Rotation: persist the new refresh token. Absent on the concurrent-refresh
+    // grace path, where the winning request already set the session cookie.
+    if (out.refreshToken) setSessionCookie(res, this.env, out.refreshToken);
     return { ok: true };
   }
 }

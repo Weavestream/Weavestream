@@ -10,6 +10,7 @@ export const AUDIT_ACTIONS = {
     loginFailure: 'auth.login.failure',
     logout: 'auth.logout',
     refresh: 'auth.refresh',
+    refreshTokenReused: 'auth.refresh.reused',
     mfaEnroll: 'auth.mfa.enroll',
     mfaEnrollComplete: 'auth.mfa.enroll.complete',
     mfaVerifySuccess: 'auth.mfa.verify.success',

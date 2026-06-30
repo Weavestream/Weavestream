@@ -4,6 +4,7 @@ import {
   HttpException,
   HttpStatus,
   Injectable,
+  Logger,
   UnauthorizedException,
 } from '@nestjs/common';
 import type { UiTheme, UiAccent } from '@weavestream/shared';
@@ -16,9 +17,20 @@ import { LockoutService } from './lockout.service.js';
 import { StepUpService } from './step-up/step-up.service.js';
 import { EnvService } from '../config/env.service.js';
 import { AuditLogService } from '../audit/audit.service.js';
+import { AUDIT_ACTIONS } from '../audit/audit-actions.js';
 import { SetupTokenService } from '../users/setup-token.service.js';
 import { themeFromDb, accentFromDb } from './ui-preferences.mapping.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
+
+/**
+ * A refresh token that was just rotated away is remembered for one
+ * generation so a benign concurrent refresh — two tabs or several in-flight
+ * requests racing on the same cookie — can still be served. The retired
+ * token presented within this window yields a fresh access token only (no
+ * re-rotation); presented later it is treated as reuse/theft and the session
+ * is revoked. Server-owned tunable, deliberately not an env var.
+ */
+const REFRESH_REUSE_LEEWAY_SEC = 15;
 
 export interface LoginResult {
   accessToken: string;
@@ -43,6 +55,8 @@ export class AuthService {
     private readonly audit: AuditLogService,
     private readonly setupTokens: SetupTokenService,
   ) {}
+
+  private readonly logger = new Logger(AuthService.name);
 
   async login(
     email: string,
@@ -418,34 +432,167 @@ export class AuthService {
     };
   }
 
-  async refresh(
+  /**
+   * Validate a refresh token, rotate it, and mint a fresh access token.
+   * Shared by the explicit `POST /auth/refresh` endpoint and the guard's
+   * silent-refresh path so rotation cannot be bypassed by using one path.
+   *
+   * On success the caller must set the access cookie, and — when
+   * `refreshToken` is present — replace the session cookie with it. A `null`
+   * return means the caller should clear cookies and respond 401; any
+   * security action (reuse revoke + audit) has already happened here.
+   *
+   * `opts.audit` controls the routine `auth.refresh` audit entry: the
+   * explicit endpoint records it, the silent path does not (it fires every
+   * ~15 min per active user and would flood the log). The security-critical
+   * reuse event is always audited regardless.
+   */
+  async rotateRefresh(
     refreshToken: string,
     ip: string,
     userAgent: string,
-  ): Promise<{ accessToken: string; userId: string; sessionId: string } | null> {
+    opts: { audit: boolean },
+  ): Promise<{
+    accessToken: string;
+    refreshToken?: string;
+    payload: { sub: string; sid: string; role: string };
+  } | null> {
     const hash = this.tokens.hashRefreshToken(refreshToken);
-    const session = await this.prisma.session.findUnique({
+    const now = new Date();
+
+    // --- Active token: the happy path. Rotate it for a fresh one. ---
+    const active = await this.prisma.session.findUnique({
       where: { refreshTokenHash: hash },
       include: { user: true },
     });
-    if (!session || session.revokedAt || session.expiresAt < new Date() || !session.user.isActive) {
+    if (active) {
+      if (active.revokedAt || active.expiresAt < now || !active.user.isActive) {
+        return null;
+      }
+      // Mint both tokens *before* the compare-and-swap. Issuing the access
+      // JWT is the only fallible step in this branch, so doing it first means
+      // a transient failure cannot retire the old refresh token and strand
+      // the browser on a cookie the DB no longer recognises (which would
+      // surface as a spurious logout, or a false reuse revoke when the
+      // browser later retries the now-"previous" token). On a lost race the
+      // freshly minted tokens are simply discarded — a cheap, harmless cost.
+      const next = this.tokens.mintRefreshToken();
+      const accessToken = await this.tokens.issueAccessToken({
+        sub: active.userId,
+        sid: active.id,
+        role: active.user.role,
+      });
+      // Atomic compare-and-swap on the active hash: only one concurrent
+      // caller can flip it. A loser sees count === 0 and falls through to
+      // the previous-hash branch, where it is recognised as a benign race.
+      const rotated = await this.prisma.session.updateMany({
+        where: { id: active.id, refreshTokenHash: hash, revokedAt: null },
+        data: {
+          refreshTokenHash: next.hash,
+          previousRefreshTokenHash: hash,
+          rotatedAt: now,
+        },
+      });
+      if (rotated.count === 1) {
+        // The old token is now retired, so we must hand back the new cookie
+        // no matter what. The routine refresh audit is therefore best-effort:
+        // a logging hiccup must never convert a successful rotation into a
+        // logout or a later false reuse revoke.
+        if (opts.audit) {
+          try {
+            await this.audit.log({
+              actorId: active.userId,
+              action: AUDIT_ACTIONS.auth.refresh,
+              entityType: 'Session',
+              entityId: active.id,
+              ip,
+              userAgent,
+              before: null,
+              after: null,
+            });
+          } catch (err) {
+            this.logger.warn(
+              `Failed to audit auth.refresh for session ${active.id}: ${String(err)}`,
+            );
+          }
+        }
+        return {
+          accessToken,
+          refreshToken: next.token,
+          payload: { sub: active.userId, sid: active.id, role: active.user.role },
+        };
+      }
+      // count === 0 -> lost the rotation race; fall through to the
+      // previous-hash branch, which now holds our token.
+    }
+
+    // --- Previous token: either a concurrent refresh or reuse/theft. ---
+    const prior = await this.prisma.session.findUnique({
+      where: { previousRefreshTokenHash: hash },
+      include: { user: true },
+    });
+    if (
+      !prior ||
+      prior.revokedAt ||
+      prior.expiresAt < now ||
+      !prior.user.isActive
+    ) {
       return null;
     }
-    const accessToken = await this.tokens.issueAccessToken({
-      sub: session.userId,
-      sid: session.id,
-      role: session.user.role,
+
+    const rotatedAgoSec = prior.rotatedAt
+      ? (now.getTime() - prior.rotatedAt.getTime()) / 1000
+      : Infinity;
+    if (rotatedAgoSec <= REFRESH_REUSE_LEEWAY_SEC) {
+      // Benign concurrent refresh: the winning request already minted (and
+      // set the cookie for) the new refresh token. Hand this racer a fresh
+      // access token only — do not rotate again, do not touch the session
+      // cookie (omitting `refreshToken` signals the caller to leave it).
+      const accessToken = await this.tokens.issueAccessToken({
+        sub: prior.userId,
+        sid: prior.id,
+        role: prior.user.role,
+      });
+      return {
+        accessToken,
+        payload: { sub: prior.userId, sid: prior.id, role: prior.user.role },
+      };
+    }
+
+    // Reuse of a long-retired token -> treat as theft. Revoke the session
+    // and raise a security event. The conditional update makes this
+    // idempotent: only the transition to revoked audits, so a burst of stale
+    // requests after revocation does not flood the audit log.
+    const revoked = await this.prisma.session.updateMany({
+      where: { id: prior.id, revokedAt: null },
+      data: { revokedAt: now },
     });
-    await this.audit.log({
-      actorId: session.userId,
-      action: 'auth.refresh',
-      entityType: 'Session',
-      entityId: session.id,
-      ip,
-      userAgent,
-      before: null,
-      after: null,
-    });
-    return { accessToken, userId: session.userId, sessionId: session.id };
+    if (revoked.count === 1) {
+      // Write the security event first — it is the whole point of reuse
+      // detection and must not be lost to a downstream Redis failure.
+      await this.audit.log({
+        actorId: prior.userId,
+        action: AUDIT_ACTIONS.auth.refreshTokenReused,
+        entityType: 'Session',
+        entityId: prior.id,
+        ip,
+        userAgent,
+        before: null,
+        // Never log the raw token; a short hash prefix is enough to
+        // correlate the reused token across audit rows.
+        after: { reason: 'rotated_token_reused', tokenHashPrefix: hash.slice(0, 12) },
+      });
+      // Best-effort: drop any step-up window bound to the now-revoked
+      // session. The window's TTL is the backstop, so a Redis hiccup here
+      // must not bubble up and mask the (already-recorded) reuse event.
+      try {
+        await this.stepUp.clear(prior.id);
+      } catch (err) {
+        this.logger.warn(
+          `Failed to clear step-up window for revoked session ${prior.id}: ${String(err)}`,
+        );
+      }
+    }
+    return null;
   }
 }

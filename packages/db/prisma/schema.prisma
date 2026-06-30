@@ -385,6 +385,12 @@ model Session {
   id               String    @id @default(uuid()) @db.Uuid
   userId           String    @map("user_id") @db.Uuid
   refreshTokenHash String    @unique @map("refresh_token_hash")
+  // Single-generation refresh-token rotation: the hash of the
+  // immediately-prior refresh token (null until first rotation) and when
+  // that rotation happened. Re-presenting the previous token within a
+  // short grace window is a benign concurrent refresh; later it is reuse.
+  previousRefreshTokenHash String?   @unique @map("previous_refresh_token_hash")
+  rotatedAt                DateTime? @map("rotated_at")
   mfaPending       Boolean   @default(false) @map("mfa_pending")
   ip               String
   userAgent        String    @map("user_agent")

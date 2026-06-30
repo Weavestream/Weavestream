@@ -8,9 +8,11 @@ import { Reflector } from '@nestjs/core';
 import type { Request, Response } from 'express';
 import { IS_PUBLIC_KEY } from '../../common/public.decorator.js';
 import { TokenService } from '../token.service.js';
+import { AuthService } from '../auth.service.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { EnvService } from '../../config/env.service.js';
-import { cookieNames, setAccessCookie } from '../cookies.js';
+import { cookieNames, setAccessCookie, setSessionCookie } from '../cookies.js';
+import { ipOf, userAgentOf } from '../../common/request-meta.js';
 import type { AuthedUser } from '../../common/current-user.decorator.js';
 
 @Injectable()
@@ -18,6 +20,7 @@ export class AuthGuard implements CanActivate {
   constructor(
     private readonly reflector: Reflector,
     private readonly tokens: TokenService,
+    private readonly auth: AuthService,
     private readonly prisma: PrismaService,
     private readonly env: EnvService,
   ) {}
@@ -76,13 +79,17 @@ export class AuthGuard implements CanActivate {
   }
 
   /**
-   * When the access JWT is missing or expired, look up the live session
-   * via the signed refresh cookie. If the session is still valid, mint a
-   * fresh access JWT, drop it back into the response as a Set-Cookie,
-   * and return the new payload so the rest of the guard can proceed
-   * without the caller noticing an outage. No audit entry is written —
-   * that stays on the explicit `POST /auth/refresh` path which is kept
-   * for clients that want to eagerly rotate.
+   * When the access JWT is missing or expired, rotate the signed refresh
+   * cookie via {@link AuthService.rotateRefresh}: if the session is still
+   * valid it mints a fresh access JWT (and a new refresh token), drops both
+   * back into the response as Set-Cookies, and returns the payload so the
+   * rest of the guard proceeds without the caller noticing an outage.
+   *
+   * Rotation runs here too, not just on the explicit `POST /auth/refresh`,
+   * so a stolen refresh cookie cannot dodge rotation by riding the silent
+   * path. No routine audit entry is written (`audit: false`) — this fires
+   * roughly every access-token TTL per active user and would flood the log;
+   * the reuse/theft event is still audited inside `rotateRefresh`.
    */
   private async silentRefresh(
     req: Request,
@@ -91,25 +98,17 @@ export class AuthGuard implements CanActivate {
     const names = cookieNames(this.env);
     const refreshCookie = req.signedCookies[names.session] as string | undefined;
     if (!refreshCookie) return null;
-    const refreshHash = this.tokens.hashRefreshToken(refreshCookie);
-    const session = await this.prisma.session.findUnique({
-      where: { refreshTokenHash: refreshHash },
-      include: { user: true },
-    });
-    if (
-      !session ||
-      session.revokedAt ||
-      session.expiresAt < new Date() ||
-      !session.user.isActive
-    ) {
-      return null;
-    }
-    const accessToken = await this.tokens.issueAccessToken({
-      sub: session.userId,
-      sid: session.id,
-      role: session.user.role,
-    });
-    setAccessCookie(res, this.env, accessToken);
-    return { sub: session.userId, sid: session.id, role: session.user.role };
+    const out = await this.auth.rotateRefresh(
+      refreshCookie,
+      ipOf(req),
+      userAgentOf(req),
+      { audit: false },
+    );
+    if (!out) return null;
+    setAccessCookie(res, this.env, out.accessToken);
+    // Rotation: persist the new refresh token. Absent on the concurrent-
+    // refresh grace path, where the winning request already set the cookie.
+    if (out.refreshToken) setSessionCookie(res, this.env, out.refreshToken);
+    return out.payload;
   }
 }
