@@ -13,6 +13,29 @@ All notable changes to Weavestream are documented here. The format follows [Keep
 
 ## [Unreleased]
 
+## [1.8.11] - 2026-07-01
+
+### Added
+
+- **File uploads now stream directly to storage.** Uploads are written through the storage layer without buffering the full object in memory. Size limits are enforced while bytes are read, object metadata can be checked without loading the file body, and a Redis-backed write-once guard protects the upload/confirmation lifecycle.
+- **Audited super-admin upload recovery tools.** Super admins can now restore tombstoned uploads and, when needed, explicitly reveal an upload's storage path through a separate audited action.
+
+### Changed
+
+- **Date and time rendering is now SSR-safe.** Shared deterministic date formatters and a web timezone provider prevent React hydration mismatches caused by differing server/client ICU behavior or system timezones.
+- **Integration and egress errors are easier to diagnose.** Error unwrapping now preserves useful cause-chain detail for safe-fetch and integration failures without weakening the existing outbound request guards.
+
+### Fixed
+
+- **Protected pages refresh auth before server rendering.** The web proxy now performs an auth preflight for protected routes so a valid session with an expired access cookie can refresh before SSR data fetches run.
+- **Date formatting hydration mismatches were removed** across audit, backup, export, integration, security, ticket, article, asset, password, profile, session, expiration, and layout views.
+
+### Security
+
+- **MFA lockouts are scoped per user.** MFA verification now uses a dedicated per-user lockout path so shared IPs or email buckets cannot accidentally lock unrelated users out of second-factor verification.
+- **Upload restore metadata no longer exposes storage keys.** The restore-info endpoint excludes internal storage keys; path disclosure moved behind a separate SUPER_ADMIN-only, audited reveal endpoint.
+- **Restricted credential access is enforced consistently.** Restricted passwords now apply the internal allow-list to version listing, historical reveal, TOTP generation, API list operations, and password detail rendering. The UI now distinguishes restricted access from missing records.
+
 ## [1.8.10] - 2026-06-30
 
 ### Added
@@ -516,7 +539,12 @@ Initial public release.
 
 ---
 
-[Unreleased]: https://github.com/Weavestream/Weavestream/compare/v1.8.6...HEAD
+[Unreleased]: https://github.com/Weavestream/Weavestream/compare/v1.8.11...HEAD
+[1.8.11]: https://github.com/Weavestream/Weavestream/releases/tag/v1.8.11
+[1.8.10]: https://github.com/Weavestream/Weavestream/releases/tag/v1.8.10
+[1.8.9]: https://github.com/Weavestream/Weavestream/releases/tag/v1.8.9
+[1.8.8]: https://github.com/Weavestream/Weavestream/releases/tag/v1.8.8
+[1.8.7]: https://github.com/Weavestream/Weavestream/releases/tag/v1.8.7
 [1.8.6]: https://github.com/Weavestream/Weavestream/releases/tag/v1.8.6
 [1.8.5]: https://github.com/Weavestream/Weavestream/releases/tag/v1.8.5
 [1.8.4]: https://github.com/Weavestream/Weavestream/releases/tag/v1.8.4
