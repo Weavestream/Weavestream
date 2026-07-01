@@ -280,6 +280,56 @@ export class UploadsController {
   ) {
     return this.uploads.softDelete(actor, companyId, id, meta(req));
   }
+
+  /**
+   * Restorability + storage location for the audit-log restore panel.
+   * SUPER_ADMIN-only (enforced in the service): returns the internal
+   * storage key so an admin can locate a blocked file in the data store.
+   */
+  @Get(':id/restore-info')
+  @RequirePermission('upload.read', { companyIdFrom: 'params.companyId' })
+  async restoreInfo(
+    @CurrentUser() actor: AuthedUser,
+    @Param('companyId', new ParseUUIDPipe()) companyId: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
+  ) {
+    return this.uploads.restoreInfo(actor, companyId, id);
+  }
+
+  /**
+   * Undelete a soft-deleted upload before the reaper purges it.
+   * SUPER_ADMIN-only (enforced in the service); the `upload.create` guard
+   * here only resolves + validates the tenant `companyId`.
+   */
+  @Post(':id/restore')
+  @HttpCode(HttpStatus.OK)
+  @RequirePermission('upload.create', { companyIdFrom: 'params.companyId' })
+  async restore(
+    @CurrentUser() actor: AuthedUser,
+    @Param('companyId', new ParseUUIDPipe()) companyId: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Req() req: Request,
+  ) {
+    return this.uploads.restore(actor, companyId, id, meta(req));
+  }
+
+  /**
+   * Disclose an upload's internal storage path to a SUPER_ADMIN (audited in
+   * the service). POST — it's a sensitive read with an audit side effect,
+   * and POST keeps the path out of GET request logs, browser history, and
+   * link prefetches.
+   */
+  @Post(':id/reveal-path')
+  @HttpCode(HttpStatus.OK)
+  @RequirePermission('upload.read', { companyIdFrom: 'params.companyId' })
+  async revealPath(
+    @CurrentUser() actor: AuthedUser,
+    @Param('companyId', new ParseUUIDPipe()) companyId: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Req() req: Request,
+  ) {
+    return this.uploads.revealStoragePath(actor, companyId, id, meta(req));
+  }
 }
 
 /**

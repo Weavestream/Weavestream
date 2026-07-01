@@ -215,11 +215,18 @@ export const AUDIT_ACTIONS = {
     // matchedCidr }`.
     egressBlocked: 'security.egress.blocked',
   },
-  // Phase 7 — soft-deleted Upload reaper. One roll-up row per sweep
-  // tick (not per row) with totals in `after`. `actorId` is null
-  // because the worker fires this. `entityId` is null because the
-  // row aggregates many uploads.
+  // Upload lifecycle. `create`/`delete`/`restore` are per-row operator
+  // actions on a single Upload row; `path_revealed` records a SUPER_ADMIN
+  // disclosing an upload's internal storage key (a sensitive read, akin to
+  // `password.revealed`). `reap` is the Phase 7 soft-deleted reaper sweep —
+  // one roll-up row per tick (not per row) with totals in `after`,
+  // `actorId` null (the worker fires it) and `entityId` null (the row
+  // aggregates many uploads).
   upload: {
+    create: 'upload.create',
+    delete: 'upload.delete',
+    restore: 'upload.restore',
+    revealPath: 'upload.path_revealed',
     reap: 'upload.reap',
   },
   // Phase 12 — real-time external ticket browse (NinjaOne first).

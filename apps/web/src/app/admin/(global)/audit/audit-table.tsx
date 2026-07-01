@@ -12,9 +12,11 @@ import {
   Pagination,
   Select,
   Tag,
+  useToast,
   type DataColumn,
   type TagTone,
 } from '../../../../components/ui';
+import { apiFetch } from '../../../../lib/api';
 import type { AuditEntry } from '../../../../lib/server-api';
 import { lower } from '../../../../lib/term';
 import { useTerm } from '../../../../lib/term-context';
@@ -59,6 +61,7 @@ export function AuditTable({
   pageSizeOptions,
   companies,
   requireCompany,
+  isSuperAdmin,
 }: {
   rows: AuditEntry[];
   filters: { companyId?: string; action?: string; from?: string; to?: string };
@@ -68,6 +71,7 @@ export function AuditTable({
   pageSizeOptions: number[];
   companies: Array<{ id: string; name: string; slug: string }>;
   requireCompany: boolean;
+  isSuperAdmin: boolean;
 }) {
   const router = useRouter();
   const sp = useSearchParams();
@@ -380,6 +384,11 @@ export function AuditTable({
       <AuditDetailDrawer
         entry={selected}
         onClose={() => setSelected(null)}
+        isSuperAdmin={isSuperAdmin}
+        onRestored={() => {
+          setSelected(null);
+          router.refresh();
+        }}
       />
     </div>
   );
@@ -392,9 +401,13 @@ export function AuditTable({
 function AuditDetailDrawer({
   entry,
   onClose,
+  isSuperAdmin,
+  onRestored,
 }: {
   entry: AuditEntry | null;
   onClose: () => void;
+  isSuperAdmin: boolean;
+  onRestored: () => void;
 }) {
   if (!entry) return null;
   const diff = buildDiffRows(entry.before ?? null, entry.after ?? null);
@@ -428,8 +441,226 @@ function AuditDetailDrawer({
         ) : (
           <RawPayload entry={entry} />
         )}
+        {isSuperAdmin &&
+          entry.entityType === 'Upload' &&
+          entry.action === 'upload.delete' &&
+          entry.companyId &&
+          entry.entityId && (
+            <UploadRestorePanel
+              key={entry.entityId}
+              companyId={entry.companyId}
+              uploadId={entry.entityId}
+              onRestored={onRestored}
+            />
+          )}
       </div>
     </Dialog>
+  );
+}
+
+type UploadRestoreInfo = {
+  deleted: boolean;
+  restorable: boolean;
+  blockedReason: 'parent_missing' | 'parent_archived' | null;
+};
+
+/**
+ * SUPER_ADMIN-only restore affordance for a soft-deleted upload, shown in
+ * the audit detail drawer for `upload.delete` entries. Fetches
+ * restorability on open: the Restore button is disabled (with helper text)
+ * when the file was reaped or its parent is gone/archived, and the
+ * internal storage path is always shown with a copy button so an admin can
+ * retrieve a blocked file from the data store directly.
+ */
+function UploadRestorePanel({
+  companyId,
+  uploadId,
+  onRestored,
+}: {
+  companyId: string;
+  uploadId: string;
+  onRestored: () => void;
+}) {
+  const toast = useToast();
+  const [status, setStatus] = useState<'loading' | 'ready' | 'gone' | 'error'>(
+    'loading',
+  );
+  const [info, setInfo] = useState<UploadRestoreInfo | null>(null);
+  const [confirming, setConfirming] = useState(false);
+  const [pending, setPending] = useState(false);
+  const [revealing, setRevealing] = useState(false);
+
+  // The panel is keyed by uploadId at the call site, so it remounts (fresh
+  // 'loading'/null state) whenever a different upload entry is opened — no
+  // synchronous in-effect reset needed; this effect only does the fetch.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await apiFetch<UploadRestoreInfo>(
+          `/companies/${companyId}/uploads/${uploadId}/restore-info`,
+        );
+        if (cancelled) return;
+        if (res.ok && res.data) {
+          setInfo(res.data);
+          setStatus('ready');
+        } else if (res.status === 404) {
+          setStatus('gone');
+        } else {
+          setStatus('error');
+        }
+      } catch {
+        // apiFetch rethrows non-abort network failures — don't leave the
+        // panel stuck on 'loading'.
+        if (!cancelled) setStatus('error');
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [companyId, uploadId]);
+
+  const helperText =
+    status === 'loading'
+      ? 'Checking restore status…'
+      : status === 'gone'
+        ? 'Original file has been permanently removed.'
+        : status === 'error'
+          ? "Couldn't check restore status."
+          : info == null
+            ? ''
+            : !info.deleted
+              ? 'This upload is not deleted.'
+              : info.restorable
+                ? ''
+                : info.blockedReason === 'parent_archived'
+                  ? 'Original parent is archived — restore it first.'
+                  : 'Original parent no longer exists.';
+
+  const canRestore = status === 'ready' && info != null && info.restorable;
+
+  async function doRestore() {
+    setPending(true);
+    try {
+      const res = await apiFetch(
+        `/companies/${companyId}/uploads/${uploadId}/restore`,
+        { method: 'POST' },
+      );
+      if (!res.ok) {
+        const problem = res.problem as { message?: string } | undefined;
+        toast.push(
+          problem?.message ?? 'Could not restore the attachment.',
+          'danger',
+        );
+        setPending(false);
+        return;
+      }
+      setPending(false);
+      setConfirming(false);
+      toast.push('Attachment restored.', 'ok');
+      onRestored();
+    } catch {
+      toast.push('Could not restore the attachment.', 'danger');
+      setPending(false);
+    }
+  }
+
+  async function copyPath() {
+    setRevealing(true);
+    try {
+      // The path is disclosed by a separate audited endpoint, so each copy
+      // is recorded as an `upload.path_revealed` audit entry.
+      const res = await apiFetch<{ storagePath: string }>(
+        `/companies/${companyId}/uploads/${uploadId}/reveal-path`,
+        { method: 'POST' },
+      );
+      if (!res.ok || !res.data) {
+        const problem = res.problem as { message?: string } | undefined;
+        toast.push(
+          problem?.message ?? 'Could not retrieve the file path.',
+          'danger',
+        );
+        return;
+      }
+      await navigator.clipboard.writeText(res.data.storagePath);
+      toast.push('File path copied.', 'ok');
+    } catch {
+      toast.push('Could not retrieve the file path.', 'danger');
+    } finally {
+      setRevealing(false);
+    }
+  }
+
+  return (
+    <div
+      style={{
+        border: '1px solid var(--line)',
+        borderRadius: 8,
+        padding: 12,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 10,
+        background: 'var(--panel-2)',
+      }}
+    >
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: 12,
+        }}
+      >
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+          <span style={{ fontSize: 13, fontWeight: 600 }}>Restore attachment</span>
+          {helperText && (
+            <span style={{ fontSize: 12, color: 'var(--muted)' }}>{helperText}</span>
+          )}
+        </div>
+        <Btn
+          kind="primary"
+          icon={Icon.refresh}
+          disabled={!canRestore}
+          loading={pending}
+          title={!canRestore && helperText ? helperText : undefined}
+          onClick={() => setConfirming(true)}
+        >
+          Restore
+        </Btn>
+      </div>
+      {status === 'ready' && (
+        <div style={{ display: 'flex' }}>
+          <Btn
+            kind="ghost"
+            size="sm"
+            icon={Icon.copy}
+            loading={revealing}
+            onClick={copyPath}
+          >
+            Copy file path
+          </Btn>
+        </div>
+      )}
+      <Dialog
+        open={confirming}
+        onClose={() => !pending && setConfirming(false)}
+        title="Restore attachment?"
+        footer={
+          <>
+            <Btn kind="ghost" onClick={() => setConfirming(false)} disabled={pending}>
+              Cancel
+            </Btn>
+            <Btn kind="primary" loading={pending} onClick={doRestore}>
+              Restore
+            </Btn>
+          </>
+        }
+      >
+        <p style={{ margin: 0, fontSize: 14 }}>
+          This makes the file visible again and cancels its scheduled cleanup.
+        </p>
+      </Dialog>
+    </div>
   );
 }
 

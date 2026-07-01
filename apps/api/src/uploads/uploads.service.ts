@@ -41,6 +41,7 @@ import type {
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { AuditLogService } from '../audit/audit.service.js';
+import { AUDIT_ACTIONS } from '../audit/audit-actions.js';
 import { LocalStorageService } from '../storage/local-storage.service.js';
 import { RedisService } from '../redis/redis.service.js';
 import { EnvService } from '../config/env.service.js';
@@ -115,6 +116,26 @@ export interface SerializedUpload {
    * `null` for non-article uploads.
    */
   articleLinkState: ArticleLinkState | null;
+}
+
+/**
+ * Why a soft-deleted upload cannot be restored. Restoring a file whose
+ * parent was archived or purged would resurrect it into a broken UI
+ * state, so the restore panel disables the action with a matching reason.
+ */
+export type UploadRestoreBlockedReason = 'parent_missing' | 'parent_archived';
+
+/**
+ * Restorability + storage location for the audit-log restore panel.
+ * SUPER_ADMIN-only (see `UploadsService.restoreInfo`).
+ */
+export interface UploadRestoreInfo {
+  /** Whether the row is currently soft-deleted. */
+  deleted: boolean;
+  /** True only when the row is soft-deleted AND its parent is intact. */
+  restorable: boolean;
+  /** Why restore is blocked; `null` when restorable or not deleted. */
+  blockedReason: UploadRestoreBlockedReason | null;
 }
 
 const PENDING_TTL_SECONDS = 15 * 60;
@@ -576,7 +597,7 @@ export class UploadsService {
 
     await this.audit.log({
       actorId: actor.id,
-      action: 'upload.create',
+      action: AUDIT_ACTIONS.upload.create,
       entityType: 'Upload',
       entityId: upload.id,
       companyId,
@@ -753,7 +774,7 @@ export class UploadsService {
 
     await this.audit.log({
       actorId: actor.id,
-      action: 'upload.delete',
+      action: AUDIT_ACTIONS.upload.delete,
       entityType: 'Upload',
       entityId: upload.id,
       companyId,
@@ -838,6 +859,239 @@ export class UploadsService {
       data: { deletedAt: new Date() },
     });
     return { softDeleted: count };
+  }
+
+  // ------------------------------------------------------------------
+  // 5) restore — undelete a soft-deleted Upload before the reaper purges
+  //    it. Admin-only (SUPER_ADMIN): surfaced from the platform audit log,
+  //    so the authoritative gate lives here, not in the UI. Clearing
+  //    `deletedAt` drops the row from the reaper's `deletedAt < cutoff`
+  //    sweep, so the reaper needs no change.
+  // ------------------------------------------------------------------
+
+  /**
+   * Restore is a platform-admin safety net reachable only from the global
+   * audit log. Company `upload.create` / `upload.read` membership must NOT
+   * be sufficient, so enforce SUPER_ADMIN at the entry point (mirrors the
+   * SA-only guard in UsersService) — independent of the company-scoped
+   * `@RequirePermission` decorator, which only resolves `companyId`.
+   */
+  private assertRestoreAdmin(actor: AuthedUser): void {
+    if (actor.role !== 'SUPER_ADMIN') {
+      throw new ForbiddenException('Restoring an upload requires SUPER_ADMIN.');
+    }
+  }
+
+  /**
+   * Whether a soft-deleted upload can be safely restored: a concrete
+   * parent must exist AND not be archived, otherwise restoring would
+   * resurrect the file into a broken UI state. Uploads with no parent (or
+   * an article embed carrying no `attachedToId`) are always restorable —
+   * an article image simply returns to the photos grid as an `orphan`
+   * tile. Mirrors the parent lookups in `assertAttachmentParent`.
+   */
+  private async computeUploadRestorability(row: {
+    attachedToType: string | null;
+    attachedToId: string | null;
+    companyId: string;
+  }): Promise<{
+    restorable: boolean;
+    blockedReason: UploadRestoreBlockedReason | null;
+  }> {
+    const { attachedToType, attachedToId, companyId } = row;
+    if (!attachedToType || !attachedToId) {
+      return { restorable: true, blockedReason: null };
+    }
+
+    const classify = (
+      parent: { archivedAt: Date | null } | null,
+    ): { restorable: boolean; blockedReason: UploadRestoreBlockedReason | null } => {
+      if (!parent) return { restorable: false, blockedReason: 'parent_missing' };
+      if (parent.archivedAt) {
+        return { restorable: false, blockedReason: 'parent_archived' };
+      }
+      return { restorable: true, blockedReason: null };
+    };
+
+    switch (attachedToType) {
+      case 'asset':
+        return classify(
+          await this.prisma.asset.findFirst({
+            where: { id: attachedToId, companyId },
+            select: { archivedAt: true },
+          }),
+        );
+      case 'article':
+        return classify(
+          await this.prisma.article.findFirst({
+            where: { id: attachedToId, companyId },
+            select: { archivedAt: true },
+          }),
+        );
+      case 'asset_field':
+        // AssetField is keyed globally (per layout), not per company —
+        // matches the lookup in `assertAttachmentParent`.
+        return classify(
+          await this.prisma.assetField.findFirst({
+            where: { id: attachedToId },
+            select: { archivedAt: true },
+          }),
+        );
+      case 'password':
+        return classify(
+          await this.prisma.password.findFirst({
+            where: { id: attachedToId, companyId },
+            select: { archivedAt: true },
+          }),
+        );
+      default:
+        // Unknown attachment type (shouldn't happen — closed enum at
+        // write time). Treat as unrestorable rather than guess.
+        return { restorable: false, blockedReason: 'parent_missing' };
+    }
+  }
+
+  /**
+   * Restorability for the audit-log restore panel. SUPER_ADMIN-only.
+   * Intentionally does NOT return the storage path — that disclosure is a
+   * separate, audited action (`revealStoragePath`) so merely opening the
+   * panel doesn't leak where the bytes live. 404 when the row is already
+   * gone (reaped or never existed in this company).
+   */
+  async restoreInfo(
+    actor: AuthedUser,
+    companyId: string,
+    uploadId: string,
+  ): Promise<UploadRestoreInfo> {
+    this.assertRestoreAdmin(actor);
+    const row = await this.prisma.upload.findFirst({
+      where: { id: uploadId, companyId },
+      select: {
+        deletedAt: true,
+        attachedToType: true,
+        attachedToId: true,
+      },
+    });
+    if (!row) throw new NotFoundException();
+    const deleted = row.deletedAt != null;
+    const { restorable, blockedReason } = await this.computeUploadRestorability({
+      attachedToType: row.attachedToType,
+      attachedToId: row.attachedToId,
+      companyId,
+    });
+    return {
+      deleted,
+      restorable: deleted && restorable,
+      blockedReason: deleted ? blockedReason : null,
+    };
+  }
+
+  /**
+   * Disclose an upload's internal storage key to a SUPER_ADMIN so a file
+   * whose restore is blocked can still be retrieved from the data store by
+   * hand. The key locates the raw bytes, so this is a sensitive read: every
+   * disclosure is written to the audit log (`upload.path_revealed`),
+   * satisfying the "log every use" rule for admin data-access paths — the
+   * same pattern as `password.revealed`. 404 when the row is gone.
+   */
+  async revealStoragePath(
+    actor: AuthedUser,
+    companyId: string,
+    uploadId: string,
+    meta: AuditMeta,
+  ): Promise<{ storagePath: string }> {
+    this.assertRestoreAdmin(actor);
+    const row = await this.prisma.upload.findFirst({
+      where: { id: uploadId, companyId },
+      select: { storageKey: true },
+    });
+    if (!row) throw new NotFoundException();
+
+    await this.audit.log({
+      actorId: actor.id,
+      action: AUDIT_ACTIONS.upload.revealPath,
+      entityType: 'Upload',
+      entityId: uploadId,
+      companyId,
+      ip: meta.ip,
+      userAgent: meta.userAgent,
+      before: null,
+      after: { storageKey: row.storageKey },
+    });
+
+    return { storagePath: row.storageKey };
+  }
+
+  /**
+   * Undelete a soft-deleted upload (SUPER_ADMIN-only). Idempotent: a row
+   * that is already live is returned unchanged (mirrors `softDelete`'s own
+   * idempotency). Blocked with 409 when the parent is missing/archived,
+   * 404 when the row has already been reaped.
+   */
+  async restore(
+    actor: AuthedUser,
+    companyId: string,
+    uploadId: string,
+    meta: AuditMeta,
+  ): Promise<SerializedUpload> {
+    this.assertRestoreAdmin(actor);
+    const upload = await this.prisma.upload.findFirst({
+      where: { id: uploadId, companyId },
+    });
+    if (!upload) throw new NotFoundException();
+    if (!upload.deletedAt) {
+      return this.serialize(upload);
+    }
+
+    const { restorable, blockedReason } = await this.computeUploadRestorability({
+      attachedToType: upload.attachedToType,
+      attachedToId: upload.attachedToId,
+      companyId,
+    });
+    if (!restorable) {
+      throw new ConflictException({
+        error: 'UploadNotRestorable',
+        blockedReason,
+        message:
+          blockedReason === 'parent_archived'
+            ? 'The parent this file was attached to is archived — restore it first.'
+            : 'The parent this file was attached to no longer exists.',
+      });
+    }
+
+    // Conditional clear scoped to a still-deleted row: if the reaper hard-
+    // deleted the row between the read above and this write, `count` is 0
+    // and we resolve as gone (404) rather than resurrecting a phantom, or
+    // as already-restored if a concurrent restore won the race.
+    const { count } = await this.prisma.upload.updateMany({
+      where: { id: upload.id, companyId, deletedAt: { not: null } },
+      data: { deletedAt: null },
+    });
+    if (count === 0) {
+      const now = await this.prisma.upload.findFirst({
+        where: { id: upload.id, companyId },
+      });
+      if (!now) throw new NotFoundException();
+      return this.serialize(now);
+    }
+
+    const updated = await this.prisma.upload.findFirstOrThrow({
+      where: { id: upload.id, companyId },
+    });
+
+    await this.audit.log({
+      actorId: actor.id,
+      action: AUDIT_ACTIONS.upload.restore,
+      entityType: 'Upload',
+      entityId: upload.id,
+      companyId,
+      ip: meta.ip,
+      userAgent: meta.userAgent,
+      before: { deletedAt: upload.deletedAt },
+      after: { deletedAt: null },
+    });
+
+    return this.serialize(updated);
   }
 
   // ------------------------------------------------------------------

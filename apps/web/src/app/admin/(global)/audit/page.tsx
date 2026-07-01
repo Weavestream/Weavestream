@@ -84,6 +84,7 @@ export default async function AuditPage({
               slug: c.slug,
             }))}
             requireCompany={me.role !== 'SUPER_ADMIN'}
+            isSuperAdmin={me.role === 'SUPER_ADMIN'}
           />
         </Panel>
       </PageBody>

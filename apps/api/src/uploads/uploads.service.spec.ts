@@ -1768,3 +1768,242 @@ describe('UploadsService.confirm — magic-byte validation + image thumbnail (re
     );
   });
 });
+
+describe('UploadsService.restore / restoreInfo', () => {
+  type Row = {
+    id: string;
+    companyId: string;
+    filename: string;
+    mimeType: string;
+    sizeBytes: number;
+    storageKey: string;
+    sha256: string;
+    isImage: boolean;
+    width: number | null;
+    height: number | null;
+    thumbnailKey: string | null;
+    attachedToType: string | null;
+    attachedToId: string | null;
+    deletedAt: Date | null;
+    uploaderId: string | null;
+    createdAt: Date;
+  };
+
+  function row(over: Partial<Row> = {}): Row {
+    return {
+      id: 'u1',
+      companyId: 'c1',
+      filename: 'a.png',
+      mimeType: 'image/png',
+      sizeBytes: 100,
+      storageKey: 'c1/uploads/u1/a.png',
+      sha256: 'abc',
+      isImage: true,
+      width: 10,
+      height: 10,
+      thumbnailKey: 'c1/thumbs/u1.webp',
+      attachedToType: 'asset',
+      attachedToId: 'a1',
+      deletedAt: new Date('2026-06-01T00:00:00Z'),
+      uploaderId: 'user-1',
+      createdAt: new Date('2026-01-01T00:00:00Z'),
+      ...over,
+    };
+  }
+
+  function makeService(opts: { upload: Row | null; updateCount?: number }) {
+    const findFirst = jest.fn().mockResolvedValue(opts.upload);
+    const updateMany = jest
+      .fn()
+      .mockResolvedValue({ count: opts.updateCount ?? 1 });
+    const findFirstOrThrow = jest
+      .fn()
+      .mockResolvedValue(opts.upload ? { ...opts.upload, deletedAt: null } : null);
+    // One mock per parent model so tests can both set the archive state and
+    // assert that the switch routed to the correct model for the type.
+    const parent = {
+      asset: jest.fn().mockResolvedValue({ archivedAt: null }),
+      article: jest.fn().mockResolvedValue({ archivedAt: null }),
+      assetField: jest.fn().mockResolvedValue({ archivedAt: null }),
+      password: jest.fn().mockResolvedValue({ archivedAt: null }),
+    };
+    const prisma = {
+      upload: { findFirst, updateMany, findFirstOrThrow },
+      asset: { findFirst: parent.asset },
+      article: { findFirst: parent.article },
+      assetField: { findFirst: parent.assetField },
+      password: { findFirst: parent.password },
+    };
+    const audit = { log: jest.fn() };
+    const service = new UploadsService(
+      prisma as never,
+      {} as never,
+      { client: {} } as never,
+      audit as never,
+      { values: { MAX_UPLOAD_MB: 1, ALLOWED_UPLOAD_MIME: '' } } as never,
+    );
+    return { service, audit, findFirst, updateMany, findFirstOrThrow, parent };
+  }
+
+  const sa = { id: 'admin-1', role: 'SUPER_ADMIN' } as never;
+  const operator = { id: 'user-1', role: 'OPERATOR' } as never;
+  const meta = { ip: '127.0.0.1', userAgent: 'jest' };
+
+  // ---- restore ----
+
+  it('rejects a non-SUPER_ADMIN actor before touching the row', async () => {
+    const { service, updateMany, findFirst } = makeService({ upload: row() });
+    await expect(
+      service.restore(operator, 'c1', 'u1', meta),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+    expect(findFirst).not.toHaveBeenCalled();
+    expect(updateMany).not.toHaveBeenCalled();
+  });
+
+  it('clears deletedAt (scoped to a still-deleted row) and audits upload.restore', async () => {
+    const deletedAt = new Date('2026-06-01T00:00:00Z');
+    const { service, audit, updateMany } = makeService({ upload: row({ deletedAt }) });
+    const out = await service.restore(sa, 'c1', 'u1', meta);
+    expect(updateMany).toHaveBeenCalledWith({
+      where: { id: 'u1', companyId: 'c1', deletedAt: { not: null } },
+      data: { deletedAt: null },
+    });
+    expect(audit.log).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'upload.restore',
+        entityType: 'Upload',
+        entityId: 'u1',
+        companyId: 'c1',
+        before: { deletedAt },
+        after: { deletedAt: null },
+      }),
+    );
+    expect(out.id).toBe('u1');
+  });
+
+  it('is idempotent when the row is already live', async () => {
+    const { service, audit, updateMany } = makeService({
+      upload: row({ deletedAt: null }),
+    });
+    const out = await service.restore(sa, 'c1', 'u1', meta);
+    expect(out.id).toBe('u1');
+    expect(updateMany).not.toHaveBeenCalled();
+    expect(audit.log).not.toHaveBeenCalled();
+  });
+
+  it('throws NotFound when the row is already gone', async () => {
+    const { service } = makeService({ upload: null });
+    await expect(
+      service.restore(sa, 'c1', 'u1', meta),
+    ).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  it('blocks restore with 409 when the parent is missing', async () => {
+    const { service, updateMany, parent } = makeService({ upload: row() });
+    parent.asset.mockResolvedValueOnce(null);
+    await expect(
+      service.restore(sa, 'c1', 'u1', meta),
+    ).rejects.toBeInstanceOf(ConflictException);
+    expect(updateMany).not.toHaveBeenCalled();
+  });
+
+  it('blocks restore with 409 when the parent is archived (routes by type)', async () => {
+    const { service, updateMany, parent } = makeService({
+      upload: row({ attachedToType: 'password', attachedToId: 'p1' }),
+    });
+    parent.password.mockResolvedValueOnce({ archivedAt: new Date() });
+    await expect(
+      service.restore(sa, 'c1', 'u1', meta),
+    ).rejects.toBeInstanceOf(ConflictException);
+    expect(parent.password).toHaveBeenCalledTimes(1);
+    expect(parent.asset).not.toHaveBeenCalled();
+    expect(updateMany).not.toHaveBeenCalled();
+  });
+
+  it('restores an article upload with no attachedToId without a parent check', async () => {
+    const { service, updateMany, parent } = makeService({
+      upload: row({ attachedToType: 'article', attachedToId: null }),
+    });
+    await service.restore(sa, 'c1', 'u1', meta);
+    expect(parent.article).not.toHaveBeenCalled();
+    expect(updateMany).toHaveBeenCalledTimes(1);
+  });
+
+  it('resolves a concurrent reap (updateMany count 0, row vanished) as NotFound', async () => {
+    const { service, findFirst } = makeService({ upload: row(), updateCount: 0 });
+    // initial load → deleted row; post-update re-read → null (reaped)
+    findFirst.mockReset();
+    findFirst.mockResolvedValueOnce(row()).mockResolvedValueOnce(null);
+    await expect(
+      service.restore(sa, 'c1', 'u1', meta),
+    ).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  // ---- restoreInfo ----
+
+  it('restoreInfo rejects a non-SUPER_ADMIN actor', async () => {
+    const { service } = makeService({ upload: row() });
+    await expect(
+      service.restoreInfo(operator, 'c1', 'u1'),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it('restoreInfo reports restorable for a deleted upload with a live parent (no path)', async () => {
+    const { service } = makeService({ upload: row() });
+    const info = await service.restoreInfo(sa, 'c1', 'u1');
+    expect(info).toEqual({
+      deleted: true,
+      restorable: true,
+      blockedReason: null,
+    });
+    expect(info).not.toHaveProperty('storagePath');
+  });
+
+  it('restoreInfo reports parent_archived and not-restorable', async () => {
+    const { service, parent } = makeService({ upload: row() });
+    parent.asset.mockResolvedValueOnce({ archivedAt: new Date() });
+    const info = await service.restoreInfo(sa, 'c1', 'u1');
+    expect(info.restorable).toBe(false);
+    expect(info.blockedReason).toBe('parent_archived');
+  });
+
+  it('restoreInfo throws NotFound when the row is gone', async () => {
+    const { service } = makeService({ upload: null });
+    await expect(
+      service.restoreInfo(sa, 'c1', 'u1'),
+    ).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  // ---- revealStoragePath (sensitive, audited disclosure) ----
+
+  it('revealStoragePath rejects a non-SUPER_ADMIN actor without auditing', async () => {
+    const { service, audit } = makeService({ upload: row() });
+    await expect(
+      service.revealStoragePath(operator, 'c1', 'u1', meta),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+    expect(audit.log).not.toHaveBeenCalled();
+  });
+
+  it('revealStoragePath returns the storage key and audits upload.path_revealed', async () => {
+    const { service, audit } = makeService({ upload: row() });
+    const out = await service.revealStoragePath(sa, 'c1', 'u1', meta);
+    expect(out).toEqual({ storagePath: 'c1/uploads/u1/a.png' });
+    expect(audit.log).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'upload.path_revealed',
+        entityType: 'Upload',
+        entityId: 'u1',
+        companyId: 'c1',
+        after: { storageKey: 'c1/uploads/u1/a.png' },
+      }),
+    );
+  });
+
+  it('revealStoragePath throws NotFound when the row is gone and does not audit', async () => {
+    const { service, audit } = makeService({ upload: null });
+    await expect(
+      service.revealStoragePath(sa, 'c1', 'u1', meta),
+    ).rejects.toBeInstanceOf(NotFoundException);
+    expect(audit.log).not.toHaveBeenCalled();
+  });
+});
