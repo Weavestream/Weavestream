@@ -32,13 +32,13 @@ import {
 export function MappingDetailDialog({
   integration,
   mapping,
-  onClose,
-  onChanged,
+  closeAction,
+  changedAction,
 }: {
   integration: IntegrationDto;
   mapping: IntegrationCompanyMappingDto;
-  onClose: () => void;
-  onChanged: () => void;
+  closeAction: () => void;
+  changedAction: () => void;
 }) {
   const toast = useToast();
   const [enabled, setEnabled] = useState(mapping.enabled);
@@ -61,7 +61,7 @@ export function MappingDetailDialog({
       return;
     }
     toast.push('Mapping saved.', 'ok');
-    onChanged();
+    changedAction();
   }
 
   async function destroy() {
@@ -89,13 +89,13 @@ export function MappingDetailDialog({
       return;
     }
     toast.push('Mapping deleted, assets released.', 'ok');
-    onChanged();
+    changedAction();
   }
 
   return (
     <Dialog
       open
-      onClose={onClose}
+      onClose={closeAction}
       title={`${mapping.externalOrgName ?? mapping.externalOrgId} → ${mapping.companyName ?? mapping.companyId.slice(0, 8)}`}
       width={520}
       footer={
@@ -109,7 +109,7 @@ export function MappingDetailDialog({
           >
             Delete mapping
           </Btn>
-          <Btn kind="ghost" onClick={onClose} disabled={pending}>
+          <Btn kind="ghost" onClick={closeAction} disabled={pending}>
             Close
           </Btn>
           <Btn kind="primary" onClick={save} loading={pending}>

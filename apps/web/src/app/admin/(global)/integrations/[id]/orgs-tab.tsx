@@ -200,8 +200,8 @@ export function OrgsTab({
         <MappingDetailDialog
           integration={integration}
           mapping={editing}
-          onClose={() => setEditing(null)}
-          onChanged={() => {
+          closeAction={() => setEditing(null)}
+          changedAction={() => {
             setEditing(null);
             router.refresh();
           }}
