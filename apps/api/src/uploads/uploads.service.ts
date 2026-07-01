@@ -119,6 +119,15 @@ export interface SerializedUpload {
 
 const PENDING_TTL_SECONDS = 15 * 60;
 
+/**
+ * Bytes read from the head of a stored upload for magic-byte + BOM
+ * sniffing at confirm time. Comfortably larger than `file-type`'s
+ * detection window for every allowlisted format, so detection matches
+ * what a full-buffer read produced — but bounded, so a 1 GB upload
+ * never lands in the heap. Files smaller than this are read whole.
+ */
+const MAGIC_HEAD_BYTES = 64 * 1024;
+
 @Injectable()
 export class UploadsService {
   private readonly logger = new Logger(UploadsService.name);
@@ -282,14 +291,67 @@ export class UploadsService {
       });
     }
 
-    const buffer = await readBoundedStream(body, this.maxBytes);
+    // Write-once guard: atomically claim the body slot so a second PUT
+    // can't overwrite the bytes a later `confirm` validates — otherwise
+    // its split reads could mix file versions or wave a payload past the
+    // magic-byte gate. Released only on failure so a genuinely failed
+    // PUT can retry; a hard crash self-heals via the TTL.
+    const claimed = await this.redis.client.set(
+      bodyKey(uploadId),
+      'writing',
+      'EX',
+      PENDING_TTL_SECONDS,
+      'NX',
+    );
+    if (claimed !== 'OK') {
+      throw new ConflictException({
+        error: 'UploadBodyAlreadyReceived',
+        message: 'This upload already has a body; proceed to confirm.',
+      });
+    }
 
-    // Trust the pending mimeType from init for the stored object's
-    // Content-Type. The browser-declared header is only a hint; magic-
-    // bytes verification still happens at confirm time.
-    await this.storage.putObject(companyId, pending.storageKey, buffer, {
-      contentType: pending.mimeType,
+    // A client disconnect surfaces as a stream 'abort'; remember it so
+    // we can tell a caller-side abort (400) apart from a storage/write
+    // failure (5xx) once the pipeline rejects.
+    let sourceAborted = false;
+    body.once('aborted', () => {
+      sourceAborted = true;
     });
+
+    try {
+      // Trust the pending mimeType from init for the stored object's
+      // Content-Type. The browser-declared header is only a hint;
+      // magic-bytes verification still happens at confirm time. The
+      // body streams straight to disk under a byte-counted ceiling, so
+      // it never lands in the heap.
+      await this.storage.putObjectStream(companyId, pending.storageKey, body, {
+        contentType: pending.mimeType,
+        maxBytes: this.maxBytes,
+      });
+    } catch (err) {
+      // Failed write: free the slot so a retry can re-claim it.
+      await this.redis.client.del(bodyKey(uploadId)).catch(() => undefined);
+      if (err instanceof PayloadTooLargeException) throw err;
+      if (
+        sourceAborted ||
+        (body as { readableAborted?: boolean }).readableAborted
+      ) {
+        throw new BadRequestException({
+          error: 'ClientAborted',
+          message: 'Client aborted upload.',
+        });
+      }
+      throw err;
+    }
+
+    // Body fully written: mark the slot done so no later PUT can
+    // re-claim and overwrite it (kept until the pending TTL lapses).
+    await this.redis.client.set(
+      bodyKey(uploadId),
+      'done',
+      'EX',
+      PENDING_TTL_SECONDS,
+    );
   }
 
   // ------------------------------------------------------------------
@@ -373,7 +435,20 @@ export class UploadsService {
       });
     }
 
-    const body = await this.storage.getObjectBody(companyId, pending.storageKey);
+    // Read only the head for magic-byte + BOM sniffing; the full body
+    // never enters the heap. The write-once guard guarantees the bytes
+    // are stable across this and the streamed hash read below.
+    const headBytes = await this.storage.getObjectHead(
+      companyId,
+      pending.storageKey,
+      MAGIC_HEAD_BYTES,
+    );
+    if (!headBytes) {
+      throw new BadRequestException({
+        error: 'UploadNotFound',
+        message: 'Object was not found in storage — did the browser PUT finish?',
+      });
+    }
 
     const declaredMime = pending.mimeType.toLowerCase();
     const isTextDeclared = declaredMime.startsWith('text/');
@@ -392,10 +467,10 @@ export class UploadsService {
     // exported BitLocker Recovery Key `.txt` files fail as `audio/mpeg`.
     // The allowlist check below still runs, so only declared text MIMEs
     // already in `ALLOWED_UPLOAD_MIME` can take this path.
-    if (isTextDeclared && startsWithTextBom(body)) {
+    if (isTextDeclared && startsWithTextBom(headBytes)) {
       // finalMime already === declaredMime; fall through to allowlist.
     } else {
-      const detected = await fileTypeFromBuffer(body);
+      const detected = await fileTypeFromBuffer(headBytes);
       if (detected) {
         if (detected.mime === declaredMime) {
           finalMime = detected.mime;
@@ -432,7 +507,19 @@ export class UploadsService {
       });
     }
 
-    const sha256 = createHash('sha256').update(body).digest('hex');
+    // Hash by streaming the stored file through the digest so a large
+    // upload never lands in the heap. The write-once guard means these
+    // are the same bytes the magic-byte check above validated.
+    const obj = await this.storage.getObjectStream(companyId, pending.storageKey);
+    if (!obj) {
+      throw new BadRequestException({
+        error: 'UploadNotFound',
+        message: 'Object was not found in storage — did the browser PUT finish?',
+      });
+    }
+    const hash = createHash('sha256');
+    for await (const chunk of obj.body) hash.update(chunk);
+    const sha256 = hash.digest('hex');
     const isImage = finalMime.startsWith('image/');
 
     let width: number | null = null;
@@ -441,12 +528,16 @@ export class UploadsService {
 
     if (isImage) {
       try {
-        const pipeline = sharp(body, { failOn: 'error' });
-        const meta2 = await pipeline.metadata();
+        // Feed `sharp` the on-disk path so libvips reads the file itself
+        // (off-heap) rather than us holding the whole image Buffer. Safe
+        // to open twice: the write-once guard makes the stored bytes
+        // immutable for this session.
+        const absPath = this.storage.getObjectPath(companyId, pending.storageKey);
+        const meta2 = await sharp(absPath, { failOn: 'error' }).metadata();
         width = meta2.width ?? null;
         height = meta2.height ?? null;
 
-        const thumb = await sharp(body)
+        const thumb = await sharp(absPath)
           .rotate()
           .resize(300, 300, { fit: 'inside', withoutEnlargement: true })
           .webp({ quality: 80 })
@@ -1500,6 +1591,16 @@ function pendingKey(uploadId: string): string {
 }
 
 /**
+ * Marks that an upload session's body has been (or is being) written.
+ * `SET NX` on this key is the write-once guard: the first relay PUT
+ * claims it and later PUTs are rejected, so the bytes `confirm`
+ * validates can't be swapped underneath it.
+ */
+function bodyKey(uploadId: string): string {
+  return `upload:body:${uploadId}`;
+}
+
+/**
  * Resolution priority when an article upload appears in multiple
  * places. Higher wins; `orphan` is the implicit floor so it never
  * needs to compete against a found state.
@@ -1515,52 +1616,4 @@ function statePriority(state: ArticleLinkState): number {
     case 'orphan':
       return 0;
   }
-}
-
-/**
- * Read a Node Readable stream into a Buffer, rejecting once the
- * cumulative size exceeds `maxBytes`. We can't trust a client's
- * declared `Content-Length`, so this is the real ceiling — even if a
- * malicious caller lies about the length we'll still tear the
- * connection down before the body grows past the configured limit.
- */
-async function readBoundedStream(stream: Readable, maxBytes: number): Promise<Buffer> {
-  return new Promise<Buffer>((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    let received = 0;
-    let settled = false;
-
-    const settle = (err: Error | null, buf?: Buffer) => {
-      if (settled) return;
-      settled = true;
-      if (err) {
-        stream.destroy(err);
-        reject(err);
-      } else {
-        resolve(buf!);
-      }
-    };
-
-    stream.on('data', (chunk: Buffer | string) => {
-      const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-      received += buf.length;
-      if (received > maxBytes) {
-        settle(
-          new PayloadTooLargeException({
-            error: 'FileTooLarge',
-            sizeBytes: received,
-            maxBytes,
-            message: `Upload body exceeds ${maxBytes} bytes.`,
-          }),
-        );
-        return;
-      }
-      chunks.push(buf);
-    });
-    stream.on('end', () => settle(null, Buffer.concat(chunks)));
-    stream.on('error', (err) => settle(err));
-    stream.on('aborted', () =>
-      settle(new BadRequestException({ error: 'ClientAborted', message: 'Client aborted upload.' })),
-    );
-  });
 }

@@ -5,8 +5,13 @@ import {
   NotFoundException,
   PayloadTooLargeException,
 } from '@nestjs/common';
+import { createHash } from 'node:crypto';
+import { promises as fs } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { Readable } from 'node:stream';
 import type { Upload } from '@prisma/client';
+import sharp from 'sharp';
 import { UploadsService } from './uploads.service.js';
 
 function baseUpload(over: Partial<Upload> = {}): Upload {
@@ -54,7 +59,6 @@ describe('UploadsService.listAttachments', () => {
     const prisma = { upload: { findMany } };
     const storage = {
       headObject: jest.fn(),
-      getObjectBody: jest.fn(),
       deleteObject: jest.fn(),
       putObject: jest.fn(),
       uploadKey: jest.fn(),
@@ -113,7 +117,7 @@ describe('UploadsService.listAttachments', () => {
 describe('UploadsService.init / relayPut', () => {
   type Storage = {
     headObject: jest.Mock;
-    getObjectBody: jest.Mock;
+    putObjectStream: jest.Mock;
     deleteObject: jest.Mock;
     putObject: jest.Mock;
     uploadKey: jest.Mock;
@@ -134,8 +138,8 @@ describe('UploadsService.init / relayPut', () => {
   beforeEach(() => {
     storage = {
       headObject: jest.fn(),
-      getObjectBody: jest.fn(),
-      deleteObject: jest.fn(),
+      putObjectStream: jest.fn().mockResolvedValue(undefined),
+      deleteObject: jest.fn().mockResolvedValue(undefined),
       putObject: jest.fn().mockResolvedValue(undefined),
       uploadKey: jest
         .fn()
@@ -150,7 +154,7 @@ describe('UploadsService.init / relayPut', () => {
       client: {
         get: jest.fn(),
         set: jest.fn().mockResolvedValue('OK'),
-        del: jest.fn(),
+        del: jest.fn().mockResolvedValue(undefined),
       },
     };
     const env = {
@@ -201,11 +205,27 @@ describe('UploadsService.init / relayPut', () => {
       contentType: 'image/png',
       contentLength: 5,
     });
-    expect(storage.putObject).toHaveBeenCalledWith(
+    // The body streams straight to storage (never buffered in the
+    // service) with a byte-counted ceiling derived from MAX_UPLOAD_MB.
+    expect(storage.putObjectStream).toHaveBeenCalledWith(
       'c1',
       'c1/uploads/u-1/a.png',
-      Buffer.from('hello'),
-      { contentType: 'image/png' },
+      body,
+      { contentType: 'image/png', maxBytes: 1024 * 1024 },
+    );
+    // Write-once slot is claimed (NX), then marked done.
+    expect(redis.client.set).toHaveBeenCalledWith(
+      'upload:body:u-1',
+      'writing',
+      'EX',
+      15 * 60,
+      'NX',
+    );
+    expect(redis.client.set).toHaveBeenCalledWith(
+      'upload:body:u-1',
+      'done',
+      'EX',
+      15 * 60,
     );
   });
 
@@ -214,7 +234,7 @@ describe('UploadsService.init / relayPut', () => {
     await expect(
       service.relayPut(actor, 'c1', 'u-1', Readable.from(Buffer.alloc(0)), {}),
     ).rejects.toBeInstanceOf(NotFoundException);
-    expect(storage.putObject).not.toHaveBeenCalled();
+    expect(storage.putObjectStream).not.toHaveBeenCalled();
   });
 
   it('relayPut rejects when the company scope mismatches', async () => {
@@ -273,7 +293,10 @@ describe('UploadsService.init / relayPut', () => {
     ).rejects.toBeInstanceOf(PayloadTooLargeException);
   });
 
-  it('relayPut rejects when the streamed body exceeds the limit even if header lies', async () => {
+  it('relayPut surfaces the storage size-limit rejection (enforced while streaming)', async () => {
+    // Byte-level enforcement now lives in putObjectStream (covered in the
+    // local-storage spec); relayPut must surface it rather than trusting
+    // a (possibly lying) Content-Length.
     redis.client.get.mockResolvedValue(
       JSON.stringify({
         companyId: 'c1',
@@ -286,13 +309,81 @@ describe('UploadsService.init / relayPut', () => {
         attachedToId: null,
       }),
     );
-    const oversize = Buffer.alloc(2 * 1024 * 1024); // 2 MB > 1 MB cap
+    storage.putObjectStream.mockRejectedValue(
+      new PayloadTooLargeException({ error: 'FileTooLarge' }),
+    );
     await expect(
-      service.relayPut(actor, 'c1', 'u-1', Readable.from(oversize), {
+      service.relayPut(actor, 'c1', 'u-1', Readable.from(Buffer.from('x')), {
         contentLength: 5,
       }),
     ).rejects.toBeInstanceOf(PayloadTooLargeException);
-    expect(storage.putObject).not.toHaveBeenCalled();
+    // Slot released so a corrected retry can re-claim it.
+    expect(redis.client.del).toHaveBeenCalledWith('upload:body:u-1');
+  });
+
+  it('relayPut rejects a second PUT once the body slot is claimed (write-once)', async () => {
+    redis.client.get.mockResolvedValue(
+      JSON.stringify({
+        companyId: 'c1',
+        filename: 'a.png',
+        mimeType: 'image/png',
+        sizeBytes: 5,
+        storageKey: 'k',
+        uploaderId: 'user-1',
+        attachedToType: null,
+        attachedToId: null,
+      }),
+    );
+    redis.client.set.mockResolvedValueOnce(null); // NX claim loses the race
+    await expect(
+      service.relayPut(actor, 'c1', 'u-1', Readable.from(Buffer.from('x')), {}),
+    ).rejects.toBeInstanceOf(ConflictException);
+    expect(storage.putObjectStream).not.toHaveBeenCalled();
+  });
+
+  it('relayPut maps a client abort to a 400, not a server error', async () => {
+    redis.client.get.mockResolvedValue(
+      JSON.stringify({
+        companyId: 'c1',
+        filename: 'a.png',
+        mimeType: 'image/png',
+        sizeBytes: 5,
+        storageKey: 'k',
+        uploaderId: 'user-1',
+        attachedToType: null,
+        attachedToId: null,
+      }),
+    );
+    const body = new Readable({ read() {} });
+    storage.putObjectStream.mockImplementation(async () => {
+      body.emit('aborted');
+      throw new Error('premature close');
+    });
+    await expect(
+      service.relayPut(actor, 'c1', 'u-1', body, {}),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(redis.client.del).toHaveBeenCalledWith('upload:body:u-1');
+  });
+
+  it('relayPut bubbles a storage write error instead of labeling it a client abort', async () => {
+    redis.client.get.mockResolvedValue(
+      JSON.stringify({
+        companyId: 'c1',
+        filename: 'a.png',
+        mimeType: 'image/png',
+        sizeBytes: 5,
+        storageKey: 'k',
+        uploaderId: 'user-1',
+        attachedToType: null,
+        attachedToId: null,
+      }),
+    );
+    const fsError = Object.assign(new Error('disk full'), { code: 'ENOSPC' });
+    storage.putObjectStream.mockRejectedValue(fsError);
+    await expect(
+      service.relayPut(actor, 'c1', 'u-1', Readable.from(Buffer.from('x')), {}),
+    ).rejects.toBe(fsError);
+    expect(redis.client.del).toHaveBeenCalledWith('upload:body:u-1');
   });
 });
 
@@ -1019,7 +1110,6 @@ describe('UploadsService attachment parent invariants (WS-013)', () => {
             `${cid}/uploads/${uid}/${name}`,
         ),
       headObject: jest.fn(),
-      getObjectBody: jest.fn(),
       deleteObject: jest.fn(),
       putObject: jest.fn(),
       thumbnailKey: jest.fn(),
@@ -1387,5 +1477,294 @@ describe('UploadsService.paginatedList CLIENT_USER filter', () => {
       'u-orphan',
       'u-pw-hidden',
     ]);
+  });
+});
+
+describe('UploadsService.confirm — streamed hashing + storage-read races', () => {
+  const operator = { id: 'user-1', role: 'OPERATOR' } as never;
+  const auditMeta = { ip: '127.0.0.1', userAgent: 'jest' };
+
+  // These cases deliberately drive the text/* + UTF-8 BOM fast-path,
+  // which skips `file-type`, so they isolate the streamed SHA-256 and the
+  // null-storage-read guards. Real magic-byte detection and the image
+  // thumbnail path are covered in the sibling describe block below.
+  const bom = Buffer.from([0xef, 0xbb, 0xbf]);
+
+  function makeService(opts: {
+    head: Buffer | null;
+    body: Buffer;
+    streamNull?: boolean;
+  }) {
+    const prisma = {
+      upload: {
+        create: jest
+          .fn()
+          .mockImplementation(
+            async ({ data }: { data: Record<string, unknown> }) => ({
+              ...data,
+              createdAt: new Date('2026-01-01T00:00:00Z'),
+            }),
+          ),
+      },
+      asset: { findFirst: jest.fn().mockResolvedValue(null) },
+      article: { findFirst: jest.fn().mockResolvedValue(null) },
+      assetField: { findFirst: jest.fn().mockResolvedValue(null) },
+      password: { findFirst: jest.fn().mockResolvedValue(null) },
+    };
+    const storage = {
+      headObject: jest.fn().mockResolvedValue({
+        ContentLength: opts.body.length,
+        LastModified: new Date('2026-01-01T00:00:00Z'),
+        ETag: '"e"',
+      }),
+      getObjectHead: jest.fn().mockResolvedValue(opts.head),
+      getObjectStream: jest
+        .fn()
+        .mockResolvedValue(
+          opts.streamNull ? null : { body: Readable.from(opts.body) },
+        ),
+      getObjectPath: jest.fn().mockReturnValue('/unused'),
+      deleteObject: jest.fn().mockResolvedValue(undefined),
+      putObject: jest.fn().mockResolvedValue(undefined),
+      thumbnailKey: jest.fn().mockReturnValue('c1/thumbs/u-1.webp'),
+    };
+    const redis = {
+      client: {
+        get: jest.fn().mockResolvedValue(
+          JSON.stringify({
+            companyId: 'c1',
+            filename: 'note.txt',
+            mimeType: 'text/plain',
+            sizeBytes: opts.body.length,
+            storageKey: 'c1/uploads/u-1/note.txt',
+            uploaderId: 'user-1',
+            attachedToType: null,
+            attachedToId: null,
+          }),
+        ),
+        set: jest.fn().mockResolvedValue('OK'),
+        del: jest.fn().mockResolvedValue(undefined),
+      },
+    };
+    const service = new UploadsService(
+      prisma as never,
+      storage as never,
+      redis as never,
+      { log: jest.fn() } as never,
+      {
+        values: { MAX_UPLOAD_MB: 25, ALLOWED_UPLOAD_MIME: 'text/plain' },
+      } as never,
+    );
+    return { service, prisma, storage };
+  }
+
+  it('hashes the stored file by streaming and persists the digest', async () => {
+    const body = Buffer.concat([bom, Buffer.from('hello world')]);
+    const expected = createHash('sha256').update(body).digest('hex');
+    const { service, prisma, storage } = makeService({ head: body, body });
+    const res = await service.confirm(
+      operator,
+      'c1',
+      { uploadId: 'u-1' } as never,
+      auditMeta,
+    );
+    // Hash comes from a streamed read, not a full in-memory buffer.
+    expect(storage.getObjectStream).toHaveBeenCalledWith(
+      'c1',
+      'c1/uploads/u-1/note.txt',
+    );
+    expect(res.sha256).toBe(expected);
+    expect(prisma.upload.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ sha256: expected, isImage: false }),
+      }),
+    );
+  });
+
+  it('returns a shaped 400 (not a 500) when the head read races to null', async () => {
+    const { service } = makeService({ head: null, body: Buffer.from('x') });
+    await expect(
+      service.confirm(operator, 'c1', { uploadId: 'u-1' } as never, auditMeta),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('returns a shaped 400 (not a 500) when the hash stream races to null', async () => {
+    const body = Buffer.concat([bom, Buffer.from('hi')]);
+    const { service } = makeService({ head: body, body, streamNull: true });
+    await expect(
+      service.confirm(operator, 'c1', { uploadId: 'u-1' } as never, auditMeta),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+});
+
+describe('UploadsService.confirm — magic-byte validation + image thumbnail (real file-type/sharp)', () => {
+  const operator = { id: 'user-1', role: 'OPERATOR' } as never;
+  const auditMeta = { ip: '127.0.0.1', userAgent: 'jest' };
+  const docxMime =
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+  const allowed = `image/png,application/zip,${docxMime}`;
+  // A real single-entry ZIP (contains `hello.txt`); `file-type` reports it
+  // as application/zip — the declared-docx compatibility case.
+  const realZip = Buffer.from(
+    'UEsDBAoAAAAAAFY/4VyGphA2BQAAAAUAAAAJABwAaGVsbG8udHh0VVQJAAPzAEVq8wBFanV4CwABBPUBAAAEFAAAAGhlbGxvUEsBAh4DCgAAAAAAVj/hXIamEDYFAAAABQAAAAkAGAAAAAAAAQAAAKSBAAAAAGhlbGxvLnR4dFVUBQAD8wBFanV4CwABBPUBAAAEFAAAAFBLBQYAAAAAAQABAE8AAABIAAAAAAA=',
+    'base64',
+  );
+
+  let pngBuffer: Buffer;
+  let tmpDir: string;
+  let pngPath: string;
+
+  beforeAll(async () => {
+    pngBuffer = await sharp({
+      create: {
+        width: 8,
+        height: 8,
+        channels: 3,
+        background: { r: 255, g: 0, b: 0 },
+      },
+    })
+      .png()
+      .toBuffer();
+    tmpDir = await fs.mkdtemp(join(tmpdir(), 'confirm-real-'));
+    pngPath = join(tmpDir, 'img.png');
+    await fs.writeFile(pngPath, pngBuffer);
+  });
+
+  afterAll(async () => {
+    if (tmpDir) await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  function makeService(opts: {
+    mimeType: string;
+    head: Buffer;
+    body: Buffer;
+    objectPath?: string;
+  }) {
+    const prisma = {
+      upload: {
+        create: jest
+          .fn()
+          .mockImplementation(
+            async ({ data }: { data: Record<string, unknown> }) => ({
+              ...data,
+              createdAt: new Date('2026-01-01T00:00:00Z'),
+            }),
+          ),
+      },
+      asset: { findFirst: jest.fn().mockResolvedValue(null) },
+      article: { findFirst: jest.fn().mockResolvedValue(null) },
+      assetField: { findFirst: jest.fn().mockResolvedValue(null) },
+      password: { findFirst: jest.fn().mockResolvedValue(null) },
+    };
+    const storage = {
+      headObject: jest.fn().mockResolvedValue({
+        ContentLength: opts.body.length,
+        LastModified: new Date('2026-01-01T00:00:00Z'),
+        ETag: '"e"',
+      }),
+      getObjectHead: jest.fn().mockResolvedValue(opts.head),
+      getObjectStream: jest
+        .fn()
+        .mockResolvedValue({ body: Readable.from(opts.body) }),
+      getObjectPath: jest.fn().mockReturnValue(opts.objectPath ?? '/unused'),
+      deleteObject: jest.fn().mockResolvedValue(undefined),
+      putObject: jest.fn().mockResolvedValue(undefined),
+      thumbnailKey: jest.fn().mockReturnValue('c1/thumbs/u-1.webp'),
+    };
+    const redis = {
+      client: {
+        get: jest.fn().mockResolvedValue(
+          JSON.stringify({
+            companyId: 'c1',
+            filename: 'f',
+            mimeType: opts.mimeType,
+            sizeBytes: opts.body.length,
+            storageKey: 'c1/uploads/u-1/f',
+            uploaderId: 'user-1',
+            attachedToType: null,
+            attachedToId: null,
+          }),
+        ),
+        set: jest.fn().mockResolvedValue('OK'),
+        del: jest.fn().mockResolvedValue(undefined),
+      },
+    };
+    const service = new UploadsService(
+      prisma as never,
+      storage as never,
+      redis as never,
+      { log: jest.fn() } as never,
+      { values: { MAX_UPLOAD_MB: 25, ALLOWED_UPLOAD_MIME: allowed } } as never,
+    );
+    return { service, prisma, storage };
+  }
+
+  it('rejects when magic bytes contradict the declared MIME and deletes the object', async () => {
+    // Declared a zip, but the stored bytes are a real PNG → mismatch.
+    const { service, storage } = makeService({
+      mimeType: 'application/zip',
+      head: pngBuffer,
+      body: pngBuffer,
+    });
+    await expect(
+      service.confirm(operator, 'c1', { uploadId: 'u-1' } as never, auditMeta),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(storage.deleteObject).toHaveBeenCalled();
+    // Rejected before spending work hashing the body.
+    expect(storage.getObjectStream).not.toHaveBeenCalled();
+  });
+
+  it('accepts a docx whose magic bytes detect as zip (compatible) and keeps the declared MIME', async () => {
+    const { service, prisma } = makeService({
+      mimeType: docxMime,
+      head: realZip,
+      body: realZip,
+    });
+    await service.confirm(
+      operator,
+      'c1',
+      { uploadId: 'u-1' } as never,
+      auditMeta,
+    );
+    expect(prisma.upload.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ mimeType: docxMime, isImage: false }),
+      }),
+    );
+  });
+
+  it('records dimensions and writes a thumbnail for an image (sharp reads the stored path)', async () => {
+    const { service, prisma, storage } = makeService({
+      mimeType: 'image/png',
+      head: pngBuffer,
+      body: pngBuffer,
+      objectPath: pngPath,
+    });
+    await service.confirm(
+      operator,
+      'c1',
+      { uploadId: 'u-1' } as never,
+      auditMeta,
+    );
+    expect(storage.getObjectPath).toHaveBeenCalledWith(
+      'c1',
+      'c1/uploads/u-1/f',
+    );
+    expect(prisma.upload.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          isImage: true,
+          width: 8,
+          height: 8,
+          thumbnailKey: 'c1/thumbs/u-1.webp',
+        }),
+      }),
+    );
+    expect(storage.putObject).toHaveBeenCalledWith(
+      'c1',
+      'c1/thumbs/u-1.webp',
+      expect.any(Buffer),
+      { contentType: 'image/webp' },
+    );
   });
 });

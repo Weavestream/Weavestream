@@ -3,11 +3,14 @@ import {
   Injectable,
   Logger,
   OnModuleInit,
+  PayloadTooLargeException,
 } from '@nestjs/common';
 import { createHash, randomBytes } from 'node:crypto';
-import { createReadStream, type ReadStream } from 'node:fs';
+import { createReadStream, createWriteStream, type ReadStream } from 'node:fs';
 import { promises as fs } from 'node:fs';
 import * as path from 'node:path';
+import { Transform, type Readable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 import { resolveDataDir } from '@weavestream/shared/server';
 import { EnvService } from '../config/env.service.js';
 
@@ -94,9 +97,45 @@ export class LocalStorageService implements OnModuleInit {
     }
   }
 
+  /**
+   * Read a whole object into memory. Kept for callers that genuinely
+   * need the full bytes in the heap (e.g. the worker embedding an image
+   * into a generated PDF). The upload confirm path deliberately avoids
+   * this in favour of {@link getObjectHead} + {@link getObjectStream} so
+   * a large upload never lands in the heap.
+   */
   async getObjectBody(companyId: string, key: string): Promise<Buffer> {
     const abs = this.resolveKey(companyId, key);
     return fs.readFile(abs);
+  }
+
+  /**
+   * Read at most the first `maxBytes` of an object into a Buffer for
+   * cheap magic-byte / BOM sniffing without loading the whole file into
+   * the heap. Returns `null` on a missing / non-file key, mirroring
+   * {@link getObjectStream}.
+   */
+  async getObjectHead(
+    companyId: string,
+    key: string,
+    maxBytes: number,
+  ): Promise<Buffer | null> {
+    const abs = this.resolveKey(companyId, key);
+    let stat;
+    try {
+      stat = await fs.stat(abs);
+    } catch (err) {
+      if (isEnoent(err)) return null;
+      throw err;
+    }
+    if (!stat.isFile()) return null;
+    if (maxBytes <= 0 || stat.size === 0) return Buffer.alloc(0);
+    const end = Math.min(maxBytes, stat.size) - 1;
+    const chunks: Buffer[] = [];
+    for await (const chunk of createReadStream(abs, { start: 0, end })) {
+      chunks.push(chunk as Buffer);
+    }
+    return Buffer.concat(chunks);
   }
 
   /**
@@ -134,6 +173,17 @@ export class LocalStorageService implements OnModuleInit {
   }
 
   /**
+   * Resolve a stored object to its absolute on-disk path (no I/O).
+   * Local backend only — exposed so callers can hand the path straight
+   * to libraries that read files themselves (e.g. `sharp`), keeping
+   * large media off the JS heap. Tenant containment is enforced by
+   * {@link resolveKey}; existence is the caller's concern.
+   */
+  getObjectPath(companyId: string, key: string): string {
+    return this.resolveKey(companyId, key);
+  }
+
+  /**
    * Atomic write: write to a `<key>.tmp-<rand>` sibling first, then
    * `fs.rename` into place. A crash mid-write leaves the temp file
    * behind (operator can prune) but never a partially written
@@ -152,6 +202,62 @@ export class LocalStorageService implements OnModuleInit {
     const tmp = `${abs}.tmp-${randomBytes(8).toString('hex')}`;
     try {
       await fs.writeFile(tmp, body, { flag: 'wx' });
+      await fs.rename(tmp, abs);
+    } catch (err) {
+      await fs.rm(tmp, { force: true }).catch(() => undefined);
+      throw err;
+    }
+  }
+
+  /**
+   * Streaming counterpart to {@link putObject}. Pipes `source` straight
+   * to a `<key>.tmp-<rand>` sibling and atomically renames it into
+   * place, so the full body never lands in the JS heap. Enforces
+   * `maxBytes` by counting bytes as they flow — it never trusts a
+   * declared Content-Length — and tears the write down with the same
+   * `PayloadTooLargeException` shape the old in-memory reader used. Any
+   * failure removes the temp file.
+   *
+   * Byte-overflow surfaces as `PayloadTooLargeException`; filesystem and
+   * write-stream errors bubble unchanged so the caller can map them to a
+   * 5xx. Detecting a *client* abort is the caller's job (it owns the
+   * request stream), so this method does not translate stream aborts.
+   */
+  async putObjectStream(
+    companyId: string,
+    key: string,
+    source: Readable,
+    opts: { contentType: string; maxBytes: number },
+  ): Promise<void> {
+    void opts.contentType;
+    const abs = this.resolveKey(companyId, key);
+    await fs.mkdir(path.dirname(abs), { recursive: true });
+    const tmp = `${abs}.tmp-${randomBytes(8).toString('hex')}`;
+    let received = 0;
+    const meter = new Transform({
+      transform(chunk: Buffer | string, _enc, cb) {
+        // Count actual bytes, not `String.length`: a Readable may emit
+        // strings, and a multibyte character would otherwise undercount
+        // against `maxBytes` (and write more bytes than we tallied).
+        // Push the Buffer downstream so the write matches what we count.
+        const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+        received += buf.length;
+        if (received > opts.maxBytes) {
+          cb(
+            new PayloadTooLargeException({
+              error: 'FileTooLarge',
+              sizeBytes: received,
+              maxBytes: opts.maxBytes,
+              message: `Upload body exceeds ${opts.maxBytes} bytes.`,
+            }),
+          );
+          return;
+        }
+        cb(null, buf);
+      },
+    });
+    try {
+      await pipeline(source, meter, createWriteStream(tmp, { flags: 'wx' }));
       await fs.rename(tmp, abs);
     } catch (err) {
       await fs.rm(tmp, { force: true }).catch(() => undefined);
