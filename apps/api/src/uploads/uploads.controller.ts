@@ -282,9 +282,11 @@ export class UploadsController {
   }
 
   /**
-   * Restorability + storage location for the audit-log restore panel.
-   * SUPER_ADMIN-only (enforced in the service): returns the internal
-   * storage key so an admin can locate a blocked file in the data store.
+   * Restorability for the audit-log restore panel (whether the row is
+   * deleted, whether it can be restored, and if not why). SUPER_ADMIN-only
+   * (enforced in the service). Deliberately does NOT return the storage
+   * key — that disclosure is the separate, audited `reveal-path` endpoint
+   * below.
    */
   @Get(':id/restore-info')
   @RequirePermission('upload.read', { companyIdFrom: 'params.companyId' })

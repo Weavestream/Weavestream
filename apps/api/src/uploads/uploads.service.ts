@@ -126,8 +126,9 @@ export interface SerializedUpload {
 export type UploadRestoreBlockedReason = 'parent_missing' | 'parent_archived';
 
 /**
- * Restorability + storage location for the audit-log restore panel.
- * SUPER_ADMIN-only (see `UploadsService.restoreInfo`).
+ * Restorability for the audit-log restore panel (SUPER_ADMIN-only, see
+ * `UploadsService.restoreInfo`). The storage key is intentionally absent —
+ * it is disclosed only by the audited `revealStoragePath`.
  */
 export interface UploadRestoreInfo {
   /** Whether the row is currently soft-deleted. */

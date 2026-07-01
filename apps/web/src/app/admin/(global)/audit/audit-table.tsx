@@ -468,9 +468,11 @@ type UploadRestoreInfo = {
  * SUPER_ADMIN-only restore affordance for a soft-deleted upload, shown in
  * the audit detail drawer for `upload.delete` entries. Fetches
  * restorability on open: the Restore button is disabled (with helper text)
- * when the file was reaped or its parent is gone/archived, and the
- * internal storage path is always shown with a copy button so an admin can
- * retrieve a blocked file from the data store directly.
+ * when the file was reaped or its parent is gone/archived. A "Copy file
+ * path" button fetches the internal storage key from the audited
+ * `reveal-path` endpoint on click — the key is never sent to the client
+ * until an admin explicitly copies it — so a blocked file can still be
+ * retrieved from the data store directly.
  */
 function UploadRestorePanel({
   companyId,
