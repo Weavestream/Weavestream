@@ -1,4 +1,5 @@
 import type { IpRuleLike } from '@weavestream/shared';
+import { API_INTERNAL_URL } from './api-config';
 
 /**
  * Module-level cache of the active IP allow/deny rules, polled from
@@ -19,7 +20,6 @@ import type { IpRuleLike } from '@weavestream/shared';
  */
 
 const TTL_MS = 30_000;
-const API_INTERNAL_URL = process.env.API_INTERNAL_URL ?? 'http://api:4000';
 
 let cached: IpRuleLike[] = [];
 let fetchedAt = 0;

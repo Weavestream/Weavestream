@@ -7,6 +7,12 @@ import {
   resolveClientIpFromXff,
 } from './lib/client-ip';
 import { getActiveIpRules } from './lib/ip-rules-cache';
+import {
+  ACCESS_COOKIE_NAME,
+  API_INTERNAL_URL,
+  CSRF_COOKIE_NAME,
+  SESSION_COOKIE_NAME,
+} from './lib/api-config';
 
 /**
  * CSP + security headers. Strict by default; no 'unsafe-eval' in production.
@@ -97,7 +103,16 @@ export async function proxy(req: NextRequest) {
     });
   }
 
+  const preflightSetCookies = await refreshAccessCookieForProtectedPage(
+    req,
+    requestHeaders,
+    resolvedClientIp,
+  );
+
   const res = NextResponse.next({ request: { headers: requestHeaders } });
+  for (const setCookie of preflightSetCookies) {
+    res.headers.append('set-cookie', setCookie);
+  }
   res.headers.set('Content-Security-Policy', csp);
   res.headers.set('X-Content-Type-Options', 'nosniff');
   res.headers.set('Referrer-Policy', 'strict-origin-when-cross-origin');
@@ -141,6 +156,169 @@ function cryptoRandomNonce(): string {
   const bytes = new Uint8Array(16);
   crypto.getRandomValues(bytes);
   return Buffer.from(bytes).toString('base64');
+}
+
+async function refreshAccessCookieForProtectedPage(
+  req: NextRequest,
+  requestHeaders: Headers,
+  resolvedClientIp: string,
+): Promise<string[]> {
+  if (!shouldPreflightAuth(req)) return [];
+  if (!req.cookies.has(SESSION_COOKIE_NAME) || req.cookies.has(ACCESS_COOKIE_NAME)) {
+    return [];
+  }
+
+  let cookieHeader = requestHeaders.get('cookie') ?? '';
+  let csrfToken = req.cookies.get(CSRF_COOKIE_NAME)?.value;
+  const setCookies: string[] = [];
+
+  if (!csrfToken) {
+    const csrfRes = await fetch(`${API_INTERNAL_URL}/api/v1/auth/csrf`, {
+      method: 'POST',
+      headers: refreshHeaders(req, cookieHeader, resolvedClientIp),
+      cache: 'no-store',
+    }).catch(() => null);
+
+    if (!csrfRes?.ok) return [];
+    const issuedCookies = getSetCookieHeaders(csrfRes.headers);
+    setCookies.push(...issuedCookies);
+    cookieHeader = mergeSetCookiesIntoCookieHeader(cookieHeader, issuedCookies);
+    requestHeaders.set('cookie', cookieHeader);
+    csrfToken = extractCookieValue(cookieHeader, CSRF_COOKIE_NAME);
+    if (!csrfToken) return setCookies;
+  }
+
+  const refreshRes = await fetch(`${API_INTERNAL_URL}/api/v1/auth/refresh`, {
+    method: 'POST',
+    headers: refreshHeaders(req, cookieHeader, resolvedClientIp, csrfToken),
+    cache: 'no-store',
+  }).catch(() => null);
+
+  if (!refreshRes) return setCookies;
+  const refreshCookies = getSetCookieHeaders(refreshRes.headers);
+  setCookies.push(...refreshCookies);
+  if (refreshCookies.length > 0) {
+    cookieHeader = mergeSetCookiesIntoCookieHeader(cookieHeader, refreshCookies);
+    requestHeaders.set('cookie', cookieHeader);
+  }
+  return setCookies;
+}
+
+/**
+ * Which page routes get an access-cookie preflight refresh before they
+ * render. This allowlist is COUPLED to `server-api.ts`, which strips the
+ * long-lived refresh cookie from every SSR read: once the short-lived
+ * access cookie expires, an authenticated route that is NOT listed here
+ * gets no fresh access cookie and no refresh-cookie fallback, so its SSR
+ * `/me` fetch 401s and `getMe()` returns null → the layout bounces the
+ * user to `/login` even though their session is still valid. Every
+ * authenticated top-level route MUST appear below; add new ones here.
+ */
+function shouldPreflightAuth(req: NextRequest): boolean {
+  const { pathname } = req.nextUrl;
+  if (
+    pathname.startsWith('/api/') ||
+    pathname.startsWith('/login') ||
+    pathname.startsWith('/setup/') ||
+    pathname.startsWith('/mfa/')
+  ) {
+    return false;
+  }
+  return (
+    pathname === '/' ||
+    pathname === '/access-pending' ||
+    pathname === '/admin' ||
+    pathname.startsWith('/admin/') ||
+    pathname === '/me' ||
+    pathname.startsWith('/me/') ||
+    pathname.startsWith('/portal/')
+  );
+}
+
+function refreshHeaders(
+  req: NextRequest,
+  cookieHeader: string,
+  resolvedClientIp: string,
+  csrfToken?: string,
+): Headers {
+  const headers = new Headers({
+    accept: 'application/json',
+    cookie: cookieHeader,
+  });
+  headers.set('x-forwarded-for', resolvedClientIp);
+  headers.set('x-forwarded-host', req.nextUrl.host);
+  headers.set(
+    'x-forwarded-proto',
+    req.nextUrl.protocol.replace(':', '') || 'http',
+  );
+  const userAgent = req.headers.get('user-agent');
+  if (userAgent) headers.set('user-agent', userAgent);
+  if (csrfToken) headers.set('x-csrf-token', csrfToken);
+  return headers;
+}
+
+function getSetCookieHeaders(headers: Headers): string[] {
+  const withGetter = headers as Headers & { getSetCookie?: () => string[] };
+  const values = withGetter.getSetCookie?.();
+  if (values && values.length > 0) return values;
+  const combined = headers.get('set-cookie');
+  return combined ? splitSetCookieHeader(combined) : [];
+}
+
+function splitSetCookieHeader(header: string): string[] {
+  return header.split(/,(?=\s*[^;,]+=)/).map((v) => v.trim()).filter(Boolean);
+}
+
+function mergeSetCookiesIntoCookieHeader(
+  cookieHeader: string,
+  setCookies: string[],
+): string {
+  const cookies = new Map<string, string>();
+  for (const part of cookieHeader.split(';')) {
+    const trimmed = part.trim();
+    if (!trimmed) continue;
+    const idx = trimmed.indexOf('=');
+    if (idx <= 0) continue;
+    cookies.set(trimmed.slice(0, idx), trimmed.slice(idx + 1));
+  }
+
+  for (const setCookie of setCookies) {
+    const pair = setCookie.split(';', 1)[0]?.trim();
+    if (!pair) continue;
+    const idx = pair.indexOf('=');
+    if (idx <= 0) continue;
+    const name = pair.slice(0, idx);
+    const value = pair.slice(idx + 1);
+    if (isCookieDeletion(setCookie, value)) {
+      cookies.delete(name);
+    } else {
+      cookies.set(name, value);
+    }
+  }
+
+  return Array.from(cookies, ([name, value]) => `${name}=${value}`).join('; ');
+}
+
+/**
+ * Whether a Set-Cookie clears the cookie rather than setting it. Express's
+ * `clearCookie` emits an empty value; belt-and-suspenders we also treat any
+ * non-positive `Max-Age` as a deletion (whitespace-tolerant, so `Max-Age=0`,
+ * `Max-Age= 0 `, and `Max-Age=-1` all count) in case the upstream cookie
+ * serialization ever changes.
+ */
+function isCookieDeletion(setCookie: string, value: string): boolean {
+  if (value === '') return true;
+  const maxAge = /;\s*max-age\s*=\s*(-?\d+)/i.exec(setCookie);
+  return maxAge !== null && Number(maxAge[1]) <= 0;
+}
+
+function extractCookieValue(cookieHeader: string, name: string): string | undefined {
+  for (const part of cookieHeader.split(';')) {
+    const trimmed = part.trim();
+    if (!trimmed.startsWith(`${name}=`)) continue;
+    return trimmed.slice(name.length + 1);
+  }
+  return undefined;
 }
 
 export const config = {

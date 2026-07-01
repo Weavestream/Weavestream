@@ -2,6 +2,7 @@ import { cache } from 'react';
 import { cookies, headers } from 'next/headers';
 import { notFound, redirect } from 'next/navigation';
 import { getResolvedClientIp } from './client-ip';
+import { API_INTERNAL_URL, SESSION_COOKIE_NAME } from './api-config';
 import type {
   AiSettings,
   AlertConfig,
@@ -37,12 +38,9 @@ export type {
   UserUiPreferences,
 };
 
-/**
- * Internal base URL for the API from inside Next.js (docker service name in
- * production, localhost in local dev). Never expose this to the browser —
- * the browser always goes through the `/api/v1` reverse proxy.
- */
-export const API_INTERNAL_URL = process.env.API_INTERNAL_URL ?? 'http://api:4000';
+// Re-exported from the proxy/edge-safe `api-config` module (which `proxy.ts`
+// also consumes) so the value and its default stay defined in one place.
+export { API_INTERNAL_URL };
 
 /**
  * Thrown by `getMe`, `getSettings`, and any other server helper that would
@@ -250,6 +248,11 @@ export async function serverApiFetch<T>(
   const cookieStore = await cookies();
   const cookieHeader = cookieStore
     .getAll()
+    // Server Component fetches cannot forward Set-Cookie back to the
+    // browser, so never let an SSR read silently rotate the long-lived
+    // refresh cookie. `proxy.ts` (`shouldPreflightAuth`) refreshes before
+    // protected page renders when the short-lived access cookie is missing.
+    .filter((c) => c.name !== SESSION_COOKIE_NAME)
     .map((c) => `${c.name}=${c.value}`)
     .join('; ');
 
