@@ -6,7 +6,7 @@ import {
   getCompanyDetail,
   getCompanyPasswordFolders,
   requireMe,
-  getPasswordDetail,
+  getPasswordDetailResult,
   getSettings,
   listPasswordVersions,
   throwUnlessFound,
@@ -16,7 +16,7 @@ import {
   PageBody,
   PageHeader,
 } from '../../../../../../components/shell/page-header';
-import { LayoutSwatch, Tag } from '../../../../../../components/ui';
+import { ErrorBanner, LayoutSwatch, Tag } from '../../../../../../components/ui';
 import { buildTerm } from '../../../../../../lib/term';
 import { companyCrumbs } from '../../../../../../lib/company-crumbs';
 import {
@@ -44,18 +44,62 @@ export default async function PasswordDetailPage({
   const settings = await getSettings();
   const term = buildTerm(settings);
 
-  const [companyRes, password, folders, versions] = await Promise.all([
+  const [companyRes, passwordResult, folders] = await Promise.all([
     getCompanyDetail(companyId),
-    getPasswordDetail(companyId, passwordId),
+    getPasswordDetailResult(companyId, passwordId),
     getCompanyPasswordFolders(companyId),
-    listPasswordVersions(companyId, passwordId),
   ]);
   const company = throwUnlessFound(companyRes, `/companies/${companyId}`);
+
+  // A non-allowlisted operator gets 403 from the API (a CLIENT_USER gets
+  // 404, handled by `notFound()` below so existence stays hidden). Render
+  // a clear "no access" state rather than a bare not-found — the
+  // credential is real, the viewer just isn't on its internal access
+  // list. Return before fetching versions/asset so the denied path issues
+  // no further (also-denied) requests.
+  if (passwordResult.status === 403) {
+    return (
+      <>
+        <PageHeader
+          crumbs={companyCrumbs(
+            term,
+            company,
+            {
+              label: 'Passwords',
+              href: `/admin/companies/${companyId}/passwords`,
+            },
+            { label: 'Restricted' },
+          )}
+          leading={<LayoutSwatch icon="lock" color="var(--muted)" size={48} />}
+          title="Restricted credential"
+        />
+        <PageBody>
+          <ErrorBanner
+            tone="warn"
+            title="You don't have access to this credential"
+            detail="This credential is restricted to specific internal users. Ask a workspace admin to add you to its internal access list."
+          >
+            <Link
+              href={`/admin/companies/${companyId}/passwords`}
+              style={{ color: 'var(--accent)', textDecoration: 'underline' }}
+            >
+              Back to passwords
+            </Link>
+          </ErrorBanner>
+        </PageBody>
+      </>
+    );
+  }
+
+  const password = passwordResult.data;
   if (!password) notFound();
 
-  const linkedAsset = password.assetId
-    ? await getAsset(companyId, password.assetId)
-    : null;
+  const [versions, linkedAsset] = await Promise.all([
+    listPasswordVersions(companyId, passwordId),
+    password.assetId
+      ? getAsset(companyId, password.assetId)
+      : Promise.resolve(null),
+  ]);
 
   const manage = canWriteCompany(me, company.id);
   const manageInternalAccess = manage && hasCapability(me, 'MEMBERSHIP_MANAGE');

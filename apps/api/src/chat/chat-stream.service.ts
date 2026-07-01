@@ -303,11 +303,12 @@ export class ChatStreamService {
         body: JSON.stringify({
           model: config.defaultModel,
           stream: true,
-          // Deterministic-ish + an explicit output ceiling. Without
-          // `max_tokens` the model can run to its default cap mid-JSON
-          // and the tool arguments arrive truncated.
+          // Deterministic-ish + an explicit output ceiling. Without an
+          // output-token cap the model can run to its default limit
+          // mid-JSON and the tool arguments arrive truncated. The field
+          // name depends on the model (see `outputTokenParam`).
           temperature: CHAT_TEMPERATURE,
-          max_tokens: config.maxOutputTokens,
+          ...outputTokenParam(config.defaultModel, config.maxOutputTokens),
           messages: upstreamMessages,
           ...(routed.tools.length > 0
             ? { tools: routed.tools, tool_choice: routed.toolChoice }
@@ -515,7 +516,7 @@ export class ChatStreamService {
           // Reasoning models burn most of their budget inside the
           // <think> block before answering. 1024 is plenty for a few
           // words of title and still cheap.
-          max_tokens: 1024,
+          ...outputTokenParam(config.defaultModel, 1024),
           // vLLM / LM Studio / SGLang convention to disable
           // reasoning-mode emission entirely for this request. Servers
           // that don't recognise the flag will simply ignore it.
@@ -618,7 +619,7 @@ export class ChatStreamService {
           // Reasoning models may burn budget before producing the
           // visible sentence. Keep this aligned with title generation:
           // accept only final content below, never reasoning fields.
-          max_tokens: 1024,
+          ...outputTokenParam(config.defaultModel, 1024),
           enable_thinking: false,
           chat_template_kwargs: { enable_thinking: false },
           reasoning: { effort: 'none' },
@@ -827,6 +828,22 @@ function writeError(res: Response, err: unknown): void {
 
 function stripTrailingSlash(s: string): string {
   return s.endsWith('/') ? s.slice(0, -1) : s;
+}
+
+// OpenAI's GPT-5 family rejects the legacy `max_tokens` field and requires
+// `max_completion_tokens` instead. Every other endpoint we target — older
+// GPT-4/3.5 and all local/self-hosted OpenAI-compatible servers (LM Studio,
+// Ollama, vLLM) — speaks the original shape and only understands
+// `max_tokens`, so we keep sending that unless the model is a GPT-5. The
+// o-series reasoning models also want the new field but are intentionally
+// out of scope here (expensive, unused); selecting one would 400.
+function outputTokenParam(
+  model: string | null,
+  budget: number,
+): { max_completion_tokens: number } | { max_tokens: number } {
+  return model && /^gpt-5/i.test(model)
+    ? { max_completion_tokens: budget }
+    : { max_tokens: budget };
 }
 
 function deriveTitle(content: string): string {

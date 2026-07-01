@@ -1346,6 +1346,13 @@ describe('UploadsService.paginatedList CLIENT_USER filter', () => {
       return [
         { id: 'pw-ok', visibleToClients: true, restrictedToUserIds: [] },
         { id: 'pw-hidden', visibleToClients: false, restrictedToUserIds: [] },
+        // Internal credential restricted to a specific operator ('other-op').
+        // Governs the allow-list enforcement on the list/photos path.
+        {
+          id: 'pw-restricted',
+          visibleToClients: false,
+          restrictedToUserIds: ['other-op'],
+        },
       ].filter((row) => ids.has(row.id));
     });
     const assetFieldFindMany = jest.fn().mockResolvedValue([{ id: 'fld-ok' }]);
@@ -1451,14 +1458,22 @@ describe('UploadsService.paginatedList CLIENT_USER filter', () => {
     expect(ids).toEqual(['u-art-ok', 'u-asset', 'u-fld-ok', 'u-live-body', 'u-pw-ok']);
   });
 
-  it('does not filter for non-CLIENT_USER actors', async () => {
+  it('skips article/asset-field/orphan visibility rules for internal actors but still enforces the password allow-list', async () => {
     const { service } = build([
       { id: 'u-asset', isImage: true, attachedToType: 'asset', attachedToId: 'a' },
       {
-        id: 'u-pw-hidden',
+        // Client-hidden but NOT restricted → readable by any operator.
+        id: 'u-pw-open',
         isImage: true,
         attachedToType: 'password',
         attachedToId: 'pw-hidden',
+      },
+      {
+        // Restricted to 'other-op' → the acting operator 'op' is not on it.
+        id: 'u-pw-restricted',
+        isImage: true,
+        attachedToType: 'password',
+        attachedToId: 'pw-restricted',
       },
       {
         id: 'u-orphan',
@@ -1472,11 +1487,41 @@ describe('UploadsService.paginatedList CLIENT_USER filter', () => {
       limit: 50,
       includeNonLatest: true,
     });
+    // Asset + unrestricted (client-hidden) password + orphan pass through;
+    // the credential restricted to someone else is filtered out even for
+    // an internal actor.
     expect(res.items.map((i) => i.id).sort()).toEqual([
       'u-asset',
       'u-orphan',
-      'u-pw-hidden',
+      'u-pw-open',
     ]);
+  });
+
+  it('keeps restricted password attachments for allow-listed and super-admin actors', async () => {
+    const { service } = build([
+      {
+        id: 'u-pw-restricted',
+        isImage: true,
+        attachedToType: 'password',
+        attachedToId: 'pw-restricted',
+      },
+    ]);
+
+    // Operator on the allow-list ('other-op') sees the attachment.
+    const allowListed = await service.listPhotos('c1', {
+      actor: { id: 'other-op', role: 'OPERATOR' } as never,
+      limit: 50,
+      includeNonLatest: true,
+    });
+    expect(allowListed.items.map((i) => i.id)).toEqual(['u-pw-restricted']);
+
+    // SUPER_ADMIN bypasses the allow-list entirely.
+    const superAdmin = await service.listPhotos('c1', {
+      actor: { id: 'root', role: 'SUPER_ADMIN' } as never,
+      limit: 50,
+      includeNonLatest: true,
+    });
+    expect(superAdmin.items.map((i) => i.id)).toEqual(['u-pw-restricted']);
   });
 });
 

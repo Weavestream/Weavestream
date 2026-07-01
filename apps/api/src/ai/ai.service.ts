@@ -6,6 +6,7 @@ import { AUDIT_ACTIONS } from '../audit/audit-actions.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
 import type { RequestMeta } from '../common/request-meta.js';
 import { EgressBlockedError, safeFetch } from '../common/egress/safe-fetch.js';
+import { describeError } from '../common/describe-error.js';
 
 const TEST_TIMEOUT_MS = 8_000;
 
@@ -74,8 +75,13 @@ export class AiService {
           `The configured AI endpoint is not allowed: ${err.reason}.`,
         );
       }
+      // undici throws a bare `TypeError: fetch failed` and stashes the
+      // real reason (ECONNREFUSED, connect timeout, proxy/TLS errors, …)
+      // on `err.cause`. `describeError` walks that chain so the admin
+      // sees why, not just "fetch failed". Admin-only surface; secrets in
+      // any embedded URL are redacted by the helper.
       throw new BadRequestException(
-        `Could not reach ${url}: ${messageOf(err)}`,
+        `Could not reach ${url}: ${describeError(err)}`,
       );
     }
 
@@ -116,7 +122,9 @@ export class AiService {
       modelCount = models.length;
       return { ok: true, models };
     } catch (err) {
-      error = messageOf(err);
+      // Capture the full cause chain in the durable audit record too, so
+      // a failed test is diagnosable after the fact.
+      error = describeError(err);
       if (err instanceof AiNotConfiguredError) throw err;
       if (err instanceof BadRequestException) throw err;
       throw new BadRequestException(`AI connection test failed: ${error}`);

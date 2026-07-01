@@ -415,6 +415,18 @@ describe('PasswordsService — list', () => {
     expect(list.map((p) => p.id)).toEqual(['pwd-a']);
     expect(list[0]?.restrictedToUserIds).toEqual([]);
   });
+
+  it('includes restricted + client-hidden rows for SUPER_ADMIN', async () => {
+    const { svc } = makeStubs({
+      passwords: [
+        passwordRow({ id: 'pwd-a', restrictedToUserIds: ['someone-else'] }),
+        passwordRow({ id: 'pwd-b', visibleToClients: false }),
+      ],
+    });
+
+    const list = await svc.list(SUPER, 'co-1', {});
+    expect(list.map((p) => p.id).sort()).toEqual(['pwd-a', 'pwd-b']);
+  });
 });
 
 describe('PasswordsService — detail', () => {
@@ -474,6 +486,35 @@ describe('PasswordsService — detail', () => {
     const detail = await svc.getDetail(CLIENT, 'co-1', 'pwd-a');
     expect(detail.id).toBe('pwd-a');
     expect(detail.restrictedToUserIds).toEqual([]);
+  });
+});
+
+describe('PasswordsService — listVersions', () => {
+  it('enforces the internal allow-list before returning history', async () => {
+    const { svc, versions } = makeStubs({
+      passwords: [
+        passwordRow({ id: 'pwd-a', restrictedToUserIds: ['user-op'] }),
+      ],
+    });
+    versions.push({
+      id: 'pv-1',
+      passwordId: 'pwd-a',
+      companyId: 'co-1',
+      version: 1,
+      changedFields: ['password'],
+      changedBy: 'user-op',
+      changeReason: null,
+      createdAt: new Date('2026-01-02T00:00:00Z'),
+    } as unknown as StoredVersion);
+
+    // Non-allow-listed operator can't even enumerate the version history.
+    await expect(
+      svc.listVersions(OTHER_OPERATOR, 'co-1', 'pwd-a'),
+    ).rejects.toThrow(ForbiddenException);
+
+    // Allow-listed operator gets the rows.
+    const rows = await svc.listVersions(OPERATOR, 'co-1', 'pwd-a');
+    expect(rows.map((r) => r.version)).toEqual([1]);
   });
 });
 
@@ -695,6 +736,66 @@ describe('PasswordsService — reveal', () => {
     await expect(
       svc.reveal(OPERATOR, 'co-1', 'pwd-a', {}, META),
     ).rejects.toThrow(BadRequestException);
+  });
+});
+
+describe('PasswordsService — revealVersion / generateTotpCode', () => {
+  it('revealVersion enforces the internal allow-list', async () => {
+    const { svc, versions } = makeStubs({
+      passwords: [
+        passwordRow({ id: 'pwd-a', restrictedToUserIds: ['user-op'] }),
+      ],
+    });
+    versions.push({
+      id: 'pv-1',
+      passwordId: 'pwd-a',
+      companyId: 'co-1',
+      version: 1,
+      changedFields: ['password'],
+      changedBy: 'user-op',
+      changeReason: null,
+      passwordCiphertext: 'ENC(old-secret)',
+      notesCiphertext: null,
+      totpSecretCiphertext: null,
+      createdAt: new Date('2026-01-02T00:00:00Z'),
+    } as unknown as StoredVersion);
+
+    // Non-allow-listed operator is denied before any ciphertext is read.
+    await expect(
+      svc.revealVersion(OTHER_OPERATOR, 'co-1', 'pwd-a', 1, {}, META),
+    ).rejects.toThrow(ForbiddenException);
+
+    // SUPER_ADMIN bypasses the restriction and gets the historical secret.
+    const out = await svc.revealVersion(SUPER, 'co-1', 'pwd-a', 1, {}, META);
+    expect(out.password).toBe('old-secret');
+  });
+
+  it('generateTotpCode enforces the allow-list and client visibility', async () => {
+    const { svc } = makeStubs({
+      passwords: [
+        passwordRow({
+          id: 'pwd-restricted',
+          restrictedToUserIds: ['user-op'],
+          totpSecretCiphertext: 'ENC(JBSWY3DPEHPK3PXP)',
+        }),
+        passwordRow({
+          id: 'pwd-internal',
+          visibleToClients: false,
+          totpSecretCiphertext: 'ENC(JBSWY3DPEHPK3PXP)',
+        }),
+      ],
+    });
+
+    // Non-allow-listed operator → 403 (before the TOTP secret is touched).
+    await expect(
+      svc.generateTotpCode(OTHER_OPERATOR, 'co-1', 'pwd-restricted'),
+    ).rejects.toThrow(ForbiddenException);
+
+    // CLIENT_USER on an internal (non-client-visible) row → 404, so
+    // existence stays hidden.
+    await expect(
+      svc.generateTotpCode(CLIENT, 'co-1', 'pwd-internal'),
+    ).rejects.toThrow(NotFoundException);
   });
 });
 

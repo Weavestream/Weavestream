@@ -315,15 +315,13 @@ async function safeFetchInternal(
   // IP via an undici dispatcher so the kernel resolver can't return a
   // different (private) address than the one we just approved. Skip
   // when the caller supplied a custom `fetchImpl` (tests) or when the
-  // URL was already an IP literal (no rebinding window). Skip when
-  // private networks are allowed — the dispatcher mostly just adds
-  // overhead in that case.
+  // URL was already an IP literal (no rebinding window).
   const shouldPin =
     !options.fetchImpl && !isIpLiteral(hostname) && !allowPrivate;
   const pinnedIp = shouldPin ? pickPinnableIp(resolvedIps) : null;
-  let pinnedAgent: Agent | null = null;
+  let ownedAgent: Agent | null = null;
   if (pinnedIp) {
-    pinnedAgent = new Agent({
+    ownedAgent = new Agent({
       connect: {
         // Force the TCP connect to the IP we validated. SNI +
         // certificate verification still use the original hostname.
@@ -342,6 +340,13 @@ async function safeFetchInternal(
         servername: hostname,
       },
     });
+  } else if (!options.fetchImpl && allowPrivate) {
+    // Admin-configured private-network targets (local Ollama/LM Studio,
+    // on-prem integrations) are authorised by the caller, but they should
+    // not depend on the process-global undici dispatcher. A short-lived
+    // per-request agent avoids stale pooled connection state and keeps
+    // LAN diagnostics isolated from unrelated outbound traffic.
+    ownedAgent = new Agent();
   }
 
   try {
@@ -359,7 +364,7 @@ async function safeFetchInternal(
     // global `fetch`. Node's RequestInit type uses `undici-types` for
     // the slot, but the actual implementation accepts any
     // `Dispatcher`-shaped object. Bypass the structural-match check.
-    if (pinnedAgent) (init as { dispatcher?: unknown }).dispatcher = pinnedAgent;
+    if (ownedAgent) (init as { dispatcher?: unknown }).dispatcher = ownedAgent;
 
     const res = await fetchImpl(url, init);
 
@@ -376,7 +381,7 @@ async function safeFetchInternal(
         const nextUrl = resolveLocation(url, location);
         await res.body?.cancel().catch(() => {});
         clearTimeout(timer);
-        await pinnedAgent?.close().catch(() => {});
+        await ownedAgent?.close().catch(() => {});
         const visited = internal.visitedUrls ?? [url];
         if (visited.includes(nextUrl)) {
           throw new Error(`safeFetch redirect loop detected at ${nextUrl}`);
@@ -396,11 +401,11 @@ async function safeFetchInternal(
       res,
       options.maxResponseBytes ?? config.defaultMaxResponseBytes,
       timer,
-      pinnedAgent,
+      ownedAgent,
     );
   } catch (err) {
     clearTimeout(timer);
-    await pinnedAgent?.close().catch(() => {});
+    await ownedAgent?.close().catch(() => {});
     throw err;
   }
 }
@@ -428,14 +433,14 @@ function wrapResponse(
   res: Response,
   maxBytes: number,
   timer: NodeJS.Timeout,
-  pinnedAgent: Agent | null,
+  ownedAgent: Agent | null,
 ): Response {
   // Clear the timeout once headers are in — body reads handle their own
   // limit. The caller is still responsible for reading promptly.
   clearTimeout(timer);
 
   const closeAgent = async (): Promise<void> => {
-    if (pinnedAgent) await pinnedAgent.close().catch(() => {});
+    if (ownedAgent) await ownedAgent.close().catch(() => {});
   };
 
   if (!res.body) {

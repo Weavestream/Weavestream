@@ -1838,15 +1838,36 @@ export async function listPasswords(
   return res.data?.items ?? [];
 }
 
+/**
+ * Status-aware password-detail fetch. `getPasswordDetail` collapses
+ * every failure to `null`, which forces a page into `notFound()` even
+ * when the API said 403 ("restricted to specific internal users"). The
+ * admin detail page needs to tell 403 apart from a genuine 404 so it can
+ * render a "you don't have access" state instead of a bare not-found.
+ *
+ * Only the HTTP status is surfaced here — callers should branch **only**
+ * on `403`. Every other non-OK status (404, 429, 503, network failure)
+ * yields `data: null`, matching `getPasswordDetail`'s existing fallback
+ * so 429/503 keep rendering as the 404 page rather than a misleading
+ * "no access" screen. (Intentionally not routed through
+ * `throwUnlessFound`, which has bespoke 429/network semantics.)
+ */
+export async function getPasswordDetailResult(
+  companyId: string,
+  id: string,
+): Promise<{ status: number; data: PasswordDetail | null }> {
+  const res = await serverApiFetch<PasswordDetail>(
+    `/companies/${companyId}/passwords/${id}`,
+  );
+  return { status: res.status, data: res.ok ? res.data : null };
+}
+
 export async function getPasswordDetail(
   companyId: string,
   id: string,
 ): Promise<PasswordDetail | null> {
-  const res = await serverApiFetch<PasswordDetail>(
-    `/companies/${companyId}/passwords/${id}`,
-  );
-  if (!res.ok || !res.data) return null;
-  return res.data;
+  const { data } = await getPasswordDetailResult(companyId, id);
+  return data;
 }
 
 export async function listPasswordFolders(
