@@ -27,6 +27,7 @@ import {
   type DriverRecord,
   type FetchRecordsContext,
 } from './drivers/integration-driver.js';
+import { describeError } from '../common/describe-error.js';
 
 /**
  * Phase 11 — per-mapping sync execution.
@@ -258,7 +259,7 @@ export class IntegrationSyncRunnerService {
             });
           } catch (e) {
             totals.errors += 1;
-            const message = e instanceof Error ? e.message : String(e);
+            const message = describeError(e);
             conflicts.push({
               kind:
                 e instanceof DriverAuthError ||
@@ -332,7 +333,7 @@ export class IntegrationSyncRunnerService {
         resourceKey: resource.resourceKey,
       };
     } catch (e) {
-      const message = e instanceof Error ? e.message : String(e);
+      const message = describeError(e);
       conflicts.push({
         kind: 'driver_error',
         externalId: '',

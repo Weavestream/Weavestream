@@ -33,7 +33,7 @@
  */
 
 import { lookup as dnsLookup } from 'node:dns/promises';
-import { Agent } from 'undici';
+import { Agent, fetch as undiciFetch } from 'undici';
 import {
   defaultBlockedCidrs,
   ipMatchesAny,
@@ -126,6 +126,44 @@ let config: EgressGuardConfig = {
   onBlocked: () => {},
 };
 
+// Default outbound fetch. Deliberately undici's OWN `fetch` — the same
+// package that provides `Agent` (our pinned dispatcher). Node's *global*
+// `fetch` is served by the undici *bundled inside Node*, whose
+// Dispatcher-handler interface can be a different major version than the
+// standalone `undici` dependency. Handing a standalone `Agent` to a
+// mismatched global fetch throws `UND_ERR_INVALID_ARG: invalid
+// onRequestStart method`, which surfaces as an opaque `TypeError: fetch
+// failed`. Sourcing fetch and Agent from the same package keeps them
+// version-locked regardless of the host Node version. Overridable via
+// `setDefaultFetchForTests` (driver specs) or per-call `options.fetchImpl`.
+const REAL_FETCH: typeof fetch = undiciFetch as unknown as typeof fetch;
+let defaultFetchImpl: typeof fetch = REAL_FETCH;
+
+type ResolveFn = (hostname: string) => Promise<readonly string[]>;
+
+// Default hostname resolver (real DNS). safeFetch resolves BEFORE it
+// touches the fetch implementation, so stubbing fetch alone still leaves
+// tests dependent on live DNS. Overridable here so specs are hermetic.
+let defaultResolveImpl: ResolveFn = defaultResolve;
+
+/**
+ * Test-only: swap the default outbound fetch implementation (e.g. a
+ * scripted stub in the driver specs). Pass `null` to restore undici's
+ * real fetch. Production code never calls this.
+ */
+export function setDefaultFetchForTests(fn: typeof fetch | null): void {
+  defaultFetchImpl = fn ?? REAL_FETCH;
+}
+
+/**
+ * Test-only companion to `setDefaultFetchForTests`: swap the default DNS
+ * resolver so specs don't depend on live name resolution. Pass `null` to
+ * restore the real resolver. Production code never calls this.
+ */
+export function setDefaultResolveForTests(fn: ResolveFn | null): void {
+  defaultResolveImpl = fn ?? defaultResolve;
+}
+
 export interface ConfigureEgressGuardOptions {
   allowPrivateNetworks: boolean;
   allowedPrivateCidrs: string;
@@ -156,6 +194,8 @@ export function resetEgressGuardForTests(): void {
     defaultMaxResponseBytes: DEFAULT_MAX_RESPONSE_BYTES,
     onBlocked: () => {},
   };
+  defaultFetchImpl = REAL_FETCH;
+  defaultResolveImpl = defaultResolve;
 }
 
 export async function safeFetch(
@@ -170,8 +210,8 @@ async function safeFetchInternal(
   options: SafeFetchOptions,
   internal: SafeFetchInternal,
 ): Promise<Response> {
-  const fetchImpl = options.fetchImpl ?? fetch;
-  const resolveImpl = options.resolve ?? defaultResolve;
+  const fetchImpl = options.fetchImpl ?? defaultFetchImpl;
+  const resolveImpl = options.resolve ?? defaultResolveImpl;
 
   let parsed: URL;
   try {

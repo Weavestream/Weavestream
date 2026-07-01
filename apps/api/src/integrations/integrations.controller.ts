@@ -51,7 +51,8 @@ import { EnvService } from '../config/env.service.js';
 import { AuditLogService } from '../audit/audit.service.js';
 import { AUDIT_ACTIONS } from '../audit/audit-actions.js';
 import { randomUUID } from 'node:crypto';
-import { BadRequestException } from '@nestjs/common';
+import { BadRequestException, Logger } from '@nestjs/common';
+import { describeError } from '../common/describe-error.js';
 
 /**
  * Phase 11 — admin integrations API.
@@ -88,6 +89,8 @@ import { BadRequestException } from '@nestjs/common';
  */
 @Controller({ path: 'admin/integrations', version: '1' })
 export class IntegrationsController {
+  private readonly logger = new Logger(IntegrationsController.name);
+
   constructor(
     private readonly integrations: IntegrationsService,
     private readonly mappings: IntegrationCompanyMappingService,
@@ -196,7 +199,14 @@ export class IntegrationsController {
       });
       return result;
     } catch (e) {
-      const message = e instanceof Error ? e.message : String(e);
+      // Unwrap `err.cause` so the real reason (ECONNREFUSED, TLS, DNS,
+      // egress block, dispatcher mismatch, …) reaches the logs and the
+      // UI toast instead of a bare "fetch failed".
+      const message = describeError(e);
+      this.logger.error(
+        { err: message, integrationId: id, driver: ctx.driver, correlationId },
+        'integration test connection failed',
+      );
       await this.audit.log({
         actorId: user.id,
         action: AUDIT_ACTIONS.integration.testConnection,

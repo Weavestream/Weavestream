@@ -5,6 +5,10 @@ import {
   type IntegrationContext,
 } from '../integration-driver.js';
 import { Action1Driver } from './action1.driver.js';
+import {
+  setDefaultFetchForTests,
+  setDefaultResolveForTests,
+} from '../../../common/egress/safe-fetch.js';
 
 /**
  * Phase 11 — Action1 driver behavioural tests.
@@ -48,8 +52,7 @@ interface RecordedCall {
 function installFetchScript(script: ScriptedResponse[]) {
   const calls: RecordedCall[] = [];
   let i = 0;
-  const original = globalThis.fetch;
-  globalThis.fetch = (async (
+  const shim = (async (
     input: string | URL | Request,
     init?: RequestInit,
   ) => {
@@ -80,10 +83,15 @@ function installFetchScript(script: ScriptedResponse[]) {
       headers: { 'content-type': 'text/plain', ...next.headers },
     });
   }) as typeof fetch;
+  setDefaultFetchForTests(shim);
+  // Hermetic: resolve to a fixed public IP so the guard's pre-fetch DNS
+  // lookup never hits the network. Any non-blocked (public) IP works.
+  setDefaultResolveForTests(async () => ['1.2.3.4']);
   return {
     calls,
     restore: () => {
-      globalThis.fetch = original;
+      setDefaultFetchForTests(null);
+      setDefaultResolveForTests(null);
     },
   };
 }

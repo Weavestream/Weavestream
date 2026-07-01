@@ -24,6 +24,7 @@ import {
   isTicketingDriver,
   type TicketContext,
 } from './drivers/integration-driver.js';
+import { describeError } from '../common/describe-error.js';
 
 export interface TicketAuditMeta {
   ip: string;
@@ -341,7 +342,7 @@ export class TicketsService {
       return e;
     }
     if (e instanceof Error) {
-      return new BadRequestException(`Ticket fetch failed: ${e.message}`);
+      return new BadRequestException(`Ticket fetch failed: ${describeError(e)}`);
     }
     return new BadRequestException('Ticket fetch failed');
   }
@@ -403,6 +404,7 @@ function sanitizeTicketId(id: string): string {
 }
 
 function shortError(e: unknown): string {
-  if (e instanceof Error) return e.message.slice(0, 500);
-  return String(e).slice(0, 500);
+  // Include the `cause` chain — a bare "fetch failed" is useless in the
+  // ticket audit trail without the underlying network/driver reason.
+  return describeError(e, 500);
 }

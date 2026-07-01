@@ -8,6 +8,10 @@ import {
   NinjaOneDriver,
   __resetNinjaOneTokenCacheForTests,
 } from './ninjaone.driver.js';
+import {
+  setDefaultFetchForTests,
+  setDefaultResolveForTests,
+} from '../../../common/egress/safe-fetch.js';
 
 // Phase 12 — the driver now keeps a process-wide OAuth token cache so
 // concurrent production callers share a single live token. The spec
@@ -53,8 +57,7 @@ interface RecordedCall {
 function installFetchScript(script: ScriptedResponse[]) {
   const calls: RecordedCall[] = [];
   let i = 0;
-  const original = globalThis.fetch;
-  globalThis.fetch = (async (
+  const shim = (async (
     input: string | URL | Request,
     init?: RequestInit,
   ) => {
@@ -85,10 +88,15 @@ function installFetchScript(script: ScriptedResponse[]) {
       headers: { 'content-type': 'text/plain', ...next.headers },
     });
   }) as typeof fetch;
+  setDefaultFetchForTests(shim);
+  // Hermetic: resolve to a fixed public IP so the guard's pre-fetch DNS
+  // lookup never hits the network. Any non-blocked (public) IP works.
+  setDefaultResolveForTests(async () => ['1.2.3.4']);
   return {
     calls,
     restore: () => {
-      globalThis.fetch = original;
+      setDefaultFetchForTests(null);
+      setDefaultResolveForTests(null);
     },
   };
 }

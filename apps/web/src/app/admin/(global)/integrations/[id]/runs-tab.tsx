@@ -491,13 +491,27 @@ function RunTotalsBreakdown({ totals }: { totals: SyncRunTotals | null }) {
 function formatDateTime(iso: string | null): string {
   if (!iso) return '—';
   const d = new Date(iso);
-  return d.toLocaleString(undefined, {
+  if (Number.isNaN(d.getTime())) return '—';
+  // Assemble from parts with our OWN separators instead of letting
+  // `toLocaleString` join them. With `month: 'short'`, newer CLDR (the
+  // browser's ICU) inserts an " at " connector — "Jul 01, 2026 at 08:00
+  // AM" — while Node's ICU still uses ", ". As a client component this is
+  // rendered on both the server and the client, so that divergence is a
+  // hydration mismatch. Reading the part values (which agree across ICU
+  // versions) and joining them ourselves makes the output deterministic.
+  // Locale is pinned for the same reason (month name / AM-PM must not
+  // follow each runtime's default).
+  const parts = new Intl.DateTimeFormat('en-US', {
     year: 'numeric',
     month: 'short',
     day: '2-digit',
     hour: '2-digit',
     minute: '2-digit',
-  });
+    hour12: true,
+  }).formatToParts(d);
+  const v = (type: Intl.DateTimeFormatPartTypes): string =>
+    parts.find((p) => p.type === type)?.value ?? '';
+  return `${v('month')} ${v('day')}, ${v('year')}, ${v('hour')}:${v('minute')} ${v('dayPeriod')}`;
 }
 
 const sectionHeader: React.CSSProperties = {
