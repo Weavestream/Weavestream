@@ -226,7 +226,11 @@ export class AuthService {
     ip: string,
     userAgent: string,
   ): Promise<{ backupCodes?: string[] }> {
-    if (await this.lockout.isLocked(ip, user.email)) {
+    // MFA lockout is scoped per user (never the login email/IP buckets):
+    // this path always runs against an authenticated mfaPending session, so
+    // `user.id` is the correct principal and is available without a DB load,
+    // keeping this fast-fail check ahead of the row fetch below.
+    if (await this.lockout.isMfaLocked(user.id)) {
       throw new HttpException(
         'Too many failed attempts. Try again later.',
         HttpStatus.TOO_MANY_REQUESTS,
@@ -246,7 +250,7 @@ export class AuthService {
       : false;
     const ok = totpOk || backupOk;
     if (!ok) {
-      await this.lockout.recordFailure(ip, user.email);
+      await this.lockout.recordMfaFailure(user.id);
       await this.audit.log({
         actorId: user.id,
         action: 'auth.mfa.verify.failure',
@@ -260,7 +264,7 @@ export class AuthService {
       throw new UnauthorizedException('Invalid MFA code');
     }
 
-    await this.lockout.clear(ip, user.email);
+    await this.lockout.clearMfaFailures(user.id);
 
     const issuedBackupCodes = firstTime
       ? await this.backupCodes.replaceForUser(user.id)

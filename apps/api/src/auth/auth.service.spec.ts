@@ -1,4 +1,9 @@
-import { Logger, UnauthorizedException } from '@nestjs/common';
+import {
+  HttpException,
+  HttpStatus,
+  Logger,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { AuthService } from './auth.service.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
 
@@ -30,23 +35,27 @@ function makeService(backupOk: boolean) {
     consume: jest.fn().mockResolvedValue(backupOk),
     replaceForUser: jest.fn(),
   };
+  const lockout = {
+    isLocked: jest.fn().mockResolvedValue(false),
+    recordFailure: jest.fn().mockResolvedValue(undefined),
+    clear: jest.fn().mockResolvedValue(undefined),
+    isMfaLocked: jest.fn().mockResolvedValue(false),
+    recordMfaFailure: jest.fn().mockResolvedValue(undefined),
+    clearMfaFailures: jest.fn().mockResolvedValue(undefined),
+  };
   const svc = new AuthService(
     prisma as never,
     { verify: jest.fn(), hash: jest.fn() } as never,
     { issueAccessToken: jest.fn(), mintRefreshToken: jest.fn() } as never,
     { decryptSecret: jest.fn().mockReturnValue('secret'), verify: jest.fn().mockReturnValue(false) } as never,
     backupCodes as never,
-    {
-      isLocked: jest.fn().mockResolvedValue(false),
-      recordFailure: jest.fn().mockResolvedValue(undefined),
-      clear: jest.fn().mockResolvedValue(undefined),
-    } as never,
+    lockout as never,
     { clear: jest.fn().mockResolvedValue(undefined) } as never,
     { values: { SESSION_MAX_AGE_DAYS: 30 } } as never,
     audit as never,
     {} as never,
   );
-  return { svc, prisma, audit, backupCodes };
+  return { svc, prisma, audit, backupCodes, lockout };
 }
 
 describe('AuthService.verifyMfa backup codes', () => {
@@ -74,6 +83,35 @@ describe('AuthService.verifyMfa backup codes', () => {
     await expect(
       svc.verifyMfa(USER, 'ABCDE-FGHJ2', '127.0.0.1', 'jest'),
     ).rejects.toBeInstanceOf(UnauthorizedException);
+  });
+});
+
+describe('AuthService.verifyMfa lockout scoping', () => {
+  it('records a failure against the user id, never the login ip/email buckets', async () => {
+    const { svc, lockout } = makeService(false);
+
+    await expect(
+      svc.verifyMfa(USER, '000000', '127.0.0.1', 'jest'),
+    ).rejects.toBeInstanceOf(UnauthorizedException);
+
+    // Per-user MFA counter, not the shared login buckets (the blank-email bug).
+    expect(lockout.recordMfaFailure).toHaveBeenCalledWith(USER.id);
+    expect(lockout.recordFailure).not.toHaveBeenCalled();
+  });
+
+  it('rejects with 429 when the user is MFA-locked, without loading the DB row', async () => {
+    const { svc, prisma, lockout } = makeService(false);
+    lockout.isMfaLocked.mockResolvedValueOnce(true);
+
+    const err = await svc
+      .verifyMfa(USER, '000000', '127.0.0.1', 'jest')
+      .catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(HttpException);
+    expect((err as HttpException).getStatus()).toBe(HttpStatus.TOO_MANY_REQUESTS);
+    // Fast-fail: the lockout check must stay ahead of the row fetch.
+    expect(prisma.user.findUnique).not.toHaveBeenCalled();
+    expect(lockout.recordMfaFailure).not.toHaveBeenCalled();
   });
 });
 

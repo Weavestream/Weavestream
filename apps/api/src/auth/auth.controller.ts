@@ -122,7 +122,9 @@ export class AuthController {
 
     const asUser: AuthedUser = {
       id: payload.sub,
-      email: '', // filled by service lookup
+      // The MFA verify path keys lockout and audit on `id`, never `email`,
+      // so this is left blank deliberately (the service loads its own row).
+      email: '',
       role: payload.role as AuthedUser['role'],
       // The MFA verify path doesn't consult RBAC at all — the JWT
       // payload only carries the global role. Default the new axes
