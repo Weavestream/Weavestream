@@ -6,6 +6,7 @@ import type {
   IntegrationDto,
 } from '@weavestream/shared';
 import { apiFetch } from '../../../../../lib/api';
+import { FormattedDateTime } from '../../../../../lib/timezone-context';
 import {
   Btn,
   Dialog,
@@ -142,10 +143,7 @@ export function MappingDetailDialog({
           <span>company id: {mapping.companyId.slice(0, 8)}…</span>
           <span>
             updated:{' '}
-            {new Date(mapping.updatedAt).toLocaleString(undefined, {
-              dateStyle: 'medium',
-              timeStyle: 'short',
-            })}
+            <FormattedDateTime value={mapping.updatedAt} />
           </span>
         </div>
 

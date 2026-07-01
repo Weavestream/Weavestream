@@ -11,6 +11,7 @@ import type {
 } from '@weavestream/shared';
 import { apiFetch } from '../../../../../lib/api';
 import { Btn, Dialog, Icon, Tag } from '../../../../../components/ui';
+import { FormattedDateTime } from '../../../../../lib/timezone-context';
 
 /**
  * Phase 11 — sync run history.
@@ -79,7 +80,7 @@ export function RunsTab({
               }}
             >
               <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>
-                {formatDateTime(r.startedAt ?? r.createdAt)}
+                <FormattedDateTime value={r.startedAt ?? r.createdAt} />
               </span>
               <RunStatusTag status={r.status} />
               <Tag tone="default">{r.kind}</Tag>
@@ -179,8 +180,8 @@ function RunDetailDialog({
                 fontFamily: 'var(--font-mono)',
               }}
             >
-              <span>started: {formatDateTime(run.startedAt ?? run.createdAt)}</span>
-              <span>finished: {formatDateTime(run.finishedAt)}</span>
+              <span>started: <FormattedDateTime value={run.startedAt ?? run.createdAt} /></span>
+              <span>finished: <FormattedDateTime value={run.finishedAt} /></span>
               <span>kind: {run.kind}</span>
               <span title={run.triggeredByUser?.email ?? run.triggeredBy ?? undefined}>
                 triggered by:{' '}
@@ -486,32 +487,6 @@ function RunTotalsBreakdown({ totals }: { totals: SyncRunTotals | null }) {
       ))}
     </div>
   );
-}
-
-function formatDateTime(iso: string | null): string {
-  if (!iso) return '—';
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return '—';
-  // Assemble from parts with our OWN separators instead of letting
-  // `toLocaleString` join them. With `month: 'short'`, newer CLDR (the
-  // browser's ICU) inserts an " at " connector — "Jul 01, 2026 at 08:00
-  // AM" — while Node's ICU still uses ", ". As a client component this is
-  // rendered on both the server and the client, so that divergence is a
-  // hydration mismatch. Reading the part values (which agree across ICU
-  // versions) and joining them ourselves makes the output deterministic.
-  // Locale is pinned for the same reason (month name / AM-PM must not
-  // follow each runtime's default).
-  const parts = new Intl.DateTimeFormat('en-US', {
-    year: 'numeric',
-    month: 'short',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: true,
-  }).formatToParts(d);
-  const v = (type: Intl.DateTimeFormatPartTypes): string =>
-    parts.find((p) => p.type === type)?.value ?? '';
-  return `${v('month')} ${v('day')}, ${v('year')}, ${v('hour')}:${v('minute')} ${v('dayPeriod')}`;
 }
 
 const sectionHeader: React.CSSProperties = {

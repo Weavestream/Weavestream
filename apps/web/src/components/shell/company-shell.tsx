@@ -26,6 +26,8 @@ import { SearchPaletteProvider } from '../search/search-palette-provider';
 import { ChatPanel } from '../chat-panel/chat-panel';
 import { CompanyChatContext } from '../chat-panel/company-chat-context';
 import { ShellScopeProvider } from './shell-scope-context';
+import { getEffectiveTimezone } from '../../lib/date-format';
+import { TimezoneProvider } from '../../lib/timezone-context';
 
 export type CompanyShellMode = 'admin' | 'portal';
 
@@ -339,6 +341,7 @@ export function CompanyShell({
   const showChat = isAdmin;
 
   return (
+    <TimezoneProvider timezone={getEffectiveTimezone(me)}>
     <StickyNoteProvider value={stickyNote ?? null}>
     <ShellScopeProvider
       value={{
@@ -396,5 +399,6 @@ export function CompanyShell({
     </SearchPaletteProvider>
     </ShellScopeProvider>
     </StickyNoteProvider>
+    </TimezoneProvider>
   );
 }

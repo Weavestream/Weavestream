@@ -5,6 +5,8 @@ import {
 } from '../../lib/server-api';
 import { hasCapability, initialsFromName } from '../../lib/roles';
 import type { Term } from '../../lib/term';
+import { getEffectiveTimezone } from '../../lib/date-format';
+import { TimezoneProvider } from '../../lib/timezone-context';
 import { Sidebar, type SidebarSection } from './sidebar';
 import { MobileShellChrome } from './mobile-nav';
 import { SearchPaletteProvider } from '../search/search-palette-provider';
@@ -203,6 +205,7 @@ export async function AdminShell({
   };
 
   return (
+    <TimezoneProvider timezone={getEffectiveTimezone(me)}>
     <ShellScopeProvider
       value={{
         // Admin shell is global — no per-company filtering on the
@@ -257,5 +260,6 @@ export async function AdminShell({
       </div>
     </SearchPaletteProvider>
     </ShellScopeProvider>
+    </TimezoneProvider>
   );
 }

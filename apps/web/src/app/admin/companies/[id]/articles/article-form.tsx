@@ -2,8 +2,13 @@
 
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { ArticleEditorMode } from '@weavestream/shared';
+import {
+  formatDate,
+  formatDateTime,
+  type ArticleEditorMode,
+} from '@weavestream/shared';
 import { apiFetch } from '../../../../../lib/api';
+import { useTimezone } from '../../../../../lib/timezone-context';
 import type {
   ArticleDetail,
   FolderNode,
@@ -95,6 +100,12 @@ export function ArticleForm({
   const [lastSavedAt, setLastSavedAt] = useState<Date | null>(
     article ? new Date(article.updatedAt) : null,
   );
+  const tz = useTimezone();
+  // The "saved X ago" label is relative to the client clock, which the
+  // SSR render can't know. Render an absolute timestamp until mount, then
+  // upgrade to the relative label so hydration stays deterministic.
+  const [savedLabelMounted, setSavedLabelMounted] = useState(false);
+  useEffect(() => setSavedLabelMounted(true), []);
   const [dirty, setDirty] = useState(false);
   // Tracks whether the server is currently holding an in-progress
   // autosave draft for this article. Seeded from the detail load and
@@ -406,11 +417,16 @@ export function ArticleForm({
   //   - editing a fresh form (no saves yet) → "draft · unsaved"
   //   - autosave off → "saved Xs ago" (factual; no auto label)
   //   - autosave on → "auto-saved Xs ago" (signals continuous persistence)
+  const savedAgo = lastSavedAt
+    ? savedLabelMounted
+      ? timeAgo(lastSavedAt, tz)
+      : formatDateTime(lastSavedAt, tz)
+    : '';
   const autosaveLabel = !lastSavedAt
     ? 'draft · unsaved'
     : autosaveEnabled && mode === 'edit'
-      ? `auto-saved ${timeAgo(lastSavedAt)}`
-      : `saved ${timeAgo(lastSavedAt)}`;
+      ? `auto-saved ${savedAgo}`
+      : `saved ${savedAgo}`;
 
   function navigateAway() {
     if (mode === 'edit' && article) {
@@ -986,12 +1002,12 @@ function extractErr(problem: unknown): string | null {
   return p.title ?? null;
 }
 
-function timeAgo(d: Date): string {
+function timeAgo(d: Date, tz: string): string {
   const sec = Math.max(1, Math.round((Date.now() - d.getTime()) / 1000));
   if (sec < 60) return `${sec}s ago`;
   const min = Math.round(sec / 60);
   if (min < 60) return `${min}m ago`;
   const h = Math.round(min / 60);
   if (h < 24) return `${h}h ago`;
-  return d.toLocaleDateString();
+  return formatDate(d, tz);
 }

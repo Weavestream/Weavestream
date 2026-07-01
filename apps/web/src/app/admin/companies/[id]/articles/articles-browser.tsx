@@ -8,6 +8,7 @@ import type {
   FolderNode,
 } from '../../../../../lib/server-api';
 import { apiFetch } from '../../../../../lib/api';
+import { FormattedDate } from '../../../../../lib/timezone-context';
 import { Btn, Icon, Tag, useToast } from '../../../../../components/ui';
 import { useIsMobile } from '../../../../../lib/hooks/use-is-mobile';
 import { FolderSettingsDialog } from './folder-settings-dialog';
@@ -268,7 +269,7 @@ export function ArticlesBrowser({
                     color: 'var(--dim)',
                   }}
                 >
-                  {new Date(a.updatedAt).toLocaleDateString()}
+                  <FormattedDate value={a.updatedAt} />
                 </span>
                 {canManage && (
                   <div

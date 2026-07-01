@@ -12,6 +12,7 @@
  * are erased by TypeScript before any bundler sees them.
  */
 export * from './roles.js';
+export * from './date-format.js';
 export * from './schemas/index.js';
 export * from './queues/index.js';
 export * from './templates/index.js';

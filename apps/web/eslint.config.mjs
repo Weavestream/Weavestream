@@ -45,6 +45,35 @@ export default [
       'react-hooks/purity': 'warn',
       'react-hooks/refs': 'warn',
       'react-hooks/immutability': 'warn',
+      // Dates: bare toLocale* mismatches on SSR hydration (server tz/ICU
+      // vs the browser's). Use the shared formatters from
+      // `@weavestream/shared` with `useTimezone()` (or the `<Formatted*>`
+      // components in `lib/timezone-context`). Warn-level to match the
+      // v1.0.0 posture; this also flags the not-yet-migrated server
+      // components (a correctness backlog, not a hydration bug). The
+      // number-format callers are exempted in the override below.
+      'no-restricted-syntax': [
+        'warn',
+        {
+          selector:
+            "CallExpression[callee.property.name=/^(toLocaleString|toLocaleDateString|toLocaleTimeString)$/]",
+          message:
+            'Do not format dates with toLocaleString/toLocaleDateString/toLocaleTimeString — they hydration-mismatch across timezones and ICU versions. Use formatDateTime/formatDate/formatCalendarDate/formatRelative from @weavestream/shared with useTimezone(), or the <Formatted*> components in lib/timezone-context.',
+        },
+      ],
+    },
+  },
+  {
+    // These call `.toLocaleString()` on NUMBERS (counts/totals) — locale
+    // digit grouping, which carries no timezone/ICU hydration risk — so
+    // they are exempt from the date-formatting guard above.
+    files: [
+      '**/components/ui/pagination.tsx',
+      '**/components/shell/sidebar.tsx',
+      '**/audit/page.tsx',
+    ],
+    rules: {
+      'no-restricted-syntax': 'off',
     },
   },
 ];

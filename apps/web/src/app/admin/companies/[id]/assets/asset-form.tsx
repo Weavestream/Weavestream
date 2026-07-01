@@ -9,11 +9,13 @@ import { useRouter } from 'next/navigation';
 import dynamic from 'next/dynamic';
 import {
   FIELD_TYPE_CATALOG,
+  formatDateTime,
   type FieldType,
   type FieldTypeMeta,
 } from '@weavestream/shared';
 import type { LayoutSummary } from '../../../../../lib/server-api';
 import { apiFetch } from '../../../../../lib/api';
+import { useTimezone } from '../../../../../lib/timezone-context';
 import { Btn, Icon, LayoutSwatch, Tag, useToast } from '../../../../../components/ui';
 import { TopBar } from '../../../../../components/shell/top-bar';
 import { useTerm } from '../../../../../lib/term-context';
@@ -459,6 +461,7 @@ function FormField({
   lastSyncedAt?: string | null;
   children: React.ReactNode;
 }) {
+  const tz = useTimezone();
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -481,7 +484,7 @@ function FormField({
           <span
             title={
               lastSyncedAt
-                ? `Last synced from ${syncedFromSource} on ${new Date(lastSyncedAt).toLocaleString()}.\nDepending on the field-mapping direction, manual edits may be overwritten on the next sync.`
+                ? `Last synced from ${syncedFromSource} on ${formatDateTime(lastSyncedAt, tz)}.\nDepending on the field-mapping direction, manual edits may be overwritten on the next sync.`
                 : `Last value came from ${syncedFromSource}. Manual edits may be overwritten on the next sync.`
             }
             style={{ display: 'inline-flex' }}

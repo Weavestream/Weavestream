@@ -77,7 +77,11 @@ export function ProfileForm({ me }: { me: Me }) {
         </Field>
         <Field
           label="Timezone"
-          help="Used for the timestamps you see across the app."
+          help={
+            timezone.trim()
+              ? 'Used for the timestamps you see across the app.'
+              : 'Not set — timestamps display in UTC. Pick your timezone so times match your local clock.'
+          }
         >
           <TimezonePicker value={timezone} onChange={setTimezone} />
         </Field>

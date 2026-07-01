@@ -14,6 +14,7 @@ import {
   PlatformCapabilityValues,
 } from '@weavestream/shared';
 import { apiFetch } from '../../../../lib/api';
+import { FormattedDateTime } from '../../../../lib/timezone-context';
 import {
   Btn,
   CompanyPicker,
@@ -290,7 +291,7 @@ export function CreateUserButton({
               <strong style={{ color: 'var(--text)' }}>{result.user.email}</strong>. It expires{' '}
               on{' '}
               <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text)' }}>
-                {new Date(result.expiresAt).toLocaleString()}
+                <FormattedDateTime value={result.expiresAt} />
               </span>
               .
             </p>

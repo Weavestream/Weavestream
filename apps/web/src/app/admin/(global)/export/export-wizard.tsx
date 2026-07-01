@@ -3,12 +3,12 @@
 import {
   useCallback,
   useEffect,
-  useMemo,
   useRef,
   useState,
   type CSSProperties,
 } from 'react';
 import { apiFetch } from '../../../../lib/api';
+import { FormattedRelative } from '../../../../lib/timezone-context';
 import { ensureStepUp } from '../../../../lib/step-up';
 import {
   Btn,
@@ -471,8 +471,6 @@ function ExportRow({
   onDownload: () => void;
   onDismiss: () => void;
 }) {
-  const startedLabel = useMemo(() => formatRelative(rec.startedAt), [rec.startedAt]);
-
   const rowStyle: CSSProperties = {
     display: 'grid',
     gridTemplateColumns: 'minmax(0, 1fr) auto',
@@ -532,7 +530,9 @@ function ExportRow({
             flexWrap: 'wrap',
           }}
         >
-          <span>Started {startedLabel}</span>
+          <span>
+            Started <FormattedRelative value={new Date(rec.startedAt)} />
+          </span>
           {rec.status === 'failed' && rec.error && (
             <span style={{ color: 'var(--danger)' }}>{rec.error}</span>
           )}
@@ -645,14 +645,6 @@ function Spinner() {
       }}
     />
   );
-}
-
-function formatRelative(ts: number): string {
-  const diff = Date.now() - ts;
-  if (diff < 60_000) return 'just now';
-  if (diff < 60 * 60_000) return `${Math.floor(diff / 60_000)} min ago`;
-  if (diff < 24 * 60 * 60_000) return `${Math.floor(diff / (60 * 60_000))} h ago`;
-  return new Date(ts).toLocaleString();
 }
 
 // ---------------------------------------------------------------------------

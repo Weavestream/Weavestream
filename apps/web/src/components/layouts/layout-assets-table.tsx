@@ -11,6 +11,10 @@ import type {
 } from '../../lib/server-api';
 import { vaultLinkLabel } from '../../lib/vault-link';
 import {
+  FormattedCalendarDate,
+  FormattedDateTime,
+} from '../../lib/timezone-context';
+import {
   DataTable,
   type DataColumn,
   Icon,
@@ -616,9 +620,11 @@ function FieldCell({
       if (Number.isNaN(d.getTime())) return <Dim>{String(value)}</Dim>;
       return (
         <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11.5 }}>
-          {fieldType === 'DATETIME'
-            ? d.toLocaleString()
-            : d.toLocaleDateString()}
+          {fieldType === 'DATETIME' ? (
+            <FormattedDateTime value={d} />
+          ) : (
+            <FormattedCalendarDate value={d} />
+          )}
         </span>
       );
     }

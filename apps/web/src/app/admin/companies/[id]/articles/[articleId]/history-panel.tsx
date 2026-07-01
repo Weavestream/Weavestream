@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { apiFetch } from '../../../../../../lib/api';
+import { FormattedDateTime } from '../../../../../../lib/timezone-context';
 import {
   Btn,
   Dialog,
@@ -215,7 +216,7 @@ export function HistoryPanel({
                       }}
                     >
                       {v.changedByName ?? 'Unknown'} ·{' '}
-                      {new Date(v.updatedAt).toLocaleString()}
+                      <FormattedDateTime value={v.updatedAt} />
                     </div>
                     {v.changedFields.length > 0 && (
                       <div
@@ -297,7 +298,7 @@ export function HistoryPanel({
           {preview && (
             <span style={{ color: 'var(--muted)', fontSize: 12 }}>
               {preview.changedByName ?? 'Unknown'} ·{' '}
-              {new Date(preview.updatedAt).toLocaleString()}
+              <FormattedDateTime value={preview.updatedAt} />
             </span>
           )}
           <div style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>

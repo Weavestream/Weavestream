@@ -6,6 +6,7 @@ import type {
   TicketDetail,
 } from '../../../../../lib/server-api';
 import { Icon, Tag } from '../../../../../components/ui';
+import { FormattedDateTime } from '../../../../../lib/timezone-context';
 
 /**
  * Phase 12+ — global ticket detail surface. Description +
@@ -73,10 +74,14 @@ export function TicketDetailView({
           }}
         >
           {ticket.createdAt && (
-            <Meta label="Created">{formatIso(ticket.createdAt)}</Meta>
+            <Meta label="Created">
+              <FormattedDateTime value={ticket.createdAt} />
+            </Meta>
           )}
           {ticket.updatedAt && (
-            <Meta label="Updated">{formatIso(ticket.updatedAt)}</Meta>
+            <Meta label="Updated">
+              <FormattedDateTime value={ticket.updatedAt} />
+            </Meta>
           )}
         </div>
       </header>
@@ -325,7 +330,7 @@ function ActivityEntry({ activity }: { activity: TicketActivity }) {
             color: 'var(--dim)',
           }}
         >
-          {formatIso(activity.occurredAt)}
+          <FormattedDateTime value={activity.occurredAt} />
         </span>
       </div>
       {activity.body && activity.body.trim().length > 0 ? (
@@ -378,16 +383,6 @@ function RawEntry({ entry }: { entry: { key: string; value: string } }) {
       </dd>
     </>
   );
-}
-
-function formatIso(iso: string): string {
-  try {
-    const d = new Date(iso);
-    if (Number.isNaN(d.getTime())) return iso;
-    return d.toLocaleString();
-  } catch {
-    return iso;
-  }
 }
 
 function humanBytes(n: number): string {

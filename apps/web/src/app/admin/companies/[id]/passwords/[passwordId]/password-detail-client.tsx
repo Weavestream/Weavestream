@@ -13,6 +13,12 @@ import type {
 import { apiFetch } from '../../../../../../lib/api';
 import { copyToClipboard } from '../../../../../../lib/clipboard';
 import {
+  FormattedCalendarDate,
+  FormattedDate,
+  FormattedDateTime,
+  FormattedShortDateTime,
+} from '../../../../../../lib/timezone-context';
+import {
   Btn,
   Dialog,
   Field,
@@ -452,13 +458,13 @@ export function PasswordDetailClient({
                   {password.lastRotatedAt && (
                     <>
                       <dt style={dt}>Last rotated</dt>
-                      <dd style={dd}>{fmtDate(password.lastRotatedAt)}</dd>
+                      <dd style={dd}><FormattedDate value={password.lastRotatedAt} /></dd>
                     </>
                   )}
                   {password.expiresAt && (
                     <>
                       <dt style={dt}>Expires</dt>
-                      <dd style={dd}>{fmtDate(password.expiresAt)}</dd>
+                      <dd style={dd}><FormattedCalendarDate value={password.expiresAt} /></dd>
                     </>
                   )}
                   {password.rotationReminderDays != null && (
@@ -472,15 +478,16 @@ export function PasswordDetailClient({
                       <dt style={dt}>HIBP</dt>
                       <dd style={dd}>
                         <Tag tone="danger">
+                          {/* eslint-disable-next-line no-restricted-syntax -- locale digit grouping on a number, not a date */}
                           seen in {password.pwnedCount?.toLocaleString()} breaches
                         </Tag>
                       </dd>
                     </>
                   )}
                   <dt style={dt}>Created</dt>
-                  <dd style={dd}>{fmtDateTime(password.createdAt)}</dd>
+                  <dd style={dd}><FormattedDateTime value={password.createdAt} /></dd>
                   <dt style={dt}>Updated</dt>
-                  <dd style={dd}>{fmtDateTime(password.updatedAt)}</dd>
+                  <dd style={dd}><FormattedDateTime value={password.updatedAt} /></dd>
                 </>
               )}
             </dl>
@@ -1073,7 +1080,7 @@ function VersionHistoryItem({
             whiteSpace: 'nowrap',
           }}
         >
-          {fmtShortDateTime(version.createdAt)}
+          <FormattedShortDateTime value={version.createdAt} />
         </span>
       </div>
       <div
@@ -1574,58 +1581,6 @@ const checkboxLabel = {
   fontSize: 13,
   color: 'var(--text)',
 } as const;
-
-function fmtDate(iso: string | null): string {
-  if (!iso) return '—';
-  return new Date(iso).toLocaleDateString('en-US', {
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric',
-  });
-}
-
-// Assemble from parts with our OWN separators instead of letting
-// `toLocaleString` join them. With `month: 'short'` plus a time
-// component, newer CLDR (the browser's ICU) inserts an " at " connector
-// — "Jul 1, 2026 at 08:00 AM" — while Node's ICU (server render) uses
-// ", ", and the space before AM/PM can be a narrow no-break space on
-// newer ICU. As a client component this renders on both server and
-// client, so those divergences are hydration mismatches. Reading the
-// part values (which agree across ICU versions) and joining them
-// ourselves makes the output deterministic. Locale is pinned for the
-// same reason.
-function fmtDateTime(iso: string | null): string {
-  if (!iso) return '—';
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return '—';
-  const parts = new Intl.DateTimeFormat('en-US', {
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: true,
-  }).formatToParts(d);
-  const v = (type: Intl.DateTimeFormatPartTypes): string =>
-    parts.find((p) => p.type === type)?.value ?? '';
-  return `${v('month')} ${v('day')}, ${v('year')}, ${v('hour')}:${v('minute')} ${v('dayPeriod')}`;
-}
-
-function fmtShortDateTime(iso: string | null): string {
-  if (!iso) return '—';
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return '—';
-  const parts = new Intl.DateTimeFormat('en-US', {
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-    hour12: true,
-  }).formatToParts(d);
-  const v = (type: Intl.DateTimeFormatPartTypes): string =>
-    parts.find((p) => p.type === type)?.value ?? '';
-  return `${v('month')} ${v('day')}, ${v('hour')}:${v('minute')} ${v('dayPeriod')}`;
-}
 
 function formatCredentialUrl(value: string | null): string {
   if (!value) return '';

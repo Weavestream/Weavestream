@@ -9,6 +9,7 @@ import type {
 } from '@weavestream/shared';
 import { MANAGER_PRESET, PlatformCapabilityValues } from '@weavestream/shared';
 import { apiFetch } from '../../../../../lib/api';
+import { FormattedDateTime } from '../../../../../lib/timezone-context';
 import {
   Btn,
   Dialog,
@@ -204,7 +205,7 @@ export function UserActions({ user, isSelf }: { user: UserDetail; isSelf: boolea
               Send this one-time link to {user.email}. They can choose a new
               password and re-enroll MFA. It expires{' '}
               <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text)' }}>
-                {new Date(invite.expiresAt).toLocaleString()}
+                <FormattedDateTime value={invite.expiresAt} />
               </span>
               .
             </p>

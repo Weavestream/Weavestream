@@ -11,6 +11,10 @@ import {
   Tag,
   type DataColumn,
 } from '../ui';
+import {
+  FormattedCalendarDate,
+  FormattedDateTime,
+} from '../../lib/timezone-context';
 
 /**
  * Unified "Expiring soon" table. Rows come pre-sorted by the API
@@ -81,7 +85,7 @@ export function ExpirationsTable({
       mono: true,
       render: (row) => (
         <span style={{ color: 'var(--text-2)' }}>
-          {formatExpires(row.expiresAt, expiresFormat(row))}
+          <ExpiresValue row={row} />
         </span>
       ),
     });
@@ -165,7 +169,7 @@ export function ExpirationsTable({
             )}
           </div>
           <MobileCardRow label="Expires" mono>
-            {formatExpires(row.expiresAt, expiresFormat(row))}
+            <ExpiresValue row={row} />
           </MobileCardRow>
           <MobileCardRow label="Days" mono>
             <span style={{ color: daysColor(row.daysUntil), fontWeight: 500 }}>
@@ -369,35 +373,15 @@ function daysColor(n: number): string {
   return 'var(--text-2)';
 }
 
-function formatExpires(iso: string, fieldType: 'DATE' | 'DATETIME'): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  if (fieldType === 'DATE') {
-    return d.toLocaleDateString(undefined, {
-      year: 'numeric',
-      month: 'short',
-      day: '2-digit',
-    });
-  }
-  // Assemble from parts with our OWN separators instead of letting
-  // `toLocaleString` join them. With `month: 'short'` plus a time
-  // component, newer CLDR (the browser's ICU) inserts an " at " connector
-  // — "Jul 01, 2026 at 08:00 AM" — while Node's ICU (server render) still
-  // uses ", ". As a client component this renders on both server and
-  // client, so that divergence is a hydration mismatch. Reading the part
-  // values (which agree across ICU versions) and joining them ourselves
-  // makes the output deterministic. Locale is pinned for the same reason.
-  const parts = new Intl.DateTimeFormat('en-US', {
-    year: 'numeric',
-    month: 'short',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: true,
-  }).formatToParts(d);
-  const v = (type: Intl.DateTimeFormatPartTypes): string =>
-    parts.find((p) => p.type === type)?.value ?? '';
-  return `${v('month')} ${v('day')}, ${v('year')}, ${v('hour')}:${v('minute')} ${v('dayPeriod')}`;
+function ExpiresValue({ row }: { row: ExpirationRow }) {
+  // Calendar-day asset fields (DATE) render in UTC so the stored day
+  // never shifts across zones; timestamps (domains, passwords, DATETIME
+  // fields) render in the viewer's timezone.
+  return expiresFormat(row) === 'DATE' ? (
+    <FormattedCalendarDate value={row.expiresAt} />
+  ) : (
+    <FormattedDateTime value={row.expiresAt} />
+  );
 }
 
 function formatDays(n: number): string {

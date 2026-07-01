@@ -17,6 +17,7 @@ import {
   type TagTone,
 } from '../../../../components/ui';
 import { apiFetch } from '../../../../lib/api';
+import { FormattedDateTime } from '../../../../lib/timezone-context';
 import type { AuditEntry } from '../../../../lib/server-api';
 import { lower } from '../../../../lib/term';
 import { useTerm } from '../../../../lib/term-context';
@@ -96,7 +97,7 @@ export function AuditTable({
         mono: true,
         render: (r) => (
           <span style={{ color: 'var(--dim)' }}>
-            {new Date(r.createdAt).toLocaleString()}
+            <FormattedDateTime value={r.createdAt} />
           </span>
         ),
       },
@@ -313,7 +314,7 @@ export function AuditTable({
                   color: 'var(--dim)',
                 }}
               >
-                {new Date(r.createdAt).toLocaleString()}
+                <FormattedDateTime value={r.createdAt} />
               </span>
             </div>
             {(r.entityName || r.entityType) && (
@@ -683,7 +684,7 @@ function MetaGrid({ entry }: { entry: AuditEntry }) {
     >
       <MetaLabel>When</MetaLabel>
       <span style={{ fontFamily: 'var(--font-mono)' }}>
-        {new Date(entry.createdAt).toLocaleString()}
+        <FormattedDateTime value={entry.createdAt} />
       </span>
       <MetaLabel>Actor</MetaLabel>
       <span>

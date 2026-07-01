@@ -13,6 +13,7 @@ import {
   type TagTone,
 } from '../../../../components/ui';
 import { apiFetch } from '../../../../lib/api';
+import { FormattedDateTime } from '../../../../lib/timezone-context';
 import type {
   EgressBlockRow,
   EgressBlocksResponse,
@@ -211,7 +212,7 @@ function LoginsPane({ activity }: { activity: LoginActivity | null }) {
                 {r.attemptedEmail ?? r.actor?.email ?? 'unknown'} — {r.ip ?? 'unknown'}
               </span>
               <span style={{ fontSize: 11, color: 'var(--dim)' }}>
-                {new Date(r.createdAt).toLocaleString()}
+                <FormattedDateTime value={r.createdAt} />
               </span>
             </div>
           )}
@@ -229,7 +230,7 @@ const recentColumns: DataColumn<LoginActivity['recent'][number]>[] = [
     mono: true,
     render: (r) => (
       <span style={{ color: 'var(--dim)' }}>
-        {new Date(r.createdAt).toLocaleString()}
+        <FormattedDateTime value={r.createdAt} />
       </span>
     ),
   },
@@ -335,7 +336,7 @@ function BucketTable({
             mono: true,
             render: (r) => (
               <span style={{ color: 'var(--dim)' }}>
-                {new Date(r.lastSeen).toLocaleString()}
+                <FormattedDateTime value={r.lastSeen} />
               </span>
             ),
           },
@@ -350,7 +351,7 @@ function BucketTable({
               {r.success} successes · {r.failure} failures
             </span>
             <span style={{ fontSize: 11, color: 'var(--dim)' }}>
-              {new Date(r.lastSeen).toLocaleString()}
+              <FormattedDateTime value={r.lastSeen} />
             </span>
           </div>
         )}
@@ -530,7 +531,7 @@ function BlocksPane({ blocks }: { blocks: ThrottleBlockEntry[] | null }) {
           mono: true,
           render: (r) => (
             <span style={{ color: 'var(--dim)' }}>
-              {r.blockedUntil ? new Date(r.blockedUntil).toLocaleString() : '—'}
+              <FormattedDateTime value={r.blockedUntil} />
             </span>
           ),
         },
@@ -638,7 +639,7 @@ function SessionsPane({
         mono: true,
         render: (r) => (
           <span style={{ color: 'var(--dim)' }}>
-            {new Date(r.createdAt).toLocaleString()}
+            <FormattedDateTime value={r.createdAt} />
           </span>
         ),
       },
@@ -703,7 +704,7 @@ function SessionsPane({
             {r.user.email} · {r.ip || 'unknown'}
           </span>
           <span style={{ fontSize: 11, color: 'var(--dim)' }}>
-            {new Date(r.createdAt).toLocaleString()}
+            <FormattedDateTime value={r.createdAt} />
           </span>
         </div>
       )}
@@ -762,7 +763,7 @@ function EgressPane({ egress }: { egress: EgressBlocksResponse | null }) {
               {r.reason ?? '—'}
             </span>
             <span style={{ fontSize: 11, color: 'var(--dim)' }}>
-              {new Date(r.createdAt).toLocaleString()}
+              <FormattedDateTime value={r.createdAt} />
             </span>
           </div>
         )}
@@ -779,7 +780,7 @@ const egressColumns: DataColumn<EgressBlockRow>[] = [
     mono: true,
     render: (r) => (
       <span style={{ color: 'var(--dim)' }}>
-        {new Date(r.createdAt).toLocaleString()}
+        <FormattedDateTime value={r.createdAt} />
       </span>
     ),
   },

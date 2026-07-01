@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { apiFetch } from '../../lib/api';
+import { FormattedRelative } from '../../lib/timezone-context';
 import {
   Btn,
   DataTable,
@@ -52,7 +53,7 @@ export function SessionsList({ sessions }: { sessions: Session[] }) {
       width: 150,
       sortValue: (s) => new Date(s.createdAt),
       render: (s) => (
-        <span style={{ color: 'var(--dim)' }}>{relative(s.createdAt)}</span>
+        <span style={{ color: 'var(--dim)' }}><FormattedRelative value={s.createdAt} /></span>
       ),
     },
     {
@@ -136,7 +137,7 @@ export function SessionsList({ sessions }: { sessions: Session[] }) {
               )}
             </div>
             <MobileCardRow label="Started" mono>
-              {relative(s.createdAt)}
+              <FormattedRelative value={s.createdAt} />
             </MobileCardRow>
           </div>
         )}
@@ -151,13 +152,4 @@ function summariseUserAgent(ua: string | null): string {
   if (/Firefox/i.test(ua)) return 'Firefox browser';
   if (/Safari/i.test(ua)) return 'Safari browser';
   return ua.slice(0, 48);
-}
-
-function relative(iso: string): string {
-  const diff = Date.now() - new Date(iso).getTime();
-  const day = 86_400_000;
-  if (diff < 60_000) return 'just now';
-  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
-  if (diff < day) return `${Math.floor(diff / 3_600_000)}h ago`;
-  return `${Math.floor(diff / day)}d ago`;
 }

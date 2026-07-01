@@ -8,6 +8,7 @@ import type {
   BackupRunStatus,
 } from '@weavestream/shared';
 import { apiFetch } from '../../../../lib/api';
+import { FormattedDateTime } from '../../../../lib/timezone-context';
 import { downloadWithStepUp } from '../../../../lib/step-up';
 import {
   Btn,
@@ -317,7 +318,9 @@ function SchedulesTab({
       sortValue: (c) => c.lastRunAt ?? '',
       render: (c) =>
         c.lastRunAt ? (
-          <span title={c.lastRunAt}>{formatDate(c.lastRunAt)}</span>
+          <span title={c.lastRunAt}>
+            <FormattedDateTime value={c.lastRunAt} />
+          </span>
         ) : (
           <span style={{ color: 'var(--muted)' }}>Never</span>
         ),
@@ -393,7 +396,7 @@ function SchedulesTab({
             <span style={{ fontSize: 12 }}>{summariseRetention(c)}</span>
           </MobileCardRow>
           <MobileCardRow label="Last run">
-            {c.lastRunAt ? formatDate(c.lastRunAt) : 'Never'}
+            {c.lastRunAt ? <FormattedDateTime value={c.lastRunAt} /> : 'Never'}
           </MobileCardRow>
           <div
             style={{
@@ -453,7 +456,7 @@ function HistoryTab({ runs }: { runs: BackupRunDto[] }) {
       render: (r) => (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
           <span style={{ color: 'var(--text)' }}>
-            {formatDate(r.startedAt ?? r.createdAt)}
+            <FormattedDateTime value={r.startedAt ?? r.createdAt} />
           </span>
           <span style={{ fontSize: 12, color: 'var(--muted)' }}>
             {r.kind === 'MANUAL' ? 'Manual run' : 'Scheduled run'}
@@ -535,7 +538,7 @@ function HistoryTab({ runs }: { runs: BackupRunDto[] }) {
             </span>
           </div>
           <MobileCardRow label="Started">
-            {formatDate(r.startedAt ?? r.createdAt)}
+            <FormattedDateTime value={r.startedAt ?? r.createdAt} />
           </MobileCardRow>
           <MobileCardRow label="Schedule">{r.configName ?? '—'}</MobileCardRow>
           <MobileCardRow label="Size">
@@ -1015,12 +1018,6 @@ function summariseRetention(c: BackupConfig): string {
   if (c.retention.weekly > 0) parts.push(`${c.retention.weekly} weekly`);
   if (c.retention.monthly > 0) parts.push(`${c.retention.monthly} monthly`);
   return parts.length === 0 ? 'no retention' : parts.join(' · ');
-}
-
-function formatDate(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  return d.toLocaleString();
 }
 
 function formatDuration(start: string | null, end: string | null): string {

@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Panel, Tag } from '../../components/ui';
+import { FormattedDateTime } from '../../lib/timezone-context';
 import { roleLabel } from '../../lib/roles';
 import type { Me } from '../../lib/server-api';
 import { ProfileForm } from './profile-form';
@@ -175,9 +176,11 @@ export function MeTabs({
                           color: 'var(--dim)',
                         }}
                       >
-                        {me.mfaEnforcementCompletedAt
-                          ? new Date(me.mfaEnforcementCompletedAt).toLocaleString()
-                          : 'never'}
+                        {me.mfaEnforcementCompletedAt ? (
+                          <FormattedDateTime value={me.mfaEnforcementCompletedAt} />
+                        ) : (
+                          'never'
+                        )}
                       </span>
                     }
                   />
