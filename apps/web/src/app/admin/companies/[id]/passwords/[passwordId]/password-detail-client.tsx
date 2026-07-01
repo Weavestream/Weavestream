@@ -1584,36 +1584,47 @@ function fmtDate(iso: string | null): string {
   });
 }
 
-// Format date + time as two separate locale calls and join manually.
-// Avoids hydration mismatches caused by ICU version differences between
-// Node and the browser (e.g. newer ICU inserts "at" instead of ", ").
+// Assemble from parts with our OWN separators instead of letting
+// `toLocaleString` join them. With `month: 'short'` plus a time
+// component, newer CLDR (the browser's ICU) inserts an " at " connector
+// — "Jul 1, 2026 at 08:00 AM" — while Node's ICU (server render) uses
+// ", ", and the space before AM/PM can be a narrow no-break space on
+// newer ICU. As a client component this renders on both server and
+// client, so those divergences are hydration mismatches. Reading the
+// part values (which agree across ICU versions) and joining them
+// ourselves makes the output deterministic. Locale is pinned for the
+// same reason.
 function fmtDateTime(iso: string | null): string {
   if (!iso) return '—';
   const d = new Date(iso);
-  const datePart = d.toLocaleDateString('en-US', {
+  if (Number.isNaN(d.getTime())) return '—';
+  const parts = new Intl.DateTimeFormat('en-US', {
     year: 'numeric',
     month: 'short',
     day: 'numeric',
-  });
-  const timePart = d.toLocaleTimeString('en-US', {
     hour: '2-digit',
     minute: '2-digit',
-  });
-  return `${datePart}, ${timePart}`;
+    hour12: true,
+  }).formatToParts(d);
+  const v = (type: Intl.DateTimeFormatPartTypes): string =>
+    parts.find((p) => p.type === type)?.value ?? '';
+  return `${v('month')} ${v('day')}, ${v('year')}, ${v('hour')}:${v('minute')} ${v('dayPeriod')}`;
 }
 
 function fmtShortDateTime(iso: string | null): string {
   if (!iso) return '—';
   const d = new Date(iso);
-  const datePart = d.toLocaleDateString('en-US', {
+  if (Number.isNaN(d.getTime())) return '—';
+  const parts = new Intl.DateTimeFormat('en-US', {
     month: 'short',
     day: 'numeric',
-  });
-  const timePart = d.toLocaleTimeString('en-US', {
     hour: 'numeric',
     minute: '2-digit',
-  });
-  return `${datePart}, ${timePart}`;
+    hour12: true,
+  }).formatToParts(d);
+  const v = (type: Intl.DateTimeFormatPartTypes): string =>
+    parts.find((p) => p.type === type)?.value ?? '';
+  return `${v('month')} ${v('day')}, ${v('hour')}:${v('minute')} ${v('dayPeriod')}`;
 }
 
 function formatCredentialUrl(value: string | null): string {

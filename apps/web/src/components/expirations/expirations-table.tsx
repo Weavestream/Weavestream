@@ -379,13 +379,25 @@ function formatExpires(iso: string, fieldType: 'DATE' | 'DATETIME'): string {
       day: '2-digit',
     });
   }
-  return d.toLocaleString(undefined, {
+  // Assemble from parts with our OWN separators instead of letting
+  // `toLocaleString` join them. With `month: 'short'` plus a time
+  // component, newer CLDR (the browser's ICU) inserts an " at " connector
+  // — "Jul 01, 2026 at 08:00 AM" — while Node's ICU (server render) still
+  // uses ", ". As a client component this renders on both server and
+  // client, so that divergence is a hydration mismatch. Reading the part
+  // values (which agree across ICU versions) and joining them ourselves
+  // makes the output deterministic. Locale is pinned for the same reason.
+  const parts = new Intl.DateTimeFormat('en-US', {
     year: 'numeric',
     month: 'short',
     day: '2-digit',
     hour: '2-digit',
     minute: '2-digit',
-  });
+    hour12: true,
+  }).formatToParts(d);
+  const v = (type: Intl.DateTimeFormatPartTypes): string =>
+    parts.find((p) => p.type === type)?.value ?? '';
+  return `${v('month')} ${v('day')}, ${v('year')}, ${v('hour')}:${v('minute')} ${v('dayPeriod')}`;
 }
 
 function formatDays(n: number): string {
