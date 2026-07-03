@@ -129,6 +129,7 @@ The self-block guard catches the obvious mistakes (typo'd CIDR, accidentally del
 
 ```bash
 # 1. SSH into the host, then exec into the API container
+# (prefix with `sudo` if your user isn't in the `docker` group)
 docker exec -it weavestream-api sh
 
 # 2. Authenticate (this hits IpRuleGuard with peer=127.0.0.1, which is not in your DENY rule)

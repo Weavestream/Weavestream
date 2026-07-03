@@ -152,6 +152,10 @@ To reset only MFA from the web UI, use **Admin → Users → user detail → Res
 
 If the first or only `SUPER_ADMIN` is locked out, run the CLI from the host running Docker Compose.
 
+!!!tip Command fails or the prompts don't appear?
+If you get a permission error talking to the Docker daemon, your shell user isn't in the `docker` group — prefix the command with `sudo`. `create-admin` (without `--force --email ... --password ...`) is interactive, so if you're running it via plain `docker exec` instead of `docker compose exec`, add `-it`: `docker exec -it <container> node dist/cli.js create-admin`.
+!!!
+
 Create the initial super admin:
 
 ```sh

@@ -81,6 +81,10 @@ docker compose up -d
 docker compose exec api node dist/cli.js create-admin
 ```
 
+!!!tip Command fails or the prompts don't appear?
+If you get a permission error talking to the Docker daemon, your shell user isn't in the `docker` group — prefix the command with `sudo`. This command is interactive (it prompts for input), so if you're running it via plain `docker exec` instead of `docker compose exec`, add `-it`: `docker exec -it <container> node dist/cli.js create-admin`.
+!!!
+
 ## Health Checks
 
 Each service has a health check defined in `compose.yml`. Check the status:
