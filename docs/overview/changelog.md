@@ -13,6 +13,16 @@ All notable changes to Weavestream are documented here. The format follows [Keep
 
 ## [Unreleased]
 
+## [1.8.13] - 2026-07-03
+
+### Fixed
+
+- **Admin tools no longer crash on self-hosted installs served over plain HTTP.** When Weavestream is opened over `http://` by IP address (for example `http://192.168.1.20:3000`), the browser treats the origin as non-secure and does not expose `crypto.randomUUID()`, which produced a `crypto.randomUUID is not a function` error in the layout builder (creating a layout from a template or dragging in a new field), integration field-mapping rows, and AI chat tabs. These browser-only temporary IDs now use a shared helper that falls back to the Web Crypto `getRandomValues` API, which remains available on non-secure origins. Serving Weavestream over HTTPS behind a TLS reverse proxy remains the recommended production configuration.
+92
+## [1.8.12] - 2026-07-03
+
+_No notable changes._ Documentation-only maintenance release (Docker troubleshooting notes); no application changes since 1.8.11.
+
 ## [1.8.11] - 2026-07-01
 
 ### Added
@@ -539,7 +549,9 @@ Initial public release.
 
 ---
 
-[Unreleased]: https://github.com/Weavestream/Weavestream/compare/v1.8.11...HEAD
+[Unreleased]: https://github.com/Weavestream/Weavestream/compare/v1.8.13...HEAD
+[1.8.13]: https://github.com/Weavestream/Weavestream/releases/tag/v1.8.13
+[1.8.12]: https://github.com/Weavestream/Weavestream/releases/tag/v1.8.12
 [1.8.11]: https://github.com/Weavestream/Weavestream/releases/tag/v1.8.11
 [1.8.10]: https://github.com/Weavestream/Weavestream/releases/tag/v1.8.10
 [1.8.9]: https://github.com/Weavestream/Weavestream/releases/tag/v1.8.9
