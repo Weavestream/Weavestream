@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
+import { randomClientId } from '../../../../../../lib/client-id';
 import { lower } from '../../../../../../lib/term';
 import { useTerm } from '../../../../../../lib/term-context';
 import {
@@ -70,7 +71,7 @@ type BuilderField = {
   options: Record<string, unknown>;
 };
 
-const newKey = () => `new-${crypto.randomUUID()}`;
+const newKey = () => `new-${randomClientId()}`;
 
 function toBuilder(f: LayoutFieldSummary): BuilderField {
   return {
@@ -1776,7 +1777,7 @@ function ChoicesEditor({
   const choicesWithIds = useMemo(() => {
     return choices.map((c, i) => ({
       ...c,
-      id: c.id || `choice-${i}-${crypto.randomUUID()}`,
+      id: c.id || `choice-${i}-${randomClientId()}`,
     }));
   }, [choices]);
 

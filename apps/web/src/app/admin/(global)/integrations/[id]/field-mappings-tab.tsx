@@ -13,6 +13,7 @@ import type {
   SourceFieldDto,
 } from '@weavestream/shared';
 import { apiFetch } from '../../../../../lib/api';
+import { randomClientId } from '../../../../../lib/client-id';
 import {
   Btn,
   Field,
@@ -770,7 +771,7 @@ function MatchKeyPicker({
 }
 
 function tempRowId(): string {
-  return `tmp_${crypto.randomUUID()}`;
+  return `tmp_${randomClientId()}`;
 }
 
 function duplicates<T>(arr: T[]): T[] {

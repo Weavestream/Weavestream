@@ -27,6 +27,7 @@ import { streamChatMessage, type ChatStreamMeta } from '../../lib/chat-stream';
 import { tiptapDocToMarkdown } from '../../lib/article-format';
 import { assetToMarkdown } from '../../lib/asset-format';
 import { domainToMarkdown } from '../../lib/domain-format';
+import { randomClientId } from '../../lib/client-id';
 import type {
   ArticleDetail,
   AssetSummary,
@@ -384,7 +385,7 @@ function clampWidth(w: number): number {
 }
 
 function newId(): string {
-  return crypto.randomUUID();
+  return randomClientId();
 }
 
 function newFreeformTab(): ChatTab {

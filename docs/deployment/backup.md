@@ -45,6 +45,61 @@ DATA_DIR=$COMPOSE_DIR/data
 
 If your `.env` uses a custom `DATA_DIR`, replace the value above.
 
+## PostgreSQL Client Prerequisites
+
+Weavestream's published Docker images run PostgreSQL 16. Use PostgreSQL 16
+client utilities for backup and restore work so the client matches the server
+major version.
+
+Normal Docker Compose deployments do **not** need PostgreSQL tools installed on
+the Docker host for scheduled in-app backups. The `worker` image includes
+`postgresql16-client`, and scheduled backups execute `pg_dump` inside that
+container.
+
+You do need PostgreSQL client utilities on the machine running the command when:
+
+- Running the worker from source with `pnpm dev`; scheduled backups spawn
+  `pg_dump` from the host `PATH`.
+- Running host-side backup or restore commands instead of the Docker
+  `docker compose exec ...` examples below.
+- Restoring or inspecting dumps outside the Compose `postgres` container.
+
+Required tools by workflow:
+
+| Workflow | Required command |
+|---|---|
+| In-app scheduled backups | `pg_dump` |
+| Custom-format dump restore (`.dump`) | `pg_restore` |
+| Legacy SQL restore (`.sql` / `.sql.gz`) | `psql` |
+| Recreate database during restore | `dropdb`, `createdb` |
+
+Verify the tools are available:
+
+```bash
+pg_dump --version
+pg_restore --version
+psql --version
+```
+
+On macOS with Homebrew, either install the full PostgreSQL 16 package or the
+client-only `libpq` package and add its `bin` directory to `PATH`:
+
+```bash
+brew install postgresql@16
+# or:
+brew install libpq
+echo 'export PATH="$(brew --prefix libpq)/bin:$PATH"' >> ~/.zshrc
+```
+
+If you follow the Docker restore commands in this guide, you can verify the
+container-provided tools instead:
+
+```bash
+docker compose exec postgres pg_dump --version
+docker compose exec postgres pg_restore --version
+docker compose exec postgres psql --version
+```
+
 ## In-App Scheduled Postgres Export
 
 Operators with the `BACKUP_MANAGE` capability, or any `SUPER_ADMIN`, can configure scheduled Postgres exports under **Admin -> Backups**. Each schedule produces:
