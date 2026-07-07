@@ -588,7 +588,6 @@ export class AssetsService {
     companyId: string,
     id: string,
     meta: AuditMeta,
-    opts: { skipArchivedCheck?: boolean } = {},
   ): Promise<{ id: string }> {
     const existing = await this.prisma.asset.findFirst({
       where: { id, companyId },
@@ -602,10 +601,10 @@ export class AssetsService {
       },
     });
     if (!existing) throw new NotFoundException();
-    // Single-item route keeps the archive-first safety. Bulk purge gates on
-    // an explicit confirmation dialog instead, so it opts out via
-    // `skipArchivedCheck`.
-    if (!existing.archivedAt && !opts.skipArchivedCheck) {
+    // Archive-first is a server-side invariant for every purge path,
+    // single and bulk alike (WS-015). Client confirmation dialogs are UX,
+    // not a security control.
+    if (!existing.archivedAt) {
       throw new BadRequestException(
         'Archive the asset before permanently deleting it.',
       );
@@ -614,10 +613,26 @@ export class AssetsService {
     await this.prisma.$transaction(async (tx) => {
       await this.relations.cleanupForAsset({ tx, companyId, assetId: id });
       await this.searchIndex.removeAsset(tx, id);
-      const result = await tx.asset.deleteMany({ where: { id, companyId } });
+      // `archivedAt: { not: null }` re-asserts the archive-first invariant
+      // at the delete statement itself, closing the read→delete window in
+      // which a concurrent restore could reactivate the asset.
+      const result = await tx.asset.deleteMany({
+        where: { id, companyId, archivedAt: { not: null } },
+      });
       if (result.count === 0) {
-        // Defence in depth: another request already purged the row.
-        throw new NotFoundException();
+        // Nothing matched the guarded predicate: either a concurrent
+        // request already purged the row (gone → 404) or a concurrent
+        // restore cleared `archivedAt` (still present → archive gate, so
+        // bulk callers classify it `not_archived`). Distinguish the two
+        // so API clients and bulk retry UX see the right failure.
+        const still = await tx.asset.findFirst({
+          where: { id, companyId },
+          select: { id: true },
+        });
+        if (!still) throw new NotFoundException();
+        throw new BadRequestException(
+          'Archive the asset before permanently deleting it.',
+        );
       }
     });
 
@@ -678,11 +693,12 @@ export class AssetsService {
   }
 
   /**
-   * Bulk-purge. Bypasses the per-item "archive first" safety because the
-   * UI gates this action behind an explicit confirmation dialog (the user
-   * has to type `delete` to proceed); requiring a separate archive step
-   * for items the operator has already chosen for permanent deletion is
-   * unnecessary friction.
+   * Bulk-purge. Enforces the same per-item "archive first" safety as the
+   * single-item path (WS-015) — permanent deletion must never rely on a
+   * client-side confirmation dialog. Ids that are still active are
+   * reported as `code: "not_archived"` soft failures rather than
+   * throwing, so the caller sees "8 deleted, 2 not archived" and can
+   * archive the rest before retrying.
    */
   async purgeMany(
     actor: AuthedUser,
@@ -690,9 +706,7 @@ export class AssetsService {
     ids: string[],
     meta: AuditMeta,
   ): Promise<BulkAssetResult> {
-    return this.runBulk(ids, (id) =>
-      this.purge(actor, companyId, id, meta, { skipArchivedCheck: true }),
-    );
+    return this.runBulk(ids, (id) => this.purge(actor, companyId, id, meta));
   }
 
   /**

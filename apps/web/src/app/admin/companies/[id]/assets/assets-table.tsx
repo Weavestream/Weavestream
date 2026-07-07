@@ -255,6 +255,12 @@ export function AssetsTable({
 
   const archivedSelectedCount = selectedRows.filter((r) => r.archivedAt).length;
   const activeSelectedCount = selectedRows.length - archivedSelectedCount;
+  // Selection persists across server-side filter changes (search, layout,
+  // archived toggle), so some selected ids may no longer be in `rows` and
+  // can't be classified as active/archived — yet `runBulk` still submits
+  // them. Track them explicitly so disabled states and dialog copy stay
+  // truthful about what a purge might actually do.
+  const unknownSelectedCount = selectedIds.size - selectedRows.length;
 
   const visibleIds = useMemo(() => visibleRows.map((r) => r.id), [visibleRows]);
   const visibleSelectedCount = visibleIds.filter((id) => selectedIds.has(id)).length;
@@ -326,7 +332,7 @@ export function AssetsTable({
       clearSelection();
     } else if (ok.length === 0) {
       toast.push(
-        `Bulk ${action} failed for all ${failed.length} asset${failed.length === 1 ? '' : 's'}.`,
+        `Bulk ${action} failed for all ${failed.length} asset${failed.length === 1 ? '' : 's'} (${summariseFailures(failed)}).`,
         'danger',
       );
     } else {
@@ -467,6 +473,7 @@ export function AssetsTable({
           totalSelected={selectedIds.size}
           activeSelected={activeSelectedCount}
           archivedSelected={archivedSelectedCount}
+          unknownSelected={unknownSelectedCount}
           pending={bulkPending}
           onArchive={() => runBulk('archive')}
           onRestore={() => runBulk('restore')}
@@ -602,7 +609,11 @@ export function AssetsTable({
       <Dialog
         open={purgeOpen}
         onClose={() => !bulkPending && setPurgeOpen(false)}
-        title={`Permanently delete ${selectedIds.size} asset${selectedIds.size === 1 ? '' : 's'}?`}
+        title={
+          unknownSelectedCount > 0
+            ? `Permanently delete up to ${archivedSelectedCount + unknownSelectedCount} asset${archivedSelectedCount + unknownSelectedCount === 1 ? '' : 's'}?`
+            : `Permanently delete ${archivedSelectedCount} archived asset${archivedSelectedCount === 1 ? '' : 's'}?`
+        }
         footer={
           <>
             <Btn
@@ -615,7 +626,10 @@ export function AssetsTable({
             <Btn
               kind="danger"
               loading={bulkPending}
-              disabled={!purgeConfirmReady}
+              disabled={
+                !purgeConfirmReady ||
+                (archivedSelectedCount === 0 && unknownSelectedCount === 0)
+              }
               onClick={() => runBulk('purge')}
             >
               Delete forever
@@ -638,12 +652,43 @@ export function AssetsTable({
               lineHeight: 1.5,
             }}
           >
-            <strong>{selectedIds.size}</strong> asset
-            {selectedIds.size === 1 ? '' : 's'} will be permanently removed,
-            including all field values, sync records, and relation links. Any
-            embedded credentials are unlinked but preserved. This cannot be
-            undone.
+            <strong>{archivedSelectedCount}</strong> archived asset
+            {archivedSelectedCount === 1 ? '' : 's'} will be permanently
+            removed, including all field values, sync records, and relation
+            links. Any embedded credentials are unlinked but preserved. This
+            cannot be undone.
           </p>
+          {activeSelectedCount > 0 && (
+            <p
+              style={{
+                margin: 0,
+                fontSize: 13,
+                color: 'var(--warn)',
+                lineHeight: 1.5,
+              }}
+            >
+              <strong>{activeSelectedCount}</strong> selected asset
+              {activeSelectedCount === 1 ? ' is' : 's are'} still active and
+              will be skipped — only archived assets can be permanently
+              deleted. Archive {activeSelectedCount === 1 ? 'it' : 'them'}{' '}
+              first.
+            </p>
+          )}
+          {unknownSelectedCount > 0 && (
+            <p
+              style={{
+                margin: 0,
+                fontSize: 13,
+                color: 'var(--warn)',
+                lineHeight: 1.5,
+              }}
+            >
+              <strong>{unknownSelectedCount}</strong> selected asset
+              {unknownSelectedCount === 1 ? ' is' : 's are'} hidden by the
+              current filters and not shown here — any that are archived
+              will also be permanently deleted; active ones are skipped.
+            </p>
+          )}
           <label
             style={{
               fontSize: 11.5,
@@ -682,6 +727,7 @@ function BulkActionBar({
   totalSelected,
   activeSelected,
   archivedSelected,
+  unknownSelected,
   pending,
   onArchive,
   onRestore,
@@ -691,6 +737,7 @@ function BulkActionBar({
   totalSelected: number;
   activeSelected: number;
   archivedSelected: number;
+  unknownSelected: number;
   pending: boolean;
   onArchive: () => void;
   onRestore: () => void;
@@ -698,11 +745,15 @@ function BulkActionBar({
   onClear: () => void;
 }) {
   // Mixed-state rules: Archive only does work on non-archived rows;
-  // Restore only does work on archived rows. Disable when there's nothing
-  // to do for that action — but never block Permanently Delete since
-  // bulk purge handles archived + non-archived alike.
-  const canArchive = activeSelected > 0;
-  const canRestore = archivedSelected > 0;
+  // Restore only does work on archived rows; Permanently Delete only does
+  // work on archived rows (the server enforces archive-first, WS-015).
+  // Disable when there's nothing the action could succeed on. Selected
+  // ids hidden by the current server-side filters can't be classified,
+  // so treat them as potentially eligible for every action rather than
+  // wrongly disabling it.
+  const canArchive = activeSelected > 0 || unknownSelected > 0;
+  const canRestore = archivedSelected > 0 || unknownSelected > 0;
+  const canPurge = archivedSelected > 0 || unknownSelected > 0;
   return (
     <div
       style={{
@@ -728,7 +779,7 @@ function BulkActionBar({
       >
         {totalSelected} selected
       </span>
-      {(activeSelected > 0 || archivedSelected > 0) && (
+      {(activeSelected > 0 || archivedSelected > 0 || unknownSelected > 0) && (
         <span
           style={{
             fontFamily: 'var(--font-mono)',
@@ -736,7 +787,8 @@ function BulkActionBar({
             color: 'var(--muted)',
           }}
         >
-          ({activeSelected} active, {archivedSelected} archived)
+          ({activeSelected} active, {archivedSelected} archived
+          {unknownSelected > 0 ? `, ${unknownSelected} filtered out` : ''})
         </span>
       )}
       <span style={{ flex: 1 }} />
@@ -762,7 +814,8 @@ function BulkActionBar({
         kind="danger"
         size="sm"
         icon={Icon.trash}
-        disabled={pending}
+        disabled={!canPurge || pending}
+        title={canPurge ? undefined : 'Archive assets before deleting them'}
         onClick={onPurge}
       >
         Delete forever
@@ -774,18 +827,29 @@ function BulkActionBar({
   );
 }
 
+// Human-readable phrasing per bulk failure code (the `code` values are
+// part of the API contract — see `BulkAssetFailure` in
+// packages/shared/src/schemas/asset.ts). The toast must explain *why* an
+// item was skipped, not just echo the code.
+const FAILURE_LABELS: Record<string, string> = {
+  not_archived: 'not archived — archive first',
+  already_archived: 'already archived',
+  not_found: 'not found',
+  forbidden: 'no permission',
+};
+
 function summariseFailures(
   failed: BulkAssetResult['failed'],
 ): string {
-  // Compact "5 already_archived, 2 forbidden" — codes group naturally so
-  // the user can act on the dominant cause without us listing every item.
+  // Compact "5 already archived, 2 no permission" — codes group naturally
+  // so the user can act on the dominant cause without us listing every item.
   const counts = new Map<string, number>();
   for (const f of failed) {
     const key = f.code ?? 'error';
     counts.set(key, (counts.get(key) ?? 0) + 1);
   }
   return Array.from(counts.entries())
-    .map(([code, n]) => `${n} ${code.replace(/_/g, ' ')}`)
+    .map(([code, n]) => `${n} ${FAILURE_LABELS[code] ?? code.replace(/_/g, ' ')}`)
     .join(', ');
 }
 

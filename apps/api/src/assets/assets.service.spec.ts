@@ -1,3 +1,4 @@
+import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { AssetsService } from './assets.service.js';
 
 /**
@@ -176,5 +177,217 @@ describe('AssetsService.linkFileFieldUploadsToAsset', () => {
     // The clause is the load-bearing safety: never claim an upload
     // that already belongs to a different asset.
     expect(call.where.attachedToId).toBeNull();
+  });
+});
+
+/**
+ * Archive-first purge invariant (WS-015). Permanent deletion must be
+ * enforced server-side for both the single-item and bulk paths — the
+ * typed-"delete" confirmation dialog in the UI is UX, not a security
+ * control. These tests pin:
+ *   - purge rejects active assets before the delete transaction runs,
+ *   - the delete predicate itself re-asserts `archivedAt != null`
+ *     (closes the read→delete race with a concurrent restore),
+ *   - purgeMany reports active ids as `not_archived` soft failures.
+ */
+describe('AssetsService purge (archive-first, WS-015)', () => {
+  const actor = { id: 'user-1' } as never;
+  const meta = { ip: '127.0.0.1', userAgent: 'jest' } as never;
+  const companyId = 'c1';
+
+  function makePurgeService(rows: Record<string, { archivedAt: Date | null }>) {
+    const findFirst = jest.fn(({ where }: { where: { id: string } }) => {
+      const row = rows[where.id];
+      return Promise.resolve(
+        row
+          ? {
+              id: where.id,
+              name: `Asset ${where.id}`,
+              assetLayoutId: 'layout-1',
+              archivedAt: row.archivedAt,
+              externalId: null,
+              externalSource: null,
+            }
+          : null,
+      );
+    });
+    const deleteMany = jest.fn().mockResolvedValue({ count: 1 });
+    // Post-delete existence probe used only when the guarded delete
+    // matched nothing (count 0) to distinguish gone vs restored.
+    const txFindFirst = jest.fn(({ where }: { where: { id: string } }) =>
+      Promise.resolve(rows[where.id] ? { id: where.id } : null),
+    );
+    const tx = { asset: { deleteMany, findFirst: txFindFirst } };
+    const $transaction = jest.fn(
+      async (cb: (t: unknown) => Promise<unknown>) => cb(tx),
+    );
+    const prisma = { asset: { findFirst }, $transaction };
+    const audit = { log: jest.fn().mockResolvedValue(undefined) };
+    const relations = { cleanupForAsset: jest.fn().mockResolvedValue(undefined) };
+    const searchIndex = { removeAsset: jest.fn().mockResolvedValue(undefined) };
+    const service = new AssetsService(
+      prisma as never,
+      audit as never,
+      {} as never,
+      relations as never,
+      {} as never,
+      searchIndex as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    );
+    return { service, findFirst, deleteMany, txFindFirst, $transaction, audit };
+  }
+
+  describe('purge', () => {
+    it('deletes an archived asset and re-asserts archivedAt in the delete predicate', async () => {
+      const { service, deleteMany, audit } = makePurgeService({
+        'a-1': { archivedAt: new Date('2026-01-01') },
+      });
+
+      await expect(service.purge(actor, companyId, 'a-1', meta)).resolves.toEqual(
+        { id: 'a-1' },
+      );
+
+      expect(deleteMany).toHaveBeenCalledTimes(1);
+      expect(deleteMany.mock.calls[0][0]).toEqual({
+        where: { id: 'a-1', companyId, archivedAt: { not: null } },
+      });
+      expect(audit.log).toHaveBeenCalledWith(
+        expect.objectContaining({ action: 'asset.purge', entityId: 'a-1' }),
+      );
+    });
+
+    it('rejects an active asset before the delete transaction runs', async () => {
+      const { service, $transaction, deleteMany } = makePurgeService({
+        'a-1': { archivedAt: null },
+      });
+
+      await expect(service.purge(actor, companyId, 'a-1', meta)).rejects.toThrow(
+        BadRequestException,
+      );
+      await expect(service.purge(actor, companyId, 'a-1', meta)).rejects.toThrow(
+        /archive the asset before/i,
+      );
+      expect($transaction).not.toHaveBeenCalled();
+      expect(deleteMany).not.toHaveBeenCalled();
+    });
+
+    it('rejects a missing asset with NotFound', async () => {
+      const { service } = makePurgeService({});
+
+      await expect(service.purge(actor, companyId, 'ghost', meta)).rejects.toThrow(
+        NotFoundException,
+      );
+    });
+
+    it('rejects with the archive gate when the asset is restored between the read and the delete', async () => {
+      // Archived at findFirst time, but the guarded deleteMany matches
+      // nothing (count 0) because a concurrent restore cleared archivedAt;
+      // the row still exists, so this is `not_archived`, not `not_found`.
+      const { service, deleteMany, txFindFirst, audit } = makePurgeService({
+        'a-1': { archivedAt: new Date('2026-01-01') },
+      });
+      deleteMany.mockResolvedValue({ count: 0 });
+      txFindFirst.mockResolvedValue({ id: 'a-1' });
+
+      await expect(service.purge(actor, companyId, 'a-1', meta)).rejects.toThrow(
+        /archive the asset before/i,
+      );
+      expect(audit.log).not.toHaveBeenCalled();
+    });
+
+    it('rejects with NotFound when a concurrent request already purged the row', async () => {
+      // Archived at findFirst time, guarded delete matches nothing AND the
+      // row is gone — another request won the race. API clients should see
+      // 404, not the archive gate.
+      const { service, deleteMany, txFindFirst, audit } = makePurgeService({
+        'a-1': { archivedAt: new Date('2026-01-01') },
+      });
+      deleteMany.mockResolvedValue({ count: 0 });
+      txFindFirst.mockResolvedValue(null);
+
+      await expect(service.purge(actor, companyId, 'a-1', meta)).rejects.toThrow(
+        NotFoundException,
+      );
+      expect(audit.log).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('purgeMany', () => {
+    it('deletes all archived ids', async () => {
+      const { service, deleteMany } = makePurgeService({
+        'a-1': { archivedAt: new Date('2026-01-01') },
+        'a-2': { archivedAt: new Date('2026-01-02') },
+      });
+
+      const result = await service.purgeMany(actor, companyId, ['a-1', 'a-2'], meta);
+
+      expect(result).toEqual({ ok: ['a-1', 'a-2'], failed: [] });
+      expect(deleteMany).toHaveBeenCalledTimes(2);
+    });
+
+    it('reports active ids as not_archived and deletes only the archived ones', async () => {
+      const { service, deleteMany } = makePurgeService({
+        'a-1': { archivedAt: new Date('2026-01-01') },
+        'a-2': { archivedAt: null },
+        'a-3': { archivedAt: null },
+      });
+
+      const result = await service.purgeMany(
+        actor,
+        companyId,
+        ['a-1', 'a-2', 'a-3'],
+        meta,
+      );
+
+      expect(result.ok).toEqual(['a-1']);
+      expect(result.failed).toEqual([
+        {
+          id: 'a-2',
+          code: 'not_archived',
+          reason: 'Archive the asset before permanently deleting it.',
+        },
+        {
+          id: 'a-3',
+          code: 'not_archived',
+          reason: 'Archive the asset before permanently deleting it.',
+        },
+      ]);
+      expect(deleteMany).toHaveBeenCalledTimes(1);
+      expect(deleteMany.mock.calls[0][0].where.id).toBe('a-1');
+    });
+
+    it('deletes nothing when every id is active', async () => {
+      const { service, deleteMany } = makePurgeService({
+        'a-1': { archivedAt: null },
+        'a-2': { archivedAt: null },
+      });
+
+      const result = await service.purgeMany(actor, companyId, ['a-1', 'a-2'], meta);
+
+      expect(result.ok).toEqual([]);
+      expect(result.failed.map((f) => f.code)).toEqual([
+        'not_archived',
+        'not_archived',
+      ]);
+      expect(deleteMany).not.toHaveBeenCalled();
+    });
+
+    it('dedupes repeated ids to one operation each', async () => {
+      const { service, deleteMany } = makePurgeService({
+        'a-1': { archivedAt: new Date('2026-01-01') },
+      });
+
+      const result = await service.purgeMany(
+        actor,
+        companyId,
+        ['a-1', 'a-1', 'a-1'],
+        meta,
+      );
+
+      expect(result).toEqual({ ok: ['a-1'], failed: [] });
+      expect(deleteMany).toHaveBeenCalledTimes(1);
+    });
   });
 });

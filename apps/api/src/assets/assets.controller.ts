@@ -25,6 +25,7 @@ import {
 import { AssetsService } from './assets.service.js';
 import { CurrentUser, type AuthedUser } from '../common/current-user.decorator.js';
 import { RequirePermission } from '../rbac/require-permission.decorator.js';
+import { RequireStepUp } from '../auth/step-up/require-step-up.decorator.js';
 import { ZodBody } from '../common/zod-validation.pipe.js';
 import { requestMetaOf as meta } from '../common/request-meta.js';
 
@@ -125,15 +126,16 @@ export class AssetsController {
   }
 
   /**
-   * Bulk hard-delete. Bypasses the per-item "archive first" safety
-   * because the UI already gates this action behind a typed-confirmation
-   * dialog; making the operator archive twice (once before purge, once
-   * before bulk purge) would be unnecessary friction. Caller still needs
-   * `asset.purge` (FULL access).
+   * Bulk hard-delete. The per-item "archive first" safety is enforced
+   * server-side (WS-015): ids that are still active come back as
+   * `code: "not_archived"` entries in `failed` instead of being deleted.
+   * Requires `asset.purge` (FULL access) plus a fresh step-up
+   * re-authentication.
    */
   @Post('bulk/purge')
   @HttpCode(HttpStatus.OK)
   @RequirePermission('asset.purge', { companyIdFrom: 'params.companyId' })
+  @RequireStepUp()
   async bulkPurge(
     @CurrentUser() actor: AuthedUser,
     @Param('companyId', new ParseUUIDPipe()) companyId: string,
@@ -210,6 +212,7 @@ export class AssetsController {
   @Post(':id/purge')
   @HttpCode(HttpStatus.NO_CONTENT)
   @RequirePermission('asset.purge', { companyIdFrom: 'params.companyId' })
+  @RequireStepUp()
   async purge(
     @CurrentUser() actor: AuthedUser,
     @Param('companyId', new ParseUUIDPipe()) companyId: string,

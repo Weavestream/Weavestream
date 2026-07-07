@@ -69,6 +69,7 @@ Each field supports additional configuration:
 Each **Asset** is a single instance of a layout within a tenant. Assets support:
 
 - **Soft-archive** — remove from active lists while preserving the full historical record
+- **Permanent deletion** — requires the asset to be archived first; this is enforced server-side for both single and bulk purge, and purging additionally requires step-up re-authentication. Bulk purge skips still-active assets and reports them so you can archive and retry
 - **External ID tracking** — for synchronising with external systems
 - **Embedded passwords** — link credentials directly to an asset; they archive when the asset is archived
 - **Cross-references** — `ASSET_REFERENCE` fields create navigable links between assets
