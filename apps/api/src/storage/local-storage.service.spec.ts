@@ -152,3 +152,138 @@ describe('LocalStorageService streaming + bounded reads', () => {
     });
   });
 });
+
+/**
+ * WS-013 orphan-sweep helpers. These are the only enumeration and
+ * recursive-delete surfaces in the service, so the tests focus on the
+ * strictness rules: UUID-shaped names only, symlinks refused/ignored,
+ * resolved-path containment before the recursive rm.
+ */
+describe('LocalStorageService orphan-sweep helpers', () => {
+  const COMPANY = '11111111-1111-1111-1111-111111111111';
+  const UPLOAD = '22222222-2222-2222-2222-222222222222';
+
+  let root: string;
+  let outside: string;
+  let svc: LocalStorageService;
+
+  beforeEach(async () => {
+    root = await fs.mkdtemp(join(tmpdir(), 'local-storage-orphan-'));
+    outside = await fs.mkdtemp(join(tmpdir(), 'outside-root-'));
+    svc = new LocalStorageService({
+      values: { FILE_STORAGE_DIR: root },
+    } as never);
+    await svc.onModuleInit();
+  });
+
+  afterEach(async () => {
+    await fs.rm(root, { recursive: true, force: true });
+    await fs.rm(outside, { recursive: true, force: true });
+  });
+
+  async function makeUploadDir(
+    companyId: string,
+    uploadId: string,
+    file = 'a.bin',
+  ): Promise<string> {
+    const dir = join(root, companyId, 'uploads', uploadId);
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(join(dir, file), 'bytes');
+    return dir;
+  }
+
+  describe('listTenantDirs', () => {
+    it('returns only UUID-shaped real directories', async () => {
+      await fs.mkdir(join(root, COMPANY));
+      await fs.mkdir(join(root, 'not-a-uuid'));
+      await fs.writeFile(join(root, `${UPLOAD}`), 'a file, not a dir');
+      await fs.symlink(outside, join(root, '33333333-3333-3333-3333-333333333333'));
+      expect(await svc.listTenantDirs()).toEqual([COMPANY]);
+    });
+
+    it('returns empty for a missing root', async () => {
+      await fs.rm(root, { recursive: true, force: true });
+      expect(await svc.listTenantDirs()).toEqual([]);
+    });
+  });
+
+  describe('listUploadDirs', () => {
+    it('lists UUID-shaped upload directories with their mtime', async () => {
+      await makeUploadDir(COMPANY, UPLOAD);
+      await fs.mkdir(join(root, COMPANY, 'uploads', 'temp-junk'), {
+        recursive: true,
+      });
+      const rows = await svc.listUploadDirs(COMPANY);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]!.uploadId).toBe(UPLOAD);
+      // Not `toBeInstanceOf(Date)`: fs Dates cross the jest ESM vm
+      // realm boundary and fail instanceof despite being real Dates.
+      expect(Number.isFinite(rows[0]!.mtime.getTime())).toBe(true);
+    });
+
+    it('ignores symlinked entries', async () => {
+      await fs.mkdir(join(root, COMPANY, 'uploads'), { recursive: true });
+      await fs.symlink(
+        outside,
+        join(root, COMPANY, 'uploads', '44444444-4444-4444-4444-444444444444'),
+      );
+      expect(await svc.listUploadDirs(COMPANY)).toEqual([]);
+    });
+
+    it('returns empty when the company has no uploads directory', async () => {
+      expect(await svc.listUploadDirs(COMPANY)).toEqual([]);
+    });
+
+    it('rejects a non-UUID companyId', async () => {
+      await expect(svc.listUploadDirs('not-a-uuid')).rejects.toThrow();
+    });
+  });
+
+  describe('removeUploadDir', () => {
+    it('recursively removes the directory including tmp siblings', async () => {
+      const dir = await makeUploadDir(COMPANY, UPLOAD);
+      await fs.writeFile(join(dir, 'a.bin.tmp-deadbeef'), 'partial');
+      await svc.removeUploadDir(COMPANY, UPLOAD);
+      await expect(fs.lstat(dir)).rejects.toMatchObject({ code: 'ENOENT' });
+    });
+
+    it('is a no-op for a missing directory', async () => {
+      await expect(
+        svc.removeUploadDir(COMPANY, UPLOAD),
+      ).resolves.toBeUndefined();
+    });
+
+    it('rejects non-UUID ids', async () => {
+      await expect(svc.removeUploadDir('c1', UPLOAD)).rejects.toThrow();
+      await expect(svc.removeUploadDir(COMPANY, 'u-1')).rejects.toThrow();
+    });
+
+    it('refuses a symlinked upload directory and leaves the target intact', async () => {
+      const victim = join(outside, 'victim');
+      await fs.mkdir(victim);
+      await fs.writeFile(join(victim, 'keep.txt'), 'precious');
+      await fs.mkdir(join(root, COMPANY, 'uploads'), { recursive: true });
+      await fs.symlink(victim, join(root, COMPANY, 'uploads', UPLOAD));
+
+      await expect(svc.removeUploadDir(COMPANY, UPLOAD)).rejects.toThrow();
+      expect(await fs.readFile(join(victim, 'keep.txt'), 'utf8')).toBe(
+        'precious',
+      );
+    });
+
+    it('refuses when an ancestor symlink escapes the tenant root', async () => {
+      // uploads/ itself is a symlink pointing outside the storage root;
+      // the realpath containment check must catch it.
+      const victimUploads = join(outside, 'uploads');
+      await fs.mkdir(join(victimUploads, UPLOAD), { recursive: true });
+      await fs.writeFile(join(victimUploads, UPLOAD, 'keep.txt'), 'precious');
+      await fs.mkdir(join(root, COMPANY), { recursive: true });
+      await fs.symlink(victimUploads, join(root, COMPANY, 'uploads'));
+
+      await expect(svc.removeUploadDir(COMPANY, UPLOAD)).rejects.toThrow();
+      expect(
+        await fs.readFile(join(victimUploads, UPLOAD, 'keep.txt'), 'utf8'),
+      ).toBe('precious');
+    });
+  });
+});

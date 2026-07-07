@@ -273,6 +273,27 @@ describe('UploadsService.init / relayPut', () => {
     ).rejects.toBeInstanceOf(ForbiddenException);
   });
 
+  it('relayPut fails closed when the pending session has no uploaderId', async () => {
+    // init always records the uploader, so a missing id means a
+    // malformed/tampered session — never "allow anyone" (WS-013).
+    redis.client.get.mockResolvedValue(
+      JSON.stringify({
+        companyId: 'c1',
+        filename: 'a.png',
+        mimeType: 'image/png',
+        sizeBytes: 5,
+        storageKey: 'k',
+        uploaderId: null,
+        attachedToType: null,
+        attachedToId: null,
+      }),
+    );
+    await expect(
+      service.relayPut(actor, 'c1', 'u-1', Readable.from(Buffer.alloc(0)), {}),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+    expect(storage.putObjectStream).not.toHaveBeenCalled();
+  });
+
   it('relayPut rejects when the declared content-length exceeds the limit', async () => {
     redis.client.get.mockResolvedValue(
       JSON.stringify({
@@ -1287,6 +1308,15 @@ describe('UploadsService attachment parent invariants (WS-013)', () => {
         service.confirm(operator, 'c1', { uploadId: 'u-1' } as never, meta),
       ).rejects.toBeInstanceOf(ForbiddenException);
       // Short-circuits before any storage / body work.
+      expect(storage.headObject).not.toHaveBeenCalled();
+    });
+
+    it('fails closed when the pending session has no uploaderId', async () => {
+      const { service, storage, redis } = makeService();
+      redis.client.get.mockResolvedValue(pendingJson({ uploaderId: null }));
+      await expect(
+        service.confirm(operator, 'c1', { uploadId: 'u-1' } as never, meta),
+      ).rejects.toBeInstanceOf(ForbiddenException);
       expect(storage.headObject).not.toHaveBeenCalled();
     });
 

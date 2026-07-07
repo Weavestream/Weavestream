@@ -11,6 +11,7 @@ import { PrismaService } from '../../../api/src/prisma/prisma.service.js';
 import { AuditLogService } from '../../../api/src/audit/audit.service.js';
 import { AUDIT_ACTIONS } from '../../../api/src/audit/audit-actions.js';
 import { LocalStorageService } from '../../../api/src/storage/local-storage.service.js';
+import { pendingKey } from '../../../api/src/uploads/upload-session-keys.js';
 
 /**
  * Postgres `pg_try_advisory_lock` arguments. Same shape as the backup
@@ -29,6 +30,7 @@ const SYSTEM_META = {
 };
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+const HOUR_MS = 60 * 60 * 1000;
 
 interface ReaperOutcome {
   reaped: number;
@@ -38,6 +40,11 @@ interface ReaperOutcome {
   cutoff: string;
   batchSize: number;
   retentionDays: number;
+  /** WS-013 orphan pass: upload dirs on disk with no DB row. */
+  orphanScanned: number;
+  orphanRemoved: number;
+  orphanSkipped: number;
+  orphanFailed: number;
   skipped?: 'concurrent';
 }
 
@@ -148,6 +155,10 @@ export class UploadReaperWorker implements OnModuleDestroy {
         cutoff: cutoff.toISOString(),
         batchSize,
         retentionDays,
+        orphanScanned: 0,
+        orphanRemoved: 0,
+        orphanSkipped: 0,
+        orphanFailed: 0,
         skipped: 'concurrent',
       };
     }
@@ -202,6 +213,11 @@ export class UploadReaperWorker implements OnModuleDestroy {
         }
       }
 
+      // WS-013 orphan pass: the row reap and the orphan removal share
+      // one per-sweep work budget so a single tick never does more
+      // than `batchSize` deletions in total.
+      const orphans = await this.sweepOrphanDirs(batchSize - rows.length);
+
       const outcome: ReaperOutcome = {
         reaped,
         failed,
@@ -210,6 +226,7 @@ export class UploadReaperWorker implements OnModuleDestroy {
         cutoff: cutoff.toISOString(),
         batchSize,
         retentionDays,
+        ...orphans,
       };
 
       // Roll-up audit row. `entityId` is null because the row aggregates
@@ -235,9 +252,10 @@ export class UploadReaperWorker implements OnModuleDestroy {
         );
       }
 
-      if (reaped > 0 || failed > 0) {
+      if (reaped > 0 || failed > 0 || orphans.orphanRemoved > 0 || orphans.orphanFailed > 0) {
         this.logger.log(
-          `upload-reaper sweep: reaped=${reaped} failed=${failed} bytesFreed=${bytesFreed} (retention=${retentionDays}d)`,
+          `upload-reaper sweep: reaped=${reaped} failed=${failed} bytesFreed=${bytesFreed} ` +
+            `orphansRemoved=${orphans.orphanRemoved} orphansFailed=${orphans.orphanFailed} (retention=${retentionDays}d)`,
         );
       }
 
@@ -253,5 +271,106 @@ export class UploadReaperWorker implements OnModuleDestroy {
           );
         });
     }
+  }
+
+  /**
+   * WS-013 orphan pass. A relay PUT that is never confirmed leaves
+   * `${companyId}/uploads/<uploadId>/` on disk with no `Upload` row —
+   * the pending session is Redis-only and its 15-minute TTL erases the
+   * last pointer to those bytes. This walks the storage tree and
+   * removes upload directories that:
+   *
+   *   - are older than `UPLOAD_ORPHAN_MIN_AGE_HOURS` (dir mtime), and
+   *   - have no `Upload` row of any state (soft-deleted rows belong to
+   *     the retention pass above — their bytes are still referenced), and
+   *   - have no live pending session in Redis (defence in depth; the
+   *     age floor of 1h already dwarfs the 15-minute session TTL).
+   *
+   * `budget` is what remains of `UPLOAD_REAPER_BATCH_SIZE` after the
+   * row reap, so one tick never does more than the configured total
+   * work; anything left over is picked up on the next tick.
+   */
+  private async sweepOrphanDirs(budget: number): Promise<{
+    orphanScanned: number;
+    orphanRemoved: number;
+    orphanSkipped: number;
+    orphanFailed: number;
+  }> {
+    const counters = {
+      orphanScanned: 0,
+      orphanRemoved: 0,
+      orphanSkipped: 0,
+      orphanFailed: 0,
+    };
+    if (budget <= 0) return counters;
+    const minAgeHours = this.env.values.UPLOAD_ORPHAN_MIN_AGE_HOURS;
+    const cutoffMs = Date.now() - minAgeHours * HOUR_MS;
+
+    let companies: string[];
+    try {
+      companies = await this.storage.listTenantDirs();
+    } catch (err) {
+      counters.orphanFailed += 1;
+      this.logger.error(
+        `upload-reaper: orphan pass could not enumerate storage root: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+      return counters;
+    }
+
+    for (const companyId of companies) {
+      if (counters.orphanRemoved >= budget) break;
+
+      let dirs: { uploadId: string; mtime: Date }[];
+      try {
+        dirs = await this.storage.listUploadDirs(companyId);
+      } catch (err) {
+        counters.orphanFailed += 1;
+        this.logger.warn(
+          `upload-reaper: orphan pass could not enumerate ${companyId}/uploads: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+        continue;
+      }
+
+      const oldDirs = dirs.filter((d) => d.mtime.getTime() < cutoffMs);
+      counters.orphanScanned += oldDirs.length;
+      if (oldDirs.length === 0) continue;
+
+      // One batch lookup per company; any row (live OR soft-deleted)
+      // means the directory is owned and must be left alone.
+      const rows = await this.prisma.upload.findMany({
+        where: { id: { in: oldDirs.map((d) => d.uploadId) } },
+        select: { id: true },
+      });
+      const owned = new Set(rows.map((r) => r.id));
+
+      for (const dir of oldDirs) {
+        if (counters.orphanRemoved >= budget) break;
+        if (owned.has(dir.uploadId)) {
+          counters.orphanSkipped += 1;
+          continue;
+        }
+        try {
+          if (await this.redis.client.exists(pendingKey(dir.uploadId))) {
+            counters.orphanSkipped += 1;
+            continue;
+          }
+          await this.storage.removeUploadDir(companyId, dir.uploadId);
+          counters.orphanRemoved += 1;
+        } catch (err) {
+          counters.orphanFailed += 1;
+          this.logger.warn(
+            `upload-reaper: failed to remove orphan dir ${companyId}/uploads/${dir.uploadId}: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+          );
+        }
+      }
+    }
+
+    return counters;
   }
 }

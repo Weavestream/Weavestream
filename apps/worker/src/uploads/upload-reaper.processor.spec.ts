@@ -21,6 +21,11 @@ function makeWorker(opts: {
   };
   retentionDays?: number;
   batchSize?: number;
+  orphanMinAgeHours?: number;
+  /** On-disk upload dirs per company, for the WS-013 orphan pass. */
+  orphanDirs?: Record<string, { uploadId: string; mtime: Date }[]>;
+  /** uploadIds with a live `upload:pending:<id>` Redis session. */
+  pendingIds?: string[];
 }) {
   const lockGot = opts.lockGot ?? true;
   const queryRawUnsafe = jest.fn(async (sql: string) => {
@@ -35,10 +40,17 @@ function makeWorker(opts: {
 
   const findMany = jest.fn(
     async (args: {
-      where: { deletedAt: { lt: Date } };
-      take: number;
-    }): Promise<FakeRow[]> => {
-      const cutoff = args.where.deletedAt.lt;
+      where: { deletedAt?: { lt: Date }; id?: { in: string[] } };
+      take?: number;
+    }): Promise<Array<Partial<FakeRow>>> => {
+      // Orphan-pass lookup: any row (live or soft-deleted) counts.
+      if (args.where.id) {
+        const ids = new Set(args.where.id.in);
+        return opts.rows
+          .filter((r) => ids.has(r.id))
+          .map((r) => ({ id: r.id }));
+      }
+      const cutoff = args.where.deletedAt!.lt;
       const matched = opts.rows
         .filter((r) => r.deletedAt !== null && r.deletedAt.getTime() < cutoff.getTime())
         .sort((a, b) => (a.deletedAt!.getTime() - b.deletedAt!.getTime()))
@@ -72,7 +84,24 @@ function makeWorker(opts: {
       }),
   );
   const removeUploadDirIfEmpty = jest.fn(async () => undefined);
-  const storage = { deleteObject, removeUploadDirIfEmpty };
+  const orphanDirs = opts.orphanDirs ?? {};
+  const listTenantDirs = jest.fn(async () => Object.keys(orphanDirs));
+  const listUploadDirs = jest.fn(
+    async (companyId: string) => orphanDirs[companyId] ?? [],
+  );
+  const removedDirs: string[] = [];
+  const removeUploadDir = jest.fn(
+    async (companyId: string, uploadId: string) => {
+      removedDirs.push(`${companyId}/${uploadId}`);
+    },
+  );
+  const storage = {
+    deleteObject,
+    removeUploadDirIfEmpty,
+    listTenantDirs,
+    listUploadDirs,
+    removeUploadDir,
+  };
 
   const auditLog = jest.fn(async () => undefined);
   const audit = { log: auditLog };
@@ -81,10 +110,18 @@ function makeWorker(opts: {
     values: {
       UPLOAD_REAPER_RETENTION_DAYS: opts.retentionDays ?? RETENTION_DAYS,
       UPLOAD_REAPER_BATCH_SIZE: opts.batchSize ?? BATCH_SIZE,
+      UPLOAD_ORPHAN_MIN_AGE_HOURS: opts.orphanMinAgeHours ?? 24,
     },
   };
 
-  const redis = { bullmqConnection: () => ({}) };
+  const pending = new Set(
+    (opts.pendingIds ?? []).map((id) => `upload:pending:${id}`),
+  );
+  const redisExists = jest.fn(async (key: string) => (pending.has(key) ? 1 : 0));
+  const redis = {
+    bullmqConnection: () => ({}),
+    client: { exists: redisExists },
+  };
 
   const worker = new UploadReaperWorker(
     env as never,
@@ -103,6 +140,11 @@ function makeWorker(opts: {
     deleteRow,
     deleteObject,
     removeUploadDirIfEmpty,
+    listTenantDirs,
+    listUploadDirs,
+    removeUploadDir,
+    removedDirs,
+    redisExists,
     findMany,
     queryRawUnsafe,
     deletedIds,
@@ -302,5 +344,153 @@ describe('UploadReaperWorker.sweep', () => {
     const cutoff = args.where.deletedAt.lt;
     const expected = Date.now() - 7 * DAY_MS;
     expect(Math.abs(cutoff.getTime() - expected)).toBeLessThan(5_000);
+  });
+});
+
+describe('UploadReaperWorker.sweep — WS-013 orphan pass', () => {
+  const HOUR_MS = 60 * 60 * 1000;
+  const old = (hours: number) => new Date(Date.now() - hours * HOUR_MS);
+
+  it('removes an old directory with no DB row and no pending session', async () => {
+    const ctx = makeWorker({
+      rows: [],
+      orphanDirs: { c1: [{ uploadId: 'u-orphan', mtime: old(48) }] },
+    });
+    const result = await ctx.worker.sweep();
+
+    expect(ctx.removedDirs).toEqual(['c1/u-orphan']);
+    expect(result.orphanScanned).toBe(1);
+    expect(result.orphanRemoved).toBe(1);
+    expect(result.orphanSkipped).toBe(0);
+    expect(result.orphanFailed).toBe(0);
+    expect(ctx.auditLog.mock.calls[0][0].after).toMatchObject({
+      orphanRemoved: 1,
+    });
+  });
+
+  it('keeps directories that have a DB row, even a soft-deleted one', async () => {
+    const ctx = makeWorker({
+      rows: [
+        row({ id: 'u-live', deletedAt: null }),
+        row({ id: 'u-tombstone', deletedAt: new Date() }),
+      ],
+      orphanDirs: {
+        c1: [
+          { uploadId: 'u-live', mtime: old(48) },
+          { uploadId: 'u-tombstone', mtime: old(48) },
+        ],
+      },
+    });
+    const result = await ctx.worker.sweep();
+
+    expect(ctx.removedDirs).toEqual([]);
+    expect(result.orphanScanned).toBe(2);
+    expect(result.orphanSkipped).toBe(2);
+    expect(result.orphanRemoved).toBe(0);
+  });
+
+  it('keeps a directory with a live pending Redis session', async () => {
+    const ctx = makeWorker({
+      rows: [],
+      orphanDirs: { c1: [{ uploadId: 'u-pending', mtime: old(48) }] },
+      pendingIds: ['u-pending'],
+    });
+    const result = await ctx.worker.sweep();
+
+    expect(ctx.redisExists).toHaveBeenCalledWith('upload:pending:u-pending');
+    expect(ctx.removedDirs).toEqual([]);
+    expect(result.orphanSkipped).toBe(1);
+    expect(result.orphanRemoved).toBe(0);
+  });
+
+  it('keeps directories younger than the minimum age', async () => {
+    const ctx = makeWorker({
+      rows: [],
+      orphanMinAgeHours: 24,
+      orphanDirs: { c1: [{ uploadId: 'u-young', mtime: old(2) }] },
+    });
+    const result = await ctx.worker.sweep();
+
+    expect(ctx.removedDirs).toEqual([]);
+    expect(result.orphanScanned).toBe(0);
+    expect(result.orphanRemoved).toBe(0);
+  });
+
+  it('shares the batch budget with the row reap', async () => {
+    // batchSize=2: the row reap consumes 2, leaving no budget for the
+    // orphan pass; nothing on disk is touched this tick.
+    const staleRows = [0, 1].map((i) =>
+      row({
+        id: `u-row-${i}`,
+        deletedAt: new Date(Date.now() - (RETENTION_DAYS + 1) * DAY_MS - i * 1000),
+      }),
+    );
+    const ctx = makeWorker({
+      rows: staleRows,
+      batchSize: 2,
+      orphanDirs: { c1: [{ uploadId: 'u-orphan', mtime: old(48) }] },
+    });
+    const result = await ctx.worker.sweep();
+
+    expect(result.reaped).toBe(2);
+    expect(ctx.removedDirs).toEqual([]);
+    expect(result.orphanRemoved).toBe(0);
+    expect(ctx.listTenantDirs).not.toHaveBeenCalled();
+  });
+
+  it('caps orphan removals at the remaining budget', async () => {
+    const dirs = Array.from({ length: 5 }, (_, i) => ({
+      uploadId: `u-orphan-${i}`,
+      mtime: old(48),
+    }));
+    const ctx = makeWorker({
+      rows: [
+        row({
+          id: 'u-row',
+          deletedAt: new Date(Date.now() - (RETENTION_DAYS + 1) * DAY_MS),
+        }),
+      ],
+      batchSize: 3,
+      orphanDirs: { c1: dirs },
+    });
+    const result = await ctx.worker.sweep();
+
+    // 1 row reaped leaves budget for 2 orphan removals.
+    expect(result.reaped).toBe(1);
+    expect(result.orphanRemoved).toBe(2);
+    expect(ctx.removedDirs).toHaveLength(2);
+  });
+
+  it('counts a failed removal and keeps sweeping', async () => {
+    const ctx = makeWorker({
+      rows: [],
+      orphanDirs: {
+        c1: [
+          { uploadId: 'u-bad', mtime: old(48) },
+          { uploadId: 'u-good', mtime: old(48) },
+        ],
+      },
+    });
+    ctx.removeUploadDir.mockImplementationOnce(async () => {
+      throw new Error('EACCES');
+    });
+    const result = await ctx.worker.sweep();
+
+    expect(result.orphanFailed).toBe(1);
+    expect(result.orphanRemoved).toBe(1);
+    expect(ctx.removedDirs).toEqual(['c1/u-good']);
+  });
+
+  it('does no orphan work when the advisory lock is held', async () => {
+    const ctx = makeWorker({
+      rows: [],
+      lockGot: false,
+      orphanDirs: { c1: [{ uploadId: 'u-orphan', mtime: old(48) }] },
+    });
+    const result = await ctx.worker.sweep();
+
+    expect(result.skipped).toBe('concurrent');
+    expect(ctx.listTenantDirs).not.toHaveBeenCalled();
+    expect(ctx.removedDirs).toEqual([]);
   });
 });

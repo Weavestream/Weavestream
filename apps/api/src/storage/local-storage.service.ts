@@ -301,6 +301,115 @@ export class LocalStorageService implements OnModuleInit {
   }
 
   // ------------------------------------------------------------------
+  // Orphan-sweep enumeration (WS-013). Used only by the upload reaper
+  // to find `${companyId}/uploads/<uploadId>/` directories whose bytes
+  // were relayed but never confirmed. All three methods are strict
+  // about shape: only UUID-named real directories count, symlinks are
+  // never followed, and the recursive delete re-checks containment on
+  // the resolved path right before removal.
+  // ------------------------------------------------------------------
+
+  /**
+   * Company directories directly under the storage root. Returns only
+   * UUID-shaped real directories — anything else under the root (temp
+   * files, symlinks, operator debris) is ignored, never traversed.
+   */
+  async listTenantDirs(): Promise<string[]> {
+    let entries;
+    try {
+      entries = await fs.readdir(this.root, { withFileTypes: true });
+    } catch (err) {
+      if (isEnoent(err)) return [];
+      throw err;
+    }
+    return entries
+      .filter((e) => e.isDirectory() && !e.isSymbolicLink() && isUuid(e.name))
+      .map((e) => e.name);
+  }
+
+  /**
+   * Per-upload directories under `${companyId}/uploads`, with the
+   * directory mtime so the reaper can apply its minimum-age threshold.
+   * Same shape rules as {@link listTenantDirs}; entries whose `lstat`
+   * fails (raced away, or not actually a directory) are skipped.
+   */
+  async listUploadDirs(
+    companyId: string,
+  ): Promise<{ uploadId: string; mtime: Date }[]> {
+    this.assertSafeId(companyId, 'companyId');
+    if (!isUuid(companyId)) {
+      throw new BadRequestException('companyId must be a UUID');
+    }
+    const uploadsRoot = path.join(this.root, companyId, 'uploads');
+    let entries;
+    try {
+      entries = await fs.readdir(uploadsRoot, { withFileTypes: true });
+    } catch (err) {
+      if (isEnoent(err)) return [];
+      throw err;
+    }
+    const out: { uploadId: string; mtime: Date }[] = [];
+    for (const entry of entries) {
+      if (!entry.isDirectory() || entry.isSymbolicLink() || !isUuid(entry.name)) {
+        continue;
+      }
+      try {
+        const stat = await fs.lstat(path.join(uploadsRoot, entry.name));
+        if (!stat.isDirectory()) continue;
+        out.push({ uploadId: entry.name, mtime: stat.mtime });
+      } catch (err) {
+        if (isEnoent(err)) continue;
+        throw err;
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Recursively remove one upload directory (the orphaned file plus any
+   * `.tmp-*` siblings a crashed relay left behind). Deliberately
+   * stricter than {@link removeUploadDirIfEmpty} because it is the only
+   * recursive delete in the service: both ids must be UUIDs, the target
+   * must be a real directory (symlinks refused, never followed), and
+   * the `realpath`-resolved location is re-checked against the tenant
+   * root immediately before `fs.rm(recursive)`.
+   */
+  async removeUploadDir(companyId: string, uploadId: string): Promise<void> {
+    this.assertSafeId(companyId, 'companyId');
+    this.assertSafeId(uploadId, 'uploadId');
+    if (!isUuid(companyId) || !isUuid(uploadId)) {
+      throw new BadRequestException('companyId and uploadId must be UUIDs');
+    }
+    const abs = path.join(this.root, companyId, 'uploads', uploadId);
+
+    let stat;
+    try {
+      stat = await fs.lstat(abs);
+    } catch (err) {
+      if (isEnoent(err)) return;
+      throw err;
+    }
+    if (stat.isSymbolicLink() || !stat.isDirectory()) {
+      throw new BadRequestException('Upload directory is not a real directory');
+    }
+
+    // Containment on the *resolved* path: if any ancestor is a symlink
+    // pointing outside the storage root, realpath exposes it and we
+    // refuse rather than recursively delete foreign files.
+    const tenantRoot = path.join(this.root, companyId);
+    const resolved = await fs.realpath(abs);
+    const resolvedTenantRoot = await fs.realpath(tenantRoot);
+    if (
+      resolved !== resolvedTenantRoot &&
+      !resolved.startsWith(`${resolvedTenantRoot}${path.sep}`)
+    ) {
+      throw new BadRequestException('Upload directory escapes tenant root');
+    }
+
+    await fs.rm(abs, { recursive: true, force: true });
+  }
+
+  // ------------------------------------------------------------------
   // Key builders — single place to compute storage paths. Every path
   // starts with `<companyId>/…` so a key alone is enough to know which
   // tenant owns it.
@@ -372,6 +481,13 @@ export class LocalStorageService implements OnModuleInit {
       throw new BadRequestException(`Unsafe ${label}`);
     }
   }
+}
+
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function isUuid(value: string): boolean {
+  return UUID_RE.test(value);
 }
 
 function isEnoent(err: unknown): boolean {

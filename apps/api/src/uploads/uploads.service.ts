@@ -50,6 +50,7 @@ import { extractEmbeddedUploadIds } from '../articles/article-uploads.js';
 import { mimesAreCompatible } from './mime-compat.js';
 import { startsWithTextBom } from './text-bom.js';
 import { canReadPassword } from '../passwords/password-access-policy.js';
+import { pendingKey, bodyKey } from './upload-session-keys.js';
 
 export interface AuditMeta {
   ip: string;
@@ -293,7 +294,9 @@ export class UploadsService {
     // Only the user who created the pending session may PUT against it.
     // The init endpoint already gated on `upload.create`, so this is a
     // narrowing check rather than the primary authorization decision.
-    if (pending.uploaderId && pending.uploaderId !== actor.id) {
+    // Fail closed on a missing uploaderId: init always records one, so
+    // its absence means a malformed/tampered session, not a legacy row.
+    if (!pending.uploaderId || pending.uploaderId !== actor.id) {
       throw new ForbiddenException({
         error: 'UploadNotOwned',
         message: 'This upload session belongs to a different user.',
@@ -418,8 +421,10 @@ export class UploadsService {
     // means a confirm with a known (UUID) upload ID still cannot be
     // driven by a different user (WS-013). The controller already gated
     // on `upload.create`, so this narrows ownership rather than being the
-    // primary authorization decision.
-    if (pending.uploaderId && pending.uploaderId !== actor.id) {
+    // primary authorization decision. Fail closed on a missing
+    // uploaderId: init always records one, so its absence means a
+    // malformed/tampered session, not a legacy row.
+    if (!pending.uploaderId || pending.uploaderId !== actor.id) {
       throw new ForbiddenException({
         error: 'UploadNotOwned',
         message: 'This upload session belongs to a different user.',
@@ -1839,20 +1844,6 @@ export class UploadsService {
       articleLinkState: null,
     };
   }
-}
-
-function pendingKey(uploadId: string): string {
-  return `upload:pending:${uploadId}`;
-}
-
-/**
- * Marks that an upload session's body has been (or is being) written.
- * `SET NX` on this key is the write-once guard: the first relay PUT
- * claims it and later PUTs are rejected, so the bytes `confirm`
- * validates can't be swapped underneath it.
- */
-function bodyKey(uploadId: string): string {
-  return `upload:body:${uploadId}`;
 }
 
 /**

@@ -1,5 +1,10 @@
 import { SearchService } from './search.service.js';
 import type { PrismaService } from '../prisma/prisma.service.js';
+import {
+  runWithTenantContext,
+  type TenantContext,
+} from '@weavestream/shared/server';
+import type { AuthedUser } from '../common/current-user.decorator.js';
 
 /**
  * Unit tests for the pure helpers inside SearchService that don't
@@ -150,5 +155,110 @@ describe('SearchService helpers', () => {
     it('strips non-alphanumeric characters', () => {
       expect(svc.lastLexeme('router-01')).toBe('router01');
     });
+  });
+});
+
+/**
+ * WS-001: the password allow-list predicate must reach the raw SQL for
+ * internal (non-super-admin) users and stay out of it for super admins
+ * and client users. We don't run the query — `$queryRaw` is stubbed to
+ * return no rows and we assert on the captured `Prisma.Sql` (its
+ * flattened `.sql` text and bound `.values`). The real tsvector/array
+ * behaviour is covered by the 0051 migration verification against a
+ * live database.
+ */
+describe('SearchService password allow-list filter', () => {
+  const COMPANY_ID = '33333333-3333-3333-3333-333333333333';
+
+  function makeActor(role: AuthedUser['role']): AuthedUser {
+    return {
+      id: '44444444-4444-4444-4444-444444444444',
+      email: 'someone@example.com',
+      role,
+      globalAccess: role === 'OPERATOR' ? 'FULL' : null,
+      platformCapabilities: [],
+      sessionId: 'session-1',
+      mfaEnforcementCompletedAt: null,
+      mfaPending: false,
+    } as AuthedUser;
+  }
+
+  function makeCtx(actor: AuthedUser): TenantContext {
+    return {
+      userId: actor.id,
+      role: actor.role,
+      email: actor.email,
+      allowedCompanyIds: [COMPANY_ID],
+      isSuperAdmin: actor.role === 'SUPER_ADMIN',
+      globalAccess: actor.globalAccess,
+      requestId: 'req-1',
+      ip: '127.0.0.1',
+      userAgent: 'jest',
+    };
+  }
+
+  function makeService() {
+    const queryRaw = jest.fn(async () => []);
+    const prisma = { $queryRaw: queryRaw } as unknown as PrismaService;
+    return { svc: new SearchService(prisma), queryRaw };
+  }
+
+  function capturedSql(queryRaw: jest.Mock): {
+    sql: string;
+    values: unknown[];
+  } {
+    expect(queryRaw).toHaveBeenCalledTimes(1);
+    const arg = queryRaw.mock.calls[0][0] as {
+      sql: string;
+      values: unknown[];
+    };
+    return { sql: arg.sql, values: arg.values };
+  }
+
+  async function runSearch(actor: AuthedUser) {
+    const { svc, queryRaw } = makeService();
+    await runWithTenantContext(makeCtx(actor), () =>
+      svc.search(actor, { q: 'gateway' }),
+    );
+    return capturedSql(queryRaw);
+  }
+
+  it('applies the allow-list predicate for operators', async () => {
+    const actor = makeActor('OPERATOR');
+    const { sql, values } = await runSearch(actor);
+    expect(sql).toContain('restricted_to_user_ids');
+    expect(sql).toContain("si.entity_type <> 'password'");
+    expect(values).toContain(actor.id);
+  });
+
+  it('applies the allow-list predicate for contractors', async () => {
+    const actor = makeActor('CONTRACTOR');
+    const { sql, values } = await runSearch(actor);
+    expect(sql).toContain('restricted_to_user_ids');
+    expect(values).toContain(actor.id);
+  });
+
+  it('omits the allow-list predicate for super admins', async () => {
+    const actor = makeActor('SUPER_ADMIN');
+    const { sql } = await runSearch(actor);
+    expect(sql).not.toContain('restricted_to_user_ids');
+  });
+
+  it('omits the allow-list predicate for client users but keeps the visibility gate', async () => {
+    const actor = makeActor('CLIENT_USER');
+    const { sql } = await runSearch(actor);
+    expect(sql).not.toContain('restricted_to_user_ids');
+    expect(sql).toContain('si.visible_to_clients = true');
+  });
+
+  it('mentions() delegates through search() with the predicate for operators', async () => {
+    const actor = makeActor('OPERATOR');
+    const { svc, queryRaw } = makeService();
+    await runWithTenantContext(makeCtx(actor), () =>
+      svc.mentions(actor, 'gateway', { companyId: COMPANY_ID }),
+    );
+    const { sql, values } = capturedSql(queryRaw);
+    expect(sql).toContain('restricted_to_user_ids');
+    expect(values).toContain(actor.id);
   });
 });

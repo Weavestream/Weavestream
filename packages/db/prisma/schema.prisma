@@ -802,6 +802,9 @@ model SearchIndex {
   bodyPublic       String    @map("body_public")
   bodyInternal     String    @map("body_internal")
   visibleToClients Boolean   @default(true) @map("visible_to_clients")
+  // Copy of Password.restrictedToUserIds ('{}' = unrestricted; always
+  // '{}' for non-password rows). Maintained by the password triggers.
+  restrictedToUserIds String[] @default([]) @map("restricted_to_user_ids") @db.Uuid
   layoutId         String?   @map("layout_id") @db.Uuid
   archivedAt       DateTime? @map("archived_at")
   updatedAt        DateTime  @map("updated_at")

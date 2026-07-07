@@ -248,7 +248,8 @@ Repeatable BullMQ jobs. Every `*_CRON` takes a standard 5-field cron expression,
 |---|---|---|
 | `UPLOAD_REAPER_CRON` | `7 4 * * *` | Schedule for purging soft-deleted uploads. `off` disables it. |
 | `UPLOAD_REAPER_RETENTION_DAYS` | `30` | Grace period before a soft-deleted upload is purged. Range: 1–365. |
-| `UPLOAD_REAPER_BATCH_SIZE` | `500` | Max rows purged per tick (bounds the advisory-lock hold window). Range: 1–5,000. |
+| `UPLOAD_REAPER_BATCH_SIZE` | `500` | Max rows purged per tick (bounds the advisory-lock hold window). Shared between the soft-delete purge and the orphan-directory sweep. Range: 1–5,000. |
+| `UPLOAD_ORPHAN_MIN_AGE_HOURS` | `24` | Minimum age before an upload directory with no database row (an upload that was started but never confirmed) is removed from disk. Range: 1–720. The worker needs read-write access to `FILE_STORAGE_DIR` for this sweep; the shipped `compose.yml` already mounts it read-write, so this only matters for custom deployments. |
 
 ### Worker Concurrency
 

@@ -213,6 +213,12 @@ export const envSchema = z.object({
   UPLOAD_REAPER_CRON: z.string().min(1).default('7 4 * * *'),
   UPLOAD_REAPER_RETENTION_DAYS: intFromString(1, 365).default(30),
   UPLOAD_REAPER_BATCH_SIZE: intFromString(1, 5000).default(500),
+  // WS-013 — orphaned pending-upload bytes. A relay PUT that is never
+  // confirmed leaves its bytes on disk after the 15-minute Redis
+  // session lapses; the reaper removes those directories once they are
+  // older than this. Floor of 1 hour keeps a misconfigured env from
+  // sweeping uploads that are still in flight.
+  UPLOAD_ORPHAN_MIN_AGE_HOURS: intFromString(1, 24 * 30).default(24),
 
   // Phase 8: Domain & SSL monitor + BullMQ infra.
   //

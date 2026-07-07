@@ -198,6 +198,20 @@ export class SearchService {
       );
     }
 
+    if (!isClient && !ctx.isSuperAdmin) {
+      // WS-001: `restricted_to_user_ids` mirrors the password
+      // allow-list into the index so internal users who are not on a
+      // restricted credential's allow-list never match it — same rule
+      // `canReadPassword()` applies on every other read path. Client
+      // users are exempt by policy (their gate is visible_to_clients,
+      // above) and super admins always pass.
+      whereParts.push(
+        Prisma.sql`(si.entity_type <> 'password'
+          OR si.restricted_to_user_ids = '{}'::uuid[]
+          OR ${actor.id}::uuid = ANY(si.restricted_to_user_ids))`,
+      );
+    }
+
     const where = Prisma.join(whereParts, ' AND ');
 
     // ---- ORDER BY + rank ----
