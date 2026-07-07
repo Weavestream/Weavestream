@@ -1326,6 +1326,9 @@ export class ArticlesService {
    * promotion), and `archive()` (when reverting before discarding a
    * draft). Avoids `archivedAt`/audit columns — versions are pure
    * content snapshots, lifecycle state lives on the parent row.
+   *
+   * Secondary plaintext store — each revision retains the full article
+   * body. See docs/security/data-retention.md.
    */
   private versionRowBodyFromArticle(row: Article): {
     title: string;

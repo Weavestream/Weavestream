@@ -77,6 +77,8 @@ export class AuditLogService {
   }
 
   async log(entry: AuditEntry): Promise<void> {
+    // Secondary plaintext store — before/after snapshots persist here.
+    // See docs/security/data-retention.md.
     const row = await this.prisma.auditLog.create({
       data: {
         actorId: entry.actorId ?? null,

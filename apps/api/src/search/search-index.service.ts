@@ -219,6 +219,10 @@ export class SearchIndexService {
    * field rows. Exposed so unit tests can assert that fields with
    * `visibleToClients = false` stay out of `body_public`. Archived
    * fields are excluded up front.
+   *
+   * Secondary plaintext store — `body_internal` retains all searchable
+   * field text incl. hidden fields (accepted, WS-004). See
+   * docs/security/data-retention.md.
    */
   buildAssetBodies(asset: {
     name: string;

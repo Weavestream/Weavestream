@@ -362,6 +362,8 @@ export class AssetsService {
       after: {
         name: asset.name,
         assetLayoutId: layout.id,
+        // Accepted plaintext copy (WS-004) — full field values incl. hidden
+        // fields. Secondary store; see docs/security/data-retention.md.
         fieldValues: validated,
       },
     });
@@ -464,6 +466,8 @@ export class AssetsService {
           input.externalSource !== undefined
             ? input.externalSource
             : existing.externalSource,
+        // Accepted plaintext copy (WS-004) — full field values incl. hidden
+        // fields. Secondary store; see docs/security/data-retention.md.
         fieldValues: validated,
       },
     });

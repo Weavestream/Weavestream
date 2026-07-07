@@ -15,6 +15,7 @@ Weavestream is built with a security-first design. This section documents the th
 - [Authentication](/security/authentication/) — login flow, MFA, session management, and lockout
 - [Encryption](/security/encryption/) — credential encryption, key management, and TOTP
 - [Audit Log](/security/audit-log/) — tamper-resistant mutation history
+- [Data Retention](/security/data-retention/) — where derived plaintext copies live and how to remediate them
 - [Responsible Disclosure](/security/disclosure/) — how to report vulnerabilities
 
 ## Security Principles
