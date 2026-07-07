@@ -556,6 +556,125 @@ describe('PermissionService.evaluate — semantic checks', () => {
     ).toBe(false);
   });
 
+  // ────────────────────────────────────────────────────────────────
+  // WS-016: operator globalAccess is a full substitute for an explicit
+  // membership on EVERY company-scoped action, sensitive ones included.
+  // The old `requireNonExpiredMembership` rule metadata implied
+  // otherwise but was never enforced; the policy below is the
+  // confirmed design, so these tests lock it in.
+  // ────────────────────────────────────────────────────────────────
+  describe('WS-016 — operator globalAccess vs sensitive company actions', () => {
+    const SENSITIVE_ACTIONS: Action[] = [
+      'asset.write',
+      'asset.archive',
+      'asset.purge',
+      'article.write',
+      'article.purge',
+      'upload.create',
+      'relation.write',
+      'domain.manage',
+      'password.write',
+      'password.reveal',
+      'password.archive',
+    ];
+    const ctx = { companyId: THE_COMPANY };
+
+    it('globalAccess=FULL with no membership allows every sensitive action', () => {
+      const op = buildUser('OPERATOR', 'FULL');
+      for (const action of SENSITIVE_ACTIONS) {
+        expect(PermissionService.evaluate(op, action, [], ctx).allowed).toBe(
+          true,
+        );
+      }
+    });
+
+    it('globalAccess=READONLY with no membership follows allowReadonly per action', () => {
+      const op = buildUser('OPERATOR', 'READONLY');
+      for (const action of SENSITIVE_ACTIONS) {
+        expect(PermissionService.evaluate(op, action, [], ctx).allowed).toBe(
+          PERMISSIONS[action].allowReadonly,
+        );
+      }
+      // Spot-check the one sensitive action READONLY does satisfy:
+      expect(
+        PermissionService.evaluate(op, 'password.reveal', [], ctx).allowed,
+      ).toBe(true);
+      expect(
+        PermissionService.evaluate(op, 'password.write', [], ctx).allowed,
+      ).toBe(false);
+    });
+
+    it('globalAccess=NONE with no membership denies every sensitive action', () => {
+      const op = buildUser('OPERATOR', 'NONE');
+      for (const action of SENSITIVE_ACTIONS) {
+        expect(PermissionService.evaluate(op, action, [], ctx).allowed).toBe(
+          false,
+        );
+      }
+    });
+
+    it('restricted operator (globalAccess=NONE) with an active FULL membership can perform sensitive actions there', () => {
+      const m: MembershipSnapshot = {
+        companyId: THE_COMPANY,
+        role: 'FULL',
+        expiresAt: new Date(Date.now() + 86_400_000),
+        revokedAt: null,
+      };
+      const op = buildUser('OPERATOR', 'NONE');
+      for (const action of SENSITIVE_ACTIONS) {
+        expect(PermissionService.evaluate(op, action, [m], ctx).allowed).toBe(
+          true,
+        );
+      }
+    });
+
+    it('restricted operator (globalAccess=NONE) is denied everywhere once the membership expires', () => {
+      const expired: MembershipSnapshot = {
+        companyId: THE_COMPANY,
+        role: 'FULL',
+        expiresAt: new Date('2000-01-01'),
+        revokedAt: null,
+      };
+      const op = buildUser('OPERATOR', 'NONE');
+      for (const action of SENSITIVE_ACTIONS) {
+        expect(
+          PermissionService.evaluate(op, action, [expired], ctx).allowed,
+        ).toBe(false);
+      }
+    });
+
+    it('a READONLY membership downgrades a globalAccess=FULL operator while active, and its expiry reverts them to FULL (intentional widening)', () => {
+      const op = buildUser('OPERATOR', 'FULL');
+      const activeReadonly: MembershipSnapshot = {
+        companyId: THE_COMPANY,
+        role: 'READONLY',
+        expiresAt: new Date(Date.now() + 86_400_000),
+        revokedAt: null,
+      };
+      expect(
+        PermissionService.evaluate(op, 'asset.write', [activeReadonly], ctx)
+          .allowed,
+      ).toBe(false);
+      expect(
+        PermissionService.evaluate(op, 'password.write', [activeReadonly], ctx)
+          .allowed,
+      ).toBe(false);
+
+      const expiredReadonly: MembershipSnapshot = {
+        ...activeReadonly,
+        expiresAt: new Date('2000-01-01'),
+      };
+      expect(
+        PermissionService.evaluate(op, 'asset.write', [expiredReadonly], ctx)
+          .allowed,
+      ).toBe(true);
+      expect(
+        PermissionService.evaluate(op, 'password.write', [expiredReadonly], ctx)
+          .allowed,
+      ).toBe(true);
+    });
+  });
+
   it('CONTRACTOR cannot manage memberships, integrations, or layouts (no capabilities)', () => {
     const m: MembershipSnapshot = {
       companyId: THE_COMPANY,

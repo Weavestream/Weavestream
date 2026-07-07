@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import type { MembershipRole, UserRole } from '@weavestream/shared';
+import type { GlobalAccess, MembershipRole, UserRole } from '@weavestream/shared';
 import { apiFetch } from '../../../../../lib/api';
 import {
   Btn,
@@ -20,6 +20,7 @@ import {
   type DataColumn,
 } from '../../../../../components/ui';
 import {
+  globalAccessLabel,
   hasCapability,
   membershipRoleLabel,
 } from '../../../../../lib/roles';
@@ -126,10 +127,10 @@ export function UserMembershipsList({
     setPending(false);
     if (!res.ok) {
       const problem = res.problem as { detail?: string } | undefined;
-      toast.push(problem?.detail ?? 'Could not attach company.', 'danger');
+      toast.push(problem?.detail ?? `Could not set ${lower(term.one)}-level access.`, 'danger');
       return false;
     }
-    toast.push('Attached to company.', 'ok');
+    toast.push(`${term.one}-level access set.`, 'ok');
     setAddOpen(false);
     await refresh();
     return true;
@@ -294,6 +295,27 @@ export function UserMembershipsList({
   // membership no longer self-grants membership writes.
   const canAttach = canManageUser && canManageMemberships;
 
+  const orgWord = lower(term.one);
+
+  // "No memberships" means opposite things depending on the user:
+  // an operator falls back to their default (global) access, so an
+  // empty list = access to ALL companies; a contractor/client without
+  // memberships has access to NOTHING. Spell that out instead of the
+  // ambiguous "no memberships yet".
+  let emptyText: string;
+  if (user.role === 'SUPER_ADMIN') {
+    emptyText = `No ${orgWord} memberships — super admins have full access to every ${orgWord}.`;
+  } else if (user.role === 'OPERATOR') {
+    const ga = user.globalAccess ?? 'NONE';
+    if (ga === 'NONE') {
+      emptyText = `No ${orgWord} memberships and default access is "${globalAccessLabel('NONE')}" — this user currently has no ${orgWord} access. Add ${orgWord}-level access to grant access to a specific ${orgWord}.`;
+    } else {
+      emptyText = `No ${orgWord} memberships — this user has ${ga === 'FULL' ? 'full' : 'read-only'} access to every ${orgWord} via their default access. Add ${orgWord}-level access to set a different level for a specific ${orgWord}.`;
+    }
+  } else {
+    emptyText = `This user has no ${orgWord} memberships, so they cannot access any ${orgWord}. Add ${orgWord}-level access to grant access.`;
+  }
+
   return (
     <div>
       {canAttach && (
@@ -312,7 +334,7 @@ export function UserMembershipsList({
             icon={Icon.plus}
             onClick={() => setAddOpen(true)}
           >
-            Attach to {lower(term.one)}
+            Set {orgWord}-level access
           </Btn>
         </div>
       )}
@@ -320,7 +342,7 @@ export function UserMembershipsList({
         columns={columns}
         rows={active}
         rowHref={(r) => `/admin/companies/${r.company.id}`}
-        empty={`This user has no ${lower(term.one)} memberships yet.`}
+        empty={emptyText}
         renderMobileCard={(r) => {
           const canEditRow = canManageUser && canManageMemberships;
           let expiresNode: React.ReactNode = (
@@ -413,6 +435,7 @@ export function UserMembershipsList({
         open={addOpen}
         userName={user.name}
         userRole={user.role}
+        userGlobalAccess={user.globalAccess}
         excludeCompanyIds={excludeCompanyIds}
         pending={pending}
         onClose={() => !pending && setAddOpen(false)}
@@ -460,9 +483,23 @@ export function UserMembershipsList({
             lineHeight: 1.5,
           }}
         >
-          {user.name} will lose access to{' '}
-          <strong>{revoking?.company.name}</strong> immediately. They can be
-          re-added later — audit history is preserved.
+          {user.role === 'OPERATOR' &&
+          user.globalAccess &&
+          user.globalAccess !== 'NONE' ? (
+            <>
+              {user.name}&apos;s access to{' '}
+              <strong>{revoking?.company.name}</strong> will revert to their
+              default access ({globalAccessLabel(user.globalAccess)})
+              immediately.
+            </>
+          ) : (
+            <>
+              {user.name} will lose access to{' '}
+              <strong>{revoking?.company.name}</strong> immediately.
+            </>
+          )}{' '}
+          {term.one}-level access can be set again later — audit history is
+          preserved.
         </p>
       </Dialog>
     </div>
@@ -477,6 +514,7 @@ function AttachDialog({
   open,
   userName,
   userRole,
+  userGlobalAccess,
   excludeCompanyIds,
   pending,
   onClose,
@@ -485,6 +523,7 @@ function AttachDialog({
   open: boolean;
   userName: string;
   userRole: UserRole;
+  userGlobalAccess: GlobalAccess | null;
   excludeCompanyIds: string[];
   pending: boolean;
   onClose: () => void;
@@ -517,11 +556,20 @@ function AttachDialog({
       ? 'Contractors should have a membership expiry date.'
       : null;
 
+  // For an operator with default access, a membership *overrides* it
+  // for one company (and their default comes back when it expires or
+  // is revoked); for everyone else it *grants* access they otherwise
+  // lack. Spell out which one applies.
+  const roleHelp =
+    userRole === 'OPERATOR' && userGlobalAccess && userGlobalAccess !== 'NONE'
+      ? `Overrides this user's default access (${globalAccessLabel(userGlobalAccess)}) for this ${lower(term.one)} only. Their default access returns if this expires or is revoked.`
+      : `Grants access to this ${lower(term.one)} only.`;
+
   return (
     <Dialog
       open={open}
       onClose={onClose}
-      title={`Attach ${userName} to a ${lower(term.one)}`}
+      title={`Set ${lower(term.one)}-level access for ${userName}`}
       footer={
         <>
           <Btn kind="ghost" onClick={onClose} disabled={pending}>
@@ -542,7 +590,7 @@ function AttachDialog({
               });
             }}
           >
-            Attach
+            Set access
           </Btn>
         </>
       }
@@ -561,7 +609,7 @@ function AttachDialog({
             autoFocus
           />
         </Field>
-        <Field label="Membership role" htmlFor="u-attach-role">
+        <Field label="Access level" htmlFor="u-attach-role" help={roleHelp}>
           <Select
             id="u-attach-role"
             value={role}
