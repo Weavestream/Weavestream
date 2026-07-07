@@ -6,6 +6,7 @@ import { CompanyShell } from '../../../components/shell/company-shell';
 import {
   getAssetCountsByLayout,
   getMe,
+  getMeForMetadata,
   getSettings,
   listDomains,
   listLayouts,
@@ -21,7 +22,7 @@ export async function generateMetadata({
   params: Promise<{ companySlug: string }>;
 }): Promise<Metadata> {
   const { companySlug } = await params;
-  const me = await getMe();
+  const me = await getMeForMetadata();
   if (!me) return {};
   let company: { id: string; name: string; slug: string };
   try {

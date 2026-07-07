@@ -4,7 +4,8 @@ import { notFound } from 'next/navigation';
 import { Fragment } from 'react';
 import {
   getAsset,
-  getMe,
+  forMetadata,
+  getMeForMetadata,
   requireMe,
   type AssetSummary,
 } from '../../../../../lib/server-api';
@@ -40,7 +41,7 @@ export async function generateMetadata({
   params: Promise<{ companySlug: string; assetId: string }>;
 }): Promise<Metadata> {
   const { companySlug, assetId } = await params;
-  const me = await getMe();
+  const me = await getMeForMetadata();
   if (!me) return {};
   let company: { id: string; name: string; slug: string };
   try {
@@ -48,7 +49,7 @@ export async function generateMetadata({
   } catch {
     return {};
   }
-  const asset = await getAsset(company.id, assetId);
+  const asset = await forMetadata(() => getAsset(company.id, assetId));
   return asset ? { title: asset.name } : {};
 }
 

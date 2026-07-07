@@ -42,73 +42,24 @@ export type {
 // also consumes) so the value and its default stay defined in one place.
 export { API_INTERNAL_URL };
 
-/**
- * Thrown by `getMe`, `getSettings`, and any other server helper that would
- * otherwise silently return a fallback when the API is genuinely
- * unreachable (ECONNREFUSED, dropped socket, etc.). Callers — especially
- * those using non-null assertions like `(await getMe())!` — need this to
- * surface as an exception so the nearest `error.tsx` boundary can render
- * a dedicated "backend unavailable" page instead of a random
- * `TypeError: Cannot read properties of null` deep inside the component tree.
- */
-export class ApiUnavailableError extends Error {
-  readonly path: string;
-  readonly method: string;
-  override readonly cause?: unknown;
-  constructor(path: string, method: string, message: string, cause?: unknown) {
-    super(`API unavailable — ${method} ${path}: ${message}`);
-    this.name = 'ApiUnavailableError';
-    this.path = path;
-    this.method = method;
-    this.cause = cause;
-  }
-}
-
-/**
- * Thrown when a server component's read hits the API-level rate
- * limiter (HTTP 429). Separated from generic 4xx / 5xx failures so
- * the nearest `error.tsx` boundary can render a dedicated "please
- * slow down" banner instead of the misleading 404 the old "return
- * `notFound()` on any non-OK" pattern used to produce.
- *
- * `retryAfterSeconds` is the honoured cooldown — the server-side
- * throttler returns it in the `retry-after` header (per-bucket) and
- * in a `retry-after-global` header for the app-wide limit; we pick
- * the larger of the two so the UI countdown actually matches what
- * the next request will see.
- */
-/**
- * Magic prefix on `error.digest` that the top-level `error.tsx`
- * client boundary matches against to render a retry banner instead of
- * the generic "Something went wrong" page. We encode the retry
- * cooldown into the digest because Next.js App Router only forwards
- * `message` and `digest` across the RSC → client boundary in
- * production (everything else on the `Error` instance is stripped as
- * sensitive), so digest is the only channel for out-of-band state.
- * Keep the format in sync with `app/error.tsx`'s parser.
- */
-export const RATE_LIMIT_DIGEST_PREFIX = 'WS_RATE_LIMITED:';
-
-export class RateLimitedError extends Error {
-  readonly path: string;
-  readonly method: string;
-  readonly retryAfterSeconds: number;
-  /** Read by Next's error boundary; see `RATE_LIMIT_DIGEST_PREFIX`. */
-  readonly digest: string;
-  constructor(
-    path: string,
-    method: string,
-    retryAfterSeconds: number,
-    message = 'Rate limited',
-  ) {
-    super(`${message} — ${method} ${path} (retry in ${retryAfterSeconds}s)`);
-    this.name = 'RateLimitedError';
-    this.path = path;
-    this.method = method;
-    this.retryAfterSeconds = retryAfterSeconds;
-    this.digest = `${RATE_LIMIT_DIGEST_PREFIX}${retryAfterSeconds}`;
-  }
-}
+// The error classes, their `error.digest` constants, and the pure `/me`
+// response classifier live in the client-safe `api-errors` module so
+// `app/error.tsx` (a client boundary) can import the same definitions
+// this file throws. Imported for local use AND re-exported — a bare
+// `export ... from` would not create the local bindings `throwUnlessFound`,
+// `getMe`, and `forMetadata` need.
+import {
+  ApiUnavailableError,
+  RateLimitedError,
+  unwrapApiResponse,
+  unwrapMeResponse,
+} from './api-errors';
+export {
+  API_UNAVAILABLE_DIGEST,
+  ApiUnavailableError,
+  RATE_LIMIT_DIGEST_PREFIX,
+  RateLimitedError,
+} from './api-errors';
 
 /**
  * Recognizes the handful of Node `fetch` / undici errors that indicate the
@@ -212,7 +163,11 @@ export function throwUnlessFound<T>(
       extractProblemTitle(res.problem) ?? 'Rate limited',
     );
   }
-  if (res.networkError) {
+  // 429 is matched above, so `status >= 500` here only catches real
+  // API/proxy 5xx — the backend answering "I'm broken" is the same
+  // user-facing situation as not answering at all, and rendering it
+  // as a 404 would be just as misleading as the login bounce was.
+  if (res.networkError || res.status >= 500) {
     throw new ApiUnavailableError(
       path,
       'GET',
@@ -409,17 +364,20 @@ export type Me = {
 // opts out of Next's own `fetch` deduper, so React's request-scoped cache
 // is the right primitive here.
 //
-// Returns `null` for BOTH genuine 401s and network-level failures. Every
-// auth-gated layout (`admin/layout.tsx`, `portal/[companySlug]/layout.tsx`,
-// etc.) redirects to `/login` on null, which is the right UX for both
-// cases: if the user isn't signed in they need to log in, and if the
-// backend is temporarily unreachable, bouncing through `/login` gives
-// the extended retry loop in `serverApiFetch` (~5s budget) another
-// chance to connect before the user sees anything broken.
+// Returns `null` ONLY when the user is genuinely unauthenticated
+// (401/403) — the one case where the auth-gated layouts
+// (`admin/layout.tsx`, `portal/[companySlug]/layout.tsx`, etc.) should
+// redirect to `/login`. A network-level failure (after `serverApiFetch`'s
+// ~5s retry budget) or a real API/proxy 5xx instead throws
+// `ApiUnavailableError` (digest `WS_API_UNAVAILABLE`), which the
+// `app/error.tsx` boundary renders as a dedicated backend-unavailable
+// page — an outage used to return `null` here too, making it
+// indistinguishable from being signed out (WS-021). A 429 throws
+// `RateLimitedError` for the existing cooldown banner. Because `cache()`
+// memoizes the *rejected* promise as well, the layout, its page, and any
+// `generateMetadata` all observe one outcome from one `/me` call.
 export const getMe = cache(async (): Promise<Me | null> => {
-  const res = await serverApiFetch<Me>('/me');
-  if (!res.ok || !res.data) return null;
-  return res.data;
+  return unwrapMeResponse(await serverApiFetch<Me>('/me'));
 });
 
 /**
@@ -440,6 +398,31 @@ export async function requireMe(): Promise<Me> {
   if (!me) redirect('/login');
   return me;
 }
+
+/**
+ * For `generateMetadata` only. Metadata streams separately from the page
+ * render in the App Router, so a throw here can fail the whole response
+ * instead of landing in the segment's `error.tsx` — metadata must
+ * degrade (title falls back) rather than throw. Nothing is silenced
+ * overall: the page render performs the same fetches (deduped by
+ * `cache()`) and surfaces the same error through the boundary.
+ *
+ * Only the two API-availability errors are swallowed; `notFound()` /
+ * `redirect()` control-flow throws and genuine bugs still propagate.
+ */
+export async function forMetadata<T>(fn: () => Promise<T>): Promise<T | null> {
+  try {
+    return await fn();
+  } catch (err) {
+    if (err instanceof ApiUnavailableError || err instanceof RateLimitedError) {
+      return null;
+    }
+    throw err;
+  }
+}
+
+/** `getMe` variant for `generateMetadata`; see {@link forMetadata}. */
+export const getMeForMetadata = (): Promise<Me | null> => forMetadata(getMe);
 
 /**
  * Workspace branding + tenant terminology, fed from the singleton
@@ -963,7 +946,9 @@ export async function listLayouts(params?: {
   const res = await serverApiFetch<{ items: LayoutSummary[] }>(
     `/layouts${q.toString() ? `?${q.toString()}` : ''}`,
   );
-  return res.data?.items ?? [];
+  // Throws on network failure / 5xx / 429 — an empty list here would
+  // cascade into "layout not found" 404s on every layout-driven page.
+  return unwrapApiResponse(res, '/layouts')?.items ?? [];
 }
 
 export async function getLayout(
@@ -1078,7 +1063,14 @@ export async function listAssets(
   const res = await serverApiFetch<AssetPage>(
     `/companies/${companyId}/assets${q.toString() ? `?${q.toString()}` : ''}`,
   );
-  return res.data ?? { items: [], nextCursor: null };
+  // Throws on network failure / 5xx / 429 — an empty page here would
+  // render as "no assets" when the backend is actually broken.
+  return (
+    unwrapApiResponse(res, `/companies/${companyId}/assets`) ?? {
+      items: [],
+      nextCursor: null,
+    }
+  );
 }
 
 /**
@@ -1102,8 +1094,7 @@ export async function getAsset(
   const res = await serverApiFetch<AssetSummary>(
     `/companies/${companyId}/assets/${id}`,
   );
-  if (!res.ok || !res.data) return null;
-  return res.data;
+  return unwrapApiResponse(res, `/companies/${companyId}/assets/${id}`);
 }
 
 // ───────────────────────────────────────────────────────────────────
@@ -1979,8 +1970,7 @@ export async function getSubnetDetail(
   const res = await serverApiFetch<SubnetDetail>(
     `/companies/${companyId}/ipam/subnets/${id}`,
   );
-  if (!res.ok || !res.data) return null;
-  return res.data;
+  return unwrapApiResponse(res, `/companies/${companyId}/ipam/subnets/${id}`);
 }
 
 export async function listPhotos(

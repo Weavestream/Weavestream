@@ -304,6 +304,9 @@ importers:
         specifier: ^1.0.2
         version: 1.0.2
     devDependencies:
+      '@types/jest':
+        specifier: ^30.0.0
+        version: 30.0.0
       '@types/node':
         specifier: ^24.0.0
         version: 24.12.2
@@ -328,12 +331,18 @@ importers:
       eslint-config-next:
         specifier: ^16.2.6
         version: 16.2.6(eslint@9.39.4(jiti@1.21.7))(typescript@5.9.3)
+      jest:
+        specifier: ^30.0.0
+        version: 30.3.0(@types/node@24.12.2)(ts-node@10.9.2(@types/node@24.12.2)(typescript@5.9.3))
       postcss:
         specifier: ^8.4.49
         version: 8.5.10
       tailwindcss:
         specifier: ^3.4.14
         version: 3.4.19
+      ts-jest:
+        specifier: ^29.4.9
+        version: 29.4.9(@babel/core@7.29.0)(@jest/transform@30.3.0)(@jest/types@30.3.0)(babel-jest@30.3.0(@babel/core@7.29.0))(jest-util@30.3.0)(jest@30.3.0(@types/node@24.12.2))(typescript@5.9.3)
       typescript:
         specifier: ^5.9.0
         version: 5.9.3

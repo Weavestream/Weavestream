@@ -153,5 +153,6 @@ Some changes (like `DATA_DIR`) require the stack to be stopped first to avoid da
 |---|---|
 | `api` fails at startup with `P1000` or `P1001` | Migration step cannot reach Postgres. Check `DATABASE_URL` and `docker compose logs postgres`. |
 | Web UI loads but API calls return 502 | `api` is probably unhealthy. Run `docker compose logs api` and confirm the Redis password matches `REDIS_URL`. |
+| Web UI shows "Can't reach the backend" (`ref: WS_API_UNAVAILABLE`) | The `api` container is down, still starting, or answering 5xx. Sessions are unaffected — users are not signed out. Run `docker compose ps` and `docker compose logs api`. |
 | Image uploads fail with CORS or CSP errors | Browser-facing reads stream through the API on the web origin. Confirm `APP_URL` matches the hostname you load in the browser. |
 | Login says "Invalid credentials" after a reset | `POSTGRES_PASSWORD` changed but `DATABASE_URL` still points at the old password. |

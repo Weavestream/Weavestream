@@ -1,6 +1,9 @@
 import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
 import {
+  ApiUnavailableError,
+  RateLimitedError,
+  forMetadata,
   getMe,
   listAssets,
   listLayouts,
@@ -26,7 +29,14 @@ async function loadContext(companySlug: string, layoutSlug: string) {
   let company: { id: string; name: string; slug: string };
   try {
     company = await resolvePortalCompany(me, companySlug);
-  } catch {
+  } catch (err) {
+    // Only `notFound()` collapses to null (the page re-raises it as its
+    // own 404). Availability errors must keep propagating: the page
+    // render surfaces them through the error boundary, and the
+    // `forMetadata` wrapper in `generateMetadata` degrades them to {}.
+    if (err instanceof ApiUnavailableError || err instanceof RateLimitedError) {
+      throw err;
+    }
     return null;
   }
   const layouts = await listLayouts({ includeArchived: false });
@@ -41,7 +51,10 @@ export async function generateMetadata({
   params: Promise<{ companySlug: string; layoutSlug: string }>;
 }): Promise<Metadata> {
   const { companySlug, layoutSlug } = await params;
-  const ctx = await loadContext(companySlug, layoutSlug);
+  // `forMetadata` so an API outage degrades the title instead of
+  // failing the response; the page render below shares `loadContext`
+  // and still surfaces the outage through the error boundary.
+  const ctx = await forMetadata(() => loadContext(companySlug, layoutSlug));
   return ctx ? { title: ctx.layout.name } : {};
 }
 

@@ -1,4 +1,5 @@
 import { notFound } from 'next/navigation';
+import { unwrapApiResponse } from './api-errors';
 import { canAccessAdminShell } from './roles';
 import { serverApiFetch, type CompanyPage, type Me } from './server-api';
 
@@ -44,11 +45,15 @@ export async function resolvePortalCompany(
       const res = await serverApiFetch<CompanyPage>(
         `/companies?q=${encodeURIComponent(companySlug)}&limit=200${cursorParam}`,
       );
-      const items = res.data?.items ?? [];
+      // Throws on network failure / 5xx / 429 — treating a broken
+      // `/companies` response as "no match" would surface the outage
+      // as a misleading 404 on every admin portal preview.
+      const data = unwrapApiResponse(res, '/companies');
+      const items = data?.items ?? [];
       const company =
         items.find((c: { slug: string }) => c.slug === companySlug) ?? null;
       if (company) return company;
-      cursor = res.data?.nextCursor ?? null;
+      cursor = data?.nextCursor ?? null;
       if (!cursor) break;
     }
   }

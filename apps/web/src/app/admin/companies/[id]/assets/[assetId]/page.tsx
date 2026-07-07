@@ -3,6 +3,7 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import React, { Fragment } from 'react';
 import {
+  forMetadata,
   getAsset,
   getCompanyDetail,
   requireMe,
@@ -29,7 +30,7 @@ export async function generateMetadata({
   params: Promise<{ id: string; assetId: string }>;
 }): Promise<Metadata> {
   const { id, assetId } = await params;
-  const asset = await getAsset(id, assetId);
+  const asset = await forMetadata(() => getAsset(id, assetId));
   return asset ? { title: asset.name } : {};
 }
 

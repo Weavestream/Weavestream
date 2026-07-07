@@ -1,6 +1,10 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import {
+  isApiUnavailableDigest,
+  parseRateLimitDigest,
+} from '../lib/api-errors';
 
 /**
  * Route-segment error boundary. Catches anything thrown during the render
@@ -16,22 +20,16 @@ import { useEffect, useState } from 'react';
  *   - the real resilience for API flakiness lives in `serverApiFetch`,
  *     which transparently retries network errors over a ~5s budget.
  *
- * Special case: `RateLimitedError` thrown from `throwUnlessFound` smuggles
- * the honoured cooldown through `error.digest` (the only server→client
- * channel App Router keeps in production), so we render a dedicated
- * "please slow down" banner with an auto-enabling retry button instead
- * of the generic chrome. Keep the prefix in sync with `lib/server-api.ts`.
+ * Two special cases, both recognized via `error.digest` (the only
+ * server→client channel App Router keeps in production; constants and
+ * parsers shared with the throw sites via `lib/api-errors`):
+ *   - `RateLimitedError` smuggles the honoured cooldown through the
+ *     digest → dedicated "please slow down" banner with an
+ *     auto-enabling retry button.
+ *   - `ApiUnavailableError` (backend unreachable or 5xx) → dedicated
+ *     "can't reach the backend" page, so an outage never reads as a
+ *     login problem or a generic crash (WS-021).
  */
-const RATE_LIMIT_DIGEST_PREFIX = 'WS_RATE_LIMITED:';
-
-function parseRateLimit(digest: string | undefined): number | null {
-  if (!digest) return null;
-  if (!digest.startsWith(RATE_LIMIT_DIGEST_PREFIX)) return null;
-  const n = Number.parseInt(digest.slice(RATE_LIMIT_DIGEST_PREFIX.length), 10);
-  if (!Number.isFinite(n) || n < 1) return 30;
-  return n;
-}
-
 export default function AppError({
   error,
   reset,
@@ -39,7 +37,11 @@ export default function AppError({
   error: Error & { digest?: string };
   reset: () => void;
 }) {
-  const rateLimitSeconds = parseRateLimit(error.digest);
+  if (isApiUnavailableDigest(error.digest)) {
+    return <BackendUnavailablePanel />;
+  }
+
+  const rateLimitSeconds = parseRateLimitDigest(error.digest);
   if (rateLimitSeconds != null) {
     return <RateLimitedPanel seconds={rateLimitSeconds} />;
   }
@@ -123,6 +125,100 @@ export default function AppError({
             Reload page
           </button>
         </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Renders when SSR could not reach the API at all (network-level
+ * failure after `serverApiFetch`'s retry budget) or the API/proxy
+ * answered 5xx. The one thing this page must communicate: the user's
+ * session is fine — this is a server availability problem, not a login
+ * problem. No auto-retry (see the file header); the Retry button does a
+ * full reload, which re-runs SSR including the ~5s retry budget.
+ */
+function BackendUnavailablePanel() {
+  return (
+    <div
+      style={{
+        minHeight: '60vh',
+        display: 'grid',
+        placeItems: 'center',
+        padding: '48px 24px',
+      }}
+    >
+      <div style={{ maxWidth: 480, textAlign: 'center' }}>
+        <div
+          aria-hidden
+          style={{
+            width: 44,
+            height: 44,
+            margin: '0 auto 14px',
+            borderRadius: '50%',
+            background: 'var(--warn-soft, rgba(255, 193, 7, 0.18))',
+            color: 'var(--warn, #e2b247)',
+            display: 'grid',
+            placeItems: 'center',
+            fontSize: 20,
+          }}
+        >
+          ⚠
+        </div>
+        <h1
+          style={{
+            fontFamily: 'var(--font-display)',
+            fontSize: 20,
+            fontWeight: 600,
+            letterSpacing: -0.2,
+            margin: '0 0 8px',
+            color: 'var(--text, inherit)',
+          }}
+        >
+          Can&rsquo;t reach the backend
+        </h1>
+        <p
+          style={{
+            color: 'var(--muted, #9a9aa2)',
+            fontSize: 13.5,
+            lineHeight: 1.55,
+            margin: '0 0 20px',
+          }}
+        >
+          The web app couldn&rsquo;t reach the Weavestream API. You have
+          not been signed out — this is a server availability issue, not
+          a login problem. If it persists, ask your administrator to
+          check that the API service is running.
+          <br />
+          <span
+            style={{
+              fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+              fontSize: 12,
+              color: 'var(--dim, #6a6a72)',
+              marginTop: 8,
+              display: 'inline-block',
+            }}
+          >
+            ref: WS_API_UNAVAILABLE
+          </span>
+        </p>
+        <button
+          type="button"
+          onClick={() => window.location.reload()}
+          style={{
+            padding: '9px 16px',
+            background: 'var(--accent, #c6ff3f)',
+            color: '#0b0b0d',
+            border: 0,
+            borderRadius: 6,
+            fontSize: 13,
+            fontWeight: 600,
+            cursor: 'pointer',
+            minWidth: 140,
+          }}
+        >
+          Retry
+        </button>
       </div>
     </div>
   );

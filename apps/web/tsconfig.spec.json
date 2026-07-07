@@ -1,0 +1,13 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    // The app tsconfig targets Next's bundler (ESNext/Bundler); jest
+    // runs the compiled output on plain Node, so specs compile as CJS.
+    "module": "CommonJS",
+    "moduleResolution": "Node",
+    "incremental": false,
+    "types": ["node", "jest"]
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["node_modules"]
+}

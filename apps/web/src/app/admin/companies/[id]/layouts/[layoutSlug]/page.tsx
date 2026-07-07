@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import {
+  forMetadata,
   getActiveLayouts,
   getCompanyDetail,
   requireMe,
@@ -48,7 +49,7 @@ export async function generateMetadata({
   params: Promise<{ id: string; layoutSlug: string }>;
 }): Promise<Metadata> {
   const { id, layoutSlug } = await params;
-  const ctx = await loadContext(id, layoutSlug);
+  const ctx = await forMetadata(() => loadContext(id, layoutSlug));
   if (!ctx) return {};
   // Parent layout's `template: "%s · <company>"` fills in the rest.
   return { title: ctx.layout.name };

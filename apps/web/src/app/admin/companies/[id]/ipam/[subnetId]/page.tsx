@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
 import {
+  forMetadata,
   getCompanyDetail,
   requireMe,
   getSettings,
@@ -20,7 +21,7 @@ export async function generateMetadata({
   params: Promise<{ id: string; subnetId: string }>;
 }): Promise<Metadata> {
   const { id, subnetId } = await params;
-  const detail = await getSubnetDetail(id, subnetId);
+  const detail = await forMetadata(() => getSubnetDetail(id, subnetId));
   return { title: detail?.subnet.name ?? 'Subnet' };
 }
 
