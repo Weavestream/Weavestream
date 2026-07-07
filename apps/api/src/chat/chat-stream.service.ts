@@ -15,10 +15,11 @@ import type {
   SendChatMessageInput,
 } from '@weavestream/shared';
 import { PrismaService } from '../prisma/prisma.service.js';
-import { AiSettingsService } from '../ai/ai-settings.service.js';
+import { AiSettingsService, aiEgressOptions } from '../ai/ai-settings.service.js';
 import type { AiResolvedConfig } from '../ai/ai-settings.service.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
-import { safeFetch } from '../common/egress/safe-fetch.js';
+import { EgressBlockedError, safeFetch } from '../common/egress/safe-fetch.js';
+import { readUpstreamSnippet } from '../common/redact-secrets.js';
 import { isArticleToolName } from './chat-tools.js';
 import { parseToolCalls } from './chat.service.js';
 import {
@@ -321,14 +322,15 @@ export class ChatStreamService {
         // only to defend against runaway non-LLM origins, not the
         // expected long-stream case.
         maxResponseBytes: Number.POSITIVE_INFINITY,
-        // baseUrl is admin-pasted in Settings → AI — treat private
-        // IPs as authorised so LAN-hosted LLMs (LM Studio, Ollama)
-        // work without an EGRESS_ALLOWED_PRIVATE_CIDRS env tweak.
-        allowPrivateNetworks: true,
+        // LAN-hosted LLMs (LM Studio, Ollama) need the explicit
+        // Settings → AI private-network opt-in, which allows only the
+        // curated ADMIN_PRIVATE_ENDPOINT_CIDRS — cloud-metadata and
+        // link-local stay blocked (WS-017).
+        ...aiEgressOptions(config),
       });
 
       if (!upstream.ok || !upstream.body) {
-        const bodyText = await safeReadText(upstream);
+        const bodyText = await readUpstreamSnippet(upstream);
         writeError(
           res,
           new BadRequestException(
@@ -363,7 +365,16 @@ export class ChatStreamService {
         }
       }
     } catch (err) {
-      writeError(res, err);
+      if (err instanceof EgressBlockedError) {
+        writeError(
+          res,
+          new BadRequestException(
+            'The configured AI endpoint is not allowed. If your LLM runs on a private network, enable "Allow private-network addresses" in Settings → AI.',
+          ),
+        );
+      } else {
+        writeError(res, err);
+      }
       res.end();
       return;
     } finally {
@@ -495,7 +506,12 @@ export class ChatStreamService {
    *     `sanitizeTitle`.
    */
   private async generateTitle(
-    config: { baseUrl: string; apiKey: string | null; defaultModel: string | null },
+    config: {
+      baseUrl: string;
+      apiKey: string | null;
+      defaultModel: string | null;
+      allowPrivateNetwork: boolean;
+    },
     userMessage: string,
     assistantReply: string,
   ): Promise<string | null> {
@@ -538,7 +554,7 @@ export class ChatStreamService {
         }),
         signal: ctrl.signal,
         timeoutMs: TITLE_TIMEOUT_MS,
-        allowPrivateNetworks: true,
+        ...aiEgressOptions(config),
       });
       if (!res.ok) {
         this.logger.warn(`Title LLM call returned ${res.status}`);
@@ -597,7 +613,12 @@ export class ChatStreamService {
    * attached ticket/article/asset and the user's actual request.
    */
   private async generateToolIntentPrelude(
-    config: { baseUrl: string; apiKey: string | null; defaultModel: string | null },
+    config: {
+      baseUrl: string;
+      apiKey: string | null;
+      defaultModel: string | null;
+      allowPrivateNetwork: boolean;
+    },
     userMessage: string,
     kind: 'create' | 'edit',
     context?: ChatRequestContext,
@@ -653,7 +674,7 @@ export class ChatStreamService {
         }),
         signal: ctrl.signal,
         timeoutMs: TOOL_INTENT_TIMEOUT_MS,
-        allowPrivateNetworks: true,
+        ...aiEgressOptions(config),
       });
       if (!res.ok) {
         this.logger.warn(`Tool intent LLM call returned ${res.status}`);
@@ -850,16 +871,6 @@ function deriveTitle(content: string): string {
   const cleaned = content.replace(/\s+/g, ' ').trim();
   if (cleaned.length <= TITLE_MAX) return cleaned || DEFAULT_TITLE;
   return `${cleaned.slice(0, TITLE_MAX - 1).trimEnd()}…`;
-}
-
-async function safeReadText(res: Response | globalThis.Response): Promise<string | null> {
-  try {
-    const text = (await (res as globalThis.Response).text()).trim();
-    if (!text) return null;
-    return text.length > 240 ? `${text.slice(0, 240)}…` : text;
-  } catch {
-    return null;
-  }
 }
 
 type OpenAiToolCallDelta = {

@@ -123,6 +123,12 @@ export const aiSettingsSchema = z.object({
    * conservative server default.
    */
   contextWindowTokens: z.number().int().min(1_024).max(2_000_000).nullable(),
+  /**
+   * Opt-in for AI endpoints on private/LAN addresses (local Ollama,
+   * LM Studio). Off by default; when enabled, only curated private ranges
+   * are reachable — cloud-metadata and link-local stay blocked.
+   */
+  allowPrivateNetwork: z.boolean(),
   updatedAt: z.string(),
 });
 
@@ -147,6 +153,7 @@ export const updateAiSettingsSchema = z
       .max(2_000_000)
       .nullable()
       .optional(),
+    allowPrivateNetwork: z.boolean().optional(),
   })
   .refine((v) => Object.keys(v).length > 0, 'At least one field must be provided')
   .refine((v) => !(v.apiKey && v.clearApiKey), {
@@ -188,6 +195,7 @@ export const testAiSettingsSchema = z
   .object({
     baseUrl: z.string().trim().url('Base URL must be a valid URL').max(2048).optional(),
     apiKey: z.string().min(1).max(1024).optional(),
+    allowPrivateNetwork: z.boolean().optional(),
   })
   .optional();
 export type TestAiSettingsInput = z.infer<typeof testAiSettingsSchema>;

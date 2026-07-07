@@ -51,6 +51,21 @@ const PRIVATE_BLOCKLIST_V6: ReadonlyArray<string> = [
   'ff00::/8', // Multicast
 ];
 
+/**
+ * Curated private ranges reachable when an admin explicitly opts an AI
+ * endpoint into private-network access (Settings → AI → "Allow
+ * private-network addresses"). Passed per-call via
+ * `SafeFetchOptions.extraAllowedPrivateCidrs`, so — unlike the blanket
+ * `allowPrivateNetworks: true` bypass — DNS-rebinding pinning stays on
+ * and everything outside this list (cloud metadata 169.254.169.254,
+ * link-local, multicast, reserved) stays blocked. Includes CGNAT
+ * 100.64.0.0/10 for Tailscale-hosted LLMs. Operators needing anything
+ * beyond this list still have `EGRESS_ALLOWED_PRIVATE_CIDRS`.
+ */
+export const ADMIN_PRIVATE_ENDPOINT_CIDRS: readonly Cidr[] = parseCidrList(
+  '127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,100.64.0.0/10,::1/128,fc00::/7',
+);
+
 let cachedDefaults: Cidr[] | null = null;
 
 export function defaultBlockedCidrs(): readonly Cidr[] {

@@ -522,6 +522,7 @@ export const DEFAULT_AI_SETTINGS: AiSettings = {
   apiKeyConfigured: false,
   maxOutputTokens: null,
   contextWindowTokens: null,
+  allowPrivateNetwork: false,
   updatedAt: new Date(0).toISOString(),
 };
 

@@ -29,6 +29,7 @@ function baseRow(overrides: Partial<Record<string, unknown>> = {}) {
     defaultModel: null as string | null,
     maxOutputTokens: null as number | null,
     contextWindowTokens: null as number | null,
+    allowPrivateNetwork: false,
     updatedAt: NOW,
     updatedBy: null as string | null,
     ...overrides,
@@ -169,8 +170,77 @@ describe('AiSettingsService', () => {
       defaultModel: 'llama3:latest',
       maxOutputTokens: DEFAULT_MAX_OUTPUT_TOKENS,
       contextWindowTokens: DEFAULT_CONTEXT_WINDOW_TOKENS,
+      allowPrivateNetwork: false,
     });
     expect(crypto.decrypt).toHaveBeenCalledWith('ENC(sk-test)');
+  });
+
+  it('persists the private-network opt-in and carries it into DTO, config, and audit', async () => {
+    const prisma = makePrisma();
+    prisma.aiSetting.findUnique.mockResolvedValue(
+      baseRow({ enabled: true, baseUrl: 'http://192.168.1.50:11434/v1' }),
+    );
+    prisma.aiSetting.update.mockResolvedValue(
+      baseRow({
+        enabled: true,
+        baseUrl: 'http://192.168.1.50:11434/v1',
+        allowPrivateNetwork: true,
+      }),
+    );
+    const audit = makeAudit();
+    const svc = new AiSettingsService(
+      prisma as never,
+      audit as never,
+      makeCrypto() as never,
+    );
+
+    const out = await svc.update(ACTOR, { allowPrivateNetwork: true }, META);
+
+    expect(prisma.aiSetting.update.mock.calls[0]![0].data).toEqual(
+      expect.objectContaining({ allowPrivateNetwork: true }),
+    );
+    expect(out.allowPrivateNetwork).toBe(true);
+    // The toggle is security-relevant — the settings.ai.update audit entry
+    // must record both sides of the change.
+    const entry = audit.log.mock.calls[0]![0];
+    expect(entry.before).toEqual(
+      expect.objectContaining({ allowPrivateNetwork: false }),
+    );
+    expect(entry.after).toEqual(
+      expect.objectContaining({ allowPrivateNetwork: true }),
+    );
+
+    // update() invalidates the cache, so getConfig re-reads the row.
+    prisma.aiSetting.findUnique.mockResolvedValue(
+      baseRow({
+        enabled: true,
+        baseUrl: 'http://192.168.1.50:11434/v1',
+        allowPrivateNetwork: true,
+      }),
+    );
+    const config = await svc.getConfig();
+    expect(config.allowPrivateNetwork).toBe(true);
+  });
+
+  it('leaves the private-network opt-in untouched when omitted from an update', async () => {
+    const prisma = makePrisma();
+    prisma.aiSetting.findUnique.mockResolvedValue(
+      baseRow({ allowPrivateNetwork: true }),
+    );
+    prisma.aiSetting.update.mockResolvedValue(
+      baseRow({ enabled: true, allowPrivateNetwork: true }),
+    );
+    const svc = new AiSettingsService(
+      prisma as never,
+      makeAudit() as never,
+      makeCrypto() as never,
+    );
+
+    await svc.update(ACTOR, { enabled: true }, META);
+
+    expect(prisma.aiSetting.update.mock.calls[0]![0].data).not.toHaveProperty(
+      'allowPrivateNetwork',
+    );
   });
 
   it('persists token limits and resolves configured values over defaults', async () => {

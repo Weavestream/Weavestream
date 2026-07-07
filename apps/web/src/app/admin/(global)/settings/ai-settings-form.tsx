@@ -21,6 +21,9 @@ export function AiSettingsForm({ initial }: { initial: AiSettings }) {
       ? String(initial.contextWindowTokens)
       : '',
   );
+  const [allowPrivateNetwork, setAllowPrivateNetwork] = useState(
+    initial.allowPrivateNetwork,
+  );
   const [models, setModels] = useState<string[] | null>(null);
   const [pending, setPending] = useState(false);
   const [testing, setTesting] = useState(false);
@@ -39,6 +42,7 @@ export function AiSettingsForm({ initial }: { initial: AiSettings }) {
     clean(defaultModel) !== baseline.current.defaultModel ||
     numOrNull(maxOutputTokens) !== baseline.current.maxOutputTokens ||
     numOrNull(contextWindowTokens) !== baseline.current.contextWindowTokens ||
+    allowPrivateNetwork !== baseline.current.allowPrivateNetwork ||
     apiKey.length > 0 ||
     clearApiKey;
 
@@ -51,6 +55,7 @@ export function AiSettingsForm({ initial }: { initial: AiSettings }) {
       defaultModel: clean(defaultModel),
       maxOutputTokens: numOrNull(maxOutputTokens),
       contextWindowTokens: numOrNull(contextWindowTokens),
+      allowPrivateNetwork,
     };
     if (apiKey) payload.apiKey = apiKey;
     if (clearApiKey) payload.clearApiKey = true;
@@ -80,6 +85,9 @@ export function AiSettingsForm({ initial }: { initial: AiSettings }) {
     const url = clean(baseUrl);
     if (url) payload.baseUrl = url;
     if (apiKey) payload.apiKey = apiKey;
+    // Always send the checkbox state so an unsaved change is honoured by
+    // the test (the server treats any provided field as an override).
+    payload.allowPrivateNetwork = allowPrivateNetwork;
     const res = await apiFetch<{ ok: true; models: string[] }>('/settings/ai/test', {
       method: 'POST',
       body: JSON.stringify(payload),
@@ -108,6 +116,7 @@ export function AiSettingsForm({ initial }: { initial: AiSettings }) {
     setContextWindowTokens(
       b.contextWindowTokens != null ? String(b.contextWindowTokens) : '',
     );
+    setAllowPrivateNetwork(b.allowPrivateNetwork);
     setModels(null);
     setError(null);
   }
@@ -148,6 +157,44 @@ export function AiSettingsForm({ initial }: { initial: AiSettings }) {
           autoComplete="off"
         />
       </Field>
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        <label
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            fontSize: 13,
+            color: 'var(--text)',
+            cursor: 'pointer',
+          }}
+        >
+          <input
+            type="checkbox"
+            checked={allowPrivateNetwork}
+            onChange={(e) => setAllowPrivateNetwork(e.target.checked)}
+          />
+          Allow private-network addresses (local Ollama, LM Studio, LAN servers)
+        </label>
+        {allowPrivateNetwork && (
+          <div
+            style={{
+              fontSize: 12.5,
+              lineHeight: 1.5,
+              color: 'var(--warn)',
+              background: 'var(--warn-soft)',
+              border: '1px solid var(--warn)',
+              borderRadius: 6,
+              padding: '8px 12px',
+            }}
+          >
+            This relaxes server-side request protections so the AI endpoint may
+            resolve to loopback or LAN addresses. Only enable it if the LLM
+            server is on a network you control. Link-local and cloud-metadata
+            addresses remain blocked.
+          </div>
+        )}
+      </div>
 
       <Field
         label="API key"
@@ -267,6 +314,24 @@ export function AiSettingsForm({ initial }: { initial: AiSettings }) {
           />
         </Field>
       </div>
+
+      <section
+        style={{
+          padding: 14,
+          background: 'var(--panel-2)',
+          border: '1px solid var(--line-2)',
+          borderRadius: 6,
+          fontSize: 13,
+          lineHeight: 1.5,
+          color: 'var(--text-2)',
+        }}
+      >
+        AI chat sends conversation text and attached context to the endpoint
+        configured here — including article content, asset field values,
+        domain details, and ticket bodies with internal notes. Choose a
+        provider you trust to handle this data; Weavestream does not proxy or
+        filter these requests.
+      </section>
 
       <section
         style={{

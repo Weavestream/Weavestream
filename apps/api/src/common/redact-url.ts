@@ -32,3 +32,17 @@ export function redactUrl(url: string): string {
     return UNPARSABLE_URL;
   }
 }
+
+// Redact secret-bearing components (userinfo / query / fragment) of any
+// URL embedded in a free-form error string. URLs never contain
+// whitespace, so match up to the next space/quote, then trim trailing
+// punctuation that belongs to the surrounding prose rather than the URL.
+const URL_IN_TEXT = /https?:\/\/[^\s'"]+/gi;
+
+export function redactUrlsInText(text: string): string {
+  return text.replace(URL_IN_TEXT, (match) => {
+    const core = match.replace(/[).,;:!?\]}]+$/, '');
+    const trailing = match.slice(core.length);
+    return redactUrl(core) + trailing;
+  });
+}

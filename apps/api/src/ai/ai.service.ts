@@ -1,12 +1,18 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import type { TestAiSettingsInput } from '@weavestream/shared';
-import { AiNotConfiguredError, AiSettingsService } from './ai-settings.service.js';
+import {
+  AiNotConfiguredError,
+  AiSettingsService,
+  aiEgressOptions,
+} from './ai-settings.service.js';
 import { AuditLogService } from '../audit/audit.service.js';
 import { AUDIT_ACTIONS } from '../audit/audit-actions.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
 import type { RequestMeta } from '../common/request-meta.js';
 import { EgressBlockedError, safeFetch } from '../common/egress/safe-fetch.js';
 import { describeError } from '../common/describe-error.js';
+import { redactUrl } from '../common/redact-url.js';
+import { readUpstreamSnippet } from '../common/redact-secrets.js';
 
 const TEST_TIMEOUT_MS = 8_000;
 
@@ -24,25 +30,44 @@ export class AiService {
     private readonly audit: AuditLogService,
   ) {}
 
-  async listModels(override?: { baseUrl?: string; apiKey?: string }): Promise<string[]> {
+  async listModels(
+    override?: {
+      baseUrl?: string;
+      apiKey?: string;
+      allowPrivateNetwork?: boolean;
+    },
+    // Out-param so `runTest` can audit the flag that was actually applied
+    // even when the call fails after resolution.
+    telemetry?: { privateNetworkAllowed?: boolean },
+  ): Promise<string[]> {
     let baseUrl: string;
     let apiKey: string | null = null;
+    let allowPrivateNetwork: boolean;
 
     // Test path: never enforce `enabled` — the user is verifying a
     // candidate config. Prefer override values; for any field the
     // override doesn't supply, fall back to whatever is currently saved.
-    if (override?.baseUrl || override?.apiKey) {
+    // An unsaved private-network checkbox alone must also enter this
+    // branch, or Test Connection would silently ignore it.
+    if (
+      override?.baseUrl ||
+      override?.apiKey ||
+      override?.allowPrivateNetwork !== undefined
+    ) {
       let savedBaseUrl: string | null = null;
       let savedApiKey: string | null = null;
+      let savedAllowPrivate = false;
       try {
         const saved = await this.settings.getRawConfig();
         savedBaseUrl = saved.baseUrl;
         savedApiKey = saved.apiKey;
+        savedAllowPrivate = saved.allowPrivateNetwork;
       } catch {
         // No saved baseUrl — fine, override has to carry it.
       }
       baseUrl = override.baseUrl ?? savedBaseUrl ?? '';
       apiKey = override.apiKey ?? savedApiKey;
+      allowPrivateNetwork = override.allowPrivateNetwork ?? savedAllowPrivate;
       if (!baseUrl) {
         throw new BadRequestException('Enter a base URL to test the connection.');
       }
@@ -53,9 +78,15 @@ export class AiService {
       const config = await this.settings.getConfig();
       baseUrl = config.baseUrl;
       apiKey = config.apiKey;
+      allowPrivateNetwork = config.allowPrivateNetwork;
     }
 
+    if (telemetry) telemetry.privateNetworkAllowed = allowPrivateNetwork;
+
     const url = `${stripTrailingSlash(baseUrl)}/models`;
+    // Admin-pasted base URLs can carry userinfo/query secrets; never echo
+    // the raw form back in error messages.
+    const displayUrl = redactUrl(url);
 
     let res: Response;
     try {
@@ -63,16 +94,17 @@ export class AiService {
         method: 'GET',
         headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : undefined,
         timeoutMs: TEST_TIMEOUT_MS,
-        // The baseUrl is admin-pasted in Settings → AI, so we treat it
-        // as authorised even when it points at a private/LAN address
-        // (LM Studio, on-prem Ollama, etc.). The SSRF guard still
-        // applies its timeout, body cap, and protocol/URL validation.
-        allowPrivateNetworks: true,
+        // Private/LAN endpoints (LM Studio, on-prem Ollama, …) require the
+        // explicit Settings → AI opt-in, which allows only the curated
+        // `ADMIN_PRIVATE_ENDPOINT_CIDRS` — cloud-metadata and link-local
+        // stay blocked, and DNS-rebinding pinning stays active (WS-017).
+        ...aiEgressOptions({ allowPrivateNetwork }),
       });
     } catch (err) {
       if (err instanceof EgressBlockedError) {
         throw new BadRequestException(
-          `The configured AI endpoint is not allowed: ${err.reason}.`,
+          `The configured AI endpoint is not allowed: ${err.reason}. ` +
+            'If your LLM runs on a private network, enable "Allow private-network addresses" in Settings → AI.',
         );
       }
       // undici throws a bare `TypeError: fetch failed` and stashes the
@@ -81,14 +113,14 @@ export class AiService {
       // sees why, not just "fetch failed". Admin-only surface; secrets in
       // any embedded URL are redacted by the helper.
       throw new BadRequestException(
-        `Could not reach ${url}: ${describeError(err)}`,
+        `Could not reach ${displayUrl}: ${describeError(err)}`,
       );
     }
 
     if (!res.ok) {
-      const body = await safeText(res);
+      const body = await readUpstreamSnippet(res);
       throw new BadRequestException(
-        `${url} returned ${res.status}${body ? ` — ${body}` : ''}`,
+        `${displayUrl} returned ${res.status}${body ? ` — ${body}` : ''}`,
       );
     }
 
@@ -116,8 +148,9 @@ export class AiService {
     let success = false;
     let error: string | null = null;
     let modelCount = 0;
+    const telemetry: { privateNetworkAllowed?: boolean } = {};
     try {
-      const models = await this.listModels(input ?? undefined);
+      const models = await this.listModels(input ?? undefined, telemetry);
       success = true;
       modelCount = models.length;
       return { ok: true, models };
@@ -141,7 +174,14 @@ export class AiService {
           success,
           modelCount,
           error,
-          overrideUsed: Boolean(input?.baseUrl),
+          // Null when the test failed before the flag was even resolved
+          // (e.g. no base URL saved or supplied).
+          privateNetworkAllowed: telemetry.privateNetworkAllowed ?? null,
+          overrideUsed: Boolean(
+            input?.baseUrl ||
+              input?.apiKey ||
+              input?.allowPrivateNetwork !== undefined,
+          ),
         },
       });
     }
@@ -165,16 +205,6 @@ function extractModelIds(payload: unknown): string[] {
     }
   }
   return ids;
-}
-
-async function safeText(res: Response): Promise<string | null> {
-  try {
-    const text = (await res.text()).trim();
-    if (!text) return null;
-    return text.length > 240 ? `${text.slice(0, 240)}…` : text;
-  } catch {
-    return null;
-  }
 }
 
 function messageOf(err: unknown): string {

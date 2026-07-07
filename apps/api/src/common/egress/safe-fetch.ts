@@ -92,6 +92,15 @@ export interface SafeFetchOptions extends Omit<RequestInit, 'signal'> {
    * either avoid this entirely or rely on `EGRESS_ALLOWED_PRIVATE_CIDRS`.
    */
   allowPrivateNetworks?: boolean;
+  /**
+   * Per-call additions to the private-CIDR allowlist. Unlike
+   * `allowPrivateNetworks`, this keeps the default blocklist for every
+   * range NOT in the list (cloud metadata, link-local, multicast, …) and
+   * keeps DNS-rebinding pinning active. Prefer this for admin-authorised
+   * private endpoints (e.g. `ADMIN_PRIVATE_ENDPOINT_CIDRS` for local
+   * LLM servers).
+   */
+  extraAllowedPrivateCidrs?: readonly Cidr[];
   /** Optional caller-supplied abort signal. */
   signal?: AbortSignal | null;
   /**
@@ -277,9 +286,14 @@ async function safeFetchInternal(
   const allowPrivate = options.allowPrivateNetworks || config.allowAllPrivate;
   if (!allowPrivate) {
     const blockList = defaultBlockedCidrs();
+    const extraAllowed = options.extraAllowedPrivateCidrs ?? [];
     for (const ip of resolvedIps) {
       const matched = ipMatchesAny(ip, blockList);
-      if (matched && !ipMatchesAny(ip, config.allowedPrivateCidrs)) {
+      if (
+        matched &&
+        !ipMatchesAny(ip, config.allowedPrivateCidrs) &&
+        !ipMatchesAny(ip, extraAllowed)
+      ) {
         throw block(
           url,
           hostname,
@@ -358,6 +372,7 @@ async function safeFetchInternal(
     delete (init as { resolve?: unknown }).resolve;
     delete (init as { fetchImpl?: unknown }).fetchImpl;
     delete (init as { allowPrivateNetworks?: unknown }).allowPrivateNetworks;
+    delete (init as { extraAllowedPrivateCidrs?: unknown }).extraAllowedPrivateCidrs;
     delete (init as { maxResponseBytes?: unknown }).maxResponseBytes;
     delete (init as { timeoutMs?: unknown }).timeoutMs;
     // The `dispatcher` knob comes from the bundled undici inside Node's

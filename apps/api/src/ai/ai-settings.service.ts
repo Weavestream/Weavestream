@@ -6,6 +6,8 @@ import { AUDIT_ACTIONS } from '../audit/audit-actions.js';
 import { IntegrationSecretEncryptionService } from '../crypto/integration-secret-encryption.service.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
 import type { RequestMeta } from '../common/request-meta.js';
+import type { SafeFetchOptions } from '../common/egress/safe-fetch.js';
+import { ADMIN_PRIVATE_ENDPOINT_CIDRS } from '../common/egress/private-cidrs.js';
 
 const SINGLETON_ID = 'singleton';
 
@@ -67,6 +69,9 @@ export class AiSettingsService {
     }
     if (input.contextWindowTokens !== undefined) {
       data.contextWindowTokens = input.contextWindowTokens;
+    }
+    if (input.allowPrivateNetwork !== undefined) {
+      data.allowPrivateNetwork = input.allowPrivateNetwork;
     }
 
     const after = await this.prisma.aiSetting.update({
@@ -150,6 +155,7 @@ export class AiSettingsService {
       defaultModel: row.defaultModel,
       maxOutputTokens,
       contextWindowTokens,
+      allowPrivateNetwork: row.allowPrivateNetwork,
     };
   }
 
@@ -190,6 +196,22 @@ export interface AiResolvedConfig {
   maxOutputTokens: number;
   /** Resolved (defaults applied) — never null. */
   contextWindowTokens: number;
+  /** Admin opt-in for private/LAN AI endpoints (WS-017). */
+  allowPrivateNetwork: boolean;
+}
+
+/**
+ * safeFetch options for an AI endpoint call. With the opt-in on, only the
+ * curated `ADMIN_PRIVATE_ENDPOINT_CIDRS` become reachable — never the
+ * blanket `allowPrivateNetworks: true` bypass, so cloud-metadata /
+ * link-local stay blocked and DNS-rebinding pinning stays active.
+ */
+export function aiEgressOptions(
+  config: Pick<AiResolvedConfig, 'allowPrivateNetwork'>,
+): Pick<SafeFetchOptions, 'extraAllowedPrivateCidrs'> {
+  return config.allowPrivateNetwork
+    ? { extraAllowedPrivateCidrs: ADMIN_PRIVATE_ENDPOINT_CIDRS }
+    : {};
 }
 
 type AiSettingRow = {
@@ -199,6 +221,7 @@ type AiSettingRow = {
   defaultModel: string | null;
   maxOutputTokens: number | null;
   contextWindowTokens: number | null;
+  allowPrivateNetwork: boolean;
   updatedAt: Date;
 };
 
@@ -210,6 +233,7 @@ function toDto(row: AiSettingRow): AiSettings {
     apiKeyConfigured: Boolean(row.apiKeyCiphertext),
     maxOutputTokens: row.maxOutputTokens,
     contextWindowTokens: row.contextWindowTokens,
+    allowPrivateNetwork: row.allowPrivateNetwork,
     updatedAt: row.updatedAt.toISOString(),
   };
 }
@@ -222,5 +246,6 @@ function stripForAudit(row: AiSettingRow) {
     apiKeyConfigured: Boolean(row.apiKeyCiphertext),
     maxOutputTokens: row.maxOutputTokens,
     contextWindowTokens: row.contextWindowTokens,
+    allowPrivateNetwork: row.allowPrivateNetwork,
   };
 }

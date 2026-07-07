@@ -1,4 +1,4 @@
-import { redactUrl } from './redact-url.js';
+import { redactSecretsInText } from './redact-secrets.js';
 
 /**
  * Render an error for logs, admin-facing messages, and durable audit /
@@ -15,8 +15,9 @@ import { redactUrl } from './redact-url.js';
  * Redaction: driver error messages routinely interpolate the request URL,
  * whose query string / userinfo can carry API keys or signed-URL tokens.
  * Every embedded `http(s)://` URL is passed through `redactUrl`, which
- * strips userinfo, query, and fragment. This does NOT attempt to scrub
- * secrets a driver might splice elsewhere into free text, so the output is
+ * strips userinfo, query, and fragment, and common secret shapes spliced
+ * into free text (Bearer tokens, `sk-…` keys, JSON credential fields) are
+ * scrubbed by `redactSecretsInText`. Still best-effort, so the output is
  * intended for server logs and SUPER_ADMIN-only integration surfaces — not
  * for untrusted end users, who should get a generic message + correlation id.
  */
@@ -48,19 +49,7 @@ export function describeError(e: unknown, maxLen = 500): string {
     depth += 1;
   }
   const joined = parts.filter(Boolean).join(' ← ') || 'unknown error';
-  return redactUrlsInText(joined).slice(0, maxLen);
-}
-
-// Redact secret-bearing components (userinfo / query / fragment) of any
-// URL embedded in a free-form error string. URLs never contain
-// whitespace, so match up to the next space/quote, then trim trailing
-// punctuation that belongs to the surrounding prose rather than the URL.
-const URL_IN_TEXT = /https?:\/\/[^\s'"]+/gi;
-
-function redactUrlsInText(text: string): string {
-  return text.replace(URL_IN_TEXT, (match) => {
-    const core = match.replace(/[).,;:!?\]}]+$/, '');
-    const trailing = match.slice(core.length);
-    return redactUrl(core) + trailing;
-  });
+  // Redact BEFORE truncating — cutting first could split a secret around
+  // the boundary and leave an unmatched (unredacted) prefix behind.
+  return redactSecretsInText(joined).slice(0, maxLen);
 }

@@ -7,6 +7,7 @@ import {
 } from './safe-fetch.js';
 import {
   __testing,
+  ADMIN_PRIVATE_ENDPOINT_CIDRS,
   ipMatchesAny,
   parseCidr,
   parseCidrList,
@@ -158,6 +159,83 @@ describe('safeFetch — egress guard', () => {
         allowPrivateNetworks: true,
       });
       expect(res.status).toBe(200);
+    });
+  });
+
+  describe('per-call extraAllowedPrivateCidrs (AI private-endpoint opt-in)', () => {
+    it('allows a private IP covered by the extra allowlist', async () => {
+      const res = await safeFetch('http://ollama.lan:11434/v1/models', {
+        timeoutMs: 1000,
+        fetchImpl: okFetch,
+        resolve: resolveTo(['192.168.1.50']),
+        extraAllowedPrivateCidrs: ADMIN_PRIVATE_ENDPOINT_CIDRS,
+      });
+      expect(res.status).toBe(200);
+    });
+
+    it('still blocks cloud metadata even with the curated AI list', async () => {
+      // The whole point of the curated list vs. allowPrivateNetworks: the
+      // opt-in must never open 169.254.169.254 (or any link-local range).
+      await expect(
+        safeFetch('http://169.254.169.254/latest/meta-data', {
+          timeoutMs: 1000,
+          fetchImpl: okFetch,
+          extraAllowedPrivateCidrs: ADMIN_PRIVATE_ENDPOINT_CIDRS,
+        }),
+      ).rejects.toBeInstanceOf(EgressBlockedError);
+    });
+
+    it('blocks private IPs when the option is absent (opt-in off)', async () => {
+      // Acceptance-criterion anchor for WS-017: without the explicit
+      // setting, an AI-style call to a LAN address must be refused.
+      await expect(
+        safeFetch('http://ollama.lan:11434/v1/models', {
+          timeoutMs: 1000,
+          fetchImpl: okFetch,
+          resolve: resolveTo(['192.168.1.50']),
+        }),
+      ).rejects.toBeInstanceOf(EgressBlockedError);
+    });
+
+    it('validates EVERY resolved address, not just the first (mixed DNS)', async () => {
+      // Rebinding-flavoured shape: one record inside the curated list,
+      // one on a link-local range the list deliberately excludes. The
+      // request must be blocked because the excluded address could be
+      // the one the connection actually reaches.
+      await expect(
+        safeFetch('http://ollama.lan:11434/v1/models', {
+          timeoutMs: 1000,
+          fetchImpl: okFetch,
+          resolve: resolveTo(['192.168.1.10', '169.254.169.254']),
+          extraAllowedPrivateCidrs: ADMIN_PRIVATE_ENDPOINT_CIDRS,
+        }),
+      ).rejects.toBeInstanceOf(EgressBlockedError);
+    });
+
+    it('blocks a redirect hop to a range the extra list does not cover', async () => {
+      // First hop: allowed LAN address. Redirect target resolves to a
+      // link-local address outside the curated list → must be blocked on
+      // re-validation.
+      let call = 0;
+      const fetchImpl = (() =>
+        Promise.resolve(
+          new Response(null, {
+            status: 302,
+            headers: { location: 'http://metadata.lan/creds' },
+          }),
+        )) as unknown as typeof fetch;
+      const resolve = async () => {
+        call += 1;
+        return call === 1 ? ['192.168.1.50'] : ['169.254.169.254'];
+      };
+      await expect(
+        safeFetch('http://ollama.lan:11434/v1/models', {
+          timeoutMs: 1000,
+          fetchImpl,
+          resolve,
+          extraAllowedPrivateCidrs: ADMIN_PRIVATE_ENDPOINT_CIDRS,
+        }),
+      ).rejects.toBeInstanceOf(EgressBlockedError);
     });
   });
 

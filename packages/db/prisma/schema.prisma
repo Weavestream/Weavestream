@@ -894,6 +894,10 @@ model AiSetting {
   // Total model context window, used to size the prompt budget. Null →
   // conservative server default.
   contextWindowTokens Int?  @map("context_window_tokens")
+  // Opt-in for AI endpoints on private/LAN addresses (local Ollama,
+  // LM Studio). When true, AI egress allows curated private ranges only —
+  // cloud-metadata and link-local stay blocked (WS-017).
+  allowPrivateNetwork Boolean @default(false) @map("allow_private_network")
   updatedAt        DateTime @updatedAt @map("updated_at")
   updatedBy        String?  @map("updated_by") @db.Uuid
 

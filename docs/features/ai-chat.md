@@ -22,8 +22,15 @@ The AI chat requires an OpenAI-compatible language model endpoint. Configure thi
 | **API Base URL** | The base URL of your OpenAI-compatible endpoint (e.g. `https://api.openai.com/v1`) |
 | **Model** | The model identifier to use (e.g. `gpt-4o`, `gpt-4o-mini`) |
 | **API Key** | Your API key for the endpoint |
+| **Allow private-network addresses** | Opt-in required for endpoints on loopback or LAN addresses (local Ollama, LM Studio). Off by default. |
 
 Any provider that implements the OpenAI chat completions API is compatible, including self-hosted models via Ollama, LM Studio, or similar tools.
+
+### Private network access
+
+By default, Weavestream's server-side request guard refuses to connect to AI endpoints that resolve to private addresses — the same SSRF protection applied to every other outbound integration. If your LLM runs on your own machine or LAN (e.g. `http://localhost:11434/v1`), enable **Allow private-network addresses** in **Admin → Settings → AI**.
+
+The opt-in permits only a curated set of private ranges (loopback, RFC1918, CGNAT/Tailscale, IPv6 loopback and unique-local). Link-local and cloud-metadata addresses (such as `169.254.169.254`) remain blocked even with the setting enabled, and DNS-rebinding protection stays active. Operators who need ranges outside the curated list can allow them process-wide via the `EGRESS_ALLOWED_PRIVATE_CIDRS` environment variable.
 
 ## Conversations & History
 
@@ -63,9 +70,13 @@ Any assistant response can be saved as a new article via the **Save as article**
 
 ## Privacy & Data
 
-The following data is sent to your configured LLM endpoint when included in context:
+AI chat sends your conversation and its attached context directly to the LLM endpoint you configure. Depending on what is attached, a single request can include:
 
-- The full text content of attached articles
-- The field values of attached assets (label and value pairs)
+- The full markdown content of attached articles
+- The field values of attached assets (label and value pairs, as visible to the requesting user)
+- Attached domain records (WHOIS/DNS/TLS/email-auth details)
+- Attached ticket bodies fetched in real time from your ticketing integration (NinjaOne), **including internal notes**
+- The acting user's email address, user id, and role, plus the active company id
+- The conversation history of the current chat session
 
-No other tenant data is transmitted. The LLM endpoint you configure is solely responsible for data handling under your own terms — Weavestream does not proxy requests through any Weavestream-operated service.
+Context is only attached when you (or the auto-attach behaviour of the page you are on) add it — but once attached, it is transmitted in full. The LLM endpoint you configure is solely responsible for data handling under its own terms — Weavestream does not proxy requests through any Weavestream-operated service, and it does not filter or anonymise the content before sending. Choose a provider you trust with your client documentation, or self-host the model.
