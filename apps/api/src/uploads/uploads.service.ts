@@ -32,6 +32,7 @@ async function fileTypeFromBuffer(
   const mod = await fileTypeModulePromise;
   return mod.fileTypeFromBuffer(buffer);
 }
+import { MAX_IMAGE_DECODE_PIXELS } from '@weavestream/shared';
 import type {
   ConfirmUploadInput,
   FileFieldEntry,
@@ -51,6 +52,7 @@ import { mimesAreCompatible } from './mime-compat.js';
 import { startsWithTextBom } from './text-bom.js';
 import { canReadPassword } from '../passwords/password-access-policy.js';
 import { pendingKey, bodyKey } from './upload-session-keys.js';
+import { Semaphore } from '../common/semaphore.js';
 
 export interface AuditMeta {
   ip: string;
@@ -151,9 +153,19 @@ const PENDING_TTL_SECONDS = 15 * 60;
  */
 const MAGIC_HEAD_BYTES = 64 * 1024;
 
+/**
+ * At most this many thumbnail decodes run concurrently (WS-027). Each
+ * decode may hold up to ~MAX_IMAGE_DECODE_PIXELS × 4 bytes of native
+ * raster memory in libvips; without a cap, parallel confirms multiply
+ * that. Waiters queue (FIFO) rather than skip, so no upload loses its
+ * thumbnail under load.
+ */
+const MAX_CONCURRENT_THUMBNAILS = 2;
+
 @Injectable()
 export class UploadsService {
   private readonly logger = new Logger(UploadsService.name);
+  private readonly thumbnailSemaphore = new Semaphore(MAX_CONCURRENT_THUMBNAILS);
 
   constructor(
     private readonly prisma: PrismaService,
@@ -560,22 +572,52 @@ export class UploadsService {
         // to open twice: the write-once guard makes the stored bytes
         // immutable for this session.
         const absPath = this.storage.getObjectPath(companyId, pending.storageKey);
+        // `metadata()` parses only the header — no pixel data is decoded.
+        // It keeps sharp's DEFAULT limitInputPixels (~268 MP) on purpose:
+        // a 50 MP limit here would throw for 50–268 MP files and lose the
+        // width/height the PDF-export gate relies on. Headers beyond the
+        // default throw into the catch below → null dims, no thumbnail.
         const meta2 = await sharp(absPath, { failOn: 'error' }).metadata();
         width = meta2.width ?? null;
         height = meta2.height ?? null;
 
-        const thumb = await sharp(absPath)
-          .rotate()
-          .resize(300, 300, { fit: 'inside', withoutEnlargement: true })
-          .webp({ quality: 80 })
-          .toBuffer();
-        thumbnailKey = this.storage.thumbnailKey(companyId, input.uploadId);
-        await this.storage.putObject(companyId, thumbnailKey, thumb, {
-          contentType: 'image/webp',
-        });
+        if (
+          width !== null &&
+          height !== null &&
+          width * height > MAX_IMAGE_DECODE_PIXELS
+        ) {
+          // Decompression-bomb gate (WS-027): a tiny file can declare huge
+          // dimensions and expand to gigabytes when decoded. Keep the file
+          // and its recorded dimensions, but never materialize the raster.
+          // storageKey is deliberately not logged (embeds the user-chosen
+          // filename; this branch is expected attack traffic).
+          this.logger.warn(
+            `Skipping thumbnail for upload ${input.uploadId} (company ${companyId}): ` +
+              `${width}x${height} exceeds ${MAX_IMAGE_DECODE_PIXELS}px decode limit`,
+          );
+        } else {
+          const thumb = await this.thumbnailSemaphore.run(() =>
+            sharp(absPath, { limitInputPixels: MAX_IMAGE_DECODE_PIXELS })
+              .rotate()
+              .resize(300, 300, { fit: 'inside', withoutEnlargement: true })
+              .webp({ quality: 80 })
+              .toBuffer(),
+          );
+          thumbnailKey = this.storage.thumbnailKey(companyId, input.uploadId);
+          await this.storage.putObject(companyId, thumbnailKey, thumb, {
+            contentType: 'image/webp',
+          });
+        }
       } catch (err) {
+        // Log uploadId/companyId rather than the filename-bearing storage
+        // key: headers beyond sharp's own metadata limit land here as
+        // expected attack traffic (WS-027), and some sharp errors embed
+        // the input path — scrub the key from the message if present.
+        const msg = String((err as Error).message)
+          .split(pending.storageKey)
+          .join('<storage-key>');
         this.logger.warn(
-          `Thumbnail generation failed for ${pending.storageKey}: ${(err as Error).message}`,
+          `Thumbnail generation failed for upload ${input.uploadId} (company ${companyId}): ${msg}`,
         );
       }
     }

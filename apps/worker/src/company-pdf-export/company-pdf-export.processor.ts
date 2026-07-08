@@ -16,7 +16,7 @@ import {
   CompanyExportDataService,
   type CompanyExportData,
 } from '../../../api/src/exports/company-export-data.service.js';
-import { buildCompanyExportPdf } from './pdf-builder.js';
+import { buildCompanyExportPdf, pdfEmbedSizeBlockReason } from './pdf-builder.js';
 
 /** 4 hours in milliseconds — how long before the cleanup job fires. */
 const CLEANUP_DELAY_MS = 4 * 60 * 60 * 1000;
@@ -202,6 +202,11 @@ export class CompanyPdfExportWorker implements OnModuleDestroy {
     for (const article of data.articles) {
       for (const image of article.images) {
         if (!isPdfEmbeddableImage(image.mimeType)) continue;
+        // WS-027: pdfkit fully decodes whatever buffer it is handed, so
+        // images blocked by the size gate never have their bytes read off
+        // disk. The render side re-checks the same predicate and prints a
+        // fallback line with the reason.
+        if (pdfEmbedSizeBlockReason(image.width, image.height) !== null) continue;
         const cached = cache.get(image.storageKey);
         if (cached !== undefined) {
           if (cached) image.data = cached;

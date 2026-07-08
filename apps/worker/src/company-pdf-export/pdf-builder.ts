@@ -1,5 +1,5 @@
 import PDFDocument from 'pdfkit';
-import { tiptapToPlaintext } from '@weavestream/shared';
+import { MAX_IMAGE_DECODE_PIXELS, tiptapToPlaintext } from '@weavestream/shared';
 import type { CompanyExportData } from '../../../api/src/exports/company-export-data.service.js';
 
 interface PdfBuildOpts {
@@ -1125,6 +1125,13 @@ function renderArticleImage(
     renderImageFallback(doc, label, `${image.mimeType} is not embeddable`, sectionTitle);
     return;
   }
+  // Before the `!image.data` check so a gate-skipped image reports its
+  // true reason instead of 'file unavailable' (hydration never read it).
+  const sizeBlock = pdfEmbedSizeBlockReason(image.width, image.height);
+  if (sizeBlock) {
+    renderImageFallback(doc, label, sizeBlock, sectionTitle);
+    return;
+  }
   if (!image.data) {
     renderImageFallback(doc, label, 'file unavailable', sectionTitle);
     return;
@@ -1233,6 +1240,28 @@ function extractUploadId(src: string): string | null {
 function isPdfEmbeddableImage(mimeType: string): boolean {
   const normalized = mimeType.toLowerCase();
   return normalized === 'image/png' || normalized === 'image/jpeg';
+}
+
+/**
+ * WS-027: pdfkit has no pixel limit, so we refuse to decode images whose
+ * stored dimensions are unknown or exceed MAX_IMAGE_DECODE_PIXELS. Unknown
+ * dims fail closed: sharp's metadata() throws for headers beyond ~268 MP,
+ * so a large-enough decompression bomb is stored with null dims — exactly
+ * the rows we must not hand to doc.image(). Returns the human-readable
+ * reason for the PDF fallback line, or null when the image may be embedded.
+ * Exported so the hydration pass and the render gate share one predicate.
+ */
+export function pdfEmbedSizeBlockReason(
+  width: number | null | undefined,
+  height: number | null | undefined,
+): string | null {
+  if (typeof width !== 'number' || typeof height !== 'number') {
+    return 'image dimensions unavailable';
+  }
+  if (width * height > MAX_IMAGE_DECODE_PIXELS) {
+    return 'image too large to embed';
+  }
+  return null;
 }
 
 function renderDomains(doc: PDFKit.PDFDocument, data: CompanyExportData): void {

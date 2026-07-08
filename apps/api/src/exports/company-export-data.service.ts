@@ -89,6 +89,13 @@ export interface ExportArticleImage {
   filename: string;
   mimeType: string;
   storageKey: string;
+  /**
+   * Stored dimensions from upload confirm, used by the PDF-export
+   * decompression-bomb gate (WS-027). Null when sharp could not read the
+   * image header — the gate fails closed on those rows.
+   */
+  width: number | null;
+  height: number | null;
   data?: Buffer;
 }
 
@@ -345,6 +352,8 @@ export class CompanyExportDataService {
               filename: true,
               mimeType: true,
               storageKey: true,
+              width: true,
+              height: true,
             },
           })
         : [];
@@ -366,6 +375,8 @@ export class CompanyExportDataService {
           filename: u.filename,
           mimeType: u.mimeType,
           storageKey: u.storageKey,
+          width: u.width,
+          height: u.height,
         })),
       updatedAt: a.updatedAt,
     }));

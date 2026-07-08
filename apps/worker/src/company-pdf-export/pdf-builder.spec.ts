@@ -1,6 +1,7 @@
 import {
   articleSegmentsFromTiptap,
   formatAssetFieldValue,
+  pdfEmbedSizeBlockReason,
   richTextToPlaintext,
 } from './pdf-builder.js';
 
@@ -84,5 +85,25 @@ describe('PDF export formatting helpers', () => {
       },
       { kind: 'text', text: 'After image\n' },
     ]);
+  });
+});
+
+describe('pdfEmbedSizeBlockReason (WS-027 decompression-bomb gate)', () => {
+  it('blocks images above the pixel cap', () => {
+    expect(pdfEmbedSizeBlockReason(10000, 6000)).toBe('image too large to embed');
+  });
+
+  it('allows images at exactly the pixel cap (strict >)', () => {
+    expect(pdfEmbedSizeBlockReason(10000, 5000)).toBeNull();
+  });
+
+  it('fails closed on unknown dimensions', () => {
+    expect(pdfEmbedSizeBlockReason(null, null)).toBe('image dimensions unavailable');
+    expect(pdfEmbedSizeBlockReason(1000, null)).toBe('image dimensions unavailable');
+    expect(pdfEmbedSizeBlockReason(undefined, 1000)).toBe('image dimensions unavailable');
+  });
+
+  it('allows ordinary photo dimensions', () => {
+    expect(pdfEmbedSizeBlockReason(8000, 6000)).toBeNull();
   });
 });

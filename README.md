@@ -6,8 +6,8 @@
 
 # Weavestream
 
-**A self-hosted documentation platform with a clean UI and Docker-first deployment.**
-_Your knowledge base, your infrastructure._
+**Open-source, self-hosted IT documentation and relationship management platform.**
+_Manage assets, credentials, domains, networks, vendors, procedures, and the relationships between them — all under your control._
 
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
 [![CI](https://github.com/Weavestream/Weavestream/actions/workflows/ci.yml/badge.svg)](https://github.com/Weavestream/Weavestream/actions/workflows/ci.yml)
@@ -20,17 +20,42 @@ _Your knowledge base, your infrastructure._
 
 → **Full feature docs and guides at [docs.weavestream.io](https://docs.weavestream.io)**
 
-Weavestream is a Postgres-backed IT documentation platform designed for
-small teams, MSPs, and homelabs. One codebase, one distribution — the
-operator chooses what to call their tenants (companies, clients,
-departments, sites, …) from the admin UI, so the same build fits every
-audience without code changes.
+Weavestream is a self-hosted platform for managing IT operations knowledge.
+
+Assets, passwords, domains, IP networks, vendors, contacts, procedures, and documentation live in a connected system instead of isolated records.
+
+Built for MSPs, internal IT teams, and homelabs, Weavestream helps you understand not just what you have, but how everything relates.
 
 ![Weavestream Tenant Dashboard](./weavestream-company-dashboard.png)
 
+## Documentation with Context
+
+Most documentation systems store information as pages.
+
+Weavestream stores relationships.
+
+A firewall can be linked to:
+- its credentials
+- public IPs
+- domains
+- SSL certificates
+- ISP information
+- support contacts
+- procedures
+- related assets
+
+The result is documentation that behaves like a connected system instead of a collection of notes.
+
+## Why Weavestream?
+
+- **Connected documentation.** Assets, credentials, domains, vendors, contacts, and procedures are linked together so context is never lost.
+- **Built for IT operations.** Designed for MSPs, internal IT teams, and homelabs—not generic note-taking.
+- **Self-hosted and open source.** Your data stays under your control.
+- **Modern and extensible.** Docker-first deployment, OpenAI-compatible AI integrations, and a growing ecosystem of integrations.
+
 ## Highlights
 
-- **Tenant documentation.** Markdown and rich-text articles, folders, photo
+- **Connected documentation.** Markdown and rich-text articles, folders, photo
   galleries, and configurable asset layouts per organization.
 - **Password management.** AES-256-GCM encrypted credential storage with
   TOTP support, breach detection, and role-based access control.
@@ -51,7 +76,7 @@ audience without code changes.
   TOTP MFA, IP-based access rules, and append-only audit logging.
 - **Two-layer RBAC.** Global roles combined with per-tenant memberships
   evaluated from a single permission matrix.
-- **Client portals.** Each tenant gets a read-only portal where client
+- **Customer portals.** Each tenant gets a read-only portal where client
   users see only the articles, assets, passwords, and domains their role allows.
 - **Local file storage.** Tenant files live on a shared host-mounted
   filesystem path with per-tenant directory isolation.

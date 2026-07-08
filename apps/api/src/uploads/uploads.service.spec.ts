@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import { createHash } from 'node:crypto';
 import { promises as fs } from 'node:fs';
+import { crc32, deflateSync } from 'node:zlib';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
@@ -1688,6 +1689,40 @@ describe('UploadsService.confirm — magic-byte validation + image thumbnail (re
   let pngBuffer: Buffer;
   let tmpDir: string;
   let pngPath: string;
+  let bomb256mpBuffer: Buffer;
+  let bomb256mpPath: string;
+  let bomb400mpBuffer: Buffer;
+  let bomb400mpPath: string;
+
+  /**
+   * Hand-craft a 68-byte PNG whose IHDR declares arbitrary dimensions
+   * (decompression-bomb stand-in, WS-027). `file-type` sees valid PNG
+   * magic bytes and `sharp().metadata()` parses the header, but there is
+   * no real pixel data — so the test never allocates raster memory, even
+   * if the gate under test regresses (the limited decode throws instead).
+   */
+  function craftPng(width: number, height: number): Buffer {
+    const chunk = (type: string, data: Buffer) => {
+      const len = Buffer.alloc(4);
+      len.writeUInt32BE(data.length, 0);
+      const tag = Buffer.from(type, 'latin1');
+      const crc = Buffer.alloc(4);
+      crc.writeUInt32BE(crc32(Buffer.concat([tag, data])) >>> 0, 0);
+      return Buffer.concat([len, tag, data, crc]);
+    };
+    const sig = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    const ihdr = Buffer.alloc(13);
+    ihdr.writeUInt32BE(width, 0);
+    ihdr.writeUInt32BE(height, 4);
+    ihdr[8] = 8; // bit depth
+    ihdr[9] = 2; // color type: truecolor
+    return Buffer.concat([
+      sig,
+      chunk('IHDR', ihdr),
+      chunk('IDAT', deflateSync(Buffer.alloc(8))),
+      chunk('IEND', Buffer.alloc(0)),
+    ]);
+  }
 
   beforeAll(async () => {
     pngBuffer = await sharp({
@@ -1703,6 +1738,16 @@ describe('UploadsService.confirm — magic-byte validation + image thumbnail (re
     tmpDir = await fs.mkdtemp(join(tmpdir(), 'confirm-real-'));
     pngPath = join(tmpDir, 'img.png');
     await fs.writeFile(pngPath, pngBuffer);
+    // 256 MP: above the 50 MP decode gate, below sharp's ~268 MP default
+    // metadata ceiling — dimensions are readable, decode must be skipped.
+    bomb256mpBuffer = craftPng(16000, 16000);
+    bomb256mpPath = join(tmpDir, 'bomb-256mp.png');
+    await fs.writeFile(bomb256mpPath, bomb256mpBuffer);
+    // 400 MP: beyond sharp's own metadata limit — metadata() throws, so
+    // the upload stores null dimensions and no thumbnail.
+    bomb400mpBuffer = craftPng(20000, 20000);
+    bomb400mpPath = join(tmpDir, 'bomb-400mp.png');
+    await fs.writeFile(bomb400mpPath, bomb400mpBuffer);
   });
 
   afterAll(async () => {
@@ -1841,6 +1886,62 @@ describe('UploadsService.confirm — magic-byte validation + image thumbnail (re
       expect.any(Buffer),
       { contentType: 'image/webp' },
     );
+  });
+
+  it('stores a >50 MP image but skips thumbnail generation (decompression-bomb gate, WS-027)', async () => {
+    const { service, prisma, storage } = makeService({
+      mimeType: 'image/png',
+      head: bomb256mpBuffer,
+      body: bomb256mpBuffer,
+      objectPath: bomb256mpPath,
+    });
+    await service.confirm(
+      operator,
+      'c1',
+      { uploadId: 'u-1' } as never,
+      auditMeta,
+    );
+    expect(prisma.upload.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          isImage: true,
+          width: 16000,
+          height: 16000,
+          thumbnailKey: null,
+        }),
+      }),
+    );
+    expect(storage.putObject).not.toHaveBeenCalled();
+  });
+
+  it("stores an image whose header exceeds sharp's own metadata limit with null dimensions", async () => {
+    // Pins the null-dims contract the PDF-export gate fails closed on:
+    // metadata() itself enforces sharp's default ~268 MP limit, so a
+    // 400 MP header throws into the catch and the upload keeps
+    // width/height/thumbnailKey null while still succeeding.
+    const { service, prisma, storage } = makeService({
+      mimeType: 'image/png',
+      head: bomb400mpBuffer,
+      body: bomb400mpBuffer,
+      objectPath: bomb400mpPath,
+    });
+    await service.confirm(
+      operator,
+      'c1',
+      { uploadId: 'u-1' } as never,
+      auditMeta,
+    );
+    expect(prisma.upload.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          isImage: true,
+          width: null,
+          height: null,
+          thumbnailKey: null,
+        }),
+      }),
+    );
+    expect(storage.putObject).not.toHaveBeenCalled();
   });
 });
 
