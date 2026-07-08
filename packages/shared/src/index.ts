@@ -19,6 +19,7 @@ export * from './templates/index.js';
 export * from './tiptap.js';
 export * from './markdown.js';
 export * from './ip-match.js';
+export * from './internal-token.js';
 export * from './strip-nul.js';
 export * from './image-limits.js';
 export type { TenantContext } from './tenant-context.js';

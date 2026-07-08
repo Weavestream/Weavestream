@@ -22,3 +22,17 @@ export const API_INTERNAL_URL = process.env.API_INTERNAL_URL ?? 'http://api:4000
 export const SESSION_COOKIE_NAME = process.env.SESSION_COOKIE_NAME ?? 'ws_session';
 export const ACCESS_COOKIE_NAME = `${SESSION_COOKIE_NAME}_access`;
 export const CSRF_COOKIE_NAME = 'ws_csrf';
+
+/**
+ * The cookie signing key, shared by the api and web containers through the
+ * same `.env` (compose gives all services `env_file: .env`). The web tier
+ * derives the internal-API token from it (`deriveInternalApiToken` in
+ * `@weavestream/shared`) to authenticate its server-side poll of the
+ * internal `/api/v1/ip-rules/active` endpoint — no separate secret to set.
+ *
+ * Read as a raw env var: the web app does not run the Zod `loadEnv` the
+ * API/worker use, so this can be empty in a misconfigured custom (non-
+ * compose) deployment. Empty ⇒ the poll is rejected and page-layer IP
+ * rules fail open; the API still enforces on its own endpoints. (WS-028)
+ */
+export const COOKIE_SIGNING_KEY = process.env.COOKIE_SIGNING_KEY ?? '';

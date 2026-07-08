@@ -2,13 +2,13 @@ import {
   Body,
   Controller,
   Delete,
-  ForbiddenException,
   Get,
   Param,
   ParseUUIDPipe,
   Patch,
   Post,
   Req,
+  UseGuards,
 } from '@nestjs/common';
 import type { Request } from 'express';
 import {
@@ -21,7 +21,8 @@ import { IpRulesService } from './ip-rules.service.js';
 import { CurrentUser, type AuthedUser } from '../common/current-user.decorator.js';
 import { ZodBody } from '../common/zod-validation.pipe.js';
 import { RequirePermission } from '../rbac/require-permission.decorator.js';
-import { isPrivatePeer, requestMetaOf } from '../common/request-meta.js';
+import { requestMetaOf } from '../common/request-meta.js';
+import { InternalOnlyGuard } from '../common/internal-only.guard.js';
 import { Public } from '../common/public.decorator.js';
 
 /**
@@ -45,21 +46,18 @@ export class IpRulesController {
    * blocks page renders, not just API calls. Returns the same cached
    * ruleset `IpRuleGuard` is enforcing so the two layers stay in sync.
    *
-   * Bypasses authentication (the web container has no API session) but
-   * is restricted to internal TCP peers (loopback / link-local / RFC1918
-   * / IPv6 ULA + loopback / link-local). The peer address is the
-   * underlying socket — not spoofable through `X-Forwarded-For` — so
-   * we don't need a shared secret. Standard Docker / private-network
-   * deployments where the web and API containers share a bridge
-   * already satisfy this; deployments that route web→API over the
-   * public internet will need to add an explicit reverse-proxy hop.
+   * Internal-only: gated by `InternalOnlyGuard`, which requires BOTH an
+   * internal TCP peer AND a valid `x-ws-internal-token` (derived from
+   * `COOKIE_SIGNING_KEY`). The peer check alone is not a boundary here —
+   * the web tier is a blind reverse proxy on the same bridge, so a
+   * proxied internet request has the web container as its socket peer and
+   * would pass a peer-only check. The web proxy 404s this path before it
+   * forwards, and the token is the API-side backstop. (WS-028)
    */
   @Get('active')
   @Public()
-  async active(@Req() req: Request) {
-    if (!isPrivatePeer(req.socket.remoteAddress)) {
-      throw new ForbiddenException();
-    }
+  @UseGuards(InternalOnlyGuard)
+  async active() {
     return { rules: await this.ipRules.getActiveRulesCached() };
   }
 

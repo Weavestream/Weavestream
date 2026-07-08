@@ -1,5 +1,9 @@
-import type { IpRuleLike } from '@weavestream/shared';
-import { API_INTERNAL_URL } from './api-config';
+import {
+  INTERNAL_TOKEN_HEADER,
+  deriveInternalApiToken,
+  type IpRuleLike,
+} from '@weavestream/shared';
+import { API_INTERNAL_URL, COOKIE_SIGNING_KEY } from './api-config';
 
 /**
  * Module-level cache of the active IP allow/deny rules, polled from
@@ -26,6 +30,29 @@ let fetchedAt = 0;
 let everSucceeded = false;
 let inflight: Promise<IpRuleLike[]> | null = null;
 
+// The internal-API token is derived from COOKIE_SIGNING_KEY once and
+// reused. Returns null (and warns once) when the key isn't visible to the
+// web container — the poll will then be rejected and page-layer IP rules
+// fail open (the API still enforces on its own endpoints). (WS-028)
+let tokenPromise: Promise<string> | null = null;
+let warnedMissingKey = false;
+
+function resolveInternalToken(): Promise<string> | null {
+  if (!COOKIE_SIGNING_KEY) {
+    if (!warnedMissingKey) {
+      warnedMissingKey = true;
+      console.warn(
+        '[ip-rules-cache] COOKIE_SIGNING_KEY not visible to web — internal poll will be rejected and page-layer IP rules fail open',
+      );
+    }
+    return null;
+  }
+  if (!tokenPromise) {
+    tokenPromise = deriveInternalApiToken(COOKIE_SIGNING_KEY);
+  }
+  return tokenPromise;
+}
+
 export async function getActiveIpRules(): Promise<IpRuleLike[]> {
   const now = Date.now();
   if (everSucceeded && now - fetchedAt < TTL_MS) {
@@ -35,14 +62,25 @@ export async function getActiveIpRules(): Promise<IpRuleLike[]> {
 
   inflight = (async () => {
     try {
+      const token = await resolveInternalToken();
+      const headers: Record<string, string> = { accept: 'application/json' };
+      if (token) headers[INTERNAL_TOKEN_HEADER] = token;
       const res = await fetch(`${API_INTERNAL_URL}/api/v1/ip-rules/active`, {
         method: 'GET',
         // Don't let Next's data cache memoize this; we manage the TTL
         // ourselves so admin writes propagate predictably.
         cache: 'no-store',
-        headers: { accept: 'application/json' },
+        headers,
       });
       if (!res.ok) {
+        if (res.status === 403) {
+          // The only loud signal that the shared secret is wrong: the
+          // cache is fail-open, so a 403 otherwise silently degrades
+          // page-layer IP enforcement.
+          console.warn(
+            '[ip-rules-cache] 403 from ip-rules/active — COOKIE_SIGNING_KEY likely missing or mismatched between web and api; page-layer IP enforcement is failing open',
+          );
+        }
         throw new Error(`upstream returned ${res.status}`);
       }
       const body = (await res.json()) as { rules?: IpRuleLike[] };

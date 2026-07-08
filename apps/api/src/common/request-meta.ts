@@ -68,12 +68,13 @@ const PRIVATE_PEER_RULES: IpRuleLike[] = [
  * peer-trust families used by Express's `trust proxy` setting in
  * `main.ts`.
  *
- * Used to gate the internal `GET /api/v1/ip-rules/active` endpoint
- * that the Next.js `proxy.ts` calls so it can mirror the IP allow/
- * deny rules at the page-render layer. The TCP peer address can't
- * be spoofed by `X-Forwarded-For` headers, so this is a stronger
- * boundary than an `X-Internal-Token` shared secret would be (and
- * needs no env var).
+ * One of the two layers `InternalOnlyGuard` requires on the internal
+ * `GET /api/v1/ip-rules/active` endpoint. The TCP peer address can't be
+ * spoofed by `X-Forwarded-For` headers, but peer-trust ALONE is not a
+ * boundary here: the web tier is a blind reverse proxy on the same
+ * bridge, so a proxied internet request has the web container as its
+ * socket peer and would pass this check. That is why the guard also
+ * requires a derived `x-ws-internal-token` (see `internal-only.guard.ts`).
  */
 export function isPrivatePeer(ip: string | undefined | null): boolean {
   if (!ip) return false;

@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { IpRulesController } from './ip-rules.controller.js';
 import { IpRulesService } from './ip-rules.service.js';
 import { IpRuleCacheService } from './ip-rule-cache.service.js';
+import { InternalOnlyGuard } from '../common/internal-only.guard.js';
 
 /**
  * IP allow/deny rules module.
@@ -18,7 +19,7 @@ import { IpRuleCacheService } from './ip-rule-cache.service.js';
  */
 @Module({
   controllers: [IpRulesController],
-  providers: [IpRulesService, IpRuleCacheService],
+  providers: [IpRulesService, IpRuleCacheService, InternalOnlyGuard],
   exports: [IpRulesService, IpRuleCacheService],
 })
 export class IpRulesModule {}

@@ -1,11 +1,16 @@
 import type { NextRequest } from 'next/server';
-import { API_INTERNAL_URL } from './server-api';
+import { INTERNAL_TOKEN_HEADER } from '@weavestream/shared';
+// Import the proxy/edge-safe config module directly rather than the
+// `server-api` re-export, so this module stays free of `next/headers` and
+// friends (keeps it unit-testable and light).
+import { API_INTERNAL_URL } from './api-config';
 import {
   INBOUND_XFF_HEADER,
   RESOLVED_CLIENT_IP_HEADER,
   UNKNOWN_CLIENT_IP,
   getResolvedClientIp,
 } from './client-ip';
+import { isInternalOnlyUpstreamUrl } from './internal-only-paths';
 
 // The one endpoint allowed to receive the display-only raw inbound XFF
 // header. Every other `/api/*` call strips it (see HOP_BY_HOP_HEADERS)
@@ -45,7 +50,29 @@ const HOP_BY_HOP_HEADERS = new Set([
   // default and re-add it (below) only for the whoami endpoint, so its
   // untrusted value can't reach any other handler.
   INBOUND_XFF_HEADER,
+  // The internal-API token is a web→API credential minted server-side by
+  // the ip-rules poller. A browser-supplied value must NEVER transit the
+  // proxy, or a client could smuggle it toward a peer-gated internal
+  // endpoint. Strip it unconditionally here. (WS-028)
+  INTERNAL_TOKEN_HEADER,
 ]);
+
+// RFC 7807 problem+json 404, mirroring the API's ProblemExceptionFilter so
+// a denied internal path is indistinguishable from a genuinely-absent one.
+// `instance` is the PUBLIC request path only — never the internal upstream
+// URL, so `http://api:4000/...` is never disclosed to the client.
+function internalOnlyNotFound(req: NextRequest): Response {
+  const body = JSON.stringify({
+    type: 'https://weavestream.app/problems/404',
+    title: 'Not Found',
+    status: 404,
+    instance: `${req.nextUrl.pathname}${req.nextUrl.search ?? ''}`,
+  });
+  return new Response(body, {
+    status: 404,
+    headers: { 'content-type': 'application/problem+json' },
+  });
+}
 
 export async function proxyToApi(
   req: NextRequest,
@@ -53,6 +80,14 @@ export async function proxyToApi(
 ): Promise<Response> {
   const search = req.nextUrl.search ?? '';
   const url = `${API_INTERNAL_URL}${upstreamPath}${search}`;
+
+  // Deny internal-only endpoints before any header work or upstream fetch.
+  // Checks the final constructed URL (after undici-equivalent path
+  // normalization) so `..` traversal from either the `/api/*` or the
+  // `/health/*` catch-all can't reach a peer-gated route. (WS-028)
+  if (isInternalOnlyUpstreamUrl(url)) {
+    return internalOnlyNotFound(req);
+  }
 
   const outgoing = new Headers();
   for (const [key, value] of req.headers.entries()) {
