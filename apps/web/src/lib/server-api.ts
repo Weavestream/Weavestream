@@ -818,6 +818,21 @@ export type ThrottleBlockEntry = {
   remainingMs: number;
 };
 
+// WS-024 connection diagnostics — mirrors `ConnectionDiagnostics` in
+// `apps/api/src/security/security.service.ts`. Fetched client-side (via
+// `apiFetch`, not `serverApiFetch`) so the request travels the real
+// browser → proxy → API path being diagnosed; see the Security Center
+// client component. No server fetch helper here by design.
+export type ConnectionDiagnostics = {
+  resolvedIp: string;
+  socketPeer: string;
+  peerTrusted: boolean;
+  forwardedForReceived: string | null;
+  inboundForwardedFor: string;
+  trustProxyHops: number;
+  interpretation: string[];
+};
+
 export type SecuritySessionRow = {
   id: string;
   ip: string;

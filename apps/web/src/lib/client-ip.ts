@@ -17,6 +17,31 @@
 
 export const RESOLVED_CLIENT_IP_HEADER = 'x-ws-resolved-client-ip';
 
+// Display-only diagnostic header carrying the *raw* inbound
+// `X-Forwarded-For` chain the edge presented, before `proxy.ts`
+// collapses it to a single sanitized entry. It exists solely so the
+// admin `GET /api/v1/security/whoami` diagnostic can echo "what you
+// sent" alongside "what we resolved". It is NEVER trusted for
+// attribution: `api-proxy.ts` strips it from every upstream request
+// except that one endpoint, and the API only ever reflects it back in
+// the response. See `apps/web/src/lib/api-proxy.ts` and
+// `apps/api/src/security/security.service.ts`.
+export const INBOUND_XFF_HEADER = 'x-ws-inbound-xff';
+
+// Upper bound on the echoed raw chain. A real XFF is a short list of
+// IPs; anything longer is junk or an attempted header-stuffing probe.
+// Mirrors the 500-char User-Agent cap in the API's `request-meta.ts`
+// so a hostile client can't push an unbounded string through the
+// diagnostic channel.
+export const MAX_INBOUND_XFF_LEN = 500;
+
+// Length-bound the raw inbound chain before it is stashed for the
+// diagnostic endpoint. Returns '' for a missing/empty chain.
+export function boundInboundXff(xff: string | null | undefined): string {
+  if (!xff) return '';
+  return xff.slice(0, MAX_INBOUND_XFF_LEN);
+}
+
 // Sentinel used when the edge tier doesn't provide an XFF chain (or
 // `TRUST_PROXY_HOPS=0`). Mirrors the API's `normalizeIp(undefined)`
 // fallback so audit rows and throttler buckets stay consistent.

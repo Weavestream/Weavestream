@@ -1,6 +1,7 @@
 'use client';
 
-import { useMemo, useState, useTransition } from 'react';
+import { useCallback, useEffect, useMemo, useState, useTransition } from 'react';
+import type { ReactNode } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import {
   Btn,
@@ -15,6 +16,7 @@ import {
 import { apiFetch } from '../../../../lib/api';
 import { FormattedDateTime } from '../../../../lib/timezone-context';
 import type {
+  ConnectionDiagnostics,
   EgressBlockRow,
   EgressBlocksResponse,
   LockoutsResponse,
@@ -23,7 +25,13 @@ import type {
   ThrottleBlockEntry,
 } from '../../../../lib/server-api';
 
-type TabId = 'logins' | 'lockouts' | 'blocks' | 'sessions' | 'egress';
+type TabId =
+  | 'logins'
+  | 'lockouts'
+  | 'blocks'
+  | 'sessions'
+  | 'egress'
+  | 'diagnostics';
 
 const TABS: Array<{ id: TabId; label: string; icon: keyof typeof Icon }> = [
   { id: 'logins', label: 'Login activity', icon: 'shield' },
@@ -31,6 +39,7 @@ const TABS: Array<{ id: TabId; label: string; icon: keyof typeof Icon }> = [
   { id: 'blocks', label: 'Rate-limit blocks', icon: 'clock' },
   { id: 'sessions', label: 'Active sessions', icon: 'users' },
   { id: 'egress', label: 'Egress blocks', icon: 'globe' },
+  { id: 'diagnostics', label: 'Connection', icon: 'network' },
 ];
 
 const WINDOW_OPTIONS = [
@@ -104,7 +113,11 @@ export function SecurityCenterClient({
           flexWrap: 'wrap',
         }}
       >
-        <div role="tablist" aria-label="Security center" style={{ display: 'flex', gap: 4 }}>
+        <div
+          role="tablist"
+          aria-label="Security center"
+          style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}
+        >
           {TABS.map((t) => {
             const active = t.id === tab;
             const IconCmp = Icon[t.icon];
@@ -173,8 +186,187 @@ export function SecurityCenterClient({
           />
         )}
         {tab === 'egress' && <EgressPane egress={egress} />}
+        {tab === 'diagnostics' && <DiagnosticsPane />}
       </div>
     </section>
+  );
+}
+
+// ─── Connection diagnostics (WS-024) ───────────────────────────────
+//
+// Unlike every other pane, this data is NOT server-fetched in
+// `page.tsx` and handed down as a prop. It is fetched here, in the
+// browser, via `apiFetch` — deliberately. The whole point of the panel
+// is to show how *this real request* is attributed as it travels the
+// browser → proxy.ts → api-proxy.ts → API path, which a server-side
+// `serverApiFetch` from within the Next.js process would not reproduce.
+function DiagnosticsPane() {
+  const [state, setState] = useState<{
+    loading: boolean;
+    data: ConnectionDiagnostics | null;
+    error: boolean;
+  }>({ loading: true, data: null, error: false });
+
+  const load = useCallback(async () => {
+    setState((s) => ({ ...s, loading: true, error: false }));
+    try {
+      const res = await apiFetch<ConnectionDiagnostics>('/security/whoami');
+      setState({
+        loading: false,
+        data: res.ok ? res.data : null,
+        error: !res.ok || res.data == null,
+      });
+    } catch {
+      // apiFetch rethrows non-abort network errors (proxy/API outage).
+      // Surface the "unavailable" state instead of leaving the pane stuck
+      // loading with an unhandled rejection.
+      setState({ loading: false, data: null, error: true });
+    }
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const d = state.data;
+
+  return (
+    <div style={{ display: 'grid', gap: 16 }}>
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: 12,
+          flexWrap: 'wrap',
+        }}
+      >
+        <p style={{ margin: 0, fontSize: 13, color: 'var(--muted)' }}>
+          How Weavestream attributed this request. Used to verify client-IP
+          resolution behind your proxy topology.
+        </p>
+        <Btn
+          kind="ghost"
+          onClick={() => void load()}
+          disabled={state.loading}
+          title="Re-run"
+          icon={Icon.refresh}
+        >
+          Re-run
+        </Btn>
+      </div>
+
+      {state.loading && <Empty>Resolving this connection…</Empty>}
+      {!state.loading && !d && (
+        <Empty>Connection diagnostics are unavailable right now.</Empty>
+      )}
+
+      {d && (
+        <>
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
+              gap: 12,
+            }}
+          >
+            <DiagRow label="Resolved client IP" value={d.resolvedIp} mono />
+            <DiagRow
+              label="Forwarding trusted"
+              value={
+                <Tag tone={d.peerTrusted ? 'ok' : 'warn'} mono={false}>
+                  {d.peerTrusted ? 'trusted peer' : 'untrusted peer'}
+                </Tag>
+              }
+            />
+            <DiagRow label="Socket peer" value={d.socketPeer} mono />
+            <DiagRow
+              label="TRUST_PROXY_HOPS"
+              value={String(d.trustProxyHops)}
+              mono
+            />
+            <DiagRow
+              label="X-Forwarded-For (as received)"
+              value={d.forwardedForReceived ?? '—'}
+              mono
+            />
+            <DiagRow
+              label="Inbound chain (as you presented it)"
+              value={d.inboundForwardedFor || '—'}
+              mono
+            />
+          </div>
+
+          {d.interpretation.length > 0 && (
+            <div style={{ display: 'grid', gap: 8 }}>
+              <div
+                style={{
+                  fontSize: 12,
+                  fontWeight: 600,
+                  color: 'var(--muted)',
+                  textTransform: 'uppercase',
+                  letterSpacing: 0.4,
+                }}
+              >
+                Interpretation
+              </div>
+              <ul
+                style={{
+                  margin: 0,
+                  paddingLeft: 18,
+                  display: 'grid',
+                  gap: 6,
+                  fontSize: 13,
+                  color: 'var(--text)',
+                }}
+              >
+                {d.interpretation.map((note, i) => (
+                  <li key={i}>{note}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+// Stacked label/value row — reads cleanly on narrow screens (the label
+// sits above the value instead of relying on horizontal space).
+function DiagRow({
+  label,
+  value,
+  mono = false,
+}: {
+  label: string;
+  value: ReactNode;
+  mono?: boolean;
+}) {
+  return (
+    <div
+      style={{
+        display: 'grid',
+        gap: 4,
+        padding: '10px 12px',
+        background: 'var(--panel-2)',
+        border: '1px solid var(--line)',
+        borderRadius: 6,
+        minWidth: 0,
+      }}
+    >
+      <div style={{ fontSize: 12, color: 'var(--muted)' }}>{label}</div>
+      <div
+        style={{
+          fontSize: 13,
+          color: 'var(--text)',
+          fontFamily: mono ? 'var(--mono, monospace)' : undefined,
+          wordBreak: 'break-all',
+        }}
+      >
+        {value}
+      </div>
+    </div>
   );
 }
 

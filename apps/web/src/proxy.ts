@@ -1,8 +1,10 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { matchIpRule } from '@weavestream/shared';
 import {
+  INBOUND_XFF_HEADER,
   RESOLVED_CLIENT_IP_HEADER,
   UNKNOWN_CLIENT_IP,
+  boundInboundXff,
   normalizeClientIp,
   resolveClientIpFromXff,
 } from './lib/client-ip';
@@ -87,6 +89,13 @@ export async function proxy(req: NextRequest) {
   requestHeaders.set(RESOLVED_CLIENT_IP_HEADER, resolvedClientIp);
   requestHeaders.set('x-forwarded-for', resolvedClientIp);
   requestHeaders.delete('x-real-ip');
+  // Stash the *raw* inbound chain (length-bounded) under a dedicated
+  // display-only header for the admin `whoami` diagnostic. `set`
+  // overwrites, so any value a client tried to inject under this name
+  // is discarded and replaced with what the edge actually presented.
+  // `api-proxy.ts` strips this from every upstream call except
+  // `/api/v1/security/whoami`, and it is never trusted for attribution.
+  requestHeaders.set(INBOUND_XFF_HEADER, boundInboundXff(inboundXff));
 
   // Mirror the API's `IpRuleGuard` at the page-render layer so a DENY
   // rule blocks HTML responses too — not just API calls. Without this,

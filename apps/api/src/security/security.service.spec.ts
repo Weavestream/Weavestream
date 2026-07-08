@@ -1,6 +1,28 @@
 import { NotFoundException } from '@nestjs/common';
+import type { Request } from 'express';
 import { SecurityService } from './security.service.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
+
+/**
+ * Minimal Express-request stub with the surface `connectionDiagnostics`
+ * touches: `ip` (already-resolved by Express `trust proxy`), the socket
+ * peer, and the two forwarding headers.
+ */
+function makeReq(args: {
+  ip: string;
+  peer?: string;
+  xff?: string;
+  inboundXff?: string;
+}): Request {
+  const headers: Record<string, string> = {};
+  if (args.xff !== undefined) headers['x-forwarded-for'] = args.xff;
+  if (args.inboundXff !== undefined) headers['x-ws-inbound-xff'] = args.inboundXff;
+  return {
+    ip: args.ip,
+    socket: { remoteAddress: args.peer ?? args.ip },
+    headers,
+  } as unknown as Request;
+}
 
 type AuditCall = Parameters<{ log: (e: unknown) => Promise<void> }['log']>[0];
 
@@ -28,7 +50,13 @@ function makeService(args: {
   }>;
   sessionRows?: Array<Record<string, unknown>>;
   redisStore?: Map<string, { value: string; ttl: number; pttl: number }>;
-  envValues?: { LOCKOUT_MAX_FAILURES?: number; LOCKOUT_WINDOW_MIN?: number };
+  envValues?: {
+    LOCKOUT_MAX_FAILURES?: number;
+    LOCKOUT_WINDOW_MIN?: number;
+    TRUST_PROXY_HOPS?: number;
+    APP_URL?: string;
+    NODE_ENV?: string;
+  };
   sessionUpdate?: jest.Mock;
   sessionFindUnique?: jest.Mock;
 }) {
@@ -111,6 +139,9 @@ function makeService(args: {
     values: {
       LOCKOUT_MAX_FAILURES: args.envValues?.LOCKOUT_MAX_FAILURES ?? 5,
       LOCKOUT_WINDOW_MIN: args.envValues?.LOCKOUT_WINDOW_MIN ?? 15,
+      TRUST_PROXY_HOPS: args.envValues?.TRUST_PROXY_HOPS ?? 1,
+      APP_URL: args.envValues?.APP_URL ?? 'http://localhost:3000',
+      NODE_ENV: args.envValues?.NODE_ENV ?? 'test',
     },
   };
 
@@ -334,5 +365,101 @@ describe('SecurityService.revokeSession', () => {
       entityType: 'Session',
       entityId: 's-1',
     });
+  });
+});
+
+describe('SecurityService.connectionDiagnostics', () => {
+  it('resolves via req.ip and flags a trusted private-bridge peer', () => {
+    const { service } = makeService({});
+    const out = service.connectionDiagnostics(
+      makeReq({
+        ip: '203.0.113.9', // Express already resolved the real client
+        peer: '172.18.0.5', // the web container on the docker bridge
+        xff: '203.0.113.9', // single sanitized entry the web tier emits
+        inboundXff: '203.0.113.9',
+      }),
+    );
+
+    expect(out.resolvedIp).toBe('203.0.113.9');
+    expect(out.socketPeer).toBe('172.18.0.5');
+    expect(out.peerTrusted).toBe(true);
+    expect(out.forwardedForReceived).toBe('203.0.113.9');
+    expect(out.trustProxyHops).toBe(1);
+    // Always-present, non-overclaiming note.
+    expect(out.interpretation[0]).toMatch(/Only the single sanitized resolvedIp/);
+    // No "untrusted peer" note when the peer is on the bridge.
+    expect(out.interpretation.some((n) => /not on the private/i.test(n))).toBe(
+      false,
+    );
+  });
+
+  it('flags an untrusted peer when the request did not arrive via the bridge', () => {
+    const { service } = makeService({});
+    const out = service.connectionDiagnostics(
+      makeReq({
+        ip: '8.8.8.8', // trust proxy did not honor XFF → socket peer
+        peer: '8.8.8.8', // public peer, not the bridge
+        xff: '1.2.3.4', // a value the client tried to forge
+        inboundXff: '1.2.3.4',
+      }),
+    );
+
+    expect(out.peerTrusted).toBe(false);
+    expect(out.resolvedIp).toBe('8.8.8.8');
+    expect(out.interpretation.some((n) => /not on the private/i.test(n))).toBe(
+      true,
+    );
+  });
+
+  it('echoes both raw chains display-only and length-bounds them', () => {
+    const { service } = makeService({});
+    const longChain = Array.from({ length: 100 }, () => '10.0.0.1').join(', ');
+    const out = service.connectionDiagnostics(
+      makeReq({
+        ip: '203.0.113.9',
+        peer: '172.18.0.5',
+        xff: longChain, // e.g. a raw header under direct API exposure
+        inboundXff: longChain,
+      }),
+    );
+
+    // Both echoed header values bounded to the 500-char cap; never used
+    // for attribution (resolvedIp stays the sanitized single entry).
+    expect(out.inboundForwardedFor.length).toBeLessThanOrEqual(500);
+    expect(out.inboundForwardedFor).toBe(longChain.slice(0, 500));
+    expect(out.forwardedForReceived?.length).toBeLessThanOrEqual(500);
+    expect(out.forwardedForReceived).toBe(longChain.slice(0, 500));
+    expect(out.resolvedIp).toBe('203.0.113.9');
+  });
+
+  it('warns when TRUST_PROXY_HOPS=0 collapses attribution to the sentinel', () => {
+    const { service } = makeService({ envValues: { TRUST_PROXY_HOPS: 0 } });
+    const out = service.connectionDiagnostics(
+      makeReq({ ip: '0.0.0.0', peer: '172.18.0.5' }),
+    );
+
+    expect(out.trustProxyHops).toBe(0);
+    expect(out.resolvedIp).toBe('0.0.0.0');
+    expect(out.forwardedForReceived).toBeNull();
+    expect(out.inboundForwardedFor).toBe('');
+    expect(out.interpretation.some((n) => /TRUST_PROXY_HOPS=0/.test(n))).toBe(
+      true,
+    );
+    expect(out.interpretation.some((n) => /0\.0\.0\.0 sentinel/.test(n))).toBe(
+      true,
+    );
+  });
+
+  it('surfaces config-derived topology warnings for a public plain-HTTP APP_URL', () => {
+    const { service } = makeService({
+      envValues: { APP_URL: 'http://portal.example.com' },
+    });
+    const out = service.connectionDiagnostics(
+      makeReq({ ip: '203.0.113.9', peer: '172.18.0.5', xff: '203.0.113.9' }),
+    );
+    // topologyWarnings flags plain HTTP on a public host.
+    expect(out.interpretation.some((n) => /plain HTTP on a public host/.test(n))).toBe(
+      true,
+    );
   });
 });

@@ -43,6 +43,19 @@ export class SecurityController {
     return this.security.activeLockouts();
   }
 
+  /**
+   * Connection diagnostics (WS-024). Returns how *this* request was
+   * attributed — resolved client IP, socket peer, whether forwarding
+   * was trusted, the forwarded chains, and interpretation — so an
+   * operator can verify IP attribution behind their real proxy
+   * topology. See docs/deployment/tls (Verify forged X-Forwarded-For).
+   */
+  @Get('whoami')
+  @RequirePermission('security.read')
+  whoami(@Req() req: Request) {
+    return this.security.connectionDiagnostics(req);
+  }
+
   @Get('throttle-blocks')
   @RequirePermission('security.read')
   async throttleBlocks() {

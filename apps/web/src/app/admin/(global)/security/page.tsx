@@ -138,7 +138,14 @@ function parseWindow(raw: string | undefined): number {
   return Math.min(n, 168);
 }
 
-const VALID_TABS = ['logins', 'lockouts', 'blocks', 'sessions', 'egress'] as const;
+const VALID_TABS = [
+  'logins',
+  'lockouts',
+  'blocks',
+  'sessions',
+  'egress',
+  'diagnostics',
+] as const;
 type TabId = (typeof VALID_TABS)[number];
 
 function parseTab(raw: string | undefined): TabId {

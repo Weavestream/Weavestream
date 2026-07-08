@@ -1,10 +1,17 @@
 import type { NextRequest } from 'next/server';
 import { API_INTERNAL_URL } from './server-api';
 import {
+  INBOUND_XFF_HEADER,
   RESOLVED_CLIENT_IP_HEADER,
   UNKNOWN_CLIENT_IP,
   getResolvedClientIp,
 } from './client-ip';
+
+// The one endpoint allowed to receive the display-only raw inbound XFF
+// header. Every other `/api/*` call strips it (see HOP_BY_HOP_HEADERS)
+// so an untrusted, client-influenced value never reaches a handler that
+// might act on it.
+const INBOUND_XFF_DIAGNOSTIC_PATH = '/api/v1/security/whoami';
 
 // Reverse-proxy an inbound browser request through to the API,
 // rewriting client-IP-bearing headers to a single sanitized entry so
@@ -34,6 +41,10 @@ const HOP_BY_HOP_HEADERS = new Set([
   // The resolved-IP header is an internal marker — never forward it
   // upstream; the API only ever sees the sanitized `x-forwarded-for`.
   RESOLVED_CLIENT_IP_HEADER,
+  // The raw inbound XFF is a display-only diagnostic marker. Strip it by
+  // default and re-add it (below) only for the whoami endpoint, so its
+  // untrusted value can't reach any other handler.
+  INBOUND_XFF_HEADER,
 ]);
 
 export async function proxyToApi(
@@ -60,6 +71,14 @@ export async function proxyToApi(
     'x-forwarded-proto',
     req.nextUrl.protocol.replace(':', '') || 'http',
   );
+
+  // Only the admin whoami diagnostic receives the raw inbound XFF (set by
+  // `proxy.ts`, already length-bounded). It is echoed back for the "what
+  // you presented vs. what we resolved" comparison and never used for
+  // attribution. Every other endpoint had it stripped above.
+  if (upstreamPath === INBOUND_XFF_DIAGNOSTIC_PATH) {
+    outgoing.set(INBOUND_XFF_HEADER, req.headers.get(INBOUND_XFF_HEADER) ?? '');
+  }
 
   const method = req.method.toUpperCase();
   const hasBody = method !== 'GET' && method !== 'HEAD';

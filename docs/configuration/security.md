@@ -112,6 +112,7 @@ Detailed diagnostics moved to authenticated endpoints:
 
 - **Security Center (`/admin/security`)** provides visibility into login events, active lockouts, rate-limit blocks, active sessions, and egress blocks.
 - Access requires `SECURITY_READ` capability (or `SUPER_ADMIN`).
+- **Connection diagnostics** (`/admin/security?tab=diagnostics`, or `GET /api/v1/security/whoami`, same `SECURITY_READ` gate) report how the current request was attributed — resolved client IP, socket peer, whether forwarding was trusted, and topology interpretation. Use it to verify client-IP attribution behind your real proxy; see [Verify forged `X-Forwarded-For` is ignored](/deployment/tls/#verify-forged-x-forwarded-for-is-ignored).
 - **IP rules (`/admin/ip-rules`)** allow global ALLOW/DENY rules for IPv4/CIDR with priority ordering.
 - Managing IP rules requires `IP_RULE_MANAGE` capability.
 - Changes are audited (`security.ip_rule.create`, `security.ip_rule.update`, `security.ip_rule.delete`).

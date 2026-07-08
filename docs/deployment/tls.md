@@ -155,6 +155,34 @@ Then open **Security Center → Audit log** (or query the audit table) and find 
 
 If you instead see `1.2.3.4`, your proxy is not overwriting `X-Forwarded-For`, or `TRUST_PROXY_HOPS` is higher than the number of proxies actually in front of `web`. If you see `0.0.0.0`, `TRUST_PROXY_HOPS=0` is in effect (expected only for an intentional direct-internet deployment). See [Client IP Attribution](/configuration/security/#client-ip-attribution).
 
+### Connection diagnostics endpoint
+
+For a faster check that does not require reading the audit log, an admin with the **View Security Center** (`SECURITY_READ`) capability can call the diagnostics endpoint, which reports how Weavestream attributed **that exact request**:
+
+```bash
+# Reuse the CSRF token + cookie jar from the login test above, and a
+# signed-in admin session cookie. GET needs no CSRF token.
+curl -k -s -b cookies.txt \
+  -H 'X-Forwarded-For: 1.2.3.4' \
+  https://your-domain.com/api/v1/security/whoami | jq
+```
+
+The same view is available in the browser at **Security Center → Connection** (`/admin/security?tab=diagnostics`).
+
+The response includes `resolvedIp` (the value every per-IP control uses), `socketPeer`, `peerTrusted`, `forwardedForReceived`, `inboundForwardedFor` (the raw `X-Forwarded-For` chain the web tier received from its immediate upstream — echoed for comparison, never used for attribution; a healthy edge proxy may already have overwritten a client's forged value before it reached `web`), `trustProxyHops`, and plain-English `interpretation` notes.
+
+**Expected results are topology-specific.** Read them against your actual edge:
+
+| Topology | Expected `resolvedIp` / `inboundForwardedFor` | Meaning |
+|---|---|---|
+| Trusted TLS proxy in front of `web`, `TRUST_PROXY_HOPS=1` (supported) | Both show your **real public IP**; the forged `1.2.3.4` appears nowhere | **Pass.** The edge overwrote `X-Forwarded-For` before it reached `web`. |
+| CDN → edge → `web`, `TRUST_PROXY_HOPS=2` | `inboundForwardedFor` may show a multi-entry chain; `resolvedIp` is the entry two hops from the right | Normal. Differing entries are the forwarding chain, not spoofing. |
+| Direct `curl http://localhost:3000` with no real edge, `TRUST_PROXY_HOPS=1` | Both show `1.2.3.4` | **Negative example — why direct web exposure is unsafe.** The web tier trusted your forged header. |
+
+:::warning
+In that last (direct, no-edge) case the endpoint still reports `peerTrusted: true`, because the API's TCP peer is the `web` container regardless of how `web` was reached. `peerTrusted` reflects only the API↔peer hop — **it cannot tell whether `web` sat behind a trusted edge proxy or was hit directly.** The endpoint's only self-detected hint for that misconfiguration is the config-derived topology note in `interpretation` (echoing the same `[Topology]` boot warnings). The authoritative proof that spoofing is discarded is this test run **from an external machine through your real proxy**, not from `localhost`.
+:::
+
 ## Self-Signed Certificates (Internal)
 
 For internal deployments where Let's Encrypt isn't available:

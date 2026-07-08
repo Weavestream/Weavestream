@@ -1,10 +1,35 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import type { Request } from 'express';
+import { topologyWarnings } from '@weavestream/shared/server';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { RedisService } from '../redis/redis.service.js';
 import { AuditLogService } from '../audit/audit.service.js';
 import { EnvService } from '../config/env.service.js';
 import { StepUpService } from '../auth/step-up/step-up.service.js';
+import { ipOf, isPrivatePeer, normalizeIp } from '../common/request-meta.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
+
+// Wire contract with the web tier: `proxy.ts` stashes the raw inbound
+// `X-Forwarded-For` chain under this header and `api-proxy.ts` forwards
+// it ONLY to `GET /security/whoami` (see apps/web/src/lib/api-proxy.ts).
+// Display-only — never used for attribution. Bound matches the API's
+// 500-char User-Agent cap in `request-meta.ts`.
+const INBOUND_XFF_HEADER = 'x-ws-inbound-xff';
+const MAX_INBOUND_XFF_LEN = 500;
+
+/** Collapse an Express header value (string | string[] | undefined) to
+ * a single string, or null when absent. */
+function headerToString(
+  value: string | string[] | undefined,
+): string | null {
+  if (value == null) return null;
+  return Array.isArray(value) ? value.join(', ') : value;
+}
+
+/** Length-bound an echoed header value; preserves null. */
+function boundHeader(value: string | null): string | null {
+  return value == null ? null : value.slice(0, MAX_INBOUND_XFF_LEN);
+}
 
 /**
  * Read-only Security Center backend.
@@ -406,6 +431,85 @@ export class SecurityService {
   }
 
   // ────────────────────────────────────────────────────────────────
+  // Connection diagnostics (WS-024)
+  // ────────────────────────────────────────────────────────────────
+
+  /**
+   * Reports how this exact request was attributed: the resolved client
+   * IP (the value every per-IP control uses), the raw TCP peer, whether
+   * that peer was trusted, the forwarded chain the API received, the
+   * raw chain the client presented (display-only, forwarded by the web
+   * tier solely for this endpoint), and plain-English interpretation.
+   *
+   * Reuses `ipOf`/`normalizeIp`/`isPrivatePeer` — the same helpers the
+   * lockout / throttle / IP-rule / audit paths use — so this never
+   * drifts from real attribution. `inboundForwardedFor` is untrusted
+   * client data: it is only ever reflected back in this response, never
+   * used in a query, counter key, or rule match.
+   */
+  connectionDiagnostics(req: Request): ConnectionDiagnostics {
+    const resolvedIp = ipOf(req);
+    const socketPeer = normalizeIp(req.socket.remoteAddress ?? null);
+    const peerTrusted = isPrivatePeer(req.socket.remoteAddress);
+    // Both echoed header values are length-bounded: under direct API
+    // exposure or a hand-crafted diagnostic call they can reflect a raw,
+    // unsanitized header rather than the web tier's single entry.
+    const forwardedForReceived = boundHeader(
+      headerToString(req.headers['x-forwarded-for']),
+    );
+    const inboundForwardedFor =
+      boundHeader(headerToString(req.headers[INBOUND_XFF_HEADER])) ?? '';
+    const trustProxyHops = this.env.values.TRUST_PROXY_HOPS;
+
+    const interpretation: string[] = [
+      'Only the single sanitized resolvedIp is used downstream for ' +
+        'lockout, rate-limit, IP-rules, and audit. Any additional entries ' +
+        'in inboundForwardedFor are diagnostic only and are never trusted.',
+    ];
+    if (!peerTrusted) {
+      interpretation.push(
+        "This request's TCP peer was not on the private docker bridge, so " +
+          'forwarded headers were ignored and resolvedIp fell back to the ' +
+          'socket peer. If this is a normal browser request, the API may be ' +
+          'directly exposed. Note: peerTrusted reflects only the API↔peer ' +
+          'hop — for a request arriving through `web` it is always true and ' +
+          'does not prove `web` itself sits behind a trusted edge proxy.',
+      );
+    }
+    if (trustProxyHops === 0) {
+      interpretation.push(
+        'TRUST_PROXY_HOPS=0: the web tier resolves no client IP, so every ' +
+          'request is attributed to the 0.0.0.0 sentinel and per-IP controls ' +
+          '(lockout, rate-limit, IP-rules, audit attribution) are disabled.',
+      );
+    }
+    if (resolvedIp === '0.0.0.0') {
+      interpretation.push(
+        'resolvedIp is the 0.0.0.0 sentinel: no usable client IP was ' +
+          'resolved for this request.',
+      );
+    }
+    // Config-derived topology hints — the same shapes flagged at boot in
+    // the API logs (`topologyWarnings`). This is the only in-endpoint
+    // signal that `web` may be directly exposed, since peerTrusted cannot
+    // see past the web tier. It cannot prove a correctly-configured edge
+    // exists — only the external forged-header runbook test can.
+    for (const warning of topologyWarnings(this.env.values)) {
+      interpretation.push(warning);
+    }
+
+    return {
+      resolvedIp,
+      socketPeer,
+      peerTrusted,
+      forwardedForReceived,
+      inboundForwardedFor,
+      trustProxyHops,
+      interpretation,
+    };
+  }
+
+  // ────────────────────────────────────────────────────────────────
   // Helpers
   // ────────────────────────────────────────────────────────────────
 
@@ -539,6 +643,28 @@ export type EgressBlockRow = {
   resolvedIps: string[];
   reason: string | null;
   matchedCidr: string | null;
+};
+
+export type ConnectionDiagnostics = {
+  /** The IP every per-IP control (lockout, throttle, IP-rules, audit)
+   * attributes this request to. Resolved via `ipOf(req)`. */
+  resolvedIp: string;
+  /** The raw TCP peer the API sees — normally the `web` container. */
+  socketPeer: string;
+  /** Whether the API honored forwarding headers (peer on private
+   * bridge). Reflects only the API↔peer hop; see interpretation. */
+  peerTrusted: boolean;
+  /** `X-Forwarded-For` as the API received it (the single sanitized
+   * entry the web tier emits), or null. */
+  forwardedForReceived: string | null;
+  /** The raw inbound chain the client presented, forwarded display-only
+   * by the web tier for this endpoint. Never used for attribution. */
+  inboundForwardedFor: string;
+  /** Configured `TRUST_PROXY_HOPS`. */
+  trustProxyHops: number;
+  /** Plain-English, non-overclaiming notes about this request's
+   * attribution and (config-derived) deployment topology. */
+  interpretation: string[];
 };
 
 export type ActiveSessionRow = {
