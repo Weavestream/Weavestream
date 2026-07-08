@@ -64,6 +64,7 @@ import { AuthGuard } from './auth/guards/auth.guard.js';
 import { MfaEnrollmentGuard } from './auth/guards/mfa-enrollment.guard.js';
 import { CsrfGuard } from './auth/guards/csrf.guard.js';
 import { UserThrottlerGuard } from './auth/guards/user-throttler.guard.js';
+import { authThrottler } from './auth/guards/auth-throttle.js';
 import { PermissionGuard } from './rbac/permission.guard.js';
 import { StepUpGuard } from './auth/step-up/step-up.guard.js';
 import { ContractorAccessGuard } from './rbac/contractor-access.guard.js';
@@ -127,6 +128,7 @@ const httpSerializers = {
             ttl: 60_000,
             limit: env.values.GLOBAL_RATE_LIMIT_PER_MIN,
           },
+          authThrottler(env.values.AUTH_RATE_LIMIT_PER_MIN),
         ],
         storage: new RedisThrottlerStorage(redis.client),
       }),

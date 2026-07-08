@@ -100,13 +100,13 @@ JWTs are short-lived (15 minutes), so even if a token is used after revocation, 
 
 The login endpoint has two independent protections:
 
-### Per-IP and per-email rate limit
+### Per-(IP, email) rate limit
 
-Default: 5 login attempts per minute, per IP address and per email address independently.
+Default: 5 login attempts per minute per (IP address, email address) pair. Users behind a shared egress IP (e.g. an office NAT) each get their own bucket for their own email; requests without a usable email in the body share a single per-IP bucket.
 
-If either bucket is exhausted, the endpoint returns 429 with a `Retry-After` header.
+When a bucket is exhausted, the endpoint returns 429 with a `Retry-After-auth` header.
 
-Configured via `AUTH_RATE_LIMIT_PER_MIN`.
+Configured via `AUTH_RATE_LIMIT_PER_MIN`. Independent per-IP and per-email limits on *failed* attempts are enforced separately by the account soft-lock below, which also stops single-IP password spraying across many emails.
 
 ### Account soft-lock
 

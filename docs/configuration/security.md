@@ -14,7 +14,7 @@ Most of Weavestream's security hardening is on by default. This page documents t
 | Variable | Default | Effect |
 |---|---|---|
 | `GLOBAL_RATE_LIMIT_PER_MIN` | `600` | Requests per minute per user (authenticated) or per IP (unauthenticated). Raise for high-traffic instances; lower for stricter hardening. |
-| `AUTH_RATE_LIMIT_PER_MIN` | `5` | Login attempts per IP + per email per minute. Keep this low. |
+| `AUTH_RATE_LIMIT_PER_MIN` | `5` | Login attempts per minute per (IP, email) pair. Keep this low. |
 | `LOCKOUT_MAX_FAILURES` | `5` | Failed logins before account soft-lock. |
 | `LOCKOUT_WINDOW_MIN` | `15` | Minutes a locked account remains inaccessible. |
 

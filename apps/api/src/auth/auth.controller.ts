@@ -17,7 +17,12 @@ import { TokenService } from './token.service.js';
 import { CsrfService } from './csrf.service.js';
 import { LoginDto } from './dto/login.dto.js';
 import { MfaVerifyDto } from './dto/mfa.dto.js';
-import { MfaSetupAllowed, Public, SkipCsrf } from '../common/public.decorator.js';
+import {
+  AuthThrottle,
+  MfaSetupAllowed,
+  Public,
+  SkipCsrf,
+} from '../common/public.decorator.js';
 import { AuthedOnly } from '../rbac/require-permission.decorator.js';
 import { CurrentUser, type AuthedUser } from '../common/current-user.decorator.js';
 import {
@@ -57,7 +62,7 @@ export class AuthController {
   }
 
   @Public()
-  @Throttle({ global: { limit: 5, ttl: 60_000 } })
+  @AuthThrottle()
   @Post('login')
   @HttpCode(HttpStatus.OK)
   async login(

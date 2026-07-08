@@ -90,7 +90,7 @@ Advanced; the defaults follow OWASP guidance and rarely need tuning.
 | Variable | Default | Notes |
 |---|---|---|
 | `GLOBAL_RATE_LIMIT_PER_MIN` | `600` | Requests per minute per authenticated user ID (falls back to client IP for unauthenticated requests). |
-| `AUTH_RATE_LIMIT_PER_MIN` | `5` | Login attempts per minute, per IP and per email. |
+| `AUTH_RATE_LIMIT_PER_MIN` | `5` | Login attempts per minute, per (IP, email) pair. |
 | `LOCKOUT_MAX_FAILURES` | `5` | Failed login attempts before account soft-lock. |
 | `LOCKOUT_WINDOW_MIN` | `15` | Soft-lock duration in minutes. |
 
