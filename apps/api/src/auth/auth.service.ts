@@ -73,8 +73,12 @@ export class AuthService {
     }
 
     const user = await this.prisma.user.findUnique({ where: { email: email.toLowerCase() } });
-    const ok =
-      !!user && user.isActive && (await this.passwords.verify(user.passwordHash, password));
+    // WS-025: always spend one Argon2 verification, even for non-existent,
+    // inactive, or pending-invite accounts, so response latency does not
+    // reveal whether an email maps to a valid active account.
+    const hash = user?.passwordHash ?? (await this.passwords.dummyHash());
+    const verified = await this.passwords.verify(hash, password);
+    const ok = !!user && user.isActive && !!user.passwordHash && verified;
 
     if (!ok) {
       await this.lockout.recordFailure(ip, email);

@@ -20,6 +20,14 @@ export default [
   },
   ...next,
   {
+    // Required once several apps' configs load in one ESLint process (the
+    // IDE server): the parser refuses to infer a root when multiple
+    // candidates exist. https://tseslint.com/parser-tsconfigrootdir
+    languageOptions: {
+      parserOptions: { tsconfigRootDir: import.meta.dirname },
+    },
+  },
+  {
     files: ['**/*.ts', '**/*.tsx'],
     rules: {
       '@typescript-eslint/no-explicit-any': 'off',

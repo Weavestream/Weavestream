@@ -363,3 +363,125 @@ describe('AuthService.rotateRefresh', () => {
     });
   });
 });
+
+const DUMMY_HASH = '$argon2id$dummy';
+
+function makeLoginService(userRow: Record<string, unknown> | null) {
+  const prisma = {
+    user: {
+      findUnique: jest.fn().mockResolvedValue(userRow),
+      update: jest.fn().mockResolvedValue({}),
+    },
+    session: {
+      create: jest.fn().mockResolvedValue({ id: 's-new' }),
+    },
+  };
+  const passwords = {
+    verify: jest.fn().mockResolvedValue(false),
+    hash: jest.fn(),
+    dummyHash: jest.fn().mockResolvedValue(DUMMY_HASH),
+  };
+  const tokens = {
+    issueAccessToken: jest.fn().mockResolvedValue('access'),
+    mintRefreshToken: jest.fn().mockReturnValue({ token: 'refresh', hash: 'refresh-hash' }),
+  };
+  const lockout = {
+    isLocked: jest.fn().mockResolvedValue(false),
+    recordFailure: jest.fn().mockResolvedValue(undefined),
+    clear: jest.fn().mockResolvedValue(undefined),
+  };
+  const audit = { log: jest.fn().mockResolvedValue(undefined) };
+  const svc = new AuthService(
+    prisma as never,
+    passwords as never,
+    tokens as never,
+    {} as never,
+    {} as never,
+    lockout as never,
+    {} as never,
+    { values: { SESSION_MAX_AGE_DAYS: 30 } } as never,
+    audit as never,
+    {} as never,
+  );
+  return { svc, prisma, passwords, lockout, audit };
+}
+
+// WS-025: every login attempt must spend one Argon2 verification so latency
+// cannot distinguish valid active accounts from anything else.
+describe('AuthService.login timing equalization', () => {
+  it('runs verify against the dummy hash when no user exists', async () => {
+    const { svc, passwords } = makeLoginService(null);
+
+    await expect(
+      svc.login('nobody@example.com', 'guess', '127.0.0.1', 'jest'),
+    ).rejects.toBeInstanceOf(UnauthorizedException);
+
+    expect(passwords.dummyHash).toHaveBeenCalledTimes(1);
+    expect(passwords.verify).toHaveBeenCalledTimes(1);
+    expect(passwords.verify).toHaveBeenCalledWith(DUMMY_HASH, 'guess');
+  });
+
+  it('runs verify against the real hash for an inactive user', async () => {
+    const { svc, passwords } = makeLoginService({
+      id: 'u-1',
+      isActive: false,
+      passwordHash: 'real-hash',
+    });
+
+    await expect(
+      svc.login('u@example.com', 'guess', '127.0.0.1', 'jest'),
+    ).rejects.toBeInstanceOf(UnauthorizedException);
+
+    expect(passwords.verify).toHaveBeenCalledWith('real-hash', 'guess');
+  });
+
+  it('runs verify against the dummy hash for a pending-invite user (null passwordHash)', async () => {
+    const { svc, passwords } = makeLoginService({
+      id: 'u-1',
+      isActive: true,
+      passwordHash: null,
+    });
+
+    await expect(
+      svc.login('u@example.com', 'guess', '127.0.0.1', 'jest'),
+    ).rejects.toBeInstanceOf(UnauthorizedException);
+
+    expect(passwords.verify).toHaveBeenCalledWith(DUMMY_HASH, 'guess');
+  });
+
+  it('rejects a pending-invite user even if verify returns true', async () => {
+    const { svc, passwords } = makeLoginService({
+      id: 'u-1',
+      isActive: true,
+      passwordHash: null,
+    });
+    passwords.verify.mockResolvedValue(true);
+
+    await expect(
+      svc.login('u@example.com', 'guess', '127.0.0.1', 'jest'),
+    ).rejects.toBeInstanceOf(UnauthorizedException);
+  });
+
+  it('still logs in a valid active user', async () => {
+    const { svc, passwords, lockout } = makeLoginService({
+      id: 'u-1',
+      email: 'u@example.com',
+      name: 'U',
+      role: 'OPERATOR',
+      isActive: true,
+      passwordHash: 'real-hash',
+      mfaEnforcementCompletedAt: new Date(),
+      mfaEnabled: false,
+      uiTheme: 'SYSTEM',
+      uiAccent: 'BLUE',
+    });
+    passwords.verify.mockResolvedValue(true);
+
+    const out = await svc.login('u@example.com', 'correct', '127.0.0.1', 'jest');
+
+    expect(passwords.verify).toHaveBeenCalledWith('real-hash', 'correct');
+    expect(passwords.dummyHash).not.toHaveBeenCalled();
+    expect(out.user.id).toBe('u-1');
+    expect(lockout.clear).toHaveBeenCalled();
+  });
+});
