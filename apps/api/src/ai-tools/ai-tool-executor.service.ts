@@ -110,6 +110,11 @@ export class AiToolExecutorService {
       };
     }
 
+    // One string for ALL of this tool's unavailable outcomes (not-found,
+    // denied, internal error) — outcomes must stay indistinguishable to
+    // the model even when a spec overrides the wording.
+    const unavailableMessage = spec.unavailableMessage ?? AI_TOOL_UNAVAILABLE_MESSAGE;
+
     // 2. Validate BEFORE the budget — malformed calls are free.
     const parsed = spec.inputSchema.safeParse(stripNullArgs(rawArgs));
     if (!parsed.success) {
@@ -157,7 +162,7 @@ export class AiToolExecutorService {
         );
         return {
           ok: false,
-          error: AI_TOOL_UNAVAILABLE_MESSAGE,
+          error: unavailableMessage,
           errorCode: 'unavailable',
         };
       }
@@ -179,7 +184,7 @@ export class AiToolExecutorService {
           );
           return {
             ok: false,
-            error: AI_TOOL_UNAVAILABLE_MESSAGE,
+            error: unavailableMessage,
             errorCode: 'unavailable',
           };
         }
@@ -218,7 +223,7 @@ export class AiToolExecutorService {
       await this.auditInvocation(spec.name, toolCallId, ctx, companyId, outcome, argsSha256);
       return {
         ok: false,
-        error: AI_TOOL_UNAVAILABLE_MESSAGE,
+        error: unavailableMessage,
         errorCode: 'unavailable',
       };
     }

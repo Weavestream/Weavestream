@@ -244,6 +244,61 @@ describe('AiToolExecutorService.executeRead', () => {
     expect(serialized).not.toContain(ARTICLE_ID.slice(0, 8));
   });
 
+  it('a spec unavailableMessage overrides the generic string IDENTICALLY for not-found and denied', async () => {
+    expect(AI_TOOL_SPECS.find_related_items.unavailableMessage).toBeDefined();
+    const makeFindService = (err: Error) => {
+      const tool = {
+        spec: AI_TOOL_SPECS.find_related_items,
+        resolveCompanyId: jest.fn(async () => 'self-scoped' as const),
+        execute: jest.fn(async () => {
+          throw err;
+        }),
+      };
+      const registry = {
+        get: () => AI_TOOL_SPECS.find_related_items,
+        getReadTool: () => tool,
+      };
+      const budget = {
+        consume: jest.fn(async () => ({ allowed: true, retryAfterSeconds: 0 })),
+      };
+      const permissions = { can: jest.fn(async () => ({ allowed: true })) };
+      const audit = { log: jest.fn(async (_entry: unknown) => {}) };
+      return {
+        svc: new AiToolExecutorService(
+          registry as any,
+          budget as any,
+          permissions as any,
+          audit as any,
+        ),
+        audit,
+      };
+    };
+
+    const nf = makeFindService(new NotFoundException());
+    const rNotFound = await nf.svc.executeRead(
+      'tc-1',
+      'find_related_items',
+      { query: 'ACM-DB01' },
+      execCtx(),
+    );
+    const fb = makeFindService(new ForbiddenException());
+    const rDenied = await fb.svc.executeRead(
+      'tc-2',
+      'find_related_items',
+      { query: 'ACM-DB01' },
+      execCtx(),
+    );
+
+    if (rNotFound.ok || rDenied.ok) throw new Error('unreachable');
+    expect(rNotFound.error).toBe(AI_TOOL_SPECS.find_related_items.unavailableMessage);
+    expect(rDenied.error).toBe(rNotFound.error);
+    expect(rNotFound.errorCode).toBe('unavailable');
+    expect(rDenied.errorCode).toBe('unavailable');
+    // Audit still records the true outcome even though the strings match.
+    expect(auditAfter(nf.audit)['outcome']).toBe('not_found');
+    expect(auditAfter(fb.audit)['outcome']).toBe('denied');
+  });
+
   it('every exit path writes exactly one audit row', async () => {
     // Sampled across the six paths above via auditAfter's
     // toHaveBeenCalledTimes(1); this case covers the happy path twice

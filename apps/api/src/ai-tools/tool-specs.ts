@@ -55,6 +55,13 @@ export interface AiToolSpec {
   permission: Action | null;
   /** Why the permission model above is sufficient. Documentation only. */
   scopeNote: string;
+  /**
+   * Optional replacement for the generic unavailable message on failed
+   * executions. MUST be one static string covering not-found AND denied
+   * alike — it may steer the model's fallback behavior, but must never
+   * let it (or the persisted DTO) distinguish absence from denial.
+   */
+  unavailableMessage?: string;
   /** Always a Zod object schema — enforced by the catalog converter. */
   inputSchema: z.ZodTypeAny;
   /** Read tools validate outputs defensively; proposal tools have none. */
@@ -141,9 +148,15 @@ export const AI_TOOL_SPECS: Record<AiToolName, AiToolSpec> = {
     mode: AI_TOOL_MODES.find_related_items,
     permission: null,
     scopeNote:
-      'Resolves through SearchService under the actor tenant scope, requires an exact ',
-      'eligible entity-name match, then reuses the relation tool’s source-row and ',
+      'Resolves through SearchService under the actor tenant scope, requires an exact ' +
+      'eligible entity-name match, then reuses the relation tool’s source-row and ' +
       'counterpart permission checks before returning links.',
+    // Without this steer, the model's natural recovery from a failed
+    // lookup is a plain `search` next round, presented as relationships.
+    unavailableMessage:
+      'No single exact-name match was found, or it is not accessible. Do not ' +
+      'present search results as related items — say the relationships could ' +
+      'not be verified and ask the user for the exact item name.',
     inputSchema: findRelatedItemsToolInputSchema,
     outputSchema: findRelatedItemsToolOutputSchema,
     summarize: (_args, output) => {
