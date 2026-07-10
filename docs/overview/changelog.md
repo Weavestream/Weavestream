@@ -13,6 +13,45 @@ All notable changes to Weavestream are documented here. The format follows [Keep
 
 ## [Unreleased]
 
+## [1.8.14] - 2026-07-10
+
+### Added
+
+- **AI agent read tools (WS-030).** The chat assistant can now call dedicated `search`, `get_article`, `get_related_items`, and `get_company_summary` tools during streaming chat, with a real-time "Searching..." indicator in the UI. Tool access is scoped server-side, hourly per-user/per-conversation usage budgets are enforced, and `Article.revision` now backs optimistic-concurrency checks so an AI-proposed edit cannot silently clobber a change made elsewhere in the meantime.
+- **Connection diagnostics endpoint.** A new `/api/v1/security/whoami` endpoint and matching Security Center tab show how a request's IP and headers were attributed through the proxy, to help verify reverse-proxy/topology configuration. Raw headers are surfaced for display only and are never used in auth decisions.
+- **Opt-in AI access to private-network endpoints.** Admins can enable `allowPrivateNetwork` under AI settings to reach self-hosted model providers (e.g. Ollama, LM Studio) on the local network. Access is limited to a curated `ADMIN_PRIVATE_ENDPOINT_CIDRS` allowlist rather than a broad SSRF-protection bypass, and cloud metadata/link-local ranges remain blocked.
+- **Broader upload file type support.** HEIF, EML, and a legacy JPG alias are now accepted, with server-side and client-side MIME lists kept in sync by a new regression test.
+
+### Changed
+
+- **Global access permissions simplified.** `requireNonExpiredMembership` was replaced with a single `globalAccess` policy; the "operator" role now defaults to global access, overridable by specific company memberships. The user management UI clarifies how overlapping permissions are displayed.
+- **Auth rate limiting now keys on IP + email pairs**, so brute-force protection on login no longer locks out unrelated users sharing a network with an attacker targeting a different account.
+- **AI tool failures can now carry tool-specific guidance messages** shown to the model, while `not_found` and `denied` outcomes remain indistinguishable from each other in tool responses to avoid leaking existence information.
+- **API error handling and metadata fetching refactored.** Error types/constants now come from a shared client-safe module; metadata generation degrades gracefully during backend outages, and the global error boundary distinguishes backend-unavailable from rate-limited responses.
+- **Email settings test form layout improved on mobile.**
+
+### Fixed
+
+- **Folder moves now validate the destination parent.** Moving a folder checks that the new parent exists in the same company and is not archived, closing a gap that allowed folders to be relocated across company or archive boundaries.
+- **Invite tokens are now enforced single-use at the database level**, using a conditional update with explicit `consumedAt`/`expiresAt` checks instead of a check-then-act pattern, closing a race window that could allow one invite to be redeemed twice.
+- **Orphaned upload directories are now cleaned up.** A new `upload_reaper` worker sweep removes filesystem directories left behind by uploads that started but were never confirmed, based on configurable age thresholds.
+
+### Security
+
+- **Encrypted blobs are now bound to their identity via AEAD.** The AES-256-GCM envelope (format version bumped to `0x02`) includes Additional Authenticated Data derived from tenant, record, and field context, so a ciphertext copied from one record to another fails to decrypt instead of decrypting into the wrong context. Legacy `0x01` blobs are migrated transparently via `reencryptIfStale`.
+- **Content Security Policy tightened for proxied images and objects.**
+- **Browser-executable MIME types are rejected in upload configuration.** The `ALLOWED_UPLOAD_MIME` environment variable is validated at boot to reject types like HTML and SVG that can execute scripts when rendered inline.
+- **Backup and export downloads now send `X-Content-Type-Options: nosniff`.**
+- **Alert recipient lists are capped to prevent amplification (WS-031).** A shared `MAX_ALERT_RECIPIENTS` limit is enforced by both schema validation and a fail-closed backstop in `EmailService`, with clearer UI messaging when a recipient list is rejected.
+- **Password changes now have brute-force protection.** A per-user lockout in `LockoutService`, enforced by `MeService` with request throttling and audit logging, mitigates attempts to grind the current password of an already-compromised session.
+- **Refresh token endpoint is now rate limited** to 20 requests per minute per IP.
+- **Tag and search pagination offsets are capped** at 10,000 to prevent expensive O(n) scans and CPU-exhaustion attacks via deep pagination.
+- **Alert emails no longer render untrusted HTML**, removing an HTML-injection path into recipients' mail clients.
+- **IP rules endpoint now requires a multi-layered internal guard.** The web tier's polling of the active IP ruleset now requires both a private TCP peer and a shared secret derived from `COOKIE_SIGNING_KEY`, with a 404 fallback for unauthorized access at the proxy layer, closing an SSRF/smuggling path to internal APIs.
+- **Image processing now gates against decompression bombs (WS-027).** Extreme-dimension images are rejected before decode, thumbnail generation is bounded by a concurrency semaphore, and oversized images are filtered safely out of PDF exports.
+- **Password verification timing is now equalized.** Login attempts against non-existent or inactive accounts run against a dummy Argon2 hash so response latency no longer reveals account existence.
+- **Asset purging now enforces server-side archive requirements.** Permanent deletion requires re-authentication and a strict server-side check that only archived items are removed, with UI handling for mixed filtered/active selections.
+
 ## [1.8.13] - 2026-07-03
 
 ### Fixed
