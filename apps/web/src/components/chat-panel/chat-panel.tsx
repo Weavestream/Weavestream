@@ -630,9 +630,7 @@ function AssistantMarkdown({ text }: { text: string }) {
       <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkChatReference]}
         components={{
-          a: ({ node: _n, ...props }) => (
-            <a {...props} target="_blank" rel="noopener noreferrer" />
-          ),
+          a: ({ node: _n, ...props }) => <a {...props} />,
         }}
       >
         {text}
