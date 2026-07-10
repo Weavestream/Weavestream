@@ -37,7 +37,12 @@ export const searchQuerySchema = z.object({
    */
   includeArchived: z.boolean().default(false),
   limit: z.number().int().min(1).max(50).default(10),
-  offset: z.number().int().min(0).default(0),
+  /**
+   * Capped to bound deep-pagination cost: a large `OFFSET` forces Postgres
+   * into an O(n) scan-and-discard, so an attacker could pin DB CPU with a
+   * tiny request. Real depth should move to keyset pagination.
+   */
+  offset: z.number().int().min(0).max(10_000).default(0),
 });
 
 export type SearchQuery = z.infer<typeof searchQuerySchema>;

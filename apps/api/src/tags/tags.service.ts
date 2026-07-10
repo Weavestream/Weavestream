@@ -39,6 +39,12 @@ export interface SerializedTag {
 
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 200;
+/**
+ * A large `OFFSET` forces Postgres into an O(n) scan-and-discard, so an
+ * unbounded offset lets any authed user pin DB CPU with a tiny request.
+ * Cap it; real depth should move to keyset pagination.
+ */
+const MAX_OFFSET = 10_000;
 
 /**
  * Tags are global. Reads are open to every authenticated user; rename and
@@ -58,7 +64,7 @@ export class TagsService {
 
   async list(options: ListTagsOptions = {}): Promise<SerializedTag[]> {
     const limit = clampLimit(options.limit);
-    const offset = options.offset && options.offset > 0 ? options.offset : 0;
+    const offset = clampOffset(options.offset);
     const q = options.q?.trim();
     const where: Prisma.TagWhereInput = q
       ? { nameLower: { contains: q.toLowerCase() } }
@@ -240,6 +246,12 @@ function serialize(row: Tag): SerializedTag {
 function clampLimit(raw: number | undefined): number {
   if (!raw || raw <= 0) return DEFAULT_LIMIT;
   if (raw > MAX_LIMIT) return MAX_LIMIT;
+  return raw;
+}
+
+function clampOffset(raw: number | undefined): number {
+  if (!raw || raw <= 0) return 0;
+  if (raw > MAX_OFFSET) return MAX_OFFSET;
   return raw;
 }
 
