@@ -18,6 +18,7 @@ import {
   type UpdateMeInput,
   type UserUiPreferencesUpdate,
 } from '@weavestream/shared';
+import { Throttle } from '@nestjs/throttler';
 import { MeService } from './me.service.js';
 import { CurrentUser, type AuthedUser } from '../common/current-user.decorator.js';
 import { AuthedOnly } from '../rbac/require-permission.decorator.js';
@@ -55,6 +56,11 @@ export class MeController {
 
   @Post('change-password')
   @HttpCode(HttpStatus.OK)
+  // Edge-level cap on the current-password re-check, parity with the
+  // login / MFA / step-up endpoints (the service also enforces a
+  // per-user lockout counter). Defends against a stolen live session
+  // grinding the password to set a new one for persistence.
+  @Throttle({ global: { limit: 10, ttl: 60_000 } })
   async changePassword(
     @CurrentUser() user: AuthedUser,
     @Body(new ZodBody(changePasswordSchema)) dto: ChangePasswordInput,

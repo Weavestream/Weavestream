@@ -1,5 +1,7 @@
 import {
   BadRequestException,
+  HttpException,
+  HttpStatus,
   Injectable,
   NotFoundException,
   UnauthorizedException,
@@ -14,6 +16,7 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { PasswordService } from '../auth/password.service.js';
 import { MfaBackupCodeService } from '../auth/mfa-backup-code.service.js';
+import { LockoutService } from '../auth/lockout.service.js';
 import { AuditLogService } from '../audit/audit.service.js';
 import {
   accentFromDb,
@@ -29,6 +32,7 @@ export class MeService {
     private readonly prisma: PrismaService,
     private readonly passwords: PasswordService,
     private readonly backupCodes: MfaBackupCodeService,
+    private readonly lockout: LockoutService,
     private readonly audit: AuditLogService,
   ) {}
 
@@ -205,11 +209,42 @@ export class MeService {
     input: ChangePasswordInput,
     meta: { ip: string; userAgent: string },
   ) {
+    // Brute-force protection on the current-password re-check. A live but
+    // non-privileged session (stolen/left-open cookie) must not be able to
+    // grind the password and set a new one for persistence. Dedicated
+    // per-user counter, decoupled from the login bucket, mirrors
+    // StepUpService — grinding here never locks the victim out of sign-in.
+    if (await this.lockout.isChangePasswordLocked(actor.id)) {
+      throw new HttpException(
+        'Too many failed attempts. Try again later.',
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
+
     const user = await this.prisma.user.findUnique({ where: { id: actor.id } });
     if (!user) throw new NotFoundException();
 
     const ok = await this.passwords.verify(user.passwordHash, input.currentPassword);
-    if (!ok) throw new UnauthorizedException('Current password is incorrect');
+    if (!ok) {
+      await this.lockout.recordChangePasswordFailure(actor.id);
+      await this.audit.log({
+        actorId: actor.id,
+        action: 'user.password.change.failed',
+        entityType: 'User',
+        entityId: actor.id,
+        ip: meta.ip,
+        userAgent: meta.userAgent,
+        before: null,
+        // The opaque session row id (not a bearer credential — clients
+        // present a signed JWT / hashed refresh token, never this uuid)
+        // pinpoints which session is grinding, so an admin can revoke
+        // exactly the compromised cookie. See §2 note in CLAUDE.md.
+        after: { sessionId: actor.sessionId },
+      });
+      throw new UnauthorizedException('Current password is incorrect');
+    }
+
+    await this.lockout.clearChangePasswordFailures(actor.id);
 
     if (input.currentPassword === input.newPassword) {
       throw new BadRequestException('New password must differ from current password');

@@ -48,8 +48,20 @@ function makeService(
     prisma as never,
     { verify: jest.fn(), hash: jest.fn() } as never,
     { replaceForUser: jest.fn() } as never,
+    makeLockout() as never,
     audit as never,
   );
+}
+
+// Change-password lockout is irrelevant to updatePreferences /
+// regenerateMfaBackupCodes; a permissive stub (never locked, no-op
+// record/clear) satisfies the constructor.
+function makeLockout(): unknown {
+  return {
+    isChangePasswordLocked: jest.fn().mockResolvedValue(false),
+    recordChangePasswordFailure: jest.fn().mockResolvedValue(undefined),
+    clearChangePasswordFailures: jest.fn().mockResolvedValue(undefined),
+  };
 }
 
 describe('MeService.updatePreferences', () => {
@@ -119,6 +131,120 @@ describe('MeService.updatePreferences', () => {
   });
 });
 
+describe('MeService.changePassword', () => {
+  function makeChangePasswordPrisma() {
+    return {
+      user: {
+        findUnique: jest
+          .fn()
+          .mockResolvedValue({ id: ACTOR.id, passwordHash: 'stored-hash' }),
+        update: jest.fn().mockResolvedValue(undefined),
+      },
+      session: { updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
+      $transaction: jest.fn().mockImplementation(async (cb: (tx: unknown) => unknown) =>
+        cb({
+          user: { update: jest.fn().mockResolvedValue(undefined) },
+          session: { updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
+        }),
+      ),
+    };
+  }
+
+  it('rejects with 429 when the change-password lockout is engaged', async () => {
+    const prisma = makeChangePasswordPrisma();
+    const audit = makeAudit();
+    const passwords = { verify: jest.fn(), hash: jest.fn() };
+    const lockout = {
+      isChangePasswordLocked: jest.fn().mockResolvedValue(true),
+      recordChangePasswordFailure: jest.fn(),
+      clearChangePasswordFailures: jest.fn(),
+    };
+    const svc = new MeService(
+      prisma as never,
+      passwords as never,
+      { replaceForUser: jest.fn() } as never,
+      lockout as never,
+      audit as never,
+    );
+
+    await expect(
+      svc.changePassword(
+        ACTOR,
+        { currentPassword: 'a', newPassword: 'b' } as never,
+        META,
+      ),
+    ).rejects.toMatchObject({ status: 429 });
+    // Short-circuits before touching the password or the DB.
+    expect(passwords.verify).not.toHaveBeenCalled();
+    expect(prisma.user.findUnique).not.toHaveBeenCalled();
+  });
+
+  it('records a failure and audits when the current password is wrong', async () => {
+    const prisma = makeChangePasswordPrisma();
+    const audit = makeAudit();
+    const passwords = { verify: jest.fn().mockResolvedValue(false), hash: jest.fn() };
+    const lockout = {
+      isChangePasswordLocked: jest.fn().mockResolvedValue(false),
+      recordChangePasswordFailure: jest.fn().mockResolvedValue(undefined),
+      clearChangePasswordFailures: jest.fn().mockResolvedValue(undefined),
+    };
+    const svc = new MeService(
+      prisma as never,
+      passwords as never,
+      { replaceForUser: jest.fn() } as never,
+      lockout as never,
+      audit as never,
+    );
+
+    await expect(
+      svc.changePassword(
+        ACTOR,
+        { currentPassword: 'wrong', newPassword: 'b' } as never,
+        META,
+      ),
+    ).rejects.toMatchObject({ status: 401 });
+    expect(lockout.recordChangePasswordFailure).toHaveBeenCalledWith(ACTOR.id);
+    expect(lockout.clearChangePasswordFailures).not.toHaveBeenCalled();
+    expect(audit.log).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'user.password.change.failed' }),
+    );
+  });
+
+  it('clears failures on a successful change', async () => {
+    const prisma = makeChangePasswordPrisma();
+    const audit = makeAudit();
+    const passwords = {
+      verify: jest.fn().mockResolvedValue(true),
+      hash: jest.fn().mockResolvedValue('new-hash'),
+    };
+    const lockout = {
+      isChangePasswordLocked: jest.fn().mockResolvedValue(false),
+      recordChangePasswordFailure: jest.fn().mockResolvedValue(undefined),
+      clearChangePasswordFailures: jest.fn().mockResolvedValue(undefined),
+    };
+    const svc = new MeService(
+      prisma as never,
+      passwords as never,
+      { replaceForUser: jest.fn() } as never,
+      lockout as never,
+      audit as never,
+    );
+
+    const out = await svc.changePassword(
+      ACTOR,
+      { currentPassword: 'right', newPassword: 'different' } as never,
+      META,
+    );
+
+    expect(out).toEqual({ ok: true });
+    expect(lockout.clearChangePasswordFailures).toHaveBeenCalledWith(ACTOR.id);
+    expect(lockout.recordChangePasswordFailure).not.toHaveBeenCalled();
+    expect(audit.log).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'user.password.change' }),
+    );
+  });
+});
+
 describe('MeService.regenerateMfaBackupCodes', () => {
   it('replaces existing codes and audits the one-time return', async () => {
     const prisma = {
@@ -137,6 +263,7 @@ describe('MeService.regenerateMfaBackupCodes', () => {
       prisma as never,
       { verify: jest.fn(), hash: jest.fn() } as never,
       backupCodes as never,
+      makeLockout() as never,
       audit as never,
     );
 

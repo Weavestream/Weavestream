@@ -34,6 +34,8 @@ import { UsersModule } from '../users/users.module.js';
     // Exported so the globally-registered StepUpGuard (app.module) and
     // SecurityService (revoke cleanup) can inject it.
     StepUpService,
+    // Exported so MeService can enforce the change-password lockout.
+    LockoutService,
   ],
 })
 export class AuthModule {}

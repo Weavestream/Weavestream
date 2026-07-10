@@ -25,6 +25,7 @@ export const AUDIT_ACTIONS = {
     roleChange: 'user.role.change',
     deactivate: 'user.deactivate',
     passwordChange: 'user.password.change',
+    passwordChangeFailed: 'user.password.change.failed',
     mfaReset: 'user.mfa.reset',
     inviteCreated: 'user.invite.created',
     inviteAccepted: 'user.invite.accepted',

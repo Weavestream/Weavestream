@@ -71,4 +71,34 @@ export class LockoutService {
   async clearMfaFailures(userId: string): Promise<void> {
     await this.redis.client.del(this.mfaKey(userId));
   }
+
+  // ── Dedicated change-password failure counter ───────────────────────
+  // Keyed on userId alone, in its own namespace. Change-password re-checks
+  // the current password against an already-authenticated session, so the
+  // user is the right principal — never IP or email. A separate namespace
+  // (out of the shared login `email` bucket) means grinding the current
+  // password on this endpoint cannot lock the legitimate user out of normal
+  // sign-in. Mirrors StepUpService's per-user counter.
+
+  private changePasswordKey(userId: string): string {
+    return `changepw:fail:${userId}`;
+  }
+
+  async isChangePasswordLocked(userId: string): Promise<boolean> {
+    const hits = await this.redis.client.get(this.changePasswordKey(userId));
+    return parseInt(hits ?? '0', 10) >= this.env.values.LOCKOUT_MAX_FAILURES;
+  }
+
+  async recordChangePasswordFailure(userId: string): Promise<void> {
+    const windowSec = this.env.values.LOCKOUT_WINDOW_MIN * 60;
+    const key = this.changePasswordKey(userId);
+    const multi = this.redis.client.multi();
+    multi.incr(key);
+    multi.expire(key, windowSec);
+    await multi.exec();
+  }
+
+  async clearChangePasswordFailures(userId: string): Promise<void> {
+    await this.redis.client.del(this.changePasswordKey(userId));
+  }
 }
