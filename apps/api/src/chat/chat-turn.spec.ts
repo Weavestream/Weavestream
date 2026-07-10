@@ -3,7 +3,6 @@ import {
   buildTurnContext,
   estimateTokens,
   inferToolIntentPrelude,
-  isExplicitNamedRelationshipQuestion,
   planBudget,
   resolveTurnTools,
   synthesizeActionHistory,
@@ -151,20 +150,6 @@ describe('resolveTurnTools', () => {
     ]);
   });
 
-  it('forces the compound relationship resolver for an explicitly named entity', () => {
-    const r = resolveTurnTools({
-      hasCompany: true,
-      targetArticleRetained: true,
-      intent: 'question',
-      forceNamedRelationshipLookup: true,
-    });
-    expect(r.toolChoice).toEqual({
-      type: 'function',
-      function: { name: 'find_related_items' },
-    });
-    expect(r.tools.map((t) => t.function.name)).toEqual(['find_related_items']);
-  });
-
   it('does NOT force update_article when the user asks to draft a new article', () => {
     // current article present, but explicit create intent → named create.
     const r = resolveTurnTools({
@@ -226,24 +211,6 @@ describe('resolveTurnTools', () => {
     expect(names).not.toContain('update_article');
     expect(names).toContain('create_article');
     expect(names).toContain('get_article');
-  });
-});
-
-describe('isExplicitNamedRelationshipQuestion', () => {
-  it.each([
-    "What's related to ACM-DB01?",
-    'Show items linked with acm.local',
-    'What is connected for Domain Admin?',
-  ])('recognizes an explicitly named relationship request: %s', (message) => {
-    expect(isExplicitNamedRelationshipQuestion(message)).toBe(true);
-  });
-
-  it.each([
-    'What is related to this asset?',
-    'What linked items are on the current article?',
-    'Summarize the current page.',
-  ])('does not force a named lookup without a usable name: %s', (message) => {
-    expect(isExplicitNamedRelationshipQuestion(message)).toBe(false);
   });
 });
 

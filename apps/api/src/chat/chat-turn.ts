@@ -99,18 +99,6 @@ export function synthesizeActionHistory(
 export type TurnIntent = 'question' | 'edit' | 'create';
 
 /**
- * True only for an explicitly named relationship question. We force a
- * compound server-side resolver for this shape so plain FTS results
- * cannot be mistaken for relationship edges. “this asset” remains on
- * the normal path because it has no stable user-supplied name to match.
- */
-export function isExplicitNamedRelationshipQuestion(text: string): boolean {
-  return /\b(?:related|linked|connected)\s+(?:to|with|for)\s+(?!this\b|the\s+(?:current\s+)?(?:asset|article|password)\b)[^?\n]{2,}/i.test(
-    text,
-  );
-}
-
-/**
  * Decide which tools to offer and the `tool_choice` for this turn.
  *
  * Defaults to `auto` + the strict `ARTICLE_TOOLS` (the safe path: the
@@ -130,15 +118,8 @@ export function resolveTurnTools(input: {
   hasCompany: boolean;
   targetArticleRetained: boolean;
   intent?: TurnIntent;
-  forceNamedRelationshipLookup?: boolean;
 }): { tools: ToolDef[]; toolChoice: ToolChoice } {
   const { hasCompany, targetArticleRetained, intent } = input;
-  if (input.forceNamedRelationshipLookup) {
-    return {
-      tools: toolDefsFor(['find_related_items']),
-      toolChoice: { type: 'function', function: { name: 'find_related_items' } },
-    };
-  }
   const reads = readToolDefs(hasCompany);
 
   // WS-030 widening (deliberate, called out in review): turns that

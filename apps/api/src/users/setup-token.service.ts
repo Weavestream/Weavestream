@@ -70,12 +70,4 @@ export class SetupTokenService {
       row.consumedAt === null && row.expiresAt > new Date() && row.user.isActive;
     return { row, valid };
   }
-
-  async consume(token: string) {
-    const hash = SetupTokenService.hash(token);
-    return this.prisma.userSetupToken.update({
-      where: { tokenHash: hash },
-      data: { consumedAt: new Date() },
-    });
-  }
 }

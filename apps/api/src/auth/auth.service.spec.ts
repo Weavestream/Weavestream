@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   HttpException,
   HttpStatus,
   Logger,
@@ -483,5 +484,132 @@ describe('AuthService.login timing equalization', () => {
     expect(passwords.dummyHash).not.toHaveBeenCalled();
     expect(out.user.id).toBe('u-1');
     expect(lockout.clear).toHaveBeenCalled();
+  });
+});
+
+// WS-030: consuming an invite/setup token must be atomic — the single-use
+// invariant is enforced in the WHERE clause of the write, not by the earlier
+// read, so concurrent redemptions (and tokens that expire in flight) cannot
+// both mint a session.
+function makeInviteService(
+  opts: {
+    lookup?: { row: { id: string; userId: string }; valid: boolean } | null;
+    user?: Record<string, unknown> | null;
+    consumeCount?: number;
+  } = {},
+) {
+  const lookup =
+    opts.lookup === undefined
+      ? { row: { id: 'st-1', userId: 'u-1' }, valid: true }
+      : opts.lookup;
+  const userRow =
+    opts.user === undefined
+      ? {
+          id: 'u-1',
+          email: 'u@example.com',
+          name: 'U',
+          role: 'OPERATOR',
+          isActive: true,
+          uiTheme: 'SYSTEM',
+          uiAccent: 'BLUE',
+        }
+      : opts.user;
+  const prisma: {
+    user: { findUnique: jest.Mock; update: jest.Mock };
+    userSetupToken: { updateMany: jest.Mock };
+    userMfaBackupCode: { deleteMany: jest.Mock };
+    session: { create: jest.Mock };
+    $transaction: jest.Mock;
+  } = {
+    user: {
+      findUnique: jest.fn().mockResolvedValue(userRow),
+      update: jest.fn().mockResolvedValue({ id: 'u-1' }),
+    },
+    userSetupToken: {
+      updateMany: jest.fn().mockResolvedValue({ count: opts.consumeCount ?? 1 }),
+    },
+    userMfaBackupCode: { deleteMany: jest.fn().mockResolvedValue({ count: 0 }) },
+    session: { create: jest.fn().mockResolvedValue({ id: 's-new' }) },
+    // Pass the same mock object as the transaction client so the guarded
+    // tx.userSetupToken.updateMany above is the one asserted below.
+    $transaction: jest.fn(async (fn: (tx: unknown) => unknown) => fn(prisma)),
+  };
+  const passwords = { hash: jest.fn().mockResolvedValue('new-hash'), verify: jest.fn() };
+  const tokens = {
+    mintRefreshToken: jest.fn().mockReturnValue({ token: 'refresh', hash: 'refresh-hash' }),
+    issueAccessToken: jest.fn().mockResolvedValue('access-jwt'),
+  };
+  const audit = { log: jest.fn().mockResolvedValue(undefined) };
+  const setupTokens = { lookup: jest.fn().mockResolvedValue(lookup) };
+  const svc = new AuthService(
+    prisma as never,
+    passwords as never,
+    tokens as never,
+    {} as never,
+    {} as never,
+    {} as never,
+    {} as never,
+    { values: { SESSION_MAX_AGE_DAYS: 30 } } as never,
+    audit as never,
+    setupTokens as never,
+  );
+  return { svc, prisma, passwords, tokens, audit, setupTokens };
+}
+
+describe('AuthService.acceptInvite', () => {
+  it('consumes the token with a guarded write asserting unconsumed + unexpired, then mints a session', async () => {
+    const { svc, prisma, audit } = makeInviteService();
+
+    const out = await svc.acceptInvite('tok', 'new-password', '1.2.3.4', 'jest');
+
+    expect(out.accessToken).toBe('access-jwt');
+    expect(out.refreshToken).toBe('refresh');
+
+    // Both validity conditions are re-asserted at the mutation boundary.
+    expect(prisma.userSetupToken.updateMany).toHaveBeenCalledTimes(1);
+    const call = (prisma.userSetupToken.updateMany as jest.Mock).mock.calls[0][0];
+    expect(call.where).toEqual({
+      id: 'st-1',
+      consumedAt: null,
+      expiresAt: { gt: expect.any(Date) },
+    });
+    // The same instant stamps consumedAt and bounds the expiry check, so a
+    // record can never show consumption past its own expiry.
+    expect(call.data.consumedAt).toBe(call.where.expiresAt.gt);
+
+    expect(prisma.session.create).toHaveBeenCalledTimes(1);
+    expect(audit.log).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'user.invite.accepted' }),
+    );
+  });
+
+  it('rejects when the guarded consume matches no row (race loser or expired in flight): no password, no session, no audit', async () => {
+    const { svc, prisma, audit } = makeInviteService({ consumeCount: 0 });
+
+    const err = await svc
+      .acceptInvite('tok', 'new-password', '1.2.3.4', 'jest')
+      .catch((e: unknown) => e);
+
+    // Indistinguishable from a plain invalid token.
+    expect(err).toBeInstanceOf(BadRequestException);
+    expect((err as BadRequestException).message).toBe('Setup link is invalid or expired');
+
+    // The transaction rolls back and nothing downstream runs.
+    expect(prisma.user.update).not.toHaveBeenCalled();
+    expect(prisma.session.create).not.toHaveBeenCalled();
+    expect(audit.log).not.toHaveBeenCalled();
+  });
+
+  it('rejects an invalid/expired lookup up front, without opening a transaction', async () => {
+    const { svc, prisma } = makeInviteService({
+      lookup: { row: { id: 'st-1', userId: 'u-1' }, valid: false },
+    });
+
+    await expect(
+      svc.acceptInvite('tok', 'new-password', '1.2.3.4', 'jest'),
+    ).rejects.toBeInstanceOf(BadRequestException);
+
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+    expect(prisma.userSetupToken.updateMany).not.toHaveBeenCalled();
   });
 });

@@ -372,10 +372,22 @@ export class AuthService {
     const passwordHash = await this.passwords.hash(newPassword);
 
     await this.prisma.$transaction(async (tx) => {
-      await tx.userSetupToken.update({
-        where: { id: lookup.row.id },
-        data: { consumedAt: new Date() },
+      // Consume the token atomically: re-assert the validity conditions
+      // (unconsumed AND unexpired) in the WHERE clause so the single-use
+      // invariant holds under concurrency and a token that expired between
+      // the lookup above and here cannot be redeemed. A race loser (or an
+      // in-flight expiry) matches zero rows and is rejected exactly like a
+      // plain invalid token. The same `now` stamps consumedAt and bounds
+      // the expiry check, so a record can never show consumption past its
+      // own expiry.
+      const now = new Date();
+      const consumed = await tx.userSetupToken.updateMany({
+        where: { id: lookup.row.id, consumedAt: null, expiresAt: { gt: now } },
+        data: { consumedAt: now },
       });
+      if (consumed.count === 0) {
+        throw new BadRequestException('Setup link is invalid or expired');
+      }
       await tx.user.update({
         where: { id: user.id },
         data: {
