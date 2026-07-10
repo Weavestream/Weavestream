@@ -11,16 +11,17 @@ Weavestream stores uploaded files on the local filesystem with one directory per
 
 ## Supported File Types
 
-| Category | Examples |
+| Category | Types |
 |---|---|
-| Images | JPEG, PNG, GIF, WebP, SVG |
-| Documents | PDF, DOCX, XLSX, PPTX |
-| Archives | ZIP, TAR, GZ |
-| Scripts | SH, PS1, PY |
-| Data | JSON, YAML, CSV |
-| Text | TXT, MD, LOG |
+| Images | JPEG, PNG, GIF, WebP, HEIC |
+| Documents | PDF, DOCX, XLSX |
+| Email messages | MSG (Outlook) |
+| Archives & installers | ZIP, 7Z, TAR, GZ/TGZ, MSI |
+| Scripts | SH, PY — plus PS1, CMD, BAT, REG (uploaded as plain text) |
+| Data & config | JSON, XML, YAML, CSV — plus INI, CONF (uploaded as plain text) |
+| Text | TXT, MD, LOG, KEY, PEM |
 
-The allowed MIME type list is configurable via `ALLOWED_UPLOAD_MIME` in `.env`.
+The allowed MIME type list is configurable via `ALLOWED_UPLOAD_MIME` in `.env`. Browser-active content types — `text/html`, `application/xhtml+xml`, and XML-based image types such as `image/svg+xml` — are rejected at startup even if added to the list, because they can execute script when rendered inline.
 
 ## Storage Architecture
 

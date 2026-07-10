@@ -160,7 +160,7 @@ Every thumbnail, attachment, logo, and export PDF is streamed through the API on
 |---|---|
 | `MAX_UPLOAD_MB` | Server-enforced upload size cap in megabytes. Default: `25`. |
 | `NEXT_PUBLIC_MAX_UPLOAD_MB` | Client-side mirror. Keep in sync with `MAX_UPLOAD_MB`. |
-| `ALLOWED_UPLOAD_MIME` | Comma-separated MIME allowlist. The default includes images, PDFs, documents, archives, scripts, and data files. Add cautiously. |
+| `ALLOWED_UPLOAD_MIME` | Comma-separated MIME allowlist. The default includes images, PDFs, documents, archives, scripts, and data files. Add cautiously. Browser-active types (`text/html`, `application/xhtml+xml`, `image/svg+xml`, and any `image/*+xml`) are rejected at startup regardless of this setting — they can execute script when rendered inline. |
 
 ## Data Directory
 

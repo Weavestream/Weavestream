@@ -34,6 +34,21 @@ const intFromString = (min: number, max: number) =>
     .transform((v) => (typeof v === 'number' ? v : parseInt(v, 10)))
     .pipe(z.number().int().min(min).max(max));
 
+// Browser-active content types are rejected from ALLOWED_UPLOAD_MIME at
+// boot, no matter what the operator configures. Today allowing them would
+// not yield stored XSS on its own (SVG fails the magic-byte gate, and
+// non-`image/*` types are force-downloaded with `nosniff`), but that
+// safety must not depend on the serving logic never changing — an entry
+// here would turn a future inline-serving tweak into an immediate
+// stored-XSS primitive. The `image/*+xml` pattern catches SVG aliases and
+// any other XML-based image type a browser might parse as a document.
+const FORBIDDEN_UPLOAD_MIMES = new Set(['text/html', 'application/xhtml+xml', 'image/svg+xml']);
+
+export const isForbiddenUploadMime = (mime: string): boolean => {
+  const m = mime.trim().toLowerCase();
+  return FORBIDDEN_UPLOAD_MIMES.has(m) || (m.startsWith('image/') && m.endsWith('+xml'));
+};
+
 export const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   APP_URL: z.string().url(),
@@ -301,7 +316,27 @@ export const envSchema = z.object({
         'text/yaml',
         'application/x-yaml',
       ].join(','),
-    ),
+    )
+    .superRefine((v, ctx) => {
+      const rejected = [
+        ...new Set(
+          v
+            .split(',')
+            .map((m) => m.trim().toLowerCase())
+            .filter(Boolean)
+            .filter(isForbiddenUploadMime),
+        ),
+      ];
+      if (rejected.length) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message:
+            `must not include browser-active content types (got: ${rejected.join(', ')}). ` +
+            'text/html, application/xhtml+xml, and image/*+xml (e.g. image/svg+xml) can execute ' +
+            'script when rendered inline and are rejected regardless of configuration.',
+        });
+      }
+    }),
 });
 
 export type Env = z.infer<typeof envSchema>;
