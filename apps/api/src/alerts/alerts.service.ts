@@ -253,11 +253,13 @@ export class AlertsService {
     let success = false;
     let error: string | null = null;
     try {
+      // Send text-only (like real alert emails): `text` embeds the
+      // admin-controlled `row.name`, so interpolating it into an HTML
+      // body would allow HTML injection into recipients' mail clients.
       await this.email.send({
         to: recipients,
         subject,
         text,
-        html: `<p>${text.replace(/\n/g, '<br />')}</p>`,
       });
       success = true;
       return { ok: true };

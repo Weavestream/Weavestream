@@ -243,41 +243,46 @@ export function EmailSettingsForm({
 
       <section
         style={{
-          display: 'grid',
-          gridTemplateColumns: '1fr auto',
-          gap: 10,
-          alignItems: 'end',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 8,
           padding: 14,
           background: 'var(--panel-2)',
           border: '1px solid var(--line-2)',
           borderRadius: 6,
         }}
       >
-        <Field
-          label="Test recipient"
-          htmlFor="smtp-test-recipient"
-          help={
-            dirty
-              ? 'Save changes before sending a test email; tests use persisted settings.'
-              : 'Sends a simple test email using the saved SMTP configuration.'
-          }
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: '1fr auto',
+            gap: 10,
+            alignItems: 'end',
+          }}
         >
-          <Input
-            id="smtp-test-recipient"
-            type="email"
-            value={testRecipient}
-            onChange={(e) => setTestRecipient(e.target.value)}
-            maxLength={255}
-          />
-        </Field>
-        <Btn
-          kind="outline"
-          onClick={sendTest}
-          loading={testing}
-          disabled={dirty || !testRecipient.trim()}
-        >
-          Send test email
-        </Btn>
+          <Field label="Test recipient" htmlFor="smtp-test-recipient">
+            <Input
+              id="smtp-test-recipient"
+              type="email"
+              value={testRecipient}
+              onChange={(e) => setTestRecipient(e.target.value)}
+              maxLength={255}
+            />
+          </Field>
+          <Btn
+            kind="outline"
+            onClick={sendTest}
+            loading={testing}
+            disabled={dirty || !testRecipient.trim()}
+          >
+            Send test email
+          </Btn>
+        </div>
+        <div style={{ fontSize: 11.5, color: 'var(--muted)' }}>
+          {dirty
+            ? 'Save changes before sending a test email; tests use persisted settings.'
+            : 'Sends a simple test email using the saved SMTP configuration.'}
+        </div>
       </section>
 
       {error && (
