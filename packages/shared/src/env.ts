@@ -279,10 +279,14 @@ export const envSchema = z.object({
     .default(
       [
         'image/jpeg',
+        // Legacy alias some clients still declare; the confirm step's
+        // compat table pairs it with detected `image/jpeg`.
+        'image/jpg',
         'image/png',
         'image/webp',
         'image/gif',
         'image/heic',
+        'image/heif',
         'application/pdf',
         // Plain-text family. Markdown is RFC 7763 `text/markdown`; we
         // also accept `text/x-markdown` which some older clients still
@@ -305,6 +309,10 @@ export const envSchema = z.object({
         'application/x-msi',
         'application/x-ms-installer',
         'application/vnd.ms-outlook',
+        // RFC 822 email messages (.eml). Plain text with no magic bytes —
+        // the confirm step treats `message/rfc822` like text/* for the
+        // no-signature fallback (see `isTextLikeDeclared`).
+        'message/rfc822',
         // Script + config families. These have no magic bytes — the
         // server's `isTextDeclared` fallback keeps `text/*` uploads
         // legal without a signature.

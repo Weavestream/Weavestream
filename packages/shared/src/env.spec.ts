@@ -11,6 +11,21 @@ describe('ALLOWED_UPLOAD_MIME', () => {
     expect(field.safeParse(undefined).success).toBe(true);
   });
 
+  it('keeps the default list in sync with the web client mirror', () => {
+    // These three were advertised and preflighted by the web client
+    // (CLIENT_ALLOWED_MIMES in apps/web/src/lib/upload-client.ts) but
+    // missing from the server default, so uploads passed preflight and
+    // then died at init with MimeNotAllowed.
+    const parsed = field.safeParse(undefined);
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      const mimes = (parsed.data as string).split(',');
+      expect(mimes).toContain('message/rfc822');
+      expect(mimes).toContain('image/heif');
+      expect(mimes).toContain('image/jpg');
+    }
+  });
+
   it('accepts a benign operator-supplied list', () => {
     expect(field.safeParse('image/png,application/pdf,text/csv').success).toBe(true);
   });

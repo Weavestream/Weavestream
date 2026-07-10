@@ -13,9 +13,9 @@ Weavestream stores uploaded files on the local filesystem with one directory per
 
 | Category | Types |
 |---|---|
-| Images | JPEG, PNG, GIF, WebP, HEIC |
+| Images | JPEG, PNG, GIF, WebP, HEIC, HEIF |
 | Documents | PDF, DOCX, XLSX |
-| Email messages | MSG (Outlook) |
+| Email messages | MSG (Outlook), EML |
 | Archives & installers | ZIP, 7Z, TAR, GZ/TGZ, MSI |
 | Scripts | SH, PY — plus PS1, CMD, BAT, REG (uploaded as plain text) |
 | Data & config | JSON, XML, YAML, CSV — plus INI, CONF (uploaded as plain text) |
