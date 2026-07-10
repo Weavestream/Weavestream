@@ -1,6 +1,7 @@
 import { BadRequestException } from '@nestjs/common';
 import nodemailer from 'nodemailer';
-import { EmailService } from './email.service.js';
+import { MAX_ALERT_RECIPIENTS } from '@weavestream/shared';
+import { EmailService, capRecipients } from './email.service.js';
 import { EmailNotConfiguredError } from './email-settings.service.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
 
@@ -103,6 +104,19 @@ describe('EmailService', () => {
     );
   });
 
+  it('caps an over-cap recipient array before handing it to Nodemailer (WS-031)', async () => {
+    const sendMail = jest.fn().mockResolvedValue({});
+    createTransport.mockReturnValue({ sendMail });
+    const svc = new EmailService(makeSettings() as never, makeAudit() as never);
+    const to = Array.from({ length: 150 }, (_, i) => `u${i}@example.com`);
+
+    await svc.send({ to, subject: 'x', text: 'y' });
+
+    const arg = sendMail.mock.calls[0][0].to as string[];
+    expect(arg).toHaveLength(MAX_ALERT_RECIPIENTS);
+    expect(arg[0]).toBe('u0@example.com');
+  });
+
   it('surfaces not-configured errors without calling Nodemailer', async () => {
     const svc = new EmailService(
       {
@@ -117,6 +131,24 @@ describe('EmailService', () => {
       svc.sendTest(ACTOR, { recipient: 'admin@example.com' }, META),
     ).rejects.toBeInstanceOf(EmailNotConfiguredError);
     expect(createTransport).not.toHaveBeenCalled();
+  });
+});
+
+describe('capRecipients (WS-031 send-path backstop)', () => {
+  it('truncates an over-cap array to MAX_ALERT_RECIPIENTS', () => {
+    const to = Array.from({ length: 150 }, (_, i) => `u${i}@example.com`);
+    const capped = capRecipients(to) as string[];
+    expect(capped).toHaveLength(MAX_ALERT_RECIPIENTS);
+    expect(capped[0]).toBe('u0@example.com');
+  });
+
+  it('leaves an at-cap array unchanged (same reference)', () => {
+    const to = Array.from({ length: MAX_ALERT_RECIPIENTS }, (_, i) => `u${i}@x.com`);
+    expect(capRecipients(to)).toBe(to);
+  });
+
+  it('passes a single-string recipient through untouched', () => {
+    expect(capRecipients('one@example.com')).toBe('one@example.com');
   });
 });
 

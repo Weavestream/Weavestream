@@ -64,17 +64,67 @@ export type AlertRecordAction = z.infer<typeof recordActionSchema>;
 const trimmedEmail = z.string().trim().email().max(255);
 
 /**
- * One-or-more recipient list. Accepts either an array of trimmed
- * emails (canonical form) or a comma/semicolon/newline-separated
- * string for ergonomic form input — the latter is split, trimmed,
- * de-duplicated, and re-validated as individual emails.
+ * Max distinct recipients a single alert may fan out to. Enforced here
+ * at validation, again at the send path (`EmailService.send`), and by
+ * the `0054_cap_alert_recipients` remediation migration for pre-existing
+ * rows — all three reference this constant. Without a cap, a holder of
+ * the delegable `alert.manage` capability can turn a routine alert into
+ * an outbound-email amplifier (WS-031).
+ */
+export const MAX_ALERT_RECIPIENTS = 100;
+
+// Hard ceiling on raw items/tokens before de-dup. Rejects the request
+// before the (more expensive) de-duplication + per-email `safeParse`
+// loops run over an oversized list. Deliberately above
+// `MAX_ALERT_RECIPIENTS` so a paste with some duplicates that dedupe
+// under the cap is still accepted.
+const MAX_RAW_RECIPIENT_PARTS = 500;
+
+// Hard ceiling on the raw string length — checked before the split so a
+// pathological multi-megabyte body can't allocate a huge parts array.
+const MAX_RECIPIENT_INPUT_LENGTH = 50_000;
+
+/**
+ * One-or-more recipient list. Accepts either an array of strings
+ * (canonical form) or a comma/semicolon/newline-separated string for
+ * ergonomic form input — the latter is split, trimmed, de-duplicated,
+ * and re-validated as individual emails.
+ *
+ * Work bounds (what each guard actually caps):
+ *   - String branch: `MAX_RECIPIENT_INPUT_LENGTH` is checked before the
+ *     split, so a multi-megabyte string never allocates a huge parts
+ *     array — genuinely the first thing that runs.
+ *   - Array branch: Zod's `z.array(z.string())` has already traversed
+ *     the whole array (string-typing every element) before this
+ *     transform runs, so the initial array size is bounded by the API's
+ *     2 MB request-body limit, NOT by our guards. `MAX_RAW_RECIPIENT_PARTS`
+ *     then caps the de-duplication and per-email `safeParse` work that
+ *     follows, and `z.array(z.string())` (not `z.array(trimmedEmail)`)
+ *     keeps that pre-traversal to a cheap typeof-string check rather than
+ *     a full email parse per element.
+ *   - `MAX_ALERT_RECIPIENTS` is the security limit (distinct recipients);
+ *     the per-email `safeParse` loop below it runs ≤ the cap times.
  */
 const recipientEmailsSchema = z
-  .union([z.array(trimmedEmail), trimmedEmail, z.string()])
+  .union([z.array(z.string()), z.string()])
   .transform((raw, ctx) => {
+    if (typeof raw === 'string' && raw.length > MAX_RECIPIENT_INPUT_LENGTH) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Recipient list is too long',
+      });
+      return z.NEVER;
+    }
     const parts = Array.isArray(raw)
       ? raw
       : raw.split(/[,;\n]/).map((s) => s.trim()).filter(Boolean);
+    if (parts.length > MAX_RAW_RECIPIENT_PARTS) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `Too many recipients (max ${MAX_ALERT_RECIPIENTS})`,
+      });
+      return z.NEVER;
+    }
     const seen = new Set<string>();
     const cleaned: string[] = [];
     for (const p of parts) {
@@ -89,6 +139,13 @@ const recipientEmailsSchema = z
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message: 'At least one recipient email is required',
+      });
+      return z.NEVER;
+    }
+    if (cleaned.length > MAX_ALERT_RECIPIENTS) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `Too many recipients (max ${MAX_ALERT_RECIPIENTS})`,
       });
       return z.NEVER;
     }

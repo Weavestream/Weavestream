@@ -771,8 +771,22 @@ function summariseConfig(a: AlertConfig): string {
 
 function problemText(problem: unknown, fallback: string): string {
   if (problem && typeof problem === 'object') {
-    const p = problem as { title?: unknown; detail?: unknown };
-    if (typeof p.detail === 'string') return p.detail;
+    // RFC 7807 extension members (see ProblemExceptionFilter): the useful
+    // per-field message lives in `issues[]`; `detail` is only the stable
+    // code "ValidationError" for a ZodBody rejection. Prefer the issue
+    // message so e.g. "Too many recipients (max 100)" reaches the user
+    // instead of the opaque code. Mirrors `handleApiError` in asset-form.
+    const p = problem as {
+      title?: unknown;
+      detail?: unknown;
+      issues?: Array<{ message?: unknown }>;
+    };
+    if (Array.isArray(p.issues) && typeof p.issues[0]?.message === 'string') {
+      return p.issues[0].message;
+    }
+    if (typeof p.detail === 'string' && p.detail !== 'ValidationError') {
+      return p.detail;
+    }
     if (typeof p.title === 'string') return p.title;
   }
   return fallback;

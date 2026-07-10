@@ -1,14 +1,33 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import nodemailer from 'nodemailer';
-import type { TestEmailSettingsInput } from '@weavestream/shared';
+import { MAX_ALERT_RECIPIENTS, type TestEmailSettingsInput } from '@weavestream/shared';
 import { EmailNotConfiguredError, EmailSettingsService } from './email-settings.service.js';
 import { AuditLogService } from '../audit/audit.service.js';
 import { AUDIT_ACTIONS } from '../audit/audit-actions.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
 import type { RequestMeta } from '../common/request-meta.js';
 
+/**
+ * Fail-closed backstop for outbound email fan-out. Alert recipient lists
+ * are capped at validation (`recipientEmailsSchema`), but a row saved
+ * before that cap existed — or written directly to the
+ * `alert_config.recipient_emails` column — would otherwise fan out
+ * uncapped through this single send chokepoint. Truncating to
+ * `MAX_ALERT_RECIPIENTS` hard-bounds delivery volume regardless of how a
+ * list got large (WS-031). Single-recipient callers pass through
+ * untouched.
+ */
+export function capRecipients(to: string | string[]): string | string[] {
+  if (Array.isArray(to) && to.length > MAX_ALERT_RECIPIENTS) {
+    return to.slice(0, MAX_ALERT_RECIPIENTS);
+  }
+  return to;
+}
+
 @Injectable()
 export class EmailService {
+  private readonly logger = new Logger(EmailService.name);
+
   constructor(
     private readonly settings: EmailSettingsService,
     private readonly audit: AuditLogService,
@@ -20,6 +39,12 @@ export class EmailService {
     text: string;
     html?: string;
   }): Promise<void> {
+    const to = capRecipients(input.to);
+    if (Array.isArray(input.to) && Array.isArray(to) && to.length < input.to.length) {
+      this.logger.warn(
+        `Recipient list truncated from ${input.to.length} to ${to.length} (MAX_ALERT_RECIPIENTS)`,
+      );
+    }
     const config = await this.settings.getSendConfig();
     const transport = nodemailer.createTransport({
       host: config.host,
@@ -38,7 +63,7 @@ export class EmailService {
         address: config.fromEmail,
       },
       replyTo: config.replyTo ?? undefined,
-      to: input.to,
+      to,
       subject: input.subject,
       text: input.text,
       html: input.html,
