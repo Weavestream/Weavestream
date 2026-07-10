@@ -208,7 +208,7 @@ function BackendUnavailablePanel() {
           style={{
             padding: '9px 16px',
             background: 'var(--accent, #c6ff3f)',
-            color: '#0b0b0d',
+            color: '#fff',
             border: 0,
             borderRadius: 6,
             fontSize: 13,

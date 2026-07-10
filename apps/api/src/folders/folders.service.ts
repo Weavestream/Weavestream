@@ -156,6 +156,15 @@ export class FoldersService {
     const nextParentId =
       input.parentId === undefined ? existing.parentId : input.parentId;
     if (nextParentId && nextParentId !== existing.parentId) {
+      const parent = await this.prisma.folder.findFirst({
+        where: { id: nextParentId, companyId },
+      });
+      if (!parent) {
+        throw new BadRequestException({
+          error: 'ParentNotFound',
+          parentId: nextParentId,
+        });
+      }
       await this.assertNoCycle(companyId, id, nextParentId);
     }
 

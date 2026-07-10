@@ -149,16 +149,45 @@ type StubAccessUser = {
   globalAccess?: 'FULL' | 'READONLY' | 'NONE' | null;
 };
 
+function folderRow(init: DeepPartial<PasswordFolder> = {}): PasswordFolder {
+  const created = new Date('2026-01-01T00:00:00Z');
+  return {
+    id: init.id ?? 'fld-1',
+    companyId: init.companyId ?? 'co-1',
+    parentId: init.parentId ?? null,
+    name: init.name ?? 'Folder',
+    icon: init.icon ?? null,
+    color: init.color ?? null,
+    position: init.position ?? 0,
+    archivedAt: init.archivedAt ?? null,
+    createdBy: init.createdBy ?? 'user-op',
+    createdAt: init.createdAt ?? created,
+    updatedAt: init.updatedAt ?? created,
+  } as PasswordFolder;
+}
+
+function matchFolder(
+  row: PasswordFolder,
+  where: Prisma.PasswordFolderWhereInput,
+): boolean {
+  if (where.id && (where.id as string) !== row.id) return false;
+  if (where.companyId && (where.companyId as string) !== row.companyId)
+    return false;
+  if (where.archivedAt === null && row.archivedAt !== null) return false;
+  return true;
+}
+
 function makeStubs(
   initial: {
     passwords?: StoredPassword[];
     accessUsers?: StubAccessUser[];
+    folders?: PasswordFolder[];
   } = {},
 ) {
   const passwords: StoredPassword[] = [...(initial.passwords ?? [])];
   const accessUsers: StubAccessUser[] = [...(initial.accessUsers ?? [])];
   const versions: StoredVersion[] = [];
-  const folders: PasswordFolder[] = [];
+  const folders: PasswordFolder[] = [...(initial.folders ?? [])];
   let versionSeq = 0;
   let passwordSeq = passwords.length;
 
@@ -241,8 +270,8 @@ function makeStubs(
       },
     },
     passwordFolder: {
-      async findFirst() {
-        return null;
+      async findFirst(args: { where: Prisma.PasswordFolderWhereInput }) {
+        return folders.find((f) => matchFolder(f, args.where)) ?? null;
       },
       async findMany() {
         return folders;
@@ -250,11 +279,23 @@ function makeStubs(
       async create() {
         throw new Error('not used');
       },
-      async updateMany() {
-        return { count: 0 };
+      async updateMany(args: {
+        where: Prisma.PasswordFolderWhereInput;
+        data: Partial<PasswordFolder>;
+      }) {
+        let count = 0;
+        for (const row of folders) {
+          if (matchFolder(row, args.where)) {
+            Object.assign(row, args.data, { updatedAt: new Date() });
+            count += 1;
+          }
+        }
+        return { count };
       },
-      async findFirstOrThrow() {
-        throw new Error('not used');
+      async findFirstOrThrow(args: { where: Prisma.PasswordFolderWhereInput }) {
+        const row = folders.find((f) => matchFolder(f, args.where));
+        if (!row) throw new Error('not found');
+        return row;
       },
       async count() {
         return 0;
@@ -823,5 +864,72 @@ describe('PasswordsService — cascade archive from asset', () => {
     );
     expect(passwords.find((p) => p.id === 'pwd-c')?.archivedAt).toBeNull();
     expect(passwords.find((p) => p.id === 'pwd-d')?.archivedAt).toBeNull();
+  });
+});
+
+describe('PasswordsService — updateFolder parent scoping', () => {
+  it('rejects a parentId belonging to another company', async () => {
+    const { svc } = makeStubs({
+      folders: [
+        folderRow({ id: 'fld-mine', companyId: 'co-1' }),
+        folderRow({ id: 'fld-foreign', companyId: 'co-2' }),
+      ],
+    });
+
+    await expect(
+      svc.updateFolder(
+        OPERATOR,
+        'co-1',
+        'fld-mine',
+        { parentId: 'fld-foreign' },
+        META,
+      ),
+    ).rejects.toThrow(BadRequestException);
+  });
+
+  it('rejects an archived parent', async () => {
+    const { svc } = makeStubs({
+      folders: [
+        folderRow({ id: 'fld-mine', companyId: 'co-1' }),
+        folderRow({ id: 'fld-old', companyId: 'co-1', archivedAt: new Date() }),
+      ],
+    });
+
+    await expect(
+      svc.updateFolder(
+        OPERATOR,
+        'co-1',
+        'fld-mine',
+        { parentId: 'fld-old' },
+        META,
+      ),
+    ).rejects.toThrow(BadRequestException);
+  });
+
+  it('accepts a same-company parent and clears the parent with null', async () => {
+    const { svc } = makeStubs({
+      folders: [
+        folderRow({ id: 'fld-parent', companyId: 'co-1' }),
+        folderRow({ id: 'fld-child', companyId: 'co-1' }),
+      ],
+    });
+
+    const moved = await svc.updateFolder(
+      OPERATOR,
+      'co-1',
+      'fld-child',
+      { parentId: 'fld-parent' },
+      META,
+    );
+    expect(moved.parentId).toBe('fld-parent');
+
+    const cleared = await svc.updateFolder(
+      OPERATOR,
+      'co-1',
+      'fld-child',
+      { parentId: null },
+      META,
+    );
+    expect(cleared.parentId).toBeNull();
   });
 });

@@ -1017,6 +1017,17 @@ export class PasswordsService {
       throw new BadRequestException('Cannot edit an archived folder — restore it first.');
     }
     if (input.parentId !== undefined && input.parentId !== existing.parentId) {
+      if (input.parentId) {
+        const parent = await this.prisma.passwordFolder.findFirst({
+          where: { id: input.parentId, companyId, archivedAt: null },
+        });
+        if (!parent) {
+          throw new BadRequestException({
+            error: 'ParentNotFound',
+            parentId: input.parentId,
+          });
+        }
+      }
       await this.assertFolderNoCycle(companyId, id, input.parentId);
     }
 
