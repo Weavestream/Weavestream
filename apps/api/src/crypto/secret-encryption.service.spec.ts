@@ -1,6 +1,11 @@
 import { createCipheriv, randomBytes } from 'node:crypto';
 import { EnvService } from '../config/env.service.js';
-import { SecretEncryptionService } from './secret-encryption.service.js';
+import {
+  SecretEncryptionService,
+  passwordVaultAad,
+} from './secret-encryption.service.js';
+
+const AAD = passwordVaultAad('co-1', 'pwd-1', 'password');
 
 function makeEnv(overrides: Partial<EnvService> = {}): EnvService {
   const activeKey = randomBytes(32);
@@ -16,39 +21,56 @@ function makeEnv(overrides: Partial<EnvService> = {}): EnvService {
 describe('SecretEncryptionService', () => {
   it('round-trips plaintext', () => {
     const svc = new SecretEncryptionService(makeEnv());
-    const out = svc.encrypt('correct horse battery staple');
+    const out = svc.encrypt('correct horse battery staple', AAD);
     expect(out).not.toContain('correct horse');
-    expect(svc.decrypt(out)).toBe('correct horse battery staple');
+    expect(svc.decrypt(out, AAD)).toBe('correct horse battery staple');
   });
 
   it('round-trips unicode + long plaintext (notes use-case)', () => {
     const svc = new SecretEncryptionService(makeEnv());
     const plaintext = '🗝️ ' + 'a'.repeat(10_000) + ' — notes ✨';
-    expect(svc.decrypt(svc.encrypt(plaintext))).toBe(plaintext);
+    const aad = passwordVaultAad('co-1', 'pwd-1', 'notes');
+    expect(svc.decrypt(svc.encrypt(plaintext, aad), aad)).toBe(plaintext);
   });
 
   it('produces different ciphertext each call (unique IV)', () => {
     const svc = new SecretEncryptionService(makeEnv());
-    const a = svc.encrypt('same');
-    const b = svc.encrypt('same');
+    const a = svc.encrypt('same', AAD);
+    const b = svc.encrypt('same', AAD);
     expect(a).not.toBe(b);
-    expect(svc.decrypt(a)).toBe('same');
-    expect(svc.decrypt(b)).toBe('same');
+    expect(svc.decrypt(a, AAD)).toBe('same');
+    expect(svc.decrypt(b, AAD)).toBe('same');
+  });
+
+  it('binds a blob to its record identity — other rows/tenants/fields fail', () => {
+    const svc = new SecretEncryptionService(makeEnv());
+    const blob = svc.encrypt('hunter2', AAD);
+
+    expect(() =>
+      svc.decrypt(blob, passwordVaultAad('co-1', 'pwd-2', 'password')),
+    ).toThrow();
+    expect(() =>
+      svc.decrypt(blob, passwordVaultAad('co-2', 'pwd-1', 'password')),
+    ).toThrow();
+    expect(() =>
+      svc.decrypt(blob, passwordVaultAad('co-1', 'pwd-1', 'totp')),
+    ).toThrow();
+    expect(svc.decrypt(blob, AAD)).toBe('hunter2');
   });
 
   it('rejects a tampered ciphertext', () => {
     const svc = new SecretEncryptionService(makeEnv());
-    const good = Buffer.from(svc.encrypt('sensitive'), 'base64');
+    const good = Buffer.from(svc.encrypt('sensitive', AAD), 'base64');
     good.writeUInt8(good.readUInt8(good.length - 1) ^ 0x01, good.length - 1);
     const bad = good.toString('base64');
-    expect(() => svc.decrypt(bad)).toThrow();
+    expect(() => svc.decrypt(bad, AAD)).toThrow();
   });
 
   it('rejects a blob with unknown kid', () => {
     const a = new SecretEncryptionService(makeEnv({ passwordActiveKid: 'k-a' }));
-    const blob = a.encrypt('secret');
+    const blob = a.encrypt('secret', AAD);
     const b = new SecretEncryptionService(makeEnv({ passwordActiveKid: 'k-b' }));
-    expect(() => b.decrypt(blob)).toThrow(/unknown password-vault kid/);
+    expect(() => b.decrypt(blob, AAD)).toThrow(/unknown password-vault kid/);
   });
 
   it('decrypts blobs written under a previous kid via PASSWORD_PREVIOUS_KEYS', () => {
@@ -56,7 +78,7 @@ describe('SecretEncryptionService', () => {
     const oldSvc = new SecretEncryptionService(
       makeEnv({ passwordActiveKey: oldKey, passwordActiveKid: 'k-old' }),
     );
-    const blob = oldSvc.encrypt('rotated secret');
+    const blob = oldSvc.encrypt('rotated secret', AAD);
 
     const newKey = randomBytes(32);
     const newSvc = new SecretEncryptionService(
@@ -66,13 +88,13 @@ describe('SecretEncryptionService', () => {
         passwordPreviousKeys: [{ kid: 'k-old', key: oldKey }],
       }),
     );
-    expect(newSvc.decrypt(blob)).toBe('rotated secret');
+    expect(newSvc.decrypt(blob, AAD)).toBe('rotated secret');
   });
 
   it('reencryptIfStale is a no-op for blobs already under the active kid', () => {
     const svc = new SecretEncryptionService(makeEnv());
-    const blob = svc.encrypt('static');
-    const out = svc.reencryptIfStale(blob);
+    const blob = svc.encrypt('static', AAD);
+    const out = svc.reencryptIfStale(blob, AAD);
     expect(out.rotated).toBe(false);
     expect(out.blob).toBe(blob);
   });
@@ -82,7 +104,7 @@ describe('SecretEncryptionService', () => {
     const oldSvc = new SecretEncryptionService(
       makeEnv({ passwordActiveKey: oldKey, passwordActiveKid: 'k-old' }),
     );
-    const oldBlob = oldSvc.encrypt('rotate me');
+    const oldBlob = oldSvc.encrypt('rotate me', AAD);
 
     const newKey = randomBytes(32);
     const newSvc = new SecretEncryptionService(
@@ -92,12 +114,12 @@ describe('SecretEncryptionService', () => {
         passwordPreviousKeys: [{ kid: 'k-old', key: oldKey }],
       }),
     );
-    const out = newSvc.reencryptIfStale(oldBlob);
+    const out = newSvc.reencryptIfStale(oldBlob, AAD);
     expect(out.rotated).toBe(true);
     expect(out.blob).not.toBe(oldBlob);
-    expect(newSvc.decrypt(out.blob)).toBe('rotate me');
+    expect(newSvc.decrypt(out.blob, AAD)).toBe('rotate me');
     // Re-running is a no-op.
-    const again = newSvc.reencryptIfStale(out.blob);
+    const again = newSvc.reencryptIfStale(out.blob, AAD);
     expect(again.rotated).toBe(false);
   });
 
@@ -126,19 +148,26 @@ describe('SecretEncryptionService', () => {
 
   it('rejects malformed / truncated blobs', () => {
     const svc = new SecretEncryptionService(makeEnv());
-    expect(() => svc.decrypt('')).toThrow();
-    expect(() => svc.decrypt('AAAA')).toThrow(/truncated/);
+    expect(() => svc.decrypt('', AAD)).toThrow();
+    expect(() => svc.decrypt('AAAA', AAD)).toThrow(/truncated/);
   });
 
-  it('decrypts pre-refactor password-vault blobs', () => {
+  it('decrypts pre-AAD (0x01) password-vault blobs and upgrades them on rewrap', () => {
     const key = Buffer.alloc(32, 7);
     const svc = new SecretEncryptionService(
       makeEnv({ passwordActiveKey: key, passwordActiveKid: 'legacy' }),
     );
+    const legacy = legacyBlob('legacy', key, 'legacy password');
 
-    expect(svc.decrypt(legacyBlob('legacy', key, 'legacy password'))).toBe(
-      'legacy password',
-    );
+    expect(svc.decrypt(legacy, AAD)).toBe('legacy password');
+
+    // Same kid but legacy format → the migration pass rebinds it.
+    const upgraded = svc.reencryptIfStale(legacy, AAD);
+    expect(upgraded.rotated).toBe(true);
+    expect(svc.decrypt(upgraded.blob, AAD)).toBe('legacy password');
+    expect(() =>
+      svc.decrypt(upgraded.blob, passwordVaultAad('co-1', 'pwd-2', 'password')),
+    ).toThrow();
   });
 });
 

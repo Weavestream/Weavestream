@@ -5,6 +5,7 @@ import {
   DEFAULT_MAX_OUTPUT_TOKENS,
 } from './ai-settings.service.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
+import { AI_SETTINGS_API_KEY_AAD } from '../crypto/integration-secret-encryption.service.js';
 
 const ACTOR: AuthedUser = {
   id: 'actor-1',
@@ -88,7 +89,7 @@ describe('AiSettingsService', () => {
       META,
     );
 
-    expect(crypto.encrypt).toHaveBeenCalledWith('sk-test');
+    expect(crypto.encrypt).toHaveBeenCalledWith('sk-test', AI_SETTINGS_API_KEY_AAD);
     expect(prisma.aiSetting.update).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({ apiKeyCiphertext: 'ENC(sk-test)' }),
@@ -172,7 +173,7 @@ describe('AiSettingsService', () => {
       contextWindowTokens: DEFAULT_CONTEXT_WINDOW_TOKENS,
       allowPrivateNetwork: false,
     });
-    expect(crypto.decrypt).toHaveBeenCalledWith('ENC(sk-test)');
+    expect(crypto.decrypt).toHaveBeenCalledWith('ENC(sk-test)', AI_SETTINGS_API_KEY_AAD);
   });
 
   it('persists the private-network opt-in and carries it into DTO, config, and audit', async () => {

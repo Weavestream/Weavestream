@@ -1,5 +1,6 @@
 import { BadRequestException, ConflictException } from '@nestjs/common';
 import { EmailSettingsService } from './email-settings.service.js';
+import { SMTP_PASSWORD_AAD } from '../crypto/smtp-secret-encryption.service.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
 
 const ACTOR: AuthedUser = {
@@ -90,7 +91,7 @@ describe('EmailSettingsService', () => {
       META,
     );
 
-    expect(crypto.encrypt).toHaveBeenCalledWith('secret');
+    expect(crypto.encrypt).toHaveBeenCalledWith('secret', SMTP_PASSWORD_AAD);
     expect(prisma.emailSetting.update).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({ passwordCiphertext: 'ENC(secret)' }),
@@ -173,7 +174,7 @@ describe('EmailSettingsService', () => {
     await expect(svc.getSendConfig()).resolves.toEqual(
       expect.objectContaining({ password: 'secret', host: 'smtp.example.com' }),
     );
-    expect(crypto.decrypt).toHaveBeenCalledWith('ENC(secret)');
+    expect(crypto.decrypt).toHaveBeenCalledWith('ENC(secret)', SMTP_PASSWORD_AAD);
   });
 
   it('fails cleanly when disabled, incomplete, or undecryptable', async () => {

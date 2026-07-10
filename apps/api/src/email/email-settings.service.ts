@@ -7,7 +7,10 @@ import type {
 import { PrismaService } from '../prisma/prisma.service.js';
 import { AuditLogService } from '../audit/audit.service.js';
 import { AUDIT_ACTIONS } from '../audit/audit-actions.js';
-import { SmtpSecretEncryptionService } from '../crypto/smtp-secret-encryption.service.js';
+import {
+  SmtpSecretEncryptionService,
+  SMTP_PASSWORD_AAD,
+} from '../crypto/smtp-secret-encryption.service.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
 import type { RequestMeta } from '../common/request-meta.js';
 
@@ -46,7 +49,10 @@ export class EmailSettingsService {
     if (input.replyTo !== undefined) data.replyTo = input.replyTo;
     if (input.clearPassword) data.passwordCiphertext = null;
     if (input.password !== undefined) {
-      data.passwordCiphertext = this.crypto.encrypt(input.password);
+      data.passwordCiphertext = this.crypto.encrypt(
+        input.password,
+        SMTP_PASSWORD_AAD,
+      );
     }
 
     const after = await this.prisma.emailSetting.update({
@@ -81,7 +87,7 @@ export class EmailSettingsService {
     let password: string | null = null;
     if (row.passwordCiphertext) {
       try {
-        password = this.crypto.decrypt(row.passwordCiphertext);
+        password = this.crypto.decrypt(row.passwordCiphertext, SMTP_PASSWORD_AAD);
       } catch {
         throw new ConflictException(
           'Stored SMTP password could not be decrypted. Save the password again.',

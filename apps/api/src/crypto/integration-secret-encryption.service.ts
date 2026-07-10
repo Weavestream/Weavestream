@@ -18,6 +18,23 @@ import { AesGcmEnvelope } from './aes-gcm-envelope.js';
  * The plaintext is always a JSON-encoded string — every driver
  * defines its own `secretSchema` and parses the decrypted body.
  */
+
+/**
+ * AAD for an integration's credential bundle — binds the blob to its
+ * `Integration` row so it cannot be relocated onto another integration
+ * (or the AI-settings row, which shares this key).
+ */
+export function integrationSecretAad(integrationId: string): string {
+  return `integration:${integrationId}:secret`;
+}
+
+/**
+ * AAD for the AI-settings API key. `AiSetting` is a singleton row
+ * encrypted under the integrations key; the distinct context keeps its
+ * blob and integration-secret blobs mutually non-interchangeable.
+ */
+export const AI_SETTINGS_API_KEY_AAD = 'ai-settings:singleton:api-key';
+
 @Injectable()
 export class IntegrationSecretEncryptionService {
   private readonly envelope: AesGcmEnvelope;
@@ -33,19 +50,19 @@ export class IntegrationSecretEncryptionService {
     });
   }
 
-  /** Encrypt plaintext under the active key. Returns base64. */
-  encrypt(plaintext: string): string {
-    return this.envelope.encrypt(plaintext);
+  /** Encrypt plaintext under the active key, bound to `aad`. Returns base64. */
+  encrypt(plaintext: string, aad: string): string {
+    return this.envelope.encrypt(plaintext, aad);
   }
 
-  /** Decrypt base64 blob produced by `encrypt`. Throws on tamper / unknown kid. */
-  decrypt(blob: string): string {
-    return this.envelope.decrypt(blob);
+  /** Decrypt base64 blob produced by `encrypt`. Throws on tamper / AAD mismatch / unknown kid. */
+  decrypt(blob: string, aad: string): string {
+    return this.envelope.decrypt(blob, aad);
   }
 
-  /** Re-encrypts under the active kid if the blob was written under an old one. */
-  reencryptIfStale(blob: string): { blob: string; rotated: boolean } {
-    return this.envelope.reencryptIfStale(blob);
+  /** Re-encrypts under the active kid if the blob was written under an old one or pre-AAD. */
+  reencryptIfStale(blob: string, aad: string): { blob: string; rotated: boolean } {
+    return this.envelope.reencryptIfStale(blob, aad);
   }
 
   get currentKid(): string {

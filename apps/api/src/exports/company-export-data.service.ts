@@ -1,7 +1,10 @@
 import { Injectable } from '@nestjs/common';
 import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service.js';
-import { SecretEncryptionService } from '../crypto/secret-encryption.service.js';
+import {
+  SecretEncryptionService,
+  passwordVaultAad,
+} from '../crypto/secret-encryption.service.js';
 import { extractEmbeddedUploadIds } from '../articles/article-uploads.js';
 
 // ---------------------------------------------------------------------------
@@ -427,6 +430,9 @@ export class CompanyExportDataService {
       where: { companyId, archivedAt: null },
       select: {
         ...baseSelect,
+        // Row id is needed to rebuild each blob's AAD identity — it is
+        // consumed for decryption only and never lands in the export.
+        id: true,
         passwordCiphertext: true,
         notesCiphertext: true,
         totpSecretCiphertext: true,
@@ -437,7 +443,10 @@ export class CompanyExportDataService {
     return rows.map((p) => {
       let password: string | null;
       try {
-        password = this.crypto.decrypt(p.passwordCiphertext);
+        password = this.crypto.decrypt(
+          p.passwordCiphertext,
+          passwordVaultAad(companyId, p.id, 'password'),
+        );
       } catch {
         password = '[decryption error]';
       }
@@ -445,7 +454,12 @@ export class CompanyExportDataService {
       let notes: unknown | null = null;
       if (p.notesCiphertext) {
         try {
-          notes = parseJsonIfPossible(this.crypto.decrypt(p.notesCiphertext));
+          notes = parseJsonIfPossible(
+            this.crypto.decrypt(
+              p.notesCiphertext,
+              passwordVaultAad(companyId, p.id, 'notes'),
+            ),
+          );
         } catch {
           notes = '[decryption error]';
         }
@@ -454,7 +468,10 @@ export class CompanyExportDataService {
       let totpSecret: string | null = null;
       if (p.totpSecretCiphertext) {
         try {
-          totpSecret = this.crypto.decrypt(p.totpSecretCiphertext);
+          totpSecret = this.crypto.decrypt(
+            p.totpSecretCiphertext,
+            passwordVaultAad(companyId, p.id, 'totp'),
+          );
         } catch {
           totpSecret = '[decryption error]';
         }

@@ -15,12 +15,16 @@ import type {
   UpdatePasswordFolderInput,
   UpdatePasswordInput,
 } from '@weavestream/shared';
+import { randomUUID } from 'node:crypto';
 import { authenticator } from 'otplib';
 import { computeHibpRangeHash } from './hibp-range-hash.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { AuditLogService } from '../audit/audit.service.js';
 import { AUDIT_ACTIONS } from '../audit/audit-actions.js';
-import { SecretEncryptionService } from '../crypto/secret-encryption.service.js';
+import {
+  SecretEncryptionService,
+  passwordVaultAad,
+} from '../crypto/secret-encryption.service.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
 import { EnvService } from '../config/env.service.js';
 import { QueuesService } from '../queues/queues.service.js';
@@ -211,7 +215,7 @@ export class PasswordsService {
   ): Promise<SerializedPasswordDetail> {
     const row = await this.loadForRead(actor, companyId, id);
     const notes = row.notesCiphertext
-      ? this.safeDecryptNotes(row.notesCiphertext)
+      ? this.safeDecryptNotes(row.notesCiphertext, companyId, id)
       : null;
     const isStarred = await this.stars.isStarred(actor.id, 'password', id);
     return {
@@ -272,11 +276,25 @@ export class PasswordsService {
       );
     }
 
-    const passwordCiphertext = this.crypto.encrypt(input.password);
-    const notesCiphertext = this.encodeNotes(input.notes ?? null);
+    // Generate the row id up front: the ciphertexts are AAD-bound to
+    // `companyId + passwordId + field`, so the identity has to exist
+    // before the first encrypt call.
+    const passwordId = randomUUID();
+    const passwordCiphertext = this.crypto.encrypt(
+      input.password,
+      passwordVaultAad(companyId, passwordId, 'password'),
+    );
+    const notesCiphertext = this.encodeNotes(
+      input.notes ?? null,
+      companyId,
+      passwordId,
+    );
     const totpBlock = input.totp
       ? {
-          ciphertext: this.crypto.encrypt(input.totp.secret),
+          ciphertext: this.crypto.encrypt(
+            input.totp.secret,
+            passwordVaultAad(companyId, passwordId, 'totp'),
+          ),
           algorithm: input.totp.algorithm,
           digits: input.totp.digits,
           period: input.totp.period,
@@ -292,6 +310,7 @@ export class PasswordsService {
     const created = await this.prisma.$transaction(async (tx) => {
       const row = await tx.password.create({
         data: {
+          id: passwordId,
           companyId,
           folderId: input.folderId ?? null,
           assetId: input.assetId ?? null,
@@ -421,7 +440,10 @@ export class PasswordsService {
       changedFields.push('url');
     }
     if (input.password !== undefined) {
-      data.passwordCiphertext = this.crypto.encrypt(input.password);
+      data.passwordCiphertext = this.crypto.encrypt(
+        input.password,
+        passwordVaultAad(companyId, id, 'password'),
+      );
       data.lastRotatedAt = new Date();
       data.passwordStrength = computePasswordStrength(input.password, [
         (input.name ?? existing.name) ?? '',
@@ -431,7 +453,7 @@ export class PasswordsService {
       changedFields.push('password');
     }
     if (input.notes !== undefined) {
-      data.notesCiphertext = this.encodeNotes(input.notes);
+      data.notesCiphertext = this.encodeNotes(input.notes, companyId, id);
       changedFields.push('notes');
     }
     if (input.totp !== undefined) {
@@ -443,7 +465,10 @@ export class PasswordsService {
         if (existing.totpSecretCiphertext) changedFields.push('totpSecret');
       } else {
         const block: TotpConfigInput = input.totp;
-        data.totpSecretCiphertext = this.crypto.encrypt(block.secret);
+        data.totpSecretCiphertext = this.crypto.encrypt(
+          block.secret,
+          passwordVaultAad(companyId, id, 'totp'),
+        );
         data.totpAlgorithm = block.algorithm;
         data.totpDigits = block.digits;
         data.totpPeriod = block.period;
@@ -571,7 +596,9 @@ export class PasswordsService {
     const isStarred = await this.stars.isStarred(actor.id, 'password', id);
     return {
       ...this.toSummary(updated, actor),
-      notes: updated.notesCiphertext ? this.safeDecryptNotes(updated.notesCiphertext) : null,
+      notes: updated.notesCiphertext
+        ? this.safeDecryptNotes(updated.notesCiphertext, companyId, id)
+        : null,
       totpAlgorithm: updated.totpAlgorithm,
       totpDigits: updated.totpDigits,
       totpPeriod: updated.totpPeriod,
@@ -655,10 +682,16 @@ export class PasswordsService {
         message: 'A reason is required to reveal this credential.',
       });
     }
-    const password = this.crypto.decrypt(row.passwordCiphertext);
+    const password = this.crypto.decrypt(
+      row.passwordCiphertext,
+      passwordVaultAad(companyId, id, 'password'),
+    );
     const totpSecret =
       input.includeTotpSecret && row.totpSecretCiphertext
-        ? this.crypto.decrypt(row.totpSecretCiphertext)
+        ? this.crypto.decrypt(
+            row.totpSecretCiphertext,
+            passwordVaultAad(companyId, id, 'totp'),
+          )
         : undefined;
 
     await this.audit.log({
@@ -698,10 +731,18 @@ export class PasswordsService {
       where: { passwordId: id, companyId, version },
     });
     if (!v) throw new NotFoundException('version not found');
-    const password = this.crypto.decrypt(v.passwordCiphertext);
+    // Version rows carry verbatim copies of the parent row's blobs, so
+    // they share the parent's AAD identity.
+    const password = this.crypto.decrypt(
+      v.passwordCiphertext,
+      passwordVaultAad(companyId, id, 'password'),
+    );
     const totpSecret =
       input.includeTotpSecret && v.totpSecretCiphertext
-        ? this.crypto.decrypt(v.totpSecretCiphertext)
+        ? this.crypto.decrypt(
+            v.totpSecretCiphertext,
+            passwordVaultAad(companyId, id, 'totp'),
+          )
         : undefined;
     await this.audit.log({
       actorId: actor.id,
@@ -741,7 +782,10 @@ export class PasswordsService {
     if (!row.totpSecretCiphertext) {
       throw new BadRequestException('no TOTP configured');
     }
-    const secret = this.crypto.decrypt(row.totpSecretCiphertext);
+    const secret = this.crypto.decrypt(
+      row.totpSecretCiphertext,
+      passwordVaultAad(companyId, id, 'totp'),
+    );
     // `clone()` carries the default presets (keyDecoder, createDigest,
     // etc.) from `authenticator`'s built-in defaults and merges in just
     // the overrides we need. `create({})` would drop them and throw
@@ -792,12 +836,18 @@ export class PasswordsService {
     // Pipe vN's decrypted contents back through update() so strength
     // re-computes, HIBP re-enqueues, and a fresh version row is written
     // by the same code path as a normal edit.
-    const plaintext = this.crypto.decrypt(v.passwordCiphertext);
+    const plaintext = this.crypto.decrypt(
+      v.passwordCiphertext,
+      passwordVaultAad(companyId, id, 'password'),
+    );
     const notes = (v.notesCiphertext
-      ? this.safeDecryptNotes(v.notesCiphertext)
+      ? this.safeDecryptNotes(v.notesCiphertext, companyId, id)
       : null) as UpdatePasswordInput['notes'];
     const totpSecret = v.totpSecretCiphertext
-      ? this.crypto.decrypt(v.totpSecretCiphertext)
+      ? this.crypto.decrypt(
+          v.totpSecretCiphertext,
+          passwordVaultAad(companyId, id, 'totp'),
+        )
       : null;
 
     const result = await this.update(
@@ -1268,16 +1318,30 @@ export class PasswordsService {
     updatedAt: row.updatedAt,
   });
 
-  private encodeNotes(notes: unknown): string | null {
+  private encodeNotes(
+    notes: unknown,
+    companyId: string,
+    passwordId: string,
+  ): string | null {
     if (notes === null || notes === undefined) return null;
     const json = typeof notes === 'string' ? notes : JSON.stringify(notes);
     if (json.length === 0) return null;
-    return this.crypto.encrypt(json);
+    return this.crypto.encrypt(
+      json,
+      passwordVaultAad(companyId, passwordId, 'notes'),
+    );
   }
 
-  private safeDecryptNotes(blob: string): unknown {
+  private safeDecryptNotes(
+    blob: string,
+    companyId: string,
+    passwordId: string,
+  ): unknown {
     try {
-      const plaintext = this.crypto.decrypt(blob);
+      const plaintext = this.crypto.decrypt(
+        blob,
+        passwordVaultAad(companyId, passwordId, 'notes'),
+      );
       // Try to decode as JSON (Tiptap doc). If it isn't, treat as string.
       try {
         return JSON.parse(plaintext);
@@ -1286,7 +1350,7 @@ export class PasswordsService {
       }
     } catch (err) {
       this.logger.error(
-        `Failed to decrypt notes — record may have been encrypted under an unknown kid: ${(err as Error).message}`,
+        `Failed to decrypt notes — unknown kid or mismatched record binding: ${(err as Error).message}`,
       );
       return null;
     }

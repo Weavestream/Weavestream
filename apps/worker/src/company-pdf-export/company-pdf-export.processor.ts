@@ -9,7 +9,10 @@ import {
 } from '@weavestream/shared';
 import { RedisService } from '../../../api/src/redis/redis.service.js';
 import { LocalStorageService } from '../../../api/src/storage/local-storage.service.js';
-import { SecretEncryptionService } from '../../../api/src/crypto/secret-encryption.service.js';
+import {
+  SecretEncryptionService,
+  exportPdfPasswordAad,
+} from '../../../api/src/crypto/secret-encryption.service.js';
 import { AuditLogService } from '../../../api/src/audit/audit.service.js';
 import { AUDIT_ACTIONS } from '../../../api/src/audit/audit-actions.js';
 import {
@@ -106,7 +109,10 @@ export class CompanyPdfExportWorker implements OnModuleDestroy {
     let pdfPassword: string | undefined;
     if (pdfPasswordCiphertext) {
       try {
-        pdfPassword = this.crypto.decrypt(pdfPasswordCiphertext);
+        pdfPassword = this.crypto.decrypt(
+          pdfPasswordCiphertext,
+          exportPdfPasswordAad(exportId),
+        );
       } catch (err) {
         throw new Error(
           `Could not decrypt pdf password ciphertext: ${(err as Error).message}`,

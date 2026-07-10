@@ -8,7 +8,10 @@ import {
 import { QueuesService } from '../queues/queues.service.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { LocalStorageService } from '../storage/local-storage.service.js';
-import { SecretEncryptionService } from '../crypto/secret-encryption.service.js';
+import {
+  SecretEncryptionService,
+  exportPdfPasswordAad,
+} from '../crypto/secret-encryption.service.js';
 import { AuditLogService } from '../audit/audit.service.js';
 import { AUDIT_ACTIONS } from '../audit/audit-actions.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
@@ -50,9 +53,10 @@ export class ExportsService {
 
     // Encrypt the user-supplied PDF password before it ever lands in
     // Redis. Same envelope (AES-256-GCM, kid-tagged) the password vault
-    // uses, so a Redis dump alone is not enough to recover it.
+    // uses, so a Redis dump alone is not enough to recover it. AAD-bound
+    // to this exportId, so the blob only decrypts inside this job.
     const pdfPasswordCiphertext = opts.pdfPassword
-      ? this.crypto.encrypt(opts.pdfPassword)
+      ? this.crypto.encrypt(opts.pdfPassword, exportPdfPasswordAad(exportId))
       : undefined;
 
     const payload: CompanyExportJob = {

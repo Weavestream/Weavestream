@@ -3,7 +3,10 @@ import type { AiSettings, UpdateAiSettingsInput } from '@weavestream/shared';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { AuditLogService } from '../audit/audit.service.js';
 import { AUDIT_ACTIONS } from '../audit/audit-actions.js';
-import { IntegrationSecretEncryptionService } from '../crypto/integration-secret-encryption.service.js';
+import {
+  IntegrationSecretEncryptionService,
+  AI_SETTINGS_API_KEY_AAD,
+} from '../crypto/integration-secret-encryption.service.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
 import type { RequestMeta } from '../common/request-meta.js';
 import type { SafeFetchOptions } from '../common/egress/safe-fetch.js';
@@ -60,7 +63,10 @@ export class AiSettingsService {
     if (input.defaultModel !== undefined) data.defaultModel = input.defaultModel;
     if (input.clearApiKey) data.apiKeyCiphertext = null;
     if (input.apiKey !== undefined) {
-      data.apiKeyCiphertext = this.crypto.encrypt(input.apiKey);
+      data.apiKeyCiphertext = this.crypto.encrypt(
+        input.apiKey,
+        AI_SETTINGS_API_KEY_AAD,
+      );
     }
     // `null` explicitly resets to the server default; `undefined` (field
     // omitted) leaves the saved value untouched.
@@ -130,7 +136,10 @@ export class AiSettingsService {
     let apiKey: string | null = null;
     if (row.apiKeyCiphertext) {
       try {
-        apiKey = this.crypto.decrypt(row.apiKeyCiphertext);
+        apiKey = this.crypto.decrypt(
+          row.apiKeyCiphertext,
+          AI_SETTINGS_API_KEY_AAD,
+        );
       } catch {
         throw new ConflictException(
           'Stored AI API key could not be decrypted. Save the key again.',

@@ -10,7 +10,10 @@ import { AuditLogService } from './audit/audit.service.js';
 import { SearchIndexService } from './search/search-index.service.js';
 import { QueuesService } from './queues/queues.service.js';
 import { DomainCheckJobNames, QueueNames } from '@weavestream/shared';
-import { SecretEncryptionService } from './crypto/secret-encryption.service.js';
+import {
+  SecretEncryptionService,
+  passwordVaultAad,
+} from './crypto/secret-encryption.service.js';
 
 async function bootstrap() {
   const app = await NestFactory.createApplicationContext(AppModule, { bufferLogs: true });
@@ -73,9 +76,10 @@ Commands:
   reencrypt-passwords [--force]  Decrypt every Password/PasswordVersion ciphertext
                                  and re-encrypt under the CURRENT encryption key
                                  (PASSWORD_ENCRYPTION_KEY_KID). Default-skips rows
-                                 already on the current kid; pass --force to
-                                 re-wrap regardless (useful after an IV-format
-                                 migration).
+                                 already on the current kid AND blob format (the
+                                 default pass upgrades legacy pre-AAD blobs to the
+                                 record-bound format); pass --force to re-wrap
+                                 regardless.
 `);
 }
 
@@ -376,9 +380,9 @@ async function checkDomains(
  * Walks every ciphertext column on Password and PasswordVersion rows
  * and re-encrypts under the current PASSWORD_ENCRYPTION_KEY_KID. The
  * default pass is fast: it short-circuits when the blob is already on
- * the current kid. `--force` decrypts every blob and re-encrypts it
- * regardless — use only after a migration that changed the blob format
- * and a simple kid rotation is not enough.
+ * the current kid and blob format — legacy pre-AAD (0x01) blobs are
+ * rewrapped into the AAD-bound format as part of the default pass.
+ * `--force` decrypts every blob and re-encrypts it regardless.
  *
  * Runs in batches to keep memory bounded on vaults with 100k+ rows and
  * writes an audit row per password so an admin can diff before/after.
@@ -398,14 +402,17 @@ async function reencryptPasswords(
   let passwordsTouched = 0;
   let versionsTouched = 0;
 
-  const rewrap = (blob: string | null): { next: string | null; changed: boolean } => {
+  const rewrap = (
+    blob: string | null,
+    aad: string,
+  ): { next: string | null; changed: boolean } => {
     if (!blob) return { next: null, changed: false };
     totalBlobs += 1;
     if (force) {
-      const plaintext = crypto.decrypt(blob);
-      return { next: crypto.encrypt(plaintext), changed: true };
+      const plaintext = crypto.decrypt(blob, aad);
+      return { next: crypto.encrypt(plaintext, aad), changed: true };
     }
-    const result = crypto.reencryptIfStale(blob);
+    const result = crypto.reencryptIfStale(blob, aad);
     return { next: result.blob, changed: result.rotated };
   };
 
@@ -432,9 +439,18 @@ async function reencryptPasswords(
     });
     if (batch.length === 0) break;
     for (const row of batch) {
-      const pw = rewrap(row.passwordCiphertext);
-      const notes = rewrap(row.notesCiphertext);
-      const totp = rewrap(row.totpSecretCiphertext);
+      const pw = rewrap(
+        row.passwordCiphertext,
+        passwordVaultAad(row.companyId, row.id, 'password'),
+      );
+      const notes = rewrap(
+        row.notesCiphertext,
+        passwordVaultAad(row.companyId, row.id, 'notes'),
+      );
+      const totp = rewrap(
+        row.totpSecretCiphertext,
+        passwordVaultAad(row.companyId, row.id, 'totp'),
+      );
       if (pw.changed || notes.changed || totp.changed) {
         await prisma.password.update({
           where: { id: row.id },
@@ -458,6 +474,8 @@ async function reencryptPasswords(
   for (;;) {
     const batch: Array<{
       id: string;
+      passwordId: string;
+      companyId: string;
       passwordCiphertext: string;
       notesCiphertext: string | null;
       totpSecretCiphertext: string | null;
@@ -467,6 +485,8 @@ async function reencryptPasswords(
       take: BATCH,
       select: {
         id: true,
+        passwordId: true,
+        companyId: true,
         passwordCiphertext: true,
         notesCiphertext: true,
         totpSecretCiphertext: true,
@@ -474,9 +494,21 @@ async function reencryptPasswords(
     });
     if (batch.length === 0) break;
     for (const row of batch) {
-      const pw = rewrap(row.passwordCiphertext);
-      const notes = rewrap(row.notesCiphertext);
-      const totp = rewrap(row.totpSecretCiphertext);
+      // Version blobs are verbatim copies of the parent Password row's
+      // blobs, so they share the parent's AAD (passwordId, not the
+      // version row's own id).
+      const pw = rewrap(
+        row.passwordCiphertext,
+        passwordVaultAad(row.companyId, row.passwordId, 'password'),
+      );
+      const notes = rewrap(
+        row.notesCiphertext,
+        passwordVaultAad(row.companyId, row.passwordId, 'notes'),
+      );
+      const totp = rewrap(
+        row.totpSecretCiphertext,
+        passwordVaultAad(row.companyId, row.passwordId, 'totp'),
+      );
       if (pw.changed || notes.changed || totp.changed) {
         await prisma.passwordVersion.update({
           where: { id: row.id },

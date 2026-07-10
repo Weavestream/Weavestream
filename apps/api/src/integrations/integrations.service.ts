@@ -18,7 +18,10 @@ import type {
   UpdateIntegrationResourceInput,
 } from '@weavestream/shared';
 import { PrismaService } from '../prisma/prisma.service.js';
-import { IntegrationSecretEncryptionService } from '../crypto/integration-secret-encryption.service.js';
+import {
+  IntegrationSecretEncryptionService,
+  integrationSecretAad,
+} from '../crypto/integration-secret-encryption.service.js';
 import { AuditLogService } from '../audit/audit.service.js';
 import { AUDIT_ACTIONS } from '../audit/audit-actions.js';
 import { EnvService } from '../config/env.service.js';
@@ -137,7 +140,10 @@ export class IntegrationsService {
         await tx.integrationSecret.create({
           data: {
             integrationId: row.id,
-            ciphertext: this.crypto.encrypt(JSON.stringify(input.secret)),
+            ciphertext: this.crypto.encrypt(
+              JSON.stringify(input.secret),
+              integrationSecretAad(row.id),
+            ),
           },
         });
       }
@@ -214,7 +220,10 @@ export class IntegrationsService {
         });
         secretMutated = true;
       } else if (input.secret) {
-        const ciphertext = this.crypto.encrypt(JSON.stringify(input.secret));
+        const ciphertext = this.crypto.encrypt(
+          JSON.stringify(input.secret),
+          integrationSecretAad(id),
+        );
         await tx.integrationSecret.upsert({
           where: { integrationId: id },
           create: { integrationId: id, ciphertext },
@@ -387,7 +396,10 @@ export class IntegrationsService {
     }
     let secret: Record<string, unknown>;
     try {
-      const json = this.crypto.decrypt(row.secret.ciphertext);
+      const json = this.crypto.decrypt(
+        row.secret.ciphertext,
+        integrationSecretAad(row.id),
+      );
       const parsed = JSON.parse(json);
       if (!parsed || typeof parsed !== 'object') {
         throw new Error('decrypted secret is not a JSON object');
@@ -900,7 +912,10 @@ export class IntegrationsService {
     let secretMask: Record<string, string> | null = null;
     if (row.secret) {
       try {
-        const json = this.crypto.decrypt(row.secret.ciphertext);
+        const json = this.crypto.decrypt(
+          row.secret.ciphertext,
+          integrationSecretAad(row.id),
+        );
         const parsed = JSON.parse(json) as Record<string, unknown>;
         secretMask = {};
         for (const [k, v] of Object.entries(parsed ?? {})) {

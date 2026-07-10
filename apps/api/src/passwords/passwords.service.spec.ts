@@ -11,6 +11,7 @@ import type {
   TotpAlgo,
 } from '@prisma/client';
 import { PasswordsService } from './passwords.service.js';
+import { passwordVaultAad } from '../crypto/secret-encryption.service.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
 
 /**
@@ -495,6 +496,7 @@ describe('PasswordsService — detail', () => {
     expect(detail.notes).toEqual({ type: 'doc', text: 'hi' });
     expect(crypto.decrypt).toHaveBeenCalledWith(
       'ENC({"type":"doc","text":"hi"})',
+      passwordVaultAad('co-1', 'pwd-a', 'notes'),
     );
   });
 
