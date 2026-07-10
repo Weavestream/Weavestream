@@ -103,6 +103,7 @@ export class ExportsController {
       throw new NotFoundException({ error: 'ExportUnavailable' });
     }
     res.setHeader('Content-Type', stream.contentType ?? 'application/pdf');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
     if (typeof stream.contentLength === 'number') {
       res.setHeader('Content-Length', stream.contentLength.toString());
     }

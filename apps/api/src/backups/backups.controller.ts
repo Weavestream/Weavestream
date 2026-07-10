@@ -157,6 +157,7 @@ export class BackupsController {
   ): Promise<StreamableFile> {
     const file = await this.backups.openRunDump(id);
     res.setHeader('Content-Type', 'application/octet-stream');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Content-Length', file.contentLength.toString());
     res.setHeader(
       'Content-Disposition',
