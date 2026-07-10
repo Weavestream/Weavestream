@@ -55,14 +55,26 @@ export async function proxy(req: NextRequest) {
     ...(isDev ? ['ws:', 'wss:'] : []),
   ].join(' ');
 
-  const imgSrc = ['img-src', "'self'", 'data:', 'blob:'].join(' ');
+  // No browser render path uses data: or blob: images — the editor stores
+  // same-origin `/uploads/:id/image` URLs, Tiptap's default allowBase64:false
+  // rejects pasted data: images, and the data: URLs in icon.tsx/apple-icon.tsx
+  // are consumed server-side by Satori. Re-add a scheme here only when a
+  // feature actually needs it (e.g. blob: for client-side upload previews).
+  const imgSrc = ['img-src', "'self'"].join(' ');
 
+  // style-src keeps 'unsafe-inline': Next.js streams inline <style> tags for
+  // CSS-in-JS/fonts and React `style=` attributes need style-src-attr
+  // 'unsafe-inline' regardless. With script-src locked to nonce +
+  // strict-dynamic, style injection alone is not an XSS vector (worst case is
+  // exfiltration-via-CSS, which requires an HTML-injection primitive that the
+  // script policy already contains). Revisit if Next.js ships nonce'd styles.
   const csp = [
     "default-src 'self'",
     scriptSrc,
-    "style-src 'self' 'unsafe-inline'", // Tailwind/Next.js inject inline styles
+    "style-src 'self' 'unsafe-inline'",
     imgSrc,
     connectSrc,
+    "object-src 'none'",
     "frame-ancestors 'none'",
     "base-uri 'self'",
     "form-action 'self'",
