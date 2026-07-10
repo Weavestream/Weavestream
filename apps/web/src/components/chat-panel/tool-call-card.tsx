@@ -50,6 +50,13 @@ export function ToolCallCard({
   const [saveDialogOpen, setSaveDialogOpen] = useState(false);
   const pageContext = state.pageContext;
 
+  // Read tools (WS-030) executed server-side during streaming; they
+  // are never pending and have no Apply/Reject affordance — render a
+  // compact status chip. (Placed after every hook: Rules of Hooks.)
+  if (toolCall.name !== 'update_article' && toolCall.name !== 'create_article') {
+    return <ReadToolChip toolCall={toolCall} />;
+  }
+
   const isUpdate = toolCall.name === 'update_article';
   const args = toolCall.arguments as {
     article_id?: string;
@@ -480,13 +487,60 @@ function CreatedArticleCard({
   );
 }
 
+/**
+ * Compact one-line chip for an executed (or failed) read tool. The
+ * persisted `result` is a server-written one-line summary — never
+ * document content — and failures carry deliberately generic text.
+ */
+function ReadToolChip({ toolCall }: { toolCall: ChatToolCallDto }) {
+  const verb =
+    toolCall.name === 'search'
+      ? 'Searched'
+      : toolCall.name === 'find_related_items'
+        ? 'Checked linked items'
+      : toolCall.name === 'get_article'
+        ? 'Read article'
+        : toolCall.name === 'get_related_items'
+          ? 'Checked linked items'
+          : 'Company summary';
+  const ok = toolCall.status === 'executed';
+  const label = ok
+    ? `${verb} — ${toolCall.result ?? 'done'}`
+    : `${verb} — ${toolCall.error ?? 'not available'}`;
+  return (
+    <div
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 6,
+        padding: '4px 8px',
+        border: '1px solid var(--line)',
+        borderRadius: 6,
+        background: 'var(--panel-2)',
+        fontSize: 11.5,
+        color: ok ? 'var(--muted)' : 'var(--warn, #b7791f)',
+        maxWidth: '100%',
+      }}
+    >
+      {ok ? <Icon.check size={11} /> : <Icon.x size={11} />}
+      <span style={{ overflowWrap: 'anywhere' }}>{label}</span>
+    </div>
+  );
+}
+
 function StatusRow({ toolCall }: { toolCall: ChatToolCallDto }) {
   // A truncated/empty proposal is a "couldn't finish" warning, not a
   // hard failure — the server already put a friendly explanation in
   // `error`, so we show it without the alarming "Failed:" prefix.
+  // Revision-guard refusals (stale / no_base) are the same kind of
+  // soft outcome: the server's message tells the user how to proceed
+  // and the newer article content was preserved, not lost.
   const isSoftFailure =
     toolCall.status === 'failed' &&
-    (toolCall.errorCode === 'truncated' || toolCall.errorCode === 'empty');
+    (toolCall.errorCode === 'truncated' ||
+      toolCall.errorCode === 'empty' ||
+      toolCall.errorCode === 'stale' ||
+      toolCall.errorCode === 'no_base');
   const tone =
     toolCall.status === 'applied'
       ? 'ok'

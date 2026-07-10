@@ -9,7 +9,7 @@ import {
   type ArticleVersion,
   type Folder,
 } from '@prisma/client';
-import { ArticlesService } from './articles.service.js';
+import { ArticlesService, StaleArticleError } from './articles.service.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
 
 /**
@@ -125,6 +125,7 @@ function makeStubs(initial: {
           updatedAt: new Date(),
           createdBy: (d.createdBy as string | null) ?? null,
           updatedBy: (d.updatedBy as string | null) ?? null,
+          revision: 1,
           archivedAt: null,
         };
         articles.push(row);
@@ -159,15 +160,27 @@ function makeStubs(initial: {
       },
       // The service uses `updateMany` for writes that must be scoped by
       // both `id` and `companyId` (so a stale id from one tenant can't
-      // target another). Mirror that here with a two-predicate filter.
+      // target another). Mirror that here with a two-predicate filter,
+      // plus the optimistic-concurrency predicates (`revision`,
+      // `archivedAt: null`) the guarded apply path adds to the WHERE.
       async updateMany(args: {
-        where: { id?: string; companyId?: string };
+        where: {
+          id?: string;
+          companyId?: string;
+          revision?: number;
+          archivedAt?: Date | null;
+        };
         data: Prisma.ArticleUncheckedUpdateManyInput;
       }) {
         const targets = articles.filter(
           (a) =>
             (!args.where.id || a.id === args.where.id) &&
-            (!args.where.companyId || a.companyId === args.where.companyId),
+            (!args.where.companyId || a.companyId === args.where.companyId) &&
+            (args.where.revision === undefined ||
+              a.revision === args.where.revision) &&
+            (!('archivedAt' in args.where) ||
+              args.where.archivedAt !== null ||
+              a.archivedAt === null),
         );
         const d = args.data as Record<string, unknown>;
         for (const row of targets) {
@@ -189,6 +202,11 @@ function makeStubs(initial: {
           if ('excerpt' in d) row.excerpt = (d.excerpt as string) ?? null;
           if ('visibleToClients' in d)
             row.visibleToClients = d.visibleToClients as boolean;
+          if ('revision' in d) {
+            const r = d.revision as number | { increment: number };
+            row.revision =
+              typeof r === 'number' ? r : row.revision + r.increment;
+          }
           if ('updatedBy' in d) row.updatedBy = d.updatedBy as string | null;
           row.updatedAt = new Date();
         }
@@ -461,7 +479,7 @@ function makeStubs(initial: {
         }).length;
       },
     },
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+     
     async $transaction<T>(fn: (tx: any) => Promise<T>): Promise<T> {
       return fn(prisma);
     },
@@ -548,7 +566,7 @@ describe('ArticlesService', () => {
   describe('create', () => {
     it('rejects non-doc content', async () => {
       const { prisma, audit, stars, uploads, relations } = makeStubs();
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+       
       const svc = new ArticlesService(prisma as any, audit as any, stars as any, uploads as any, relations as any);
       await expect(
         svc.create(
@@ -565,7 +583,7 @@ describe('ArticlesService', () => {
 
     it('slugifies the title when no slug is provided', async () => {
       const { prisma, audit, stars, uploads, relations } = makeStubs();
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+       
       const svc = new ArticlesService(prisma as any, audit as any, stars as any, uploads as any, relations as any);
       const created = await svc.create(
         actor(),
@@ -594,10 +612,11 @@ describe('ArticlesService', () => {
         updatedAt: new Date(),
         createdBy: null,
         updatedBy: null,
+        revision: 1,
         archivedAt: null,
       };
       const { prisma, audit, stars, uploads, relations } = makeStubs({ articles: [existing] });
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+       
       const svc = new ArticlesService(prisma as any, audit as any, stars as any, uploads as any, relations as any);
       await expect(
         svc.create(
@@ -626,10 +645,11 @@ describe('ArticlesService', () => {
         updatedAt: new Date(),
         createdBy: null,
         updatedBy: null,
+        revision: 1,
         archivedAt: null,
       };
       const { prisma, audit, stars, uploads, relations } = makeStubs({ articles: [other] });
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+       
       const svc = new ArticlesService(prisma as any, audit as any, stars as any, uploads as any, relations as any);
       const created = await svc.create(
         actor(),
@@ -656,7 +676,7 @@ describe('ArticlesService', () => {
         archivedAt: null,
       };
       const { prisma, audit, stars, uploads, relations } = makeStubs({ folders: [folder] });
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+       
       const svc = new ArticlesService(prisma as any, audit as any, stars as any, uploads as any, relations as any);
       await expect(
         svc.create(
@@ -670,7 +690,7 @@ describe('ArticlesService', () => {
 
     it('persists Markdown and derives search plaintext without Markdown syntax', async () => {
       const { prisma, audit, stars, uploads, relations } = makeStubs();
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+       
       const svc = new ArticlesService(prisma as any, audit as any, stars as any, uploads as any, relations as any);
       const created = await svc.create(
         actor(),
@@ -708,10 +728,11 @@ describe('ArticlesService', () => {
         updatedAt: new Date(),
         createdBy: null,
         updatedBy: null,
+        revision: 1,
         archivedAt: null,
       };
       const { prisma, audit, stars, uploads, relations } = makeStubs({ articles: [row] });
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+       
       const svc = new ArticlesService(prisma as any, audit as any, stars as any, uploads as any, relations as any);
       const updated = await svc.update(
         actor(),
@@ -744,14 +765,162 @@ describe('ArticlesService', () => {
         updatedAt: new Date(),
         createdBy: null,
         updatedBy: null,
+        revision: 1,
         archivedAt: null,
       };
       const { prisma, audit, stars, uploads, relations } = makeStubs({ articles: [row] });
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+       
       const svc = new ArticlesService(prisma as any, audit as any, stars as any, uploads as any, relations as any);
       await expect(
         svc.update(actor(), 'c-1', 'art-md', { content: doc('y') } as never, meta()),
       ).rejects.toBeInstanceOf(BadRequestException);
+    });
+  });
+
+  describe('revision guard (WS-030)', () => {
+    function mdRow(overrides: Partial<ArticleRow> = {}): ArticleRow {
+      return {
+        id: 'art-md',
+        companyId: 'c-1',
+        folderId: null,
+        title: 't',
+        slug: 't',
+        editorMode: 'markdown',
+        markdownSource: '# A',
+        content: null,
+        contentPlaintext: 'A',
+        excerpt: 'A',
+        visibleToClients: true,
+        revision: 1,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        createdBy: null,
+        updatedBy: null,
+        archivedAt: null,
+        ...overrides,
+      };
+    }
+
+    function mkSvc(initial: Parameters<typeof makeStubs>[0] = {}) {
+      const stubs = makeStubs(initial);
+      const svc = new ArticlesService(
+         
+        stubs.prisma as any,
+         
+        stubs.audit as any,
+         
+        stubs.stars as any,
+         
+        stubs.uploads as any,
+         
+        stubs.relations as any,
+      );
+      return { svc, ...stubs };
+    }
+
+    it('increments revision on an explicit content save', async () => {
+      const { svc } = mkSvc({ articles: [mdRow()] });
+      const updated = await svc.update(
+        actor(),
+        'c-1',
+        'art-md',
+        { editorMode: 'markdown', markdownSource: '## B' } as never,
+        meta(),
+      );
+      expect(updated.revision).toBe(2);
+    });
+
+    it('increments revision on an autosave draft write', async () => {
+      const { svc, articles } = mkSvc({ articles: [mdRow()] });
+      await svc.update(
+        actor(),
+        'c-1',
+        'art-md',
+        { editorMode: 'markdown', markdownSource: '## B', draft: true } as never,
+        meta(),
+      );
+      expect(articles[0]!.revision).toBe(2);
+    });
+
+    it('increments revision on a title-only change', async () => {
+      const { svc } = mkSvc({ articles: [mdRow()] });
+      const updated = await svc.update(
+        actor(),
+        'c-1',
+        'art-md',
+        { title: 'renamed' } as never,
+        meta(),
+      );
+      expect(updated.revision).toBe(2);
+    });
+
+    it('does not touch revision on move', async () => {
+      const { svc, articles } = mkSvc({ articles: [mdRow()] });
+      await svc.move(actor(), 'c-1', 'art-md', { folderId: null } as never, meta());
+      expect(articles[0]!.revision).toBe(1);
+    });
+
+    it('applies with a matching expectedRevision and carries the guard in the WHERE', async () => {
+      const { svc, prisma } = mkSvc({ articles: [mdRow({ revision: 4 })] });
+      const spy = jest.spyOn(prisma.article, 'updateMany');
+      const updated = await svc.update(
+        actor(),
+        'c-1',
+        'art-md',
+        { editorMode: 'markdown', markdownSource: '## guarded' } as never,
+        meta(),
+        { expectedRevision: 4 },
+      );
+      expect(updated.revision).toBe(5);
+      // The guard must literally ride the WHERE clause of the write —
+      // never a separate read-then-check.
+      expect(spy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            id: 'art-md',
+            companyId: 'c-1',
+            revision: 4,
+            archivedAt: null,
+          }),
+        }),
+      );
+    });
+
+    it('throws StaleArticleError on revision mismatch without writing history or audit', async () => {
+      const { svc, articles, versions, audit } = mkSvc({
+        articles: [mdRow({ revision: 6, markdownSource: '# newer' })],
+      });
+      await expect(
+        svc.update(
+          actor(),
+          'c-1',
+          'art-md',
+          { editorMode: 'markdown', markdownSource: '## from-proposal' } as never,
+          meta(),
+          { expectedRevision: 5 },
+        ),
+      ).rejects.toBeInstanceOf(StaleArticleError);
+      // The newer content survives untouched and nothing was recorded.
+      expect(articles[0]!.markdownSource).toBe('# newer');
+      expect(articles[0]!.revision).toBe(6);
+      expect(versions).toHaveLength(0);
+      expect(audit.log).not.toHaveBeenCalled();
+    });
+
+    it('refuses a guarded write to an archived article', async () => {
+      // The unguarded HTTP path pre-checks archived state before the tx;
+      // the guarded path must also refuse INSIDE the WHERE. Bypass the
+      // pre-check by archiving between snapshot and write is impossible
+      // to stage with the stub, so assert the WHERE-level behavior
+      // directly: a row that is archived matches zero rows.
+      const { prisma } = mkSvc({
+        articles: [mdRow({ archivedAt: new Date(), revision: 3 })],
+      });
+      const res = await prisma.article.updateMany({
+        where: { id: 'art-md', companyId: 'c-1', revision: 3, archivedAt: null },
+        data: { title: 'x' },
+      });
+      expect(res.count).toBe(0);
     });
   });
 
@@ -773,10 +942,11 @@ describe('ArticlesService', () => {
         updatedAt: new Date(),
         createdBy: null,
         updatedBy: null,
+        revision: 1,
         archivedAt: null,
       };
       const { prisma, audit, stars, uploads, relations } = makeStubs({ articles: [row] });
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+       
       const svc = new ArticlesService(prisma as any, audit as any, stars as any, uploads as any, relations as any);
       await expect(svc.getById(actor(), 'c-1', 'art-1')).rejects.toBeInstanceOf(
         NotFoundException,
@@ -800,10 +970,11 @@ describe('ArticlesService', () => {
         updatedAt: new Date(),
         createdBy: null,
         updatedBy: null,
+        revision: 1,
         archivedAt: null,
       };
       const { prisma, audit, stars, uploads, relations } = makeStubs({ articles: [row] });
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+       
       const svc = new ArticlesService(prisma as any, audit as any, stars as any, uploads as any, relations as any);
       await expect(
         svc.getById(actor({ role: 'CLIENT_USER' }), 'c-1', 'art-1'),
@@ -827,10 +998,11 @@ describe('ArticlesService', () => {
         updatedAt: new Date(),
         createdBy: null,
         updatedBy: null,
+        revision: 1,
         archivedAt: null,
       };
       const { prisma, audit, stars, uploads, relations } = makeStubs({ articles: [row] });
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+       
       const svc = new ArticlesService(prisma as any, audit as any, stars as any, uploads as any, relations as any);
       const got = await svc.getById(actor(), 'c-1', 'art-1');
       expect(got.id).toBe('art-1');
@@ -841,7 +1013,7 @@ describe('ArticlesService', () => {
     it('orders by archivedAt (nulls first) then title alphabetically', async () => {
       const { prisma, audit, stars, uploads, relations } = makeStubs();
       const findManySpy = jest.spyOn(prisma.article, 'findMany');
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+       
       const svc = new ArticlesService(prisma as any, audit as any, stars as any, uploads as any, relations as any);
 
       await svc.list(actor(), 'c-1');
@@ -872,10 +1044,11 @@ describe('ArticlesService', () => {
         updatedAt: new Date(),
         createdBy: null,
         updatedBy: null,
+        revision: 1,
         archivedAt: null,
       };
       const { prisma, audit, stars, uploads, relations } = makeStubs({ articles: [row] });
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+       
       const svc = new ArticlesService(prisma as any, audit as any, stars as any, uploads as any, relations as any);
       const archived = await svc.archive(actor(), 'c-1', 'art-1', meta());
       expect(archived.archivedAt).toBeInstanceOf(Date);
@@ -903,6 +1076,7 @@ describe('ArticlesService', () => {
         contentPlaintext: '',
         excerpt: null,
         visibleToClients: true,
+        revision: 1,
         createdAt: new Date(),
         updatedAt: new Date(),
         createdBy: null,
@@ -918,15 +1092,15 @@ describe('ArticlesService', () => {
         articles: [row],
       });
       const svc = new ArticlesService(
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+         
         prisma as any,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+         
         audit as any,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+         
         stars as any,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+         
         uploads as any,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+         
         relations as any,
       );
 
@@ -941,15 +1115,15 @@ describe('ArticlesService', () => {
         articles: [row],
       });
       const svc = new ArticlesService(
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+         
         prisma as any,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+         
         audit as any,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+         
         stars as any,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+         
         uploads as any,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+         
         relations as any,
       );
 
@@ -964,15 +1138,15 @@ describe('ArticlesService', () => {
         articles: [row],
       });
       const svc = new ArticlesService(
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+         
         prisma as any,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+         
         audit as any,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+         
         stars as any,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+         
         uploads as any,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+         
         relations as any,
       );
 
@@ -1014,15 +1188,15 @@ describe('ArticlesService', () => {
         ],
       });
       const svc = new ArticlesService(
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+         
         prisma as any,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+         
         audit as any,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+         
         stars as any,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+         
         uploads as any,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+         
         relations as any,
       );
 
@@ -1087,15 +1261,15 @@ describe('ArticlesService', () => {
         ],
       });
       const svc = new ArticlesService(
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+         
         prisma as any,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+         
         audit as any,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+         
         stars as any,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+         
         uploads as any,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+         
         relations as any,
       );
 
@@ -1136,6 +1310,7 @@ describe('ArticlesService', () => {
         updatedAt: new Date('2024-01-01T00:00:00Z'),
         createdBy: 'u-1',
         updatedBy: 'u-1',
+        revision: 1,
         archivedAt: null,
         ...overrides,
       };
@@ -1169,15 +1344,15 @@ describe('ArticlesService', () => {
     function mkSvc(initial: Parameters<typeof makeStubs>[0] = {}) {
       const stubs = makeStubs(initial);
       const svc = new ArticlesService(
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+         
         stubs.prisma as any,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+         
         stubs.audit as any,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+         
         stubs.stars as any,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+         
         stubs.uploads as any,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+         
         stubs.relations as any,
       );
       return { svc, ...stubs };

@@ -1145,6 +1145,13 @@ export type ArticleSummary = {
   slug: string;
   excerpt: string | null;
   visibleToClients: boolean;
+  /**
+   * Monotonic optimistic-concurrency token, bumped on every content-
+   * affecting write including autosave drafts. Attached article
+   * snapshots claim it so AI update proposals can be revision-guarded
+   * at apply time (WS-030).
+   */
+  revision: number;
   archivedAt: string | null;
   createdBy: string | null;
   updatedBy: string | null;

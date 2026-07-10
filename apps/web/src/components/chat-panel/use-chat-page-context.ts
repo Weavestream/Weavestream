@@ -61,6 +61,7 @@ export function useChatPageContext(
       // Thunk reads from the ref so the latest closure (with the
       // latest editor state) is sampled at send time.
       getMarkdown: () => snapRef.current?.getMarkdown() ?? '',
+      getRevision: () => snapRef.current?.getRevision?.() ?? null,
       // `isDirty` / `onBeforeAiApply` are forwarded through the ref;
       // the tool-call apply path reads them live at click time so a
       // form going dirty / clean between renders never desyncs the

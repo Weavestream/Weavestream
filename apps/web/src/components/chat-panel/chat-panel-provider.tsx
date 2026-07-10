@@ -82,6 +82,12 @@ export type ChatTab = {
   streamingMessageId: string | null;
   /** Explicit @-mentioned articles + assets, in insertion order. */
   mentions: ChatTabContextMention[];
+  /**
+   * Transient "Searching… / Reading article…" line while a read tool
+   * executes server-side (WS-030). Never persisted; cleared when the
+   * lookup settles and on sendDone/sendError.
+   */
+  toolActivity?: string | null;
 };
 
 /**
@@ -102,6 +108,16 @@ export type ChatArticlePageContext = {
   articleId: string | null;
   title: string;
   getMarkdown: () => string;
+  /**
+   * The saved revision the page's body is based on, sampled at send
+   * time like `getMarkdown` (WS-030). Travels with the snapshot as its
+   * basis claim: the server captures an update-proposal base only when
+   * this matches the current row, so a stale page can never anchor an
+   * Apply that would overwrite someone else's newer save. Null when
+   * unknown (new-article page) — the assistant then reads the article
+   * with get_article before proposing.
+   */
+  getRevision?: () => number | null;
   /**
    * True when the page is an open editor with unsaved changes. The
    * Apply path uses this to warn before overwriting the form's body.
@@ -266,6 +282,7 @@ type Action =
     }
   | { type: 'sendDelta'; tabId: string; assistantMsgId: string; chunk: string }
   | { type: 'setTabTitle'; tabId: string; title: string }
+  | { type: 'setToolActivity'; tabId: string; label: string | null }
   | { type: 'sendDone'; tabId: string; assistantMsgId: string }
   | {
       type: 'sendError';
@@ -647,6 +664,13 @@ function reducer(state: State, action: Action): State {
             : t,
         ),
       };
+    case 'setToolActivity':
+      return {
+        ...state,
+        tabs: state.tabs.map((t) =>
+          t.id === action.tabId ? { ...t, toolActivity: action.label } : t,
+        ),
+      };
     case 'sendDone':
       return {
         ...state,
@@ -655,6 +679,7 @@ function reducer(state: State, action: Action): State {
             ? {
                 ...t,
                 streamingMessageId: null,
+                toolActivity: null,
                 messages: t.messages.map((m) =>
                   m.id === action.assistantMsgId
                     ? { ...m, pending: false }
@@ -672,6 +697,7 @@ function reducer(state: State, action: Action): State {
             ? {
                 ...t,
                 streamingMessageId: null,
+                toolActivity: null,
                 messages: t.messages.map((m) =>
                   m.id === action.assistantMsgId
                     ? {
@@ -1080,6 +1106,27 @@ export function ChatPanelProvider({ children }: { children: ReactNode }) {
           // reply. A visible inline banner can be layered on later.
           if (typeof console !== 'undefined') console.debug(`[chat] ${message}`);
         },
+        onToolActivity: (activity) => {
+          // Transient "the assistant is looking things up" line — names
+          // only, never arguments or results.
+          const label =
+            activity.name === 'search'
+              ? 'Searching…'
+              : activity.name === 'find_related_items'
+                ? 'Checking linked items…'
+              : activity.name === 'get_article'
+                ? 'Reading an article…'
+                : activity.name === 'get_related_items'
+                  ? 'Checking linked items…'
+                  : activity.name === 'get_company_summary'
+                    ? 'Summarizing the company…'
+                    : 'Looking things up…';
+          dispatch({
+            type: 'setToolActivity',
+            tabId,
+            label: activity.status === 'started' ? label : null,
+          });
+        },
       },
       ctrl.signal,
       requestContext,
@@ -1337,10 +1384,15 @@ async function resolveChatRequestContext(
   if (pageCtx && pageCtx.kind === 'article' && pageCtx.articleId) {
     const markdown = safeGetMarkdown(pageCtx);
     if (markdown) {
+      // The revision claim states which saved revision this snapshot's
+      // body was based on. The server captures an update-proposal base
+      // only when the claim matches the current row (WS-030).
+      const revision = pageCtx.getRevision?.() ?? null;
       articles.push({
         id: pageCtx.articleId,
         title: pageCtx.title || 'Untitled',
         markdown,
+        ...(typeof revision === 'number' ? { revision } : {}),
       });
     }
   }
@@ -1469,7 +1521,7 @@ function safeGetMarkdown(ctx: ChatPageContextSnapshot): string {
 async function fetchArticleAsMarkdown(
   companyId: string,
   articleId: string,
-): Promise<{ id: string; title: string; markdown: string } | null> {
+): Promise<{ id: string; title: string; markdown: string; revision?: number } | null> {
   const res = await apiFetch<ArticleDetail>(
     `/companies/${companyId}/articles/${articleId}`,
   );
@@ -1486,7 +1538,14 @@ async function fetchArticleAsMarkdown(
     markdown = a.contentPlaintext ?? '';
   }
   if (!markdown.trim()) return null;
-  return { id: a.id, title: a.title, markdown };
+  return {
+    id: a.id,
+    title: a.title,
+    markdown,
+    // Just fetched, so this snapshot's basis claim IS the current
+    // revision — the server verifies it again at send time (WS-030).
+    ...(typeof a.revision === 'number' ? { revision: a.revision } : {}),
+  };
 }
 
 /**

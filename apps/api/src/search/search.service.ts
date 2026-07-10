@@ -8,6 +8,7 @@ import {
 } from '@weavestream/shared';
 import { PrismaService } from '../prisma/prisma.service.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
+import { entityHrefFor } from './entity-href.js';
 
 export type MentionKind = 'asset' | 'article' | 'password';
 
@@ -379,12 +380,8 @@ export class SearchService {
   }
 
   // ------------------------------------------------------------------
-  // URL construction
-  //
-  // Operators (SUPER_ADMIN, OPERATOR*, CONTRACTOR, TECH_LEAD) land on
-  // admin URLs, clients on portal URLs. Portal asset detail pages
-  // don't exist yet in v1 (see BUILD_PLAN Phase 4), so client asset
-  // hits route to the layout's asset list page, which *does* exist.
+  // URL construction — extracted to `entity-href.ts` (WS-030) so the
+  // AI read tools emit the same role-aware links the palette does.
   // ------------------------------------------------------------------
 
   private hrefFor(
@@ -396,32 +393,15 @@ export class SearchService {
       isClient: boolean;
     },
   ): string {
-    const adminBase = `/admin/companies/${row.company_id}`;
-    const portalBase = `/portal/${ctx.companySlug}`;
-    const base = ctx.isClient ? portalBase : adminBase;
-    switch (row.entity_type) {
-      case 'asset':
-        if (ctx.isClient && ctx.layoutSlug) {
-          return `${base}/layouts/${ctx.layoutSlug}`;
-        }
-        return `${base}/assets/${row.entity_id}`;
-      case 'article':
-        if (ctx.isClient && ctx.articleSlug) {
-          return `${base}/articles/${ctx.articleSlug}`;
-        }
-        return `${base}/articles/${row.entity_id}`;
-      case 'upload':
-        return `${base}/photos`;
-      case 'domain':
-        // Portal currently renders a read-only list only; operators get
-        // a detail page. Both live under `/domains/:id` so the same
-        // route works in either role.
-        return `${base}/domains/${row.entity_id}`;
-      case 'password':
-        // Same path shape in admin + portal — the password detail page
-        // exists in both routers and enforces its own visibility rules.
-        return `${base}/passwords/${row.entity_id}`;
-    }
+    return entityHrefFor({
+      kind: row.entity_type,
+      entityId: row.entity_id,
+      companyId: row.company_id,
+      companySlug: ctx.companySlug,
+      layoutSlug: ctx.layoutSlug,
+      articleSlug: ctx.articleSlug,
+      isClient: ctx.isClient,
+    });
   }
 
   // ------------------------------------------------------------------

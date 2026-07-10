@@ -149,6 +149,14 @@ export function ArticleForm({
       return '';
     }
   }, []);
+  // The saved revision the editor's body is based on (WS-030). Seeded
+  // from the detail load and refreshed from every successful PATCH —
+  // autosaves bump the server-side revision, so tracking the response
+  // keeps the chat snapshot's basis claim honest while typing. Reset
+  // to null (unknowable) after an AI apply; the assistant then reads
+  // the article before proposing again.
+  const revisionRef = useRef<number | null>(article?.revision ?? null);
+  const getRevision = useCallback((): number | null => revisionRef.current, []);
   const autoSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const onBeforeAiApply = useCallback(() => {
     // Cancel any debounced autosave so the user-visible state and
@@ -183,6 +191,10 @@ export function ArticleForm({
       // linger after an apply.
       setHasServerDraft(false);
       setLastSavedAt(new Date());
+      // The apply bumped the server-side revision and this form didn't
+      // see the response — the basis is unknowable until the page data
+      // refreshes, so stop claiming one.
+      revisionRef.current = null;
     },
     [],
   );
@@ -191,6 +203,7 @@ export function ArticleForm({
     articleId: article?.id ?? null,
     title: title || article?.title || 'Untitled article',
     getMarkdown: getEditorMarkdown,
+    getRevision,
     isDirty: dirty,
     onBeforeAiApply,
     onAfterAiApply,
@@ -338,7 +351,7 @@ export function ArticleForm({
     const body =
       kind === 'autosave' ? { ...payload, draft: true } : payload;
     if (kind === 'publish') setSaving(true);
-    const res = await apiFetch(
+    const res = await apiFetch<{ revision?: number }>(
       `/companies/${companyId}/articles/${article.id}`,
       {
         method: 'PATCH',
@@ -349,6 +362,11 @@ export function ArticleForm({
     if (!res.ok) {
       setError(extractErr(res.problem) ?? 'Save failed');
       return;
+    }
+    // Track the bumped revision so the chat snapshot's basis claim
+    // stays honest across autosaves (WS-030).
+    if (typeof res.data?.revision === 'number') {
+      revisionRef.current = res.data.revision;
     }
     setLastSavedAt(new Date());
     setDirty(false);

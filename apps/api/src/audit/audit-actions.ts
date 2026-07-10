@@ -229,6 +229,23 @@ export const AUDIT_ACTIONS = {
     revealPath: 'upload.path_revealed',
     reap: 'upload.reap',
   },
+  // WS-030 — AI chat read tools. One row per executor invocation,
+  // regardless of exit path: `entityType: 'AiTool'`, `entityId` = the
+  // tool-call id from the streaming turn, `companyId` = the resolved
+  // scope (null when resolution failed). `after` carries ONLY
+  // `{ outcome, correlationId, argsSha256 }` — outcome ∈ ok |
+  // invalid_args | budget_exhausted | not_found | denied | error, and
+  // argsSha256 is a SHA-256 of the canonical-JSON VALIDATED arguments
+  // (null for invalid_args, where nothing passed validation). Raw
+  // arguments, document content and tool results are never stored —
+  // same rule as `tickets.*`: identifiers, not content.
+  aiTool: {
+    search: 'ai_tool.search',
+    findRelatedItems: 'ai_tool.find_related_items',
+    getArticle: 'ai_tool.get_article',
+    getRelatedItems: 'ai_tool.get_related_items',
+    getCompanySummary: 'ai_tool.get_company_summary',
+  },
   // Phase 12 — real-time external ticket browse (NinjaOne first).
   // Tickets are NEVER persisted, so the audit log is the only record
   // that a given operator looked at a given ticket id. `entityType`
@@ -259,5 +276,6 @@ export const ALL_AUDIT_ACTIONS: string[] = [
   ...Object.values(AUDIT_ACTIONS.security),
   ...Object.values(AUDIT_ACTIONS.backup),
   ...Object.values(AUDIT_ACTIONS.upload),
+  ...Object.values(AUDIT_ACTIONS.aiTool),
   ...Object.values(AUDIT_ACTIONS.tickets),
 ];

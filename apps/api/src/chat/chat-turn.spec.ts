@@ -3,6 +3,7 @@ import {
   buildTurnContext,
   estimateTokens,
   inferToolIntentPrelude,
+  isExplicitNamedRelationshipQuestion,
   planBudget,
   resolveTurnTools,
   synthesizeActionHistory,
@@ -77,33 +78,91 @@ describe('synthesizeActionHistory', () => {
   it('returns null when no prior turn proposed an action', () => {
     expect(synthesizeActionHistory([{ toolCalls: null }, {}])).toBeNull();
   });
+
+  it('summarises executed reads so follow-up turns know what was looked up (WS-030)', () => {
+    const note = synthesizeActionHistory([
+      {
+        toolCalls: [
+          {
+            id: 't1',
+            name: 'search',
+            arguments: { query: 'backup rotation' },
+            status: 'executed',
+          },
+          {
+            id: 't2',
+            name: 'get_article',
+            arguments: { article_id: ART_A },
+            status: 'executed',
+          },
+        ],
+      },
+    ]);
+    expect(note).toContain('search("backup rotation") — EXECUTED');
+    expect(note).toContain(`get_article(${ART_A}) — EXECUTED`);
+  });
 });
 
 describe('resolveTurnTools', () => {
-  it('offers nothing without a company', () => {
+  // WS-030: no-company turns get the read set (search self-scopes to
+  // the actor's allowedCompanyIds), but never write proposals and
+  // never get_company_summary (its scope comes from the turn company).
+  it('offers only company-independent read tools without a company', () => {
     const r = resolveTurnTools({ hasCompany: false, targetArticleRetained: true });
-    expect(r.tools).toHaveLength(0);
-    expect(r.toolChoice).toBe('none');
+    expect(r.toolChoice).toBe('auto');
+    expect(r.tools.map((t) => t.function.name).sort()).toEqual([
+      'find_related_items',
+      'get_article',
+      'get_related_items',
+      'search',
+    ]);
   });
 
-  it('defaults to auto + both strict tools when ambiguous', () => {
+  it('defaults to auto over reads + both proposal tools when ambiguous', () => {
     const r = resolveTurnTools({ hasCompany: true, targetArticleRetained: true });
     expect(r.toolChoice).toBe('auto');
     expect(r.tools.map((t) => t.function.name).sort()).toEqual([
       'create_article',
+      'find_related_items',
+      'get_article',
+      'get_company_summary',
+      'get_related_items',
+      'search',
       'update_article',
     ]);
     expect(r.tools.every((t) => t.function.strict === true)).toBe(true);
   });
 
-  it('forces a question turn to make no tool call', () => {
+  // WS-030: questions are exactly when lookups help — reads offered,
+  // proposals still withheld.
+  it('gives a question turn the read set and no proposal tools', () => {
     const r = resolveTurnTools({
       hasCompany: true,
       targetArticleRetained: true,
       intent: 'question',
     });
-    expect(r.toolChoice).toBe('none');
-    expect(r.tools).toHaveLength(0);
+    expect(r.toolChoice).toBe('auto');
+    expect(r.tools.map((t) => t.function.name).sort()).toEqual([
+      'find_related_items',
+      'get_article',
+      'get_company_summary',
+      'get_related_items',
+      'search',
+    ]);
+  });
+
+  it('forces the compound relationship resolver for an explicitly named entity', () => {
+    const r = resolveTurnTools({
+      hasCompany: true,
+      targetArticleRetained: true,
+      intent: 'question',
+      forceNamedRelationshipLookup: true,
+    });
+    expect(r.toolChoice).toEqual({
+      type: 'function',
+      function: { name: 'find_related_items' },
+    });
+    expect(r.tools.map((t) => t.function.name)).toEqual(['find_related_items']);
   });
 
   it('does NOT force update_article when the user asks to draft a new article', () => {
@@ -149,9 +208,12 @@ describe('resolveTurnTools', () => {
       targetArticleRetained: false,
       intent: 'edit',
     });
-    // Body gone → don't invite a hallucinated update.
-    expect(trimmed.toolChoice).toBe('none');
-    expect(trimmed.tools).toHaveLength(0);
+    // Body gone/unconfirmed → don't invite a hallucinated update. The
+    // model gets the read set instead: get_article is the recovery
+    // path (exact basis capture), after which round 2 can offer update.
+    expect(trimmed.toolChoice).toBe('auto');
+    expect(trimmed.tools.map((t) => t.function.name)).not.toContain('update_article');
+    expect(trimmed.tools.map((t) => t.function.name)).toContain('get_article');
   });
 
   it('drops update_article from the auto set when the target body was trimmed', () => {
@@ -160,7 +222,28 @@ describe('resolveTurnTools', () => {
       targetArticleRetained: false,
     });
     expect(r.toolChoice).toBe('auto');
-    expect(r.tools.map((t) => t.function.name)).toEqual(['create_article']);
+    const names = r.tools.map((t) => t.function.name);
+    expect(names).not.toContain('update_article');
+    expect(names).toContain('create_article');
+    expect(names).toContain('get_article');
+  });
+});
+
+describe('isExplicitNamedRelationshipQuestion', () => {
+  it.each([
+    "What's related to ACM-DB01?",
+    'Show items linked with acm.local',
+    'What is connected for Domain Admin?',
+  ])('recognizes an explicitly named relationship request: %s', (message) => {
+    expect(isExplicitNamedRelationshipQuestion(message)).toBe(true);
+  });
+
+  it.each([
+    'What is related to this asset?',
+    'What linked items are on the current article?',
+    'Summarize the current page.',
+  ])('does not force a named lookup without a usable name: %s', (message) => {
+    expect(isExplicitNamedRelationshipQuestion(message)).toBe(false);
   });
 });
 
@@ -295,13 +378,14 @@ describe('planBudget', () => {
     const out = planBudget({ ...base, context: ctx, history: [] });
     expect(out.context?.articles).toHaveLength(0); // dropped (not pinned)
     expect(out.trimmedContextItems).toBe(1);
-    // Nothing left to update → update_article must be withheld.
+    // Nothing left to update → update_article must be withheld (reads
+    // and create remain on offer; get_article is the recovery path).
     expect(out.targetArticleRetained).toBe(false);
     expect(
       resolveTurnTools({ hasCompany: true, targetArticleRetained: false }).tools.map(
         (t) => t.function.name,
       ),
-    ).toEqual(['create_article']);
+    ).not.toContain('update_article');
   });
 
   it('flags the target as not retained when it alone exceeds the budget', () => {

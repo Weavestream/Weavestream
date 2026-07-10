@@ -24,6 +24,7 @@ export * from './subnet.js';
 export * from './ip-rule.js';
 export * from './backup.js';
 export * from './cloudflare.js';
+export * from './ai-tools.js';
 export * from './chat.js';
 export * from './ticket.js';
 export * from './step-up.js';

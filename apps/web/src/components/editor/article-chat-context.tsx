@@ -19,6 +19,7 @@ export function ArticleChatContext({
   editorMode,
   content,
   markdownSource,
+  revision,
 }: {
   companyId: string;
   articleId: string;
@@ -26,6 +27,8 @@ export function ArticleChatContext({
   editorMode: ArticleEditorMode;
   content: unknown;
   markdownSource: string | null;
+  /** The saved revision this server-rendered body is based on (WS-030). */
+  revision: number;
 }) {
   const getMarkdown = useCallback((): string => {
     if (editorMode === 'markdown') return markdownSource ?? '';
@@ -35,7 +38,8 @@ export function ArticleChatContext({
       return '';
     }
   }, [editorMode, content, markdownSource]);
+  const getRevision = useCallback((): number | null => revision, [revision]);
 
-  useChatPageContext({ companyId, articleId, title, getMarkdown });
+  useChatPageContext({ companyId, articleId, title, getMarkdown, getRevision });
   return null;
 }

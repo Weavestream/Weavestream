@@ -379,6 +379,23 @@ function MessageList({ tab }: { tab: ChatTab }) {
       {messages.map((m) => (
         <MessageBubble key={m.id} tab={tab} message={m} />
       ))}
+      {tab.toolActivity ? (
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 6,
+            flexWrap: 'wrap',
+            fontSize: 11.5,
+            fontStyle: 'italic',
+            color: 'var(--muted)',
+          }}
+          aria-live="polite"
+        >
+          <TypingDots />
+          <span>{tab.toolActivity}</span>
+        </div>
+      ) : null}
       <div ref={endRef} />
     </div>
   );

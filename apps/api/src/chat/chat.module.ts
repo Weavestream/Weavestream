@@ -5,9 +5,10 @@ import { ChatStreamService } from './chat-stream.service.js';
 import { ChatToolCallService } from './chat-tool-call.service.js';
 import { AiModule } from '../ai/ai.module.js';
 import { ArticlesModule } from '../articles/articles.module.js';
+import { AiToolsModule } from '../ai-tools/ai-tools.module.js';
 
 @Module({
-  imports: [AiModule, ArticlesModule],
+  imports: [AiModule, ArticlesModule, AiToolsModule],
   controllers: [ChatController],
   providers: [ChatService, ChatStreamService, ChatToolCallService],
   exports: [ChatService],

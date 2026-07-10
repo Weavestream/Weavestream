@@ -18,18 +18,34 @@ import {
   type UpdateArticleInput,
   type UserRole,
 } from '@weavestream/shared';
+import { requireTenantContext } from '@weavestream/shared/server';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { AuditLogService } from '../audit/audit.service.js';
 import { AUDIT_ACTIONS } from '../audit/audit-actions.js';
 import { StarsService } from '../stars/stars.service.js';
 import { UploadsService } from '../uploads/uploads.service.js';
 import { RelationsService } from '../relations/relations.service.js';
+import { scopedCompanyLookupWhere } from '../ai-tools/entity-scope.js';
 import { diffRemovedUploadIds, extractEmbeddedUploadIds } from './article-uploads.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
 
 export interface AuditMeta {
   ip: string;
   userAgent: string;
+}
+
+/**
+ * Thrown by `update()` when an `expectedRevision` guard matched zero
+ * rows — the article was edited (or archived) after the caller's base
+ * revision was captured. Only the AI chat apply path passes
+ * `expectedRevision`, and it catches this explicitly; the guard rides
+ * the WHERE clause of the UPDATE, so there is no check-then-act window.
+ */
+export class StaleArticleError extends Error {
+  constructor() {
+    super('Article was modified since the base revision was captured.');
+    this.name = 'StaleArticleError';
+  }
 }
 
 export interface ActorRef {
@@ -54,6 +70,13 @@ export interface SerializedArticle {
   contentPlaintext: string;
   excerpt: string | null;
   visibleToClients: boolean;
+  /**
+   * Monotonic optimistic-concurrency token, bumped on every
+   * content-affecting write including autosave drafts. The AI chat
+   * captures it when article content is shown to the model and guards
+   * Apply on it.
+   */
+  revision: number;
   archivedAt: Date | null;
   createdBy: string | null;
   updatedBy: string | null;
@@ -149,11 +172,21 @@ export class ArticlesService {
    * caller to already know it. Used by callers that learned about the
    * article id from a less-trusted source (e.g. an LLM tool call) and
    * need to derive the canonical scope before running a permission
-   * check. Returns `null` when the article does not exist.
+   * check. Returns `null` when the article does not exist — or is not
+   * within the acting user's tenant scope, which callers must treat
+   * identically (non-enumeration).
+   *
+   * WS-030: previously queried `findUnique({ where: { id } })`, which
+   * the Prisma tenant middleware rejects for membership-scoped actors
+   * (no `companyId` filter). Now phrased per scope via
+   * `scopedCompanyLookupWhere`: read-bypass actors look up by id,
+   * membership-scoped actors add `companyId IN allowedCompanyIds`.
    */
   async findCompanyIdForArticle(id: string): Promise<string | null> {
-    const row = await this.prisma.article.findUnique({
-      where: { id },
+    const where = scopedCompanyLookupWhere(requireTenantContext(), id);
+    if (where === null) return null;
+    const row = await this.prisma.article.findFirst({
+      where,
       select: { companyId: true },
     });
     return row?.companyId ?? null;
@@ -283,6 +316,17 @@ export class ArticlesService {
     id: string,
     input: UpdateArticleInput,
     meta: AuditMeta,
+    opts?: {
+      /**
+       * Optimistic-concurrency guard for callers whose edit was drafted
+       * against a known `revision` (the AI chat apply path). Rides the
+       * WHERE clause of the article UPDATE together with
+       * `archived_at IS NULL`; a zero-row match throws
+       * {@link StaleArticleError} and aborts the transaction — no
+       * version row, no audit row.
+       */
+      expectedRevision?: number;
+    },
   ): Promise<SerializedArticle> {
     const isDraftWrite = input.draft === true;
     const existing = await this.prisma.article.findFirst({ where: { id, companyId } });
@@ -355,6 +399,20 @@ export class ArticlesService {
     if (input.excerpt !== undefined) data.excerpt = input.excerpt;
     if (input.visibleToClients !== undefined) data.visibleToClients = input.visibleToClients;
 
+    // Bump the optimistic-concurrency token on content-affecting writes
+    // (including autosave drafts — they always carry body fields). The
+    // decision is made from the INPUT, not the post-hoc changed-fields
+    // diff, so a no-op PATCH with an identical body still bumps it:
+    // conservative in the safe direction, since a stale-marked proposal
+    // just means re-asking the assistant.
+    const contentAffecting =
+      input.title !== undefined ||
+      input.content !== undefined ||
+      input.markdownSource !== undefined ||
+      input.excerpt !== undefined ||
+      input.editorMode !== undefined;
+    if (contentAffecting) data.revision = { increment: 1 };
+
     // Single transaction wraps the article row update + version row
     // write so a partial commit cannot leave the live article ahead
     // of (or behind) its history. `updateMany` + refetch keeps the
@@ -362,7 +420,23 @@ export class ArticlesService {
     // plain `update` would only accept `{ id }`. See assets.service
     // for the same idiom.
     const txResult = await this.prisma.$transaction(async (tx) => {
-      await tx.article.updateMany({ where: { id, companyId }, data });
+      const guarded = opts?.expectedRevision !== undefined;
+      const writeResult = await tx.article.updateMany({
+        where: {
+          id,
+          companyId,
+          // The concurrency guard lives IN the WHERE — never as a
+          // separate read-then-write check. `archivedAt: null` rides
+          // along so an archive racing the apply also refuses.
+          ...(guarded
+            ? { revision: opts.expectedRevision, archivedAt: null }
+            : {}),
+        },
+        data,
+      });
+      if (guarded && writeResult.count === 0) {
+        throw new StaleArticleError();
+      }
       const updated = await tx.article.findFirstOrThrow({
         where: { id, companyId },
       });
@@ -1456,6 +1530,7 @@ export class ArticlesService {
       // excerpt helpers.
       excerpt: this.deriveExcerpt(row),
       visibleToClients: row.visibleToClients,
+      revision: row.revision,
       archivedAt: row.archivedAt,
       createdBy: row.createdBy,
       updatedBy: row.updatedBy,

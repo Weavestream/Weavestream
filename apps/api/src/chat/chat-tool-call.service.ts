@@ -12,8 +12,13 @@ import type {
   CreateArticleInput,
   UpdateArticleInput,
 } from '@weavestream/shared';
-import { splitMarkdownTitleAndBody } from '@weavestream/shared';
-import { ArticlesService } from '../articles/articles.service.js';
+import {
+  createArticleToolInputSchema,
+  splitMarkdownTitleAndBody,
+  stripNullArgs,
+  updateArticleToolInputSchema,
+} from '@weavestream/shared';
+import { ArticlesService, StaleArticleError } from '../articles/articles.service.js';
 import { PermissionService } from '../rbac/permission.service.js';
 import type { AuditMeta } from '../articles/articles.service.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
@@ -84,7 +89,7 @@ export class ChatToolCallService {
           params.auditMeta,
         );
         next = { ...toolCall, status: 'applied', result, error: null };
-      } else {
+      } else if (toolCall.name === 'create_article') {
         const result = await this.applyCreate(
           actor,
           toolCall,
@@ -93,17 +98,46 @@ export class ChatToolCallService {
           params.auditMeta,
         );
         next = { ...toolCall, status: 'applied', result, error: null };
+      } else {
+        // Read tools execute during streaming and are never persisted
+        // as `pending`; a stray apply on one is a client bug.
+        throw new BadRequestException('Only proposal tool calls can be applied.');
       }
     } catch (err) {
       this.logger.warn(
         `Tool call ${toolCall.id} (${toolCall.name}) failed: ${messageOf(err)}`,
       );
-      next = {
-        ...toolCall,
-        status: 'failed',
-        result: null,
-        error: messageOf(err),
-      };
+      if (err instanceof StaleArticleError) {
+        // The WHERE-clause revision guard matched zero rows: someone
+        // edited (or archived) the article after the proposal's base
+        // revision was captured. The newer content wins, always.
+        next = {
+          ...toolCall,
+          status: 'failed',
+          result: null,
+          errorCode: 'stale',
+          error:
+            'This article was edited after the proposal was drafted, so it was not applied. ' +
+            'Ask the assistant to redo the change against the current version.',
+        };
+      } else if (err instanceof NoBaseRevisionError) {
+        next = {
+          ...toolCall,
+          status: 'failed',
+          result: null,
+          errorCode: 'no_base',
+          error:
+            'This proposal was not based on the article’s current content, so it was not applied. ' +
+            'Ask the assistant to read the article and propose the change again.',
+        };
+      } else {
+        next = {
+          ...toolCall,
+          status: 'failed',
+          result: null,
+          error: messageOf(err),
+        };
+      }
     }
 
     const finalCalls = replaceCall(allToolCalls, next);
@@ -147,7 +181,7 @@ export class ChatToolCallService {
     overrides: CreateArticleOverrides | undefined,
     auditMeta: AuditMeta,
   ): Promise<string> {
-    const args = updateArgsSchema.parse(stripNullArgs(toolCall.arguments));
+    const args = updateArticleToolInputSchema.parse(stripNullArgs(toolCall.arguments));
 
     // Look the article up FIRST. We don't trust the LLM's company
     // scope — the article's own row is the source of truth, and the
@@ -183,6 +217,24 @@ export class ChatToolCallService {
     }
     await this.assertArticleWrite(actor, targetCompanyId);
 
+    // Revision-guard semantics (WS-030), keyed on how the proposal was
+    // persisted:
+    //   number  → the server captured the basis the model actually saw;
+    //             guard the update on it (WHERE clause, atomic).
+    //   null    → the article did not resolve at persist time. It
+    //             resolves NOW, so the proposal was drafted blind to
+    //             this article's content — refuse. (null exists only to
+    //             serve the not-found → Save-as-article promotion above,
+    //             which creates and never updates.)
+    //   absent  → legacy row from before revision guarding; applies
+    //             unguarded exactly as it always did. New rows always
+    //             persist number-or-null, so absence cannot be forged.
+    if (toolCall.baseRevision === null) {
+      throw new NoBaseRevisionError();
+    }
+    const expectedRevision =
+      typeof toolCall.baseRevision === 'number' ? toolCall.baseRevision : undefined;
+
     // Strip a duplicated leading `# Heading` so the rendered article
     // doesn't show the title twice. If the LLM didn't explicitly
     // propose a title we promote the parsed heading into one — the
@@ -216,6 +268,7 @@ export class ChatToolCallService {
       args.article_id,
       input,
       auditMeta,
+      { expectedRevision },
     );
     return `Updated article "${updated.title}".`;
   }
@@ -232,7 +285,7 @@ export class ChatToolCallService {
         'Cannot create an article without a company context. Open the chat from a company page first.',
       );
     }
-    const args = createArgsSchema.parse(stripNullArgs(toolCall.arguments));
+    const args = createArticleToolInputSchema.parse(stripNullArgs(toolCall.arguments));
     await this.assertArticleWrite(actor, requestCompanyId);
 
     // Same dedupe as `applyUpdate`: if the LLM's body opens with the
@@ -366,23 +419,25 @@ export class ChatToolCallService {
 }
 
 // ----------------------------------------------------------------------
-// Strict schemas for re-validating LLM-supplied arguments at apply time
+// Apply-time re-validation uses the SAME shared Zod schemas the LLM
+// tool definitions are generated from (`@weavestream/shared` ai-tools) —
+// one source of truth instead of the previous hand-maintained pair.
+// `stripNullArgs` (also shared) normalises the strict-schema `null`
+// placeholders to `undefined` first.
 // ----------------------------------------------------------------------
 
-const updateArgsSchema = z.object({
-  article_id: z.string().uuid(),
-  title: z.string().min(1).max(200).optional(),
-  markdown: z.string().min(1).max(100_000).optional(),
-  summary: z.string().max(1000).optional(),
-});
-
-const createArgsSchema = z.object({
-  title: z.string().min(1).max(200),
-  markdown: z.string().min(1).max(100_000),
-  folder_id: z.string().uuid().optional(),
-  visible_to_clients: z.boolean().optional(),
-  summary: z.string().max(1000).optional(),
-});
+/**
+ * Thrown when an `update_article` proposal persisted with
+ * `baseRevision: null` targets an article that NOW resolves — the
+ * proposal was drafted without reading this article's content, so
+ * applying it could blindly overwrite. Mapped to errorCode `no_base`.
+ */
+class NoBaseRevisionError extends Error {
+  constructor() {
+    super('Update proposal has no server-captured base revision.');
+    this.name = 'NoBaseRevisionError';
+  }
+}
 
 /**
  * User-confirmed overrides for `create_article` apply, posted by the
@@ -395,24 +450,6 @@ export type CreateArticleOverrides = {
   folderId: string | null;
   visibleToClients: boolean;
 };
-
-/**
- * Drop `null`-valued keys from LLM tool arguments before apply-time
- * validation. The strict tool schemas (`strict: true`) require every
- * property to be present, so the model emits `null` for fields it isn't
- * setting; the apply-time schemas use `.optional()` (which accepts
- * `undefined`, not `null`), so an un-stripped `{ summary: null }` would
- * throw a ZodError and fail the apply.
- */
-function stripNullArgs(
-  args: Record<string, unknown>,
-): Record<string, unknown> {
-  const out: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(args)) {
-    if (value !== null) out[key] = value;
-  }
-  return out;
-}
 
 function replaceCall(
   calls: ChatToolCallDto[],

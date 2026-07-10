@@ -102,6 +102,7 @@ describe('ChatToolCallService.apply', () => {
       ART,
       expect.objectContaining({ editorMode: 'markdown' }),
       META,
+      { expectedRevision: undefined },
     );
   });
 
@@ -123,6 +124,7 @@ describe('ChatToolCallService.apply', () => {
       ART,
       expect.anything(),
       META,
+      { expectedRevision: undefined },
     );
   });
 
@@ -187,6 +189,103 @@ describe('ChatToolCallService.apply', () => {
       ART,
       expect.anything(),
       META,
+      { expectedRevision: undefined },
+    );
+  });
+});
+
+describe('ChatToolCallService.apply — revision guard (WS-030)', () => {
+  it('passes a numeric baseRevision through as expectedRevision', async () => {
+    const { svc, articles } = makeService({
+      toolCall: pendingCall({ baseRevision: 7 }),
+      turnContext: { companyId: CO },
+    });
+
+    const { toolCall } = await apply(svc, CO);
+
+    expect(toolCall.status).toBe('applied');
+    expect(articles.update).toHaveBeenCalledWith(
+      ACTOR,
+      CO,
+      ART,
+      expect.anything(),
+      META,
+      { expectedRevision: 7 },
+    );
+  });
+
+  it('maps StaleArticleError to failed/stale with a truthful message', async () => {
+    const { svc, articles, chat } = makeService({
+      toolCall: pendingCall({ baseRevision: 7 }),
+      turnContext: { companyId: CO },
+    });
+    const { StaleArticleError } = await import('../articles/articles.service.js');
+    articles.update.mockRejectedValueOnce(new StaleArticleError());
+
+    const { toolCall } = await apply(svc, CO);
+
+    expect(toolCall.status).toBe('failed');
+    expect(toolCall.errorCode).toBe('stale');
+    expect(toolCall.error).toMatch(/edited after the proposal/i);
+    // The failure is persisted so the card reflects reality.
+    expect(chat.updateMessageToolCalls).toHaveBeenCalledWith(
+      'msg-1',
+      expect.arrayContaining([expect.objectContaining({ errorCode: 'stale' })]),
+    );
+  });
+
+  it('refuses a null baseRevision when the article now resolves (no_base, never a blind update)', async () => {
+    const { svc, articles } = makeService({
+      toolCall: pendingCall({ baseRevision: null }),
+      turnContext: { companyId: CO },
+      articleCompanyId: CO, // article exists now
+    });
+
+    const { toolCall } = await apply(svc, CO);
+
+    expect(toolCall.status).toBe('failed');
+    expect(toolCall.errorCode).toBe('no_base');
+    expect(toolCall.error).toMatch(/not based on the article/i);
+    expect(articles.update).not.toHaveBeenCalled();
+  });
+
+  it('null baseRevision still serves the Save-as-article promotion when the article is gone', async () => {
+    const { svc, articles } = makeService({
+      toolCall: pendingCall({ baseRevision: null }),
+      turnContext: { companyId: CO },
+      articleCompanyId: null, // hallucinated id — not found
+    });
+
+    const { toolCall } = await svc.apply(ACTOR, {
+      conversationId: 'conv-1',
+      messageId: 'msg-1',
+      toolCallId: 'tc-1',
+      requestCompanyId: CO,
+      createOverrides: { title: 'Chosen', folderId: null, visibleToClients: true },
+      auditMeta: META,
+    });
+
+    expect(toolCall.status).toBe('applied');
+    expect(articles.create).toHaveBeenCalledTimes(1);
+    expect(articles.update).not.toHaveBeenCalled();
+  });
+
+  it('legacy rows without the baseRevision field apply unguarded, exactly as before', async () => {
+    const { svc, articles } = makeService({
+      toolCall: pendingCall(), // field absent
+      turnContext: { companyId: CO },
+    });
+
+    const { toolCall } = await apply(svc, CO);
+
+    expect(toolCall.status).toBe('applied');
+    expect(articles.update).toHaveBeenCalledWith(
+      ACTOR,
+      CO,
+      ART,
+      expect.anything(),
+      META,
+      { expectedRevision: undefined },
     );
   });
 });

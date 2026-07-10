@@ -663,6 +663,12 @@ model Article {
   contentPlaintext String    @map("content_plaintext")
   excerpt          String?
   visibleToClients Boolean   @default(true) @map("visible_to_clients")
+  /// Monotonic optimistic-concurrency token. Incremented by the app on
+  /// every content-affecting write INCLUDING autosave drafts (which is
+  /// why ArticleVersion.version — reused when a draft is promoted —
+  /// cannot serve). The AI chat apply path guards on it in the WHERE
+  /// clause of the update.
+  revision         Int       @default(1)
   archivedAt       DateTime? @map("archived_at")
   createdBy        String?   @map("created_by") @db.Uuid
   updatedBy        String?   @map("updated_by") @db.Uuid

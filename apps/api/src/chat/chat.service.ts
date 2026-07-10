@@ -12,6 +12,11 @@ import type {
   ChatToolCallDto,
   ChatTurnContext,
 } from '@weavestream/shared';
+import {
+  chatToolCallErrorCodeSchema,
+  chatToolCallNameSchema,
+  chatToolCallStatusSchema,
+} from '@weavestream/shared';
 import { ChatRole as PrismaChatRole } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
@@ -205,29 +210,31 @@ export function parseToolCalls(raw: Prisma.JsonValue | null): ChatToolCallDto[] 
         ? (obj.arguments as Record<string, unknown>)
         : {};
     if (!id || !name || !status) continue;
-    if (name !== 'update_article' && name !== 'create_article') continue;
-    if (
-      status !== 'pending' &&
-      status !== 'applied' &&
-      status !== 'rejected' &&
-      status !== 'failed'
-    ) {
-      continue;
-    }
-    const errorCode =
-      obj.errorCode === 'truncated' ||
-      obj.errorCode === 'malformed' ||
-      obj.errorCode === 'empty'
-        ? obj.errorCode
-        : null;
+    // Allowlists come from the shared schemas — the single source of
+    // truth for tool names / statuses / error codes (WS-030).
+    const parsedName = chatToolCallNameSchema.safeParse(name);
+    const parsedStatus = chatToolCallStatusSchema.safeParse(status);
+    if (!parsedName.success || !parsedStatus.success) continue;
+    const parsedErrorCode = chatToolCallErrorCodeSchema.safeParse(obj.errorCode);
     out.push({
       id,
-      name,
+      name: parsedName.data,
       arguments: args,
-      status,
+      status: parsedStatus.data,
       result: typeof obj.result === 'string' ? obj.result : null,
       error: typeof obj.error === 'string' ? obj.error : null,
-      errorCode,
+      errorCode: parsedErrorCode.success ? parsedErrorCode.data : null,
+      // `baseRevision` distinguishes null (article didn't resolve at
+      // persist time — create-promotion only) from ABSENT (legacy row,
+      // applies unguarded). Preserve that distinction through the
+      // JSONB round-trip.
+      ...(typeof obj.baseRevision === 'number' &&
+      Number.isInteger(obj.baseRevision) &&
+      obj.baseRevision > 0
+        ? { baseRevision: obj.baseRevision }
+        : obj.baseRevision === null
+          ? { baseRevision: null }
+          : {}),
     });
   }
   return out.length > 0 ? out : null;

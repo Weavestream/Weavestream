@@ -118,6 +118,15 @@ export const envSchema = z.object({
   LOCKOUT_MAX_FAILURES: intFromString(1, 100).default(5),
   LOCKOUT_WINDOW_MIN: intFromString(1, 1440).default(15),
 
+  // WS-030 — AI chat read-tool budgets. Fixed-window Redis counters
+  // capping how many read-tool executions the streaming loop may run
+  // per user and per conversation each hour, independent of the
+  // per-request HTTP throttle (each chat request can trigger several
+  // internal tool/model operations). Exhaustion degrades gracefully:
+  // the model is told to answer with what it has; chat keeps working.
+  AI_TOOL_BUDGET_USER_PER_HOUR: intFromString(1, 10000).default(100),
+  AI_TOOL_BUDGET_CONVERSATION_PER_HOUR: intFromString(1, 10000).default(40),
+
   // Step-up (re-authentication) validity window. After an admin
   // re-confirms a credential (MFA code or password) on a sensitive
   // action, the proof is cached in Redis keyed by session id for this

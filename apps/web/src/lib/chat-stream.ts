@@ -40,6 +40,20 @@ export type ChatStreamHandlers = {
   /** Non-fatal server notice (e.g. attached context was trimmed to fit
    *  the model's limit). The stream continues normally. */
   onNotice?: (message: string) => void;
+  /**
+   * Fires as read tools execute server-side during the streaming loop
+   * (WS-030): `started` when a lookup begins, then `succeeded` or
+   * `failed`. Carries names/ids only — never arguments or results —
+   * so the panel can show a transient "Searching…" line.
+   */
+  onToolActivity?: (activity: ChatToolActivity) => void;
+};
+
+export type ChatToolActivity = {
+  messageId: string;
+  toolCallId: string;
+  name: string;
+  status: 'started' | 'succeeded' | 'failed';
 };
 
 export type ChatStreamMeta = {
@@ -200,6 +214,20 @@ function dispatchEvent(block: string, handlers: ChatStreamHandlers): void {
       const message = (parsed as { message?: string })?.message;
       if (typeof message === 'string' && message.length > 0) {
         handlers.onNotice?.(message);
+      }
+      return;
+    }
+    case 'tool_activity': {
+      const activity = parsed as Partial<ChatToolActivity>;
+      if (
+        typeof activity.messageId === 'string' &&
+        typeof activity.toolCallId === 'string' &&
+        typeof activity.name === 'string' &&
+        (activity.status === 'started' ||
+          activity.status === 'succeeded' ||
+          activity.status === 'failed')
+      ) {
+        handlers.onToolActivity?.(activity as ChatToolActivity);
       }
       return;
     }

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { aiToolNameSchema } from './ai-tools.js';
 
 /**
  * Per-user AI chat history. A conversation == one chat tab in the UI;
@@ -11,23 +12,25 @@ export type ChatRole = z.infer<typeof chatRoleSchema>;
 
 /**
  * Tool call status lifecycle:
- *   pending  → emitted by the LLM, awaiting user decision
+ *   pending  → emitted by the LLM, awaiting user decision (proposal tools)
  *   applied  → user clicked Apply, the action ran successfully
  *   rejected → user dismissed without applying
- *   failed   → user clicked Apply but the action threw server-side
+ *   failed   → user clicked Apply but the action threw server-side, OR
+ *              a read tool could not run (see `errorCode`)
+ *   executed → a read tool ran server-side during the streaming loop;
+ *              `result` holds a one-line summary, never the full output
  */
 export const chatToolCallStatusSchema = z.enum([
   'pending',
   'applied',
   'rejected',
   'failed',
+  'executed',
 ]);
 export type ChatToolCallStatus = z.infer<typeof chatToolCallStatusSchema>;
 
-export const chatToolCallNameSchema = z.enum([
-  'update_article',
-  'create_article',
-]);
+/** Every tool the chat can persist — read and proposal alike. */
+export const chatToolCallNameSchema = aiToolNameSchema;
 export type ChatToolCallName = z.infer<typeof chatToolCallNameSchema>;
 
 /**
@@ -41,11 +44,28 @@ export type ChatToolCallName = z.infer<typeof chatToolCallNameSchema>;
  *   empty     → the model emitted a tool call with no arguments
  * The UI switches its tone/icon on this instead of string-matching the
  * display text; tests assert on it directly.
+ *
+ * Read-loop / revision-guard additions:
+ *   unavailable → a read tool was denied OR the target was not found.
+ *                 Deliberately ONE code for both so the persisted DTO
+ *                 cannot enumerate what exists; the audit log records
+ *                 the true outcome.
+ *   budget      → per-turn read cap or the Redis cross-turn tool budget
+ *                 was exhausted before this call could run
+ *   stale       → Apply was refused because the article was edited
+ *                 after the proposal's base revision was captured
+ *   no_base     → an update proposal had no server-captured base
+ *                 revision (the model never read/attached the article
+ *                 this turn), so it was blocked at persist time
  */
 export const chatToolCallErrorCodeSchema = z.enum([
   'truncated',
   'malformed',
   'empty',
+  'unavailable',
+  'budget',
+  'stale',
+  'no_base',
 ]);
 export type ChatToolCallErrorCode = z.infer<typeof chatToolCallErrorCodeSchema>;
 
@@ -66,6 +86,21 @@ export const chatToolCallSchema = z.object({
    *  Independent of `status`/`error`; only set when a call could not be
    *  produced cleanly. */
   errorCode: chatToolCallErrorCodeSchema.nullable().optional(),
+  /**
+   * Optimistic-concurrency basis for `update_article` proposals,
+   * captured server-side from the content the model actually saw
+   * (attached snapshot with a matching revision claim, or a
+   * `get_article` read) — never looked up at persist time.
+   *
+   *   number  → server-captured basis; Apply is guarded on it in the
+   *             WHERE clause of the article update
+   *   null    → the article did not resolve in the actor's scope at
+   *             persist time; only the Save-as-article create
+   *             promotion may apply this call (it can never update)
+   *   absent  → legacy row persisted before revision guarding shipped
+   *             (applies unguarded; new rows always set number|null)
+   */
+  baseRevision: z.number().int().positive().nullable().optional(),
 });
 export type ChatToolCallDto = z.infer<typeof chatToolCallSchema>;
 
@@ -134,6 +169,19 @@ export const chatContextArticleSchema = z.object({
   id: z.string().uuid(),
   title: z.string().max(300),
   markdown: z.string().max(60_000),
+  /**
+   * The saved article revision this snapshot was based on (unsaved
+   * client edits do not bump it, so a dirty editor still claims the
+   * revision it started from). The server captures an update-proposal
+   * basis from this snapshot ONLY when this claim matches the current
+   * row — a claim/DB mismatch means someone saved a newer revision
+   * after the client fetched, so the snapshot's basis is stale and no
+   * base is captured. Safe to accept from the client: it is a
+   * concurrency token, not authorization — misstating it can only make
+   * Apply fail stale or get blocked, never widen write access.
+   * Optional for older clients (absent = basis unconfirmable).
+   */
+  revision: z.number().int().positive().optional(),
 });
 export type ChatContextArticle = z.infer<typeof chatContextArticleSchema>;
 

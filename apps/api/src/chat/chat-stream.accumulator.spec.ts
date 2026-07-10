@@ -73,12 +73,32 @@ describe('ToolCallAccumulator', () => {
     expect(call.errorCode).toBe('malformed');
   });
 
-  it('ignores tool calls that are not article tools', () => {
+  it('ignores tool calls with names outside the registry', () => {
     const acc = new ToolCallAccumulator();
     acc.ingest([
       { index: 0, id: 'c1', function: { name: 'get_weather', arguments: '{}' } },
     ]);
     expect(acc.finalize('stop')).toHaveLength(0);
+  });
+
+  it('accepts read-tool names (WS-030)', () => {
+    const acc = new ToolCallAccumulator();
+    acc.ingest([
+      { index: 0, id: 'c1', function: { name: 'search', arguments: '{"query":"backup"}' } },
+      { index: 1, id: 'c2', function: { name: 'get_article', arguments: `{"article_id":"${ART}","cursor":null}` } },
+    ]);
+    const calls = acc.finalize('stop');
+    expect(calls.map((c) => c.name)).toEqual(['search', 'get_article']);
+    expect(calls.every((c) => c.status === 'pending')).toBe(true);
+  });
+
+  it('returns the raw arguments blob for the upstream echo', () => {
+    const acc = new ToolCallAccumulator();
+    acc.ingest([{ index: 0, id: 'c1', function: { name: 'search' } }]);
+    acc.ingest([{ index: 0, function: { arguments: '{"query":' } }]);
+    acc.ingest([{ index: 0, function: { arguments: '"rotation"}' } }]);
+    const call = acc.finalize('stop')[0]!;
+    expect(call.rawArguments).toBe('{"query":"rotation"}');
   });
 
   it('keeps multiple calls separated by index', () => {
