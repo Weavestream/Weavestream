@@ -6,6 +6,8 @@ import {
   findRelatedItemsToolOutputSchema,
   getArticleToolInputSchema,
   getArticleToolOutputSchema,
+  getAppHelpToolInputSchema,
+  getAppHelpToolOutputSchema,
   getCompanySummaryToolInputSchema,
   getCompanySummaryToolOutputSchema,
   getRelatedItemsToolInputSchema,
@@ -19,6 +21,7 @@ import type {
   AiToolMode,
   AiToolName,
   GetArticleToolOutput,
+  GetAppHelpToolOutput,
   GetCompanySummaryToolOutput,
   GetRelatedItemsToolOutput,
   FindRelatedItemsToolOutput,
@@ -249,6 +252,30 @@ export const AI_TOOL_SPECS: Record<AiToolName, AiToolSpec> = {
     summarize: (_args, output) => {
       const o = output as GetCompanySummaryToolOutput;
       return `Summarized company "${o.companyName}"`;
+    },
+  },
+  get_app_help: {
+    name: 'get_app_help',
+    description: [
+      'Retrieve official, version-matched instructions for using the',
+      'Weavestream application. Use this for questions about navigating',
+      'the UI, creating or managing records, asset layouts, integrations,',
+      'organization mappings, field mappings, and syncs. It contains',
+      'application usage guidance only: it does not inspect live tenant',
+      'configuration and does not cover Docker, deployment, environment',
+      'variables, databases, or server administration.',
+    ].join(' '),
+    mode: AI_TOOL_MODES.get_app_help,
+    permission: null,
+    scopeNote:
+      'Authenticated-only static help. The implementation reads only bundled, ' +
+      'application-owned Markdown from a fixed directory, accepts no path or ' +
+      'tenant scope from the model, and returns no live tenant data.',
+    inputSchema: getAppHelpToolInputSchema,
+    outputSchema: getAppHelpToolOutputSchema,
+    summarize: (_args, output) => {
+      const o = output as GetAppHelpToolOutput;
+      return `Retrieved ${o.matches.length} app-help section${o.matches.length === 1 ? '' : 's'}`;
     },
   },
 };

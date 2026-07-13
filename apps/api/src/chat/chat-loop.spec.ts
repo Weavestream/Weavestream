@@ -69,6 +69,7 @@ describe('roundTools', () => {
       'find_related_items',
       'get_article',
       'get_related_items',
+      'get_app_help',
       'patch_article',
       'update_article',
     ]);

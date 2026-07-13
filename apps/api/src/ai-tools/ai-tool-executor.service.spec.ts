@@ -244,6 +244,72 @@ describe('AiToolExecutorService.executeRead', () => {
     expect(serialized).not.toContain(ARTICLE_ID.slice(0, 8));
   });
 
+  it('runs app help through the standard budget and audits only the question hash', async () => {
+    const question = 'How do I create an asset?';
+    const markdown = '## Create an asset\n\nSelect **New asset**.';
+    const output = {
+      version: 'v1.2.3',
+      matches: [
+        {
+          documentId: 'assets',
+          sectionId: 'assets/create-an-asset',
+          documentTitle: 'Assets',
+          sectionTitle: 'Create an asset',
+          requiredPermissions: ['asset.write'],
+          markdown,
+        },
+      ],
+    };
+    const tool = {
+      spec: AI_TOOL_SPECS.get_app_help,
+      resolveCompanyId: jest.fn(async () => 'self-scoped' as const),
+      execute: jest.fn(async () => output),
+    };
+    const registry = {
+      get: () => AI_TOOL_SPECS.get_app_help,
+      getReadTool: () => tool,
+    };
+    const budget = {
+      consume: jest.fn(async () => ({ allowed: true, retryAfterSeconds: 0 })),
+    };
+    const permissions = { can: jest.fn(async () => ({ allowed: true })) };
+    const audit = { log: jest.fn(async (_entry: unknown) => {}) };
+    const svc = new AiToolExecutorService(
+      registry as any,
+      budget as any,
+      permissions as any,
+      audit as any,
+    );
+
+    const result = await svc.executeRead(
+      'tc-help',
+      'get_app_help',
+      { question },
+      execCtx(),
+    );
+
+    expect(result).toMatchObject({
+      ok: true,
+      output,
+      summary: 'Retrieved 1 app-help section',
+    });
+    expect(budget.consume).toHaveBeenCalledWith('u-1', 'conv-1');
+    expect(permissions.can).not.toHaveBeenCalled();
+    const entry = audit.log.mock.calls[0]![0] as Record<string, unknown>;
+    expect(entry).toMatchObject({
+      action: 'ai_tool.get_app_help',
+      companyId: null,
+      after: {
+        outcome: 'ok',
+        correlationId: 'req-42',
+        argsSha256: sha256CanonicalJson({ question }),
+      },
+    });
+    const serialized = JSON.stringify(entry);
+    expect(serialized).not.toContain(question);
+    expect(serialized).not.toContain(markdown);
+  });
+
   it('a spec unavailableMessage overrides the generic string IDENTICALLY for not-found and denied', async () => {
     expect(AI_TOOL_SPECS.find_related_items.unavailableMessage).toBeDefined();
     const makeFindService = (err: Error) => {

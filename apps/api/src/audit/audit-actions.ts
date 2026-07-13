@@ -246,6 +246,7 @@ export const AUDIT_ACTIONS = {
     getArticle: 'ai_tool.get_article',
     getRelatedItems: 'ai_tool.get_related_items',
     getCompanySummary: 'ai_tool.get_company_summary',
+    getAppHelp: 'ai_tool.get_app_help',
   },
   // Phase 12 — real-time external ticket browse (NinjaOne first).
   // Tickets are NEVER persisted, so the audit log is the only record

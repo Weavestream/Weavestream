@@ -7,7 +7,7 @@ description: OpenAI-compatible AI assistant with article editing, context attach
 
 # AI Chat
 
-Weavestream includes a built-in AI chat panel available on every company page. You can ask questions, draft documentation, and have the AI read and edit articles directly — all without leaving the context of the tenant you are working in.
+Weavestream includes a built-in AI chat panel available throughout the app. You can ask questions, retrieve permitted company documentation, get instructions for using Weavestream, and draft or edit articles without leaving your current workflow.
 
 ## Opening the Chat Panel
 
@@ -42,9 +42,17 @@ Each conversation is stored as a **chat session** tied to your user account. Ses
 | **Resume a conversation** | Select it from the history list |
 | **Start a new conversation** | Click **New chat** at the top of the panel |
 
+## Product Help and Read Tools
+
+For questions about using Weavestream itself—such as creating an asset layout, configuring an integration, mapping organizations, or running a sync—the assistant can retrieve release-matched instructions bundled with the deployed application. This app help is read-only: it explains the current UI and lists permissions that may be required, but it cannot inspect live integration state or perform the documented steps.
+
+The assistant can also search records the signed-in user is permitted to access and read selected articles or relationships. Product help and tenant data are separate: static instructions do not prove that a particular asset, mapping, integration, or sync run exists.
+
+If no app-help section qualifies with sufficient confidence, the assistant is instructed to say that the built-in help does not cover the question instead of guessing. Deployment, Docker, environment-variable, database, and server-administration guidance is intentionally excluded.
+
 ## Context Attachment
 
-The AI only has access to information you explicitly provide. You can attach context in two ways:
+Attached context gives the assistant the current page or selected records immediately. The assistant may also use its permission-scoped read tools when a question needs other records. You can attach context in two ways:
 
 ### Auto-attach
 

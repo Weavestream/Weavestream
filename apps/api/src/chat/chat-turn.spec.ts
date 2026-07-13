@@ -111,6 +111,7 @@ describe('resolveTurnTools', () => {
     expect(r.toolChoice).toBe('auto');
     expect(r.tools.map((t) => t.function.name).sort()).toEqual([
       'find_related_items',
+      'get_app_help',
       'get_article',
       'get_related_items',
       'search',
@@ -123,6 +124,7 @@ describe('resolveTurnTools', () => {
     expect(r.tools.map((t) => t.function.name).sort()).toEqual([
       'create_article',
       'find_related_items',
+      'get_app_help',
       'get_article',
       'get_company_summary',
       'get_related_items',
@@ -144,6 +146,7 @@ describe('resolveTurnTools', () => {
     expect(r.toolChoice).toBe('auto');
     expect(r.tools.map((t) => t.function.name).sort()).toEqual([
       'find_related_items',
+      'get_app_help',
       'get_article',
       'get_company_summary',
       'get_related_items',

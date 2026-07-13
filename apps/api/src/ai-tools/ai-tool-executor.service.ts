@@ -61,6 +61,7 @@ const AUDIT_ACTION_BY_TOOL: Record<AiToolName, string> = {
   get_article: AUDIT_ACTIONS.aiTool.getArticle,
   get_related_items: AUDIT_ACTIONS.aiTool.getRelatedItems,
   get_company_summary: AUDIT_ACTIONS.aiTool.getCompanySummary,
+  get_app_help: AUDIT_ACTIONS.aiTool.getAppHelp,
 };
 
 /**

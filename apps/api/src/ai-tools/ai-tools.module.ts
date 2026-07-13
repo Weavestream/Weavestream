@@ -13,6 +13,8 @@ import { GetArticleAiTool } from './tools/get-article.tool.js';
 import { GetRelatedItemsAiTool } from './tools/get-related-items.tool.js';
 import { FindRelatedItemsAiTool } from './tools/find-related-items.tool.js';
 import { GetCompanySummaryAiTool } from './tools/get-company-summary.tool.js';
+import { GetAppHelpAiTool } from './tools/get-app-help.tool.js';
+import { AppHelpService } from '../ai-help/app-help.service.js';
 
 /**
  * WS-030 — typed AI tool registry. Read tools execute server-side in
@@ -28,11 +30,13 @@ import { GetCompanySummaryAiTool } from './tools/get-company-summary.tool.js';
   providers: [
     EntityScopeService,
     AiToolBudgetService,
+    AppHelpService,
     SearchAiTool,
     GetArticleAiTool,
     GetRelatedItemsAiTool,
     FindRelatedItemsAiTool,
     GetCompanySummaryAiTool,
+    GetAppHelpAiTool,
     {
       provide: AiToolRegistry,
       useFactory: (
@@ -41,6 +45,7 @@ import { GetCompanySummaryAiTool } from './tools/get-company-summary.tool.js';
         getRelatedItems: GetRelatedItemsAiTool,
         findRelatedItems: FindRelatedItemsAiTool,
         getCompanySummary: GetCompanySummaryAiTool,
+        getAppHelp: GetAppHelpAiTool,
       ) =>
         new AiToolRegistry([
           search,
@@ -48,6 +53,7 @@ import { GetCompanySummaryAiTool } from './tools/get-company-summary.tool.js';
           getRelatedItems,
           findRelatedItems,
           getCompanySummary,
+          getAppHelp,
         ]),
       inject: [
         SearchAiTool,
@@ -55,6 +61,7 @@ import { GetCompanySummaryAiTool } from './tools/get-company-summary.tool.js';
         GetRelatedItemsAiTool,
         FindRelatedItemsAiTool,
         GetCompanySummaryAiTool,
+        GetAppHelpAiTool,
       ],
     },
     AiToolExecutorService,

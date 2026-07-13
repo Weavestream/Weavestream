@@ -135,6 +135,7 @@ describe('toOpenAiToolDef', () => {
       'find_related_items',
       'get_article',
       'get_related_items',
+      'get_app_help',
     ] as const) {
       const def = toOpenAiToolDef(AI_TOOL_SPECS[name]);
       expect(def.function.strict).toBe(true);

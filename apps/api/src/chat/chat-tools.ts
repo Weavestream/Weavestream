@@ -90,5 +90,11 @@ export function toolDefsFor(names: readonly AiToolName[]): ToolDef[] {
 export function readToolDefs(hasCompany: boolean): ToolDef[] {
   return hasCompany
     ? READ_TOOL_DEFS
-    : toolDefsFor(['search', 'find_related_items', 'get_article', 'get_related_items']);
+    : toolDefsFor([
+        'search',
+        'find_related_items',
+        'get_article',
+        'get_related_items',
+        'get_app_help',
+      ]);
 }

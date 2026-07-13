@@ -31,6 +31,7 @@ export const aiToolNames = [
   'get_article',
   'get_related_items',
   'get_company_summary',
+  'get_app_help',
 ] as const;
 export const aiToolNameSchema = z.enum(aiToolNames);
 export type AiToolName = z.infer<typeof aiToolNameSchema>;
@@ -46,6 +47,7 @@ export const AI_TOOL_MODES: Record<AiToolName, AiToolMode> = {
   get_article: 'read',
   get_related_items: 'read',
   get_company_summary: 'read',
+  get_app_help: 'read',
 };
 
 export const AI_READ_TOOL_NAMES = aiToolNames.filter((n) => AI_TOOL_MODES[n] === 'read');
@@ -239,6 +241,25 @@ export type GetRelatedItemsToolInput = z.infer<typeof getRelatedItemsToolInputSc
 export const getCompanySummaryToolInputSchema = z.object({});
 export type GetCompanySummaryToolInput = z.infer<typeof getCompanySummaryToolInputSchema>;
 
+/**
+ * `get_app_help` — read version-matched, application-usage guidance.
+ * The model supplies a natural-language question only; it can never
+ * select a file or filesystem path.
+ */
+export const getAppHelpToolInputSchema = z
+  .object({
+    question: z
+      .string()
+      .trim()
+      .min(3)
+      .max(400)
+      .describe(
+        'Question about how to use the Weavestream application. Do not use for live tenant state, deployment, Docker, environment variables, or server administration.',
+      ),
+  })
+  .strict();
+export type GetAppHelpToolInput = z.infer<typeof getAppHelpToolInputSchema>;
+
 // ----------------------------------------------------------------------
 // Read-tool output schemas
 //
@@ -320,6 +341,26 @@ export const getCompanySummaryToolOutputSchema = z.object({
   auditEventsLast30d: z.number().int().min(0).optional(),
 });
 export type GetCompanySummaryToolOutput = z.infer<typeof getCompanySummaryToolOutputSchema>;
+
+export const appHelpMatchSchema = z
+  .object({
+    documentId: z.string().min(1).max(200),
+    sectionId: z.string().min(1).max(300),
+    documentTitle: z.string().min(1).max(200),
+    sectionTitle: z.string().min(1).max(200),
+    requiredPermissions: z.array(z.string().min(1).max(100)).max(5),
+    markdown: z.string().min(1).max(6_000),
+  })
+  .strict();
+export type AppHelpMatch = z.infer<typeof appHelpMatchSchema>;
+
+export const getAppHelpToolOutputSchema = z
+  .object({
+    version: z.string().min(1).max(100),
+    matches: z.array(appHelpMatchSchema).max(3),
+  })
+  .strict();
+export type GetAppHelpToolOutput = z.infer<typeof getAppHelpToolOutputSchema>;
 
 // ----------------------------------------------------------------------
 // Helpers
