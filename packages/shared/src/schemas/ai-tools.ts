@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { searchEntityKindSchema } from './search.js';
+import { MAX_ARTICLE_PATCH_CHARS, MAX_ARTICLE_PATCH_EDITS } from '../article-patch.js';
 
 /**
  * Single source of truth for the AI chat tool surface.
@@ -22,6 +23,7 @@ import { searchEntityKindSchema } from './search.js';
  * authenticated actor and the trusted turn context.
  */
 export const aiToolNames = [
+  'patch_article',
   'update_article',
   'create_article',
   'search',
@@ -36,6 +38,7 @@ export type AiToolName = z.infer<typeof aiToolNameSchema>;
 export type AiToolMode = 'read' | 'proposal';
 
 export const AI_TOOL_MODES: Record<AiToolName, AiToolMode> = {
+  patch_article: 'proposal',
   update_article: 'proposal',
   create_article: 'proposal',
   search: 'read',
@@ -45,12 +48,8 @@ export const AI_TOOL_MODES: Record<AiToolName, AiToolMode> = {
   get_company_summary: 'read',
 };
 
-export const AI_READ_TOOL_NAMES = aiToolNames.filter(
-  (n) => AI_TOOL_MODES[n] === 'read',
-);
-export const AI_PROPOSAL_TOOL_NAMES = aiToolNames.filter(
-  (n) => AI_TOOL_MODES[n] === 'proposal',
-);
+export const AI_READ_TOOL_NAMES = aiToolNames.filter((n) => AI_TOOL_MODES[n] === 'read');
+export const AI_PROPOSAL_TOOL_NAMES = aiToolNames.filter((n) => AI_TOOL_MODES[n] === 'proposal');
 
 // ----------------------------------------------------------------------
 // Input schemas
@@ -62,7 +61,49 @@ export const AI_PROPOSAL_TOOL_NAMES = aiToolNames.filter(
 // `null → undefined` before these schemas re-validate.
 // ----------------------------------------------------------------------
 
-/** `update_article` — proposal. Moved verbatim from the apply-time schema. */
+const articleTextEditSchema = z.object({
+  old_text: z
+    .string()
+    .min(1)
+    .max(MAX_ARTICLE_PATCH_CHARS)
+    .describe(
+      'Exact, contiguous article text to replace. Include enough surrounding text that it occurs once.',
+    ),
+  new_text: z
+    .string()
+    .max(MAX_ARTICLE_PATCH_CHARS)
+    .describe('Replacement text. Use an empty string to delete old_text.'),
+});
+
+/** `patch_article` — focused exact-match article edits. */
+export const patchArticleToolInputSchema = z.object({
+  article_id: z
+    .string()
+    .uuid()
+    .describe(
+      'UUID of the article to edit. Must match an article id shown in the system context or returned by get_article.',
+    ),
+  title: z
+    .string()
+    .min(1)
+    .max(200)
+    .optional()
+    .describe('New title. Use null to keep the existing title.'),
+  edits: z
+    .array(articleTextEditSchema)
+    .min(1)
+    .max(MAX_ARTICLE_PATCH_EDITS)
+    .optional()
+    .describe('Ordered exact replacements. Use null only for a title-only edit.'),
+  summary: z
+    .string()
+    .max(1000)
+    .optional()
+    .describe('One-line natural-language summary shown above the diff. Use null if none.'),
+});
+export type PatchArticleToolInput = z.infer<typeof patchArticleToolInputSchema>;
+
+/** `update_article` — deliberate full-document rewrite proposal. */
 export const updateArticleToolInputSchema = z.object({
   article_id: z
     .string()
@@ -82,7 +123,7 @@ export const updateArticleToolInputSchema = z.object({
     .max(100_000)
     .optional()
     .describe(
-      'Full replacement markdown body. Required to change content; use null when only changing the title.',
+      'Complete replacement markdown body for an explicit whole-article rewrite. Required to replace content; use null when only changing the title.',
     ),
   summary: z
     .string()
@@ -97,11 +138,7 @@ export type UpdateArticleToolInput = z.infer<typeof updateArticleToolInputSchema
 /** `create_article` — proposal. Moved verbatim from the apply-time schema. */
 export const createArticleToolInputSchema = z.object({
   title: z.string().min(1).max(200),
-  markdown: z
-    .string()
-    .min(1)
-    .max(100_000)
-    .describe('Article body as markdown.'),
+  markdown: z.string().min(1).max(100_000).describe('Article body as markdown.'),
   folder_id: z
     .string()
     .uuid()
@@ -157,16 +194,11 @@ export const findRelatedItemsToolInputSchema = z.object({
       'Exact displayed name of the asset, article, or password entry whose linked items the user requested.',
     ),
 });
-export type FindRelatedItemsToolInput = z.infer<
-  typeof findRelatedItemsToolInputSchema
->;
+export type FindRelatedItemsToolInput = z.infer<typeof findRelatedItemsToolInputSchema>;
 
 /** `get_article` — read. */
 export const getArticleToolInputSchema = z.object({
-  article_id: z
-    .string()
-    .uuid()
-    .describe('UUID of the article to read.'),
+  article_id: z.string().uuid().describe('UUID of the article to read.'),
   cursor: z
     .string()
     .min(1)
@@ -268,9 +300,7 @@ export type GetRelatedItemsToolOutput = z.infer<typeof getRelatedItemsToolOutput
 
 /** Same relationship result shape for the named-entity resolver tool. */
 export const findRelatedItemsToolOutputSchema = getRelatedItemsToolOutputSchema;
-export type FindRelatedItemsToolOutput = z.infer<
-  typeof findRelatedItemsToolOutputSchema
->;
+export type FindRelatedItemsToolOutput = z.infer<typeof findRelatedItemsToolOutputSchema>;
 
 /**
  * Company summary. Every count section is OPTIONAL and is omitted —
@@ -302,9 +332,7 @@ export type GetCompanySummaryToolOutput = z.infer<typeof getCompanySummaryToolOu
  * validation schemas use `.optional()` (which accepts `undefined`, not
  * `null`), so an un-stripped `{ summary: null }` would throw a ZodError.
  */
-export function stripNullArgs(
-  args: Record<string, unknown>,
-): Record<string, unknown> {
+export function stripNullArgs(args: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(args)) {
     if (value !== null) out[key] = value;

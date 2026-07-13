@@ -1,23 +1,37 @@
 'use client';
 
 import { useRouter } from 'next/navigation';
-import { useState, type CSSProperties } from 'react';
+import { useEffect, useState, type CSSProperties } from 'react';
 import type { ChatToolCallDto } from '@weavestream/shared';
-import { splitMarkdownTitleAndBody } from '@weavestream/shared';
-import { Icon } from '../ui';
 import {
-  useChatPanel,
-  type ChatPageContextSnapshot,
-  type ChatTab,
-} from './chat-panel-provider';
+  applyArticleTextEdits,
+  splitMarkdownTitleAndBody,
+  tiptapDocToMarkdown,
+  type ArticleTextEdit,
+} from '@weavestream/shared';
+import { apiFetch } from '../../lib/api';
+import type { ArticleDetail } from '../../lib/server-api';
+import { Icon } from '../ui';
+import { useChatPanel, type ChatPageContextSnapshot, type ChatTab } from './chat-panel-provider';
 import { SaveAsArticleDialog } from './save-as-article-dialog';
+
+type PatchSource =
+  | { status: 'idle' }
+  | { status: 'loading' }
+  | { status: 'ready'; markdown: string; revision: number }
+  | { status: 'error'; message: string };
+
+type PatchPreview =
+  | { status: 'loading' }
+  | { status: 'error'; message: string }
+  | { status: 'ready'; before: string; markdown: string };
 
 /**
  * Apply / Reject card rendered inline inside an assistant message
  * bubble whenever the model proposed an article-editing action.
  *
  * Pending state shows a header, optional one-line summary, a
- * collapsible diff (for update_article) or preview (for
+ * collapsible diff (for patch_article / update_article) or preview (for
  * create_article), and the Apply / Reject buttons.
  *
  * Once acted on, the card collapses to a single-line status row
@@ -44,24 +58,80 @@ export function ToolCallCard({
   const [showCreatedBody, setShowCreatedBody] = useState(false);
   // `create_article` Apply routes through the Save-as-article dialog
   // so the user picks the target company / folder explicitly — the
-  // LLM's `folder_id` is treated as advisory only. `update_article`
-  // keeps the inline Apply flow because the target row is already
+  // LLM's `folder_id` is treated as advisory only. Article edit tools
+  // keep the inline Apply flow because the target row is already
   // pinned to a real article.
   const [saveDialogOpen, setSaveDialogOpen] = useState(false);
   const pageContext = state.pageContext;
 
+  const isPatch = toolCall.name === 'patch_article';
+  const isRewrite = toolCall.name === 'update_article';
+  const rawTargetArticleId =
+    (isPatch || isRewrite) && typeof toolCall.arguments['article_id'] === 'string'
+      ? toolCall.arguments['article_id']
+      : null;
+  const previewCompanyId = state.pageContext?.companyId ?? state.companyContext?.companyId ?? null;
+  const patchPreviewKey =
+    isPatch && rawTargetArticleId && previewCompanyId
+      ? `${previewCompanyId}:${rawTargetArticleId}`
+      : null;
+  const [loadedPatchSource, setLoadedPatchSource] = useState<{
+    key: string;
+    source: Extract<PatchSource, { status: 'ready' | 'error' }>;
+  } | null>(null);
+  const patchSource: PatchSource = !patchPreviewKey
+    ? { status: 'idle' }
+    : loadedPatchSource?.key === patchPreviewKey
+      ? loadedPatchSource.source
+      : { status: 'loading' };
+
+  useEffect(() => {
+    if (!patchPreviewKey || !rawTargetArticleId || !previewCompanyId) return;
+    const controller = new AbortController();
+    void apiFetch<ArticleDetail>(`/companies/${previewCompanyId}/articles/${rawTargetArticleId}`, {
+      signal: controller.signal,
+    }).then((res) => {
+      if (controller.signal.aborted) return;
+      if (!res.ok || !res.data) {
+        setLoadedPatchSource({
+          key: patchPreviewKey,
+          source: {
+            status: 'error',
+            message: 'The article could not be loaded for a safe preview.',
+          },
+        });
+        return;
+      }
+      const article = res.data;
+      const markdown =
+        article.editorMode === 'markdown'
+          ? (article.markdownSource ?? '')
+          : tiptapDocToMarkdown(article.content);
+      setLoadedPatchSource({
+        key: patchPreviewKey,
+        source: { status: 'ready', markdown, revision: article.revision },
+      });
+    });
+    return () => controller.abort();
+  }, [patchPreviewKey, previewCompanyId, rawTargetArticleId]);
+
   // Read tools (WS-030) executed server-side during streaming; they
   // are never pending and have no Apply/Reject affordance — render a
   // compact status chip. (Placed after every hook: Rules of Hooks.)
-  if (toolCall.name !== 'update_article' && toolCall.name !== 'create_article') {
+  if (
+    toolCall.name !== 'patch_article' &&
+    toolCall.name !== 'update_article' &&
+    toolCall.name !== 'create_article'
+  ) {
     return <ReadToolChip toolCall={toolCall} />;
   }
 
-  const isUpdate = toolCall.name === 'update_article';
+  const isUpdate = isPatch || isRewrite;
   const args = toolCall.arguments as {
     article_id?: string;
     title?: string;
     markdown?: string;
+    edits?: ArticleTextEdit[];
     folder_id?: string;
     visible_to_clients?: boolean;
     summary?: string;
@@ -73,17 +143,13 @@ export function ToolCallCard({
   // `splitMarkdownTitleAndBody` strip so the user sees an accurate
   // diff before clicking Apply.
   const proposedMarkdown =
-    typeof args.markdown === 'string'
-      ? splitMarkdownTitleAndBody(args.markdown).body
-      : '';
-  const targetArticleId =
-    isUpdate && typeof args.article_id === 'string' ? args.article_id : null;
+    typeof args.markdown === 'string' ? splitMarkdownTitleAndBody(args.markdown).body : '';
+  const targetArticleId = rawTargetArticleId;
   // Narrow once — the article-specific page-context fields
   // (`onBeforeAiApply`, `onAfterAiApply`, etc.) only exist on the
   // article variant. The asset variant is read-only and never
   // referenced by tool-call apply.
-  const articlePageContext =
-    pageContext && pageContext.kind === 'article' ? pageContext : null;
+  const articlePageContext = pageContext && pageContext.kind === 'article' ? pageContext : null;
   const targetIsCurrentPage =
     !!targetArticleId &&
     articlePageContext !== null &&
@@ -102,14 +168,14 @@ export function ToolCallCard({
     }
     return ids;
   })();
-  const updateTargetIsHallucinated =
-    isUpdate && !!targetArticleId && !knownArticleIds.has(targetArticleId);
+  const rewriteTargetIsHallucinated =
+    isRewrite && !!targetArticleId && !knownArticleIds.has(targetArticleId);
   // Treat hallucinated update targets exactly like a `create_article`
   // proposal — the header, preview, and Apply flow all route through
   // the Save-as-article dialog. The server-side fallback in
   // `applyUpdate` matches this: a missing article + user-confirmed
   // overrides becomes a create.
-  const treatAsCreate = !isUpdate || updateTargetIsHallucinated;
+  const treatAsCreate = !isUpdate || rewriteTargetIsHallucinated;
   // The "current" body comes from the page context if the LLM is
   // updating the article currently being viewed/edited. Otherwise we
   // don't have it client-side (we'd have to re-fetch); for v1 we just
@@ -119,9 +185,18 @@ export function ToolCallCard({
       ? safeGetMarkdown(articlePageContext.getMarkdown)
       : null;
 
+  const patchPreview = buildPatchPreview(
+    patchSource,
+    toolCall.baseRevision,
+    args.title,
+    args.edits,
+  );
+
   const header = treatAsCreate
     ? `Proposed: create "${args.title ?? 'new article'}"`
-    : `Proposed: update "${resolvedArticleTitle(tab, pageContext, targetArticleId)}"`;
+    : isPatch
+      ? `Proposed edit: "${resolvedArticleTitle(tab, pageContext, targetArticleId)}"`
+      : `Proposed rewrite: "${resolvedArticleTitle(tab, pageContext, targetArticleId)}"`;
 
   async function onApply() {
     if (busy) return;
@@ -136,6 +211,7 @@ export function ToolCallCard({
       setSaveDialogOpen(true);
       return;
     }
+    if (isPatch && patchPreview.status !== 'ready') return;
     // Unsaved-changes guard: if the user is in the middle of editing
     // the same article the AI wants to overwrite, make them
     // acknowledge the swap before we clobber the form's body.
@@ -144,14 +220,15 @@ export function ToolCallCard({
         typeof window === 'undefined'
           ? true
           : window.confirm(
-              'You have unsaved edits in the article editor. Applying the AI suggestion will overwrite them with the proposed markdown. Continue?',
+              'You have unsaved edits in the article editor. Applying the AI suggestion will replace them with the reviewed article version. Continue?',
             );
       if (!ok) return;
     }
     setBusy('apply');
     articlePageContext?.onBeforeAiApply?.();
-    await applyToolCall(tab.id, messageId, toolCall.id);
+    const applyError = await applyToolCall(tab.id, messageId, toolCall.id);
     setBusy(null);
+    if (applyError) return;
     // If we just mutated the article the user is looking at, sync
     // the page surface to the new body. We do BOTH:
     //  1. `onAfterAiApply` — for client-component editors that hold
@@ -164,12 +241,8 @@ export function ToolCallCard({
     //     the refresh is a belt-and-suspenders pickup of server-side
     //     fields (slug, updatedBy, plaintext excerpt).
     if (targetIsCurrentPage) {
-      // Mirror the server-side `splitMarkdownTitleAndBody` strip so
-      // the form's local state matches what was persisted: the body
-      // without the leading heading, and the parsed heading promoted
-      // to the title when the LLM didn't supply one explicitly.
       const parsed =
-        typeof args.markdown === 'string'
+        isRewrite && typeof args.markdown === 'string'
           ? splitMarkdownTitleAndBody(args.markdown)
           : null;
       const resolvedTitle =
@@ -178,8 +251,14 @@ export function ToolCallCard({
           : parsed?.hadLeadingHeading
             ? parsed.title
             : undefined;
+      const appliedMarkdown =
+        isPatch && patchPreview.status === 'ready' ? patchPreview.markdown : parsed?.body;
       articlePageContext?.onAfterAiApply?.({
-        ...(parsed ? { markdown: parsed.body } : {}),
+        ...(appliedMarkdown !== undefined && args.edits !== undefined
+          ? { markdown: appliedMarkdown }
+          : parsed
+            ? { markdown: parsed.body }
+            : {}),
         ...(resolvedTitle !== undefined ? { title: resolvedTitle } : {}),
       });
       router.refresh();
@@ -227,13 +306,9 @@ export function ToolCallCard({
   const dialogDefaultCompanyId =
     state.pageContext?.companyId ?? state.companyContext?.companyId ?? null;
   const proposedTitle =
-    typeof args.title === 'string' && args.title.trim()
-      ? args.title
-      : undefined;
+    typeof args.title === 'string' && args.title.trim() ? args.title : undefined;
   const proposedVisibleToClients =
-    typeof args.visible_to_clients === 'boolean'
-      ? args.visible_to_clients
-      : false;
+    typeof args.visible_to_clients === 'boolean' ? args.visible_to_clients : false;
 
   return (
     <div
@@ -302,11 +377,10 @@ export function ToolCallCard({
             background: 'var(--panel-2)',
           }}
         >
-          {!treatAsCreate && currentMarkdown !== null ? (
-            <DiffBlock
-              before={currentMarkdown}
-              after={proposedMarkdown}
-            />
+          {isPatch ? (
+            <PatchPreviewBlock preview={patchPreview} />
+          ) : !treatAsCreate && currentMarkdown !== null ? (
+            <DiffBlock before={currentMarkdown} after={proposedMarkdown} />
           ) : (
             <PreviewBlock markdown={proposedMarkdown} />
           )}
@@ -334,10 +408,14 @@ export function ToolCallCard({
         <button
           type="button"
           onClick={onApply}
-          disabled={!!busy}
+          disabled={!!busy || (isPatch && patchPreview.status !== 'ready')}
           style={btnStyle(true, busy === 'apply')}
         >
-          {busy === 'apply' ? 'Applying…' : 'Apply'}
+          {busy === 'apply'
+            ? 'Applying…'
+            : isPatch && patchPreview.status === 'loading'
+              ? 'Loading preview…'
+              : 'Apply'}
         </button>
       </div>
       {treatAsCreate && (
@@ -369,6 +447,86 @@ export function ToolCallCard({
   );
 }
 
+function buildPatchPreview(
+  source: PatchSource,
+  baseRevision: number | null | undefined,
+  proposedTitle: string | undefined,
+  rawEdits: ArticleTextEdit[] | undefined,
+): PatchPreview {
+  if (source.status === 'loading') return { status: 'loading' };
+  if (source.status === 'idle') {
+    return {
+      status: 'error',
+      message: 'The target article is unavailable for preview.',
+    };
+  }
+  if (source.status === 'error') return source;
+  if (typeof baseRevision !== 'number') {
+    return {
+      status: 'error',
+      message: 'This proposal was not based on a confirmed article revision.',
+    };
+  }
+  if (source.revision !== baseRevision) {
+    return {
+      status: 'error',
+      message:
+        'The article changed after this proposal was drafted. Ask the assistant to redo the edit.',
+    };
+  }
+  if (rawEdits === undefined) {
+    if (proposedTitle === undefined) {
+      return { status: 'error', message: 'The proposed edit does not contain any changes.' };
+    }
+    return {
+      status: 'ready',
+      before: source.markdown,
+      markdown: source.markdown,
+    };
+  }
+  if (
+    !Array.isArray(rawEdits) ||
+    rawEdits.length === 0 ||
+    rawEdits.some(
+      (edit) =>
+        !edit ||
+        typeof edit.old_text !== 'string' ||
+        !edit.old_text ||
+        typeof edit.new_text !== 'string',
+    )
+  ) {
+    return { status: 'error', message: 'The proposed edit is malformed.' };
+  }
+  const patched = applyArticleTextEdits(source.markdown, rawEdits);
+  if (!patched.ok) {
+    return {
+      status: 'error',
+      message:
+        patched.code === 'not_found'
+          ? `Edit ${patched.editIndex + 1} no longer matches the article text.`
+          : `Edit ${patched.editIndex + 1} matches more than one passage. Ask the assistant to include more surrounding text.`,
+    };
+  }
+  return {
+    status: 'ready',
+    before: source.markdown,
+    markdown: patched.markdown,
+  };
+}
+
+function PatchPreviewBlock({ preview }: { preview: PatchPreview }) {
+  if (preview.status === 'loading') {
+    return <div style={{ color: 'var(--muted)' }}>Loading article preview…</div>;
+  }
+  if (preview.status === 'error') {
+    return <div style={{ color: 'var(--warn, #b7791f)' }}>{preview.message}</div>;
+  }
+  if (preview.before === preview.markdown) {
+    return <div style={{ color: 'var(--muted)' }}>Article body unchanged.</div>;
+  }
+  return <DiffBlock before={preview.before} after={preview.markdown} />;
+}
+
 /**
  * Settled-state card for a `create_article` tool call.
  *
@@ -394,13 +552,8 @@ function CreatedArticleCard({
   onToggle: () => void;
 }) {
   const tone: 'ok' | 'danger' | 'muted' =
-    toolCall.status === 'applied'
-      ? 'ok'
-      : toolCall.status === 'failed'
-        ? 'danger'
-        : 'muted';
-  const StatusIcon =
-    tone === 'ok' ? Icon.check : tone === 'danger' ? Icon.x : Icon.chat;
+    toolCall.status === 'applied' ? 'ok' : toolCall.status === 'failed' ? 'danger' : 'muted';
+  const StatusIcon = tone === 'ok' ? Icon.check : tone === 'danger' ? Icon.x : Icon.chat;
   const toneColor =
     tone === 'ok'
       ? 'var(--ok, #2ea043)'
@@ -409,7 +562,7 @@ function CreatedArticleCard({
         : 'var(--muted)';
   const statusLabel =
     toolCall.status === 'applied'
-      ? toolCall.result ?? `Created article "${title}".`
+      ? (toolCall.result ?? `Created article "${title}".`)
       : toolCall.status === 'rejected'
         ? `Rejected: ${title}`
         : `Failed: ${toolCall.error ?? 'unknown error'}`;
@@ -448,9 +601,7 @@ function CreatedArticleCard({
             {statusLabel}
           </div>
           {summary && summary.trim() && (
-            <div style={{ color: 'var(--muted)', fontSize: 11.5, marginTop: 2 }}>
-              {summary}
-            </div>
+            <div style={{ color: 'var(--muted)', fontSize: 11.5, marginTop: 2 }}>{summary}</div>
           )}
         </div>
         <button
@@ -498,11 +649,11 @@ function ReadToolChip({ toolCall }: { toolCall: ChatToolCallDto }) {
       ? 'Searched'
       : toolCall.name === 'find_related_items'
         ? 'Checked linked items'
-      : toolCall.name === 'get_article'
-        ? 'Read article'
-        : toolCall.name === 'get_related_items'
-          ? 'Checked linked items'
-          : 'Company summary';
+        : toolCall.name === 'get_article'
+          ? 'Read article'
+          : toolCall.name === 'get_related_items'
+            ? 'Checked linked items'
+            : 'Company summary';
   const ok = toolCall.status === 'executed';
   const label = ok
     ? `${verb} — ${toolCall.result ?? 'done'}`
@@ -540,7 +691,9 @@ function StatusRow({ toolCall }: { toolCall: ChatToolCallDto }) {
     (toolCall.errorCode === 'truncated' ||
       toolCall.errorCode === 'empty' ||
       toolCall.errorCode === 'stale' ||
-      toolCall.errorCode === 'no_base');
+      toolCall.errorCode === 'no_base' ||
+      toolCall.errorCode === 'patch_missing' ||
+      toolCall.errorCode === 'patch_ambiguous');
   const tone =
     toolCall.status === 'applied'
       ? 'ok'
@@ -551,12 +704,12 @@ function StatusRow({ toolCall }: { toolCall: ChatToolCallDto }) {
         : 'muted';
   const label =
     toolCall.status === 'applied'
-      ? toolCall.result ?? 'Applied.'
+      ? (toolCall.result ?? 'Applied.')
       : toolCall.status === 'rejected'
         ? 'Rejected.'
         : toolCall.status === 'failed'
           ? isSoftFailure
-            ? toolCall.error ?? 'The draft could not be completed.'
+            ? (toolCall.error ?? 'The draft could not be completed.')
             : `Failed: ${toolCall.error ?? 'unknown error'}`
           : 'Pending.';
   const color =
@@ -567,8 +720,7 @@ function StatusRow({ toolCall }: { toolCall: ChatToolCallDto }) {
         : tone === 'warn'
           ? 'var(--warn, #b7791f)'
           : 'var(--muted)';
-  const IconCmp =
-    tone === 'ok' ? Icon.check : tone === 'muted' ? Icon.chat : Icon.x;
+  const IconCmp = tone === 'ok' ? Icon.check : tone === 'muted' ? Icon.chat : Icon.x;
   return (
     <div
       style={{
@@ -603,8 +755,7 @@ function DiffBlock({ before, after }: { before: string; after: string }) {
     <pre
       style={{
         margin: 0,
-        fontFamily:
-          'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
         fontSize: 11.5,
         lineHeight: 1.5,
         whiteSpace: 'pre-wrap',
@@ -651,9 +802,7 @@ function computeLineDiff(a: string[], b: string[]): DiffOp[] {
   const m = b.length;
   // LCS table: (n+1) x (m+1). For very large inputs this is O(n*m);
   // article bodies in this product cap at ~2 k lines so it's fine.
-  const dp: number[][] = Array.from({ length: n + 1 }, () =>
-    new Array<number>(m + 1).fill(0),
-  );
+  const dp: number[][] = Array.from({ length: n + 1 }, () => new Array<number>(m + 1).fill(0));
   for (let i = n - 1; i >= 0; i--) {
     for (let j = m - 1; j >= 0; j--) {
       if (a[i] === b[j]) dp[i]![j] = (dp[i + 1]![j + 1] ?? 0) + 1;
@@ -686,8 +835,7 @@ function PreviewBlock({ markdown }: { markdown: string }) {
     <pre
       style={{
         margin: 0,
-        fontFamily:
-          'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
         fontSize: 11.5,
         lineHeight: 1.5,
         whiteSpace: 'pre-wrap',
@@ -706,10 +854,7 @@ function resolvedArticleTitle(
   articleId: string | null,
 ): string {
   if (!articleId) return 'article';
-  if (
-    pageContext?.kind === 'article' &&
-    pageContext.articleId === articleId
-  ) {
+  if (pageContext?.kind === 'article' && pageContext.articleId === articleId) {
     return pageContext.title;
   }
   const mention = tab.mentions.find((m) => m.id === articleId);

@@ -889,7 +889,7 @@ const LINE_HEIGHT = 18;
 const COMPOSER_LINES = 6;
 const COMPOSER_PADDING_Y = 24; // top + bottom padding inside textarea
 const MAX_TEXTAREA_HEIGHT = LINE_HEIGHT * COMPOSER_LINES + COMPOSER_PADDING_Y;
-const MIN_TEXTAREA_HEIGHT = 88;
+const MIN_TEXTAREA_HEIGHT = 56;
 
 // The composer renders the textarea with transparent text and an
 // absolutely-positioned mirror div underneath, so `@[Title]` reference

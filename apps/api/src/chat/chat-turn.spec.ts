@@ -126,6 +126,7 @@ describe('resolveTurnTools', () => {
       'get_article',
       'get_company_summary',
       'get_related_items',
+      'patch_article',
       'search',
       'update_article',
     ]);
@@ -177,7 +178,7 @@ describe('resolveTurnTools', () => {
     expect(r.tools.map((t) => t.function.name)).toEqual(['create_article']);
   });
 
-  it('forces named update only when the target body is retained', () => {
+  it('forces focused patch editing only when the target body is retained', () => {
     const ok = resolveTurnTools({
       hasCompany: true,
       targetArticleRetained: true,
@@ -185,7 +186,7 @@ describe('resolveTurnTools', () => {
     });
     expect(ok.toolChoice).toEqual({
       type: 'function',
-      function: { name: 'update_article' },
+      function: { name: 'patch_article' },
     });
 
     const trimmed = resolveTurnTools({
@@ -195,13 +196,14 @@ describe('resolveTurnTools', () => {
     });
     // Body gone/unconfirmed → don't invite a hallucinated update. The
     // model gets the read set instead: get_article is the recovery
-    // path (exact basis capture), after which round 2 can offer update.
+    // path (exact basis capture), after which round 2 can offer edits.
     expect(trimmed.toolChoice).toBe('auto');
     expect(trimmed.tools.map((t) => t.function.name)).not.toContain('update_article');
+    expect(trimmed.tools.map((t) => t.function.name)).not.toContain('patch_article');
     expect(trimmed.tools.map((t) => t.function.name)).toContain('get_article');
   });
 
-  it('drops update_article from the auto set when the target body was trimmed', () => {
+  it('drops article edit tools from the auto set when the target body was trimmed', () => {
     const r = resolveTurnTools({
       hasCompany: true,
       targetArticleRetained: false,
@@ -209,6 +211,7 @@ describe('resolveTurnTools', () => {
     expect(r.toolChoice).toBe('auto');
     const names = r.tools.map((t) => t.function.name);
     expect(names).not.toContain('update_article');
+    expect(names).not.toContain('patch_article');
     expect(names).toContain('create_article');
     expect(names).toContain('get_article');
   });
@@ -345,7 +348,7 @@ describe('planBudget', () => {
     const out = planBudget({ ...base, context: ctx, history: [] });
     expect(out.context?.articles).toHaveLength(0); // dropped (not pinned)
     expect(out.trimmedContextItems).toBe(1);
-    // Nothing left to update → update_article must be withheld (reads
+    // Nothing left to update → edit tools must be withheld (reads
     // and create remain on offer; get_article is the recovery path).
     expect(out.targetArticleRetained).toBe(false);
     expect(
@@ -353,6 +356,11 @@ describe('planBudget', () => {
         (t) => t.function.name,
       ),
     ).not.toContain('update_article');
+    expect(
+      resolveTurnTools({ hasCompany: true, targetArticleRetained: false }).tools.map(
+        (t) => t.function.name,
+      ),
+    ).not.toContain('patch_article');
   });
 
   it('flags the target as not retained when it alone exceeds the budget', () => {

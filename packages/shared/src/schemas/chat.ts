@@ -54,9 +54,11 @@ export type ChatToolCallName = z.infer<typeof chatToolCallNameSchema>;
  *                 was exhausted before this call could run
  *   stale       → Apply was refused because the article was edited
  *                 after the proposal's base revision was captured
- *   no_base     → an update proposal had no server-captured base
+ *   no_base     → an article edit proposal had no server-captured base
  *                 revision (the model never read/attached the article
  *                 this turn), so it was blocked at persist time
+ *   patch_missing → patch old_text did not occur in the base article
+ *   patch_ambiguous → patch old_text occurred more than once
  */
 export const chatToolCallErrorCodeSchema = z.enum([
   'truncated',
@@ -66,6 +68,8 @@ export const chatToolCallErrorCodeSchema = z.enum([
   'budget',
   'stale',
   'no_base',
+  'patch_missing',
+  'patch_ambiguous',
 ]);
 export type ChatToolCallErrorCode = z.infer<typeof chatToolCallErrorCodeSchema>;
 
@@ -87,7 +91,7 @@ export const chatToolCallSchema = z.object({
    *  produced cleanly. */
   errorCode: chatToolCallErrorCodeSchema.nullable().optional(),
   /**
-   * Optimistic-concurrency basis for `update_article` proposals,
+   * Optimistic-concurrency basis for article edit proposals,
    * captured server-side from the content the model actually saw
    * (attached snapshot with a matching revision claim, or a
    * `get_article` read) — never looked up at persist time.
@@ -121,7 +125,7 @@ export type ChatMessageDto = z.infer<typeof chatMessageSchema>;
  *
  * METADATA ONLY — ids/titles, never full markdown bodies (size/privacy).
  * This is descriptive context, NOT an authorization source: apply still
- * derives the writable company from the article row for `update_article`
+ * derives the writable company from the article row for article edits
  * and re-checks `article.write`. `companyId` here only ever acts as a
  * reject-only cross-check (update) or the create scope (still gated by
  * `article.write`).
@@ -244,7 +248,7 @@ export type ChatContextTicket = z.infer<typeof chatContextTicketSchema>;
  * optional — a freeform tab with no @-mentions and no page context
  * sends nothing. The server uses this to (1) build a system prompt
  * inlining the attached articles + assets + domains and (2) scope
- * agentic tool calls (`create_article` / `update_article`) to the
+ * agentic article proposal tool calls to the
  * current company so the LLM cannot accidentally mutate a different
  * tenant. Assets and domains are read-only context and never travel
  * as tool-call targets.

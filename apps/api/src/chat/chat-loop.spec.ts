@@ -54,9 +54,10 @@ describe('roundTools', () => {
     expect(names(r)).toEqual(['create_article']);
   });
 
-  it('earns update_article back once a basis was captured this turn', () => {
+  it('earns article edit tools back once a basis was captured this turn', () => {
     const r = roundTools({ readBudget: 3, hasCompany: true, anyBasisCaptured: true });
     expect(names(r)).toContain('update_article');
+    expect(names(r)).toContain('patch_article');
     expect(names(r)).toContain('create_article');
     expect(names(r)).toContain('get_company_summary');
   });
@@ -68,6 +69,7 @@ describe('roundTools', () => {
       'find_related_items',
       'get_article',
       'get_related_items',
+      'patch_article',
       'update_article',
     ]);
   });
@@ -125,10 +127,7 @@ describe('text/result helpers', () => {
 
 describe('confirmedSnapshotBases (capture point a)', () => {
   it('captures only when the client claim matches the current row', () => {
-    const captured = confirmedSnapshotBases(
-      [{ id: 'a-1', revision: 5 }],
-      new Map([['a-1', 5]]),
-    );
+    const captured = confirmedSnapshotBases([{ id: 'a-1', revision: 5 }], new Map([['a-1', 5]]));
     expect(captured.get('a-1')).toBe(5);
   });
 
@@ -136,10 +135,7 @@ describe('confirmedSnapshotBases (capture point a)', () => {
     // Snapshot body is revision 5; another user saved revision 6 after
     // the client fetched. Capturing 6 here would let Apply overwrite
     // that newer edit with a proposal drafted from 5.
-    const captured = confirmedSnapshotBases(
-      [{ id: 'a-1', revision: 5 }],
-      new Map([['a-1', 6]]),
-    );
+    const captured = confirmedSnapshotBases([{ id: 'a-1', revision: 5 }], new Map([['a-1', 6]]));
     expect(captured.size).toBe(0);
   });
 
@@ -157,10 +153,25 @@ describe('assignProposalBases', () => {
       new Map([[ART, 7]]),
       resolver,
     );
-    expect(out).toEqual([
-      expect.objectContaining({ status: 'pending', baseRevision: 7 }),
-    ]);
+    expect(out).toEqual([expect.objectContaining({ status: 'pending', baseRevision: 7 })]);
     // No fresh lookup for captured bases — persist time is lookup-free.
+    expect(resolver).not.toHaveBeenCalled();
+  });
+
+  it('binds a captured basis onto a patch proposal', async () => {
+    const resolver = jest.fn(async () => true);
+    const out = await assignProposalBases(
+      [call('patch_article', { arguments: { article_id: ART, edits: [] } })],
+      new Map([[ART, 9]]),
+      resolver,
+    );
+    expect(out).toEqual([
+      expect.objectContaining({
+        name: 'patch_article',
+        status: 'pending',
+        baseRevision: 9,
+      }),
+    ]);
     expect(resolver).not.toHaveBeenCalled();
   });
 
@@ -185,9 +196,23 @@ describe('assignProposalBases', () => {
       new Map(),
       jest.fn(async () => false),
     );
+    expect(out).toEqual([expect.objectContaining({ status: 'pending', baseRevision: null })]);
+  });
+
+  it('blocks an unresolvable patch target instead of promoting it to a create', async () => {
+    const out = await assignProposalBases(
+      [call('patch_article', { arguments: { article_id: ART, edits: [] } })],
+      new Map(),
+      jest.fn(async () => false),
+    );
     expect(out).toEqual([
-      expect.objectContaining({ status: 'pending', baseRevision: null }),
+      expect.objectContaining({
+        name: 'patch_article',
+        status: 'failed',
+        errorCode: 'unavailable',
+      }),
     ]);
+    expect(out[0]).not.toHaveProperty('baseRevision');
   });
 
   it('treats a non-uuid article id as unresolvable without querying', async () => {

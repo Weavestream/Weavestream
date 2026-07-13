@@ -10,6 +10,7 @@ import {
   getCompanySummaryToolOutputSchema,
   getRelatedItemsToolInputSchema,
   getRelatedItemsToolOutputSchema,
+  patchArticleToolInputSchema,
   searchToolInputSchema,
   searchToolOutputSchema,
   updateArticleToolInputSchema,
@@ -72,16 +73,36 @@ export interface AiToolSpec {
    * the schema-validated args/output (erased); never include document
    * content. Full outputs are never persisted.
    */
-  summarize:
-    | ((args: Record<string, unknown>, output: unknown) => string)
-    | null;
+  summarize: ((args: Record<string, unknown>, output: unknown) => string) | null;
 }
 
 export const AI_TOOL_SPECS: Record<AiToolName, AiToolSpec> = {
+  patch_article: {
+    name: 'patch_article',
+    description: [
+      'Propose focused edits to an existing article using exact text',
+      'replacements. The edits are NOT applied immediately — the user',
+      'reviews a diff and clicks Apply or Reject. Use this for additions,',
+      'corrections, and localized changes. Copy old_text verbatim from',
+      'the article and include enough context that it occurs exactly once.',
+      'The article is saved in Markdown editor mode when content changes.',
+    ].join(' '),
+    mode: AI_TOOL_MODES.patch_article,
+    permission: 'article.write',
+    scopeNote:
+      'Never executes during streaming. Apply derives the writable company from ' +
+      'the article row, re-checks article.write, applies exact edits server-side, ' +
+      'and guards the base revision in the WHERE clause of the update.',
+    inputSchema: patchArticleToolInputSchema,
+    outputSchema: null,
+    summarize: null,
+  },
   update_article: {
     name: 'update_article',
     description: [
-      'Propose an update to an existing article. The change is NOT',
+      'Propose a complete rewrite of an existing article. Use this only',
+      'when the user explicitly wants the whole document rewritten,',
+      'reorganized, or replaced. The change is NOT',
       'applied immediately — the user sees a diff and clicks Apply',
       'or Reject in the chat UI. Provide the full new markdown body',
       '(do not send a partial diff). The article will be saved in',
@@ -170,7 +191,7 @@ export const AI_TOOL_SPECS: Record<AiToolName, AiToolSpec> = {
       'Read an article’s body as markdown. Long articles return one chunk',
       'plus a continuation cursor — call again with the cursor to keep',
       'reading the SAME article. Always read an article with this tool',
-      'before proposing an update to it, unless its content is already',
+      'before proposing an edit or rewrite, unless its content is already',
       'attached to this conversation. Cite the returned href when you use',
       'the content.',
     ].join(' '),

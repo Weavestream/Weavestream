@@ -13,6 +13,10 @@ All notable changes to Weavestream are documented here. The format follows [Keep
 
 ## [Unreleased]
 
+### Added
+
+- **Patch-first AI article editing.** Focused AI edits now propose exact passage replacements instead of regenerating the complete article, reducing output size and preserving unchanged content more reliably on smaller local models. Whole-document replacement remains available for explicit rewrites. Patch previews and Apply share the same exact-match rules, and stale, missing, or ambiguous passages are refused without partial writes.
+
 ## [1.8.14] - 2026-07-10
 
 ### Added

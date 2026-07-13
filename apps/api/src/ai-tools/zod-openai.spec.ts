@@ -18,7 +18,9 @@ const LEGACY_ARTICLE_TOOLS = [
       name: 'update_article',
       strict: true,
       description: [
-        'Propose an update to an existing article. The change is NOT',
+        'Propose a complete rewrite of an existing article. Use this only',
+        'when the user explicitly wants the whole document rewritten,',
+        'reorganized, or replaced. The change is NOT',
         'applied immediately — the user sees a diff and clicks Apply',
         'or Reject in the chat UI. Provide the full new markdown body',
         '(do not send a partial diff). The article will be saved in',
@@ -40,7 +42,7 @@ const LEGACY_ARTICLE_TOOLS = [
           markdown: {
             type: ['string', 'null'],
             description:
-              'Full replacement markdown body. Required to change content; use null when only changing the title.',
+              'Complete replacement markdown body for an explicit whole-article rewrite. Required to replace content; use null when only changing the title.',
           },
           summary: {
             type: ['string', 'null'],
@@ -74,8 +76,7 @@ const LEGACY_ARTICLE_TOOLS = [
           },
           folder_id: {
             type: ['string', 'null'],
-            description:
-              'UUID of the parent folder. Use null to create the article at the root.',
+            description: 'UUID of the parent folder. Use null to create the article at the root.',
           },
           visible_to_clients: {
             type: ['boolean', 'null'],
@@ -83,8 +84,7 @@ const LEGACY_ARTICLE_TOOLS = [
           },
           summary: {
             type: ['string', 'null'],
-            description:
-              'One-line summary shown to the user above the preview. null if none.',
+            description: 'One-line summary shown to the user above the preview. null if none.',
           },
         },
         required: ['title', 'markdown', 'folder_id', 'visible_to_clients', 'summary'],
@@ -94,16 +94,39 @@ const LEGACY_ARTICLE_TOOLS = [
 ];
 
 describe('toOpenAiToolDef', () => {
+  it('emits a strict nested schema for patch_article edits', () => {
+    const def = toOpenAiToolDef(AI_TOOL_SPECS.patch_article);
+    expect(def).toMatchObject({
+      type: 'function',
+      function: {
+        name: 'patch_article',
+        strict: true,
+        parameters: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['article_id', 'title', 'edits', 'summary'],
+          properties: {
+            edits: {
+              type: ['array', 'null'],
+              maxItems: 12,
+              items: {
+                type: 'object',
+                additionalProperties: false,
+                required: ['old_text', 'new_text'],
+              },
+            },
+          },
+        },
+      },
+    });
+  });
+
   it('reproduces the legacy hand-written update_article definition exactly', () => {
-    expect(toOpenAiToolDef(AI_TOOL_SPECS.update_article)).toEqual(
-      LEGACY_ARTICLE_TOOLS[0],
-    );
+    expect(toOpenAiToolDef(AI_TOOL_SPECS.update_article)).toEqual(LEGACY_ARTICLE_TOOLS[0]);
   });
 
   it('reproduces the legacy hand-written create_article definition exactly', () => {
-    expect(toOpenAiToolDef(AI_TOOL_SPECS.create_article)).toEqual(
-      LEGACY_ARTICLE_TOOLS[1],
-    );
+    expect(toOpenAiToolDef(AI_TOOL_SPECS.create_article)).toEqual(LEGACY_ARTICLE_TOOLS[1]);
   });
 
   it('emits strict mode with every read-tool property in required', () => {
@@ -148,7 +171,13 @@ describe('zodObjectToStrictJsonSchema', () => {
 
   it('converts optional arrays to a ["array","null"] union with items and maxItems', () => {
     const schema = zodObjectToStrictJsonSchema(
-      z.object({ types: z.array(z.enum(['x', 'y'])).min(1).max(5).optional() }),
+      z.object({
+        types: z
+          .array(z.enum(['x', 'y']))
+          .min(1)
+          .max(5)
+          .optional(),
+      }),
     );
     expect(schema['properties']).toEqual({
       types: {
@@ -174,9 +203,7 @@ describe('zodObjectToStrictJsonSchema', () => {
   });
 
   it('collapses nested optional/nullable wrappers into a single null union', () => {
-    const schema = zodObjectToStrictJsonSchema(
-      z.object({ v: z.string().nullable().optional() }),
-    );
+    const schema = zodObjectToStrictJsonSchema(z.object({ v: z.string().nullable().optional() }));
     expect(schema['properties']).toEqual({ v: { type: ['string', 'null'] } });
   });
 
@@ -190,13 +217,11 @@ describe('zodObjectToStrictJsonSchema', () => {
   });
 
   it('throws on Zod types outside the supported subset', () => {
+    expect(() => zodObjectToStrictJsonSchema(z.object({ v: z.record(z.string()) }))).toThrow(
+      /unsupported Zod type/,
+    );
     expect(() =>
-      zodObjectToStrictJsonSchema(z.object({ v: z.record(z.string()) })),
-    ).toThrow(/unsupported Zod type/);
-    expect(() =>
-      zodObjectToStrictJsonSchema(
-        z.object({ v: z.union([z.string(), z.number()]) }),
-      ),
+      zodObjectToStrictJsonSchema(z.object({ v: z.union([z.string(), z.number()]) })),
     ).toThrow(/unsupported Zod type/);
   });
 

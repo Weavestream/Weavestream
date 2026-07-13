@@ -29,11 +29,28 @@ function pendingCall(overrides: Partial<ChatToolCallDto> = {}): ChatToolCallDto 
   };
 }
 
+function pendingPatchCall(overrides: Partial<ChatToolCallDto> = {}): ChatToolCallDto {
+  return {
+    id: 'tc-1',
+    name: 'patch_article',
+    arguments: {
+      article_id: ART,
+      edits: [{ old_text: 'Old text', new_text: 'New text' }],
+    },
+    status: 'pending',
+    result: null,
+    error: null,
+    baseRevision: 7,
+    ...overrides,
+  };
+}
+
 function makeService(opts: {
   toolCall: ChatToolCallDto;
   turnContext: ChatTurnContext | null;
   articleCompanyId?: string | null;
   canWrite?: boolean;
+  article?: Record<string, unknown>;
 }) {
   const chat = {
     getMessageForActor: jest.fn().mockResolvedValue({
@@ -49,11 +66,17 @@ function makeService(opts: {
   const articles = {
     findCompanyIdForArticle: jest
       .fn()
-      .mockResolvedValue(
-        opts.articleCompanyId === undefined ? CO : opts.articleCompanyId,
-      ),
+      .mockResolvedValue(opts.articleCompanyId === undefined ? CO : opts.articleCompanyId),
     update: jest.fn().mockResolvedValue({ title: 'Hi' }),
     create: jest.fn().mockResolvedValue({ title: 'T' }),
+    getById: jest.fn().mockResolvedValue(
+      opts.article ?? {
+        revision: 7,
+        editorMode: 'markdown',
+        markdownSource: 'Before\n\nOld text\n\nAfter',
+        content: null,
+      },
+    ),
   };
   const permissions = {
     can: jest
@@ -64,11 +87,7 @@ function makeService(opts: {
           : { allowed: true },
       ),
   };
-  const svc = new ChatToolCallService(
-    articles as never,
-    chat as never,
-    permissions as never,
-  );
+  const svc = new ChatToolCallService(articles as never, chat as never, permissions as never);
   return { svc, chat, articles, permissions };
 }
 
@@ -118,14 +137,9 @@ describe('ChatToolCallService.apply', () => {
 
     // turnContext (CO) wins, matches the article row (CO) → applies.
     expect(toolCall.status).toBe('applied');
-    expect(articles.update).toHaveBeenCalledWith(
-      ACTOR,
-      CO,
-      ART,
-      expect.anything(),
-      META,
-      { expectedRevision: undefined },
-    );
+    expect(articles.update).toHaveBeenCalledWith(ACTOR, CO, ART, expect.anything(), META, {
+      expectedRevision: undefined,
+    });
   });
 
   it('rejects when bound company differs from the article’s real company (IDOR guard)', async () => {
@@ -183,14 +197,158 @@ describe('ChatToolCallService.apply', () => {
     const { toolCall } = await apply(svc, CO);
 
     expect(toolCall.status).toBe('applied');
+    expect(articles.update).toHaveBeenCalledWith(ACTOR, CO, ART, expect.anything(), META, {
+      expectedRevision: undefined,
+    });
+  });
+});
+
+describe('ChatToolCallService.apply — exact article patches', () => {
+  it('applies the complete transformed markdown through the guarded update path', async () => {
+    const { svc, articles } = makeService({
+      toolCall: pendingPatchCall(),
+      turnContext: { companyId: CO },
+    });
+
+    const { toolCall } = await apply(svc, CO);
+
+    expect(toolCall).toMatchObject({
+      status: 'applied',
+      result: 'Edited article "Hi".',
+    });
     expect(articles.update).toHaveBeenCalledWith(
       ACTOR,
       CO,
       ART,
-      expect.anything(),
+      {
+        editorMode: 'markdown',
+        markdownSource: 'Before\n\nNew text\n\nAfter',
+      },
       META,
-      { expectedRevision: undefined },
+      { expectedRevision: 7 },
     );
+  });
+
+  it('supports a title-only patch without converting the article body', async () => {
+    const { svc, articles } = makeService({
+      toolCall: pendingPatchCall({
+        arguments: { article_id: ART, title: 'Renamed', edits: null },
+      }),
+      turnContext: { companyId: CO },
+    });
+
+    const { toolCall } = await apply(svc, CO);
+
+    expect(toolCall.status).toBe('applied');
+    expect(articles.update).toHaveBeenCalledWith(ACTOR, CO, ART, { title: 'Renamed' }, META, {
+      expectedRevision: 7,
+    });
+  });
+
+  it('converts a Tiptap article to markdown before applying exact edits', async () => {
+    const { svc, articles } = makeService({
+      toolCall: pendingPatchCall({
+        arguments: {
+          article_id: ART,
+          edits: [{ old_text: 'Old text', new_text: 'Updated' }],
+        },
+      }),
+      turnContext: { companyId: CO },
+      article: {
+        revision: 7,
+        editorMode: 'tiptap',
+        markdownSource: null,
+        content: {
+          type: 'doc',
+          content: [
+            {
+              type: 'paragraph',
+              content: [{ type: 'text', text: 'Old text' }],
+            },
+          ],
+        },
+      },
+    });
+
+    const { toolCall } = await apply(svc, CO);
+
+    expect(toolCall.status).toBe('applied');
+    expect(articles.update).toHaveBeenCalledWith(
+      ACTOR,
+      CO,
+      ART,
+      expect.objectContaining({
+        editorMode: 'markdown',
+        markdownSource: 'Updated',
+      }),
+      META,
+      { expectedRevision: 7 },
+    );
+  });
+
+  it.each([
+    {
+      label: 'missing',
+      markdown: 'Different text',
+      errorCode: 'patch_missing',
+    },
+    {
+      label: 'ambiguous',
+      markdown: 'Old text\nOld text',
+      errorCode: 'patch_ambiguous',
+    },
+  ])('rejects $label text without a partial write', async ({ markdown, errorCode }) => {
+    const { svc, articles, chat } = makeService({
+      toolCall: pendingPatchCall(),
+      turnContext: { companyId: CO },
+      article: {
+        revision: 7,
+        editorMode: 'markdown',
+        markdownSource: markdown,
+        content: null,
+      },
+    });
+
+    const { toolCall } = await apply(svc, CO);
+
+    expect(toolCall).toMatchObject({ status: 'failed', errorCode });
+    expect(articles.update).not.toHaveBeenCalled();
+    expect(chat.updateMessageToolCalls).toHaveBeenCalledWith(
+      'msg-1',
+      expect.arrayContaining([expect.objectContaining({ errorCode })]),
+    );
+  });
+
+  it('rejects a stale base before attempting the text replacement', async () => {
+    const { svc, articles } = makeService({
+      toolCall: pendingPatchCall(),
+      turnContext: { companyId: CO },
+      article: {
+        revision: 8,
+        editorMode: 'markdown',
+        markdownSource: 'Old text',
+        content: null,
+      },
+    });
+
+    const { toolCall } = await apply(svc, CO);
+
+    expect(toolCall).toMatchObject({ status: 'failed', errorCode: 'stale' });
+    expect(articles.update).not.toHaveBeenCalled();
+  });
+
+  it('never promotes a missing patch target into a new article', async () => {
+    const { svc, articles } = makeService({
+      toolCall: pendingPatchCall(),
+      turnContext: { companyId: CO },
+      articleCompanyId: null,
+    });
+
+    const { toolCall } = await apply(svc, CO);
+
+    expect(toolCall.status).toBe('failed');
+    expect(articles.create).not.toHaveBeenCalled();
+    expect(articles.update).not.toHaveBeenCalled();
   });
 });
 
@@ -204,14 +362,9 @@ describe('ChatToolCallService.apply — revision guard (WS-030)', () => {
     const { toolCall } = await apply(svc, CO);
 
     expect(toolCall.status).toBe('applied');
-    expect(articles.update).toHaveBeenCalledWith(
-      ACTOR,
-      CO,
-      ART,
-      expect.anything(),
-      META,
-      { expectedRevision: 7 },
-    );
+    expect(articles.update).toHaveBeenCalledWith(ACTOR, CO, ART, expect.anything(), META, {
+      expectedRevision: 7,
+    });
   });
 
   it('maps StaleArticleError to failed/stale with a truthful message', async () => {
@@ -279,13 +432,8 @@ describe('ChatToolCallService.apply — revision guard (WS-030)', () => {
     const { toolCall } = await apply(svc, CO);
 
     expect(toolCall.status).toBe('applied');
-    expect(articles.update).toHaveBeenCalledWith(
-      ACTOR,
-      CO,
-      ART,
-      expect.anything(),
-      META,
-      { expectedRevision: undefined },
-    );
+    expect(articles.update).toHaveBeenCalledWith(ACTOR, CO, ART, expect.anything(), META, {
+      expectedRevision: undefined,
+    });
   });
 });

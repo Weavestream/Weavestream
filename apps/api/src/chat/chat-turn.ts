@@ -5,11 +5,7 @@
  * {@link ChatStreamService} so the prompt-assembly and routing decisions
  * are unit-testable in isolation (no SSE, no DB, no network).
  */
-import type {
-  ChatRequestContext,
-  ChatToolCallDto,
-  ChatTurnContext,
-} from '@weavestream/shared';
+import type { ChatRequestContext, ChatToolCallDto, ChatTurnContext } from '@weavestream/shared';
 import {
   isReadToolName,
   readToolDefs,
@@ -35,9 +31,7 @@ export function estimateTokens(text: string): number {
  * includes markdown bodies. Returns null when there is nothing worth
  * persisting (a freeform tab with no scope).
  */
-export function buildTurnContext(
-  context: ChatRequestContext | undefined,
-): ChatTurnContext | null {
+export function buildTurnContext(context: ChatRequestContext | undefined): ChatTurnContext | null {
   if (!context) return null;
   const out: ChatTurnContext = {};
   if (context.companyId) out.companyId = context.companyId;
@@ -107,10 +101,10 @@ export type TurnIntent = 'question' | 'edit' | 'create';
  * structured-output constraints by default, the strongest reliability
  * lever. Misclassification fails safe: it degrades to `auto`/`none`,
  * never to a forced wrong-tool mutation. `create_article` is
- * first-class; a current article never forces `update_article`.
+ * first-class; a current article never forces an edit proposal by itself.
  *
  * Coupled with budgeting (2.3): when the target article body could not
- * be retained (`targetArticleRetained === false`), `update_article` is
+ * be retained (`targetArticleRetained === false`), article edit tools are
  * never offered/forced — the model can't be asked to emit a full body it
  * can no longer see.
  */
@@ -139,25 +133,28 @@ export function resolveTurnTools(input: {
         toolChoice: { type: 'function', function: { name: 'create_article' } },
       };
     case 'edit':
-      // Force the named update tool only when we still have the body
+      // Force the focused patch tool only when we still have the body
       // AND its basis was confirmed (the caller folds the captured-
       // revision check into `targetArticleRetained`). Otherwise offer
       // reads so the model can `get_article` and propose next round,
       // rather than inviting a proposal persist would block.
       return targetArticleRetained
         ? {
-            tools: toolDefsFor(['update_article']),
-            toolChoice: { type: 'function', function: { name: 'update_article' } },
+            tools: toolDefsFor(['patch_article']),
+            toolChoice: { type: 'function', function: { name: 'patch_article' } },
           }
         : { tools: reads, toolChoice: 'auto' };
     default:
       // No explicit hint → auto over reads + proposals. Drop
-      // update_article when the target body wasn't retained/confirmed
+      // article edit tools when the target body wasn't retained/confirmed
       // (2.3) so an ambiguous turn can't produce a bodyless update —
       // the read loop can still earn it back next round via get_article.
       return targetArticleRetained
         ? {
-            tools: [...reads, ...toolDefsFor(['update_article', 'create_article'])],
+            tools: [
+              ...reads,
+              ...toolDefsFor(['patch_article', 'update_article', 'create_article']),
+            ],
             toolChoice: 'auto',
           }
         : { tools: [...reads, ...toolDefsFor(['create_article'])], toolChoice: 'auto' };
@@ -189,16 +186,12 @@ export function inferToolIntentPrelude(input: {
   }
   const createLikely =
     /\b(create|draft|write|document|turn\s+this\s+into|make)\b/.test(text) &&
-    /\b(article|page|doc|document|documentation|runbook|guide|kb|knowledge\s+base)\b/.test(
-      text,
-    );
+    /\b(article|page|doc|document|documentation|runbook|guide|kb|knowledge\s+base)\b/.test(text);
   if (createLikely) return 'create';
 
   const editLikely =
     input.targetArticleRetained &&
-    /\b(edit|change|update|fix|rewrite|revise|expand|add\s+to|clean\s+up)\b/.test(
-      text,
-    ) &&
+    /\b(edit|change|update|fix|rewrite|revise|expand|add\s+to|clean\s+up)\b/.test(text) &&
     /\b(article|page|doc|document|documentation|runbook|this)\b/.test(text);
   return editLikely ? 'edit' : null;
 }
@@ -210,7 +203,7 @@ export function inferToolIntentPrelude(input: {
  * articles), and NEVER the article the user is currently viewing. The
  * returned `targetArticleRetained` is false when the current article's
  * body isn't available (trimmed away, never attached, or the whole
- * prompt still won't fit) — the caller uses it to gate `update_article`.
+ * prompt still won't fit) — the caller uses it to gate article edit tools.
  */
 export function planBudget(input: {
   contextWindowTokens: number;
@@ -241,8 +234,7 @@ export function planBudget(input: {
     assets.reduce((a, x) => a + estimateTokens(x.markdown), 0) +
     domains.reduce((a, x) => a + estimateTokens(x.markdown), 0) +
     tickets.reduce((a, x) => a + estimateTokens(x.markdown), 0);
-  const histTokens = () =>
-    history.reduce((a, m) => a + estimateTokens(m.content), 0);
+  const histTokens = () => history.reduce((a, m) => a + estimateTokens(m.content), 0);
   const total = () => input.fixedTokens + ctxTokens() + histTokens();
 
   let trimmedHistory = 0;
@@ -254,9 +246,9 @@ export function planBudget(input: {
   }
 
   const dropNextContext = (): boolean => {
-    if (tickets.length > 0) return (tickets = tickets.slice(0, -1)), true;
-    if (domains.length > 0) return (domains = domains.slice(0, -1)), true;
-    if (assets.length > 0) return (assets = assets.slice(0, -1)), true;
+    if (tickets.length > 0) return ((tickets = tickets.slice(0, -1)), true);
+    if (domains.length > 0) return ((domains = domains.slice(0, -1)), true);
+    if (assets.length > 0) return ((assets = assets.slice(0, -1)), true);
     const idx = articles.findIndex((a) => a.id !== input.currentArticleId);
     if (idx !== -1) {
       articles = articles.filter((_, i) => i !== idx);
@@ -273,7 +265,7 @@ export function planBudget(input: {
   // article, that specific one must survive. With no current article
   // (a company-page or @-mentioned-article turn), at least one attached
   // article must remain — if they were all trimmed away there is nothing
-  // valid to update, so `update_article` must be withheld to avoid a
+  // valid to update, so article edit tools must be withheld to avoid a
   // bodyless/hallucinated edit.
   const targetPresent = input.currentArticleId
     ? articles.some((a) => a.id === input.currentArticleId)

@@ -61,8 +61,11 @@ Multiple items can be attached to a single conversation. The context strip shows
 When an article is attached to the chat (either auto-attached or via @-mention), the AI can propose edits to it directly.
 
 - Ask the AI to rewrite, expand, or fix sections of the article
-- Proposed edits appear as **tool-call cards** in the chat — review the diff before accepting
+- Focused changes use exact passage replacements, so the model does not need to reproduce the unchanged article
+- Explicit whole-article rewrites can still replace the complete document
+- Proposed edits appear as **tool-call cards** in the chat — review the generated diff before accepting
 - Accepted edits are applied directly to the article; the editor reflects the change immediately
+- If the article changed after the proposal, or an original passage is missing or ambiguous, Apply safely refuses the edit
 
 ### Save as Article
 

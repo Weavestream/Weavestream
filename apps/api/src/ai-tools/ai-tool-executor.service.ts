@@ -53,6 +53,7 @@ type AuditOutcome =
 
 const AUDIT_ACTION_BY_TOOL: Record<AiToolName, string> = {
   // Proposal tools never reach the executor; mapped for completeness.
+  patch_article: AUDIT_ACTIONS.article.update,
   update_article: AUDIT_ACTIONS.article.update,
   create_article: AUDIT_ACTIONS.article.create,
   search: AUDIT_ACTIONS.aiTool.search,

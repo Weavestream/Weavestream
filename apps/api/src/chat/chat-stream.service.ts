@@ -252,7 +252,7 @@ export class ChatStreamService {
 
     // -----------------------------------------------------------------
     // Captured-revision map (WS-030). A base revision for an
-    // update_article proposal is recorded ONLY at the moments article
+    // article edit proposal is recorded ONLY at the moments article
     // content becomes visible to the model:
     //   (a) prompt build — an attached snapshot whose client-claimed
     //       `revision` matches the current row (a mismatch means someone
@@ -292,7 +292,7 @@ export class ChatStreamService {
 
     // Decide which tools to offer and the `tool_choice`. Default is
     // `auto` + the strict tool schemas (the model self-selects). An
-    // explicit `intent` hint forces a single named tool. update_article
+    // explicit `intent` hint can force a single named tool. Article edit tools
     // is offered/forced only when the target body was retained AND its
     // basis was confirmed above — an unconfirmable snapshot withholds
     // the tool rather than inviting a proposal persist would block; the
@@ -1204,7 +1204,7 @@ function buildSystemPrompt(
   if (context.companyId) {
     lines.push(`Active company id: ${context.companyId}.`);
     lines.push(
-      'Any tool call (update_article / create_article) you propose will be scoped to this company. Do not invent or guess company ids.',
+      'Any article proposal tool you call will be scoped to this company. Do not invent or guess company ids.',
     );
   }
   if (context.currentArticleId) {
@@ -1330,7 +1330,10 @@ function appendToolSections(
   lines.push('');
   lines.push('Proposal tools (NOT executed — the user reviews an Apply/Reject card):');
   lines.push(
-    '- update_article(article_id, title?, markdown, summary?): propose an edit to an article.',
+    '- patch_article(article_id, title?, edits?, summary?): propose focused exact-text edits to an article.',
+  );
+  lines.push(
+    '- update_article(article_id, title?, markdown, summary?): replace the complete article only for an explicit whole-document rewrite.',
   );
   lines.push(
     '- create_article(title, markdown, folder_id?, visible_to_clients?, summary?): propose a brand-new article in the active company.',
@@ -1374,13 +1377,16 @@ function appendToolSections(
     '- Only call create_article when the user EXPLICITLY asks to create, draft, write, or document a new article/page/runbook. Phrases like "explain", "what is", "why", "how does", "summarise", "is this …", "show me", or "look at" are questions, not article requests — answer them in chat.',
   );
   lines.push(
-    '- Only call update_article when the user EXPLICITLY asks to edit, change, update, fix, rewrite, or add to an article. If the article isn’t attached, read it with get_article first.',
+    '- Only call patch_article or update_article when the user EXPLICITLY asks to edit an article. If it isn’t attached, read it with get_article first.',
   );
   lines.push(
     '- If you are unsure whether the user wants an article, ask a one-line clarifying question instead of emitting a tool call. An unwanted tool call costs the user a click to dismiss.',
   );
   lines.push(
-    '- When you DO call update_article, pass the COMPLETE new markdown body — never a partial diff. Prefer markdown formatting (headings, lists, fenced code, tables). Keep the chat reply concise; the diff in the Apply card is the main deliverable.',
+    '- Use patch_article by default for additions, corrections, deletions, and other localized edits. Copy each old_text EXACTLY from the article and include enough contiguous surrounding text that it occurs once. Put only the replacement in new_text; use an empty new_text to delete.',
+  );
+  lines.push(
+    '- Use update_article only when the user explicitly asks to rewrite, reorganize, or replace the entire article. It requires the COMPLETE new markdown body. Never use it for a small edit.',
   );
   lines.push(
     '- Before you emit any article tool call, include one short, specific user-facing sentence explaining what you are about to do (for example, that you will review the attached ticket and draft a runbook). Do not use generic filler, and do not claim the article has already been created or changed.',

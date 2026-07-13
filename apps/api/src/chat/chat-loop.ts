@@ -52,9 +52,10 @@ export const READ_FAILED_LIMIT_MESSAGE =
 export const NO_BASE_BLOCK_MESSAGE =
   'The assistant proposed editing an article it hadn’t read this turn, ' +
   'so the proposal was blocked. Ask it to read the article first.';
+export const PATCH_TARGET_UNAVAILABLE_MESSAGE =
+  'The requested article could not be found or is not accessible, so the edit was not proposed.';
 
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** A finalized tool call plus the raw arguments blob, needed to echo
  *  the call back upstream verbatim in the assistant message. */
@@ -92,7 +93,7 @@ export function partitionToolCalls(calls: FinalizedToolCall[]): {
 }
 
 /** Tool set for rounds after the first. Reads stay on the menu while
- *  the per-turn allowance lasts; `update_article` appears once ANY
+ *  the per-turn allowance lasts; article edit tools appear once ANY
  *  article basis has been captured this turn (attached with a
  *  confirmed revision claim, or read via `get_article`); create needs
  *  a company scope, exactly like apply time. */
@@ -103,7 +104,7 @@ export function roundTools(input: {
 }): { tools: ToolDef[]; toolChoice: ToolChoice } {
   const tools: ToolDef[] = [
     ...(input.readBudget > 0 ? readToolDefs(input.hasCompany) : []),
-    ...(input.anyBasisCaptured ? toolDefsFor(['update_article']) : []),
+    ...(input.anyBasisCaptured ? toolDefsFor(['patch_article', 'update_article']) : []),
     ...(input.hasCompany ? toolDefsFor(['create_article']) : []),
   ];
   return { tools, toolChoice: 'auto' };
@@ -132,9 +133,9 @@ export function clampToolResult(
 /**
  * A `get_article` read may establish an update basis only when the
  * model received a complete, schema-valid article body. Chunked reads
- * (`truncated: true`) intentionally do not qualify: `update_article`
- * replaces the whole body, so anchoring it to one fragment could drop
- * the unseen remainder.
+ * (`truncated: true`) intentionally do not qualify: the rewrite tool
+ * replaces the whole body, and the patch tool must still anchor its
+ * exact text to one confirmed article revision.
  */
 export function completeArticleReadBasis(
   result: AiToolExecutionResult & { ok: true },
@@ -170,20 +171,11 @@ export function fitToolResultChars(input: {
     (a, m) =>
       a +
       estimateTokens(m.content ?? '') +
-      (m.tool_calls?.reduce(
-        (b, t) => b + estimateTokens(t.function.arguments),
-        0,
-      ) ?? 0),
+      (m.tool_calls?.reduce((b, t) => b + estimateTokens(t.function.arguments), 0) ?? 0),
     0,
   );
-  const remainingTokens = Math.max(
-    0,
-    input.contextWindowTokens - input.maxOutputTokens - used,
-  );
-  return Math.max(
-    TOOL_RESULT_MIN_CHARS,
-    Math.min(TOOL_RESULT_MAX_CHARS, remainingTokens * 4),
-  );
+  const remainingTokens = Math.max(0, input.contextWindowTokens - input.maxOutputTokens - used);
+  return Math.max(TOOL_RESULT_MIN_CHARS, Math.min(TOOL_RESULT_MAX_CHARS, remainingTokens * 4));
 }
 
 export function assistantToolCallMessage(
@@ -237,10 +229,7 @@ export interface ToolLoopDeps {
   executeRead(call: FinalizedToolCall): Promise<AiToolExecutionResult>;
   /** Called when a read result validated OK (records article bases etc.). */
   onReadResult(call: FinalizedToolCall, result: AiToolExecutionResult & { ok: true }): void;
-  onToolActivity(
-    call: FinalizedToolCall,
-    status: 'started' | 'succeeded' | 'failed',
-  ): void;
+  onToolActivity(call: FinalizedToolCall, status: 'started' | 'succeeded' | 'failed'): void;
   onNotice(message: string): void;
   now(): number;
 }
@@ -404,13 +393,8 @@ export async function runToolLoop(
         deps.onToolActivity(call, 'failed');
         if (outcome.errorCode === 'budget' && !budgetNoticeSent) {
           budgetNoticeSent = true;
-          const minutes = Math.max(
-            1,
-            Math.ceil((outcome.retryAfterSeconds ?? 3600) / 60),
-          );
-          deps.onNotice(
-            `AI tool budget reached — more lookups available in about ${minutes} min.`,
-          );
+          const minutes = Math.max(1, Math.ceil((outcome.retryAfterSeconds ?? 3600) / 60));
+          deps.onNotice(`AI tool budget reached — more lookups available in about ${minutes} min.`);
         }
       }
     }
@@ -454,7 +438,7 @@ export function confirmedSnapshotBases(
 }
 
 /**
- * baseRevision assignment for the FINAL round's proposals:
+ * baseRevision assignment for the FINAL round's article proposals:
  *   captured basis   → pending, guarded at apply on that revision
  *   uncaptured but the article resolves in the actor's scope
  *                    → BLOCKED (failed/no_base): the model proposed an
@@ -470,7 +454,7 @@ export async function assignProposalBases(
   const out: ChatToolCallDto[] = [];
   for (const proposal of proposals) {
     const dto = stripRaw(proposal);
-    if (proposal.name !== 'update_article') {
+    if (proposal.name !== 'patch_article' && proposal.name !== 'update_article') {
       out.push(dto);
       continue;
     }
@@ -483,9 +467,7 @@ export async function assignProposalBases(
       continue;
     }
     const resolves =
-      articleId && UUID_RE.test(articleId)
-        ? await articleResolvesInScope(articleId)
-        : false;
+      articleId && UUID_RE.test(articleId) ? await articleResolvesInScope(articleId) : false;
     if (resolves) {
       out.push({
         ...dto,
@@ -493,6 +475,14 @@ export async function assignProposalBases(
         result: null,
         errorCode: 'no_base',
         error: NO_BASE_BLOCK_MESSAGE,
+      });
+    } else if (proposal.name === 'patch_article') {
+      out.push({
+        ...dto,
+        status: 'failed',
+        result: null,
+        errorCode: 'unavailable',
+        error: PATCH_TARGET_UNAVAILABLE_MESSAGE,
       });
     } else {
       out.push({ ...dto, baseRevision: null });

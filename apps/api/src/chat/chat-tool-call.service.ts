@@ -13,9 +13,15 @@ import type {
   UpdateArticleInput,
 } from '@weavestream/shared';
 import {
+  applyArticleTextEdits,
+  articlePatchPayloadChars,
   createArticleToolInputSchema,
+  MAX_ARTICLE_PATCH_CHARS,
+  MAX_MARKDOWN_SOURCE,
+  patchArticleToolInputSchema,
   splitMarkdownTitleAndBody,
   stripNullArgs,
+  tiptapDocToMarkdown,
   updateArticleToolInputSchema,
 } from '@weavestream/shared';
 import { ArticlesService, StaleArticleError } from '../articles/articles.service.js';
@@ -25,7 +31,8 @@ import type { AuthedUser } from '../common/current-user.decorator.js';
 import { ChatService } from './chat.service.js';
 
 /**
- * Executes the agentic write tools (`update_article`, `create_article`)
+ * Executes the agentic write tools (`patch_article`, `update_article`,
+ * `create_article`)
  * proposed by the LLM after the user clicks Apply in the chat UI.
  *
  * Responsibilities:
@@ -66,13 +73,15 @@ export class ChatToolCallService {
       auditMeta: AuditMeta;
     },
   ): Promise<{ toolCall: ChatToolCallDto; updatedToolCalls: ChatToolCallDto[] }> {
-    const { toolCall, updatedToolCalls, allToolCalls, turnContext } =
-      await this.loadPending(actor, params);
+    const { toolCall, updatedToolCalls, allToolCalls, turnContext } = await this.loadPending(
+      actor,
+      params,
+    );
 
     // Bind the apply to the scope that PRODUCED the proposal, not
     // whatever page the client is on now. The persisted `turnContext`
     // wins; the client-supplied `requestCompanyId` is a legacy fallback
-    // for rows saved before turn-binding. For `update_article` this is
+    // for rows saved before turn-binding. For article edit tools this is
     // only a reject-only cross-check — the writable company is still
     // derived from the article row. For `create_article` it is the
     // scope, still gated by `article.write`.
@@ -80,7 +89,10 @@ export class ChatToolCallService {
 
     let next: ChatToolCallDto;
     try {
-      if (toolCall.name === 'update_article') {
+      if (toolCall.name === 'patch_article') {
+        const result = await this.applyPatch(actor, toolCall, scopeCompanyId, params.auditMeta);
+        next = { ...toolCall, status: 'applied', result, error: null };
+      } else if (toolCall.name === 'update_article') {
         const result = await this.applyUpdate(
           actor,
           toolCall,
@@ -104,9 +116,7 @@ export class ChatToolCallService {
         throw new BadRequestException('Only proposal tool calls can be applied.');
       }
     } catch (err) {
-      this.logger.warn(
-        `Tool call ${toolCall.id} (${toolCall.name}) failed: ${messageOf(err)}`,
-      );
+      this.logger.warn(`Tool call ${toolCall.id} (${toolCall.name}) failed: ${messageOf(err)}`);
       if (err instanceof StaleArticleError) {
         // The WHERE-clause revision guard matched zero rows: someone
         // edited (or archived) the article after the proposal's base
@@ -129,6 +139,17 @@ export class ChatToolCallService {
           error:
             'This proposal was not based on the article’s current content, so it was not applied. ' +
             'Ask the assistant to read the article and propose the change again.',
+        };
+      } else if (err instanceof ArticlePatchApplyError) {
+        next = {
+          ...toolCall,
+          status: 'failed',
+          result: null,
+          errorCode: err.code === 'not_found' ? 'patch_missing' : 'patch_ambiguous',
+          error:
+            err.code === 'not_found'
+              ? 'The original passage could not be found in the current article, so no changes were applied. Ask the assistant to redo the edit against the current text.'
+              : 'The original passage appears more than once, so the edit could not be applied safely. Ask the assistant to retry with more surrounding text.',
         };
       } else {
         next = {
@@ -174,6 +195,73 @@ export class ChatToolCallService {
   // Action implementations
   // ------------------------------------------------------------------
 
+  private async applyPatch(
+    actor: AuthedUser,
+    toolCall: ChatToolCallDto,
+    requestCompanyId: string | undefined,
+    auditMeta: AuditMeta,
+  ): Promise<string> {
+    const args = patchArticleToolInputSchema.parse(stripNullArgs(toolCall.arguments));
+    if (args.title === undefined && args.edits === undefined) {
+      throw new BadRequestException('Tool call did not propose any change.');
+    }
+    if (args.edits && articlePatchPayloadChars(args.edits) > MAX_ARTICLE_PATCH_CHARS) {
+      throw new BadRequestException('Article patch is too large.');
+    }
+
+    const targetCompanyId = await this.articles.findCompanyIdForArticle(args.article_id);
+    if (targetCompanyId === null) throw new NotFoundException('Article not found.');
+    if (requestCompanyId && requestCompanyId !== targetCompanyId) {
+      throw new ForbiddenException(
+        'Refusing to apply: article belongs to a different company than the one you were viewing.',
+      );
+    }
+    await this.assertArticleWrite(actor, targetCompanyId);
+
+    if (typeof toolCall.baseRevision !== 'number') {
+      throw new NoBaseRevisionError();
+    }
+    const article = await this.articles.getById(actor, targetCompanyId, args.article_id);
+    if (article.revision !== toolCall.baseRevision) {
+      throw new StaleArticleError();
+    }
+
+    const titleChanged = args.title !== undefined && args.title !== article.title;
+    const input: UpdateArticleInput = {};
+    if (titleChanged) input.title = args.title;
+    if (args.edits !== undefined) {
+      const currentMarkdown =
+        article.editorMode === 'markdown'
+          ? (article.markdownSource ?? '')
+          : tiptapDocToMarkdown(article.content);
+      const patched = applyArticleTextEdits(currentMarkdown, args.edits);
+      if (!patched.ok) {
+        throw new ArticlePatchApplyError(patched.code, patched.editIndex);
+      }
+      if (patched.markdown.length > MAX_MARKDOWN_SOURCE) {
+        throw new BadRequestException('The edited article is too large.');
+      }
+      if (patched.markdown === currentMarkdown && !titleChanged) {
+        throw new BadRequestException('Tool call did not change the article.');
+      }
+      input.editorMode = 'markdown';
+      input.markdownSource = patched.markdown;
+    }
+    if (args.edits === undefined && !titleChanged) {
+      throw new BadRequestException('Tool call did not change the article.');
+    }
+
+    const updated = await this.articles.update(
+      actor,
+      targetCompanyId,
+      args.article_id,
+      input,
+      auditMeta,
+      { expectedRevision: toolCall.baseRevision },
+    );
+    return `Edited article "${updated.title}".`;
+  }
+
   private async applyUpdate(
     actor: AuthedUser,
     toolCall: ChatToolCallDto,
@@ -188,9 +276,7 @@ export class ChatToolCallService {
     // request-scope `companyId` (the page the user was on) must match
     // it so the user can't be tricked into mutating another tenant
     // via a hallucinated article id.
-    const targetCompanyId = await this.articles.findCompanyIdForArticle(
-      args.article_id,
-    );
+    const targetCompanyId = await this.articles.findCompanyIdForArticle(args.article_id);
     if (targetCompanyId === null) {
       // The LLM referenced an article that doesn't exist. The chat UI
       // flags this client-side (no matching page-context / mention)
@@ -200,13 +286,7 @@ export class ChatToolCallService {
       // article id — but only when we have an explicit company scope
       // AND the LLM emitted a body to seed the new article.
       if (overrides && requestCompanyId && args.markdown) {
-        return this.applyCreateFromUpdateArgs(
-          actor,
-          args,
-          requestCompanyId,
-          overrides,
-          auditMeta,
-        );
+        return this.applyCreateFromUpdateArgs(actor, args, requestCompanyId, overrides, auditMeta);
       }
       throw new NotFoundException('Article not found.');
     }
@@ -240,10 +320,7 @@ export class ChatToolCallService {
     // propose a title we promote the parsed heading into one — the
     // user already saw the heading in the chat panel preview, so
     // applying with that heading as the title matches expectations.
-    const parsed =
-      args.markdown !== undefined
-        ? splitMarkdownTitleAndBody(args.markdown)
-        : null;
+    const parsed = args.markdown !== undefined ? splitMarkdownTitleAndBody(args.markdown) : null;
 
     const input: UpdateArticleInput = {
       ...(args.title !== undefined
@@ -298,28 +375,18 @@ export class ChatToolCallService {
     // pick from the live company tree, so a stray LLM hallucination
     // can never reach the articles service.
     const title = overrides?.title ?? args.title;
-    const folderId =
-      overrides !== undefined ? overrides.folderId : args.folder_id ?? null;
+    const folderId = overrides !== undefined ? overrides.folderId : (args.folder_id ?? null);
     const visibleToClients =
-      overrides !== undefined
-        ? overrides.visibleToClients
-        : args.visible_to_clients;
+      overrides !== undefined ? overrides.visibleToClients : args.visible_to_clients;
     const input: CreateArticleInput = {
       editorMode: 'markdown',
       title,
       markdownSource: parsed.body,
       ...(folderId ? { folderId } : {}),
-      ...(visibleToClients !== undefined
-        ? { visibleToClients }
-        : {}),
+      ...(visibleToClients !== undefined ? { visibleToClients } : {}),
     };
 
-    const created = await this.articles.create(
-      actor,
-      requestCompanyId,
-      input,
-      auditMeta,
-    );
+    const created = await this.articles.create(actor, requestCompanyId, input, auditMeta);
     return `Created article "${created.title}".`;
   }
 
@@ -338,9 +405,7 @@ export class ChatToolCallService {
     auditMeta: AuditMeta,
   ): Promise<string> {
     if (!args.markdown) {
-      throw new BadRequestException(
-        'Tool call did not include a body to create an article from.',
-      );
+      throw new BadRequestException('Tool call did not include a body to create an article from.');
     }
     await this.assertArticleWrite(actor, requestCompanyId);
     const parsed = splitMarkdownTitleAndBody(args.markdown);
@@ -351,12 +416,7 @@ export class ChatToolCallService {
       ...(overrides.folderId ? { folderId: overrides.folderId } : {}),
       visibleToClients: overrides.visibleToClients,
     };
-    const created = await this.articles.create(
-      actor,
-      requestCompanyId,
-      input,
-      auditMeta,
-    );
+    const created = await this.articles.create(actor, requestCompanyId, input, auditMeta);
     return `Created article "${created.title}".`;
   }
 
@@ -379,11 +439,7 @@ export class ChatToolCallService {
     updatedToolCalls: ChatToolCallDto[];
     turnContext: ChatTurnContext | null;
   }> {
-    const msg = await this.chat.getMessageForActor(
-      actor,
-      params.conversationId,
-      params.messageId,
-    );
+    const msg = await this.chat.getMessageForActor(actor, params.conversationId, params.messageId);
     const calls = msg.toolCalls ?? [];
     const idx = calls.findIndex((c) => c.id === params.toolCallId);
     if (idx === -1) {
@@ -403,17 +459,12 @@ export class ChatToolCallService {
     };
   }
 
-  private async assertArticleWrite(
-    actor: AuthedUser,
-    companyId: string,
-  ): Promise<void> {
+  private async assertArticleWrite(actor: AuthedUser, companyId: string): Promise<void> {
     const decision = await this.permissions.can(actor, 'article.write', {
       companyId,
     });
     if (!decision.allowed) {
-      throw new ForbiddenException(
-        decision.reason ?? 'Missing article.write permission.',
-      );
+      throw new ForbiddenException(decision.reason ?? 'Missing article.write permission.');
     }
   }
 }
@@ -427,7 +478,7 @@ export class ChatToolCallService {
 // ----------------------------------------------------------------------
 
 /**
- * Thrown when an `update_article` proposal persisted with
+ * Thrown when an article edit proposal persisted with
  * `baseRevision: null` targets an article that NOW resolves — the
  * proposal was drafted without reading this article's content, so
  * applying it could blindly overwrite. Mapped to errorCode `no_base`.
@@ -436,6 +487,16 @@ class NoBaseRevisionError extends Error {
   constructor() {
     super('Update proposal has no server-captured base revision.');
     this.name = 'NoBaseRevisionError';
+  }
+}
+
+class ArticlePatchApplyError extends Error {
+  constructor(
+    readonly code: 'not_found' | 'ambiguous',
+    readonly editIndex: number,
+  ) {
+    super(`Article patch edit ${editIndex + 1} failed: ${code}.`);
+    this.name = 'ArticlePatchApplyError';
   }
 }
 
@@ -451,10 +512,7 @@ export type CreateArticleOverrides = {
   visibleToClients: boolean;
 };
 
-function replaceCall(
-  calls: ChatToolCallDto[],
-  next: ChatToolCallDto,
-): ChatToolCallDto[] {
+function replaceCall(calls: ChatToolCallDto[], next: ChatToolCallDto): ChatToolCallDto[] {
   return calls.map((c) => (c.id === next.id ? next : c));
 }
 
