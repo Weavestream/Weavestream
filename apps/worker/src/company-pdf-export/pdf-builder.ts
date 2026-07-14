@@ -130,6 +130,9 @@ export async function buildCompanyExportPdf(
       if (data.assets.length > 0) renderAssets(doc, data);
       renderPasswords(doc, data);
       if (data.articles.length > 0) renderArticles(doc, data);
+      renderIpam(doc, data);
+      renderRelationships(doc, data);
+      renderReconstruction(doc, data);
       renderDomains(doc, data);
       if (data.uploads.length > 0) renderUploads(doc, data);
 
@@ -379,6 +382,39 @@ function tableRow(
   doc.y = rowY + ROW_HEIGHT;
 }
 
+function wrappedTableRow(
+  doc: PDFKit.PDFDocument,
+  cols: string[],
+  table: TableSpec,
+  rowIndex: number,
+): void {
+  doc.font(FONT_NORMAL).fontSize(8.5);
+  const cellHeights = cols.map((col, index) =>
+    doc.heightOfString(col, { width: table.widths[index]! - 12 }),
+  );
+  const rowHeight = Math.max(ROW_HEIGHT, ...cellHeights.map((height) => height + 10));
+  if (doc.y + rowHeight > pageBottomBoundary()) {
+    doc.addPage();
+    drawSlimBanner(doc, table.title);
+    drawTableHeaderRow(doc, table);
+  }
+
+  const rowY = doc.y;
+  if (rowIndex % 2 === 1) {
+    doc.save();
+    doc.rect(MARGIN_X, rowY - 2, CONTENT_WIDTH, rowHeight).fill(C.zebra);
+    doc.restore();
+  }
+  let x = MARGIN_X + 6;
+  cols.forEach((col, index) => {
+    const cellWidth = table.widths[index]! - 12;
+    doc.font(FONT_NORMAL).fontSize(8.5).fillColor(C.ink)
+      .text(col, x, rowY + 4, { width: cellWidth, align: table.aligns?.[index] ?? 'left' });
+    x += table.widths[index]!;
+  });
+  doc.y = rowY + rowHeight;
+}
+
 /**
  * Pixel-perfect ellipsis truncation. Linear shrink is plenty fast for
  * cell-sized strings (a few hundred chars max); we don't need a binary
@@ -425,6 +461,10 @@ function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function humanize(value: string): string {
+  return value.replaceAll('_', ' ').replaceAll('-', ' ');
 }
 
 export function formatAssetFieldValue(field: ExportAssetField): string {
@@ -612,8 +652,8 @@ function renderCover(doc: PDFKit.PDFDocument, data: CompanyExportData): void {
     );
 
   // Summary card
-  const cardY = 410;
-  const cardH = 280;
+  const cardY = 382;
+  const cardH = 292;
   doc.save();
   doc.roundedRect(MARGIN_X, cardY, CONTENT_WIDTH, cardH, 6).fill(C.white);
   doc.restore();
@@ -646,6 +686,18 @@ function renderCover(doc: PDFKit.PDFDocument, data: CompanyExportData): void {
       `${data.articles.length} ${plural(data.articles.length, 'article')}`,
     ],
     [
+      'IPAM networks',
+      `${data.ipam.length} ${plural(data.ipam.length, 'subnet')}`,
+    ],
+    [
+      'Relationships',
+      `${data.relations.length} ${plural(data.relations.length, 'relation')}`,
+    ],
+    [
+      'Reconstruction dossier',
+      `${data.reconstruction.gaps.length} active ${plural(data.reconstruction.gaps.length, 'gap')}`,
+    ],
+    [
       'Monitored domains',
       `${data.domains.length} ${plural(data.domains.length, 'domain')}`,
     ],
@@ -676,7 +728,7 @@ function renderCover(doc: PDFKit.PDFDocument, data: CompanyExportData): void {
         align: 'right',
         lineBreak: false,
       });
-    listY += 28;
+    listY += 22;
   });
 
   // Bottom warning
@@ -1262,6 +1314,220 @@ export function pdfEmbedSizeBlockReason(
     return 'image too large to embed';
   }
   return null;
+}
+
+function renderIpam(doc: PDFKit.PDFDocument, data: CompanyExportData): void {
+  const TITLE = 'IP Address Management';
+  const reservationCount = data.ipam.reduce(
+    (total, subnet) => total + subnet.reservations.length,
+    0,
+  );
+  const occupantCount = data.ipam.reduce(
+    (total, subnet) => total + subnet.occupants.length,
+    0,
+  );
+  sectionBanner(
+    doc,
+    TITLE,
+    `${data.ipam.length} ${plural(data.ipam.length, 'subnet')} · ${reservationCount} reserved · ${occupantCount} occupied`,
+  );
+  if (data.ipam.length === 0) {
+    doc.font(FONT_OBLIQUE).fontSize(10).fillColor(C.ink3)
+      .text('No subnets or address assignments.', MARGIN_X, doc.y, { width: CONTENT_WIDTH });
+    return;
+  }
+
+  data.ipam.forEach((subnet, subnetIndex) => {
+    if (subnetIndex > 0) ensureRoom(doc, 90, TITLE);
+    subheading(doc, `${subnet.name} - ${subnet.cidr}`, TITLE);
+    fieldGrid(doc, [
+      ['CIDR / Prefix', `${subnet.cidr} (/${subnet.prefix})`],
+      ['VLAN', subnet.vlanId === null ? null : String(subnet.vlanId)],
+      ['Gateway', subnet.gateway],
+      ['DHCP range', subnet.dhcpRangeStart || subnet.dhcpRangeEnd
+        ? `${subnet.dhcpRangeStart ?? '?'} - ${subnet.dhcpRangeEnd ?? '?'}`
+        : null],
+    ], TITLE);
+    if (subnet.description) field(doc, 'Description', subnet.description, TITLE);
+
+    if (subnet.reservations.length > 0) {
+      subheading(doc, `Static / reserved addresses · ${subnet.reservations.length}`, TITLE);
+      subnet.reservations.forEach((reservation) => {
+        ensureRoom(doc, reservation.notes ? 64 : 42, TITLE);
+        const y = doc.y;
+        doc.save();
+        doc.rect(MARGIN_X, y, 3, 18).fill(C.cardAccent);
+        doc.restore();
+        doc.font(FONT_BOLD).fontSize(10.5).fillColor(C.ink)
+          .text(reservation.ipAddress, MARGIN_X + 12, y, {
+            width: 110,
+            lineBreak: false,
+          });
+        doc.font(FONT_NORMAL).fontSize(10).fillColor(C.ink2)
+          .text(reservation.label, MARGIN_X + 126, y, {
+            width: CONTENT_WIDTH - 126,
+          });
+        doc.y = Math.max(doc.y, y + 22);
+        if (reservation.notes) {
+          doc.font(FONT_NORMAL).fontSize(9).fillColor(C.ink3)
+            .text(reservation.notes, MARGIN_X + 12, doc.y, {
+              width: CONTENT_WIDTH - 12,
+            });
+        }
+        doc.moveDown(0.35);
+      });
+    }
+
+    if (subnet.occupants.length > 0) {
+      subheading(doc, `Device / interface / IP links · ${subnet.occupants.length}`, TITLE);
+      const table: TableSpec = {
+        title: TITLE,
+        headers: ['IP Address', 'Device', 'Interface / Field'],
+        widths: [110, 190, 204],
+      };
+      drawTableHeaderRow(doc, table);
+      subnet.occupants.forEach((occupant, index) => {
+        wrappedTableRow(
+          doc,
+          [occupant.ipAddress, occupant.assetLabel, occupant.interfaceLabel],
+          table,
+          index,
+        );
+      });
+    }
+  });
+}
+
+function renderRelationships(doc: PDFKit.PDFDocument, data: CompanyExportData): void {
+  const TITLE = 'Relationships / Topology';
+  sectionBanner(
+    doc,
+    TITLE,
+    `${data.relations.length} ${plural(data.relations.length, 'relationship')}`,
+  );
+  if (data.relations.length === 0) {
+    doc.font(FONT_OBLIQUE).fontSize(10).fillColor(C.ink3)
+      .text('No relationships or dependency links.', MARGIN_X, doc.y, { width: CONTENT_WIDTH });
+    return;
+  }
+  const table: TableSpec = {
+    title: TITLE,
+    headers: ['Source', 'Relationship', 'Target', 'Recorded'],
+    widths: [150, 134, 150, 70],
+  };
+  drawTableHeaderRow(doc, table);
+  data.relations.forEach((relation, index) => {
+    wrappedTableRow(
+      doc,
+      [
+        relation.source.label,
+        humanize(relation.relationType),
+        relation.target.label,
+        formatDate(relation.createdAt),
+      ],
+      table,
+      index,
+    );
+  });
+}
+
+function renderReconstruction(doc: PDFKit.PDFDocument, data: CompanyExportData): void {
+  const TITLE = 'Reconstruction Dossier';
+  const { summaries, gaps, provenance } = data.reconstruction;
+  sectionBanner(
+    doc,
+    TITLE,
+    `${summaries.length} summaries · ${provenance.length} source records · ${gaps.length} active gaps`,
+  );
+  if (summaries.length === 0 && gaps.length === 0 && provenance.length === 0) {
+    doc.font(FONT_OBLIQUE).fontSize(10).fillColor(C.ink3)
+      .text(
+        'No reconstruction summaries, gaps, or source provenance.',
+        MARGIN_X,
+        doc.y,
+        { width: CONTENT_WIDTH },
+      );
+    return;
+  }
+
+  if (summaries.length > 0) {
+    subheading(doc, 'Completeness summaries', TITLE);
+    for (const summary of summaries) {
+      ensureRoom(doc, 122, TITLE);
+      doc.font(FONT_BOLD).fontSize(11).fillColor(C.ink)
+        .text(summary.resourceLabel, MARGIN_X, doc.y, { width: CONTENT_WIDTH });
+      fieldGrid(doc, [
+        ['Synchronized current', String(summary.counts.synchronizedCurrent)],
+        ['Manually documented', String(summary.counts.manuallyDocumented)],
+        ['Secret blocked', String(summary.counts.secretBlocked)],
+        ['Missing', String(summary.counts.missing)],
+        ['Stale', String(summary.counts.stale)],
+        ['Synchronization error', String(summary.counts.synchronizationError)],
+        ['Evaluated', formatDate(summary.evaluatedAt)],
+        ['Last successful sync', formatDate(summary.lastSuccessfulSyncAt)],
+      ], TITLE);
+      doc.moveDown(0.35);
+    }
+  }
+
+  if (provenance.length > 0) {
+    subheading(doc, 'Source provenance and age', TITLE);
+    for (const source of provenance) {
+      ensureRoom(doc, 112, TITLE);
+      const title = `${source.target.label} · ${humanize(source.state)}`;
+      doc.font(FONT_BOLD).fontSize(10.5).fillColor(
+        source.state === 'stale' ? C.warn : source.state === 'blocked' ? C.danger : C.ink,
+      ).text(title, MARGIN_X, doc.y, { width: CONTENT_WIDTH });
+      fieldGrid(doc, [
+        ['Source', source.sourceLabel],
+        ['Resource', humanize(source.sourceResource)],
+        ['Ownership', source.ownership],
+        ['State', humanize(source.state)],
+        ['First seen', formatDate(source.firstSeenAt)],
+        ['Last seen', formatDate(source.lastSeenAt)],
+        ['Last synchronized', formatDate(source.lastSyncedAt)],
+        ['Stale since', formatDate(source.staleSince)],
+      ], TITLE);
+      doc.moveDown(0.35);
+    }
+  }
+
+  if (gaps.length > 0) {
+    subheading(doc, 'Safe completeness gaps', TITLE);
+    gaps.forEach((gap) => drawReconstructionGap(doc, gap, TITLE));
+  }
+}
+
+function drawReconstructionGap(
+  doc: PDFKit.PDFDocument,
+  gap: CompanyExportData['reconstruction']['gaps'][number],
+  sectionTitle: string,
+): void {
+  doc.font(FONT_NORMAL).fontSize(9.5);
+  const messageHeight = doc.heightOfString(gap.message, { width: CONTENT_WIDTH - 24 });
+  const boxHeight = Math.max(78, messageHeight + 58);
+  ensureRoom(doc, boxHeight + 10, sectionTitle);
+  const y = doc.y;
+  doc.save();
+  doc.roundedRect(MARGIN_X, y, CONTENT_WIDTH, boxHeight, 4).fill(C.cardBg);
+  doc.strokeColor(C.cardBorder).lineWidth(0.5)
+    .roundedRect(MARGIN_X, y, CONTENT_WIDTH, boxHeight, 4).stroke();
+  doc.restore();
+  doc.font(FONT_BOLD).fontSize(10).fillColor(C.ink)
+    .text(`${gap.resourceLabel} · ${humanize(gap.kind)}`, MARGIN_X + 12, y + 10, {
+      width: CONTENT_WIDTH - 24,
+    });
+  doc.font(FONT_NORMAL).fontSize(9.5).fillColor(C.ink2)
+    .text(gap.message, MARGIN_X + 12, doc.y + 4, { width: CONTENT_WIDTH - 24 });
+  const target = gap.target ? ` · Target: ${gap.target.label}` : '';
+  doc.font(FONT_OBLIQUE).fontSize(8).fillColor(C.ink3)
+    .text(
+      `First seen ${formatDate(gap.firstSeenAt)} · Last seen ${formatDate(gap.lastSeenAt)}${target}`,
+      MARGIN_X + 12,
+      y + boxHeight - 18,
+      { width: CONTENT_WIDTH - 24 },
+    );
+  doc.y = y + boxHeight + 8;
 }
 
 function renderDomains(doc: PDFKit.PDFDocument, data: CompanyExportData): void {

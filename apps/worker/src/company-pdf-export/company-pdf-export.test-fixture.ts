@@ -1,0 +1,141 @@
+import type { CompanyExportData } from '../../../api/src/exports/company-export-data.service.js';
+
+export const FIXTURE_BLOCKED_SECRET = 'ghp_pdfBlockedSecretValue1234567890';
+
+export function companyPdfTestFixture(
+  overrides: Partial<CompanyExportData> = {},
+): CompanyExportData {
+  const companyId = '00000000-0000-4000-8000-000000000001';
+  const assetHref = `/admin/companies/${companyId}/assets/00000000-0000-4000-8000-000000000002`;
+  const data: CompanyExportData = {
+    workspaceName: 'Northwind MSP',
+    company: {
+      id: companyId,
+      name: 'München Café Systems',
+      slug: 'munchen-cafe',
+      type: 'CUSTOMER',
+      quickNotes: 'Standalone reconstruction fixture',
+      contactName: null,
+      contactTitle: null,
+      contactEmail: null,
+      contactPhone: null,
+      generalEmail: null,
+      phone: null,
+      fax: null,
+      website: null,
+      addressLine1: null,
+      addressLine2: null,
+      city: 'München',
+      region: 'Bavaria',
+      postalCode: '80331',
+      country: 'Germany',
+      parentName: null,
+      createdAt: new Date('2025-01-01T00:00:00.000Z'),
+    },
+    members: [],
+    assets: [{
+      name: 'APP-01',
+      layoutName: 'Server',
+      fields: [{ label: 'Role', fieldType: 'TEXT', value: 'Réseau application server' }],
+    }],
+    passwords: [{
+      name: 'Manual administrator',
+      username: 'admin',
+      url: null,
+      folderPath: '/',
+      tags: ['manual'],
+      password: FIXTURE_BLOCKED_SECRET,
+      notes: `Never render ${FIXTURE_BLOCKED_SECRET} without explicit opt-in`,
+      totpSecret: FIXTURE_BLOCKED_SECRET,
+      lastRotatedAt: null,
+      expiresAt: null,
+      pwnedCount: null,
+    }],
+    articles: [{
+      id: '00000000-0000-4000-8000-000000000003',
+      title: 'APP-01 Reconstruction Procedure',
+      folderPath: 'Breeze Procedures',
+      editorMode: 'markdown',
+      content: null,
+      markdownSource: '# Rebuild APP-01',
+      contentPlaintext:
+        '1. Install Windows Server from verified media.\n2. Restore the application database.\n3. Validate HTTPS and queue processing.',
+      images: [],
+      updatedAt: new Date('2026-07-14T10:00:00.000Z'),
+    }],
+    domains: [],
+    uploads: [],
+    ipam: [{
+      name: 'Core Réseau',
+      cidr: '10.20.30.0/24',
+      prefix: 24,
+      vlanId: 30,
+      gateway: '10.20.30.1',
+      dhcpRangeStart: '10.20.30.100',
+      dhcpRangeEnd: '10.20.30.199',
+      description: 'Primary application subnet',
+      reservations: [{
+        ipAddress: '10.20.30.10',
+        label: 'APP-01 static address',
+        notes: 'Reserved application endpoint',
+      }],
+      occupants: [{
+        ipAddress: '10.20.30.10',
+        assetLabel: 'APP-01',
+        interfaceLabel: 'Ethernet 0',
+        assetHref,
+      }],
+    }],
+    relations: [{
+      relationType: 'depends_on',
+      source: { kind: 'asset', label: 'WEB-01', href: assetHref },
+      target: { kind: 'asset', label: 'APP-01', href: assetHref },
+      createdAt: new Date('2026-07-14T09:00:00.000Z'),
+    }, {
+      relationType: 'device_interface_ip',
+      source: { kind: 'asset', label: 'APP-01 Ethernet 0', href: assetHref },
+      target: { kind: 'asset', label: '10.20.30.10', href: assetHref },
+      createdAt: new Date('2026-07-14T09:01:00.000Z'),
+    }],
+    reconstruction: {
+      summaries: [{
+        resourceKey: 'devices',
+        resourceLabel: 'Devices',
+        counts: {
+          synchronizedCurrent: 4,
+          manuallyDocumented: 1,
+          secretBlocked: 1,
+          missing: 2,
+          stale: 1,
+          synchronizationError: 0,
+        },
+        evaluatedAt: new Date('2026-07-14T11:00:00.000Z'),
+        lastSuccessfulSyncAt: new Date('2026-07-14T10:59:00.000Z'),
+      }],
+      gaps: [{
+        resourceKey: 'devices',
+        resourceLabel: 'Devices',
+        kind: 'secret_blocked',
+        message: 'A credential-bearing procedure requires manual documentation.',
+        firstSeenAt: new Date('2026-07-13T08:00:00.000Z'),
+        lastSeenAt: new Date('2026-07-14T11:00:00.000Z'),
+        resolvedAt: null,
+        target: { kind: 'asset', label: 'APP-01', href: assetHref },
+      }],
+      provenance: [{
+        sourceLabel: 'Breeze',
+        sourceResource: 'devices',
+        ownership: 'breeze',
+        state: 'stale',
+        firstSeenAt: new Date('2026-07-01T08:00:00.000Z'),
+        lastSeenAt: new Date('2026-07-14T10:58:00.000Z'),
+        lastSyncedAt: new Date('2026-07-14T10:59:00.000Z'),
+        staleSince: new Date('2026-07-14T11:30:00.000Z'),
+        target: { kind: 'asset', label: 'APP-01', href: assetHref },
+      }],
+    },
+    exportedAt: new Date('2026-07-14T12:00:00.000Z'),
+    includePasswords: false,
+  };
+  return { ...data, ...overrides };
+}

@@ -1,5 +1,6 @@
 import { CompanyPdfExportWorker } from './company-pdf-export.processor.js';
 import type { CompanyExportData } from '../../../api/src/exports/company-export-data.service.js';
+import { companyPdfTestFixture } from './company-pdf-export.test-fixture.js';
 
 /**
  * WS-027: pdfkit fully decodes whatever buffer it is handed, so the
@@ -58,4 +59,52 @@ describe('CompanyPdfExportWorker.hydrateArticleImages (WS-027 size gate)', () =>
     expect(images[2].data).toBeUndefined();
     expect(images[3].data).toBeUndefined();
   });
+});
+
+describe('CompanyPdfExportWorker reconstruction export compatibility', () => {
+  it.each([false, true])(
+    'passes includePasswords=%s through unchanged while rendering the complete dossier',
+    async (includePasswords) => {
+      const data = companyPdfTestFixture({ includePasswords });
+      const storage = {
+        exportKey: jest.fn().mockReturnValue('companies/c1/exports/export.pdf'),
+        putObject: jest.fn().mockResolvedValue(undefined),
+        getObjectBody: jest.fn(),
+      };
+      const audit = { log: jest.fn().mockResolvedValue(undefined) };
+      const exportData = { gather: jest.fn().mockResolvedValue(data) };
+      const crypto = { decrypt: jest.fn() };
+      const worker = new CompanyPdfExportWorker(
+        {} as never,
+        storage as never,
+        crypto as never,
+        audit as never,
+        exportData as never,
+      );
+
+      const result = await worker['handleExport'](
+        { id: 'fixture-job' } as never,
+        {
+          kind: 'export',
+          exportId: '00000000-0000-4000-8000-000000000099',
+          companyId: data.company.id,
+          includePasswords,
+          pdfPasswordCiphertext: null,
+        },
+      );
+
+      expect(exportData.gather).toHaveBeenCalledWith(data.company.id, { includePasswords });
+      expect(crypto.decrypt).not.toHaveBeenCalled();
+      expect(storage.putObject).toHaveBeenCalledWith(
+        data.company.id,
+        'companies/c1/exports/export.pdf',
+        expect.any(Buffer),
+        { contentType: 'application/pdf' },
+      );
+      expect(result.sizeBytes).toBeGreaterThan(1_000);
+      expect(audit.log).toHaveBeenCalledWith(expect.objectContaining({
+        after: expect.objectContaining({ includePasswords }),
+      }));
+    },
+  );
 });
