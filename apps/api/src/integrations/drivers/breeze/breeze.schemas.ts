@@ -3,8 +3,11 @@ import { z } from 'zod';
 export const BREEZE_RESOURCE_KEYS = [
   'sites',
   'devices',
+  'site-inventory',
   'device-inventory',
   'device-software',
+  'network-equipment',
+  'virtual-machines',
   'subnets',
   'ip-reservations',
   'configuration-policies',
@@ -45,8 +48,11 @@ export const BREEZE_ENDPOINT_BY_RESOURCE: Readonly<
 > = {
   sites: 'sites',
   devices: 'devices',
+  'site-inventory': 'device-inventory',
   'device-inventory': 'device-inventory',
   'device-software': 'device-software',
+  'network-equipment': 'device-inventory',
+  'virtual-machines': 'device-inventory',
   subnets: 'device-inventory',
   'ip-reservations': 'device-inventory',
   'configuration-policies': 'configuration-policies',
@@ -176,82 +182,197 @@ export const breezeDeviceSchema = record({
   linkGroupRole: nullableText(16),
 });
 
-const namedVersionSchema = z
+const collectionSchema = z
   .object({
-    name: requiredText(255),
-    version: nullableText(100),
+    total: z.number().int().nonnegative(),
+    included: z.number().int().nonnegative(),
+    complete: z.boolean(),
+    reason: z.literal('collection_limit_exceeded').nullable(),
   })
-  .strict();
+  .strict()
+  .superRefine((value, ctx) => {
+    if (value.included > value.total) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['included'],
+        message: 'included cannot exceed total',
+      });
+    }
+    if (value.complete !== (value.included === value.total)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['complete'],
+        message: 'complete must reflect collection bounds',
+      });
+    }
+    if ((value.reason === null) !== value.complete) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['reason'],
+        message: 'reason must reflect completeness',
+      });
+    }
+  });
 
-const interfaceSchema = z
-  .object({
-    name: requiredText(255),
-    macAddress: nullableText(32),
-    addresses: z.array(requiredText(64)).max(100),
-  })
-  .strict();
+const inventoryText = nullableText(1_000);
+const inventoryCount = z.number().int().nonnegative().nullable();
 
-const subnetSchema = z
-  .object({
-    id: requiredText(128),
-    name: requiredText(200),
-    cidr: requiredText(64),
-    vlanId: z.number().int().min(1).max(4094).nullable(),
-    gateway: nullableText(64),
-    dhcpRangeStart: nullableText(64),
-    dhcpRangeEnd: nullableText(64),
-    description: nullableText(2_000),
-  })
-  .strict();
-
-const reservationSchema = z
-  .object({
-    id: requiredText(128),
-    subnetId: requiredText(128),
-    ipAddress: requiredText(64),
-    label: requiredText(200),
-    notes: nullableText(2_000),
-  })
-  .strict();
-
-export const breezeDeviceInventorySchema = record({
+const breezeDeviceInventoryRecordSchema = record({
+  subjectType: z.literal('device'),
   deviceId: z.string().uuid(),
-  cpu: z.array(namedVersionSchema).max(64),
-  memoryBytes: z.number().int().nonnegative().nullable(),
-  firmware: z.array(namedVersionSchema).max(128),
+  hardware: z
+    .object({
+      processor: z
+        .object({ model: inventoryText, cores: inventoryCount, threads: inventoryCount })
+        .strict(),
+      memory: z.object({ totalMb: inventoryCount }).strict(),
+      graphics: z.object({ model: inventoryText }).strict(),
+      motherboard: z
+        .object({ manufacturer: inventoryText, product: inventoryText, version: inventoryText })
+        .strict(),
+      firmware: z.object({ biosVersion: inventoryText }).strict(),
+    })
+    .strict(),
   disks: z
     .array(
       z
         .object({
-          name: requiredText(255),
-          model: nullableText(255),
-          serialNumber: nullableText(100),
-          sizeBytes: z.number().int().nonnegative().nullable(),
+          id: z.string().uuid(),
+          mountPoint: z.string().max(255),
+          device: inventoryText,
+          fileSystem: inventoryText,
+          totalGb: z.number().nonnegative(),
         })
         .strict(),
     )
-    .max(128),
-  interfaces: z.array(interfaceSchema).max(256),
-  subnets: z.array(subnetSchema).max(256),
-  reservations: z.array(reservationSchema).max(500),
-  warrantyExpiry: timestamp.nullable(),
-  supportExpiry: timestamp.nullable(),
+    .max(500),
+  interfaces: z
+    .array(
+      z
+        .object({
+          id: z.string().uuid(),
+          name: requiredText(1_000),
+          macAddress: nullableText(17),
+          primary: z.boolean(),
+        })
+        .strict(),
+    )
+    .max(500),
+  addresses: z
+    .array(
+      z
+        .object({
+          id: z.string().uuid(),
+          interfaceId: z.string().uuid(),
+          interfaceName: requiredText(1_000),
+          address: requiredText(45),
+          family: z.enum(['ipv4', 'ipv6']),
+          assignment: z.enum(['dhcp', 'static', 'vpn', 'link-local', 'unknown']),
+          reservationEligible: z.boolean(),
+          subnetMask: nullableText(45),
+          gateway: nullableText(45),
+          dnsServers: z.array(requiredText(45)).max(20),
+          active: z.boolean(),
+          firstSeenAt: timestamp,
+          deactivatedAt: timestamp.nullable(),
+        })
+        .strict(),
+    )
+    .max(500),
+  warranty: z
+    .object({
+      status: z.enum(['active', 'expiring', 'expired', 'unknown', 'subscription_active']),
+      startsOn: z.string().date().nullable(),
+      endsOn: z.string().date().nullable(),
+      subscription: z.boolean(),
+    })
+    .strict()
+    .nullable(),
+  virtualMachines: z
+    .array(
+      z
+        .object({
+          id: z.string().uuid(),
+          externalId: requiredText(64),
+          name: requiredText(256),
+          generation: z.number().int().positive(),
+          memoryMb: inventoryCount,
+          processorCount: inventoryCount,
+          rctEnabled: z.boolean(),
+          passthroughDisks: z.boolean(),
+        })
+        .strict(),
+    )
+    .max(500),
+  collections: z
+    .object({
+      disks: collectionSchema,
+      interfaces: collectionSchema,
+      addresses: collectionSchema,
+      virtualMachines: collectionSchema,
+    })
+    .strict(),
 });
 
+const breezeSiteInventoryRecordSchema = record({
+  subjectType: z.literal('site'),
+  siteSubjectId: z.string().uuid(),
+  networkEquipment: z
+    .array(
+      z
+        .object({
+          id: z.string().uuid(),
+          type: z.enum(['printer', 'router', 'switch', 'firewall', 'access_point', 'nas']),
+          name: nullableText(255),
+          address: requiredText(45),
+          macAddress: nullableText(17),
+          manufacturer: nullableText(255),
+          model: nullableText(255),
+        })
+        .strict(),
+    )
+    .max(500),
+  networkSegments: z
+    .array(
+      z
+        .object({
+          id: z.string().uuid(),
+          cidr: requiredText(50),
+        })
+        .strict(),
+    )
+    .max(500),
+  collections: z
+    .object({
+      networkEquipment: collectionSchema,
+      networkSegments: collectionSchema,
+    })
+    .strict(),
+});
+
+export const breezeDeviceInventorySchema = z.discriminatedUnion('subjectType', [
+  breezeDeviceInventoryRecordSchema,
+  breezeSiteInventoryRecordSchema,
+]);
+
 export const breezeDeviceSoftwareSchema = record({
+  subjectType: z.literal('device'),
   deviceId: z.string().uuid(),
   software: z
     .array(
       z
         .object({
-          name: requiredText(255),
+          id: z.string().uuid(),
+          name: requiredText(500),
           version: nullableText(100),
-          publisher: nullableText(255),
-          installedAt: timestamp.nullable(),
+          vendor: nullableText(255),
+          installedOn: z.string().date().nullable(),
+          managed: z.boolean(),
         })
         .strict(),
     )
-    .max(2_000),
+    .max(1_000),
+  collection: collectionSchema,
 });
 
 const articleRecordShape = {
@@ -283,22 +404,70 @@ export const breezeCustomFieldsSchema = record({
     .max(500),
 });
 
-export const breezeDeviceRelationshipsSchema = record({
-  relationships: z
-    .array(
-      z
-        .object({
-          id: requiredText(128),
-          sourceResourceKey: breezeResourceKeySchema,
-          sourceId: requiredText(256),
-          targetResourceKey: breezeResourceKeySchema,
-          targetId: requiredText(256),
-          type: requiredText(128),
-        })
-        .strict(),
-    )
-    .max(1_000),
+const relationshipEndpointSchema = z
+  .object({
+    type: z.enum([
+      'organization',
+      'site',
+      'device',
+      'interface',
+      'address',
+      'virtual_machine',
+      'discovered_asset',
+    ]),
+    id: z.string().uuid(),
+  })
+  .strict();
+
+const relationshipEdgesSchema = z
+  .array(
+    z
+      .object({
+        key: requiredText(128),
+        type: z.enum([
+          'organization_site',
+          'site_device',
+          'device_interface',
+          'interface_address',
+          'hyperv_host_vm',
+          'network_topology',
+          'device_link',
+        ]),
+        from: relationshipEndpointSchema,
+        to: relationshipEndpointSchema,
+        metadata: z
+          .object({
+            interfaceName: nullableText(1_000).optional(),
+            assignment: z.enum(['dhcp', 'static', 'vpn', 'link-local', 'unknown']).optional(),
+            reservationEligible: z.boolean().optional(),
+            connectionType: nullableText(50).optional(),
+            vlan: z.number().int().min(0).max(4095).nullable().optional(),
+            linkGroupRole: nullableText(16).optional(),
+          })
+          .strict(),
+      })
+      .strict(),
+  )
+  .max(500);
+
+const breezeDeviceRelationshipRecordSchema = record({
+  subjectType: z.literal('device'),
+  deviceId: z.string().uuid(),
+  edges: relationshipEdgesSchema,
+  collection: collectionSchema,
 });
+
+const breezeSiteRelationshipRecordSchema = record({
+  subjectType: z.literal('site'),
+  siteSubjectId: z.string().uuid(),
+  edges: relationshipEdgesSchema,
+  collection: collectionSchema,
+});
+
+export const breezeDeviceRelationshipsSchema = z.discriminatedUnion('subjectType', [
+  breezeDeviceRelationshipRecordSchema,
+  breezeSiteRelationshipRecordSchema,
+]);
 
 export const breezeRecordSchemaByEndpoint: Readonly<Record<BreezeSourceEndpoint, z.ZodTypeAny>> = {
   organizations: breezeOrganizationSchema,
@@ -362,9 +531,7 @@ export function breezeEnvelopeSchema<T extends z.ZodTypeAny>(recordSchema: T) {
       }
       const snapshotAt = Date.parse(value.snapshotAt);
       value.data.forEach((record, index) => {
-        const sourceUpdatedAt = Date.parse(
-          (record as { sourceUpdatedAt: string }).sourceUpdatedAt,
-        );
+        const sourceUpdatedAt = Date.parse((record as { sourceUpdatedAt: string }).sourceUpdatedAt);
         if (sourceUpdatedAt > snapshotAt) {
           ctx.addIssue({
             code: z.ZodIssueCode.custom,

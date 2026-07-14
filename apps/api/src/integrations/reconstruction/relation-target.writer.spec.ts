@@ -1,5 +1,6 @@
 import { RelationTargetWriter, type RelationIntegrationWritePort } from './relation-target.writer.js';
 import type { ReconstructionWriteContext, RelationReconstructionInput } from './reconstruction-target.js';
+import { transformBreezeRecord } from '../drivers/breeze/breeze.transforms.js';
 
 const ids = {
   company: '30000000-0000-0000-0000-000000000001', otherCompany: '30000000-0000-0000-0000-000000000002',
@@ -118,6 +119,62 @@ describe('RelationTargetWriter', () => {
     const { writer, writeFromIntegration } = setup({ change: 'updated' });
     const out = await writer.write(context({ existingTargetId: ids.relation, previousProvenance: null }), input);
     expect(out).toMatchObject({ gaps: [{ details: { reasonCode: 'manual_ownership' } }] });
+    expect(writeFromIntegration).not.toHaveBeenCalled();
+  });
+
+  it('turns an exported interface edge with no durable endpoint binding into a bounded dependency gap', async () => {
+    const orgId = '11111111-1111-4111-8111-111111111111';
+    const deviceId = '22222222-2222-4222-8222-222222222222';
+    const interfaceId = '33333333-3333-4333-8333-333333333333';
+    const [record] = transformBreezeRecord('device-relationships', {
+      id: deviceId,
+      orgId,
+      siteId: null,
+      sourceUpdatedAt: '2026-07-14T11:00:00.000Z',
+      revision: 'a'.repeat(64),
+      subjectType: 'device',
+      deviceId,
+      edges: [
+        {
+          key: 'device-interface-edge',
+          type: 'device_interface',
+          from: { type: 'device', id: deviceId },
+          to: { type: 'interface', id: interfaceId },
+          metadata: { interfaceName: 'Ethernet' },
+        },
+      ],
+      collection: { total: 1, included: 1, complete: true, reason: null },
+    });
+    const transformed = record?.reconstructionInput as RelationReconstructionInput;
+    const { writer, writeFromIntegration } = setup();
+    const resolveBinding = jest.fn(async (ref: { resourceKey: string }) =>
+      ref.resourceKey === 'devices'
+        ? { targetKind: 'asset' as const, targetId: ids.sourceAsset, companyId: ids.company }
+        : null,
+    );
+
+    const out = await writer.write(
+      context({ resourceKey: 'device-relationships', externalOrgId: orgId, resolveBinding }),
+      transformed,
+    );
+
+    expect(out).toMatchObject({
+      change: 'blocked',
+      provenance: {
+        externalId: `${orgId}:device-relationships:device-interface-edge`,
+        sourceRevision: 'a'.repeat(64),
+      },
+      gaps: [
+        {
+          kind: 'missing_dependency',
+          details: { dependencyResourceKey: 'network-interfaces' },
+        },
+      ],
+    });
+    expect(resolveBinding).toHaveBeenCalledWith({
+      resourceKey: 'network-interfaces',
+      externalId: `${orgId}:network-interfaces:${interfaceId}`,
+    });
     expect(writeFromIntegration).not.toHaveBeenCalled();
   });
 });

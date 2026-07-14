@@ -1,4 +1,5 @@
 import type { DriverRecord, LegacyDriverRecord, TypedDriverRecord } from '../integration-driver.js';
+import { ipInCidr, normalizeCidrV4, normalizeIpv4V4 } from '@weavestream/shared';
 import type {
   ArticleReconstructionInput,
   IpReservationReconstructionInput,
@@ -74,23 +75,112 @@ export function transformBreezeRecord(
         }),
       ];
     case 'device-inventory':
+      if (record.subjectType !== 'device') return [];
       return [
         legacy(
           record,
-          `Inventory ${record.deviceId}`,
+          `Device ${record.deviceId}`,
           {
             breezeId: record.deviceId,
-            cpu: asStructuredText(record.cpu),
-            memoryBytes: record.memoryBytes,
-            firmware: asStructuredText(record.firmware),
-            disks: asStructuredText(record.disks),
-            interfaces: asStructuredText(record.interfaces),
-            warrantyExpiry: record.warrantyExpiry,
-            supportExpiry: record.supportExpiry,
+            processor: formatParts([
+              ['Model', record.hardware.processor.model],
+              ['Cores', record.hardware.processor.cores],
+              ['Threads', record.hardware.processor.threads],
+            ]),
+            processorCores: record.hardware.processor.cores,
+            processorThreads: record.hardware.processor.threads,
+            memoryMb: record.hardware.memory.totalMb,
+            graphics: record.hardware.graphics.model,
+            motherboard: formatParts([
+              ['Manufacturer', record.hardware.motherboard.manufacturer],
+              ['Product', record.hardware.motherboard.product],
+              ['Version', record.hardware.motherboard.version],
+            ]),
+            biosVersion: record.hardware.firmware.biosVersion,
+            disks: formatRows(record.disks, [
+              ['ID', 'id'],
+              ['Mount', 'mountPoint'],
+              ['Device', 'device'],
+              ['File system', 'fileSystem'],
+              ['Total GB', 'totalGb'],
+            ]),
+            interfaces: formatRows(record.interfaces, [
+              ['ID', 'id'],
+              ['Name', 'name'],
+              ['MAC', 'macAddress'],
+              ['Primary', 'primary'],
+            ]),
+            networkAddresses: formatRows(record.addresses, [
+              ['ID', 'id'],
+              ['Interface ID', 'interfaceId'],
+              ['Interface', 'interfaceName'],
+              ['Address', 'address'],
+              ['Family', 'family'],
+              ['Assignment', 'assignment'],
+              ['Reservation eligible', 'reservationEligible'],
+              ['Subnet mask', 'subnetMask'],
+              ['Active', 'active'],
+              ['First seen', 'firstSeenAt'],
+              ['Deactivated', 'deactivatedAt'],
+            ]),
+            gateways: uniqueText(
+              record.addresses.map((address: Record<string, unknown>) => address.gateway),
+            ),
+            dnsServers: uniqueText(
+              record.addresses.flatMap((address: Record<string, unknown>) => address.dnsServers),
+            ),
+            warrantyStatus: record.warranty?.status ?? null,
+            warrantyStartsOn: record.warranty?.startsOn ?? null,
+            warrantyEndsOn: record.warranty?.endsOn ?? null,
+            warrantySubscription: record.warranty?.subscription ?? null,
+            virtualMachines: formatRows(record.virtualMachines, [
+              ['ID', 'id'],
+              ['External ID', 'externalId'],
+              ['Name', 'name'],
+              ['Generation', 'generation'],
+              ['Memory MB', 'memoryMb'],
+              ['Processors', 'processorCount'],
+              ['RCT', 'rctEnabled'],
+              ['Passthrough disks', 'passthroughDisks'],
+            ]),
+            inventoryCompleteness: formatCollections(record.collections),
             sourceRevision: record.revision,
             sourceFingerprint: record.revision,
           },
           record.deviceId,
+        ),
+      ];
+    case 'site-inventory':
+      if (record.subjectType !== 'site') return [];
+      return [
+        legacy(
+          record,
+          `Site ${record.siteSubjectId}`,
+          {
+            breezeId: record.siteSubjectId,
+            networkEquipment: formatRows(record.networkEquipment, [
+              ['ID', 'id'],
+              ['Type', 'type'],
+              ['Name', 'name'],
+              ['Address', 'address'],
+              ['MAC', 'macAddress'],
+              ['Manufacturer', 'manufacturer'],
+              ['Model', 'model'],
+            ]),
+            networkSegments: boundStructuredText(
+              record.networkSegments
+                .map(
+                  (segment: Record<string, unknown>) =>
+                    `${segment.id} | ${normalizeCidrV4(String(segment.cidr)) ?? `invalid: ${segment.cidr}`}`,
+                )
+                .sort()
+                .join('\n'),
+            ),
+            inventoryCompleteness: formatCollections(record.collections),
+            sourceRevision: record.revision,
+            sourceFingerprint: record.revision,
+          },
+          record.siteSubjectId,
         ),
       ];
     case 'device-software':
@@ -100,13 +190,62 @@ export function transformBreezeRecord(
           `Software ${record.deviceId}`,
           {
             breezeId: record.deviceId,
-            installedSoftware: asStructuredText(record.software),
+            installedSoftware: formatRows(record.software, [
+              ['ID', 'id'],
+              ['Name', 'name'],
+              ['Version', 'version'],
+              ['Vendor', 'vendor'],
+              ['Installed', 'installedOn'],
+              ['Managed', 'managed'],
+            ]),
+            softwareCompleteness: formatCollection('software', record.collection),
             sourceRevision: record.revision,
             sourceFingerprint: record.revision,
           },
           record.deviceId,
         ),
       ];
+    case 'network-equipment':
+      if (record.subjectType !== 'site') return [];
+      return record.networkEquipment.map((equipment: Record<string, any>) =>
+        legacy(
+          record,
+          equipment.name || `${equipment.type} ${equipment.id.slice(0, 8)}`,
+          {
+            breezeId: equipment.id,
+            siteId: record.siteSubjectId,
+            equipmentType: equipment.type,
+            address: equipment.address,
+            macAddress: equipment.macAddress,
+            manufacturer: equipment.manufacturer,
+            model: equipment.model,
+            sourceRevision: record.revision,
+            sourceFingerprint: record.revision,
+          },
+          equipment.id,
+        ),
+      );
+    case 'virtual-machines':
+      if (record.subjectType !== 'device') return [];
+      return record.virtualMachines.map((vm: Record<string, any>) =>
+        legacy(
+          record,
+          vm.name,
+          {
+            breezeId: vm.id,
+            hostDeviceId: record.deviceId,
+            upstreamExternalId: vm.externalId,
+            generation: vm.generation,
+            memoryMb: vm.memoryMb,
+            processorCount: vm.processorCount,
+            rctEnabled: vm.rctEnabled,
+            passthroughDisks: vm.passthroughDisks,
+            sourceRevision: record.revision,
+            sourceFingerprint: record.revision,
+          },
+          vm.id,
+        ),
+      );
     case 'custom-fields':
       return [
         legacy(
@@ -114,7 +253,11 @@ export function transformBreezeRecord(
           `Custom fields ${record.deviceId}`,
           {
             breezeId: record.deviceId,
-            selectedCustomFields: asStructuredText(record.fields),
+            selectedCustomFields: formatRows(record.fields, [
+              ['Key', 'key'],
+              ['Label', 'label'],
+              ['Value', 'value'],
+            ]),
             sourceRevision: record.revision,
             sourceFingerprint: record.revision,
           },
@@ -122,9 +265,9 @@ export function transformBreezeRecord(
         ),
       ];
     case 'subnets':
-      return record.subnets.map((subnet: Record<string, any>) => typedSubnet(record, subnet));
+      return subnetCandidates(record).map((subnet) => typedSubnet(record, subnet));
     case 'ip-reservations':
-      return record.reservations.map((reservation: Record<string, any>) =>
+      return reservationCandidates(record).map((reservation) =>
         typedReservation(record, reservation),
       );
     case 'configuration-policies':
@@ -133,7 +276,7 @@ export function transformBreezeRecord(
     case 'backup-configurations':
       return [typedArticle(resource.data, record)];
     case 'device-relationships':
-      return record.relationships.map((relationship: Record<string, any>) =>
+      return record.edges.map((relationship: Record<string, any>) =>
         typedRelation(record, relationship),
       );
   }
@@ -171,18 +314,15 @@ function namespaced(orgId: string, resourceKey: string, sourceId: string): strin
 }
 
 function typedSubnet(record: BreezeRecordBase, subnet: Record<string, any>): TypedDriverRecord {
-  const sourceId = `${record.id}:${subnet.id}`;
+  const sourceId = `cidr:${subnet.cidr}`;
   const input: SubnetReconstructionInput = {
     targetKind: 'subnet',
     externalId: namespaced(record.orgId, 'subnets', sourceId),
     source: source(record, 'subnets', sourceId),
-    name: subnet.name,
+    name: `Network ${subnet.cidr}`,
     cidr: subnet.cidr,
-    vlanId: subnet.vlanId,
-    gateway: subnet.gateway,
-    dhcpRangeStart: subnet.dhcpRangeStart,
-    dhcpRangeEnd: subnet.dhcpRangeEnd,
-    description: subnet.description,
+    gateway: subnet.gateway ?? null,
+    description: subnet.description ?? null,
   };
   return { reconstructionInput: input };
 }
@@ -191,8 +331,8 @@ function typedReservation(
   record: BreezeRecordBase,
   reservation: Record<string, any>,
 ): TypedDriverRecord {
-  const sourceId = `${record.id}:${reservation.id}`;
-  const subnetSourceId = `${record.id}:${reservation.subnetId}`;
+  const sourceId = `${reservation.cidr}:${reservation.ipAddress}`;
+  const subnetSourceId = `cidr:${reservation.cidr}`;
   const input: IpReservationReconstructionInput = {
     targetKind: 'ip_reservation',
     externalId: namespaced(record.orgId, 'ip-reservations', sourceId),
@@ -202,8 +342,8 @@ function typedReservation(
       externalId: namespaced(record.orgId, 'subnets', subnetSourceId),
     },
     ipAddress: reservation.ipAddress,
-    label: reservation.label,
-    notes: reservation.notes,
+    label: `Static address ${reservation.ipAddress}`,
+    notes: null,
   };
   return { reconstructionInput: input };
 }
@@ -236,24 +376,174 @@ function typedRelation(
   record: BreezeRecordBase,
   relationship: Record<string, any>,
 ): TypedDriverRecord {
-  const sourceId = `${record.id}:${relationship.id}`;
+  const sourceId = relationship.key;
+  const from = relationshipEndpoint(record.orgId, relationship.from);
+  const to = relationshipEndpoint(record.orgId, relationship.to);
   const input: RelationReconstructionInput = {
     targetKind: 'relation',
     externalId: namespaced(record.orgId, 'device-relationships', sourceId),
     source: source(record, 'device-relationships', sourceId),
     sourceRef: {
-      resourceKey: relationship.sourceResourceKey,
-      externalId: namespaced(record.orgId, relationship.sourceResourceKey, relationship.sourceId),
+      resourceKey: from.resourceKey,
+      externalId: namespaced(record.orgId, from.resourceKey, from.id),
     },
     targetRef: {
-      resourceKey: relationship.targetResourceKey,
-      externalId: namespaced(record.orgId, relationship.targetResourceKey, relationship.targetId),
+      resourceKey: to.resourceKey,
+      externalId: namespaced(record.orgId, to.resourceKey, to.id),
     },
     relationType: relationship.type,
   };
   return { reconstructionInput: input };
 }
 
-function asStructuredText(value: unknown): string {
-  return JSON.stringify(value);
+function relationshipEndpoint(
+  orgId: string,
+  endpoint: { type: string; id: string },
+): { resourceKey: string; id: string } {
+  const resourceKey = {
+    organization: 'organizations',
+    site: 'sites',
+    device: 'devices',
+    interface: 'network-interfaces',
+    address: 'network-addresses',
+    virtual_machine: 'virtual-machines',
+    discovered_asset: 'network-equipment',
+  }[endpoint.type];
+  if (!resourceKey) throw new Error('Unsupported Breeze relationship endpoint.');
+  return { resourceKey, id: endpoint.type === 'organization' ? orgId : endpoint.id };
+}
+
+function subnetCandidates(
+  record: BreezeRecordBase & Record<string, any>,
+): Array<Record<string, any>> {
+  const candidates = new Map<string, Record<string, any>>();
+  if (record.subjectType === 'site') {
+    for (const segment of record.networkSegments as Array<Record<string, unknown>>) {
+      const cidr = normalizeCidrV4(String(segment.cidr));
+      if (!cidr) continue;
+      candidates.set(cidr, {
+        cidr,
+        gateway: null,
+        description: `Breeze network segment ${segment.id}`,
+      });
+    }
+  }
+  if (record.subjectType === 'device') {
+    for (const address of record.addresses as Array<Record<string, any>>) {
+      const network = durableStaticNetwork(address);
+      if (!network) continue;
+      const current = candidates.get(network.cidr);
+      candidates.set(network.cidr, {
+        cidr: network.cidr,
+        gateway: current?.gateway ?? network.gateway,
+        description: `Breeze current static network`,
+      });
+    }
+  }
+  return [...candidates.values()].sort((left, right) => left.cidr.localeCompare(right.cidr));
+}
+
+function reservationCandidates(
+  record: BreezeRecordBase & Record<string, any>,
+): Array<Record<string, any>> {
+  if (record.subjectType !== 'device') return [];
+  const candidates = new Map<string, Record<string, any>>();
+  for (const address of record.addresses as Array<Record<string, any>>) {
+    const network = durableStaticNetwork(address);
+    if (!network) continue;
+    const key = `${network.cidr}:${network.ipAddress}`;
+    candidates.set(key, { cidr: network.cidr, ipAddress: network.ipAddress });
+  }
+  return [...candidates.values()].sort((left, right) =>
+    `${left.cidr}:${left.ipAddress}`.localeCompare(`${right.cidr}:${right.ipAddress}`),
+  );
+}
+
+function durableStaticNetwork(address: Record<string, any>): {
+  cidr: string;
+  ipAddress: string;
+  gateway: string | null;
+} | null {
+  if (
+    address.family !== 'ipv4' ||
+    address.assignment !== 'static' ||
+    address.reservationEligible !== true ||
+    address.active !== true ||
+    address.deactivatedAt !== null
+  ) {
+    return null;
+  }
+  const ipAddress = normalizeIpv4V4(String(address.address));
+  const prefix = subnetMaskPrefix(address.subnetMask);
+  if (!ipAddress || prefix === null) return null;
+  const cidr = normalizeCidrV4(`${ipAddress}/${prefix}`);
+  if (!cidr) return null;
+  const gateway = address.gateway ? normalizeIpv4V4(String(address.gateway)) : null;
+  return { cidr, ipAddress, gateway: gateway && ipInCidr(gateway, cidr) ? gateway : null };
+}
+
+function subnetMaskPrefix(value: unknown): number | null {
+  if (typeof value !== 'string') return null;
+  const octets = value.split('.').map(Number);
+  if (
+    octets.length !== 4 ||
+    octets.some((octet) => !Number.isInteger(octet) || octet < 0 || octet > 255)
+  ) {
+    return null;
+  }
+  const bits = octets.map((octet) => octet.toString(2).padStart(8, '0')).join('');
+  if (!/^1*0*$/u.test(bits)) return null;
+  return bits.indexOf('0') === -1 ? 32 : bits.indexOf('0');
+}
+
+function formatRows(
+  rows: Array<Record<string, unknown>>,
+  columns: Array<readonly [label: string, key: string]>,
+): string {
+  return boundStructuredText(
+    [...rows]
+      .sort((left, right) => String(left.id ?? '').localeCompare(String(right.id ?? '')))
+      .map((row) =>
+        columns.map(([label, key]) => `${label}: ${displayValue(row[key])}`).join(' | '),
+      )
+      .join('\n'),
+  );
+}
+
+function formatParts(parts: Array<readonly [label: string, value: unknown]>): string {
+  return parts.map(([label, value]) => `${label}: ${displayValue(value)}`).join(' | ');
+}
+
+function displayValue(value: unknown): string {
+  if (value === null || value === undefined || value === '') return '—';
+  if (typeof value === 'boolean') return value ? 'yes' : 'no';
+  return String(value).replaceAll('\n', ' ').slice(0, 2_000);
+}
+
+function uniqueText(values: unknown[]): string {
+  return [
+    ...new Set(
+      values.filter((value): value is string => typeof value === 'string' && value.length > 0),
+    ),
+  ]
+    .sort()
+    .join(', ');
+}
+
+function formatCollections(collections: Record<string, unknown>): string {
+  return Object.entries(collections)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([name, collection]) => formatCollection(name, collection as Record<string, unknown>))
+    .join('\n');
+}
+
+function formatCollection(name: string, collection: Record<string, unknown>): string {
+  return `${name}: ${collection.included}/${collection.total} ${collection.complete ? 'complete' : 'incomplete (collection limit exceeded)'}`;
+}
+
+function boundStructuredText(value: string): string {
+  const limit = 32_000;
+  if (value.length <= limit) return value;
+  const marker = '\n[structured output truncated at 32000 characters]';
+  return `${value.slice(0, limit - marker.length)}${marker}`;
 }

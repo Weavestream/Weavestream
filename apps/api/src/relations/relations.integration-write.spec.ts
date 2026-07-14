@@ -1,4 +1,7 @@
 import { RelationsService } from './relations.service.js';
+import { RelationTargetWriter } from '../integrations/reconstruction/relation-target.writer.js';
+import type { ReconstructionWriteContext } from '../integrations/reconstruction/reconstruction-target.js';
+import { transformBreezeRecord } from '../integrations/drivers/breeze/breeze.transforms.js';
 
 const ids = {
   company: '53000000-0000-0000-0000-000000000001',
@@ -92,6 +95,79 @@ const input = {
 };
 
 describe('RelationsService integration system writes', () => {
+  it('writes an exported Breeze hierarchy edge through binding resolution and the real relation service', async () => {
+    const orgId = '11111111-1111-4111-8111-111111111111';
+    const siteId = '22222222-2222-4222-8222-222222222222';
+    const deviceId = '33333333-3333-4333-8333-333333333333';
+    const [record] = transformBreezeRecord('device-relationships', {
+      id: deviceId,
+      orgId,
+      siteId,
+      sourceUpdatedAt: '2026-07-14T11:00:00.000Z',
+      revision: 'a'.repeat(64),
+      subjectType: 'device',
+      deviceId,
+      edges: [
+        {
+          key: 'site-device-edge',
+          type: 'site_device',
+          from: { type: 'site', id: siteId },
+          to: { type: 'device', id: deviceId },
+          metadata: {},
+        },
+      ],
+      collection: { total: 1, included: 1, complete: true, reason: null },
+    });
+    const harness = setup();
+    const resolveBinding = jest.fn(async (ref: { resourceKey: string }) => ({
+      targetKind: 'asset' as const,
+      targetId: ref.resourceKey === 'sites' ? ids.asset : ids.article,
+      companyId: ids.company,
+    }));
+    const context: ReconstructionWriteContext = {
+      tx: harness.tx as never,
+      companyId: ids.company,
+      integrationId: ids.integration,
+      integrationCompanyMappingId: ids.mapping,
+      resourceId: ids.resource,
+      resourceKey: 'device-relationships',
+      externalOrgId: orgId,
+      auditActorId: ids.actor,
+      now: new Date('2026-07-14T12:00:00.000Z'),
+      dryRun: false,
+      resolveBinding,
+    };
+
+    const out = await new RelationTargetWriter(harness.service).write(
+      context,
+      record!.reconstructionInput as never,
+    );
+
+    expect(out).toMatchObject({
+      targetKind: 'relation',
+      targetId: ids.relation,
+      change: 'created',
+      provenance: { externalId: `${orgId}:device-relationships:site-device-edge` },
+    });
+    expect(resolveBinding).toHaveBeenCalledWith({
+      resourceKey: 'sites',
+      externalId: `${orgId}:sites:${siteId}`,
+    });
+    expect(resolveBinding).toHaveBeenCalledWith({
+      resourceKey: 'devices',
+      externalId: `${orgId}:devices:${deviceId}`,
+    });
+    expect(harness.tx.relation.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        create: expect.objectContaining({ relationType: 'site_device' }),
+      }),
+    );
+    expect(harness.audit.logWithClient).toHaveBeenCalledWith(
+      harness.tx,
+      expect.objectContaining({ actorId: ids.actor, entityId: ids.relation }),
+    );
+  });
+
   it('creates and audits an idempotent relation in one transaction', async () => {
     const { service, audit, tx } = setup();
     await expect(service.writeFromIntegration(input)).resolves.toEqual({

@@ -80,31 +80,26 @@ const deviceIdentityFields = [
 
 const inventoryFields = [
   field('breezeId', 'Breeze ID', 'breeze-id', 'TEXT', 'source_wins'),
-  field('cpu', 'CPU', 'cpu', 'TEXTAREA'),
-  field('memoryBytes', 'Memory Bytes', 'memory-bytes', 'NUMBER'),
-  field('firmware', 'Firmware', 'firmware', 'TEXTAREA'),
+  field('processor', 'Processor', 'processor', 'TEXTAREA'),
+  field('processorCores', 'Processor Cores', 'processor-cores', 'NUMBER'),
+  field('processorThreads', 'Processor Threads', 'processor-threads', 'NUMBER'),
+  field('memoryMb', 'Memory (MB)', 'memory-mb', 'NUMBER'),
+  field('graphics', 'Graphics', 'graphics', 'TEXT'),
+  field('motherboard', 'Motherboard', 'motherboard', 'TEXTAREA'),
+  field('biosVersion', 'BIOS Version', 'bios-version', 'TEXT'),
   field('disks', 'Disks', 'disks', 'TEXTAREA'),
   field('interfaces', 'Interfaces', 'interfaces', 'TEXTAREA'),
-  field(
-    'warrantyExpiry',
-    'Warranty Expiry',
-    'warranty-expiry',
-    'DATETIME',
-    'source_wins',
-    false,
-    true,
-    { isExpiry: true },
-  ),
-  field(
-    'supportExpiry',
-    'Support Expiry',
-    'support-expiry',
-    'DATETIME',
-    'source_wins',
-    false,
-    true,
-    { isExpiry: true },
-  ),
+  field('networkAddresses', 'Network Address History', 'network-addresses', 'TEXTAREA'),
+  field('gateways', 'Gateways', 'gateways', 'TEXT'),
+  field('dnsServers', 'DNS Servers', 'dns-servers', 'TEXT'),
+  field('warrantyStatus', 'Warranty Status', 'warranty-status', 'TEXT'),
+  field('warrantyStartsOn', 'Warranty Starts', 'warranty-starts-on', 'DATE'),
+  field('warrantyEndsOn', 'Warranty Ends', 'warranty-ends-on', 'DATE', 'source_wins', false, true, {
+    isExpiry: true,
+  }),
+  field('warrantySubscription', 'Warranty Subscription', 'warranty-subscription', 'BOOLEAN'),
+  field('virtualMachines', 'Virtual Machines', 'virtual-machines', 'TEXTAREA'),
+  field('inventoryCompleteness', 'Inventory Completeness', 'inventory-completeness', 'TEXTAREA'),
   field('sourceRevision', 'Source Revision', 'source-revision', 'TEXT'),
   field('sourceFingerprint', 'Source Fingerprint', 'source-fingerprint', 'TEXT'),
 ] as const;
@@ -112,6 +107,44 @@ const inventoryFields = [
 const softwareFields = [
   field('breezeId', 'Breeze ID', 'breeze-id', 'TEXT', 'source_wins'),
   field('installedSoftware', 'Installed Software', 'installed-software', 'TEXTAREA'),
+  field('softwareCompleteness', 'Software Completeness', 'software-completeness', 'TEXT'),
+  field('sourceRevision', 'Source Revision', 'source-revision', 'TEXT'),
+  field('sourceFingerprint', 'Source Fingerprint', 'source-fingerprint', 'TEXT'),
+] as const;
+
+const siteInventoryFields = [
+  field('breezeId', 'Breeze ID', 'breeze-id', 'TEXT', 'source_wins'),
+  field('networkEquipment', 'Network Equipment', 'network-equipment', 'TEXTAREA'),
+  field('networkSegments', 'Network Segments', 'network-segments', 'TEXTAREA'),
+  field('inventoryCompleteness', 'Inventory Completeness', 'inventory-completeness', 'TEXTAREA'),
+  field('sourceRevision', 'Source Revision', 'source-revision', 'TEXT'),
+  field('sourceFingerprint', 'Source Fingerprint', 'source-fingerprint', 'TEXT'),
+] as const;
+
+const equipmentFields = [
+  field('breezeId', 'Breeze ID', 'breeze-id', 'TEXT', 'source_wins'),
+  field('siteId', 'Site ID', 'site-id', 'TEXT'),
+  field('equipmentType', 'Equipment Type', 'equipment-type', 'TEXT'),
+  field('address', 'Address', 'address', 'IP_ADDRESS', 'source_wins', false, false, {
+    version: 'any',
+    allowCidr: false,
+  }),
+  field('macAddress', 'MAC Address', 'mac-address', 'TEXT'),
+  field('manufacturer', 'Manufacturer', 'manufacturer', 'TEXT'),
+  field('model', 'Model', 'model', 'TEXT'),
+  field('sourceRevision', 'Source Revision', 'source-revision', 'TEXT'),
+  field('sourceFingerprint', 'Source Fingerprint', 'source-fingerprint', 'TEXT'),
+] as const;
+
+const virtualMachineFields = [
+  field('breezeId', 'Breeze ID', 'breeze-id', 'TEXT', 'source_wins'),
+  field('hostDeviceId', 'Host Device ID', 'host-device-id', 'TEXT'),
+  field('upstreamExternalId', 'Upstream External ID', 'upstream-external-id', 'TEXT'),
+  field('generation', 'Generation', 'generation', 'NUMBER'),
+  field('memoryMb', 'Memory (MB)', 'memory-mb', 'NUMBER'),
+  field('processorCount', 'Processor Count', 'processor-count', 'NUMBER'),
+  field('rctEnabled', 'RCT Enabled', 'rct-enabled', 'BOOLEAN'),
+  field('passthroughDisks', 'Passthrough Disks', 'passthrough-disks', 'BOOLEAN'),
   field('sourceRevision', 'Source Revision', 'source-revision', 'TEXT'),
   field('sourceFingerprint', 'Source Fingerprint', 'source-fingerprint', 'TEXT'),
 ] as const;
@@ -150,8 +183,27 @@ const deviceLayout = {
 export const BREEZE_RECOMMENDED_DESTINATIONS: Readonly<Record<string, RecommendedDestination>> = {
   sites: siteDestination,
   devices: { layout: deviceLayout, fields: deviceDestinationFields },
+  'site-inventory': { layout: siteDestination.layout, fields: siteInventoryFields },
   'device-inventory': { layout: deviceLayout, fields: inventoryFields },
   'device-software': { layout: deviceLayout, fields: softwareFields },
+  'network-equipment': {
+    layout: {
+      name: 'Breeze Network Equipment',
+      slug: 'breeze-network-equipment',
+      icon: 'network',
+      color: 'amber',
+    },
+    fields: equipmentFields,
+  },
+  'virtual-machines': {
+    layout: {
+      name: 'Breeze Virtual Machines',
+      slug: 'breeze-virtual-machines',
+      icon: 'server',
+      color: 'violet',
+    },
+    fields: virtualMachineFields,
+  },
   'custom-fields': { layout: deviceLayout, fields: customFields },
 };
 
@@ -177,6 +229,13 @@ export class BreezeDriver implements IntegrationDriver {
       resource('sites', 'Sites', 'asset', { sourceEndpoint: '/sites' }),
       resource('devices', 'Devices', 'asset', { sourceEndpoint: '/devices' }, ['sites']),
       resource(
+        'site-inventory',
+        'Site inventory',
+        'asset',
+        { sourceEndpoint: '/device-inventory', bindingResourceKey: 'sites' },
+        ['sites'],
+      ),
+      resource(
         'device-inventory',
         'Device inventory',
         'asset',
@@ -191,18 +250,32 @@ export class BreezeDriver implements IntegrationDriver {
         ['devices'],
       ),
       resource(
+        'network-equipment',
+        'Network equipment',
+        'asset',
+        { sourceEndpoint: '/device-inventory' },
+        ['sites'],
+      ),
+      resource(
+        'virtual-machines',
+        'Virtual machines',
+        'asset',
+        { sourceEndpoint: '/device-inventory' },
+        ['devices'],
+      ),
+      resource(
         'subnets',
         'Subnets',
         'subnet',
         { sourceEndpoint: '/device-inventory', normalization: 'cidr' },
-        ['devices'],
+        ['site-inventory', 'device-inventory'],
       ),
       resource(
         'ip-reservations',
         'IP reservations',
         'ip_reservation',
         { sourceEndpoint: '/device-inventory', normalization: 'ip' },
-        ['subnets', 'devices'],
+        ['subnets', 'device-inventory'],
       ),
       resource('configuration-policies', 'Configuration policies', 'article', {
         sourceEndpoint: '/configuration-policies',
@@ -315,7 +388,7 @@ export class BreezeDriver implements IntegrationDriver {
         );
       }
     }
-    const records = page.data.flatMap((record) => {
+    const transformed = page.data.flatMap((record) => {
       if (
         !record ||
         typeof record !== 'object' ||
@@ -325,8 +398,8 @@ export class BreezeDriver implements IntegrationDriver {
       }
       return transformBreezeRecord(resource.data, record);
     });
-    const highWater =
-      ctx.mode === 'incremental' ? maxSourceUpdatedAt(page.data) : null;
+    const records = deduplicateDriverRecords(transformed);
+    const highWater = ctx.mode === 'incremental' ? maxSourceUpdatedAt(page.data) : null;
 
     return {
       records,
@@ -361,6 +434,40 @@ function maxSourceUpdatedAt(records: unknown[]): string | null {
   return highWater === null ? null : new Date(highWater).toISOString();
 }
 
+function deduplicateDriverRecords(records: DriverFetchPage['records']): DriverFetchPage['records'] {
+  const byIdentity = new Map<string, DriverFetchPage['records'][number]>();
+  for (const record of records) {
+    const identity = record.reconstructionInput
+      ? `${record.reconstructionInput.targetKind}:${record.reconstructionInput.externalId}`
+      : `asset:${record.externalId}`;
+    const existing = byIdentity.get(identity);
+    if (existing && driverRecordSemantics(existing) !== driverRecordSemantics(record)) {
+      throw new Error('Breeze partner API returned a conflicting duplicate stable identity.');
+    }
+    byIdentity.set(identity, record);
+  }
+  return [...byIdentity.values()];
+}
+
+function driverRecordSemantics(record: DriverFetchPage['records'][number]): string {
+  if (record.reconstructionInput) {
+    const input = record.reconstructionInput;
+    return JSON.stringify({
+      ...input,
+      source: {
+        externalOrgId: input.source.externalOrgId,
+        resourceKey: input.source.resourceKey,
+        sourceId: input.source.sourceId,
+      },
+    });
+  }
+  return JSON.stringify({
+    externalId: record.externalId,
+    displayName: record.displayName,
+    fields: record.fields,
+  });
+}
+
 function validatePageOrdering(
   records: unknown[],
   snapshotAt: string,
@@ -384,11 +491,7 @@ function validatePageOrdering(
     ) {
       throw new Error('Breeze incremental records must be newer than updatedSince.');
     }
-    if (
-      mode === 'incremental' &&
-      previousMillis !== null &&
-      sourceMillis < previousMillis
-    ) {
+    if (mode === 'incremental' && previousMillis !== null && sourceMillis < previousMillis) {
       throw new Error('Breeze sourceUpdatedAt values must be ordered within each page.');
     }
     previousMillis = sourceMillis;

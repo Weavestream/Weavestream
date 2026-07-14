@@ -1,4 +1,7 @@
 import { IpamService } from './ipam.service.js';
+import { IpReservationTargetWriter } from '../integrations/reconstruction/ipam-target.writer.js';
+import type { ReconstructionWriteContext } from '../integrations/reconstruction/reconstruction-target.js';
+import { transformBreezeRecord } from '../integrations/drivers/breeze/breeze.transforms.js';
 
 const ids = {
   company: '51000000-0000-0000-0000-000000000001',
@@ -129,6 +132,100 @@ const subnetInput = {
 };
 
 describe('IpamService integration system writes', () => {
+  it('writes an eligible adjacent Breeze static-address DTO through the real target writer and service', async () => {
+    const orgId = '11111111-1111-4111-8111-111111111111';
+    const deviceId = '22222222-2222-4222-8222-222222222222';
+    const interfaceId = '33333333-3333-4333-8333-333333333333';
+    const addressId = '44444444-4444-4444-8444-444444444444';
+    const [record] = transformBreezeRecord('ip-reservations', {
+      id: deviceId,
+      orgId,
+      siteId: null,
+      sourceUpdatedAt: '2026-07-14T11:00:00.000Z',
+      revision: 'a'.repeat(64),
+      subjectType: 'device',
+      deviceId,
+      hardware: {
+        processor: { model: null, cores: null, threads: null },
+        memory: { totalMb: null },
+        graphics: { model: null },
+        motherboard: { manufacturer: null, product: null, version: null },
+        firmware: { biosVersion: null },
+      },
+      disks: [],
+      interfaces: [{ id: interfaceId, name: 'Ethernet', macAddress: null, primary: true }],
+      addresses: [
+        {
+          id: addressId,
+          interfaceId,
+          interfaceName: 'Ethernet',
+          address: '10.0.0.50',
+          family: 'ipv4',
+          assignment: 'static',
+          reservationEligible: true,
+          subnetMask: '255.255.255.0',
+          gateway: '10.0.0.1',
+          dnsServers: [],
+          active: true,
+          firstSeenAt: '2026-01-01T00:00:00.000Z',
+          deactivatedAt: null,
+        },
+      ],
+      warranty: null,
+      virtualMachines: [],
+      collections: {
+        disks: { total: 0, included: 0, complete: true, reason: null },
+        interfaces: { total: 1, included: 1, complete: true, reason: null },
+        addresses: { total: 1, included: 1, complete: true, reason: null },
+        virtualMachines: { total: 0, included: 0, complete: true, reason: null },
+      },
+    });
+    const harness = setup({ subnet: subnetRow() });
+    const context: ReconstructionWriteContext = {
+      tx: harness.tx as never,
+      companyId: ids.company,
+      integrationId: ids.integration,
+      integrationCompanyMappingId: ids.mapping,
+      resourceId: ids.resource,
+      resourceKey: 'ip-reservations',
+      externalOrgId: orgId,
+      auditActorId: ids.actor,
+      now: new Date('2026-07-14T12:00:00.000Z'),
+      dryRun: false,
+      resolveBinding: jest.fn().mockResolvedValue({
+        targetKind: 'subnet',
+        targetId: ids.subnet,
+        companyId: ids.company,
+      }),
+    };
+
+    const out = await new IpReservationTargetWriter(harness.service).write(
+      context,
+      record!.reconstructionInput as never,
+    );
+
+    expect(out).toMatchObject({
+      targetKind: 'ip_reservation',
+      targetId: ids.reservation,
+      change: 'created',
+      provenance: {
+        externalId: `${orgId}:ip-reservations:10.0.0.0/24:10.0.0.50`,
+      },
+    });
+    expect(harness.tx.ipReservation.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        companyId: ids.company,
+        subnetId: ids.subnet,
+        ipAddress: '10.0.0.50',
+        label: 'Static address 10.0.0.50',
+      }),
+    });
+    expect(harness.audit.logWithClient).toHaveBeenCalledWith(
+      harness.tx,
+      expect.objectContaining({ actorId: ids.actor, entityId: ids.reservation }),
+    );
+  });
+
   it('creates a subnet and its attributed audit row in one transaction', async () => {
     const { service, prisma, audit, tx } = setup();
     await expect(service.writeSubnetFromIntegration(subnetInput)).resolves.toEqual({
