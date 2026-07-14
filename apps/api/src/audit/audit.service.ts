@@ -154,6 +154,27 @@ export class AuditLogService {
     });
   }
 
+  async logManyWithClient(
+    client: Prisma.TransactionClient,
+    entries: readonly AuditEntry[],
+  ): Promise<void> {
+    for (let offset = 0; offset < entries.length; offset += 500) {
+      await client.auditLog.createMany({
+        data: entries.slice(offset, offset + 500).map((entry) => ({
+          actorId: entry.actorId ?? null,
+          action: entry.action,
+          entityType: entry.entityType,
+          entityId: entry.entityId ?? null,
+          companyId: entry.companyId ?? null,
+          ip: entry.ip ?? null,
+          userAgent: entry.userAgent ?? null,
+          before: (entry.before ?? null) as never,
+          after: (entry.after ?? null) as never,
+        })),
+      });
+    }
+  }
+
   async assertIntegrationActor(actorId: string, companyId: string): Promise<void> {
     const now = new Date();
     const actor = await this.prisma.user.findFirst({

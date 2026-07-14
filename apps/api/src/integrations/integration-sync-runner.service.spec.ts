@@ -176,6 +176,7 @@ describe('IntegrationSyncRunnerService writer dispatch', () => {
         ? jest.fn().mockRejectedValue(new Error('forbidden'))
         : jest.fn().mockResolvedValue(undefined),
       logWithClient: jest.fn().mockResolvedValue(undefined),
+      logManyWithClient: jest.fn().mockResolvedValue(undefined),
     };
     const writerRegistry = { get: jest.fn().mockReturnValue(writer) };
     const provenance = {
@@ -266,7 +267,7 @@ describe('IntegrationSyncRunnerService writer dispatch', () => {
       dryRun: false, actorId: 'actor', mode: 'incremental',
     })).resolves.toMatchObject({ status: 'succeeded', totals: { created: 1 } });
     expect(writer.write).toHaveBeenCalledWith(expect.objectContaining({ tx, existingTargetId: null }), input);
-    expect(audit.logWithClient).toHaveBeenCalledWith(tx, {
+    expect(audit.logManyWithClient).toHaveBeenCalledWith(tx, [{
       actorId: 'actor',
       action: 'integration.target.created',
       entityType: 'IntegrationTarget',
@@ -283,9 +284,39 @@ describe('IntegrationSyncRunnerService writer dispatch', () => {
         state: 'active',
         counts: { records: 1, gaps: 0 },
       },
-    });
+    }]);
     expect(order).toEqual([
       'target+audit', 'binding', 'gaps', 'resolve-gaps', 'completeness', 'checkpoint',
+    ]);
+  });
+
+  it('persists page lifecycle audits with one transaction-scoped batch call', async () => {
+    const { service, driver, audit, tx } = setup();
+    driver.fetchRecords.mockResolvedValueOnce({
+      records: [
+        { reconstructionInput: input },
+        { reconstructionInput: {
+          ...input,
+          externalId: 'org-1:subnets:dmz',
+          source: { ...input.source, sourceId: 'dmz' },
+          name: 'DMZ', cidr: '10.0.1.0/24',
+        } },
+      ],
+      hasMore: false, cursor: null, terminal: true,
+      snapshotAt: '2026-07-14T10:00:00.000Z',
+      sourceHighWater: '2026-07-14T09:00:00.000Z',
+    });
+
+    await expect(service.runMapping({
+      syncRunId: 'batched-audit-run', integrationCompanyMappingId: 'mapping',
+      resourceId: 'resource', dryRun: false, actorId: 'actor', mode: 'incremental',
+    })).resolves.toMatchObject({ status: 'succeeded', totals: { created: 2 } });
+
+    expect(audit.logWithClient).not.toHaveBeenCalled();
+    expect(audit.logManyWithClient).toHaveBeenCalledTimes(1);
+    expect(audit.logManyWithClient).toHaveBeenCalledWith(tx, [
+      expect.objectContaining({ action: 'integration.target.created' }),
+      expect.objectContaining({ action: 'integration.target.created' }),
     ]);
   });
 
@@ -339,7 +370,7 @@ describe('IntegrationSyncRunnerService writer dispatch', () => {
       mode: 'incremental',
     });
 
-    expect(audit.logWithClient).toHaveBeenCalledWith(tx, {
+    expect(audit.logManyWithClient).toHaveBeenCalledWith(tx, [{
       actorId: 'actor',
       action: `integration.target.${change}`,
       entityType: 'IntegrationTarget',
@@ -357,8 +388,8 @@ describe('IntegrationSyncRunnerService writer dispatch', () => {
         counts: { records: 1, gaps: gap ? 1 : 0 },
         ...(gap ? { reasonCategory: 'missing_dependency' } : {}),
       },
-    });
-    expect(JSON.stringify(audit.logWithClient.mock.calls)).not.toContain(
+    }]);
+    expect(JSON.stringify(audit.logManyWithClient.mock.calls)).not.toContain(
       'dependency_not_found',
     );
   });
@@ -1280,6 +1311,7 @@ describe('Breeze foundational asset composition', () => {
       {
         assertIntegrationActor: jest.fn().mockResolvedValue(undefined),
         logWithClient: jest.fn().mockResolvedValue(undefined),
+        logManyWithClient: jest.fn().mockResolvedValue(undefined),
       } as never,
       { loadDriverContext: jest.fn().mockResolvedValue({ config: { baseUrl: 'https://breeze.example' }, secret: { apiKey: 'key' } }) } as never,
       { get: jest.fn().mockReturnValue(breeze) } as never,

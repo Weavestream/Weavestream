@@ -10,7 +10,7 @@ import {
   type ReconstructionGapKind,
   type SafeIntegrationProvenance,
 } from '@weavestream/shared';
-import { AuditLogService } from '../../audit/audit.service.js';
+import { AuditLogService, type AuditEntry } from '../../audit/audit.service.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { scanSensitiveMaterial } from '../sensitive-material.js';
 import {
@@ -309,22 +309,22 @@ export class IntegrationProvenanceService {
       targetIds(rows, 'subnet').filter((id) => !protectedTargetIds.has(id)),
     );
 
-    for (const row of rows) {
-      const previous = integrationProvenanceSchema.safeParse(row.provenance);
-      const provenance = previous.success
-        ? { ...previous.data, state: 'stale' as const }
-        : row.provenance;
-      await tx.integrationSyncRecord.update({
-        where: { id: row.id },
-        data: {
-          state: 'stale',
-          staleSince: row.staleSince ?? input.snapshotAt,
-          provenance: provenance as Prisma.InputJsonValue,
-        },
-      });
-      if (this.audit?.logWithClient) {
+    for (let offset = 0; offset < rows.length; offset += TARGET_MUTATION_BATCH) {
+      const batch = rows.slice(offset, offset + TARGET_MUTATION_BATCH);
+      await tx.$executeRaw(Prisma.sql`
+        UPDATE "integration_sync_records"
+        SET
+          "state" = 'stale'::"IntegrationSyncState",
+          "stale_since" = COALESCE("stale_since", ${input.snapshotAt}),
+          "provenance" = jsonb_set("provenance", '{state}', '"stale"'::jsonb, true),
+          "updated_at" = CURRENT_TIMESTAMP
+        WHERE "id" IN (${Prisma.join(batch.map((row) => Prisma.sql`${row.id}::uuid`))})
+      `);
+    }
+    if (this.audit?.logManyWithClient) {
+      const auditEntries: AuditEntry[] = rows.map((row) => {
         const targetId = targetIdForKind(row, row.targetKind);
-        await this.audit.logWithClient(tx, {
+        return {
           actorId: input.auditActorId,
           action: integrationTargetAuditAction('stale'),
           entityType: 'IntegrationTarget',
@@ -341,8 +341,9 @@ export class IntegrationProvenanceService {
             state: 'stale',
             counts: { records: 1, gaps: 0 },
           }),
-        });
-      }
+        };
+      });
+      await this.audit.logManyWithClient(tx, auditEntries);
     }
     return { stale: rows.length, archived };
   }

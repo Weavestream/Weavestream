@@ -240,9 +240,8 @@ describe('IntegrationProvenanceService', () => {
       .mockResolvedValueOnce(rows)
       .mockResolvedValueOnce([])
       .mockResolvedValue([]);
-    const update = jest.fn();
     const tx = {
-      integrationSyncRecord: { findMany, update },
+      integrationSyncRecord: { findMany, update: jest.fn() },
       asset: { updateMany: jest.fn() },
       article: { updateMany: jest.fn() },
       subnet: { updateMany: jest.fn() },
@@ -251,8 +250,9 @@ describe('IntegrationProvenanceService', () => {
       upload: { updateMany: jest.fn(), deleteMany: jest.fn() },
       password: { updateMany: jest.fn(), deleteMany: jest.fn() },
       searchIndex: { updateMany: jest.fn() },
+      $executeRaw: jest.fn().mockResolvedValue(1),
     };
-    const audit = { logWithClient: jest.fn() };
+    const audit = { logManyWithClient: jest.fn() };
     const service = new IntegrationProvenanceService({} as never, audit as never);
 
     await expect(service.staleUnseen(tx as never, {
@@ -298,11 +298,9 @@ describe('IntegrationProvenanceService', () => {
     expect(tx.upload.deleteMany).not.toHaveBeenCalled();
     expect(tx.password.updateMany).not.toHaveBeenCalled();
     expect(tx.password.deleteMany).not.toHaveBeenCalled();
-    expect(update).toHaveBeenCalledTimes(1);
-    expect(update.mock.calls[0][0]).toEqual(expect.objectContaining({
-      data: expect.objectContaining({ state: 'stale', staleSince: staleAt }),
-    }));
-    expect(audit.logWithClient).toHaveBeenCalledWith(tx, {
+    expect(tx.integrationSyncRecord.update).not.toHaveBeenCalled();
+    expect(tx.$executeRaw).toHaveBeenCalledTimes(1);
+    expect(audit.logManyWithClient).toHaveBeenCalledWith(tx, [{
       actorId: '00000000-0000-0000-0000-000000000005',
       action: 'integration.target.stale',
       entityType: 'IntegrationTarget',
@@ -319,7 +317,7 @@ describe('IntegrationProvenanceService', () => {
         state: 'stale',
         counts: { records: 1, gaps: 0 },
       },
-    });
+    }]);
   });
 
   it.each(['asset', 'article', 'subnet'] as const)(
@@ -336,6 +334,7 @@ describe('IntegrationProvenanceService', () => {
         integrationSyncRecord: { findMany, update: jest.fn() },
         asset: { updateMany: jest.fn() }, article: { updateMany: jest.fn() },
         subnet: { updateMany: jest.fn() }, searchIndex: { updateMany: jest.fn() },
+        $executeRaw: jest.fn().mockResolvedValue(1),
       };
       const service = new IntegrationProvenanceService({} as never, {} as never);
       await expect(service.staleUnseen(tx as never, {
@@ -348,13 +347,59 @@ describe('IntegrationProvenanceService', () => {
         auditActorId: '00000000-0000-0000-0000-000000000005',
       })).resolves.toEqual({ stale: 1, archived: 0 });
       expect(tx[targetKind].updateMany).not.toHaveBeenCalled();
-      expect(tx.integrationSyncRecord.update).toHaveBeenCalledTimes(1);
+      expect(tx.integrationSyncRecord.update).not.toHaveBeenCalled();
+      expect(tx.$executeRaw).toHaveBeenCalledTimes(1);
       expect(findMany).toHaveBeenLastCalledWith(expect.objectContaining({
         where: expect.not.objectContaining({ provenance: expect.anything() }),
         distinct: [targetKind === 'asset' ? 'assetId' : targetKind === 'article' ? 'articleId' : 'subnetId'],
       }));
     },
   );
+
+  it('batches 501 binding provenance transitions and target-level audits', async () => {
+    const staleAt = new Date('2026-07-14T12:00:00.000Z');
+    const rows = Array.from({ length: 501 }, (_, index) => binding(
+      `00000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`,
+      'asset',
+      `00000000-0000-4000-9000-${String(index + 1).padStart(12, '0')}`,
+    ));
+    const findMany = jest.fn(async (args: { cursor?: { id: string }; distinct?: string[] }) => {
+      if (args.distinct) return [];
+      return args.cursor ? rows.slice(500) : rows;
+    });
+    const tx = {
+      integrationSyncRecord: { findMany, update: jest.fn() },
+      asset: { updateMany: jest.fn(async (args: { where: { id: { in: string[] } } }) => ({
+        count: args.where.id.in.length,
+      })) },
+      article: { updateMany: jest.fn() }, subnet: { updateMany: jest.fn() },
+      searchIndex: { updateMany: jest.fn() },
+      $executeRaw: jest.fn().mockResolvedValue(500),
+    };
+    const audit = { logManyWithClient: jest.fn().mockResolvedValue(undefined) };
+    const service = new IntegrationProvenanceService({} as never, audit as never);
+
+    await expect(service.staleUnseen(tx as never, {
+      integrationId: ids.integration, companyId: ids.company,
+      integrationCompanyMappingId: ids.mapping, resourceId: ids.resource,
+      targetKind: 'asset', snapshotAt: staleAt,
+      auditActorId: '00000000-0000-0000-0000-000000000005', batchSize: 500,
+    })).resolves.toEqual({ stale: 501, archived: 501 });
+
+    expect(tx.integrationSyncRecord.update).not.toHaveBeenCalled();
+    expect(tx.$executeRaw).toHaveBeenCalledTimes(2);
+    expect(audit.logManyWithClient).toHaveBeenCalledTimes(1);
+    const entries = audit.logManyWithClient.mock.calls[0]![1];
+    expect(entries).toHaveLength(501);
+    expect(entries[0]).toEqual(expect.objectContaining({
+      action: 'integration.target.stale', entityId: rows[0]!.assetId,
+      after: expect.objectContaining({ targetId: rows[0]!.assetId, state: 'stale' }),
+    }));
+    expect(entries[500]).toEqual(expect.objectContaining({
+      action: 'integration.target.stale', entityId: rows[500]!.assetId,
+      after: expect.objectContaining({ targetId: rows[500]!.assetId, state: 'stale' }),
+    }));
+  });
 
   it('includes an unseen blocked Breeze binding in an authoritative stale transition', async () => {
     const blocked = binding('blocked-binding', 'article', 'article-blocked');
@@ -367,6 +412,7 @@ describe('IntegrationProvenanceService', () => {
       },
       asset: { updateMany: jest.fn() }, article: { updateMany: jest.fn() },
       subnet: { updateMany: jest.fn() }, searchIndex: { updateMany: jest.fn() },
+      $executeRaw: jest.fn().mockResolvedValue(1),
     };
     const service = new IntegrationProvenanceService({} as never, {} as never);
 
@@ -379,9 +425,8 @@ describe('IntegrationProvenanceService', () => {
     expect(tx.integrationSyncRecord.findMany).toHaveBeenCalledWith(expect.objectContaining({
       where: expect.objectContaining({ state: { in: ['active', 'blocked'] } }),
     }));
-    expect(tx.integrationSyncRecord.update).toHaveBeenCalledWith(expect.objectContaining({
-      where: { id: 'blocked-binding' }, data: expect.objectContaining({ state: 'stale' }),
-    }));
+    expect(tx.integrationSyncRecord.update).not.toHaveBeenCalled();
+    expect(tx.$executeRaw).toHaveBeenCalledTimes(1);
   });
 
   it('does not overwrite the asset search archive timestamp when the native row was already archived', async () => {
@@ -394,6 +439,7 @@ describe('IntegrationProvenanceService', () => {
       asset: { updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
       article: { updateMany: jest.fn() }, subnet: { updateMany: jest.fn() },
       searchIndex: { updateMany: jest.fn() },
+      $executeRaw: jest.fn().mockResolvedValue(1),
     };
     const service = new IntegrationProvenanceService({} as never, {} as never);
     await expect(service.staleUnseen(tx as never, {

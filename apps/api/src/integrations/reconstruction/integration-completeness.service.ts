@@ -296,9 +296,12 @@ export class IntegrationCompletenessService {
     }
 
     const relationIdSet = new Set(relationIds);
+    const recordByRelation = new Map(records
+      .filter((record) => record.relationId)
+      .map((record) => [record.relationId!, record]));
     for (const relation of relations) {
       if (relationIdSet.has(relation.id)) {
-        const record = records.find((candidate) => candidate.relationId === relation.id);
+        const record = recordByRelation.get(relation.id);
         const evidenceState = sourceEvidenceState(record);
         if (evidenceState) (evidenceState === 'active' ? active : stale).add('service_dependencies');
       } else if (
@@ -310,15 +313,21 @@ export class IntegrationCompletenessService {
     }
     if (passwords.length > 0) manual.add('administrative_credential');
 
+    const recordBySubnet = new Map(records
+      .filter((record) => record.subnetId)
+      .map((record) => [record.subnetId!, record]));
     for (const subnet of subnets) {
       if (!/firewall/i.test(subnet.description ?? '')) continue;
-      const record = records.find((candidate) => candidate.subnetId === subnet.id);
+      const record = recordBySubnet.get(subnet.id);
       const evidenceState = sourceEvidenceState(record);
       if (evidenceState) (evidenceState === 'active' ? active : stale).add('ip_firewall');
     }
+    const recordByReservation = new Map(records
+      .filter((record) => record.ipReservationId)
+      .map((record) => [record.ipReservationId!, record]));
     for (const reservation of reservations) {
       if (!/firewall/i.test(reservation.notes ?? '')) continue;
-      const record = records.find((candidate) => candidate.ipReservationId === reservation.id);
+      const record = recordByReservation.get(reservation.id);
       const evidenceState = sourceEvidenceState(record);
       if (evidenceState) (evidenceState === 'active' ? active : stale).add('ip_firewall');
     }

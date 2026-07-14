@@ -7,6 +7,7 @@ function makePrisma() {
     },
     auditLog: {
       create: jest.fn().mockResolvedValue(undefined),
+      createMany: jest.fn().mockResolvedValue({ count: 0 }),
     },
   };
 }
@@ -32,6 +33,35 @@ describe('AuditLogService integration transaction boundary', () => {
 
     expect(tx.auditLog.create).toHaveBeenCalledTimes(1);
     expect(prisma.auditLog.create).not.toHaveBeenCalled();
+  });
+
+  it('persists many transaction-scoped audit entries with one bounded write', async () => {
+    const prisma = makePrisma();
+    const tx = {
+      auditLog: {
+        create: jest.fn(),
+        createMany: jest.fn().mockResolvedValue({ count: 2 }),
+      },
+    };
+    const svc = new AuditLogService(prisma as never);
+
+    await svc.logManyWithClient(tx as never, [{
+      actorId: 'actor-1', action: 'integration.target.created',
+      entityType: 'IntegrationTarget', entityId: 'asset-1', companyId: 'company-1',
+      after: { targetId: 'asset-1' },
+    }, {
+      actorId: 'actor-1', action: 'integration.target.updated',
+      entityType: 'IntegrationTarget', entityId: 'asset-2', companyId: 'company-1',
+      after: { targetId: 'asset-2' },
+    }]);
+
+    expect(tx.auditLog.createMany).toHaveBeenCalledTimes(1);
+    expect(tx.auditLog.createMany).toHaveBeenCalledWith({ data: [
+      expect.objectContaining({ action: 'integration.target.created', entityId: 'asset-1' }),
+      expect.objectContaining({ action: 'integration.target.updated', entityId: 'asset-2' }),
+    ] });
+    expect(tx.auditLog.create).not.toHaveBeenCalled();
+    expect(prisma.auditLog.createMany).not.toHaveBeenCalled();
   });
 
   it('requires a persisted active authorized integration audit actor', async () => {

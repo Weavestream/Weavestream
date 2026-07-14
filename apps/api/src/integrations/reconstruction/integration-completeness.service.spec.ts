@@ -274,6 +274,38 @@ describe('IntegrationCompletenessService', () => {
     }
   });
 
+  it('indexes bound targets once instead of rescanning every sync record', async () => {
+    const prisma = completenessPrisma({
+      activeAssetFields: [], activeArticles: [], manualAssetFields: [],
+      staleAssetFields: [], staleArticles: [], gaps: [],
+    });
+    let relationIdReads = 0;
+    const records = Array.from({ length: 400 }, (_, index) => ({
+      id: `binding-${String(index).padStart(4, '0')}`,
+      state: 'active', targetKind: 'relation', assetId: null, articleId: null,
+      subnetId: null, ipReservationId: null,
+      get relationId() {
+        relationIdReads += 1;
+        return `relation-${String(index).padStart(4, '0')}`;
+      },
+      lastSyncedFieldChecksums: {},
+      provenance: sourceProvenance('device-relationships', 'active'),
+    }));
+    const relations = records.map((record, index) => ({
+      id: record.relationId,
+      relationType: 'depends_on', sourceType: 'Asset', sourceId: `asset-${index}`,
+      targetType: 'Article', targetId: `article-${index}`,
+    }));
+    relationIdReads = 0;
+    prisma.integrationSyncRecord.findMany.mockResolvedValueOnce(records);
+    prisma.relation.findMany.mockResolvedValueOnce(relations);
+
+    await expect(new IntegrationCompletenessService(prisma as never)
+      .recalculate(prisma as never, scope())).resolves.toBeDefined();
+
+    expect(relationIdReads).toBeLessThanOrEqual(records.length * 5);
+  });
+
   it('recognizes exact Task 7 rendered scripts, automations, and recommended site address fields', async () => {
     const scriptRecord = transformBreezeRecord('scripts', {
       ...breezeBase('00000000-0000-4000-8000-000000000031'),

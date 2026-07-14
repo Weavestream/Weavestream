@@ -18,7 +18,7 @@ import type {
   SyncRunTotals,
 } from '@weavestream/shared';
 import { PrismaService } from '../prisma/prisma.service.js';
-import { AuditLogService } from '../audit/audit.service.js';
+import { AuditLogService, type AuditEntry } from '../audit/audit.service.js';
 import { EnvService } from '../config/env.service.js';
 import { IntegrationsService } from './integrations.service.js';
 import { IntegrationDriverRegistry } from './drivers/integration-driver.registry.js';
@@ -365,6 +365,7 @@ export class IntegrationSyncRunnerService {
             message: string;
             details: Record<string, unknown>;
           }> = [];
+          const targetAuditEntries: AuditEntry[] = [];
           let droppedGapCount = 0;
           const observeGap = (gap: (typeof pageGaps)[number]): void => {
             if (pageGaps.length < RECONSTRUCTION_RUNTIME_LIMITS.gapsPerPage - 1) {
@@ -501,7 +502,7 @@ export class IntegrationSyncRunnerService {
             if (input.dryRun) continue;
             if (outcome.change !== 'unchanged') {
               const targetId = outcome.targetId || null;
-              await this.audit.logWithClient(tx, {
+              targetAuditEntries.push({
                 actorId: input.actorId!,
                 action: integrationTargetAuditAction(outcome.change),
                 entityType: 'IntegrationTarget',
@@ -575,6 +576,7 @@ export class IntegrationSyncRunnerService {
             });
           }
           if (!input.dryRun) {
+            await this.audit.logManyWithClient(tx, targetAuditEntries);
             if (droppedGapCount > 0) {
               pageGaps.push({
                 externalId: null,

@@ -1020,20 +1020,11 @@ describeIfDb('Breeze reconstruction disposable PostgreSQL dossier', () => {
     expect(await persistedDeviceState(prisma)).toEqual(before);
   });
 
-  it('observes production stale mutation batches capped at 500 native targets', async () => {
-    const resourceId = randomUUID();
-    await prisma.integrationResource.create({
-      data: {
-        id: resourceId,
-        integrationId: ids.integration,
-        resourceKey: `task11-scale-${resourceId}`,
-        targetKind: 'asset',
-        assetLayoutId: ids.layout,
-        targetConfig: {},
-        dependsOnResourceKeys: [],
-      },
-    });
-    const targets = Array.from({ length: 501 }, (_, index) => ({
+  it('keeps the 10,000-device production terminal transaction inside cadence bounds', async () => {
+    const resourceId = ids.devices;
+    // seedDatabase already provides one bound device in this exact production
+    // resource, so 9,999 additional rows exercise the 10,000 binding cap.
+    const targets = Array.from({ length: 9_999 }, (_, index) => ({
       assetId: randomUUID(),
       bindingId: randomUUID(),
       externalId: `${ORG_A}:task11-scale:${index}`,
@@ -1043,47 +1034,103 @@ describeIfDb('Breeze reconstruction disposable PostgreSQL dossier', () => {
         id: target.assetId,
         companyId: ids.companyA,
         assetLayoutId: ids.layout,
-        name: `Task11 batch target ${index}`,
+        name: `Task11 terminal target ${index}`,
         createdBy: ids.actor,
         updatedBy: ids.actor,
       })),
     });
     await prisma.integrationSyncRecord.createMany({
-      data: targets.map((target) => syncRecordData({
-        id: target.bindingId,
-        companyId: ids.companyA,
-        mappingId: ids.mappingA,
-        resourceId,
-        externalId: target.externalId,
-        targetKind: 'asset',
-        targetId: target.assetId,
+      data: targets.map((target) => ({
+        ...syncRecordData({
+          id: target.bindingId,
+          companyId: ids.companyA,
+          mappingId: ids.mappingA,
+          resourceId,
+          externalId: target.externalId,
+          targetKind: 'asset',
+          targetId: target.assetId,
+        }),
+        provenance: provenanceFor('devices', target.externalId),
       })),
     });
     const batchSizes: number[] = [];
+    const auditBatchSizes: number[] = [];
+    let queryCount = 0;
     prisma.$use(async (params, next) => {
+      queryCount += 1;
       const idsArg = (params.args as {
         where?: { id?: { in?: unknown[] } };
       } | undefined)?.where?.id?.in;
       if (params.model === 'Asset' && params.action === 'updateMany' && Array.isArray(idsArg)) {
         batchSizes.push(idsArg.length);
       }
+      const auditRows = (params.args as { data?: unknown[] } | undefined)?.data;
+      if (params.model === 'AuditLog' && params.action === 'createMany' && Array.isArray(auditRows)) {
+        auditBatchSizes.push(auditRows.length);
+      }
       return next(params);
     });
+    installFetchScript([{ body: envelope([]) }]);
+    const runner = buildRunner(
+      prisma,
+      audit,
+      provenance,
+      new BreezeDriver(new BreezePartnerApiClient()),
+      await buildAssetWriter(prisma, audit),
+    );
+    const runId = await createQueuedRun(prisma, 'full');
+    queryCount = 0;
+    const heapBefore = process.memoryUsage().heapUsed;
+    let peakHeap = heapBefore;
+    const sampler = setInterval(() => {
+      peakHeap = Math.max(peakHeap, process.memoryUsage().heapUsed);
+    }, 5);
+    const startedAt = performance.now();
+    let outcome: Awaited<ReturnType<IntegrationSyncRunnerService['runMapping']>> | undefined;
+    try {
+      outcome = await runner.runMapping({
+        syncRunId: runId,
+        integrationCompanyMappingId: ids.mappingA,
+        resourceId,
+        dryRun: false,
+        actorId: ids.actor,
+        mode: 'full',
+      });
+    } finally {
+      clearInterval(sampler);
+    }
+    const durationMs = performance.now() - startedAt;
+    const peakHeapGrowth = Math.max(0, peakHeap - heapBefore);
 
-    await expect(prisma.$transaction((tx) => provenance.staleUnseen(tx, {
-      integrationId: ids.integration,
-      companyId: ids.companyA,
-      integrationCompanyMappingId: ids.mappingA,
-      resourceId,
-      targetKind: 'asset',
-      snapshotAt: new Date(SNAPSHOT),
-      auditActorId: ids.actor,
-    }))).resolves.toMatchObject({ stale: 501 });
-    expect(batchSizes).toEqual([500, 1]);
+    expect(outcome?.error).toBeNull();
+    expect(outcome).toMatchObject({
+      status: 'succeeded', totals: { fetched: 0, stale: 10_000, archived: 10_000 },
+    });
+    expect(batchSizes).toHaveLength(20);
+    expect(batchSizes.every((size) => size === 500)).toBe(true);
+    expect(auditBatchSizes).toHaveLength(20);
+    expect(auditBatchSizes.every((size) => size === 500)).toBe(true);
+    expect(queryCount).toBeLessThan(300);
+    expect(peakHeapGrowth).toBeLessThan(384 * 1024 * 1024);
+    expect(durationMs).toBeLessThan(60_000);
+    expect(durationMs).toBeLessThan(15 * 60_000);
     await expect(prisma.asset.count({
       where: { id: { in: targets.map((target) => target.assetId) }, archivedAt: { not: null } },
-    })).resolves.toBe(501);
-  }, 30_000);
+    })).resolves.toBe(9_999);
+    await expect(prisma.asset.findUniqueOrThrow({ where: { id: ids.deviceA } }))
+      .resolves.toMatchObject({ archivedAt: expect.any(Date) });
+    await expect(prisma.integrationSyncRecord.count({
+      where: { resourceId, state: 'stale', provenance: { path: ['state'], equals: 'stale' } },
+    })).resolves.toBe(10_000);
+    await expect(prisma.auditLog.count({
+      where: { companyId: ids.companyA, action: 'integration.target.stale' },
+    })).resolves.toBeGreaterThanOrEqual(10_000);
+    await expect(prisma.integrationSyncCheckpoint.findUniqueOrThrow({
+      where: { integrationCompanyMappingId_resourceId_mode: {
+        integrationCompanyMappingId: ids.mappingA, resourceId, mode: 'full',
+      } },
+    })).resolves.toMatchObject({ cursor: null, authoritative: true });
+  }, 120_000);
 });
 
 async function buildAssetWriter(prisma: PrismaClient, audit: AuditLogService) {
