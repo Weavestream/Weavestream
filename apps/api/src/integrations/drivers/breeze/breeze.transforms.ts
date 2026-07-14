@@ -101,8 +101,21 @@ export function transformBreezeRecord(
           sourceFingerprint: record.revision,
         }),
       ];
-    case 'device-inventory':
+    case 'device-inventory': {
       if (record.subjectType !== 'device') return [];
+      const diskProjection = formatRowsProjection(record.disks, DISK_COLUMNS);
+      const interfaceProjection = formatRowsProjection(record.interfaces, INTERFACE_COLUMNS);
+      const addressProjection = formatRowsProjection(record.addresses, ADDRESS_COLUMNS);
+      const gatewayProjection = formatUniqueTextProjection(
+        record.addresses.map((address: Record<string, unknown>) => address.gateway),
+      );
+      const dnsServerProjection = formatUniqueTextProjection(
+        record.addresses.flatMap((address: Record<string, unknown>) => address.dnsServers),
+      );
+      const virtualMachineProjection = formatRowsProjection(
+        record.virtualMachines,
+        VM_COLUMNS,
+      );
       return [
         legacy(
           record,
@@ -124,32 +137,35 @@ export function transformBreezeRecord(
               ['Version', record.hardware.motherboard.version],
             ]),
             biosVersion: record.hardware.firmware.biosVersion,
-            disks: formatRows(record.disks, DISK_COLUMNS),
-            interfaces: formatRows(record.interfaces, INTERFACE_COLUMNS),
-            networkAddresses: formatRows(record.addresses, ADDRESS_COLUMNS),
-            gateways: uniqueText(
-              record.addresses.map((address: Record<string, unknown>) => address.gateway),
-            ),
-            dnsServers: uniqueText(
-              record.addresses.flatMap((address: Record<string, unknown>) => address.dnsServers),
-            ),
+            disks: diskProjection.text,
+            interfaces: interfaceProjection.text,
+            networkAddresses: addressProjection.text,
+            gateways: gatewayProjection.text,
+            dnsServers: dnsServerProjection.text,
             warrantyStatus: record.warranty?.status ?? null,
             warrantyStartsOn: record.warranty?.startsOn ?? null,
             warrantyEndsOn: record.warranty?.endsOn ?? null,
             warrantySubscription: record.warranty?.subscription ?? null,
-            virtualMachines: formatRows(record.virtualMachines, VM_COLUMNS),
-            inventoryCompleteness: formatCollections(record.collections, {
-              disks: formatRowsProjection(record.disks, DISK_COLUMNS),
-              interfaces: formatRowsProjection(record.interfaces, INTERFACE_COLUMNS),
-              addresses: formatRowsProjection(record.addresses, ADDRESS_COLUMNS),
-              virtualMachines: formatRowsProjection(record.virtualMachines, VM_COLUMNS),
-            }),
+            virtualMachines: virtualMachineProjection.text,
+            inventoryCompleteness: [
+              formatCollections(record.collections, {
+                disks: diskProjection,
+                interfaces: interfaceProjection,
+                addresses: addressProjection,
+                virtualMachines: virtualMachineProjection,
+              }),
+              formatProjectionCompleteness('gateways', gatewayProjection, 'values'),
+              formatProjectionCompleteness('DNS servers', dnsServerProjection, 'values'),
+            ]
+              .filter(Boolean)
+              .join('\n'),
             sourceRevision: record.revision,
             sourceFingerprint: record.revision,
           },
           record.deviceId,
         ),
       ];
+    }
     case 'site-inventory':
       if (record.subjectType !== 'site') return [];
       return [
@@ -551,14 +567,39 @@ function displayValue(value: unknown): string {
   return String(value).replaceAll('\n', ' ').slice(0, 2_000);
 }
 
-function uniqueText(values: unknown[]): string {
-  return [
+function formatUniqueTextProjection(values: unknown[]): StructuredProjection {
+  const uniqueValues = [
     ...new Set(
       values.filter((value): value is string => typeof value === 'string' && value.length > 0),
     ),
-  ]
-    .sort()
-    .join(', ');
+  ].sort();
+  const limit = 10_000;
+  const complete = uniqueValues.join(', ');
+  if (complete.length <= limit) {
+    return { text: complete, shown: uniqueValues.length, total: uniqueValues.length };
+  }
+  const included: string[] = [];
+  for (const value of uniqueValues) {
+    const marker = `[projection truncated: ${included.length + 1}/${uniqueValues.length} values shown]`;
+    if ([...included, value, marker].join(', ').length > limit) break;
+    included.push(value);
+  }
+  const marker = `[projection truncated: ${included.length}/${uniqueValues.length} values shown]`;
+  return {
+    text: [...included, marker].join(', '),
+    shown: included.length,
+    total: uniqueValues.length,
+  };
+}
+
+function formatProjectionCompleteness(
+  name: string,
+  projection: StructuredProjection,
+  unit: 'rows' | 'values',
+): string {
+  return projection.shown < projection.total
+    ? `${name}: projection ${projection.shown}/${projection.total} ${unit} shown`
+    : '';
 }
 
 function formatCollections(

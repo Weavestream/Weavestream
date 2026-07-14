@@ -782,6 +782,41 @@ describe('Breeze transforms', () => {
     expect(fields.networkAddresses).toMatch(/\[projection truncated: \d+\/500 rows shown\]/u);
     expect(fields.inventoryCompleteness).toMatch(/addresses: 500\/500 complete; projection \d+\/500/u);
   });
+
+  it('bounds maximum adjacent gateway and DNS values at complete TEXT boundaries', () => {
+    const addresses = Array.from({ length: 500 }, (_, addressIndex) => ({
+      ...deviceInventory.addresses[1],
+      id: `${(addressIndex + 1).toString(16).padStart(8, '0')}-0000-4000-8000-000000000000`,
+      gateway: `gateway-${String(addressIndex).padStart(4, '0')}-${'g'.repeat(32)}`,
+      dnsServers: Array.from(
+        { length: 20 },
+        (_, dnsIndex) =>
+          `dns-${String(addressIndex).padStart(4, '0')}-${String(dnsIndex).padStart(2, '0')}-${'d'.repeat(32)}`,
+      ),
+    }));
+    const [record] = transformBreezeRecord('device-inventory', {
+      ...deviceInventory,
+      addresses,
+      collections: {
+        ...deviceInventory.collections,
+        addresses: { total: 500, included: 500, complete: true, reason: null },
+      },
+    });
+    const fields = (record as unknown as {
+      fields: {
+        gateways: string;
+        dnsServers: string;
+        inventoryCompleteness: string;
+      };
+    }).fields;
+
+    expect(() => new TextStrategy().valueSchema().parse(fields.gateways)).not.toThrow();
+    expect(() => new TextStrategy().valueSchema().parse(fields.dnsServers)).not.toThrow();
+    expect(fields.gateways).toMatch(/\[projection truncated: \d+\/500 values shown\]$/u);
+    expect(fields.dnsServers).toMatch(/\[projection truncated: \d+\/10000 values shown\]$/u);
+    expect(fields.inventoryCompleteness).toMatch(/gateways: projection \d+\/500 values shown/u);
+    expect(fields.inventoryCompleteness).toMatch(/DNS servers: projection \d+\/10000 values shown/u);
+  });
 });
 
 describe('BreezeDriver transport delegation', () => {
