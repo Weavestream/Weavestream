@@ -11,10 +11,16 @@ export const BREEZE_RESOURCE_KEYS = [
   'subnets',
   'ip-reservations',
   'configuration-policies',
+  'configuration-assignments',
+  'configuration-assignment-relations',
   'scripts',
   'automations',
+  'automation-relations',
   'backup-configurations',
+  'backup-configuration-relations',
   'custom-fields',
+  'custom-field-values',
+  'custom-field-value-relations',
   'device-relationships',
 ] as const;
 
@@ -28,6 +34,7 @@ export const BREEZE_SOURCE_ENDPOINTS = [
   'device-inventory',
   'device-software',
   'configuration-policies',
+  'configuration-assignments',
   'scripts',
   'automations',
   'backup-configurations',
@@ -38,10 +45,7 @@ export const BREEZE_SOURCE_ENDPOINTS = [
 export const breezeSourceEndpointSchema = z.enum(BREEZE_SOURCE_ENDPOINTS);
 export type BreezeSourceEndpoint = z.infer<typeof breezeSourceEndpointSchema>;
 
-const breezeBlockedResourceSchema = z.enum([
-  ...BREEZE_SOURCE_ENDPOINTS,
-  'configuration-assignments',
-]);
+const breezeBlockedResourceSchema = z.enum(BREEZE_SOURCE_ENDPOINTS);
 
 export const BREEZE_ENDPOINT_BY_RESOURCE: Readonly<
   Record<BreezeResourceKey, BreezeSourceEndpoint>
@@ -56,10 +60,16 @@ export const BREEZE_ENDPOINT_BY_RESOURCE: Readonly<
   subnets: 'device-inventory',
   'ip-reservations': 'device-inventory',
   'configuration-policies': 'configuration-policies',
+  'configuration-assignments': 'configuration-assignments',
+  'configuration-assignment-relations': 'configuration-assignments',
   scripts: 'scripts',
   automations: 'automations',
+  'automation-relations': 'automations',
   'backup-configurations': 'backup-configurations',
+  'backup-configuration-relations': 'backup-configurations',
   'custom-fields': 'custom-fields',
+  'custom-field-values': 'custom-fields',
+  'custom-field-value-relations': 'custom-fields',
   'device-relationships': 'device-relationships',
 };
 
@@ -375,33 +385,106 @@ export const breezeDeviceSoftwareSchema = record({
   collection: collectionSchema,
 });
 
-const articleRecordShape = {
+type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
+const json: z.ZodType<JsonValue> = z.lazy(() => z.union([
+  z.null(), z.boolean(), z.number().finite(), z.string(), z.array(json), z.record(json),
+]));
+const definitionScope = z.enum(['organization', 'partner']);
+const longNullableText = z.string().max(12_288).nullable();
+
+export const breezeConfigurationPolicySchema = record({
+  sourceScope: definitionScope,
   name: requiredText(255),
-  description: nullableText(2_000),
-  content: z.string().max(250_000),
-} as const;
-
-export const breezeConfigurationPolicySchema = record(articleRecordShape);
-export const breezeScriptSchema = record(articleRecordShape);
-export const breezeAutomationSchema = record({
-  ...articleRecordShape,
-  scriptIds: z.array(z.string().uuid()).max(500),
+  description: longNullableText,
+  status: z.enum(['active', 'inactive', 'archived']),
+  features: z.array(z.object({
+    id: z.string().uuid(),
+    type: requiredText(100),
+    policyId: z.string().uuid().nullable(),
+    settings: json.nullable(),
+  }).strict()).max(500),
 });
-export const breezeBackupConfigurationSchema = record(articleRecordShape);
 
-export const breezeCustomFieldsSchema = record({
-  deviceId: z.string().uuid(),
-  fields: z
-    .array(
-      z
-        .object({
-          key: requiredText(128),
-          label: requiredText(255),
-          value: z.union([z.string().max(8_192), z.number(), z.boolean(), z.null()]),
-        })
-        .strict(),
-    )
-    .max(500),
+export const breezeConfigurationAssignmentSchema = record({
+  policyId: z.string().uuid(),
+  policyName: requiredText(255),
+  sourceScope: definitionScope,
+  level: z.enum(['partner', 'organization', 'site', 'device_group', 'device']),
+  targetId: z.string().uuid(),
+  priority: z.number().int(),
+  roleFilter: z.array(requiredText(30)).max(100).nullable(),
+  osFilter: z.array(requiredText(10)).max(100).nullable(),
+});
+
+export const breezeScriptSchema = record({
+  sourceScope: definitionScope,
+  name: requiredText(255),
+  description: longNullableText,
+  category: nullableText(100),
+  osTypes: z.array(requiredText(50)).max(20),
+  language: z.enum(['powershell', 'bash', 'python', 'cmd']),
+  content: z.string().max(12_288),
+  parameters: json.nullable(),
+  timeoutSeconds: z.number().int().positive(),
+  runAs: z.enum(['system', 'user', 'elevated']),
+  version: z.number().int().positive(),
+  exitCodeSeverityMapping: json.nullable(),
+});
+
+export const breezeAutomationSchema = record({
+  sourceScope: definitionScope,
+  name: requiredText(255),
+  description: longNullableText,
+  enabled: z.boolean(),
+  trigger: json,
+  conditions: json.nullable(),
+  actions: z.array(json).max(500),
+  onFailure: z.enum(['stop', 'continue', 'notify']),
+  notificationTargets: json.nullable(),
+  dependencies: z.array(z.object({ resource: z.literal('scripts'), id: z.string().uuid() }).strict()).max(500),
+});
+
+const backupRestore = z.object({
+  types: z.array(z.enum(['full', 'selective', 'bare_metal'])).max(3),
+  notes: nullableText(1_000),
+}).strict();
+const backupCommon = {
+  sourceScope: definitionScope,
+  name: requiredText(200),
+  schedule: json.nullable(),
+  retention: json.nullable(),
+  exclusions: z.array(z.string().max(2_000)).max(500),
+  restore: backupRestore,
+} as const;
+const backupDestination = record({
+  kind: z.literal('destination'), ...backupCommon, sourceScope: z.literal('organization'),
+  type: z.enum(['file', 'system_image', 'database', 'application']),
+  provider: z.enum(['local', 's3', 'azure_blob', 'google_cloud', 'backblaze']),
+  compression: z.boolean(), encryption: z.boolean(), active: z.boolean(), default: z.boolean(),
+});
+const backupProfile = record({
+  kind: z.literal('profile'), ...backupCommon, description: longNullableText,
+  active: z.boolean(), selections: json, destinationId: z.string().uuid().nullable(),
+});
+const backupPolicy = record({
+  kind: z.literal('policy'), ...backupCommon, sourceScope: z.literal('organization'),
+  enabled: z.boolean(), destinationId: z.string().uuid(), targets: json, gfs: json.nullable(),
+  legalHold: z.boolean(), legalHoldReason: longNullableText,
+  bandwidthLimitMbps: z.number().int().positive().nullable(),
+  backupWindowStart: nullableText(5), backupWindowEnd: nullableText(5), priority: z.number().int().nullable(),
+});
+export const breezeBackupConfigurationSchema = z.discriminatedUnion('kind', [
+  backupDestination, backupProfile, backupPolicy,
+]);
+
+export const breezeCustomFieldSchema = record({
+  sourceScope: definitionScope,
+  name: requiredText(100), fieldKey: requiredText(100),
+  type: z.enum(['text', 'number', 'boolean', 'dropdown', 'date']),
+  options: json.nullable(), required: z.boolean(), defaultValue: json.nullable(),
+  deviceTypes: z.array(requiredText(50)).max(100).nullable(),
+  values: z.array(z.object({ deviceId: z.string().uuid(), value: json }).strict()).max(500),
+  valueCollection: collectionSchema,
 });
 
 const relationshipEndpointSchema = z
@@ -476,10 +559,11 @@ export const breezeRecordSchemaByEndpoint: Readonly<Record<BreezeSourceEndpoint,
   'device-inventory': breezeDeviceInventorySchema,
   'device-software': breezeDeviceSoftwareSchema,
   'configuration-policies': breezeConfigurationPolicySchema,
+  'configuration-assignments': breezeConfigurationAssignmentSchema,
   scripts: breezeScriptSchema,
   automations: breezeAutomationSchema,
   'backup-configurations': breezeBackupConfigurationSchema,
-  'custom-fields': breezeCustomFieldsSchema,
+  'custom-fields': breezeCustomFieldSchema,
   'device-relationships': breezeDeviceRelationshipsSchema,
 };
 

@@ -95,6 +95,40 @@ const input = {
 };
 
 describe('RelationsService integration system writes', () => {
+  it('writes an assignment-to-site dependency from the separate Breeze relation resource', async () => {
+    const orgId = '11111111-1111-4111-8111-111111111111';
+    const siteId = '22222222-2222-4222-8222-222222222222';
+    const assignmentId = '33333333-3333-4333-8333-333333333333';
+    const policyId = '44444444-4444-4444-8444-444444444444';
+    const records = transformBreezeRecord('configuration-assignment-relations', {
+      id: assignmentId, orgId, siteId: null, sourceUpdatedAt: '2026-07-14T11:00:00.000Z',
+      revision: 'a'.repeat(64), policyId, policyName: 'Baseline', sourceScope: 'organization',
+      level: 'site', targetId: siteId, priority: 10, roleFilter: ['server'], osFilter: ['windows'],
+    }) as Array<{ reconstructionInput: { relationType: string } }>;
+    const appliesTo = records.find((record) => record.reconstructionInput.relationType === 'applies_to')!;
+    const harness = setup();
+    const resolveBinding = jest.fn(async (ref: { resourceKey: string }) => ({
+      targetKind: ref.resourceKey === 'configuration-assignments' ? 'article' as const : 'asset' as const,
+      targetId: ref.resourceKey === 'configuration-assignments' ? ids.article : ids.asset,
+      companyId: ids.company,
+    }));
+    const out = await new RelationTargetWriter(harness.service).write({
+      tx: harness.tx as never, companyId: ids.company, integrationId: ids.integration,
+      integrationCompanyMappingId: ids.mapping, resourceId: ids.resource,
+      resourceKey: 'configuration-assignment-relations', externalOrgId: orgId,
+      auditActorId: ids.actor, now: new Date('2026-07-14T12:00:00.000Z'), dryRun: false,
+      resolveBinding,
+    }, appliesTo.reconstructionInput as never);
+    expect(out).toMatchObject({ change: 'created', targetKind: 'relation' });
+    expect(resolveBinding).toHaveBeenCalledWith({
+      resourceKey: 'configuration-assignments',
+      externalId: `${orgId}:configuration-assignments:${assignmentId}`,
+    });
+    expect(resolveBinding).toHaveBeenCalledWith({
+      resourceKey: 'sites', externalId: `${orgId}:sites:${siteId}`,
+    });
+  });
+
   it('writes an exported Breeze hierarchy edge through binding resolution and the real relation service', async () => {
     const orgId = '11111111-1111-4111-8111-111111111111';
     const siteId = '22222222-2222-4222-8222-222222222222';

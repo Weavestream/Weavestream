@@ -14,6 +14,28 @@ import {
   type BreezeRecordBase,
   type BreezeResourceKey,
 } from './breeze.schemas.js';
+import { scanSensitiveMaterial } from '../../sensitive-material.js';
+
+const MANAGED_START = '<!-- weavestream:breeze:managed:start -->';
+const MANAGED_END = '<!-- weavestream:breeze:managed:end -->';
+const FORBIDDEN_CONFIGURATION_KEYS = new Set([
+  'authorization', 'credential', 'credentials', 'encryptionkey', 'apikey', 'accesstoken',
+  'refreshtoken', 'privatekey', 'providerconfig', 'password', 'passwd', 'pwd', 'secret', 'token',
+]);
+
+export class BreezeSensitiveDefinitionError extends Error {
+  constructor(readonly sourceId: string, readonly orgId: string) {
+    super('Breeze desired configuration was blocked as sensitive input.');
+    this.name = 'BreezeSensitiveDefinitionError';
+  }
+}
+
+export class BreezeBoundedDefinitionError extends Error {
+  constructor(readonly sourceId: string, readonly orgId: string) {
+    super('Breeze desired configuration exceeds a native field bound.');
+    this.name = 'BreezeBoundedDefinitionError';
+  }
+}
 
 const DISK_COLUMNS = [
   ['ID', 'id'], ['Mount', 'mountPoint'], ['Device', 'device'],
@@ -53,6 +75,15 @@ export function transformBreezeRecord(
   const validated = schema.parse(rawRecord);
   const record = schema.parse(sanitizeBreezeText(validated)) as BreezeRecordBase &
     Record<string, any>;
+  if (isDesiredConfigurationResource(resource.data) && inspectDesiredConfiguration(record) !== 'safe') {
+    throw new BreezeSensitiveDefinitionError(record.id, record.orgId);
+  }
+  if (
+    BREEZE_ENDPOINT_BY_RESOURCE[resource.data] === 'custom-fields' &&
+    record.values.some((value: Record<string, unknown>) => stableJson(value.value).length > 50_000)
+  ) {
+    throw new BreezeBoundedDefinitionError(record.id, record.orgId);
+  }
 
   switch (resource.data) {
     case 'sites':
@@ -250,23 +281,30 @@ export function transformBreezeRecord(
         ),
       );
     case 'custom-fields':
-      return [
-        legacy(
-          record,
-          `Custom fields ${record.deviceId}`,
-          {
-            breezeId: record.deviceId,
-            selectedCustomFields: formatRows(record.fields, [
-              ['Key', 'key'],
-              ['Label', 'label'],
-              ['Value', 'value'],
-            ]),
-            sourceRevision: record.revision,
-            sourceFingerprint: record.revision,
-          },
-          record.deviceId,
-        ),
-      ];
+      return [typedArticle(resource.data, record)];
+    case 'custom-field-values':
+      return [...record.values]
+        .sort((left: Record<string, any>, right: Record<string, any>) => left.deviceId.localeCompare(right.deviceId))
+        .map((value: Record<string, any>) => legacy(record, `${record.name} on ${value.deviceId}`, {
+          breezeId: `${record.id}:${value.deviceId}`,
+          definitionId: record.id,
+          deviceId: value.deviceId,
+          fieldKey: record.fieldKey,
+          fieldName: record.name,
+          fieldType: record.type,
+          value: stableJson(value.value),
+          valueCollection: formatCollection('values', record.valueCollection),
+          sourceRevision: record.revision,
+          sourceFingerprint: record.revision,
+        }, `${record.id}:${value.deviceId}`));
+    case 'custom-field-value-relations':
+      return [...record.values]
+        .sort((left: Record<string, any>, right: Record<string, any>) => left.deviceId.localeCompare(right.deviceId))
+        .map((value: Record<string, any>) => typedDependencyRelation(
+          record, resource.data, `${record.id}:${value.deviceId}:device`,
+          'custom-field-values', `${record.id}:${value.deviceId}`, 'devices', value.deviceId,
+          'custom_field_value',
+        ));
     case 'subnets':
       return subnetCandidates(record).map((subnet) => typedSubnet(record, subnet));
     case 'ip-reservations':
@@ -274,10 +312,39 @@ export function transformBreezeRecord(
         typedReservation(record, reservation),
       );
     case 'configuration-policies':
+    case 'configuration-assignments':
     case 'scripts':
     case 'automations':
     case 'backup-configurations':
       return [typedArticle(resource.data, record)];
+    case 'configuration-assignment-relations': {
+      const relations = [typedDependencyRelation(
+        record, resource.data, `${record.id}:policy`, 'configuration-assignments', record.id,
+        'configuration-policies', record.policyId, 'configuration_policy',
+      )];
+      if (record.level === 'site' || record.level === 'device') {
+        const targetResource = record.level === 'site' ? 'sites' : 'devices';
+        relations.push(typedDependencyRelation(
+          record, resource.data, `${record.id}:target`, 'configuration-assignments', record.id,
+          targetResource, record.targetId, 'applies_to',
+        ));
+      }
+      return relations;
+    }
+    case 'automation-relations':
+      return [...record.dependencies]
+        .sort((left: Record<string, any>, right: Record<string, any>) => left.id.localeCompare(right.id))
+        .map((dependency: Record<string, any>) => typedDependencyRelation(
+          record, resource.data, `${record.id}:script:${dependency.id}`, 'automations', record.id,
+          'scripts', dependency.id, 'automation_script',
+        ));
+    case 'backup-configuration-relations':
+      return record.destinationId
+        ? [typedDependencyRelation(
+            record, resource.data, `${record.id}:destination`, 'backup-configurations', record.id,
+            'backup-configurations', record.destinationId, 'backup_destination',
+          )]
+        : [];
     case 'device-relationships':
       return record.edges.map((relationship: Record<string, any>) =>
         typedRelation(record, relationship),
@@ -352,27 +419,178 @@ function typedReservation(
 }
 
 function typedArticle(
-  resource: 'configuration-policies' | 'scripts' | 'automations' | 'backup-configurations',
+  resource: 'configuration-policies' | 'configuration-assignments' | 'scripts' | 'automations' | 'backup-configurations' | 'custom-fields',
   record: BreezeRecordBase & Record<string, any>,
 ): TypedDriverRecord {
-  const markdown = [
-    `# ${record.name}`,
-    record.description ? `\n${record.description}` : '',
-    record.content ? `\n${record.content}` : '',
-    `\nSource revision: ${record.revision}`,
-    `\nSource updated: ${record.sourceUpdatedAt}`,
-  ].join('');
-  const input: ArticleReconstructionInput = {
+  const markdown = renderDesiredConfiguration(resource, record);
+  const input: ArticleReconstructionInput & { folderSlug: string; folderName: string } = {
     targetKind: 'article',
     externalId: namespaced(record.orgId, resource, record.id),
     source: source(record, resource, record.id),
-    title: record.name,
-    slug: `${resource.slice(0, 40)}-${record.id.slice(0, 8)}`,
+    title: boundedTitle(record.name),
+    slug: `${resource}-${record.id}`,
     folderId: null,
+    folderSlug: `breeze-${resource}`,
+    folderName: `Breeze ${resource.split('-').map(titleCase).join(' ')}`,
     markdown,
     visibleToClients: false,
   };
   return { reconstructionInput: input };
+}
+
+function typedDependencyRelation(
+  record: BreezeRecordBase,
+  relationResource: BreezeResourceKey,
+  sourceId: string,
+  fromResource: string,
+  fromId: string,
+  toResource: string,
+  toId: string,
+  relationType: string,
+): TypedDriverRecord {
+  const input: RelationReconstructionInput = {
+    targetKind: 'relation',
+    externalId: namespaced(record.orgId, relationResource, sourceId),
+    source: source(record, relationResource, sourceId),
+    sourceRef: { resourceKey: fromResource, externalId: namespaced(record.orgId, fromResource, fromId) },
+    targetRef: { resourceKey: toResource, externalId: namespaced(record.orgId, toResource, toId) },
+    relationType,
+  };
+  return { reconstructionInput: input };
+}
+
+function isDesiredConfigurationResource(resource: BreezeResourceKey): boolean {
+  return [
+    'configuration-policies', 'configuration-assignments', 'configuration-assignment-relations',
+    'scripts', 'automations', 'automation-relations', 'backup-configurations',
+    'backup-configuration-relations', 'custom-fields', 'custom-field-values',
+    'custom-field-value-relations',
+  ].includes(resource);
+}
+
+function inspectDesiredConfiguration(root: unknown): 'safe' | 'sensitive' | 'bounds_exceeded' {
+  const pending: Array<{ value: unknown; depth: number }> = [{ value: root, depth: 0 }];
+  let visited = 0;
+  while (pending.length > 0) {
+    const { value, depth } = pending.pop()!;
+    visited += 1;
+    if (visited > 10_000 || depth > 32) return 'bounds_exceeded';
+    if (typeof value === 'string') {
+      if (value.length > 12_288 || scanSensitiveMaterial(value) !== 'safe') return 'sensitive';
+      if (/^(?:password|passwd|pwd|secret|token|api[_-]?key|authorization|private[_-]?key|provider[_-]?config|encryption[_-]?key)$/iu.test(value.trim())) return 'sensitive';
+      if (/(?:^|[\s;|&])(?:export\s+|setx?\s+)?["']?\$?(?:env:)?(?:password|passwd|pwd|secret|token|api[_-]?key|authorization|private[_-]?key|provider[_-]?config|encryption[_-]?key)\s*(?:=|:)\s*\S+/imu.test(value)
+        || /ConvertTo-SecureString\s+(?:-String\s+)?(?:"[^"\r\n]+"|'[^'\r\n]+')\s+-AsPlainText/iu.test(value)) return 'sensitive';
+      continue;
+    }
+    if (!value || typeof value !== 'object') continue;
+    if (Array.isArray(value)) {
+      for (const child of value) pending.push({ value: child, depth: depth + 1 });
+      continue;
+    }
+    for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+      const delimited = key.split(/[^A-Za-z0-9]+/u).filter(Boolean).map((part) => part.toLowerCase());
+      const compact = key.replace(/[^A-Za-z0-9]/gu, '').toLowerCase();
+      if ([...delimited, compact].some((token) => FORBIDDEN_CONFIGURATION_KEYS.has(token))) return 'sensitive';
+      pending.push({ value: child, depth: depth + 1 });
+    }
+  }
+  return 'safe';
+}
+
+function renderDesiredConfiguration(
+  resource: 'configuration-policies' | 'configuration-assignments' | 'scripts' | 'automations' | 'backup-configurations' | 'custom-fields',
+  record: BreezeRecordBase & Record<string, any>,
+): string {
+  const lines = [`# ${singleLine(record.name)}`, '', `Source scope: ${singleLine(record.sourceScope)}`];
+  if (record.description) lines.push('', record.description);
+  if (resource === 'configuration-policies') {
+    lines.push(`Status: ${record.status}`, '', '## Policy features');
+    for (const feature of [...record.features].sort((a, b) => a.id.localeCompare(b.id))) {
+      lines.push('', `### ${singleLine(feature.type)} (${feature.id})`, `Policy UUID: ${feature.policyId ?? 'not exported'}`, fencedJson(feature.settings));
+    }
+  } else if (resource === 'configuration-assignments') {
+    lines.push(
+      `Policy: ${singleLine(record.policyName)} (${record.policyId})`, `Target level: ${record.level}`,
+      `Target UUID: ${record.targetId}`, `Priority: ${record.priority}`,
+      `Role filter: ${record.roleFilter?.map(singleLine).join(', ') || 'none'}`,
+      `OS filter: ${record.osFilter?.map(singleLine).join(', ') || 'none'}`,
+      '', record.level === 'site' || record.level === 'device'
+        ? 'The target relation is resolved during the native relation stage.'
+        : 'The exported target has no durable Weavestream asset relation for this target level.',
+    );
+  } else if (resource === 'scripts') {
+    lines.push(
+      `Category: ${record.category ? singleLine(record.category) : 'not exported'}`, `Operating systems: ${record.osTypes.map(singleLine).join(', ') || 'not exported'}`,
+      `Language: ${record.language}`, `Run as: ${record.runAs}`, `Timeout: ${record.timeoutSeconds} seconds`,
+      `Native script version: ${record.version}`, '', '## Parameters', fencedJson(record.parameters),
+      '', '## Rebuild-safe content', fencedCode(record.content, record.language),
+      '', '## Exit-code severity mapping', fencedJson(record.exitCodeSeverityMapping),
+      '', 'Installation sources and post-build validation steps are not exported unless present in the script content.',
+    );
+  } else if (resource === 'automations') {
+    lines.push(`Enabled: ${record.enabled ? 'yes' : 'no'}`, `On failure: ${record.onFailure}`, '', '## Trigger', fencedJson(record.trigger), '', '## Conditions', fencedJson(record.conditions), '', '## Ordered actions');
+    record.actions.forEach((action: unknown, index: number) => lines.push('', `${index + 1}.`, fencedJson(action)));
+    lines.push('', '## Notification targets', fencedJson(record.notificationTargets), '', '## Script dependencies');
+    for (const dependency of [...record.dependencies].sort((a, b) => a.id.localeCompare(b.id))) lines.push(`- ${dependency.id}`);
+  } else if (resource === 'backup-configurations') {
+    lines.push(`Kind: ${record.kind}`);
+    for (const [label, key] of [['Provider', 'provider'], ['Type', 'type'], ['Active', 'active'], ['Default', 'default'], ['Enabled', 'enabled'], ['Compression', 'compression'], ['Encryption', 'encryption'], ['Destination UUID', 'destinationId'], ['Legal hold', 'legalHold'], ['Legal hold reason', 'legalHoldReason'], ['Bandwidth limit Mbps', 'bandwidthLimitMbps'], ['Backup window start', 'backupWindowStart'], ['Backup window end', 'backupWindowEnd'], ['Priority', 'priority']] as const) {
+      if (key in record) lines.push(`${label}: ${displayValue(record[key])}`);
+    }
+    lines.push('', '## Schedule', fencedJson(record.schedule), '', '## Retention', fencedJson(record.retention), '', '## Exclusions', ...record.exclusions.map((item: string) => `- ${singleLine(item)}`), '', '## Restore capabilities', fencedJson(record.restore));
+    if ('selections' in record) lines.push('', '## Selections', fencedJson(record.selections));
+    if ('targets' in record) lines.push('', '## Targets', fencedJson(record.targets));
+    if ('gfs' in record) lines.push('', '## GFS', fencedJson(record.gfs));
+    lines.push('', 'Credentials, provider configuration, encryption keys, job state, snapshots, and restore-job state are not exported.');
+  } else {
+    lines.push(
+      `Field key: ${singleLine(record.fieldKey)}`, `Type: ${record.type}`, `Required: ${record.required ? 'yes' : 'no'}`,
+      `Device types: ${record.deviceTypes?.map(singleLine).join(', ') || 'all exported device types'}`,
+      '', '## Options', fencedJson(record.options), '', '## Default value', fencedJson(record.defaultValue),
+      '', `Value collection: ${record.valueCollection.included}/${record.valueCollection.total} ${record.valueCollection.complete ? 'complete' : 'incomplete (collection limit exceeded)'}`,
+      'Per-device values are stored as separate durable assets and related to their devices.',
+    );
+  }
+  lines.push('', '## Source provenance', `Source UUID: ${record.id}`, `Source revision: ${record.revision}`, `Source fingerprint: ${record.revision}`, `Exported source date: ${record.sourceUpdatedAt}`);
+  const body = lines.join('\n')
+    .replaceAll(MANAGED_START, '&lt;!-- weavestream:breeze:managed:start --&gt;')
+    .replaceAll(MANAGED_END, '&lt;!-- weavestream:breeze:managed:end --&gt;');
+  const markdown = `${MANAGED_START}\n${body}\n${MANAGED_END}`;
+  if (markdown.split(MANAGED_START).length !== 2 || markdown.split(MANAGED_END).length !== 2) {
+    throw new Error('Breeze desired configuration produced invalid managed-region markers.');
+  }
+  if (markdown.length > 500_000) throw new Error('Breeze desired configuration exceeds the native article bound.');
+  return markdown;
+}
+
+function stableJson(value: unknown): string {
+  if (value === null) return 'null';
+  if (typeof value === 'string') return JSON.stringify(value);
+  if (typeof value !== 'object') return String(value);
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
+  return `{${Object.entries(value as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b)).map(([key, child]) => `${JSON.stringify(key)}:${stableJson(child)}`).join(',')}}`;
+}
+
+function fencedJson(value: unknown): string {
+  return fencedCode(stableJson(value), 'json');
+}
+
+function fencedCode(content: string, language: string): string {
+  const longest = Math.max(0, ...(content.match(/`+/gu) ?? []).map((run) => run.length));
+  const fence = '`'.repeat(Math.max(3, longest + 1));
+  return `${fence}${singleLine(language)}\n${content}\n${fence}`;
+}
+
+function singleLine(value: unknown): string {
+  return String(value).replace(/[\r\n\t]+/gu, ' ').replace(/\s{2,}/gu, ' ').trim();
+}
+
+function boundedTitle(value: unknown): string {
+  return [...singleLine(value)].slice(0, 200).join('');
+}
+
+function titleCase(value: string): string {
+  return value.length === 0 ? value : value[0]!.toUpperCase() + value.slice(1);
 }
 
 function typedRelation(

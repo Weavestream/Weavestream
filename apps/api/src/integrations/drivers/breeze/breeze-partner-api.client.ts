@@ -28,6 +28,8 @@ const FAN_OUT_RESOURCES = new Set<BreezeResourceKey>([
   'subnets',
   'ip-reservations',
   'device-relationships',
+  'custom-field-values',
+  'custom-field-value-relations',
 ]);
 
 export type BreezePartnerApiContext = IntegrationContext;

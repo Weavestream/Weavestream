@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { transformBreezeRecord } from '../integrations/drivers/breeze/breeze.transforms.js';
 import { AssetTargetWriter } from '../integrations/reconstruction/asset-target.writer.js';
+import { TextareaStrategy } from '../field-types/strategies/text.strategy.js';
 
 jest.mock('../uploads/uploads.service.js', () => ({
   UploadsService: class UploadsService {},
@@ -96,7 +97,7 @@ function binding(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function setup(options: { target?: unknown; match?: unknown[]; binding?: unknown; auditFails?: boolean } = {}) {
+function setup(options: { target?: unknown; match?: unknown[]; binding?: unknown; auditFails?: boolean; textarea?: boolean } = {}) {
   let committed = false;
   const created = asset();
   const tx = {
@@ -135,7 +136,7 @@ function setup(options: { target?: unknown; match?: unknown[]; binding?: unknown
       : jest.fn().mockResolvedValue(undefined),
   };
   const registry = {
-    get: jest.fn().mockReturnValue({
+    get: jest.fn().mockReturnValue(options.textarea ? new TextareaStrategy() : {
       valueSchema: () => z.string(),
       normalize: (value: unknown) => value,
       toPlaintext: (value: unknown) => String(value),
@@ -173,6 +174,38 @@ const input = {
 };
 
 describe('AssetsService integration system writes', () => {
+  it('writes a maximum safe custom-field value through the real Textarea strategy, writer, and service', async () => {
+    const orgId = '11111111-1111-4111-8111-111111111111';
+    const definitionId = '22222222-2222-4222-8222-222222222222';
+    const deviceId = '33333333-3333-4333-8333-333333333333';
+    const [transformed] = transformBreezeRecord('custom-field-values', {
+      id: definitionId, orgId, siteId: null, sourceUpdatedAt: '2026-07-14T11:00:00.000Z',
+      revision: 'a'.repeat(64), sourceScope: 'organization', name: 'Structured', fieldKey: 'structured',
+      type: 'text', options: null, required: false, defaultValue: null, deviceTypes: null,
+      values: [{ deviceId, value: Array.from({ length: 4 }, (_, index) => `${index}:${'x'.repeat(12_000)}`) }],
+      valueCollection: { total: 1, included: 1, complete: true, reason: null },
+    });
+    if (!transformed || !('fields' in transformed) || !transformed.fields) throw new Error('Expected custom value asset.');
+    const { service, tx } = setup({ textarea: true });
+    const outcome = await new AssetTargetWriter(service).write({
+      tx: tx as never, companyId: ids.company, integrationId: ids.integration,
+      integrationCompanyMappingId: ids.mapping, resourceId: ids.resource,
+      resourceKey: 'custom-field-values', externalOrgId: orgId, auditActorId: ids.actor,
+      now: new Date('2026-07-14T12:00:00.000Z'), dryRun: false,
+      resolveBinding: jest.fn().mockResolvedValue(null),
+    }, {
+      targetKind: 'asset', externalId: `${orgId}:custom-field-values:${definitionId}:${deviceId}`,
+      source: { externalOrgId: orgId, resourceKey: 'custom-field-values', sourceId: `${definitionId}:${deviceId}`, revision: 'a'.repeat(64), fingerprint: 'a'.repeat(64) },
+      name: transformed.displayName ?? 'Structured value', assetLayoutId: ids.layout,
+      externalSource: 'breeze', matchKeyFieldIds: [],
+      fieldValues: [{ targetFieldId: ids.field, value: transformed.fields.value, syncDirection: 'source_wins' }],
+    });
+    expect(outcome).toMatchObject({ change: 'created', targetKind: 'asset' });
+    expect(tx.assetFieldValue.upsert).toHaveBeenCalledWith(expect.objectContaining({
+      create: expect.objectContaining({ value: transformed.fields.value }),
+    }));
+  });
+
   it('creates the exact source asset and audit row in one transaction', async () => {
     const { service, audit, tx } = setup();
     await expect(service.writeFromIntegration(input)).resolves.toMatchObject({

@@ -22,7 +22,7 @@ import {
   type BreezePartnerEnvelope,
   type BreezeResourceKey,
 } from './breeze.schemas.js';
-import { transformBreezeRecord } from './breeze.transforms.js';
+import { BreezeBoundedDefinitionError, BreezeSensitiveDefinitionError, transformBreezeRecord } from './breeze.transforms.js';
 
 interface BreezeClientPort {
   testConnection(ctx: IntegrationContext): Promise<void>;
@@ -149,15 +149,15 @@ const virtualMachineFields = [
   field('sourceFingerprint', 'Source Fingerprint', 'source-fingerprint', 'TEXT'),
 ] as const;
 
-const customFields = [
+const customFieldValueFields = [
   field('breezeId', 'Breeze ID', 'breeze-id', 'TEXT', 'source_wins'),
-  field(
-    'selectedCustomFields',
-    'Selected Custom Fields',
-    'selected-custom-fields',
-    'TEXTAREA',
-    'preserve_manual',
-  ),
+  field('definitionId', 'Definition ID', 'definition-id', 'TEXT', 'source_wins'),
+  field('deviceId', 'Device ID', 'device-id', 'TEXT', 'source_wins'),
+  field('fieldKey', 'Field Key', 'field-key', 'TEXT'),
+  field('fieldName', 'Field Name', 'field-name', 'TEXT'),
+  field('fieldType', 'Field Type', 'field-type', 'TEXT'),
+  field('value', 'Value', 'value', 'TEXTAREA'),
+  field('valueCollection', 'Value Collection', 'value-collection', 'TEXT'),
   field('sourceRevision', 'Source Revision', 'source-revision', 'TEXT'),
   field('sourceFingerprint', 'Source Fingerprint', 'source-fingerprint', 'TEXT'),
 ] as const;
@@ -166,7 +166,6 @@ const deviceDestinationFields = uniqueFields([
   ...deviceIdentityFields,
   ...inventoryFields.map((item) => ({ ...item, mapResource: false as const })),
   ...softwareFields.map((item) => ({ ...item, mapResource: false as const })),
-  ...customFields.map((item) => ({ ...item, mapResource: false as const })),
 ]);
 const siteDestinationFields = uniqueFields([
   ...siteFields,
@@ -208,7 +207,10 @@ export const BREEZE_RECOMMENDED_DESTINATIONS: Readonly<Record<string, Recommende
     },
     fields: virtualMachineFields,
   },
-  'custom-fields': { layout: deviceLayout, fields: customFields },
+  'custom-field-values': {
+    layout: { name: 'Breeze Custom Field Values', slug: 'breeze-custom-field-values', icon: 'list', color: 'cyan' },
+    fields: customFieldValueFields,
+  },
 };
 
 export class BreezeDriver implements IntegrationDriver {
@@ -286,6 +288,14 @@ export class BreezeDriver implements IntegrationDriver {
         folderSlug: 'breeze-configuration-policies',
         visibility: 'internal',
       }),
+      resource('configuration-assignments', 'Configuration assignments', 'article', {
+        sourceEndpoint: '/configuration-assignments',
+        folderSlug: 'breeze-configuration-assignments',
+        visibility: 'internal',
+      }, ['configuration-policies']),
+      resource('configuration-assignment-relations', 'Configuration assignment relations', 'relation', {
+        sourceEndpoint: '/configuration-assignments',
+      }, ['configuration-policies', 'configuration-assignments', 'sites', 'devices']),
       resource('scripts', 'Scripts', 'article', {
         sourceEndpoint: '/scripts',
         folderSlug: 'breeze-scripts',
@@ -302,18 +312,29 @@ export class BreezeDriver implements IntegrationDriver {
         },
         ['scripts'],
       ),
+      resource('automation-relations', 'Automation relations', 'relation', {
+        sourceEndpoint: '/automations',
+      }, ['automations', 'scripts']),
       resource('backup-configurations', 'Backup configurations', 'article', {
         sourceEndpoint: '/backup-configurations',
         folderSlug: 'breeze-backup-configurations',
         visibility: 'internal',
       }),
+      resource('backup-configuration-relations', 'Backup configuration relations', 'relation', {
+        sourceEndpoint: '/backup-configurations',
+      }, ['backup-configurations']),
       resource(
         'custom-fields',
         'Custom fields',
-        'asset',
-        { sourceEndpoint: '/custom-fields', bindingResourceKey: 'devices' },
-        ['devices'],
+        'article',
+        { sourceEndpoint: '/custom-fields', folderSlug: 'breeze-custom-fields', visibility: 'internal' },
       ),
+      resource('custom-field-values', 'Custom field values', 'asset', {
+        sourceEndpoint: '/custom-fields',
+      }, ['devices', 'custom-fields']),
+      resource('custom-field-value-relations', 'Custom field value relations', 'relation', {
+        sourceEndpoint: '/custom-fields',
+      }, ['custom-field-values', 'devices']),
       resource(
         'device-relationships',
         'Device relationships',
@@ -392,7 +413,10 @@ export class BreezeDriver implements IntegrationDriver {
         );
       }
     }
-    const transformed = page.data.flatMap((record) => {
+    const transformed = [] as ReturnType<typeof transformBreezeRecord>;
+    const inlineBlocked: Array<{ id: string; orgId: string }> = [];
+    const boundedBlocked: Array<{ id: string; orgId: string }> = [];
+    for (const record of page.data) {
       if (
         !record ||
         typeof record !== 'object' ||
@@ -400,8 +424,18 @@ export class BreezeDriver implements IntegrationDriver {
       ) {
         throw new Error('Breeze partner API returned a record for a different organization.');
       }
-      return transformBreezeRecord(resource.data, record);
-    });
+      try {
+        transformed.push(...transformBreezeRecord(resource.data, record));
+      } catch (error) {
+        if (error instanceof BreezeSensitiveDefinitionError) {
+          inlineBlocked.push({ id: error.sourceId, orgId: error.orgId });
+        } else if (error instanceof BreezeBoundedDefinitionError) {
+          boundedBlocked.push({ id: error.sourceId, orgId: error.orgId });
+        } else {
+          throw error;
+        }
+      }
+    }
     const records = deduplicateDriverRecords(transformed);
     const highWater = ctx.mode === 'incremental' ? maxSourceUpdatedAt(page.data) : null;
 
@@ -411,7 +445,8 @@ export class BreezeDriver implements IntegrationDriver {
       cursor: page.nextCursor,
       schemaVersion: page.schemaVersion,
       snapshotAt: page.snapshotAt,
-      blockedInputs: (page.blocked ?? []).map((blocked) => ({
+      blockedInputs: [
+        ...(page.blocked ?? []).map((blocked) => ({
         kind: 'secret_blocked' as const,
         externalId: `${blocked.orgId}:${resource.data}:${blocked.id}`,
         message: 'Breeze withheld a record because secret material was detected.',
@@ -422,7 +457,31 @@ export class BreezeDriver implements IntegrationDriver {
           sourceOrgId: blocked.orgId,
           sourceId: blocked.id,
         },
-      })),
+        })),
+        ...inlineBlocked.map((blocked) => ({
+          kind: 'secret_blocked' as const,
+          externalId: `${blocked.orgId}:${resource.data}:${blocked.id}`,
+          message: 'Breeze withheld a record because secret material was detected.',
+          details: {
+            reasonCode: 'secret_detected',
+            fieldPaths: [],
+            sourceResource: resource.data,
+            sourceOrgId: blocked.orgId,
+            sourceId: blocked.id,
+          },
+        })),
+        ...boundedBlocked.map((blocked) => ({
+          kind: 'validation' as const,
+          externalId: `${blocked.orgId}:${resource.data}:${blocked.id}`,
+          message: 'Breeze withheld a record because it exceeds a native field bound.',
+          details: {
+            reasonCode: 'bounded_input',
+            sourceResource: resource.data,
+            sourceOrgId: blocked.orgId,
+            sourceId: blocked.id,
+          },
+        })),
+      ],
       sourceHighWater: highWater,
       terminal: !page.hasMore,
     };

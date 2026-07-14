@@ -248,6 +248,16 @@ describe('BreezeDriver descriptor', () => {
         },
       },
       {
+        key: 'configuration-assignments', targetKind: 'article',
+        dependsOnResourceKeys: ['configuration-policies'],
+        targetConfig: { sourceEndpoint: '/configuration-assignments', folderSlug: 'breeze-configuration-assignments', visibility: 'internal' },
+      },
+      {
+        key: 'configuration-assignment-relations', targetKind: 'relation',
+        dependsOnResourceKeys: ['configuration-policies', 'configuration-assignments', 'sites', 'devices'],
+        targetConfig: { sourceEndpoint: '/configuration-assignments' },
+      },
+      {
         key: 'scripts',
         targetKind: 'article',
         dependsOnResourceKeys: [],
@@ -268,6 +278,10 @@ describe('BreezeDriver descriptor', () => {
         },
       },
       {
+        key: 'automation-relations', targetKind: 'relation',
+        dependsOnResourceKeys: ['automations', 'scripts'], targetConfig: { sourceEndpoint: '/automations' },
+      },
+      {
         key: 'backup-configurations',
         targetKind: 'article',
         dependsOnResourceKeys: [],
@@ -278,10 +292,22 @@ describe('BreezeDriver descriptor', () => {
         },
       },
       {
+        key: 'backup-configuration-relations', targetKind: 'relation',
+        dependsOnResourceKeys: ['backup-configurations'], targetConfig: { sourceEndpoint: '/backup-configurations' },
+      },
+      {
         key: 'custom-fields',
-        targetKind: 'asset',
-        dependsOnResourceKeys: ['devices'],
-        targetConfig: { sourceEndpoint: '/custom-fields', bindingResourceKey: 'devices' },
+        targetKind: 'article',
+        dependsOnResourceKeys: [],
+        targetConfig: { sourceEndpoint: '/custom-fields', folderSlug: 'breeze-custom-fields', visibility: 'internal' },
+      },
+      {
+        key: 'custom-field-values', targetKind: 'asset',
+        dependsOnResourceKeys: ['devices', 'custom-fields'], targetConfig: { sourceEndpoint: '/custom-fields' },
+      },
+      {
+        key: 'custom-field-value-relations', targetKind: 'relation',
+        dependsOnResourceKeys: ['custom-field-values', 'devices'], targetConfig: { sourceEndpoint: '/custom-fields' },
       },
       {
         key: 'device-relationships',
@@ -297,10 +323,16 @@ describe('BreezeDriver descriptor', () => {
           'subnets',
           'ip-reservations',
           'configuration-policies',
+          'configuration-assignments',
+          'configuration-assignment-relations',
           'scripts',
           'automations',
+          'automation-relations',
           'backup-configurations',
+          'backup-configuration-relations',
           'custom-fields',
+          'custom-field-values',
+          'custom-field-value-relations',
         ],
         targetConfig: { sourceEndpoint: '/device-relationships' },
       },
@@ -348,6 +380,259 @@ describe('BreezeDriver descriptor', () => {
 });
 
 describe('Breeze transforms', () => {
+  it('renders exact desired-configuration DTOs as deterministic rebuild-safe Markdown', () => {
+    const policyId = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+    const scriptId = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+    const destinationId = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
+    const article = (resource: Parameters<typeof transformBreezeRecord>[0], value: unknown) =>
+      (transformBreezeRecord(resource, value)[0] as { reconstructionInput: Record<string, any> })
+        .reconstructionInput;
+
+    const policy = article('configuration-policies', {
+      ...base, id: policyId, siteId: null, sourceScope: 'organization', name: 'Server baseline',
+      description: 'Durable desired state', status: 'active',
+      features: [{ id: SEGMENT, type: 'patch', policyId: null, settings: { rebootPolicy: 'if_required' } }],
+    });
+    expect(policy).toMatchObject({
+      slug: `configuration-policies-${policyId}`,
+      folderSlug: 'breeze-configuration-policies',
+      markdown: expect.stringContaining('## Policy features'),
+    });
+    expect(policy.markdown).toContain('rebootPolicy');
+    expect(policy.markdown).toContain(`Source fingerprint: ${REVISION}`);
+    expect(policy.markdown).toContain('<!-- weavestream:breeze:managed:start -->');
+
+    const assignment = article('configuration-assignments', {
+      ...base, id: SEGMENT, siteId: null, policyId, policyName: 'Server baseline',
+      sourceScope: 'organization', level: 'site', targetId: SITE, priority: 10,
+      roleFilter: ['server'], osFilter: ['windows'],
+    });
+    expect(assignment.markdown).toContain('Target level: site');
+    expect(assignment.markdown).toContain('Role filter: server');
+    const assignmentRelations = transformBreezeRecord('configuration-assignment-relations', {
+      ...base, id: SEGMENT, siteId: null, policyId, policyName: 'Server baseline',
+      sourceScope: 'organization', level: 'site', targetId: SITE, priority: 10,
+      roleFilter: ['server'], osFilter: ['windows'],
+    }) as Array<{ reconstructionInput: Record<string, any> }>;
+    expect(assignmentRelations.map(({ reconstructionInput }) => reconstructionInput)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ relationType: 'configuration_policy', targetRef: { resourceKey: 'configuration-policies', externalId: `${ORG}:configuration-policies:${policyId}` } }),
+      expect.objectContaining({ relationType: 'applies_to', targetRef: { resourceKey: 'sites', externalId: `${ORG}:sites:${SITE}` } }),
+    ]));
+
+    const script = article('scripts', {
+      ...base, id: scriptId, siteId: null, sourceScope: 'partner', name: 'Install database',
+      description: 'Rebuild procedure', category: 'build', osTypes: ['linux'], language: 'bash',
+      content: 'dnf install postgresql17', parameters: [{ name: 'cluster', required: true }],
+      timeoutSeconds: 900, runAs: 'elevated', version: 4,
+      exitCodeSeverityMapping: { '0': null, '1': 'high' },
+    });
+    expect(script.markdown).toContain('```bash\ndnf install postgresql17\n```');
+    expect(script.markdown).toContain('## Parameters');
+    expect(script.markdown).toContain('## Exit-code severity mapping');
+
+    const automation = article('automations', {
+      ...base, siteId: null, sourceScope: 'partner', name: 'Rebuild application', description: null,
+      enabled: true, trigger: { type: 'manual' }, conditions: null,
+      actions: [{ type: 'run_script', scriptId }, { type: 'reboot' }], onFailure: 'stop',
+      notificationTargets: null, dependencies: [{ resource: 'scripts', id: scriptId }],
+    });
+    expect(automation.markdown.indexOf('1.')).toBeLessThan(automation.markdown.indexOf('2.'));
+    const automationRelations = transformBreezeRecord('automation-relations', {
+      ...base, siteId: null, sourceScope: 'partner', name: 'Rebuild application', description: null,
+      enabled: true, trigger: { type: 'manual' }, conditions: null,
+      actions: [{ type: 'run_script', scriptId }, { type: 'reboot' }], onFailure: 'stop',
+      notificationTargets: null, dependencies: [{ resource: 'scripts', id: scriptId }],
+    }) as Array<{ reconstructionInput: Record<string, any> }>;
+    expect(automationRelations.map(({ reconstructionInput }) => reconstructionInput)).toEqual([
+      expect.objectContaining({ relationType: 'automation_script', targetRef: { resourceKey: 'scripts', externalId: `${ORG}:scripts:${scriptId}` } }),
+    ]);
+
+    const backup = article('backup-configurations', {
+      ...base, id: destinationId, siteId: null, kind: 'destination', sourceScope: 'organization',
+      name: 'Primary offsite', type: 'system_image', provider: 's3', compression: true,
+      encryption: true, active: true, default: true,
+      schedule: { cron: '0 2 * * *', timezone: 'America/Denver' }, retention: { daily: 14 },
+      exclusions: ['/var/cache'], restore: { types: ['full', 'selective', 'bare_metal'], notes: null },
+    });
+    expect(backup.markdown).toContain('Provider: s3');
+    expect(backup.markdown).toContain('bare_metal');
+    expect(JSON.stringify(backup)).not.toMatch(/providerConfig|encryptionKey|restoreJobs/);
+
+    const profile = article('backup-configurations', {
+      ...base, id: SEGMENT, siteId: null, kind: 'profile', sourceScope: 'partner', name: 'File profile',
+      description: 'Selected files', active: true, selections: { paths: ['/srv/data'] },
+      destinationId: destinationId, schedule: null, retention: null, exclusions: ['*.tmp'],
+      restore: { types: ['selective'], notes: 'Choose the required paths.' },
+    });
+    expect(profile.markdown).toContain('## Selections');
+    expect(profile.markdown).toContain('Choose the required paths.');
+    const policyBackupId = 'abababab-abab-4bab-8bab-abababababab';
+    const policyBackup = article('backup-configurations', {
+      ...base, id: policyBackupId, siteId: null, kind: 'policy', sourceScope: 'organization',
+      name: 'Server backup', enabled: true, destinationId, targets: { roles: ['server'] },
+      schedule: { cron: '0 1 * * *' }, retention: { daily: 14 }, exclusions: [],
+      restore: { types: ['full'], notes: null }, gfs: { monthly: 12 }, legalHold: true,
+      legalHoldReason: 'Case 42', bandwidthLimitMbps: 100, backupWindowStart: '01:00',
+      backupWindowEnd: '05:00', priority: 5,
+    });
+    expect(policyBackup.markdown).toContain('Legal hold: yes');
+    expect(policyBackup.markdown).toContain('## Targets');
+    const backupRelations = transformBreezeRecord('backup-configuration-relations', {
+      ...base, id: policyBackupId, siteId: null, kind: 'policy', sourceScope: 'organization',
+      name: 'Server backup', enabled: true, destinationId, targets: { roles: ['server'] },
+      schedule: null, retention: null, exclusions: [], restore: { types: ['full'], notes: null },
+      gfs: null, legalHold: false, legalHoldReason: null, bandwidthLimitMbps: null,
+      backupWindowStart: null, backupWindowEnd: null, priority: null,
+    }) as Array<{ reconstructionInput: Record<string, any> }>;
+    expect(backupRelations[0]!.reconstructionInput).toMatchObject({
+      relationType: 'backup_destination',
+      targetRef: { resourceKey: 'backup-configurations', externalId: `${ORG}:backup-configurations:${destinationId}` },
+    });
+
+    for (const rendered of [policy, assignment, script, automation, backup]) {
+      expect(rendered.slug.length).toBeLessThanOrEqual(80);
+      expect(rendered.markdown.length).toBeLessThanOrEqual(1_000_000);
+    }
+  });
+
+  it('strictly rejects unreviewed desired-configuration keys and malicious inline secrets', () => {
+    const safeScript = {
+      ...base, siteId: null, sourceScope: 'organization', name: 'Install', description: null,
+      category: null, osTypes: ['linux'], language: 'bash', content: 'true', parameters: null,
+      timeoutSeconds: 30, runAs: 'system', version: 1, exitCodeSeverityMapping: null,
+    };
+    expect(() => transformBreezeRecord('scripts', { ...safeScript, providerConfig: {} })).toThrow();
+    expect(() => transformBreezeRecord('scripts', { ...safeScript, content: 'export TOKEN=hunter2' }))
+      .toThrow(/blocked|secret|sensitive/i);
+    const policy = (settings: Record<string, unknown>) => ({
+      ...base, siteId: null, sourceScope: 'organization', name: 'Safe policy', description: null,
+      status: 'active', features: [{ id: SEGMENT, type: 'settings', policyId: null, settings }],
+    });
+    expect(() => transformBreezeRecord('configuration-policies', policy({
+      tokenize: true, secretary: 'Alice', passwordPolicyEnabled: true,
+    }))).not.toThrow();
+    expect(() => transformBreezeRecord('configuration-policies', policy({ providerConfig: {} })))
+      .toThrow(/blocked|secret|sensitive/i);
+  });
+
+  it('preserves split custom-field definitions and repeated device value pages losslessly', () => {
+    const definitionId = 'ffffffff-ffff-4fff-8fff-ffffffffffff';
+    const definition = transformBreezeRecord('custom-fields', {
+      ...base, id: definitionId, siteId: null, sourceScope: 'partner', name: 'Rack', fieldKey: 'rack',
+      type: 'text', options: null, required: false, defaultValue: null, deviceTypes: ['server'],
+      values: [{ deviceId: DEVICE, value: 'DC1-R07' }, { deviceId: SITE, value: 'DC1-R08' }],
+      valueCollection: { total: 2, included: 2, complete: true, reason: null },
+    })[0] as { reconstructionInput: Record<string, any> };
+    expect(definition.reconstructionInput).toMatchObject({
+      targetKind: 'article', externalId: `${ORG}:custom-fields:${definitionId}`,
+      slug: `custom-fields-${definitionId}`,
+    });
+    const valueRecord = {
+      ...base, id: definitionId, siteId: null, sourceScope: 'partner', name: 'Rack', fieldKey: 'rack',
+      type: 'text', options: null, required: false, defaultValue: null, deviceTypes: ['server'],
+      values: [{ deviceId: DEVICE, value: 'DC1-R07' }, { deviceId: SITE, value: 'DC1-R08' }],
+      valueCollection: { total: 2, included: 2, complete: true, reason: null },
+    };
+    const first = transformBreezeRecord('custom-field-values', valueRecord);
+    const repeated = transformBreezeRecord('custom-field-values', valueRecord);
+    expect(first).toEqual(repeated);
+    expect(first).toHaveLength(2);
+    expect(first).toEqual(expect.arrayContaining([
+      expect.objectContaining({ externalId: `${definitionId}:${DEVICE}`, fields: expect.objectContaining({ definitionId, deviceId: DEVICE }) }),
+    ]));
+    expect(JSON.stringify(first[0])).toContain(definitionId);
+    const relations = transformBreezeRecord('custom-field-value-relations', valueRecord) as Array<{ reconstructionInput: Record<string, any> }>;
+    expect(relations).toHaveLength(2);
+    expect(relations.map(({ reconstructionInput }) => reconstructionInput)).toEqual(expect.arrayContaining([expect.objectContaining({
+      sourceRef: { resourceKey: 'custom-field-values', externalId: `${ORG}:custom-field-values:${definitionId}:${DEVICE}` },
+      targetRef: { resourceKey: 'devices', externalId: `${ORG}:devices:${DEVICE}` },
+    })]));
+  });
+
+  it('bounds legal titles, uses collision-safe fences, and accepts maximum simple cardinalities', () => {
+    const longName = `${'N'.repeat(120)}\n${'M'.repeat(134)}`;
+    const [script] = transformBreezeRecord('scripts', {
+      ...base, siteId: null, sourceScope: 'organization', name: longName, description: null,
+      category: null, osTypes: ['linux'], language: 'bash', content: 'echo "```"', parameters: null,
+      timeoutSeconds: 30, runAs: 'system', version: 1, exitCodeSeverityMapping: null,
+    }) as Array<{ reconstructionInput: Record<string, any> }>;
+    expect(script!.reconstructionInput.title).toHaveLength(200);
+    expect(script!.reconstructionInput.title).not.toMatch(/[\r\n]/u);
+    expect(script!.reconstructionInput.markdown).toContain('````bash\necho "```"\n````');
+
+    const actions = Array.from({ length: 500 }, (_, index) => ({ type: 'step', index }));
+    const [automation] = transformBreezeRecord('automations', {
+      ...base, siteId: null, sourceScope: 'organization', name: 'Maximum automation', description: null,
+      enabled: true, trigger: { type: 'manual' }, conditions: null, actions,
+      onFailure: 'stop', notificationTargets: null, dependencies: [],
+    }) as Array<{ reconstructionInput: Record<string, any> }>;
+    expect(automation!.reconstructionInput.markdown).toContain('500.');
+    expect(automation!.reconstructionInput.markdown.length).toBeLessThanOrEqual(500_000);
+
+    const features = Array.from({ length: 500 }, (_, index) => ({
+      id: `00000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`,
+      type: 'feature', policyId: null, settings: { enabled: true, index },
+    }));
+    const [policy] = transformBreezeRecord('configuration-policies', {
+      ...base, siteId: null, sourceScope: 'organization', name: 'Maximum policy', description: null,
+      status: 'active', features,
+    }) as Array<{ reconstructionInput: Record<string, any> }>;
+    expect(policy!.reconstructionInput.markdown).toContain(features[499]!.id);
+    expect(policy!.reconstructionInput.markdown.length).toBeLessThanOrEqual(500_000);
+
+    const values = Array.from({ length: 500 }, (_, index) => ({
+      deviceId: `00000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`,
+      value: `rack-${index}`,
+    }));
+    const valueRecord = {
+      ...base, siteId: null, sourceScope: 'organization', name: 'Rack', fieldKey: 'rack', type: 'text',
+      options: null, required: false, defaultValue: null, deviceTypes: null, values,
+      valueCollection: { total: 500, included: 500, complete: true, reason: null },
+    };
+    expect(transformBreezeRecord('custom-field-values', valueRecord)).toHaveLength(500);
+    expect(transformBreezeRecord('custom-field-value-relations', valueRecord)).toHaveLength(500);
+  });
+
+  it('blocks an oversized legal Markdown projection at a semantic boundary', () => {
+    const actions = Array.from({ length: 500 }, (_, index) => ({
+      type: 'step', index, instructions: 'x'.repeat(1_100),
+    }));
+    expect(() => transformBreezeRecord('automations', {
+      ...base, siteId: null, sourceScope: 'organization', name: 'Too large', description: null,
+      enabled: true, trigger: { type: 'manual' }, conditions: null, actions,
+      onFailure: 'stop', notificationTargets: null, dependencies: [],
+    })).toThrow(/native article bound/i);
+  });
+
+  it('neutralizes source-supplied managed marker tokens and emits exactly one region', () => {
+    const marker = '<!-- weavestream:breeze:managed:start -->';
+    const [record] = transformBreezeRecord('scripts', {
+      ...base, siteId: null, sourceScope: 'organization', name: `Marker ${marker}`, description: marker,
+      category: null, osTypes: ['linux'], language: 'bash', content: `echo '${marker}'`, parameters: null,
+      timeoutSeconds: 30, runAs: 'system', version: 1, exitCodeSeverityMapping: null,
+    }) as Array<{ reconstructionInput: Record<string, any> }>;
+    const markdown = record!.reconstructionInput.markdown as string;
+    expect(markdown.split('<!-- weavestream:breeze:managed:start -->')).toHaveLength(2);
+    expect(markdown.split('<!-- weavestream:breeze:managed:end -->')).toHaveLength(2);
+    expect(markdown).toContain('&lt;!-- weavestream:breeze:managed:start --&gt;');
+  });
+
+  it('keeps indivisible custom values within the native TEXTAREA bound or blocks the definition', () => {
+    const custom = (value: unknown) => ({
+      ...base, siteId: null, sourceScope: 'organization', name: 'Structured', fieldKey: 'structured',
+      type: 'text', options: null, required: false, defaultValue: null, deviceTypes: null,
+      values: [{ deviceId: DEVICE, value }], valueCollection: completeCollection,
+    });
+    const [valid] = transformBreezeRecord('custom-field-values', custom(
+      Array.from({ length: 4 }, (_, index) => `${index}:${'x'.repeat(12_000)}`),
+    ));
+    const projected = (valid as unknown as { fields: { value: string } }).fields.value;
+    expect(() => new TextareaStrategy().valueSchema().parse(projected)).not.toThrow();
+    expect(() => transformBreezeRecord('custom-field-values', custom(
+      Array.from({ length: 5 }, (_, index) => `${index}:${'x'.repeat(12_000)}`),
+    ))).toThrow(/native field bound/i);
+  });
+
   it('uses stable namespaced identities, strips NUL recursively, and excludes monitoring fields', () => {
     const [record] = transformBreezeRecord('devices', device);
     expect(record).toMatchObject({
@@ -820,21 +1105,27 @@ describe('Breeze transforms', () => {
     ['ip-reservations', deviceInventory],
     [
       'configuration-policies',
-      { ...base, name: 'Policy', description: null, content: 'Desired state' },
+      { ...base, siteId: null, name: 'Policy', description: null, sourceScope: 'organization', status: 'active', features: [] },
     ],
-    ['scripts', { ...base, name: 'Install', description: null, content: 'Install safely' }],
+    ['configuration-assignments', { ...base, siteId: null, policyId: SEGMENT, policyName: 'Policy', sourceScope: 'organization', level: 'site', targetId: SITE, priority: 0, roleFilter: null, osFilter: null }],
+    ['configuration-assignment-relations', { ...base, siteId: null, policyId: SEGMENT, policyName: 'Policy', sourceScope: 'organization', level: 'site', targetId: SITE, priority: 0, roleFilter: null, osFilter: null }],
+    ['scripts', { ...base, siteId: null, sourceScope: 'organization', name: 'Install', description: null, category: null, osTypes: ['linux'], language: 'bash', content: 'true', parameters: null, timeoutSeconds: 30, runAs: 'system', version: 1, exitCodeSeverityMapping: null }],
     [
       'automations',
-      { ...base, name: 'Onboard', description: null, content: 'Run install', scriptIds: [] },
+      { ...base, siteId: null, sourceScope: 'organization', name: 'Onboard', description: null, enabled: true, trigger: { type: 'manual' }, conditions: null, actions: [], onFailure: 'stop', notificationTargets: null, dependencies: [] },
     ],
+    ['automation-relations', { ...base, siteId: null, sourceScope: 'organization', name: 'Onboard', description: null, enabled: true, trigger: { type: 'manual' }, conditions: null, actions: [], onFailure: 'stop', notificationTargets: null, dependencies: [] }],
     [
       'backup-configurations',
-      { ...base, name: 'Backup', description: null, content: 'Nightly backup' },
+      { ...base, siteId: null, kind: 'profile', sourceScope: 'organization', name: 'Backup', description: null, active: true, selections: {}, destinationId: null, schedule: null, retention: null, exclusions: [], restore: { types: [], notes: null } },
     ],
+    ['backup-configuration-relations', { ...base, siteId: null, kind: 'profile', sourceScope: 'organization', name: 'Backup', description: null, active: true, selections: {}, destinationId: null, schedule: null, retention: null, exclusions: [], restore: { types: [], notes: null } }],
     [
       'custom-fields',
-      { ...base, deviceId: DEVICE, fields: [{ key: 'owner', label: 'Owner', value: 'IT' }] },
+      { ...base, siteId: null, sourceScope: 'organization', name: 'Owner', fieldKey: 'owner', type: 'text', options: null, required: false, defaultValue: null, deviceTypes: null, values: [{ deviceId: DEVICE, value: 'IT' }], valueCollection: completeCollection },
     ],
+    ['custom-field-values', { ...base, siteId: null, sourceScope: 'organization', name: 'Owner', fieldKey: 'owner', type: 'text', options: null, required: false, defaultValue: null, deviceTypes: null, values: [{ deviceId: DEVICE, value: 'IT' }], valueCollection: completeCollection }],
+    ['custom-field-value-relations', { ...base, siteId: null, sourceScope: 'organization', name: 'Owner', fieldKey: 'owner', type: 'text', options: null, required: false, defaultValue: null, deviceTypes: null, values: [{ deviceId: DEVICE, value: 'IT' }], valueCollection: completeCollection }],
     [
       'device-relationships',
       {
@@ -940,6 +1231,36 @@ describe('Breeze transforms', () => {
 });
 
 describe('BreezeDriver transport delegation', () => {
+  it('converts a malicious inline definition to a safe blocked input and continues safe records', async () => {
+    const secret = 'Summer2026!';
+    const unsafe = {
+      ...base, siteId: null, sourceScope: 'organization', name: 'Unsafe', description: null,
+      category: null, osTypes: ['linux'], language: 'bash', content: `export TOKEN=${secret}`,
+      parameters: null, timeoutSeconds: 30, runAs: 'system', version: 1,
+      exitCodeSeverityMapping: null,
+    };
+    const safe = { ...unsafe, id: SEGMENT, name: 'Safe', content: 'true' };
+    const client = {
+      testConnection: jest.fn(), listOrganizations: jest.fn(),
+      fetchPage: jest.fn().mockResolvedValue({
+        schemaVersion: '1', snapshotAt: '2026-07-14T12:00:00.000Z', data: [unsafe, safe],
+        nextCursor: null, hasMore: false,
+      }),
+    };
+    const page = await new BreezeDriver(client).fetchRecords(
+      { ...ctx('scripts'), mode: 'full', updatedSince: null }, null,
+    );
+    expect(page.records).toHaveLength(1);
+    expect(page.blockedInputs).toEqual([expect.objectContaining({
+      kind: 'secret_blocked', externalId: `${ORG}:scripts:${DEVICE}`,
+      details: expect.objectContaining({ reasonCode: 'secret_detected', sourceId: DEVICE }),
+    })]);
+    const serialized = JSON.stringify(page);
+    expect(serialized).not.toContain(secret);
+    expect(serialized).not.toContain('export TOKEN');
+    expect(serialized).not.toContain('Unsafe');
+  });
+
   it('keeps 21 maximum-cardinality fan-out parents within two bounded lossless pages', async () => {
     const uuid = (value: number) =>
       `${value.toString(16).padStart(8, '0')}-0000-4000-8000-${value

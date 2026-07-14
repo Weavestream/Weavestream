@@ -1,4 +1,6 @@
 import { ArticlesService } from './articles.service.js';
+import { ArticleTargetWriter } from '../integrations/reconstruction/article-target.writer.js';
+import { transformBreezeRecord } from '../integrations/drivers/breeze/breeze.transforms.js';
 
 const ids = {
   company: '52000000-0000-0000-0000-000000000001',
@@ -8,6 +10,7 @@ const ids = {
   mapping: '52000000-0000-0000-0000-000000000005',
   resource: '52000000-0000-0000-0000-000000000006',
   other: '52000000-0000-0000-0000-000000000007',
+  folder: '52000000-0000-0000-0000-000000000008',
 };
 
 function article(overrides: Record<string, unknown> = {}) {
@@ -46,10 +49,20 @@ function binding(overrides: Record<string, unknown> = {}) {
 
 function setup(options: { bound?: unknown; collision?: unknown; binding?: unknown; auditFails?: boolean } = {}) {
   let committed = false;
+  let createdFolder: Record<string, unknown> | null = null;
   const created = article();
   const updated = article({ markdownSource: '# Updated', revision: 2 });
   const tx = {
+    folder: {
+      findFirst: jest.fn(async () => createdFolder),
+      create: jest.fn(async () => {
+        createdFolder = { id: ids.folder, companyId: ids.company, parentId: null, name: 'Breeze Scripts', slug: 'breeze-scripts', archivedAt: null };
+        return createdFolder;
+      }),
+    },
     article: {
+      findUnique: jest.fn().mockResolvedValue(options.bound ?? null),
+      findFirst: jest.fn().mockResolvedValue(options.collision ?? null),
       create: jest.fn().mockResolvedValue(created),
       updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       findFirstOrThrow: jest.fn().mockResolvedValue(updated),
@@ -106,6 +119,36 @@ const input = {
 };
 
 describe('ArticlesService integration system writes', () => {
+  it('writes an exact Breeze script transform through the real article writer and service', async () => {
+    const orgId = '11111111-1111-4111-8111-111111111111';
+    const sourceId = '22222222-2222-4222-8222-222222222222';
+    const [record] = transformBreezeRecord('scripts', {
+      id: sourceId, orgId, siteId: null, sourceUpdatedAt: '2026-07-14T12:00:00.000Z', revision: 'a'.repeat(64),
+      sourceScope: 'organization', name: 'Install database', description: 'Rebuild procedure',
+      category: 'build', osTypes: ['linux'], language: 'bash', content: 'dnf install postgresql17',
+      parameters: [{ name: 'cluster', required: true }], timeoutSeconds: 900, runAs: 'elevated',
+      version: 4, exitCodeSeverityMapping: { '0': null, '1': 'high' },
+    }) as Array<{ reconstructionInput: any }>;
+    const { service, tx } = setup();
+    const writer = new ArticleTargetWriter(service);
+    const outcome = await writer.write({
+      tx: tx as never, companyId: ids.company, integrationId: ids.integration,
+      integrationCompanyMappingId: ids.mapping, resourceId: ids.resource, resourceKey: 'scripts',
+      externalOrgId: orgId, auditActorId: ids.actor, now: new Date('2026-07-14T12:00:00.000Z'),
+      dryRun: false, resolveBinding: jest.fn().mockResolvedValue(null),
+    }, record!.reconstructionInput);
+    expect(outcome).toMatchObject({ change: 'created', targetKind: 'article' });
+    expect(tx.article.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        folderId: ids.folder,
+        markdownSource: expect.stringContaining('dnf install postgresql17'),
+      }),
+    }));
+    expect(tx.articleVersion.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ version: 1, isDraft: false }),
+    }));
+  });
+
   it('creates a source article, published version, and audit in one transaction', async () => {
     const { service, audit, tx } = setup();
     await expect(service.writeFromIntegration(input)).resolves.toEqual({
@@ -187,5 +230,81 @@ describe('ArticlesService integration system writes', () => {
     await expect(service.writeFromIntegration({ ...input, dryRun: true })).resolves.toMatchObject({ change: 'created' });
     expect(audit.assertIntegrationActor).toHaveBeenCalled();
     expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('preserves manual notes and creates exactly one version for changed managed content', async () => {
+    const oldManaged = '<!-- weavestream:breeze:managed:start -->\n# Old\n<!-- weavestream:breeze:managed:end -->';
+    const manual = '\n\n## Operator notes\nKeep this note and [attachment](upload://manual-1).';
+    const { service, tx } = setup({
+      bound: article({ markdownSource: oldManaged + manual }),
+      binding: binding(),
+    });
+    await expect(service.writeFromIntegration({
+      ...input,
+      existingTargetId: ids.article,
+      markdown: '<!-- weavestream:breeze:managed:start -->\n# New\n<!-- weavestream:breeze:managed:end -->',
+      sourceFingerprintUnchanged: false,
+    })).resolves.toMatchObject({ change: 'updated' });
+    expect(tx.article.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ markdownSource: expect.stringContaining('## Operator notes') }),
+    }));
+    expect(tx.article.updateMany.mock.calls[0]![0].data.markdownSource).toContain('# New');
+    expect(tx.article.updateMany.mock.calls[0]![0].data.markdownSource).toContain('upload://manual-1');
+    expect(tx.articleVersion.create).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not version an unchanged fingerprint merely because the exported date advanced', async () => {
+    const current = '<!-- weavestream:breeze:managed:start -->\n# Runbook\nExported source date: 2026-07-13T00:00:00.000Z\n<!-- weavestream:breeze:managed:end -->\n\nManual note';
+    const { service, tx } = setup({
+      bound: article({ markdownSource: current }),
+      binding: binding(),
+    });
+    await expect(service.writeFromIntegration({
+      ...input,
+      existingTargetId: ids.article,
+      markdown: current.replace('2026-07-13', '2026-07-14'),
+      sourceFingerprintUnchanged: true,
+    })).resolves.toMatchObject({ change: 'unchanged' });
+    expect(tx.article.updateMany).not.toHaveBeenCalled();
+    expect(tx.articleVersion.create).not.toHaveBeenCalled();
+  });
+
+  it('provisions a deterministic internal folder and writes the article into it', async () => {
+    const { service, tx } = setup();
+    await expect(service.writeFromIntegration({
+      ...input,
+      folderSlug: 'breeze-scripts',
+      folderName: 'Breeze Scripts',
+    })).resolves.toMatchObject({ change: 'created' });
+    expect(tx.folder.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ companyId: ids.company, slug: 'breeze-scripts', name: 'Breeze Scripts' }),
+    }));
+    expect(tx.article.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ folderId: ids.folder }),
+    }));
+  });
+
+  it('reuses the first uncommitted folder for two articles sharing one page transaction', async () => {
+    const { service, tx } = setup();
+    const shared = { ...input, tx: tx as never, folderSlug: 'breeze-scripts', folderName: 'Breeze Scripts' };
+    await service.writeFromIntegration(shared);
+    await service.writeFromIntegration({ ...shared, externalId: 'org:articles:second', slug: 'second' });
+    expect(tx.folder.create).toHaveBeenCalledTimes(1);
+    expect(tx.article.create).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    ['missing markers', '# Manual-only bound body'],
+    ['end before start', '<!-- weavestream:breeze:managed:end -->\nmanual\n<!-- weavestream:breeze:managed:start -->'],
+    ['duplicate markers', '<!-- weavestream:breeze:managed:start -->\nA\n<!-- weavestream:breeze:managed:start -->\n<!-- weavestream:breeze:managed:end -->'],
+  ])('fails closed without mutation for %s in a bound source article', async (_label, malformed) => {
+    const { service, tx } = setup({ bound: article({ markdownSource: malformed }), binding: binding() });
+    await expect(service.writeFromIntegration({
+      ...input,
+      existingTargetId: ids.article,
+      markdown: '<!-- weavestream:breeze:managed:start -->\n# New\n<!-- weavestream:breeze:managed:end -->',
+    })).resolves.toMatchObject({ change: 'blocked', gap: { details: { reasonCode: 'managed_region_invalid' } } });
+    expect(tx.article.updateMany).not.toHaveBeenCalled();
+    expect(tx.articleVersion.create).not.toHaveBeenCalled();
   });
 });

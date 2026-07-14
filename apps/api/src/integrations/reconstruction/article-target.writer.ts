@@ -32,6 +32,9 @@ export interface ArticleIntegrationWriteInput {
   title: string;
   slug: string;
   folderId: string | null;
+  folderSlug?: string;
+  folderName?: string;
+  sourceFingerprintUnchanged?: boolean;
   markdown: string;
   visibleToClients: boolean;
 }
@@ -83,6 +86,11 @@ export class ArticleTargetWriter implements ReconstructionWriter<ArticleReconstr
         title: input.title,
         slug: input.slug,
         folderId: input.folderId,
+        folderSlug: input.folderSlug,
+        folderName: input.folderName,
+        sourceFingerprintUnchanged:
+          ctx.previousProvenance?.sourceFingerprint != null &&
+          ctx.previousProvenance.sourceFingerprint === input.source.fingerprint,
         markdown: input.markdown,
         visibleToClients: input.visibleToClients,
       });

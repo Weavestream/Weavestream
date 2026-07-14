@@ -49,6 +49,9 @@ export interface IntegrationArticleWriteInput {
   title: string;
   slug: string;
   folderId: string | null;
+  folderSlug?: string;
+  folderName?: string;
+  sourceFingerprintUnchanged?: boolean;
   markdown: string;
   visibleToClients: boolean;
 }
@@ -665,6 +668,7 @@ export class ArticlesService {
   ): Promise<IntegrationArticleWriteResult> {
     const runTransaction = <T>(callback: (tx: Prisma.TransactionClient) => Promise<T>) =>
       input.tx ? callback(input.tx) : this.prisma.$transaction(callback);
+    const lookupClient = input.tx ?? this.prisma;
     await this.audit.assertIntegrationActor(input.auditActorId, input.companyId);
     let native: Extract<CreateArticleInput, { editorMode: 'markdown' }>;
     try {
@@ -680,7 +684,7 @@ export class ArticlesService {
       return articleBlocked(input.companyId, 'validation', 'Article input failed native validation.', 'native_validation');
     }
     if (native.folderId) {
-      const folder = await this.prisma.folder.findFirst({
+      const folder = await lookupClient.folder.findFirst({
         where: { id: native.folderId, companyId: input.companyId, archivedAt: null },
         select: { id: true },
       });
@@ -691,7 +695,7 @@ export class ArticlesService {
 
     const sourceSlug = native.slug ?? input.slug;
     const bound = input.existingTargetId
-      ? await this.prisma.article.findUnique({ where: { id: input.existingTargetId } })
+      ? await lookupClient.article.findUnique({ where: { id: input.existingTargetId } })
       : null;
     if (bound && bound.companyId !== input.companyId) {
       return { targetId: bound.id, companyId: bound.companyId, change: 'blocked' };
@@ -700,7 +704,7 @@ export class ArticlesService {
       return articleBlocked(input.companyId, 'missing_dependency', 'The bound article no longer exists.', 'target_not_found', input.existingTargetId);
     }
     if (bound && (bound.archivedAt || bound.slug !== sourceSlug)) {
-      const slugOwner = await this.prisma.article.findFirst({
+      const slugOwner = await lookupClient.article.findFirst({
         where: {
           companyId: input.companyId,
           slug: sourceSlug,
@@ -714,13 +718,93 @@ export class ArticlesService {
       }
     }
     if (!bound) {
-      const collision = await this.prisma.article.findFirst({
+      const collision = await lookupClient.article.findFirst({
         where: { companyId: input.companyId, slug: sourceSlug, archivedAt: null },
         select: { id: true },
       });
       if (collision) {
         return articleBlocked(input.companyId, 'ambiguous', 'An unbound article already owns this slug.', 'manual_ownership', collision.id, 1);
       }
+    }
+
+    let managedFolderId = native.folderId ?? null;
+    if (!managedFolderId && input.folderSlug) {
+      const existingFolder = await lookupClient.folder.findFirst({
+        where: {
+          companyId: input.companyId,
+          parentId: null,
+          slug: input.folderSlug,
+          archivedAt: null,
+        },
+        select: { id: true },
+      });
+      managedFolderId = existingFolder?.id ?? null;
+    }
+
+    if (bound && (bound.editorMode !== 'markdown' || bound.markdownSource === null)) {
+      return articleBlocked(
+        input.companyId,
+        'validation',
+        'The source-managed article body is unavailable.',
+        'managed_region_invalid',
+        bound.id,
+      );
+    }
+    const mergedMarkdown = bound?.markdownSource
+      ? mergeIntegrationManagedMarkdown(
+          bound.markdownSource,
+          input.markdown,
+          input.sourceFingerprintUnchanged === true,
+        )
+      : input.markdown;
+    if (mergedMarkdown === null) {
+      return articleBlocked(
+        input.companyId,
+        'validation',
+        'The source-managed article region is missing or malformed.',
+        'managed_region_invalid',
+        bound?.id,
+      );
+    }
+    try {
+      native = createArticleSchema.parse({
+        ...native,
+        folderId: managedFolderId,
+        markdownSource: mergedMarkdown,
+      }) as Extract<CreateArticleInput, { editorMode: 'markdown' }>;
+    } catch {
+      return articleBlocked(input.companyId, 'validation', 'Article input failed native validation.', 'native_validation');
+    }
+
+    if (!managedFolderId && input.folderSlug && !input.dryRun) {
+      const folderSlug = input.folderSlug;
+      const folderName = input.folderName ?? folderSlug;
+      const folder = await runTransaction(async (tx) => {
+        const row = await tx.folder.create({
+          data: {
+            companyId: input.companyId,
+            parentId: null,
+            name: folderName,
+            slug: folderSlug,
+            icon: 'book-open',
+            position: 0,
+            createdBy: input.auditActorId,
+          },
+        });
+        await this.audit.logWithClient(tx, {
+          actorId: input.auditActorId,
+          action: 'folder.create',
+          entityType: 'Folder',
+          entityId: row.id,
+          companyId: input.companyId,
+          ip: INTEGRATION_AUDIT_META.ip,
+          userAgent: INTEGRATION_AUDIT_META.userAgent,
+          after: { integrationId: input.integrationId, slug: row.slug },
+        });
+        return row;
+      });
+      managedFolderId = folder.id;
+      native = { ...native, folderId: managedFolderId };
     }
 
     const body = this.projectArticleBody(native);
@@ -1843,4 +1927,33 @@ function articleBlocked(
       },
     },
   };
+}
+
+const INTEGRATION_MANAGED_START = '<!-- weavestream:breeze:managed:start -->';
+const INTEGRATION_MANAGED_END = '<!-- weavestream:breeze:managed:end -->';
+
+function mergeIntegrationManagedMarkdown(
+  existing: string,
+  incoming: string,
+  fingerprintUnchanged: boolean,
+): string | null {
+  const region = (markdown: string) => {
+    const starts = markdown.split(INTEGRATION_MANAGED_START).length - 1;
+    const ends = markdown.split(INTEGRATION_MANAGED_END).length - 1;
+    const start = markdown.indexOf(INTEGRATION_MANAGED_START);
+    const end = markdown.indexOf(INTEGRATION_MANAGED_END);
+    return { starts, ends, start, end, valid: starts === 1 && ends === 1 && start < end };
+  };
+  const current = region(existing);
+  const next = region(incoming);
+  if (current.starts === 0 && current.ends === 0 && next.starts === 0 && next.ends === 0) return incoming;
+  if (!current.valid || !next.valid) return null;
+  if (fingerprintUnchanged) return existing;
+  const incomingRegion = incoming.slice(
+    next.start,
+    next.end + INTEGRATION_MANAGED_END.length,
+  );
+  return `${existing.slice(0, current.start)}${incomingRegion}${existing.slice(
+    current.end + INTEGRATION_MANAGED_END.length,
+  )}`;
 }

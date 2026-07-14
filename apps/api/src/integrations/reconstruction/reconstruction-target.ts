@@ -99,6 +99,8 @@ export const articleReconstructionInputSchema = z
       .max(80)
       .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
     folderId: z.string().uuid().nullable(),
+    folderSlug: z.string().min(1).max(80).regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/).optional(),
+    folderName: z.string().trim().min(1).max(200).optional(),
     markdown: z.string().min(1).max(1_000_000),
     visibleToClients: z.boolean(),
   })
