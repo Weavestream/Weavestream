@@ -413,6 +413,19 @@ export function sensitiveInputOutcome(
   };
 }
 
+export function boundedInputOutcome(
+  ctx: ReconstructionWriteContext,
+  targetKind: IntegrationTargetKind,
+): ReconstructionWriteOutcome {
+  const outcome = sensitiveInputOutcome(ctx, targetKind);
+  return {
+    ...outcome,
+    gaps: [safeGap('validation', 'Reconstruction input exceeded safe traversal bounds.', {
+      reasonCode: 'input_bounds_exceeded',
+    })],
+  };
+}
+
 function safeBlockedChecksum(ctx: ReconstructionWriteContext): string {
   if (
     ctx.previousProvenance &&

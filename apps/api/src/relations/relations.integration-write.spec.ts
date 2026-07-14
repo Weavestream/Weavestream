@@ -7,6 +7,9 @@ const ids = {
   relation: '53000000-0000-0000-0000-000000000004',
   asset: '53000000-0000-0000-0000-000000000005',
   article: '53000000-0000-0000-0000-000000000006',
+  mapping: '53000000-0000-0000-0000-000000000007',
+  resource: '53000000-0000-0000-0000-000000000008',
+  other: '53000000-0000-0000-0000-000000000009',
 };
 
 function relation(overrides: Record<string, unknown> = {}) {
@@ -24,7 +27,16 @@ function relation(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function setup(options: { bound?: unknown; composite?: unknown; auditFails?: boolean } = {}) {
+function binding(overrides: Record<string, unknown> = {}) {
+  return {
+    integrationCompanyMappingId: ids.mapping, resourceId: ids.resource, externalId: 'org:relations:runbook',
+    companyId: ids.company, targetKind: 'relation', assetId: null, subnetId: null,
+    ipReservationId: null, articleId: null, relationId: ids.relation, state: 'active',
+    provenance: { integrationId: ids.integration, ownership: 'breeze', state: 'active' }, ...overrides,
+  };
+}
+
+function setup(options: { bound?: unknown; composite?: unknown; binding?: unknown; auditFails?: boolean } = {}) {
   let committed = false;
   const tx = {
     relation: {
@@ -32,6 +44,7 @@ function setup(options: { bound?: unknown; composite?: unknown; auditFails?: boo
       deleteMany: jest.fn().mockResolvedValue({ count: 1 }),
       findFirst: jest.fn().mockResolvedValue(relation()),
     },
+    integrationSyncRecord: { findUnique: jest.fn().mockResolvedValue(options.binding ?? null) },
     auditLog: { create: jest.fn() },
   };
   const prisma = {
@@ -43,6 +56,7 @@ function setup(options: { bound?: unknown; composite?: unknown; auditFails?: boo
       findFirst: jest.fn().mockResolvedValue(options.composite ?? null),
       upsert: tx.relation.upsert,
     },
+    integrationSyncRecord: { findUnique: jest.fn().mockResolvedValue(options.binding ?? null) },
     $transaction: jest.fn(async (callback: (client: unknown) => Promise<unknown>) => {
       const result = await callback(tx);
       committed = true;
@@ -63,9 +77,11 @@ function setup(options: { bound?: unknown; composite?: unknown; auditFails?: boo
 const input = {
   companyId: ids.company,
   integrationId: ids.integration,
+  integrationCompanyMappingId: ids.mapping,
+  resourceId: ids.resource,
+  externalId: 'org:relations:runbook',
   auditActorId: ids.actor,
   dryRun: false,
-  ownershipVerified: false,
   sourceType: 'Asset' as const,
   sourceId: ids.asset,
   targetType: 'Article' as const,
@@ -94,11 +110,10 @@ describe('RelationsService integration system writes', () => {
 
   it('returns the exact existing target id without mutating an unchanged verified relation', async () => {
     const existing = relation();
-    const { service, prisma, tx } = setup({ bound: existing, composite: existing });
+    const { service, prisma, tx } = setup({ bound: existing, composite: existing, binding: binding() });
     await expect(service.writeFromIntegration({
       ...input,
       existingTargetId: ids.relation,
-      ownershipVerified: true,
     })).resolves.toEqual({ targetId: ids.relation, companyId: ids.company, change: 'unchanged' });
     expect(prisma.$transaction).not.toHaveBeenCalled();
     expect(tx.relation.upsert).not.toHaveBeenCalled();
@@ -110,17 +125,34 @@ describe('RelationsService integration system writes', () => {
     await expect(service.writeFromIntegration({
       ...input,
       existingTargetId: ids.relation,
-      ownershipVerified: false,
     })).resolves.toMatchObject({ change: 'blocked', gap: { details: { reasonCode: 'manual_ownership' } } });
     expect(tx.relation.deleteMany).not.toHaveBeenCalled();
   });
 
   it('updates a verified relation composite and preserves its exact target id', async () => {
     const existing = relation({ relationType: 'old-type' });
-    const { service } = setup({ bound: existing });
+    const { service } = setup({
+      bound: existing,
+      binding: binding({ state: 'stale', provenance: { integrationId: ids.integration, ownership: 'breeze', state: 'stale' } }),
+    });
     await expect(service.writeFromIntegration({
-      ...input, existingTargetId: ids.relation, ownershipVerified: true,
+      ...input, existingTargetId: ids.relation,
     })).resolves.toEqual({ targetId: ids.relation, companyId: ids.company, change: 'updated' });
+  });
+
+  it.each([
+    ['missing', null], ['wrong mapping', binding({ integrationCompanyMappingId: ids.other })],
+    ['wrong resource', binding({ resourceId: ids.other })], ['wrong external id', binding({ externalId: 'wrong' })],
+    ['wrong kind', binding({ targetKind: 'asset' })], ['wrong id', binding({ relationId: ids.other })],
+    ['wrong company', binding({ companyId: 'other-company' })],
+    ['blocked', binding({ state: 'blocked', provenance: { integrationId: ids.integration, ownership: 'breeze', state: 'blocked' } })],
+    ['manual', binding({ provenance: { integrationId: ids.integration, ownership: 'weavestream', state: 'active' } })],
+  ])('rejects a %s relation binding despite a forged legacy flag', async (_label, persistedBinding) => {
+    const existing = relation({ relationType: 'old-type' });
+    const { service, tx } = setup({ bound: existing, binding: persistedBinding });
+    await expect(service.writeFromIntegration({ ...input, existingTargetId: ids.relation, ownershipVerified: true } as never))
+      .resolves.toMatchObject({ change: 'blocked', gap: { details: { reasonCode: 'manual_ownership' } } });
+    expect(tx.relation.deleteMany).not.toHaveBeenCalled();
   });
 
   it('keeps relation dry-run side-effect free', async () => {

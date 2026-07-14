@@ -207,4 +207,37 @@ describe('AssetTargetWriter', () => {
     expect(out).toMatchObject({ change: 'blocked', gaps: [{ details: { reasonCode: 'manual_ownership' } }] });
     expect(writeFromIntegration).not.toHaveBeenCalled();
   });
+
+  it.each([
+    ['cyclic', () => {
+      const value: Record<string, unknown> = {};
+      value.self = value;
+      return value;
+    }],
+    ['too deep', () => {
+      let value: Record<string, unknown> = {};
+      const root = value;
+      for (let index = 0; index < 9; index += 1) {
+        const child: Record<string, unknown> = {};
+        value.child = child;
+        value = child;
+      }
+      return root;
+    }],
+    ['too many entries', () => Object.fromEntries(
+      Array.from({ length: 1_025 }, (_, index) => [`field${index}`, index]),
+    )],
+  ] as const)('blocks %s field JSON before validation with the safe sentinel', async (_label, makeValue) => {
+    const { writer, writeFromIntegration } = setup();
+    const out = await writer.write(context(), {
+      ...input,
+      fieldValues: [{ ...input.fieldValues[0]!, value: makeValue() }],
+    });
+    expect(out).toMatchObject({
+      change: 'blocked',
+      gaps: [{ kind: 'validation', details: { reasonCode: 'input_bounds_exceeded' } }],
+    });
+    expect(out.checksum).toMatch(/^[a-f0-9]{64}$/);
+    expect(writeFromIntegration).not.toHaveBeenCalled();
+  });
 });

@@ -1,7 +1,8 @@
 import { Injectable } from '@nestjs/common';
-import { containsSensitiveMaterial } from '../sensitive-material.js';
+import { scanSensitiveMaterial } from '../sensitive-material.js';
 import {
   articleReconstructionInputSchema,
+  boundedInputOutcome,
   blockedOutcome,
   completedOutcome,
   contextGap,
@@ -20,10 +21,12 @@ import {
 export interface ArticleIntegrationWriteInput {
   companyId: string;
   integrationId: string;
+  integrationCompanyMappingId: string;
+  resourceId: string;
+  externalId: string;
   auditActorId: string;
   dryRun: boolean;
   existingTargetId?: string | null;
-  ownershipVerified: boolean;
   title: string;
   slug: string;
   folderId: string | null;
@@ -51,7 +54,9 @@ export class ArticleTargetWriter implements ReconstructionWriter<ArticleReconstr
     ctx: ReconstructionWriteContext,
     rawInput: ArticleReconstructionInput,
   ): Promise<ReconstructionWriteOutcome> {
-    if (containsSensitiveMaterial(rawInput)) {
+    const scan = scanSensitiveMaterial(rawInput);
+    if (scan === 'bounds_exceeded') return boundedInputOutcome(ctx, this.targetKind);
+    if (scan === 'sensitive') {
       return sensitiveInputOutcome(ctx, this.targetKind);
     }
     let input: ValidatedReconstructionInput<ArticleReconstructionInput>;
@@ -66,10 +71,12 @@ export class ArticleTargetWriter implements ReconstructionWriter<ArticleReconstr
       const result = await this.articles.writeFromIntegration({
         companyId: ctx.companyId,
         integrationId: ctx.integrationId,
+        integrationCompanyMappingId: ctx.integrationCompanyMappingId,
+        resourceId: ctx.resourceId,
+        externalId: input.externalId,
         auditActorId: ctx.auditActorId,
         dryRun: ctx.dryRun,
         existingTargetId: ctx.existingTargetId,
-        ownershipVerified: ctx.existingTargetId != null,
         title: input.title,
         slug: input.slug,
         folderId: input.folderId,

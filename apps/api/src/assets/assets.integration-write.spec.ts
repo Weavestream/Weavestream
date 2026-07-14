@@ -70,7 +70,25 @@ function asset(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function setup(options: { target?: unknown; match?: unknown[]; auditFails?: boolean } = {}) {
+function binding(overrides: Record<string, unknown> = {}) {
+  return {
+    integrationCompanyMappingId: ids.mapping,
+    resourceId: ids.resource,
+    externalId: 'org-1:devices:edge-01',
+    companyId: ids.company,
+    targetKind: 'asset',
+    assetId: ids.asset,
+    subnetId: null,
+    ipReservationId: null,
+    articleId: null,
+    relationId: null,
+    state: 'active',
+    provenance: { integrationId: ids.integration, ownership: 'breeze', state: 'active' },
+    ...overrides,
+  };
+}
+
+function setup(options: { target?: unknown; match?: unknown[]; binding?: unknown; auditFails?: boolean } = {}) {
   let committed = false;
   const created = asset();
   const tx = {
@@ -83,11 +101,12 @@ function setup(options: { target?: unknown; match?: unknown[]; auditFails?: bool
       deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
     },
     upload: { updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
+    integrationSyncRecord: { findUnique: jest.fn().mockResolvedValue(options.binding ?? null) },
     auditLog: { create: jest.fn() },
   };
   const prisma = {
     assetLayout: { findUnique: jest.fn().mockResolvedValue(layout) },
-    integrationSyncRecord: { findUnique: jest.fn().mockResolvedValue(null) },
+    integrationSyncRecord: { findUnique: jest.fn().mockResolvedValue(options.binding ?? null) },
     asset: {
       findUnique: jest.fn().mockResolvedValue(options.target ?? null),
       findFirst: jest.fn().mockResolvedValue(null),
@@ -136,7 +155,6 @@ const input = {
   resourceId: ids.resource,
   auditActorId: ids.actor,
   dryRun: false,
-  ownershipVerified: false,
   externalId: 'org-1:devices:edge-01',
   externalSource: 'breeze',
   name: 'Edge 01',
@@ -166,13 +184,20 @@ describe('AssetsService integration system writes', () => {
     ['updated', asset(), 'Edge 02'],
     ['restored', asset({ archivedAt: new Date('2026-07-02T00:00:00.000Z') }), 'Edge 01'],
   ] as const)('returns %s for a verified existing source asset', async (change, target, name) => {
-    const { service } = setup({ target });
+    const bindingState = change === 'restored' ? 'stale' : 'active';
+    const { service, tx } = setup({
+      target,
+      binding: binding({
+        state: bindingState,
+        provenance: { integrationId: ids.integration, ownership: 'breeze', state: bindingState },
+      }),
+    });
     await expect(service.writeFromIntegration({
       ...input,
       existingTargetId: ids.asset,
-      ownershipVerified: true,
       name,
     })).resolves.toMatchObject({ targetId: ids.asset, change });
+    expect(tx.integrationSyncRecord.findUnique).toHaveBeenCalled();
   });
 
   it('rejects an arbitrary manual existing asset before mutation', async () => {
@@ -180,8 +205,30 @@ describe('AssetsService integration system writes', () => {
     await expect(service.writeFromIntegration({
       ...input,
       existingTargetId: ids.asset,
-      ownershipVerified: false,
     })).resolves.toMatchObject({ change: 'blocked', gap: { details: { reasonCode: 'manual_ownership' } } });
+    expect(tx.asset.updateMany).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['missing', null],
+    ['wrong mapping', binding({ integrationCompanyMappingId: 'wrong-mapping' })],
+    ['wrong resource', binding({ resourceId: 'wrong-resource' })],
+    ['wrong external id', binding({ externalId: 'wrong-external' })],
+    ['wrong target kind', binding({ targetKind: 'article' })],
+    ['wrong target id', binding({ assetId: ids.manual })],
+    ['wrong company', binding({ companyId: 'other-company' })],
+    ['blocked state', binding({ state: 'blocked', provenance: { integrationId: ids.integration, ownership: 'breeze', state: 'blocked' } })],
+    ['manual provenance', binding({ provenance: { integrationId: ids.integration, ownership: 'weavestream', state: 'active' } })],
+  ])('rejects a %s persisted binding even when a caller forges the legacy flag', async (_label, persistedBinding) => {
+    const { service, tx } = setup({ target: asset(), binding: persistedBinding });
+    await expect(service.writeFromIntegration({
+      ...input,
+      existingTargetId: ids.asset,
+      ownershipVerified: true,
+    } as never)).resolves.toMatchObject({
+      change: 'blocked',
+      gap: { details: { reasonCode: 'manual_ownership' } },
+    });
     expect(tx.asset.updateMany).not.toHaveBeenCalled();
   });
 
@@ -192,6 +239,14 @@ describe('AssetsService integration system writes', () => {
       ...input,
       matchKeyFieldIds: [ids.field],
     })).resolves.toMatchObject({ targetId: ids.asset, change: 'created' });
+  });
+
+  it('blocks a source-compatible match-key candidate without its exact persisted binding', async () => {
+    const candidate = asset();
+    const { service, tx } = setup({ match: [candidate] });
+    await expect(service.writeFromIntegration({ ...input, matchKeyFieldIds: [ids.field] }))
+      .resolves.toMatchObject({ change: 'blocked', gap: { details: { reasonCode: 'manual_ownership' } } });
+    expect(tx.asset.updateMany).not.toHaveBeenCalled();
   });
 
   it('does not commit the asset when transactional audit fails', async () => {
@@ -211,7 +266,7 @@ describe('AssetsService integration system writes', () => {
   it('blocks a verified target from another company and native external-id collision', async () => {
     const wrong = setup({ target: asset({ companyId: 'other-company' }) }).service;
     await expect(wrong.writeFromIntegration({
-      ...input, existingTargetId: ids.asset, ownershipVerified: true,
+      ...input, existingTargetId: ids.asset,
     })).resolves.toMatchObject({ companyId: 'other-company', change: 'blocked' });
 
     const collisionSetup = setup();

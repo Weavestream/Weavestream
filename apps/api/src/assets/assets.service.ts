@@ -33,6 +33,7 @@ import { TagsService } from '../tags/tags.service.js';
 import { buildAssetZodSchema } from './build-asset-schema.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
 import { expandMatchValueVariants } from '../integrations/match-resolver.service.js';
+import { hasEligibleNativeBinding } from '../integrations/reconstruction/native-binding-ownership.js';
 
 export interface AuditMeta {
   ip: string;
@@ -79,7 +80,6 @@ export interface IntegrationAssetWriteInput {
   externalId: string;
   externalSource?: string;
   existingTargetId?: string | null;
-  ownershipVerified: boolean;
   name: string;
   assetLayoutId: string;
   matchKeyFieldIds: string[];
@@ -555,15 +555,6 @@ export class AssetsService {
     input: IntegrationAssetWriteInput,
   ): Promise<IntegrationAssetWriteResult> {
     await this.audit.assertIntegrationActor(input.auditActorId, input.companyId);
-    if (input.existingTargetId && !input.ownershipVerified) {
-      return integrationAssetBlocked(
-        input.companyId,
-        'ambiguous',
-        'The existing asset is not owned by the reconstruction binding.',
-        'manual_ownership',
-        input.existingTargetId,
-      );
-    }
     const layout = await this.loadLayout(input.assetLayoutId);
     if (layout.archivedAt) {
       return integrationAssetBlocked(input.companyId, 'validation', 'The asset layout is archived.', 'layout_archived');
@@ -672,6 +663,9 @@ export class AssetsService {
         target.externalSource !== (input.externalSource ?? null));
     const restored = target?.archivedAt != null;
     if (input.dryRun) {
+      if (target && !(await this.hasEligibleAssetBinding(this.prisma, input, target.id))) {
+        return integrationAssetBlocked(input.companyId, 'ambiguous', 'The existing asset is not owned by an eligible reconstruction binding.', 'manual_ownership', target.id);
+      }
       const dryRunValues = await this.canonicalizeFieldValuesForDryRun(layout, valuesToWrite);
       const fieldsChanged = Object.entries(dryRunValues).some(
         ([slug, value]) => assetFieldChecksum(existingValues[slug]) !== assetFieldChecksum(value),
@@ -760,6 +754,9 @@ export class AssetsService {
     } else {
       targetId = target.id;
       const outcome = await this.prisma.$transaction(async (tx) => {
+        if (!(await this.hasEligibleAssetBinding(tx, input, target.id))) {
+          return { blocked: true as const };
+        }
         const canonicalValues = await this.canonicalizeFieldValues(
           tx,
           layout,
@@ -814,8 +811,11 @@ export class AssetsService {
             after: { integrationId: input.integrationId, change: plannedChange },
           });
         }
-        return { change: plannedChange, canonicalValues };
+        return { blocked: false as const, change: plannedChange, canonicalValues };
       });
+      if (outcome.blocked) {
+        return integrationAssetBlocked(input.companyId, 'ambiguous', 'The existing asset is not owned by an eligible reconstruction binding.', 'manual_ownership', target.id);
+      }
       this.updateIntegrationFieldChecksums(
         directionByFieldId,
         fieldById,
@@ -827,6 +827,22 @@ export class AssetsService {
     }
 
     return { targetId, companyId: input.companyId, change, fieldChecksums };
+  }
+
+  private hasEligibleAssetBinding(
+    client: Parameters<typeof hasEligibleNativeBinding>[0],
+    input: IntegrationAssetWriteInput,
+    targetId: string,
+  ): Promise<boolean> {
+    return hasEligibleNativeBinding(client, {
+      integrationCompanyMappingId: input.integrationCompanyMappingId,
+      resourceId: input.resourceId,
+      externalId: input.externalId,
+      integrationId: input.integrationId,
+      companyId: input.companyId,
+      targetKind: 'asset',
+      targetId,
+    });
   }
 
   // --------------------------------------------------------------------

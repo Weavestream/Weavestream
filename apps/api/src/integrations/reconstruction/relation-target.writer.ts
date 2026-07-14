@@ -1,7 +1,8 @@
 import { Injectable } from '@nestjs/common';
-import { containsSensitiveMaterial } from '../sensitive-material.js';
+import { scanSensitiveMaterial } from '../sensitive-material.js';
 import {
   blockedOutcome,
+  boundedInputOutcome,
   completedOutcome,
   contextGap,
   invalidInputOutcome,
@@ -21,10 +22,12 @@ import {
 export interface RelationIntegrationWriteInput {
   companyId: string;
   integrationId: string;
+  integrationCompanyMappingId: string;
+  resourceId: string;
+  externalId: string;
   auditActorId: string;
   dryRun: boolean;
   existingTargetId?: string | null;
-  ownershipVerified: boolean;
   sourceType: 'Asset' | 'Article';
   sourceId: string;
   targetType: 'Asset' | 'Article';
@@ -52,7 +55,9 @@ export class RelationTargetWriter implements ReconstructionWriter<RelationRecons
     ctx: ReconstructionWriteContext,
     rawInput: RelationReconstructionInput,
   ): Promise<ReconstructionWriteOutcome> {
-    if (containsSensitiveMaterial(rawInput)) {
+    const scan = scanSensitiveMaterial(rawInput);
+    if (scan === 'bounds_exceeded') return boundedInputOutcome(ctx, this.targetKind);
+    if (scan === 'sensitive') {
       return sensitiveInputOutcome(ctx, this.targetKind);
     }
     let input: ValidatedReconstructionInput<RelationReconstructionInput>;
@@ -101,10 +106,12 @@ export class RelationTargetWriter implements ReconstructionWriter<RelationRecons
       const result = await this.relations.writeFromIntegration({
         companyId: ctx.companyId,
         integrationId: ctx.integrationId,
+        integrationCompanyMappingId: ctx.integrationCompanyMappingId,
+        resourceId: ctx.resourceId,
+        externalId: input.externalId,
         auditActorId: ctx.auditActorId,
         dryRun: ctx.dryRun,
         existingTargetId: ctx.existingTargetId,
-        ownershipVerified: ctx.existingTargetId != null,
         sourceType: source.targetKind === 'asset' ? 'Asset' : 'Article',
         sourceId: source.targetId,
         targetType: target.targetKind === 'asset' ? 'Asset' : 'Article',

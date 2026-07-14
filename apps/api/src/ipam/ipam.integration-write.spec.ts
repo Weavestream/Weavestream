@@ -6,6 +6,9 @@ const ids = {
   integration: '51000000-0000-0000-0000-000000000003',
   subnet: '51000000-0000-0000-0000-000000000004',
   reservation: '51000000-0000-0000-0000-000000000005',
+  mapping: '51000000-0000-0000-0000-000000000006',
+  resource: '51000000-0000-0000-0000-000000000007',
+  other: '51000000-0000-0000-0000-000000000008',
 };
 
 function subnetRow(overrides: Record<string, unknown> = {}) {
@@ -29,6 +32,18 @@ function subnetRow(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function binding(targetKind: 'subnet' | 'ip_reservation', overrides: Record<string, unknown> = {}) {
+  const isSubnet = targetKind === 'subnet';
+  return {
+    integrationCompanyMappingId: ids.mapping, resourceId: ids.resource,
+    externalId: isSubnet ? 'org:subnets:lan' : 'org:reservations:printer', companyId: ids.company,
+    targetKind, assetId: null, subnetId: isSubnet ? ids.subnet : null,
+    ipReservationId: isSubnet ? null : ids.reservation, articleId: null, relationId: null,
+    state: 'active', provenance: { integrationId: ids.integration, ownership: 'breeze', state: 'active' },
+    ...overrides,
+  };
+}
+
 function reservationRow(overrides: Record<string, unknown> = {}) {
   return {
     id: ids.reservation,
@@ -45,7 +60,7 @@ function reservationRow(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function setup(options: { subnet?: unknown; reservation?: unknown; subnetCollision?: unknown; reservationCollision?: unknown; auditFails?: boolean } = {}) {
+function setup(options: { subnet?: unknown; reservation?: unknown; subnetCollision?: unknown; reservationCollision?: unknown; binding?: unknown; auditFails?: boolean } = {}) {
   let committed = false;
   const createdSubnet = subnetRow();
   const createdReservation = reservationRow();
@@ -60,6 +75,7 @@ function setup(options: { subnet?: unknown; reservation?: unknown; subnetCollisi
       updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       findFirstOrThrow: jest.fn().mockResolvedValue(options.reservation ?? createdReservation),
     },
+    integrationSyncRecord: { findUnique: jest.fn().mockResolvedValue(options.binding ?? null) },
     auditLog: { create: jest.fn() },
   };
   const prisma = {
@@ -77,6 +93,7 @@ function setup(options: { subnet?: unknown; reservation?: unknown; subnetCollisi
       updateMany: tx.ipReservation.updateMany,
       findFirstOrThrow: tx.ipReservation.findFirstOrThrow,
     },
+    integrationSyncRecord: { findUnique: jest.fn().mockResolvedValue(options.binding ?? null) },
     $transaction: jest.fn(async (callback: (client: unknown) => Promise<unknown>) => {
       const result = await callback(tx);
       committed = true;
@@ -95,9 +112,11 @@ function setup(options: { subnet?: unknown; reservation?: unknown; subnetCollisi
 const subnetInput = {
   companyId: ids.company,
   integrationId: ids.integration,
+  integrationCompanyMappingId: ids.mapping,
+  resourceId: ids.resource,
+  externalId: 'org:subnets:lan',
   auditActorId: ids.actor,
   dryRun: false,
-  ownershipVerified: false,
   name: 'LAN',
   cidr: '10.0.0.42/24',
   gateway: '10.0.0.1',
@@ -124,8 +143,21 @@ describe('IpamService integration system writes', () => {
     await expect(service.writeSubnetFromIntegration({
       ...subnetInput,
       existingTargetId: ids.subnet,
-      ownershipVerified: false,
     })).resolves.toMatchObject({ change: 'blocked', gap: { details: { reasonCode: 'manual_ownership' } } });
+    expect(tx.subnet.updateMany).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['missing', null], ['wrong mapping', binding('subnet', { integrationCompanyMappingId: ids.other })],
+    ['wrong resource', binding('subnet', { resourceId: ids.other })], ['wrong external id', binding('subnet', { externalId: 'wrong' })],
+    ['wrong kind', binding('subnet', { targetKind: 'article' })], ['wrong id', binding('subnet', { subnetId: ids.other })],
+    ['wrong company', binding('subnet', { companyId: 'other-company' })],
+    ['blocked', binding('subnet', { state: 'blocked', provenance: { integrationId: ids.integration, ownership: 'breeze', state: 'blocked' } })],
+    ['manual', binding('subnet', { provenance: { integrationId: ids.integration, ownership: 'weavestream', state: 'active' } })],
+  ])('rejects a %s subnet binding despite a forged legacy flag', async (_label, persistedBinding) => {
+    const { service, tx } = setup({ subnet: subnetRow({ name: 'Old LAN' }), binding: persistedBinding });
+    await expect(service.writeSubnetFromIntegration({ ...subnetInput, existingTargetId: ids.subnet, ownershipVerified: true, name: 'LAN' } as never))
+      .resolves.toMatchObject({ change: 'blocked', gap: { details: { reasonCode: 'manual_ownership' } } });
     expect(tx.subnet.updateMany).not.toHaveBeenCalled();
   });
 
@@ -149,9 +181,11 @@ describe('IpamService integration system writes', () => {
     await expect(service.writeReservationFromIntegration({
       companyId: ids.company,
       integrationId: ids.integration,
+      integrationCompanyMappingId: ids.mapping,
+      resourceId: ids.resource,
+      externalId: 'org:reservations:printer',
       auditActorId: ids.actor,
       dryRun: false,
-      ownershipVerified: false,
       subnetId: ids.subnet,
       ipAddress: '10.0.0.50',
       label: 'Printer',
@@ -164,11 +198,11 @@ describe('IpamService integration system writes', () => {
     ['updated', subnetRow(), 'LAN 2'],
     ['restored', subnetRow({ archivedAt: new Date('2026-07-02T00:00:00.000Z') }), 'LAN'],
   ] as const)('classifies a verified existing subnet as %s', async (change, subnet, name) => {
-    const { service } = setup({ subnet });
+    const state = change === 'restored' ? 'stale' : 'active';
+    const { service } = setup({ subnet, binding: binding('subnet', { state, provenance: { integrationId: ids.integration, ownership: 'breeze', state } }) });
     await expect(service.writeSubnetFromIntegration({
       ...subnetInput,
       existingTargetId: ids.subnet,
-      ownershipVerified: true,
       name,
     })).resolves.toEqual({ targetId: ids.subnet, companyId: ids.company, change });
   });
@@ -178,7 +212,6 @@ describe('IpamService integration system writes', () => {
     await expect(wrong.writeSubnetFromIntegration({
       ...subnetInput,
       existingTargetId: ids.subnet,
-      ownershipVerified: true,
     })).resolves.toMatchObject({ companyId: 'other-company', change: 'blocked' });
     const collision = setup({ subnetCollision: subnetRow() }).service;
     await expect(collision.writeSubnetFromIntegration(subnetInput)).resolves.toMatchObject({
@@ -188,14 +221,19 @@ describe('IpamService integration system writes', () => {
 
   it.each(['updated', 'unchanged'] as const)('classifies a verified reservation as %s', async (change) => {
     const current = reservationRow({ label: change === 'updated' ? 'Old Printer' : 'Printer' });
-    const { service } = setup({ subnet: subnetRow(), reservation: current });
+    const state = change === 'updated' ? 'stale' : 'active';
+    const { service } = setup({
+      subnet: subnetRow(),
+      reservation: current,
+      binding: binding('ip_reservation', { state, provenance: { integrationId: ids.integration, ownership: 'breeze', state } }),
+    });
     await expect(service.writeReservationFromIntegration({
       companyId: ids.company,
       integrationId: ids.integration,
+      integrationCompanyMappingId: ids.mapping, resourceId: ids.resource, externalId: 'org:reservations:printer',
       auditActorId: ids.actor,
       dryRun: false,
       existingTargetId: ids.reservation,
-      ownershipVerified: true,
       subnetId: ids.subnet,
       ipAddress: '10.0.0.50',
       label: 'Printer',
@@ -206,13 +244,13 @@ describe('IpamService integration system writes', () => {
     const dry = setup({ subnet: subnetRow() });
     await expect(dry.service.writeReservationFromIntegration({
       companyId: ids.company, integrationId: ids.integration, auditActorId: ids.actor,
-      dryRun: true, ownershipVerified: false, subnetId: ids.subnet, ipAddress: '10.0.0.50', label: 'Printer',
+      dryRun: true, integrationCompanyMappingId: ids.mapping, resourceId: ids.resource, externalId: 'org:reservations:printer', subnetId: ids.subnet, ipAddress: '10.0.0.50', label: 'Printer',
     })).resolves.toMatchObject({ change: 'created' });
     expect(dry.prisma.$transaction).not.toHaveBeenCalled();
     const collision = setup({ subnet: subnetRow(), reservationCollision: reservationRow() });
     await expect(collision.service.writeReservationFromIntegration({
       companyId: ids.company, integrationId: ids.integration, auditActorId: ids.actor,
-      dryRun: false, ownershipVerified: false, subnetId: ids.subnet, ipAddress: '10.0.0.50', label: 'Printer',
+      dryRun: false, integrationCompanyMappingId: ids.mapping, resourceId: ids.resource, externalId: 'org:reservations:printer', subnetId: ids.subnet, ipAddress: '10.0.0.50', label: 'Printer',
     })).resolves.toMatchObject({ change: 'blocked', gap: { details: { reasonCode: 'manual_ownership' } } });
   });
 
@@ -220,7 +258,7 @@ describe('IpamService integration system writes', () => {
     const manual = setup({ subnet: subnetRow(), reservation: reservationRow() });
     await expect(manual.service.writeReservationFromIntegration({
       companyId: ids.company, integrationId: ids.integration, auditActorId: ids.actor,
-      dryRun: false, existingTargetId: ids.reservation, ownershipVerified: false,
+      dryRun: false, existingTargetId: ids.reservation, integrationCompanyMappingId: ids.mapping, resourceId: ids.resource, externalId: 'org:reservations:printer',
       subnetId: ids.subnet, ipAddress: '10.0.0.50', label: 'Printer',
     })).resolves.toMatchObject({ change: 'blocked', gap: { details: { reasonCode: 'manual_ownership' } } });
     expect(manual.tx.ipReservation.updateMany).not.toHaveBeenCalled();
@@ -228,8 +266,26 @@ describe('IpamService integration system writes', () => {
     const wrong = setup({ subnet: subnetRow(), reservation: reservationRow({ companyId: 'other-company' }) });
     await expect(wrong.service.writeReservationFromIntegration({
       companyId: ids.company, integrationId: ids.integration, auditActorId: ids.actor,
-      dryRun: false, existingTargetId: ids.reservation, ownershipVerified: true,
+      dryRun: false, existingTargetId: ids.reservation, integrationCompanyMappingId: ids.mapping, resourceId: ids.resource, externalId: 'org:reservations:printer',
       subnetId: ids.subnet, ipAddress: '10.0.0.50', label: 'Printer',
     })).resolves.toMatchObject({ companyId: 'other-company', change: 'blocked' });
+  });
+
+  it.each([
+    ['missing', null], ['wrong mapping', binding('ip_reservation', { integrationCompanyMappingId: ids.other })],
+    ['wrong resource', binding('ip_reservation', { resourceId: ids.other })], ['wrong external id', binding('ip_reservation', { externalId: 'wrong' })],
+    ['wrong kind', binding('ip_reservation', { targetKind: 'article' })], ['wrong id', binding('ip_reservation', { ipReservationId: ids.other })],
+    ['wrong company', binding('ip_reservation', { companyId: 'other-company' })],
+    ['blocked', binding('ip_reservation', { state: 'blocked', provenance: { integrationId: ids.integration, ownership: 'breeze', state: 'blocked' } })],
+    ['manual', binding('ip_reservation', { provenance: { integrationId: ids.integration, ownership: 'weavestream', state: 'active' } })],
+  ])('rejects a %s reservation binding despite a forged legacy flag', async (_label, persistedBinding) => {
+    const { service, tx } = setup({ subnet: subnetRow(), reservation: reservationRow({ label: 'Old' }), binding: persistedBinding });
+    await expect(service.writeReservationFromIntegration({
+      companyId: ids.company, integrationId: ids.integration, integrationCompanyMappingId: ids.mapping,
+      resourceId: ids.resource, externalId: 'org:reservations:printer', auditActorId: ids.actor,
+      dryRun: false, existingTargetId: ids.reservation, ownershipVerified: true,
+      subnetId: ids.subnet, ipAddress: '10.0.0.50', label: 'Printer',
+    } as never)).resolves.toMatchObject({ change: 'blocked', gap: { details: { reasonCode: 'manual_ownership' } } });
+    expect(tx.ipReservation.updateMany).not.toHaveBeenCalled();
   });
 });

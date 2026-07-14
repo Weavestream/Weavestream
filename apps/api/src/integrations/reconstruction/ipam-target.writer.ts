@@ -3,9 +3,10 @@ import {
   createIpReservationSchema,
   createSubnetSchema,
 } from '@weavestream/shared';
-import { containsSensitiveMaterial } from '../sensitive-material.js';
+import { scanSensitiveMaterial } from '../sensitive-material.js';
 import {
   blockedOutcome,
+  boundedInputOutcome,
   completedOutcome,
   contextGap,
   ipReservationReconstructionInputSchema,
@@ -27,10 +28,12 @@ import {
 export interface SubnetIntegrationWriteInput {
   companyId: string;
   integrationId: string;
+  integrationCompanyMappingId: string;
+  resourceId: string;
+  externalId: string;
   auditActorId: string;
   dryRun: boolean;
   existingTargetId?: string | null;
-  ownershipVerified: boolean;
   name: string;
   cidr: string;
   vlanId?: number | null;
@@ -43,10 +46,12 @@ export interface SubnetIntegrationWriteInput {
 export interface ReservationIntegrationWriteInput {
   companyId: string;
   integrationId: string;
+  integrationCompanyMappingId: string;
+  resourceId: string;
+  externalId: string;
   auditActorId: string;
   dryRun: boolean;
   existingTargetId?: string | null;
-  ownershipVerified: boolean;
   subnetId: string;
   ipAddress: string;
   label: string;
@@ -86,7 +91,9 @@ export class SubnetTargetWriter implements ReconstructionWriter<SubnetReconstruc
     ctx: ReconstructionWriteContext,
     rawInput: SubnetReconstructionInput,
   ): Promise<ReconstructionWriteOutcome> {
-    if (containsSensitiveMaterial(rawInput)) {
+    const scan = scanSensitiveMaterial(rawInput);
+    if (scan === 'bounds_exceeded') return boundedInputOutcome(ctx, this.targetKind);
+    if (scan === 'sensitive') {
       return sensitiveInputOutcome(ctx, this.targetKind);
     }
     let input: ValidatedReconstructionInput<SubnetReconstructionInput>;
@@ -101,10 +108,12 @@ export class SubnetTargetWriter implements ReconstructionWriter<SubnetReconstruc
       const result = await this.ipam.writeSubnetFromIntegration({
         companyId: ctx.companyId,
         integrationId: ctx.integrationId,
+        integrationCompanyMappingId: ctx.integrationCompanyMappingId,
+        resourceId: ctx.resourceId,
+        externalId: input.externalId,
         auditActorId: ctx.auditActorId,
         dryRun: ctx.dryRun,
         existingTargetId: ctx.existingTargetId,
-        ownershipVerified: ctx.existingTargetId != null,
         name: input.name,
         cidr: input.cidr,
         vlanId: input.vlanId,
@@ -144,7 +153,9 @@ export class IpReservationTargetWriter
     ctx: ReconstructionWriteContext,
     rawInput: IpReservationReconstructionInput,
   ): Promise<ReconstructionWriteOutcome> {
-    if (containsSensitiveMaterial(rawInput)) {
+    const scan = scanSensitiveMaterial(rawInput);
+    if (scan === 'bounds_exceeded') return boundedInputOutcome(ctx, this.targetKind);
+    if (scan === 'sensitive') {
       return sensitiveInputOutcome(ctx, this.targetKind);
     }
     let input: ValidatedReconstructionInput<IpReservationReconstructionInput>;
@@ -182,10 +193,12 @@ export class IpReservationTargetWriter
       const result = await this.ipam.writeReservationFromIntegration({
         companyId: ctx.companyId,
         integrationId: ctx.integrationId,
+        integrationCompanyMappingId: ctx.integrationCompanyMappingId,
+        resourceId: ctx.resourceId,
+        externalId: input.externalId,
         auditActorId: ctx.auditActorId,
         dryRun: ctx.dryRun,
         existingTargetId: ctx.existingTargetId,
-        ownershipVerified: ctx.existingTargetId != null,
         subnetId: subnet.targetId,
         ipAddress: input.ipAddress,
         label: input.label,

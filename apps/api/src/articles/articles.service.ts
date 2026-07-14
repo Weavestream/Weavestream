@@ -29,6 +29,7 @@ import { RelationsService } from '../relations/relations.service.js';
 import { scopedCompanyLookupWhere } from '../ai-tools/entity-scope.js';
 import { diffRemovedUploadIds, extractEmbeddedUploadIds } from './article-uploads.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
+import { hasEligibleNativeBinding } from '../integrations/reconstruction/native-binding-ownership.js';
 
 export interface AuditMeta {
   ip: string;
@@ -38,10 +39,12 @@ export interface AuditMeta {
 export interface IntegrationArticleWriteInput {
   companyId: string;
   integrationId: string;
+  integrationCompanyMappingId: string;
+  resourceId: string;
+  externalId: string;
   auditActorId: string;
   dryRun: boolean;
   existingTargetId?: string | null;
-  ownershipVerified: boolean;
   title: string;
   slug: string;
   folderId: string | null;
@@ -660,9 +663,6 @@ export class ArticlesService {
     input: IntegrationArticleWriteInput,
   ): Promise<IntegrationArticleWriteResult> {
     await this.audit.assertIntegrationActor(input.auditActorId, input.companyId);
-    if (input.existingTargetId && !input.ownershipVerified) {
-      return articleBlocked(input.companyId, 'ambiguous', 'The existing article is not owned by the reconstruction binding.', 'manual_ownership', input.existingTargetId, 1);
-    }
     let native: Extract<CreateArticleInput, { editorMode: 'markdown' }>;
     try {
       native = createArticleSchema.parse({
@@ -737,6 +737,11 @@ export class ArticlesService {
       bound.visibleToClients !== data.visibleToClients ||
       bound.editorMode !== data.editorMode ||
       bound.markdownSource !== data.markdownSource;
+    if (bound && (input.dryRun || (!changed && !restored))) {
+      if (!(await this.hasEligibleArticleBinding(this.prisma, input, bound.id))) {
+        return articleBlocked(input.companyId, 'ambiguous', 'The existing article is not owned by an eligible reconstruction binding.', 'manual_ownership', bound.id, 1);
+      }
+    }
     if (input.dryRun) {
       return {
         targetId: bound?.id ?? '',
@@ -783,7 +788,10 @@ export class ArticlesService {
       });
       change = 'created';
     } else if (changed || restored) {
-      article = await this.prisma.$transaction(async (tx) => {
+      const outcome = await this.prisma.$transaction(async (tx) => {
+        if (!(await this.hasEligibleArticleBinding(tx, input, bound.id))) {
+          return { blocked: true as const };
+        }
         await tx.article.updateMany({
           where: { id: bound.id, companyId: input.companyId },
           data: {
@@ -824,8 +832,12 @@ export class ArticlesService {
           userAgent: INTEGRATION_AUDIT_META.userAgent,
           after: { integrationId: input.integrationId, slug: updated.slug },
         });
-        return updated;
+        return { blocked: false as const, article: updated };
       });
+      if (outcome.blocked) {
+        return articleBlocked(input.companyId, 'ambiguous', 'The existing article is not owned by an eligible reconstruction binding.', 'manual_ownership', bound.id, 1);
+      }
+      article = outcome.article;
       change = restored ? 'restored' : 'updated';
     } else {
       article = bound;
@@ -833,6 +845,22 @@ export class ArticlesService {
     }
 
     return { targetId: article.id, companyId: input.companyId, change };
+  }
+
+  private hasEligibleArticleBinding(
+    client: Parameters<typeof hasEligibleNativeBinding>[0],
+    input: IntegrationArticleWriteInput,
+    targetId: string,
+  ): Promise<boolean> {
+    return hasEligibleNativeBinding(client, {
+      integrationCompanyMappingId: input.integrationCompanyMappingId,
+      resourceId: input.resourceId,
+      externalId: input.externalId,
+      integrationId: input.integrationId,
+      companyId: input.companyId,
+      targetKind: 'article',
+      targetId,
+    });
   }
 
   async move(

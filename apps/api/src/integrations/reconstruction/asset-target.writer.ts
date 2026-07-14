@@ -1,8 +1,9 @@
 import { Injectable } from '@nestjs/common';
 import type { IntegrationSyncDirectionValue } from '@weavestream/shared';
-import { containsSensitiveMaterial } from '../sensitive-material.js';
+import { scanSensitiveMaterial } from '../sensitive-material.js';
 import {
   assetReconstructionInputSchema,
+  boundedInputOutcome,
   blockedOutcome,
   completedOutcome,
   contextGap,
@@ -30,7 +31,6 @@ export interface AssetIntegrationWriteInput {
   externalId: string;
   externalSource?: string;
   existingTargetId?: string | null;
-  ownershipVerified: boolean;
   name: string;
   assetLayoutId: string;
   matchKeyFieldIds: string[];
@@ -62,7 +62,9 @@ export class AssetTargetWriter implements ReconstructionWriter<AssetReconstructi
     ctx: ReconstructionWriteContext,
     rawInput: AssetReconstructionInput,
   ): Promise<ReconstructionWriteOutcome> {
-    if (containsSensitiveMaterial(rawInput)) {
+    const scan = scanSensitiveMaterial(rawInput);
+    if (scan === 'bounds_exceeded') return boundedInputOutcome(ctx, this.targetKind);
+    if (scan === 'sensitive') {
       return sensitiveInputOutcome(ctx, this.targetKind);
     }
     let input: ValidatedReconstructionInput<AssetReconstructionInput>;
@@ -76,7 +78,6 @@ export class AssetTargetWriter implements ReconstructionWriter<AssetReconstructi
     if (identityGap) return blockedOutcome(ctx, input, identityGap);
 
     let existingTargetId = ctx.existingTargetId ?? null;
-    let ownershipVerified = existingTargetId !== null;
     if (input.bindingResourceKey) {
       const binding = await ctx.resolveBinding({
         resourceKey: input.bindingResourceKey,
@@ -115,7 +116,6 @@ export class AssetTargetWriter implements ReconstructionWriter<AssetReconstructi
         );
       }
       existingTargetId = binding.targetId;
-      ownershipVerified = true;
     }
 
     try {
@@ -129,7 +129,6 @@ export class AssetTargetWriter implements ReconstructionWriter<AssetReconstructi
         externalId: input.externalId,
         ...(input.externalSource ? { externalSource: input.externalSource } : {}),
         existingTargetId,
-        ownershipVerified,
         name: input.name,
         assetLayoutId: input.assetLayoutId,
         matchKeyFieldIds: [...input.matchKeyFieldIds],
