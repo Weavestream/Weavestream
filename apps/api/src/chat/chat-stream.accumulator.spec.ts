@@ -110,6 +110,43 @@ describe('ToolCallAccumulator', () => {
     const calls = acc.finalize('stop');
     expect(calls.map((c) => c.name)).toEqual(['update_article', 'create_article']);
   });
+
+  it('separates parallel calls that omit index, keyed by a fresh id (F4)', () => {
+    const acc = new ToolCallAccumulator();
+    acc.ingest([
+      { id: 'c1', function: { name: 'search', arguments: '{"query":"backup"}' } },
+      {
+        id: 'c2',
+        function: { name: 'get_article', arguments: `{"article_id":"${ART}","cursor":null}` },
+      },
+    ]);
+    const calls = acc.finalize('stop');
+    expect(calls.map((c) => c.name)).toEqual(['search', 'get_article']);
+    expect(calls.every((c) => c.status === 'pending')).toBe(true);
+    // finalize() does not strip nulls — stripNullArgs runs later, at apply.
+    expect(calls[1]!.arguments).toEqual({ article_id: ART, cursor: null });
+  });
+
+  it('separates index-less calls by a new name once the current args parse', () => {
+    const acc = new ToolCallAccumulator();
+    // No id at all — split on the second name because the first call's
+    // arguments already form a complete JSON object.
+    acc.ingest([{ function: { name: 'search', arguments: '{"query":"a"}' } }]);
+    acc.ingest([{ function: { name: 'search', arguments: '{"query":"b"}' } }]);
+    const calls = acc.finalize('stop');
+    expect(calls.map((c) => c.name)).toEqual(['search', 'search']);
+    expect(calls.map((c) => c.arguments)).toEqual([{ query: 'a' }, { query: 'b' }]);
+  });
+
+  it('does not split a single index-less call streamed as fragments', () => {
+    const acc = new ToolCallAccumulator();
+    acc.ingest([{ function: { name: 'search' } }]);
+    acc.ingest([{ function: { arguments: '{"query":' } }]);
+    acc.ingest([{ function: { arguments: '"rotation"}' } }]);
+    const calls = acc.finalize('stop');
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.arguments).toEqual({ query: 'rotation' });
+  });
 });
 
 describe('sanitizeIntentPrelude', () => {

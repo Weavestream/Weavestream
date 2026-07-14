@@ -87,10 +87,14 @@ export class AppHelpService {
   }
 
   search(question: string): GetAppHelpToolOutput {
+    // `??` only substitutes null/undefined — an empty or whitespace-only
+    // WEAVESTREAM_VERSION (unset compose interpolation, empty build-arg)
+    // would otherwise yield version: '' and fail the output schema's
+    // .min(1), silently disabling get_app_help. Guard on emptiness.
     return searchAppHelpIndex(
       this.index,
       question,
-      process.env.WEAVESTREAM_VERSION ?? 'dev',
+      process.env.WEAVESTREAM_VERSION?.trim() || 'dev',
     );
   }
 }
@@ -453,8 +457,16 @@ function normalize(value: string): string {
 
 function isUnsupportedLiveStateQuestion(question: string): boolean {
   const q = normalize(question);
+  // Deployment/infra terms only. `container`, `database`, and `sql` were
+  // deliberately dropped from this bare-word list: in an IT-documentation
+  // product they are common asset/software names ("add a SQL Server
+  // asset", "document a database asset", "link a container asset"), so
+  // matching them anywhere wrongly blocked legitimate app-usage help.
+  // Genuine DB/container *deployment* questions still hit docker /
+  // kubernetes / deployment / env-var, and any true infra question with
+  // no matching doc simply scores nothing and returns no matches.
   if (
-    /\b(docker|container|kubernetes|helm|deployment|deploy|database|sql|environment variable|env var|server administration)\b/.test(
+    /\b(docker|kubernetes|helm|deployment|deploy|environment variable|env var|server administration)\b/.test(
       q,
     )
   ) {

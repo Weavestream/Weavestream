@@ -49,9 +49,17 @@ export const TOOL_MSG_PROPOSAL_DEFERRED =
   'Not executed. After reviewing the tool results, propose it again and the user will see an Apply card.';
 export const READ_FAILED_LIMIT_MESSAGE =
   'Not executed — the tool limit for this reply was reached.';
+// Covers BOTH no-basis causes without accusing the model of not reading:
+// (1) it genuinely never read the article this turn, or (2) it read the
+// article but the body was too large to retain in full alongside the rest
+// of the prompt (F8), so no basis was captured. Points at a real recovery
+// path rather than "read it first" (which a re-read would just clamp again).
 export const NO_BASE_BLOCK_MESSAGE =
-  'The assistant proposed editing an article it hadn’t read this turn, ' +
-  'so the proposal was blocked. Ask it to read the article first.';
+  'The assistant could not confirm this article’s current content this turn — ' +
+  'it either did not read the article or the article was too large to load in ' +
+  'full alongside everything else in the conversation — so the edit was blocked ' +
+  'rather than risk overwriting unseen changes. Ask it to read the article first, ' +
+  'or retry in a focused chat on that article with less other context attached.';
 export const PATCH_TARGET_UNAVAILABLE_MESSAGE =
   'The requested article could not be found or is not accessible, so the edit was not proposed.';
 
@@ -101,9 +109,11 @@ export function roundTools(input: {
   readBudget: number;
   hasCompany: boolean;
   anyBasisCaptured: boolean;
+  /** False for CLIENT_USER — withholds get_app_help (F13). Defaults true. */
+  appHelpAllowed?: boolean;
 }): { tools: ToolDef[]; toolChoice: ToolChoice } {
   const tools: ToolDef[] = [
-    ...(input.readBudget > 0 ? readToolDefs(input.hasCompany) : []),
+    ...(input.readBudget > 0 ? readToolDefs(input.hasCompany, input.appHelpAllowed ?? true) : []),
     ...(input.anyBasisCaptured ? toolDefsFor(['patch_article', 'update_article']) : []),
     ...(input.hasCompany ? toolDefsFor(['create_article']) : []),
   ];
@@ -241,6 +251,8 @@ export interface ToolLoopInput {
   tools: ToolDef[];
   toolChoice: ToolChoice;
   hasCompany: boolean;
+  /** False for CLIENT_USER — withholds get_app_help in later rounds (F13). */
+  appHelpAllowed: boolean;
   /** True once any article basis is captured this turn (live view). */
   anyBasisCaptured(): boolean;
   deadline: number;
@@ -278,6 +290,7 @@ export async function runToolLoop(
               readBudget,
               hasCompany: input.hasCompany,
               anyBasisCaptured: input.anyBasisCaptured(),
+              appHelpAllowed: input.appHelpAllowed,
             })
           : { tools: [] as ToolDef[], toolChoice: 'none' as ToolChoice };
     const offerTools = routed.tools.length > 0 && routed.toolChoice !== 'none';
@@ -301,7 +314,7 @@ export async function runToolLoop(
     }
 
     const timeLeft = remainingMs(input.deadline, deps.now());
-    const roundsLeft = round < MAX_TOOL_ROUNDS;
+    const isLastToolRound = round >= MAX_TOOL_ROUNDS;
     const canContinue = timeLeft >= MIN_NEXT_ROUND_MS;
 
     if (!canContinue) {
@@ -312,29 +325,21 @@ export async function runToolLoop(
       return { text, finishReason, settledCalls, proposals };
     }
 
-    if (!roundsLeft) {
-      if (proposals.length > 0) {
-        // Final tool round emitted proposals alongside reads: the user
-        // has visible output (text + cards); no third completion.
-        settledCalls.push(...malformed.map(stripRaw), ...reads.map(limitFailedDto));
-        return { text, finishReason, settledCalls, proposals };
-      }
-      // Reads only at the bound → force-final round with no tools.
-      input.messages.push(assistantToolCallMessage(result.text, result.toolCalls));
-      for (const call of result.toolCalls) {
-        input.messages.push(
-          toolResultMessage(
-            call.id,
-            call.status !== 'pending' ? TOOL_MSG_INVALID_ARGS : TOOL_MSG_LIMIT_REACHED,
-          ),
-        );
-      }
+    if (isLastToolRound && proposals.length > 0) {
+      // Last tool round emitted proposals alongside reads: round
+      // MAX_COMPLETIONS offers no tools, so there is no later round to
+      // re-propose in — return the proposals directly instead of
+      // deferring them into oblivion. The user still has visible output
+      // (text + cards); the unexecuted reads settle as limit-reached.
       settledCalls.push(...malformed.map(stripRaw), ...reads.map(limitFailedDto));
-      continue;
+      return { text, finishReason, settledCalls, proposals };
     }
 
-    // Execute-and-continue. Echo the round's calls, then answer every
-    // single one (protocol validity), executing reads up to the budget.
+    // Execute-and-continue. Rounds 1..MAX_TOOL_ROUNDS all execute reads;
+    // each round's results feed the next completion — the last tool round
+    // feeds the forced-final round MAX_COMPLETIONS, which then answers
+    // with no tools. Echo the round's calls, then answer every single one
+    // (protocol validity), executing reads up to the budget.
     input.messages.push(assistantToolCallMessage(result.text, result.toolCalls));
     const toExecute = new Set(reads.slice(0, Math.max(0, readBudget)));
     for (const call of result.toolCalls) {
@@ -345,6 +350,8 @@ export async function runToolLoop(
       }
       if (isProposalToolName(call.name)) {
         // Deferred — NOT persisted; the model re-proposes next round.
+        // Only reachable before the last tool round: the last round
+        // returns its proposals directly above (no round left to defer to).
         input.messages.push(toolResultMessage(call.id, TOOL_MSG_PROPOSAL_DEFERRED));
         continue;
       }
@@ -407,9 +414,12 @@ export async function runToolLoop(
 }
 
 // ----------------------------------------------------------------------
-// Persist-time revision binding (capture points feed these; nothing is
-// looked up fresh at persist time — a DB read here could refresh a
-// stale basis, the exact TOCTOU the captured map exists to prevent).
+// Persist-time revision binding (capture points feed these; the basis
+// REVISION is never looked up fresh at persist time — a fresh read could
+// refresh a stale basis, the exact TOCTOU the captured map exists to
+// prevent). A company-only resolve for the patch-preview hint is a
+// separate, safe lookup: it never touches the revision and is not an
+// authorization source.
 // ----------------------------------------------------------------------
 
 /**
@@ -439,17 +449,23 @@ export function confirmedSnapshotBases(
 
 /**
  * baseRevision assignment for the FINAL round's article proposals:
- *   captured basis   → pending, guarded at apply on that revision
+ *   captured basis   → pending, guarded at apply on that revision.
+ *                      patch proposals also carry `targetCompanyId` (a
+ *                      preview hint) when the company resolves in scope.
  *   uncaptured but the article resolves in the actor's scope
  *                    → BLOCKED (failed/no_base): the model proposed an
  *                      edit to content it never saw this turn
  *   does not resolve → pending with baseRevision null, serving ONLY
  *                      the Save-as-article create promotion
+ *
+ * `resolveArticleCompany` returns the article's company id within the
+ * actor's tenant scope, or null for not-found/out-of-scope (identical,
+ * to avoid cross-tenant enumeration).
  */
 export async function assignProposalBases(
   proposals: FinalizedToolCall[],
   captured: ReadonlyMap<string, number>,
-  articleResolvesInScope: (articleId: string) => Promise<boolean>,
+  resolveArticleCompany: (articleId: string) => Promise<string | null>,
 ): Promise<ChatToolCallDto[]> {
   const out: ChatToolCallDto[] = [];
   for (const proposal of proposals) {
@@ -463,12 +479,23 @@ export async function assignProposalBases(
         ? proposal.arguments['article_id']
         : null;
     if (articleId && captured.has(articleId)) {
-      out.push({ ...dto, baseRevision: captured.get(articleId)! });
+      const bound: ChatToolCallDto = { ...dto, baseRevision: captured.get(articleId)! };
+      // Attach the target company so the client patch card can fetch the
+      // diff base from a chat with no company shell (F2). Patch only —
+      // rewrites don't fetch by company. This resolves ONLY the company
+      // (never the revision, which stays the captured basis, so the
+      // TOCTOU guard is untouched) and is not an auth source: apply
+      // re-derives the writable company from the article row.
+      if (proposal.name === 'patch_article' && UUID_RE.test(articleId)) {
+        const companyId = await resolveArticleCompany(articleId);
+        if (companyId) bound.targetCompanyId = companyId;
+      }
+      out.push(bound);
       continue;
     }
-    const resolves =
-      articleId && UUID_RE.test(articleId) ? await articleResolvesInScope(articleId) : false;
-    if (resolves) {
+    const companyId =
+      articleId && UUID_RE.test(articleId) ? await resolveArticleCompany(articleId) : null;
+    if (companyId !== null) {
       out.push({
         ...dto,
         status: 'failed',

@@ -112,9 +112,11 @@ export function resolveTurnTools(input: {
   hasCompany: boolean;
   targetArticleRetained: boolean;
   intent?: TurnIntent;
+  /** False for CLIENT_USER — withholds get_app_help (F13). Defaults true. */
+  appHelpAllowed?: boolean;
 }): { tools: ToolDef[]; toolChoice: ToolChoice } {
-  const { hasCompany, targetArticleRetained, intent } = input;
-  const reads = readToolDefs(hasCompany);
+  const { hasCompany, targetArticleRetained, intent, appHelpAllowed = true } = input;
+  const reads = readToolDefs(hasCompany, appHelpAllowed);
 
   // WS-030 widening (deliberate, called out in review): turns that
   // previously got NO tools — no-company chats and explicit questions —

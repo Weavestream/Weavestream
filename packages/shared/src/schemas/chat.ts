@@ -105,6 +105,17 @@ export const chatToolCallSchema = z.object({
    *             (applies unguarded; new rows always set number|null)
    */
   baseRevision: z.number().int().positive().nullable().optional(),
+  /**
+   * PREVIEW HINT ONLY — the company the target article belongs to,
+   * server-resolved (membership-scoped) when a `patch_article` proposal
+   * is persisted with a captured basis. Lets the client patch card fetch
+   * the diff base even from a chat with no company shell (global-admin /
+   * freeform tabs), where page/company context is absent. NEVER an
+   * authorization source: apply re-derives the writable company from the
+   * article row and re-checks `article.write`; the client fetch it feeds
+   * is itself re-authorized server-side.
+   */
+  targetCompanyId: z.string().uuid().nullable().optional(),
 });
 export type ChatToolCallDto = z.infer<typeof chatToolCallSchema>;
 

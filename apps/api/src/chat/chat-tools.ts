@@ -85,10 +85,13 @@ export function toolDefsFor(names: readonly AiToolName[]): ToolDef[] {
 /**
  * Read tools available for a turn. `get_company_summary` is only
  * meaningful (and only resolvable) on a company-scoped chat — its
- * scope comes exclusively from the turn context.
+ * scope comes exclusively from the turn context. `appHelpAllowed` is
+ * false for CLIENT_USER: the app-help corpus is admin/operator how-to a
+ * portal user can't act on (F13), so it is withheld from the offered
+ * set (the executor denies it too, as defense-in-depth).
  */
-export function readToolDefs(hasCompany: boolean): ToolDef[] {
-  return hasCompany
+export function readToolDefs(hasCompany: boolean, appHelpAllowed = true): ToolDef[] {
+  const defs = hasCompany
     ? READ_TOOL_DEFS
     : toolDefsFor([
         'search',
@@ -97,4 +100,5 @@ export function readToolDefs(hasCompany: boolean): ToolDef[] {
         'get_related_items',
         'get_app_help',
       ]);
+  return appHelpAllowed ? defs : defs.filter((t) => t.function.name !== 'get_app_help');
 }

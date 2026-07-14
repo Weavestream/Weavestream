@@ -1,6 +1,6 @@
 {
   "version": "4.6.0",
-  "created": "2026-07-03T12:06:30Z",
+  "created": "2026-07-14T14:50:09Z",
   "files": [
     {
       "path": ".nojekyll"
@@ -665,6 +665,12 @@
     },
     {
       "path": "security/authentication/index.html"
+    },
+    {
+      "path": "security/data-retention.md"
+    },
+    {
+      "path": "security/data-retention/index.html"
     },
     {
       "path": "security/disclosure.md"

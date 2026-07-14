@@ -38,8 +38,14 @@ export const COLOR_CHOICES: ReadonlyArray<{ label: string; value: string }> = [
   { label: 'Yellow', value: '#facc15' },
   { label: 'Sky', value: '#60a5fa' },
   { label: 'Slate', value: 'var(--muted)' },
-  { label: 'Coral', value: '#e0645c' },
-  { label: 'Indigo', value: '#6366f1' },
+  // Theme-aware --layout-* tokens (light + dark ramps live in
+  // styles/tokens.css). Coral/Indigo previously hardcoded hex, so a
+  // saved layout wouldn't adapt between light and dark; Teal's token
+  // shipped with no matching choice at all. Wiring all three keeps the
+  // swatch consistent with the Blue/Amber/Green/Slate var() choices.
+  { label: 'Teal', value: 'var(--layout-teal)' },
+  { label: 'Coral', value: 'var(--layout-coral)' },
+  { label: 'Indigo', value: 'var(--layout-indigo)' },
 ];
 
 export function slugify(s: string): string {

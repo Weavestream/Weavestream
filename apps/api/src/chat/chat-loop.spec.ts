@@ -1,4 +1,6 @@
 import {
+  MAX_COMPLETIONS,
+  MAX_TOOL_ROUNDS,
   NO_BASE_BLOCK_MESSAGE,
   TOOL_RESULT_MAX_CHARS,
   TOOL_RESULT_MIN_CHARS,
@@ -11,8 +13,14 @@ import {
   partitionToolCalls,
   remainingMs,
   roundTools,
+  runToolLoop,
   type FinalizedToolCall,
+  type RoundResult,
+  type ToolLoopDeps,
+  type ToolLoopInput,
+  type UpstreamMessage,
 } from './chat-loop.js';
+import type { AiToolExecutionResult } from '../ai-tools/ai-tool-executor.service.js';
 
 const ART = '4e8c7a52-88a1-4f5e-9b1e-1a2b3c4d5e6f';
 
@@ -73,6 +81,19 @@ describe('roundTools', () => {
       'patch_article',
       'update_article',
     ]);
+  });
+
+  it('withholds get_app_help from CLIENT_USER (appHelpAllowed=false) (F13)', () => {
+    const r = roundTools({
+      readBudget: 3,
+      hasCompany: true,
+      anyBasisCaptured: false,
+      appHelpAllowed: false,
+    });
+    expect(names(r)).not.toContain('get_app_help');
+    // Other read tools stay on the menu.
+    expect(names(r)).toContain('search');
+    expect(names(r)).toContain('get_article');
   });
 });
 
@@ -147,20 +168,24 @@ describe('confirmedSnapshotBases (capture point a)', () => {
 });
 
 describe('assignProposalBases', () => {
-  it('binds a captured basis onto the pending proposal', async () => {
-    const resolver = jest.fn(async () => true);
+  const COMPANY = 'cccccccc-cccc-cccc-cccc-cccccccccccc';
+
+  it('binds a captured basis onto a rewrite proposal without a fresh lookup', async () => {
+    const resolver = jest.fn(async () => COMPANY);
     const out = await assignProposalBases(
       [call('update_article', { arguments: { article_id: ART } })],
       new Map([[ART, 7]]),
       resolver,
     );
     expect(out).toEqual([expect.objectContaining({ status: 'pending', baseRevision: 7 })]);
-    // No fresh lookup for captured bases — persist time is lookup-free.
+    // Rewrites don't fetch by company, so the captured basis stays
+    // lookup-free — the revision is never re-read.
     expect(resolver).not.toHaveBeenCalled();
+    expect(out[0]).not.toHaveProperty('targetCompanyId');
   });
 
-  it('binds a captured basis onto a patch proposal', async () => {
-    const resolver = jest.fn(async () => true);
+  it('binds a captured basis onto a patch proposal and attaches the target company (F2)', async () => {
+    const resolver = jest.fn(async () => COMPANY);
     const out = await assignProposalBases(
       [call('patch_article', { arguments: { article_id: ART, edits: [] } })],
       new Map([[ART, 9]]),
@@ -171,16 +196,32 @@ describe('assignProposalBases', () => {
         name: 'patch_article',
         status: 'pending',
         baseRevision: 9,
+        targetCompanyId: COMPANY,
       }),
     ]);
-    expect(resolver).not.toHaveBeenCalled();
+    // Company-only resolve for the preview hint; the basis revision (9)
+    // still comes from the captured map, never a fresh read.
+    expect(resolver).toHaveBeenCalledTimes(1);
+    expect(resolver).toHaveBeenCalledWith(ART);
+  });
+
+  it('omits targetCompanyId on a captured patch whose company no longer resolves', async () => {
+    const out = await assignProposalBases(
+      [call('patch_article', { arguments: { article_id: ART, edits: [] } })],
+      new Map([[ART, 9]]),
+      jest.fn(async () => null),
+    );
+    expect(out[0]).toEqual(
+      expect.objectContaining({ status: 'pending', baseRevision: 9 }),
+    );
+    expect(out[0]).not.toHaveProperty('targetCompanyId');
   });
 
   it('BLOCKS an uncaptured proposal whose article resolves in scope (never a blind update)', async () => {
     const out = await assignProposalBases(
       [call('update_article', { arguments: { article_id: ART } })],
       new Map(),
-      jest.fn(async () => true),
+      jest.fn(async () => COMPANY),
     );
     expect(out).toEqual([
       expect.objectContaining({
@@ -195,7 +236,7 @@ describe('assignProposalBases', () => {
     const out = await assignProposalBases(
       [call('update_article', { arguments: { article_id: ART } })],
       new Map(),
-      jest.fn(async () => false),
+      jest.fn(async () => null),
     );
     expect(out).toEqual([expect.objectContaining({ status: 'pending', baseRevision: null })]);
   });
@@ -204,7 +245,7 @@ describe('assignProposalBases', () => {
     const out = await assignProposalBases(
       [call('patch_article', { arguments: { article_id: ART, edits: [] } })],
       new Map(),
-      jest.fn(async () => false),
+      jest.fn(async () => null),
     );
     expect(out).toEqual([
       expect.objectContaining({
@@ -217,7 +258,7 @@ describe('assignProposalBases', () => {
   });
 
   it('treats a non-uuid article id as unresolvable without querying', async () => {
-    const resolver = jest.fn(async () => true);
+    const resolver = jest.fn(async () => COMPANY);
     const out = await assignProposalBases(
       [call('update_article', { arguments: { article_id: 'not-a-uuid' } })],
       new Map(),
@@ -231,7 +272,7 @@ describe('assignProposalBases', () => {
     const out = await assignProposalBases(
       [call('create_article', { arguments: { title: 'T', markdown: 'B' } })],
       new Map(),
-      jest.fn(async () => true),
+      jest.fn(async () => COMPANY),
     );
     expect(out).toEqual([
       {
@@ -245,5 +286,106 @@ describe('assignProposalBases', () => {
       },
     ]);
     expect('rawArguments' in out[0]!).toBe(false);
+  });
+});
+
+describe('runToolLoop', () => {
+  // These tests assume the two-execution-round shape (F3): tool rounds
+  // 1..MAX_TOOL_ROUNDS execute reads, round MAX_COMPLETIONS is forced-final.
+  beforeAll(() => {
+    expect(MAX_TOOL_ROUNDS).toBe(2);
+    expect(MAX_COMPLETIONS).toBe(3);
+  });
+
+  function okRead(summary: string, output: Record<string, unknown> = {}): AiToolExecutionResult {
+    return { ok: true, output, payloadJson: JSON.stringify(output), summary };
+  }
+
+  function harness(rounds: RoundResult[]) {
+    const seen = {
+      rounds: [] as Array<{ round: number; offeredTools: boolean; toolChoice: unknown }>,
+      executed: [] as string[],
+      notices: [] as string[],
+    };
+    const deps: ToolLoopDeps = {
+      callRound: async (round, _messages, tools, toolChoice) => {
+        seen.rounds.push({ round, offeredTools: tools !== null, toolChoice });
+        return rounds[round - 1] ?? { text: '', finishReason: 'stop', toolCalls: [] };
+      },
+      executeRead: async (c) => {
+        seen.executed.push(c.name);
+        return okRead(`ran ${c.name}`);
+      },
+      onReadResult: () => {},
+      onToolActivity: () => {},
+      onNotice: (m) => seen.notices.push(m),
+      now: () => 0,
+    };
+    const input: ToolLoopInput = {
+      messages: [{ role: 'user', content: 'hi' }] as UpstreamMessage[],
+      tools: [],
+      toolChoice: 'auto',
+      hasCompany: true,
+      appHelpAllowed: true,
+      anyBasisCaptured: () => false,
+      deadline: 1_000_000,
+      contextWindowTokens: 8_000,
+      maxOutputTokens: 1_000,
+    };
+    return { deps, input, seen };
+  }
+
+  const read = (id: string, name: FinalizedToolCall['name'], args: Record<string, unknown>) =>
+    call(name, { id, arguments: args, rawArguments: JSON.stringify(args) });
+
+  it('executes reads in BOTH tool rounds before the forced-final answer (F3)', async () => {
+    const { deps, input, seen } = harness([
+      { text: 'looking', finishReason: 'tool_calls', toolCalls: [read('r1', 'search', { query: 'a' })] },
+      {
+        text: 'more',
+        finishReason: 'tool_calls',
+        toolCalls: [read('r2', 'get_article', { article_id: ART })],
+      },
+      { text: 'final answer', finishReason: 'stop', toolCalls: [] },
+    ]);
+
+    const outcome = await runToolLoop(deps, input);
+
+    // The regression: the round-2 read is EXECUTED, not dropped as
+    // "tool limit reached". Before the fix only 'search' ran.
+    expect(seen.executed).toEqual(['search', 'get_article']);
+    expect(seen.rounds.map((r) => r.round)).toEqual([1, 2, 3]);
+    // Round 3 is forced-final — no tools offered.
+    expect(seen.rounds[2]).toMatchObject({ round: 3, offeredTools: false, toolChoice: null });
+    expect(outcome.text).toContain('final answer');
+    expect(
+      outcome.settledCalls.filter((c) => c.status === 'executed').map((c) => c.name),
+    ).toEqual(['search', 'get_article']);
+  });
+
+  it('returns a proposal from the last tool round instead of deferring it away', async () => {
+    const { deps, input, seen } = harness([
+      { text: 'reading', finishReason: 'tool_calls', toolCalls: [read('r1', 'search', { query: 'a' })] },
+      {
+        text: 'proposing',
+        finishReason: 'tool_calls',
+        toolCalls: [
+          read('r2', 'search', { query: 'b' }),
+          read('p1', 'update_article', { article_id: ART }),
+        ],
+      },
+    ]);
+
+    const outcome = await runToolLoop(deps, input);
+
+    // Only round 1's read runs; round 2 short-circuits to return the
+    // proposal (round 3 offers no tools to re-propose in).
+    expect(seen.executed).toEqual(['search']);
+    expect(seen.rounds.map((r) => r.round)).toEqual([1, 2]);
+    expect(outcome.proposals.map((p) => p.name)).toEqual(['update_article']);
+    // The unexecuted round-2 read settles as a limit-reached failure.
+    expect(
+      outcome.settledCalls.some((c) => c.name === 'search' && c.errorCode === 'budget'),
+    ).toBe(true);
   });
 });

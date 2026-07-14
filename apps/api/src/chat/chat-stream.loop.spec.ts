@@ -3,7 +3,6 @@ import {
   MAX_READ_CALLS,
   READ_FAILED_LIMIT_MESSAGE,
   TOOL_MSG_INVALID_ARGS,
-  TOOL_MSG_LIMIT_REACHED,
   TOOL_MSG_PROPOSAL_DEFERRED,
   runToolLoop,
   type FinalizedToolCall,
@@ -82,6 +81,7 @@ function makeHarness(rounds: RoundResult[], opts: {
     tools: readToolDefs(true),
     toolChoice: 'auto',
     hasCompany: true,
+    appHelpAllowed: true,
     anyBasisCaptured: () => opts.basisCaptured ?? false,
     deadline: 120_000,
     contextWindowTokens: opts.contextWindowTokens ?? 32_000,
@@ -195,7 +195,7 @@ describe('runToolLoop', () => {
     expect(messages.filter((m) => m.role === 'tool')).toHaveLength(reads.length);
   });
 
-  it('force-finals when the last tool round returns reads only', async () => {
+  it('executes reads in BOTH tool rounds, then force-finals with no tools (F3)', async () => {
     const first = call('search');
     const second = call('search');
     const { deps, input, messages } = makeHarness([
@@ -206,15 +206,13 @@ describe('runToolLoop', () => {
     const out = await runToolLoop(deps, input);
 
     expect(out.text).toBe('forced final answer');
-    // Round 2's read was NOT executed — bound hit; persisted as budget-failed.
-    expect(deps.executeRead).toHaveBeenCalledTimes(1);
+    // Two execution rounds (F3): the round-2 read now runs too, feeding
+    // the forced-final round — it is no longer dropped as budget-failed.
+    expect(deps.executeRead).toHaveBeenCalledTimes(2);
     expect(out.settledCalls).toEqual([
       expect.objectContaining({ id: first.id, status: 'executed' }),
-      expect.objectContaining({ id: second.id, status: 'failed', errorCode: 'budget' }),
+      expect.objectContaining({ id: second.id, status: 'executed' }),
     ]);
-    // It still got a synthetic upstream reply so the protocol holds.
-    const toolMsgs = messages.filter((m) => m.role === 'tool');
-    expect(toolMsgs.map((m) => m.content)).toContain(TOOL_MSG_LIMIT_REACHED);
     // The forced-final round carried no tools at all.
     expect(deps.callRound).toHaveBeenLastCalledWith(3, messages, null, null, {
       leadingSeparator: false,
