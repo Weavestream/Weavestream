@@ -493,6 +493,37 @@ describe('BreezeDriver transport delegation', () => {
     ).rejects.toThrow(/sourceUpdatedAt|incremental|order|snapshot/i);
   });
 
+  it('accepts full pages ordered by UUID rather than sourceUpdatedAt', async () => {
+    const client = {
+      testConnection: jest.fn(),
+      listOrganizations: jest.fn(),
+      fetchPage: jest.fn().mockResolvedValue({
+        schemaVersion: '1',
+        snapshotAt: '2026-07-14T12:00:00.000Z',
+        data: [
+          {
+            ...device,
+            id: '00000000-0000-4000-8000-000000000001',
+            sourceUpdatedAt: '2026-07-14T11:30:00.000Z',
+          },
+          {
+            ...device,
+            id: '00000000-0000-4000-8000-000000000002',
+            sourceUpdatedAt: '2026-07-14T11:00:00.000Z',
+          },
+        ],
+        nextCursor: null,
+        hasMore: false,
+      }),
+    };
+    const page = await new BreezeDriver(client).fetchRecords(
+      { ...ctx(), mode: 'full' },
+      null,
+    );
+    expect(page).toMatchObject({ sourceHighWater: null });
+    expect(page.records).toHaveLength(2);
+  });
+
   it('emits per-page incremental high-water without retaining failed traversal state', async () => {
     const newer = { ...device, sourceUpdatedAt: '2026-07-14T11:30:00.000Z' };
     const client = {

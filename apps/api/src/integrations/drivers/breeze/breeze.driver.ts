@@ -384,7 +384,11 @@ function validatePageOrdering(
     ) {
       throw new Error('Breeze incremental records must be newer than updatedSince.');
     }
-    if (previousMillis !== null && sourceMillis < previousMillis) {
+    if (
+      mode === 'incremental' &&
+      previousMillis !== null &&
+      sourceMillis < previousMillis
+    ) {
       throw new Error('Breeze sourceUpdatedAt values must be ordered within each page.');
     }
     previousMillis = sourceMillis;

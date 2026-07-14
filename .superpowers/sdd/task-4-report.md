@@ -2,7 +2,7 @@
 
 ## Outcome
 
-Added a registered Breeze pull driver backed by the guarded Partner API transport, explicit strict schemas, curated transforms for all twelve destination-oriented resources, safe blocked-input gaps, deterministic recommended site/device destinations, and generic idempotent destination bootstrap. Formal-review hardening now also prevents credential-bearing redirects, persists source revision/fingerprint as provenance, rejects traversal cursor cycles and high-water regression, enforces strict source timestamp bounds/order, and makes destination bootstrap fully transactional. The Breeze documentation logo is reused byte-for-byte.
+Added a registered Breeze pull driver backed by the guarded Partner API transport, explicit strict schemas, curated transforms for all twelve destination-oriented resources, safe blocked-input gaps, deterministic recommended site/device destinations, and generic idempotent destination bootstrap. Formal-review hardening now also prevents credential-bearing redirects, persists source revision/fingerprint as provenance, rejects traversal cursor cycles and high-water regression, enforces strict incremental source timestamp bounds/order while preserving the adjacent full-traversal UUID order, and makes destination bootstrap fully transactional. The Breeze documentation logo is reused byte-for-byte.
 
 ## TDD evidence
 
@@ -14,6 +14,8 @@ Added a registered Breeze pull driver backed by the guarded Partner API transpor
 - Formal-review RED on Node `v24.18.0`: 4 failed suites; 14 failed / 66 passed assertions. The failures covered cross-origin redirects, future/equal/out-of-order timestamps, nonterminal high-water, traversal cursor/high-water regression, missing reconstruction provenance, bootstrap races, inactive layouts, and rollback.
 - First formal-review GREEN: 79/80 assertions passed. The only remaining failure was an obsolete test fixture that returned the old pre-create empty field read; the transactional implementation correctly reads fields only after creation.
 - Final formal-review GREEN: 4/4 focused suites and 80/80 assertions passed; the broader integration run passed 19/19 suites and 297/297 assertions.
+- Re-review RED: a valid full page ordered by UUID with source timestamps `11:30` then `11:00` failed the new regression because timestamp ordering was applied unconditionally.
+- Re-review GREEN: timestamp validity and the snapshot ceiling remain common to both modes, while strict `updatedSince` and nondecreasing timestamp checks now apply only to incremental traversal. The focused review run passed 81/81 and the broader integration run passed 298/298.
 
 ## Implemented
 
@@ -23,7 +25,7 @@ Added a registered Breeze pull driver backed by the guarded Partner API transpor
 - Raw identity/control metadata is strictly parsed before NUL cleanup. Only already-allowlisted text is recursively NUL-stripped, then re-parsed. NUL-corrupted UUIDs reject.
 - Curated asset projections for sites, devices, inventory, software, and custom fields; typed native inputs for subnet, IP reservation, article, and relation resources. No raw payload or monitoring/live-state field is passed downstream.
 - Safe `secret_blocked` gaps retain only bounded source identity, reason, and safe field paths. Cross-organization or wrong-resource blocked metadata rejects.
-- Every record must be at or before the traversal snapshot; incremental records must be strictly newer than `updatedSince` and page timestamps must be nondecreasing. Incremental pages emit their maximum source timestamp, the generic runner retains the traversal maximum in local traversal state for validation, and any page-level high-water regression fails before that page transaction. Nonterminal checkpoints retain only the previously committed high-water; the traversal maximum advances the checkpoint only on terminal completion. Full traversal emits no Breeze incremental high-water.
+- Every record must be at or before the traversal snapshot. Incremental records must additionally be strictly newer than `updatedSince`, and incremental page timestamps must be nondecreasing. Full pages retain the adjacent API's UUID/organization ordering and may therefore carry descending source timestamps. Incremental pages emit their maximum source timestamp, the generic runner retains the traversal maximum in local traversal state for validation, and any page-level high-water regression fails before that page transaction. Nonterminal checkpoints retain only the previously committed high-water; the traversal maximum advances the checkpoint only on terminal completion. Full traversal emits no Breeze incremental high-water.
 - Generic traversal-local cursor tracking is seeded from a resumed cursor and rejects multi-hop cycles before fetching or committing the repeated cursor. The 1,000-page cap remains a secondary bound.
 - Legacy driver records may provide bounded optional source revision/fingerprint metadata. The generic runner promotes it into reconstruction source identity, and the native writer persists it in integration provenance without weakening typed record identity.
 - Exact descriptor resources, target configs, dependencies, `bindingResourceKey` declarations, pull/list-org/dry-run capabilities, static asset catalogs, and registry entry.
@@ -57,6 +59,11 @@ All commands used Node `v24.18.0` through `PATH="$HOME/.nvm/versions/node/v24.18
   - `pnpm --filter @weavestream/api typecheck`
   - `pnpm --filter @weavestream/api exec eslint <all changed integration TypeScript files>`
   - Both passed with zero warnings/errors.
+- Re-review full-order correction:
+  - RED: `NODE_OPTIONS=--experimental-vm-modules pnpm --filter @weavestream/api exec jest --runInBand src/integrations/drivers/breeze/breeze.driver.spec.ts -t "accepts full pages ordered by UUID"` — 1 failed as expected.
+  - Focused GREEN: the four formal-review suites passed 81/81 tests.
+  - Broad GREEN: `src/integrations` passed 19 suites and 298 tests.
+  - API/shared typechecks and focused driver lint passed.
 - Typechecks:
   - `pnpm --filter @weavestream/shared typecheck`
   - `pnpm --filter @weavestream/api typecheck`
