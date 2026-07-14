@@ -80,7 +80,8 @@ const DEVICE = randomUUID();
 const CHAIN_SITE = randomUUID();
 const CHAIN_DEVICE = randomUUID();
 const CHAIN_ADDRESS = randomUUID();
-const CHAIN_SCRIPT = randomUUID();
+// Keep the generated article slug below the intentional high-entropy secret heuristic.
+const CHAIN_SCRIPT = '11111111-1111-4111-8111-111111111112';
 const REVISION = 'a'.repeat(64);
 const SNAPSHOT = '2026-07-14T12:00:00.000Z';
 const UPDATED = '2026-07-14T11:00:00.000Z';
@@ -391,6 +392,190 @@ describeIfDb('Breeze reconstruction disposable PostgreSQL dossier', () => {
     expect(pdf.subarray(-16).toString('ascii')).toContain('%%EOF');
     expect(pdf.length).toBeGreaterThan(5_000);
     await expect(buildCompanyExportPdf(data)).resolves.toEqual(pdf);
+  });
+
+  it('persists distinct configured scalar custom fields on one bound device without last-writer loss', async () => {
+    const resourceId = randomUUID();
+    const rackFieldId = randomUUID();
+    const ownerFieldId = randomUUID();
+    const rackDefinitionId = '10000000-0000-4000-8000-000000000001';
+    const ownerDefinitionId = '10000000-0000-4000-8000-000000000002';
+    const unmappedDefinitionId = '10000000-0000-4000-8000-000000000003';
+    const rackValueId = '20000000-0000-4000-8000-000000000001';
+    const ownerValueId = '20000000-0000-4000-8000-000000000002';
+    const unmappedValueId = '20000000-0000-4000-8000-000000000003';
+
+    await prisma.assetField.createMany({ data: [
+      {
+        id: rackFieldId,
+        assetLayoutId: ids.layout,
+        name: 'Breeze Rack',
+        slug: 'breeze-rack',
+        fieldType: 'TEXT',
+        position: 10,
+        options: {},
+      },
+      {
+        id: ownerFieldId,
+        assetLayoutId: ids.layout,
+        name: 'Breeze Owner',
+        slug: 'breeze-owner',
+        fieldType: 'TEXT',
+        position: 11,
+        options: {},
+      },
+    ] });
+    await prisma.integrationResource.create({ data: {
+      id: resourceId,
+      integrationId: ids.integration,
+      resourceKey: 'custom-field-values',
+      targetKind: 'asset',
+      assetLayoutId: ids.layout,
+      targetConfig: {
+        sourceEndpoint: '/custom-field-values',
+        bindingResourceKey: 'devices',
+      },
+      dependsOnResourceKeys: ['devices'],
+    } });
+    await prisma.integrationFieldMapping.createMany({ data: [
+      {
+        resourceId,
+        sourceField: rackDefinitionId,
+        targetFieldId: rackFieldId,
+        syncDirection: 'source_wins',
+      },
+      {
+        resourceId,
+        sourceField: ownerDefinitionId,
+        targetFieldId: ownerFieldId,
+        syncDirection: 'preserve_manual',
+      },
+    ] });
+
+    const scalar = (
+      id: string,
+      definitionId: string,
+      fieldKey: string,
+      name: string,
+      value: string,
+      sourceUpdatedAt = UPDATED,
+    ) => ({
+      id,
+      orgId: ORG_A,
+      siteId: null,
+      sourceUpdatedAt,
+      revision: REVISION,
+      deviceId: DEVICE,
+      definitionId,
+      target: { type: 'device', id: DEVICE },
+      name,
+      fieldKey,
+      type: 'text',
+      value,
+    });
+    const rack = scalar(rackValueId, rackDefinitionId, 'rack', 'Rack', 'DC1-R07');
+    const owner = scalar(ownerValueId, ownerDefinitionId, 'owner', 'Owner', 'Infrastructure');
+    const unmapped = scalar(
+      unmappedValueId,
+      unmappedDefinitionId,
+      'unmapped',
+      'Unmapped',
+      'must-not-persist',
+    );
+    const { registry } = buildRealWriterRegistry(prisma, audit);
+    const runner = buildRunner(
+      prisma,
+      audit,
+      provenance,
+      new BreezeDriver(new BreezePartnerApiClient()),
+      registry,
+    );
+    const finishRun = (id: string) => prisma.integrationSyncRun.update({
+      where: { id },
+      data: { status: 'succeeded', finishedAt: new Date() },
+    });
+    const run = async (mode: 'full' | 'incremental', rows: unknown[]) => {
+      installFetchScript([{ body: envelope(rows) }]);
+      const syncRunId = await createQueuedRun(prisma, mode);
+      const result = await runner.runMapping({
+        syncRunId,
+        integrationCompanyMappingId: ids.mappingA,
+        resourceId,
+        dryRun: false,
+        actorId: ids.actor,
+        mode,
+      });
+      await finishRun(syncRunId);
+      return result;
+    };
+    const fieldValues = () => prisma.assetFieldValue.findMany({
+      where: { assetId: ids.deviceA, assetFieldId: { in: [rackFieldId, ownerFieldId, ids.field] } },
+      select: { assetFieldId: true, value: true },
+      orderBy: { assetFieldId: 'asc' },
+    });
+
+    await expect(run('full', [rack, owner, unmapped])).resolves.toMatchObject({
+      status: 'succeeded',
+      totals: { updated: 2, unchanged: 0, blocked: 0 },
+    });
+    expect(Object.fromEntries((await fieldValues()).map((row) => [row.assetFieldId, row.value])))
+      .toEqual({
+        [rackFieldId]: 'DC1-R07',
+        [ownerFieldId]: 'Infrastructure',
+        [ids.field]: 'operator-preserved manual field',
+      });
+    const bindings = await prisma.integrationSyncRecord.findMany({
+      where: { resourceId },
+      select: { externalId: true, assetId: true, provenance: true },
+      orderBy: { externalId: 'asc' },
+    });
+    expect(bindings).toHaveLength(2);
+    expect(bindings.map((row) => row.externalId)).toEqual([
+      `${ORG_A}:custom-field-values:${rackValueId}`,
+      `${ORG_A}:custom-field-values:${ownerValueId}`,
+    ].sort());
+    expect(bindings.every((row) => row.assetId === ids.deviceA)).toBe(true);
+    expect(bindings.map((row) => (row.provenance as { externalId: string }).externalId).sort())
+      .toEqual(bindings.map((row) => row.externalId));
+    expect(JSON.stringify(await fieldValues())).not.toContain('must-not-persist');
+
+    await expect(run('full', [rack, owner, unmapped])).resolves.toMatchObject({
+      status: 'succeeded',
+      totals: { updated: 0, unchanged: 2, blocked: 0 },
+    });
+    expect(await prisma.integrationSyncRecord.count({ where: { resourceId } })).toBe(2);
+
+    await prisma.assetFieldValue.update({
+      where: { assetId_assetFieldId: { assetId: ids.deviceA, assetFieldId: ownerFieldId } },
+      data: { value: 'Operator-owned' },
+    });
+    const ownerChanged = {
+      ...owner,
+      value: 'Source overwrite attempt',
+      sourceUpdatedAt: '2026-07-14T11:30:00.000Z',
+      revision: 'b'.repeat(64),
+    };
+    await expect(run('incremental', [ownerChanged])).resolves.toMatchObject({
+      status: 'succeeded',
+      totals: { updated: 0, unchanged: 1, blocked: 0 },
+    });
+    const rackChanged = {
+      ...rack,
+      value: 'DC1-R08',
+      sourceUpdatedAt: '2026-07-14T11:45:00.000Z',
+      revision: 'c'.repeat(64),
+    };
+    await expect(run('incremental', [rackChanged])).resolves.toMatchObject({
+      status: 'succeeded',
+      totals: { updated: 1, unchanged: 0, blocked: 0 },
+    });
+    expect(Object.fromEntries((await fieldValues()).map((row) => [row.assetFieldId, row.value])))
+      .toEqual({
+        [rackFieldId]: 'DC1-R08',
+        [ownerFieldId]: 'Operator-owned',
+        [ids.field]: 'operator-preserved manual field',
+      });
+    expect(await prisma.integrationSyncRecord.count({ where: { resourceId } })).toBe(2);
   });
 
   it('fails closed at runner, native-writer, admin-read, provenance, and export boundaries across companies', async () => {

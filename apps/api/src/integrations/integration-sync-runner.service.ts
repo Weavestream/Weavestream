@@ -397,12 +397,13 @@ export class IntegrationSyncRunnerService {
           }
           for (const record of page.records) {
             pageTotals.fetched += 1;
-            let reconstruction: ReconstructionInput;
+            let reconstruction: ReconstructionInput | null;
             const safeRecord = record.reconstructionInput === undefined
               ? stripNul(record)
               : record;
             try {
               reconstruction = this.toReconstructionInput(safeRecord, resource, mapping);
+              if (reconstruction === null) continue;
               this.assertTypedIdentity(reconstruction, resource.targetKind, mapping.externalOrgId, resource.resourceKey);
             } catch {
               pageAuthoritative = false;
@@ -752,7 +753,7 @@ export class IntegrationSyncRunnerService {
       integrationId: string;
       integration: { driver: string };
     },
-  ): ReconstructionInput {
+  ): ReconstructionInput | null {
     if (record.reconstructionInput !== undefined) return record.reconstructionInput;
     if (resource.targetKind !== 'asset' || !resource.assetLayoutId) {
       throw new BadRequestException('Legacy driver records may only target asset resources.');
@@ -768,8 +769,33 @@ export class IntegrationSyncRunnerService {
       ),
       updatedAt: record.updatedAt,
     };
-    const fieldValues = resource.fieldMappings
-      .filter((field) => field.targetField && field.targetField.archivedAt === null)
+    const activeFieldMappings = resource.fieldMappings.filter(
+      (field) => field.targetField && field.targetField.archivedAt === null,
+    );
+    let selectedFieldMappings = activeFieldMappings;
+    if (record.mappingSourceField !== undefined) {
+      if (!Object.prototype.hasOwnProperty.call(record.fields, record.mappingSourceField)) {
+        throw new BadRequestException(
+          'Definition-bound record does not contain its selected source field.',
+        );
+      }
+      const sourceByTarget = new Map<string, string>();
+      for (const field of activeFieldMappings) {
+        const targetFieldId = field.targetField!.id;
+        const existingSource = sourceByTarget.get(targetFieldId);
+        if (existingSource !== undefined && existingSource !== field.sourceField) {
+          throw new BadRequestException(
+            'Custom-field definition mappings must use distinct target fields.',
+          );
+        }
+        sourceByTarget.set(targetFieldId, field.sourceField);
+      }
+      selectedFieldMappings = activeFieldMappings.filter(
+        (field) => field.sourceField === record.mappingSourceField,
+      );
+      if (selectedFieldMappings.length === 0) return null;
+    }
+    const fieldValues = selectedFieldMappings
       .map((field) => {
         const raw = record.fields[field.sourceField];
         const value = field.transform

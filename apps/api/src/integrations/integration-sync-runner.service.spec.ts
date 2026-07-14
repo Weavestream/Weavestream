@@ -213,21 +213,26 @@ describe('IntegrationSyncRunnerService writer dispatch', () => {
     return { service, writer, writerRegistry, tx, order, driver, audit, prisma, provenance, completeness };
   }
 
-  it('propagates an exact legacy binding reference without replacing source identity', () => {
+  it('maps one scalar definition to only its configured target field and skips unmapped rows', () => {
     const { service } = setup();
+    const definitionA = '00000000-0000-4000-8000-000000000201';
+    const definitionB = '00000000-0000-4000-8000-000000000202';
+    const targetA = '00000000-0000-4000-8000-000000000301';
+    const targetB = '00000000-0000-4000-8000-000000000302';
     const toReconstructionInput = service as unknown as {
       toReconstructionInput(
         record: Record<string, unknown>,
         resource: Record<string, unknown>,
         mapping: Record<string, unknown>,
-      ): AssetReconstructionInput;
+      ): AssetReconstructionInput | null;
     };
     const converted = toReconstructionInput.toReconstructionInput(
       {
         externalId: 'value-uuid',
         displayName: 'Rack on device-uuid',
-        fields: {},
+        fields: { [definitionA]: 'DC1-R07' },
         updatedAt: '2026-07-14T09:00:00.000Z',
+        mappingSourceField: definitionA,
         bindingRef: {
           resourceKey: 'devices',
           externalId: 'org-1:devices:device-uuid',
@@ -240,7 +245,20 @@ describe('IntegrationSyncRunnerService writer dispatch', () => {
         targetConfig: { bindingResourceKey: 'devices' },
         assetLayoutId: '00000000-0000-4000-8000-000000000007',
         matchKeyFieldIds: [],
-        fieldMappings: [],
+        fieldMappings: [
+          {
+            sourceField: definitionA,
+            targetField: { id: targetA, archivedAt: null },
+            transform: null,
+            syncDirection: 'preserve_manual',
+          },
+          {
+            sourceField: definitionB,
+            targetField: { id: targetB, archivedAt: null },
+            transform: null,
+            syncDirection: 'manual_only',
+          },
+        ],
       },
       {
         externalOrgId: 'org-1',
@@ -256,8 +274,87 @@ describe('IntegrationSyncRunnerService writer dispatch', () => {
         resourceKey: 'devices',
         externalId: 'org-1:devices:device-uuid',
       },
+      fieldValues: [{
+        targetFieldId: targetA,
+        value: 'DC1-R07',
+        syncDirection: 'preserve_manual',
+      }],
     });
     expect(converted).not.toHaveProperty('bindingResourceKey');
+
+    expect(toReconstructionInput.toReconstructionInput(
+      {
+        externalId: 'unmapped-value-uuid',
+        displayName: 'Unmapped on device-uuid',
+        fields: { unmappedDefinition: 'ignore-me' },
+        updatedAt: '2026-07-14T09:00:00.000Z',
+        mappingSourceField: 'unmappedDefinition',
+        bindingRef: {
+          resourceKey: 'devices',
+          externalId: 'org-1:devices:device-uuid',
+        },
+      },
+      {
+        id: 'resource',
+        resourceKey: 'custom-field-values',
+        targetKind: 'asset',
+        targetConfig: { bindingResourceKey: 'devices' },
+        assetLayoutId: '00000000-0000-4000-8000-000000000007',
+        matchKeyFieldIds: [],
+        fieldMappings: [{
+          sourceField: definitionA,
+          targetField: { id: targetA, archivedAt: null },
+          transform: null,
+          syncDirection: 'source_wins',
+        }],
+      },
+      {
+        externalOrgId: 'org-1',
+        integrationId: '00000000-0000-4000-8000-000000000001',
+        integration: { driver: 'breeze' },
+      },
+    )).toBeNull();
+  });
+
+  it('rejects custom-field mappings that reuse one target field for different definitions', () => {
+    const { service } = setup();
+    const toReconstructionInput = service as unknown as {
+      toReconstructionInput(
+        record: Record<string, unknown>,
+        resource: Record<string, unknown>,
+        mapping: Record<string, unknown>,
+      ): AssetReconstructionInput | null;
+    };
+    const targetFieldId = '00000000-0000-4000-8000-000000000301';
+    const fieldMapping = (sourceField: string) => ({
+      sourceField,
+      targetField: { id: targetFieldId, archivedAt: null },
+      transform: null,
+      syncDirection: 'source_wins',
+    });
+    expect(() => toReconstructionInput.toReconstructionInput(
+      {
+        externalId: 'value-uuid',
+        displayName: 'Rack',
+        fields: { definitionA: 'DC1-R07' },
+        updatedAt: null,
+        mappingSourceField: 'definitionA',
+      },
+      {
+        id: 'resource',
+        resourceKey: 'custom-field-values',
+        targetKind: 'asset',
+        targetConfig: {},
+        assetLayoutId: '00000000-0000-4000-8000-000000000007',
+        matchKeyFieldIds: [],
+        fieldMappings: [fieldMapping('definitionA'), fieldMapping('definitionB')],
+      },
+      {
+        externalOrgId: 'org-1',
+        integrationId: '00000000-0000-4000-8000-000000000001',
+        integration: { driver: 'breeze' },
+      },
+    )).toThrow(/distinct|target field|custom-field/i);
   });
 
   it('dispatches typed input and commits its binding before the page checkpoint', async () => {

@@ -149,19 +149,6 @@ const virtualMachineFields = [
   field('sourceFingerprint', 'Source Fingerprint', 'source-fingerprint', 'TEXT'),
 ] as const;
 
-const customFieldValueFields = [
-  field('breezeId', 'Breeze ID', 'breeze-id', 'TEXT', 'source_wins'),
-  field('orgId', 'Organization ID', 'organization-id', 'TEXT', 'source_wins'),
-  field('definitionId', 'Definition ID', 'definition-id', 'TEXT', 'source_wins'),
-  field('deviceId', 'Device ID', 'device-id', 'TEXT', 'source_wins'),
-  field('fieldKey', 'Field Key', 'field-key', 'TEXT'),
-  field('fieldName', 'Field Name', 'field-name', 'TEXT'),
-  field('fieldType', 'Field Type', 'field-type', 'TEXT'),
-  field('value', 'Value', 'value', 'TEXTAREA'),
-  field('sourceRevision', 'Source Revision', 'source-revision', 'TEXT'),
-  field('sourceFingerprint', 'Source Fingerprint', 'source-fingerprint', 'TEXT'),
-] as const;
-
 const deviceDestinationFields = uniqueFields([
   ...deviceIdentityFields,
   ...inventoryFields.map((item) => ({ ...item, mapResource: false as const })),
@@ -209,7 +196,7 @@ export const BREEZE_RECOMMENDED_DESTINATIONS: Readonly<Record<string, Recommende
   },
   'custom-field-values': {
     layout: deviceLayout,
-    fields: customFieldValueFields,
+    fields: [],
   },
 };
 

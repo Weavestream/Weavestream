@@ -94,6 +94,11 @@ export interface LegacyDriverRecord {
   displayName: string | null;
   /** Flat map of source-field key → raw value. */
   fields: Record<string, unknown>;
+  /**
+   * Optional immutable source definition key used to select exactly one
+   * configured field mapping. Records without a matching mapping are skipped.
+   */
+  mappingSourceField?: string;
   /** Optional driver-emitted last-modified hint (UTC ISO). */
   updatedAt: string | null;
   /** Optional bounded source revision persisted as reconstruction provenance. */

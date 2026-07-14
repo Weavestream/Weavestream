@@ -58,6 +58,8 @@ Recommended destinations store bounded structured fields, not entire upstream re
 
 Custom-field definitions and values have independent cursors. `/custom-fields` returns definition metadata only. `/custom-field-values` returns one bounded scalar row with a stable value UUID plus `orgId`, `deviceId`, `definitionId`, and an explicit device target. Weavestream walks both endpoints through every page, uses the supplied value UUID for provenance and idempotence, and uses the separate device reference only to resolve the native asset. It never rebuilds value identity from a definition/device pair or expects an embedded `values` array.
 
+Scalar custom fields are opt-in. For each selected definition, configure a `custom-field-values` mapping whose source field is the immutable Breeze `definitionId` and whose target is a distinct field on the Breeze Devices layout. Each mapping carries its own ownership rule. A scalar row writes only the field mapped to its definition; unmapped definitions do not write native state. The mutable Breeze field key and name remain display metadata and are not mapping identities.
+
 ### Ownership rules
 
 - **Source wins** updates a field from Breeze.

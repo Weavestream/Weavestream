@@ -593,8 +593,9 @@ describe('Breeze transforms', () => {
     expect(first).toHaveLength(1);
     expect(first).toEqual([expect.objectContaining({
       externalId: valueRecord.id,
+      mappingSourceField: definitionId,
       bindingRef: { resourceKey: 'devices', externalId: `${ORG}:devices:${DEVICE}` },
-      fields: expect.objectContaining({ definitionId, deviceId: DEVICE }),
+      fields: { [definitionId]: 'DC1-R07' },
     })]);
     expect(JSON.stringify(first[0])).toContain(definitionId);
   });
@@ -672,7 +673,8 @@ describe('Breeze transforms', () => {
     const [valid] = transformBreezeRecord('custom-field-values', custom(
       Array.from({ length: 4 }, (_, index) => `${index}:${'x'.repeat(12_000)}`),
     ));
-    const projected = (valid as unknown as { fields: { value: string[] } }).fields.value;
+    const definitionId = 'ffffffff-ffff-4fff-8fff-ffffffffffff';
+    const projected = (valid as unknown as { fields: Record<string, string[]> }).fields[definitionId];
     expect(projected).toHaveLength(4);
     expect(() => transformBreezeRecord('custom-field-values', custom(
       Array.from({ length: 5 }, (_, index) => `${index}:${'x'.repeat(12_000)}`),
@@ -1921,6 +1923,7 @@ describe('Breeze scalar custom-field value contract', () => {
       },
     });
     expect(resources.some(({ key }) => key === 'custom-field-value-relations')).toBe(false);
+    expect(new BreezeDriver().recommendedDestinations?.['custom-field-values']?.fields).toEqual([]);
 
     const [definitionRecord] = transformBreezeRecord('custom-fields', definition) as Array<{
       reconstructionInput: Record<string, unknown>;
@@ -1936,20 +1939,15 @@ describe('Breeze scalar custom-field value contract', () => {
     expect(first).toEqual([
       expect.objectContaining({
         externalId: valueId,
+        mappingSourceField: definitionId,
         bindingRef: {
           resourceKey: 'devices',
           externalId: `${ORG}:devices:${DEVICE}`,
         },
-        fields: expect.objectContaining({
-          breezeId: valueId,
-          orgId: ORG,
-          deviceId: DEVICE,
-          definitionId,
-          target: { type: 'device', id: DEVICE },
-          value: 'DC1-R07',
-        }),
+        fields: { [definitionId]: 'DC1-R07' },
       }),
     ]);
+    expect(JSON.stringify(first)).not.toMatch(/fieldName|fieldType|"value":/u);
   });
 
   it('walks more than 500 definition and scalar rows with independent cursors', async () => {

@@ -298,18 +298,9 @@ export function transformBreezeRecord(
     case 'custom-field-values':
       return [{
         ...legacy(record, `${record.name} on ${record.deviceId}`, {
-          breezeId: record.id,
-          orgId: record.orgId,
-          definitionId: record.definitionId,
-          deviceId: record.deviceId,
-          target: record.target,
-          fieldKey: record.fieldKey,
-          fieldName: record.name,
-          fieldType: record.type,
-          value: record.value,
-          sourceRevision: record.revision,
-          sourceFingerprint: record.revision,
+          [record.definitionId]: record.value,
         }),
+        mappingSourceField: record.definitionId,
         bindingRef: {
           resourceKey: 'devices',
           externalId: namespaced(record.orgId, 'devices', record.deviceId),
