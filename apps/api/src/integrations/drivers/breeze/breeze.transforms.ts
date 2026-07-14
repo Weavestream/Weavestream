@@ -15,6 +15,33 @@ import {
   type BreezeResourceKey,
 } from './breeze.schemas.js';
 
+const DISK_COLUMNS = [
+  ['ID', 'id'], ['Mount', 'mountPoint'], ['Device', 'device'],
+  ['File system', 'fileSystem'], ['Total GB', 'totalGb'],
+] as const;
+const INTERFACE_COLUMNS = [
+  ['ID', 'id'], ['Name', 'name'], ['MAC', 'macAddress'], ['Primary', 'primary'],
+] as const;
+const ADDRESS_COLUMNS = [
+  ['ID', 'id'], ['Interface ID', 'interfaceId'], ['Interface', 'interfaceName'],
+  ['Address', 'address'], ['Family', 'family'], ['Assignment', 'assignment'],
+  ['Reservation eligible', 'reservationEligible'], ['Subnet mask', 'subnetMask'],
+  ['Active', 'active'], ['First seen', 'firstSeenAt'], ['Deactivated', 'deactivatedAt'],
+] as const;
+const VM_COLUMNS = [
+  ['ID', 'id'], ['External ID', 'externalId'], ['Name', 'name'],
+  ['Generation', 'generation'], ['Memory MB', 'memoryMb'], ['Processors', 'processorCount'],
+  ['RCT', 'rctEnabled'], ['Passthrough disks', 'passthroughDisks'],
+] as const;
+const EQUIPMENT_COLUMNS = [
+  ['ID', 'id'], ['Type', 'type'], ['Name', 'name'], ['Address', 'address'],
+  ['MAC', 'macAddress'], ['Manufacturer', 'manufacturer'], ['Model', 'model'],
+] as const;
+const SOFTWARE_COLUMNS = [
+  ['ID', 'id'], ['Name', 'name'], ['Version', 'version'], ['Vendor', 'vendor'],
+  ['Installed', 'installedOn'], ['Managed', 'managed'],
+] as const;
+
 export function transformBreezeRecord(
   rawResource: BreezeResourceKey,
   rawRecord: unknown,
@@ -97,32 +124,9 @@ export function transformBreezeRecord(
               ['Version', record.hardware.motherboard.version],
             ]),
             biosVersion: record.hardware.firmware.biosVersion,
-            disks: formatRows(record.disks, [
-              ['ID', 'id'],
-              ['Mount', 'mountPoint'],
-              ['Device', 'device'],
-              ['File system', 'fileSystem'],
-              ['Total GB', 'totalGb'],
-            ]),
-            interfaces: formatRows(record.interfaces, [
-              ['ID', 'id'],
-              ['Name', 'name'],
-              ['MAC', 'macAddress'],
-              ['Primary', 'primary'],
-            ]),
-            networkAddresses: formatRows(record.addresses, [
-              ['ID', 'id'],
-              ['Interface ID', 'interfaceId'],
-              ['Interface', 'interfaceName'],
-              ['Address', 'address'],
-              ['Family', 'family'],
-              ['Assignment', 'assignment'],
-              ['Reservation eligible', 'reservationEligible'],
-              ['Subnet mask', 'subnetMask'],
-              ['Active', 'active'],
-              ['First seen', 'firstSeenAt'],
-              ['Deactivated', 'deactivatedAt'],
-            ]),
+            disks: formatRows(record.disks, DISK_COLUMNS),
+            interfaces: formatRows(record.interfaces, INTERFACE_COLUMNS),
+            networkAddresses: formatRows(record.addresses, ADDRESS_COLUMNS),
             gateways: uniqueText(
               record.addresses.map((address: Record<string, unknown>) => address.gateway),
             ),
@@ -133,17 +137,13 @@ export function transformBreezeRecord(
             warrantyStartsOn: record.warranty?.startsOn ?? null,
             warrantyEndsOn: record.warranty?.endsOn ?? null,
             warrantySubscription: record.warranty?.subscription ?? null,
-            virtualMachines: formatRows(record.virtualMachines, [
-              ['ID', 'id'],
-              ['External ID', 'externalId'],
-              ['Name', 'name'],
-              ['Generation', 'generation'],
-              ['Memory MB', 'memoryMb'],
-              ['Processors', 'processorCount'],
-              ['RCT', 'rctEnabled'],
-              ['Passthrough disks', 'passthroughDisks'],
-            ]),
-            inventoryCompleteness: formatCollections(record.collections),
+            virtualMachines: formatRows(record.virtualMachines, VM_COLUMNS),
+            inventoryCompleteness: formatCollections(record.collections, {
+              disks: formatRowsProjection(record.disks, DISK_COLUMNS),
+              interfaces: formatRowsProjection(record.interfaces, INTERFACE_COLUMNS),
+              addresses: formatRowsProjection(record.addresses, ADDRESS_COLUMNS),
+              virtualMachines: formatRowsProjection(record.virtualMachines, VM_COLUMNS),
+            }),
             sourceRevision: record.revision,
             sourceFingerprint: record.revision,
           },
@@ -158,25 +158,15 @@ export function transformBreezeRecord(
           `Site ${record.siteSubjectId}`,
           {
             breezeId: record.siteSubjectId,
-            networkEquipment: formatRows(record.networkEquipment, [
-              ['ID', 'id'],
-              ['Type', 'type'],
-              ['Name', 'name'],
-              ['Address', 'address'],
-              ['MAC', 'macAddress'],
-              ['Manufacturer', 'manufacturer'],
-              ['Model', 'model'],
-            ]),
-            networkSegments: boundStructuredText(
-              record.networkSegments
-                .map(
-                  (segment: Record<string, unknown>) =>
-                    `${segment.id} | ${normalizeCidrV4(String(segment.cidr)) ?? `invalid: ${segment.cidr}`}`,
-                )
-                .sort()
-                .join('\n'),
-            ),
-            inventoryCompleteness: formatCollections(record.collections),
+            networkEquipment: formatRows(record.networkEquipment, EQUIPMENT_COLUMNS),
+            networkSegments: formatNetworkSegments(record.networkSegments).text,
+            inventoryCompleteness: formatCollections(record.collections, {
+              networkEquipment: formatRowsProjection(
+                record.networkEquipment,
+                EQUIPMENT_COLUMNS,
+              ),
+              networkSegments: formatNetworkSegments(record.networkSegments),
+            }),
             sourceRevision: record.revision,
             sourceFingerprint: record.revision,
           },
@@ -190,15 +180,12 @@ export function transformBreezeRecord(
           `Software ${record.deviceId}`,
           {
             breezeId: record.deviceId,
-            installedSoftware: formatRows(record.software, [
-              ['ID', 'id'],
-              ['Name', 'name'],
-              ['Version', 'version'],
-              ['Vendor', 'vendor'],
-              ['Installed', 'installedOn'],
-              ['Managed', 'managed'],
-            ]),
-            softwareCompleteness: formatCollection('software', record.collection),
+            installedSoftware: formatRows(record.software, SOFTWARE_COLUMNS),
+            softwareCompleteness: formatCollection(
+              'software',
+              record.collection,
+              formatRowsProjection(record.software, SOFTWARE_COLUMNS),
+            ),
             sourceRevision: record.revision,
             sourceFingerprint: record.revision,
           },
@@ -424,7 +411,7 @@ function subnetCandidates(
       candidates.set(cidr, {
         cidr,
         gateway: null,
-        description: `Breeze network segment ${segment.id}`,
+        description: `Breeze durable network ${cidr}`,
       });
     }
   }
@@ -436,7 +423,7 @@ function subnetCandidates(
       candidates.set(network.cidr, {
         cidr: network.cidr,
         gateway: current?.gateway ?? network.gateway,
-        description: `Breeze current static network`,
+        description: `Breeze durable network ${network.cidr}`,
       });
     }
   }
@@ -496,18 +483,62 @@ function subnetMaskPrefix(value: unknown): number | null {
   return bits.indexOf('0') === -1 ? 32 : bits.indexOf('0');
 }
 
+interface StructuredProjection {
+  text: string;
+  shown: number;
+  total: number;
+}
+
+function formatNetworkSegments(
+  segments: Array<Record<string, unknown>>,
+): StructuredProjection {
+  return formatLinesProjection(
+    segments
+      .map(
+        (segment) =>
+          `${segment.id} | ${normalizeCidrV4(String(segment.cidr)) ?? `invalid: ${segment.cidr}`}`,
+      )
+      .sort(),
+  );
+}
+
 function formatRows(
   rows: Array<Record<string, unknown>>,
-  columns: Array<readonly [label: string, key: string]>,
+  columns: ReadonlyArray<readonly [label: string, key: string]>,
 ): string {
-  return boundStructuredText(
-    [...rows]
-      .sort((left, right) => String(left.id ?? '').localeCompare(String(right.id ?? '')))
-      .map((row) =>
-        columns.map(([label, key]) => `${label}: ${displayValue(row[key])}`).join(' | '),
-      )
-      .join('\n'),
-  );
+  return formatRowsProjection(rows, columns).text;
+}
+
+function formatRowsProjection(
+  rows: Array<Record<string, unknown>>,
+  columns: ReadonlyArray<readonly [label: string, key: string]>,
+): StructuredProjection {
+  const lines = [...rows]
+    .sort((left, right) => String(left.id ?? '').localeCompare(String(right.id ?? '')))
+    .map((row) =>
+      columns.map(([label, key]) => `${label}: ${displayValue(row[key])}`).join(' | '),
+    );
+  return formatLinesProjection(lines);
+}
+
+function formatLinesProjection(lines: string[]): StructuredProjection {
+  const limit = 50_000;
+  const complete = lines.join('\n');
+  if (complete.length <= limit) return { text: complete, shown: lines.length, total: lines.length };
+  const included: string[] = [];
+  for (const line of lines) {
+    const shown = included.length + 1;
+    const marker = `[projection truncated: ${shown}/${lines.length} rows shown]`;
+    const candidate = [...included, line, marker].join('\n');
+    if (candidate.length > limit) break;
+    included.push(line);
+  }
+  const marker = `[projection truncated: ${included.length}/${lines.length} rows shown]`;
+  return {
+    text: [...included, marker].join('\n'),
+    shown: included.length,
+    total: lines.length,
+  };
 }
 
 function formatParts(parts: Array<readonly [label: string, value: unknown]>): string {
@@ -530,20 +561,25 @@ function uniqueText(values: unknown[]): string {
     .join(', ');
 }
 
-function formatCollections(collections: Record<string, unknown>): string {
+function formatCollections(
+  collections: Record<string, unknown>,
+  projections: Record<string, StructuredProjection> = {},
+): string {
   return Object.entries(collections)
     .sort(([left], [right]) => left.localeCompare(right))
-    .map(([name, collection]) => formatCollection(name, collection as Record<string, unknown>))
+    .map(([name, collection]) =>
+      formatCollection(name, collection as Record<string, unknown>, projections[name]),
+    )
     .join('\n');
 }
 
-function formatCollection(name: string, collection: Record<string, unknown>): string {
-  return `${name}: ${collection.included}/${collection.total} ${collection.complete ? 'complete' : 'incomplete (collection limit exceeded)'}`;
-}
-
-function boundStructuredText(value: string): string {
-  const limit = 32_000;
-  if (value.length <= limit) return value;
-  const marker = '\n[structured output truncated at 32000 characters]';
-  return `${value.slice(0, limit - marker.length)}${marker}`;
+function formatCollection(
+  name: string,
+  collection: Record<string, unknown>,
+  projection?: StructuredProjection,
+): string {
+  const source = `${name}: ${collection.included}/${collection.total} ${collection.complete ? 'complete' : 'incomplete (collection limit exceeded)'}`;
+  return projection && projection.shown < projection.total
+    ? `${source}; projection ${projection.shown}/${projection.total} rows shown`
+    : source;
 }

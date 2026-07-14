@@ -441,12 +441,52 @@ function deduplicateDriverRecords(records: DriverFetchPage['records']): DriverFe
       ? `${record.reconstructionInput.targetKind}:${record.reconstructionInput.externalId}`
       : `asset:${record.externalId}`;
     const existing = byIdentity.get(identity);
-    if (existing && driverRecordSemantics(existing) !== driverRecordSemantics(record)) {
-      throw new Error('Breeze partner API returned a conflicting duplicate stable identity.');
+    if (existing) {
+      const merged = mergeDriverRecords(existing, record);
+      if (!merged) {
+        throw new Error('Breeze partner API returned a conflicting duplicate stable identity.');
+      }
+      byIdentity.set(identity, merged);
+    } else {
+      byIdentity.set(identity, record);
     }
-    byIdentity.set(identity, record);
   }
   return [...byIdentity.values()];
+}
+
+function mergeDriverRecords(
+  left: DriverFetchPage['records'][number],
+  right: DriverFetchPage['records'][number],
+): DriverFetchPage['records'][number] | null {
+  const leftInput = left.reconstructionInput;
+  const rightInput = right.reconstructionInput;
+  if (leftInput?.targetKind === 'subnet' && rightInput?.targetKind === 'subnet') {
+    const { source: _leftSource, gateway: leftGateway, ...leftFacts } = leftInput;
+    const { source: _rightSource, gateway: rightGateway, ...rightFacts } = rightInput;
+    if (JSON.stringify(leftFacts) !== JSON.stringify(rightFacts)) return null;
+    if (leftGateway && rightGateway && leftGateway !== rightGateway) return null;
+    const source = latestReconstructionSource(leftInput.source, rightInput.source);
+    return {
+      reconstructionInput: {
+        ...leftInput,
+        source,
+        gateway: leftGateway ?? rightGateway ?? null,
+      },
+    };
+  }
+  if (driverRecordSemantics(left) !== driverRecordSemantics(right)) return null;
+  return canonicalJsonChoice(left, right);
+}
+
+function canonicalJsonChoice<T>(left: T, right: T): T {
+  return JSON.stringify(left).localeCompare(JSON.stringify(right)) <= 0 ? left : right;
+}
+
+function latestReconstructionSource<T extends { updatedAt?: string | null }>(left: T, right: T): T {
+  const leftTime = left.updatedAt ? Date.parse(left.updatedAt) : Number.NEGATIVE_INFINITY;
+  const rightTime = right.updatedAt ? Date.parse(right.updatedAt) : Number.NEGATIVE_INFINITY;
+  if (leftTime !== rightTime) return leftTime > rightTime ? left : right;
+  return canonicalJsonChoice(left, right);
 }
 
 function driverRecordSemantics(record: DriverFetchPage['records'][number]): string {

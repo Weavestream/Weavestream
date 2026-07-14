@@ -2,6 +2,7 @@ import type { FetchRecordsContext, IntegrationContext } from '../integration-dri
 import { driverDescriptorSchema } from '@weavestream/shared';
 import { BreezeDriver } from './breeze.driver.js';
 import { transformBreezeRecord } from './breeze.transforms.js';
+import { TextStrategy, TextareaStrategy } from '../../../field-types/strategies/text.strategy.js';
 
 const ORG = '11111111-1111-4111-8111-111111111111';
 const SITE = '22222222-2222-4222-8222-222222222222';
@@ -742,16 +743,44 @@ describe('Breeze transforms', () => {
       managed: false,
     }));
     const [record] = transformBreezeRecord('device-software', {
-        ...base,
-        subjectType: 'device',
-        deviceId: DEVICE,
-        software,
-        collection: { total: 1_000, included: 1_000, complete: true, reason: null },
-      });
+      ...base,
+      subjectType: 'device',
+      deviceId: DEVICE,
+      software,
+      collection: { total: 1_000, included: 1_000, complete: true, reason: null },
+    });
     const installedSoftware = (record as unknown as { fields: { installedSoftware: string } }).fields
       .installedSoftware;
-    expect(installedSoftware.length).toBeLessThanOrEqual(32_000);
-    expect(installedSoftware).toContain('[structured output truncated');
+    const softwareCompleteness = (record as unknown as { fields: { softwareCompleteness: string } })
+      .fields.softwareCompleteness;
+    expect(() => new TextareaStrategy().valueSchema().parse(installedSoftware)).not.toThrow();
+    expect(() => new TextStrategy().valueSchema().parse(softwareCompleteness)).not.toThrow();
+    expect(installedSoftware).toMatch(/\[projection truncated: \d+\/1000 rows shown\]/u);
+    expect(softwareCompleteness).toMatch(/software: 1000\/1000 complete; projection \d+\/1000/u);
+  });
+
+  it('bounds maximum adjacent inventory rows at complete asset-field boundaries', () => {
+    const addresses = Array.from({ length: 500 }, (_, index) => ({
+      ...deviceInventory.addresses[1],
+      id: `${(index + 1).toString(16).padStart(8, '0')}-0000-4000-8000-000000000000`,
+      address: `10.${Math.floor(index / 250)}.${Math.floor((index % 250) / 50)}.${(index % 50) + 1}`,
+    }));
+    const [record] = transformBreezeRecord('device-inventory', {
+      ...deviceInventory,
+      addresses,
+      collections: {
+        ...deviceInventory.collections,
+        addresses: { total: 500, included: 500, complete: true, reason: null },
+      },
+    });
+    const fields = (record as unknown as {
+      fields: { networkAddresses: string; inventoryCompleteness: string };
+    }).fields;
+
+    expect(() => new TextareaStrategy().valueSchema().parse(fields.networkAddresses)).not.toThrow();
+    expect(() => new TextareaStrategy().valueSchema().parse(fields.inventoryCompleteness)).not.toThrow();
+    expect(fields.networkAddresses).toMatch(/\[projection truncated: \d+\/500 rows shown\]/u);
+    expect(fields.inventoryCompleteness).toMatch(/addresses: 500\/500 complete; projection \d+\/500/u);
   });
 });
 
@@ -774,6 +803,73 @@ describe('BreezeDriver transport delegation', () => {
     expect(page.records[0]).toMatchObject({
       reconstructionInput: { externalId: `${ORG}:subnets:cidr:10.20.0.0/24` },
     });
+  });
+
+  it('merges a site segment and compatible device static network independent of input order', async () => {
+    const fetch = async (data: unknown[]) => {
+      const client = {
+        testConnection: jest.fn(),
+        listOrganizations: jest.fn(),
+        fetchPage: jest.fn().mockResolvedValue({
+          schemaVersion: '1',
+          snapshotAt: '2026-07-14T12:00:00.000Z',
+          data,
+          nextCursor: null,
+          hasMore: false,
+        }),
+      };
+      return new BreezeDriver(client).fetchRecords(
+        { ...ctx('subnets'), mode: 'full', updatedSince: null },
+        null,
+      );
+    };
+
+    const latestDevice = {
+      ...deviceInventory,
+      sourceUpdatedAt: '2026-07-14T11:30:00.000Z',
+      revision: 'b'.repeat(64),
+    };
+    const forward = await fetch([siteInventory, latestDevice]);
+    const reverse = await fetch([latestDevice, siteInventory]);
+
+    expect(forward.records).toEqual(reverse.records);
+    expect(forward.records).toHaveLength(1);
+    expect(forward.records[0]).toMatchObject({
+      reconstructionInput: {
+        cidr: '10.20.0.0/24',
+        gateway: '10.20.0.1',
+        description: 'Breeze durable network 10.20.0.0/24',
+        source: {
+          updatedAt: '2026-07-14T11:30:00.000Z',
+          revision: 'b'.repeat(64),
+        },
+      },
+    });
+  });
+
+  it('deduplicates identical eligible reservations independent of input order', async () => {
+    const secondDevice = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+    const fetch = async (data: unknown[]) => {
+      const client = {
+        testConnection: jest.fn(),
+        listOrganizations: jest.fn(),
+        fetchPage: jest.fn().mockResolvedValue({
+          schemaVersion: '1',
+          snapshotAt: '2026-07-14T12:00:00.000Z',
+          data,
+          nextCursor: null,
+          hasMore: false,
+        }),
+      };
+      return new BreezeDriver(client).fetchRecords(ctx('ip-reservations'), null);
+    };
+    const duplicate = { ...deviceInventory, id: secondDevice, deviceId: secondDevice };
+
+    const forward = await fetch([deviceInventory, duplicate]);
+    const reverse = await fetch([duplicate, deviceInventory]);
+
+    expect(forward.records).toEqual(reverse.records);
+    expect(forward.records).toHaveLength(1);
   });
 
   it('fails closed when duplicate stable native identities carry conflicting facts', async () => {
