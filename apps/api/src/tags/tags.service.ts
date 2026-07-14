@@ -141,7 +141,7 @@ export class TagsService {
     });
 
     if (audit) {
-      await this.audit.log({
+      const entry = {
         actorId: audit.actorId,
         action: 'tag.create',
         entityType: 'Tag',
@@ -150,7 +150,9 @@ export class TagsService {
         userAgent: audit.userAgent,
         before: null,
         after: { name: row.name },
-      });
+      };
+      if (tx) await this.audit.logWithClient(tx, entry);
+      else await this.audit.log(entry);
     }
     return row.id;
   }

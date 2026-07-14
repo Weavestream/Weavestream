@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { containsSensitiveMaterial } from '../sensitive-material.js';
 import {
   blockedOutcome,
   completedOutcome,
@@ -7,6 +8,7 @@ import {
   nativeWriteErrorOutcome,
   relationReconstructionInputSchema,
   safeGap,
+  sensitiveInputOutcome,
   validated,
   type NativeIntegrationWriteResult,
   type ReconstructionWriteContext,
@@ -22,6 +24,7 @@ export interface RelationIntegrationWriteInput {
   auditActorId: string;
   dryRun: boolean;
   existingTargetId?: string | null;
+  ownershipVerified: boolean;
   sourceType: 'Asset' | 'Article';
   sourceId: string;
   targetType: 'Asset' | 'Article';
@@ -49,6 +52,9 @@ export class RelationTargetWriter implements ReconstructionWriter<RelationRecons
     ctx: ReconstructionWriteContext,
     rawInput: RelationReconstructionInput,
   ): Promise<ReconstructionWriteOutcome> {
+    if (containsSensitiveMaterial(rawInput)) {
+      return sensitiveInputOutcome(ctx, this.targetKind);
+    }
     let input: ValidatedReconstructionInput<RelationReconstructionInput>;
     try {
       input = this.validate(rawInput);
@@ -98,6 +104,7 @@ export class RelationTargetWriter implements ReconstructionWriter<RelationRecons
         auditActorId: ctx.auditActorId,
         dryRun: ctx.dryRun,
         existingTargetId: ctx.existingTargetId,
+        ownershipVerified: ctx.existingTargetId != null,
         sourceType: source.targetKind === 'asset' ? 'Asset' : 'Article',
         sourceId: source.targetId,
         targetType: target.targetKind === 'asset' ? 'Asset' : 'Article',

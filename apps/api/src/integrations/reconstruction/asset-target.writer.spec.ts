@@ -25,7 +25,7 @@ const input: AssetReconstructionInput = {
 };
 
 function context(overrides: Partial<ReconstructionWriteContext> = {}): ReconstructionWriteContext {
-  return {
+  const ctx: ReconstructionWriteContext = {
     companyId: ids.company,
     integrationId: ids.integration,
     integrationCompanyMappingId: ids.mapping,
@@ -38,6 +38,22 @@ function context(overrides: Partial<ReconstructionWriteContext> = {}): Reconstru
     resolveBinding: jest.fn().mockResolvedValue(null),
     ...overrides,
   };
+  if (ctx.existingTargetId && overrides.previousProvenance === undefined) {
+    ctx.previousProvenance = {
+      integrationId: ids.integration,
+      externalOrgId: 'org-1',
+      resourceKey: 'devices',
+      externalId: input.externalId,
+      sourceRevision: '7',
+      sourceFingerprint: null,
+      firstSeenAt: '2026-07-01T00:00:00.000Z',
+      lastSeenAt: '2026-07-01T00:00:00.000Z',
+      lastSyncedAt: '2026-07-01T00:00:00.000Z',
+      ownership: 'breeze',
+      state: ctx.existingState === 'stale' ? 'stale' : 'active',
+    };
+  }
+  return ctx;
 }
 
 function setup(result: Partial<Awaited<ReturnType<AssetIntegrationWritePort['writeFromIntegration']>>> = {}) {
@@ -170,5 +186,25 @@ describe('AssetTargetWriter', () => {
     expect(out.provenance).toEqual(expect.objectContaining({ externalId: input.externalId, sourceRevision: '7', firstSeenAt: '2026-07-13T18:00:00.000Z', ownership: 'breeze' }));
     expect(JSON.stringify(out.provenance)).not.toContain('edge-01');
     expect(Buffer.byteLength(JSON.stringify(out.provenance), 'utf8')).toBeLessThanOrEqual(8192);
+  });
+
+  it('rejects nested secret material before calling the native asset port', async () => {
+    const { writer, writeFromIntegration } = setup();
+    const out = await writer.write(context(), {
+      ...input,
+      fieldValues: [{ ...input.fieldValues[0]!, value: { accessToken: 'short' } }],
+    });
+    expect(out).toMatchObject({
+      change: 'blocked',
+      gaps: [{ details: { reasonCode: 'sensitive_input' } }],
+    });
+    expect(writeFromIntegration).not.toHaveBeenCalled();
+  });
+
+  it('blocks an arbitrary existing target without matching Breeze provenance', async () => {
+    const { writer, writeFromIntegration } = setup({ change: 'updated' });
+    const out = await writer.write(context({ existingTargetId: ids.asset, previousProvenance: null }), input);
+    expect(out).toMatchObject({ change: 'blocked', gaps: [{ details: { reasonCode: 'manual_ownership' } }] });
+    expect(writeFromIntegration).not.toHaveBeenCalled();
   });
 });

@@ -222,6 +222,8 @@ describe('AssetsService integration reconstruction helpers', () => {
       id: 'asset-1',
       companyId: 'company-1',
       assetLayoutId: 'layout-1',
+      externalSource: 'breeze',
+      externalId: 'source-id',
       fieldValues: [],
     };
     const findMany = jest.fn().mockResolvedValue([candidate]);
@@ -243,6 +245,7 @@ describe('AssetsService integration reconstruction helpers', () => {
         integrationCompanyMappingId: 'mapping-1',
         resourceId: 'resource-1',
         externalId: 'source-id',
+        externalSource: 'breeze',
         assetLayoutId: 'layout-1',
         matchKeyFieldIds: ['field-1'],
       },

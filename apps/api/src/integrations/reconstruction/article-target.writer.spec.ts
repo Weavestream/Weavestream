@@ -16,12 +16,21 @@ const input: ArticleReconstructionInput = {
 };
 
 function context(overrides: Partial<ReconstructionWriteContext> = {}): ReconstructionWriteContext {
-  return {
+  const ctx: ReconstructionWriteContext = {
     companyId: ids.company, integrationId: ids.integration, integrationCompanyMappingId: ids.mapping,
     resourceId: ids.resource, resourceKey: 'procedures', externalOrgId: 'org-1', auditActorId: ids.actor,
     now: new Date('2026-07-13T18:00:00.000Z'), dryRun: false,
     resolveBinding: jest.fn().mockResolvedValue(null), ...overrides,
   };
+  if (ctx.existingTargetId && overrides.previousProvenance === undefined) {
+    ctx.previousProvenance = {
+      integrationId: ids.integration, externalOrgId: 'org-1', resourceKey: 'procedures', externalId: input.externalId,
+      sourceRevision: '42', sourceFingerprint: 'sha256:body', firstSeenAt: '2026-07-01T00:00:00.000Z',
+      lastSeenAt: '2026-07-01T00:00:00.000Z', lastSyncedAt: '2026-07-01T00:00:00.000Z',
+      ownership: 'breeze', state: ctx.existingState === 'stale' ? 'stale' : 'active',
+    };
+  }
+  return ctx;
 }
 
 function setup(result: Partial<Awaited<ReturnType<ArticleIntegrationWritePort['writeFromIntegration']>>> = {}) {
@@ -85,5 +94,22 @@ describe('ArticleTargetWriter', () => {
     expect(out.provenance).toEqual(expect.objectContaining({ sourceRevision: '42', sourceFingerprint: 'sha256:body', ownership: 'breeze' }));
     expect(JSON.stringify(out.provenance)).not.toContain('Install the agent');
     expect(Buffer.byteLength(JSON.stringify(out.provenance))).toBeLessThanOrEqual(8192);
+  });
+
+  it('rejects secret-bearing Markdown before calling the native article port', async () => {
+    const { writer, writeFromIntegration } = setup();
+    const out = await writer.write(context(), {
+      ...input,
+      markdown: '-----BEGIN PRIVATE KEY-----\nsecret\n-----END PRIVATE KEY-----',
+    });
+    expect(out).toMatchObject({ gaps: [{ details: { reasonCode: 'sensitive_input' } }] });
+    expect(writeFromIntegration).not.toHaveBeenCalled();
+  });
+
+  it('blocks an arbitrary existing article without matching Breeze provenance', async () => {
+    const { writer, writeFromIntegration } = setup({ change: 'updated' });
+    const out = await writer.write(context({ existingTargetId: ids.article, previousProvenance: null }), input);
+    expect(out).toMatchObject({ gaps: [{ details: { reasonCode: 'manual_ownership' } }] });
+    expect(writeFromIntegration).not.toHaveBeenCalled();
   });
 });

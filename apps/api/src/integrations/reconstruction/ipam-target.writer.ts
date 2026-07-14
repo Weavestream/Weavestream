@@ -3,6 +3,7 @@ import {
   createIpReservationSchema,
   createSubnetSchema,
 } from '@weavestream/shared';
+import { containsSensitiveMaterial } from '../sensitive-material.js';
 import {
   blockedOutcome,
   completedOutcome,
@@ -11,6 +12,7 @@ import {
   invalidInputOutcome,
   nativeWriteErrorOutcome,
   safeGap,
+  sensitiveInputOutcome,
   subnetReconstructionInputSchema,
   validated,
   type IpReservationReconstructionInput,
@@ -28,6 +30,7 @@ export interface SubnetIntegrationWriteInput {
   auditActorId: string;
   dryRun: boolean;
   existingTargetId?: string | null;
+  ownershipVerified: boolean;
   name: string;
   cidr: string;
   vlanId?: number | null;
@@ -43,6 +46,7 @@ export interface ReservationIntegrationWriteInput {
   auditActorId: string;
   dryRun: boolean;
   existingTargetId?: string | null;
+  ownershipVerified: boolean;
   subnetId: string;
   ipAddress: string;
   label: string;
@@ -82,6 +86,9 @@ export class SubnetTargetWriter implements ReconstructionWriter<SubnetReconstruc
     ctx: ReconstructionWriteContext,
     rawInput: SubnetReconstructionInput,
   ): Promise<ReconstructionWriteOutcome> {
+    if (containsSensitiveMaterial(rawInput)) {
+      return sensitiveInputOutcome(ctx, this.targetKind);
+    }
     let input: ValidatedReconstructionInput<SubnetReconstructionInput>;
     try {
       input = this.validate(rawInput);
@@ -97,6 +104,7 @@ export class SubnetTargetWriter implements ReconstructionWriter<SubnetReconstruc
         auditActorId: ctx.auditActorId,
         dryRun: ctx.dryRun,
         existingTargetId: ctx.existingTargetId,
+        ownershipVerified: ctx.existingTargetId != null,
         name: input.name,
         cidr: input.cidr,
         vlanId: input.vlanId,
@@ -136,6 +144,9 @@ export class IpReservationTargetWriter
     ctx: ReconstructionWriteContext,
     rawInput: IpReservationReconstructionInput,
   ): Promise<ReconstructionWriteOutcome> {
+    if (containsSensitiveMaterial(rawInput)) {
+      return sensitiveInputOutcome(ctx, this.targetKind);
+    }
     let input: ValidatedReconstructionInput<IpReservationReconstructionInput>;
     try {
       input = this.validate(rawInput);
@@ -174,6 +185,7 @@ export class IpReservationTargetWriter
         auditActorId: ctx.auditActorId,
         dryRun: ctx.dryRun,
         existingTargetId: ctx.existingTargetId,
+        ownershipVerified: ctx.existingTargetId != null,
         subnetId: subnet.targetId,
         ipAddress: input.ipAddress,
         label: input.label,

@@ -6,6 +6,7 @@ import {
   type IntegrationTransform,
   type IntegrationTransformStep,
 } from '@weavestream/shared';
+import { containsSensitiveMaterial } from '../sensitive-material.js';
 
 const MAX_INPUT_BYTES = 262_144;
 const MAX_DEPTH = 8;
@@ -74,7 +75,7 @@ export class IntegrationTransformService {
       current = applyStep(current, step, root);
       assertOutputBounds(current);
     }
-    if (containsSecretLikeMaterial(current)) {
+    if (containsSensitiveMaterial(current)) {
       throw new IntegrationTransformError(
         'SECRET_OUTPUT',
         'Transform output contains sensitive material.',
@@ -335,45 +336,4 @@ function measureValue(value: unknown): { bytes: number; depth: number; entries: 
   const json = JSON.stringify(value);
   if (json === undefined) throw new Error('not JSON');
   return { bytes: Buffer.byteLength(json, 'utf8'), depth, entries };
-}
-
-const secretKeyPattern =
-  /(secret|password|passwd|passphrase|token|apikey|authorization|credential|privatekey|encryptionkey|providerconfig|recoverykey)/;
-const explicitSecretPatterns = [
-  /\b(?:bearer|basic)\s+\S{8,}/i,
-  /-----BEGIN [A-Z ]*PRIVATE KEY-----/i,
-  /(?:^|[?&;\s])(?:api[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|password|passwd|authorization)=\S+/i,
-  /^[a-z][a-z0-9+.-]*:\/\/[^/\s:@]+:[^/\s@]+@/i,
-  /\b(?:gh[pousr]_|xox[baprs]-|sk-(?:live-|test-)?)[A-Za-z0-9_-]{16,}\b/i,
-  /\bAKIA[0-9A-Z]{16}\b/,
-  /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/,
-];
-
-function containsSecretLikeMaterial(value: unknown): boolean {
-  if (typeof value === 'string') {
-    return explicitSecretPatterns.some((pattern) => pattern.test(value)) || looksHighEntropy(value);
-  }
-  if (Array.isArray(value)) return value.some(containsSecretLikeMaterial);
-  if (value && typeof value === 'object') {
-    return Object.entries(value as Record<string, unknown>).some(([key, entry]) => {
-      const normalized = key.replace(/[^a-z0-9]/gi, '').toLowerCase();
-      return secretKeyPattern.test(normalized) || containsSecretLikeMaterial(entry);
-    });
-  }
-  return false;
-}
-
-function looksHighEntropy(value: string): boolean {
-  const candidate = value.trim();
-  if (candidate.length < 40 || candidate.length > 4096 || /\s/.test(candidate)) return false;
-  if (!/^[A-Za-z0-9+/_=-]+$/.test(candidate)) return false;
-  const counts = new Map<string, number>();
-  for (const char of candidate) counts.set(char, (counts.get(char) ?? 0) + 1);
-  let entropy = 0;
-  for (const count of counts.values()) {
-    const probability = count / candidate.length;
-    entropy -= probability * Math.log2(probability);
-  }
-  const classes = [/[a-z]/, /[A-Z]/, /\d/, /[+/_=-]/].filter((pattern) => pattern.test(candidate)).length;
-  return classes >= 3 && entropy >= 4.25;
 }

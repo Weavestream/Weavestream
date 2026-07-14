@@ -2,6 +2,7 @@ import { BadRequestException, Injectable } from '@nestjs/common';
 import type { Prisma } from '@prisma/client';
 import type { UserRole } from '@weavestream/shared';
 import { PrismaService } from '../prisma/prisma.service.js';
+import { AuditLogService } from '../audit/audit.service.js';
 import type {
   RelationPort,
   RelationReplaceCtx,
@@ -58,6 +59,7 @@ export interface IntegrationRelationWriteInput {
   auditActorId: string;
   dryRun: boolean;
   existingTargetId?: string | null;
+  ownershipVerified: boolean;
   sourceType: 'Asset' | 'Article';
   sourceId: string;
   targetType: 'Asset' | 'Article';
@@ -159,7 +161,10 @@ const TYPE_TO_KIND: Record<string, RelationEndpointKind> = {
  */
 @Injectable()
 export class RelationsService implements RelationPort {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly audit?: AuditLogService,
+  ) {}
 
   async link(input: LinkInput): Promise<void> {
     this.guardSameCompany(input);
@@ -191,6 +196,11 @@ export class RelationsService implements RelationPort {
   async writeFromIntegration(
     input: IntegrationRelationWriteInput,
   ): Promise<IntegrationRelationWriteResult> {
+    if (!this.audit) throw new Error('Integration relation audit service is unavailable.');
+    await this.audit.assertIntegrationActor(input.auditActorId, input.companyId);
+    if (input.existingTargetId && !input.ownershipVerified) {
+      return relationBlocked(input.companyId, 'ambiguous', 'The existing relation is not owned by the reconstruction binding.', 'manual_ownership', input.existingTargetId, 1);
+    }
     const sourceKind = TYPE_TO_KIND[input.sourceType];
     const targetKind = TYPE_TO_KIND[input.targetType];
     if (!sourceKind || !targetKind) {
@@ -248,7 +258,6 @@ export class RelationsService implements RelationPort {
       };
     }
     if (sameComposite) {
-      await this.link({ ...key, actorId: input.auditActorId });
       return { targetId: bound.id, companyId: input.companyId, change: 'unchanged' };
     }
 
@@ -269,6 +278,16 @@ export class RelationsService implements RelationPort {
       const row = await tx.relation.findFirst({ where: key, select: { id: true } });
       if (!row) throw new Error('Relation write did not produce a target.');
       targetId = row.id;
+      await this.audit!.logWithClient(tx, {
+        actorId: input.auditActorId,
+        action: bound ? 'integration.relation.updated' : 'integration.relation.created',
+        entityType: 'Relation',
+        entityId: row.id,
+        companyId: input.companyId,
+        ip: '0.0.0.0',
+        userAgent: 'weavestream-worker/integration-reconstruction',
+        after: { integrationId: input.integrationId, change: bound ? 'updated' : 'created' },
+      });
     });
     return {
       targetId,

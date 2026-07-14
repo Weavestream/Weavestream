@@ -39,7 +39,7 @@ const reservationInput: IpReservationReconstructionInput = {
 };
 
 function context(resourceKey: string, overrides: Partial<ReconstructionWriteContext> = {}): ReconstructionWriteContext {
-  return {
+  const ctx: ReconstructionWriteContext = {
     companyId: ids.company,
     integrationId: ids.integration,
     integrationCompanyMappingId: ids.mapping,
@@ -52,6 +52,23 @@ function context(resourceKey: string, overrides: Partial<ReconstructionWriteCont
     resolveBinding: jest.fn().mockResolvedValue(null),
     ...overrides,
   };
+  if (ctx.existingTargetId && overrides.previousProvenance === undefined) {
+    const source = resourceKey === 'subnets' ? subnetInput : reservationInput;
+    ctx.previousProvenance = {
+      integrationId: ids.integration,
+      externalOrgId: 'org-1',
+      resourceKey,
+      externalId: source.externalId,
+      sourceRevision: source.source.revision ?? null,
+      sourceFingerprint: source.source.fingerprint ?? null,
+      firstSeenAt: '2026-07-01T00:00:00.000Z',
+      lastSeenAt: '2026-07-01T00:00:00.000Z',
+      lastSyncedAt: '2026-07-01T00:00:00.000Z',
+      ownership: 'breeze',
+      state: ctx.existingState === 'stale' ? 'stale' : 'active',
+    };
+  }
+  return ctx;
 }
 
 function port(overrides: Partial<IpamIntegrationWritePort> = {}) {
@@ -105,6 +122,16 @@ describe('SubnetTargetWriter', () => {
     expect(out.provenance.sourceFingerprint).toBe('sha256:lan');
     expect(JSON.stringify(out.provenance)).not.toContain('10.0.0.0');
     expect(Buffer.byteLength(JSON.stringify(out.provenance))).toBeLessThanOrEqual(8192);
+  });
+
+  it('rejects a secret-bearing subnet description before native validation/write', async () => {
+    const service = port();
+    const out = await new SubnetTargetWriter(service).write(
+      context('subnets'),
+      { ...subnetInput, description: 'Bearer abcdefghijklmnopqrstuvwxyz' },
+    );
+    expect(out).toMatchObject({ gaps: [{ details: { reasonCode: 'sensitive_input' } }] });
+    expect(service.writeSubnetFromIntegration).not.toHaveBeenCalled();
   });
 });
 
@@ -167,5 +194,17 @@ describe('IpReservationTargetWriter', () => {
     expect(out.provenance.externalId).toBe(reservationInput.externalId);
     expect(JSON.stringify(out.provenance)).not.toContain('printer password');
     expect(Buffer.byteLength(JSON.stringify(out.provenance))).toBeLessThanOrEqual(8192);
+  });
+
+  it('rejects secret-bearing reservation notes before resolving dependencies or writing', async () => {
+    const service = port();
+    const resolveBinding = jest.fn();
+    const out = await new IpReservationTargetWriter(service).write(
+      context('reservations', { resolveBinding }),
+      { ...reservationInput, notes: 'AKIAIOSFODNN7EXAMPLE' },
+    );
+    expect(out).toMatchObject({ gaps: [{ details: { reasonCode: 'sensitive_input' } }] });
+    expect(resolveBinding).not.toHaveBeenCalled();
+    expect(service.writeReservationFromIntegration).not.toHaveBeenCalled();
   });
 });

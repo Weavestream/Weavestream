@@ -1,4 +1,5 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { ForbiddenException, Injectable, Logger } from '@nestjs/common';
+import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service.js';
 
 export interface AuditEntry {
@@ -131,6 +132,68 @@ export class AuditLogService {
           `audit hook threw: ${err instanceof Error ? err.message : String(err)}`,
         );
       }
+    }
+  }
+
+  async logWithClient(
+    client: Prisma.TransactionClient,
+    entry: AuditEntry,
+  ): Promise<void> {
+    await client.auditLog.create({
+      data: {
+        actorId: entry.actorId ?? null,
+        action: entry.action,
+        entityType: entry.entityType,
+        entityId: entry.entityId ?? null,
+        companyId: entry.companyId ?? null,
+        ip: entry.ip ?? null,
+        userAgent: entry.userAgent ?? null,
+        before: (entry.before ?? null) as never,
+        after: (entry.after ?? null) as never,
+      },
+    });
+  }
+
+  async assertIntegrationActor(actorId: string, companyId: string): Promise<void> {
+    const now = new Date();
+    const actor = await this.prisma.user.findFirst({
+      where: {
+        id: actorId,
+        isActive: true,
+        deactivatedAt: null,
+        OR: [
+          { role: 'SUPER_ADMIN' },
+          {
+            role: 'OPERATOR',
+            OR: [
+              {
+                memberships: {
+                  some: {
+                    companyId,
+                    role: 'FULL',
+                    revokedAt: null,
+                    OR: [{ expiresAt: null }, { expiresAt: { gt: now } }],
+                  },
+                },
+              },
+              {
+                globalAccess: 'FULL',
+                memberships: {
+                  none: {
+                    companyId,
+                    revokedAt: null,
+                    OR: [{ expiresAt: null }, { expiresAt: { gt: now } }],
+                  },
+                },
+              },
+            ],
+          },
+        ],
+      },
+      select: { id: true },
+    });
+    if (!actor) {
+      throw new ForbiddenException('Integration audit actor is not active or authorized.');
     }
   }
 

@@ -808,7 +808,7 @@ export const integrationProvenanceSchema = z
     sourceFingerprint: z.string().max(256).nullable(),
     firstSeenAt: z.string().datetime(),
     lastSeenAt: z.string().datetime(),
-    lastSyncedAt: z.string().datetime(),
+    lastSyncedAt: z.string().datetime().nullable(),
     ownership: z.enum(['breeze', 'weavestream']),
     state: integrationSyncStateSchema,
   })

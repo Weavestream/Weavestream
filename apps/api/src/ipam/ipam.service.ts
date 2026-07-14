@@ -33,6 +33,7 @@ export interface IntegrationSubnetWriteInput {
   auditActorId: string;
   dryRun: boolean;
   existingTargetId?: string | null;
+  ownershipVerified: boolean;
   name: string;
   cidr: string;
   vlanId?: number | null;
@@ -48,6 +49,7 @@ export interface IntegrationReservationWriteInput {
   auditActorId: string;
   dryRun: boolean;
   existingTargetId?: string | null;
+  ownershipVerified: boolean;
   subnetId: string;
   ipAddress: string;
   label: string;
@@ -403,6 +405,10 @@ export class IpamService {
   async writeSubnetFromIntegration(
     input: IntegrationSubnetWriteInput,
   ): Promise<IntegrationIpamWriteResult> {
+    await this.audit.assertIntegrationActor(input.auditActorId, input.companyId);
+    if (input.existingTargetId && !input.ownershipVerified) {
+      return ipamBlocked(input.companyId, 'ambiguous', 'The existing subnet is not owned by the reconstruction binding.', 'manual_ownership', input.existingTargetId);
+    }
     let native: ReturnType<typeof createSubnetSchema.parse>;
     try {
       native = createSubnetSchema.parse({
@@ -466,34 +472,39 @@ export class IpamService {
       };
     }
 
-    let row: Subnet;
-    let change: IntegrationIpamWriteResult['change'];
     if (existing) {
-      if (changed || restored) {
-        await this.prisma.subnet.updateMany({
+      const change: IntegrationIpamWriteResult['change'] = restored ? 'restored' : changed ? 'updated' : 'unchanged';
+      if (change === 'unchanged') {
+        return { targetId: existing.id, companyId: input.companyId, change };
+      }
+      return this.prisma.$transaction(async (tx) => {
+        await tx.subnet.updateMany({
           where: { id: existing.id, companyId: input.companyId },
           data: { ...data, ...(restored ? { archivedAt: null } : {}), updatedBy: input.auditActorId },
         });
-      }
-      row = await this.prisma.subnet.findFirstOrThrow({
-        where: { id: existing.id, companyId: input.companyId },
+        const row = await tx.subnet.findFirstOrThrow({
+          where: { id: existing.id, companyId: input.companyId },
+        });
+        await this.audit.logWithClient(tx, {
+          actorId: input.auditActorId,
+          action: change === 'restored' ? AUDIT_ACTIONS.subnet.restore : AUDIT_ACTIONS.subnet.update,
+          entityType: 'Subnet',
+          entityId: row.id,
+          companyId: input.companyId,
+          ip: INTEGRATION_AUDIT_META.ip,
+          userAgent: INTEGRATION_AUDIT_META.userAgent,
+          after: { integrationId: input.integrationId, cidr: row.cidr },
+        });
+        return { targetId: row.id, companyId: input.companyId, change };
       });
-      change = restored ? 'restored' : changed ? 'updated' : 'unchanged';
-    } else {
-      row = await this.prisma.subnet.create({
+    }
+    return this.prisma.$transaction(async (tx) => {
+      const row = await tx.subnet.create({
         data: { companyId: input.companyId, ...data, createdBy: input.auditActorId, updatedBy: input.auditActorId },
       });
-      change = 'created';
-    }
-    if (change !== 'unchanged') {
-      await this.audit.log({
+      await this.audit.logWithClient(tx, {
         actorId: input.auditActorId,
-        action:
-          change === 'created'
-            ? AUDIT_ACTIONS.subnet.create
-            : change === 'restored'
-              ? AUDIT_ACTIONS.subnet.restore
-              : AUDIT_ACTIONS.subnet.update,
+        action: AUDIT_ACTIONS.subnet.create,
         entityType: 'Subnet',
         entityId: row.id,
         companyId: input.companyId,
@@ -501,8 +512,8 @@ export class IpamService {
         userAgent: INTEGRATION_AUDIT_META.userAgent,
         after: { integrationId: input.integrationId, cidr: row.cidr },
       });
-    }
-    return { targetId: row.id, companyId: input.companyId, change };
+      return { targetId: row.id, companyId: input.companyId, change: 'created' as const };
+    });
   }
 
   async archiveSubnet(
@@ -684,6 +695,10 @@ export class IpamService {
   async writeReservationFromIntegration(
     input: IntegrationReservationWriteInput,
   ): Promise<IntegrationIpamWriteResult> {
+    await this.audit.assertIntegrationActor(input.auditActorId, input.companyId);
+    if (input.existingTargetId && !input.ownershipVerified) {
+      return ipamBlocked(input.companyId, 'ambiguous', 'The existing reservation is not owned by the reconstruction binding.', 'manual_ownership', input.existingTargetId);
+    }
     let native: ReturnType<typeof createIpReservationSchema.parse>;
     try {
       native = createIpReservationSchema.parse({
@@ -733,20 +748,34 @@ export class IpamService {
     if (input.dryRun) {
       return { targetId: bound?.id ?? '', companyId: input.companyId, change: bound ? (changed ? 'updated' : 'unchanged') : 'created' };
     }
-    let row: IpReservation;
     const change: IntegrationIpamWriteResult['change'] = bound ? (changed ? 'updated' : 'unchanged') : 'created';
     if (bound) {
-      if (changed) {
-        await this.prisma.ipReservation.updateMany({
+      if (!changed) {
+        return { targetId: bound.id, companyId: input.companyId, change };
+      }
+      return this.prisma.$transaction(async (tx) => {
+        await tx.ipReservation.updateMany({
           where: { id: bound.id, companyId: input.companyId },
           data: { ...data, updatedBy: input.auditActorId },
         });
-      }
-      row = await this.prisma.ipReservation.findFirstOrThrow({
-        where: { id: bound.id, companyId: input.companyId },
+        const row = await tx.ipReservation.findFirstOrThrow({
+          where: { id: bound.id, companyId: input.companyId },
+        });
+        await this.audit.logWithClient(tx, {
+          actorId: input.auditActorId,
+          action: AUDIT_ACTIONS.subnet.reservationUpdate,
+          entityType: 'IpReservation',
+          entityId: row.id,
+          companyId: input.companyId,
+          ip: INTEGRATION_AUDIT_META.ip,
+          userAgent: INTEGRATION_AUDIT_META.userAgent,
+          after: { integrationId: input.integrationId, subnetId: input.subnetId },
+        });
+        return { targetId: row.id, companyId: input.companyId, change };
       });
-    } else {
-      row = await this.prisma.ipReservation.create({
+    }
+    return this.prisma.$transaction(async (tx) => {
+      const row = await tx.ipReservation.create({
         data: {
           companyId: input.companyId,
           subnetId: input.subnetId,
@@ -755,14 +784,9 @@ export class IpamService {
           updatedBy: input.auditActorId,
         },
       });
-    }
-    if (change !== 'unchanged') {
-      await this.audit.log({
+      await this.audit.logWithClient(tx, {
         actorId: input.auditActorId,
-        action:
-          change === 'created'
-            ? AUDIT_ACTIONS.subnet.reservationCreate
-            : AUDIT_ACTIONS.subnet.reservationUpdate,
+        action: AUDIT_ACTIONS.subnet.reservationCreate,
         entityType: 'IpReservation',
         entityId: row.id,
         companyId: input.companyId,
@@ -770,8 +794,8 @@ export class IpamService {
         userAgent: INTEGRATION_AUDIT_META.userAgent,
         after: { integrationId: input.integrationId, subnetId: input.subnetId },
       });
-    }
-    return { targetId: row.id, companyId: input.companyId, change };
+      return { targetId: row.id, companyId: input.companyId, change: 'created' as const };
+    });
   }
 
   async deleteReservation(

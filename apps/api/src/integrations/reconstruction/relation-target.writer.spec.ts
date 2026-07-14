@@ -23,11 +23,20 @@ function context(overrides: Partial<ReconstructionWriteContext> = {}): Reconstru
       ? { targetKind: 'asset' as const, targetId: ids.sourceAsset, companyId: ids.company }
       : { targetKind: 'article' as const, targetId: ids.targetArticle, companyId: ids.company },
   );
-  return {
+  const ctx: ReconstructionWriteContext = {
     companyId: ids.company, integrationId: ids.integration, integrationCompanyMappingId: ids.mapping,
     resourceId: ids.resource, resourceKey: 'relations', externalOrgId: 'org-1', auditActorId: ids.actor,
     now: new Date('2026-07-13T18:00:00.000Z'), dryRun: false, resolveBinding, ...overrides,
   };
+  if (ctx.existingTargetId && overrides.previousProvenance === undefined) {
+    ctx.previousProvenance = {
+      integrationId: ids.integration, externalOrgId: 'org-1', resourceKey: 'relations', externalId: input.externalId,
+      sourceRevision: null, sourceFingerprint: null, firstSeenAt: '2026-07-01T00:00:00.000Z',
+      lastSeenAt: '2026-07-01T00:00:00.000Z', lastSyncedAt: '2026-07-01T00:00:00.000Z',
+      ownership: 'breeze', state: ctx.existingState === 'stale' ? 'stale' : 'active',
+    };
+  }
+  return ctx;
 }
 
 function setup(result: Partial<Awaited<ReturnType<RelationIntegrationWritePort['writeFromIntegration']>>> = {}) {
@@ -90,5 +99,24 @@ describe('RelationTargetWriter', () => {
     expect(out.provenance.externalId).toBe(input.externalId);
     expect(JSON.stringify(out.provenance)).not.toContain(ids.sourceAsset);
     expect(Buffer.byteLength(JSON.stringify(out.provenance))).toBeLessThanOrEqual(8192);
+  });
+
+  it('rejects secret-bearing relation metadata before resolving endpoints or writing', async () => {
+    const { writer, writeFromIntegration } = setup();
+    const resolveBinding = jest.fn();
+    const out = await writer.write(
+      context({ resolveBinding }),
+      { ...input, relationType: 'ghp_abcdefghijklmnopqrstuvwxyz1234567890' },
+    );
+    expect(out).toMatchObject({ gaps: [{ details: { reasonCode: 'sensitive_input' } }] });
+    expect(resolveBinding).not.toHaveBeenCalled();
+    expect(writeFromIntegration).not.toHaveBeenCalled();
+  });
+
+  it('blocks an arbitrary existing relation without matching Breeze provenance', async () => {
+    const { writer, writeFromIntegration } = setup({ change: 'updated' });
+    const out = await writer.write(context({ existingTargetId: ids.relation, previousProvenance: null }), input);
+    expect(out).toMatchObject({ gaps: [{ details: { reasonCode: 'manual_ownership' } }] });
+    expect(writeFromIntegration).not.toHaveBeenCalled();
   });
 });

@@ -2,11 +2,94 @@ import { AuditLogService } from './audit.service.js';
 
 function makePrisma() {
   return {
+    user: {
+      findFirst: jest.fn().mockResolvedValue({ id: 'actor-1' }),
+    },
     auditLog: {
       create: jest.fn().mockResolvedValue(undefined),
     },
   };
 }
+
+describe('AuditLogService integration transaction boundary', () => {
+  it('writes through the supplied transaction client', async () => {
+    const prisma = makePrisma();
+    const tx = {
+      auditLog: {
+        create: jest.fn().mockResolvedValue({ id: 'audit-1' }),
+      },
+    };
+    const svc = new AuditLogService(prisma as never);
+
+    await svc.logWithClient(tx as never, {
+      actorId: 'actor-1',
+      action: 'integration.asset.created',
+      entityType: 'Asset',
+      entityId: 'asset-1',
+      companyId: 'company-1',
+      after: { integrationId: 'integration-1', change: 'created' },
+    });
+
+    expect(tx.auditLog.create).toHaveBeenCalledTimes(1);
+    expect(prisma.auditLog.create).not.toHaveBeenCalled();
+  });
+
+  it('requires a persisted active authorized integration audit actor', async () => {
+    const prisma = makePrisma();
+    prisma.user.findFirst.mockResolvedValue(null);
+    const svc = new AuditLogService(prisma as never);
+
+    await expect(
+      svc.assertIntegrationActor('actor-1', 'company-1'),
+    ).rejects.toThrow('Integration audit actor is not active or authorized.');
+    expect(prisma.user.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ id: 'actor-1', isActive: true, deactivatedAt: null }),
+      }),
+    );
+  });
+
+  it('only authorizes an operator through an active, unexpired FULL membership', async () => {
+    const prisma = makePrisma();
+    const svc = new AuditLogService(prisma as never);
+
+    await svc.assertIntegrationActor('actor-1', 'company-1');
+
+    expect(prisma.user.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          OR: expect.arrayContaining([
+            expect.objectContaining({
+              role: 'OPERATOR',
+              OR: expect.arrayContaining([
+                {
+                  memberships: {
+                    some: {
+                      companyId: 'company-1',
+                      role: 'FULL',
+                      revokedAt: null,
+                      OR: [{ expiresAt: null }, { expiresAt: { gt: expect.any(Date) } }],
+                    },
+                  },
+                },
+                {
+                  globalAccess: 'FULL',
+                  memberships: {
+                    none: {
+                      companyId: 'company-1',
+                      revokedAt: null,
+                      OR: [{ expiresAt: null }, { expiresAt: { gt: expect.any(Date) } }],
+                    },
+                  },
+                },
+              ]),
+            }),
+          ]),
+        }),
+      }),
+    );
+  });
+});
 
 describe('AuditLogService.logChange (Phase 9a)', () => {
   it('writes a row containing only the changed fields', async () => {

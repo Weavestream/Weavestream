@@ -40,7 +40,10 @@ const AUDIT_META = {
 };
 
 function makeAudit() {
-  return { log: jest.fn().mockResolvedValue(undefined) };
+  return {
+    log: jest.fn().mockResolvedValue(undefined),
+    logWithClient: jest.fn().mockResolvedValue(undefined),
+  };
 }
 
 const ACTOR: AuthedUser = {
@@ -157,6 +160,25 @@ describe('TagsService', () => {
           after: { name: 'Production' },
         }),
       );
+    });
+
+    it('writes tag creation audit through the supplied transaction client', async () => {
+      const prisma = makePrisma();
+      const audit = makeAudit();
+      const tx = {
+        tag: {
+          findUnique: jest.fn().mockResolvedValue(null),
+          upsert: jest.fn().mockResolvedValue({ id: 't-9', name: 'Critical' }),
+        },
+        auditLog: { create: jest.fn() },
+      };
+      const svc = new TagsService(prisma as never, audit as never);
+      await svc.upsertByName('Critical', tx as never, AUDIT_META);
+      expect(audit.logWithClient).toHaveBeenCalledWith(
+        tx,
+        expect.objectContaining({ action: 'tag.create', entityId: 't-9' }),
+      );
+      expect(audit.log).not.toHaveBeenCalled();
     });
 
     it('does not emit an audit row when the tag already existed', async () => {

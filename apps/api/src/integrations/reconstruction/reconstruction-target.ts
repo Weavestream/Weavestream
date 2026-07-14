@@ -11,6 +11,9 @@ import {
 const MAX_INPUT_BYTES = 262_144;
 const MAX_INPUT_DEPTH = 8;
 const MAX_INPUT_ENTRIES = 1_024;
+const BLOCKED_CHECKSUM = createHash('sha256')
+  .update('weavestream-reconstruction-blocked-v1')
+  .digest('hex');
 
 const sourceRefSchema = z
   .object({
@@ -240,7 +243,7 @@ export function buildProvenance(
     sourceFingerprint: previous?.sourceFingerprint ?? input.source.fingerprint ?? null,
     firstSeenAt: ctx.previousProvenance?.firstSeenAt ?? at,
     lastSeenAt: at,
-    lastSyncedAt: at,
+    lastSyncedAt: state === 'blocked' ? previous?.lastSyncedAt ?? null : at,
     ownership: previous?.ownership ?? 'breeze',
     state,
   });
@@ -259,6 +262,12 @@ export function contextGap(
     });
   }
   const previous = ctx.previousProvenance;
+  if (ctx.existingTargetId && (!previous || previous.ownership !== 'breeze' || previous.state === 'blocked')) {
+    return safeGap('ambiguous', 'The existing target is not owned by an active Breeze binding.', {
+      reasonCode: 'manual_ownership',
+      candidateCount: 1,
+    });
+  }
   if (previous?.ownership === 'weavestream') {
     return safeGap('ambiguous', 'The existing target is manually owned.', {
       reasonCode: 'manual_ownership',
@@ -338,7 +347,7 @@ export function blockedOutcome(
   return {
     targetKind: input.targetKind,
     targetId,
-    checksum: computeReconstructionChecksum(input),
+    checksum: safeBlockedChecksum(ctx),
     change: 'blocked',
     provenance: buildProvenance(ctx, input, 'blocked'),
     gaps: [gap],
@@ -351,27 +360,69 @@ export function invalidInputOutcome(
 ): ReconstructionWriteOutcome {
   const at = ctx.now.toISOString();
   const externalId = `${ctx.externalOrgId}:${ctx.resourceKey}:invalid`.slice(0, 1024);
+  const previous = ctx.previousProvenance;
   const provenance = integrationProvenanceSchema.parse({
-    integrationId: ctx.integrationId,
-    externalOrgId: ctx.externalOrgId.slice(0, 256) || 'invalid',
-    resourceKey: ctx.resourceKey.slice(0, 256) || 'invalid',
-    externalId,
-    sourceRevision: null,
-    sourceFingerprint: null,
-    firstSeenAt: ctx.previousProvenance?.firstSeenAt ?? at,
+    integrationId: previous?.integrationId ?? ctx.integrationId,
+    externalOrgId: previous?.externalOrgId ?? (ctx.externalOrgId.slice(0, 256) || 'invalid'),
+    resourceKey: previous?.resourceKey ?? (ctx.resourceKey.slice(0, 256) || 'invalid'),
+    externalId: previous?.externalId ?? externalId,
+    sourceRevision: previous?.sourceRevision ?? null,
+    sourceFingerprint: previous?.sourceFingerprint ?? null,
+    firstSeenAt: previous?.firstSeenAt ?? at,
     lastSeenAt: at,
-    lastSyncedAt: at,
-    ownership: 'breeze',
+    lastSyncedAt: previous?.lastSyncedAt ?? null,
+    ownership: previous?.ownership ?? 'breeze',
     state: 'blocked',
   });
   return {
     targetKind,
     targetId: ctx.existingTargetId ?? '',
-    checksum: createHash('sha256').update('invalid-reconstruction-input').digest('hex'),
+    checksum: safeBlockedChecksum(ctx),
     change: 'blocked',
     provenance,
     gaps: [validationGap()],
   };
+}
+
+export function sensitiveInputOutcome(
+  ctx: ReconstructionWriteContext,
+  targetKind: IntegrationTargetKind,
+): ReconstructionWriteOutcome {
+  const at = ctx.now.toISOString();
+  return {
+    targetKind,
+    targetId: ctx.existingTargetId ?? '',
+    checksum: safeBlockedChecksum(ctx),
+    change: 'blocked',
+    provenance: integrationProvenanceSchema.parse({
+      integrationId: ctx.previousProvenance?.integrationId ?? ctx.integrationId,
+      externalOrgId: ctx.previousProvenance?.externalOrgId ?? 'rejected',
+      resourceKey: ctx.previousProvenance?.resourceKey ?? 'rejected',
+      externalId: ctx.previousProvenance?.externalId ?? 'rejected:rejected:rejected',
+      sourceRevision: ctx.previousProvenance?.sourceRevision ?? null,
+      sourceFingerprint: ctx.previousProvenance?.sourceFingerprint ?? null,
+      firstSeenAt: ctx.previousProvenance?.firstSeenAt ?? at,
+      lastSeenAt: at,
+      lastSyncedAt: ctx.previousProvenance?.lastSyncedAt ?? null,
+      ownership: ctx.previousProvenance?.ownership ?? 'breeze',
+      state: 'blocked',
+    }),
+    gaps: [safeGap('validation', 'Sensitive reconstruction input was rejected.', {
+      reasonCode: 'sensitive_input',
+    })],
+  };
+}
+
+function safeBlockedChecksum(ctx: ReconstructionWriteContext): string {
+  if (
+    ctx.previousProvenance &&
+    ctx.previousProvenance.state !== 'blocked' &&
+    typeof ctx.previousChecksum === 'string' &&
+    /^[a-f0-9]{64}$/i.test(ctx.previousChecksum)
+  ) {
+    return ctx.previousChecksum.toLowerCase();
+  }
+  return BLOCKED_CHECKSUM;
 }
 
 export function completedOutcome(

@@ -79,6 +79,7 @@ export interface IntegrationAssetWriteInput {
   externalId: string;
   externalSource?: string;
   existingTargetId?: string | null;
+  ownershipVerified: boolean;
   name: string;
   assetLayoutId: string;
   matchKeyFieldIds: string[];
@@ -553,6 +554,16 @@ export class AssetsService {
   async writeFromIntegration(
     input: IntegrationAssetWriteInput,
   ): Promise<IntegrationAssetWriteResult> {
+    await this.audit.assertIntegrationActor(input.auditActorId, input.companyId);
+    if (input.existingTargetId && !input.ownershipVerified) {
+      return integrationAssetBlocked(
+        input.companyId,
+        'ambiguous',
+        'The existing asset is not owned by the reconstruction binding.',
+        'manual_ownership',
+        input.existingTargetId,
+      );
+    }
     const layout = await this.loadLayout(input.assetLayoutId);
     if (layout.archivedAt) {
       return integrationAssetBlocked(input.companyId, 'validation', 'The asset layout is archived.', 'layout_archived');
@@ -725,6 +736,16 @@ export class AssetsService {
         );
         await this.linkFileFieldUploadsToAsset(tx, input.companyId, row.id, layout, canonicalValues);
         await this.searchIndex.upsertAsset(tx, row.id);
+        await this.audit.logWithClient(tx, {
+          actorId: input.auditActorId,
+          action: 'integration.asset.created',
+          entityType: 'Asset',
+          entityId: row.id,
+          companyId: input.companyId,
+          ip: INTEGRATION_AUDIT_META.ip,
+          userAgent: INTEGRATION_AUDIT_META.userAgent,
+          after: { integrationId: input.integrationId, change: 'created' },
+        });
         return { row, canonicalValues };
       });
       targetId = created.row.id;
@@ -782,6 +803,16 @@ export class AssetsService {
           );
           await this.linkFileFieldUploadsToAsset(tx, input.companyId, target!.id, layout, canonicalValues);
           await this.searchIndex.upsertAsset(tx, target!.id);
+          await this.audit.logWithClient(tx, {
+            actorId: input.auditActorId,
+            action: 'integration.asset.updated',
+            entityType: 'Asset',
+            entityId: target!.id,
+            companyId: input.companyId,
+            ip: INTEGRATION_AUDIT_META.ip,
+            userAgent: INTEGRATION_AUDIT_META.userAgent,
+            after: { integrationId: input.integrationId, change: plannedChange },
+          });
         }
         return { change: plannedChange, canonicalValues };
       });
@@ -795,21 +826,6 @@ export class AssetsService {
       change = outcome.change;
     }
 
-    if (change !== 'unchanged') {
-      await this.audit.log({
-        actorId: input.auditActorId,
-        action:
-          change === 'created'
-            ? 'integration.asset.created'
-            : 'integration.asset.updated',
-        entityType: 'Asset',
-        entityId: targetId,
-        companyId: input.companyId,
-        ip: INTEGRATION_AUDIT_META.ip,
-        userAgent: INTEGRATION_AUDIT_META.userAgent,
-        after: { integrationId: input.integrationId, change },
-      });
-    }
     return { targetId, companyId: input.companyId, change, fieldChecksums };
   }
 
@@ -1159,9 +1175,15 @@ export class AssetsService {
       include: { fieldValues: true },
       take: 2,
     });
+    const compatible = candidates.filter(
+      (candidate) =>
+        candidate.externalSource !== null &&
+        candidate.externalSource === (input.externalSource ?? null) &&
+        candidate.externalId === input.externalId,
+    );
     return {
-      target: candidates.length === 1 ? candidates[0]! : null,
-      ambiguous: candidates.length > 1,
+      target: compatible.length === 1 ? compatible[0]! : null,
+      ambiguous: compatible.length > 1,
     };
   }
 

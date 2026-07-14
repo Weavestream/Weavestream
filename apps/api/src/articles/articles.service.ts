@@ -41,6 +41,7 @@ export interface IntegrationArticleWriteInput {
   auditActorId: string;
   dryRun: boolean;
   existingTargetId?: string | null;
+  ownershipVerified: boolean;
   title: string;
   slug: string;
   folderId: string | null;
@@ -658,6 +659,10 @@ export class ArticlesService {
   async writeFromIntegration(
     input: IntegrationArticleWriteInput,
   ): Promise<IntegrationArticleWriteResult> {
+    await this.audit.assertIntegrationActor(input.auditActorId, input.companyId);
+    if (input.existingTargetId && !input.ownershipVerified) {
+      return articleBlocked(input.companyId, 'ambiguous', 'The existing article is not owned by the reconstruction binding.', 'manual_ownership', input.existingTargetId, 1);
+    }
     let native: Extract<CreateArticleInput, { editorMode: 'markdown' }>;
     try {
       native = createArticleSchema.parse({
@@ -764,6 +769,16 @@ export class ArticlesService {
             changeReason: `integration:${input.integrationId}`,
           },
         });
+        await this.audit.logWithClient(tx, {
+          actorId: input.auditActorId,
+          action: AUDIT_ACTIONS.article.create,
+          entityType: 'Article',
+          entityId: row.id,
+          companyId: input.companyId,
+          ip: INTEGRATION_AUDIT_META.ip,
+          userAgent: INTEGRATION_AUDIT_META.userAgent,
+          after: { integrationId: input.integrationId, slug: row.slug },
+        });
         return row;
       });
       change = 'created';
@@ -799,6 +814,16 @@ export class ArticlesService {
             },
           });
         }
+        await this.audit.logWithClient(tx, {
+          actorId: input.auditActorId,
+          action: restored ? AUDIT_ACTIONS.article.restore : AUDIT_ACTIONS.article.update,
+          entityType: 'Article',
+          entityId: updated.id,
+          companyId: input.companyId,
+          ip: INTEGRATION_AUDIT_META.ip,
+          userAgent: INTEGRATION_AUDIT_META.userAgent,
+          after: { integrationId: input.integrationId, slug: updated.slug },
+        });
         return updated;
       });
       change = restored ? 'restored' : 'updated';
@@ -807,23 +832,6 @@ export class ArticlesService {
       change = 'unchanged';
     }
 
-    if (change !== 'unchanged') {
-      await this.audit.log({
-        actorId: input.auditActorId,
-        action:
-          change === 'created'
-            ? AUDIT_ACTIONS.article.create
-            : change === 'restored'
-              ? AUDIT_ACTIONS.article.restore
-              : AUDIT_ACTIONS.article.update,
-        entityType: 'Article',
-        entityId: article.id,
-        companyId: input.companyId,
-        ip: INTEGRATION_AUDIT_META.ip,
-        userAgent: INTEGRATION_AUDIT_META.userAgent,
-        after: { integrationId: input.integrationId, slug: article.slug },
-      });
-    }
     return { targetId: article.id, companyId: input.companyId, change };
   }
 

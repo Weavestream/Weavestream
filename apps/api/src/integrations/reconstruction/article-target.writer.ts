@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { containsSensitiveMaterial } from '../sensitive-material.js';
 import {
   articleReconstructionInputSchema,
   blockedOutcome,
@@ -6,6 +7,7 @@ import {
   contextGap,
   invalidInputOutcome,
   nativeWriteErrorOutcome,
+  sensitiveInputOutcome,
   validated,
   type ArticleReconstructionInput,
   type NativeIntegrationWriteResult,
@@ -21,6 +23,7 @@ export interface ArticleIntegrationWriteInput {
   auditActorId: string;
   dryRun: boolean;
   existingTargetId?: string | null;
+  ownershipVerified: boolean;
   title: string;
   slug: string;
   folderId: string | null;
@@ -48,6 +51,9 @@ export class ArticleTargetWriter implements ReconstructionWriter<ArticleReconstr
     ctx: ReconstructionWriteContext,
     rawInput: ArticleReconstructionInput,
   ): Promise<ReconstructionWriteOutcome> {
+    if (containsSensitiveMaterial(rawInput)) {
+      return sensitiveInputOutcome(ctx, this.targetKind);
+    }
     let input: ValidatedReconstructionInput<ArticleReconstructionInput>;
     try {
       input = this.validate(rawInput);
@@ -63,6 +69,7 @@ export class ArticleTargetWriter implements ReconstructionWriter<ArticleReconstr
         auditActorId: ctx.auditActorId,
         dryRun: ctx.dryRun,
         existingTargetId: ctx.existingTargetId,
+        ownershipVerified: ctx.existingTargetId != null,
         title: input.title,
         slug: input.slug,
         folderId: input.folderId,
