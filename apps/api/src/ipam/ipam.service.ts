@@ -19,7 +19,10 @@ import {
 } from '@weavestream/shared';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { AuditLogService } from '../audit/audit.service.js';
-import { hasEligibleNativeBinding } from '../integrations/reconstruction/native-binding-ownership.js';
+import {
+  hasEligibleNativeBinding,
+  hasEligibleNativeTargetBinding,
+} from '../integrations/reconstruction/native-binding-ownership.js';
 import { AUDIT_ACTIONS } from '../audit/audit-actions.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
 
@@ -429,33 +432,61 @@ export class IpamService {
     } catch {
       return ipamBlocked(input.companyId, 'validation', 'Subnet input failed native validation.', 'native_validation');
     }
+    const readClient = input.tx ?? this.prisma;
 
     const bound = input.existingTargetId
-      ? await this.prisma.subnet.findUnique({ where: { id: input.existingTargetId } })
+      ? await readClient.subnet.findUnique({ where: { id: input.existingTargetId } })
       : null;
     if (bound && bound.companyId !== input.companyId) {
       return { targetId: bound.id, companyId: bound.companyId, change: 'blocked' };
     }
+    if (input.existingTargetId && !bound) {
+      return ipamBlocked(input.companyId, 'missing_dependency', 'The bound subnet no longer exists.', 'target_not_found', input.existingTargetId);
+    }
     const collision = !bound
-      ? await this.prisma.subnet.findFirst({
+      ? await readClient.subnet.findFirst({
           where: { companyId: input.companyId, cidr: native.cidr, archivedAt: null },
         })
       : null;
-    if (collision) {
+    const adoptedCanonicalTarget = !!collision;
+    if (
+      collision &&
+      !(await this.hasEligibleIpamBinding(
+        input.tx ?? this.prisma,
+        input,
+        'subnet',
+        collision.id,
+        true,
+      ))
+    ) {
       return ipamBlocked(input.companyId, 'ambiguous', 'An unbound subnet already owns this CIDR.', 'manual_ownership', collision.id);
     }
-    const existing = bound;
-    if (input.existingTargetId && !existing) {
-      return ipamBlocked(input.companyId, 'missing_dependency', 'The bound subnet no longer exists.', 'target_not_found', input.existingTargetId);
-    }
+    const existing = bound ?? collision;
     if (existing) await this.assertCidrFree(input.companyId, native.cidr, existing.id);
+    if (
+      adoptedCanonicalTarget &&
+      existing?.gateway &&
+      native.gateway &&
+      existing.gateway !== native.gateway
+    ) {
+      return ipamBlocked(
+        input.companyId,
+        'validation',
+        'Canonical subnet sources disagree on a non-null gateway.',
+        'canonical_gateway_conflict',
+        existing.id,
+      );
+    }
 
     const data = {
       name: native.name,
       cidr: native.cidr,
       prefix: Number(native.cidr.split('/')[1]),
       vlanId: native.vlanId ?? null,
-      gateway: native.gateway ?? null,
+      gateway:
+        adoptedCanonicalTarget && native.gateway == null
+          ? existing?.gateway ?? null
+          : native.gateway ?? null,
       dhcpRangeStart: native.dhcpRangeStart ?? null,
       dhcpRangeEnd: native.dhcpRangeEnd ?? null,
       description: native.description ?? null,
@@ -471,7 +502,7 @@ export class IpamService {
       existing.description !== data.description;
     const restored = existing?.archivedAt != null;
     if (input.dryRun) {
-      if (existing && !(await this.hasEligibleIpamBinding(input.tx ?? this.prisma, input, 'subnet', existing.id))) {
+      if (existing && !(await this.hasEligibleIpamBinding(input.tx ?? this.prisma, input, 'subnet', existing.id, adoptedCanonicalTarget))) {
         return ipamBlocked(input.companyId, 'ambiguous', 'The existing subnet is not owned by an eligible reconstruction binding.', 'manual_ownership', existing.id);
       }
       return {
@@ -484,13 +515,13 @@ export class IpamService {
     if (existing) {
       const change: IntegrationIpamWriteResult['change'] = restored ? 'restored' : changed ? 'updated' : 'unchanged';
       if (change === 'unchanged') {
-        if (!(await this.hasEligibleIpamBinding(input.tx ?? this.prisma, input, 'subnet', existing.id))) {
+        if (!(await this.hasEligibleIpamBinding(input.tx ?? this.prisma, input, 'subnet', existing.id, adoptedCanonicalTarget))) {
           return ipamBlocked(input.companyId, 'ambiguous', 'The existing subnet is not owned by an eligible reconstruction binding.', 'manual_ownership', existing.id);
         }
         return { targetId: existing.id, companyId: input.companyId, change };
       }
       return runTransaction(async (tx) => {
-        if (!(await this.hasEligibleIpamBinding(tx, input, 'subnet', existing.id))) {
+        if (!(await this.hasEligibleIpamBinding(tx, input, 'subnet', existing.id, adoptedCanonicalTarget))) {
           return ipamBlocked(input.companyId, 'ambiguous', 'The existing subnet is not owned by an eligible reconstruction binding.', 'manual_ownership', existing.id);
         }
         await tx.subnet.updateMany({
@@ -723,7 +754,8 @@ export class IpamService {
     } catch {
       return ipamBlocked(input.companyId, 'validation', 'Reservation input failed native validation.', 'native_validation');
     }
-    const subnet = await this.prisma.subnet.findUnique({ where: { id: input.subnetId } });
+    const readClient = input.tx ?? this.prisma;
+    const subnet = await readClient.subnet.findUnique({ where: { id: input.subnetId } });
     if (!subnet) {
       return ipamBlocked(input.companyId, 'missing_dependency', 'The reservation subnet was not found.', 'dependency_not_found');
     }
@@ -734,55 +766,66 @@ export class IpamService {
       return ipamBlocked(input.companyId, 'validation', 'The reservation IP is outside its subnet.', 'ip_outside_subnet');
     }
     const bound = input.existingTargetId
-      ? await this.prisma.ipReservation.findUnique({ where: { id: input.existingTargetId } })
+      ? await readClient.ipReservation.findUnique({ where: { id: input.existingTargetId } })
       : null;
     if (bound && bound.companyId !== input.companyId) {
       return { targetId: bound.id, companyId: bound.companyId, change: 'blocked' };
     }
-    const collision = !bound
-      ? await this.prisma.ipReservation.findFirst({
-          where: { companyId: input.companyId, subnetId: input.subnetId, ipAddress: native.ipAddress },
-        })
-      : null;
-    if (collision) {
-      return ipamBlocked(input.companyId, 'ambiguous', 'An unbound reservation already owns this IP.', 'manual_ownership', collision.id);
-    }
     if (input.existingTargetId && !bound) {
       return ipamBlocked(input.companyId, 'missing_dependency', 'The bound reservation no longer exists.', 'target_not_found', input.existingTargetId);
     }
-    if (bound && bound.subnetId !== input.subnetId) {
-      return ipamBlocked(input.companyId, 'validation', 'The bound reservation belongs to another subnet.', 'target_subnet_mismatch', bound.id);
+    const collision = !bound
+      ? await readClient.ipReservation.findFirst({
+          where: { companyId: input.companyId, subnetId: input.subnetId, ipAddress: native.ipAddress },
+        })
+      : null;
+    const adoptedCanonicalTarget = !!collision;
+    if (
+      collision &&
+      !(await this.hasEligibleIpamBinding(
+        input.tx ?? this.prisma,
+        input,
+        'ip_reservation',
+        collision.id,
+        true,
+      ))
+    ) {
+      return ipamBlocked(input.companyId, 'ambiguous', 'An unbound reservation already owns this IP.', 'manual_ownership', collision.id);
+    }
+    const existing = bound ?? collision;
+    if (existing && existing.subnetId !== input.subnetId) {
+      return ipamBlocked(input.companyId, 'validation', 'The bound reservation belongs to another subnet.', 'target_subnet_mismatch', existing.id);
     }
     const data = { ipAddress: native.ipAddress, label: native.label, notes: native.notes ?? null };
     const changed =
-      !bound ||
-      bound.ipAddress !== data.ipAddress ||
-      bound.label !== data.label ||
-      bound.notes !== data.notes;
+      !existing ||
+      existing.ipAddress !== data.ipAddress ||
+      existing.label !== data.label ||
+      existing.notes !== data.notes;
     if (input.dryRun) {
-      if (bound && !(await this.hasEligibleIpamBinding(input.tx ?? this.prisma, input, 'ip_reservation', bound.id))) {
-        return ipamBlocked(input.companyId, 'ambiguous', 'The existing reservation is not owned by an eligible reconstruction binding.', 'manual_ownership', bound.id);
+      if (existing && !(await this.hasEligibleIpamBinding(input.tx ?? this.prisma, input, 'ip_reservation', existing.id, adoptedCanonicalTarget))) {
+        return ipamBlocked(input.companyId, 'ambiguous', 'The existing reservation is not owned by an eligible reconstruction binding.', 'manual_ownership', existing.id);
       }
-      return { targetId: bound?.id ?? '', companyId: input.companyId, change: bound ? (changed ? 'updated' : 'unchanged') : 'created' };
+      return { targetId: existing?.id ?? '', companyId: input.companyId, change: existing ? (changed ? 'updated' : 'unchanged') : 'created' };
     }
-    const change: IntegrationIpamWriteResult['change'] = bound ? (changed ? 'updated' : 'unchanged') : 'created';
-    if (bound) {
+    const change: IntegrationIpamWriteResult['change'] = existing ? (changed ? 'updated' : 'unchanged') : 'created';
+    if (existing) {
       if (!changed) {
-        if (!(await this.hasEligibleIpamBinding(input.tx ?? this.prisma, input, 'ip_reservation', bound.id))) {
-          return ipamBlocked(input.companyId, 'ambiguous', 'The existing reservation is not owned by an eligible reconstruction binding.', 'manual_ownership', bound.id);
+        if (!(await this.hasEligibleIpamBinding(input.tx ?? this.prisma, input, 'ip_reservation', existing.id, adoptedCanonicalTarget))) {
+          return ipamBlocked(input.companyId, 'ambiguous', 'The existing reservation is not owned by an eligible reconstruction binding.', 'manual_ownership', existing.id);
         }
-        return { targetId: bound.id, companyId: input.companyId, change };
+        return { targetId: existing.id, companyId: input.companyId, change };
       }
       return runTransaction(async (tx) => {
-        if (!(await this.hasEligibleIpamBinding(tx, input, 'ip_reservation', bound.id))) {
-          return ipamBlocked(input.companyId, 'ambiguous', 'The existing reservation is not owned by an eligible reconstruction binding.', 'manual_ownership', bound.id);
+        if (!(await this.hasEligibleIpamBinding(tx, input, 'ip_reservation', existing.id, adoptedCanonicalTarget))) {
+          return ipamBlocked(input.companyId, 'ambiguous', 'The existing reservation is not owned by an eligible reconstruction binding.', 'manual_ownership', existing.id);
         }
         await tx.ipReservation.updateMany({
-          where: { id: bound.id, companyId: input.companyId },
+          where: { id: existing.id, companyId: input.companyId },
           data: { ...data, updatedBy: input.auditActorId },
         });
         const row = await tx.ipReservation.findFirstOrThrow({
-          where: { id: bound.id, companyId: input.companyId },
+          where: { id: existing.id, companyId: input.companyId },
         });
         await this.audit.logWithClient(tx, {
           actorId: input.auditActorId,
@@ -826,16 +869,22 @@ export class IpamService {
     input: IntegrationSubnetWriteInput | IntegrationReservationWriteInput,
     targetKind: 'subnet' | 'ip_reservation',
     targetId: string,
+    allowCanonicalTarget = false,
   ): Promise<boolean> {
-    return hasEligibleNativeBinding(client, {
+    const identity = {
       integrationCompanyMappingId: input.integrationCompanyMappingId,
       resourceId: input.resourceId,
-      externalId: input.externalId,
       integrationId: input.integrationId,
       companyId: input.companyId,
       targetKind,
       targetId,
-    });
+    };
+    return hasEligibleNativeBinding(client, { ...identity, externalId: input.externalId }).then(
+      (exact) =>
+        exact || !allowCanonicalTarget
+          ? exact
+          : hasEligibleNativeTargetBinding(client, identity),
+    );
   }
 
   async deleteReservation(

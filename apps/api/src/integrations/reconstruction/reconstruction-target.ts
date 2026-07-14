@@ -174,6 +174,8 @@ export interface ResolvedReconstructionTarget {
   targetKind: IntegrationTargetKind;
   targetId: string;
   companyId: string;
+  resourceId?: string;
+  externalId?: string;
 }
 
 export interface ReconstructionWriteContext {

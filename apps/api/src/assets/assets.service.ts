@@ -81,6 +81,7 @@ export interface IntegrationAssetWriteInput {
   externalId: string;
   externalSource?: string;
   existingTargetId?: string | null;
+  ownershipBinding?: { resourceId: string; externalId: string };
   name: string;
   assetLayoutId: string;
   matchKeyFieldIds: string[];
@@ -856,15 +857,25 @@ export class AssetsService {
     return { targetId, companyId: input.companyId, change, fieldChecksums };
   }
 
-  private hasEligibleAssetBinding(
+  private async hasEligibleAssetBinding(
     client: Parameters<typeof hasEligibleNativeBinding>[0],
     input: IntegrationAssetWriteInput,
     targetId: string,
   ): Promise<boolean> {
-    return hasEligibleNativeBinding(client, {
+    const exact = await hasEligibleNativeBinding(client, {
       integrationCompanyMappingId: input.integrationCompanyMappingId,
       resourceId: input.resourceId,
       externalId: input.externalId,
+      integrationId: input.integrationId,
+      companyId: input.companyId,
+      targetKind: 'asset',
+      targetId,
+    });
+    if (exact || !input.ownershipBinding) return exact;
+    return hasEligibleNativeBinding(client, {
+      integrationCompanyMappingId: input.integrationCompanyMappingId,
+      resourceId: input.ownershipBinding.resourceId,
+      externalId: input.ownershipBinding.externalId,
       integrationId: input.integrationId,
       companyId: input.companyId,
       targetKind: 'asset',

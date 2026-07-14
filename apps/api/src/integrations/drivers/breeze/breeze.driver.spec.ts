@@ -470,12 +470,14 @@ describe('Breeze transforms', () => {
     expect(siteSubnet!.reconstructionInput).toMatchObject({
       targetKind: 'subnet',
       cidr: '10.20.0.0/24',
-      externalId: `${ORG}:subnets:cidr:10.20.0.0/24`,
+      externalId: `${ORG}:subnets:${SEGMENT}`,
+      source: { sourceId: SEGMENT },
     });
     expect(derivedSubnet!.reconstructionInput).toMatchObject({
       targetKind: 'subnet',
       cidr: '10.20.0.0/24',
-      externalId: siteSubnet!.reconstructionInput.externalId,
+      externalId: `${ORG}:subnets:${STATIC_ADDRESS}`,
+      source: { sourceId: STATIC_ADDRESS },
     });
 
     const reservations = transformBreezeRecord('ip-reservations', deviceInventory) as Array<{
@@ -485,13 +487,131 @@ describe('Breeze transforms', () => {
     expect(reservations[0]?.reconstructionInput).toMatchObject({
       targetKind: 'ip_reservation',
       ipAddress: '10.20.0.50',
-      externalId: `${ORG}:ip-reservations:10.20.0.0/24:10.20.0.50`,
+      externalId: `${ORG}:ip-reservations:${STATIC_ADDRESS}`,
       subnetRef: {
         resourceKey: 'subnets',
-        externalId: `${ORG}:subnets:cidr:10.20.0.0/24`,
+        externalId: `${ORG}:subnets:${STATIC_ADDRESS}`,
       },
     });
     expect(JSON.stringify(reservations)).not.toContain('10.20.0.99');
+  });
+
+  it('creates a subnet for current static IPv4 even when reservation eligibility is false', () => {
+    const input = {
+      ...deviceInventory,
+      addresses: [
+        {
+          ...deviceInventory.addresses[0],
+          reservationEligible: false,
+        },
+      ],
+      collections: {
+        ...deviceInventory.collections,
+        addresses: completeCollection,
+      },
+    };
+
+    expect(transformBreezeRecord('subnets', input)).toHaveLength(1);
+    expect(transformBreezeRecord('ip-reservations', input)).toHaveLength(0);
+  });
+
+  it('fails closed on same-record same-CIDR gateway conflicts independent of address order', () => {
+    const conflicting = {
+      ...deviceInventory.addresses[0],
+      id: '14141414-1414-4414-8414-141414141414',
+      address: '10.20.0.51',
+      gateway: '10.20.0.3',
+    };
+    const makeInput = (addresses: unknown[]) => ({
+      ...deviceInventory,
+      addresses,
+      collections: {
+        ...deviceInventory.collections,
+        addresses: { total: 2, included: 2, complete: true, reason: null },
+      },
+    });
+
+    expect(() =>
+      transformBreezeRecord(
+        'subnets',
+        makeInput([deviceInventory.addresses[0]!, conflicting]),
+      ),
+    ).toThrow(/gateway|conflict|duplicate/i);
+    expect(() =>
+      transformBreezeRecord(
+        'subnets',
+        makeInput([conflicting, deviceInventory.addresses[0]!]),
+      ),
+    ).toThrow(/gateway|conflict|duplicate/i);
+  });
+
+  it.each(['not-an-ip', '10.30.0.1'])(
+    'fails closed on a malformed or out-of-subnet static gateway: %s',
+    (gateway) => {
+      expect(() =>
+        transformBreezeRecord('subnets', {
+          ...deviceInventory,
+          addresses: [{ ...deviceInventory.addresses[0], gateway }],
+          collections: {
+            ...deviceInventory.collections,
+            addresses: completeCollection,
+          },
+        }),
+      ).toThrow(/gateway/i);
+    },
+  );
+
+  it('keeps UUID-backed IPAM source identity stable when native address facts change', () => {
+    const [initialSubnet] = transformBreezeRecord('subnets', deviceInventory) as Array<{
+      reconstructionInput: Record<string, any>;
+    }>;
+    const [initialReservation] = transformBreezeRecord(
+      'ip-reservations',
+      deviceInventory,
+    ) as Array<{ reconstructionInput: Record<string, any> }>;
+    const changed = {
+      ...deviceInventory,
+      addresses: deviceInventory.addresses.map((address, index) =>
+        index === 0
+          ? {
+              ...address,
+              address: '10.30.0.50',
+              gateway: '10.30.0.1',
+            }
+          : address,
+      ),
+    };
+    const [changedSubnet] = transformBreezeRecord('subnets', changed) as Array<{
+      reconstructionInput: Record<string, any>;
+    }>;
+    const [changedReservation] = transformBreezeRecord(
+      'ip-reservations',
+      changed,
+    ) as Array<{ reconstructionInput: Record<string, any> }>;
+
+    expect(initialSubnet!.reconstructionInput.externalId).toBe(
+      `${ORG}:subnets:${STATIC_ADDRESS}`,
+    );
+    expect(changedSubnet!.reconstructionInput.externalId).toBe(
+      initialSubnet!.reconstructionInput.externalId,
+    );
+    expect(changedSubnet!.reconstructionInput).toMatchObject({
+      cidr: '10.30.0.0/24',
+      source: { sourceId: STATIC_ADDRESS },
+    });
+    expect(initialReservation!.reconstructionInput.externalId).toBe(
+      `${ORG}:ip-reservations:${STATIC_ADDRESS}`,
+    );
+    expect(changedReservation!.reconstructionInput.externalId).toBe(
+      initialReservation!.reconstructionInput.externalId,
+    );
+    expect(changedReservation!.reconstructionInput).toMatchObject({
+      ipAddress: '10.30.0.50',
+      source: { sourceId: STATIC_ADDRESS },
+      subnetRef: {
+        externalId: `${ORG}:subnets:${STATIC_ADDRESS}`,
+      },
+    });
   });
 
   it('preserves collection truncation as an explicit searchable completeness marker', () => {
@@ -820,7 +940,86 @@ describe('Breeze transforms', () => {
 });
 
 describe('BreezeDriver transport delegation', () => {
-  it('deduplicates canonical native identities emitted by multiple source rows in one page', async () => {
+  it('keeps 21 maximum-cardinality fan-out parents within two bounded lossless pages', async () => {
+    const uuid = (value: number) =>
+      `${value.toString(16).padStart(8, '0')}-0000-4000-8000-${value
+        .toString(16)
+        .padStart(12, '0')}`;
+    const parents = Array.from({ length: 21 }, (_, parentIndex) => {
+      const siteId = uuid(parentIndex + 1);
+      return {
+        ...siteInventory,
+        id: siteId,
+        siteId,
+        siteSubjectId: siteId,
+        networkEquipment: Array.from({ length: 500 }, (_, childIndex) => {
+          const value = (parentIndex + 1) * 1_000 + childIndex + 1;
+          return {
+            id: uuid(value),
+            type: 'switch' as const,
+            name: `Switch ${value}`,
+            address: '10.20.0.2',
+            macAddress: null,
+            manufacturer: null,
+            model: null,
+          };
+        }),
+        networkSegments: [],
+        collections: {
+          networkEquipment: { total: 500, included: 500, complete: true, reason: null },
+          networkSegments: { total: 0, included: 0, complete: true, reason: null },
+        },
+      };
+    });
+    const client = {
+      testConnection: jest.fn(),
+      listOrganizations: jest.fn(),
+      fetchPage: jest
+        .fn()
+        .mockResolvedValueOnce({
+          schemaVersion: '1',
+          snapshotAt: '2026-07-14T12:00:00.000Z',
+          data: parents.slice(0, 20),
+          nextCursor: 'fanout-page-2',
+          hasMore: true,
+        })
+        .mockResolvedValueOnce({
+          schemaVersion: '1',
+          snapshotAt: '2026-07-14T12:00:00.000Z',
+          data: parents.slice(20),
+          nextCursor: null,
+          hasMore: false,
+        }),
+    };
+    const driver = new BreezeDriver(client);
+    const fullContext = { ...ctx('network-equipment'), mode: 'full' as const, updatedSince: null };
+
+    const first = await driver.fetchRecords(fullContext, null);
+    const second = await driver.fetchRecords(
+      { ...fullContext, snapshotAt: first.snapshotAt ?? null },
+      first.cursor ?? null,
+    );
+    const identities = [...first.records, ...second.records].map((record) =>
+      'externalId' in record ? record.externalId : record.reconstructionInput.externalId,
+    );
+
+    expect(first.records).toHaveLength(10_000);
+    expect(second.records).toHaveLength(500);
+    expect(Math.max(first.records.length, second.records.length)).toBeLessThanOrEqual(10_000);
+    expect(new Set(identities).size).toBe(10_500);
+    expect(client.fetchPage).toHaveBeenNthCalledWith(
+      1,
+      expect.anything(),
+      expect.objectContaining({ resource: 'network-equipment', cursor: null }),
+    );
+    expect(client.fetchPage).toHaveBeenNthCalledWith(
+      2,
+      expect.anything(),
+      expect.objectContaining({ resource: 'network-equipment', cursor: 'fanout-page-2' }),
+    );
+  });
+
+  it('deduplicates the same UUID-backed native source emitted by multiple parent rows', async () => {
     const secondDevice = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
     const client = {
       testConnection: jest.fn(),
@@ -836,7 +1035,7 @@ describe('BreezeDriver transport delegation', () => {
     const page = await new BreezeDriver(client).fetchRecords(ctx('subnets'), null);
     expect(page.records).toHaveLength(1);
     expect(page.records[0]).toMatchObject({
-      reconstructionInput: { externalId: `${ORG}:subnets:cidr:10.20.0.0/24` },
+      reconstructionInput: { externalId: `${ORG}:subnets:${STATIC_ADDRESS}` },
     });
   });
 
@@ -868,21 +1067,30 @@ describe('BreezeDriver transport delegation', () => {
     const reverse = await fetch([latestDevice, siteInventory]);
 
     expect(forward.records).toEqual(reverse.records);
-    expect(forward.records).toHaveLength(1);
-    expect(forward.records[0]).toMatchObject({
-      reconstructionInput: {
-        cidr: '10.20.0.0/24',
-        gateway: '10.20.0.1',
-        description: 'Breeze durable network 10.20.0.0/24',
-        source: {
-          updatedAt: '2026-07-14T11:30:00.000Z',
-          revision: 'b'.repeat(64),
-        },
-      },
-    });
+    expect(forward.records).toHaveLength(2);
+    expect(forward.records).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          reconstructionInput: expect.objectContaining({
+            externalId: `${ORG}:subnets:${SEGMENT}`,
+            cidr: '10.20.0.0/24',
+            gateway: '10.20.0.1',
+            source: expect.objectContaining({ sourceId: SEGMENT }),
+          }),
+        }),
+        expect.objectContaining({
+          reconstructionInput: expect.objectContaining({
+            externalId: `${ORG}:subnets:${STATIC_ADDRESS}`,
+            cidr: '10.20.0.0/24',
+            gateway: '10.20.0.1',
+            source: expect.objectContaining({ sourceId: STATIC_ADDRESS }),
+          }),
+        }),
+      ]),
+    );
   });
 
-  it('deduplicates identical eligible reservations independent of input order', async () => {
+  it('retains convergent reservation source UUIDs independent of input order', async () => {
     const secondDevice = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
     const fetch = async (data: unknown[]) => {
       const client = {
@@ -898,13 +1106,37 @@ describe('BreezeDriver transport delegation', () => {
       };
       return new BreezeDriver(client).fetchRecords(ctx('ip-reservations'), null);
     };
-    const duplicate = { ...deviceInventory, id: secondDevice, deviceId: secondDevice };
+    const secondAddress = '15151515-1515-4515-8515-151515151515';
+    const duplicate = {
+      ...deviceInventory,
+      id: secondDevice,
+      deviceId: secondDevice,
+      addresses: deviceInventory.addresses.map((address, index) =>
+        index === 0 ? { ...address, id: secondAddress } : address,
+      ),
+    };
 
     const forward = await fetch([deviceInventory, duplicate]);
     const reverse = await fetch([duplicate, deviceInventory]);
 
     expect(forward.records).toEqual(reverse.records);
-    expect(forward.records).toHaveLength(1);
+    expect(forward.records).toHaveLength(2);
+    expect(forward.records).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          reconstructionInput: expect.objectContaining({
+            externalId: `${ORG}:ip-reservations:${STATIC_ADDRESS}`,
+            ipAddress: '10.20.0.50',
+          }),
+        }),
+        expect.objectContaining({
+          reconstructionInput: expect.objectContaining({
+            externalId: `${ORG}:ip-reservations:${secondAddress}`,
+            ipAddress: '10.20.0.50',
+          }),
+        }),
+      ]),
+    );
   });
 
   it('fails closed when duplicate stable native identities carry conflicting facts', async () => {

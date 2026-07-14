@@ -610,7 +610,15 @@ export class IntegrationSyncRunnerService {
     });
     if (!binding) return null;
     const targetId = targetIdFromBinding(binding);
-    return targetId ? { targetKind: binding.targetKind, targetId, companyId } : null;
+    return targetId
+      ? {
+          targetKind: binding.targetKind,
+          targetId,
+          companyId,
+          resourceId: dependency.id,
+          externalId: ref.externalId,
+        }
+      : null;
   }
 
   private accumulateWriterOutcome(

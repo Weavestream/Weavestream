@@ -22,6 +22,13 @@ const configSchema = z.object({ baseUrl: z.string().min(1).max(2_048) }).strict(
 const secretSchema = z.object({ apiKey: z.string().min(1).max(8_192) }).strict();
 const uuidSchema = z.string().uuid();
 const timestampSchema = z.string().datetime({ offset: true });
+const FAN_OUT_RESOURCES = new Set<BreezeResourceKey>([
+  'network-equipment',
+  'virtual-machines',
+  'subnets',
+  'ip-reservations',
+  'device-relationships',
+]);
 
 export type BreezePartnerApiContext = IntegrationContext;
 
@@ -81,7 +88,7 @@ export class BreezePartnerApiClient {
     if (input.updatedSince !== null)
       query.set('updatedSince', timestampSchema.parse(input.updatedSince));
     if (input.cursor !== null) query.set('cursor', input.cursor);
-    query.set('limit', '500');
+    query.set('limit', FAN_OUT_RESOURCES.has(resource.data) ? '20' : '500');
     const page = await this.request(ctx, BREEZE_ENDPOINT_BY_RESOURCE[resource.data], query);
     if (input.cursor !== null && page.nextCursor === input.cursor) {
       throw new Error('Breeze partner API cursor did not advance.');

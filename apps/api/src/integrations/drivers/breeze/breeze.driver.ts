@@ -168,10 +168,14 @@ const deviceDestinationFields = uniqueFields([
   ...softwareFields.map((item) => ({ ...item, mapResource: false as const })),
   ...customFields.map((item) => ({ ...item, mapResource: false as const })),
 ]);
+const siteDestinationFields = uniqueFields([
+  ...siteFields,
+  ...siteInventoryFields.map((item) => ({ ...item, mapResource: false as const })),
+]);
 
 const siteDestination: RecommendedDestination = {
   layout: { name: 'Breeze Sites', slug: 'breeze-sites', icon: 'map-pin', color: 'teal' },
-  fields: siteFields,
+  fields: siteDestinationFields,
 };
 const deviceLayout = {
   name: 'Breeze Devices',
@@ -451,7 +455,57 @@ function deduplicateDriverRecords(records: DriverFetchPage['records']): DriverFe
       byIdentity.set(identity, record);
     }
   }
-  return [...byIdentity.values()];
+  return convergeCanonicalIpamFacts([...byIdentity.values()]).sort((left, right) =>
+    driverRecordIdentity(left).localeCompare(driverRecordIdentity(right)),
+  );
+}
+
+function convergeCanonicalIpamFacts(
+  records: DriverFetchPage['records'],
+): DriverFetchPage['records'] {
+  const output = [...records];
+  const subnetIndexes = new Map<string, number[]>();
+  for (const [index, record] of output.entries()) {
+    const input = record.reconstructionInput;
+    if (input?.targetKind !== 'subnet') continue;
+    const indexes = subnetIndexes.get(input.cidr) ?? [];
+    indexes.push(index);
+    subnetIndexes.set(input.cidr, indexes);
+  }
+  for (const indexes of subnetIndexes.values()) {
+    const inputs = indexes.map((index) => output[index]!.reconstructionInput!).filter(
+      (input): input is Extract<NonNullable<typeof input>, { targetKind: 'subnet' }> =>
+        input.targetKind === 'subnet',
+    );
+    const canonicalFacts = inputs.map(({ externalId: _externalId, source: _source, gateway: _gateway, ...facts }) =>
+      JSON.stringify(facts),
+    );
+    if (new Set(canonicalFacts).size !== 1) {
+      throw new Error('Breeze partner API returned conflicting canonical subnet facts.');
+    }
+    const gateways = [...new Set(inputs.map((input) => input.gateway).filter(Boolean))];
+    if (gateways.length > 1) {
+      throw new Error('Breeze partner API returned conflicting gateways for one canonical subnet.');
+    }
+    for (const index of indexes) {
+      const record = output[index]!;
+      const input = record.reconstructionInput;
+      if (!input || input.targetKind !== 'subnet') continue;
+      output[index] = {
+        reconstructionInput: {
+          ...input,
+          gateway: gateways[0] ?? null,
+        },
+      };
+    }
+  }
+  return output;
+}
+
+function driverRecordIdentity(record: DriverFetchPage['records'][number]): string {
+  return record.reconstructionInput
+    ? `${record.reconstructionInput.targetKind}:${record.reconstructionInput.externalId}`
+    : `asset:${record.externalId}`;
 }
 
 function mergeDriverRecords(

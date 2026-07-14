@@ -117,6 +117,41 @@ describe('AssetTargetWriter', () => {
     expect(writeFromIntegration).toHaveBeenCalledWith(expect.objectContaining({ existingTargetId: ids.asset }));
   });
 
+  it('passes the exact resolved dependency binding as a first-write ownership anchor', async () => {
+    const { writer, writeFromIntegration } = setup({ change: 'updated' });
+    const dependencyResourceId = '00000000-0000-0000-0000-000000000010';
+    const groupedInput: AssetReconstructionInput = {
+      ...input,
+      externalId: 'org-1:device-inventory:device-1',
+      source: {
+        ...input.source,
+        resourceKey: 'device-inventory',
+      },
+      bindingResourceKey: 'devices',
+    };
+    const ctx = context({
+      resourceKey: 'device-inventory',
+      resolveBinding: jest.fn().mockResolvedValue({
+        targetKind: 'asset',
+        targetId: ids.asset,
+        companyId: ids.company,
+        resourceId: dependencyResourceId,
+        externalId: 'org-1:devices:device-1',
+      }),
+    });
+
+    await expect(writer.write(ctx, groupedInput)).resolves.toMatchObject({ change: 'updated' });
+    expect(writeFromIntegration).toHaveBeenCalledWith(
+      expect.objectContaining({
+        existingTargetId: ids.asset,
+        ownershipBinding: {
+          resourceId: dependencyResourceId,
+          externalId: 'org-1:devices:device-1',
+        },
+      }),
+    );
+  });
+
   it('returns a bounded validation gap for malformed input', async () => {
     const { writer, writeFromIntegration } = setup();
     expect(() => writer.validate({ ...input, name: '' })).toThrow();

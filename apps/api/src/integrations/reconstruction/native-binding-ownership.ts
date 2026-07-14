@@ -9,6 +9,7 @@ export interface ReconstructionBindingIdentity {
 interface BindingLookupClient {
   integrationSyncRecord: {
     findUnique(args: unknown): Promise<Record<string, unknown> | null>;
+    findFirst?(args: unknown): Promise<Record<string, unknown> | null>;
   };
 }
 
@@ -54,6 +55,50 @@ export async function hasEligibleNativeBinding(
       resource: { select: { integrationId: true, resourceKey: true } },
     },
   });
+  return isEligibleNativeBinding(record, input);
+}
+
+export async function hasEligibleNativeTargetBinding(
+  client: BindingLookupClient,
+  input: Omit<Parameters<typeof hasEligibleNativeBinding>[1], 'externalId'>,
+): Promise<boolean> {
+  if (!client.integrationSyncRecord.findFirst) return false;
+  const targetIdField = TARGET_ID_FIELD[input.targetKind];
+  const record = await client.integrationSyncRecord.findFirst({
+    where: {
+      integrationCompanyMappingId: input.integrationCompanyMappingId,
+      resourceId: input.resourceId,
+      companyId: input.companyId,
+      targetKind: input.targetKind,
+      [targetIdField]: input.targetId,
+      state: { in: ['active', 'stale'] },
+    },
+    select: {
+      integrationCompanyMappingId: true,
+      resourceId: true,
+      externalId: true,
+      companyId: true,
+      targetKind: true,
+      assetId: true,
+      subnetId: true,
+      ipReservationId: true,
+      articleId: true,
+      relationId: true,
+      state: true,
+      provenance: true,
+      companyMapping: { select: { integrationId: true, externalOrgId: true } },
+      resource: { select: { integrationId: true, resourceKey: true } },
+    },
+  });
+  return record
+    ? isEligibleNativeBinding(record, { ...input, externalId: String(record.externalId) })
+    : false;
+}
+
+function isEligibleNativeBinding(
+  record: Record<string, unknown> | null,
+  input: Parameters<typeof hasEligibleNativeBinding>[1],
+): boolean {
   if (!record) return false;
   const provenance = record.provenance;
   if (!provenance || typeof provenance !== 'object' || Array.isArray(provenance)) return false;

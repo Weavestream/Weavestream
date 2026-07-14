@@ -69,28 +69,39 @@ function reservationRow(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function setup(options: { subnet?: unknown; reservation?: unknown; subnetCollision?: unknown; reservationCollision?: unknown; binding?: unknown; auditFails?: boolean } = {}) {
+function setup(options: { subnet?: unknown; reservation?: unknown; subnetCollision?: unknown; reservationCollision?: unknown; binding?: unknown; targetBinding?: unknown; auditFails?: boolean } = {}) {
   let committed = false;
   const createdSubnet = subnetRow();
   const createdReservation = reservationRow();
   const tx = {
     subnet: {
+      findUnique: jest.fn().mockResolvedValue(options.subnet ?? null),
+      findFirst: jest.fn(async ({ where }: { where: { id?: { not?: string } } }) =>
+        where.id?.not ? null : options.subnetCollision ?? null,
+      ),
       create: jest.fn().mockResolvedValue(createdSubnet),
       updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       findFirstOrThrow: jest.fn().mockResolvedValue(options.subnet ?? createdSubnet),
     },
     ipReservation: {
+      findUnique: jest.fn().mockResolvedValue(options.reservation ?? null),
+      findFirst: jest.fn().mockResolvedValue(options.reservationCollision ?? null),
       create: jest.fn().mockResolvedValue(createdReservation),
       updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       findFirstOrThrow: jest.fn().mockResolvedValue(options.reservation ?? createdReservation),
     },
-    integrationSyncRecord: { findUnique: jest.fn().mockResolvedValue(options.binding ?? null) },
+    integrationSyncRecord: {
+      findUnique: jest.fn().mockResolvedValue(options.binding ?? null),
+      findFirst: jest.fn().mockResolvedValue(options.targetBinding ?? null),
+    },
     auditLog: { create: jest.fn() },
   };
   const prisma = {
     subnet: {
       findUnique: jest.fn().mockResolvedValue(options.subnet ?? null),
-      findFirst: jest.fn().mockResolvedValue(options.subnetCollision ?? null),
+      findFirst: jest.fn(async ({ where }: { where: { id?: { not?: string } } }) =>
+        where.id?.not ? null : options.subnetCollision ?? null,
+      ),
       create: tx.subnet.create,
       updateMany: tx.subnet.updateMany,
       findFirstOrThrow: tx.subnet.findFirstOrThrow,
@@ -102,7 +113,10 @@ function setup(options: { subnet?: unknown; reservation?: unknown; subnetCollisi
       updateMany: tx.ipReservation.updateMany,
       findFirstOrThrow: tx.ipReservation.findFirstOrThrow,
     },
-    integrationSyncRecord: { findUnique: jest.fn().mockResolvedValue(options.binding ?? null) },
+    integrationSyncRecord: {
+      findUnique: jest.fn().mockResolvedValue(options.binding ?? null),
+      findFirst: jest.fn().mockResolvedValue(options.targetBinding ?? null),
+    },
     $transaction: jest.fn(async (callback: (client: unknown) => Promise<unknown>) => {
       const result = await callback(tx);
       committed = true;
@@ -209,7 +223,7 @@ describe('IpamService integration system writes', () => {
       targetId: ids.reservation,
       change: 'created',
       provenance: {
-        externalId: `${orgId}:ip-reservations:10.0.0.0/24:10.0.0.50`,
+        externalId: `${orgId}:ip-reservations:${addressId}`,
       },
     });
     expect(harness.tx.ipReservation.create).toHaveBeenCalledWith({
@@ -310,6 +324,41 @@ describe('IpamService integration system writes', () => {
     })).resolves.toEqual({ targetId: ids.subnet, companyId: ids.company, change });
   });
 
+  it('updates native subnet facts through one stable UUID-backed source binding', async () => {
+    const externalId = 'org:subnets:11111111-1111-4111-8111-111111111111';
+    const { service, tx } = setup({
+      subnet: subnetRow(),
+      binding: binding('subnet', {
+        externalId,
+        provenance: {
+          integrationId: ids.integration,
+          externalOrgId: 'org',
+          resourceKey: 'subnets',
+          externalId,
+          ownership: 'breeze',
+          state: 'active',
+        },
+      }),
+    });
+
+    await expect(
+      service.writeSubnetFromIntegration({
+        ...subnetInput,
+        externalId,
+        existingTargetId: ids.subnet,
+        name: 'Renamed LAN',
+        cidr: '10.1.0.50/24',
+        gateway: '10.1.0.1',
+      }),
+    ).resolves.toMatchObject({ targetId: ids.subnet, change: 'updated' });
+    expect(tx.subnet.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: ids.subnet, companyId: ids.company },
+        data: expect.objectContaining({ name: 'Renamed LAN', cidr: '10.1.0.0/24' }),
+      }),
+    );
+  });
+
   it('blocks wrong-company and native CIDR collisions', async () => {
     const wrong = setup({ subnet: subnetRow({ companyId: 'other-company' }) }).service;
     await expect(wrong.writeSubnetFromIntegration({
@@ -320,6 +369,94 @@ describe('IpamService integration system writes', () => {
     await expect(collision.writeSubnetFromIntegration(subnetInput)).resolves.toMatchObject({
       change: 'blocked', gap: { details: { reasonCode: 'manual_ownership' } },
     });
+  });
+
+  it('converges a second UUID-backed subnet source only through an eligible target binding', async () => {
+    const firstExternalId = 'org:subnets:11111111-1111-4111-8111-111111111111';
+    const secondExternalId = 'org:subnets:22222222-2222-4222-8222-222222222222';
+    const targetBinding = binding('subnet', {
+      externalId: firstExternalId,
+      provenance: {
+        integrationId: ids.integration,
+        externalOrgId: 'org',
+        resourceKey: 'subnets',
+        externalId: firstExternalId,
+        ownership: 'breeze',
+        state: 'active',
+      },
+    });
+    const { service, tx } = setup({
+      subnetCollision: subnetRow(),
+      targetBinding,
+    });
+
+    await expect(
+      service.writeSubnetFromIntegration({
+        ...subnetInput,
+        externalId: secondExternalId,
+        gateway: null,
+        tx: tx as never,
+      }),
+    ).resolves.toEqual({ targetId: ids.subnet, companyId: ids.company, change: 'unchanged' });
+    expect(tx.integrationSyncRecord.findFirst).toHaveBeenCalled();
+    expect(tx.subnet.findFirst).toHaveBeenCalled();
+  });
+
+  it('does not adopt a canonical subnet collision when the exact bound target is missing', async () => {
+    const firstExternalId = 'org:subnets:11111111-1111-4111-8111-111111111111';
+    const targetBinding = binding('subnet', {
+      externalId: firstExternalId,
+      provenance: {
+        integrationId: ids.integration,
+        externalOrgId: 'org',
+        resourceKey: 'subnets',
+        externalId: firstExternalId,
+        ownership: 'breeze',
+        state: 'active',
+      },
+    });
+    const { service } = setup({ subnetCollision: subnetRow(), targetBinding });
+
+    await expect(
+      service.writeSubnetFromIntegration({
+        ...subnetInput,
+        existingTargetId: ids.other,
+      }),
+    ).resolves.toMatchObject({
+      change: 'blocked',
+      gap: { kind: 'missing_dependency', details: { reasonCode: 'target_not_found' } },
+    });
+  });
+
+  it('blocks a cross-page canonical subnet convergence with conflicting non-null gateways', async () => {
+    const firstExternalId = 'org:subnets:11111111-1111-4111-8111-111111111111';
+    const { service, tx } = setup({
+      subnetCollision: subnetRow({ gateway: '10.0.0.1' }),
+      targetBinding: binding('subnet', {
+        externalId: firstExternalId,
+        provenance: {
+          integrationId: ids.integration,
+          externalOrgId: 'org',
+          resourceKey: 'subnets',
+          externalId: firstExternalId,
+          ownership: 'breeze',
+          state: 'active',
+        },
+      }),
+    });
+
+    await expect(
+      service.writeSubnetFromIntegration({
+        ...subnetInput,
+        externalId: 'org:subnets:22222222-2222-4222-8222-222222222222',
+        gateway: '10.0.0.2',
+        tx: tx as never,
+      }),
+    ).resolves.toMatchObject({
+      change: 'blocked',
+      gap: { kind: 'validation', details: { reasonCode: 'canonical_gateway_conflict' } },
+    });
+    expect(tx.subnet.updateMany).not.toHaveBeenCalled();
   });
 
   it.each(['updated', 'unchanged'] as const)('classifies a verified reservation as %s', async (change) => {
@@ -343,6 +480,47 @@ describe('IpamService integration system writes', () => {
     })).resolves.toEqual({ targetId: ids.reservation, companyId: ids.company, change });
   });
 
+  it('updates a reservation address through one stable UUID-backed source binding', async () => {
+    const externalId = 'org:reservations:11111111-1111-4111-8111-111111111111';
+    const { service, tx } = setup({
+      subnet: subnetRow(),
+      reservation: reservationRow(),
+      binding: binding('ip_reservation', {
+        externalId,
+        provenance: {
+          integrationId: ids.integration,
+          externalOrgId: 'org',
+          resourceKey: 'reservations',
+          externalId,
+          ownership: 'breeze',
+          state: 'active',
+        },
+      }),
+    });
+
+    await expect(
+      service.writeReservationFromIntegration({
+        companyId: ids.company,
+        integrationId: ids.integration,
+        integrationCompanyMappingId: ids.mapping,
+        resourceId: ids.resource,
+        externalId,
+        auditActorId: ids.actor,
+        dryRun: false,
+        existingTargetId: ids.reservation,
+        subnetId: ids.subnet,
+        ipAddress: '10.0.0.51',
+        label: 'Printer',
+      }),
+    ).resolves.toMatchObject({ targetId: ids.reservation, change: 'updated' });
+    expect(tx.ipReservation.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: ids.reservation, companyId: ids.company },
+        data: expect.objectContaining({ ipAddress: '10.0.0.51' }),
+      }),
+    );
+  });
+
   it('keeps reservation dry-run side-effect free and blocks an IP collision', async () => {
     const dry = setup({ subnet: subnetRow() });
     await expect(dry.service.writeReservationFromIntegration({
@@ -355,6 +533,49 @@ describe('IpamService integration system writes', () => {
       companyId: ids.company, integrationId: ids.integration, auditActorId: ids.actor,
       dryRun: false, integrationCompanyMappingId: ids.mapping, resourceId: ids.resource, externalId: 'org:reservations:printer', subnetId: ids.subnet, ipAddress: '10.0.0.50', label: 'Printer',
     })).resolves.toMatchObject({ change: 'blocked', gap: { details: { reasonCode: 'manual_ownership' } } });
+  });
+
+  it('converges a second UUID-backed reservation source only through an eligible target binding', async () => {
+    const firstExternalId = 'org:reservations:11111111-1111-4111-8111-111111111111';
+    const secondExternalId = 'org:reservations:22222222-2222-4222-8222-222222222222';
+    const targetBinding = binding('ip_reservation', {
+      externalId: firstExternalId,
+      provenance: {
+        integrationId: ids.integration,
+        externalOrgId: 'org',
+        resourceKey: 'reservations',
+        externalId: firstExternalId,
+        ownership: 'breeze',
+        state: 'active',
+      },
+    });
+    const { service, tx } = setup({
+      subnet: subnetRow(),
+      reservationCollision: reservationRow(),
+      targetBinding,
+    });
+
+    await expect(
+      service.writeReservationFromIntegration({
+        companyId: ids.company,
+        integrationId: ids.integration,
+        integrationCompanyMappingId: ids.mapping,
+        resourceId: ids.resource,
+        externalId: secondExternalId,
+        tx: tx as never,
+        auditActorId: ids.actor,
+        dryRun: false,
+        subnetId: ids.subnet,
+        ipAddress: '10.0.0.50',
+        label: 'Printer',
+      }),
+    ).resolves.toEqual({
+      targetId: ids.reservation,
+      companyId: ids.company,
+      change: 'unchanged',
+    });
+    expect(tx.integrationSyncRecord.findFirst).toHaveBeenCalled();
+    expect(tx.ipReservation.findFirst).toHaveBeenCalled();
   });
 
   it('rejects an arbitrary existing reservation and a wrong-company reservation', async () => {

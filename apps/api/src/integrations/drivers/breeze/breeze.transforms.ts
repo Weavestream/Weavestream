@@ -317,7 +317,7 @@ function namespaced(orgId: string, resourceKey: string, sourceId: string): strin
 }
 
 function typedSubnet(record: BreezeRecordBase, subnet: Record<string, any>): TypedDriverRecord {
-  const sourceId = `cidr:${subnet.cidr}`;
+  const sourceId = subnet.sourceId;
   const input: SubnetReconstructionInput = {
     targetKind: 'subnet',
     externalId: namespaced(record.orgId, 'subnets', sourceId),
@@ -334,8 +334,8 @@ function typedReservation(
   record: BreezeRecordBase,
   reservation: Record<string, any>,
 ): TypedDriverRecord {
-  const sourceId = `${reservation.cidr}:${reservation.ipAddress}`;
-  const subnetSourceId = `cidr:${reservation.cidr}`;
+  const sourceId = reservation.sourceId;
+  const subnetSourceId = reservation.sourceId;
   const input: IpReservationReconstructionInput = {
     targetKind: 'ip_reservation',
     externalId: namespaced(record.orgId, 'ip-reservations', sourceId),
@@ -419,12 +419,13 @@ function relationshipEndpoint(
 function subnetCandidates(
   record: BreezeRecordBase & Record<string, any>,
 ): Array<Record<string, any>> {
-  const candidates = new Map<string, Record<string, any>>();
+  const candidates: Array<Record<string, any>> = [];
   if (record.subjectType === 'site') {
     for (const segment of record.networkSegments as Array<Record<string, unknown>>) {
       const cidr = normalizeCidrV4(String(segment.cidr));
       if (!cidr) continue;
-      candidates.set(cidr, {
+      candidates.push({
+        sourceId: segment.id,
         cidr,
         gateway: null,
         description: `Breeze durable network ${cidr}`,
@@ -433,36 +434,38 @@ function subnetCandidates(
   }
   if (record.subjectType === 'device') {
     for (const address of record.addresses as Array<Record<string, any>>) {
-      const network = durableStaticNetwork(address);
+      const network = currentStaticNetwork(address);
       if (!network) continue;
-      const current = candidates.get(network.cidr);
-      candidates.set(network.cidr, {
+      candidates.push({
+        sourceId: address.id,
         cidr: network.cidr,
-        gateway: current?.gateway ?? network.gateway,
+        gateway: network.gateway,
         description: `Breeze durable network ${network.cidr}`,
       });
     }
   }
-  return [...candidates.values()].sort((left, right) => left.cidr.localeCompare(right.cidr));
+  assertCompatibleSubnetGateways(candidates);
+  return candidates.sort((left, right) => left.sourceId.localeCompare(right.sourceId));
 }
 
 function reservationCandidates(
   record: BreezeRecordBase & Record<string, any>,
 ): Array<Record<string, any>> {
   if (record.subjectType !== 'device') return [];
-  const candidates = new Map<string, Record<string, any>>();
+  const candidates: Array<Record<string, any>> = [];
   for (const address of record.addresses as Array<Record<string, any>>) {
-    const network = durableStaticNetwork(address);
-    if (!network) continue;
-    const key = `${network.cidr}:${network.ipAddress}`;
-    candidates.set(key, { cidr: network.cidr, ipAddress: network.ipAddress });
+    const network = currentStaticNetwork(address);
+    if (!network || address.reservationEligible !== true) continue;
+    candidates.push({
+      sourceId: address.id,
+      cidr: network.cidr,
+      ipAddress: network.ipAddress,
+    });
   }
-  return [...candidates.values()].sort((left, right) =>
-    `${left.cidr}:${left.ipAddress}`.localeCompare(`${right.cidr}:${right.ipAddress}`),
-  );
+  return candidates.sort((left, right) => left.sourceId.localeCompare(right.sourceId));
 }
 
-function durableStaticNetwork(address: Record<string, any>): {
+function currentStaticNetwork(address: Record<string, any>): {
   cidr: string;
   ipAddress: string;
   gateway: string | null;
@@ -470,7 +473,6 @@ function durableStaticNetwork(address: Record<string, any>): {
   if (
     address.family !== 'ipv4' ||
     address.assignment !== 'static' ||
-    address.reservationEligible !== true ||
     address.active !== true ||
     address.deactivatedAt !== null
   ) {
@@ -482,7 +484,22 @@ function durableStaticNetwork(address: Record<string, any>): {
   const cidr = normalizeCidrV4(`${ipAddress}/${prefix}`);
   if (!cidr) return null;
   const gateway = address.gateway ? normalizeIpv4V4(String(address.gateway)) : null;
-  return { cidr, ipAddress, gateway: gateway && ipInCidr(gateway, cidr) ? gateway : null };
+  if (address.gateway && (!gateway || !ipInCidr(gateway, cidr))) {
+    throw new Error('Breeze source contains an invalid static-address gateway.');
+  }
+  return { cidr, ipAddress, gateway };
+}
+
+function assertCompatibleSubnetGateways(candidates: Array<Record<string, any>>): void {
+  const gatewayByCidr = new Map<string, string>();
+  for (const candidate of candidates) {
+    if (!candidate.gateway) continue;
+    const existing = gatewayByCidr.get(candidate.cidr);
+    if (existing && existing !== candidate.gateway) {
+      throw new Error('Breeze source contains conflicting gateways for one canonical subnet.');
+    }
+    gatewayByCidr.set(candidate.cidr, candidate.gateway);
+  }
 }
 
 function subnetMaskPrefix(value: unknown): number | null {

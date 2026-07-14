@@ -1,4 +1,6 @@
 import { z } from 'zod';
+import { transformBreezeRecord } from '../integrations/drivers/breeze/breeze.transforms.js';
+import { AssetTargetWriter } from '../integrations/reconstruction/asset-target.writer.js';
 
 jest.mock('../uploads/uploads.service.js', () => ({
   UploadsService: class UploadsService {},
@@ -16,6 +18,7 @@ const ids = {
   integration: '54000000-0000-0000-0000-000000000003',
   mapping: '54000000-0000-0000-0000-000000000004',
   resource: '54000000-0000-0000-0000-000000000005',
+  dependencyResource: '54000000-0000-0000-0000-000000000010',
   layout: '54000000-0000-0000-0000-000000000006',
   field: '54000000-0000-0000-0000-000000000007',
   asset: '54000000-0000-0000-0000-000000000008',
@@ -214,6 +217,177 @@ describe('AssetsService integration system writes', () => {
     })).resolves.toMatchObject({ targetId: ids.asset, change });
     expect(tx.integrationSyncRecord.findUnique).toHaveBeenCalled();
   });
+
+  it('accepts an exact eligible dependency binding as a grouped-resource first-write anchor', async () => {
+    const dependencyExternalId = 'org-1:devices:edge-01';
+    const { service, tx } = setup({
+      target: asset(),
+      binding: binding({
+        resourceId: ids.dependencyResource,
+        externalId: dependencyExternalId,
+        resource: { integrationId: ids.integration, resourceKey: 'devices' },
+        provenance: {
+          integrationId: ids.integration,
+          externalOrgId: 'org-1',
+          resourceKey: 'devices',
+          externalId: dependencyExternalId,
+          ownership: 'breeze',
+          state: 'active',
+        },
+      }),
+    });
+
+    await expect(
+      service.writeFromIntegration({
+        ...input,
+        externalId: 'org-1:device-inventory:edge-01',
+        existingTargetId: ids.asset,
+        ownershipBinding: {
+          resourceId: ids.dependencyResource,
+          externalId: dependencyExternalId,
+        },
+      } as never),
+    ).resolves.toMatchObject({ targetId: ids.asset, change: 'unchanged' });
+    expect(tx.asset.updateMany).not.toHaveBeenCalled();
+  });
+
+  it.each(['device', 'site'] as const)(
+    'writes first adjacent Breeze %s inventory fields through the real writer and service',
+    async (subject) => {
+      const orgId = '11111111-1111-4111-8111-111111111111';
+      const siteId = '22222222-2222-4222-8222-222222222222';
+      const deviceId = '33333333-3333-4333-8333-333333333333';
+      const revision = 'a'.repeat(64);
+      const sourceUpdatedAt = '2026-07-14T11:00:00.000Z';
+      const complete = { total: 0, included: 0, complete: true, reason: null } as const;
+      const raw = subject === 'device'
+        ? {
+            id: deviceId,
+            orgId,
+            siteId,
+            sourceUpdatedAt,
+            revision,
+            subjectType: 'device' as const,
+            deviceId,
+            hardware: {
+              processor: { model: null, cores: 4, threads: 8 },
+              memory: { totalMb: 8_192 },
+              graphics: { model: null },
+              motherboard: { manufacturer: null, product: null, version: null },
+              firmware: { biosVersion: null },
+            },
+            disks: [],
+            interfaces: [],
+            addresses: [],
+            warranty: null,
+            virtualMachines: [],
+            collections: {
+              disks: complete,
+              interfaces: complete,
+              addresses: complete,
+              virtualMachines: complete,
+            },
+          }
+        : {
+            id: siteId,
+            orgId,
+            siteId,
+            sourceUpdatedAt,
+            revision,
+            subjectType: 'site' as const,
+            siteSubjectId: siteId,
+            networkEquipment: [],
+            networkSegments: [],
+            collections: { networkEquipment: complete, networkSegments: complete },
+          };
+      const resourceKey = subject === 'device' ? 'device-inventory' : 'site-inventory';
+      const dependencyResourceKey = subject === 'device' ? 'devices' : 'sites';
+      const sourceId = subject === 'device' ? deviceId : siteId;
+      const dependencyExternalId = `${orgId}:${dependencyResourceKey}:${sourceId}`;
+      const dependencyBinding = binding({
+        resourceId: ids.dependencyResource,
+        externalId: dependencyExternalId,
+        resource: { integrationId: ids.integration, resourceKey: dependencyResourceKey },
+        companyMapping: { integrationId: ids.integration, externalOrgId: orgId },
+        provenance: {
+          integrationId: ids.integration,
+          externalOrgId: orgId,
+          resourceKey: dependencyResourceKey,
+          externalId: dependencyExternalId,
+          ownership: 'breeze',
+          state: 'active',
+        },
+      });
+      const { service, tx } = setup({ target: asset(), binding: dependencyBinding });
+      const [transformed] = transformBreezeRecord(resourceKey, raw);
+      if (!transformed || !('fields' in transformed) || !transformed.fields) {
+        throw new Error('Expected grouped asset fields.');
+      }
+      const writer = new AssetTargetWriter(service);
+
+      const outcome = await writer.write(
+        {
+          tx: tx as never,
+          companyId: ids.company,
+          integrationId: ids.integration,
+          integrationCompanyMappingId: ids.mapping,
+          resourceId: ids.resource,
+          resourceKey,
+          externalOrgId: orgId,
+          auditActorId: ids.actor,
+          now: new Date(sourceUpdatedAt),
+          dryRun: false,
+          existingTargetId: null,
+          previousProvenance: null,
+          resolveBinding: jest.fn().mockResolvedValue({
+            targetKind: 'asset',
+            targetId: ids.asset,
+            companyId: ids.company,
+            resourceId: ids.dependencyResource,
+            externalId: dependencyExternalId,
+          }),
+        },
+        {
+          targetKind: 'asset',
+          externalId: `${orgId}:${resourceKey}:${sourceId}`,
+          source: {
+            externalOrgId: orgId,
+            resourceKey,
+            sourceId,
+            revision,
+            fingerprint: revision,
+            updatedAt: sourceUpdatedAt,
+          },
+          name: transformed.displayName ?? `${subject} inventory`,
+          assetLayoutId: ids.layout,
+          externalSource: 'breeze',
+          matchKeyFieldIds: [],
+          fieldValues: [
+            {
+              targetFieldId: ids.field,
+              value: String(transformed.fields.inventoryCompleteness ?? ''),
+              syncDirection: 'source_wins',
+            },
+          ],
+          bindingResourceKey: dependencyResourceKey,
+        },
+      );
+
+      expect(outcome).toMatchObject({ targetId: ids.asset, change: 'updated' });
+      expect(tx.integrationSyncRecord.findUnique).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: {
+            integrationCompanyMappingId_resourceId_externalId: {
+              integrationCompanyMappingId: ids.mapping,
+              resourceId: ids.dependencyResource,
+              externalId: dependencyExternalId,
+            },
+          },
+        }),
+      );
+      expect(tx.asset.updateMany).toHaveBeenCalled();
+    },
+  );
 
   it('rejects an arbitrary manual existing asset before mutation', async () => {
     const { service, tx } = setup({ target: asset({ externalSource: null, externalId: null }) });

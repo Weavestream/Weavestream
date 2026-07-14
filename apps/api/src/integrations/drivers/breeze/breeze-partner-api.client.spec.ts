@@ -133,6 +133,35 @@ describe('BreezePartnerApiClient', () => {
     expect(fx.calls[0]!.url).not.toContain('top-secret-key');
   });
 
+  it('uses bounded fan-out parent pages and preserves opaque cursor continuation', async () => {
+    const fx = installFetchScript([
+      { body: envelope([], { nextCursor: 'fanout-page-2', hasMore: true }) },
+      { body: envelope([]) },
+    ]);
+    const client = new BreezePartnerApiClient();
+
+    const first = await client.fetchPage(context(), {
+      resource: 'network-equipment',
+      externalOrgId: ORG,
+      cursor: null,
+      updatedSince: null,
+    });
+    await client.fetchPage(context(), {
+      resource: 'network-equipment',
+      externalOrgId: ORG,
+      cursor: first.nextCursor,
+      updatedSince: null,
+    });
+
+    expect(fx.calls).toHaveLength(2);
+    expect(fx.calls[0]!.url).toBe(
+      `https://breeze.example.test/api/v1/partner-api/device-inventory?orgId=${ORG}&limit=20`,
+    );
+    expect(fx.calls[1]!.url).toBe(
+      `https://breeze.example.test/api/v1/partner-api/device-inventory?orgId=${ORG}&cursor=fanout-page-2&limit=20`,
+    );
+  });
+
   it('does not follow redirects or forward X-API-Key to another public origin', async () => {
     const fx = installFetchScript([
       {

@@ -33,6 +33,7 @@ export interface AssetIntegrationWriteInput {
   externalId: string;
   externalSource?: string;
   existingTargetId?: string | null;
+  ownershipBinding?: { resourceId: string; externalId: string };
   name: string;
   assetLayoutId: string;
   matchKeyFieldIds: string[];
@@ -80,6 +81,7 @@ export class AssetTargetWriter implements ReconstructionWriter<AssetReconstructi
     if (identityGap) return blockedOutcome(ctx, input, identityGap);
 
     let existingTargetId = ctx.existingTargetId ?? null;
+    let ownershipBinding: AssetIntegrationWriteInput['ownershipBinding'];
     if (input.bindingResourceKey) {
       const binding = await ctx.resolveBinding({
         resourceKey: input.bindingResourceKey,
@@ -118,6 +120,12 @@ export class AssetTargetWriter implements ReconstructionWriter<AssetReconstructi
         );
       }
       existingTargetId = binding.targetId;
+      if (binding.resourceId && binding.externalId) {
+        ownershipBinding = {
+          resourceId: binding.resourceId,
+          externalId: binding.externalId,
+        };
+      }
     }
 
     try {
@@ -132,6 +140,7 @@ export class AssetTargetWriter implements ReconstructionWriter<AssetReconstructi
         externalId: input.externalId,
         ...(input.externalSource ? { externalSource: input.externalSource } : {}),
         existingTargetId,
+        ...(ownershipBinding ? { ownershipBinding } : {}),
         name: input.name,
         assetLayoutId: input.assetLayoutId,
         matchKeyFieldIds: [...input.matchKeyFieldIds],

@@ -1,6 +1,7 @@
 import type { DriverDescriptor } from '@weavestream/shared';
 import { ensureResourceDestination, validateResourceRegistry } from './integrations.service.js';
 import type { RecommendedDestination } from './drivers/integration-driver.js';
+import { BREEZE_RECOMMENDED_DESTINATIONS } from './drivers/breeze/breeze.driver.js';
 
 const baseDescriptor = {
   key: 'test',
@@ -153,6 +154,105 @@ describe('ensureResourceDestination', () => {
     await ensureResourceDestination(prisma, 'integration-1', 'devices', recommendation);
     expect(prisma.assetLayout.create).toHaveBeenCalledTimes(1);
     expect(prisma.integrationFieldMapping.createMany).toHaveBeenCalledTimes(1);
+  });
+
+  it('provisions one complete Breeze site layout with resource-specific mappings', async () => {
+    const layoutId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const resources = new Map([
+      ['sites', { id: 'sites-resource', assetLayoutId: null as string | null, mappings: [] as string[] }],
+      [
+        'site-inventory',
+        {
+          id: 'site-inventory-resource',
+          assetLayoutId: null as string | null,
+          mappings: [] as string[],
+        },
+      ],
+    ]);
+    let layout: { id: string; slug: string; isActive: boolean } | null = null;
+    const fields: Array<{ id: string; slug: string; fieldType: string }> = [];
+    const tx = {
+      integrationResource: {
+        findUnique: jest.fn(async ({ where }: any) => {
+          const row = resources.get(where.integrationId_resourceKey.resourceKey)!;
+          return {
+            id: row.id,
+            assetLayoutId: row.assetLayoutId,
+            _count: { fieldMappings: row.mappings.length },
+          };
+        }),
+        updateMany: jest.fn(async ({ where, data }: any) => {
+          const row = [...resources.values()].find((candidate) => candidate.id === where.id)!;
+          if (row.assetLayoutId || row.mappings.length > 0) return { count: 0 };
+          row.assetLayoutId = data.assetLayoutId;
+          return { count: 1 };
+        }),
+      },
+      assetLayout: {
+        findFirst: jest.fn(async () => layout),
+        create: jest.fn(async ({ data }: any) => {
+          layout = { id: layoutId, slug: data.slug, isActive: true };
+          return layout;
+        }),
+      },
+      assetField: {
+        createMany: jest.fn(async ({ data }: any) => {
+          for (const item of data) {
+            fields.push({
+              id: `field-${fields.length + 1}`,
+              slug: item.slug,
+              fieldType: item.fieldType,
+            });
+          }
+          return { count: data.length };
+        }),
+        findMany: jest.fn(async ({ where }: any) =>
+          fields.filter((field) => where.slug.in.includes(field.slug)),
+        ),
+      },
+      integrationFieldMapping: {
+        createMany: jest.fn(async ({ data }: any) => {
+          for (const item of data) {
+            const row = [...resources.values()].find(
+              (candidate) => candidate.id === item.resourceId,
+            )!;
+            row.mappings.push(item.sourceField);
+          }
+          return { count: data.length };
+        }),
+      },
+    };
+    const prisma = {
+      ...tx,
+      $transaction: jest.fn(async (callback: (client: typeof tx) => Promise<void>) =>
+        callback(tx),
+      ),
+    };
+
+    await ensureResourceDestination(
+      prisma as never,
+      'integration-1',
+      'sites',
+      BREEZE_RECOMMENDED_DESTINATIONS.sites!,
+    );
+    await ensureResourceDestination(
+      prisma as never,
+      'integration-1',
+      'site-inventory',
+      BREEZE_RECOMMENDED_DESTINATIONS['site-inventory']!,
+    );
+
+    expect(tx.assetLayout.create).toHaveBeenCalledTimes(1);
+    expect(resources.get('sites')).toMatchObject({ assetLayoutId: layoutId });
+    expect(resources.get('site-inventory')).toMatchObject({ assetLayoutId: layoutId });
+    expect(fields.map((field) => field.slug)).toEqual(
+      expect.arrayContaining(['name', 'network-equipment', 'network-segments']),
+    );
+    expect(resources.get('sites')!.mappings).toContain('name');
+    expect(resources.get('sites')!.mappings).not.toContain('networkEquipment');
+    expect(resources.get('site-inventory')!.mappings).toEqual(
+      expect.arrayContaining(['networkEquipment', 'networkSegments']),
+    );
   });
 
   it.each([

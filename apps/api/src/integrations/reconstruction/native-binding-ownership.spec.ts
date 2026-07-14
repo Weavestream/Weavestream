@@ -1,4 +1,7 @@
-import { hasEligibleNativeBinding } from './native-binding-ownership.js';
+import {
+  hasEligibleNativeBinding,
+  hasEligibleNativeTargetBinding,
+} from './native-binding-ownership.js';
 
 const identity = {
   integrationCompanyMappingId: 'mapping-1',
@@ -53,5 +56,47 @@ describe('hasEligibleNativeBinding persisted provenance identity', () => {
   ])('rejects a provenance %s mismatch', async (_label, provenanceOverride) => {
     const row = record({ provenance: { ...record().provenance as object, ...provenanceOverride } });
     await expect(hasEligibleNativeBinding(client(row), identity)).resolves.toBe(false);
+  });
+
+  it('accepts canonical target ownership only from another complete eligible binding', async () => {
+    const row = record({ externalId: 'org-1:devices:asset-2' });
+    const targetClient = {
+      integrationSyncRecord: {
+        findUnique: jest.fn(),
+        findFirst: jest.fn().mockResolvedValue(row),
+      },
+    };
+
+    await expect(
+      hasEligibleNativeTargetBinding(targetClient, {
+        integrationCompanyMappingId: identity.integrationCompanyMappingId,
+        resourceId: identity.resourceId,
+        integrationId: identity.integrationId,
+        companyId: identity.companyId,
+        targetKind: identity.targetKind,
+        targetId: identity.targetId,
+      }),
+    ).resolves.toBe(false);
+
+    const eligibleExternalId = 'org-1:devices:asset-2';
+    targetClient.integrationSyncRecord.findFirst.mockResolvedValue(
+      record({
+        externalId: eligibleExternalId,
+        provenance: {
+          ...record().provenance as object,
+          externalId: eligibleExternalId,
+        },
+      }),
+    );
+    await expect(
+      hasEligibleNativeTargetBinding(targetClient, {
+        integrationCompanyMappingId: identity.integrationCompanyMappingId,
+        resourceId: identity.resourceId,
+        integrationId: identity.integrationId,
+        companyId: identity.companyId,
+        targetKind: identity.targetKind,
+        targetId: identity.targetId,
+      }),
+    ).resolves.toBe(true);
   });
 });
