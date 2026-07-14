@@ -21,6 +21,12 @@ export const ICON_CHOICES = [
   'key',
   'doc',
   'shield',
+  'folder',
+  'tag',
+  'clock',
+  'image',
+  'gear',
+  'home',
 ] as const;
 
 export const COLOR_CHOICES: ReadonlyArray<{ label: string; value: string }> = [
@@ -32,6 +38,8 @@ export const COLOR_CHOICES: ReadonlyArray<{ label: string; value: string }> = [
   { label: 'Yellow', value: '#facc15' },
   { label: 'Sky', value: '#60a5fa' },
   { label: 'Slate', value: 'var(--muted)' },
+  { label: 'Coral', value: '#e0645c' },
+  { label: 'Indigo', value: '#6366f1' },
 ];
 
 export function slugify(s: string): string {

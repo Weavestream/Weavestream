@@ -258,6 +258,12 @@ export const Icon = {
       <path d="M5 8l2 2 4-4" />
     </IconBase>
   ),
+  info: (p: IconProps) => (
+    <IconBase {...p}>
+      <circle cx="8" cy="8" r="6" />
+      <path d="M8 7v4M8 4.5v0.5" />
+    </IconBase>
+  ),
   x: (p: IconProps) => (
     <IconBase {...p}>
       <path d="M3.5 3.5l9 9M12.5 3.5l-9 9" />

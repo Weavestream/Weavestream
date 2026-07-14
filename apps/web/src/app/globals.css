@@ -70,6 +70,7 @@
 .hide-on-mobile {
   /* no-op on desktop */
 }
+
 @media (min-width: 768px) {
   .mobile-only {
     display: none !important;
@@ -325,4 +326,3 @@
 .dt-resize-handle:active::after {
   background: var(--accent);
 }
-

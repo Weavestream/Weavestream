@@ -230,7 +230,7 @@ export const FIELD_TYPE_CATALOG: readonly FieldTypeMeta[] = [
   },
   {
     kind: 'ASSET_REFERENCE',
-    label: 'Asset',
+    label: 'Linked asset',
     slug: 'asset_reference',
     icon: 'link',
     width: 'full',
