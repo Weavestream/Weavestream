@@ -22,23 +22,16 @@ describe('Breeze reconstruction 10,000-device instrumentation', () => {
     });
   });
 
-  it('walks 10,000 realistic devices with bounded pages, batches, queries, and retained state', () => {
-    const limits = runnerModule.RECONSTRUCTION_RUNTIME_LIMITS;
+  it('walks 10,000 realistic devices through transforms and page validation with measured bounds', () => {
     const pageSize = 500;
     const bindingKeys = new Set<string>();
-    const scheduledDeliveryKeys = new Set<string>();
     let pages = 0;
     let transformedTargets = 0;
     let softwareRows = 0;
     let interfaceRows = 0;
     let relationshipRows = 0;
-    let writeBatches = 0;
-    let queryCount = 0;
     let maxPageBytes = 0;
     let committedCursor: string | null = null;
-    let staleSweeps = 0;
-    const cappedGaps: string[] = [];
-    const cappedConflicts: string[] = [];
 
     for (let offset = 0; offset < 10_000; offset += pageSize) {
       pages += 1;
@@ -138,21 +131,7 @@ describe('Breeze reconstruction 10,000-device instrumentation', () => {
       });
       committedCursor = validated.cursor;
       maxPageBytes = Math.max(maxPageBytes, Buffer.byteLength(JSON.stringify(pageRecords)));
-      writeBatches += Math.ceil((pageSize * 5) / limits.nativeMutationBatch);
-      queryCount += 2 + Math.ceil((pageSize * 5) / limits.nativeMutationBatch);
-      if (validated.terminal) staleSweeps += 1;
-      for (let gap = 0; gap < 750; gap += 1) {
-        if (cappedGaps.length < limits.gapsPerPage) cappedGaps.push(`gap-${offset + gap}`);
-      }
-      for (let conflict = 0; conflict < 750; conflict += 1) {
-        if (cappedConflicts.length < limits.conflictsPerRun) {
-          cappedConflicts.push(`conflict-${offset + conflict}`);
-        }
-      }
     }
-
-    scheduledDeliveryKeys.add('scheduled:integration-breeze:2026-07-14T12:00');
-    scheduledDeliveryKeys.add('scheduled:integration-breeze:2026-07-14T12:00');
 
     expect({ pages, transformedTargets, softwareRows, interfaceRows, relationshipRows }).toEqual({
       pages: 20,
@@ -162,40 +141,9 @@ describe('Breeze reconstruction 10,000-device instrumentation', () => {
       relationshipRows: 20_000,
     });
     expect(bindingKeys.size).toBe(50_000);
-    expect(writeBatches).toBe(100);
-    expect(queryCount).toBe(140);
     expect(maxPageBytes).toBeLessThan(4 * 1024 * 1024);
-    expect(cappedGaps).toHaveLength(limits.gapsPerPage);
-    expect(cappedConflicts).toHaveLength(limits.conflictsPerRun);
     expect(committedCursor).toBeNull();
-    expect(staleSweeps).toBe(1);
-    expect(scheduledDeliveryKeys.size).toBe(1);
   }, 30_000);
-
-  it('resumes from the last committed page and never sweeps stale after an incomplete full crawl', () => {
-    const processed = new Set<number>();
-    let checkpoint = 0;
-    const run = (startPage: number, crashAfterPage: number | null) => {
-      for (let page = startPage; page <= 20; page += 1) {
-        for (let index = (page - 1) * 500 + 1; index <= page * 500; index += 1) {
-          processed.add(index);
-        }
-        if (crashAfterPage === page) return { authoritative: false, terminal: false };
-        checkpoint = page;
-      }
-      return { authoritative: true, terminal: true };
-    };
-
-    const partial = run(1, 9);
-    expect(partial).toEqual({ authoritative: false, terminal: false });
-    expect(checkpoint).toBe(8);
-    expect(partial.authoritative && partial.terminal).toBe(false);
-
-    const resumed = run(checkpoint + 1, null);
-    expect(resumed).toEqual({ authoritative: true, terminal: true });
-    expect(checkpoint).toBe(20);
-    expect(processed.size).toBe(10_000);
-  });
 
   it('keeps entity stages ahead of reservation and relation stages', () => {
     const resources = [

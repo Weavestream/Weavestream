@@ -1,4 +1,5 @@
-import { PrismaClient } from '@prisma/client';
+import { Prisma, PrismaClient } from '@prisma/client';
+import { randomUUID } from 'node:crypto';
 import {
   setDefaultFetchForTests,
   setDefaultResolveForTests,
@@ -7,11 +8,22 @@ import { AuditLogService } from '../../audit/audit.service.js';
 import { CompanyExportDataService } from '../../exports/company-export-data.service.js';
 import { FieldTypesRegistry } from '../../field-types/field-types.registry.js';
 import { AssetsService } from '../../assets/assets.service.js';
+import { ArticlesService } from '../../articles/articles.service.js';
+import { IpamService } from '../../ipam/ipam.service.js';
 import { RelationsService } from '../../relations/relations.service.js';
 import { AssetTargetWriter } from './asset-target.writer.js';
+import { ArticleTargetWriter } from './article-target.writer.js';
+import { IpReservationTargetWriter, SubnetTargetWriter } from './ipam-target.writer.js';
 import { RelationTargetWriter } from './relation-target.writer.js';
+import { ReconstructionWriterRegistry } from './reconstruction-writer.registry.js';
 import { IntegrationSyncRunnerService } from '../integration-sync-runner.service.js';
+import { IntegrationSyncService } from '../integration-sync.service.js';
 import { IntegrationCompletenessService } from './integration-completeness.service.js';
+import {
+  createDisposableReconstructionDatabase,
+  reconstructionDatabaseTemplate,
+  type DisposableReconstructionDatabase,
+} from './reconstruction-test-database.js';
 import {
   IntegrationProvenanceService,
   readTargetProvenance,
@@ -23,40 +35,52 @@ import { DriverAuthError, DriverRateLimitError } from '../drivers/integration-dr
 import type { ReconstructionWriteContext } from './reconstruction-target.js';
 
 const ids = {
-  actor: 'c0000000-0000-4000-8000-000000000001',
-  companyA: 'a0000000-0000-4000-8000-000000000001',
-  companyB: 'b0000000-0000-4000-8000-000000000001',
-  integration: 'd0000000-0000-4000-8000-000000000001',
-  mappingA: 'e0000000-0000-4000-8000-000000000001',
-  mappingB: 'e0000000-0000-4000-8000-000000000002',
-  layout: 'f0000000-0000-4000-8000-000000000001',
-  field: 'f0000000-0000-4000-8000-000000000002',
-  devices: '10000000-0000-4000-8000-000000000001',
-  subnets: '10000000-0000-4000-8000-000000000002',
-  articles: '10000000-0000-4000-8000-000000000003',
-  relations: '10000000-0000-4000-8000-000000000004',
-  siteA: '20000000-0000-4000-8000-000000000001',
-  deviceA: '20000000-0000-4000-8000-000000000002',
-  deviceB: '20000000-0000-4000-8000-000000000003',
-  subnet: '30000000-0000-4000-8000-000000000001',
-  reservation: '30000000-0000-4000-8000-000000000002',
-  article: '40000000-0000-4000-8000-000000000001',
-  manualArticle: '40000000-0000-4000-8000-000000000002',
-  relation: '50000000-0000-4000-8000-000000000001',
-  manualRelation: '50000000-0000-4000-8000-000000000002',
-  password: '60000000-0000-4000-8000-000000000001',
-  syncDevice: '70000000-0000-4000-8000-000000000001',
-  syncSubnet: '70000000-0000-4000-8000-000000000002',
-  syncArticle: '70000000-0000-4000-8000-000000000003',
-  syncRelation: '70000000-0000-4000-8000-000000000004',
-  continuityRun: '80000000-0000-4000-8000-000000000001',
+  actor: randomUUID(),
+  companyA: randomUUID(),
+  companyB: randomUUID(),
+  integration: randomUUID(),
+  mappingA: randomUUID(),
+  mappingB: randomUUID(),
+  layout: randomUUID(),
+  field: randomUUID(),
+  devices: randomUUID(),
+  sites: randomUUID(),
+  subnets: randomUUID(),
+  reservations: randomUUID(),
+  scripts: randomUUID(),
+  deviceRelationships: randomUUID(),
+  articles: randomUUID(),
+  relations: randomUUID(),
+  siteA: randomUUID(),
+  deviceA: randomUUID(),
+  deviceB: randomUUID(),
+  subnetB: randomUUID(),
+  articleB: randomUUID(),
+  relationB: randomUUID(),
+  subnet: randomUUID(),
+  reservation: randomUUID(),
+  article: randomUUID(),
+  manualArticle: randomUUID(),
+  relation: randomUUID(),
+  manualRelation: randomUUID(),
+  password: randomUUID(),
+  upload: randomUUID(),
+  syncDevice: randomUUID(),
+  syncSubnet: randomUUID(),
+  syncArticle: randomUUID(),
+  syncRelation: randomUUID(),
+  continuityRun: randomUUID(),
 };
 
-const ORG_A = '11111111-1111-4111-8111-111111111111';
-const ORG_UNMAPPED = '22222222-2222-4222-8222-222222222222';
-const ORG_B = '33333333-3333-4333-8333-333333333333';
-const SITE = '44444444-4444-4444-8444-444444444444';
-const DEVICE = '55555555-5555-4555-8555-555555555555';
+const ORG_A = randomUUID();
+const ORG_UNMAPPED = randomUUID();
+const ORG_B = randomUUID();
+const SITE = randomUUID();
+const DEVICE = randomUUID();
+const CHAIN_SITE = randomUUID();
+const CHAIN_DEVICE = randomUUID();
+const CHAIN_ADDRESS = randomUUID();
+const CHAIN_SCRIPT = randomUUID();
 const REVISION = 'a'.repeat(64);
 const SNAPSHOT = '2026-07-14T12:00:00.000Z';
 const UPDATED = '2026-07-14T11:00:00.000Z';
@@ -99,7 +123,7 @@ describe('Breeze reconstruction deterministic provider contract', () => {
       details: 'Reached Breeze Partner API.',
     });
     const organizations = await driver.listSourceOrgs(ctx);
-    const explicitMappings = new Map([
+    const explicitMappings = new Map<string, string>([
       [ORG_A, ids.companyA],
       [ORG_B, ids.companyB],
     ]);
@@ -291,23 +315,36 @@ describe('Breeze reconstruction deterministic failure injection', () => {
   });
 });
 
-const dbUrl = process.env.DATABASE_URL;
-const describeIfDb = dbUrl ? describe : describe.skip;
+const reconstructionDatabaseUrl = process.env['WEAVESTREAM_RECONSTRUCTION_TEST_DATABASE_URL'];
+const describeIfDb = reconstructionDatabaseUrl ? describe : describe.skip;
 
 describeIfDb('Breeze reconstruction disposable PostgreSQL dossier', () => {
-  const prisma = new PrismaClient();
-  const audit = new AuditLogService(prisma as never);
-  const provenance = new IntegrationProvenanceService(prisma as never, audit);
+  let database: DisposableReconstructionDatabase;
+  let prisma: PrismaClient;
+  let audit: AuditLogService;
+  let provenance: IntegrationProvenanceService;
 
   beforeAll(async () => {
-    await prisma.$connect();
-    await seedDatabase(prisma);
-  });
+    const template = reconstructionDatabaseTemplate(reconstructionDatabaseUrl);
+    database = await createDisposableReconstructionDatabase(
+      template,
+      `${process.pid}-${randomUUID()}`,
+    );
+    prisma = database.prisma;
+    audit = new AuditLogService(prisma as never);
+    provenance = new IntegrationProvenanceService(prisma as never, audit);
+    try {
+      await prisma.$connect();
+      await seedDatabase(prisma);
+    } catch (error) {
+      await database.drop();
+      throw error;
+    }
+  }, 120_000);
 
   afterAll(async () => {
-    await cleanupDatabase(prisma);
-    await prisma.$disconnect();
-  });
+    if (database) await database.drop();
+  }, 30_000);
 
   it('exports a company-scoped native dossier and renders its standalone PDF', async () => {
     const service = new CompanyExportDataService(prisma as never, {
@@ -352,36 +389,159 @@ describeIfDb('Breeze reconstruction disposable PostgreSQL dossier', () => {
     await expect(buildCompanyExportPdf(data)).resolves.toEqual(pdf);
   });
 
-  it('fails closed for direct and mismatched cross-company target lookups', async () => {
+  it('fails closed at runner, native-writer, admin-read, provenance, and export boundaries across companies', async () => {
+    const actor = { id: ids.actor, role: 'SUPER_ADMIN' } as const;
+    const { registry, writerByKind, services } = buildRealWriterRegistry(prisma, audit);
+
     await expect(readTargetProvenance(prisma as never, {
       companyId: ids.companyA,
       targetKind: 'asset',
       targetId: ids.deviceB,
     })).resolves.toEqual([]);
+    await expect(services.assets.get(actor as never, ids.companyA, ids.deviceB)).rejects.toThrow();
+    await expect(services.articles.getById(actor as never, ids.companyA, ids.articleB)).rejects.toThrow();
+    await expect(services.ipam.getSubnetDetail(actor as never, ids.companyA, ids.subnetB)).rejects.toThrow();
+    await expect(services.relations.listRelated({
+      actor: actor as never,
+      companyId: ids.companyA,
+      entityType: 'asset',
+      entityId: ids.deviceB,
+    })).resolves.toMatchObject({ totalCount: 0, items: [] });
 
+    const forgedBindingId = randomUUID();
+    const forgedSourceId = randomUUID();
     await prisma.integrationSyncRecord.create({
       data: syncRecordData({
-        id: '70000000-0000-4000-8000-000000000099',
+        id: forgedBindingId,
         companyId: ids.companyA,
         mappingId: ids.mappingA,
         resourceId: ids.devices,
-        externalId: `${ORG_A}:devices:forged-cross-company`,
+        externalId: `${ORG_A}:devices:${forgedSourceId}`,
         targetKind: 'asset',
         targetId: ids.deviceB,
       }),
     });
+    const companyBDeviceBefore = await prisma.asset.findUniqueOrThrow({ where: { id: ids.deviceB } });
+    installFetchScript([{ body: envelope([{
+      ...deviceRecord(),
+      id: forgedSourceId,
+      hostname: 'forged-cross-company',
+      displayName: 'FORGED CROSS COMPANY',
+    }]) }]);
+    const runner = buildRunner(
+      prisma,
+      audit,
+      provenance,
+      new BreezeDriver(new BreezePartnerApiClient()),
+      registry,
+    );
+    const forgedRunId = await createQueuedRun(prisma, 'full');
+    await expect(runner.runMapping({
+      syncRunId: forgedRunId,
+      integrationCompanyMappingId: ids.mappingA,
+      resourceId: ids.devices,
+      dryRun: false,
+      actorId: ids.actor,
+      mode: 'full',
+    })).resolves.toMatchObject({ status: 'failed', totals: { blocked: 1 } });
+    await expect(prisma.asset.findUniqueOrThrow({ where: { id: ids.deviceB } }))
+      .resolves.toEqual(companyBDeviceBefore);
     await expect(readTargetProvenance(prisma as never, {
       companyId: ids.companyA,
       targetKind: 'asset',
       targetId: ids.deviceB,
     })).resolves.toEqual([]);
-    await prisma.integrationSyncRecord.delete({
-      where: { id: '70000000-0000-4000-8000-000000000099' },
+
+    const directInputs = {
+      asset: assetInput(`${ORG_A}:devices:${randomUUID()}`),
+      subnet: transformBreezeRecord('subnets', inventoryRecord())[0]!.reconstructionInput!,
+      article: transformBreezeRecord('scripts', scriptRecord())[0]!.reconstructionInput!,
+      relation: transformBreezeRecord('device-relationships', relationshipRecord())[0]!.reconstructionInput!,
+    };
+    const directContext = (
+      tx: Prisma.TransactionClient,
+      resourceId: string,
+      resourceKey: string,
+      existingTargetId: string,
+      input: { externalId: string },
+    ) => ({
+      tx,
+      companyId: ids.companyA,
+      integrationId: ids.integration,
+      integrationCompanyMappingId: ids.mappingA,
+      resourceId,
+      resourceKey,
+      externalOrgId: ORG_A,
+      auditActorId: ids.actor,
+      now: new Date(SNAPSHOT),
+      dryRun: false,
+      existingTargetId,
+      existingState: 'active' as const,
+      previousProvenance: provenanceFor(resourceKey, input.externalId) as never,
+      resolveBinding: jest.fn().mockResolvedValue({
+        targetKind: 'asset',
+        targetId: ids.deviceA,
+        companyId: ids.companyA,
+      }),
     });
+    const crossWriterOutcomes = await prisma.$transaction(async (tx) => Promise.all([
+      writerByKind.assetWriter.write(
+        directContext(tx, ids.devices, 'devices', ids.deviceB, directInputs.asset),
+        directInputs.asset,
+      ),
+      writerByKind.subnetWriter.write(
+        directContext(tx, ids.subnets, 'subnets', ids.subnetB, directInputs.subnet),
+        directInputs.subnet as never,
+      ),
+      writerByKind.articleWriter.write(
+        directContext(tx, ids.scripts, 'scripts', ids.articleB, directInputs.article),
+        directInputs.article as never,
+      ),
+      writerByKind.relationWriter.write(
+        directContext(
+          tx,
+          ids.deviceRelationships,
+          'device-relationships',
+          ids.relationB,
+          directInputs.relation,
+        ),
+        directInputs.relation as never,
+      ),
+    ]));
+    expect(crossWriterOutcomes).toEqual(crossWriterOutcomes.map(() => expect.objectContaining({
+      change: 'blocked',
+      gaps: [expect.objectContaining({
+        kind: 'validation',
+        details: expect.objectContaining({ reasonCode: 'target_company_mismatch' }),
+      })],
+    })));
+    await expect(prisma.subnet.findUniqueOrThrow({ where: { id: ids.subnetB } }))
+      .resolves.toMatchObject({ companyId: ids.companyB, name: 'Company B LAN' });
+    await expect(prisma.article.findUniqueOrThrow({ where: { id: ids.articleB } }))
+      .resolves.toMatchObject({ companyId: ids.companyB, title: 'Company B article' });
+    await expect(prisma.relation.findUniqueOrThrow({ where: { id: ids.relationB } }))
+      .resolves.toMatchObject({ companyId: ids.companyB, relationType: 'company_b_dependency' });
+
+    const exportA = await new CompanyExportDataService(prisma as never, {
+      decrypt: jest.fn(),
+    } as never).gather(ids.companyA, { includePasswords: false });
+    expect(JSON.stringify(exportA)).not.toMatch(/Company B device|Company B article|Company B LAN/);
+    await prisma.integrationSyncRun.update({
+      where: { id: forgedRunId },
+      data: { status: 'failed', finishedAt: new Date() },
+    });
+    await prisma.integrationSyncRecord.delete({ where: { id: forgedBindingId } });
   });
 
   it('stales only after an authoritative full sweep and restores the same asset idempotently', async () => {
     const staleAt = new Date(SNAPSHOT);
+    const manualContentBefore = await Promise.all([
+      prisma.company.findUniqueOrThrow({
+        where: { id: ids.companyA },
+        select: { notes: true, quickNotes: true },
+      }),
+      prisma.upload.findUniqueOrThrow({ where: { id: ids.upload } }),
+    ]);
     await prisma.$transaction((tx) => provenance.staleUnseen(tx, {
       integrationId: ids.integration,
       companyId: ids.companyA,
@@ -398,6 +558,13 @@ describeIfDb('Breeze reconstruction disposable PostgreSQL dossier', () => {
     expect(stale).toMatchObject({ state: 'stale', staleSince: staleAt, assetId: ids.deviceA });
     expect(archivedAsset.archivedAt).toEqual(staleAt);
     expect(password.assetId).toBe(ids.deviceA);
+    await expect(Promise.all([
+      prisma.company.findUniqueOrThrow({
+        where: { id: ids.companyA },
+        select: { notes: true, quickNotes: true },
+      }),
+      prisma.upload.findUniqueOrThrow({ where: { id: ids.upload } }),
+    ])).resolves.toEqual(manualContentBefore);
 
     const relations = new RelationsService(prisma as never, audit);
     const assets = new AssetsService(
@@ -473,6 +640,13 @@ describeIfDb('Breeze reconstruction disposable PostgreSQL dossier', () => {
     expect(value.value).toBe('operator-preserved manual field');
     expect(await prisma.article.findUnique({ where: { id: ids.manualArticle } })).not.toBeNull();
     expect(await prisma.relation.findUnique({ where: { id: ids.manualRelation } })).not.toBeNull();
+    await expect(Promise.all([
+      prisma.company.findUniqueOrThrow({
+        where: { id: ids.companyA },
+        select: { notes: true, quickNotes: true },
+      }),
+      prisma.upload.findUniqueOrThrow({ where: { id: ids.upload } }),
+    ])).resolves.toEqual(manualContentBefore);
 
     const auditRows = await prisma.auditLog.findMany({
       where: { companyId: ids.companyA, action: { startsWith: 'integration.target.' } },
@@ -482,96 +656,558 @@ describeIfDb('Breeze reconstruction disposable PostgreSQL dossier', () => {
     expect(JSON.stringify(auditRows)).not.toContain(BLOCKED_SECRET);
   });
 
-  it('persists one Breeze page through runner, native writer, completeness, export, and PDF', async () => {
-    const client = {
-      testConnection: jest.fn(),
-      listOrganizations: jest.fn(),
-      fetchPage: jest.fn().mockResolvedValue(envelope([deviceRecord()])),
-    };
-    const breeze = new BreezeDriver(client);
-    const relations = new RelationsService(prisma as never, audit);
-    const assets = new AssetsService(
-      prisma as never,
-      audit,
-      new FieldTypesRegistry(),
-      relations,
-      {} as never,
-      { upsertAsset: jest.fn().mockResolvedValue(undefined) } as never,
-      {} as never,
-      {} as never,
-      {} as never,
-    );
-    const runner = new IntegrationSyncRunnerService(
-      prisma as never,
-      {
-        values: {
-          INTEGRATION_HTTP_TIMEOUT_MS: 1_000,
-          INTEGRATION_HTTP_MAX_RETRIES: 0,
-          INTEGRATION_HTTP_BACKOFF_MS: 100,
-        },
-      } as never,
-      audit,
-      {
-        loadDriverContext: jest.fn().mockResolvedValue({
-          config: { baseUrl: 'https://breeze.example.test' },
-          secret: { apiKey: 'synthetic-test-key' },
-        }),
-      } as never,
-      { get: jest.fn().mockReturnValue(breeze) } as never,
-      { execute: jest.fn() } as never,
-      { get: jest.fn().mockReturnValue(new AssetTargetWriter(assets)) } as never,
-      provenance,
-      new IntegrationCompletenessService(prisma as never),
-    );
+  it('composes the real Breeze request seam, registry, every native writer, completeness, export, and PDF idempotently', async () => {
+    const breeze = new BreezeDriver(new BreezePartnerApiClient());
+    installFetchScript([{ body: envelope([
+      organization(ORG_A, 'Mapped A'),
+      organization(ORG_UNMAPPED, 'Visible but unmapped'),
+      organization(ORG_B, 'Mapped B'),
+    ]) }]);
+    await expect(breeze.listSourceOrgs(integrationContext())).resolves.toEqual([
+      expect.objectContaining({ externalId: ORG_A }),
+      expect.objectContaining({ externalId: ORG_UNMAPPED }),
+      expect.objectContaining({ externalId: ORG_B }),
+    ]);
+    await expect(prisma.integrationCompanyMapping.findFirst({
+      where: { integrationId: ids.integration, externalOrgId: ORG_UNMAPPED },
+    })).resolves.toBeNull();
 
-    await expect(runner.runMapping({
-      syncRunId: ids.continuityRun,
-      integrationCompanyMappingId: ids.mappingA,
-      resourceId: ids.devices,
-      dryRun: false,
-      actorId: ids.actor,
-      mode: 'incremental',
-    })).resolves.toMatchObject({
+    const { registry, writers } = buildRealWriterRegistry(prisma, audit);
+    const writeSpies = writers.map((writer) => jest.spyOn(writer, 'write'));
+    let queryCount = 0;
+    prisma.$use(async (params, next) => {
+      queryCount += 1;
+      return next(params);
+    });
+    const runner = buildRunner(prisma, audit, provenance, breeze, registry);
+    const firstRecords = chainRecords(UPDATED);
+    const secondRecords = chainRecords('2026-07-14T11:30:00.000Z');
+    const resources = [
+      [ids.sites, firstRecords.site, secondRecords.site],
+      [ids.devices, firstRecords.device, secondRecords.device],
+      [ids.subnets, firstRecords.inventory, secondRecords.inventory],
+      [ids.reservations, firstRecords.inventory, secondRecords.inventory],
+      [ids.scripts, firstRecords.script, secondRecords.script],
+      [ids.deviceRelationships, firstRecords.relationship, secondRecords.relationship],
+    ] as const;
+
+    const firstOutcomes = [];
+    for (const [resourceId, first] of resources) {
+      installFetchScript([{ body: envelope([first]) }]);
+      firstOutcomes.push(await runner.runMapping({
+        syncRunId: await createQueuedRun(prisma, 'incremental'),
+        integrationCompanyMappingId: ids.mappingA,
+        resourceId,
+        dryRun: false,
+        actorId: ids.actor,
+        mode: 'incremental',
+      }));
+    }
+    expect(firstOutcomes).toEqual(resources.map(() => expect.objectContaining({
       status: 'succeeded',
-      companyId: ids.companyA,
-      resourceKey: 'devices',
-      totals: { fetched: 1, unchanged: 1 },
-    });
+      totals: expect.objectContaining({ fetched: 1, created: 1 }),
+    })));
 
-    const checkpoint = await prisma.integrationSyncCheckpoint.findUniqueOrThrow({
+    const firstBindings = await prisma.integrationSyncRecord.findMany({
       where: {
-        integrationCompanyMappingId_resourceId_mode: {
-          integrationCompanyMappingId: ids.mappingA,
-          resourceId: ids.devices,
-          mode: 'incremental',
-        },
+        integrationCompanyMappingId: ids.mappingA,
+        resourceId: { in: resources.map(([resourceId]) => resourceId) },
+        id: { notIn: [ids.syncDevice, ids.syncSubnet, ids.syncArticle, ids.syncRelation] },
       },
+      orderBy: { externalId: 'asc' },
     });
-    expect(checkpoint).toMatchObject({ cursor: null, authoritative: true });
-    expect(checkpoint.lastCompletedAt).not.toBeNull();
-    expect(await prisma.integrationReconstructionSummary.findUnique({
+    expect(firstBindings).toHaveLength(6);
+    const stableTargets = firstBindings.map((binding) => ({
+      externalId: binding.externalId,
+      assetId: binding.assetId,
+      subnetId: binding.subnetId,
+      ipReservationId: binding.ipReservationId,
+      articleId: binding.articleId,
+      relationId: binding.relationId,
+    }));
+
+    const secondOutcomes = [];
+    for (const [resourceId, , second] of resources) {
+      installFetchScript([{ body: envelope([second]) }]);
+      secondOutcomes.push(await runner.runMapping({
+        syncRunId: await createQueuedRun(prisma, 'incremental'),
+        integrationCompanyMappingId: ids.mappingA,
+        resourceId,
+        dryRun: false,
+        actorId: ids.actor,
+        mode: 'incremental',
+      }));
+    }
+    expect(secondOutcomes).toEqual(resources.map(() => expect.objectContaining({
+      status: 'succeeded',
+      totals: expect.objectContaining({ fetched: 1, unchanged: 1 }),
+    })));
+    expect(writeSpies.map((spy) => spy.mock.calls.length)).toEqual([4, 2, 2, 2, 2]);
+    expect(writeSpies.every((spy) => spy.mock.calls.every((call) => call.length === 2))).toBe(true);
+    expect(queryCount).toBeGreaterThan(0);
+    expect(queryCount).toBeLessThanOrEqual(500);
+    await expect(prisma.integrationSyncCheckpoint.count({
       where: {
-        integrationCompanyMappingId_summaryKey: {
-          integrationCompanyMappingId: ids.mappingA,
-          summaryKey: ids.devices,
-        },
+        integrationCompanyMappingId: ids.mappingA,
+        resourceId: { in: resources.map(([resourceId]) => resourceId) },
+        mode: 'incremental',
+        lastCompletedAt: { not: null },
       },
-    })).not.toBeNull();
+    })).resolves.toBe(6);
+    await expect(prisma.integrationSyncRecord.findMany({
+      where: {
+        integrationCompanyMappingId: ids.mappingA,
+        resourceId: { in: resources.map(([resourceId]) => resourceId) },
+        id: { notIn: [ids.syncDevice, ids.syncSubnet, ids.syncArticle, ids.syncRelation] },
+      },
+      orderBy: { externalId: 'asc' },
+      select: {
+        externalId: true,
+        assetId: true,
+        subnetId: true,
+        ipReservationId: true,
+        articleId: true,
+        relationId: true,
+      },
+    })).resolves.toEqual(stableTargets);
+    await expect(prisma.integrationSyncRecord.count({
+      where: { companyId: ids.companyA, externalId: { contains: ORG_UNMAPPED } },
+    })).resolves.toBe(0);
 
     const data = await new CompanyExportDataService(prisma as never, {
       decrypt: jest.fn(() => {
         throw new Error('Password decryption must remain opt-in.');
       }),
     } as never).gather(ids.companyA, { includePasswords: false });
-    expect(data.assets.find((asset) => asset.name === 'APP-01')).toMatchObject({
-      fields: [expect.objectContaining({ value: 'operator-preserved manual field' })],
-    });
+    expect(data.assets.map((asset) => asset.name)).toEqual(expect.arrayContaining([
+      'Task11 chain site',
+      'Task11 chain device',
+    ]));
+    expect(data.ipam).toEqual(expect.arrayContaining([
+      expect.objectContaining({ cidr: '10.77.88.0/24' }),
+    ]));
+    expect(data.articles.map((article) => article.title)).toContain('Task11 chain rebuild');
+    expect(data.relations).toEqual(expect.arrayContaining([
+      expect.objectContaining({ relationType: 'site_device' }),
+    ]));
+    expect(data.reconstruction.summaries.length).toBeGreaterThan(0);
     expect(JSON.stringify(data)).not.toContain(BLOCKED_SECRET);
     const pdf = await buildCompanyExportPdf(data);
     expect(pdf.subarray(0, 8).toString('ascii')).toMatch(/^%PDF-1\./);
     expect(pdf.subarray(-16).toString('ascii')).toContain('%%EOF');
+  }, 30_000);
+
+  it('measures actual runner queries and writer calls and deduplicates a scheduled delivery durably', async () => {
+    let queryCount = 0;
+    prisma.$use(async (params, next) => {
+      queryCount += 1;
+      return next(params);
+    });
+    const writer = await buildAssetWriter(prisma, audit);
+    const writeSpy = jest.spyOn(writer, 'write');
+    const sourceId = randomUUID();
+    installFetchScript([{ body: envelope([{
+      ...deviceRecord(),
+      id: sourceId,
+      hostname: 'instrumented-01',
+      displayName: 'Instrumented runner asset',
+      sourceUpdatedAt: '2026-07-14T11:45:00.000Z',
+    }]) }]);
+    const runId = await createQueuedRun(prisma, 'incremental');
+    queryCount = 0;
+    const runner = buildRunner(
+      prisma,
+      audit,
+      provenance,
+      new BreezeDriver(new BreezePartnerApiClient()),
+      writer,
+    );
+
+    await expect(runner.runMapping({
+      syncRunId: runId,
+      integrationCompanyMappingId: ids.mappingA,
+      resourceId: ids.devices,
+      dryRun: false,
+      actorId: ids.actor,
+      mode: 'incremental',
+    })).resolves.toMatchObject({ status: 'succeeded', totals: { fetched: 1, created: 1 } });
+    const runnerQueryCount = queryCount;
+    expect(writeSpy).toHaveBeenCalledTimes(1);
+    expect(runnerQueryCount).toBeGreaterThan(0);
+    expect(runnerQueryCount).toBeLessThan(100);
+
+    const deliveryKey = `task11:${randomUUID()}`;
+    const sync = new IntegrationSyncService(
+      prisma as never,
+      audit,
+      {} as never,
+      {} as never,
+    );
+    const first = await sync.createScheduledRun(
+      ids.integration,
+      'incremental',
+      new Date(SNAPSHOT),
+      deliveryKey,
+    );
+    const second = await sync.createScheduledRun(
+      ids.integration,
+      'incremental',
+      new Date(SNAPSHOT),
+      deliveryKey,
+    );
+    expect(second.id).toBe(first.id);
+    await expect(prisma.integrationSyncRun.count({ where: { deliveryKey } })).resolves.toBe(1);
   });
+
+  it.each([
+    ['401 authentication rejection', { status: 401, body: 'rejected' }],
+    ['403 authorization rejection', { status: 403, body: 'rejected' }],
+    ['429 rate limit', { status: 429, body: 'slow down', headers: { 'Retry-After': '1' } }],
+    ['503 upstream failure', { status: 503, body: 'unavailable' }],
+    ['transport timeout', { error: new Error('deterministic timeout') }],
+    ['malformed response', { body: '{not-json' }],
+    ['unknown schema', { body: { ...envelope([]), schemaVersion: '2' } }],
+    ['invalid record', { body: envelope([{ ...deviceRecord(), hostname: null }]) }],
+  ] as const)('preserves persisted last-known-good state after %s', async (_label, frame) => {
+    const before = await persistedDeviceState(prisma);
+    installFetchScript([frame]);
+    const runId = await createQueuedRun(prisma, 'incremental');
+    const runner = buildRunner(
+      prisma,
+      audit,
+      provenance,
+      new BreezeDriver(new BreezePartnerApiClient()),
+      await buildAssetWriter(prisma, audit),
+    );
+
+    await expect(runner.runMapping({
+      syncRunId: runId,
+      integrationCompanyMappingId: ids.mappingA,
+      resourceId: ids.devices,
+      dryRun: false,
+      actorId: ids.actor,
+      mode: 'incremental',
+    })).resolves.toMatchObject({ status: 'failed', totals: { errors: 1 } });
+
+    expect(await persistedDeviceState(prisma)).toEqual(before);
+  });
+
+  it('persists a committed page cursor, suppresses stale, and resumes after a repeated cursor failure', async () => {
+    const orphanAssetId = randomUUID();
+    const orphanBindingId = randomUUID();
+    const orphanExternalId = `${ORG_A}:devices:${randomUUID()}`;
+    await prisma.asset.create({
+      data: {
+        id: orphanAssetId,
+        companyId: ids.companyA,
+        assetLayoutId: ids.layout,
+        name: 'Last-known-good orphan candidate',
+        createdBy: ids.actor,
+        updatedBy: ids.actor,
+      },
+    });
+    await prisma.integrationSyncRecord.create({
+      data: syncRecordData({
+        id: orphanBindingId,
+        companyId: ids.companyA,
+        mappingId: ids.mappingA,
+        resourceId: ids.devices,
+        externalId: orphanExternalId,
+        targetKind: 'asset',
+        targetId: orphanAssetId,
+      }),
+    });
+    installFetchScript([
+      { body: envelope([deviceRecord()], { hasMore: true, nextCursor: 'resume-page-2' }) },
+      { body: envelope([], { hasMore: true, nextCursor: 'resume-page-2' }) },
+    ]);
+    const runner = buildRunner(
+      prisma,
+      audit,
+      provenance,
+      new BreezeDriver(new BreezePartnerApiClient()),
+      await buildAssetWriter(prisma, audit),
+    );
+    const failedRunId = await createQueuedRun(prisma, 'full');
+
+    await expect(runner.runMapping({
+      syncRunId: failedRunId,
+      integrationCompanyMappingId: ids.mappingA,
+      resourceId: ids.devices,
+      dryRun: false,
+      actorId: ids.actor,
+      mode: 'full',
+    })).resolves.toMatchObject({ status: 'failed', totals: { fetched: 1, unchanged: 1, stale: 0 } });
+
+    const partial = await prisma.integrationSyncCheckpoint.findUniqueOrThrow({
+      where: { integrationCompanyMappingId_resourceId_mode: {
+        integrationCompanyMappingId: ids.mappingA,
+        resourceId: ids.devices,
+        mode: 'full',
+      } },
+    });
+    expect(partial).toMatchObject({ cursor: 'resume-page-2', authoritative: true, lastCompletedAt: null });
+    expect(await prisma.integrationSyncRecord.findUniqueOrThrow({ where: { id: orphanBindingId } }))
+      .toMatchObject({ state: 'active', staleSince: null });
+    expect(await prisma.asset.findUniqueOrThrow({ where: { id: orphanAssetId } }))
+      .toMatchObject({ archivedAt: null });
+
+    await prisma.integrationSyncRun.update({
+      where: { id: failedRunId },
+      data: { status: 'failed', finishedAt: new Date() },
+    });
+    installFetchScript([{ body: envelope([]) }]);
+    const resumedRunId = await createQueuedRun(prisma, 'full');
+    await expect(runner.runMapping({
+      syncRunId: resumedRunId,
+      integrationCompanyMappingId: ids.mappingA,
+      resourceId: ids.devices,
+      dryRun: false,
+      actorId: ids.actor,
+      mode: 'full',
+    })).resolves.toMatchObject({ status: 'succeeded', totals: { fetched: 0, stale: 1 } });
+    const completed = await prisma.integrationSyncCheckpoint.findUniqueOrThrow({
+      where: { integrationCompanyMappingId_resourceId_mode: {
+        integrationCompanyMappingId: ids.mappingA,
+        resourceId: ids.devices,
+        mode: 'full',
+      } },
+    });
+    expect(completed).toMatchObject({ cursor: null, authoritative: true });
+    expect(completed.lastCompletedAt).not.toBeNull();
+  });
+
+  it('rolls back a native mutation and checkpoint when a worker crashes inside the page transaction', async () => {
+    const before = await persistedDeviceState(prisma);
+    installFetchScript([{ body: envelope([{
+      ...deviceRecord(),
+      sourceUpdatedAt: '2026-07-14T11:55:00.000Z',
+    }]) }]);
+    const crashingWriter = {
+      targetKind: 'asset',
+      async write(context: ReconstructionWriteContext) {
+        await context.tx.asset.update({
+          where: { id: ids.deviceA },
+          data: { name: 'MUTATION THAT MUST ROLL BACK' },
+        });
+        throw new Error('deterministic worker crash after native mutation');
+      },
+    };
+    const runId = await createQueuedRun(prisma, 'incremental');
+    const runner = buildRunner(
+      prisma,
+      audit,
+      provenance,
+      new BreezeDriver(new BreezePartnerApiClient()),
+      crashingWriter,
+    );
+
+    await expect(runner.runMapping({
+      syncRunId: runId,
+      integrationCompanyMappingId: ids.mappingA,
+      resourceId: ids.devices,
+      dryRun: false,
+      actorId: ids.actor,
+      mode: 'incremental',
+    })).resolves.toMatchObject({
+      status: 'failed',
+      error: expect.stringContaining('deterministic worker crash'),
+    });
+    expect(await persistedDeviceState(prisma)).toEqual(before);
+  });
+
+  it('observes production stale mutation batches capped at 500 native targets', async () => {
+    const resourceId = randomUUID();
+    await prisma.integrationResource.create({
+      data: {
+        id: resourceId,
+        integrationId: ids.integration,
+        resourceKey: `task11-scale-${resourceId}`,
+        targetKind: 'asset',
+        assetLayoutId: ids.layout,
+        targetConfig: {},
+        dependsOnResourceKeys: [],
+      },
+    });
+    const targets = Array.from({ length: 501 }, (_, index) => ({
+      assetId: randomUUID(),
+      bindingId: randomUUID(),
+      externalId: `${ORG_A}:task11-scale:${index}`,
+    }));
+    await prisma.asset.createMany({
+      data: targets.map((target, index) => ({
+        id: target.assetId,
+        companyId: ids.companyA,
+        assetLayoutId: ids.layout,
+        name: `Task11 batch target ${index}`,
+        createdBy: ids.actor,
+        updatedBy: ids.actor,
+      })),
+    });
+    await prisma.integrationSyncRecord.createMany({
+      data: targets.map((target) => syncRecordData({
+        id: target.bindingId,
+        companyId: ids.companyA,
+        mappingId: ids.mappingA,
+        resourceId,
+        externalId: target.externalId,
+        targetKind: 'asset',
+        targetId: target.assetId,
+      })),
+    });
+    const batchSizes: number[] = [];
+    prisma.$use(async (params, next) => {
+      const idsArg = (params.args as {
+        where?: { id?: { in?: unknown[] } };
+      } | undefined)?.where?.id?.in;
+      if (params.model === 'Asset' && params.action === 'updateMany' && Array.isArray(idsArg)) {
+        batchSizes.push(idsArg.length);
+      }
+      return next(params);
+    });
+
+    await expect(prisma.$transaction((tx) => provenance.staleUnseen(tx, {
+      integrationId: ids.integration,
+      companyId: ids.companyA,
+      integrationCompanyMappingId: ids.mappingA,
+      resourceId,
+      targetKind: 'asset',
+      snapshotAt: new Date(SNAPSHOT),
+      auditActorId: ids.actor,
+    }))).resolves.toMatchObject({ stale: 501 });
+    expect(batchSizes).toEqual([500, 1]);
+    await expect(prisma.asset.count({
+      where: { id: { in: targets.map((target) => target.assetId) }, archivedAt: { not: null } },
+    })).resolves.toBe(501);
+  }, 30_000);
 });
+
+async function buildAssetWriter(prisma: PrismaClient, audit: AuditLogService) {
+  const relations = new RelationsService(prisma as never, audit);
+  const assets = new AssetsService(
+    prisma as never,
+    audit,
+    new FieldTypesRegistry(),
+    relations,
+    {} as never,
+    { upsertAsset: jest.fn().mockResolvedValue(undefined) } as never,
+    {} as never,
+    {} as never,
+    {} as never,
+  );
+  return new AssetTargetWriter(assets);
+}
+
+function buildRealWriterRegistry(prisma: PrismaClient, audit: AuditLogService) {
+  const relations = new RelationsService(prisma as never, audit);
+  const assets = new AssetsService(
+    prisma as never,
+    audit,
+    new FieldTypesRegistry(),
+    relations,
+    {} as never,
+    { upsertAsset: jest.fn().mockResolvedValue(undefined) } as never,
+    {} as never,
+    {} as never,
+    {} as never,
+  );
+  const articles = new ArticlesService(
+    prisma as never,
+    audit,
+    { isStarred: jest.fn().mockResolvedValue(false) } as never,
+    {} as never,
+    relations,
+  );
+  const ipam = new IpamService(prisma as never, audit);
+  const assetWriter = new AssetTargetWriter(assets);
+  const subnetWriter = new SubnetTargetWriter(ipam);
+  const reservationWriter = new IpReservationTargetWriter(ipam);
+  const articleWriter = new ArticleTargetWriter(articles);
+  const relationWriter = new RelationTargetWriter(relations);
+  const writers = [
+    assetWriter,
+    subnetWriter,
+    reservationWriter,
+    articleWriter,
+    relationWriter,
+  ] as const;
+  return {
+    registry: new ReconstructionWriterRegistry(writers),
+    writers,
+    writerByKind: { assetWriter, subnetWriter, reservationWriter, articleWriter, relationWriter },
+    services: { assets, articles, ipam, relations },
+  };
+}
+
+function buildRunner(
+  prisma: PrismaClient,
+  audit: AuditLogService,
+  provenance: IntegrationProvenanceService,
+  driver: BreezeDriver,
+  writer: ReconstructionWriterRegistry | { write: (...args: never[]) => Promise<unknown> },
+) {
+  const writers = writer instanceof ReconstructionWriterRegistry
+    ? writer
+    : { get: jest.fn().mockReturnValue(writer) };
+  return new IntegrationSyncRunnerService(
+    prisma as never,
+    { values: {
+      INTEGRATION_HTTP_TIMEOUT_MS: 5,
+      INTEGRATION_HTTP_MAX_RETRIES: 0,
+      INTEGRATION_HTTP_BACKOFF_MS: 0,
+    } } as never,
+    audit,
+    { loadDriverContext: jest.fn().mockResolvedValue({
+      config: { baseUrl: 'https://breeze.example.test' },
+      secret: { apiKey: 'synthetic-test-key' },
+    }) } as never,
+    { get: jest.fn().mockReturnValue(driver) } as never,
+    { execute: jest.fn() } as never,
+    writers as never,
+    provenance,
+    new IntegrationCompletenessService(prisma as never),
+  );
+}
+
+async function createQueuedRun(prisma: PrismaClient, mode: 'incremental' | 'full') {
+  const id = randomUUID();
+  await prisma.integrationSyncRun.create({
+    data: {
+      id,
+      integrationId: ids.integration,
+      kind: 'manual',
+      mode,
+      status: 'queued',
+      dryRun: false,
+      triggeredBy: ids.actor,
+    },
+  });
+  return id;
+}
+
+async function persistedDeviceState(prisma: PrismaClient) {
+  const [asset, binding, checkpoint, activeGapCount, staleAuditCount] = await Promise.all([
+    prisma.asset.findUniqueOrThrow({ where: { id: ids.deviceA } }),
+    prisma.integrationSyncRecord.findUniqueOrThrow({ where: { id: ids.syncDevice } }),
+    prisma.integrationSyncCheckpoint.findUnique({ where: {
+      integrationCompanyMappingId_resourceId_mode: {
+        integrationCompanyMappingId: ids.mappingA,
+        resourceId: ids.devices,
+        mode: 'incremental',
+      },
+    } }),
+    prisma.integrationReconstructionGap.count({ where: {
+      integrationCompanyMappingId: ids.mappingA,
+      resourceId: ids.devices,
+      resolvedAt: null,
+    } }),
+    prisma.auditLog.count({ where: {
+      companyId: ids.companyA,
+      action: 'integration.target.stale',
+    } }),
+  ]);
+  return { asset, binding, checkpoint, activeGapCount, staleAuditCount };
+}
 
 function integrationContext(overrides: Record<string, unknown> = {}) {
   return {
@@ -689,6 +1325,91 @@ function relationshipRecord() {
   };
 }
 
+function chainRecords(sourceUpdatedAt: string) {
+  const site = {
+    ...siteRecord(),
+    id: CHAIN_SITE,
+    siteId: CHAIN_SITE,
+    name: 'Task11 chain site',
+    sourceUpdatedAt,
+  };
+  const device = {
+    ...deviceRecord(),
+    id: CHAIN_DEVICE,
+    siteId: CHAIN_SITE,
+    hostname: 'task11-chain-device',
+    displayName: 'Task11 chain device',
+    sourceUpdatedAt,
+  };
+  const baseInventory = inventoryRecord();
+  const interfaceId = randomUUID();
+  const inventory = {
+    ...baseInventory,
+    id: CHAIN_DEVICE,
+    deviceId: CHAIN_DEVICE,
+    siteId: CHAIN_SITE,
+    sourceUpdatedAt,
+    interfaces: [{
+      ...baseInventory.interfaces[0],
+      id: interfaceId,
+      name: 'Task11 chain Ethernet',
+      macAddress: '00:11:22:77:88:99',
+    }],
+    addresses: [{
+      ...baseInventory.addresses[0],
+      id: CHAIN_ADDRESS,
+      interfaceId,
+      interfaceName: 'Task11 chain Ethernet',
+      address: '10.77.88.10',
+      subnetMask: '255.255.255.0',
+      gateway: '10.77.88.1',
+      dnsServers: ['10.77.88.2'],
+    }],
+  };
+  const script = {
+    ...scriptRecord(),
+    id: CHAIN_SCRIPT,
+    name: 'Task11 chain rebuild',
+    content: 'dnf install task11-chain-package',
+    sourceUpdatedAt,
+  };
+  const relationship = {
+    ...relationshipRecord(),
+    id: CHAIN_DEVICE,
+    deviceId: CHAIN_DEVICE,
+    siteId: CHAIN_SITE,
+    sourceUpdatedAt,
+    edges: [{
+      key: 'task11-chain-site-device',
+      type: 'site_device',
+      from: { type: 'site', id: CHAIN_SITE },
+      to: { type: 'device', id: CHAIN_DEVICE },
+      metadata: {},
+    }],
+  };
+  return { site, device, inventory, script, relationship };
+}
+
+function assetInput(externalId: string) {
+  return {
+    targetKind: 'asset' as const,
+    externalId,
+    source: {
+      externalOrgId: ORG_A,
+      resourceKey: 'devices',
+      sourceId: externalId.split(':').at(-1)!,
+      revision: REVISION,
+      fingerprint: REVISION,
+      updatedAt: UPDATED,
+    },
+    name: 'Cross-company guard probe',
+    assetLayoutId: ids.layout,
+    externalSource: `breeze:${ids.integration}`,
+    matchKeyFieldIds: [],
+    fieldValues: [],
+  };
+}
+
 function provenanceFor(resourceKey: string, externalId: string) {
   return {
     integrationId: ids.integration,
@@ -731,25 +1452,32 @@ function syncRecordData(input: {
 async function seedDatabase(prisma: PrismaClient) {
   await prisma.user.create({ data: { id: ids.actor, email: 'task11@example.test', name: 'Task 11', role: 'SUPER_ADMIN' } });
   await prisma.company.createMany({ data: [
-    { id: ids.companyA, name: 'Task 11 Company A', slug: 'task11-company-a' },
+    { id: ids.companyA, name: 'Task 11 Company A', slug: 'task11-company-a', notes: 'operator-preserved company notes', quickNotes: 'operator-preserved quick notes' },
     { id: ids.companyB, name: 'Task 11 Company B', slug: 'task11-company-b' },
   ] });
   await prisma.assetLayout.create({ data: { id: ids.layout, name: 'Task 11 Devices', slug: 'task11-devices', icon: 'server', color: '#000000', createdBy: ids.actor } });
   await prisma.assetField.create({ data: { id: ids.field, assetLayoutId: ids.layout, name: 'Reconstruction details', slug: 'reconstruction-details', fieldType: 'TEXTAREA', position: 0, isPrimary: true, options: {} } });
   await prisma.integration.create({ data: { id: ids.integration, driver: 'breeze', name: 'Task 11 Breeze', status: 'ACTIVE', config: { baseUrl: 'https://breeze.example.test' }, syncCron: '*/15 * * * *', createdBy: ids.actor } });
   await prisma.integrationResource.createMany({ data: [
+    { id: ids.sites, integrationId: ids.integration, resourceKey: 'sites', targetKind: 'asset', assetLayoutId: ids.layout, targetConfig: {}, dependsOnResourceKeys: [] },
     { id: ids.devices, integrationId: ids.integration, resourceKey: 'devices', targetKind: 'asset', assetLayoutId: ids.layout, targetConfig: {}, dependsOnResourceKeys: [] },
     { id: ids.subnets, integrationId: ids.integration, resourceKey: 'subnets', targetKind: 'subnet', targetConfig: {}, dependsOnResourceKeys: ['devices'] },
+    { id: ids.reservations, integrationId: ids.integration, resourceKey: 'ip-reservations', targetKind: 'ip_reservation', targetConfig: {}, dependsOnResourceKeys: ['subnets'] },
+    { id: ids.scripts, integrationId: ids.integration, resourceKey: 'scripts', targetKind: 'article', targetConfig: {}, dependsOnResourceKeys: [] },
+    { id: ids.deviceRelationships, integrationId: ids.integration, resourceKey: 'device-relationships', targetKind: 'relation', targetConfig: {}, dependsOnResourceKeys: ['sites', 'devices'] },
     { id: ids.articles, integrationId: ids.integration, resourceKey: 'articles', targetKind: 'article', targetConfig: {}, dependsOnResourceKeys: [] },
     { id: ids.relations, integrationId: ids.integration, resourceKey: 'relations', targetKind: 'relation', targetConfig: {}, dependsOnResourceKeys: ['devices', 'articles'] },
   ] });
-  await prisma.integrationFieldMapping.create({
-    data: {
-      resourceId: ids.devices,
-      sourceField: 'hostname',
+  await prisma.integrationFieldMapping.createMany({
+    data: [
+      { resourceId: ids.sites, sourceField: 'name' },
+      { resourceId: ids.devices, sourceField: 'hostname' },
+    ].map(({ resourceId, sourceField }) => ({
+      resourceId,
+      sourceField,
       targetFieldId: ids.field,
-      syncDirection: 'manual_only',
-    },
+      syncDirection: 'manual_only' as const,
+    })),
   });
   await prisma.integrationCompanyMapping.createMany({ data: [
     { id: ids.mappingA, integrationId: ids.integration, companyId: ids.companyA, externalOrgId: ORG_A, externalOrgName: 'Mapped A', createdBy: ids.actor },
@@ -773,17 +1501,21 @@ async function seedDatabase(prisma: PrismaClient) {
   ] });
   await prisma.assetFieldValue.create({ data: { companyId: ids.companyA, assetId: ids.deviceA, assetFieldId: ids.field, value: 'operator-preserved manual field' } });
   await prisma.subnet.create({ data: { id: ids.subnet, companyId: ids.companyA, name: 'Application LAN', cidr: '10.20.30.0/24', prefix: 24, gateway: '10.20.30.1', createdBy: ids.actor, updatedBy: ids.actor } });
+  await prisma.subnet.create({ data: { id: ids.subnetB, companyId: ids.companyB, name: 'Company B LAN', cidr: '10.99.0.0/24', prefix: 24, gateway: '10.99.0.1', createdBy: ids.actor, updatedBy: ids.actor } });
   await prisma.ipReservation.create({ data: { id: ids.reservation, companyId: ids.companyA, subnetId: ids.subnet, ipAddress: '10.20.30.10', label: 'APP-01 static', createdBy: ids.actor, updatedBy: ids.actor } });
   await prisma.article.createMany({ data: [
     { id: ids.article, companyId: ids.companyA, title: 'APP-01 Rebuild', slug: 'app-01-rebuild', editorMode: 'markdown', markdownSource: '# APP-01 Rebuild\nInstall PostgreSQL and restore the database.', contentPlaintext: 'APP-01 Rebuild Install PostgreSQL and restore the database.', visibleToClients: false, createdBy: ids.actor, updatedBy: ids.actor },
     { id: ids.manualArticle, companyId: ids.companyA, title: 'Manual operating notes', slug: 'manual-operating-notes', editorMode: 'markdown', markdownSource: '# Manual notes\nPreserve this article.', contentPlaintext: 'Manual notes Preserve this article.', visibleToClients: false, createdBy: ids.actor, updatedBy: ids.actor },
+    { id: ids.articleB, companyId: ids.companyB, title: 'Company B article', slug: 'company-b-article', editorMode: 'markdown', markdownSource: '# Company B', contentPlaintext: 'Company B', visibleToClients: false, createdBy: ids.actor, updatedBy: ids.actor },
   ] });
   await prisma.articleVersion.create({ data: { articleId: ids.article, companyId: ids.companyA, version: 1, title: 'APP-01 Rebuild', slug: 'app-01-rebuild', folderId: null, visibleToClients: false, editorMode: 'markdown', markdownSource: '# APP-01 Rebuild\nInstall PostgreSQL and restore the database.', contentPlaintext: 'APP-01 Rebuild Install PostgreSQL and restore the database.', changedBy: ids.actor } });
   await prisma.relation.createMany({ data: [
     { id: ids.relation, companyId: ids.companyA, sourceType: 'Asset', sourceId: ids.siteA, targetType: 'Asset', targetId: ids.deviceA, relationType: 'site_device', createdBy: ids.actor },
     { id: ids.manualRelation, companyId: ids.companyA, sourceType: 'Asset', sourceId: ids.deviceA, targetType: 'Article', targetId: ids.manualArticle, relationType: 'manual_dependency', createdBy: ids.actor },
+    { id: ids.relationB, companyId: ids.companyB, sourceType: 'Asset', sourceId: ids.deviceB, targetType: 'Article', targetId: ids.articleB, relationType: 'company_b_dependency', createdBy: ids.actor },
   ] });
   await prisma.password.create({ data: { id: ids.password, companyId: ids.companyA, assetId: ids.deviceA, name: 'Manual administrator reference', username: 'admin', passwordCiphertext: 'test-ciphertext-not-a-secret', createdBy: ids.actor, updatedBy: ids.actor } });
+  await prisma.upload.create({ data: { id: ids.upload, companyId: ids.companyA, uploaderId: ids.actor, filename: 'operator-runbook.txt', mimeType: 'text/plain', sizeBytes: 28, storageKey: `${ids.companyA}/uploads/${ids.upload}/operator-runbook.txt`, sha256: 'b'.repeat(64), attachedToType: 'asset', attachedToId: ids.deviceA } });
   await prisma.integrationSyncRecord.createMany({ data: [
     syncRecordData({ id: ids.syncDevice, companyId: ids.companyA, mappingId: ids.mappingA, resourceId: ids.devices, externalId: `${ORG_A}:devices:${DEVICE}`, targetKind: 'asset', targetId: ids.deviceA }),
     syncRecordData({ id: ids.syncSubnet, companyId: ids.companyA, mappingId: ids.mappingA, resourceId: ids.subnets, externalId: `${ORG_A}:subnets:application`, targetKind: 'subnet', targetId: ids.subnet }),
@@ -795,22 +1527,4 @@ async function seedDatabase(prisma: PrismaClient) {
     { companyId: ids.companyA, integrationCompanyMappingId: ids.mappingA, resourceId: ids.articles, dedupeKey: 'secret-blocked', kind: 'secret_blocked', message: 'A secret blocked item requires operator review.', details: { reasonCode: 'secret_like_input' }, firstSeenAt: new Date(UPDATED), lastSeenAt: new Date(UPDATED) },
     { companyId: ids.companyA, integrationCompanyMappingId: ids.mappingA, resourceId: ids.relations, dedupeKey: 'missing-dependency', kind: 'missing_dependency', message: 'A dependency requires operator review.', details: { reasonCode: 'dependency_not_found' }, firstSeenAt: new Date(UPDATED), lastSeenAt: new Date(UPDATED) },
   ] });
-}
-
-async function cleanupDatabase(prisma: PrismaClient) {
-  await prisma.$executeRawUnsafe('ALTER TABLE audit_log DISABLE TRIGGER audit_log_no_update_delete');
-  try {
-    await prisma.auditLog.deleteMany({ where: { OR: [{ actorId: ids.actor }, { companyId: { in: [ids.companyA, ids.companyB] } }] } });
-  } finally {
-    await prisma.$executeRawUnsafe('ALTER TABLE audit_log ENABLE TRIGGER audit_log_no_update_delete');
-  }
-  await prisma.integration.deleteMany({ where: { id: ids.integration } });
-  await prisma.relation.deleteMany({ where: { companyId: { in: [ids.companyA, ids.companyB] } } });
-  await prisma.password.deleteMany({ where: { companyId: { in: [ids.companyA, ids.companyB] } } });
-  await prisma.article.deleteMany({ where: { companyId: { in: [ids.companyA, ids.companyB] } } });
-  await prisma.subnet.deleteMany({ where: { companyId: { in: [ids.companyA, ids.companyB] } } });
-  await prisma.asset.deleteMany({ where: { companyId: { in: [ids.companyA, ids.companyB] } } });
-  await prisma.assetLayout.deleteMany({ where: { id: ids.layout } });
-  await prisma.company.deleteMany({ where: { id: { in: [ids.companyA, ids.companyB] } } });
-  await prisma.user.deleteMany({ where: { id: ids.actor } });
 }
