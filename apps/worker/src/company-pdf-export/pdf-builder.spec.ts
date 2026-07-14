@@ -3,6 +3,7 @@ import {
   buildCompanyExportPdf,
   formatAssetFieldValue,
   pdfEmbedSizeBlockReason,
+  pdfSafeUserText,
   richTextToPlaintext,
 } from './pdf-builder.js';
 import { createHash } from 'node:crypto';
@@ -286,11 +287,49 @@ describe('standalone reconstruction dossier PDF', () => {
       'ネットワーク Восстановление',
       '静的アドレスを確認してください。',
     ]) expect(compactText).toContain(expected.replace(/\s+/g, ''));
-    expect(text).toContain('[emoji omitted]');
+    expect(text).toContain('[U+1F600]');
     expect(text).not.toContain('😀');
     expect(text).not.toContain('�');
     expect(fonts).toMatch(/Noto/i);
     expect(fonts).not.toMatch(/\bno\b/i);
+  });
+
+  it('renders emoji credentials reversibly and unsupported prose deterministically', async () => {
+    const base = companyPdfTestFixture();
+    const password = 'Pass😀-1️⃣-🇺🇸';
+    const totp = 'OTP😀-1️⃣-🇺🇸';
+    const notes = 'Notes 😀 1️⃣ 🇺🇸';
+    const arabic = 'مرحبا';
+    const hebrew = 'שלום';
+    const devanagari = 'नमस्ते';
+    const thai = 'สวัสดี';
+    const data: CompanyExportData = {
+      ...base,
+      includePasswords: true,
+      company: { ...base.company, quickNotes: `Arabic ${arabic} Hebrew ${hebrew}` },
+      passwords: [{ ...base.passwords[0]!, password, totpSecret: totp, notes }],
+      articles: [{ ...base.articles[0]!, contentPlaintext: `Devanagari ${devanagari}` }],
+      reconstruction: {
+        ...base.reconstruction,
+        gaps: [{ ...base.reconstruction.gaps[0]!, message: `Thai ${thai}` }],
+      },
+    };
+
+    const first = await buildCompanyExportPdf(data);
+    const second = await buildCompanyExportPdf(data);
+    const text = extractPdfText(first);
+
+    for (const value of [password, totp, notes, arabic, hebrew, devanagari, thai]) {
+      const encoded = pdfSafeUserText(value);
+      expect(decodePdfNotation(encoded)).toBe(value);
+      expect(text.replace(/\s+/g, '')).toContain(encoded.replace(/\s+/g, ''));
+    }
+    expect(text).toContain('[U+1F600]');
+    expect(text).toContain('[U+0031+FE0F+20E3]');
+    expect(text).toContain('[U+1F1FA+1F1F8]');
+    expect(text).not.toContain('�');
+    expect(createHash('sha256').update(first).digest('hex'))
+      .toBe(createHash('sha256').update(second).digest('hex'));
   });
 
   it('labels stale-bound records unmistakably as last-known stale', async () => {
@@ -454,7 +493,18 @@ function strengthenedInspectionFixture(): CompanyExportData {
   };
   return {
     ...base,
-    company: { ...base.company, name: '東京復旧 株式会社 — Пример восстановления' },
+    company: {
+      ...base.company,
+      name: '東京復旧 株式会社 — Пример восстановления',
+      quickNotes: 'Arabic مرحبا · Hebrew שלום',
+    },
+    includePasswords: true,
+    passwords: base.passwords.map((password) => ({
+      ...password,
+      password: 'Pass😀-1️⃣-🇺🇸',
+      totpSecret: 'OTP😀-1️⃣-🇺🇸',
+      notes: 'Reversible notes 😀 1️⃣ 🇺🇸',
+    })),
     assets: base.assets.map((asset) => ({
       ...asset,
       reconstructionState: stale,
@@ -467,7 +517,7 @@ function strengthenedInspectionFixture(): CompanyExportData {
     articles: base.articles.map((article) => ({
       ...article,
       title: '復旧手順 — Процедура восстановления',
-      contentPlaintext: `${article.contentPlaintext ?? ''}\nサーバーを復元します。 Проверить сеть. 😀`,
+      contentPlaintext: `${article.contentPlaintext ?? ''}\nサーバーを復元します。 Проверить сеть. 😀 1️⃣ 🇺🇸\nDevanagari नमस्ते · Thai สวัสดี`,
       reconstructionState: stale,
     })),
     ipam: base.ipam.map((subnet) => ({ ...subnet, reconstructionState: stale })),
@@ -498,4 +548,10 @@ function strengthenedInspectionFixture(): CompanyExportData {
       ],
     },
   };
+}
+
+function decodePdfNotation(value: string): string {
+  return value.replace(/\[U\+([0-9A-F]+(?:\+[0-9A-F]+)*)\]/g, (_match, codes: string) =>
+    String.fromCodePoint(...codes.split('+').map((code) => Number.parseInt(code, 16))),
+  );
 }

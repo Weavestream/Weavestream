@@ -374,6 +374,140 @@ describe('CompanyExportDataService reconstruction export', () => {
     expect(serialized).not.toContain(unrelatedArticle);
   });
 
+  it.each([
+    ['single exact /24 reservation', ['24'], 1],
+    ['two reservations disambiguated by /24 mask', ['16', '24'], 1],
+    ['two reservations with inconsistent /25 mask', ['16', '24'], 0],
+  ])('keeps occupant proof subnet-exact for %s', async (
+    _label,
+    reservationPrefixes,
+    expectedOccupants,
+  ) => {
+    const { prisma, service } = setup();
+    const subnet16 = '00000000-0000-4000-8000-000000000091';
+    const subnet24 = '00000000-0000-4000-8000-000000000092';
+    const mask = expectedOccupants === 0 ? '255.255.255.128' : '255.255.255.0';
+    prisma.integrationSyncRecord.findMany.mockResolvedValueOnce([
+      syncRecord({ id: ids.syncA, state: 'active', targetId: ids.assetA, targetName: 'APP-01' }),
+    ]);
+    prisma.subnet.findMany.mockResolvedValueOnce([
+      { ...subnet(subnet16, 'Campus /16', '10.20.0.0/16'), prefix: 16, archivedAt: null },
+      { ...subnet(subnet24, 'Application /24', '10.20.30.0/24'), prefix: 24, archivedAt: null },
+    ]);
+    prisma.ipReservation.findMany.mockResolvedValueOnce(
+      reservationPrefixes.map((prefix, index) => ({
+        id: `00000000-0000-4000-8000-${String(93 + index).padStart(12, '0')}`,
+        companyId: ids.company,
+        subnetId: prefix === '16' ? subnet16 : subnet24,
+        ipAddress: '10.20.30.10',
+        label: `APP-01 reservation /${prefix}`,
+        notes: null,
+        subnet: { companyId: ids.company },
+      })),
+    );
+    prisma.assetFieldValue.findMany.mockResolvedValueOnce([
+      {
+        id: 'interfaces', companyId: ids.company, assetId: ids.assetA,
+        value: 'ID: 11111111-1111-4111-8111-111111111111 | Name: Ethernet 0 | MAC: 00:11:22:33:44:55 | Primary: yes',
+        asset: { id: ids.assetA, companyId: ids.company, name: 'APP-01' },
+        assetField: { name: 'Interfaces', slug: 'interfaces', fieldType: 'TEXTAREA' },
+      },
+      {
+        id: 'addresses', companyId: ids.company, assetId: ids.assetA,
+        value: `ID: 22222222-2222-4222-8222-222222222222 | Interface ID: 11111111-1111-4111-8111-111111111111 | Interface: Ethernet 0 | Address: 10.20.30.10 | Family: IPv4 | Assignment: static | Reservation eligible: yes | Subnet mask: ${mask} | Active: yes`,
+        asset: { id: ids.assetA, companyId: ids.company, name: 'APP-01' },
+        assetField: { name: 'Network Address History', slug: 'network-addresses', fieldType: 'TEXTAREA' },
+      },
+    ]);
+
+    const result = await service.gather(ids.company, { includePasswords: false });
+    const subnet16Result = result.ipam.find((row) => row.prefix === 16)!;
+    const subnet24Result = result.ipam.find((row) => row.prefix === 24)!;
+    const allOccupants = result.ipam.flatMap((row) => row.occupants);
+
+    expect(allOccupants).toHaveLength(expectedOccupants);
+    expect(subnet16Result.occupants).toEqual([]);
+    expect(subnet24Result.occupants).toHaveLength(expectedOccupants);
+    expect(JSON.stringify(allOccupants)).not.toContain('11111111-1111-4111-8111-111111111111');
+    expect(JSON.stringify(allOccupants)).not.toContain('22222222-2222-4222-8222-222222222222');
+  });
+
+  it.each([
+    ['weavestream-owned Breeze binding', 'breeze', 'weavestream'],
+    ['non-Breeze driver binding', 'other-driver', 'breeze'],
+  ])('preserves authored projection-like content for a %s', async (
+    _label,
+    driver,
+    ownership,
+  ) => {
+    const { prisma, service } = setup();
+    const authoredUuid = '33333333-3333-4333-8333-333333333333';
+    const assetBinding = withBindingAuthority(
+      syncRecord({ id: ids.syncA, state: 'active', targetId: ids.assetA, targetName: 'Authored Asset' }),
+      driver,
+      ownership,
+    );
+    const articleBinding = withBindingAuthority(
+      syncRecordForArticle(ids.article, 'Authored Article', 'active'),
+      driver,
+      ownership,
+    );
+    prisma.integrationSyncRecord.findMany.mockResolvedValueOnce([assetBinding, articleBinding]);
+    prisma.asset.findMany.mockResolvedValueOnce([assetRow(ids.assetA, null, [
+      fieldValue('Breeze ID', 'breeze-id', 'TEXT', authoredUuid, 0),
+      fieldValue('Authored notes', 'authored-notes', 'TEXTAREA', `ID: ${authoredUuid} | Procedure: preserve this text`, 1),
+    ])]);
+    const authoredArticle = `# Authored procedure\nKeep ${authoredUuid}\n## Source provenance\nThis heading is authored and must remain.`;
+    prisma.article.findMany.mockResolvedValueOnce([{
+      id: ids.article, title: 'Authored Article', editorMode: 'markdown', content: null,
+      markdownSource: authoredArticle, contentPlaintext: authoredArticle,
+      updatedAt: NOW, archivedAt: null, folder: null,
+    }]);
+
+    const result = await service.gather(ids.company, { includePasswords: false });
+    const serialized = JSON.stringify(result);
+
+    expect(serialized).toContain(authoredUuid);
+    expect(serialized).toContain('Breeze ID');
+    expect(serialized).toContain('## Source provenance');
+    expect(serialized).toContain('This heading is authored and must remain.');
+  });
+
+  it('derives Breeze projection and stale state deterministically from all mixed bindings', async () => {
+    const run = async (reverseIds: boolean) => {
+      const { prisma, service } = setup();
+      const active = syncRecord({
+        id: reverseIds ? 'ffffffff-ffff-4fff-8fff-ffffffffffff' : '00000000-0000-4000-8000-000000000021',
+        state: 'active', targetId: ids.assetA, targetName: 'APP-01',
+      });
+      const stale = syncRecord({
+        id: reverseIds ? '00000000-0000-4000-8000-000000000021' : 'ffffffff-ffff-4fff-8fff-ffffffffffff',
+        state: 'stale', targetId: ids.assetA, targetName: 'APP-01',
+      });
+      active.companyMapping.integration.name = 'Alpha Breeze';
+      stale.companyMapping.integration.name = 'Zulu Breeze';
+      prisma.integrationSyncRecord.findMany.mockResolvedValueOnce([stale, active]);
+      prisma.asset.findMany.mockResolvedValueOnce([assetRow(ids.assetA, null, [
+        fieldValue('Breeze ID', 'breeze-id', 'TEXT', ids.assetA, 0),
+        fieldValue('Recovery role', 'recovery-role', 'TEXT', 'Readable recovery server', 1),
+      ])]);
+      const result = await service.gather(ids.company, { includePasswords: false });
+      return {
+        asset: result.assets[0],
+        provenance: result.reconstruction.provenance,
+      };
+    };
+
+    const first = await run(false);
+    const reversed = await run(true);
+
+    expect(first).toEqual(reversed);
+    expect(first.asset?.reconstructionState).toBeUndefined();
+    expect(JSON.stringify(first.asset)).not.toContain(ids.assetA);
+    expect(JSON.stringify(first.asset)).toContain('Readable recovery server');
+    expect(first.provenance).toHaveLength(2);
+  });
+
   it('rejects bounded export overflow instead of silently truncating', async () => {
     const { prisma, service } = setup();
     prisma.subnet.findMany.mockResolvedValueOnce(
@@ -596,4 +730,17 @@ function syncRecordForRelation(relationId: string) {
     resource: { integrationId: ids.integration, resourceKey: 'relations' },
     provenance: { ...base.provenance, resourceKey: 'relations' },
   };
+}
+
+function withBindingAuthority<T extends {
+  companyMapping: { integration: { driver: string } };
+  provenance: { ownership: string };
+}>(
+  record: T,
+  driver: string,
+  ownership: string,
+): T {
+  record.companyMapping.integration.driver = driver;
+  record.provenance.ownership = ownership;
+  return record;
 }

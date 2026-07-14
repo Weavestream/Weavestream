@@ -102,7 +102,7 @@ export async function buildCompanyExportPdf(
   data: CompanyExportData,
   opts: PdfBuildOpts = {},
 ): Promise<Buffer> {
-  data = sanitizePdfUserText(data);
+  data = encodePdfUserText(data);
   return new Promise((resolve, reject) => {
     const doc = new PDFDocument({
       size: 'LETTER',
@@ -586,18 +586,50 @@ function formatStoredDate(value: unknown, fieldType: string): string {
   }).format(date)} UTC`;
 }
 
-const EMOJI_SEQUENCE_RE = /\p{Extended_Pictographic}(?:\uFE0E|\uFE0F)?(?:\u200D\p{Extended_Pictographic}(?:\uFE0E|\uFE0F)?)*/gu;
+const PDF_GRAPHEME_SEGMENTER = new Intl.Segmenter('en', { granularity: 'grapheme' });
 
-function sanitizePdfUserText<T>(value: T): T {
+export function pdfSafeUserText(value: string): string {
+  let encoded = '';
+  for (const { segment } of PDF_GRAPHEME_SEGMENTER.segment(value)) {
+    const codePoints = [...segment].map((character) => character.codePointAt(0)!);
+    if (codePoints.every(isPackagedPdfCodePoint)) {
+      encoded += segment;
+      continue;
+    }
+    encoded += `[U+${codePoints
+      .map((codePoint) => codePoint.toString(16).toUpperCase().padStart(4, '0'))
+      .join('+')}]`;
+  }
+  return encoded;
+}
+
+function isPackagedPdfCodePoint(codePoint: number): boolean {
+  return codePoint === 0x09 || codePoint === 0x0a || codePoint === 0x0d ||
+    (codePoint >= 0x20 && codePoint <= 0x024f) ||
+    (codePoint >= 0x0300 && codePoint <= 0x036f) ||
+    (codePoint >= 0x0400 && codePoint <= 0x052f) ||
+    (codePoint >= 0x2000 && codePoint <= 0x206f && codePoint !== 0x200d) ||
+    (codePoint >= 0x20a0 && codePoint <= 0x20cf) ||
+    (codePoint >= 0x2100 && codePoint <= 0x214f) ||
+    (codePoint >= 0x3000 && codePoint <= 0x30ff) ||
+    (codePoint >= 0x31f0 && codePoint <= 0x31ff) ||
+    (codePoint >= 0x3400 && codePoint <= 0x4dbf) ||
+    (codePoint >= 0x4e00 && codePoint <= 0x9fff) ||
+    (codePoint >= 0xac00 && codePoint <= 0xd7af) ||
+    (codePoint >= 0xf900 && codePoint <= 0xfaff) ||
+    (codePoint >= 0xff00 && codePoint <= 0xffef);
+}
+
+function encodePdfUserText<T>(value: T): T {
   if (typeof value === 'string') {
-    return value.replace(EMOJI_SEQUENCE_RE, '[emoji omitted]') as T;
+    return pdfSafeUserText(value) as T;
   }
   if (value instanceof Date || Buffer.isBuffer(value) || value === null) return value;
-  if (Array.isArray(value)) return value.map((entry) => sanitizePdfUserText(entry)) as T;
+  if (Array.isArray(value)) return value.map((entry) => encodePdfUserText(entry)) as T;
   if (typeof value === 'object') {
     return Object.fromEntries(
       Object.entries(value as Record<string, unknown>)
-        .map(([key, entry]) => [key, sanitizePdfUserText(entry)]),
+        .map(([key, entry]) => [key, encodePdfUserText(entry)]),
     ) as T;
   }
   return value;
@@ -1070,14 +1102,10 @@ function drawPasswordCard(
   );
 
   if (includePlaintext) {
-    fieldGrid(
-      doc,
-      [
-        ['Password', p.password],
-        ['TOTP secret', p.totpSecret],
-      ],
-      sectionTitle,
-    );
+    // Credential strings use the full width. Reversible U+ fallback
+    // notation must not lose punctuation at narrow column line wraps.
+    field(doc, 'Password', p.password, sectionTitle);
+    field(doc, 'TOTP secret', p.totpSecret, sectionTitle);
     const notes = richTextToPlaintext(p.notes);
     if (notes) field(doc, 'Notes', notes, sectionTitle);
   }

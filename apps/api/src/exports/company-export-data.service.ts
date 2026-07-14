@@ -253,6 +253,7 @@ interface SafeSyncBinding {
   resourceId: string;
   state: IntegrationSyncState;
   staleSince: Date | null;
+  driver: string;
   sourceLabel: string;
   resourceKey: string;
   ownership: 'breeze' | 'weavestream';
@@ -264,7 +265,7 @@ interface SafeSyncBinding {
 
 interface SafeSyncBindingIndex {
   all: SafeSyncBinding[];
-  byTarget: Map<string, SafeSyncBinding>;
+  byTarget: Map<string, SafeSyncBinding[]>;
 }
 
 // ---------------------------------------------------------------------------
@@ -381,6 +382,7 @@ export class CompanyExportDataService {
         resourceId: row.resourceId,
         state: row.state,
         staleSince: row.staleSince,
+        driver: integration.driver,
         sourceLabel: boundedText(integration.name, 256, 'Integration'),
         resourceKey: boundedText(row.resource.resourceKey, 256, 'resource'),
         ownership: parsed.data.ownership,
@@ -390,10 +392,13 @@ export class CompanyExportDataService {
         target,
       }];
     });
-    return {
-      all,
-      byTarget: new Map(all.map((binding) => [bindingKey(binding.targetKind, binding.targetId), binding])),
-    };
+    all.sort(compareSafeBindings);
+    const byTarget = new Map<string, SafeSyncBinding[]>();
+    for (const binding of all) {
+      const key = bindingKey(binding.targetKind, binding.targetId);
+      byTarget.set(key, [...(byTarget.get(key) ?? []), binding]);
+    }
+    return { all, byTarget };
   }
 
   private async fetchWorkspaceName(): Promise<string> {
@@ -520,7 +525,9 @@ export class CompanyExportDataService {
     for (const r of tagRows) labelLookup.set(r.id, r.name);
 
     return exportRows.map((a) => {
-      const binding = bindings.byTarget.get(bindingKey('asset', a.id));
+      const targetBindings = bindings.byTarget.get(bindingKey('asset', a.id)) ?? [];
+      const binding = preferredBreezeBinding(targetBindings);
+      const staleState = staleExportState(targetBindings);
       return {
       name: a.name,
       layoutName: a.assetLayout.name,
@@ -554,7 +561,7 @@ export class CompanyExportDataService {
               : {}),
           }];
         }),
-      ...(staleExportState(binding) ? { reconstructionState: staleExportState(binding)! } : {}),
+      ...(staleState ? { reconstructionState: staleState } : {}),
     };
     });
   }
@@ -617,7 +624,9 @@ export class CompanyExportDataService {
     const uploadsById = new Map(uploads.map((u) => [u.id.toLowerCase(), u]));
 
     return exportRows.map((a) => {
-      const binding = bindings.byTarget.get(bindingKey('article', a.id));
+      const targetBindings = bindings.byTarget.get(bindingKey('article', a.id)) ?? [];
+      const binding = preferredBreezeBinding(targetBindings);
+      const staleState = staleExportState(targetBindings);
       const safeArticle = binding
         ? safeSynchronizedArticle(a.markdownSource, a.contentPlaintext, binding)
         : null;
@@ -641,7 +650,7 @@ export class CompanyExportDataService {
           height: u.height,
         })),
       updatedAt: a.updatedAt,
-      ...(staleExportState(binding) ? { reconstructionState: staleExportState(binding)! } : {}),
+      ...(staleState ? { reconstructionState: staleState } : {}),
     };
     });
   }
@@ -895,9 +904,15 @@ export class CompanyExportDataService {
       reservationsBySubnet.set(reservation.subnetId, list);
     }
 
-    const reservationIps = new Set(
-      reservations.map((reservation) => normalizeIpv4V4(reservation.ipAddress)).filter(Boolean),
-    );
+    const reservationSubnetIdsByIp = new Map<string, Set<string>>();
+    for (const reservation of reservations) {
+      const ip = normalizeIpv4V4(reservation.ipAddress);
+      if (!ip) continue;
+      const subnetIdsForIp = reservationSubnetIdsByIp.get(ip) ?? new Set<string>();
+      subnetIdsForIp.add(reservation.subnetId);
+      reservationSubnetIdsByIp.set(ip, subnetIdsForIp);
+    }
+    const subnetsById = new Map(exportSubnets.map((subnet) => [subnet.id, subnet]));
     const projectionsByAsset = new Map<string, {
       assetId: string;
       assetLabel: string;
@@ -910,7 +925,7 @@ export class CompanyExportDataService {
         row.asset.companyId !== companyId ||
         row.asset.id !== row.assetId ||
         typeof row.value !== 'string' ||
-        !bindings.byTarget.has(bindingKey('asset', row.assetId))
+        !preferredBreezeBinding(bindings.byTarget.get(bindingKey('asset', row.assetId)) ?? [])
       ) continue;
       const current = projectionsByAsset.get(row.assetId) ?? {
         assetId: row.assetId,
@@ -928,9 +943,10 @@ export class CompanyExportDataService {
       projectionsByAsset.set(row.assetId, current);
     }
 
+    type ScopedOccupant = ExportSubnetOccupant & { subnetId: string };
     const safeOccupants = [...projectionsByAsset.values()].flatMap((projection) => {
       const interfaceNames = new Set(projection.interfaces);
-      return projection.addresses.flatMap((address): ExportSubnetOccupant[] => {
+      return projection.addresses.flatMap((address): ScopedOccupant[] => {
         const interfaceLabel = address['Interface']?.trim();
         const rawAddress = address['Address']?.split('/', 1)[0]?.trim();
         const ip = rawAddress ? normalizeIpv4V4(rawAddress) : null;
@@ -942,10 +958,24 @@ export class CompanyExportDataService {
           !interfaceLabel ||
           !interfaceNames.has(interfaceLabel) ||
           !active ||
-          (!eligible && !['static', 'manual', 'reserved'].includes(assignment)) ||
-          !reservationIps.has(ip)
+          (!eligible && !['static', 'manual', 'reserved'].includes(assignment))
         ) return [];
+        const reservationSubnetIds = reservationSubnetIdsByIp.get(ip);
+        if (!reservationSubnetIds || reservationSubnetIds.size === 0) return [];
+        const addressPrefix = ipv4MaskPrefix(address['Subnet mask']);
+        const matchingSubnetIds = [...reservationSubnetIds].filter((subnetId) => {
+          const subnet = subnetsById.get(subnetId);
+          return Boolean(
+            subnet &&
+            ipInCidr(ip, subnet.cidr) &&
+            (addressPrefix === null || subnet.prefix === addressPrefix),
+          );
+        });
+        // A single exact native reservation/subnet is proof. Multiple or
+        // mask-inconsistent candidates are ambiguous and must be omitted.
+        if (matchingSubnetIds.length !== 1) return [];
         return [{
+          subnetId: matchingSubnetIds[0]!,
           ipAddress: ip,
           assetLabel: projection.assetLabel,
           interfaceLabel: boundedText(interfaceLabel, 200, 'Interface'),
@@ -966,7 +996,9 @@ export class CompanyExportDataService {
         if (subnet.companyId !== companyId) {
           throw new Error('Inconsistent IPAM export scope.');
         }
-        const binding = bindings.byTarget.get(bindingKey('subnet', subnet.id));
+        const staleState = staleExportState(
+          bindings.byTarget.get(bindingKey('subnet', subnet.id)) ?? [],
+        );
         return {
           name: boundedText(subnet.name, 200, 'Subnet'),
           cidr: subnet.cidr,
@@ -980,11 +1012,12 @@ export class CompanyExportDataService {
             .sort((left, right) => compareIpv4(left.ipAddress, right.ipAddress) ||
               left.label.localeCompare(right.label)),
           occupants: safeOccupants
-            .filter((occupant) => ipInCidr(occupant.ipAddress, subnet.cidr))
+            .filter((occupant) => occupant.subnetId === subnet.id)
+            .map(({ subnetId: _subnetId, ...occupant }) => occupant)
             .sort((left, right) => compareIpv4(left.ipAddress, right.ipAddress) ||
               left.assetLabel.localeCompare(right.assetLabel) ||
               left.interfaceLabel.localeCompare(right.interfaceLabel)),
-          ...(staleExportState(binding) ? { reconstructionState: staleExportState(binding)! } : {}),
+          ...(staleState ? { reconstructionState: staleState } : {}),
         };
       })
       .sort((left, right) => left.name.localeCompare(right.name) || left.cidr.localeCompare(right.cidr));
@@ -1093,21 +1126,24 @@ export class CompanyExportDataService {
         // Unknown, archived, or foreign-company polymorphic endpoints are
         // deliberately omitted rather than exposing their ids as labels.
         if (!source || !target) return [];
-        const relationBinding = bindings.byTarget.get(bindingKey('relation', row.id));
-        const staleBindings = [
-          relationBinding,
-          bindings.byTarget.get(bindingKey(endpointKind(row.sourceType), row.sourceId)),
-          bindings.byTarget.get(bindingKey(endpointKind(row.targetType), row.targetId)),
-        ].filter((binding): binding is SafeSyncBinding => Boolean(binding?.state === 'stale'));
-        const state = staleBindings
-          .slice()
-          .sort((left, right) => (left.staleSince?.getTime() ?? 0) - (right.staleSince?.getTime() ?? 0))[0];
+        const staleStates = [
+          staleExportState(bindings.byTarget.get(bindingKey('relation', row.id)) ?? []),
+          staleExportState(bindings.byTarget.get(
+            bindingKey(endpointKind(row.sourceType), row.sourceId),
+          ) ?? []),
+          staleExportState(bindings.byTarget.get(
+            bindingKey(endpointKind(row.targetType), row.targetId),
+          ) ?? []),
+        ].filter((state): state is ExportReconstructionState => state !== null)
+          .sort((left, right) => left.staleSince.getTime() - right.staleSince.getTime() ||
+            left.sourceLabel.localeCompare(right.sourceLabel));
+        const state = staleStates[0];
         return [{
               relationType: boundedText(row.relationType, 128, 'related_to'),
               source,
               target,
               createdAt: row.createdAt,
-              ...(staleExportState(state) ? { reconstructionState: staleExportState(state)! } : {}),
+              ...(state ? { reconstructionState: state } : {}),
             }];
       })
       .sort((left, right) => left.relationType.localeCompare(right.relationType) ||
@@ -1256,6 +1292,23 @@ function compareIpv4(left: string, right: string): number {
     if (difference !== 0) return difference;
   }
   return 0;
+}
+
+function ipv4MaskPrefix(value: string | undefined): number | null {
+  if (!value || value === '—') return null;
+  const slashMatch = /^\/?(\d{1,2})$/.exec(value.trim());
+  if (slashMatch) {
+    const prefix = Number(slashMatch[1]);
+    return prefix >= 0 && prefix <= 32 ? prefix : null;
+  }
+  const octets = value.trim().split('.').map(Number);
+  if (
+    octets.length !== 4 ||
+    octets.some((octet) => !Number.isInteger(octet) || octet < 0 || octet > 255)
+  ) return null;
+  const bits = octets.map((octet) => octet.toString(2).padStart(8, '0')).join('');
+  if (!/^1*0*$/.test(bits)) return null;
+  return bits.indexOf('0') === -1 ? 32 : bits.indexOf('0');
 }
 
 function relationEndpointIds(rows: Array<{
@@ -1425,22 +1478,62 @@ function staleBoundIds(
   bindings: SafeSyncBindingIndex,
   kind: IntegrationTargetKind,
 ): string[] {
-  return bindings.all
-    .filter((binding) => binding.targetKind === kind && binding.state === 'stale' && binding.staleSince)
-    .map((binding) => binding.targetId)
+  return [...bindings.byTarget.entries()]
+    .filter(([key, targetBindings]) =>
+      key.startsWith(`${kind}:`) && staleExportState(targetBindings) !== null)
+    .map(([key]) => key.slice(kind.length + 1))
     .sort();
 }
 
 function staleExportState(
-  binding: SafeSyncBinding | undefined,
+  bindings: SafeSyncBinding[],
 ): ExportReconstructionState | null {
-  return binding?.state === 'stale' && binding.staleSince
-    ? {
-        state: 'stale',
-        staleSince: binding.staleSince,
-        sourceLabel: binding.sourceLabel,
-      }
-    : null;
+  const applicable = breezeOwnedBindings(bindings);
+  if (
+    applicable.length === 0 ||
+    applicable.some((binding) => binding.state !== 'stale' || !binding.staleSince)
+  ) return null;
+  const ordered = applicable.slice().sort((left, right) =>
+    left.staleSince!.getTime() - right.staleSince!.getTime() ||
+    left.sourceLabel.localeCompare(right.sourceLabel) ||
+    left.resourceKey.localeCompare(right.resourceKey),
+  );
+  return {
+    state: 'stale',
+    staleSince: ordered[0]!.staleSince!,
+    sourceLabel: [...new Set(applicable.map((binding) => binding.sourceLabel))]
+      .sort()
+      .join(', '),
+  };
+}
+
+function preferredBreezeBinding(bindings: SafeSyncBinding[]): SafeSyncBinding | undefined {
+  return breezeOwnedBindings(bindings)
+    .slice()
+    .sort((left, right) =>
+      Number(left.state === 'stale') - Number(right.state === 'stale') ||
+      (right.lastSyncedAt?.getTime() ?? 0) - (left.lastSyncedAt?.getTime() ?? 0) ||
+      left.sourceLabel.localeCompare(right.sourceLabel) ||
+      left.resourceKey.localeCompare(right.resourceKey),
+    )[0];
+}
+
+function breezeOwnedBindings(bindings: SafeSyncBinding[]): SafeSyncBinding[] {
+  return bindings.filter((binding) =>
+    binding.driver === 'breeze' && binding.ownership === 'breeze'
+  );
+}
+
+function compareSafeBindings(left: SafeSyncBinding, right: SafeSyncBinding): number {
+  return left.targetKind.localeCompare(right.targetKind) ||
+    left.targetId.localeCompare(right.targetId) ||
+    left.driver.localeCompare(right.driver) ||
+    left.ownership.localeCompare(right.ownership) ||
+    Number(left.state === 'stale') - Number(right.state === 'stale') ||
+    left.sourceLabel.localeCompare(right.sourceLabel) ||
+    left.resourceKey.localeCompare(right.resourceKey) ||
+    left.firstSeenAt.getTime() - right.firstSeenAt.getTime() ||
+    left.lastSeenAt.getTime() - right.lastSeenAt.getTime();
 }
 
 function endpointKind(type: string): IntegrationTargetKind {
