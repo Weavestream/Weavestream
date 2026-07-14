@@ -21,32 +21,33 @@ export function scanSensitiveMaterial(root: unknown): SensitiveMaterialScan {
   const seen = new WeakSet<object>();
   let entries = 0;
 
-  while (pending.length > 0) {
-    const current = pending.pop()!;
-    if (current.depth > MAX_SCAN_DEPTH) return 'bounds_exceeded';
-    if (typeof current.value === 'string') {
-      const text = current.value;
-      if (sensitiveValuePatterns.some((pattern) => pattern.test(text)) || looksHighEntropy(text)) {
-        return 'sensitive';
-      }
-      continue;
-    }
-    if (!current.value || typeof current.value !== 'object') continue;
-    if (seen.has(current.value)) return 'bounds_exceeded';
-    seen.add(current.value);
-
-    if (Array.isArray(current.value)) {
-      entries += current.value.length;
-      if (entries > MAX_SCAN_ENTRIES) return 'bounds_exceeded';
-      for (let index = 0; index < current.value.length; index += 1) {
-        if (index in current.value) {
-          pending.push({ value: current.value[index], depth: current.depth + 1 });
+  try {
+    while (pending.length > 0) {
+      const current = pending.pop()!;
+      if (current.depth > MAX_SCAN_DEPTH) return 'bounds_exceeded';
+      if (typeof current.value === 'string') {
+        const text = current.value;
+        if (sensitiveValuePatterns.some((pattern) => pattern.test(text)) || looksHighEntropy(text)) {
+          return 'sensitive';
         }
+        continue;
       }
-      continue;
-    }
+      if (!current.value || typeof current.value !== 'object') continue;
+      if (seen.has(current.value)) return 'bounds_exceeded';
+      seen.add(current.value);
 
-    try {
+      if (Array.isArray(current.value)) {
+        const length = current.value.length;
+        entries += length;
+        if (entries > MAX_SCAN_ENTRIES) return 'bounds_exceeded';
+        for (let index = 0; index < length; index += 1) {
+          if (index in current.value) {
+            pending.push({ value: current.value[index], depth: current.depth + 1 });
+          }
+        }
+        continue;
+      }
+
       for (const key in current.value) {
         if (!Object.prototype.hasOwnProperty.call(current.value, key)) continue;
         entries += 1;
@@ -58,9 +59,9 @@ export function scanSensitiveMaterial(root: unknown): SensitiveMaterialScan {
           depth: current.depth + 1,
         });
       }
-    } catch {
-      return 'bounds_exceeded';
     }
+  } catch {
+    return 'bounds_exceeded';
   }
   return 'safe';
 }

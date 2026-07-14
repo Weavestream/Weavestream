@@ -32,7 +32,9 @@ function binding(overrides: Record<string, unknown> = {}) {
     integrationCompanyMappingId: ids.mapping, resourceId: ids.resource, externalId: 'org:relations:runbook',
     companyId: ids.company, targetKind: 'relation', assetId: null, subnetId: null,
     ipReservationId: null, articleId: null, relationId: ids.relation, state: 'active',
-    provenance: { integrationId: ids.integration, ownership: 'breeze', state: 'active' }, ...overrides,
+    companyMapping: { integrationId: ids.integration, externalOrgId: 'org' },
+    resource: { integrationId: ids.integration, resourceKey: 'relations' },
+    provenance: { integrationId: ids.integration, externalOrgId: 'org', resourceKey: 'relations', externalId: 'org:relations:runbook', ownership: 'breeze', state: 'active' }, ...overrides,
   };
 }
 
@@ -133,7 +135,7 @@ describe('RelationsService integration system writes', () => {
     const existing = relation({ relationType: 'old-type' });
     const { service } = setup({
       bound: existing,
-      binding: binding({ state: 'stale', provenance: { integrationId: ids.integration, ownership: 'breeze', state: 'stale' } }),
+      binding: binding({ state: 'stale', provenance: { integrationId: ids.integration, externalOrgId: 'org', resourceKey: 'relations', externalId: 'org:relations:runbook', ownership: 'breeze', state: 'stale' } }),
     });
     await expect(service.writeFromIntegration({
       ...input, existingTargetId: ids.relation,

@@ -39,7 +39,13 @@ function binding(targetKind: 'subnet' | 'ip_reservation', overrides: Record<stri
     externalId: isSubnet ? 'org:subnets:lan' : 'org:reservations:printer', companyId: ids.company,
     targetKind, assetId: null, subnetId: isSubnet ? ids.subnet : null,
     ipReservationId: isSubnet ? null : ids.reservation, articleId: null, relationId: null,
-    state: 'active', provenance: { integrationId: ids.integration, ownership: 'breeze', state: 'active' },
+    state: 'active',
+    companyMapping: { integrationId: ids.integration, externalOrgId: 'org' },
+    resource: { integrationId: ids.integration, resourceKey: isSubnet ? 'subnets' : 'reservations' },
+    provenance: {
+      integrationId: ids.integration, externalOrgId: 'org', resourceKey: isSubnet ? 'subnets' : 'reservations',
+      externalId: isSubnet ? 'org:subnets:lan' : 'org:reservations:printer', ownership: 'breeze', state: 'active',
+    },
     ...overrides,
   };
 }
@@ -199,7 +205,7 @@ describe('IpamService integration system writes', () => {
     ['restored', subnetRow({ archivedAt: new Date('2026-07-02T00:00:00.000Z') }), 'LAN'],
   ] as const)('classifies a verified existing subnet as %s', async (change, subnet, name) => {
     const state = change === 'restored' ? 'stale' : 'active';
-    const { service } = setup({ subnet, binding: binding('subnet', { state, provenance: { integrationId: ids.integration, ownership: 'breeze', state } }) });
+    const { service } = setup({ subnet, binding: binding('subnet', { state, provenance: { integrationId: ids.integration, externalOrgId: 'org', resourceKey: 'subnets', externalId: 'org:subnets:lan', ownership: 'breeze', state } }) });
     await expect(service.writeSubnetFromIntegration({
       ...subnetInput,
       existingTargetId: ids.subnet,
@@ -225,7 +231,7 @@ describe('IpamService integration system writes', () => {
     const { service } = setup({
       subnet: subnetRow(),
       reservation: current,
-      binding: binding('ip_reservation', { state, provenance: { integrationId: ids.integration, ownership: 'breeze', state } }),
+      binding: binding('ip_reservation', { state, provenance: { integrationId: ids.integration, externalOrgId: 'org', resourceKey: 'reservations', externalId: 'org:reservations:printer', ownership: 'breeze', state } }),
     });
     await expect(service.writeReservationFromIntegration({
       companyId: ids.company,

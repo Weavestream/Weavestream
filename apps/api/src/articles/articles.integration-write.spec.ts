@@ -38,7 +38,9 @@ function binding(overrides: Record<string, unknown> = {}) {
     integrationCompanyMappingId: ids.mapping, resourceId: ids.resource, externalId: 'org:articles:runbook',
     companyId: ids.company, targetKind: 'article', assetId: null, subnetId: null,
     ipReservationId: null, articleId: ids.article, relationId: null, state: 'active',
-    provenance: { integrationId: ids.integration, ownership: 'breeze', state: 'active' }, ...overrides,
+    companyMapping: { integrationId: ids.integration, externalOrgId: 'org' },
+    resource: { integrationId: ids.integration, resourceKey: 'articles' },
+    provenance: { integrationId: ids.integration, externalOrgId: 'org', resourceKey: 'articles', externalId: 'org:articles:runbook', ownership: 'breeze', state: 'active' }, ...overrides,
   };
 }
 
@@ -149,7 +151,7 @@ describe('ArticlesService integration system writes', () => {
     ['restored', article({ archivedAt: new Date('2026-07-02T00:00:00.000Z') })],
   ] as const)('classifies a verified source article as %s', async (change, bound) => {
     const state = change === 'restored' ? 'stale' : 'active';
-    const { service } = setup({ bound, binding: binding({ state, provenance: { integrationId: ids.integration, ownership: 'breeze', state } }) });
+    const { service } = setup({ bound, binding: binding({ state, provenance: { integrationId: ids.integration, externalOrgId: 'org', resourceKey: 'articles', externalId: 'org:articles:runbook', ownership: 'breeze', state } }) });
     await expect(service.writeFromIntegration({
       ...input, existingTargetId: ids.article,
     })).resolves.toMatchObject({ targetId: ids.article, change });

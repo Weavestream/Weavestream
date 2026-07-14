@@ -28,4 +28,19 @@ describe('scanSensitiveMaterial', () => {
     );
     expect(scanSensitiveMaterial(value)).toBe('bounds_exceeded');
   });
+
+  it('fails closed when array classification touches a revoked proxy', () => {
+    const { proxy, revoke } = Proxy.revocable([], {});
+    revoke();
+    expect(scanSensitiveMaterial(proxy)).toBe('bounds_exceeded');
+  });
+
+  it('fails closed when an array index getter throws', () => {
+    const value: unknown[] = [];
+    Object.defineProperty(value, 0, {
+      enumerable: true,
+      get: () => { throw new Error('source-secret-index-text'); },
+    });
+    expect(scanSensitiveMaterial(value)).toBe('bounds_exceeded');
+  });
 });

@@ -50,17 +50,30 @@ export async function hasEligibleNativeBinding(
       relationId: true,
       state: true,
       provenance: true,
+      companyMapping: { select: { integrationId: true, externalOrgId: true } },
+      resource: { select: { integrationId: true, resourceKey: true } },
     },
   });
   if (!record) return false;
   const provenance = record.provenance;
   if (!provenance || typeof provenance !== 'object' || Array.isArray(provenance)) return false;
+  const companyMapping = record.companyMapping;
+  const resource = record.resource;
+  if (!companyMapping || typeof companyMapping !== 'object' || Array.isArray(companyMapping)) return false;
+  if (!resource || typeof resource !== 'object' || Array.isArray(resource)) return false;
   const source = provenance as Record<string, unknown>;
+  const mappingIdentity = companyMapping as Record<string, unknown>;
+  const resourceIdentity = resource as Record<string, unknown>;
   const eligibleState = record.state === 'active' || record.state === 'stale';
   return eligibleState &&
     source.ownership === 'breeze' &&
     source.state === record.state &&
     source.integrationId === input.integrationId &&
+    source.integrationId === mappingIdentity.integrationId &&
+    source.integrationId === resourceIdentity.integrationId &&
+    source.externalOrgId === mappingIdentity.externalOrgId &&
+    source.resourceKey === resourceIdentity.resourceKey &&
+    source.externalId === record.externalId &&
     record.integrationCompanyMappingId === input.integrationCompanyMappingId &&
     record.resourceId === input.resourceId &&
     record.externalId === input.externalId &&

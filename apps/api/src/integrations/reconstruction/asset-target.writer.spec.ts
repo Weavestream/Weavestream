@@ -240,4 +240,24 @@ describe('AssetTargetWriter', () => {
     expect(out.checksum).toMatch(/^[a-f0-9]{64}$/);
     expect(writeFromIntegration).not.toHaveBeenCalled();
   });
+
+  it('blocks throwing array access without exposing source text', async () => {
+    const value: unknown[] = [];
+    Object.defineProperty(value, 0, {
+      enumerable: true,
+      get: () => { throw new Error('source-secret-index-text'); },
+    });
+    const { writer, writeFromIntegration } = setup();
+    const out = await writer.write(context(), {
+      ...input,
+      fieldValues: [{ ...input.fieldValues[0]!, value }],
+    });
+    expect(out).toMatchObject({
+      change: 'blocked',
+      gaps: [{ details: { reasonCode: 'input_bounds_exceeded' } }],
+    });
+    expect(JSON.stringify(out)).not.toContain('source-secret-index-text');
+    expect(out.checksum).toMatch(/^[a-f0-9]{64}$/);
+    expect(writeFromIntegration).not.toHaveBeenCalled();
+  });
 });

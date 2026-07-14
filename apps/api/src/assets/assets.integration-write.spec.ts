@@ -83,7 +83,12 @@ function binding(overrides: Record<string, unknown> = {}) {
     articleId: null,
     relationId: null,
     state: 'active',
-    provenance: { integrationId: ids.integration, ownership: 'breeze', state: 'active' },
+    companyMapping: { integrationId: ids.integration, externalOrgId: 'org-1' },
+    resource: { integrationId: ids.integration, resourceKey: 'devices' },
+    provenance: {
+      integrationId: ids.integration, externalOrgId: 'org-1', resourceKey: 'devices',
+      externalId: 'org-1:devices:edge-01', ownership: 'breeze', state: 'active',
+    },
     ...overrides,
   };
 }
@@ -189,7 +194,7 @@ describe('AssetsService integration system writes', () => {
       target,
       binding: binding({
         state: bindingState,
-        provenance: { integrationId: ids.integration, ownership: 'breeze', state: bindingState },
+        provenance: { integrationId: ids.integration, externalOrgId: 'org-1', resourceKey: 'devices', externalId: 'org-1:devices:edge-01', ownership: 'breeze', state: bindingState },
       }),
     });
     await expect(service.writeFromIntegration({
