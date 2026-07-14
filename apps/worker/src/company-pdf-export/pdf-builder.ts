@@ -593,7 +593,7 @@ export function pdfSafeUserText(value: string): string {
   for (const { segment } of PDF_GRAPHEME_SEGMENTER.segment(value)) {
     const codePoints = [...segment].map((character) => character.codePointAt(0)!);
     if (codePoints.every(isPackagedPdfCodePoint)) {
-      encoded += segment;
+      encoded += segment.replaceAll('[', '[[');
       continue;
     }
     encoded += `[U+${codePoints

@@ -332,6 +332,54 @@ describe('standalone reconstruction dossier PDF', () => {
       .toBe(createHash('sha256').update(second).digest('hex'));
   });
 
+  it('keeps Unicode markers injective when credentials contain literal notation', async () => {
+    const base = companyPdfTestFixture();
+    const originals = [
+      'Pass😀',
+      'Pass[U+1F600]',
+      'OTP1️⃣',
+      'OTP[U+0031+FE0F+20E3]',
+      'Notes 😀 1️⃣ [[',
+      'Notes [U+1F600] [U+0031+FE0F+20E3] [[',
+    ];
+    const data: CompanyExportData = {
+      ...base,
+      includePasswords: true,
+      passwords: [
+        {
+          ...base.passwords[0]!,
+          title: 'Encoded graphemes',
+          password: originals[0]!,
+          totpSecret: originals[2]!,
+          notes: originals[4]!,
+        },
+        {
+          ...base.passwords[0]!,
+          title: 'Literal notation',
+          password: originals[1]!,
+          totpSecret: originals[3]!,
+          notes: originals[5]!,
+        },
+      ],
+    };
+
+    const text = extractPdfText(await buildCompanyExportPdf(data));
+    const encoded = originals.map(pdfSafeUserText);
+
+    expect(new Set(encoded).size).toBe(originals.length);
+    expect(encoded[0]).toBe('Pass[U+1F600]');
+    expect(encoded[1]).toBe('Pass[[U+1F600]');
+    expect(encoded[2]).toBe('OTP[U+0031+FE0F+20E3]');
+    expect(encoded[3]).toBe('OTP[[U+0031+FE0F+20E3]');
+    expect(encoded[4]).toContain('[[[[');
+    for (const [index, representation] of encoded.entries()) {
+      const offset = text.indexOf(representation);
+      expect(offset).toBeGreaterThanOrEqual(0);
+      const extractedRepresentation = text.slice(offset, offset + representation.length);
+      expect(decodePdfNotation(extractedRepresentation)).toBe(originals[index]);
+    }
+  });
+
   it('labels stale-bound records unmistakably as last-known stale', async () => {
     const base = companyPdfTestFixture();
     const stale = {
@@ -501,9 +549,9 @@ function strengthenedInspectionFixture(): CompanyExportData {
     includePasswords: true,
     passwords: base.passwords.map((password) => ({
       ...password,
-      password: 'Pass😀-1️⃣-🇺🇸',
-      totpSecret: 'OTP😀-1️⃣-🇺🇸',
-      notes: 'Reversible notes 😀 1️⃣ 🇺🇸',
+      password: 'Pass😀-[U+1F600]-1️⃣-🇺🇸',
+      totpSecret: 'OTP1️⃣-[U+0031+FE0F+20E3]-[[',
+      notes: 'Reversible notes 😀 [U+1F600] 1️⃣ [restore] [[',
     })),
     assets: base.assets.map((asset) => ({
       ...asset,
@@ -517,7 +565,7 @@ function strengthenedInspectionFixture(): CompanyExportData {
     articles: base.articles.map((article) => ({
       ...article,
       title: '復旧手順 — Процедура восстановления',
-      contentPlaintext: `${article.contentPlaintext ?? ''}\nサーバーを復元します。 Проверить сеть. 😀 1️⃣ 🇺🇸\nDevanagari नमस्ते · Thai สวัสดี`,
+      contentPlaintext: `${article.contentPlaintext ?? ''}\nサーバーを復元します。 Проверить сеть. 😀 1️⃣ 🇺🇸\nLiteral brackets [restore] and marker [U+1F600].\nDevanagari नमस्ते · Thai สวัสดี`,
       reconstructionState: stale,
     })),
     ipam: base.ipam.map((subnet) => ({ ...subnet, reconstructionState: stale })),
@@ -551,7 +599,23 @@ function strengthenedInspectionFixture(): CompanyExportData {
 }
 
 function decodePdfNotation(value: string): string {
-  return value.replace(/\[U\+([0-9A-F]+(?:\+[0-9A-F]+)*)\]/g, (_match, codes: string) =>
-    String.fromCodePoint(...codes.split('+').map((code) => Number.parseInt(code, 16))),
-  );
+  let decoded = '';
+  for (let index = 0; index < value.length;) {
+    if (value.startsWith('[[', index)) {
+      decoded += '[';
+      index += 2;
+      continue;
+    }
+    const marker = /^\[U\+([0-9A-F]+(?:\+[0-9A-F]+)*)\]/.exec(value.slice(index));
+    if (marker) {
+      decoded += String.fromCodePoint(
+        ...marker[1]!.split('+').map((code) => Number.parseInt(code, 16)),
+      );
+      index += marker[0].length;
+      continue;
+    }
+    decoded += value[index];
+    index += 1;
+  }
+  return decoded;
 }
