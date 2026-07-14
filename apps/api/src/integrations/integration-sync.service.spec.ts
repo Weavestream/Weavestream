@@ -64,7 +64,10 @@ describe('IntegrationSyncService.triggerManual', () => {
       integration: { findUnique: jest.fn().mockResolvedValue({ id: 'integration', driver: 'breeze', status }) },
       integrationCompanyMapping: { count: jest.fn().mockResolvedValue(1) },
       integrationResource: { count: jest.fn().mockResolvedValue(2) },
-      integrationSyncRun: { create: jest.fn(async ({ data }: { data: { dryRun: boolean; mode: 'incremental' | 'full' } }) => ({ ...run, dryRun: data.dryRun, mode: data.mode })) },
+      integrationSyncRun: {
+        create: jest.fn(async ({ data }: { data: { dryRun: boolean; mode: 'incremental' | 'full' } }) => ({ ...run, dryRun: data.dryRun, mode: data.mode })),
+        findFirst: jest.fn(),
+      },
       user: { findMany: jest.fn().mockResolvedValue([{ id: 'actor-1', name: 'Actor', email: 'actor@example.com' }]) },
     };
     const add = jest.fn().mockResolvedValue(undefined);
@@ -115,6 +118,33 @@ describe('IntegrationSyncService.triggerManual', () => {
       expect.objectContaining({ mode: 'full' }),
       expect.any(Object),
     );
+  });
+
+  it('keeps manual incrementals explicit and independent from scheduled single-flight', async () => {
+    const { service, prisma, add } = setup('ACTIVE');
+
+    await expect(service.triggerManual(actor, 'integration', false, meta, 'incremental'))
+      .resolves.toMatchObject({ kind: 'manual', mode: 'incremental' });
+
+    expect(prisma.integrationSyncRun.findFirst).not.toHaveBeenCalled();
+    expect(prisma.integrationSyncRun.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ kind: 'manual', mode: 'incremental' }),
+    });
+    expect(add).toHaveBeenCalledWith(
+      'manual',
+      expect.objectContaining({ kind: 'manual', mode: 'incremental' }),
+      expect.any(Object),
+    );
+  });
+
+  it('rejects a manual full while scheduled work owns the durable integration flight', async () => {
+    const collision = Object.assign(new Error('active scheduled run'), { code: 'P2002' });
+    const { service, prisma, add } = setup('ACTIVE');
+    prisma.integrationSyncRun.create.mockRejectedValueOnce(collision);
+
+    await expect(service.triggerManual(actor, 'integration', false, meta, 'full'))
+      .rejects.toThrow(/scheduled sync or full reconstruction sync is already queued or running/i);
+    expect(add).not.toHaveBeenCalled();
   });
 
   it('rejects DISABLED before persistence, queueing, or audit', async () => {
@@ -263,6 +293,7 @@ describe('IntegrationSyncService scheduled reconstruction mode', () => {
 
   function setup(options: {
     activeFull?: number;
+    activeScheduled?: Record<string, unknown> | null;
     mappings?: number;
     resources?: number;
     recentFullCheckpoints?: number;
@@ -281,6 +312,7 @@ describe('IntegrationSyncService scheduled reconstruction mode', () => {
         count: jest.fn().mockResolvedValue(options.activeFull ?? 0),
         create,
         findUnique: jest.fn().mockResolvedValue(null),
+        findFirst: jest.fn().mockResolvedValue(options.activeScheduled ?? null),
       },
       integrationCompanyMapping: { count: jest.fn().mockResolvedValue(options.mappings ?? 2) },
       integrationResource: { count: jest.fn().mockResolvedValue(options.resources ?? 3) },
@@ -318,6 +350,118 @@ describe('IntegrationSyncService scheduled reconstruction mode', () => {
     expect(create).toHaveBeenCalledWith({ data: expect.objectContaining({ mode: 'incremental' }) });
   });
 
+  it.each(['queued', 'running'] as const)(
+    'coalesces a distinct scheduler occurrence while the scheduled incremental is %s',
+    async (status) => {
+      const active = {
+        id: `active-${status}`,
+        integrationId: 'integration',
+        kind: 'scheduled',
+        mode: 'incremental',
+        status,
+        deliveryKey: 'scheduled:tick-1',
+      };
+      const { service, create } = setup({ activeScheduled: active });
+
+      await expect(service.createScheduledRun(
+        'integration', 'incremental', now, 'scheduled:tick-2',
+      )).resolves.toMatchObject({
+        id: `active-${status}`,
+        deliveryKey: 'scheduled:tick-1',
+        shouldBegin: false,
+      });
+      expect(create).not.toHaveBeenCalled();
+    },
+  );
+
+  it('coalesces a distinct occurrence when the database single-flight guard wins a race', async () => {
+    const collision = Object.assign(new Error('scheduled single-flight race'), { code: 'P2002' });
+    const { service, prisma, create } = setup({ createError: collision });
+    prisma.integrationSyncRun.findFirst
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({
+        id: 'race-winner',
+        integrationId: 'integration',
+        kind: 'scheduled',
+        mode: 'incremental',
+        status: 'queued',
+        deliveryKey: 'scheduled:tick-race-winner',
+      });
+
+    await expect(service.createScheduledRun(
+      'integration', 'incremental', now, 'scheduled:tick-race-loser',
+    )).resolves.toMatchObject({ id: 'race-winner', shouldBegin: false });
+    expect(create).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['succeeded', 'failed'] as const)(
+    'creates the next scheduled occurrence after the prior run has %s',
+    async (_terminalStatus) => {
+      const { service, prisma, create } = setup({ activeScheduled: null });
+
+      await expect(service.createScheduledRun(
+        'integration', 'incremental', now, 'scheduled:next-tick',
+      )).resolves.toMatchObject({
+        id: 'scheduled-run',
+        deliveryKey: 'scheduled:next-tick',
+        shouldBegin: true,
+      });
+      expect(prisma.integrationSyncRun.findFirst).toHaveBeenCalledWith({
+        where: {
+          integrationId: 'integration',
+          status: { in: ['queued', 'running'] },
+          OR: [{ kind: 'scheduled' }, { mode: 'full' }],
+        },
+        orderBy: [{ mode: 'desc' }, { status: 'desc' }, { createdAt: 'asc' }],
+      });
+      expect(create).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it('coalesces into an active scheduled full instead of creating an incremental backlog', async () => {
+    const { service, create } = setup({
+      activeFull: 1,
+      activeScheduled: {
+        id: 'active-full',
+        integrationId: 'integration',
+        kind: 'scheduled',
+        mode: 'full',
+        status: 'running',
+        deliveryKey: 'scheduled:full-tick',
+      },
+    });
+
+    await expect(service.createScheduledRun(
+      'integration', 'full', now, 'scheduled:next-tick',
+    )).resolves.toMatchObject({ id: 'active-full', mode: 'full', shouldBegin: false });
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('coalesces a scheduled occurrence behind an active manual full', async () => {
+    const activeFull = {
+      id: 'active-manual-full',
+      integrationId: 'integration',
+      kind: 'manual',
+      mode: 'full',
+      status: 'running',
+      deliveryKey: null,
+    };
+    const { service, prisma, create } = setup({ activeScheduled: activeFull });
+
+    await expect(service.createScheduledRun(
+      'integration', 'incremental', now, 'scheduled:next-tick',
+    )).resolves.toMatchObject({ id: 'active-manual-full', shouldBegin: false });
+    expect(prisma.integrationSyncRun.findFirst).toHaveBeenCalledWith({
+      where: {
+        integrationId: 'integration',
+        status: { in: ['queued', 'running'] },
+        OR: [{ kind: 'scheduled' }, { mode: 'full' }],
+      },
+      orderBy: [{ mode: 'desc' }, { status: 'desc' }, { createdAt: 'asc' }],
+    });
+    expect(create).not.toHaveBeenCalled();
+  });
+
   it('falls back to incremental when the database full-run uniqueness guard wins a race', async () => {
     const collision = Object.assign(new Error('unique constraint'), { code: 'P2002' });
     const { service, create } = setup({ recentFullCheckpoints: 0, createError: collision });
@@ -337,7 +481,7 @@ describe('IntegrationSyncService scheduled reconstruction mode', () => {
 
     await expect(service.createScheduledRun(
       'integration', undefined, now, 'scheduled:tick-1',
-    )).resolves.toMatchObject({ id: 'persisted-delivery-run', mode: 'full' });
+    )).resolves.toMatchObject({ id: 'persisted-delivery-run', mode: 'full', shouldBegin: true });
     expect(create).not.toHaveBeenCalled();
     expect(prisma.integrationSyncRun.count).not.toHaveBeenCalled();
   });
@@ -354,7 +498,7 @@ describe('IntegrationSyncService scheduled reconstruction mode', () => {
 
     await expect(service.createScheduledRun(
       'integration', 'full', now, 'scheduled:tick-race',
-    )).resolves.toMatchObject({ id: 'race-winner', mode: 'full' });
+    )).resolves.toMatchObject({ id: 'race-winner', mode: 'full', shouldBegin: true });
     expect(create).toHaveBeenCalledTimes(1);
   });
 });

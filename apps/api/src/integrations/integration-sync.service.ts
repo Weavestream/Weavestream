@@ -177,7 +177,7 @@ export class IntegrationSyncService {
     } catch (error) {
       if (mode === 'full' && isUniqueConstraintError(error)) {
         throw new BadRequestException(
-          'A full reconstruction sync is already queued or running for this integration.',
+          'A scheduled sync or full reconstruction sync is already queued or running for this integration.',
         );
       }
       throw error;
@@ -278,8 +278,14 @@ export class IntegrationSyncService {
       const persisted = await this.prisma.integrationSyncRun.findUnique({
         where: { deliveryKey },
       });
-      if (persisted) return persisted;
+      if (persisted) return { ...persisted, shouldBegin: true as const };
     }
+
+    const activeBlocker = await this.findActiveScheduledBlocker(integrationId);
+    if (activeBlocker) {
+      return { ...activeBlocker, shouldBegin: false as const };
+    }
+
     let mode = requestedMode ?? await this.selectScheduledMode(integrationId, now);
     if (mode === 'full') {
       const activeFull = await this.prisma.integrationSyncRun.count({
@@ -293,7 +299,7 @@ export class IntegrationSyncService {
     }
 
     try {
-      return await this.prisma.integrationSyncRun.create({
+      const created = await this.prisma.integrationSyncRun.create({
         data: {
           integrationId,
           kind: 'scheduled',
@@ -303,26 +309,59 @@ export class IntegrationSyncService {
           ...(deliveryKey ? { deliveryKey } : {}),
         },
       });
+      return { ...created, shouldBegin: true as const };
     } catch (error) {
-      if (deliveryKey && isUniqueConstraintError(error)) {
+      if (!isUniqueConstraintError(error)) throw error;
+      if (deliveryKey) {
         const persisted = await this.prisma.integrationSyncRun.findUnique({
           where: { deliveryKey },
         });
-        if (persisted) return persisted;
+        if (persisted) return { ...persisted, shouldBegin: true as const };
       }
-      if (mode !== 'full' || !isUniqueConstraintError(error)) throw error;
-      // The partial unique index is the authority for racing schedulers.
-      return this.prisma.integrationSyncRun.create({
-        data: {
-          integrationId,
-          kind: 'scheduled',
-          mode: 'incremental',
-          status: 'queued',
-          dryRun: false,
-          ...(deliveryKey ? { deliveryKey } : {}),
-        },
-      });
+
+      const raceWinner = await this.findActiveScheduledBlocker(integrationId);
+      if (raceWinner) return { ...raceWinner, shouldBegin: false as const };
+
+      if (mode !== 'full') throw error;
+      // A manual full may have won the separate full-run guard. Scheduled
+      // work may continue incrementally, but remains subject to the durable
+      // scheduled single-flight guard below.
+      try {
+        const created = await this.prisma.integrationSyncRun.create({
+          data: {
+            integrationId,
+            kind: 'scheduled',
+            mode: 'incremental',
+            status: 'queued',
+            dryRun: false,
+            ...(deliveryKey ? { deliveryKey } : {}),
+          },
+        });
+        return { ...created, shouldBegin: true as const };
+      } catch (fallbackError) {
+        if (!isUniqueConstraintError(fallbackError)) throw fallbackError;
+        if (deliveryKey) {
+          const persisted = await this.prisma.integrationSyncRun.findUnique({
+            where: { deliveryKey },
+          });
+          if (persisted) return { ...persisted, shouldBegin: true as const };
+        }
+        const fallbackWinner = await this.findActiveScheduledBlocker(integrationId);
+        if (fallbackWinner) return { ...fallbackWinner, shouldBegin: false as const };
+        throw fallbackError;
+      }
     }
+  }
+
+  private findActiveScheduledBlocker(integrationId: string) {
+    return this.prisma.integrationSyncRun.findFirst({
+      where: {
+        integrationId,
+        status: { in: ['queued', 'running'] },
+        OR: [{ kind: 'scheduled' }, { mode: 'full' }],
+      },
+      orderBy: [{ mode: 'desc' }, { status: 'desc' }, { createdAt: 'asc' }],
+    });
   }
 
   // -------------------------------------------------------------------

@@ -140,6 +140,12 @@ export class IntegrationSyncOrchestratorWorker implements OnModuleDestroy {
       new Date(),
       scheduledDeliveryKey(job),
     );
+    if (run.shouldBegin === false) {
+      this.logger.debug(
+        `Coalescing scheduled occurrence into active run ${run.id} for ${payload.integrationId}`,
+      );
+      return { runId: run.id, coalesced: true };
+    }
     try {
       await this.sync.beginRun(run.id);
     } catch (e) {

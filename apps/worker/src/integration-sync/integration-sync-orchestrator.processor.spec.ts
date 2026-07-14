@@ -75,6 +75,56 @@ describe('IntegrationSyncOrchestratorWorker persisted modes', () => {
     expect(sync.failRun).not.toHaveBeenCalled();
   });
 
+  it('does not fan out a distinct occurrence that coalesced into an active scheduled run', async () => {
+    const prisma = {
+      integration: { findUnique: jest.fn().mockResolvedValue({ id: integrationId, status: 'ACTIVE' }) },
+      integrationCompanyMapping: { count: jest.fn().mockResolvedValue(1) },
+    };
+    const sync = {
+      createScheduledRun: jest.fn().mockResolvedValue({
+        id: 'active-run',
+        mode: 'incremental',
+        deliveryKey: 'scheduled:tick-1',
+        shouldBegin: false,
+      }),
+      beginRun: jest.fn(),
+      failRun: jest.fn(),
+    };
+    const worker = new IntegrationSyncOrchestratorWorker(
+      {} as never, {} as never, prisma as never, sync as never,
+    );
+
+    await expect(handleOf(worker)({
+      id: 'tick-2', data: { kind: 'scheduled', integrationId },
+    } as never)).resolves.toEqual({ runId: 'active-run', coalesced: true });
+    expect(sync.beginRun).not.toHaveBeenCalled();
+  });
+
+  it('retries the same scheduled delivery and refills its queued fan-out', async () => {
+    const prisma = {
+      integration: { findUnique: jest.fn().mockResolvedValue({ id: integrationId, status: 'ACTIVE' }) },
+      integrationCompanyMapping: { count: jest.fn().mockResolvedValue(1) },
+    };
+    const sync = {
+      createScheduledRun: jest.fn().mockResolvedValue({
+        id: 'delivery-run',
+        mode: 'incremental',
+        deliveryKey: 'scheduled:tick-retry',
+        shouldBegin: true,
+      }),
+      beginRun: jest.fn().mockResolvedValue(undefined),
+      failRun: jest.fn(),
+    };
+    const worker = new IntegrationSyncOrchestratorWorker(
+      {} as never, {} as never, prisma as never, sync as never,
+    );
+
+    await expect(handleOf(worker)({
+      id: 'tick-retry', data: { kind: 'scheduled', integrationId }, attemptsMade: 1,
+    } as never)).resolves.toEqual({ runId: 'delivery-run' });
+    expect(sync.beginRun).toHaveBeenCalledWith('delivery-run');
+  });
+
   it('matches a manual job to a run with the same mode and begins that persisted run', async () => {
     const prisma = {
       integrationSyncRun: {
