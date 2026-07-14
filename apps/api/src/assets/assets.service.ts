@@ -5,6 +5,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { createHash } from 'node:crypto';
 import type {
   Prisma,
   Asset,
@@ -31,11 +32,80 @@ import { StarsService } from '../stars/stars.service.js';
 import { TagsService } from '../tags/tags.service.js';
 import { buildAssetZodSchema } from './build-asset-schema.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
+import { expandMatchValueVariants } from '../integrations/match-resolver.service.js';
 
 export interface AuditMeta {
   ip: string;
   userAgent: string;
 }
+
+function assetFieldChecksum(value: unknown): string {
+  return createHash('sha256').update(JSON.stringify(value ?? null)).digest('hex');
+}
+
+export function classifyIntegrationAssetChange(input: {
+  exists: boolean;
+  restored: boolean;
+  identityChanged: boolean;
+  fieldsChanged: boolean;
+}): IntegrationAssetWriteResult['change'] {
+  if (!input.exists) return 'created';
+  if (input.restored) return 'restored';
+  return input.identityChanged || input.fieldsChanged ? 'updated' : 'unchanged';
+}
+
+function integrationAssetBlocked(
+  companyId: string,
+  kind: 'missing_dependency' | 'validation' | 'ambiguous' | 'synchronization_error',
+  message: string,
+  reasonCode: string,
+  targetId = '',
+): IntegrationAssetWriteResult {
+  return {
+    targetId,
+    companyId,
+    change: 'blocked',
+    gap: { kind, message, details: { reasonCode } },
+  };
+}
+
+export interface IntegrationAssetWriteInput {
+  companyId: string;
+  integrationId: string;
+  integrationCompanyMappingId: string;
+  resourceId: string;
+  auditActorId: string;
+  dryRun: boolean;
+  externalId: string;
+  externalSource?: string;
+  existingTargetId?: string | null;
+  name: string;
+  assetLayoutId: string;
+  matchKeyFieldIds: string[];
+  fieldValues: Array<{
+    targetFieldId: string;
+    value: unknown;
+    syncDirection: 'source_wins' | 'preserve_manual' | 'manual_only';
+  }>;
+  previousFieldChecksums: Readonly<Record<string, string>>;
+}
+
+export interface IntegrationAssetWriteResult {
+  targetId: string;
+  companyId: string;
+  change: 'created' | 'updated' | 'unchanged' | 'restored' | 'blocked';
+  fieldChecksums?: Record<string, string>;
+  gap?: {
+    kind: 'missing_dependency' | 'validation' | 'ambiguous' | 'synchronization_error';
+    message: string;
+    details?: { reasonCode?: string; candidateCount?: number };
+  };
+}
+
+const INTEGRATION_AUDIT_META: AuditMeta = {
+  ip: '0.0.0.0',
+  userAgent: 'weavestream-worker/integration-reconstruction',
+};
 
 export interface AssetListOptions {
   layoutId?: string;
@@ -475,6 +545,274 @@ export class AssetsService {
     return this.get(actor, companyId, id);
   }
 
+  /**
+   * Explicit non-request asset write used by reconstruction workers.
+   * It shares layout/field validation and persistence with interactive
+   * writes but receives a real audit actor and company scope directly.
+   */
+  async writeFromIntegration(
+    input: IntegrationAssetWriteInput,
+  ): Promise<IntegrationAssetWriteResult> {
+    const layout = await this.loadLayout(input.assetLayoutId);
+    if (layout.archivedAt) {
+      return integrationAssetBlocked(input.companyId, 'validation', 'The asset layout is archived.', 'layout_archived');
+    }
+    const fieldById = new Map(layout.fields.map((field) => [field.id, field]));
+    if (
+      input.matchKeyFieldIds.some((id) => !fieldById.has(id)) ||
+      input.fieldValues.some((entry) => !fieldById.has(entry.targetFieldId))
+    ) {
+      return integrationAssetBlocked(input.companyId, 'validation', 'A configured asset field is not part of the target layout.', 'field_layout_mismatch');
+    }
+
+    const writableBySlug: Record<string, unknown> = {};
+    const directionByFieldId = new Map<string, IntegrationAssetWriteInput['fieldValues'][number]>();
+    for (const entry of input.fieldValues) {
+      if (directionByFieldId.has(entry.targetFieldId)) {
+        return integrationAssetBlocked(input.companyId, 'validation', 'An asset field is mapped more than once.', 'duplicate_target_field');
+      }
+      directionByFieldId.set(entry.targetFieldId, entry);
+      if (entry.syncDirection !== 'manual_only') {
+        writableBySlug[fieldById.get(entry.targetFieldId)!.slug] = entry.value;
+      }
+    }
+    const normalizedForMatch = this.validateValues(
+      layout,
+      writableBySlug,
+      'SUPER_ADMIN',
+      'update',
+    );
+    const resolution = await this.resolveIntegrationAssetTarget(
+      input,
+      layout,
+      normalizedForMatch,
+    );
+    if (resolution.ambiguous) {
+      return integrationAssetBlocked(
+        input.companyId,
+        'ambiguous',
+        'Multiple assets match the configured asset keys.',
+        'ambiguous_match',
+      );
+    }
+    const target = resolution.target;
+    if (input.existingTargetId && !target) {
+      return integrationAssetBlocked(
+        input.companyId,
+        'missing_dependency',
+        'The bound asset no longer exists.',
+        'target_not_found',
+        input.existingTargetId,
+      );
+    }
+    if (target?.companyId !== undefined && target.companyId !== input.companyId) {
+      return { targetId: target.id, companyId: target.companyId, change: 'blocked' };
+    }
+    if (target && target.assetLayoutId !== input.assetLayoutId) {
+      return integrationAssetBlocked(input.companyId, 'validation', 'The bound asset uses a different layout.', 'target_layout_mismatch', target.id);
+    }
+
+    const normalized = this.validateValues(
+      layout,
+      writableBySlug,
+      'SUPER_ADMIN',
+      target ? 'update' : 'write',
+    );
+    const fieldChecksums: Record<string, string> = {};
+    const valuesToWrite: Record<string, unknown> = {};
+    const existingValues = target
+      ? this.currentValuesAsMap(layout, target.fieldValues)
+      : {};
+    for (const [fieldId, entry] of directionByFieldId) {
+      const field = fieldById.get(fieldId)!;
+      const stored = existingValues[field.slug];
+      const storedChecksum = assetFieldChecksum(stored);
+      if (entry.syncDirection === 'manual_only') continue;
+      if (
+        entry.syncDirection === 'preserve_manual' &&
+        stored !== null &&
+        stored !== undefined &&
+        input.previousFieldChecksums[fieldId] !== undefined &&
+        input.previousFieldChecksums[fieldId] !== storedChecksum
+      ) {
+        fieldChecksums[fieldId] = storedChecksum;
+        continue;
+      }
+      const value = normalized[field.slug];
+      valuesToWrite[field.slug] = value;
+      fieldChecksums[fieldId] = assetFieldChecksum(value);
+    }
+    await this.assertUniqueValues(
+      layout,
+      input.companyId,
+      valuesToWrite,
+      target?.id ?? null,
+    );
+
+    const sameIdentity =
+      !target ||
+      target.externalSource === null ||
+      (target.externalSource === (input.externalSource ?? null) && target.externalId === input.externalId);
+    const identityChanged =
+      !!target &&
+      sameIdentity &&
+      (target.name !== input.name ||
+        target.externalId !== input.externalId ||
+        target.externalSource !== (input.externalSource ?? null));
+    const restored = target?.archivedAt != null;
+    if (input.dryRun) {
+      const dryRunValues = await this.canonicalizeFieldValuesForDryRun(layout, valuesToWrite);
+      const fieldsChanged = Object.entries(dryRunValues).some(
+        ([slug, value]) => assetFieldChecksum(existingValues[slug]) !== assetFieldChecksum(value),
+      );
+      this.updateIntegrationFieldChecksums(
+        directionByFieldId,
+        fieldById,
+        valuesToWrite,
+        dryRunValues,
+        fieldChecksums,
+      );
+      return {
+        targetId: target?.id ?? '',
+        companyId: input.companyId,
+        change: classifyIntegrationAssetChange({
+          exists: !!target,
+          restored,
+          identityChanged,
+          fieldsChanged,
+        }),
+        fieldChecksums,
+      };
+    }
+
+    let change: IntegrationAssetWriteResult['change'];
+    let targetId: string;
+    if (!target) {
+      await this.assertExternalIdFree(
+        input.companyId,
+        input.externalId,
+        input.externalSource ?? null,
+        null,
+      );
+      const created = await this.prisma.$transaction(async (tx) => {
+        const canonicalValues = await this.canonicalizeFieldValues(
+          tx,
+          layout,
+          valuesToWrite,
+          input.auditActorId,
+          INTEGRATION_AUDIT_META,
+        );
+        const row = await tx.asset.create({
+          data: {
+            companyId: input.companyId,
+            assetLayoutId: input.assetLayoutId,
+            name: input.name,
+            externalId: input.externalId,
+            externalSource: input.externalSource ?? null,
+            createdBy: input.auditActorId,
+            updatedBy: input.auditActorId,
+          },
+        });
+        await this.persistFieldValues(
+          tx,
+          layout,
+          row.id,
+          input.companyId,
+          canonicalValues,
+          input.auditActorId,
+          INTEGRATION_AUDIT_META,
+          true,
+        );
+        await this.linkFileFieldUploadsToAsset(tx, input.companyId, row.id, layout, canonicalValues);
+        await this.searchIndex.upsertAsset(tx, row.id);
+        return { row, canonicalValues };
+      });
+      targetId = created.row.id;
+      this.updateIntegrationFieldChecksums(
+        directionByFieldId,
+        fieldById,
+        valuesToWrite,
+        created.canonicalValues,
+        fieldChecksums,
+      );
+      change = 'created';
+    } else {
+      targetId = target.id;
+      const outcome = await this.prisma.$transaction(async (tx) => {
+        const canonicalValues = await this.canonicalizeFieldValues(
+          tx,
+          layout,
+          valuesToWrite,
+          input.auditActorId,
+          INTEGRATION_AUDIT_META,
+        );
+        const fieldsChanged = Object.entries(canonicalValues).some(
+          ([slug, value]) => assetFieldChecksum(existingValues[slug]) !== assetFieldChecksum(value),
+        );
+        const plannedChange = classifyIntegrationAssetChange({
+          exists: true,
+          restored,
+          identityChanged,
+          fieldsChanged,
+        });
+        if (plannedChange !== 'unchanged') {
+          await tx.asset.updateMany({
+            where: { id: target!.id, companyId: input.companyId },
+            data: {
+              ...(restored ? { archivedAt: null } : {}),
+              ...(sameIdentity
+                ? {
+                    name: input.name,
+                    externalId: input.externalId,
+                    externalSource: input.externalSource ?? null,
+                  }
+                : {}),
+              updatedBy: input.auditActorId,
+            },
+          });
+          await this.persistFieldValues(
+            tx,
+            layout,
+            target!.id,
+            input.companyId,
+            canonicalValues,
+            input.auditActorId,
+            INTEGRATION_AUDIT_META,
+            true,
+          );
+          await this.linkFileFieldUploadsToAsset(tx, input.companyId, target!.id, layout, canonicalValues);
+          await this.searchIndex.upsertAsset(tx, target!.id);
+        }
+        return { change: plannedChange, canonicalValues };
+      });
+      this.updateIntegrationFieldChecksums(
+        directionByFieldId,
+        fieldById,
+        valuesToWrite,
+        outcome.canonicalValues,
+        fieldChecksums,
+      );
+      change = outcome.change;
+    }
+
+    if (change !== 'unchanged') {
+      await this.audit.log({
+        actorId: input.auditActorId,
+        action:
+          change === 'created'
+            ? 'integration.asset.created'
+            : 'integration.asset.updated',
+        entityType: 'Asset',
+        entityId: targetId,
+        companyId: input.companyId,
+        ip: INTEGRATION_AUDIT_META.ip,
+        userAgent: INTEGRATION_AUDIT_META.userAgent,
+        after: { integrationId: input.integrationId, change },
+      });
+    }
+    return { targetId, companyId: input.companyId, change, fieldChecksums };
+  }
+
   // --------------------------------------------------------------------
   // Archive / restore
   // --------------------------------------------------------------------
@@ -743,6 +1081,90 @@ export class AssetsService {
   // Validation + persistence
   // --------------------------------------------------------------------
 
+  private async resolveIntegrationAssetTarget(
+    input: IntegrationAssetWriteInput,
+    layout: LayoutWithFields,
+    values: Record<string, unknown>,
+  ): Promise<{
+    target: (Asset & { fieldValues: AssetFieldValue[] }) | null;
+    ambiguous: boolean;
+  }> {
+    const byId = async (id: string) =>
+      this.prisma.asset.findUnique({ where: { id }, include: { fieldValues: true } });
+
+    if (input.existingTargetId) {
+      return { target: await byId(input.existingTargetId), ambiguous: false };
+    }
+
+    const bound = await this.prisma.integrationSyncRecord.findUnique({
+      where: {
+        integrationCompanyMappingId_resourceId_externalId: {
+          integrationCompanyMappingId: input.integrationCompanyMappingId,
+          resourceId: input.resourceId,
+          externalId: input.externalId,
+        },
+      },
+      select: { assetId: true },
+    });
+    if (bound?.assetId) {
+      return { target: await byId(bound.assetId), ambiguous: false };
+    }
+
+    if (input.externalSource) {
+      const identity = await this.prisma.asset.findFirst({
+        where: {
+          companyId: input.companyId,
+          externalSource: input.externalSource,
+          externalId: input.externalId,
+          archivedAt: null,
+        },
+        include: { fieldValues: true },
+      });
+      if (identity) return { target: identity, ambiguous: false };
+    }
+
+    if (input.matchKeyFieldIds.length === 0) return { target: null, ambiguous: false };
+    const clauses: Prisma.AssetWhereInput[] = [];
+    for (const fieldId of input.matchKeyFieldIds) {
+      const field = layout.fields.find((candidate) => candidate.id === fieldId);
+      const value = field ? values[field.slug] : undefined;
+      if (!field || value === null || value === undefined || value === '') {
+        return { target: null, ambiguous: false };
+      }
+      clauses.push({
+        fieldValues: {
+          some: {
+            companyId: input.companyId,
+            assetFieldId: fieldId,
+            OR: expandMatchValueVariants(field.fieldType, value).map((variant) => ({
+              value: { equals: variant as Prisma.InputJsonValue },
+            })),
+          },
+        },
+      });
+    }
+    const candidates = await this.prisma.asset.findMany({
+      where: {
+        companyId: input.companyId,
+        assetLayoutId: input.assetLayoutId,
+        archivedAt: null,
+        AND: clauses,
+        integrationSyncRecords: {
+          none: {
+            integrationCompanyMappingId: input.integrationCompanyMappingId,
+            resourceId: input.resourceId,
+          },
+        },
+      },
+      include: { fieldValues: true },
+      take: 2,
+    });
+    return {
+      target: candidates.length === 1 ? candidates[0]! : null,
+      ambiguous: candidates.length > 1,
+    };
+  }
+
   private async loadLayout(layoutId: string): Promise<LayoutWithFields> {
     const layout = await this.prisma.assetLayout.findUnique({
       where: { id: layoutId },
@@ -895,6 +1317,100 @@ export class AssetsService {
     return bySlug;
   }
 
+  private updateIntegrationFieldChecksums(
+    directionByFieldId: Map<string, IntegrationAssetWriteInput['fieldValues'][number]>,
+    fieldById: Map<string, AssetField>,
+    requestedValues: Record<string, unknown>,
+    canonicalValues: Record<string, unknown>,
+    checksums: Record<string, string>,
+  ): void {
+    for (const [fieldId] of directionByFieldId) {
+      const field = fieldById.get(fieldId);
+      if (!field || !Object.prototype.hasOwnProperty.call(requestedValues, field.slug)) continue;
+      checksums[fieldId] = assetFieldChecksum(canonicalValues[field.slug]);
+    }
+  }
+
+  private async canonicalizeFieldValues(
+    tx: Prisma.TransactionClient,
+    layout: LayoutWithFields,
+    values: Record<string, unknown>,
+    actorId: string | null,
+    meta: AuditMeta | null,
+  ): Promise<Record<string, unknown>> {
+    const canonical: Record<string, unknown> = {};
+    for (const [slug, rawValue] of Object.entries(values)) {
+      const field = layout.fields.find((candidate) => candidate.slug === slug && candidate.archivedAt === null);
+      if (!field || rawValue === null || rawValue === undefined) {
+        canonical[slug] = rawValue;
+        continue;
+      }
+      const strategy = this.registry.get(field.fieldType);
+      const options = (field.options ?? {}) as Record<string, unknown>;
+      let value: unknown = rawValue;
+      if (strategy.preResolve) {
+        value = await strategy.preResolve(value, options, {
+          tx,
+          tags: this.tags,
+          actorId,
+          audit: meta
+            ? { actorId, ip: meta.ip, userAgent: meta.userAgent }
+            : null,
+        });
+        if (value !== null && value !== undefined) {
+          value = strategy.normalize(value, options);
+        }
+      }
+      canonical[slug] = value;
+    }
+    return canonical;
+  }
+
+  private async canonicalizeFieldValuesForDryRun(
+    layout: LayoutWithFields,
+    values: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    const canonical: Record<string, unknown> = {};
+    for (const [slug, rawValue] of Object.entries(values)) {
+      const field = layout.fields.find((candidate) => candidate.slug === slug && candidate.archivedAt === null);
+      if (!field || rawValue === null || rawValue === undefined) {
+        canonical[slug] = rawValue;
+        continue;
+      }
+      const strategy = this.registry.get(field.fieldType);
+      if (!strategy.preResolve) {
+        canonical[slug] = rawValue;
+        continue;
+      }
+      if (field.fieldType !== 'TAGS' || !Array.isArray(rawValue)) {
+        canonical[slug] = rawValue;
+        continue;
+      }
+      const names = rawValue
+        .filter((entry): entry is { name: string } =>
+          !!entry && typeof entry === 'object' && typeof (entry as { name?: unknown }).name === 'string',
+        )
+        .map((entry) => entry.name.trim().toLowerCase());
+      const rows = names.length === 0
+        ? []
+        : await this.prisma.tag.findMany({
+            where: { nameLower: { in: Array.from(new Set(names)) } },
+            select: { id: true, nameLower: true },
+          });
+      const byName = new Map(rows.map((row) => [row.nameLower, row.id]));
+      const resolved = rawValue.map((entry) => {
+        if (typeof entry === 'string') return entry;
+        if (entry && typeof entry === 'object' && typeof (entry as { name?: unknown }).name === 'string') {
+          const name = (entry as { name: string }).name.trim().toLowerCase();
+          return byName.get(name) ?? `pending-tag:${name}`;
+        }
+        return entry;
+      });
+      canonical[slug] = strategy.normalize(resolved, (field.options ?? {}) as Record<string, unknown>);
+    }
+    return canonical;
+  }
+
   /**
    * Upsert / delete AssetFieldValue rows, then call per-field onRelate
    * hooks (ASSET_REFERENCE → Relation sync) inside the same transaction.
@@ -909,32 +1425,17 @@ export class AssetsService {
     values: Record<string, unknown>,
     actorId: string | null,
     meta: AuditMeta | null,
+    preResolved = false,
   ): Promise<void> {
-    for (const [slug, rawValue] of Object.entries(values)) {
+    const canonical = preResolved
+      ? values
+      : await this.canonicalizeFieldValues(tx, layout, values, actorId, meta);
+    for (const [slug, value] of Object.entries(canonical)) {
       const field = layout.fields.find((f) => f.slug === slug && f.archivedAt === null);
       if (!field) continue;
 
       const strategy = this.registry.get(field.fieldType);
       const options = (field.options ?? {}) as Record<string, unknown>;
-
-      let value = rawValue;
-      // Strategies with `preResolve` (currently TAGS) need DB access to
-      // canonicalise their wire shape — e.g. upsert unknown tag names
-      // into the global `tags` table. Run that here, inside the tx, so
-      // tag rows and the asset write succeed or fail together.
-      if (value !== null && value !== undefined && strategy.preResolve) {
-        value = await strategy.preResolve(value, options, {
-          tx,
-          tags: this.tags,
-          actorId,
-          audit: meta
-            ? { actorId, ip: meta.ip, userAgent: meta.userAgent }
-            : null,
-        });
-        if (value !== null && value !== undefined) {
-          value = strategy.normalize(value, options);
-        }
-      }
 
       if (value === null || value === undefined) {
         await tx.assetFieldValue.deleteMany({

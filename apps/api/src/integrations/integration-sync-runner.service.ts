@@ -6,7 +6,7 @@ import {
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { createHash, randomUUID } from 'node:crypto';
-import { stripNul } from '@weavestream/shared';
+import { integrationTransformSchema, stripNul } from '@weavestream/shared';
 import type { SyncRunConflict, SyncRunTotals } from '@weavestream/shared';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { AuditLogService } from '../audit/audit.service.js';
@@ -1126,11 +1126,12 @@ function computeRecordChecksum(
  * cosmetic re-order doesn't blow the cache, but any semantic change
  * does.
  */
-function computeMappingFingerprint(
+export function computeMappingFingerprint(
   writableMappings: ReadonlyArray<{
     sourceField: string;
     syncDirection: 'source_wins' | 'preserve_manual' | 'manual_only';
     targetField: { id: string };
+    transform?: unknown;
   }>,
 ): string {
   const rows = writableMappings
@@ -1138,12 +1139,19 @@ function computeMappingFingerprint(
       sourceField: m.sourceField,
       targetFieldId: m.targetField.id,
       syncDirection: m.syncDirection,
+      transform:
+        m.transform == null
+          ? null
+          : sortedJson(integrationTransformSchema.parse(m.transform)),
     }))
     .sort((a, b) => {
       if (a.sourceField !== b.sourceField) {
         return a.sourceField.localeCompare(b.sourceField);
       }
-      return a.targetFieldId.localeCompare(b.targetFieldId);
+      if (a.targetFieldId !== b.targetFieldId) {
+        return a.targetFieldId.localeCompare(b.targetFieldId);
+      }
+      return JSON.stringify(a).localeCompare(JSON.stringify(b));
     });
   return createHash('sha256').update(JSON.stringify(rows)).digest('hex');
 }

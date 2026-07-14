@@ -7,6 +7,8 @@ import {
 } from '@nestjs/common';
 import type { Prisma, Subnet, IpReservation } from '@prisma/client';
 import {
+  createIpReservationSchema,
+  createSubnetSchema,
   normalizeCidrV4,
   usableHostCount,
   ipInCidr,
@@ -24,6 +26,49 @@ export interface AuditMeta {
   ip: string;
   userAgent: string;
 }
+
+export interface IntegrationSubnetWriteInput {
+  companyId: string;
+  integrationId: string;
+  auditActorId: string;
+  dryRun: boolean;
+  existingTargetId?: string | null;
+  name: string;
+  cidr: string;
+  vlanId?: number | null;
+  gateway?: string | null;
+  dhcpRangeStart?: string | null;
+  dhcpRangeEnd?: string | null;
+  description?: string | null;
+}
+
+export interface IntegrationReservationWriteInput {
+  companyId: string;
+  integrationId: string;
+  auditActorId: string;
+  dryRun: boolean;
+  existingTargetId?: string | null;
+  subnetId: string;
+  ipAddress: string;
+  label: string;
+  notes?: string | null;
+}
+
+export interface IntegrationIpamWriteResult {
+  targetId: string;
+  companyId: string;
+  change: 'created' | 'updated' | 'unchanged' | 'restored' | 'blocked';
+  gap?: {
+    kind: 'missing_dependency' | 'validation' | 'ambiguous' | 'synchronization_error';
+    message: string;
+    details?: { reasonCode?: string; candidateCount?: number };
+  };
+}
+
+const INTEGRATION_AUDIT_META: AuditMeta = {
+  ip: '0.0.0.0',
+  userAgent: 'weavestream-worker/integration-reconstruction',
+};
 
 export interface SubnetOccupant {
   ip: string;
@@ -355,6 +400,111 @@ export class IpamService {
     return row;
   }
 
+  async writeSubnetFromIntegration(
+    input: IntegrationSubnetWriteInput,
+  ): Promise<IntegrationIpamWriteResult> {
+    let native: ReturnType<typeof createSubnetSchema.parse>;
+    try {
+      native = createSubnetSchema.parse({
+        name: input.name,
+        cidr: input.cidr,
+        vlanId: input.vlanId,
+        gateway: input.gateway,
+        dhcpRangeStart: input.dhcpRangeStart,
+        dhcpRangeEnd: input.dhcpRangeEnd,
+        description: input.description,
+      });
+    } catch {
+      return ipamBlocked(input.companyId, 'validation', 'Subnet input failed native validation.', 'native_validation');
+    }
+
+    const bound = input.existingTargetId
+      ? await this.prisma.subnet.findUnique({ where: { id: input.existingTargetId } })
+      : null;
+    if (bound && bound.companyId !== input.companyId) {
+      return { targetId: bound.id, companyId: bound.companyId, change: 'blocked' };
+    }
+    const collision = !bound
+      ? await this.prisma.subnet.findFirst({
+          where: { companyId: input.companyId, cidr: native.cidr, archivedAt: null },
+        })
+      : null;
+    if (collision) {
+      return ipamBlocked(input.companyId, 'ambiguous', 'An unbound subnet already owns this CIDR.', 'manual_ownership', collision.id);
+    }
+    const existing = bound;
+    if (input.existingTargetId && !existing) {
+      return ipamBlocked(input.companyId, 'missing_dependency', 'The bound subnet no longer exists.', 'target_not_found', input.existingTargetId);
+    }
+    if (existing) await this.assertCidrFree(input.companyId, native.cidr, existing.id);
+
+    const data = {
+      name: native.name,
+      cidr: native.cidr,
+      prefix: Number(native.cidr.split('/')[1]),
+      vlanId: native.vlanId ?? null,
+      gateway: native.gateway ?? null,
+      dhcpRangeStart: native.dhcpRangeStart ?? null,
+      dhcpRangeEnd: native.dhcpRangeEnd ?? null,
+      description: native.description ?? null,
+    };
+    const changed =
+      !existing ||
+      existing.name !== data.name ||
+      existing.cidr !== data.cidr ||
+      existing.vlanId !== data.vlanId ||
+      existing.gateway !== data.gateway ||
+      existing.dhcpRangeStart !== data.dhcpRangeStart ||
+      existing.dhcpRangeEnd !== data.dhcpRangeEnd ||
+      existing.description !== data.description;
+    const restored = existing?.archivedAt != null;
+    if (input.dryRun) {
+      return {
+        targetId: existing?.id ?? '',
+        companyId: input.companyId,
+        change: existing ? (restored ? 'restored' : changed ? 'updated' : 'unchanged') : 'created',
+      };
+    }
+
+    let row: Subnet;
+    let change: IntegrationIpamWriteResult['change'];
+    if (existing) {
+      if (changed || restored) {
+        await this.prisma.subnet.updateMany({
+          where: { id: existing.id, companyId: input.companyId },
+          data: { ...data, ...(restored ? { archivedAt: null } : {}), updatedBy: input.auditActorId },
+        });
+      }
+      row = await this.prisma.subnet.findFirstOrThrow({
+        where: { id: existing.id, companyId: input.companyId },
+      });
+      change = restored ? 'restored' : changed ? 'updated' : 'unchanged';
+    } else {
+      row = await this.prisma.subnet.create({
+        data: { companyId: input.companyId, ...data, createdBy: input.auditActorId, updatedBy: input.auditActorId },
+      });
+      change = 'created';
+    }
+    if (change !== 'unchanged') {
+      await this.audit.log({
+        actorId: input.auditActorId,
+        action:
+          change === 'created'
+            ? AUDIT_ACTIONS.subnet.create
+            : change === 'restored'
+              ? AUDIT_ACTIONS.subnet.restore
+              : AUDIT_ACTIONS.subnet.update,
+        entityType: 'Subnet',
+        entityId: row.id,
+        companyId: input.companyId,
+        ip: INTEGRATION_AUDIT_META.ip,
+        userAgent: INTEGRATION_AUDIT_META.userAgent,
+        after: { integrationId: input.integrationId, cidr: row.cidr },
+      });
+    }
+    return { targetId: row.id, companyId: input.companyId, change };
+  }
+
   async archiveSubnet(
     actor: AuthedUser,
     companyId: string,
@@ -531,6 +681,99 @@ export class IpamService {
     }
   }
 
+  async writeReservationFromIntegration(
+    input: IntegrationReservationWriteInput,
+  ): Promise<IntegrationIpamWriteResult> {
+    let native: ReturnType<typeof createIpReservationSchema.parse>;
+    try {
+      native = createIpReservationSchema.parse({
+        ipAddress: input.ipAddress,
+        label: input.label,
+        notes: input.notes,
+      });
+    } catch {
+      return ipamBlocked(input.companyId, 'validation', 'Reservation input failed native validation.', 'native_validation');
+    }
+    const subnet = await this.prisma.subnet.findUnique({ where: { id: input.subnetId } });
+    if (!subnet) {
+      return ipamBlocked(input.companyId, 'missing_dependency', 'The reservation subnet was not found.', 'dependency_not_found');
+    }
+    if (subnet.companyId !== input.companyId) {
+      return ipamBlocked(input.companyId, 'validation', 'The reservation subnet belongs to another company.', 'dependency_company_mismatch', subnet.id);
+    }
+    if (!ipInCidr(native.ipAddress, subnet.cidr)) {
+      return ipamBlocked(input.companyId, 'validation', 'The reservation IP is outside its subnet.', 'ip_outside_subnet');
+    }
+    const bound = input.existingTargetId
+      ? await this.prisma.ipReservation.findUnique({ where: { id: input.existingTargetId } })
+      : null;
+    if (bound && bound.companyId !== input.companyId) {
+      return { targetId: bound.id, companyId: bound.companyId, change: 'blocked' };
+    }
+    const collision = !bound
+      ? await this.prisma.ipReservation.findFirst({
+          where: { companyId: input.companyId, subnetId: input.subnetId, ipAddress: native.ipAddress },
+        })
+      : null;
+    if (collision) {
+      return ipamBlocked(input.companyId, 'ambiguous', 'An unbound reservation already owns this IP.', 'manual_ownership', collision.id);
+    }
+    if (input.existingTargetId && !bound) {
+      return ipamBlocked(input.companyId, 'missing_dependency', 'The bound reservation no longer exists.', 'target_not_found', input.existingTargetId);
+    }
+    if (bound && bound.subnetId !== input.subnetId) {
+      return ipamBlocked(input.companyId, 'validation', 'The bound reservation belongs to another subnet.', 'target_subnet_mismatch', bound.id);
+    }
+    const data = { ipAddress: native.ipAddress, label: native.label, notes: native.notes ?? null };
+    const changed =
+      !bound ||
+      bound.ipAddress !== data.ipAddress ||
+      bound.label !== data.label ||
+      bound.notes !== data.notes;
+    if (input.dryRun) {
+      return { targetId: bound?.id ?? '', companyId: input.companyId, change: bound ? (changed ? 'updated' : 'unchanged') : 'created' };
+    }
+    let row: IpReservation;
+    const change: IntegrationIpamWriteResult['change'] = bound ? (changed ? 'updated' : 'unchanged') : 'created';
+    if (bound) {
+      if (changed) {
+        await this.prisma.ipReservation.updateMany({
+          where: { id: bound.id, companyId: input.companyId },
+          data: { ...data, updatedBy: input.auditActorId },
+        });
+      }
+      row = await this.prisma.ipReservation.findFirstOrThrow({
+        where: { id: bound.id, companyId: input.companyId },
+      });
+    } else {
+      row = await this.prisma.ipReservation.create({
+        data: {
+          companyId: input.companyId,
+          subnetId: input.subnetId,
+          ...data,
+          createdBy: input.auditActorId,
+          updatedBy: input.auditActorId,
+        },
+      });
+    }
+    if (change !== 'unchanged') {
+      await this.audit.log({
+        actorId: input.auditActorId,
+        action:
+          change === 'created'
+            ? AUDIT_ACTIONS.subnet.reservationCreate
+            : AUDIT_ACTIONS.subnet.reservationUpdate,
+        entityType: 'IpReservation',
+        entityId: row.id,
+        companyId: input.companyId,
+        ip: INTEGRATION_AUDIT_META.ip,
+        userAgent: INTEGRATION_AUDIT_META.userAgent,
+        after: { integrationId: input.integrationId, subnetId: input.subnetId },
+      });
+    }
+    return { targetId: row.id, companyId: input.companyId, change };
+  }
+
   async deleteReservation(
     actor: AuthedUser,
     companyId: string,
@@ -594,6 +837,21 @@ function compareIpv4(a: string, b: string): number {
   if (ai === null) return 1;
   if (bi === null) return -1;
   return ai - bi;
+}
+
+function ipamBlocked(
+  companyId: string,
+  kind: 'missing_dependency' | 'validation' | 'ambiguous' | 'synchronization_error',
+  message: string,
+  reasonCode: string,
+  targetId = '',
+): IntegrationIpamWriteResult {
+  return {
+    targetId,
+    companyId,
+    change: 'blocked',
+    gap: { kind, message, details: { reasonCode } },
+  };
 }
 
 function ipToUint32(ip: string): number | null {

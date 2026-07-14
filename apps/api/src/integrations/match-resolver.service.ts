@@ -189,7 +189,7 @@ export class MatchResolverService {
       const fieldType = fieldTypeById.get(fieldId);
       if (!fieldType) return [];
 
-      const variants = expandVariants(fieldType, normalised);
+      const variants = expandMatchValueVariants(fieldType, normalised);
       const rows = await this.prisma.assetFieldValue.findMany({
         where: {
           companyId: args.companyId,
@@ -229,7 +229,7 @@ export class MatchResolverService {
  * optimisation can add a `lower(value)` expression index if it ever
  * becomes hot.
  */
-function expandVariants(fieldType: string, normalised: unknown): unknown[] {
+export function expandMatchValueVariants(fieldType: string, normalised: unknown): unknown[] {
   const isCaseInsensitive =
     fieldType === 'TEXT' ||
     fieldType === 'EMAIL' ||

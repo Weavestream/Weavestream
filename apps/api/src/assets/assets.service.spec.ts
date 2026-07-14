@@ -1,5 +1,5 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common';
-import { AssetsService } from './assets.service.js';
+import { AssetsService, classifyIntegrationAssetChange } from './assets.service.js';
 
 /**
  * Focused unit test for the FILE-field upload backfill that runs
@@ -177,6 +177,162 @@ describe('AssetsService.linkFileFieldUploadsToAsset', () => {
     // The clause is the load-bearing safety: never claim an upload
     // that already belongs to a different asset.
     expect(call.where.attachedToId).toBeNull();
+  });
+});
+
+describe('classifyIntegrationAssetChange', () => {
+  it('uses the same unchanged classification for dry-run and live writes', () => {
+    expect(
+      classifyIntegrationAssetChange({
+        exists: true,
+        restored: false,
+        identityChanged: false,
+        fieldsChanged: false,
+      }),
+    ).toBe('unchanged');
+  });
+
+  it('prioritizes restore and otherwise reports update/create', () => {
+    expect(classifyIntegrationAssetChange({ exists: true, restored: true, identityChanged: false, fieldsChanged: false })).toBe('restored');
+    expect(classifyIntegrationAssetChange({ exists: true, restored: false, identityChanged: true, fieldsChanged: false })).toBe('updated');
+    expect(classifyIntegrationAssetChange({ exists: false, restored: false, identityChanged: false, fieldsChanged: false })).toBe('created');
+  });
+});
+
+describe('AssetsService integration reconstruction helpers', () => {
+  function makeIntegrationService(
+    prisma: Record<string, unknown>,
+    registry: Record<string, unknown> = {},
+  ) {
+    return new AssetsService(
+      prisma as never,
+      {} as never,
+      registry as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      { upsertByName: jest.fn().mockResolvedValue('tag-id') } as never,
+    );
+  }
+
+  it('uses case-insensitive variants for TEXT match keys', async () => {
+    const candidate = {
+      id: 'asset-1',
+      companyId: 'company-1',
+      assetLayoutId: 'layout-1',
+      fieldValues: [],
+    };
+    const findMany = jest.fn().mockResolvedValue([candidate]);
+    const service = makeIntegrationService({
+      integrationSyncRecord: { findUnique: jest.fn().mockResolvedValue(null) },
+      asset: { findFirst: jest.fn().mockResolvedValue(null), findMany },
+    });
+    const result = await (
+      service as unknown as {
+        resolveIntegrationAssetTarget: (
+          input: Record<string, unknown>,
+          layout: Record<string, unknown>,
+          values: Record<string, unknown>,
+        ) => Promise<{ target: unknown; ambiguous: boolean }>;
+      }
+    ).resolveIntegrationAssetTarget(
+      {
+        companyId: 'company-1',
+        integrationCompanyMappingId: 'mapping-1',
+        resourceId: 'resource-1',
+        externalId: 'source-id',
+        assetLayoutId: 'layout-1',
+        matchKeyFieldIds: ['field-1'],
+      },
+      { fields: [{ id: 'field-1', slug: 'hostname', fieldType: 'TEXT' }] },
+      { hostname: 'EDGE-01' },
+    );
+
+    expect(result).toEqual({ target: candidate, ambiguous: false });
+    expect(findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          AND: [
+            expect.objectContaining({
+              fieldValues: {
+                some: expect.objectContaining({
+                  OR: expect.arrayContaining([
+                    { value: { equals: 'EDGE-01' } },
+                    { value: { equals: 'edge-01' } },
+                  ]),
+                }),
+              },
+            }),
+          ],
+        }),
+      }),
+    );
+  });
+
+  it('canonicalizes async field values before persistence checksums are computed', async () => {
+    const normalize = jest.fn((value: unknown) => value);
+    const preResolve = jest.fn().mockResolvedValue(['tag-id']);
+    const service = makeIntegrationService({}, {
+      get: jest.fn().mockReturnValue({ preResolve, normalize }),
+    });
+    const canonical = await (
+      service as unknown as {
+        canonicalizeFieldValues: (
+          tx: unknown,
+          layout: Record<string, unknown>,
+          values: Record<string, unknown>,
+          actorId: string,
+          meta: unknown,
+        ) => Promise<Record<string, unknown>>;
+      }
+    ).canonicalizeFieldValues(
+      {},
+      {
+        fields: [
+          { id: 'field-tags', slug: 'tags', fieldType: 'TAGS', options: {}, archivedAt: null },
+        ],
+      },
+      { tags: [{ name: 'Production' }] },
+      'actor-1',
+      { ip: '0.0.0.0', userAgent: 'jest' },
+    );
+
+    expect(canonical).toEqual({ tags: ['tag-id'] });
+    expect(preResolve).toHaveBeenCalled();
+    expect(normalize).toHaveBeenCalledWith(['tag-id'], {});
+  });
+
+  it('resolves existing tag names read-only for dry-run classification', async () => {
+    const normalize = jest.fn((value: unknown) => value);
+    const preResolve = jest.fn();
+    const findMany = jest.fn().mockResolvedValue([
+      { id: 'tag-id', nameLower: 'production' },
+    ]);
+    const service = makeIntegrationService(
+      { tag: { findMany } },
+      { get: jest.fn().mockReturnValue({ preResolve, normalize }) },
+    );
+    const canonical = await (
+      service as unknown as {
+        canonicalizeFieldValuesForDryRun: (
+          layout: Record<string, unknown>,
+          values: Record<string, unknown>,
+        ) => Promise<Record<string, unknown>>;
+      }
+    ).canonicalizeFieldValuesForDryRun(
+      {
+        fields: [
+          { id: 'field-tags', slug: 'tags', fieldType: 'TAGS', options: {}, archivedAt: null },
+        ],
+      },
+      { tags: [{ name: 'Production' }] },
+    );
+
+    expect(canonical).toEqual({ tags: ['tag-id'] });
+    expect(findMany).toHaveBeenCalled();
+    expect(preResolve).not.toHaveBeenCalled();
   });
 });
 

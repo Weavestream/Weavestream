@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { Prisma, type Article, type ArticleVersion } from '@prisma/client';
 import {
+  createArticleSchema,
   markdownExcerpt,
   markdownToPlaintext,
   tiptapExcerpt,
@@ -33,6 +34,35 @@ export interface AuditMeta {
   ip: string;
   userAgent: string;
 }
+
+export interface IntegrationArticleWriteInput {
+  companyId: string;
+  integrationId: string;
+  auditActorId: string;
+  dryRun: boolean;
+  existingTargetId?: string | null;
+  title: string;
+  slug: string;
+  folderId: string | null;
+  markdown: string;
+  visibleToClients: boolean;
+}
+
+export interface IntegrationArticleWriteResult {
+  targetId: string;
+  companyId: string;
+  change: 'created' | 'updated' | 'unchanged' | 'restored' | 'blocked';
+  gap?: {
+    kind: 'missing_dependency' | 'validation' | 'ambiguous' | 'synchronization_error';
+    message: string;
+    details?: { reasonCode?: string; candidateCount?: number };
+  };
+}
+
+const INTEGRATION_AUDIT_META: AuditMeta = {
+  ip: '0.0.0.0',
+  userAgent: 'weavestream-worker/integration-reconstruction',
+};
 
 /**
  * Thrown by `update()` when an `expectedRevision` guard matched zero
@@ -618,6 +648,183 @@ export class ArticlesService {
     out.hasDraft = versionKind === 'draft';
     await this.hydrateActors([out]);
     return out;
+  }
+
+  /**
+   * Non-request Markdown writer for reconstruction. A target may only be
+   * updated by an explicit existing binding; deterministic slug collisions
+   * without a binding are reported instead of overwriting manual content.
+   */
+  async writeFromIntegration(
+    input: IntegrationArticleWriteInput,
+  ): Promise<IntegrationArticleWriteResult> {
+    let native: Extract<CreateArticleInput, { editorMode: 'markdown' }>;
+    try {
+      native = createArticleSchema.parse({
+        title: input.title,
+        slug: input.slug,
+        folderId: input.folderId,
+        editorMode: 'markdown',
+        markdownSource: input.markdown,
+        visibleToClients: input.visibleToClients,
+      }) as Extract<CreateArticleInput, { editorMode: 'markdown' }>;
+    } catch {
+      return articleBlocked(input.companyId, 'validation', 'Article input failed native validation.', 'native_validation');
+    }
+    if (native.folderId) {
+      const folder = await this.prisma.folder.findFirst({
+        where: { id: native.folderId, companyId: input.companyId, archivedAt: null },
+        select: { id: true },
+      });
+      if (!folder) {
+        return articleBlocked(input.companyId, 'missing_dependency', 'The article folder was not found.', 'dependency_not_found');
+      }
+    }
+
+    const sourceSlug = native.slug ?? input.slug;
+    const bound = input.existingTargetId
+      ? await this.prisma.article.findUnique({ where: { id: input.existingTargetId } })
+      : null;
+    if (bound && bound.companyId !== input.companyId) {
+      return { targetId: bound.id, companyId: bound.companyId, change: 'blocked' };
+    }
+    if (input.existingTargetId && !bound) {
+      return articleBlocked(input.companyId, 'missing_dependency', 'The bound article no longer exists.', 'target_not_found', input.existingTargetId);
+    }
+    if (bound && (bound.archivedAt || bound.slug !== sourceSlug)) {
+      const slugOwner = await this.prisma.article.findFirst({
+        where: {
+          companyId: input.companyId,
+          slug: sourceSlug,
+          archivedAt: null,
+          NOT: { id: bound.id },
+        },
+        select: { id: true },
+      });
+      if (slugOwner) {
+        return articleBlocked(input.companyId, 'ambiguous', 'Another article owns the source slug.', 'manual_ownership', slugOwner.id, 1);
+      }
+    }
+    if (!bound) {
+      const collision = await this.prisma.article.findFirst({
+        where: { companyId: input.companyId, slug: sourceSlug, archivedAt: null },
+        select: { id: true },
+      });
+      if (collision) {
+        return articleBlocked(input.companyId, 'ambiguous', 'An unbound article already owns this slug.', 'manual_ownership', collision.id, 1);
+      }
+    }
+
+    const body = this.projectArticleBody(native);
+    const data = {
+      folderId: native.folderId ?? null,
+      title: native.title,
+      slug: sourceSlug,
+      visibleToClients: native.visibleToClients ?? true,
+      ...body,
+    };
+    const restored = bound?.archivedAt != null;
+    const changed =
+      !bound ||
+      bound.folderId !== data.folderId ||
+      bound.title !== data.title ||
+      bound.slug !== data.slug ||
+      bound.visibleToClients !== data.visibleToClients ||
+      bound.editorMode !== data.editorMode ||
+      bound.markdownSource !== data.markdownSource;
+    if (input.dryRun) {
+      return {
+        targetId: bound?.id ?? '',
+        companyId: input.companyId,
+        change: bound ? (restored ? 'restored' : changed ? 'updated' : 'unchanged') : 'created',
+      };
+    }
+
+    let article: Article;
+    let change: IntegrationArticleWriteResult['change'];
+    if (!bound) {
+      article = await this.prisma.$transaction(async (tx) => {
+        const row = await tx.article.create({
+          data: {
+            companyId: input.companyId,
+            ...data,
+            createdBy: input.auditActorId,
+            updatedBy: input.auditActorId,
+          },
+        });
+        await tx.articleVersion.create({
+          data: {
+            articleId: row.id,
+            companyId: input.companyId,
+            version: 1,
+            isDraft: false,
+            ...this.versionRowBodyFromArticle(row),
+            changedFields: [...VERSIONED_FIELDS],
+            changedBy: input.auditActorId,
+            changeReason: `integration:${input.integrationId}`,
+          },
+        });
+        return row;
+      });
+      change = 'created';
+    } else if (changed || restored) {
+      article = await this.prisma.$transaction(async (tx) => {
+        await tx.article.updateMany({
+          where: { id: bound.id, companyId: input.companyId },
+          data: {
+            ...data,
+            ...(restored ? { archivedAt: null } : {}),
+            revision: { increment: 1 },
+            updatedBy: input.auditActorId,
+          },
+        });
+        const updated = await tx.article.findFirstOrThrow({
+          where: { id: bound.id, companyId: input.companyId },
+        });
+        if (changed) {
+          const max = await tx.articleVersion.aggregate({
+            where: { articleId: bound.id, companyId: input.companyId },
+            _max: { version: true },
+          });
+          await tx.articleVersion.create({
+            data: {
+              articleId: bound.id,
+              companyId: input.companyId,
+              version: (max._max.version ?? 0) + 1,
+              isDraft: false,
+              ...this.versionRowBodyFromArticle(updated),
+              changedFields: this.computeChangedFields(bound, updated),
+              changedBy: input.auditActorId,
+              changeReason: `integration:${input.integrationId}`,
+            },
+          });
+        }
+        return updated;
+      });
+      change = restored ? 'restored' : 'updated';
+    } else {
+      article = bound;
+      change = 'unchanged';
+    }
+
+    if (change !== 'unchanged') {
+      await this.audit.log({
+        actorId: input.auditActorId,
+        action:
+          change === 'created'
+            ? AUDIT_ACTIONS.article.create
+            : change === 'restored'
+              ? AUDIT_ACTIONS.article.restore
+              : AUDIT_ACTIONS.article.update,
+        entityType: 'Article',
+        entityId: article.id,
+        companyId: input.companyId,
+        ip: INTEGRATION_AUDIT_META.ip,
+        userAgent: INTEGRATION_AUDIT_META.userAgent,
+        after: { integrationId: input.integrationId, slug: article.slug },
+      });
+    }
+    return { targetId: article.id, companyId: input.companyId, change };
   }
 
   async move(
@@ -1574,4 +1781,27 @@ export class ArticlesService {
       if (a.updatedBy) a.updatedByUser = byId.get(a.updatedBy) ?? null;
     }
   }
+}
+
+function articleBlocked(
+  companyId: string,
+  kind: 'missing_dependency' | 'validation' | 'ambiguous' | 'synchronization_error',
+  message: string,
+  reasonCode: string,
+  targetId = '',
+  candidateCount?: number,
+): IntegrationArticleWriteResult {
+  return {
+    targetId,
+    companyId,
+    change: 'blocked',
+    gap: {
+      kind,
+      message,
+      details: {
+        reasonCode,
+        ...(candidateCount !== undefined ? { candidateCount } : {}),
+      },
+    },
+  };
 }

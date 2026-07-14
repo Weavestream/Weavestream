@@ -19,6 +19,29 @@ export interface LinkInput {
   tx?: Prisma.TransactionClient;
 }
 
+function relationBlocked(
+  companyId: string,
+  kind: 'missing_dependency' | 'validation' | 'ambiguous' | 'synchronization_error',
+  message: string,
+  reasonCode: string,
+  targetId = '',
+  candidateCount?: number,
+): IntegrationRelationWriteResult {
+  return {
+    targetId,
+    companyId,
+    change: 'blocked',
+    gap: {
+      kind,
+      message,
+      details: {
+        reasonCode,
+        ...(candidateCount !== undefined ? { candidateCount } : {}),
+      },
+    },
+  };
+}
+
 export interface UnlinkInput {
   companyId: string;
   sourceType: string;
@@ -27,6 +50,30 @@ export interface UnlinkInput {
   targetId: string;
   relationType: string;
   tx?: Prisma.TransactionClient;
+}
+
+export interface IntegrationRelationWriteInput {
+  companyId: string;
+  integrationId: string;
+  auditActorId: string;
+  dryRun: boolean;
+  existingTargetId?: string | null;
+  sourceType: 'Asset' | 'Article';
+  sourceId: string;
+  targetType: 'Asset' | 'Article';
+  targetId: string;
+  relationType: string;
+}
+
+export interface IntegrationRelationWriteResult {
+  targetId: string;
+  companyId: string;
+  change: 'created' | 'updated' | 'unchanged' | 'restored' | 'blocked';
+  gap?: {
+    kind: 'missing_dependency' | 'validation' | 'ambiguous' | 'synchronization_error';
+    message: string;
+    details?: { reasonCode?: string; candidateCount?: number };
+  };
 }
 
 export interface CleanupForAssetInput {
@@ -138,6 +185,96 @@ export class RelationsService implements RelationPort {
       },
       update: {}, // idempotent
     });
+  }
+
+  /** Explicit same-company, idempotent relation entry point for reconstruction. */
+  async writeFromIntegration(
+    input: IntegrationRelationWriteInput,
+  ): Promise<IntegrationRelationWriteResult> {
+    const sourceKind = TYPE_TO_KIND[input.sourceType];
+    const targetKind = TYPE_TO_KIND[input.targetType];
+    if (!sourceKind || !targetKind) {
+      return relationBlocked(input.companyId, 'validation', 'Relation endpoint type is invalid.', 'invalid_endpoint_kind');
+    }
+    try {
+      await this.assertEndpointsInCompany({
+        companyId: input.companyId,
+        sourceType: sourceKind,
+        sourceId: input.sourceId,
+        targetType: targetKind,
+        targetId: input.targetId,
+      });
+    } catch {
+      return relationBlocked(input.companyId, 'missing_dependency', 'A relation endpoint was not found in the write company.', 'dependency_not_found');
+    }
+
+    const bound = input.existingTargetId
+      ? await this.prisma.relation.findUnique({ where: { id: input.existingTargetId } })
+      : null;
+    if (bound && bound.companyId !== input.companyId) {
+      return { targetId: bound.id, companyId: bound.companyId, change: 'blocked' };
+    }
+    if (input.existingTargetId && !bound) {
+      return relationBlocked(input.companyId, 'missing_dependency', 'The bound relation no longer exists.', 'target_not_found', input.existingTargetId);
+    }
+
+    const key = {
+      companyId: input.companyId,
+      sourceType: input.sourceType,
+      sourceId: input.sourceId,
+      targetType: input.targetType,
+      targetId: input.targetId,
+      relationType: input.relationType,
+    };
+    const existingComposite = await this.prisma.relation.findFirst({ where: key });
+    if (!bound && existingComposite) {
+      return relationBlocked(input.companyId, 'ambiguous', 'An unbound relation already owns this composite key.', 'manual_ownership', existingComposite.id, 1);
+    }
+    if (bound && existingComposite && existingComposite.id !== bound.id) {
+      return relationBlocked(input.companyId, 'ambiguous', 'Another relation owns the requested composite key.', 'manual_ownership', existingComposite.id, 1);
+    }
+    const sameComposite =
+      bound &&
+      bound.sourceType === key.sourceType &&
+      bound.sourceId === key.sourceId &&
+      bound.targetType === key.targetType &&
+      bound.targetId === key.targetId &&
+      bound.relationType === key.relationType;
+    if (input.dryRun) {
+      return {
+        targetId: bound?.id ?? '',
+        companyId: input.companyId,
+        change: bound ? (sameComposite ? 'unchanged' : 'updated') : 'created',
+      };
+    }
+    if (sameComposite) {
+      await this.link({ ...key, actorId: input.auditActorId });
+      return { targetId: bound.id, companyId: input.companyId, change: 'unchanged' };
+    }
+
+    let targetId = '';
+    await this.prisma.$transaction(async (tx) => {
+      if (bound) {
+        await this.unlink({
+          companyId: input.companyId,
+          sourceType: bound.sourceType,
+          sourceId: bound.sourceId,
+          targetType: bound.targetType,
+          targetId: bound.targetId,
+          relationType: bound.relationType,
+          tx,
+        });
+      }
+      await this.link({ ...key, actorId: input.auditActorId, tx });
+      const row = await tx.relation.findFirst({ where: key, select: { id: true } });
+      if (!row) throw new Error('Relation write did not produce a target.');
+      targetId = row.id;
+    });
+    return {
+      targetId,
+      companyId: input.companyId,
+      change: bound ? 'updated' : 'created',
+    };
   }
 
   async unlink(input: UnlinkInput): Promise<void> {

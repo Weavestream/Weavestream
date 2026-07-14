@@ -14,6 +14,12 @@ function parseIpv4Octets(ip: string): [number, number, number, number] | null {
   return octets;
 }
 
+/** Normalize an IPv4 host to dotted decimal without leading zeroes. */
+export function normalizeIpv4V4(input: string): string | null {
+  const octets = parseIpv4Octets(input.trim());
+  return octets ? octets.join('.') : null;
+}
+
 function ipToUint32(octets: [number, number, number, number]): number {
   return ((octets[0] << 24) | (octets[1] << 16) | (octets[2] << 8) | octets[3]) >>> 0;
 }
@@ -88,10 +94,10 @@ export const ipv4HostSchema = z
   .string()
   .min(1)
   .max(15) // 255.255.255.255
-  .refine((v) => parseIpv4Octets(v.trim()) !== null, {
+  .transform((v) => normalizeIpv4V4(v))
+  .refine((v): v is string => v !== null, {
     message: 'Must be a valid IPv4 address',
-  })
-  .transform((v) => v.trim());
+  });
 
 function validateDhcpRange(
   o: {
