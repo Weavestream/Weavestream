@@ -20,7 +20,6 @@ export const BREEZE_RESOURCE_KEYS = [
   'backup-configuration-relations',
   'custom-fields',
   'custom-field-values',
-  'custom-field-value-relations',
   'device-relationships',
 ] as const;
 
@@ -39,6 +38,7 @@ export const BREEZE_SOURCE_ENDPOINTS = [
   'automations',
   'backup-configurations',
   'custom-fields',
+  'custom-field-values',
   'device-relationships',
 ] as const;
 
@@ -68,8 +68,7 @@ export const BREEZE_ENDPOINT_BY_RESOURCE: Readonly<
   'backup-configurations': 'backup-configurations',
   'backup-configuration-relations': 'backup-configurations',
   'custom-fields': 'custom-fields',
-  'custom-field-values': 'custom-fields',
-  'custom-field-value-relations': 'custom-fields',
+  'custom-field-values': 'custom-field-values',
   'device-relationships': 'device-relationships',
 };
 
@@ -483,8 +482,19 @@ export const breezeCustomFieldSchema = record({
   type: z.enum(['text', 'number', 'boolean', 'dropdown', 'date']),
   options: json.nullable(), required: z.boolean(), defaultValue: json.nullable(),
   deviceTypes: z.array(requiredText(50)).max(100).nullable(),
-  values: z.array(z.object({ deviceId: z.string().uuid(), value: json }).strict()).max(500),
-  valueCollection: collectionSchema,
+});
+
+export const breezeCustomFieldValueSchema = record({
+  deviceId: z.string().uuid(),
+  definitionId: z.string().uuid(),
+  target: z.object({ type: z.literal('device'), id: z.string().uuid() }).strict(),
+  name: requiredText(100),
+  fieldKey: requiredText(100),
+  type: z.enum(['text', 'number', 'boolean', 'dropdown', 'date']),
+  value: json,
+}).refine((value) => value.target.id === value.deviceId, {
+  message: 'Custom-field value target must match deviceId.',
+  path: ['target', 'id'],
 });
 
 const relationshipEndpointSchema = z
@@ -564,6 +574,7 @@ export const breezeRecordSchemaByEndpoint: Readonly<Record<BreezeSourceEndpoint,
   automations: breezeAutomationSchema,
   'backup-configurations': breezeBackupConfigurationSchema,
   'custom-fields': breezeCustomFieldSchema,
+  'custom-field-values': breezeCustomFieldValueSchema,
   'device-relationships': breezeDeviceRelationshipsSchema,
 };
 

@@ -100,6 +100,11 @@ export interface LegacyDriverRecord {
   sourceRevision?: string | null;
   /** Optional bounded source fingerprint persisted as reconstruction provenance. */
   sourceFingerprint?: string | null;
+  /** Optional exact native dependency binding; source identity remains externalId. */
+  bindingRef?: {
+    resourceKey: string;
+    externalId: string;
+  };
 }
 
 export interface RecommendedDestinationField {

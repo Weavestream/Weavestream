@@ -791,13 +791,16 @@ export class IntegrationSyncRunnerService {
       ),
       matchKeyFieldIds: resource.matchKeyFieldIds,
       fieldValues,
-      ...(typeof (resource.targetConfig as Record<string, unknown>)['bindingResourceKey'] === 'string'
-        ? {
-            bindingResourceKey: (resource.targetConfig as Record<string, string>)[
-              'bindingResourceKey'
-            ],
-          }
-        : {}),
+      ...(record.bindingRef
+        ? { bindingRef: record.bindingRef }
+        : typeof (resource.targetConfig as Record<string, unknown>)['bindingResourceKey'] ===
+            'string'
+          ? {
+              bindingResourceKey: (resource.targetConfig as Record<string, string>)[
+                'bindingResourceKey'
+              ],
+            }
+          : {}),
     } satisfies AssetReconstructionInput;
   }
 

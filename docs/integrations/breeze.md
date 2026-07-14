@@ -49,12 +49,14 @@ Enabled resources execute as an acyclic dependency graph. Weavestream rejects cy
 
 | Native target | Breeze resources and dependencies |
 |---|---|
-| Assets | Sites first; devices depend on sites. Site/device inventory, software, network equipment, virtual machines, and custom-field values enrich or relate to those stable assets. Warranty and support dates use expiry-marked date fields. |
+| Assets | Sites first; devices depend on sites. Site/device inventory, software, network equipment, and virtual machines enrich stable assets. Scalar custom-field values depend on devices and definitions and update their explicitly bound device without changing the value row's source identity. Warranty and support dates use expiry-marked date fields. |
 | IPAM | Subnets depend on site/device inventory. IP reservations depend on subnets and device inventory. |
 | Versioned internal articles | Configuration policies; assignments after policies; scripts; automations after scripts; backup configurations; custom-field definitions. The article body contains available reconstruction facts and explicitly identifies unavailable facts instead of inventing them. |
-| Relations | Assignment, automation, backup, custom-field, and device/topology edges run only after their endpoint resources. Missing or cross-company endpoints become safe gaps. |
+| Relations | Assignment, automation, backup, and device/topology edges run only after their endpoint resources. Missing or cross-company endpoints become safe gaps. |
 
 Recommended destinations store bounded structured fields, not entire upstream records. Devices may include durable hardware, operating-system, firmware, disk, interface, software, warranty, virtualization, and selected custom facts. Online/offline state, heartbeat/last-seen telemetry, health, alerts, patch posture, vulnerabilities, agent tokens, commands, remote-access state, runtime output, and job logs are excluded.
+
+Custom-field definitions and values have independent cursors. `/custom-fields` returns definition metadata only. `/custom-field-values` returns one bounded scalar row with a stable value UUID plus `orgId`, `deviceId`, `definitionId`, and an explicit device target. Weavestream walks both endpoints through every page, uses the supplied value UUID for provenance and idempotence, and uses the separate device reference only to resolve the native asset. It never rebuilds value identity from a definition/device pair or expects an embedded `values` array.
 
 ### Ownership rules
 

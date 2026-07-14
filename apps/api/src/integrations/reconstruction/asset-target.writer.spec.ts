@@ -117,6 +117,41 @@ describe('AssetTargetWriter', () => {
     expect(writeFromIntegration).toHaveBeenCalledWith(expect.objectContaining({ existingTargetId: ids.asset }));
   });
 
+  it('resolves an explicit device binding without replacing the scalar source identity', async () => {
+    const { writer, writeFromIntegration } = setup({ change: 'updated' });
+    const resolveBinding = jest.fn().mockResolvedValue({
+      targetKind: 'asset',
+      targetId: ids.asset,
+      companyId: ids.company,
+      resourceId: '00000000-0000-0000-0000-000000000010',
+      externalId: 'org-1:devices:device-1',
+    });
+    const scalarInput = {
+      ...input,
+      externalId: 'org-1:custom-field-values:value-uuid',
+      source: {
+        ...input.source,
+        resourceKey: 'custom-field-values',
+        sourceId: 'value-uuid',
+      },
+      bindingRef: {
+        resourceKey: 'devices',
+        externalId: 'org-1:devices:device-1',
+      },
+    } as AssetReconstructionInput;
+
+    await expect(writer.write(context({ resourceKey: 'custom-field-values', resolveBinding }), scalarInput))
+      .resolves.toMatchObject({ change: 'updated' });
+    expect(resolveBinding).toHaveBeenCalledWith({
+      resourceKey: 'devices',
+      externalId: 'org-1:devices:device-1',
+    });
+    expect(writeFromIntegration).toHaveBeenCalledWith(expect.objectContaining({
+      externalId: 'org-1:custom-field-values:value-uuid',
+      existingTargetId: ids.asset,
+    }));
+  });
+
   it('passes the exact resolved dependency binding as a first-write ownership anchor', async () => {
     const { writer, writeFromIntegration } = setup({ change: 'updated' });
     const dependencyResourceId = '00000000-0000-0000-0000-000000000010';

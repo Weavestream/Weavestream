@@ -82,18 +82,21 @@ export class AssetTargetWriter implements ReconstructionWriter<AssetReconstructi
 
     let existingTargetId = ctx.existingTargetId ?? null;
     let ownershipBinding: AssetIntegrationWriteInput['ownershipBinding'];
-    if (input.bindingResourceKey) {
-      const binding = await ctx.resolveBinding({
-        resourceKey: input.bindingResourceKey,
-        externalId: namespacedExternalId(input, input.bindingResourceKey),
-      });
+    const bindingRef = input.bindingRef ?? (input.bindingResourceKey
+      ? {
+          resourceKey: input.bindingResourceKey,
+          externalId: namespacedExternalId(input, input.bindingResourceKey),
+        }
+      : null);
+    if (bindingRef) {
+      const binding = await ctx.resolveBinding(bindingRef);
       if (!binding) {
         return blockedOutcome(
           ctx,
           input,
           safeGap('missing_dependency', 'The asset binding dependency was not found.', {
             reasonCode: 'dependency_not_found',
-            dependencyResourceKey: input.bindingResourceKey,
+            dependencyResourceKey: bindingRef.resourceKey,
           }),
         );
       }
@@ -103,7 +106,7 @@ export class AssetTargetWriter implements ReconstructionWriter<AssetReconstructi
           input,
           safeGap('validation', 'The asset binding dependency is not a same-company asset.', {
             reasonCode: 'dependency_company_or_kind_mismatch',
-            dependencyResourceKey: input.bindingResourceKey,
+            dependencyResourceKey: bindingRef.resourceKey,
           }),
           binding.targetId,
         );

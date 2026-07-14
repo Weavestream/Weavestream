@@ -162,6 +162,19 @@ describe('BreezePartnerApiClient', () => {
     );
   });
 
+  it('requests scalar custom-field values directly at the full page size', async () => {
+    const fx = installFetchScript([{ body: envelope([]) }]);
+    await new BreezePartnerApiClient().fetchPage(context(), {
+      resource: 'custom-field-values',
+      externalOrgId: ORG,
+      cursor: 'value-page-2',
+      updatedSince: null,
+    });
+    expect(fx.calls[0]!.url).toBe(
+      `https://breeze.example.test/api/v1/partner-api/custom-field-values?orgId=${ORG}&cursor=value-page-2&limit=500`,
+    );
+  });
+
   it('bounds automation dependency relation parent pages to twenty records', async () => {
     const fx = installFetchScript([{ body: envelope([]) }]);
     await new BreezePartnerApiClient().fetchPage(context(), {

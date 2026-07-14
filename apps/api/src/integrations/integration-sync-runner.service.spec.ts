@@ -212,6 +212,53 @@ describe('IntegrationSyncRunnerService writer dispatch', () => {
     return { service, writer, writerRegistry, tx, order, driver, audit, prisma, provenance, completeness };
   }
 
+  it('propagates an exact legacy binding reference without replacing source identity', () => {
+    const { service } = setup();
+    const toReconstructionInput = service as unknown as {
+      toReconstructionInput(
+        record: Record<string, unknown>,
+        resource: Record<string, unknown>,
+        mapping: Record<string, unknown>,
+      ): AssetReconstructionInput;
+    };
+    const converted = toReconstructionInput.toReconstructionInput(
+      {
+        externalId: 'value-uuid',
+        displayName: 'Rack on device-uuid',
+        fields: {},
+        updatedAt: '2026-07-14T09:00:00.000Z',
+        bindingRef: {
+          resourceKey: 'devices',
+          externalId: 'org-1:devices:device-uuid',
+        },
+      },
+      {
+        id: 'resource',
+        resourceKey: 'custom-field-values',
+        targetKind: 'asset',
+        targetConfig: { bindingResourceKey: 'devices' },
+        assetLayoutId: '00000000-0000-4000-8000-000000000007',
+        matchKeyFieldIds: [],
+        fieldMappings: [],
+      },
+      {
+        externalOrgId: 'org-1',
+        integrationId: '00000000-0000-4000-8000-000000000001',
+        integration: { driver: 'breeze' },
+      },
+    );
+
+    expect(converted).toMatchObject({
+      externalId: 'org-1:custom-field-values:value-uuid',
+      source: { sourceId: 'value-uuid' },
+      bindingRef: {
+        resourceKey: 'devices',
+        externalId: 'org-1:devices:device-uuid',
+      },
+    });
+    expect(converted).not.toHaveProperty('bindingResourceKey');
+  });
+
   it('dispatches typed input and commits its binding before the page checkpoint', async () => {
     const { service, writer, tx, order, audit } = setup();
     await expect(service.runMapping({

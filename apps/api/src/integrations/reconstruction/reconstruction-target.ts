@@ -57,6 +57,7 @@ export const assetReconstructionInputSchema = z
     matchKeyFieldIds: z.array(z.string().uuid()).max(128),
     fieldValues: z.array(assetFieldValueSchema).max(1024),
     bindingResourceKey: z.string().min(1).max(256).optional(),
+    bindingRef: dependencyRefSchema.optional(),
   })
   .strict()
   .superRefine(assertBoundedReconstructionInput);

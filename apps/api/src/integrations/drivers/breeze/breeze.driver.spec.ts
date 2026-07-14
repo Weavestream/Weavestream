@@ -303,11 +303,8 @@ describe('BreezeDriver descriptor', () => {
       },
       {
         key: 'custom-field-values', targetKind: 'asset',
-        dependsOnResourceKeys: ['devices', 'custom-fields'], targetConfig: { sourceEndpoint: '/custom-fields' },
-      },
-      {
-        key: 'custom-field-value-relations', targetKind: 'relation',
-        dependsOnResourceKeys: ['custom-field-values', 'devices'], targetConfig: { sourceEndpoint: '/custom-fields' },
+        dependsOnResourceKeys: ['devices', 'custom-fields'],
+        targetConfig: { sourceEndpoint: '/custom-field-values', bindingResourceKey: 'devices' },
       },
       {
         key: 'device-relationships',
@@ -332,7 +329,6 @@ describe('BreezeDriver descriptor', () => {
           'backup-configuration-relations',
           'custom-fields',
           'custom-field-values',
-          'custom-field-value-relations',
         ],
         targetConfig: { sourceEndpoint: '/device-relationships' },
       },
@@ -574,33 +570,33 @@ describe('Breeze transforms', () => {
     const definition = transformBreezeRecord('custom-fields', {
       ...base, id: definitionId, siteId: null, sourceScope: 'partner', name: 'Rack', fieldKey: 'rack',
       type: 'text', options: null, required: false, defaultValue: null, deviceTypes: ['server'],
-      values: [{ deviceId: DEVICE, value: 'DC1-R07' }, { deviceId: SITE, value: 'DC1-R08' }],
-      valueCollection: { total: 2, included: 2, complete: true, reason: null },
     })[0] as { reconstructionInput: Record<string, any> };
     expect(definition.reconstructionInput).toMatchObject({
       targetKind: 'article', externalId: `${ORG}:custom-fields:${definitionId}`,
       slug: `custom-fields-${definitionId}`,
     });
     const valueRecord = {
-      ...base, id: definitionId, siteId: null, sourceScope: 'partner', name: 'Rack', fieldKey: 'rack',
-      type: 'text', options: null, required: false, defaultValue: null, deviceTypes: ['server'],
-      values: [{ deviceId: DEVICE, value: 'DC1-R07' }, { deviceId: SITE, value: 'DC1-R08' }],
-      valueCollection: { total: 2, included: 2, complete: true, reason: null },
+      ...base,
+      id: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+      siteId: null,
+      deviceId: DEVICE,
+      definitionId,
+      target: { type: 'device' as const, id: DEVICE },
+      name: 'Rack',
+      fieldKey: 'rack',
+      type: 'text',
+      value: 'DC1-R07',
     };
     const first = transformBreezeRecord('custom-field-values', valueRecord);
     const repeated = transformBreezeRecord('custom-field-values', valueRecord);
     expect(first).toEqual(repeated);
-    expect(first).toHaveLength(2);
-    expect(first).toEqual(expect.arrayContaining([
-      expect.objectContaining({ externalId: `${definitionId}:${DEVICE}`, fields: expect.objectContaining({ definitionId, deviceId: DEVICE }) }),
-    ]));
+    expect(first).toHaveLength(1);
+    expect(first).toEqual([expect.objectContaining({
+      externalId: valueRecord.id,
+      bindingRef: { resourceKey: 'devices', externalId: `${ORG}:devices:${DEVICE}` },
+      fields: expect.objectContaining({ definitionId, deviceId: DEVICE }),
+    })]);
     expect(JSON.stringify(first[0])).toContain(definitionId);
-    const relations = transformBreezeRecord('custom-field-value-relations', valueRecord) as Array<{ reconstructionInput: Record<string, any> }>;
-    expect(relations).toHaveLength(2);
-    expect(relations.map(({ reconstructionInput }) => reconstructionInput)).toEqual(expect.arrayContaining([expect.objectContaining({
-      sourceRef: { resourceKey: 'custom-field-values', externalId: `${ORG}:custom-field-values:${definitionId}:${DEVICE}` },
-      targetRef: { resourceKey: 'devices', externalId: `${ORG}:devices:${DEVICE}` },
-    })]));
   });
 
   it('bounds legal titles, uses collision-safe fences, and accepts maximum simple cardinalities', () => {
@@ -634,17 +630,6 @@ describe('Breeze transforms', () => {
     expect(policy!.reconstructionInput.markdown).toContain(features[499]!.id);
     expect(policy!.reconstructionInput.markdown.length).toBeLessThanOrEqual(500_000);
 
-    const values = Array.from({ length: 500 }, (_, index) => ({
-      deviceId: `00000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`,
-      value: `rack-${index}`,
-    }));
-    const valueRecord = {
-      ...base, siteId: null, sourceScope: 'organization', name: 'Rack', fieldKey: 'rack', type: 'text',
-      options: null, required: false, defaultValue: null, deviceTypes: null, values,
-      valueCollection: { total: 500, included: 500, complete: true, reason: null },
-    };
-    expect(transformBreezeRecord('custom-field-values', valueRecord)).toHaveLength(500);
-    expect(transformBreezeRecord('custom-field-value-relations', valueRecord)).toHaveLength(500);
   });
 
   it('blocks an oversized legal Markdown projection at a semantic boundary', () => {
@@ -671,17 +656,24 @@ describe('Breeze transforms', () => {
     expect(markdown).toContain('&lt;!-- weavestream:breeze:managed:start --&gt;');
   });
 
-  it('keeps indivisible custom values within the native TEXTAREA bound or blocks the definition', () => {
+  it('keeps one scalar custom value within the native bound or blocks the row', () => {
     const custom = (value: unknown) => ({
-      ...base, siteId: null, sourceScope: 'organization', name: 'Structured', fieldKey: 'structured',
-      type: 'text', options: null, required: false, defaultValue: null, deviceTypes: null,
-      values: [{ deviceId: DEVICE, value }], valueCollection: completeCollection,
+      ...base,
+      id: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+      siteId: null,
+      deviceId: DEVICE,
+      definitionId: 'ffffffff-ffff-4fff-8fff-ffffffffffff',
+      target: { type: 'device', id: DEVICE },
+      name: 'Structured',
+      fieldKey: 'structured',
+      type: 'text',
+      value,
     });
     const [valid] = transformBreezeRecord('custom-field-values', custom(
       Array.from({ length: 4 }, (_, index) => `${index}:${'x'.repeat(12_000)}`),
     ));
-    const projected = (valid as unknown as { fields: { value: string } }).fields.value;
-    expect(() => new TextareaStrategy().valueSchema().parse(projected)).not.toThrow();
+    const projected = (valid as unknown as { fields: { value: string[] } }).fields.value;
+    expect(projected).toHaveLength(4);
     expect(() => transformBreezeRecord('custom-field-values', custom(
       Array.from({ length: 5 }, (_, index) => `${index}:${'x'.repeat(12_000)}`),
     ))).toThrow(/native field bound/i);
@@ -1176,10 +1168,19 @@ describe('Breeze transforms', () => {
     ['backup-configuration-relations', { ...base, siteId: null, kind: 'profile', sourceScope: 'organization', name: 'Backup', description: null, active: true, selections: {}, destinationId: null, schedule: null, retention: null, exclusions: [], restore: { types: [], notes: null } }],
     [
       'custom-fields',
-      { ...base, siteId: null, sourceScope: 'organization', name: 'Owner', fieldKey: 'owner', type: 'text', options: null, required: false, defaultValue: null, deviceTypes: null, values: [{ deviceId: DEVICE, value: 'IT' }], valueCollection: completeCollection },
+      { ...base, siteId: null, sourceScope: 'organization', name: 'Owner', fieldKey: 'owner', type: 'text', options: null, required: false, defaultValue: null, deviceTypes: null },
     ],
-    ['custom-field-values', { ...base, siteId: null, sourceScope: 'organization', name: 'Owner', fieldKey: 'owner', type: 'text', options: null, required: false, defaultValue: null, deviceTypes: null, values: [{ deviceId: DEVICE, value: 'IT' }], valueCollection: completeCollection }],
-    ['custom-field-value-relations', { ...base, siteId: null, sourceScope: 'organization', name: 'Owner', fieldKey: 'owner', type: 'text', options: null, required: false, defaultValue: null, deviceTypes: null, values: [{ deviceId: DEVICE, value: 'IT' }], valueCollection: completeCollection }],
+    ['custom-field-values', {
+      ...base,
+      siteId: null,
+      deviceId: DEVICE,
+      definitionId: 'ffffffff-ffff-4fff-8fff-ffffffffffff',
+      target: { type: 'device', id: DEVICE },
+      name: 'Owner',
+      fieldKey: 'owner',
+      type: 'text',
+      value: 'IT',
+    }],
     [
       'device-relationships',
       {
@@ -1876,5 +1877,178 @@ describe('BreezeDriver transport delegation', () => {
     await expect(driver.listSourceOrgs(ctx() as IntegrationContext)).resolves.toEqual([
       { externalId: ORG, name: 'Acme', hint: 'customer' },
     ]);
+  });
+});
+
+describe('Breeze scalar custom-field value contract', () => {
+  const definitionId = 'ffffffff-ffff-4fff-8fff-ffffffffffff';
+  const valueId = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
+  const definition = {
+    ...base,
+    id: definitionId,
+    siteId: null,
+    sourceScope: 'partner' as const,
+    name: 'Rack',
+    fieldKey: 'rack',
+    type: 'text' as const,
+    options: null,
+    required: false,
+    defaultValue: null,
+    deviceTypes: ['server'],
+  };
+  const scalarValue = {
+    ...base,
+    id: valueId,
+    siteId: null,
+    deviceId: DEVICE,
+    definitionId,
+    target: { type: 'device' as const, id: DEVICE },
+    name: 'Rack',
+    fieldKey: 'rack',
+    type: 'text' as const,
+    value: 'DC1-R07',
+  };
+
+  it('keeps definition and scalar endpoints separate while preserving value and device identities', () => {
+    const resources = new BreezeDriver().descriptor.resources;
+    expect(resources.find(({ key }) => key === 'custom-fields')).toMatchObject({
+      targetConfig: { sourceEndpoint: '/custom-fields' },
+    });
+    expect(resources.find(({ key }) => key === 'custom-field-values')).toMatchObject({
+      targetConfig: {
+        sourceEndpoint: '/custom-field-values',
+        bindingResourceKey: 'devices',
+      },
+    });
+    expect(resources.some(({ key }) => key === 'custom-field-value-relations')).toBe(false);
+
+    const [definitionRecord] = transformBreezeRecord('custom-fields', definition) as Array<{
+      reconstructionInput: Record<string, unknown>;
+    }>;
+    expect(definitionRecord?.reconstructionInput).toMatchObject({
+      targetKind: 'article',
+      externalId: `${ORG}:custom-fields:${definitionId}`,
+    });
+
+    const first = transformBreezeRecord('custom-field-values', scalarValue);
+    const repeated = transformBreezeRecord('custom-field-values', scalarValue);
+    expect(repeated).toEqual(first);
+    expect(first).toEqual([
+      expect.objectContaining({
+        externalId: valueId,
+        bindingRef: {
+          resourceKey: 'devices',
+          externalId: `${ORG}:devices:${DEVICE}`,
+        },
+        fields: expect.objectContaining({
+          breezeId: valueId,
+          orgId: ORG,
+          deviceId: DEVICE,
+          definitionId,
+          target: { type: 'device', id: DEVICE },
+          value: 'DC1-R07',
+        }),
+      }),
+    ]);
+  });
+
+  it('walks more than 500 definition and scalar rows with independent cursors', async () => {
+    const uuid = (prefix: string, index: number) =>
+      `${prefix}0000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`;
+    const definitions = Array.from({ length: 501 }, (_, index) => ({
+      ...definition,
+      id: uuid('1', index),
+      name: `Field ${index}`,
+      fieldKey: `field_${index}`,
+    }));
+    const values = Array.from({ length: 501 }, (_, index) => ({
+      ...scalarValue,
+      id: uuid('2', index),
+      definitionId: definitions[index]!.id,
+      name: definitions[index]!.name,
+      fieldKey: definitions[index]!.fieldKey,
+      value: `value-${index}`,
+    }));
+    const client = {
+      testConnection: jest.fn(),
+      listOrganizations: jest.fn(),
+      fetchPage: jest.fn(async (_context: unknown, input: { resource: string; cursor: string | null }) => {
+        const isDefinition = input.resource === 'custom-fields';
+        const data = isDefinition ? definitions : values;
+        const expectedCursor = isDefinition ? 'definition-cursor-1' : 'value-cursor-1';
+        const secondPage = input.cursor === expectedCursor;
+        return {
+          schemaVersion: '1' as const,
+          snapshotAt: '2026-07-14T12:00:00.000Z',
+          data: secondPage ? data.slice(500) : data.slice(0, 500),
+          nextCursor: secondPage ? null : expectedCursor,
+          hasMore: !secondPage,
+        };
+      }),
+    };
+    const driver = new BreezeDriver(client);
+    const definitionFirst = await driver.fetchRecords(ctx('custom-fields'), null);
+    const definitionSecond = await driver.fetchRecords(
+      { ...ctx('custom-fields'), snapshotAt: definitionFirst.snapshotAt ?? null },
+      definitionFirst.cursor ?? null,
+    );
+    const valueFirst = await driver.fetchRecords(ctx('custom-field-values'), null);
+    const valueSecond = await driver.fetchRecords(
+      { ...ctx('custom-field-values'), snapshotAt: valueFirst.snapshotAt ?? null },
+      valueFirst.cursor ?? null,
+    );
+
+    expect([...definitionFirst.records, ...definitionSecond.records]).toHaveLength(501);
+    const emittedValues = [...valueFirst.records, ...valueSecond.records];
+    expect(emittedValues).toHaveLength(501);
+    expect(new Set(emittedValues.map(({ externalId }) => externalId)).size).toBe(501);
+    expect(client.fetchPage.mock.calls.map(([, input]) => [input.resource, input.cursor])).toEqual([
+      ['custom-fields', null],
+      ['custom-fields', 'definition-cursor-1'],
+      ['custom-field-values', null],
+      ['custom-field-values', 'value-cursor-1'],
+    ]);
+  });
+
+  it('fails closed on unknown scalar keys and blocks secret-semantic scalar values safely', async () => {
+    expect(() =>
+      transformBreezeRecord('custom-field-values', {
+        ...scalarValue,
+        providerConfig: { accessToken: 'must-never-enter-weavestream' },
+      }),
+    ).toThrow();
+    expect(() =>
+      transformBreezeRecord('custom-field-values', {
+        ...scalarValue,
+        target: { type: 'device', id: SITE },
+      }),
+    ).toThrow(/target|device/i);
+
+    const secret = 'must-never-enter-weavestream';
+    const client = {
+      testConnection: jest.fn(),
+      listOrganizations: jest.fn(),
+      fetchPage: jest.fn().mockResolvedValue({
+        schemaVersion: '1',
+        snapshotAt: '2026-07-14T12:00:00.000Z',
+        data: [{
+          ...scalarValue,
+          name: 'Local admin password',
+          fieldKey: 'local_admin_password',
+          value: secret,
+        }],
+        nextCursor: null,
+        hasMore: false,
+      }),
+    };
+    const page = await new BreezeDriver(client).fetchRecords(ctx('custom-field-values'), null);
+    expect(page.records).toEqual([]);
+    expect(page.blockedInputs).toEqual([
+      expect.objectContaining({
+        kind: 'secret_blocked',
+        externalId: `${ORG}:custom-field-values:${valueId}`,
+      }),
+    ]);
+    expect(JSON.stringify(page)).not.toContain(secret);
   });
 });

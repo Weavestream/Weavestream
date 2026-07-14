@@ -151,13 +151,13 @@ const virtualMachineFields = [
 
 const customFieldValueFields = [
   field('breezeId', 'Breeze ID', 'breeze-id', 'TEXT', 'source_wins'),
+  field('orgId', 'Organization ID', 'organization-id', 'TEXT', 'source_wins'),
   field('definitionId', 'Definition ID', 'definition-id', 'TEXT', 'source_wins'),
   field('deviceId', 'Device ID', 'device-id', 'TEXT', 'source_wins'),
   field('fieldKey', 'Field Key', 'field-key', 'TEXT'),
   field('fieldName', 'Field Name', 'field-name', 'TEXT'),
   field('fieldType', 'Field Type', 'field-type', 'TEXT'),
   field('value', 'Value', 'value', 'TEXTAREA'),
-  field('valueCollection', 'Value Collection', 'value-collection', 'TEXT'),
   field('sourceRevision', 'Source Revision', 'source-revision', 'TEXT'),
   field('sourceFingerprint', 'Source Fingerprint', 'source-fingerprint', 'TEXT'),
 ] as const;
@@ -208,7 +208,7 @@ export const BREEZE_RECOMMENDED_DESTINATIONS: Readonly<Record<string, Recommende
     fields: virtualMachineFields,
   },
   'custom-field-values': {
-    layout: { name: 'Breeze Custom Field Values', slug: 'breeze-custom-field-values', icon: 'list', color: 'cyan' },
+    layout: deviceLayout,
     fields: customFieldValueFields,
   },
 };
@@ -330,11 +330,9 @@ export class BreezeDriver implements IntegrationDriver {
         { sourceEndpoint: '/custom-fields', folderSlug: 'breeze-custom-fields', visibility: 'internal' },
       ),
       resource('custom-field-values', 'Custom field values', 'asset', {
-        sourceEndpoint: '/custom-fields',
+        sourceEndpoint: '/custom-field-values',
+        bindingResourceKey: 'devices',
       }, ['devices', 'custom-fields']),
-      resource('custom-field-value-relations', 'Custom field value relations', 'relation', {
-        sourceEndpoint: '/custom-fields',
-      }, ['custom-field-values', 'devices']),
       resource(
         'device-relationships',
         'Device relationships',

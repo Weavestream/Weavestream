@@ -92,8 +92,8 @@ export function transformBreezeRecord(
     throw new BreezeSensitiveDefinitionError(record.id, record.orgId);
   }
   if (
-    BREEZE_ENDPOINT_BY_RESOURCE[resource.data] === 'custom-fields' &&
-    record.values.some((value: Record<string, unknown>) => stableJson(value.value).length > 50_000)
+    BREEZE_ENDPOINT_BY_RESOURCE[resource.data] === 'custom-field-values' &&
+    stableJson(record.value).length > 50_000
   ) {
     throw new BreezeBoundedDefinitionError(record.id, record.orgId);
   }
@@ -296,28 +296,25 @@ export function transformBreezeRecord(
     case 'custom-fields':
       return [typedArticle(resource.data, record)];
     case 'custom-field-values':
-      return [...record.values]
-        .sort((left: Record<string, any>, right: Record<string, any>) => left.deviceId.localeCompare(right.deviceId))
-        .map((value: Record<string, any>) => legacy(record, `${record.name} on ${value.deviceId}`, {
-          breezeId: `${record.id}:${value.deviceId}`,
-          definitionId: record.id,
-          deviceId: value.deviceId,
+      return [{
+        ...legacy(record, `${record.name} on ${record.deviceId}`, {
+          breezeId: record.id,
+          orgId: record.orgId,
+          definitionId: record.definitionId,
+          deviceId: record.deviceId,
+          target: record.target,
           fieldKey: record.fieldKey,
           fieldName: record.name,
           fieldType: record.type,
-          value: stableJson(value.value),
-          valueCollection: formatCollection('values', record.valueCollection),
+          value: record.value,
           sourceRevision: record.revision,
           sourceFingerprint: record.revision,
-        }, `${record.id}:${value.deviceId}`));
-    case 'custom-field-value-relations':
-      return [...record.values]
-        .sort((left: Record<string, any>, right: Record<string, any>) => left.deviceId.localeCompare(right.deviceId))
-        .map((value: Record<string, any>) => typedDependencyRelation(
-          record, resource.data, `${record.id}:${value.deviceId}:device`,
-          'custom-field-values', `${record.id}:${value.deviceId}`, 'devices', value.deviceId,
-          'custom_field_value',
-        ));
+        }),
+        bindingRef: {
+          resourceKey: 'devices',
+          externalId: namespaced(record.orgId, 'devices', record.deviceId),
+        },
+      }];
     case 'subnets':
       return subnetCandidates(record).map((subnet) => typedSubnet(record, subnet));
     case 'ip-reservations':
@@ -477,7 +474,6 @@ function isDesiredConfigurationResource(resource: BreezeResourceKey): boolean {
     'configuration-policies', 'configuration-assignments', 'configuration-assignment-relations',
     'scripts', 'automations', 'automation-relations', 'backup-configurations',
     'backup-configuration-relations', 'custom-fields', 'custom-field-values',
-    'custom-field-value-relations',
   ].includes(resource);
 }
 
@@ -661,8 +657,7 @@ function renderDesiredConfiguration(
       `Field key: ${singleLine(record.fieldKey)}`, `Type: ${record.type}`, `Required: ${record.required ? 'yes' : 'no'}`,
       `Device types: ${record.deviceTypes?.map(singleLine).join(', ') || 'all exported device types'}`,
       '', '## Options', fencedJson(record.options), '', '## Default value', fencedJson(record.defaultValue),
-      '', `Value collection: ${record.valueCollection.included}/${record.valueCollection.total} ${record.valueCollection.complete ? 'complete' : 'incomplete (collection limit exceeded)'}`,
-      'Per-device values are stored as separate durable assets and related to their devices.',
+      '', 'Per-device values are traversed independently and written to their bound device assets.',
     );
   }
   lines.push('', '## Source provenance', `Source UUID: ${record.id}`, `Source revision: ${record.revision}`, `Source fingerprint: ${record.revision}`, `Exported source date: ${record.sourceUpdatedAt}`);
