@@ -9,6 +9,9 @@ import type {
 } from './reconstruction/reconstruction-target.js';
 import { AssetTargetWriter } from './reconstruction/asset-target.writer.js';
 import { hasEligibleNativeBinding } from './reconstruction/native-binding-ownership.js';
+import { BreezeDriver } from './drivers/breeze/breeze.driver.js';
+import { buildResourceExecutionStages } from './integration-sync.service.js';
+import type { AssetReconstructionInput } from './reconstruction/reconstruction-target.js';
 
 describe('validateDriverFetchPage', () => {
   it('defaults a terminal legacy page without changing legacy records', () => {
@@ -443,5 +446,211 @@ describe('IntegrationSyncRunnerService writer dispatch', () => {
       dryRun: false, actorId, mode: 'incremental',
     });
     expect(writer.write).not.toHaveBeenCalled();
+  });
+});
+
+describe('Breeze foundational asset composition', () => {
+  const integrationA = '00000000-0000-4000-8000-000000000101';
+  const integrationB = '00000000-0000-4000-8000-000000000102';
+  const mapping = '00000000-0000-4000-8000-000000000103';
+  const company = '00000000-0000-4000-8000-000000000104';
+  const org = '00000000-0000-4000-8000-000000000105';
+  const layout = '00000000-0000-4000-8000-000000000106';
+  const sourceField = '00000000-0000-4000-8000-000000000107';
+  const manualField = '00000000-0000-4000-8000-000000000108';
+
+  it('orders the real Breeze sites resource before devices', () => {
+    const resources = new BreezeDriver().descriptor.resources.filter(({ key }) =>
+      key === 'sites' || key === 'devices');
+    expect(buildResourceExecutionStages(resources.map((resource) => ({
+      id: resource.key,
+      resourceKey: resource.key,
+      dependsOnResourceKeys: resource.dependsOnResourceKeys,
+    })))).toEqual([
+      [expect.objectContaining({ resourceKey: 'sites' })],
+      [expect.objectContaining({ resourceKey: 'devices' })],
+    ]);
+  });
+
+  it('runs real Breeze site/device fetch transforms through the runner and AssetTargetWriter', async () => {
+    const siteId = '00000000-0000-4000-8000-000000000111';
+    const deviceId = '00000000-0000-4000-8000-000000000112';
+    const siteResourceId = '00000000-0000-4000-8000-000000000113';
+    const deviceResourceId = '00000000-0000-4000-8000-000000000114';
+    const revision = 'a'.repeat(64);
+    const updatedAt = '2026-07-14T11:00:00.000Z';
+    const site = {
+      id: siteId, orgId: org, siteId, sourceUpdatedAt: updatedAt, revision,
+      name: 'HQ', timezone: 'America/Denver', address: null, contact: null,
+    };
+    const device = {
+      id: deviceId, orgId: org, siteId, sourceUpdatedAt: updatedAt, revision,
+      hostname: 'ws-01', displayName: 'Workstation 01',
+      type: { os: 'windows', role: 'workstation', virtual: false, virtualizationPlatform: null },
+      operatingSystem: { edition: 'Windows 11 Pro', build: '26100', architecture: 'x64' },
+      installation: { enrolledAt: '2025-01-01T00:00:00.000Z' },
+      hardwareIdentity: { serialNumber: 'SER-1', manufacturer: 'Dell', model: 'Latitude' },
+      stableIdentifiers: { assetTag: null, inventoryId: null, externalId: null },
+      tags: ['managed'], groupIds: [],
+      groupMembership: { total: 0, included: 0, complete: true, reason: null },
+      linkGroupId: null, linkGroupRole: null,
+    };
+    const client = {
+      testConnection: jest.fn(),
+      listOrganizations: jest.fn(),
+      fetchPage: jest.fn(async (_ctx: unknown, input: { resource: string }) => ({
+        schemaVersion: '1' as const, snapshotAt: '2026-07-14T12:00:00.000Z',
+        data: input.resource === 'sites' ? [site] : [device],
+        nextCursor: null, hasMore: false as const, blocked: [],
+      })),
+    };
+    const breeze = new BreezeDriver(client);
+    const resources = new Map([
+      [siteResourceId, {
+        id: siteResourceId, integrationId: integrationA, resourceKey: 'sites', enabled: true,
+        targetKind: 'asset', targetConfig: {}, dependsOnResourceKeys: [], assetLayoutId: layout,
+        assetLayout: { fields: [] }, matchKeyFieldIds: [],
+        fieldMappings: [{ sourceField: 'name', syncDirection: 'source_wins', transform: null,
+          targetField: { id: sourceField, slug: 'name', fieldType: 'TEXT', options: {}, archivedAt: null } }],
+      }],
+      [deviceResourceId, {
+        id: deviceResourceId, integrationId: integrationA, resourceKey: 'devices', enabled: true,
+        targetKind: 'asset', targetConfig: {}, dependsOnResourceKeys: ['sites'], assetLayoutId: layout,
+        assetLayout: { fields: [] }, matchKeyFieldIds: [],
+        fieldMappings: [{ sourceField: 'hostname', syncDirection: 'preserve_manual', transform: null,
+          targetField: { id: manualField, slug: 'hostname', fieldType: 'TEXT', options: {}, archivedAt: null } }],
+      }],
+    ]);
+    const bindings = new Map<string, Record<string, unknown>>();
+    const tx = {
+      integrationSyncRecord: {
+        findUnique: jest.fn(async ({ where }: { where: { integrationCompanyMappingId_resourceId_externalId: { resourceId: string; externalId: string } } }) =>
+          bindings.get(`${where.integrationCompanyMappingId_resourceId_externalId.resourceId}:${where.integrationCompanyMappingId_resourceId_externalId.externalId}`) ?? null),
+        upsert: jest.fn(async ({ create }: { create: Record<string, unknown> }) => {
+          const stored = { id: `binding-${bindings.size + 1}`, ...create };
+          bindings.set(`${String(create.resourceId)}:${String(create.externalId)}`, stored);
+          return stored;
+        }),
+        update: jest.fn(),
+      },
+      integrationSyncCheckpoint: { upsert: jest.fn() },
+      integrationResource: { findUnique: jest.fn() },
+    };
+    const prisma = {
+      integrationCompanyMapping: { findUnique: jest.fn().mockResolvedValue({
+        id: mapping, integrationId: integrationA, companyId: company, externalOrgId: org,
+        filter: {}, integration: { id: integrationA, driver: 'breeze' },
+      }) },
+      integrationResource: { findFirst: jest.fn(async ({ where }: { where: { id: string } }) => resources.get(where.id)) },
+      integrationSyncCheckpoint: { findUnique: jest.fn().mockResolvedValue(null) },
+      $transaction: jest.fn(async (callback: (client: typeof tx) => Promise<void>) => callback(tx)),
+    };
+    const writeFromIntegration = jest.fn(async (input: { resourceId: string }) => ({
+      targetId: input.resourceId === siteResourceId
+        ? '00000000-0000-4000-8000-000000000115'
+        : '00000000-0000-4000-8000-000000000116',
+      companyId: company,
+      change: 'created' as const,
+    }));
+    const assetWriter = new AssetTargetWriter({ writeFromIntegration });
+    const runner = new IntegrationSyncRunnerService(
+      prisma as never,
+      { values: { INTEGRATION_HTTP_TIMEOUT_MS: 100, INTEGRATION_HTTP_MAX_RETRIES: 0, INTEGRATION_HTTP_BACKOFF_MS: 100 } } as never,
+      { assertIntegrationActor: jest.fn().mockResolvedValue(undefined) } as never,
+      { loadDriverContext: jest.fn().mockResolvedValue({ config: { baseUrl: 'https://breeze.example' }, secret: { apiKey: 'key' } }) } as never,
+      { get: jest.fn().mockReturnValue(breeze) } as never,
+      { execute: jest.fn() } as never,
+      { get: jest.fn().mockReturnValue(assetWriter) } as never,
+    );
+
+    await expect(runner.runMapping({ syncRunId: 'run-site', integrationCompanyMappingId: mapping, resourceId: siteResourceId, dryRun: false, actorId: 'actor' }))
+      .resolves.toMatchObject({ status: 'succeeded', resourceKey: 'sites', totals: { created: 1 } });
+    await expect(runner.runMapping({ syncRunId: 'run-device', integrationCompanyMappingId: mapping, resourceId: deviceResourceId, dryRun: false, actorId: 'actor' }))
+      .resolves.toMatchObject({ status: 'succeeded', resourceKey: 'devices', totals: { created: 1 } });
+
+    expect(client.fetchPage).toHaveBeenNthCalledWith(1, expect.anything(), expect.objectContaining({ resource: 'sites', externalOrgId: org }));
+    expect(client.fetchPage).toHaveBeenNthCalledWith(2, expect.anything(), expect.objectContaining({ resource: 'devices', externalOrgId: org }));
+    expect(writeFromIntegration).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      externalId: `${org}:sites:${siteId}`, name: 'HQ', externalSource: 'breeze',
+      fieldValues: [{ targetFieldId: sourceField, value: 'HQ', syncDirection: 'source_wins' }],
+    }));
+    expect(writeFromIntegration).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      externalId: `${org}:devices:${deviceId}`, name: 'Workstation 01', externalSource: 'breeze',
+      fieldValues: [{ targetFieldId: manualField, value: 'ws-01', syncDirection: 'preserve_manual' }],
+    }));
+  });
+
+  it('creates one site and device, then remains idempotent and stable across rename/collisions', async () => {
+    type Stored = { id: string; name: string; fields: Record<string, unknown>; manualOnly?: boolean };
+    const assets = new Map<string, Stored>();
+    const provenance = new Map<string, ReconstructionWriteOutcome['provenance']>();
+    assets.set('manual-only', { id: 'manual-only', name: 'Operator asset', fields: { note: 'keep' }, manualOnly: true });
+    let next = 1;
+    const nativePort = {
+      writeFromIntegration: jest.fn(async (input: {
+        integrationId: string; externalId: string; name: string;
+        fieldValues: Array<{ targetFieldId: string; value: unknown; syncDirection: string }>;
+      }) => {
+        const key = `${input.integrationId}:${input.externalId}`;
+        const current = assets.get(key);
+        if (!current) {
+          const created = {
+            id: `00000000-0000-4000-8000-${String(next++).padStart(12, '0')}`,
+            name: input.name,
+            fields: Object.fromEntries(input.fieldValues.map((field) => [field.targetFieldId, field.value])),
+          };
+          assets.set(key, created);
+          return { targetId: created.id, companyId: company, change: 'created' as const };
+        }
+        let changed = current.name !== input.name;
+        current.name = input.name;
+        for (const field of input.fieldValues) {
+          if (field.syncDirection === 'preserve_manual' && current.fields[field.targetFieldId] !== undefined) continue;
+          changed ||= current.fields[field.targetFieldId] !== field.value;
+          current.fields[field.targetFieldId] = field.value;
+        }
+        return { targetId: current.id, companyId: company, change: changed ? 'updated' as const : 'unchanged' as const };
+      }),
+    };
+    const writer = new AssetTargetWriter(nativePort);
+    const write = async (integrationId: string, resourceKey: 'sites' | 'devices', sourceId: string, name: string, sourceValue: string, manualValue: string) => {
+      const input: AssetReconstructionInput = {
+        targetKind: 'asset',
+        externalId: `${org}:${resourceKey}:${sourceId}`,
+        source: { externalOrgId: org, resourceKey, sourceId, revision: 'a'.repeat(64), fingerprint: 'b'.repeat(64), updatedAt: null },
+        name,
+        assetLayoutId: layout,
+        externalSource: 'breeze',
+        matchKeyFieldIds: [],
+        fieldValues: [
+          { targetFieldId: sourceField, value: sourceValue, syncDirection: 'source_wins' },
+          { targetFieldId: manualField, value: manualValue, syncDirection: 'preserve_manual' },
+        ],
+      };
+      const key = `${integrationId}:${input.externalId}`;
+      const outcome = await writer.write({
+        tx: {} as never, companyId: company, integrationId,
+        integrationCompanyMappingId: mapping, resourceId: layout, resourceKey,
+        externalOrgId: org, auditActorId: 'actor', now: new Date('2026-07-14T00:00:00.000Z'),
+        dryRun: false, existingTargetId: assets.get(key)?.id ?? null,
+        previousProvenance: provenance.get(key) ?? null,
+        resolveBinding: jest.fn().mockResolvedValue(null),
+      }, input);
+      if (outcome.change !== 'blocked') provenance.set(key, outcome.provenance);
+      return outcome;
+    };
+
+    await expect(write(integrationA, 'sites', 'site-uuid', 'HQ', 'Denver', 'operator site')).resolves.toMatchObject({ change: 'created' });
+    await expect(write(integrationA, 'devices', 'device-uuid', 'Laptop', 'serial-1', 'operator device')).resolves.toMatchObject({ change: 'created' });
+    await expect(write(integrationA, 'sites', 'site-uuid', 'HQ', 'Denver', 'operator site')).resolves.toMatchObject({ change: 'unchanged' });
+    await expect(write(integrationA, 'devices', 'device-uuid', 'Renamed laptop', 'serial-2', 'replace attempt')).resolves.toMatchObject({ change: 'updated' });
+    await expect(write(integrationB, 'devices', 'device-uuid', 'Renamed laptop', 'serial-other', 'other partner')).resolves.toMatchObject({ change: 'created' });
+
+    expect([...assets.values()].filter((asset) => !asset.manualOnly)).toHaveLength(3);
+    const deviceA = assets.get(`${integrationA}:${org}:devices:device-uuid`)!;
+    const deviceB = assets.get(`${integrationB}:${org}:devices:device-uuid`)!;
+    expect(deviceA).toMatchObject({ name: 'Renamed laptop', fields: { [sourceField]: 'serial-2', [manualField]: 'operator device' } });
+    expect(deviceB.id).not.toBe(deviceA.id);
+    expect(assets.get('manual-only')).toEqual({ id: 'manual-only', name: 'Operator asset', fields: { note: 'keep' }, manualOnly: true });
   });
 });

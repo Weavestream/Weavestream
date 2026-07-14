@@ -72,7 +72,8 @@ describe('IntegrationSyncService.beginRun', () => {
       $transaction: jest.fn(async (callback: (client: typeof tx) => Promise<void>) => callback(tx)),
     };
     const service = new IntegrationSyncService(
-      prisma as never, {} as never, { get: jest.fn().mockReturnValue({ add }) } as never, {} as never,
+      prisma as never, {} as never, { get: jest.fn().mockReturnValue({ add }) } as never,
+      { get: jest.fn().mockReturnValue({ listSourceOrgs: jest.fn() }) } as never,
     );
     const result = await service.beginRun('run');
     expect(result.jobs).toHaveLength(2);
@@ -85,5 +86,44 @@ describe('IntegrationSyncService.beginRun', () => {
       }),
       expect.objectContaining({ attempts: 3 }),
     );
+    expect(prisma.integrationCompanyMapping.findMany).toHaveBeenCalledWith({
+      where: { integrationId: 'integration', enabled: true },
+      select: { id: true, companyId: true },
+    });
+  });
+
+  it('skips an upstream organization that has no persisted enabled company mapping', async () => {
+    const add = jest.fn();
+    const listSourceOrgs = jest.fn().mockResolvedValue([
+      { externalId: 'mapped-org', name: 'Mapped' },
+      { externalId: 'unmapped-org', name: 'Unmapped' },
+    ]);
+    const tx = {
+      integrationSyncRun: { update: jest.fn() },
+      integrationSyncRunCompanyResult: { upsert: jest.fn() },
+    };
+    const prisma = {
+      integrationSyncRun: { findUnique: jest.fn().mockResolvedValue({
+        id: 'run', integrationId: 'integration', dryRun: false, status: 'queued',
+        triggeredBy: 'actor', integration: { createdBy: 'creator' },
+      }) },
+      integrationCompanyMapping: { findMany: jest.fn().mockResolvedValue([
+        { id: 'persisted-mapping', companyId: 'company-a' },
+      ]) },
+      integrationResource: { findMany: jest.fn().mockResolvedValue([
+        { id: 'sites', resourceKey: 'sites', dependsOnResourceKeys: [] },
+      ]) },
+      $transaction: jest.fn(async (callback: (client: typeof tx) => Promise<void>) => callback(tx)),
+    };
+    const service = new IntegrationSyncService(
+      prisma as never, {} as never, { get: jest.fn().mockReturnValue({ add }) } as never,
+      { get: jest.fn().mockReturnValue({ listSourceOrgs }) } as never,
+    );
+
+    const result = await service.beginRun('run');
+
+    expect(result.jobs.map((job) => job.mappingId)).toEqual(['persisted-mapping']);
+    expect(add).toHaveBeenCalledTimes(1);
+    expect(listSourceOrgs).not.toHaveBeenCalled();
   });
 });

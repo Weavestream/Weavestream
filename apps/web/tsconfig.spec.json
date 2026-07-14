@@ -6,8 +6,9 @@
     "module": "CommonJS",
     "moduleResolution": "Node",
     "incremental": false,
-    "types": ["node", "jest"]
+    "jsx": "react-jsx",
+    "types": ["node", "jest", "@testing-library/jest-dom"]
   },
-  "include": ["src/**/*.ts"],
+  "include": ["src/**/*.ts", "src/**/*.tsx"],
   "exclude": ["node_modules"]
 }

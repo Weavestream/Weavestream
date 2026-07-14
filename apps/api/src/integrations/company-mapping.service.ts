@@ -129,7 +129,11 @@ export class IntegrationCompanyMappingService {
   ): Promise<IntegrationCompanyMappingDto> {
     const existing = await this.loadMapping(integrationId, mappingId);
 
-    if (input.companyId) await this.assertCompany(input.companyId);
+    if (input.companyId && input.companyId !== existing.companyId) {
+      throw new BadRequestException(
+        'An organization mapping cannot be reassigned to another company. Delete it and create a new mapping instead.',
+      );
+    }
 
     const before = {
       companyId: existing.companyId,
@@ -144,7 +148,6 @@ export class IntegrationCompanyMappingService {
     await this.prisma.integrationCompanyMapping.updateMany({
       where: { id: mappingId, companyId: existing.companyId },
       data: {
-        companyId: input.companyId ?? undefined,
         externalOrgName:
           input.externalOrgName === undefined
             ? undefined
@@ -172,7 +175,7 @@ export class IntegrationCompanyMappingService {
         enabled: fresh.enabled,
         filter: fresh.filter,
       },
-      fields: ['companyId', 'externalOrgName', 'enabled', 'filter'],
+      fields: ['externalOrgName', 'enabled', 'filter'],
     });
     return fresh;
   }
