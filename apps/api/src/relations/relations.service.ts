@@ -55,6 +55,7 @@ export interface UnlinkInput {
 }
 
 export interface IntegrationRelationWriteInput {
+  tx?: Prisma.TransactionClient;
   companyId: string;
   integrationId: string;
   integrationCompanyMappingId: string;
@@ -199,6 +200,8 @@ export class RelationsService implements RelationPort {
   async writeFromIntegration(
     input: IntegrationRelationWriteInput,
   ): Promise<IntegrationRelationWriteResult> {
+    const runTransaction = <T>(callback: (tx: Prisma.TransactionClient) => Promise<T>) =>
+      input.tx ? callback(input.tx) : this.prisma.$transaction(callback);
     if (!this.audit) throw new Error('Integration relation audit service is unavailable.');
     await this.audit.assertIntegrationActor(input.auditActorId, input.companyId);
     const sourceKind = TYPE_TO_KIND[input.sourceType];
@@ -251,7 +254,7 @@ export class RelationsService implements RelationPort {
       bound.targetId === key.targetId &&
       bound.relationType === key.relationType;
     if (bound && (input.dryRun || sameComposite)) {
-      if (!(await this.hasEligibleRelationBinding(this.prisma, input, bound.id))) {
+      if (!(await this.hasEligibleRelationBinding(input.tx ?? this.prisma, input, bound.id))) {
         return relationBlocked(input.companyId, 'ambiguous', 'The existing relation is not owned by an eligible reconstruction binding.', 'manual_ownership', bound.id, 1);
       }
     }
@@ -266,7 +269,7 @@ export class RelationsService implements RelationPort {
       return { targetId: bound.id, companyId: input.companyId, change: 'unchanged' };
     }
 
-    const outcome = await this.prisma.$transaction(async (tx) => {
+    const outcome = await runTransaction(async (tx) => {
       if (bound && !(await this.hasEligibleRelationBinding(tx, input, bound.id))) {
         return { blocked: true as const, targetId: bound.id };
       }

@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import type { Prisma } from '@prisma/client';
 import {
   createIpReservationSchema,
   createSubnetSchema,
@@ -26,6 +27,7 @@ import {
 } from './reconstruction-target.js';
 
 export interface SubnetIntegrationWriteInput {
+  tx?: Prisma.TransactionClient;
   companyId: string;
   integrationId: string;
   integrationCompanyMappingId: string;
@@ -44,6 +46,7 @@ export interface SubnetIntegrationWriteInput {
 }
 
 export interface ReservationIntegrationWriteInput {
+  tx?: Prisma.TransactionClient;
   companyId: string;
   integrationId: string;
   integrationCompanyMappingId: string;
@@ -106,6 +109,7 @@ export class SubnetTargetWriter implements ReconstructionWriter<SubnetReconstruc
     if (gap) return blockedOutcome(ctx, input, gap);
     try {
       const result = await this.ipam.writeSubnetFromIntegration({
+        tx: ctx.tx,
         companyId: ctx.companyId,
         integrationId: ctx.integrationId,
         integrationCompanyMappingId: ctx.integrationCompanyMappingId,
@@ -191,6 +195,7 @@ export class IpReservationTargetWriter
     }
     try {
       const result = await this.ipam.writeReservationFromIntegration({
+        tx: ctx.tx,
         companyId: ctx.companyId,
         integrationId: ctx.integrationId,
         integrationCompanyMappingId: ctx.integrationCompanyMappingId,

@@ -6,6 +6,11 @@ import type {
   TicketListFilter,
   TicketListResponse,
 } from '@weavestream/shared';
+import type {
+  ReconstructionGapDetails,
+  ReconstructionInput,
+} from '../reconstruction/reconstruction-target.js';
+import type { ReconstructionGapKind } from '@weavestream/shared';
 
 /**
  * Phase 11 — universal integration driver port.
@@ -70,6 +75,9 @@ export interface FetchRecordsContext extends IntegrationContext {
   readonly resourceKey: string;
   /** Mapping-level filter blob (driver-validated). */
   readonly filter: Record<string, unknown>;
+  readonly mode: 'incremental' | 'full';
+  readonly updatedSince: string | null;
+  readonly snapshotAt: string | null;
 }
 
 /**
@@ -77,7 +85,8 @@ export interface FetchRecordsContext extends IntegrationContext {
  * own field names. The framework projects this through
  * `IntegrationFieldMapping` rows onto Weavestream `AssetField` slugs.
  */
-export interface DriverRecord {
+export interface LegacyDriverRecord {
+  readonly reconstructionInput?: undefined;
   /** Stable, unique-within-org external id (Action1 endpoint id). */
   externalId: string;
   /** Driver-side display name; used as the asset's primary name fallback. */
@@ -86,6 +95,23 @@ export interface DriverRecord {
   fields: Record<string, unknown>;
   /** Optional driver-emitted last-modified hint (UTC ISO). */
   updatedAt: string | null;
+}
+
+export interface TypedDriverRecord {
+  readonly reconstructionInput: ReconstructionInput;
+  readonly externalId?: never;
+  readonly displayName?: never;
+  readonly fields?: never;
+  readonly updatedAt?: never;
+}
+
+export type DriverRecord = LegacyDriverRecord | TypedDriverRecord;
+
+export interface DriverBlockedInput {
+  kind: ReconstructionGapKind;
+  externalId: string | null;
+  message: string;
+  details?: ReconstructionGapDetails;
 }
 
 /**
@@ -98,6 +124,15 @@ export interface DriverFetchPage {
   hasMore: boolean;
   /** Opaque cursor for the next call. */
   cursor: string | null;
+  schemaVersion?: string;
+  snapshotAt?: string | null;
+  blockedInputs?: DriverBlockedInput[];
+  sourceHighWater?: string | null;
+  terminal?: boolean;
+}
+
+export interface LegacyDriverFetchPage extends Omit<DriverFetchPage, 'records'> {
+  records: LegacyDriverRecord[];
 }
 
 export class DriverAuthError extends Error {

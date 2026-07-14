@@ -270,6 +270,7 @@ export const integrationSyncMappingJobSchema = z.object({
   mode: z.enum(['incremental', 'full']).default('incremental'),
   stageIndex: z.number().int().nonnegative().optional(),
   resourceIds: z.array(z.string().uuid()).max(64).optional(),
+  auditActorId: z.string().uuid().nullable().optional(),
   dryRun: z.boolean().default(false),
 }).superRefine((job, ctx) => {
   if (job.resourceIds && new Set(job.resourceIds).size !== job.resourceIds.length) {

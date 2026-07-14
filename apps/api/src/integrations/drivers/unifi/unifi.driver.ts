@@ -7,8 +7,8 @@ import type {
 } from '@weavestream/shared';
 import {
   DriverAuthError,
-  type DriverFetchPage,
-  type DriverRecord,
+  type LegacyDriverFetchPage,
+  type LegacyDriverRecord,
   type FetchRecordsContext,
   type IntegrationContext,
   type IntegrationDriver,
@@ -271,7 +271,7 @@ export class UniFiSiteManagerDriver implements IntegrationDriver {
   async fetchRecords(
     ctx: FetchRecordsContext,
     cursor: string | null,
-  ): Promise<DriverFetchPage> {
+  ): Promise<LegacyDriverFetchPage> {
     const resourceKey = ctx.resourceKey || UNIFI_RESOURCE_DEVICES;
     if (resourceKey === UNIFI_RESOURCE_CLIENTS) {
       return this.fetchClientsRecords(ctx, cursor);
@@ -286,7 +286,7 @@ export class UniFiSiteManagerDriver implements IntegrationDriver {
   private async fetchDeviceRecords(
     ctx: FetchRecordsContext,
     cursor: string | null,
-  ): Promise<DriverFetchPage> {
+  ): Promise<LegacyDriverFetchPage> {
     const filter = unifiFilterSchema.parse(ctx.filter ?? {});
     const body = await this.fetchDevicesPage(
       ctx,
@@ -295,7 +295,7 @@ export class UniFiSiteManagerDriver implements IntegrationDriver {
       cursor,
     );
 
-    const records: DriverRecord[] = [];
+    const records: LegacyDriverRecord[] = [];
     for (const group of pageItems(body)) {
       const hostId = readString(group, ['hostId', 'host_id']);
       if (hostId !== ctx.externalOrgId) continue;
@@ -440,7 +440,7 @@ export class UniFiSiteManagerDriver implements IntegrationDriver {
       hostName: string | null;
       hostUpdatedAt: string | null;
     },
-  ): DriverRecord | null {
+  ): LegacyDriverRecord | null {
     const fields = flattenPrimitives(device, {
       hostId: parent.hostId,
       hostName: parent.hostName,
@@ -485,7 +485,7 @@ export class UniFiSiteManagerDriver implements IntegrationDriver {
   private async fetchClientsRecords(
     ctx: FetchRecordsContext,
     cursor: string | null,
-  ): Promise<DriverFetchPage> {
+  ): Promise<LegacyDriverFetchPage> {
     const consoleId = ctx.externalOrgId;
     let walker = decodeClientCursor(cursor);
     if (!walker) {
@@ -509,7 +509,7 @@ export class UniFiSiteManagerDriver implements IntegrationDriver {
         walker.offset,
       );
       const items = page.data ?? [];
-      const records: DriverRecord[] = [];
+      const records: LegacyDriverRecord[] = [];
       for (const client of items) {
         const record = this.toClientRecord(client, {
           consoleId,
@@ -610,7 +610,7 @@ export class UniFiSiteManagerDriver implements IntegrationDriver {
       siteId: string;
       siteName: string | null;
     },
-  ): DriverRecord | null {
+  ): LegacyDriverRecord | null {
     const fields = flattenPrimitives(client, {});
     // The list endpoint exposes `access` as an object — unwrap it to
     // a primitive `accessType` so it can be mapped to a TEXT field

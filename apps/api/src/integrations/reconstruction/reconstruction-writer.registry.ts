@@ -20,6 +20,10 @@ export class ReconstructionWriterRegistry {
     this.writers.set(writer.targetKind, writer as ReconstructionWriter<never>);
   }
 
+  has(targetKind: IntegrationTargetKind): boolean {
+    return this.writers.has(targetKind);
+  }
+
   get<T extends ReconstructionInput>(targetKind: T['targetKind']): ReconstructionWriter<T> {
     const writer = this.writers.get(targetKind);
     if (!writer) throw new Error(`No reconstruction writer registered for ${targetKind}.`);

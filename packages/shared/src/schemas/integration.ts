@@ -771,7 +771,11 @@ const baseSyncRunTotalsShape = {
   errors: z.number().int().nonnegative().default(0),
 } as const;
 
-export const syncRunResourceTotalsSchema = z.object(baseSyncRunTotalsShape);
+export const syncRunResourceTotalsSchema = z.object({
+  ...baseSyncRunTotalsShape,
+  /** Internal mapping-job state used to make whole-DAG retries replacement-based. */
+  status: z.enum(['succeeded', 'failed']).optional(),
+});
 export type SyncRunResourceTotals = z.infer<typeof syncRunResourceTotalsSchema>;
 
 export const syncRunTotalsSchema = z.object({

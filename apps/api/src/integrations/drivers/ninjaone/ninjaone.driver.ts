@@ -15,8 +15,8 @@ import type {
 } from '@weavestream/shared';
 import {
   DriverAuthError,
-  type DriverFetchPage,
-  type DriverRecord,
+  type LegacyDriverFetchPage,
+  type LegacyDriverRecord,
   type FetchRecordsContext,
   type IntegrationContext,
   type IntegrationDriver,
@@ -542,7 +542,7 @@ export class NinjaOneDriver implements IntegrationDriver {
   async fetchRecords(
     ctx: FetchRecordsContext,
     cursor: string | null,
-  ): Promise<DriverFetchPage> {
+  ): Promise<LegacyDriverFetchPage> {
     assertExpectedResourceKey(ctx.resourceKey);
     const { baseUrl } = parseConfig(ctx.config);
     const token = await this.getAccessToken(ctx);
@@ -607,7 +607,7 @@ export class NinjaOneDriver implements IntegrationDriver {
         )
       : resourceScoped;
 
-    const records: DriverRecord[] = filtered.map((d) => {
+    const records: LegacyDriverRecord[] = filtered.map((d) => {
       const fields = normalizeNinjaOneRecordFields(d);
       return {
         externalId: String(d.id),

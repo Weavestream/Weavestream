@@ -40,6 +40,7 @@ const reservationInput: IpReservationReconstructionInput = {
 
 function context(resourceKey: string, overrides: Partial<ReconstructionWriteContext> = {}): ReconstructionWriteContext {
   const ctx: ReconstructionWriteContext = {
+    tx: {} as never,
     companyId: ids.company,
     integrationId: ids.integration,
     integrationCompanyMappingId: ids.mapping,

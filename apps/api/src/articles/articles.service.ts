@@ -37,6 +37,7 @@ export interface AuditMeta {
 }
 
 export interface IntegrationArticleWriteInput {
+  tx?: Prisma.TransactionClient;
   companyId: string;
   integrationId: string;
   integrationCompanyMappingId: string;
@@ -662,6 +663,8 @@ export class ArticlesService {
   async writeFromIntegration(
     input: IntegrationArticleWriteInput,
   ): Promise<IntegrationArticleWriteResult> {
+    const runTransaction = <T>(callback: (tx: Prisma.TransactionClient) => Promise<T>) =>
+      input.tx ? callback(input.tx) : this.prisma.$transaction(callback);
     await this.audit.assertIntegrationActor(input.auditActorId, input.companyId);
     let native: Extract<CreateArticleInput, { editorMode: 'markdown' }>;
     try {
@@ -738,7 +741,7 @@ export class ArticlesService {
       bound.editorMode !== data.editorMode ||
       bound.markdownSource !== data.markdownSource;
     if (bound && (input.dryRun || (!changed && !restored))) {
-      if (!(await this.hasEligibleArticleBinding(this.prisma, input, bound.id))) {
+      if (!(await this.hasEligibleArticleBinding(input.tx ?? this.prisma, input, bound.id))) {
         return articleBlocked(input.companyId, 'ambiguous', 'The existing article is not owned by an eligible reconstruction binding.', 'manual_ownership', bound.id, 1);
       }
     }
@@ -753,7 +756,7 @@ export class ArticlesService {
     let article: Article;
     let change: IntegrationArticleWriteResult['change'];
     if (!bound) {
-      article = await this.prisma.$transaction(async (tx) => {
+      article = await runTransaction(async (tx) => {
         const row = await tx.article.create({
           data: {
             companyId: input.companyId,
@@ -788,7 +791,7 @@ export class ArticlesService {
       });
       change = 'created';
     } else if (changed || restored) {
-      const outcome = await this.prisma.$transaction(async (tx) => {
+      const outcome = await runTransaction(async (tx) => {
         if (!(await this.hasEligibleArticleBinding(tx, input, bound.id))) {
           return { blocked: true as const };
         }

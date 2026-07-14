@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import type { IntegrationSyncDirectionValue } from '@weavestream/shared';
+import type { Prisma } from '@prisma/client';
 import { scanSensitiveMaterial } from '../sensitive-material.js';
 import {
   assetReconstructionInputSchema,
@@ -22,6 +23,7 @@ import {
 } from './reconstruction-target.js';
 
 export interface AssetIntegrationWriteInput {
+  tx?: Prisma.TransactionClient;
   companyId: string;
   integrationId: string;
   integrationCompanyMappingId: string;
@@ -120,6 +122,7 @@ export class AssetTargetWriter implements ReconstructionWriter<AssetReconstructi
 
     try {
       const result = await this.assets.writeFromIntegration({
+        tx: ctx.tx,
         companyId: ctx.companyId,
         integrationId: ctx.integrationId,
         integrationCompanyMappingId: ctx.integrationCompanyMappingId,

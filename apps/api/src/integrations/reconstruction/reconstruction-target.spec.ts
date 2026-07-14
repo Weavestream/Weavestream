@@ -29,6 +29,7 @@ const input: AssetReconstructionInput = {
 
 function context(overrides: Partial<ReconstructionWriteContext> = {}): ReconstructionWriteContext {
   return {
+    tx: {} as never,
     companyId: ids.company,
     integrationId: ids.integration,
     integrationCompanyMappingId: ids.mapping,

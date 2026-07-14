@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
+import type { Prisma } from '@prisma/client';
 import {
   integrationProvenanceSchema,
   type IntegrationSyncDirectionValue,
@@ -176,6 +177,7 @@ export interface ResolvedReconstructionTarget {
 }
 
 export interface ReconstructionWriteContext {
+  tx: Prisma.TransactionClient;
   companyId: string;
   integrationId: string;
   integrationCompanyMappingId: string;

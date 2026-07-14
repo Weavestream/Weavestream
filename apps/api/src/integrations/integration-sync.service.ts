@@ -148,8 +148,10 @@ export class IntegrationSyncService {
       where: {
         integrationId,
         enabled: true,
-        assetLayoutId: { not: null },
-        fieldMappings: { some: {} },
+        OR: [
+          { targetKind: { not: 'asset' } },
+          { targetKind: 'asset', assetLayoutId: { not: null }, fieldMappings: { some: {} } },
+        ],
       },
     });
     if (enabledResourceCount === 0) {
@@ -218,8 +220,9 @@ export class IntegrationSyncService {
     jobs: Array<{
       mappingId: string;
       resourceId: string;
-      resourceKey: string;
+      resourceIds: string[];
       companyId: string;
+      auditActorId: string | null;
     }>;
   }> {
     const run = await this.prisma.integrationSyncRun.findUnique({
@@ -229,6 +232,8 @@ export class IntegrationSyncService {
         integrationId: true,
         dryRun: true,
         status: true,
+        triggeredBy: true,
+        integration: { select: { createdBy: true } },
       },
     });
     if (!run) throw new NotFoundException(`Sync run ${runId} not found`);
@@ -246,23 +251,31 @@ export class IntegrationSyncService {
       where: {
         integrationId: run.integrationId,
         enabled: true,
-        // Skip half-configured resources so a missing layout on one
-        // resource doesn't block sync for the other resources of the
-        // same integration.
-        assetLayoutId: { not: null },
-        fieldMappings: { some: {} },
+        OR: [
+          { targetKind: { not: 'asset' } },
+          { targetKind: 'asset', assetLayoutId: { not: null }, fieldMappings: { some: {} } },
+        ],
       },
-      select: { id: true, resourceKey: true },
+      select: { id: true, resourceKey: true, dependsOnResourceKeys: true },
     });
-
-    const jobs = mappings.flatMap((m) =>
-      resources.map((r) => ({
-        mappingId: m.id,
-        resourceId: r.id,
-        resourceKey: r.resourceKey,
-        companyId: m.companyId,
-      })),
-    );
+    let orderedResources = resources;
+    try {
+      orderedResources = buildResourceExecutionStages(resources).flat();
+    } catch {
+      // Missing/disabled dependencies are carried to the worker so it can
+      // produce a visible bounded skip instead of silently omitting them.
+    }
+    const resourceIds = orderedResources.map((resource) => resource.id);
+    const auditActorId = run.triggeredBy ?? run.integration.createdBy ?? null;
+    const jobs = resourceIds.length === 0
+      ? []
+      : mappings.map((mapping) => ({
+          mappingId: mapping.id,
+          resourceId: resourceIds[0]!,
+          resourceIds,
+          companyId: mapping.companyId,
+          auditActorId,
+        }));
 
     await this.prisma.$transaction(async (tx) => {
       await tx.integrationSyncRun.update({
@@ -308,10 +321,12 @@ export class IntegrationSyncService {
           syncRunId: runId,
           integrationCompanyMappingId: job.mappingId,
           resourceId: job.resourceId,
+          resourceIds: job.resourceIds,
+          auditActorId: job.auditActorId,
           dryRun: run.dryRun,
         },
         {
-          jobId: `mapping-${runId}-${job.mappingId}-${job.resourceId}`,
+          jobId: `mapping-${runId}-${job.mappingId}`,
           attempts: 3,
           backoff: { type: 'exponential', delay: 10_000 },
         },
@@ -374,6 +389,7 @@ export class IntegrationSyncService {
         current?.totals,
         args.resourceKey,
         resourceTotals,
+        args.status,
       );
       const existingConflicts = appendConflicts(
         current?.conflicts,
@@ -384,27 +400,17 @@ export class IntegrationSyncService {
         Object.keys(existingTotals.byResource ?? {}),
       );
       const allDone = completedKeys.size >= args.expectedResources;
-      // Aggregate failure: the whole row fails if ANY resource
-      // failed. Otherwise we wait until everyone has reported in.
-      const previousFailure = current?.status === 'failed';
+      const anyResourceFailed = Object.values(
+        existingTotals.byResource ?? {},
+      ).some((resource) => resource.status === 'failed');
       const nextStatus: 'queued' | 'running' | 'succeeded' | 'failed' =
-        args.status === 'failed' || previousFailure
-          ? allDone
-            ? 'failed'
-            : 'running'
-          : allDone
-            ? 'succeeded'
-            : 'running';
+        !allDone ? 'running' : anyResourceFailed ? 'failed' : 'succeeded';
 
-      const mergedError =
-        args.error && current?.error
-          ? `${current.error}\n[${args.resourceKey}] ${args.error}`.slice(
-              0,
-              4_000,
-            )
-          : args.error
-            ? `[${args.resourceKey}] ${args.error}`.slice(0, 4_000)
-            : current?.error ?? null;
+      const mergedError = replaceResourceError(
+        current?.error,
+        args.resourceKey,
+        args.error,
+      );
 
       await tx.integrationSyncRunCompanyResult.update({
         where: { id: current!.id },
@@ -502,6 +508,75 @@ export class IntegrationSyncService {
     });
   }
 
+  /** Final-attempt fallback for mapping jobs that throw outside a resource outcome. */
+  async failMappingJob(args: {
+    runId: string;
+    mappingId: string;
+    error: string;
+    actorId: string | null;
+  }): Promise<void> {
+    const current = await this.prisma.integrationSyncRunCompanyResult.findUnique({
+      where: {
+        syncRunId_integrationCompanyMappingId: {
+          syncRunId: args.runId,
+          integrationCompanyMappingId: args.mappingId,
+        },
+      },
+      select: {
+        id: true,
+        companyId: true,
+        totals: true,
+        conflicts: true,
+        syncRun: {
+          select: {
+            triggeredBy: true,
+            integration: { select: { createdBy: true } },
+          },
+        },
+      },
+    });
+    if (!current) return;
+    const auditActorId =
+      args.actorId ??
+      current.syncRun.triggeredBy ??
+      current.syncRun.integration.createdBy ??
+      null;
+    const parsedTotals = syncRunTotalsSchema.safeParse(current.totals);
+    const totals = parsedTotals.success ? parsedTotals.data : zeroAggregateTotals();
+    totals.errors += 1;
+    const conflicts = appendConflicts(
+      current.conflicts,
+      '__mapping__',
+      [{
+        kind: 'driver_error',
+        externalId: '',
+        message: args.error.slice(0, 500),
+      }],
+    );
+    await this.prisma.integrationSyncRunCompanyResult.update({
+      where: { id: current.id },
+      data: {
+        status: 'failed',
+        finishedAt: new Date(),
+        totals: stripNul(totals) as unknown as Prisma.InputJsonValue,
+        conflicts: stripNul(conflicts) as unknown as Prisma.InputJsonValue,
+        error: stripNul(args.error.slice(0, 4_000)),
+      },
+    });
+    await this.audit.log({
+      actorId: auditActorId,
+      action: AUDIT_ACTIONS.integration.syncMappingFailed,
+      entityType: 'IntegrationCompanyMapping',
+      entityId: args.mappingId,
+      companyId: current.companyId,
+      ip: '0.0.0.0',
+      userAgent: 'worker',
+      before: null,
+      after: { runId: args.runId, error: args.error.slice(0, 4_000) },
+    });
+    await this.closeRun(args.runId, auditActorId);
+  }
+
   /** Worker-side: bail out a run that exploded outside per-mapping scope. */
   async failRun(runId: string, error: string): Promise<void> {
     const run = await this.prisma.integrationSyncRun.findUnique({
@@ -549,6 +624,46 @@ export class IntegrationSyncService {
     });
     return new Map(users.map((u) => [u.id, u]));
   }
+}
+
+export interface ResourceExecutionNode {
+  id: string;
+  resourceKey: string;
+  dependsOnResourceKeys: string[];
+}
+
+export function buildResourceExecutionStages<T extends ResourceExecutionNode>(
+  resources: readonly T[],
+): T[][] {
+  const byKey = new Map(resources.map((resource) => [resource.resourceKey, resource]));
+  if (byKey.size !== resources.length) throw new BadRequestException('Resource keys must be unique.');
+  for (const resource of resources) {
+    for (const dependency of resource.dependsOnResourceKeys) {
+      if (!byKey.has(dependency)) {
+        throw new BadRequestException(
+          `Resource ${resource.resourceKey} has missing dependency ${dependency}.`,
+        );
+      }
+    }
+  }
+  const pending = new Map(byKey);
+  const completed = new Set<string>();
+  const stages: T[][] = [];
+  while (pending.size > 0) {
+    const stage = resources.filter((resource) =>
+      pending.has(resource.resourceKey) &&
+      resource.dependsOnResourceKeys.every((dependency) => completed.has(dependency)),
+    );
+    if (stage.length === 0) {
+      throw new BadRequestException('Resource dependency graph contains a cycle.');
+    }
+    stages.push(stage);
+    for (const resource of stage) {
+      pending.delete(resource.resourceKey);
+      completed.add(resource.resourceKey);
+    }
+  }
+  return stages;
 }
 
 // ---------------------------------------------------------------------
@@ -665,21 +780,18 @@ export function zeroAggregateTotals(): SyncRunTotals {
 /**
  * Fold one resource's per-record counters into the per-mapping result
  * row's `byResource` map AND into the top-level summed counters.
- * Idempotent on a fresh `byResource` entry; each resource only reports
- * once per run so we don't need to deduplicate.
+ * A retry replaces the prior resource entry and the top-level totals are
+ * re-derived from the map, so replay cannot double-count.
  */
-function mergeAggregate(
+export function mergeAggregate(
   raw: unknown,
   resourceKey: string,
   resourceTotals: SyncRunTotals,
+  status: 'succeeded' | 'failed',
 ): SyncRunTotals {
   const acc: SyncRunTotals = zeroAggregateTotals();
   if (raw && typeof raw === 'object') {
     const r = raw as Record<string, unknown>;
-    for (const k of TOTAL_KEYS) {
-      const n = Number(r[k] ?? 0);
-      if (Number.isFinite(n)) acc[k] = n;
-    }
     const existingByResource = r.byResource;
     if (existingByResource && typeof existingByResource === 'object') {
       acc.byResource = {} as Record<string, SyncRunResourceTotals>;
@@ -693,11 +805,11 @@ function mergeAggregate(
           const n = Number(partial[k] ?? 0);
           if (Number.isFinite(n)) totals[k] = n;
         }
+        totals.status = partial.status === 'failed' ? 'failed' : 'succeeded';
         acc.byResource![key] = totals;
       }
     }
   }
-  for (const k of TOTAL_KEYS) acc[k] += resourceTotals[k];
   acc.byResource = acc.byResource ?? {};
   acc.byResource[resourceKey] = {
     fetched: resourceTotals.fetched,
@@ -715,7 +827,11 @@ function mergeAggregate(
     secretBlocked: resourceTotals.secretBlocked,
     missingDependency: resourceTotals.missingDependency,
     errors: resourceTotals.errors,
+    status,
   };
+  for (const totals of Object.values(acc.byResource)) {
+    for (const k of TOTAL_KEYS) acc[k] += totals[k];
+  }
   return acc;
 }
 
@@ -732,7 +848,20 @@ function appendConflicts(
     ? (raw as ConflictWithResource[])
     : [];
   return [
-    ...existing,
+    ...existing.filter((conflict) => conflict.resourceKey !== resourceKey),
     ...next.map((c) => ({ ...c, resourceKey })),
   ];
+}
+
+function replaceResourceError(
+  raw: string | null | undefined,
+  resourceKey: string,
+  next: string | null,
+): string | null {
+  const prefix = `[${resourceKey}] `;
+  const retained = (raw ?? '')
+    .split('\n')
+    .filter((line) => line.length > 0 && !line.startsWith(prefix));
+  if (next) retained.push(`${prefix}${next.replace(/\s+/g, ' ')}`);
+  return retained.join('\n').slice(0, 4_000) || null;
 }

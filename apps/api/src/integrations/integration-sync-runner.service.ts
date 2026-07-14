@@ -6,62 +6,51 @@ import {
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { createHash, randomUUID } from 'node:crypto';
-import { integrationTransformSchema, stripNul } from '@weavestream/shared';
-import type { SyncRunConflict, SyncRunTotals } from '@weavestream/shared';
+import {
+  integrationProvenanceSchema,
+  integrationReconstructionGapInputSchema,
+  integrationTransformSchema,
+  stripNul,
+} from '@weavestream/shared';
+import type {
+  SafeIntegrationProvenance,
+  SyncRunConflict,
+  SyncRunTotals,
+} from '@weavestream/shared';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { AuditLogService } from '../audit/audit.service.js';
-import { AUDIT_ACTIONS } from '../audit/audit-actions.js';
-import { FieldTypesRegistry } from '../field-types/field-types.registry.js';
-import { SearchIndexService } from '../search/search-index.service.js';
 import { EnvService } from '../config/env.service.js';
 import { IntegrationsService } from './integrations.service.js';
 import { IntegrationDriverRegistry } from './drivers/integration-driver.registry.js';
 import {
-  MatchResolverService,
-  type MatchResolution,
-} from './match-resolver.service.js';
-import {
-  DriverAuthError,
-  DriverRateLimitError,
   type DriverFetchPage,
+  type DriverBlockedInput,
   type DriverRecord,
   type FetchRecordsContext,
 } from './drivers/integration-driver.js';
 import { describeError } from '../common/describe-error.js';
+import { IntegrationTransformService } from './transforms/integration-transform.service.js';
+import { ReconstructionWriterRegistry } from './reconstruction/reconstruction-writer.registry.js';
+import {
+  type AssetReconstructionInput,
+  type ReconstructionDependencyRef,
+  type ReconstructionInput,
+  type ReconstructionWriteContext,
+  type ReconstructionWriteOutcome,
+  type ReconstructionWriter,
+} from './reconstruction/reconstruction-target.js';
 
-/**
- * Phase 11 — per-mapping sync execution.
- *
- * Driven by the worker's mapping processor (one BullMQ job per
- * (run, mapping)). The runner:
- *   1. Loads the mapping + integration + decoded driver context.
- *   2. Pages the driver until exhaustion.
- *   3. For each record:
- *      a. Asks `MatchResolverService` what to do.
- *      b. Creates / claims / updates / records-conflict accordingly.
- *      c. Writes the per-field values respecting `syncDirection`
- *         (`source_wins` overwrites, `preserve_manual` skips fields the
- *         operator edited since the last sync, `manual_only` is never
- *         touched and stripped from the projected set).
- *   4. Optionally archives any sync-record whose externalId disappeared
- *      from the source (only when the driver returned a complete page —
- *      otherwise the run could prune live records).
- *
- * SUPER_ADMIN-impersonating tenant context — set per record so the
- * Prisma tenant-scope middleware enforces the per-row companyId
- * filter (writes only land in the mapping's company).
- */
-
-const SYSTEM_AUDIT_USER_AGENT = 'weavestream-worker/integration-sync';
+/** Executes one resource inside a mapping DAG through its native writer. */
 
 export interface MappingRunInput {
   syncRunId: string;
   integrationCompanyMappingId: string;
-  /** Phase 11.1 — single resource per job (orchestrator fans out per mapping × resource). */
+  /** Resource selected by the per-mapping DAG worker. */
   resourceId: string;
   dryRun: boolean;
   /** Triggered-by user id for audit attribution; null on scheduled runs. */
   actorId: string | null;
+  mode?: 'incremental' | 'full';
 }
 
 export interface MappingRunOutcome {
@@ -75,6 +64,106 @@ export interface MappingRunOutcome {
   resourceKey: string;
 }
 
+export interface ValidatedDriverFetchPage {
+  records: DriverRecord[];
+  hasMore: boolean;
+  cursor: string | null;
+  schemaVersion: string;
+  snapshotAt: string;
+  blockedInputs: DriverBlockedInput[];
+  sourceHighWater: string | null;
+  terminal: boolean;
+}
+
+export function validateDriverFetchPage(
+  page: Partial<DriverFetchPage> & Pick<DriverFetchPage, 'records' | 'hasMore' | 'cursor'>,
+  state: {
+    traversalStartedAt: string;
+    previousCursor: string | null;
+    expectedSchemaVersion: string | null;
+    expectedSnapshotAt: string | null;
+  },
+): ValidatedDriverFetchPage {
+  if (!Array.isArray(page.records) || page.records.length > 10_000) {
+    throw new BadRequestException('Driver page records are invalid or unbounded.');
+  }
+  const schemaVersion = page.schemaVersion ?? 'legacy';
+  if (schemaVersion.length < 1 || schemaVersion.length > 32) {
+    throw new BadRequestException('Driver page schemaVersion must contain 1 to 32 characters.');
+  }
+  const snapshotAt = page.snapshotAt ?? state.expectedSnapshotAt ?? state.traversalStartedAt;
+  assertIsoDate(snapshotAt, 'snapshotAt');
+  if (page.sourceHighWater != null) assertIsoDate(page.sourceHighWater, 'sourceHighWater');
+  const terminal = page.terminal ?? (!page.hasMore && page.cursor === null);
+  if (page.hasMore && (page.cursor === null || terminal)) {
+    throw new BadRequestException('A nonterminal driver page requires a non-null cursor.');
+  }
+  if (terminal && (page.hasMore || page.cursor !== null)) {
+    throw new BadRequestException('A terminal driver page requires hasMore=false and cursor=null.');
+  }
+  if (page.cursor !== null && page.cursor === state.previousCursor) {
+    throw new BadRequestException('Driver page cursor did not advance.');
+  }
+  if (state.expectedSchemaVersion && schemaVersion !== state.expectedSchemaVersion) {
+    throw new BadRequestException('Driver page schemaVersion must remain stable across pages.');
+  }
+  if (state.expectedSnapshotAt && snapshotAt !== state.expectedSnapshotAt) {
+    throw new BadRequestException('Driver page snapshotAt must remain stable across pages.');
+  }
+  if (page.sourceHighWater && page.sourceHighWater > snapshotAt) {
+    throw new BadRequestException('Driver page sourceHighWater cannot exceed snapshotAt.');
+  }
+  const blockedInputs = page.blockedInputs ?? [];
+  if (!Array.isArray(blockedInputs) || blockedInputs.length > 1_000) {
+    throw new BadRequestException('Driver blockedInputs must contain at most 1000 entries.');
+  }
+  for (const blocked of blockedInputs) {
+    if (
+      !blocked ||
+      blocked.message.length < 1 ||
+      blocked.message.length > 512 ||
+      (blocked.externalId !== null && blocked.externalId.length > 1_024)
+    ) {
+      throw new BadRequestException('Driver blocked input metadata is invalid or unbounded.');
+    }
+    const at = state.traversalStartedAt;
+    const parsed = integrationReconstructionGapInputSchema.safeParse({
+      companyId: '00000000-0000-0000-0000-000000000000',
+      integrationCompanyMappingId: '00000000-0000-0000-0000-000000000000',
+      resourceId: '00000000-0000-0000-0000-000000000000',
+      externalId: blocked.externalId,
+      kind: blocked.kind,
+      message: blocked.message,
+      details: blocked.details ?? {},
+      firstSeenAt: at,
+      lastSeenAt: at,
+      resolvedAt: null,
+    });
+    if (!parsed.success) {
+      throw new BadRequestException('Driver blocked input metadata is not sanitized.');
+    }
+  }
+  return {
+    records: page.records,
+    hasMore: page.hasMore,
+    cursor: page.cursor,
+    schemaVersion,
+    snapshotAt,
+    blockedInputs,
+    sourceHighWater: page.sourceHighWater ?? null,
+    terminal,
+  };
+}
+
+function assertIsoDate(value: string, field: string): void {
+  if (typeof value !== 'string' || !Number.isFinite(Date.parse(value))) {
+    throw new BadRequestException(`Driver page ${field} must be an ISO date.`);
+  }
+  if (new Date(value).toISOString() !== value) {
+    throw new BadRequestException(`Driver page ${field} must be a canonical ISO date.`);
+  }
+}
+
 @Injectable()
 export class IntegrationSyncRunnerService {
   private readonly logger = new Logger(IntegrationSyncRunnerService.name);
@@ -83,17 +172,15 @@ export class IntegrationSyncRunnerService {
     private readonly prisma: PrismaService,
     private readonly env: EnvService,
     private readonly audit: AuditLogService,
-    private readonly fieldTypes: FieldTypesRegistry,
-    private readonly searchIndex: SearchIndexService,
     private readonly integrations: IntegrationsService,
     private readonly drivers: IntegrationDriverRegistry,
-    private readonly matchResolver: MatchResolverService,
+    private readonly transforms: IntegrationTransformService,
+    private readonly writers: ReconstructionWriterRegistry,
   ) {}
 
   async runMapping(input: MappingRunInput): Promise<MappingRunOutcome> {
-    const totals: SyncRunTotals = emptyTotals();
+    const totals = emptyTotals();
     const conflicts: SyncRunConflict[] = [];
-
     const mapping = await this.prisma.integrationCompanyMapping.findUnique({
       where: { id: input.integrationCompanyMappingId },
       include: { integration: { select: { id: true, driver: true } } },
@@ -103,84 +190,73 @@ export class IntegrationSyncRunnerService {
         `IntegrationCompanyMapping ${input.integrationCompanyMappingId} not found`,
       );
     }
-
-    // Phase 11.1 — every (mapping, resource) pair is its own unit of
-    // work. The resource container carries the asset layout, match
-    // keys, and field mappings; the company mapping carries only the
-    // host↔company linkage shared across resources.
     const resource = await this.prisma.integrationResource.findFirst({
       where: { id: input.resourceId, integrationId: mapping.integrationId },
       include: {
         fieldMappings: {
           include: {
             targetField: {
-              select: {
-                id: true,
-                slug: true,
-                fieldType: true,
-                options: true,
-                archivedAt: true,
-              },
+              select: { id: true, slug: true, fieldType: true, options: true, archivedAt: true },
             },
           },
         },
-        assetLayout: {
-          include: {
-            fields: { orderBy: { position: 'asc' } },
-          },
-        },
+        assetLayout: { include: { fields: { orderBy: { position: 'asc' } } } },
       },
     });
     if (!resource) {
-      throw new NotFoundException(
-        `IntegrationResource ${input.resourceId} not found for integration ${mapping.integrationId}`,
-      );
+      throw new NotFoundException(`IntegrationResource ${input.resourceId} not found.`);
     }
     if (!resource.enabled) {
-      // Disabled resources are skipped silently with a zero-totals
-      // success — the orchestrator should not have enqueued the job
-      // in the first place, but we tolerate races where the operator
-      // disabled the resource between fan-out and execution.
+      return { status: 'succeeded', totals, conflicts, error: null, companyId: mapping.companyId, resourceKey: resource.resourceKey };
+    }
+    if (
+      resource.targetKind === 'asset' &&
+      (!resource.assetLayoutId || !resource.assetLayout || resource.fieldMappings.length === 0)
+    ) {
+      throw new BadRequestException(
+        `Asset resource ${resource.resourceKey} requires an asset layout and field mappings.`,
+      );
+    }
+    if (!input.actorId) {
+      totals.blocked += 1;
+      totals.missingDependency += 1;
+      conflicts.push({
+        kind: 'validation_error', externalId: '',
+        message: 'missing_audit_actor: no authorized integration audit actor is available.',
+      });
+      return { status: 'failed', totals, conflicts, error: 'missing_audit_actor', companyId: mapping.companyId, resourceKey: resource.resourceKey };
+    }
+    try {
+      await this.audit.assertIntegrationActor(input.actorId, mapping.companyId);
+    } catch {
+      totals.blocked += 1;
+      totals.missingDependency += 1;
+      conflicts.push({
+        kind: 'validation_error', externalId: '',
+        message: 'missing_audit_actor: the integration audit actor is not authorized for this company.',
+      });
       return {
-        status: 'succeeded',
-        totals,
-        conflicts,
-        error: null,
-        companyId: mapping.companyId,
-        resourceKey: resource.resourceKey,
+        status: 'failed', totals, conflicts, error: 'missing_audit_actor',
+        companyId: mapping.companyId, resourceKey: resource.resourceKey,
       };
     }
-    if (resource.targetKind !== 'asset') {
-      throw new BadRequestException(
-        `Integration resource "${resource.resourceKey}" targets ${resource.targetKind}; the legacy asset runner only accepts asset targets.`,
-      );
-    }
-    if (!resource.assetLayoutId || !resource.assetLayout) {
-      throw new BadRequestException(
-        `Integration ${mapping.integrationId} resource "${resource.resourceKey}" has no asset layout configured.`,
-      );
-    }
-    if (resource.fieldMappings.length === 0) {
-      throw new BadRequestException(
-        `Integration ${mapping.integrationId} resource "${resource.resourceKey}" has no field mappings configured.`,
-      );
-    }
 
-    const companyId = mapping.companyId;
-    const assetLayoutId = resource.assetLayoutId;
-    const matchKeyFieldIds = resource.matchKeyFieldIds;
-
-    // The worker runs outside a request context — Prisma's tenant
-    // middleware sees `getTenantContext() === undefined` and bypasses
-    // its check (CLI/system path). Every write below carries an
-    // explicit `companyId` so cross-tenant leakage is impossible.
-
+    const mode = input.mode ?? 'incremental';
+    const checkpoint = await this.prisma.integrationSyncCheckpoint.findUnique({
+      where: {
+        integrationCompanyMappingId_resourceId_mode: {
+          integrationCompanyMappingId: mapping.id,
+          resourceId: resource.id,
+          mode,
+        },
+      },
+    });
     const driver = this.drivers.get(mapping.integration.driver);
-    const ctx = await this.integrations.loadDriverContext(mapping.integrationId);
-
+    const loaded = await this.integrations.loadDriverContext(mapping.integrationId);
+    const traversalStartedAt = new Date().toISOString();
     const fetchCtx: FetchRecordsContext = {
-      config: ctx.config,
-      secret: ctx.secret,
+      config: loaded.config,
+      secret: loaded.secret,
       http: {
         timeoutMs: this.env.values.INTEGRATION_HTTP_TIMEOUT_MS,
         maxRetries: this.env.values.INTEGRATION_HTTP_MAX_RETRIES,
@@ -190,897 +266,508 @@ export class IntegrationSyncRunnerService {
       externalOrgId: mapping.externalOrgId,
       resourceKey: resource.resourceKey,
       filter: (mapping.filter ?? {}) as Record<string, unknown>,
+      mode,
+      updatedSince:
+        mode === 'incremental' && checkpoint?.highWaterAt
+          ? checkpoint.highWaterAt.toISOString()
+          : null,
+      snapshotAt:
+        checkpoint?.cursor !== null && checkpoint?.cursor !== undefined && checkpoint.snapshotAt
+          ? checkpoint.snapshotAt.toISOString()
+          : null,
     };
 
-    const writableMappings = resource.fieldMappings.filter(
-      (
-        m,
-      ): m is typeof m & {
-        targetField: NonNullable<typeof m.targetField>;
-      } =>
-        m.targetKind === 'asset' &&
-        m.targetField !== null &&
-        m.targetField.archivedAt === null &&
-        m.syncDirection !== 'manual_only',
-    );
-
-    // Fingerprint of the projection config — included in every
-    // per-record checksum so a mapping change (re-pick of source key,
-    // direction flip, target re-bind) invalidates the "unchanged"
-    // fast-path and forces every record to be re-projected on the
-    // next run. Without this, fixing a wrong-case source key only
-    // takes effect when Action1 *also* mutates the upstream record
-    // (which can be days/weeks).
-    const mappingFingerprint = computeMappingFingerprint(writableMappings);
-
-    const seenExternalIds = new Set<string>();
-    // Track which mapped source keys ever resolved to a non-null/non-
-    // empty value. Source fields that stay empty across an ENTIRE run
-    // are almost always a misconfiguration (wrong-case key, renamed
-    // upstream column) — silently nulling the target on every record
-    // would be very surprising. We surface a `validation_error`
-    // conflict at the end of the run for each such field so it shows
-    // up in the run viewer instead of staying invisible.
-    const sourceFieldHits = new Map<string, number>();
-    for (const fm of writableMappings) sourceFieldHits.set(fm.sourceField, 0);
-
-    let cursor: string | null = null;
-    let pageCount = 0;
+    let cursor = checkpoint?.cursor ?? null;
+    let schemaVersion: string | null = null;
+    let snapshotAt = checkpoint?.cursor !== null && checkpoint?.cursor !== undefined
+      ? checkpoint.snapshotAt?.toISOString() ?? null
+      : null;
+    let pages = 0;
     try {
       while (true) {
-        const page: DriverFetchPage = await driver.fetchRecords(
-          fetchCtx,
+        const rawPage = await driver.fetchRecords(
+          { ...fetchCtx, snapshotAt },
           cursor,
         );
-        pageCount += 1;
-        for (const rawRecord of page.records) {
-          // Strip NUL bytes (U+0000) up front: Postgres rejects them in
-          // text/jsonb (SQLSTATE 22P05), and upstream RMM records can carry
-          // stray NULs in externalIds, display names, or field values. This
-          // keeps both the asset write and the run-result bookkeeping safe.
-          const record = stripNul(rawRecord);
-          totals.fetched += 1;
-          seenExternalIds.add(record.externalId);
-          for (const fm of writableMappings) {
-            const v = record.fields[fm.sourceField];
-            if (v !== null && v !== undefined && v !== '') {
-              sourceFieldHits.set(
-                fm.sourceField,
-                (sourceFieldHits.get(fm.sourceField) ?? 0) + 1,
-              );
-            }
-          }
-          try {
-            await this.processRecord({
-              mapping: {
-                id: mapping.id,
-                companyId,
-                integrationId: mapping.integrationId,
-                integrationDriver: mapping.integration.driver,
-                resourceId: resource.id,
-                assetLayoutId,
-                matchKeyFieldIds,
-              },
-              syncRunId: input.syncRunId,
-              dryRun: input.dryRun,
-              actorId: input.actorId,
-              record,
-              writableMappings,
-              mappingFingerprint,
-              totals,
-              conflicts,
-            });
-          } catch (e) {
-            totals.errors += 1;
-            const message = describeError(e);
-            conflicts.push({
-              kind:
-                e instanceof DriverAuthError ||
-                e instanceof DriverRateLimitError
-                  ? 'driver_error'
-                  : 'validation_error',
-              externalId: record.externalId,
-              message: message.slice(0, 500),
-            });
-            this.logger.warn(
-              {
-                err: message,
-                mappingId: mapping.id,
-                externalId: record.externalId,
-              },
-              'integration-sync: record failed',
-            );
-            if (
-              e instanceof DriverAuthError ||
-              e instanceof DriverRateLimitError
-            ) {
-              throw e;
-            }
-          }
+        const page = validateDriverFetchPage(rawPage, {
+          traversalStartedAt,
+          previousCursor: cursor,
+          expectedSchemaVersion: schemaVersion,
+          expectedSnapshotAt: snapshotAt,
+        });
+        schemaVersion = page.schemaVersion;
+        snapshotAt = page.snapshotAt;
+        if (
+          page.terminal &&
+          page.sourceHighWater &&
+          checkpoint?.highWaterAt &&
+          page.sourceHighWater < checkpoint.highWaterAt.toISOString()
+        ) {
+          throw new BadRequestException('Driver sourceHighWater cannot regress the committed high-water mark.');
         }
-        if (!page.hasMore || pageCount >= 1_000) break;
+        pages += 1;
+        if (pages > 1_000) throw new BadRequestException('Driver traversal exceeded 1000 pages.');
+
+        const pageTotals = emptyTotals();
+        const pageConflicts: SyncRunConflict[] = [];
+        const processPage = async (tx: Prisma.TransactionClient): Promise<void> => {
+          for (const blocked of page.blockedInputs) {
+            if (
+              blocked.kind === 'synchronization_error' &&
+              blocked.details?.retryable === true
+            ) {
+              throw new Error(blocked.message);
+            }
+            this.accumulateBlockedInput(pageTotals, pageConflicts, blocked);
+          }
+          for (const record of page.records) {
+            pageTotals.fetched += 1;
+            let reconstruction: ReconstructionInput;
+            const safeRecord = record.reconstructionInput === undefined
+              ? stripNul(record)
+              : record;
+            try {
+              reconstruction = this.toReconstructionInput(safeRecord, resource, mapping);
+              this.assertTypedIdentity(reconstruction, resource.targetKind, mapping.externalOrgId, resource.resourceKey);
+            } catch (error) {
+              pageTotals.blocked += 1;
+              pageTotals.errors += 1;
+              pageConflicts.push({
+                kind: 'validation_error', externalId: '',
+                message: describeError(error).slice(0, 500),
+              });
+              continue;
+            }
+            const legacyRawId = safeRecord.reconstructionInput === undefined
+              ? safeRecord.externalId
+              : null;
+            const writeNow = new Date();
+            const existing = await this.findAndMigrateBinding(
+              tx,
+              mapping.id,
+              resource.id,
+              reconstruction.externalId,
+              legacyRawId,
+              mapping.integrationId,
+              reconstruction,
+              writeNow,
+            );
+            const writeContext: ReconstructionWriteContext = {
+              tx,
+              companyId: mapping.companyId,
+              integrationId: mapping.integrationId,
+              integrationCompanyMappingId: mapping.id,
+              resourceId: resource.id,
+              resourceKey: resource.resourceKey,
+              externalOrgId: mapping.externalOrgId,
+              auditActorId: input.actorId!,
+              now: writeNow,
+              dryRun: input.dryRun,
+              existingTargetId: targetIdFromBinding(existing),
+              existingState: existing?.state ?? null,
+              previousChecksum: existing?.checksum ?? null,
+              previousFieldChecksums: (existing?.lastSyncedFieldChecksums ?? {}) as Record<string, string>,
+              previousProvenance: parseProvenance(existing?.provenance),
+              resolveBinding: (ref) => this.resolveBinding(tx, mapping.id, mapping.companyId, mapping.integrationId, ref),
+            };
+            const writer = this.writers.get(reconstruction.targetKind) as ReconstructionWriter<ReconstructionInput>;
+            const outcome = await writer.write(writeContext, reconstruction);
+            const retryableGap = outcome.gaps.find(
+              (gap) => gap.kind === 'synchronization_error',
+            );
+            if (retryableGap) throw new Error(retryableGap.message);
+            this.accumulateWriterOutcome(
+              pageTotals,
+              pageConflicts,
+              reconstruction.externalId,
+              outcome,
+            );
+            if (input.dryRun) continue;
+            if (outcome.change === 'blocked') {
+              if (existing) {
+                await tx.integrationSyncRecord.update({
+                  where: { id: existing.id },
+                  data: {
+                    state: 'blocked',
+                    provenance: outcome.provenance as unknown as Prisma.InputJsonValue,
+                    lastSeenAt: writeContext.now,
+                  },
+                });
+              }
+              continue;
+            }
+            await tx.integrationSyncRecord.upsert({
+              where: {
+                integrationCompanyMappingId_resourceId_externalId: {
+                  integrationCompanyMappingId: mapping.id,
+                  resourceId: resource.id,
+                  externalId: reconstruction.externalId,
+                },
+              },
+              create: bindingData(mapping.id, resource.id, mapping.companyId, input.syncRunId, reconstruction, outcome, writeContext.now),
+              update: bindingData(mapping.id, resource.id, mapping.companyId, input.syncRunId, reconstruction, outcome, writeContext.now),
+            });
+          }
+          if (!input.dryRun) {
+            const highWater = page.terminal
+              ? page.sourceHighWater ?? deriveLegacyHighWater(page.records) ?? checkpoint?.highWaterAt?.toISOString() ?? null
+              : checkpoint?.highWaterAt?.toISOString() ?? null;
+            await tx.integrationSyncCheckpoint.upsert({
+              where: {
+                integrationCompanyMappingId_resourceId_mode: {
+                  integrationCompanyMappingId: mapping.id,
+                  resourceId: resource.id,
+                  mode,
+                },
+              },
+              create: {
+                companyId: mapping.companyId, integrationCompanyMappingId: mapping.id,
+                resourceId: resource.id, mode, cursor: page.terminal ? null : page.cursor,
+                snapshotAt: new Date(page.snapshotAt),
+                highWaterAt: highWater ? new Date(highWater) : null,
+                lastCompletedAt: page.terminal ? new Date() : null,
+                lastFullCompletedAt: page.terminal && mode === 'full' ? new Date() : null,
+              },
+              update: {
+                cursor: page.terminal ? null : page.cursor,
+                snapshotAt: new Date(page.snapshotAt),
+                ...(page.terminal ? {
+                  highWaterAt: highWater ? new Date(highWater) : undefined,
+                  lastCompletedAt: new Date(),
+                  ...(mode === 'full' ? { lastFullCompletedAt: new Date() } : {}),
+                } : {}),
+              },
+            });
+          }
+          if (input.dryRun) throw new DryRunPageRollback();
+        };
+        if (input.dryRun) {
+          try {
+            await this.prisma.$transaction(async (tx) => processPage(tx), { timeout: 60_000 });
+          } catch (error) {
+            if (!(error instanceof DryRunPageRollback)) throw error;
+          }
+        } else {
+          await this.prisma.$transaction(async (tx) => processPage(tx), { timeout: 60_000 });
+        }
+        mergePageOutcome(totals, conflicts, pageTotals, pageConflicts);
+        if (page.terminal) break;
+        if (!page.hasMore) {
+          throw new BadRequestException(
+            'Driver traversal ended without a terminal page.',
+          );
+        }
         cursor = page.cursor;
       }
-
-      // Optional: prune external records that disappeared from the source.
-      // Only safe when we walked every page (not in dry run).
-      if (!input.dryRun) {
-        await this.archiveDisappearedRecords({
-          mappingId: mapping.id,
-          resourceId: resource.id,
-          companyId,
-          integrationDriver: mapping.integration.driver,
-          seenExternalIds,
-          totals,
-          actorId: input.actorId,
-        });
-      }
-
-      // Surface mapped source keys that never produced a value. We
-      // require at least one record to have been fetched (otherwise
-      // an empty org would always trip the warning).
-      if (totals.fetched > 0) {
-        for (const [sourceField, hits] of sourceFieldHits) {
-          if (hits > 0) continue;
-          const targetSlug = writableMappings.find(
-            (m) => m.sourceField === sourceField,
-          )?.targetField.slug;
-          conflicts.push({
-            kind: 'validation_error',
-            externalId: '',
-            message:
-              `Source field "${sourceField}" had no value on any of the ${totals.fetched} ` +
-              `record(s) returned by the driver. The mapping to "${targetSlug ?? 'unknown'}" ` +
-              `would have written NULL on every record. Likely a wrong-case key — check ` +
-              `the field-mappings dropdown for the correct upstream key.`,
-          });
-        }
-      }
-
-      return {
-        status: 'succeeded',
-        totals,
-        conflicts,
-        error: null,
-        companyId,
-        resourceKey: resource.resourceKey,
-      };
-    } catch (e) {
-      const message = describeError(e);
-      conflicts.push({
-        kind: 'driver_error',
-        externalId: '',
-        message: message.slice(0, 500),
-      });
-      return {
-        status: 'failed',
-        totals,
-        conflicts,
-        error: message.slice(0, 4_000),
-        companyId,
-        resourceKey: resource.resourceKey,
-      };
+      return { status: 'succeeded', totals, conflicts, error: null, companyId: mapping.companyId, resourceKey: resource.resourceKey };
+    } catch (error) {
+      const message = describeError(error);
+      totals.errors += 1;
+      conflicts.push({ kind: 'driver_error', externalId: '', message: message.slice(0, 500) });
+      return { status: 'failed', totals, conflicts, error: message.slice(0, 4_000), companyId: mapping.companyId, resourceKey: resource.resourceKey };
     }
   }
 
-  // -------------------------------------------------------------------
-  // Per-record pipeline
-  // -------------------------------------------------------------------
-
-  private async processRecord(args: {
-    mapping: {
-      id: string;
-      companyId: string;
-      integrationId: string;
-      integrationDriver: string;
-      resourceId: string;
-      assetLayoutId: string;
-      matchKeyFieldIds: string[];
+  private toReconstructionInput(
+    record: DriverRecord,
+    resource: ResourceForReconstruction,
+    mapping: { externalOrgId: string; integration: { driver: string } },
+  ): ReconstructionInput {
+    if (record.reconstructionInput !== undefined) return record.reconstructionInput;
+    if (resource.targetKind !== 'asset' || !resource.assetLayoutId) {
+      throw new BadRequestException('Legacy driver records may only target asset resources.');
+    }
+    const source = {
+      externalOrgId: mapping.externalOrgId,
+      resourceKey: resource.resourceKey,
+      sourceId: record.externalId,
+      updatedAt: record.updatedAt,
     };
-    syncRunId: string;
-    dryRun: boolean;
-    actorId: string | null;
-    record: DriverRecord;
-    writableMappings: Array<{
-      sourceField: string;
-      syncDirection: 'source_wins' | 'preserve_manual' | 'manual_only';
-      targetField: {
-        id: string;
-        slug: string;
-        fieldType: string;
-        options: unknown;
-      };
-    }>;
-    mappingFingerprint: string;
-    totals: SyncRunTotals;
-    conflicts: SyncRunConflict[];
-  }): Promise<void> {
-    const projected = this.projectFields({
-      record: args.record,
-      writableMappings: args.writableMappings,
-    });
-
-    const resolution = await this.matchResolver.resolve({
-      companyId: args.mapping.companyId,
-      integrationCompanyMappingId: args.mapping.id,
-      resourceId: args.mapping.resourceId,
-      integrationDriver: args.mapping.integrationDriver,
-      externalId: args.record.externalId,
-      source: args.record.fields,
-      fieldMappings: args.writableMappings.map((m) => ({
-        sourceField: m.sourceField,
-        targetField: m.targetField,
-      })),
-      matchKeyFieldIds: args.mapping.matchKeyFieldIds,
-    });
-
-    if (resolution.kind === 'ambiguous') {
-      args.totals.skippedAmbiguous += 1;
-      args.conflicts.push({
-        kind: 'ambiguous_match',
-        externalId: args.record.externalId,
-        message: `Multiple unclaimed assets matched the configured match-key fields.`,
-        candidateAssetIds: resolution.candidateAssetIds,
-      });
-      if (!args.dryRun) {
-        await this.audit.log({
-          actorId: args.actorId,
-          action: AUDIT_ACTIONS.integration.matchAmbiguous,
-          entityType: 'IntegrationCompanyMapping',
-          entityId: args.mapping.id,
-          companyId: args.mapping.companyId,
-          ip: '0.0.0.0',
-          userAgent: SYSTEM_AUDIT_USER_AGENT,
-          before: null,
-          after: {
-            externalId: args.record.externalId,
-            candidateAssetIds: resolution.candidateAssetIds,
-          },
-        });
-      }
-      return;
-    }
-
-    if (args.dryRun) {
-      // Count an outcome bucket for the run viewer but write nothing.
-      switch (resolution.kind) {
-        case 'create':
-          args.totals.created += 1;
-          break;
-        case 'claim':
-          args.totals.claimed += 1;
-          break;
-        case 'reuse':
-          args.totals.unchanged += 1;
-          break;
-      }
-      return;
-    }
-
-    await this.applyResolution({
-      mapping: args.mapping,
-      syncRunId: args.syncRunId,
-      record: args.record,
-      projected,
-      writableMappings: args.writableMappings,
-      mappingFingerprint: args.mappingFingerprint,
-      resolution,
-      totals: args.totals,
-      actorId: args.actorId,
-    });
-  }
-
-  private async applyResolution(args: {
-    mapping: {
-      id: string;
-      companyId: string;
-      integrationDriver: string;
-      resourceId: string;
-      assetLayoutId: string;
-    };
-    syncRunId: string;
-    record: DriverRecord;
-    projected: ProjectedFields;
-    writableMappings: Array<{
-      sourceField: string;
-      syncDirection: 'source_wins' | 'preserve_manual' | 'manual_only';
-      targetField: {
-        id: string;
-        slug: string;
-        fieldType: string;
-        options: unknown;
-      };
-    }>;
-    mappingFingerprint: string;
-    resolution: MatchResolution;
-    totals: SyncRunTotals;
-    actorId: string | null;
-  }): Promise<void> {
-    const recordChecksum = computeRecordChecksum(
-      args.record,
-      args.mappingFingerprint,
-    );
-
-    if (args.resolution.kind === 'reuse') {
-      const reuseAssetId = args.resolution.assetId;
-      // Refuse to refresh archived rows. Operators archive duplicates
-      // expecting the integration to leave them alone; without this
-      // guard the sync would keep rewriting the archived shell on
-      // every run because its IntegrationSyncRecord still resolves.
-      // The matching record is preserved so a later Restore resumes
-      // updates seamlessly; if the operator wants the record to fall
-      // through to a fresh `create` they purge the asset (and the
-      // cascade deletes the IntegrationSyncRecord with it).
-      if (await this.isAssetArchived(reuseAssetId, args.mapping.companyId)) {
-        args.totals.skippedArchived += 1;
-        return;
-      }
-      const sync = await this.prisma.integrationSyncRecord.findUnique({
-        where: {
-          integrationCompanyMappingId_resourceId_externalId: {
-            integrationCompanyMappingId: args.mapping.id,
-            resourceId: args.mapping.resourceId,
-            externalId: args.record.externalId,
-          },
-        },
-      });
-      if (sync && sync.checksum === recordChecksum) {
-        args.totals.unchanged += 1;
-        const syncedAt = new Date();
-        await this.prisma.integrationSyncRecord.update({
-          where: { id: sync.id },
-          data: {
-            lastSyncedAt: syncedAt,
-            lastSeenAt: syncedAt,
-            syncRunId: args.syncRunId,
-          },
-        });
-        return;
-      }
-      await this.prisma.$transaction(async (tx) => {
-        const reuseAssetId =
-          args.resolution.kind === 'reuse' ? args.resolution.assetId : '';
-        const writeResult = await this.writeFieldValues({
-          tx,
-          assetId: reuseAssetId,
-          companyId: args.mapping.companyId,
-          projected: args.projected,
-          writableMappings: args.writableMappings,
-          previousChecksums: (sync?.lastSyncedFieldChecksums ?? {}) as Record<
-            string,
-            string
-          >,
-          totals: args.totals,
-        });
-        // Only the "primary" integration for this asset (the one that
-        // created or first claimed it) is allowed to overwrite the
-        // denormalised externalId/externalSource/name. Subsequent
-        // cross-integration syncs leave those alone — the asset's
-        // multi-integration ownership is fully expressed through the
-        // separate `IntegrationSyncRecord` rows.
-        await this.maybeUpdateAssetIdentity(tx, {
-          assetId: reuseAssetId,
-          companyId: args.mapping.companyId,
-          integrationDriver: args.mapping.integrationDriver,
-          externalId: args.record.externalId,
-          displayName: args.record.displayName,
-        });
-        const syncedAt = new Date();
-        await tx.integrationSyncRecord.upsert({
-          where: {
-            integrationCompanyMappingId_resourceId_externalId: {
-              integrationCompanyMappingId: args.mapping.id,
-              resourceId: args.mapping.resourceId,
-              externalId: args.record.externalId,
-            },
-          },
-          create: {
-            integrationCompanyMappingId: args.mapping.id,
-            resourceId: args.mapping.resourceId,
-            assetId: args.resolution.kind === 'reuse' ? args.resolution.assetId : '',
-            companyId: args.mapping.companyId,
-            externalId: args.record.externalId,
-            lastSyncedAt: syncedAt,
-            lastSeenAt: syncedAt,
-            checksum: recordChecksum,
-            lastSyncedFieldChecksums: writeResult.fieldChecksums,
-            syncRunId: args.syncRunId,
-          },
-          update: {
-            lastSyncedAt: syncedAt,
-            lastSeenAt: syncedAt,
-            checksum: recordChecksum,
-            lastSyncedFieldChecksums: writeResult.fieldChecksums,
-            syncRunId: args.syncRunId,
-          },
-        });
-        if (args.resolution.kind === 'reuse') {
-          await this.searchIndex.upsertAsset(tx, args.resolution.assetId);
-        }
-      });
-      args.totals.updated += 1;
-      await this.audit.log({
-        actorId: args.actorId,
-        action: AUDIT_ACTIONS.integration.assetUpdated,
-        entityType: 'Asset',
-        entityId:
-          args.resolution.kind === 'reuse' ? args.resolution.assetId : null,
-        companyId: args.mapping.companyId,
-        ip: '0.0.0.0',
-        userAgent: SYSTEM_AUDIT_USER_AGENT,
-        before: null,
-        after: {
-          externalId: args.record.externalId,
-          mappingId: args.mapping.id,
-        },
-      });
-      return;
-    }
-
-    if (args.resolution.kind === 'claim') {
-      const claimTargetId = args.resolution.assetId;
-      // Same archive guard as the reuse path. If the candidate the
-      // resolver picked is archived, refuse to claim it — that would
-      // both resurrect operator intent and silently bind THIS sync
-      // to a row that's hidden from the asset list. The record falls
-      // through to no-op; the next run will pick a different
-      // candidate (or create a new asset) once the archived row is
-      // restored or purged.
-      if (await this.isAssetArchived(claimTargetId, args.mapping.companyId)) {
-        args.totals.skippedArchived += 1;
-        return;
-      }
-      await this.prisma.$transaction(async (tx) => {
-        const claimAssetId =
-          args.resolution.kind === 'claim' ? args.resolution.assetId : '';
-        const writeResult = await this.writeFieldValues({
-          tx,
-          assetId: claimAssetId,
-          companyId: args.mapping.companyId,
-          projected: args.projected,
-          writableMappings: args.writableMappings,
-          previousChecksums: {},
-          totals: args.totals,
-        });
-        // Same first-writer rule as the reuse path: stamp
-        // externalId/externalSource/name only if the asset is currently
-        // unowned, so a UniFi claim of an Action1-owned asset does not
-        // flip the asset's "primary" linkage.
-        await this.maybeUpdateAssetIdentity(tx, {
-          assetId: claimAssetId,
-          companyId: args.mapping.companyId,
-          integrationDriver: args.mapping.integrationDriver,
-          externalId: args.record.externalId,
-          displayName: args.record.displayName,
-        });
-        const syncedAt = new Date();
-        await tx.integrationSyncRecord.create({
-          data: {
-            integrationCompanyMappingId: args.mapping.id,
-            resourceId: args.mapping.resourceId,
-            assetId: args.resolution.kind === 'claim' ? args.resolution.assetId : '',
-            companyId: args.mapping.companyId,
-            externalId: args.record.externalId,
-            lastSyncedAt: syncedAt,
-            lastSeenAt: syncedAt,
-            checksum: recordChecksum,
-            lastSyncedFieldChecksums: writeResult.fieldChecksums,
-            syncRunId: args.syncRunId,
-          },
-        });
-        if (args.resolution.kind === 'claim') {
-          await this.searchIndex.upsertAsset(tx, args.resolution.assetId);
-        }
-      });
-      args.totals.claimed += 1;
-      await this.audit.log({
-        actorId: args.actorId,
-        action: AUDIT_ACTIONS.integration.assetClaimed,
-        entityType: 'Asset',
-        entityId:
-          args.resolution.kind === 'claim' ? args.resolution.assetId : null,
-        companyId: args.mapping.companyId,
-        ip: '0.0.0.0',
-        userAgent: SYSTEM_AUDIT_USER_AGENT,
-        before: null,
-        after: {
-          externalId: args.record.externalId,
-          mappingId: args.mapping.id,
-        },
-      });
-      return;
-    }
-
-    // create
-    const newAssetId = await this.prisma.$transaction(async (tx) => {
-      const created = await tx.asset.create({
-        data: {
-          companyId: args.mapping.companyId,
-          assetLayoutId: args.mapping.assetLayoutId,
-          name: args.record.displayName ?? `External ${args.record.externalId}`,
-          externalId: args.record.externalId,
-          externalSource: args.mapping.integrationDriver,
-        },
-      });
-      const writeResult = await this.writeFieldValues({
-        tx,
-        assetId: created.id,
-        companyId: args.mapping.companyId,
-        projected: args.projected,
-        writableMappings: args.writableMappings,
-        previousChecksums: {},
-        totals: args.totals,
-      });
-      const syncedAt = new Date();
-      await tx.integrationSyncRecord.create({
-        data: {
-          integrationCompanyMappingId: args.mapping.id,
-          resourceId: args.mapping.resourceId,
-          assetId: created.id,
-          companyId: args.mapping.companyId,
-          externalId: args.record.externalId,
-          lastSyncedAt: syncedAt,
-          lastSeenAt: syncedAt,
-          checksum: recordChecksum,
-          lastSyncedFieldChecksums: writeResult.fieldChecksums,
-          syncRunId: args.syncRunId,
-        },
-      });
-      await this.searchIndex.upsertAsset(tx, created.id);
-      return created.id;
-    });
-    args.totals.created += 1;
-    await this.audit.log({
-      actorId: args.actorId,
-      action: AUDIT_ACTIONS.integration.assetCreated,
-      entityType: 'Asset',
-      entityId: newAssetId,
-      companyId: args.mapping.companyId,
-      ip: '0.0.0.0',
-      userAgent: SYSTEM_AUDIT_USER_AGENT,
-      before: null,
-      after: {
-        externalId: args.record.externalId,
-        mappingId: args.mapping.id,
-      },
-    });
-  }
-
-  /**
-   * Project source fields onto target fields and normalise the values.
-   * Source values that don't pass the field strategy's validator are
-   * dropped (with a debug log) — the run still succeeds for the rest of
-   * the record. Strict-mode validation would punish a single bad column
-   * in an otherwise healthy record.
-   */
-  private projectFields(args: {
-    record: DriverRecord;
-    writableMappings: Array<{
-      sourceField: string;
-      syncDirection: 'source_wins' | 'preserve_manual' | 'manual_only';
-      targetField: {
-        id: string;
-        slug: string;
-        fieldType: string;
-        options: unknown;
-      };
-    }>;
-  }): ProjectedFields {
-    const out: ProjectedFields = {};
-    for (const fm of args.writableMappings) {
-      // Distinguish "key missing" from "key present, value cleared":
-      //   - `key not in fields`         → skip this field entirely. The
-      //     local value stays as-is. This is the safety net for
-      //     wrong-case mappings (`os` instead of `OS`) so we never
-      //     silently nuke perfectly good local data.
-      //   - `fields[key] === null/''`   → propagate null (operator
-      //     intentionally cleared the upstream value).
-      if (!Object.prototype.hasOwnProperty.call(args.record.fields, fm.sourceField)) {
-        continue;
-      }
-      const raw = args.record.fields[fm.sourceField];
-      if (raw === null || raw === undefined || raw === '') {
-        out[fm.targetField.id] = {
-          fieldId: fm.targetField.id,
-          slug: fm.targetField.slug,
-          syncDirection: fm.syncDirection,
-          value: null,
+    const fieldValues = resource.fieldMappings
+      .filter((field) => field.targetField && field.targetField.archivedAt === null)
+      .map((field) => {
+        const raw = record.fields[field.sourceField];
+        const value = field.transform
+          ? this.transforms.execute(raw, integrationTransformSchema.parse(field.transform), record.fields)
+          : raw;
+        return {
+          targetFieldId: field.targetField!.id,
+          value,
+          syncDirection: field.syncDirection,
         };
-        continue;
-      }
-      try {
-        const strategy = this.fieldTypes.get(fm.targetField.fieldType as never);
-        const opts = (fm.targetField.options ?? {}) as Record<string, unknown>;
-        const normalised = strategy.normalize(raw, opts);
-
-        // Defense-in-depth: drivers occasionally surface values that pass
-        // the strategy's coercion (e.g. a flattened multi-NIC RMM string
-        // "10.0.0.35, 10.0.0.50" mapped to an IP_ADDRESS field) but would
-        // never round-trip through `valueSchema`. Re-validate so invalid
-        // shapes never reach the DB and break downstream typed queries
-        // (Phase 6 search, IPAM containment, etc.).
-        if (normalised !== null && normalised !== undefined) {
-          const parsed = strategy.valueSchema(opts).safeParse(normalised);
-          if (!parsed.success) {
-            this.logger.debug(
-              {
-                sourceField: fm.sourceField,
-                targetSlug: fm.targetField.slug,
-                fieldType: fm.targetField.fieldType,
-                issues: parsed.error.issues.map((i) => i.message),
-              },
-              'projectFields: dropping value that failed valueSchema',
-            );
-            continue;
+      });
+    return {
+      targetKind: 'asset',
+      externalId: `${source.externalOrgId}:${source.resourceKey}:${source.sourceId}`,
+      source,
+      name: record.displayName?.trim() || record.externalId,
+      assetLayoutId: resource.assetLayoutId,
+      externalSource: mapping.integration.driver,
+      matchKeyFieldIds: resource.matchKeyFieldIds,
+      fieldValues,
+      ...(typeof (resource.targetConfig as Record<string, unknown>)['bindingResourceKey'] === 'string'
+        ? {
+            bindingResourceKey: (resource.targetConfig as Record<string, string>)[
+              'bindingResourceKey'
+            ],
           }
-        }
+        : {}),
+    } satisfies AssetReconstructionInput;
+  }
 
-        out[fm.targetField.id] = {
-          fieldId: fm.targetField.id,
-          slug: fm.targetField.slug,
-          syncDirection: fm.syncDirection,
-          value: normalised as unknown,
-        };
-      } catch (err) {
-        this.logger.debug(
-          {
-            err: (err as Error).message,
-            sourceField: fm.sourceField,
-            targetSlug: fm.targetField.slug,
-          },
-          'projectFields: dropping value that failed strategy.normalize',
-        );
-      }
+  private assertTypedIdentity(
+    input: ReconstructionInput,
+    targetKind: string,
+    externalOrgId: string,
+    resourceKey: string,
+  ): void {
+    const expected = `${externalOrgId}:${resourceKey}:${input.source.sourceId}`;
+    if (
+      input.targetKind !== targetKind ||
+      input.source.externalOrgId !== externalOrgId ||
+      input.source.resourceKey !== resourceKey ||
+      input.externalId !== expected
+    ) {
+      throw new BadRequestException('Driver reconstruction input identity does not match its resource context.');
     }
-    return out;
   }
 
-  /**
-   * Persist projected values onto the asset's `AssetFieldValue` rows,
-   * honouring `syncDirection`:
-   *   - source_wins      → always overwrite.
-   *   - preserve_manual  → if the stored value's checksum doesn't match
-   *                        what we wrote last time AND it's non-null,
-   *                        skip the field (operator edited it).
-   */
-  /**
-   * Phase 11.2 — refresh `Asset.externalId` / `externalSource` / `name`
-   * only when this integration is the "primary" owner of the asset:
-   *
-   *   - Asset is currently unowned (`externalSource IS NULL`) → claim
-   *     it as the primary; stamp our externalId / source / name.
-   *   - Asset is already owned by THIS driver with the same external
-   *     id → re-stamp (refreshes the displayName when upstream renames
-   *     the record).
-   *   - Otherwise (owned by a different driver / different external id)
-   *     → leave the denormalised columns alone. The cross-integration
-   *     binding is fully tracked in the per-resource
-   *     `IntegrationSyncRecord` row written separately.
-   */
-  /**
-   * Cheap pre-flight used by the reuse / claim branches: returns true
-   * if the candidate asset has been archived. Done outside the write
-   * transaction so an archived target short-circuits before we open
-   * one (and before we hit the field-write fan-out, which is the
-   * expensive part of a record). Tenant-scoped via the `companyId`
-   * filter so the prisma middleware leaves the query alone.
-   */
-  private async isAssetArchived(
-    assetId: string,
-    companyId: string,
-  ): Promise<boolean> {
-    if (!assetId) return false;
-    const row = await this.prisma.asset.findFirst({
-      where: { id: assetId, companyId },
-      select: { archivedAt: true },
-    });
-    return !!row?.archivedAt;
-  }
-
-  private async maybeUpdateAssetIdentity(
+  private async findAndMigrateBinding(
     tx: Prisma.TransactionClient,
-    args: {
-      assetId: string;
-      companyId: string;
-      integrationDriver: string;
-      externalId: string;
-      displayName: string | null;
-    },
-  ): Promise<void> {
-    if (!args.assetId) return;
-    const current = await tx.asset.findFirst({
-      where: { id: args.assetId, companyId: args.companyId },
-      select: { externalId: true, externalSource: true },
+    mappingId: string,
+    resourceId: string,
+    externalId: string,
+    legacyRawId: string | null,
+    integrationId: string,
+    reconstruction: ReconstructionInput,
+    now: Date,
+  ) {
+    const exact = await tx.integrationSyncRecord.findUnique({
+      where: { integrationCompanyMappingId_resourceId_externalId: {
+        integrationCompanyMappingId: mappingId, resourceId, externalId,
+      } },
     });
-    if (!current) return;
-    const isUnowned = current.externalSource === null;
-    const isSameOwner =
-      current.externalSource === args.integrationDriver &&
-      current.externalId === args.externalId;
-    if (!isUnowned && !isSameOwner) return;
-    await tx.asset.updateMany({
-      where: { id: args.assetId, companyId: args.companyId },
+    if (exact || !legacyRawId || legacyRawId === externalId) return exact;
+    const legacy = await tx.integrationSyncRecord.findUnique({
+      where: { integrationCompanyMappingId_resourceId_externalId: {
+        integrationCompanyMappingId: mappingId, resourceId, externalId: legacyRawId,
+      } },
+    });
+    if (!legacy) return null;
+    const provenance = parseProvenance(legacy.provenance);
+    const migratedProvenance = provenance
+      ? { ...provenance, externalId }
+      : migrationProvenance(integrationId, reconstruction, now);
+    return tx.integrationSyncRecord.update({
+      where: { id: legacy.id },
       data: {
-        externalId: args.externalId,
-        externalSource: args.integrationDriver,
-        ...(args.displayName ? { name: args.displayName } : {}),
+        externalId,
+        provenance: migratedProvenance as unknown as Prisma.InputJsonValue,
       },
     });
   }
 
-  private async writeFieldValues(args: {
-    tx: Prisma.TransactionClient;
-    assetId: string;
-    companyId: string;
-    projected: ProjectedFields;
-    writableMappings: Array<{
-      syncDirection: 'source_wins' | 'preserve_manual' | 'manual_only';
-      targetField: { id: string };
-    }>;
-    previousChecksums: Record<string, string>;
-    totals: SyncRunTotals;
-  }): Promise<{ fieldChecksums: Record<string, string> }> {
-    const fieldChecksums: Record<string, string> = {};
-
-    let existingValuesById: Map<string, unknown> | null = null;
-    const needsExisting = Object.values(args.projected).some(
-      (p) => p.syncDirection === 'preserve_manual',
-    );
-    if (needsExisting) {
-      const rows = await args.tx.assetFieldValue.findMany({
-        where: { assetId: args.assetId, companyId: args.companyId },
-        select: { assetFieldId: true, value: true },
-      });
-      existingValuesById = new Map(rows.map((r) => [r.assetFieldId, r.value]));
-    }
-
-    for (const proj of Object.values(args.projected)) {
-      const checksum = computeValueChecksum(proj.value);
-
-      if (proj.syncDirection === 'preserve_manual') {
-        const stored = existingValuesById?.get(proj.fieldId) ?? null;
-        const lastChecksum = args.previousChecksums[proj.fieldId];
-        const storedChecksum = computeValueChecksum(stored);
-        const wasManuallyEdited =
-          stored !== null &&
-          stored !== undefined &&
-          lastChecksum !== undefined &&
-          lastChecksum !== storedChecksum;
-        if (wasManuallyEdited) {
-          args.totals.skippedManual += 1;
-          fieldChecksums[proj.fieldId] = storedChecksum;
-          continue;
-        }
-      }
-
-      if (proj.value === null || proj.value === undefined) {
-        await args.tx.assetFieldValue.deleteMany({
-          where: {
-            assetId: args.assetId,
-            assetFieldId: proj.fieldId,
-            companyId: args.companyId,
-          },
-        });
-      } else {
-        await args.tx.assetFieldValue.upsert({
-          where: {
-            assetId_assetFieldId: {
-              assetId: args.assetId,
-              assetFieldId: proj.fieldId,
-            },
-          },
-          create: {
-            companyId: args.companyId,
-            assetId: args.assetId,
-            assetFieldId: proj.fieldId,
-            value: proj.value as Prisma.InputJsonValue,
-          },
-          update: {
-            companyId: args.companyId,
-            value: proj.value as Prisma.InputJsonValue,
-          },
-        });
-      }
-      fieldChecksums[proj.fieldId] = checksum;
-    }
-
-    return { fieldChecksums };
+  private async resolveBinding(
+    tx: Prisma.TransactionClient,
+    mappingId: string,
+    companyId: string,
+    integrationId: string,
+    ref: ReconstructionDependencyRef,
+  ) {
+    const dependency = await tx.integrationResource.findUnique({
+      where: { integrationId_resourceKey: { integrationId, resourceKey: ref.resourceKey } },
+      select: { id: true },
+    });
+    if (!dependency) return null;
+    const binding = await tx.integrationSyncRecord.findUnique({
+      where: { integrationCompanyMappingId_resourceId_externalId: {
+        integrationCompanyMappingId: mappingId,
+        resourceId: dependency.id,
+        externalId: ref.externalId,
+      } },
+    });
+    if (!binding) return null;
+    const targetId = targetIdFromBinding(binding);
+    return targetId ? { targetKind: binding.targetKind, targetId, companyId } : null;
   }
 
-  /**
-   * After walking all pages, archive every sync record whose externalId
-   * was NOT seen this run. We don't HARD-archive the asset; we clear
-   * its `externalId` / `externalSource` and delete the sync record so
-   * the asset persists for the operator with no upstream linkage.
-   *
-   * This honours the explicit "deleting an integration must never
-   * delete an asset" contract — a missing record on the upstream is
-   * treated the same as a deleted integration.
-   */
-  private async archiveDisappearedRecords(args: {
-    mappingId: string;
-    /** Phase 11.1 — only prune records owned by this resource. */
-    resourceId: string;
-    companyId: string;
-    integrationDriver: string;
-    seenExternalIds: Set<string>;
-    totals: SyncRunTotals;
-    actorId: string | null;
-  }): Promise<void> {
-    const stale = await this.prisma.integrationSyncRecord.findMany({
-      where: {
-        integrationCompanyMappingId: args.mappingId,
-        resourceId: args.resourceId,
-      },
-      select: { id: true, assetId: true, externalId: true },
-    });
-    const disappeared = stale.filter(
-      (s): s is typeof s & { assetId: string } =>
-        s.assetId !== null && !args.seenExternalIds.has(s.externalId),
-    );
-    if (disappeared.length === 0) return;
-
-    const assetIds = disappeared.map((s) => s.assetId);
-    await this.prisma.$transaction(async (tx) => {
-      await tx.integrationSyncRecord.deleteMany({
-        where: {
-          id: { in: disappeared.map((d) => d.id) },
-          companyId: args.companyId,
-        },
-      });
-      // Phase 11.2 — only release the asset's denormalised
-      // externalId / externalSource if no other integration still
-      // owns it. An asset linked to BOTH Action1 and UniFi keeps its
-      // identity when one side disappears.
-      if (assetIds.length > 0) {
-        const stillLinked = await tx.integrationSyncRecord.findMany({
-          where: { assetId: { in: assetIds } },
-          select: { assetId: true },
-        });
-        const stillLinkedIds = new Set(stillLinked.map((r) => r.assetId));
-        const releasableAssetIds = assetIds.filter(
-          (id) => !stillLinkedIds.has(id),
-        );
-        if (releasableAssetIds.length > 0) {
-          await tx.asset.updateMany({
-            where: {
-              id: { in: releasableAssetIds },
-              companyId: args.companyId,
-              externalSource: args.integrationDriver,
-            },
-            data: { externalId: null, externalSource: null },
-          });
-        }
-      }
-    });
-    args.totals.archived += disappeared.length;
-    for (const s of disappeared) {
-      await this.audit.log({
-        actorId: args.actorId,
-        action: AUDIT_ACTIONS.integration.assetReleased,
-        entityType: 'Asset',
-        entityId: s.assetId,
-        companyId: args.companyId,
-        ip: '0.0.0.0',
-        userAgent: SYSTEM_AUDIT_USER_AGENT,
-        before: { externalSource: args.integrationDriver, externalId: s.externalId },
-        after: { externalSource: null, externalId: null },
+  private accumulateWriterOutcome(
+    totals: SyncRunTotals,
+    conflicts: SyncRunConflict[],
+    externalId: string,
+    outcome: ReconstructionWriteOutcome,
+  ): void {
+    if (outcome.change === 'created') totals.created += 1;
+    else if (outcome.change === 'updated') totals.updated += 1;
+    else if (outcome.change === 'unchanged') totals.unchanged += 1;
+    else if (outcome.change === 'restored') totals.restored += 1;
+    else totals.blocked += 1;
+    for (const gap of outcome.gaps.slice(0, 100)) {
+      if (gap.kind === 'secret_blocked') totals.secretBlocked += 1;
+      if (gap.kind === 'missing_dependency') totals.missingDependency += 1;
+      conflicts.push({
+        kind: gap.kind === 'synchronization_error' ? 'driver_error' : 'validation_error',
+        externalId,
+        message: gap.message.slice(0, 500),
       });
     }
   }
+
+  private accumulateBlockedInput(
+    totals: SyncRunTotals,
+    conflicts: SyncRunConflict[],
+    blocked: DriverBlockedInput,
+  ): void {
+    totals.blocked += 1;
+    if (blocked.kind === 'secret_blocked') totals.secretBlocked += 1;
+    if (blocked.kind === 'missing_dependency') totals.missingDependency += 1;
+    conflicts.push({
+      kind: blocked.kind === 'synchronization_error' ? 'driver_error' : 'validation_error',
+      externalId: blocked.externalId ?? '',
+      message: blocked.message.slice(0, 500),
+    });
+  }
+
 }
 
 // ---------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------
 
-interface ProjectedFieldEntry {
-  fieldId: string;
-  slug: string;
-  syncDirection: 'source_wins' | 'preserve_manual' | 'manual_only';
-  value: unknown;
+interface ResourceForReconstruction {
+  id: string;
+  resourceKey: string;
+  targetKind: 'asset' | 'subnet' | 'ip_reservation' | 'article' | 'relation';
+  targetConfig: unknown;
+  assetLayoutId: string | null;
+  matchKeyFieldIds: string[];
+  fieldMappings: Array<{
+    sourceField: string;
+    syncDirection: 'source_wins' | 'preserve_manual' | 'manual_only';
+    transform: unknown;
+    targetField: {
+      id: string;
+      slug: string;
+      fieldType: string;
+      options: unknown;
+      archivedAt: Date | null;
+    } | null;
+  }>;
 }
-type ProjectedFields = Record<string, ProjectedFieldEntry>;
+
+type BindingLike = {
+  id: string;
+  targetKind: 'asset' | 'subnet' | 'ip_reservation' | 'article' | 'relation';
+  assetId: string | null;
+  subnetId: string | null;
+  ipReservationId: string | null;
+  articleId: string | null;
+  relationId: string | null;
+  state: 'active' | 'stale' | 'blocked';
+  checksum: string;
+  lastSyncedFieldChecksums: unknown;
+  provenance: unknown;
+};
+
+function targetIdFromBinding(binding: BindingLike | null | undefined): string | null {
+  if (!binding) return null;
+  if (binding.targetKind === 'asset') return binding.assetId;
+  if (binding.targetKind === 'subnet') return binding.subnetId;
+  if (binding.targetKind === 'ip_reservation') return binding.ipReservationId;
+  if (binding.targetKind === 'article') return binding.articleId;
+  return binding.relationId;
+}
+
+function parseProvenance(value: unknown): SafeIntegrationProvenance | null {
+  const parsed = integrationProvenanceSchema.safeParse(value);
+  return parsed.success ? parsed.data : null;
+}
+
+function bindingData(
+  mappingId: string,
+  resourceId: string,
+  companyId: string,
+  syncRunId: string,
+  input: ReconstructionInput,
+  outcome: ReconstructionWriteOutcome,
+  now: Date,
+) {
+  return {
+    integrationCompanyMappingId: mappingId,
+    resourceId,
+    syncRunId,
+    companyId,
+    targetKind: outcome.targetKind,
+    assetId: outcome.targetKind === 'asset' ? outcome.targetId : null,
+    subnetId: outcome.targetKind === 'subnet' ? outcome.targetId : null,
+    ipReservationId: outcome.targetKind === 'ip_reservation' ? outcome.targetId : null,
+    articleId: outcome.targetKind === 'article' ? outcome.targetId : null,
+    relationId: outcome.targetKind === 'relation' ? outcome.targetId : null,
+    externalId: input.externalId,
+    lastSyncedAt: now,
+    state: 'active' as const,
+    lastSeenAt: now,
+    staleSince: null,
+    sourceUpdatedAt: input.source.updatedAt ? new Date(input.source.updatedAt) : null,
+    provenance: outcome.provenance as unknown as Prisma.InputJsonValue,
+    checksum: outcome.checksum,
+    lastSyncedFieldChecksums: (outcome.fieldChecksums ?? {}) as Prisma.InputJsonValue,
+  };
+}
+
+function deriveLegacyHighWater(records: DriverRecord[]): string | null {
+  let highest: string | null = null;
+  for (const record of records) {
+    if (record.reconstructionInput !== undefined || !record.updatedAt) continue;
+    const timestamp = Date.parse(record.updatedAt);
+    if (!Number.isFinite(timestamp)) continue;
+    const canonical = new Date(timestamp).toISOString();
+    if (!highest || canonical > highest) highest = canonical;
+  }
+  return highest;
+}
+
+function migrationProvenance(
+  integrationId: string,
+  input: ReconstructionInput,
+  now: Date,
+): SafeIntegrationProvenance {
+  const at = now.toISOString();
+  return integrationProvenanceSchema.parse({
+    integrationId,
+    externalOrgId: input.source.externalOrgId,
+    resourceKey: input.source.resourceKey,
+    externalId: input.externalId,
+    sourceRevision: input.source.revision ?? null,
+    sourceFingerprint: input.source.fingerprint ?? null,
+    firstSeenAt: at,
+    lastSeenAt: at,
+    lastSyncedAt: at,
+    ownership: 'breeze',
+    state: 'active',
+  });
+}
+
+const MAX_RUN_CONFLICTS = 10_000;
+
+class DryRunPageRollback extends Error {}
+
+function mergePageOutcome(
+  totals: SyncRunTotals,
+  conflicts: SyncRunConflict[],
+  pageTotals: SyncRunTotals,
+  pageConflicts: SyncRunConflict[],
+): void {
+  for (const key of [
+    'fetched', 'created', 'updated', 'unchanged', 'claimed', 'archived',
+    'skippedAmbiguous', 'skippedManual', 'skippedArchived', 'stale', 'restored',
+    'blocked', 'secretBlocked', 'missingDependency', 'errors',
+  ] as const) {
+    totals[key] += pageTotals[key];
+  }
+  const remaining = MAX_RUN_CONFLICTS - conflicts.length;
+  if (remaining > 0) conflicts.push(...pageConflicts.slice(0, remaining));
+}
 
 function emptyTotals(): SyncRunTotals {
   return {
@@ -1100,24 +787,6 @@ function emptyTotals(): SyncRunTotals {
     missingDependency: 0,
     errors: 0,
   };
-}
-
-function computeRecordChecksum(
-  record: DriverRecord,
-  mappingFingerprint: string,
-): string {
-  // Fold the mapping fingerprint into the canonical form so changing
-  // the field-mapping config invalidates every cached `IntegrationSyncRecord.checksum`
-  // — otherwise the runner takes the "unchanged" fast-path and never
-  // re-projects values when only the mapping (not the upstream
-  // record) changed.
-  const canonical = JSON.stringify({
-    externalId: record.externalId,
-    displayName: record.displayName ?? null,
-    fields: sortedJson(record.fields),
-    mappingFingerprint,
-  });
-  return createHash('sha256').update(canonical).digest('hex');
 }
 
 /**
@@ -1154,10 +823,6 @@ export function computeMappingFingerprint(
       return JSON.stringify(a).localeCompare(JSON.stringify(b));
     });
   return createHash('sha256').update(JSON.stringify(rows)).digest('hex');
-}
-
-function computeValueChecksum(value: unknown): string {
-  return createHash('sha256').update(JSON.stringify(value ?? null)).digest('hex');
 }
 
 function sortedJson(value: unknown): unknown {

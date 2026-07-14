@@ -1156,6 +1156,11 @@ enum IntegrationSyncState {
   blocked
 }
 
+enum IntegrationSyncMode {
+  incremental
+  full
+}
+
 enum ReconstructionGapKind {
   secret_blocked
   missing_dependency
@@ -1472,6 +1477,7 @@ model IntegrationSyncCheckpoint {
   companyId                   String    @map("company_id") @db.Uuid
   integrationCompanyMappingId String    @map("integration_company_mapping_id") @db.Uuid
   resourceId                  String    @map("resource_id") @db.Uuid
+  mode                        IntegrationSyncMode @default(incremental)
   cursor                      String?   @db.VarChar(4096)
   snapshotAt                  DateTime? @map("snapshot_at")
   highWaterAt                 DateTime? @map("high_water_at")
@@ -1484,9 +1490,10 @@ model IntegrationSyncCheckpoint {
   companyMapping IntegrationCompanyMapping @relation(fields: [integrationCompanyMappingId], references: [id], onDelete: Cascade)
   resource       IntegrationResource       @relation(fields: [resourceId], references: [id], onDelete: Cascade)
 
-  @@unique([integrationCompanyMappingId, resourceId])
+  @@unique([integrationCompanyMappingId, resourceId, mode])
   @@index([companyId, integrationCompanyMappingId])
   @@index([resourceId, lastCompletedAt])
+  @@index([resourceId, mode, lastCompletedAt])
   @@map("integration_sync_checkpoints")
 }
 

@@ -184,6 +184,16 @@ describe('AssetsService integration system writes', () => {
     );
   });
 
+  it('joins a caller page transaction instead of nesting a transaction', async () => {
+    const { service, prisma, tx, audit } = setup();
+    await expect(service.writeFromIntegration({ ...input, tx: tx as never })).resolves.toMatchObject({
+      targetId: ids.asset,
+      change: 'created',
+    });
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+    expect(audit.logWithClient).toHaveBeenCalledWith(tx, expect.any(Object));
+  });
+
   it.each([
     ['unchanged', asset(), 'Edge 01'],
     ['updated', asset(), 'Edge 02'],
@@ -244,6 +254,20 @@ describe('AssetsService integration system writes', () => {
       ...input,
       matchKeyFieldIds: [ids.field],
     })).resolves.toMatchObject({ targetId: ids.asset, change: 'created' });
+  });
+
+  it('blocks multiple unbound natural-key candidates as ambiguous', async () => {
+    const first = asset({ id: ids.manual, externalSource: null, externalId: null });
+    const second = asset({ id: '00000000-0000-0000-0000-000000000099', externalSource: null, externalId: null });
+    const { service, tx } = setup({ match: [first, second] });
+    await expect(service.writeFromIntegration({
+      ...input,
+      matchKeyFieldIds: [ids.field],
+    })).resolves.toMatchObject({
+      change: 'blocked',
+      gap: { kind: 'ambiguous', details: { reasonCode: 'ambiguous_match' } },
+    });
+    expect(tx.asset.create).not.toHaveBeenCalled();
   });
 
   it('blocks a source-compatible match-key candidate without its exact persisted binding', async () => {

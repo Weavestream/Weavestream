@@ -29,6 +29,7 @@ export interface AuditMeta {
 }
 
 export interface IntegrationSubnetWriteInput {
+  tx?: Prisma.TransactionClient;
   companyId: string;
   integrationId: string;
   integrationCompanyMappingId: string;
@@ -47,6 +48,7 @@ export interface IntegrationSubnetWriteInput {
 }
 
 export interface IntegrationReservationWriteInput {
+  tx?: Prisma.TransactionClient;
   companyId: string;
   integrationId: string;
   integrationCompanyMappingId: string;
@@ -410,6 +412,8 @@ export class IpamService {
   async writeSubnetFromIntegration(
     input: IntegrationSubnetWriteInput,
   ): Promise<IntegrationIpamWriteResult> {
+    const runTransaction = <T>(callback: (tx: Prisma.TransactionClient) => Promise<T>) =>
+      input.tx ? callback(input.tx) : this.prisma.$transaction(callback);
     await this.audit.assertIntegrationActor(input.auditActorId, input.companyId);
     let native: ReturnType<typeof createSubnetSchema.parse>;
     try {
@@ -467,7 +471,7 @@ export class IpamService {
       existing.description !== data.description;
     const restored = existing?.archivedAt != null;
     if (input.dryRun) {
-      if (existing && !(await this.hasEligibleIpamBinding(this.prisma, input, 'subnet', existing.id))) {
+      if (existing && !(await this.hasEligibleIpamBinding(input.tx ?? this.prisma, input, 'subnet', existing.id))) {
         return ipamBlocked(input.companyId, 'ambiguous', 'The existing subnet is not owned by an eligible reconstruction binding.', 'manual_ownership', existing.id);
       }
       return {
@@ -480,12 +484,12 @@ export class IpamService {
     if (existing) {
       const change: IntegrationIpamWriteResult['change'] = restored ? 'restored' : changed ? 'updated' : 'unchanged';
       if (change === 'unchanged') {
-        if (!(await this.hasEligibleIpamBinding(this.prisma, input, 'subnet', existing.id))) {
+        if (!(await this.hasEligibleIpamBinding(input.tx ?? this.prisma, input, 'subnet', existing.id))) {
           return ipamBlocked(input.companyId, 'ambiguous', 'The existing subnet is not owned by an eligible reconstruction binding.', 'manual_ownership', existing.id);
         }
         return { targetId: existing.id, companyId: input.companyId, change };
       }
-      return this.prisma.$transaction(async (tx) => {
+      return runTransaction(async (tx) => {
         if (!(await this.hasEligibleIpamBinding(tx, input, 'subnet', existing.id))) {
           return ipamBlocked(input.companyId, 'ambiguous', 'The existing subnet is not owned by an eligible reconstruction binding.', 'manual_ownership', existing.id);
         }
@@ -509,7 +513,7 @@ export class IpamService {
         return { targetId: row.id, companyId: input.companyId, change };
       });
     }
-    return this.prisma.$transaction(async (tx) => {
+    return runTransaction(async (tx) => {
       const row = await tx.subnet.create({
         data: { companyId: input.companyId, ...data, createdBy: input.auditActorId, updatedBy: input.auditActorId },
       });
@@ -706,6 +710,8 @@ export class IpamService {
   async writeReservationFromIntegration(
     input: IntegrationReservationWriteInput,
   ): Promise<IntegrationIpamWriteResult> {
+    const runTransaction = <T>(callback: (tx: Prisma.TransactionClient) => Promise<T>) =>
+      input.tx ? callback(input.tx) : this.prisma.$transaction(callback);
     await this.audit.assertIntegrationActor(input.auditActorId, input.companyId);
     let native: ReturnType<typeof createIpReservationSchema.parse>;
     try {
@@ -754,7 +760,7 @@ export class IpamService {
       bound.label !== data.label ||
       bound.notes !== data.notes;
     if (input.dryRun) {
-      if (bound && !(await this.hasEligibleIpamBinding(this.prisma, input, 'ip_reservation', bound.id))) {
+      if (bound && !(await this.hasEligibleIpamBinding(input.tx ?? this.prisma, input, 'ip_reservation', bound.id))) {
         return ipamBlocked(input.companyId, 'ambiguous', 'The existing reservation is not owned by an eligible reconstruction binding.', 'manual_ownership', bound.id);
       }
       return { targetId: bound?.id ?? '', companyId: input.companyId, change: bound ? (changed ? 'updated' : 'unchanged') : 'created' };
@@ -762,12 +768,12 @@ export class IpamService {
     const change: IntegrationIpamWriteResult['change'] = bound ? (changed ? 'updated' : 'unchanged') : 'created';
     if (bound) {
       if (!changed) {
-        if (!(await this.hasEligibleIpamBinding(this.prisma, input, 'ip_reservation', bound.id))) {
+        if (!(await this.hasEligibleIpamBinding(input.tx ?? this.prisma, input, 'ip_reservation', bound.id))) {
           return ipamBlocked(input.companyId, 'ambiguous', 'The existing reservation is not owned by an eligible reconstruction binding.', 'manual_ownership', bound.id);
         }
         return { targetId: bound.id, companyId: input.companyId, change };
       }
-      return this.prisma.$transaction(async (tx) => {
+      return runTransaction(async (tx) => {
         if (!(await this.hasEligibleIpamBinding(tx, input, 'ip_reservation', bound.id))) {
           return ipamBlocked(input.companyId, 'ambiguous', 'The existing reservation is not owned by an eligible reconstruction binding.', 'manual_ownership', bound.id);
         }
@@ -791,7 +797,7 @@ export class IpamService {
         return { targetId: row.id, companyId: input.companyId, change };
       });
     }
-    return this.prisma.$transaction(async (tx) => {
+    return runTransaction(async (tx) => {
       const row = await tx.ipReservation.create({
         data: {
           companyId: input.companyId,

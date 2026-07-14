@@ -24,6 +24,7 @@ function context(overrides: Partial<ReconstructionWriteContext> = {}): Reconstru
       : { targetKind: 'article' as const, targetId: ids.targetArticle, companyId: ids.company },
   );
   const ctx: ReconstructionWriteContext = {
+    tx: {} as never,
     companyId: ids.company, integrationId: ids.integration, integrationCompanyMappingId: ids.mapping,
     resourceId: ids.resource, resourceKey: 'relations', externalOrgId: 'org-1', auditActorId: ids.actor,
     now: new Date('2026-07-13T18:00:00.000Z'), dryRun: false, resolveBinding, ...overrides,

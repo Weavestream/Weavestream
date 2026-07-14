@@ -30,6 +30,7 @@ import { IntegrationSyncSchedulerService } from './integration-sync-scheduler.se
 import type { AuthedUser } from '../common/current-user.decorator.js';
 import { Prisma } from '@prisma/client';
 import { assertStringIdList } from '../common/safe-id-list.js';
+import { ReconstructionWriterRegistry } from './reconstruction/reconstruction-writer.registry.js';
 
 export interface AuditMeta {
   ip: string;
@@ -62,6 +63,7 @@ export class IntegrationsService {
     private readonly drivers: IntegrationDriverRegistry,
     private readonly env: EnvService,
     private readonly scheduler: IntegrationSyncSchedulerService,
+    private readonly writers: ReconstructionWriterRegistry,
   ) {}
 
   // -------------------------------------------------------------------
@@ -443,6 +445,7 @@ export class IntegrationsService {
   async reconcileResources(integrationId: string): Promise<void> {
     const integration = await this.requireIntegration(integrationId);
     const driver = this.drivers.get(integration.driver);
+    validateResourceRegistry(driver.descriptor, this.writers);
     for (const r of driver.descriptor.resources) {
       await this.prisma.integrationResource.upsert({
         where: {
@@ -1010,6 +1013,59 @@ export class IntegrationsService {
       updatedAt: row.updatedAt.toISOString(),
       mappingCount: row._count?.companyMappings ?? 0,
     };
+  }
+}
+
+export function validateResourceRegistry(
+  descriptor: DriverDescriptor,
+  writers: Pick<ReconstructionWriterRegistry, 'has'>,
+): void {
+  const resources = new Map(descriptor.resources.map((resource) => [resource.key, resource]));
+  for (const resource of descriptor.resources) {
+    if (!writers.has(resource.targetKind)) {
+      throw new BadRequestException(
+        `No reconstruction writer is registered for target ${resource.targetKind}.`,
+      );
+    }
+    for (const dependency of resource.dependsOnResourceKeys) {
+      if (!resources.has(dependency)) {
+        throw new BadRequestException(`Resource ${resource.key} has missing dependency ${dependency}.`);
+      }
+    }
+    if (resource.targetKind === 'asset' && resource.targetConfig.bindingResourceKey) {
+      const binding = resources.get(resource.targetConfig.bindingResourceKey);
+      if (!binding || binding.targetKind !== 'asset') {
+        throw new BadRequestException(
+          `bindingResourceKey ${resource.targetConfig.bindingResourceKey} must reference an asset resource.`,
+        );
+      }
+      if (!resource.dependsOnResourceKeys.includes(resource.targetConfig.bindingResourceKey)) {
+        throw new BadRequestException(
+          `bindingResourceKey ${resource.targetConfig.bindingResourceKey} must be listed in dependsOnResourceKeys.`,
+        );
+      }
+    }
+  }
+  buildDescriptorStages(descriptor.resources);
+}
+
+function buildDescriptorStages(
+  resources: readonly DriverResourceDescriptor[],
+): void {
+  const pending = new Map(resources.map((resource) => [resource.key, resource]));
+  const completed = new Set<string>();
+  while (pending.size > 0) {
+    const ready = resources.filter((resource) =>
+      pending.has(resource.key) &&
+      resource.dependsOnResourceKeys.every((dependency) => completed.has(dependency)),
+    );
+    if (ready.length === 0) {
+      throw new BadRequestException('Resource dependency graph contains a cycle.');
+    }
+    for (const resource of ready) {
+      pending.delete(resource.key);
+      completed.add(resource.key);
+    }
   }
 }
 

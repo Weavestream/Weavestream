@@ -71,6 +71,7 @@ function integrationAssetBlocked(
 }
 
 export interface IntegrationAssetWriteInput {
+  tx?: Prisma.TransactionClient;
   companyId: string;
   integrationId: string;
   integrationCompanyMappingId: string;
@@ -554,6 +555,8 @@ export class AssetsService {
   async writeFromIntegration(
     input: IntegrationAssetWriteInput,
   ): Promise<IntegrationAssetWriteResult> {
+    const runTransaction = <T>(callback: (tx: Prisma.TransactionClient) => Promise<T>) =>
+      input.tx ? callback(input.tx) : this.prisma.$transaction(callback);
     await this.audit.assertIntegrationActor(input.auditActorId, input.companyId);
     const layout = await this.loadLayout(input.assetLayoutId);
     if (layout.archivedAt) {
@@ -663,7 +666,7 @@ export class AssetsService {
         target.externalSource !== (input.externalSource ?? null));
     const restored = target?.archivedAt != null;
     if (input.dryRun) {
-      if (target && !(await this.hasEligibleAssetBinding(this.prisma, input, target.id))) {
+      if (target && !(await this.hasEligibleAssetBinding(input.tx ?? this.prisma, input, target.id))) {
         return integrationAssetBlocked(input.companyId, 'ambiguous', 'The existing asset is not owned by an eligible reconstruction binding.', 'manual_ownership', target.id);
       }
       const dryRunValues = await this.canonicalizeFieldValuesForDryRun(layout, valuesToWrite);
@@ -699,7 +702,7 @@ export class AssetsService {
         input.externalSource ?? null,
         null,
       );
-      const created = await this.prisma.$transaction(async (tx) => {
+      const created = await runTransaction(async (tx) => {
         const canonicalValues = await this.canonicalizeFieldValues(
           tx,
           layout,
@@ -753,7 +756,7 @@ export class AssetsService {
       change = 'created';
     } else {
       targetId = target.id;
-      const outcome = await this.prisma.$transaction(async (tx) => {
+      const outcome = await runTransaction(async (tx) => {
         if (!(await this.hasEligibleAssetBinding(tx, input, target.id))) {
           return { blocked: true as const };
         }
@@ -1199,7 +1202,7 @@ export class AssetsService {
     );
     return {
       target: compatible.length === 1 ? compatible[0]! : null,
-      ambiguous: compatible.length > 1,
+      ambiguous: candidates.length > 1,
     };
   }
 

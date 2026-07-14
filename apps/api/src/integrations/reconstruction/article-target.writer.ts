@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import type { Prisma } from '@prisma/client';
 import { scanSensitiveMaterial } from '../sensitive-material.js';
 import {
   articleReconstructionInputSchema,
@@ -19,6 +20,7 @@ import {
 } from './reconstruction-target.js';
 
 export interface ArticleIntegrationWriteInput {
+  tx?: Prisma.TransactionClient;
   companyId: string;
   integrationId: string;
   integrationCompanyMappingId: string;
@@ -69,6 +71,7 @@ export class ArticleTargetWriter implements ReconstructionWriter<ArticleReconstr
     if (gap) return blockedOutcome(ctx, input, gap);
     try {
       const result = await this.articles.writeFromIntegration({
+        tx: ctx.tx,
         companyId: ctx.companyId,
         integrationId: ctx.integrationId,
         integrationCompanyMappingId: ctx.integrationCompanyMappingId,
