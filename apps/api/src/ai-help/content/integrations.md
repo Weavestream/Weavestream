@@ -57,3 +57,20 @@ Create a **Cloudflare Zero Trust Lists** integration using the **Cloudflare Acco
 
 After **Test connection** succeeds, save and activate the integration. Open **Registered lists**, select **Register list**, and choose an existing IP list from the Cloudflare account. Existing entries are imported when it is registered. Open the registered list to add, edit, or remove IP/CIDR entries. Weavestream becomes the source of truth and the scheduled drift sweep corrects out-of-band Cloudflare changes.
 
+## Manage a registered Cloudflare Gateway IP list
+<!-- aliases: cloudflare list entries | add IP to Cloudflare list | remove IP from zero trust list | CIDR allow list | cloudflare drift repair -->
+<!-- requires: integration.manage -->
+
+Open **Admin → Integrations**, select the Cloudflare Zero Trust Lists integration, then open **Registered lists**. Registering a list imports its current entries and designates Weavestream as the source of truth for that registered list.
+
+Open a registered list to add, edit, or remove an IP/CIDR entry. Use a descriptive comment when the UI provides one so another operator can identify the purpose of an address. Changes are pushed to the Cloudflare Gateway list; do not edit the same registered list directly in Cloudflare unless you intend Weavestream’s next drift sweep to restore its recorded desired state.
+
+The list must be a Cloudflare Zero Trust/Gateway IP list, not the unrelated WAF Account Filter Lists API. A blank drift-sweep schedule means no scheduled repair; an active cron schedule checks registered lists and repairs out-of-band drift.
+
+## Browse connected helpdesk tickets
+<!-- aliases: tickets | NinjaOne tickets | helpdesk tickets | ticket browser | draft article from ticket | ticket search -->
+<!-- requires: tickets.read.global -->
+
+When a configured integration supplies ticketing data, open **Admin → Tickets** to browse live tickets across mapped companies. Use the available status, priority, board, company, and text filters to narrow the list, then open a ticket for its current provider data. An unmapped upstream client may be shown as unmapped rather than silently assigned to a company.
+
+Tickets are live integration data, not imported Weavestream records. They do not create an asset or article by themselves. Open a ticket and use it as AI context only when your organization authorizes sharing its body and internal notes with the configured AI provider. The intended workflow is to ask AI to draft a knowledge-base article from a resolved ticket, then review and save the draft as an article in the correct company and visibility scope.
