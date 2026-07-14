@@ -77,4 +77,23 @@ describe('IntegrationSyncSchedulerService', () => {
     await service.refreshFor('integration-1');
     expect(orchestrator.upsertJobScheduler).not.toHaveBeenCalled();
   });
+
+  it('still registers an explicit integration schedule when the global default is off', async () => {
+    const { service, orchestrator } = setup({
+      status: 'ACTIVE',
+      syncCron: '30 4 * * *',
+    });
+    (service as unknown as { env: { values: { INTEGRATION_SYNC_DEFAULT_CRON: string } } }).env.values.INTEGRATION_SYNC_DEFAULT_CRON = 'off';
+
+    await service.refreshFor('integration-1');
+
+    expect(orchestrator.upsertJobScheduler).toHaveBeenCalledWith(
+      'scheduled-integration-1',
+      { pattern: '30 4 * * *' },
+      {
+        name: IntegrationSyncOrchestratorJobNames.scheduled,
+        data: { kind: 'scheduled', integrationId: 'integration-1' },
+      },
+    );
+  });
 });
