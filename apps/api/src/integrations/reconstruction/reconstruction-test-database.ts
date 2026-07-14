@@ -13,6 +13,7 @@ export interface DisposableReconstructionDatabase {
   databaseName: string;
   databaseUrl: string;
   prisma: PrismaClient;
+  reset(): Promise<void>;
   drop(): Promise<void>;
 }
 
@@ -108,6 +109,27 @@ export async function createDisposableReconstructionDatabase(
     databaseName,
     databaseUrl: databaseUrl.toString(),
     prisma,
+    async reset() {
+      if (!SAFE_DATABASE_NAME.test(databaseName)) {
+        throw new Error('Refusing to reset an unsafe reconstruction test database.');
+      }
+      const tables = await prisma.$queryRaw<Array<{ tablename: string }>>`
+        SELECT tablename
+        FROM pg_tables
+        WHERE schemaname = 'public'
+          AND tablename <> '_prisma_migrations'
+        ORDER BY tablename
+      `;
+      if (tables.length === 0) {
+        throw new Error('The disposable reconstruction database has no application tables.');
+      }
+      const quotedTables = tables
+        .map(({ tablename }) => `"${tablename.replaceAll('"', '""')}"`)
+        .join(', ');
+      await prisma.$executeRawUnsafe(
+        `TRUNCATE TABLE ${quotedTables} RESTART IDENTITY CASCADE`,
+      );
+    },
     async drop() {
       if (dropped) return;
       dropped = true;

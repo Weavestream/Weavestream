@@ -335,12 +335,16 @@ describeIfDb('Breeze reconstruction disposable PostgreSQL dossier', () => {
     provenance = new IntegrationProvenanceService(prisma as never, audit);
     try {
       await prisma.$connect();
-      await seedDatabase(prisma);
     } catch (error) {
       await database.drop();
       throw error;
     }
   }, 120_000);
+
+  beforeEach(async () => {
+    await database.reset();
+    await seedDatabase(prisma);
+  }, 30_000);
 
   afterAll(async () => {
     if (database) await database.drop();
