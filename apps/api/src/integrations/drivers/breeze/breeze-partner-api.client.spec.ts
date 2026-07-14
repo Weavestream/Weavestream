@@ -162,6 +162,19 @@ describe('BreezePartnerApiClient', () => {
     );
   });
 
+  it('bounds automation dependency relation parent pages to twenty records', async () => {
+    const fx = installFetchScript([{ body: envelope([]) }]);
+    await new BreezePartnerApiClient().fetchPage(context(), {
+      resource: 'automation-relations',
+      externalOrgId: ORG,
+      cursor: null,
+      updatedSince: null,
+    });
+    expect(fx.calls[0]!.url).toBe(
+      `https://breeze.example.test/api/v1/partner-api/automations?orgId=${ORG}&limit=20`,
+    );
+  });
+
   it('does not follow redirects or forward X-API-Key to another public origin', async () => {
     const fx = installFetchScript([
       {

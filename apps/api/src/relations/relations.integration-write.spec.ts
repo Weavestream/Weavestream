@@ -129,6 +129,76 @@ describe('RelationsService integration system writes', () => {
     });
   });
 
+  it.each(['automation', 'backup'] as const)(
+    'writes %s article dependencies through the real relation service and safely gaps missing/cross-company endpoints',
+    async (kind) => {
+      const orgId = '11111111-1111-4111-8111-111111111111';
+      const sourceId = '55555555-5555-4555-8555-555555555555';
+      const dependencyId = '66666666-6666-4666-8666-666666666666';
+      const baseRecord = {
+        id: sourceId, orgId, siteId: null, sourceUpdatedAt: '2026-07-14T11:00:00.000Z',
+        revision: 'a'.repeat(64), sourceScope: 'organization' as const,
+      };
+      const transformed = kind === 'automation'
+        ? transformBreezeRecord('automation-relations', {
+            ...baseRecord, name: 'Rebuild', description: null, enabled: true,
+            trigger: { type: 'manual' }, conditions: null,
+            actions: [{ type: 'run_script', scriptId: dependencyId }], onFailure: 'stop',
+            notificationTargets: null, dependencies: [{ resource: 'scripts', id: dependencyId }],
+          })
+        : transformBreezeRecord('backup-configuration-relations', {
+            ...baseRecord, kind: 'policy', name: 'Server backup', enabled: true,
+            destinationId: dependencyId, targets: { roles: ['server'] }, schedule: null,
+            retention: null, exclusions: [], restore: { types: ['full'], notes: null },
+            gfs: null, legalHold: false, legalHoldReason: null, bandwidthLimitMbps: null,
+            backupWindowStart: null, backupWindowEnd: null, priority: null,
+          });
+      const relationInput = transformed[0]!.reconstructionInput as never;
+      const context = (
+        harness: ReturnType<typeof setup>,
+        resolveBinding: ReconstructionWriteContext['resolveBinding'],
+      ): ReconstructionWriteContext => ({
+        tx: harness.tx as never, companyId: ids.company, integrationId: ids.integration,
+        integrationCompanyMappingId: ids.mapping, resourceId: ids.resource,
+        resourceKey: kind === 'automation' ? 'automation-relations' : 'backup-configuration-relations',
+        externalOrgId: orgId, auditActorId: ids.actor,
+        now: new Date('2026-07-14T12:00:00.000Z'), dryRun: false, resolveBinding,
+      });
+
+      const success = setup();
+      const successResolve = jest.fn()
+        .mockResolvedValueOnce({ targetKind: 'article', targetId: ids.article, companyId: ids.company })
+        .mockResolvedValueOnce({ targetKind: 'article', targetId: ids.other, companyId: ids.company });
+      await expect(new RelationTargetWriter(success.service).write(
+        context(success, successResolve), relationInput,
+      )).resolves.toMatchObject({ change: 'created', targetKind: 'relation' });
+      expect(success.tx.relation.upsert).toHaveBeenCalled();
+
+      const missing = setup();
+      const missingResolve = jest.fn()
+        .mockResolvedValueOnce({ targetKind: 'article', targetId: ids.article, companyId: ids.company })
+        .mockResolvedValueOnce(null);
+      await expect(new RelationTargetWriter(missing.service).write(
+        context(missing, missingResolve), relationInput,
+      )).resolves.toMatchObject({
+        change: 'blocked', gaps: [expect.objectContaining({ kind: 'missing_dependency' })],
+      });
+      expect(missing.tx.relation.upsert).not.toHaveBeenCalled();
+
+      const crossCompany = setup();
+      const crossResolve = jest.fn()
+        .mockResolvedValueOnce({ targetKind: 'article', targetId: ids.article, companyId: ids.company })
+        .mockResolvedValueOnce({ targetKind: 'article', targetId: ids.other, companyId: 'other-company' });
+      await expect(new RelationTargetWriter(crossCompany.service).write(
+        context(crossCompany, crossResolve), relationInput,
+      )).resolves.toMatchObject({
+        change: 'blocked', gaps: [expect.objectContaining({ kind: 'validation', details: { reasonCode: 'dependency_company_mismatch' } })],
+      });
+      expect(crossCompany.tx.relation.upsert).not.toHaveBeenCalled();
+    },
+  );
+
+
   it('writes an exported Breeze hierarchy edge through binding resolution and the real relation service', async () => {
     const orgId = '11111111-1111-4111-8111-111111111111';
     const siteId = '22222222-2222-4222-8222-222222222222';

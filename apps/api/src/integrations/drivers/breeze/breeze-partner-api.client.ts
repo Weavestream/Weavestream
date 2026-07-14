@@ -30,6 +30,7 @@ const FAN_OUT_RESOURCES = new Set<BreezeResourceKey>([
   'device-relationships',
   'custom-field-values',
   'custom-field-value-relations',
+  'automation-relations',
 ]);
 
 export type BreezePartnerApiContext = IntegrationContext;

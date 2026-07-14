@@ -509,10 +509,55 @@ describe('Breeze transforms', () => {
       status: 'active', features: [{ id: SEGMENT, type: 'settings', policyId: null, settings }],
     });
     expect(() => transformBreezeRecord('configuration-policies', policy({
-      tokenize: true, secretary: 'Alice', passwordPolicyEnabled: true,
+      tokenize: true, secretary: 'Alice', policyEnabled: true,
     }))).not.toThrow();
+    expect(() => transformBreezeRecord('configuration-policies', policy({ passwordPolicyEnabled: true })))
+      .toThrow(/blocked|secret|sensitive/i);
     expect(() => transformBreezeRecord('configuration-policies', policy({ providerConfig: {} })))
       .toThrow(/blocked|secret|sensitive/i);
+    expect(() => transformBreezeRecord('configuration-policies', policy({ nested: { accessToken: 'ordinary' } })))
+      .toThrow(/blocked|secret|sensitive/i);
+    const highEntropy = 'JBSWY3DPEHPK3PXP'.repeat(3);
+    expect(() => transformBreezeRecord('configuration-policies', policy({ value: highEntropy })))
+      .toThrow(/blocked|secret|sensitive/i);
+  });
+
+  it.each([
+    'password=hunter2',
+    'set "PASSWORD=hunter2"',
+    'setx /M DB_PASSWORD hunter2',
+    'tool --password hunter2 --mode rebuild',
+    "tool --mode rebuild --access-token 'ordinary-value'",
+    '{"password":"hunter2"}',
+    '{"user":"admin","password":"hunter2","mode":"rebuild"}',
+    'RECOVERY_KEY=1234-5678-9012',
+    'BitLockerRecoveryKey: "1234-5678-9012"',
+    'PASSWORD_VALUE=hunter2',
+    'TOKEN_BACKUP=ordinary-value',
+    'tool "PASSWORD=hunter2"',
+    'postgresql://operator:hunter2@database.example/rebuild',
+    "$Password = 'Summer2026!'",
+    "ConvertTo-SecureString -AsPlainText -Force 'Summer2026!'",
+  ])('blocks adjacent low-entropy credential syntax without leaking it: %s', (content) => {
+    const input = {
+      ...base, siteId: null, sourceScope: 'organization', name: 'Unsafe rebuild', description: null,
+      category: 'build', osTypes: ['windows'], language: 'powershell', content, parameters: null,
+      timeoutSeconds: 300, runAs: 'system', version: 1, exitCodeSeverityMapping: null,
+    };
+    expect(() => transformBreezeRecord('scripts', input)).toThrow(/blocked|secret|sensitive/i);
+  });
+
+  it.each([
+    'echo password policy enabled',
+    'tool --password-policy enabled --mode rebuild',
+    'echo secretary tokenize ordinary prose',
+    'postgresql://database.example/rebuild',
+  ])('allows nearby benign reconstruction script text: %s', (content) => {
+    expect(() => transformBreezeRecord('scripts', {
+      ...base, siteId: null, sourceScope: 'organization', name: 'Safe rebuild', description: null,
+      category: 'build', osTypes: ['linux'], language: 'bash', content, parameters: null,
+      timeoutSeconds: 300, runAs: 'system', version: 1, exitCodeSeverityMapping: null,
+    })).not.toThrow();
   });
 
   it('preserves split custom-field definitions and repeated device value pages losslessly', () => {
@@ -601,7 +646,7 @@ describe('Breeze transforms', () => {
       ...base, siteId: null, sourceScope: 'organization', name: 'Too large', description: null,
       enabled: true, trigger: { type: 'manual' }, conditions: null, actions,
       onFailure: 'stop', notificationTargets: null, dependencies: [],
-    })).toThrow(/native article bound/i);
+    })).toThrow(/native field bound/i);
   });
 
   it('neutralizes source-supplied managed marker tokens and emits exactly one region', () => {
@@ -1231,11 +1276,90 @@ describe('Breeze transforms', () => {
 });
 
 describe('BreezeDriver transport delegation', () => {
+  it('keeps maximum automation dependency fan-out lossless within 10,000-record continuation pages', async () => {
+    const uuid = (value: number) =>
+      `${value.toString(16).padStart(8, '0')}-0000-4000-8000-${value.toString(16).padStart(12, '0')}`;
+    const parents = Array.from({ length: 21 }, (_, parentIndex) => ({
+      ...base,
+      id: uuid(parentIndex + 1),
+      siteId: null,
+      sourceScope: 'organization',
+      name: `Automation ${parentIndex + 1}`,
+      description: null,
+      enabled: true,
+      trigger: { type: 'manual' },
+      conditions: null,
+      actions: [],
+      onFailure: 'stop',
+      notificationTargets: null,
+      dependencies: Array.from({ length: 500 }, (_, dependencyIndex) => ({
+        resource: 'scripts' as const,
+        id: uuid(10_000 + dependencyIndex + 1),
+      })),
+    }));
+    const client = {
+      testConnection: jest.fn(), listOrganizations: jest.fn(),
+      fetchPage: jest.fn()
+        .mockResolvedValueOnce({
+          schemaVersion: '1', snapshotAt: '2026-07-14T12:00:00.000Z', data: parents.slice(0, 20),
+          nextCursor: 'automation-page-2', hasMore: true,
+        })
+        .mockResolvedValueOnce({
+          schemaVersion: '1', snapshotAt: '2026-07-14T12:00:00.000Z', data: parents.slice(20),
+          nextCursor: null, hasMore: false,
+        }),
+    };
+    const driver = new BreezeDriver(client);
+    const fullContext = { ...ctx('automation-relations'), mode: 'full' as const, updatedSince: null };
+    const first = await driver.fetchRecords(fullContext, null);
+    const second = await driver.fetchRecords(
+      { ...fullContext, snapshotAt: first.snapshotAt ?? null }, first.cursor ?? null,
+    );
+    const identities = [...first.records, ...second.records].map(
+      (record) => record.reconstructionInput?.externalId,
+    );
+    expect(first.records).toHaveLength(10_000);
+    expect(second.records).toHaveLength(500);
+    expect(new Set(identities).size).toBe(10_500);
+    expect(client.fetchPage).toHaveBeenNthCalledWith(
+      2, expect.anything(), expect.objectContaining({ cursor: 'automation-page-2' }),
+    );
+  });
+
+  it('quarantines one oversized legal article and continues its safe page sibling', async () => {
+    const oversizedName = 'Oversized procedure sentinel';
+    const oversized = {
+      ...base, siteId: null, sourceScope: 'organization', name: oversizedName, description: null,
+      enabled: true, trigger: { type: 'manual' }, conditions: null,
+      actions: Array.from({ length: 500 }, (_, index) => ({ type: 'step', index, instructions: 'x'.repeat(1_100) })),
+      onFailure: 'stop', notificationTargets: null, dependencies: [],
+    };
+    const safe = { ...oversized, id: SEGMENT, name: 'Safe sibling', actions: [{ type: 'reboot' }] };
+    const client = {
+      testConnection: jest.fn(), listOrganizations: jest.fn(),
+      fetchPage: jest.fn().mockResolvedValue({
+        schemaVersion: '1', snapshotAt: '2026-07-14T12:00:00.000Z', data: [oversized, safe],
+        nextCursor: null, hasMore: false,
+      }),
+    };
+    const page = await new BreezeDriver(client).fetchRecords(
+      { ...ctx('automations'), mode: 'full', updatedSince: null }, null,
+    );
+    expect(page.records).toHaveLength(1);
+    expect(page.blockedInputs).toEqual([expect.objectContaining({
+      kind: 'validation', externalId: `${ORG}:automations:${DEVICE}`,
+      details: expect.objectContaining({ reasonCode: 'bounded_input', sourceId: DEVICE }),
+    })]);
+    const serialized = JSON.stringify(page);
+    expect(serialized).not.toContain(oversizedName);
+    expect(serialized).not.toContain('x'.repeat(1_100));
+  });
+
   it('converts a malicious inline definition to a safe blocked input and continues safe records', async () => {
-    const secret = 'Summer2026!';
+    const secret = 'JBSWY3DPEHPK3PXP'.repeat(3);
     const unsafe = {
       ...base, siteId: null, sourceScope: 'organization', name: 'Unsafe', description: null,
-      category: null, osTypes: ['linux'], language: 'bash', content: `export TOKEN=${secret}`,
+      category: null, osTypes: ['linux'], language: 'bash', content: `echo ${secret}`,
       parameters: null, timeoutSeconds: 30, runAs: 'system', version: 1,
       exitCodeSeverityMapping: null,
     };
@@ -1257,7 +1381,7 @@ describe('BreezeDriver transport delegation', () => {
     })]);
     const serialized = JSON.stringify(page);
     expect(serialized).not.toContain(secret);
-    expect(serialized).not.toContain('export TOKEN');
+    expect(serialized).not.toContain('echo JBSWY');
     expect(serialized).not.toContain('Unsafe');
   });
 

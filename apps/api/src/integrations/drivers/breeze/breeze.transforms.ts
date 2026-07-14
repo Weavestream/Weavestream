@@ -14,14 +14,24 @@ import {
   type BreezeRecordBase,
   type BreezeResourceKey,
 } from './breeze.schemas.js';
-import { scanSensitiveMaterial } from '../../sensitive-material.js';
 
 const MANAGED_START = '<!-- weavestream:breeze:managed:start -->';
 const MANAGED_END = '<!-- weavestream:breeze:managed:end -->';
 const FORBIDDEN_CONFIGURATION_KEYS = new Set([
   'authorization', 'credential', 'credentials', 'encryptionkey', 'apikey', 'accesstoken',
   'refreshtoken', 'privatekey', 'providerconfig', 'password', 'passwd', 'pwd', 'secret', 'token',
+  'recoverykey', 'bitlockerrecoverykey',
 ]);
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
+const SECRET_VALUE_PATTERNS = [
+  /-----BEGIN (?:[A-Z ]+ )?PRIVATE KEY-----/iu,
+  /\bauthorization\s*:\s*(?:bearer|basic)\s+[A-Za-z0-9+/=_-]{12,}/iu,
+  /\b(?:gh[oprsu]_|sk-(?:live|test)?-?|xox[baprs]-)[A-Za-z0-9_-]{20,}/u,
+  /\bAKIA[0-9A-Z]{16}\b/u,
+  /\b[a-z][a-z0-9+.-]*:\/\/[^\s/:@]+:[^\s/@]+@/iu,
+  /\bConvertTo-SecureString\s+(?:-String\s+)?(?:"[^"\r\n]+"|'[^'\r\n]+')\s+-AsPlainText\b/iu,
+] as const;
 
 export class BreezeSensitiveDefinitionError extends Error {
   constructor(readonly sourceId: string, readonly orgId: string) {
@@ -469,17 +479,17 @@ function isDesiredConfigurationResource(resource: BreezeResourceKey): boolean {
 }
 
 function inspectDesiredConfiguration(root: unknown): 'safe' | 'sensitive' | 'bounds_exceeded' {
-  const pending: Array<{ value: unknown; depth: number }> = [{ value: root, depth: 0 }];
+  const pending: Array<{ value: unknown; depth: number; trustedRevision?: boolean }> = [{ value: root, depth: 0 }];
   let visited = 0;
   while (pending.length > 0) {
-    const { value, depth } = pending.pop()!;
+    const { value, depth, trustedRevision } = pending.pop()!;
     visited += 1;
     if (visited > 10_000 || depth > 32) return 'bounds_exceeded';
     if (typeof value === 'string') {
-      if (value.length > 12_288 || scanSensitiveMaterial(value) !== 'safe') return 'sensitive';
-      if (/^(?:password|passwd|pwd|secret|token|api[_-]?key|authorization|private[_-]?key|provider[_-]?config|encryption[_-]?key)$/iu.test(value.trim())) return 'sensitive';
-      if (/(?:^|[\s;|&])(?:export\s+|setx?\s+)?["']?\$?(?:env:)?(?:password|passwd|pwd|secret|token|api[_-]?key|authorization|private[_-]?key|provider[_-]?config|encryption[_-]?key)\s*(?:=|:)\s*\S+/imu.test(value)
-        || /ConvertTo-SecureString\s+(?:-String\s+)?(?:"[^"\r\n]+"|'[^'\r\n]+')\s+-AsPlainText/iu.test(value)) return 'sensitive';
+      if (value.length > 12_288) return 'bounds_exceeded';
+      if (!(trustedRevision && SHA256_PATTERN.test(value)) && isSecretLikeConfigurationValue(value)) {
+        return 'sensitive';
+      }
       continue;
     }
     if (!value || typeof value !== 'object') continue;
@@ -488,13 +498,91 @@ function inspectDesiredConfiguration(root: unknown): 'safe' | 'sensitive' | 'bou
       continue;
     }
     for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
-      const delimited = key.split(/[^A-Za-z0-9]+/u).filter(Boolean).map((part) => part.toLowerCase());
-      const compact = key.replace(/[^A-Za-z0-9]/gu, '').toLowerCase();
-      if ([...delimited, compact].some((token) => FORBIDDEN_CONFIGURATION_KEYS.has(token))) return 'sensitive';
-      pending.push({ value: child, depth: depth + 1 });
+      if (isForbiddenConfigurationKey(key)) return 'sensitive';
+      pending.push({ value: child, depth: depth + 1, trustedRevision: depth === 0 && key === 'revision' });
     }
   }
   return 'safe';
+}
+
+function splitConfigurationFieldName(name: string): string[] {
+  const words = name
+    .replace(/([a-z0-9])([A-Z])/gu, '$1 $2')
+    .split(/[^A-Za-z0-9]+/u)
+    .filter(Boolean)
+    .map((word) => word.toLowerCase());
+  return [...words, words.join('')];
+}
+
+function isForbiddenConfigurationKey(name: string): boolean {
+  const tokens = splitConfigurationFieldName(name);
+  return tokens.some((token) => FORBIDDEN_CONFIGURATION_KEYS.has(token));
+}
+
+function shannonEntropy(value: string): number {
+  const frequencies = new Map<string, number>();
+  for (const character of value) frequencies.set(character, (frequencies.get(character) ?? 0) + 1);
+  let entropy = 0;
+  for (const count of frequencies.values()) {
+    const probability = count / value.length;
+    entropy -= probability * Math.log2(probability);
+  }
+  return entropy;
+}
+
+function boundedWindows(value: string, windowSize: number): string[] {
+  if (value.length <= windowSize) return [value];
+  const offsets = [0, Math.floor((value.length - windowSize) / 2), value.length - windowSize];
+  return [...new Set(offsets)].map((offset) => value.slice(offset, offset + windowSize));
+}
+
+function candidateLooksHighEntropy(candidate: string): boolean {
+  if (candidate.length < 32 || UUID_PATTERN.test(candidate)) return false;
+  const sampleSize = Math.min(64, candidate.length);
+  return boundedWindows(candidate, sampleSize).some((sample) => shannonEntropy(sample) >= 3.2);
+}
+
+function containsCredentialAssignment(value: string): boolean {
+  const assignments = value.matchAll(
+    /(?:^|[\s;|&{[,])(?:export\s+|setx?\s+)?["']?\$?(?:env:)?([A-Za-z][A-Za-z0-9_-]{0,127})["']?\s*(?:=|:)\s*(?:"[^"\r\n]+"|'[^'\r\n]+'|[^\s;,}\]]+)/gimu,
+  );
+  for (const assignment of assignments) {
+    if (splitConfigurationFieldName(assignment[1] ?? '').some((token) => FORBIDDEN_CONFIGURATION_KEYS.has(token))) {
+      return true;
+    }
+  }
+  const setCommands = value.matchAll(
+    /\b(?:setx?)(?:\s+\/M)?\s+["']?([A-Za-z][A-Za-z0-9_-]{0,127})(?:\s*=\s*|\s+)(?:"[^"\r\n]+"|'[^'\r\n]+'|[^\s;]+)/gimu,
+  );
+  for (const command of setCommands) {
+    if (splitConfigurationFieldName(command[1] ?? '').some((token) => FORBIDDEN_CONFIGURATION_KEYS.has(token))) {
+      return true;
+    }
+  }
+  const flags = value.matchAll(
+    /(?:^|\s)--?([A-Za-z][A-Za-z0-9_-]{0,127})(?:=|\s+)(?:"[^"\r\n]+"|'[^'\r\n]+'|[^\s;]+)/gimu,
+  );
+  for (const flag of flags) {
+    const compact = (flag[1] ?? '').replace(/[^A-Za-z0-9]/gu, '').toLowerCase();
+    if (FORBIDDEN_CONFIGURATION_KEYS.has(compact)) return true;
+  }
+  if (
+    /\bConvertTo-SecureString\b/iu.test(value) &&
+    /(?:^|\s)-AsPlainText(?:\s|$)/iu.test(value) &&
+    /(?:"[^"\r\n]+"|'[^'\r\n]+')/u.test(value)
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function isSecretLikeConfigurationValue(value: string): boolean {
+  const highEntropyCandidates = value.match(/[A-Za-z0-9+/_=-]{32,}/gu) ?? [];
+  return SECRET_VALUE_PATTERNS.some((pattern) => pattern.test(value))
+    || containsCredentialAssignment(value)
+    || (/^[A-Za-z0-9_.-]{1,128}$/u.test(value)
+      && splitConfigurationFieldName(value).some((token) => FORBIDDEN_CONFIGURATION_KEYS.has(token)))
+    || highEntropyCandidates.some(candidateLooksHighEntropy);
 }
 
 function renderDesiredConfiguration(
@@ -559,7 +647,7 @@ function renderDesiredConfiguration(
   if (markdown.split(MANAGED_START).length !== 2 || markdown.split(MANAGED_END).length !== 2) {
     throw new Error('Breeze desired configuration produced invalid managed-region markers.');
   }
-  if (markdown.length > 500_000) throw new Error('Breeze desired configuration exceeds the native article bound.');
+  if (markdown.length > 500_000) throw new BreezeBoundedDefinitionError(record.id, record.orgId);
   return markdown;
 }
 
