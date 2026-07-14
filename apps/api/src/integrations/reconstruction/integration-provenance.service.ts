@@ -4,7 +4,9 @@ import { createHash } from 'node:crypto';
 import {
   integrationProvenanceSchema,
   integrationReconstructionGapInputSchema,
+  integrationTargetProvenanceSchema,
   type IntegrationTargetKind,
+  type IntegrationTargetProvenance,
   type ReconstructionGapKind,
   type SafeIntegrationProvenance,
 } from '@weavestream/shared';
@@ -16,6 +18,54 @@ const DEFAULT_STALE_BATCH = 200;
 const DEFAULT_STALE_LIMIT = 10_000;
 const TARGET_MUTATION_BATCH = 500;
 const MAX_GAPS_PER_PAGE = 1_000;
+
+export async function readTargetProvenance(
+  prisma: Pick<PrismaService, 'integrationSyncRecord'>,
+  input: { companyId: string; targetKind: IntegrationTargetKind; targetId: string },
+): Promise<IntegrationTargetProvenance[]> {
+  const targetField = {
+    asset: 'assetId', subnet: 'subnetId', ip_reservation: 'ipReservationId',
+    article: 'articleId', relation: 'relationId',
+  }[input.targetKind];
+  const rows = await prisma.integrationSyncRecord.findMany({
+    where: { companyId: input.companyId, targetKind: input.targetKind, [targetField]: input.targetId },
+    select: {
+      integrationCompanyMappingId: true, resourceId: true, targetKind: true,
+      assetId: true, subnetId: true, ipReservationId: true, articleId: true, relationId: true,
+      state: true, staleSince: true, provenance: true,
+      asset: { select: { name: true } },
+      subnet: { select: { name: true } },
+      ipReservation: { select: { label: true, subnetId: true } },
+      article: { select: { title: true } },
+      companyMapping: { select: { integration: { select: { id: true, name: true, driver: true } } } },
+      resource: { select: { resourceKey: true } },
+    },
+    orderBy: [{ lastSyncedAt: 'desc' }, { id: 'asc' }],
+    take: 100,
+  });
+  return rows.flatMap((row) => {
+    const provenance = integrationProvenanceSchema.safeParse(row.provenance);
+    if (!provenance.success || provenance.data.state !== row.state) return [];
+    const target = safeProvenanceTarget(input.companyId, row);
+    if (!target) return [];
+    const dto = integrationTargetProvenanceSchema.safeParse({
+      integrationId: row.companyMapping.integration.id,
+      integrationName: row.companyMapping.integration.name,
+      integrationCompanyMappingId: row.integrationCompanyMappingId,
+      resourceId: row.resourceId,
+      sourceLabel: row.companyMapping.integration.name,
+      sourceResource: row.resource.resourceKey,
+      ownership: provenance.data.ownership,
+      state: row.state,
+      firstSeenAt: provenance.data.firstSeenAt,
+      lastSeenAt: provenance.data.lastSeenAt,
+      lastSyncedAt: provenance.data.lastSyncedAt,
+      staleSince: row.staleSince?.toISOString() ?? null,
+      target,
+    });
+    return dto.success ? [dto.data] : [];
+  });
+}
 
 export interface ProvenanceBuildInput {
   integrationId: string;
@@ -320,6 +370,40 @@ function targetIds(
     .filter((row) => row.targetKind === kind)
     .map((row) => row[key])
     .filter((id): id is string => typeof id === 'string');
+}
+
+function safeProvenanceTarget(
+  companyId: string,
+  row: {
+    targetKind: string;
+    assetId: string | null; subnetId: string | null; ipReservationId: string | null;
+    articleId: string | null; relationId: string | null;
+    asset: { name: string } | null; subnet: { name: string } | null;
+    ipReservation: { label: string; subnetId: string } | null;
+    article: { title: string } | null;
+  },
+) {
+  if (row.targetKind === 'asset' && row.assetId && row.asset) return {
+    targetKind: 'asset' as const, targetId: row.assetId, targetLabel: row.asset.name,
+    targetHref: `/admin/companies/${companyId}/assets/${row.assetId}`,
+  };
+  if (row.targetKind === 'subnet' && row.subnetId && row.subnet) return {
+    targetKind: 'subnet' as const, targetId: row.subnetId, targetLabel: row.subnet.name,
+    targetHref: `/admin/companies/${companyId}/ipam/${row.subnetId}`,
+  };
+  if (row.targetKind === 'ip_reservation' && row.ipReservationId && row.ipReservation) return {
+    targetKind: 'ip_reservation' as const, targetId: row.ipReservationId,
+    targetLabel: row.ipReservation.label,
+    targetHref: `/admin/companies/${companyId}/ipam/${row.ipReservation.subnetId}`,
+  };
+  if (row.targetKind === 'article' && row.articleId && row.article) return {
+    targetKind: 'article' as const, targetId: row.articleId, targetLabel: row.article.title,
+    targetHref: `/admin/companies/${companyId}/articles/${row.articleId}`,
+  };
+  if (row.targetKind === 'relation' && row.relationId) return {
+    targetKind: 'relation' as const, targetId: row.relationId, targetLabel: 'Relationship', targetHref: null,
+  };
+  return null;
 }
 
 async function archiveTargetGroup(

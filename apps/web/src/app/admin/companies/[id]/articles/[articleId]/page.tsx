@@ -22,6 +22,7 @@ import { LinkedItemsPanel } from '../../../../../../components/relations';
 import { AttachmentsPanel } from '../../../../../../components/upload/attachments-panel';
 import { ArticleActions } from '../article-actions';
 import { HistoryTrigger } from './history-trigger';
+import { ProvenanceBadge } from '../../../../../../components/integrations/provenance-badge';
 
 export async function generateMetadata({
   params,
@@ -207,6 +208,12 @@ export default async function ArticleReadPage({
             gap: 20,
           }}
         >
+          {article.provenance.map((provenance) => (
+            <ProvenanceBadge
+              key={`${provenance.integrationId}:${provenance.resourceId}`}
+              provenance={provenance}
+            />
+          ))}
           <div className="article-read-toc" style={{ display: 'contents' }}>
             <ArticleToc
               articleId={article.id}

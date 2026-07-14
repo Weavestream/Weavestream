@@ -23,6 +23,7 @@ import { CredentialsPanel } from '../../../../../../components/passwords/credent
 import { vaultLinkLabel, vaultLinkUrl } from '../../../../../../lib/vault-link';
 import { AssetChatContext } from '../../../../../../components/chat-panel/asset-chat-context';
 import { AssetActions } from './asset-actions';
+import { ProvenanceBadge } from '../../../../../../components/integrations/provenance-badge';
 
 export async function generateMetadata({
   params,
@@ -187,6 +188,12 @@ export default async function AssetDetailPage({
           </div>
 
           <aside style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            {asset.provenance.map((provenance) => (
+              <ProvenanceBadge
+                key={`${provenance.integrationId}:${provenance.resourceId}`}
+                provenance={provenance}
+              />
+            ))}
             <LinkedItemsPanel
               companyId={companyId}
               entityType="asset"
@@ -239,16 +246,6 @@ export default async function AssetDetailPage({
                       key="updated-by"
                       label="Updated by"
                       value={updatedBy.name}
-                    />,
-                  );
-                }
-                for (const src of asset.syncSources) {
-                  rows.push(
-                    <Row
-                      key={`sync-${src.integrationId}-${src.resourceKey}-${src.externalId}`}
-                      label={`Synced · ${src.driver.toLowerCase()}`}
-                      value={relative(new Date(src.lastSyncedAt))}
-                      title={`${src.resourceKey} · external id ${src.externalId} · last synced ${new Date(src.lastSyncedAt).toLocaleString()}`}
                     />,
                   );
                 }

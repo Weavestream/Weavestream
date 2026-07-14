@@ -16,6 +16,17 @@ import type {
   ReplaceFieldMappingsInput,
   UpdateIntegrationInput,
   UpdateIntegrationResourceInput,
+  IntegrationCompletenessQuery,
+  IntegrationCompletenessResponse,
+  IntegrationGapsPage,
+  IntegrationGapsQuery,
+  IntegrationNativeTarget,
+} from '@weavestream/shared';
+import {
+  integrationCompletenessResponseSchema,
+  integrationGapsPageSchema,
+  reconstructionCompletenessCountsSchema,
+  driverResourceDescriptorSchema,
 } from '@weavestream/shared';
 import { PrismaService } from '../prisma/prisma.service.js';
 import {
@@ -33,6 +44,8 @@ import { assertStringIdList } from '../common/safe-id-list.js';
 import { ReconstructionWriterRegistry } from './reconstruction/reconstruction-writer.registry.js';
 import type { RecommendedDestination } from './drivers/integration-driver.js';
 import { integrationAssetExternalSource } from './integration-asset-source.js';
+import { createHmac, timingSafeEqual } from 'node:crypto';
+import { scanSensitiveMaterial } from './sensitive-material.js';
 
 export interface AuditMeta {
   ip: string;
@@ -691,6 +704,13 @@ export class IntegrationsService {
     const fieldMappingCount = await this.prisma.integrationFieldMapping.count({
       where: { resourceId: existing.id },
     });
+    const resourceDescriptor = driver.descriptor.resources.find(
+      (resource) => resource.key === resourceKey,
+    )!;
+    assertResourcePatchCompatible(resourceDescriptor, input);
+    const nextTargetConfig = input.targetConfig === undefined
+      ? (existing.targetConfig as Record<string, unknown>)
+      : validateResourceTargetConfig(resourceDescriptor, input.targetConfig);
 
     const nextLayoutId =
       input.assetLayoutId === undefined ? existing.assetLayoutId : input.assetLayoutId;
@@ -732,6 +752,7 @@ export class IntegrationsService {
       enabled: existing.enabled,
       assetLayoutId: existing.assetLayoutId,
       matchKeyFieldIds: existing.matchKeyFieldIds,
+      targetConfig: existing.targetConfig,
     };
 
     await this.prisma.integrationResource.update({
@@ -741,6 +762,9 @@ export class IntegrationsService {
         assetLayoutId:
           input.assetLayoutId === undefined ? undefined : (input.assetLayoutId ?? null),
         matchKeyFieldIds: input.matchKeyFieldIds === undefined ? undefined : input.matchKeyFieldIds,
+        targetConfig: input.targetConfig === undefined
+          ? undefined
+          : (nextTargetConfig as Prisma.InputJsonValue),
       },
     });
 
@@ -757,10 +781,170 @@ export class IntegrationsService {
         enabled: fresh.enabled,
         assetLayoutId: fresh.assetLayoutId,
         matchKeyFieldIds: fresh.matchKeyFieldIds,
+        targetConfig: fresh.targetConfig,
       },
-      fields: ['enabled', 'assetLayoutId', 'matchKeyFieldIds'],
+      fields: ['enabled', 'assetLayoutId', 'matchKeyFieldIds', 'targetConfig'],
     });
     return fresh;
+  }
+
+  // -------------------------------------------------------------------
+  // Reconstruction completeness and safe gaps (global administration)
+  // -------------------------------------------------------------------
+
+  async getReconstructionCompleteness(
+    integrationId: string,
+    query: IntegrationCompletenessQuery,
+  ): Promise<IntegrationCompletenessResponse> {
+    const integration = await this.requireIntegration(integrationId);
+    await this.assertReconstructionReadScope(integrationId, query);
+    const rows = await this.prisma.integrationReconstructionSummary.findMany({
+      where: {
+        companyMapping: { integrationId },
+        ...(query.mappingId ? { integrationCompanyMappingId: query.mappingId } : {}),
+        ...(query.resourceId ? { resourceId: query.resourceId } : {}),
+      },
+      include: {
+        company: { select: { name: true } },
+        companyMapping: { select: { externalOrgName: true, externalOrgId: true } },
+        resource: { select: { resourceKey: true } },
+      },
+      orderBy: [
+        { integrationCompanyMappingId: 'asc' },
+        { resourceId: 'asc' },
+        { id: 'asc' },
+      ],
+      take: 10_001,
+    });
+    if (rows.length > 10_000) {
+      throw new BadRequestException('Completeness results exceeded the bounded limit.');
+    }
+    const descriptor = this.drivers.has(integration.driver)
+      ? this.drivers.describe(integration.driver)
+      : null;
+    const responseRows = rows.flatMap((row) => {
+      if (!row.resourceId || !row.resource) return [];
+      const counts = reconstructionCompletenessCountsSchema.parse(row.counts);
+      const externalOrgName = row.companyMapping.externalOrgName?.trim()
+        || row.companyMapping.externalOrgId;
+      return [{
+        id: row.id,
+        companyId: row.companyId,
+        companyName: row.company.name,
+        integrationCompanyMappingId: row.integrationCompanyMappingId,
+        externalOrgName,
+        resourceId: row.resourceId,
+        resourceKey: row.resource.resourceKey,
+        resourceLabel: descriptor?.resources.find((resource) => resource.key === row.resource!.resourceKey)?.label
+          ?? row.resource.resourceKey,
+        counts,
+        evaluatedAt: row.evaluatedAt.toISOString(),
+        lastSuccessfulSyncAt: row.lastSuccessfulSyncAt?.toISOString() ?? null,
+      }];
+    });
+    const totals = emptyCompletenessCounts();
+    for (const row of responseRows) addCompletenessCounts(totals, row.counts);
+    return integrationCompletenessResponseSchema.parse({ counts: totals, rows: responseRows });
+  }
+
+  async listReconstructionGaps(
+    integrationId: string,
+    query: IntegrationGapsQuery,
+  ): Promise<IntegrationGapsPage> {
+    const integration = await this.requireIntegration(integrationId);
+    await this.assertReconstructionReadScope(integrationId, query);
+    const cursor = query.cursor
+      ? decodeGapCursor(query.cursor, integrationId, query, this.env.integrationActiveKey)
+      : null;
+    const resolutionWhere = query.resolution === 'active'
+      ? { resolvedAt: null }
+      : query.resolution === 'resolved'
+        ? { resolvedAt: { not: null } }
+        : {};
+    const rows = await this.prisma.integrationReconstructionGap.findMany({
+      where: {
+        companyMapping: { integrationId },
+        ...(query.mappingId ? { integrationCompanyMappingId: query.mappingId } : {}),
+        ...(query.resourceId ? { resourceId: query.resourceId } : {}),
+        ...(query.kind ? { kind: query.kind } : {}),
+        ...resolutionWhere,
+        ...(cursor ? {
+          OR: [
+            { lastSeenAt: { lt: cursor.lastSeenAt } },
+            { lastSeenAt: cursor.lastSeenAt, id: { gt: cursor.id } },
+          ],
+        } : {}),
+      },
+      include: {
+        company: { select: { name: true } },
+        companyMapping: { select: { externalOrgName: true, externalOrgId: true } },
+        resource: { select: { resourceKey: true } },
+        syncRecord: {
+          select: {
+            companyId: true, integrationCompanyMappingId: true, resourceId: true,
+            targetKind: true,
+            assetId: true, subnetId: true, ipReservationId: true, articleId: true, relationId: true,
+            asset: { select: { name: true } },
+            subnet: { select: { name: true } },
+            ipReservation: { select: { label: true, subnetId: true } },
+            article: { select: { title: true } },
+          },
+        },
+      },
+      orderBy: [{ lastSeenAt: 'desc' }, { id: 'asc' }],
+      take: query.limit + 1,
+    });
+    const hasMore = rows.length > query.limit;
+    const pageRows = hasMore ? rows.slice(0, query.limit) : rows;
+    const descriptor = this.drivers.has(integration.driver)
+      ? this.drivers.describe(integration.driver)
+      : null;
+    const items = pageRows.map((row) => ({
+      id: row.id,
+      companyId: row.companyId,
+      companyName: row.company.name,
+      integrationCompanyMappingId: row.integrationCompanyMappingId,
+      externalOrgName: row.companyMapping.externalOrgName?.trim() || row.companyMapping.externalOrgId,
+      resourceId: row.resourceId,
+      resourceKey: row.resource.resourceKey,
+      resourceLabel: descriptor?.resources.find((resource) => resource.key === row.resource.resourceKey)?.label
+        ?? row.resource.resourceKey,
+      kind: row.kind,
+      message: safeReadGapMessage(row.kind, row.message),
+      firstSeenAt: row.firstSeenAt.toISOString(),
+      lastSeenAt: row.lastSeenAt.toISOString(),
+      resolvedAt: row.resolvedAt?.toISOString() ?? null,
+      target: safeGapTarget({
+        companyId: row.companyId,
+        mappingId: row.integrationCompanyMappingId,
+        resourceId: row.resourceId,
+      }, row.syncRecord),
+    }));
+    const last = pageRows.at(-1);
+    const nextCursor = hasMore && last
+      ? encodeGapCursor({ id: last.id, lastSeenAt: last.lastSeenAt }, integrationId, query, this.env.integrationActiveKey)
+      : null;
+    return integrationGapsPageSchema.parse({ items, nextCursor });
+  }
+
+  private async assertReconstructionReadScope(
+    integrationId: string,
+    query: { mappingId?: string; resourceId?: string },
+  ): Promise<void> {
+    if (query.mappingId) {
+      const mapping = await this.prisma.integrationCompanyMapping.findFirst({
+        where: { id: query.mappingId, integrationId },
+        select: { id: true },
+      });
+      if (!mapping) throw new NotFoundException('Integration mapping not found');
+    }
+    if (query.resourceId) {
+      const resource = await this.prisma.integrationResource.findFirst({
+        where: { id: query.resourceId, integrationId },
+        select: { id: true },
+      });
+      if (!resource) throw new NotFoundException('Integration resource not found');
+    }
   }
 
   // -------------------------------------------------------------------
@@ -1150,6 +1334,58 @@ export function validateResourceRegistry(
   buildDescriptorStages(descriptor.resources);
 }
 
+export function validateResourceTargetConfig(
+  descriptor: DriverResourceDescriptor,
+  targetConfig: Record<string, unknown>,
+): Record<string, unknown> {
+  const parsed = driverResourceDescriptorSchema.safeParse({
+    ...descriptor,
+    targetKind: descriptor.targetKind,
+    targetConfig,
+  });
+  if (!parsed.success) {
+    throw new BadRequestException({
+      error: 'ValidationError',
+      message: 'Invalid target configuration for this resource kind.',
+      issues: parsed.error.issues.map((issue) => ({
+        path: issue.path.join('.'),
+        message: issue.message,
+      })),
+    });
+  }
+  const mutableKeys = descriptor.targetKind === 'article'
+    ? new Set(['folderSlug', 'visibility', 'template'])
+    : descriptor.targetKind === 'relation'
+      ? new Set(['typeMapping'])
+      : new Set<string>();
+  for (const [key, descriptorValue] of Object.entries(descriptor.targetConfig)) {
+    if (
+      !mutableKeys.has(key) &&
+      JSON.stringify(parsed.data.targetConfig[key as keyof typeof parsed.data.targetConfig]) !==
+        JSON.stringify(descriptorValue)
+    ) {
+      throw new BadRequestException(
+        `Target configuration field "${key}" is descriptor-owned and cannot be changed.`,
+      );
+    }
+  }
+  return parsed.data.targetConfig;
+}
+
+export function assertResourcePatchCompatible(
+  descriptor: Pick<DriverResourceDescriptor, 'targetKind'>,
+  input: Pick<UpdateIntegrationResourceInput, 'assetLayoutId' | 'matchKeyFieldIds'>,
+): void {
+  if (
+    descriptor.targetKind !== 'asset' &&
+    (input.assetLayoutId !== undefined || input.matchKeyFieldIds !== undefined)
+  ) {
+    throw new BadRequestException(
+      'Asset layout and match-key controls are available only for asset resources.',
+    );
+  }
+}
+
 function buildDescriptorStages(resources: readonly DriverResourceDescriptor[]): void {
   const pending = new Map(resources.map((resource) => [resource.key, resource]));
   const completed = new Set<string>();
@@ -1166,6 +1402,165 @@ function buildDescriptorStages(resources: readonly DriverResourceDescriptor[]): 
       pending.delete(resource.key);
       completed.add(resource.key);
     }
+  }
+}
+
+type CompletenessCountsValue = {
+  synchronizedCurrent: number;
+  manuallyDocumented: number;
+  secretBlocked: number;
+  missing: number;
+  stale: number;
+  synchronizationError: number;
+};
+
+function emptyCompletenessCounts(): CompletenessCountsValue {
+  return {
+    synchronizedCurrent: 0,
+    manuallyDocumented: 0,
+    secretBlocked: 0,
+    missing: 0,
+    stale: 0,
+    synchronizationError: 0,
+  };
+}
+
+function addCompletenessCounts(target: CompletenessCountsValue, source: CompletenessCountsValue): void {
+  for (const key of Object.keys(target) as Array<keyof CompletenessCountsValue>) {
+    target[key] += source[key];
+  }
+}
+
+type GapCursorPayload = { v: 1; id: string; lastSeenAt: string; scope: string };
+
+function gapCursorScope(
+  integrationId: string,
+  query: Pick<IntegrationGapsQuery, 'mappingId' | 'resourceId' | 'kind' | 'resolution'>,
+): string {
+  return JSON.stringify({
+    integrationId,
+    mappingId: query.mappingId ?? null,
+    resourceId: query.resourceId ?? null,
+    kind: query.kind ?? null,
+    resolution: query.resolution,
+  });
+}
+
+function encodeGapCursor(
+  row: { id: string; lastSeenAt: Date },
+  integrationId: string,
+  query: IntegrationGapsQuery,
+  key: Buffer,
+): string {
+  const payload: GapCursorPayload = {
+    v: 1,
+    id: row.id,
+    lastSeenAt: row.lastSeenAt.toISOString(),
+    scope: gapCursorScope(integrationId, query),
+  };
+  const encoded = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
+  const signature = createHmac('sha256', key)
+    .update('weavestream-integration-gap-cursor-v1\0')
+    .update(encoded)
+    .digest('base64url');
+  return `${encoded}.${signature}`;
+}
+
+function decodeGapCursor(
+  cursor: string,
+  integrationId: string,
+  query: IntegrationGapsQuery,
+  key: Buffer,
+): { id: string; lastSeenAt: Date } {
+  try {
+    const [encoded, suppliedSignature, extra] = cursor.split('.');
+    if (!encoded || !suppliedSignature || extra !== undefined) throw new Error('shape');
+    const expectedSignature = createHmac('sha256', key)
+      .update('weavestream-integration-gap-cursor-v1\0')
+      .update(encoded)
+      .digest();
+    const supplied = Buffer.from(suppliedSignature, 'base64url');
+    if (supplied.length !== expectedSignature.length || !timingSafeEqual(supplied, expectedSignature)) {
+      throw new Error('signature');
+    }
+    const payload = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8')) as Partial<GapCursorPayload>;
+    if (
+      payload.v !== 1 ||
+      typeof payload.id !== 'string' ||
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(payload.id) ||
+      payload.scope !== gapCursorScope(integrationId, query) ||
+      typeof payload.lastSeenAt !== 'string'
+    ) throw new Error('payload');
+    const lastSeenAt = new Date(payload.lastSeenAt);
+    if (!Number.isFinite(lastSeenAt.getTime()) || lastSeenAt.toISOString() !== payload.lastSeenAt) {
+      throw new Error('date');
+    }
+    return { id: payload.id, lastSeenAt };
+  } catch {
+    throw new BadRequestException('Invalid or mismatched reconstruction gap cursor.');
+  }
+}
+
+function safeReadGapMessage(kind: string, message: string): string {
+  return message.length <= 512 && scanSensitiveMaterial(message) === 'safe'
+    ? message
+    : `A ${kind.replaceAll('_', ' ')} item requires operator review.`;
+}
+
+function safeGapTarget(
+  scope: { companyId: string; mappingId: string; resourceId: string },
+  record: {
+    companyId: string;
+    integrationCompanyMappingId: string;
+    resourceId: string;
+    targetKind: string;
+    assetId: string | null;
+    subnetId: string | null;
+    ipReservationId: string | null;
+    articleId: string | null;
+    relationId: string | null;
+    asset: { name: string } | null;
+    subnet: { name: string } | null;
+    ipReservation: { label: string; subnetId: string } | null;
+    article: { title: string } | null;
+  } | null,
+): IntegrationNativeTarget | null {
+  if (
+    !record ||
+    record.companyId !== scope.companyId ||
+    record.integrationCompanyMappingId !== scope.mappingId ||
+    record.resourceId !== scope.resourceId
+  ) return null;
+  const companyId = scope.companyId;
+  switch (record.targetKind) {
+    case 'asset':
+      return record.assetId && record.asset ? {
+        targetKind: 'asset', targetId: record.assetId, targetLabel: record.asset.name,
+        targetHref: `/admin/companies/${companyId}/assets/${record.assetId}`,
+      } : null;
+    case 'subnet':
+      return record.subnetId && record.subnet ? {
+        targetKind: 'subnet', targetId: record.subnetId, targetLabel: record.subnet.name,
+        targetHref: `/admin/companies/${companyId}/ipam/${record.subnetId}`,
+      } : null;
+    case 'ip_reservation':
+      return record.ipReservationId && record.ipReservation ? {
+        targetKind: 'ip_reservation', targetId: record.ipReservationId,
+        targetLabel: record.ipReservation.label,
+        targetHref: `/admin/companies/${companyId}/ipam/${record.ipReservation.subnetId}`,
+      } : null;
+    case 'article':
+      return record.articleId && record.article ? {
+        targetKind: 'article', targetId: record.articleId, targetLabel: record.article.title,
+        targetHref: `/admin/companies/${companyId}/articles/${record.articleId}`,
+      } : null;
+    case 'relation':
+      return record.relationId ? {
+        targetKind: 'relation', targetId: record.relationId,
+        targetLabel: 'Relationship', targetHref: null,
+      } : null;
+    default:
+      return null;
   }
 }
 

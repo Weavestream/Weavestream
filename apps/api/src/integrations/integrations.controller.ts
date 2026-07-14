@@ -21,6 +21,8 @@ import {
   updateIntegrationCompanyMappingSchema,
   updateIntegrationResourceSchema,
   updateIntegrationSchema,
+  integrationCompletenessQuerySchema,
+  integrationGapsQuerySchema,
   type CreateIntegrationCompanyMappingInput,
   type CreateIntegrationInput,
   type CreateIntegrationResourceInput,
@@ -29,6 +31,8 @@ import {
   type UpdateIntegrationCompanyMappingInput,
   type UpdateIntegrationInput,
   type UpdateIntegrationResourceInput,
+  type IntegrationCompletenessQuery,
+  type IntegrationGapsQuery,
 } from '@weavestream/shared';
 import { ZodBody } from '../common/zod-validation.pipe.js';
 import {
@@ -431,6 +435,24 @@ export class IntegrationsController {
     @Param('runId', new ParseUUIDPipe()) runId: string,
   ) {
     return this.sync.getRun(id, runId);
+  }
+
+  @Get(':id/completeness')
+  @RequirePermission('integration.manage')
+  getCompleteness(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Query(new ZodBody(integrationCompletenessQuerySchema)) query: IntegrationCompletenessQuery,
+  ) {
+    return this.integrations.getReconstructionCompleteness(id, query);
+  }
+
+  @Get(':id/gaps')
+  @RequirePermission('integration.manage')
+  listGaps(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Query(new ZodBody(integrationGapsQuerySchema)) query: IntegrationGapsQuery,
+  ) {
+    return this.integrations.listReconstructionGaps(id, query);
   }
 
   // -------------------------------------------------------------------

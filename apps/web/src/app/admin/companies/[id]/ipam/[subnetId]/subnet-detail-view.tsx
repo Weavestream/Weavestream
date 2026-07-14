@@ -24,6 +24,7 @@ import {
   type DataColumn,
 } from '../../../../../../components/ui';
 import { AddressGrid } from '../address-grid';
+import { ProvenanceBadge } from '../../../../../../components/integrations/provenance-badge';
 
 type Tab = 'occupants' | 'reservations' | 'grid';
 
@@ -322,6 +323,12 @@ export function SubnetDetailView({
   // ---- render ------------------------------------------------------------
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      {detail.provenance.map((provenance) => (
+        <ProvenanceBadge
+          key={`${provenance.integrationId}:${provenance.resourceId}`}
+          provenance={provenance}
+        />
+      ))}
       {/* Metadata row */}
       <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap', fontSize: 13 }}>
         {subnet.vlanId != null && (

@@ -18,6 +18,7 @@ import {
   type MoveArticleInput,
   type UpdateArticleInput,
   type UserRole,
+  type IntegrationTargetProvenance,
 } from '@weavestream/shared';
 import { requireTenantContext } from '@weavestream/shared/server';
 import { PrismaService } from '../prisma/prisma.service.js';
@@ -30,6 +31,7 @@ import { scopedCompanyLookupWhere } from '../ai-tools/entity-scope.js';
 import { diffRemovedUploadIds, extractEmbeddedUploadIds } from './article-uploads.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
 import { hasEligibleNativeBinding } from '../integrations/reconstruction/native-binding-ownership.js';
+import { readTargetProvenance } from '../integrations/reconstruction/integration-provenance.service.js';
 
 export interface AuditMeta {
   ip: string;
@@ -134,6 +136,8 @@ export interface SerializedArticle {
    * accurate value, and it always loads a detail before opening.
    */
   hasDraft: boolean;
+  /** Safe, tenant-scoped reconstruction provenance for this exact article. */
+  provenance: IntegrationTargetProvenance[];
 }
 
 /**
@@ -244,6 +248,11 @@ export class ArticlesService {
     out.isStarred = await this.stars.isStarred(actor.id, 'article', id);
     out.hasDraft = await this.resolveHasDraft(companyId, id);
     await this.hydrateActors([out]);
+    out.provenance = await readTargetProvenance(this.prisma, {
+      companyId,
+      targetKind: 'article',
+      targetId: id,
+    });
     return out;
   }
 
@@ -263,6 +272,11 @@ export class ArticlesService {
     out.isStarred = await this.stars.isStarred(actor.id, 'article', row.id);
     out.hasDraft = await this.resolveHasDraft(companyId, row.id);
     await this.hydrateActors([out]);
+    out.provenance = await readTargetProvenance(this.prisma, {
+      companyId,
+      targetKind: 'article',
+      targetId: row.id,
+    });
     return out;
   }
 
@@ -1874,6 +1888,7 @@ export class ArticlesService {
       // this with the real value via `resolveHasDraft` or knowledge
       // local to the tx.
       hasDraft: false,
+      provenance: [],
     };
   }
 

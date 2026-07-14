@@ -13,8 +13,9 @@ import { CredentialsTab } from './credentials-tab';
 import { FieldMappingsTab } from './field-mappings-tab';
 import { OrgsTab } from './orgs-tab';
 import { RunsTab } from './runs-tab';
+import { CompletenessTab } from './completeness-tab';
 
-type StaticTabId = 'creds' | 'orgs' | 'runs';
+type StaticTabId = 'creds' | 'orgs' | 'completeness' | 'runs';
 type ResourceTabId = `fields:${string}`;
 type TabId = StaticTabId | ResourceTabId;
 
@@ -49,6 +50,12 @@ const STATIC_TABS_HEAD: TabDescriptor[] = [
 ];
 
 const STATIC_TABS_TAIL: TabDescriptor[] = [
+  {
+    id: 'completeness',
+    label: 'Completeness',
+    help: 'Review reconstruction coverage, lifecycle state, and safe gaps.',
+    kind: 'static',
+  },
   {
     id: 'runs',
     label: 'Run history',
@@ -193,6 +200,13 @@ export function IntegrationTabs({
         )}
         {tab === 'runs' && (
           <RunsTab integration={integration} runs={runs} mappings={mappings} />
+        )}
+        {tab === 'completeness' && (
+          <CompletenessTab
+            integrationId={integration.id}
+            mappings={mappings}
+            resources={integration.resources}
+          />
         )}
         {isResourceTabId(tab) &&
           (() => {

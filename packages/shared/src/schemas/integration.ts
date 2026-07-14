@@ -421,6 +421,8 @@ export const updateIntegrationResourceSchema = z
     assetLayoutId: z.string().uuid().nullable().optional(),
     /** Replace-all set of match-key AssetField ids on the chosen layout. */
     matchKeyFieldIds: z.array(z.string().uuid()).optional(),
+    /** Target-kind-specific operator configuration. The API re-validates this against the immutable driver descriptor. */
+    targetConfig: z.record(z.unknown()).optional(),
   })
   .refine((v) => Object.keys(v).length > 0, {
     message: 'At least one field must be provided',
@@ -931,3 +933,128 @@ export const integrationReconstructionGapDtoSchema = z
   .object({ id: z.string().uuid(), ...reconstructionGapShape })
   .strict();
 export type IntegrationReconstructionGapDto = z.infer<typeof integrationReconstructionGapDtoSchema>;
+
+// ---------------------------------------------------------------------
+// Safe, explicit reconstruction administration/read DTOs. These schemas
+// deliberately omit provider configuration, upstream values and the raw
+// provenance/gap JSON persisted by the worker.
+// ---------------------------------------------------------------------
+
+export const reconstructionCompletenessCountsSchema = z
+  .object({
+    synchronizedCurrent: z.number().int().nonnegative(),
+    manuallyDocumented: z.number().int().nonnegative(),
+    secretBlocked: z.number().int().nonnegative(),
+    missing: z.number().int().nonnegative(),
+    stale: z.number().int().nonnegative(),
+    synchronizationError: z.number().int().nonnegative(),
+  })
+  .strict();
+export type ReconstructionCompletenessCounts = z.infer<
+  typeof reconstructionCompletenessCountsSchema
+>;
+
+export const integrationCompletenessQuerySchema = z
+  .object({
+    mappingId: z.string().uuid().optional(),
+    resourceId: z.string().uuid().optional(),
+  })
+  .strict();
+export type IntegrationCompletenessQuery = z.infer<typeof integrationCompletenessQuerySchema>;
+
+export const integrationCompletenessRowSchema = z
+  .object({
+    id: z.string().uuid(),
+    companyId: z.string().uuid(),
+    companyName: z.string().min(1).max(256),
+    integrationCompanyMappingId: z.string().uuid(),
+    externalOrgName: z.string().min(1).max(256),
+    resourceId: z.string().uuid(),
+    resourceKey: driverResourceKeySchema,
+    resourceLabel: z.string().min(1).max(256),
+    counts: reconstructionCompletenessCountsSchema,
+    evaluatedAt: z.string().datetime(),
+    lastSuccessfulSyncAt: z.string().datetime().nullable(),
+  })
+  .strict();
+export type IntegrationCompletenessRow = z.infer<typeof integrationCompletenessRowSchema>;
+
+export const integrationCompletenessResponseSchema = z
+  .object({
+    counts: reconstructionCompletenessCountsSchema,
+    rows: z.array(integrationCompletenessRowSchema).max(10_000),
+  })
+  .strict();
+export type IntegrationCompletenessResponse = z.infer<
+  typeof integrationCompletenessResponseSchema
+>;
+
+const reconstructionResolutionSchema = z.enum(['active', 'resolved', 'all']);
+export const integrationGapsQuerySchema = z
+  .object({
+    mappingId: z.string().uuid().optional(),
+    resourceId: z.string().uuid().optional(),
+    kind: reconstructionGapKindSchema.optional(),
+    resolution: reconstructionResolutionSchema.default('active'),
+    limit: z.coerce.number().int().min(1).max(100).default(50),
+    cursor: z.string().min(1).max(4096).optional(),
+  })
+  .strict();
+export type IntegrationGapsQuery = z.infer<typeof integrationGapsQuerySchema>;
+
+export const integrationNativeTargetSchema = z
+  .object({
+    targetKind: integrationTargetKindSchema,
+    targetId: z.string().uuid(),
+    targetLabel: z.string().min(1).max(256),
+    targetHref: z.string().startsWith('/admin/companies/').max(1024).nullable(),
+  })
+  .strict();
+export type IntegrationNativeTarget = z.infer<typeof integrationNativeTargetSchema>;
+
+export const integrationGapRowSchema = z
+  .object({
+    id: z.string().uuid(),
+    companyId: z.string().uuid(),
+    companyName: z.string().min(1).max(256),
+    integrationCompanyMappingId: z.string().uuid(),
+    externalOrgName: z.string().min(1).max(256),
+    resourceId: z.string().uuid(),
+    resourceKey: driverResourceKeySchema,
+    resourceLabel: z.string().min(1).max(256),
+    kind: reconstructionGapKindSchema,
+    message: z.string().min(1).max(512),
+    firstSeenAt: z.string().datetime(),
+    lastSeenAt: z.string().datetime(),
+    resolvedAt: z.string().datetime().nullable(),
+    target: integrationNativeTargetSchema.nullable(),
+  })
+  .strict();
+export type IntegrationGapRow = z.infer<typeof integrationGapRowSchema>;
+
+export const integrationGapsPageSchema = z
+  .object({
+    items: z.array(integrationGapRowSchema).max(100),
+    nextCursor: z.string().max(4096).nullable(),
+  })
+  .strict();
+export type IntegrationGapsPage = z.infer<typeof integrationGapsPageSchema>;
+
+export const integrationTargetProvenanceSchema = z
+  .object({
+    integrationId: z.string().uuid(),
+    integrationName: z.string().min(1).max(256),
+    integrationCompanyMappingId: z.string().uuid(),
+    resourceId: z.string().uuid(),
+    sourceLabel: z.string().min(1).max(256),
+    sourceResource: driverResourceKeySchema,
+    ownership: z.enum(['breeze', 'weavestream']),
+    state: integrationSyncStateSchema,
+    firstSeenAt: z.string().datetime(),
+    lastSeenAt: z.string().datetime(),
+    lastSyncedAt: z.string().datetime().nullable(),
+    staleSince: z.string().datetime().nullable(),
+    target: integrationNativeTargetSchema,
+  })
+  .strict();
+export type IntegrationTargetProvenance = z.infer<typeof integrationTargetProvenanceSchema>;

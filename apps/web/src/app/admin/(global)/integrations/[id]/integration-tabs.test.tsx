@@ -11,6 +11,7 @@ jest.mock('./credentials-tab', () => ({ CredentialsTab: () => <div>credentials p
 jest.mock('./orgs-tab', () => ({ OrgsTab: () => <div>organizations panel</div> }));
 jest.mock('./runs-tab', () => ({ RunsTab: () => <div>runs panel</div> }));
 jest.mock('./field-mappings-tab', () => ({ FieldMappingsTab: ({ resource }: { resource: { key: string } }) => <div>{resource.key} panel</div> }));
+jest.mock('./completeness-tab', () => ({ CompletenessTab: () => <div>completeness panel</div> }));
 
 describe('IntegrationTabs', () => {
   it('renders credentials, organizations, then Breeze site/device resource tabs in descriptor order', () => {
@@ -29,7 +30,7 @@ describe('IntegrationTabs', () => {
     />);
 
     expect(screen.getAllByRole('tab').map((tab) => tab.textContent)).toEqual([
-      'Credentials & schedule', 'Organizations', 'Sites fields', 'Devices fields', 'Run history',
+      'Credentials & schedule', 'Organizations', 'Sites fields', 'Devices fields', 'Completeness', 'Run history',
     ]);
   });
 });

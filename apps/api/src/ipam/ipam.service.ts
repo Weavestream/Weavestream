@@ -17,6 +17,8 @@ import {
   type CreateIpReservationInput,
   type UpdateIpReservationInput,
 } from '@weavestream/shared';
+import type { IntegrationTargetProvenance } from '@weavestream/shared';
+import { readTargetProvenance } from '../integrations/reconstruction/integration-provenance.service.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { AuditLogService } from '../audit/audit.service.js';
 import {
@@ -107,6 +109,7 @@ export interface SubnetDetail {
   occupants: SubnetOccupant[];
   reservations: IpReservation[];
   conflicts: Array<{ ip: string; entries: SubnetOccupant[] }>;
+  provenance: IntegrationTargetProvenance[];
 }
 
 @Injectable()
@@ -181,7 +184,12 @@ export class IpamService {
       if (entries.length > 1) conflicts.push({ ip, entries });
     }
 
-    return { subnet, utilization, occupants, reservations, conflicts };
+    const provenance = await readTargetProvenance(this.prisma, {
+      companyId,
+      targetKind: 'subnet',
+      targetId: id,
+    });
+    return { subnet, utilization, occupants, reservations, conflicts, provenance };
   }
 
   async listOccupants(

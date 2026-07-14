@@ -1,5 +1,6 @@
 import type { DriverDescriptor } from '@weavestream/shared';
-import { ensureResourceDestination, validateResourceRegistry } from './integrations.service.js';
+import { IntegrationsService, ensureResourceDestination, validateResourceRegistry, validateResourceTargetConfig, assertResourcePatchCompatible } from './integrations.service.js';
+import { NotFoundException } from '@nestjs/common';
 import type { RecommendedDestination } from './drivers/integration-driver.js';
 import { BREEZE_RECOMMENDED_DESTINATIONS } from './drivers/breeze/breeze.driver.js';
 
@@ -58,6 +59,36 @@ describe('validateResourceRegistry', () => {
       /bindingResourceKey.*dependsOnResourceKeys/i,
     );
   });
+});
+
+describe('validateResourceTargetConfig', () => {
+  it('validates mutable configuration against the immutable descriptor target kind', () => {
+    const article = {
+      key: 'scripts', label: 'Scripts', targetKind: 'article',
+      targetConfig: { sourceEndpoint: '/scripts', folderSlug: 'scripts', visibility: 'internal' },
+      dependsOnResourceKeys: [],
+    } as const;
+    expect(validateResourceTargetConfig(article as never, {
+      sourceEndpoint: '/scripts', folderSlug: 'procedures', visibility: 'company', template: '# {{title}}',
+    })).toMatchObject({ folderSlug: 'procedures', visibility: 'company' });
+    expect(() => validateResourceTargetConfig(article as never, { normalization: 'cidr' }))
+      .toThrow(/target configuration/i);
+    expect(() => validateResourceTargetConfig(article as never, {
+      sourceEndpoint: '/attacker-controlled-route', folderSlug: 'scripts', visibility: 'internal',
+    })).toThrow(/descriptor-owned/i);
+  });
+});
+
+it('rejects asset layout and match controls for non-asset resources', () => {
+  expect(() => assertResourcePatchCompatible({ targetKind: 'article' } as never, {
+    assetLayoutId: '00000000-0000-4000-8000-000000000001',
+  })).toThrow(/asset resources/i);
+  expect(() => assertResourcePatchCompatible({ targetKind: 'subnet' } as never, {
+    matchKeyFieldIds: [],
+  })).toThrow(/asset resources/i);
+  expect(() => assertResourcePatchCompatible({ targetKind: 'asset' } as never, {
+    matchKeyFieldIds: [],
+  })).not.toThrow();
 });
 
 describe('ensureResourceDestination', () => {
@@ -389,5 +420,145 @@ describe('ensureResourceDestination', () => {
     ).rejects.toThrow(/field creation was incomplete/i);
     expect(state).toEqual({ layout: null, fields: [] });
     expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('reconstruction administration reads', () => {
+  const ids = {
+    integration: '00000000-0000-4000-8000-000000000001',
+    mapping: '00000000-0000-4000-8000-000000000002',
+    resource: '00000000-0000-4000-8000-000000000003',
+    company: '00000000-0000-4000-8000-000000000004',
+    summary: '00000000-0000-4000-8000-000000000005',
+    gap: '00000000-0000-4000-8000-000000000006',
+    target: '00000000-0000-4000-8000-000000000007',
+  };
+  const counts = {
+    synchronizedCurrent: 1, manuallyDocumented: 2, secretBlocked: 3,
+    missing: 4, stale: 5, synchronizationError: 6,
+  };
+
+  function setup() {
+    const prisma = {
+      integration: { findUnique: jest.fn().mockResolvedValue({ id: ids.integration, driver: 'breeze' }) },
+      integrationCompanyMapping: {
+        findFirst: jest.fn().mockResolvedValue({ id: ids.mapping }),
+      },
+      integrationResource: {
+        findFirst: jest.fn().mockResolvedValue({ id: ids.resource }),
+      },
+      integrationReconstructionSummary: { findMany: jest.fn().mockResolvedValue([]) },
+      integrationReconstructionGap: { findMany: jest.fn().mockResolvedValue([]) },
+    };
+    const service = new IntegrationsService(
+      prisma as never, {} as never, {} as never,
+      { get: jest.fn(), has: jest.fn().mockReturnValue(false) } as never,
+      { integrationActiveKey: Buffer.alloc(32, 7), values: { INTEGRATION_SYNC_DEFAULT_CRON: 'off' } } as never,
+      {} as never, {} as never,
+    );
+    return { prisma, service };
+  }
+
+  it('returns deterministic explicit completeness rows and six-category totals', async () => {
+    const { prisma, service } = setup();
+    prisma.integrationReconstructionSummary.findMany.mockResolvedValueOnce([{
+      id: ids.summary, companyId: ids.company, integrationCompanyMappingId: ids.mapping,
+      resourceId: ids.resource, counts, evaluatedAt: new Date('2026-07-14T01:00:00Z'),
+      lastSuccessfulSyncAt: new Date('2026-07-14T00:59:00Z'),
+      company: { name: 'Acme' }, companyMapping: { externalOrgName: 'Acme upstream', externalOrgId: 'org-a' },
+      resource: { resourceKey: 'devices' },
+    }]);
+
+    await expect(service.getReconstructionCompleteness(ids.integration, {
+      mappingId: ids.mapping, resourceId: ids.resource,
+    })).resolves.toMatchObject({ counts, rows: [{ resourceKey: 'devices', counts }] });
+    expect(prisma.integrationReconstructionSummary.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ orderBy: [
+        { integrationCompanyMappingId: 'asc' }, { resourceId: 'asc' }, { id: 'asc' },
+      ] }),
+    );
+  });
+
+  it('rejects a mapping or resource outside the integration instead of returning an empty probe', async () => {
+    const { prisma, service } = setup();
+    prisma.integrationCompanyMapping.findFirst.mockResolvedValueOnce(null);
+    await expect(service.getReconstructionCompleteness(ids.integration, { mappingId: ids.mapping }))
+      .rejects.toBeInstanceOf(NotFoundException);
+    expect(prisma.integrationReconstructionSummary.findMany).not.toHaveBeenCalled();
+  });
+
+  it('returns bounded safe gaps and rejects a tampered or cross-filter cursor', async () => {
+    const { prisma, service } = setup();
+    const gapRow = {
+      id: ids.gap, companyId: ids.company, integrationCompanyMappingId: ids.mapping,
+      resourceId: ids.resource, kind: 'synchronization_error',
+      message: 'Upstream record could not be synchronized.', details: { sourceId: 'must-not-leak' },
+      firstSeenAt: new Date('2026-07-14T00:00:00Z'), lastSeenAt: new Date('2026-07-14T00:01:00Z'),
+      resolvedAt: null, company: { name: 'Acme' },
+      companyMapping: { externalOrgName: 'Acme upstream', externalOrgId: 'org-a' },
+      resource: { resourceKey: 'devices' },
+      syncRecord: {
+        companyId: ids.company, integrationCompanyMappingId: ids.mapping, resourceId: ids.resource,
+        targetKind: 'asset', assetId: ids.target, subnetId: null, ipReservationId: null,
+        articleId: null, relationId: null, asset: { name: 'HV-01' }, subnet: null,
+        ipReservation: null, article: null,
+      },
+    };
+    prisma.integrationReconstructionGap.findMany.mockResolvedValueOnce([
+      gapRow,
+      { ...gapRow, id: ids.summary, lastSeenAt: new Date('2026-07-13T00:01:00Z') },
+    ]);
+    const first = await service.listReconstructionGaps(ids.integration, {
+      mappingId: ids.mapping, resourceId: ids.resource, resolution: 'active', limit: 1,
+    });
+    expect(JSON.stringify(first)).not.toContain('must-not-leak');
+    expect(first.items[0]?.target).toMatchObject({ targetKind: 'asset', targetId: ids.target });
+    expect(first.nextCursor).toEqual(expect.any(String));
+
+    prisma.integrationReconstructionGap.findMany.mockResolvedValueOnce([]);
+    const second = await service.listReconstructionGaps(ids.integration, {
+      mappingId: ids.mapping, resourceId: ids.resource,
+      resolution: 'active', limit: 1, cursor: first.nextCursor!,
+    });
+    expect(second.nextCursor).toBeNull();
+    expect(prisma.integrationReconstructionGap.findMany.mock.calls[1]?.[0]).toEqual(
+      expect.objectContaining({
+        where: expect.objectContaining({ OR: [
+          { lastSeenAt: { lt: new Date('2026-07-14T00:01:00.000Z') } },
+          { lastSeenAt: new Date('2026-07-14T00:01:00.000Z'), id: { gt: ids.gap } },
+        ] }),
+      }),
+    );
+
+    await expect(service.listReconstructionGaps(ids.integration, {
+      mappingId: ids.mapping, resourceId: ids.resource,
+      resolution: 'active', limit: 1, cursor: `${first.nextCursor}x`,
+    })).rejects.toThrow(/cursor/i);
+    await expect(service.listReconstructionGaps(ids.integration, {
+      mappingId: ids.mapping, resourceId: ids.resource,
+      kind: 'validation', resolution: 'active', limit: 1, cursor: first.nextCursor!,
+    })).rejects.toThrow(/cursor/i);
+  });
+
+  it('does not return native target metadata from a non-exact gap binding', async () => {
+    const { prisma, service } = setup();
+    prisma.integrationReconstructionGap.findMany.mockResolvedValueOnce([{
+      id: ids.gap, companyId: ids.company, integrationCompanyMappingId: ids.mapping,
+      resourceId: ids.resource, kind: 'validation', message: 'Review required.',
+      firstSeenAt: new Date('2026-07-14T00:00:00Z'), lastSeenAt: new Date('2026-07-14T00:01:00Z'),
+      resolvedAt: null, company: { name: 'Acme' },
+      companyMapping: { externalOrgName: 'Acme upstream', externalOrgId: 'org-a' },
+      resource: { resourceKey: 'devices' },
+      syncRecord: {
+        companyId: '00000000-0000-4000-8000-000000000099',
+        integrationCompanyMappingId: ids.mapping, resourceId: ids.resource,
+        targetKind: 'asset', assetId: ids.target, subnetId: null, ipReservationId: null,
+        articleId: null, relationId: null, asset: { name: 'Foreign asset' }, subnet: null,
+        ipReservation: null, article: null,
+      },
+    }]);
+    await expect(service.listReconstructionGaps(ids.integration, {
+      resolution: 'active', limit: 50,
+    })).resolves.toMatchObject({ items: [{ target: null }] });
   });
 });

@@ -19,6 +19,8 @@ import type {
   UpdateAssetInput,
   UserRole,
 } from '@weavestream/shared';
+import type { IntegrationTargetProvenance } from '@weavestream/shared';
+import { readTargetProvenance } from '../integrations/reconstruction/integration-provenance.service.js';
 import { FILTERABLE_FIELD_TYPES } from '@weavestream/shared';
 import type { FileFieldEntry } from '@weavestream/shared';
 import { PrismaService } from '../prisma/prisma.service.js';
@@ -176,9 +178,10 @@ export interface SerializedAsset {
     integrationName: string;
     driver: string;
     resourceKey: string;
-    externalId: string;
     lastSyncedAt: Date;
   }>;
+  /** Safe, tenant-scoped reconstruction provenance for the exact native target. */
+  provenance: IntegrationTargetProvenance[];
   fieldValues: Record<string, unknown>;
   fields: Array<{
     id: string;
@@ -367,6 +370,11 @@ export class AssetsService {
     await this.hydrateTagFields([serialized]);
     await this.hydrateActors([serialized]);
     await this.hydrateSyncMetadata(companyId, [serialized]);
+    serialized.provenance = await readTargetProvenance(this.prisma, {
+      companyId,
+      targetKind: 'asset',
+      targetId: id,
+    });
     return serialized;
   }
 
@@ -1778,7 +1786,6 @@ export class AssetsService {
       where: { companyId, assetId: { in: ids } },
       select: {
         assetId: true,
-        externalId: true,
         lastSyncedAt: true,
         lastSyncedFieldChecksums: true,
         resource: { select: { resourceKey: true } },
@@ -1811,7 +1818,6 @@ export class AssetsService {
         integrationName: r.companyMapping.integration.name,
         driver: r.companyMapping.integration.driver,
         resourceKey: r.resource.resourceKey,
-        externalId: r.externalId,
         lastSyncedAt: r.lastSyncedAt,
       };
       const entry = aggregated.get(r.assetId);
@@ -1903,6 +1909,7 @@ export class AssetsService {
       lastSyncedAt: null,
       syncedFieldIds: [],
       syncSources: [],
+      provenance: [],
       fieldValues,
       fields: visibleFields
         .sort((a, b) => a.position - b.position)

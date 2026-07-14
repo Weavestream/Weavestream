@@ -1016,9 +1016,9 @@ export type AssetSummary = {
     integrationName: string;
     driver: string;
     resourceKey: string;
-    externalId: string;
     lastSyncedAt: string;
   }>;
+  provenance: import('@weavestream/shared').IntegrationTargetProvenance[];
   archivedAt: string | null;
   createdBy: string | null;
   updatedBy: string | null;
@@ -1180,6 +1180,7 @@ export type ArticleDetail = ArticleSummary & {
    * only meaningful on detail loads.
    */
   hasDraft: boolean;
+  provenance: import('@weavestream/shared').IntegrationTargetProvenance[];
 };
 
 export type ArticlePage = { items: ArticleSummary[]; nextCursor: string | null };
@@ -1965,6 +1966,7 @@ export type SubnetDetail = {
   occupants: SubnetOccupant[];
   reservations: IpReservationRow[];
   conflicts: Array<{ ip: string; entries: SubnetOccupant[] }>;
+  provenance: import('@weavestream/shared').IntegrationTargetProvenance[];
 };
 
 export async function listSubnets(

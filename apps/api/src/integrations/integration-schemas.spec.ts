@@ -6,6 +6,12 @@ import {
   fieldMappingDraftSchema,
   integrationProvenanceSchema,
   integrationReconstructionGapDtoSchema,
+  integrationCompletenessResponseSchema,
+  integrationCompletenessQuerySchema,
+  integrationGapsPageSchema,
+  integrationGapsQuerySchema,
+  integrationTargetProvenanceSchema,
+  updateIntegrationResourceSchema,
   integrationReconstructionGapInputSchema,
   integrationSyncMappingJobSchema,
   integrationSyncOrchestratorJobSchema,
@@ -596,6 +602,82 @@ describe('integration zod schemas', () => {
         }),
       ).toThrow();
     });
+  });
+
+  describe('admin reconstruction read DTOs', () => {
+    const id = (suffix: string) => `00000000-0000-4000-8000-${suffix.padStart(12, '0')}`;
+    const counts = {
+      synchronizedCurrent: 1,
+      manuallyDocumented: 2,
+      secretBlocked: 3,
+      missing: 4,
+      stale: 5,
+      synchronizationError: 6,
+    };
+
+    it('parses explicit six-category completeness rows without synthesizing source data', () => {
+      const response = {
+        counts,
+        rows: [{
+          id: id('1'), companyId: id('2'), companyName: 'Acme',
+          integrationCompanyMappingId: id('3'), externalOrgName: 'Acme upstream',
+          resourceId: id('4'), resourceKey: 'devices', resourceLabel: 'Devices',
+          counts, evaluatedAt: '2026-07-14T01:00:00.000Z',
+          lastSuccessfulSyncAt: '2026-07-14T00:59:00.000Z',
+        }],
+      };
+      expect(integrationCompletenessResponseSchema.parse(response)).toEqual(response);
+      expect(() => integrationCompletenessResponseSchema.parse({ ...response, counts: { current: 1 } })).toThrow();
+    });
+
+    it('bounds and validates completeness and gap queries', () => {
+      expect(integrationCompletenessQuerySchema.parse({ mappingId: id('3'), resourceId: id('4') }))
+        .toEqual({ mappingId: id('3'), resourceId: id('4') });
+      expect(integrationGapsQuerySchema.parse({ limit: '100', resolution: 'active' }).limit).toBe(100);
+      expect(() => integrationGapsQuerySchema.parse({ limit: '101' })).toThrow();
+      expect(() => integrationGapsQuerySchema.parse({ kind: 'not-a-kind' })).toThrow();
+    });
+
+    it('parses safe gap pages and target provenance while rejecting raw source values', () => {
+      const target = {
+        targetKind: 'asset', targetId: id('8'), targetLabel: 'HV-01',
+        targetHref: `/admin/companies/${id('2')}/assets/${id('8')}`,
+      };
+      const provenance = {
+        integrationId: id('1'), integrationName: 'Breeze',
+        integrationCompanyMappingId: id('3'), resourceId: id('4'),
+        sourceLabel: 'Breeze', sourceResource: 'devices', ownership: 'breeze',
+        state: 'stale', firstSeenAt: '2026-07-13T00:00:00.000Z',
+        lastSeenAt: '2026-07-14T00:00:00.000Z', lastSyncedAt: '2026-07-14T00:01:00.000Z',
+        staleSince: '2026-07-14T00:02:00.000Z', target,
+      };
+      expect(integrationTargetProvenanceSchema.parse(provenance)).toEqual(provenance);
+      expect(() => integrationTargetProvenanceSchema.parse({ ...provenance, rawSourceValue: 'secret' })).toThrow();
+
+      const page = {
+        items: [{
+          id: id('9'), companyId: id('2'), companyName: 'Acme',
+          integrationCompanyMappingId: id('3'), externalOrgName: 'Acme upstream',
+          resourceId: id('4'), resourceKey: 'devices', resourceLabel: 'Devices',
+          kind: 'synchronization_error', message: 'Upstream record could not be synchronized.',
+          firstSeenAt: '2026-07-14T00:00:00.000Z', lastSeenAt: '2026-07-14T00:01:00.000Z',
+          resolvedAt: null, target,
+        }],
+        nextCursor: null,
+      };
+      expect(integrationGapsPageSchema.parse(page)).toEqual(page);
+      expect(() => integrationGapsPageSchema.parse({
+        ...page,
+        items: [{ ...page.items[0], details: { sourceValue: 'raw' } }],
+      })).toThrow();
+    });
+  });
+
+  it('accepts a bounded targetConfig patch without making targetKind operator-editable', () => {
+    expect(updateIntegrationResourceSchema.parse({
+      targetConfig: { folderSlug: 'procedures', visibility: 'internal' },
+    })).toEqual({ targetConfig: { folderSlug: 'procedures', visibility: 'internal' } });
+    expect(() => updateIntegrationResourceSchema.parse({ targetKind: 'relation' })).toThrow();
   });
 
   describe('syncRunConflictSchema', () => {

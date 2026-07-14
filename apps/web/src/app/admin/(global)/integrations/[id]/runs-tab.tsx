@@ -66,7 +66,7 @@ export function RunsTab({
               onClick={() => setOpenRunId(r.id)}
               style={{
                 display: 'grid',
-                gridTemplateColumns: '120px 100px 100px 1fr 16px',
+                gridTemplateColumns: '120px 100px 100px 90px 1fr 16px',
                 gap: 12,
                 width: '100%',
                 padding: '10px 14px',
@@ -84,6 +84,7 @@ export function RunsTab({
               </span>
               <RunStatusTag status={r.status} />
               <Tag tone="default">{r.kind}</Tag>
+              <Tag tone={r.mode === 'full' ? 'accent' : 'default'}>{r.mode}</Tag>
               <RunTotalsSummary totals={r.totals as SyncRunTotals | null} dryRun={r.dryRun} />
               <Icon.chevron size={11} style={{ color: 'var(--dim)' }} />
             </button>
@@ -300,7 +301,7 @@ function ConflictList({ conflicts }: { conflicts: SyncRunConflict[] }) {
         {conflicts.map((c, i) => (
           <li key={i} style={{ marginBottom: 2 }}>
             <Tag tone={conflictTone(c.kind)}>{c.kind.replace('_', ' ')}</Tag>{' '}
-            <code style={{ fontSize: 11.5 }}>{c.externalId}</code> — {c.message}
+            {c.message}
           </li>
         ))}
       </ul>
@@ -371,6 +372,11 @@ function RunTotalsSummary({
       {totals.skippedArchived > 0
         ? ` · ${totals.skippedArchived} archived skipped`
         : ''}
+      {totals.stale > 0 ? ` · ${totals.stale} stale` : ''}
+      {totals.restored > 0 ? ` · ${totals.restored} restored` : ''}
+      {totals.blocked > 0 ? ` · ${totals.blocked} blocked` : ''}
+      {totals.secretBlocked > 0 ? ` · ${totals.secretBlocked} secret blocked` : ''}
+      {totals.missingDependency > 0 ? ` · ${totals.missingDependency} missing dependency` : ''}
       {totals.errors > 0 ? ` · ${totals.errors} errors` : ''}
       {dryRun ? ' · dry-run' : ''}
     </span>
@@ -474,6 +480,11 @@ function RunTotalsBreakdown({ totals }: { totals: SyncRunTotals | null }) {
       { label: 'ambiguous', value: totals.skippedAmbiguous, tone: 'warn' },
       { label: 'manual skip', value: totals.skippedManual, tone: 'warn' },
       { label: 'archived skip', value: totals.skippedArchived, tone: 'warn' },
+      { label: 'stale', value: totals.stale, tone: 'warn' },
+      { label: 'restored', value: totals.restored, tone: 'ok' },
+      { label: 'blocked', value: totals.blocked, tone: 'danger' },
+      { label: 'secret blocked', value: totals.secretBlocked, tone: 'warn' },
+      { label: 'missing dependency', value: totals.missingDependency, tone: 'warn' },
       { label: 'errors', value: totals.errors, tone: 'danger' },
     ] satisfies Cell[]
   ).filter((c) => c.value > 0);

@@ -30,6 +30,8 @@ describe('IntegrationsController security contract', () => {
     ['getMapping', 'integration.manage'],
     ['updateMapping', 'integration.manage'],
     ['deleteMapping', 'integration.manage'],
+    ['getCompleteness', 'integration.manage'],
+    ['listGaps', 'integration.manage'],
     ['triggerSync', 'sync.trigger'],
   ] as const)('%s retains the %s permission contract', (handler, action) => {
     expect(metadata(REQUIRE_PERMISSION_KEY, handler)).toEqual({
@@ -82,6 +84,28 @@ describe('IntegrationsController security contract', () => {
       expect.any(Object),
       'incremental',
     );
+  });
+
+  it('delegates validated completeness and gap filters to integration-scoped reads', async () => {
+    const integrations = {
+      getReconstructionCompleteness: jest.fn().mockResolvedValue({ counts: {}, rows: [] }),
+      listReconstructionGaps: jest.fn().mockResolvedValue({ items: [], nextCursor: null }),
+    };
+    const controller = new IntegrationsController(
+      integrations as never, {} as never, {} as never, {} as never, {} as never, {} as never,
+    );
+    const query = {
+      mappingId: '00000000-0000-4000-8000-000000000002',
+      resourceId: '00000000-0000-4000-8000-000000000003',
+    };
+    await controller.getCompleteness('00000000-0000-4000-8000-000000000001', query);
+    await controller.listGaps('00000000-0000-4000-8000-000000000001', {
+      ...query, resolution: 'active', limit: 50,
+    });
+    expect(integrations.getReconstructionCompleteness).toHaveBeenCalledWith(expect.any(String), query);
+    expect(integrations.listReconstructionGaps).toHaveBeenCalledWith(expect.any(String), {
+      ...query, resolution: 'active', limit: 50,
+    });
   });
 });
 

@@ -1,4 +1,4 @@
-import { IntegrationProvenanceService } from './integration-provenance.service.js';
+import { IntegrationProvenanceService, readTargetProvenance } from './integration-provenance.service.js';
 
 const ids = {
   integration: '00000000-0000-0000-0000-000000000001',
@@ -8,6 +8,38 @@ const ids = {
 };
 
 describe('IntegrationProvenanceService', () => {
+  it('reads only exact company/target provenance through the safe shared DTO', async () => {
+    const findMany = jest.fn().mockResolvedValue([{
+      integrationCompanyMappingId: ids.mapping, resourceId: ids.resource,
+      targetKind: 'asset', assetId: '00000000-0000-4000-8000-000000000010',
+      subnetId: null, ipReservationId: null, articleId: null, relationId: null,
+      state: 'stale', staleSince: new Date('2026-07-14T00:02:00Z'),
+      provenance: {
+        integrationId: ids.integration, externalOrgId: 'org-a', resourceKey: 'devices',
+        externalId: 'raw-upstream-id', sourceRevision: 'secret-derived-revision', sourceFingerprint: null,
+        firstSeenAt: '2026-07-13T00:00:00.000Z', lastSeenAt: '2026-07-14T00:00:00.000Z',
+        lastSyncedAt: '2026-07-14T00:01:00.000Z', ownership: 'breeze', state: 'stale',
+      },
+      asset: { name: 'HV-01' }, subnet: null, ipReservation: null, article: null,
+      companyMapping: { integration: { id: ids.integration, name: 'Breeze', driver: 'breeze' } },
+      resource: { resourceKey: 'devices' },
+    }]);
+    const output = await readTargetProvenance({ integrationSyncRecord: { findMany } } as never, {
+      companyId: ids.company, targetKind: 'asset', targetId: '00000000-0000-4000-8000-000000000010',
+    });
+    expect(findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { companyId: ids.company, targetKind: 'asset', assetId: '00000000-0000-4000-8000-000000000010' },
+    }));
+    expect(output).toEqual([expect.objectContaining({ sourceLabel: 'Breeze', sourceResource: 'devices', state: 'stale' })]);
+    expect(JSON.stringify(output)).not.toContain('raw-upstream-id');
+    expect(JSON.stringify(output)).not.toContain('secret-derived-revision');
+
+    findMany.mockResolvedValueOnce([]);
+    await expect(readTargetProvenance({ integrationSyncRecord: { findMany } } as never, {
+      companyId: '00000000-0000-4000-8000-000000000099', targetKind: 'asset',
+      targetId: '00000000-0000-4000-8000-000000000010',
+    })).resolves.toEqual([]);
+  });
   it('preserves first seen while advancing safe active provenance', () => {
     const service = new IntegrationProvenanceService({} as never, {} as never);
     const previous = {

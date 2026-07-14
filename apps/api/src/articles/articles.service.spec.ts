@@ -79,6 +79,9 @@ function makeStubs(initial: {
   }
 
   const prisma = {
+    integrationSyncRecord: {
+      async findMany() { return []; },
+    },
     article: {
       async findFirst(args: { where: Prisma.ArticleWhereInput }) {
         const hit = articles.find((a) => matchesWhere(a, args.where));
