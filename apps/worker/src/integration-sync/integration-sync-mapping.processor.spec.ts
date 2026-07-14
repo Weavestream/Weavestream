@@ -68,8 +68,48 @@ describe('IntegrationSyncMappingWorker DAG execution', () => {
     expect(calls.indexOf(ids.reservation)).toBeGreaterThan(calls.indexOf(ids.device));
     expect(calls.indexOf(ids.reservation)).toBeGreaterThan(calls.indexOf(ids.subnet));
     expect(calls.at(-1)).toBe(ids.relation);
+    expect(runner.runMapping).toHaveBeenCalledWith(expect.objectContaining({ mode: 'incremental' }));
     expect(sync.mergeResourceResult).toHaveBeenCalledTimes(resources.length);
     expect(sync.closeRun).toHaveBeenCalledTimes(1);
+  });
+
+  it('passes an explicit full run mode to every resource runner call', async () => {
+    const runId = '00000000-0000-0000-0000-000000000021';
+    const mappingId = '00000000-0000-0000-0000-000000000022';
+    const resourceId = '00000000-0000-0000-0000-000000000023';
+    const runner = { runMapping: jest.fn().mockResolvedValue({
+      status: 'succeeded', resourceKey: 'devices', companyId: 'company',
+      totals: { ...totalsForWorker(), errors: 0 }, conflicts: [], error: null,
+    }) };
+    const prisma = {
+      integrationSyncRun: { findUnique: jest.fn().mockResolvedValue({
+        id: runId, triggeredBy: null, integrationId: 'integration',
+        integration: { createdBy: null },
+      }) },
+      integrationCompanyMapping: { findUnique: jest.fn().mockResolvedValue({
+        id: mappingId, companyId: 'company', integrationId: 'integration',
+      }) },
+      integrationResource: { findMany: jest.fn().mockResolvedValue([
+        { id: resourceId, resourceKey: 'devices', dependsOnResourceKeys: [] },
+      ]) },
+    };
+    const sync = {
+      markMappingRunning: jest.fn(), mergeResourceResult: jest.fn(), closeRun: jest.fn(),
+    };
+    const worker = new IntegrationSyncMappingWorker(
+      {} as never, {} as never, prisma as never, sync as never, runner as never,
+      { log: jest.fn() } as never,
+    );
+    const handle = (worker as unknown as { handle(job: {
+      data: unknown;
+      attemptsMade?: number;
+      opts?: { attempts?: number };
+    }): Promise<unknown> }).handle.bind(worker);
+
+    await handle({ data: {
+      syncRunId: runId, integrationCompanyMappingId: mappingId, resourceId, mode: 'full',
+    } });
+    expect(runner.runMapping).toHaveBeenCalledWith(expect.objectContaining({ mode: 'full' }));
   });
 
   it('rethrows a hard resource failure after persisting and closing the mapping', async () => {

@@ -86,13 +86,32 @@ describe('IntegrationSyncRunnerService writer dispatch', () => {
     unauthorized?: boolean;
     completedCheckpoint?: boolean;
     resumeCursor?: string;
+    cancelled?: boolean;
+    staleBinding?: boolean;
   } = {}) {
     const order: string[] = [];
     let pending: string[] = [];
     const tx = {
+      integrationSyncRun: {
+        updateMany: jest.fn().mockResolvedValue({ count: options.cancelled ? 0 : 1 }),
+      },
       integrationSyncRecord: {
-        findUnique: jest.fn().mockResolvedValue(null),
-        upsert: jest.fn(async () => { pending.push('binding'); }),
+        findUnique: jest.fn().mockResolvedValue(options.staleBinding ? {
+          id: 'binding-id', targetKind: 'subnet', assetId: null,
+          subnetId: 'subnet-id', ipReservationId: null, articleId: null, relationId: null,
+          state: 'stale', checksum: 'a'.repeat(64), staleSince: new Date('2026-07-13T10:00:00.000Z'),
+          lastSyncedFieldChecksums: { 'native-field': 'preserved-checksum' },
+          provenance: {
+            integrationId: '00000000-0000-4000-8000-000000000001', externalOrgId: 'org-1', resourceKey: 'subnets',
+            externalId: input.externalId, sourceRevision: null, sourceFingerprint: null,
+            firstSeenAt: '2026-07-12T10:00:00.000Z', lastSeenAt: '2026-07-13T10:00:00.000Z',
+            lastSyncedAt: '2026-07-13T10:00:00.000Z', ownership: 'breeze', state: 'stale',
+          },
+        } : null),
+        upsert: jest.fn(async () => {
+          pending.push('binding');
+          return { id: 'binding-id' };
+        }),
         update: jest.fn(),
       },
       integrationSyncCheckpoint: {
@@ -146,7 +165,7 @@ describe('IntegrationSyncRunnerService writer dispatch', () => {
       return {
       targetKind: 'subnet', targetId: 'subnet-id', checksum: 'checksum', change: 'created',
       provenance: {
-        integrationId: 'integration', externalOrgId: 'org-1', resourceKey: 'subnets',
+        integrationId: '00000000-0000-4000-8000-000000000001', externalOrgId: 'org-1', resourceKey: 'subnets',
         externalId: input.externalId, sourceRevision: null, sourceFingerprint: null,
         firstSeenAt: '2026-07-14T10:00:00.000Z', lastSeenAt: '2026-07-14T10:00:00.000Z',
         lastSyncedAt: '2026-07-14T10:00:00.000Z', ownership: 'breeze', state: 'active',
@@ -158,6 +177,26 @@ describe('IntegrationSyncRunnerService writer dispatch', () => {
         : jest.fn().mockResolvedValue(undefined),
     };
     const writerRegistry = { get: jest.fn().mockReturnValue(writer) };
+    const provenance = {
+      buildProvenance: jest.fn((value: { previous?: Record<string, unknown>; state?: string; observedAt?: Date; syncedAt?: Date }) => value.previous ? {
+        ...value.previous,
+        state: value.state,
+        lastSeenAt: value.observedAt?.toISOString(),
+        lastSyncedAt: value.syncedAt?.toISOString(),
+      } : {
+        integrationId: 'integration', externalOrgId: 'org-1', resourceKey: 'subnets',
+        externalId: input.externalId, sourceRevision: null, sourceFingerprint: null,
+        firstSeenAt: '2026-07-14T10:00:00.000Z', lastSeenAt: '2026-07-14T10:00:00.000Z',
+        lastSyncedAt: '2026-07-14T10:00:00.000Z', ownership: 'breeze', state: 'active',
+      }),
+      persistGaps: jest.fn(async () => { pending.push('gaps'); }),
+      resolveAbsentGaps: jest.fn(async () => { pending.push('resolve-gaps'); }),
+      staleUnseen: jest.fn(async () => { pending.push('stale-sweep'); return { stale: 2, archived: 1 }; }),
+      findMoveConflict: jest.fn().mockResolvedValue(null),
+    };
+    const completeness = {
+      recalculate: jest.fn(async () => { pending.push('completeness'); }),
+    };
     const service = new IntegrationSyncRunnerService(
       prisma as never,
       { values: { INTEGRATION_HTTP_TIMEOUT_MS: 1, INTEGRATION_HTTP_MAX_RETRIES: 0, INTEGRATION_HTTP_BACKOFF_MS: 1 } } as never,
@@ -166,8 +205,10 @@ describe('IntegrationSyncRunnerService writer dispatch', () => {
       { get: jest.fn().mockReturnValue(driver) } as never,
       {} as never,
       writerRegistry as never,
+      provenance as never,
+      completeness as never,
     );
-    return { service, writer, writerRegistry, tx, order, driver, audit, prisma };
+    return { service, writer, writerRegistry, tx, order, driver, audit, prisma, provenance, completeness };
   }
 
   it('dispatches typed input and commits its binding before the page checkpoint', async () => {
@@ -177,7 +218,256 @@ describe('IntegrationSyncRunnerService writer dispatch', () => {
       dryRun: false, actorId: 'actor', mode: 'incremental',
     })).resolves.toMatchObject({ status: 'succeeded', totals: { created: 1 } });
     expect(writer.write).toHaveBeenCalledWith(expect.objectContaining({ tx, existingTargetId: null }), input);
-    expect(order).toEqual(['target+audit', 'binding', 'checkpoint']);
+    expect(order).toEqual([
+      'target+audit', 'binding', 'gaps', 'resolve-gaps', 'completeness', 'checkpoint',
+    ]);
+  });
+
+  it('uses the stable full snapshot as the seen marker and commits gaps, stale sweep, completeness, then terminal checkpoint atomically', async () => {
+    const { service, tx, order, provenance, completeness } = setup();
+    await expect(service.runMapping({
+      syncRunId: 'run', integrationCompanyMappingId: 'mapping', resourceId: 'resource',
+      dryRun: false, actorId: 'actor', mode: 'full',
+    })).resolves.toMatchObject({ status: 'succeeded', totals: { stale: 2, archived: 1 } });
+    expect(tx.integrationSyncRecord.upsert).toHaveBeenCalledWith(expect.objectContaining({
+      create: expect.objectContaining({ lastSeenAt: new Date('2026-07-14T10:00:00.000Z') }),
+      update: expect.objectContaining({ lastSeenAt: new Date('2026-07-14T10:00:00.000Z') }),
+    }));
+    expect(provenance.staleUnseen).toHaveBeenCalledWith(tx, expect.objectContaining({
+      targetKind: 'subnet', snapshotAt: new Date('2026-07-14T10:00:00.000Z'),
+    }));
+    expect(completeness.recalculate).toHaveBeenCalledWith(tx, expect.objectContaining({
+      evaluatedAt: new Date('2026-07-14T10:00:00.000Z'),
+    }));
+    expect(order).toEqual([
+      'target+audit', 'binding', 'gaps', 'resolve-gaps',
+      'stale-sweep', 'completeness', 'checkpoint',
+    ]);
+  });
+
+  it('restores a stale binding in place, clears staleSince, and carries native/manual preservation state', async () => {
+    const { service, writer, tx } = setup({ staleBinding: true });
+    writer.write.mockResolvedValueOnce({
+      targetKind: 'subnet', targetId: 'subnet-id', checksum: 'b'.repeat(64), change: 'restored',
+      provenance: {
+        integrationId: 'integration', externalOrgId: 'org-1', resourceKey: 'subnets',
+        externalId: input.externalId, sourceRevision: null, sourceFingerprint: null,
+        firstSeenAt: '2026-07-12T10:00:00.000Z', lastSeenAt: '2026-07-14T10:00:00.000Z',
+        lastSyncedAt: '2026-07-14T10:00:00.000Z', ownership: 'breeze', state: 'active',
+      },
+      fieldChecksums: { 'native-field': 'preserved-checksum' }, gaps: [],
+    });
+
+    await expect(service.runMapping({
+      syncRunId: 'restore-run', integrationCompanyMappingId: 'mapping', resourceId: 'resource',
+      dryRun: false, actorId: 'actor', mode: 'incremental',
+    })).resolves.toMatchObject({ status: 'succeeded', totals: { restored: 1 } });
+    expect(writer.write).toHaveBeenCalledWith(expect.objectContaining({
+      existingTargetId: 'subnet-id', existingState: 'stale',
+      previousFieldChecksums: { 'native-field': 'preserved-checksum' },
+      previousProvenance: expect.objectContaining({ ownership: 'breeze', state: 'stale' }),
+    }), input);
+    expect(tx.integrationSyncRecord.upsert).toHaveBeenCalledWith(expect.objectContaining({
+      update: expect.objectContaining({
+        subnetId: 'subnet-id', state: 'active', staleSince: null,
+        lastSyncedFieldChecksums: { 'native-field': 'preserved-checksum' },
+        provenance: expect.objectContaining({ ownership: 'breeze', state: 'active' }),
+      }),
+    }));
+  });
+
+  it('keeps a stable full snapshot across two pages and defers resolution, sweep, completeness, and completion markers until terminal', async () => {
+    const { service, driver, tx, provenance, completeness, order } = setup();
+    driver.fetchRecords
+      .mockResolvedValueOnce({
+        records: [{ reconstructionInput: input }], hasMore: true, cursor: 'opaque-page-2',
+        terminal: false, schemaVersion: '1', snapshotAt: '2026-07-14T10:00:00.000Z',
+        sourceHighWater: '2026-07-14T09:30:00.000Z', blockedInputs: [],
+      })
+      .mockResolvedValueOnce({
+        records: [{ reconstructionInput: input }], hasMore: false, cursor: null,
+        terminal: true, schemaVersion: '1', snapshotAt: '2026-07-14T10:00:00.000Z',
+        sourceHighWater: '2026-07-14T09:45:00.000Z', blockedInputs: [],
+      });
+
+    await expect(service.runMapping({
+      syncRunId: 'new-run', integrationCompanyMappingId: 'mapping', resourceId: 'resource',
+      dryRun: false, actorId: 'actor', mode: 'full',
+    })).resolves.toMatchObject({ status: 'succeeded' });
+
+    expect(tx.integrationSyncRecord.upsert).toHaveBeenCalledTimes(2);
+    const bindingCalls = tx.integrationSyncRecord.upsert.mock.calls as unknown as Array<[
+      { create: { lastSeenAt: Date }; update: { lastSeenAt: Date } },
+    ]>;
+    for (const [call] of bindingCalls) {
+      expect(call.create.lastSeenAt).toEqual(new Date('2026-07-14T10:00:00.000Z'));
+      expect(call.update.lastSeenAt).toEqual(new Date('2026-07-14T10:00:00.000Z'));
+    }
+    expect(provenance.persistGaps).toHaveBeenCalledTimes(2);
+    expect(provenance.resolveAbsentGaps).toHaveBeenCalledTimes(1);
+    expect(provenance.staleUnseen).toHaveBeenCalledTimes(1);
+    expect(completeness.recalculate).toHaveBeenCalledTimes(1);
+    const checkpointCalls = tx.integrationSyncCheckpoint.upsert.mock.calls as unknown as Array<[
+      { update: Record<string, unknown> },
+    ]>;
+    const checkpoints = checkpointCalls.map(([call]) => call);
+    expect(checkpoints[0]!.update).not.toHaveProperty('lastFullCompletedAt');
+    expect(checkpoints[0]!.update).not.toHaveProperty('highWaterAt');
+    expect(checkpoints[1]!.update).toHaveProperty('lastFullCompletedAt');
+    expect(checkpoints[1]!.update['highWaterAt']).toEqual(new Date('2026-07-14T09:45:00.000Z'));
+    expect(order).toEqual([
+      'target+audit', 'binding', 'gaps', 'checkpoint',
+      'target+audit', 'binding', 'gaps', 'resolve-gaps',
+      'stale-sweep', 'completeness', 'checkpoint',
+    ]);
+  });
+
+  it('uses one snapshot marker across incremental pages so terminal resolution preserves page-one gaps', async () => {
+    const { service, driver, provenance } = setup();
+    driver.fetchRecords
+      .mockResolvedValueOnce({
+        records: [], hasMore: true, cursor: 'page-2', terminal: false,
+        schemaVersion: '1', snapshotAt: '2026-07-14T10:00:00.000Z',
+        blockedInputs: [{
+          kind: 'missing_dependency', externalId: 'safe-source-1',
+          message: 'A dependency was unavailable.', details: { reasonCode: 'dependency_missing' },
+        }],
+      })
+      .mockResolvedValueOnce({
+        records: [], hasMore: false, cursor: null, terminal: true,
+        schemaVersion: '1', snapshotAt: '2026-07-14T10:00:00.000Z', blockedInputs: [],
+      });
+    await service.runMapping({
+      syncRunId: 'run', integrationCompanyMappingId: 'mapping', resourceId: 'resource',
+      dryRun: false, actorId: 'actor', mode: 'incremental',
+    });
+    const gapCalls = provenance.persistGaps.mock.calls as unknown as Array<[
+      unknown, { observedAt: Date }, unknown[],
+    ]>;
+    const scopes = gapCalls.map((call) => call[1]);
+    expect(scopes).toHaveLength(2);
+    expect(scopes[0]!.observedAt).toEqual(new Date('2026-07-14T10:00:00.000Z'));
+    expect(scopes[1]!.observedAt).toEqual(scopes[0]!.observedAt);
+    expect(provenance.resolveAbsentGaps).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ observedAt: scopes[0]!.observedAt }),
+    );
+  });
+
+  it('quarantines a mapped cross-company move before the native writer and persists a safe ambiguous gap', async () => {
+    const { service, provenance, writer } = setup();
+    provenance.findMoveConflict.mockResolvedValueOnce({ count: 1 });
+    await expect(service.runMapping({
+      syncRunId: 'run', integrationCompanyMappingId: 'mapping', resourceId: 'resource',
+      dryRun: false, actorId: 'actor', mode: 'incremental',
+    })).resolves.toMatchObject({
+      status: 'succeeded', totals: { blocked: 1, skippedAmbiguous: 1, created: 0 },
+    });
+    expect(writer.write).not.toHaveBeenCalled();
+    expect(provenance.persistGaps).toHaveBeenCalledWith(expect.anything(), expect.anything(), [
+      expect.objectContaining({
+        kind: 'ambiguous',
+        details: expect.objectContaining({ reasonCode: 'cross_org_move_quarantined' }),
+      }),
+    ]);
+  });
+
+  it('persists a generic validation quarantine when typed source identity is rejected', async () => {
+    const { service, driver, provenance, writer } = setup();
+    driver.fetchRecords.mockResolvedValueOnce({
+      records: [{ reconstructionInput: { ...input, externalId: 'wrong' } }],
+      hasMore: false, cursor: null, terminal: true,
+      snapshotAt: '2026-07-14T10:00:00.000Z',
+    });
+    await service.runMapping({
+      syncRunId: 'run', integrationCompanyMappingId: 'mapping', resourceId: 'resource',
+      dryRun: false, actorId: 'actor', mode: 'incremental',
+    });
+    expect(writer.write).not.toHaveBeenCalled();
+    expect(provenance.persistGaps).toHaveBeenCalledWith(expect.anything(), expect.anything(), [
+      expect.objectContaining({
+        kind: 'validation', message: 'Source record failed bounded reconstruction validation.',
+        details: { reasonCode: 'invalid_reconstruction_input' },
+      }),
+    ]);
+  });
+
+  it('caps legal per-record writer gaps and adds one safe overflow observation', async () => {
+    const { service, driver, writer, provenance } = setup();
+    driver.fetchRecords.mockResolvedValueOnce({
+      records: [{ reconstructionInput: input }], hasMore: false, cursor: null, terminal: true,
+      snapshotAt: '2026-07-14T10:00:00.000Z',
+      blockedInputs: Array.from({ length: 1_000 }, (_, index) => ({
+        kind: 'validation' as const, externalId: `safe-${index}`,
+        message: 'Input requires operator review.', details: { reasonCode: 'invalid_input' },
+      })),
+    });
+    writer.write.mockResolvedValueOnce({
+      targetKind: 'subnet', targetId: 'subnet-id', checksum: 'checksum', change: 'created',
+      provenance: {
+        integrationId: '00000000-0000-0000-0000-000000000001',
+        externalOrgId: 'org-1', resourceKey: 'subnets', externalId: input.externalId,
+        sourceRevision: null, sourceFingerprint: null,
+        firstSeenAt: '2026-07-14T10:00:00.000Z', lastSeenAt: '2026-07-14T10:00:00.000Z',
+        lastSyncedAt: '2026-07-14T10:00:00.000Z', ownership: 'breeze', state: 'active',
+      },
+      gaps: [{ kind: 'validation', message: 'Additional writer validation.' }],
+    });
+    await service.runMapping({
+      syncRunId: 'run', integrationCompanyMappingId: 'mapping', resourceId: 'resource',
+      dryRun: false, actorId: 'actor', mode: 'incremental',
+    });
+    const overflowCalls = provenance.persistGaps.mock.calls as unknown as Array<[
+      unknown, unknown, Array<Record<string, unknown>>,
+    ]>;
+    const observations = overflowCalls[0]![2];
+    expect(observations).toHaveLength(1_000);
+    expect(observations.at(-1)).toEqual(expect.objectContaining({
+      externalId: null,
+      details: expect.objectContaining({ reasonCode: 'gap_observation_overflow', candidateCount: 2 }),
+    }));
+  });
+
+  it.each([
+    ['incremental', false],
+    ['full dry run', true],
+  ] as const)('never stales during %s traversal', async (_label, dryRun) => {
+    const { service, provenance } = setup();
+    await service.runMapping({
+      syncRunId: 'run', integrationCompanyMappingId: 'mapping', resourceId: 'resource',
+      dryRun, actorId: 'actor', mode: dryRun ? 'full' : 'incremental',
+    });
+    expect(provenance.staleUnseen).not.toHaveBeenCalled();
+  });
+
+  it('rolls back stale, completeness, and full completion when the bounded terminal sweep fails', async () => {
+    const { service, provenance, completeness, tx, order } = setup();
+    provenance.staleUnseen.mockRejectedValueOnce(new Error('bounded stale sweep exceeded'));
+    await expect(service.runMapping({
+      syncRunId: 'run', integrationCompanyMappingId: 'mapping', resourceId: 'resource',
+      dryRun: false, actorId: 'actor', mode: 'full',
+    })).resolves.toMatchObject({ status: 'failed', error: 'bounded stale sweep exceeded' });
+    expect(order).toEqual([]);
+    expect(completeness.recalculate).not.toHaveBeenCalled();
+    expect(tx.integrationSyncCheckpoint.upsert).not.toHaveBeenCalled();
+  });
+
+  it('rolls back the terminal page and never sweeps or checkpoints a cancelled full run', async () => {
+    const { service, provenance, completeness, tx, order } = setup({ cancelled: true });
+
+    await expect(service.runMapping({
+      syncRunId: 'cancelled-run', integrationCompanyMappingId: 'mapping', resourceId: 'resource',
+      dryRun: false, actorId: 'actor', mode: 'full',
+    })).resolves.toMatchObject({ status: 'failed', error: expect.stringMatching(/cancelled/i) });
+    expect(order).toEqual([]);
+    expect(tx.integrationSyncRun.updateMany).toHaveBeenCalledWith({
+      where: { id: 'cancelled-run', status: { in: ['queued', 'running'] } },
+      data: { status: 'running' },
+    });
+    expect(provenance.resolveAbsentGaps).not.toHaveBeenCalled();
+    expect(provenance.staleUnseen).not.toHaveBeenCalled();
+    expect(completeness.recalculate).not.toHaveBeenCalled();
+    expect(tx.integrationSyncCheckpoint.upsert).not.toHaveBeenCalled();
   });
 
   it('keeps dry runs free of binding and checkpoint writes', async () => {
@@ -313,7 +603,7 @@ describe('IntegrationSyncRunnerService writer dispatch', () => {
   });
 
   it('rolls back a driver-declared retryable synchronization gap', async () => {
-    const { service, driver, tx, order } = setup();
+    const { service, driver, tx, order, provenance, completeness } = setup();
     driver.fetchRecords.mockResolvedValueOnce({
       records: [], hasMore: false, cursor: null, terminal: true,
       blockedInputs: [{
@@ -327,6 +617,8 @@ describe('IntegrationSyncRunnerService writer dispatch', () => {
     })).resolves.toMatchObject({ status: 'failed', error: 'retry upstream' });
     expect(order).toEqual([]);
     expect(tx.integrationSyncCheckpoint.upsert).not.toHaveBeenCalled();
+    expect(provenance.staleUnseen).not.toHaveBeenCalled();
+    expect(completeness.recalculate).not.toHaveBeenCalled();
   });
 
   it('does not dispatch or create a targetless binding for an invalid typed record', async () => {
@@ -545,6 +837,7 @@ describe('Breeze foundational asset composition', () => {
     ]);
     const bindings = new Map<string, Record<string, unknown>>();
     const tx = {
+      integrationSyncRun: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
       integrationSyncRecord: {
         findUnique: jest.fn(async ({ where }: { where: { integrationCompanyMappingId_resourceId_externalId: { resourceId: string; externalId: string } } }) =>
           bindings.get(`${where.integrationCompanyMappingId_resourceId_externalId.resourceId}:${where.integrationCompanyMappingId_resourceId_externalId.externalId}`) ?? null),
@@ -583,6 +876,12 @@ describe('Breeze foundational asset composition', () => {
       { get: jest.fn().mockReturnValue(breeze) } as never,
       { execute: jest.fn() } as never,
       { get: jest.fn().mockReturnValue(assetWriter) } as never,
+      {
+        buildProvenance: jest.fn(({ previous }: { previous: unknown }) => previous),
+        persistGaps: jest.fn(), resolveAbsentGaps: jest.fn(), staleUnseen: jest.fn(),
+        findMoveConflict: jest.fn().mockResolvedValue(null),
+      } as never,
+      { recalculate: jest.fn() } as never,
     );
 
     await expect(runner.runMapping({ syncRunId: 'run-site', integrationCompanyMappingId: mapping, resourceId: siteResourceId, dryRun: false, actorId: 'actor' }))
@@ -631,6 +930,7 @@ describe('Breeze foundational asset composition', () => {
       return identity ? bindings.get(`${identity.integrationCompanyMappingId}:${identity.resourceId}:${identity.externalId}`) ?? null : null;
     };
     const tx = {
+      integrationSyncRun: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
       asset: {
         create: jest.fn(async ({ data }: { data: Omit<StoredAsset, 'id' | 'fieldValues' | 'createdAt' | 'updatedAt'> }) => {
           const row: StoredAsset = {

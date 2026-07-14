@@ -332,6 +332,28 @@ describe('IpamService integration system writes', () => {
     })).resolves.toEqual({ targetId: ids.subnet, companyId: ids.company, change });
   });
 
+  it('restores the same archived subnet without replacing its native identity', async () => {
+    const { service, tx } = setup({
+      subnet: subnetRow({ archivedAt: new Date('2026-07-02T00:00:00.000Z') }),
+      binding: binding('subnet', {
+        state: 'stale',
+        provenance: {
+          integrationId: ids.integration, externalOrgId: 'org', resourceKey: 'subnets',
+          externalId: 'org:subnets:lan', ownership: 'breeze', state: 'stale',
+        },
+      }),
+    });
+
+    await expect(service.writeSubnetFromIntegration({
+      ...subnetInput, existingTargetId: ids.subnet,
+    })).resolves.toEqual({ targetId: ids.subnet, companyId: ids.company, change: 'restored' });
+    expect(tx.subnet.create).not.toHaveBeenCalled();
+    expect(tx.subnet.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: ids.subnet, companyId: ids.company },
+      data: expect.objectContaining({ archivedAt: null, cidr: '10.0.0.0/24' }),
+    }));
+  });
+
   it('updates native subnet facts through one stable UUID-backed source binding', async () => {
     const externalId = 'org:subnets:11111111-1111-4111-8111-111111111111';
     const { service, tx } = setup({

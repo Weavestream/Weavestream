@@ -415,7 +415,7 @@ export class IntegrationsController {
     @Body(new ZodBody(triggerSyncSchema)) dto: TriggerSyncInput,
     @Req() req: Request,
   ) {
-    return this.sync.triggerManual(user, id, dto.dryRun, meta(req));
+    return this.sync.triggerManual(user, id, dto.dryRun, meta(req), dto.mode);
   }
 
   @Get(':id/runs')

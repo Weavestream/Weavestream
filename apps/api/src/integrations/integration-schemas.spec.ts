@@ -8,6 +8,7 @@ import {
   integrationReconstructionGapDtoSchema,
   integrationReconstructionGapInputSchema,
   integrationSyncMappingJobSchema,
+  integrationSyncOrchestratorJobSchema,
   integrationSyncDirectionSchema,
   replaceFieldMappingsSchema,
   syncRunConflictSchema,
@@ -360,8 +361,32 @@ describe('integration zod schemas', () => {
   });
 
   describe('triggerSyncSchema', () => {
-    it('defaults dryRun to false', () => {
-      expect(triggerSyncSchema.parse({})).toEqual({ dryRun: false });
+    it('defaults manual requests to an incremental non-dry run', () => {
+      expect(triggerSyncSchema.parse({})).toEqual({ dryRun: false, mode: 'incremental' });
+      expect(triggerSyncSchema.parse({ mode: 'full' })).toEqual({ dryRun: false, mode: 'full' });
+    });
+  });
+
+  describe('integration sync queue modes', () => {
+    const integrationId = '00000000-0000-0000-0000-000000000001';
+    const triggeredBy = '00000000-0000-0000-0000-000000000002';
+
+    it('defaults manual queue jobs to incremental and permits an explicit full run', () => {
+      expect(integrationSyncOrchestratorJobSchema.parse({
+        kind: 'manual', integrationId, triggeredBy,
+      })).toMatchObject({ mode: 'incremental' });
+      expect(integrationSyncOrchestratorJobSchema.parse({
+        kind: 'manual', integrationId, triggeredBy, mode: 'full',
+      })).toMatchObject({ mode: 'full' });
+    });
+
+    it('leaves scheduled mode undecided unless the scheduler explicitly requests it', () => {
+      expect(integrationSyncOrchestratorJobSchema.parse({
+        kind: 'scheduled', integrationId,
+      })).not.toHaveProperty('mode');
+      expect(integrationSyncOrchestratorJobSchema.parse({
+        kind: 'scheduled', integrationId, mode: 'full',
+      })).toMatchObject({ mode: 'full' });
     });
   });
 

@@ -40,6 +40,8 @@ import {
   type ReconstructionWriter,
 } from './reconstruction/reconstruction-target.js';
 import { integrationAssetExternalSource } from './integration-asset-source.js';
+import { IntegrationProvenanceService } from './reconstruction/integration-provenance.service.js';
+import { IntegrationCompletenessService } from './reconstruction/integration-completeness.service.js';
 
 /** Executes one resource inside a mapping DAG through its native writer. */
 
@@ -177,6 +179,8 @@ export class IntegrationSyncRunnerService {
     private readonly drivers: IntegrationDriverRegistry,
     private readonly transforms: IntegrationTransformService,
     private readonly writers: ReconstructionWriterRegistry,
+    private readonly provenance: IntegrationProvenanceService,
+    private readonly completeness: IntegrationCompletenessService,
   ) {}
 
   async runMapping(input: MappingRunInput): Promise<MappingRunOutcome> {
@@ -321,6 +325,31 @@ export class IntegrationSyncRunnerService {
         const pageTotals = emptyTotals();
         const pageConflicts: SyncRunConflict[] = [];
         const processPage = async (tx: Prisma.TransactionClient): Promise<void> => {
+          const runClaim = await tx.integrationSyncRun.updateMany({
+            where: {
+              id: input.syncRunId,
+              status: { in: ['queued', 'running'] },
+            },
+            data: { status: 'running' },
+          });
+          if (runClaim.count !== 1) {
+            throw new BadRequestException(
+              `Sync run ${input.syncRunId} is cancelled or not active; page reconciliation was rolled back.`,
+            );
+          }
+          const observedAt = new Date(page.snapshotAt);
+          const pageGaps: Array<{
+            externalId: string | null;
+            syncRecordId: string | null;
+            kind: DriverBlockedInput['kind'];
+            message: string;
+            details: Record<string, unknown>;
+          }> = [];
+          let droppedGapCount = 0;
+          const observeGap = (gap: (typeof pageGaps)[number]): void => {
+            if (pageGaps.length < 999) pageGaps.push(gap);
+            else droppedGapCount += 1;
+          };
           for (const blocked of page.blockedInputs) {
             if (
               blocked.kind === 'synchronization_error' &&
@@ -329,6 +358,13 @@ export class IntegrationSyncRunnerService {
               throw new Error(blocked.message);
             }
             this.accumulateBlockedInput(pageTotals, pageConflicts, blocked);
+            observeGap({
+              externalId: blocked.externalId,
+              syncRecordId: null,
+              kind: blocked.kind,
+              message: blocked.message,
+              details: { ...(blocked.details ?? {}) },
+            });
           }
           for (const record of page.records) {
             pageTotals.fetched += 1;
@@ -339,12 +375,19 @@ export class IntegrationSyncRunnerService {
             try {
               reconstruction = this.toReconstructionInput(safeRecord, resource, mapping);
               this.assertTypedIdentity(reconstruction, resource.targetKind, mapping.externalOrgId, resource.resourceKey);
-            } catch (error) {
+            } catch {
               pageTotals.blocked += 1;
               pageTotals.errors += 1;
               pageConflicts.push({
                 kind: 'validation_error', externalId: '',
-                message: describeError(error).slice(0, 500),
+                message: 'Source record failed bounded reconstruction validation.',
+              });
+              observeGap({
+                externalId: safeRecord.reconstructionInput?.externalId ?? safeRecord.externalId ?? null,
+                syncRecordId: null,
+                kind: 'validation',
+                message: 'Source record failed bounded reconstruction validation.',
+                details: { reasonCode: 'invalid_reconstruction_input' },
               });
               continue;
             }
@@ -362,6 +405,37 @@ export class IntegrationSyncRunnerService {
               reconstruction,
               writeNow,
             );
+            const moveConflict = await this.provenance.findMoveConflict(tx, {
+              integrationId: mapping.integrationId,
+              integrationCompanyMappingId: mapping.id,
+              resourceId: resource.id,
+              companyId: mapping.companyId,
+              resourceKey: reconstruction.source.resourceKey,
+              sourceId: reconstruction.source.sourceId,
+            });
+            if (moveConflict) {
+              pageTotals.blocked += 1;
+              pageTotals.skippedAmbiguous += 1;
+              pageConflicts.push({
+                kind: 'validation_error',
+                externalId: reconstruction.externalId,
+                message: 'Source identity is already bound under another organization mapping.',
+              });
+              observeGap({
+                externalId: reconstruction.externalId,
+                syncRecordId: null,
+                kind: 'ambiguous',
+                message: 'Source identity move requires operator review.',
+                details: {
+                  reasonCode: 'cross_org_move_quarantined',
+                  sourceResource: reconstruction.source.resourceKey,
+                  sourceOrgId: reconstruction.source.externalOrgId,
+                  sourceId: reconstruction.source.sourceId,
+                  candidateCount: moveConflict.count,
+                },
+              });
+              continue;
+            }
             const writeContext: ReconstructionWriteContext = {
               tx,
               companyId: mapping.companyId,
@@ -393,20 +467,39 @@ export class IntegrationSyncRunnerService {
               outcome,
             );
             if (input.dryRun) continue;
+            const activeProvenance = this.provenance.buildProvenance({
+              integrationId: mapping.integrationId,
+              externalOrgId: reconstruction.source.externalOrgId,
+              resourceKey: reconstruction.source.resourceKey,
+              externalId: reconstruction.externalId,
+              sourceRevision: reconstruction.source.revision ?? null,
+              sourceFingerprint: reconstruction.source.fingerprint ?? null,
+              observedAt,
+              syncedAt: outcome.change === 'blocked' ? null : writeNow,
+              state: outcome.change === 'blocked' ? 'blocked' : 'active',
+              previous: parseProvenance(existing?.provenance),
+            });
             if (outcome.change === 'blocked') {
               if (existing) {
                 await tx.integrationSyncRecord.update({
                   where: { id: existing.id },
                   data: {
                     state: 'blocked',
-                    provenance: outcome.provenance as unknown as Prisma.InputJsonValue,
-                    lastSeenAt: writeContext.now,
+                    provenance: activeProvenance as unknown as Prisma.InputJsonValue,
+                    lastSeenAt: observedAt,
                   },
                 });
               }
+              for (const gap of outcome.gaps) observeGap({
+                externalId: reconstruction.externalId,
+                syncRecordId: existing?.id ?? null,
+                kind: gap.kind,
+                message: gap.message,
+                details: { ...(gap.details ?? {}) },
+              });
               continue;
             }
-            await tx.integrationSyncRecord.upsert({
+            const binding = await tx.integrationSyncRecord.upsert({
               where: {
                 integrationCompanyMappingId_resourceId_externalId: {
                   integrationCompanyMappingId: mapping.id,
@@ -414,11 +507,63 @@ export class IntegrationSyncRunnerService {
                   externalId: reconstruction.externalId,
                 },
               },
-              create: bindingData(mapping.id, resource.id, mapping.companyId, input.syncRunId, reconstruction, outcome, writeContext.now),
-              update: bindingData(mapping.id, resource.id, mapping.companyId, input.syncRunId, reconstruction, outcome, writeContext.now),
+              create: bindingData(mapping.id, resource.id, mapping.companyId, input.syncRunId, reconstruction, outcome, activeProvenance, observedAt, writeNow),
+              update: bindingData(mapping.id, resource.id, mapping.companyId, input.syncRunId, reconstruction, outcome, activeProvenance, observedAt, writeNow),
+            });
+            for (const gap of outcome.gaps) observeGap({
+              externalId: reconstruction.externalId,
+              syncRecordId: binding.id,
+              kind: gap.kind,
+              message: gap.message,
+              details: { ...(gap.details ?? {}) },
             });
           }
           if (!input.dryRun) {
+            if (droppedGapCount > 0) {
+              pageGaps.push({
+                externalId: null,
+                syncRecordId: null,
+                kind: 'validation',
+                message: 'Additional bounded gap observations require operator review.',
+                details: {
+                  reasonCode: 'gap_observation_overflow',
+                  candidateCount: Math.min(droppedGapCount, 1_000_000),
+                },
+              });
+            }
+            await this.provenance.persistGaps(tx, {
+              companyId: mapping.companyId,
+              integrationCompanyMappingId: mapping.id,
+              resourceId: resource.id,
+              observedAt,
+            }, pageGaps);
+            if (page.terminal) {
+              await this.provenance.resolveAbsentGaps(tx, {
+                companyId: mapping.companyId,
+                integrationCompanyMappingId: mapping.id,
+                resourceId: resource.id,
+                observedAt,
+              });
+              if (mode === 'full') {
+                const reconciled = await this.provenance.staleUnseen(tx, {
+                  integrationId: mapping.integrationId,
+                  companyId: mapping.companyId,
+                  integrationCompanyMappingId: mapping.id,
+                  resourceId: resource.id,
+                  targetKind: resource.targetKind,
+                  snapshotAt: observedAt,
+                  auditActorId: input.actorId!,
+                });
+                pageTotals.stale += reconciled.stale;
+                pageTotals.archived += reconciled.archived;
+              }
+              await this.completeness.recalculate(tx, {
+                companyId: mapping.companyId,
+                integrationCompanyMappingId: mapping.id,
+                resourceId: resource.id,
+                evaluatedAt: observedAt,
+              });
+            }
             const highWater = page.terminal
               ? traversalHighWater ?? deriveLegacyHighWater(page.records)
               : checkpoint?.highWaterAt?.toISOString() ?? null;
@@ -720,7 +865,9 @@ function bindingData(
   syncRunId: string,
   input: ReconstructionInput,
   outcome: ReconstructionWriteOutcome,
-  now: Date,
+  provenance: SafeIntegrationProvenance,
+  observedAt: Date,
+  syncedAt: Date,
 ) {
   return {
     integrationCompanyMappingId: mappingId,
@@ -734,12 +881,12 @@ function bindingData(
     articleId: outcome.targetKind === 'article' ? outcome.targetId : null,
     relationId: outcome.targetKind === 'relation' ? outcome.targetId : null,
     externalId: input.externalId,
-    lastSyncedAt: now,
+    lastSyncedAt: syncedAt,
     state: 'active' as const,
-    lastSeenAt: now,
+    lastSeenAt: observedAt,
     staleSince: null,
     sourceUpdatedAt: input.source.updatedAt ? new Date(input.source.updatedAt) : null,
-    provenance: outcome.provenance as unknown as Prisma.InputJsonValue,
+    provenance: provenance as unknown as Prisma.InputJsonValue,
     checksum: outcome.checksum,
     lastSyncedFieldChecksums: (outcome.fieldChecksums ?? {}) as Prisma.InputJsonValue,
   };

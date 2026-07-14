@@ -110,6 +110,8 @@ function setup(options: { target?: unknown; match?: unknown[]; binding?: unknown
       deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
     },
     upload: { updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
+    password: { updateMany: jest.fn(), deleteMany: jest.fn() },
+    relation: { updateMany: jest.fn(), deleteMany: jest.fn() },
     integrationSyncRecord: { findUnique: jest.fn().mockResolvedValue(options.binding ?? null) },
     auditLog: { create: jest.fn() },
   };
@@ -249,6 +251,45 @@ describe('AssetsService integration system writes', () => {
       name,
     })).resolves.toMatchObject({ targetId: ids.asset, change });
     expect(tx.integrationSyncRecord.findUnique).toHaveBeenCalled();
+  });
+
+  it('restores the same archived asset while preserving an operator-edited field', async () => {
+    const target = asset({
+      archivedAt: new Date('2026-07-02T00:00:00.000Z'),
+      fieldValues: [{
+        id: 'fv-1', companyId: ids.company, assetId: ids.asset,
+        assetFieldId: ids.field, value: 'operator-edited-hostname',
+      }],
+    });
+    const { service, tx } = setup({
+      target,
+      binding: binding({
+        state: 'stale',
+        provenance: {
+          integrationId: ids.integration, externalOrgId: 'org-1', resourceKey: 'devices',
+          externalId: 'org-1:devices:edge-01', ownership: 'breeze', state: 'stale',
+        },
+      }),
+    });
+
+    await expect(service.writeFromIntegration({
+      ...input,
+      existingTargetId: ids.asset,
+      fieldValues: [{
+        targetFieldId: ids.field, value: 'new-upstream-hostname', syncDirection: 'preserve_manual',
+      }],
+      previousFieldChecksums: { [ids.field]: 'prior-source-checksum' },
+    })).resolves.toMatchObject({ targetId: ids.asset, change: 'restored' });
+    expect(tx.asset.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: ids.asset, companyId: ids.company },
+      data: expect.objectContaining({ archivedAt: null }),
+    }));
+    expect(tx.assetFieldValue.upsert).not.toHaveBeenCalled();
+    expect(tx.upload.updateMany).not.toHaveBeenCalled();
+    expect(tx.password.updateMany).not.toHaveBeenCalled();
+    expect(tx.password.deleteMany).not.toHaveBeenCalled();
+    expect(tx.relation.updateMany).not.toHaveBeenCalled();
+    expect(tx.relation.deleteMany).not.toHaveBeenCalled();
   });
 
   it('accepts an exact eligible dependency binding as a grouped-resource first-write anchor', async () => {

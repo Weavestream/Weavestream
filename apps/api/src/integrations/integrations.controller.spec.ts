@@ -68,9 +68,20 @@ describe('IntegrationsController security contract', () => {
     const user = { id: 'actor' } as never;
     const req = { ip: '127.0.0.1', headers: {} } as never;
 
-    await controller.triggerSync(user, '00000000-0000-4000-8000-000000000001', { dryRun }, req);
+    await controller.triggerSync(
+      user,
+      '00000000-0000-4000-8000-000000000001',
+      { dryRun, mode: 'incremental' },
+      req,
+    );
 
-    expect(triggerManual).toHaveBeenCalledWith(user, expect.any(String), dryRun, expect.any(Object));
+    expect(triggerManual).toHaveBeenCalledWith(
+      user,
+      expect.any(String),
+      dryRun,
+      expect.any(Object),
+      'incremental',
+    );
   });
 });
 

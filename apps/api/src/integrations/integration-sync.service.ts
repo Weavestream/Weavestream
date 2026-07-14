@@ -10,6 +10,7 @@ import {
   QueueNames,
   stripNul,
   syncRunTotalsSchema,
+  type IntegrationSyncMode,
   type IntegrationSyncRunCompanyResultDto,
   type IntegrationSyncRunDto,
   type SyncRunConflict,
@@ -120,6 +121,7 @@ export class IntegrationSyncService {
     integrationId: string,
     dryRun: boolean,
     meta: AuditMeta,
+    mode: IntegrationSyncMode = 'incremental',
   ): Promise<IntegrationSyncRunDto> {
     const integration = await this.prisma.integration.findUnique({
       where: { id: integrationId },
@@ -160,15 +162,26 @@ export class IntegrationSyncService {
       );
     }
 
-    const run = await this.prisma.integrationSyncRun.create({
-      data: {
-        integrationId,
-        kind: 'manual',
-        status: 'queued',
-        dryRun,
-        triggeredBy: actor.id,
-      },
-    });
+    let run;
+    try {
+      run = await this.prisma.integrationSyncRun.create({
+        data: {
+          integrationId,
+          kind: 'manual',
+          mode,
+          status: 'queued',
+          dryRun,
+          triggeredBy: actor.id,
+        },
+      });
+    } catch (error) {
+      if (mode === 'full' && isUniqueConstraintError(error)) {
+        throw new BadRequestException(
+          'A full reconstruction sync is already queued or running for this integration.',
+        );
+      }
+      throw error;
+    }
 
     await this.queues.get(QueueNames.integrationSyncOrchestrator).add(
       IntegrationSyncOrchestratorJobNames.manual,
@@ -176,6 +189,7 @@ export class IntegrationSyncService {
         kind: 'manual',
         integrationId,
         triggeredBy: actor.id,
+        mode,
         dryRun,
       },
       {
@@ -193,11 +207,106 @@ export class IntegrationSyncService {
       ip: meta.ip,
       userAgent: meta.userAgent,
       before: null,
-      after: { kind: 'manual', dryRun, mappings: enabledMappingCount },
+      after: { kind: 'manual', mode, dryRun, mappings: enabledMappingCount },
     });
 
     const userIndex = await this.resolveTriggeredByUsers([run]);
     return toRunDto(run, userIndex);
+  }
+
+  /**
+   * Choose a scheduled mode from durable full checkpoints. Every enabled
+   * mapping × enabled/configured resource scope must have completed a full
+   * traversal in the preceding 24 hours; raw or disabled checkpoint rows do
+   * not satisfy the requirement.
+   */
+  async selectScheduledMode(
+    integrationId: string,
+    now = new Date(),
+  ): Promise<IntegrationSyncMode> {
+    const activeFull = await this.prisma.integrationSyncRun.count({
+      where: {
+        integrationId,
+        mode: 'full',
+        status: { in: ['queued', 'running'] },
+      },
+    });
+    if (activeFull > 0) return 'incremental';
+
+    const configuredResourceWhere = {
+      integrationId,
+      enabled: true,
+      OR: [
+        { targetKind: { not: 'asset' as const } },
+        {
+          targetKind: 'asset' as const,
+          assetLayoutId: { not: null },
+          fieldMappings: { some: {} },
+        },
+      ],
+    };
+    const [mappingCount, resourceCount] = await Promise.all([
+      this.prisma.integrationCompanyMapping.count({
+        where: { integrationId, enabled: true },
+      }),
+      this.prisma.integrationResource.count({ where: configuredResourceWhere }),
+    ]);
+    const expectedScopes = mappingCount * resourceCount;
+    if (expectedScopes === 0) return 'incremental';
+
+    const fullCutoff = new Date(now.getTime() - 24 * 60 * 60 * 1_000);
+    const recentFullCheckpoints = await this.prisma.integrationSyncCheckpoint.count({
+      where: {
+        mode: 'full',
+        lastFullCompletedAt: { gte: fullCutoff },
+        companyMapping: { integrationId, enabled: true },
+        resource: configuredResourceWhere,
+      },
+    });
+    return recentFullCheckpoints >= expectedScopes ? 'incremental' : 'full';
+  }
+
+  /** Persist the scheduled decision once, before any fan-out or retry. */
+  async createScheduledRun(
+    integrationId: string,
+    requestedMode?: IntegrationSyncMode,
+    now = new Date(),
+  ) {
+    let mode = requestedMode ?? await this.selectScheduledMode(integrationId, now);
+    if (mode === 'full') {
+      const activeFull = await this.prisma.integrationSyncRun.count({
+        where: {
+          integrationId,
+          mode: 'full',
+          status: { in: ['queued', 'running'] },
+        },
+      });
+      if (activeFull > 0) mode = 'incremental';
+    }
+
+    try {
+      return await this.prisma.integrationSyncRun.create({
+        data: {
+          integrationId,
+          kind: 'scheduled',
+          mode,
+          status: 'queued',
+          dryRun: false,
+        },
+      });
+    } catch (error) {
+      if (mode !== 'full' || !isUniqueConstraintError(error)) throw error;
+      // The partial unique index is the authority for racing schedulers.
+      return this.prisma.integrationSyncRun.create({
+        data: {
+          integrationId,
+          kind: 'scheduled',
+          mode: 'incremental',
+          status: 'queued',
+          dryRun: false,
+        },
+      });
+    }
   }
 
   // -------------------------------------------------------------------
@@ -216,7 +325,7 @@ export class IntegrationSyncService {
    * still outstanding before the row reaches a terminal state.
    */
   async beginRun(runId: string): Promise<{
-    run: { id: string; integrationId: string; dryRun: boolean };
+    run: { id: string; integrationId: string; mode: IntegrationSyncMode; dryRun: boolean };
     jobs: Array<{
       mappingId: string;
       resourceId: string;
@@ -230,6 +339,7 @@ export class IntegrationSyncService {
       select: {
         id: true,
         integrationId: true,
+        mode: true,
         dryRun: true,
         status: true,
         triggeredBy: true,
@@ -323,6 +433,7 @@ export class IntegrationSyncService {
           resourceId: job.resourceId,
           resourceIds: job.resourceIds,
           auditActorId: job.auditActorId,
+          mode: run.mode,
           dryRun: run.dryRun,
         },
         {
@@ -334,7 +445,7 @@ export class IntegrationSyncService {
     }
 
     return {
-      run: { id: run.id, integrationId: run.integrationId, dryRun: run.dryRun },
+      run: { id: run.id, integrationId: run.integrationId, mode: run.mode, dryRun: run.dryRun },
       jobs,
     };
   }
@@ -458,6 +569,7 @@ export class IntegrationSyncService {
       include: { companyResults: true },
     });
     if (!run) return;
+    if (run.status === 'cancelled') return;
 
     const aggregated = aggregateTotals(run.companyResults.map((r) => r.totals));
     const anyFailed = run.companyResults.some((r) => r.status === 'failed');
@@ -468,9 +580,9 @@ export class IntegrationSyncService {
 
     const status = anyFailed ? 'failed' : 'succeeded';
 
-    await this.prisma.$transaction(async (tx) => {
-      await tx.integrationSyncRun.update({
-        where: { id: runId },
+    const finalized = await this.prisma.$transaction(async (tx) => {
+      const transition = await tx.integrationSyncRun.updateMany({
+        where: { id: runId, status: { in: ['queued', 'running'] } },
         data: {
           status,
           finishedAt: new Date(),
@@ -484,6 +596,9 @@ export class IntegrationSyncService {
             : null,
         },
       });
+      // Cancellation can race the read above. The conditional transition is
+      // authoritative and prevents a late child from reviving the run.
+      if (transition.count === 0) return false;
       await tx.integration.update({
         where: { id: run.integrationId },
         data: {
@@ -491,7 +606,9 @@ export class IntegrationSyncService {
           lastRunStatus: status,
         },
       });
+      return true;
     });
+    if (!finalized) return;
 
     await this.audit.log({
       actorId,
@@ -677,6 +794,7 @@ function toRunDto(
     id: string;
     integrationId: string;
     kind: 'manual' | 'scheduled';
+    mode: IntegrationSyncMode;
     status: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
     dryRun: boolean;
     triggeredBy: string | null;
@@ -693,6 +811,7 @@ function toRunDto(
     id: row.id,
     integrationId: row.integrationId,
     kind: row.kind,
+    mode: row.mode,
     status: row.status,
     dryRun: row.dryRun,
     triggeredBy: row.triggeredBy,
@@ -733,6 +852,12 @@ function aggregateTotals(values: unknown[]): SyncRunTotals {
   }
   if (Object.keys(byResource).length > 0) acc.byResource = byResource;
   return acc;
+}
+
+function isUniqueConstraintError(error: unknown): boolean {
+  return Boolean(
+    error && typeof error === 'object' && 'code' in error && error.code === 'P2002',
+  );
 }
 
 const TOTAL_KEYS = [

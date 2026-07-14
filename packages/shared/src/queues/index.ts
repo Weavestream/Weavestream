@@ -222,11 +222,13 @@ export const integrationSyncOrchestratorJobSchema = z.discriminatedUnion('kind',
   z.object({
     kind: z.literal('scheduled'),
     integrationId: z.string().uuid(),
+    mode: z.enum(['incremental', 'full']).optional(),
   }),
   z.object({
     kind: z.literal('manual'),
     integrationId: z.string().uuid(),
     triggeredBy: z.string().uuid(),
+    mode: z.enum(['incremental', 'full']).default('incremental'),
     /**
      * When true the worker computes every resolution but writes nothing
      * — used by the admin UI's "Test sync" button to validate mappings.

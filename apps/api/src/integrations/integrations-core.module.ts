@@ -28,6 +28,8 @@ import type {
   ReconstructionInput,
   ReconstructionWriter,
 } from './reconstruction/reconstruction-target.js';
+import { IntegrationProvenanceService } from './reconstruction/integration-provenance.service.js';
+import { IntegrationCompletenessService } from './reconstruction/integration-completeness.service.js';
 
 /**
  * Phase 11 — shared integration services.
@@ -83,6 +85,8 @@ import type {
     IntegrationsService,
     IntegrationCompanyMappingService,
     IntegrationSyncService,
+    IntegrationProvenanceService,
+    IntegrationCompletenessService,
     IntegrationSyncRunnerService,
     IntegrationSyncSchedulerService,
     MatchResolverService,
@@ -96,6 +100,8 @@ import type {
     IntegrationsService,
     IntegrationCompanyMappingService,
     IntegrationSyncService,
+    IntegrationProvenanceService,
+    IntegrationCompletenessService,
     IntegrationSyncRunnerService,
     IntegrationSyncSchedulerService,
     MatchResolverService,

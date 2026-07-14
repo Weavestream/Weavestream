@@ -1361,6 +1361,7 @@ model IntegrationSyncRun {
   id            String               @id @default(uuid()) @db.Uuid
   integrationId String               @map("integration_id") @db.Uuid
   kind          IntegrationRunKind
+  mode          IntegrationSyncMode @default(incremental)
   status        IntegrationRunStatus @default(queued)
   dryRun        Boolean              @default(false) @map("dry_run")
   triggeredBy   String?              @map("triggered_by") @db.Uuid

@@ -70,6 +70,7 @@ function setup(options: { bound?: unknown; collision?: unknown; binding?: unknow
     articleVersion: {
       create: jest.fn().mockResolvedValue({ id: 'version-1' }),
       aggregate: jest.fn().mockResolvedValue({ _max: { version: 1 } }),
+      deleteMany: jest.fn(),
     },
     integrationSyncRecord: { findUnique: jest.fn().mockResolvedValue(options.binding ?? null) },
     auditLog: { create: jest.fn() },
@@ -198,6 +199,39 @@ describe('ArticlesService integration system writes', () => {
     await expect(service.writeFromIntegration({
       ...input, existingTargetId: ids.article,
     })).resolves.toMatchObject({ targetId: ids.article, change });
+  });
+
+  it('restores the same archived article and preserves manual text outside managed markers', async () => {
+    const oldManaged = '<!-- weavestream:breeze:managed:start -->\n# Old source\n<!-- weavestream:breeze:managed:end -->';
+    const manual = '\n\n## Operator notes\nKeep this restore credential reference.';
+    const { service, tx } = setup({
+      bound: article({
+        archivedAt: new Date('2026-07-02T00:00:00.000Z'),
+        markdownSource: oldManaged + manual,
+      }),
+      binding: binding({
+        state: 'stale',
+        provenance: {
+          integrationId: ids.integration, externalOrgId: 'org', resourceKey: 'articles',
+          externalId: 'org:articles:runbook', ownership: 'breeze', state: 'stale',
+        },
+      }),
+    });
+
+    await expect(service.writeFromIntegration({
+      ...input,
+      existingTargetId: ids.article,
+      markdown: '<!-- weavestream:breeze:managed:start -->\n# New source\n<!-- weavestream:breeze:managed:end -->',
+    })).resolves.toMatchObject({ targetId: ids.article, change: 'restored' });
+    expect(tx.article.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: ids.article, companyId: ids.company },
+      data: expect.objectContaining({
+        archivedAt: null,
+        markdownSource: expect.stringContaining('## Operator notes'),
+      }),
+    }));
+    expect(tx.articleVersion.create).toHaveBeenCalledTimes(1);
+    expect(tx.articleVersion.deleteMany).not.toHaveBeenCalled();
   });
 
   it.each([

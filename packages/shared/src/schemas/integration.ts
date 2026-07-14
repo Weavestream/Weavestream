@@ -52,6 +52,9 @@ export type IntegrationTargetKind = z.infer<typeof integrationTargetKindSchema>;
 export const integrationSyncStateSchema = z.enum(['active', 'stale', 'blocked']);
 export type IntegrationSyncState = z.infer<typeof integrationSyncStateSchema>;
 
+export const integrationSyncModeSchema = z.enum(['incremental', 'full']);
+export type IntegrationSyncMode = z.infer<typeof integrationSyncModeSchema>;
+
 export const reconstructionGapKindSchema = z.enum([
   'secret_blocked',
   'missing_dependency',
@@ -689,6 +692,7 @@ export type IntegrationFieldMappingDto = z.infer<typeof integrationFieldMappingD
 
 export const triggerSyncSchema = z.object({
   dryRun: z.boolean().default(false),
+  mode: integrationSyncModeSchema.default('incremental'),
 });
 
 export type TriggerSyncInput = z.infer<typeof triggerSyncSchema>;
@@ -697,6 +701,7 @@ export const integrationSyncRunDtoSchema = z.object({
   id: z.string().uuid(),
   integrationId: z.string().uuid(),
   kind: integrationRunKindSchema,
+  mode: integrationSyncModeSchema,
   status: integrationRunStatusSchema,
   dryRun: z.boolean(),
   triggeredBy: z.string().uuid().nullable(),

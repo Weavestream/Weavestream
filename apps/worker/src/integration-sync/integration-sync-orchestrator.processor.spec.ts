@@ -1,4 +1,5 @@
 import { integrationSyncMappingJobSchema } from '@weavestream/shared';
+import { IntegrationSyncOrchestratorWorker } from './integration-sync-orchestrator.processor.js';
 
 describe('integration sync orchestrator staged payload', () => {
   it('keeps legacy resourceId while carrying the whole mapping DAG and audit actor', () => {
@@ -14,5 +15,77 @@ describe('integration sync orchestrator staged payload', () => {
     });
     expect(job.resourceIds).toHaveLength(2);
     expect(job.auditActorId).toBe('00000000-0000-0000-0000-000000000005');
+  });
+});
+
+describe('IntegrationSyncOrchestratorWorker persisted modes', () => {
+  const integrationId = '00000000-0000-0000-0000-000000000011';
+  const actorId = '00000000-0000-0000-0000-000000000012';
+
+  function handleOf(worker: IntegrationSyncOrchestratorWorker) {
+    return (worker as unknown as { handle(job: { data: unknown }): Promise<unknown> }).handle.bind(worker);
+  }
+
+  it('lets the service select and persist scheduled mode before fan-out', async () => {
+    const prisma = {
+      integration: { findUnique: jest.fn().mockResolvedValue({ id: integrationId, status: 'ACTIVE' }) },
+      integrationCompanyMapping: { count: jest.fn().mockResolvedValue(1) },
+      integrationSyncRun: { findFirst: jest.fn().mockResolvedValue(null) },
+    };
+    const sync = {
+      createScheduledRun: jest.fn().mockResolvedValue({ id: 'scheduled-run', mode: 'full' }),
+      beginRun: jest.fn().mockResolvedValue(undefined),
+      failRun: jest.fn(),
+    };
+    const worker = new IntegrationSyncOrchestratorWorker(
+      {} as never, {} as never, prisma as never, sync as never,
+    );
+
+    await expect(handleOf(worker)({ data: { kind: 'scheduled', integrationId } })).resolves.toEqual({
+      runId: 'scheduled-run',
+    });
+    expect(sync.createScheduledRun).toHaveBeenCalledWith(integrationId, undefined);
+    expect(sync.beginRun).toHaveBeenCalledWith('scheduled-run');
+  });
+
+  it('retries an existing scheduled run with its persisted full mode without reselecting', async () => {
+    const prisma = {
+      integration: { findUnique: jest.fn().mockResolvedValue({ id: integrationId, status: 'ACTIVE' }) },
+      integrationCompanyMapping: { count: jest.fn().mockResolvedValue(1) },
+      integrationSyncRun: { findFirst: jest.fn().mockResolvedValue({ id: 'persisted-run', mode: 'full' }) },
+    };
+    const sync = {
+      createScheduledRun: jest.fn(),
+      beginRun: jest.fn().mockRejectedValue(new Error('temporary queue failure')),
+      failRun: jest.fn(),
+    };
+    const worker = new IntegrationSyncOrchestratorWorker(
+      {} as never, {} as never, prisma as never, sync as never,
+    );
+
+    await expect(handleOf(worker)({
+      data: { kind: 'scheduled', integrationId }, attemptsMade: 0, opts: { attempts: 2 },
+    } as never)).rejects.toThrow('temporary queue failure');
+    expect(sync.createScheduledRun).not.toHaveBeenCalled();
+    expect(sync.beginRun).toHaveBeenCalledWith('persisted-run');
+    expect(sync.failRun).not.toHaveBeenCalled();
+  });
+
+  it('matches a manual job to a run with the same mode and begins that persisted run', async () => {
+    const prisma = {
+      integrationSyncRun: { findFirst: jest.fn().mockResolvedValue({ id: 'manual-run', mode: 'full' }) },
+    };
+    const sync = { beginRun: jest.fn(), failRun: jest.fn() };
+    const worker = new IntegrationSyncOrchestratorWorker(
+      {} as never, {} as never, prisma as never, sync as never,
+    );
+
+    await handleOf(worker)({ data: {
+      kind: 'manual', integrationId, triggeredBy: actorId, dryRun: false, mode: 'full',
+    } });
+    expect(prisma.integrationSyncRun.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ mode: 'full' }),
+    }));
+    expect(sync.beginRun).toHaveBeenCalledWith('manual-run');
   });
 });
