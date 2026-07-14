@@ -136,6 +136,17 @@ function setup(options: { target?: unknown; match?: unknown[]; binding?: unknown
     },
     searchIndex: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
     auditLog: { create: jest.fn() },
+    $executeRaw: jest.fn(async (query: { values?: unknown[] }) => {
+      if (!options.binding || typeof options.binding !== 'object') return 0;
+      const staleSince = query.values?.find((value) => value instanceof Date) as Date | undefined;
+      const current = options.binding as Record<string, any>;
+      Object.assign(current, {
+        state: 'stale',
+        staleSince: staleSince ?? current.staleSince,
+        provenance: { ...current.provenance, state: 'stale' },
+      });
+      return 1;
+    }),
   };
   const prisma = {
     assetLayout: { findUnique: jest.fn().mockResolvedValue(layout) },
@@ -202,14 +213,15 @@ describe('AssetsService integration system writes', () => {
     const orgId = '11111111-1111-4111-8111-111111111111';
     const definitionId = '22222222-2222-4222-8222-222222222222';
     const deviceId = '33333333-3333-4333-8333-333333333333';
+    const valueId = '44444444-4444-4444-8444-444444444444';
     const [transformed] = transformBreezeRecord('custom-field-values', {
-      id: definitionId, orgId, siteId: null, sourceUpdatedAt: '2026-07-14T11:00:00.000Z',
-      revision: 'a'.repeat(64), sourceScope: 'organization', name: 'Structured', fieldKey: 'structured',
-      type: 'text', options: null, required: false, defaultValue: null, deviceTypes: null,
-      values: [{ deviceId, value: Array.from({ length: 4 }, (_, index) => `${index}:${'x'.repeat(12_000)}`) }],
-      valueCollection: { total: 1, included: 1, complete: true, reason: null },
+      id: valueId, orgId, siteId: null, sourceUpdatedAt: '2026-07-14T11:00:00.000Z',
+      revision: 'a'.repeat(64), deviceId, definitionId,
+      target: { type: 'device', id: deviceId }, name: 'Structured', fieldKey: 'structured',
+      type: 'text', value: 'x'.repeat(12_288),
     });
     if (!transformed || !('fields' in transformed) || !transformed.fields) throw new Error('Expected custom value asset.');
+    const transformedValue = transformed.fields[definitionId];
     const { service, tx } = setup({ textarea: true });
     const outcome = await new AssetTargetWriter(service).write({
       tx: tx as never, companyId: ids.company, integrationId: ids.integration,
@@ -218,15 +230,15 @@ describe('AssetsService integration system writes', () => {
       now: new Date('2026-07-14T12:00:00.000Z'), dryRun: false,
       resolveBinding: jest.fn().mockResolvedValue(null),
     }, {
-      targetKind: 'asset', externalId: `${orgId}:custom-field-values:${definitionId}:${deviceId}`,
-      source: { externalOrgId: orgId, resourceKey: 'custom-field-values', sourceId: `${definitionId}:${deviceId}`, revision: 'a'.repeat(64), fingerprint: 'a'.repeat(64) },
+      targetKind: 'asset', externalId: `${orgId}:custom-field-values:${valueId}`,
+      source: { externalOrgId: orgId, resourceKey: 'custom-field-values', sourceId: valueId, revision: 'a'.repeat(64), fingerprint: 'a'.repeat(64) },
       name: transformed.displayName ?? 'Structured value', assetLayoutId: ids.layout,
       externalSource: 'breeze', matchKeyFieldIds: [],
-      fieldValues: [{ targetFieldId: ids.field, value: transformed.fields.value, syncDirection: 'source_wins' }],
+      fieldValues: [{ targetFieldId: ids.field, value: transformedValue, syncDirection: 'source_wins' }],
     });
     expect(outcome).toMatchObject({ change: 'created', targetKind: 'asset' });
     expect(tx.assetFieldValue.upsert).toHaveBeenCalledWith(expect.objectContaining({
-      create: expect.objectContaining({ value: transformed.fields.value }),
+      create: expect.objectContaining({ value: transformedValue }),
     }));
   });
 

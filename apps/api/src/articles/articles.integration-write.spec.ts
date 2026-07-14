@@ -96,6 +96,17 @@ function setup(options: { bound?: unknown; collision?: unknown; binding?: unknow
       update: jest.fn().mockResolvedValue({}),
     },
     auditLog: { create: jest.fn() },
+    $executeRaw: jest.fn(async (query: { values?: unknown[] }) => {
+      if (!options.binding || typeof options.binding !== 'object') return 0;
+      const staleSince = query.values?.find((value) => value instanceof Date) as Date | undefined;
+      const current = options.binding as Record<string, any>;
+      Object.assign(current, {
+        state: 'stale',
+        staleSince: staleSince ?? current.staleSince,
+        provenance: { ...current.provenance, state: 'stale' },
+      });
+      return 1;
+    }),
   };
   const prisma = {
     folder: { findFirst: jest.fn().mockResolvedValue(null) },
