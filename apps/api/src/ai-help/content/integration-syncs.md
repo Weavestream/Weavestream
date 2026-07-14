@@ -43,7 +43,7 @@ Records are created on their first run, claimed when match keys identify one eli
 3. Ensure **Status** is active.
 4. Select **Save changes**.
 
-Leave the cron field blank for manual-only syncs. Cloudflare security integrations label this setting **Drift sweep schedule (cron)**; each sweep checks registered lists and repairs drift from Weavestream’s desired state.
+Leave the cron field blank to inherit `INTEGRATION_SYNC_DEFAULT_CRON`, which defaults to every 15 minutes. To make blank schedules manual-only, an administrator must set the global default to `off`. Cloudflare security integrations label this setting **Drift sweep schedule (cron)**; each sweep checks registered lists and repairs drift from Weavestream’s desired state.
 
 ## Review run history and failures
 <!-- aliases: run history | sync errors | sync conflicts | failed import | troubleshoot sync | company results -->

@@ -19,6 +19,7 @@ import {
   useToast,
 } from '../../../../components/ui';
 import { DriverFieldsEditor } from './driver-fields-editor';
+import { safeIntegrationProblemMessage } from './integration-feedback';
 
 /**
  * Phase 11 — "New integration" button + dialog.
@@ -103,7 +104,13 @@ export function CreateIntegrationButton({
       const problem = res.problem as
         | { detail?: string; title?: string }
         | undefined;
-      setError(problem?.detail ?? problem?.title ?? 'Could not create integration.');
+      const message = safeIntegrationProblemMessage(
+        problem,
+        'Could not create integration.',
+        secret,
+      );
+      setError(message);
+      toast.push(message, 'danger');
       return;
     }
     toast.push('Integration created.', 'ok');
@@ -211,7 +218,7 @@ export function CreateIntegrationButton({
             label="Sync schedule (cron)"
             htmlFor="i-cron"
             help={
-              "5-field cron expression in UTC, e.g. '*/15 * * * *'. Leave blank for manual-only syncs."
+              "5-field cron expression in UTC, e.g. '*/15 * * * *'. Leave blank to inherit the global default; administrators can set that default to 'off' to disable scheduled runs."
             }
           >
             <Input

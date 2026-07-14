@@ -11,7 +11,7 @@ jest.mock('next/navigation', () => ({ useRouter: () => ({ refresh, push: jest.fn
 jest.mock('../../../../../lib/api', () => ({ apiFetch: (...args: unknown[]) => apiFetch(...args) }));
 jest.mock('../../../../../components/ui', () => ({
   Btn: ({ children, loading: _loading, icon: _icon, kind: _kind, size: _size, ...props }: React.ButtonHTMLAttributes<HTMLButtonElement> & Record<string, unknown>) => <button {...props}>{children}</button>,
-  Field: ({ label, htmlFor, children }: { label: string; htmlFor?: string; children: React.ReactNode }) => <label htmlFor={htmlFor}>{label}{children}</label>,
+  Field: ({ label, htmlFor, help, children }: { label: string; htmlFor?: string; help?: React.ReactNode; children: React.ReactNode }) => <><label htmlFor={htmlFor}>{label}{children}</label>{help && <span>{help}</span>}</>,
   Icon: { refresh: null, zap: null, eye: null, sync: null, trash: null },
   Input: (props: React.InputHTMLAttributes<HTMLInputElement>) => <input {...props} />,
   Select: (props: React.SelectHTMLAttributes<HTMLSelectElement>) => <select {...props} />,
@@ -34,7 +34,9 @@ const mappings = [{ enabled: true }] as never;
 
 describe('CredentialsTab', () => {
   beforeEach(() => {
-    jest.clearAllMocks();
+    apiFetch.mockReset();
+    toast.push.mockReset();
+    refresh.mockReset();
     apiFetch.mockResolvedValue({ ok: true, data: { id: 'run-1' } });
   });
 
@@ -78,5 +80,20 @@ describe('CredentialsTab', () => {
     render(<CredentialsTab integration={{ ...integration, status: 'DISABLED' } as never} mappings={mappings} driver={driver} />);
     expect(screen.getByRole('button', { name: 'Dry run' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Run sync now' })).toBeDisabled();
+  });
+
+  it('explains blank cron inheritance', () => {
+    render(<CredentialsTab integration={integration as never} mappings={mappings} driver={driver} />);
+    expect(screen.getByText(/blank to inherit the global default/i)).toHaveTextContent(/off/i);
+  });
+
+  it('reports credential-save failures without echoing secrets', async () => {
+    apiFetch.mockResolvedValue({ ok: false, problem: { detail: 'Rejected replacement-secret' } });
+    render(<CredentialsTab integration={integration as never} mappings={mappings} driver={driver} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Rotate credentials' }));
+    fireEvent.change(screen.getByLabelText('Partner API key *'), { target: { value: 'replacement-secret' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+    await waitFor(() => expect(toast.push).toHaveBeenCalledWith('Could not save changes.', 'danger'));
+    expect(JSON.stringify(toast.push.mock.calls)).not.toContain('replacement-secret');
   });
 });

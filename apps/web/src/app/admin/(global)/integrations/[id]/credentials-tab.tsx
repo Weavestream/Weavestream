@@ -19,6 +19,7 @@ import {
   useToast,
 } from '../../../../../components/ui';
 import { DriverFieldsEditor } from '../driver-fields-editor';
+import { safeIntegrationProblemMessage } from '../integration-feedback';
 
 const STATUSES: Array<{ value: IntegrationStatusValue; label: string }> = [
   { value: 'ACTIVE', label: 'Active — scheduled syncs run, manual sync allowed' },
@@ -128,7 +129,13 @@ export function CredentialsTab({
       const problem = res.problem as
         | { detail?: string; title?: string }
         | undefined;
-      setError(problem?.detail ?? problem?.title ?? 'Could not save changes.');
+      const message = safeIntegrationProblemMessage(
+        problem,
+        'Could not save changes.',
+        rotateSecret ? secret : {},
+      );
+      setError(message);
+      toast.push(message, 'danger');
       return;
     }
     toast.push('Integration saved.', 'ok');
@@ -252,8 +259,8 @@ export function CredentialsTab({
           htmlFor="i-cron"
           help={
             driver?.capabilities.kind === 'security'
-              ? "5-field UTC cron, e.g. '*/15 * * * *'. Drift between Cloudflare and Weavestream is auto-healed on every tick. Leave blank for manual-only. Schedule changes apply on the next API restart."
-              : "5-field UTC cron, e.g. '0 */6 * * *'. Leave blank for manual-only."
+              ? "5-field UTC cron, e.g. '*/15 * * * *'. Drift between Cloudflare and Weavestream is auto-healed on every tick. Leave blank to inherit the global default; administrators can set that default to 'off' to disable scheduled runs."
+              : "5-field UTC cron, e.g. '0 */6 * * *'. Leave blank to inherit the global default; administrators can set that default to 'off' to disable scheduled runs."
           }
         >
           <Input

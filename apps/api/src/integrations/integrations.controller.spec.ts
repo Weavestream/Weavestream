@@ -26,6 +26,10 @@ describe('IntegrationsController security contract', () => {
     ['testConnection', 'integration.manage'],
     ['listSourceOrgs', 'integration.manage'],
     ['listMappings', 'integration.manage'],
+    ['createMapping', 'integration.manage'],
+    ['getMapping', 'integration.manage'],
+    ['updateMapping', 'integration.manage'],
+    ['deleteMapping', 'integration.manage'],
     ['triggerSync', 'sync.trigger'],
   ] as const)('%s retains the %s permission contract', (handler, action) => {
     expect(metadata(REQUIRE_PERMISSION_KEY, handler)).toEqual({

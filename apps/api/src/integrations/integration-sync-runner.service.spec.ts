@@ -12,6 +12,18 @@ import { hasEligibleNativeBinding } from './reconstruction/native-binding-owners
 import { BreezeDriver } from './drivers/breeze/breeze.driver.js';
 import { buildResourceExecutionStages } from './integration-sync.service.js';
 import type { AssetReconstructionInput } from './reconstruction/reconstruction-target.js';
+import { z } from 'zod';
+import { integrationAssetExternalSource } from './integration-asset-source.js';
+
+jest.mock('../uploads/uploads.service.js', () => ({
+  UploadsService: class UploadsService {},
+}));
+
+let AssetsService: typeof import('../assets/assets.service.js').AssetsService;
+
+beforeAll(async () => {
+  ({ AssetsService } = await import('../assets/assets.service.js'));
+});
 
 describe('validateDriverFetchPage', () => {
   it('defaults a terminal legacy page without changing legacy records', () => {
@@ -458,6 +470,16 @@ describe('Breeze foundational asset composition', () => {
   const layout = '00000000-0000-4000-8000-000000000106';
   const sourceField = '00000000-0000-4000-8000-000000000107';
   const manualField = '00000000-0000-4000-8000-000000000108';
+  const manualOnlyField = '00000000-0000-4000-8000-000000000109';
+
+  it('namespaces Breeze identities without changing established driver sources', () => {
+    expect(integrationAssetExternalSource('breeze', integrationA)).toBe(
+      `breeze:${integrationA}`,
+    );
+    for (const driver of ['action1', 'ninjaone', 'unifi']) {
+      expect(integrationAssetExternalSource(driver, integrationA)).toBe(driver);
+    }
+  });
 
   it('orders the real Breeze sites resource before devices', () => {
     const resources = new BreezeDriver().descriptor.resources.filter(({ key }) =>
@@ -571,86 +593,193 @@ describe('Breeze foundational asset composition', () => {
     expect(client.fetchPage).toHaveBeenNthCalledWith(1, expect.anything(), expect.objectContaining({ resource: 'sites', externalOrgId: org }));
     expect(client.fetchPage).toHaveBeenNthCalledWith(2, expect.anything(), expect.objectContaining({ resource: 'devices', externalOrgId: org }));
     expect(writeFromIntegration).toHaveBeenNthCalledWith(1, expect.objectContaining({
-      externalId: `${org}:sites:${siteId}`, name: 'HQ', externalSource: 'breeze',
+      externalId: `${org}:sites:${siteId}`, name: 'HQ', externalSource: `breeze:${integrationA}`,
       fieldValues: [{ targetFieldId: sourceField, value: 'HQ', syncDirection: 'source_wins' }],
     }));
     expect(writeFromIntegration).toHaveBeenNthCalledWith(2, expect.objectContaining({
-      externalId: `${org}:devices:${deviceId}`, name: 'Workstation 01', externalSource: 'breeze',
+      externalId: `${org}:devices:${deviceId}`, name: 'Workstation 01', externalSource: `breeze:${integrationA}`,
       fieldValues: [{ targetFieldId: manualField, value: 'ws-01', syncDirection: 'preserve_manual' }],
     }));
   });
 
-  it('creates one site and device, then remains idempotent and stable across rename/collisions', async () => {
-    type Stored = { id: string; name: string; fields: Record<string, unknown>; manualOnly?: boolean };
-    const assets = new Map<string, Stored>();
+  it('persists idempotent isolated Breeze assets through the real AssetsService and safely migrates legacy identity', async () => {
+    type StoredAsset = {
+      id: string; companyId: string; assetLayoutId: string; name: string;
+      externalId: string | null; externalSource: string | null; archivedAt: Date | null;
+      createdBy: string; updatedBy: string; createdAt: Date; updatedAt: Date;
+      fieldValues: Array<{ id: string; companyId: string; assetId: string; assetFieldId: string; value: unknown }>;
+    };
+    const now = new Date('2026-07-14T00:00:00.000Z');
+    const makeField = (id: string, slug: string) => ({
+      id, assetLayoutId: layout, name: slug, slug, fieldType: 'TEXT', position: 0,
+      isRequired: false, isPrimary: false, isUniquePerCompany: false,
+      visibleToClients: true, options: {}, archivedAt: null, createdAt: now, updatedAt: now,
+    });
+    const assetLayout = {
+      id: layout, name: 'Breeze assets', slug: 'breeze-assets', icon: 'server', color: '#000000',
+      description: null, archivedAt: null, createdAt: now, updatedAt: now,
+      fields: [makeField(sourceField, 'source'), makeField(manualField, 'preserved'), makeField(manualOnlyField, 'manual-only')],
+    };
+    const assets = new Map<string, StoredAsset>();
+    const bindings = new Map<string, Record<string, unknown>>();
+    const targets = new Map<string, string>();
     const provenance = new Map<string, ReconstructionWriteOutcome['provenance']>();
-    assets.set('manual-only', { id: 'manual-only', name: 'Operator asset', fields: { note: 'keep' }, manualOnly: true });
-    let next = 1;
-    const nativePort = {
-      writeFromIntegration: jest.fn(async (input: {
-        integrationId: string; externalId: string; name: string;
-        fieldValues: Array<{ targetFieldId: string; value: unknown; syncDirection: string }>;
-      }) => {
-        const key = `${input.integrationId}:${input.externalId}`;
-        const current = assets.get(key);
-        if (!current) {
-          const created = {
-            id: `00000000-0000-4000-8000-${String(next++).padStart(12, '0')}`,
-            name: input.name,
-            fields: Object.fromEntries(input.fieldValues.map((field) => [field.targetFieldId, field.value])),
+    const checksums = new Map<string, Record<string, string>>();
+    let nextAsset = 1;
+    const bindingLookup = async (args: { where?: { integrationCompanyMappingId_resourceId_externalId?: { integrationCompanyMappingId: string; resourceId: string; externalId: string } } }) => {
+      const identity = args.where?.integrationCompanyMappingId_resourceId_externalId;
+      return identity ? bindings.get(`${identity.integrationCompanyMappingId}:${identity.resourceId}:${identity.externalId}`) ?? null : null;
+    };
+    const tx = {
+      asset: {
+        create: jest.fn(async ({ data }: { data: Omit<StoredAsset, 'id' | 'fieldValues' | 'createdAt' | 'updatedAt'> }) => {
+          const row: StoredAsset = {
+            ...data,
+            id: `00000000-0000-4000-8000-${String(nextAsset++).padStart(12, '0')}`,
+            createdAt: now, updatedAt: now, fieldValues: [],
           };
-          assets.set(key, created);
-          return { targetId: created.id, companyId: company, change: 'created' as const };
-        }
-        let changed = current.name !== input.name;
-        current.name = input.name;
-        for (const field of input.fieldValues) {
-          if (field.syncDirection === 'preserve_manual' && current.fields[field.targetFieldId] !== undefined) continue;
-          changed ||= current.fields[field.targetFieldId] !== field.value;
-          current.fields[field.targetFieldId] = field.value;
-        }
-        return { targetId: current.id, companyId: company, change: changed ? 'updated' as const : 'unchanged' as const };
+          assets.set(row.id, row);
+          return row;
+        }),
+        updateMany: jest.fn(async ({ where, data }: { where: { id: string; companyId: string }; data: Partial<StoredAsset> }) => {
+          const row = assets.get(where.id);
+          if (!row || row.companyId !== where.companyId) return { count: 0 };
+          Object.assign(row, data, { updatedAt: now });
+          return { count: 1 };
+        }),
+      },
+      assetFieldValue: {
+        upsert: jest.fn(async ({ where, create, update }: { where: { assetId_assetFieldId: { assetId: string; assetFieldId: string } }; create: { companyId: string; assetId: string; assetFieldId: string; value: unknown }; update: { value: unknown } }) => {
+          const row = assets.get(where.assetId_assetFieldId.assetId)!;
+          const existing = row.fieldValues.find((value) => value.assetFieldId === where.assetId_assetFieldId.assetFieldId);
+          if (existing) existing.value = update.value;
+          else row.fieldValues.push({ id: `fv-${row.fieldValues.length + 1}`, ...create });
+          return existing ?? row.fieldValues.at(-1);
+        }),
+        deleteMany: jest.fn(async ({ where }: { where: { assetId: string; assetFieldId: string } }) => {
+          const row = assets.get(where.assetId)!;
+          row.fieldValues = row.fieldValues.filter((value) => value.assetFieldId !== where.assetFieldId);
+          return { count: 1 };
+        }),
+      },
+      upload: { updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
+      integrationSyncRecord: { findUnique: jest.fn(bindingLookup) },
+      auditLog: { create: jest.fn() },
+    };
+    const prisma = {
+      assetLayout: { findUnique: jest.fn().mockResolvedValue(assetLayout) },
+      integrationSyncRecord: { findUnique: jest.fn(bindingLookup) },
+      asset: {
+        findUnique: jest.fn(async ({ where }: { where: { id: string } }) => assets.get(where.id) ?? null),
+        findFirst: jest.fn(async ({ where }: { where: { companyId: string; externalId: string; externalSource: string | null; NOT?: { id: string } } }) =>
+          [...assets.values()].find((row) => row.companyId === where.companyId && row.externalId === where.externalId && row.externalSource === where.externalSource && row.id !== where.NOT?.id) ?? null),
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+      assetFieldValue: { findFirst: jest.fn().mockResolvedValue(null) },
+      tag: { findMany: jest.fn().mockResolvedValue([]) },
+      $transaction: jest.fn(async (callback: (client: typeof tx) => Promise<unknown>) => callback(tx)),
+    };
+    const registry = {
+      get: jest.fn().mockReturnValue({
+        valueSchema: () => z.string(), normalize: (value: unknown) => value,
+        toPlaintext: (value: unknown) => String(value),
       }),
     };
-    const writer = new AssetTargetWriter(nativePort);
+    const assetService = new AssetsService(
+      prisma as never,
+      { assertIntegrationActor: jest.fn().mockResolvedValue(undefined), logWithClient: jest.fn().mockResolvedValue(undefined) } as never,
+      registry as never, {} as never, {} as never,
+      { upsertAsset: jest.fn().mockResolvedValue(undefined) } as never,
+      {} as never, {} as never, {} as never,
+    );
+    const writer = new AssetTargetWriter(assetService);
     const write = async (integrationId: string, resourceKey: 'sites' | 'devices', sourceId: string, name: string, sourceValue: string, manualValue: string) => {
+      const mappingId = integrationId === integrationA
+        ? mapping
+        : '00000000-0000-4000-8000-000000000119';
+      const resourceId = integrationId === integrationA
+        ? resourceKey === 'sites'
+          ? '00000000-0000-4000-8000-000000000117'
+          : '00000000-0000-4000-8000-000000000118'
+        : '00000000-0000-4000-8000-000000000120';
       const input: AssetReconstructionInput = {
         targetKind: 'asset',
         externalId: `${org}:${resourceKey}:${sourceId}`,
         source: { externalOrgId: org, resourceKey, sourceId, revision: 'a'.repeat(64), fingerprint: 'b'.repeat(64), updatedAt: null },
         name,
         assetLayoutId: layout,
-        externalSource: 'breeze',
+        externalSource: `breeze:${integrationId}`,
         matchKeyFieldIds: [],
         fieldValues: [
           { targetFieldId: sourceField, value: sourceValue, syncDirection: 'source_wins' },
           { targetFieldId: manualField, value: manualValue, syncDirection: 'preserve_manual' },
+          { targetFieldId: manualOnlyField, value: 'upstream-must-not-write', syncDirection: 'manual_only' },
         ],
       };
       const key = `${integrationId}:${input.externalId}`;
       const outcome = await writer.write({
-        tx: {} as never, companyId: company, integrationId,
-        integrationCompanyMappingId: mapping, resourceId: layout, resourceKey,
-        externalOrgId: org, auditActorId: 'actor', now: new Date('2026-07-14T00:00:00.000Z'),
-        dryRun: false, existingTargetId: assets.get(key)?.id ?? null,
+        tx: tx as never, companyId: company, integrationId,
+        integrationCompanyMappingId: mappingId, resourceId, resourceKey,
+        externalOrgId: org, auditActorId: 'actor', now,
+        dryRun: false, existingTargetId: targets.get(key) ?? null,
+        previousFieldChecksums: checksums.get(key) ?? {},
         previousProvenance: provenance.get(key) ?? null,
         resolveBinding: jest.fn().mockResolvedValue(null),
       }, input);
-      if (outcome.change !== 'blocked') provenance.set(key, outcome.provenance);
+      if (outcome.change !== 'blocked') {
+        targets.set(key, outcome.targetId);
+        provenance.set(key, outcome.provenance);
+        checksums.set(key, outcome.fieldChecksums ?? {});
+        bindings.set(`${mappingId}:${resourceId}:${input.externalId}`, {
+          id: `binding-${bindings.size + 1}`, integrationCompanyMappingId: mappingId, resourceId,
+          externalId: input.externalId, companyId: company, targetKind: 'asset', assetId: outcome.targetId,
+          subnetId: null, ipReservationId: null, articleId: null, relationId: null,
+          state: 'active', checksum: outcome.checksum,
+          lastSyncedFieldChecksums: outcome.fieldChecksums ?? {}, provenance: outcome.provenance,
+          companyMapping: { integrationId, externalOrgId: org },
+          resource: { integrationId, resourceKey },
+        });
+      }
       return outcome;
     };
 
     await expect(write(integrationA, 'sites', 'site-uuid', 'HQ', 'Denver', 'operator site')).resolves.toMatchObject({ change: 'created' });
     await expect(write(integrationA, 'devices', 'device-uuid', 'Laptop', 'serial-1', 'operator device')).resolves.toMatchObject({ change: 'created' });
     await expect(write(integrationA, 'sites', 'site-uuid', 'HQ', 'Denver', 'operator site')).resolves.toMatchObject({ change: 'unchanged' });
+    const deviceAId = targets.get(`${integrationA}:${org}:devices:device-uuid`)!;
+    const deviceA = assets.get(deviceAId)!;
+    deviceA.fieldValues.find((value) => value.assetFieldId === manualField)!.value = 'operator override';
+    deviceA.fieldValues.push({ id: 'manual-value', companyId: company, assetId: deviceA.id, assetFieldId: manualOnlyField, value: 'keep manual only' });
     await expect(write(integrationA, 'devices', 'device-uuid', 'Renamed laptop', 'serial-2', 'replace attempt')).resolves.toMatchObject({ change: 'updated' });
     await expect(write(integrationB, 'devices', 'device-uuid', 'Renamed laptop', 'serial-other', 'other partner')).resolves.toMatchObject({ change: 'created' });
 
-    expect([...assets.values()].filter((asset) => !asset.manualOnly)).toHaveLength(3);
-    const deviceA = assets.get(`${integrationA}:${org}:devices:device-uuid`)!;
-    const deviceB = assets.get(`${integrationB}:${org}:devices:device-uuid`)!;
-    expect(deviceA).toMatchObject({ name: 'Renamed laptop', fields: { [sourceField]: 'serial-2', [manualField]: 'operator device' } });
+    expect(assets.size).toBe(3);
+    const deviceB = assets.get(targets.get(`${integrationB}:${org}:devices:device-uuid`)!)!;
+    expect(deviceA.name).toBe('Renamed laptop');
+    expect(Object.fromEntries(deviceA.fieldValues.map((value) => [value.assetFieldId, value.value]))).toMatchObject({
+      [sourceField]: 'serial-2', [manualField]: 'operator override', [manualOnlyField]: 'keep manual only',
+    });
     expect(deviceB.id).not.toBe(deviceA.id);
-    expect(assets.get('manual-only')).toEqual({ id: 'manual-only', name: 'Operator asset', fields: { note: 'keep' }, manualOnly: true });
+    expect(deviceA.externalId).toBe(deviceB.externalId);
+    expect(deviceA.externalSource).toBe(`breeze:${integrationA}`);
+    expect(deviceB.externalSource).toBe(`breeze:${integrationB}`);
+
+    const siteA = assets.get(targets.get(`${integrationA}:${org}:sites:site-uuid`)!)!;
+    siteA.externalSource = 'breeze';
+    const countBeforeMigration = assets.size;
+    const siteBindingKey = `${mapping}:00000000-0000-4000-8000-000000000117:${org}:sites:site-uuid`;
+    const exactBinding = bindings.get(siteBindingKey)!;
+    bindings.delete(siteBindingKey);
+    await expect(write(integrationA, 'sites', 'site-uuid', 'must not apply', 'must not apply', 'must not apply'))
+      .resolves.toMatchObject({ targetId: siteA.id, change: 'blocked' });
+    expect(siteA).toMatchObject({ externalSource: 'breeze', name: 'HQ' });
+    expect(assets.size).toBe(countBeforeMigration);
+
+    bindings.set(siteBindingKey, exactBinding);
+    await expect(write(integrationA, 'sites', 'site-uuid', 'HQ renamed', 'Boulder', 'replace attempt')).resolves.toMatchObject({
+      targetId: siteA.id, change: 'updated',
+    });
+    expect(assets.size).toBe(countBeforeMigration);
+    expect(siteA).toMatchObject({ externalId: `${org}:sites:site-uuid`, externalSource: `breeze:${integrationA}`, name: 'HQ renamed' });
   });
 });

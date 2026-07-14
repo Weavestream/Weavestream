@@ -92,6 +92,14 @@ export interface IntegrationAssetWriteInput {
   previousFieldChecksums: Readonly<Record<string, string>>;
 }
 
+function legacyIntegrationExternalSource(
+  input: IntegrationAssetWriteInput,
+): string | null {
+  return input.externalSource === `breeze:${input.integrationId}`
+    ? 'breeze'
+    : null;
+}
+
 export interface IntegrationAssetWriteResult {
   targetId: string;
   companyId: string;
@@ -654,10 +662,13 @@ export class AssetsService {
       target?.id ?? null,
     );
 
+    const legacyExternalSource = legacyIntegrationExternalSource(input);
     const sameIdentity =
       !target ||
       target.externalSource === null ||
-      (target.externalSource === (input.externalSource ?? null) && target.externalId === input.externalId);
+      (target.externalId === input.externalId &&
+        (target.externalSource === (input.externalSource ?? null) ||
+          target.externalSource === legacyExternalSource));
     const identityChanged =
       !!target &&
       sameIdentity &&
@@ -665,6 +676,19 @@ export class AssetsService {
         target.externalId !== input.externalId ||
         target.externalSource !== (input.externalSource ?? null));
     const restored = target?.archivedAt != null;
+    if (
+      target &&
+      sameIdentity &&
+      (target.externalId !== input.externalId ||
+        target.externalSource !== (input.externalSource ?? null))
+    ) {
+      await this.assertExternalIdFree(
+        input.companyId,
+        input.externalId,
+        input.externalSource ?? null,
+        target.id,
+      );
+    }
     if (input.dryRun) {
       if (target && !(await this.hasEligibleAssetBinding(input.tx ?? this.prisma, input, target.id))) {
         return integrationAssetBlocked(input.companyId, 'ambiguous', 'The existing asset is not owned by an eligible reconstruction binding.', 'manual_ownership', target.id);

@@ -49,6 +49,69 @@ describe('buildResourceExecutionStages', () => {
   });
 });
 
+describe('IntegrationSyncService.triggerManual', () => {
+  const actor = { id: 'actor-1' } as never;
+  const meta = { ip: '127.0.0.1', userAgent: 'jest' };
+
+  function setup(status: 'ACTIVE' | 'PAUSED' | 'DISABLED') {
+    const run = {
+      id: 'run-1', integrationId: 'integration', kind: 'manual' as const,
+      status: 'queued' as const, dryRun: false, triggeredBy: 'actor-1',
+      startedAt: null, finishedAt: null, totals: null, error: null,
+      createdAt: new Date('2026-07-14T00:00:00.000Z'),
+    };
+    const prisma = {
+      integration: { findUnique: jest.fn().mockResolvedValue({ id: 'integration', driver: 'breeze', status }) },
+      integrationCompanyMapping: { count: jest.fn().mockResolvedValue(1) },
+      integrationResource: { count: jest.fn().mockResolvedValue(2) },
+      integrationSyncRun: { create: jest.fn(async ({ data }: { data: { dryRun: boolean } }) => ({ ...run, dryRun: data.dryRun })) },
+      user: { findMany: jest.fn().mockResolvedValue([{ id: 'actor-1', name: 'Actor', email: 'actor@example.com' }]) },
+    };
+    const add = jest.fn().mockResolvedValue(undefined);
+    const audit = { log: jest.fn().mockResolvedValue(undefined) };
+    const service = new IntegrationSyncService(
+      prisma as never,
+      audit as never,
+      { get: jest.fn().mockReturnValue({ add }) } as never,
+      { has: jest.fn().mockReturnValue(true), kindOf: jest.fn().mockReturnValue('pull') } as never,
+    );
+    return { service, prisma, add, audit };
+  }
+
+  it.each([
+    ['ACTIVE', false],
+    ['PAUSED', true],
+  ] as const)('allows %s manual runs and propagates dryRun=%s through persistence, queue, and audit', async (status, dryRun) => {
+    const { service, prisma, add, audit } = setup(status);
+
+    await expect(service.triggerManual(actor, 'integration', dryRun, meta)).resolves.toMatchObject({
+      id: 'run-1', kind: 'manual', dryRun, triggeredBy: 'actor-1',
+    });
+    expect(prisma.integrationSyncRun.create).toHaveBeenCalledWith({
+      data: { integrationId: 'integration', kind: 'manual', status: 'queued', dryRun, triggeredBy: 'actor-1' },
+    });
+    expect(add).toHaveBeenCalledWith(
+      'manual',
+      { kind: 'manual', integrationId: 'integration', triggeredBy: 'actor-1', dryRun },
+      expect.objectContaining({ jobId: 'manual-run-1', attempts: 2 }),
+    );
+    expect(audit.log).toHaveBeenCalledWith(expect.objectContaining({
+      actorId: 'actor-1', entityId: 'run-1', ip: meta.ip, userAgent: meta.userAgent,
+      after: { kind: 'manual', dryRun, mappings: 1 },
+    }));
+  });
+
+  it('rejects DISABLED before persistence, queueing, or audit', async () => {
+    const { service, prisma, add, audit } = setup('DISABLED');
+
+    await expect(service.triggerManual(actor, 'integration', true, meta)).rejects.toThrow(/DISABLED/i);
+    expect(prisma.integrationCompanyMapping.count).not.toHaveBeenCalled();
+    expect(prisma.integrationSyncRun.create).not.toHaveBeenCalled();
+    expect(add).not.toHaveBeenCalled();
+    expect(audit.log).not.toHaveBeenCalled();
+  });
+});
+
 describe('IntegrationSyncService.beginRun', () => {
   it('enqueues one whole-DAG job per mapping with the scheduled integration actor', async () => {
     const add = jest.fn();

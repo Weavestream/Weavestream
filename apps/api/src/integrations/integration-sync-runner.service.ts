@@ -39,6 +39,7 @@ import {
   type ReconstructionWriteOutcome,
   type ReconstructionWriter,
 } from './reconstruction/reconstruction-target.js';
+import { integrationAssetExternalSource } from './integration-asset-source.js';
 
 /** Executes one resource inside a mapping DAG through its native writer. */
 
@@ -480,7 +481,11 @@ export class IntegrationSyncRunnerService {
   private toReconstructionInput(
     record: DriverRecord,
     resource: ResourceForReconstruction,
-    mapping: { externalOrgId: string; integration: { driver: string } },
+    mapping: {
+      externalOrgId: string;
+      integrationId: string;
+      integration: { driver: string };
+    },
   ): ReconstructionInput {
     if (record.reconstructionInput !== undefined) return record.reconstructionInput;
     if (resource.targetKind !== 'asset' || !resource.assetLayoutId) {
@@ -516,7 +521,10 @@ export class IntegrationSyncRunnerService {
       source,
       name: record.displayName?.trim() || record.externalId,
       assetLayoutId: resource.assetLayoutId,
-      externalSource: mapping.integration.driver,
+      externalSource: integrationAssetExternalSource(
+        mapping.integration.driver,
+        mapping.integrationId,
+      ),
       matchKeyFieldIds: resource.matchKeyFieldIds,
       fieldValues,
       ...(typeof (resource.targetConfig as Record<string, unknown>)['bindingResourceKey'] === 'string'

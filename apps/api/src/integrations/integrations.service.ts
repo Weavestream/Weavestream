@@ -32,6 +32,7 @@ import { Prisma } from '@prisma/client';
 import { assertStringIdList } from '../common/safe-id-list.js';
 import { ReconstructionWriterRegistry } from './reconstruction/reconstruction-writer.registry.js';
 import type { RecommendedDestination } from './drivers/integration-driver.js';
+import { integrationAssetExternalSource } from './integration-asset-source.js';
 
 export interface AuditMeta {
   ip: string;
@@ -462,7 +463,12 @@ export class IntegrationsService {
             where: {
               id: { in: releasableAssetIds },
               companyId: { in: safeCompanyIds },
-              externalSource: existing.driver,
+              externalSource: {
+                in: [
+                  existing.driver,
+                  integrationAssetExternalSource(existing.driver, id),
+                ],
+              },
             },
             data: { externalId: null, externalSource: null },
           });
@@ -494,7 +500,10 @@ export class IntegrationsService {
         companyId: r.companyId,
         ip: meta.ip,
         userAgent: meta.userAgent,
-        before: { externalSource: existing.driver },
+        before: {
+          externalSource: integrationAssetExternalSource(existing.driver, id),
+          legacyExternalSource: existing.driver,
+        },
         after: { externalSource: null },
       });
     }

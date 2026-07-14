@@ -15,6 +15,7 @@ import {
   Select,
   Tag,
   type CompanyPickerValue,
+  useToast,
 } from '../../../../../components/ui';
 
 /**
@@ -43,6 +44,7 @@ export function CreateMappingDialog({
   onClose: () => void;
   onCreated: () => void;
 }) {
+  const toast = useToast();
   const [orgs, setOrgs] = useState<SourceOrgDto[]>([]);
   const [orgsLoading, setOrgsLoading] = useState(false);
   const [orgsError, setOrgsError] = useState<string | null>(null);
@@ -119,9 +121,12 @@ export function CreateMappingDialog({
       const problem = res.problem as
         | { detail?: string; title?: string }
         | undefined;
-      setError(problem?.detail ?? problem?.title ?? 'Could not create mapping.');
+      const message = problem?.detail ?? problem?.title ?? 'Could not create mapping.';
+      setError(message);
+      toast.push(message, 'danger');
       return;
     }
+    toast.push('Mapping created.', 'ok');
     onCreated();
   }
 

@@ -18,7 +18,7 @@ Cloudflare Zero Trust Lists is different: Weavestream manages registered Gateway
 2. Select **New integration**.
 3. Choose the driver and enter a specific **Display name**.
 4. Complete the driver’s configuration and credential fields.
-5. Optionally enter a five-field UTC cron expression under **Sync schedule (cron)**. Leave it blank for manual-only runs.
+5. Optionally enter a five-field UTC cron expression under **Sync schedule (cron)**. A blank field inherits the global `INTEGRATION_SYNC_DEFAULT_CRON` value, which defaults to every 15 minutes. An administrator can set that global value to `off` to disable inherited scheduled runs.
 6. Select **Create**.
 
 New integrations start paused. On **Credentials & schedule**, select **Test connection**, finish organization and resource configuration, change **Status** to active, and select **Save changes**.
@@ -65,7 +65,7 @@ Open **Admin → Integrations**, select the Cloudflare Zero Trust Lists integrat
 
 Open a registered list to add, edit, or remove an IP/CIDR entry. Use a descriptive comment when the UI provides one so another operator can identify the purpose of an address. Changes are pushed to the Cloudflare Gateway list; do not edit the same registered list directly in Cloudflare unless you intend Weavestream’s next drift sweep to restore its recorded desired state.
 
-The list must be a Cloudflare Zero Trust/Gateway IP list, not the unrelated WAF Account Filter Lists API. A blank drift-sweep schedule means no scheduled repair; an active cron schedule checks registered lists and repairs out-of-band drift.
+The list must be a Cloudflare Zero Trust/Gateway IP list, not the unrelated WAF Account Filter Lists API. A blank drift-sweep schedule inherits the global integration schedule; set an explicit cron for this integration or have an administrator set the global default to `off` when no scheduled repair is wanted.
 
 ## Browse connected helpdesk tickets
 <!-- aliases: tickets | NinjaOne tickets | helpdesk tickets | ticket browser | draft article from ticket | ticket search -->
