@@ -1,10 +1,14 @@
 # Assets
 
-## Create, edit, and find assets
-<!-- aliases: new asset | add asset | create server | add device | asset inventory | edit asset | find asset -->
+## Create an asset
+<!-- aliases: create asset | new asset | add asset | create server | add device -->
 <!-- requires: asset.write | asset.read -->
 
 Assets are company-scoped records created from global asset layouts. Open a company, choose **Assets**, then select **New asset**. Pick a layout, complete its required fields, and select **Create asset**. A value for a field marked **Unique per company** cannot duplicate another asset using that layout in the same company.
+
+## Edit and find assets
+<!-- aliases: edit asset | find asset | asset inventory | asset browser | search assets -->
+<!-- requires: asset.write | asset.read -->
 
 To edit an asset, open it and select **Edit**. Layout fields control the form; changing an asset never changes the layout definition. The assets browser supports search, layout selection, table sorting, archived-state display, tag filtering, and fields configured as filters. The command palette can also find accessible assets across companies.
 

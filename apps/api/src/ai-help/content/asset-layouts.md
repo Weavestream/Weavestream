@@ -16,8 +16,8 @@ The layout becomes available in each company’s **New asset** layout picker. La
 
 Use **Settings** in the builder to change the layout name, icon, or color. **Archive** removes a layout from new-asset pickers but preserves every existing asset. Open an archived layout and choose **Restore** to make it selectable again.
 
-## Add and configure layout fields
-<!-- aliases: add field | asset properties | custom asset field | field label | field slug | required asset field | unique asset field -->
+## Add and arrange layout fields
+<!-- aliases: add field | add dropdown field to server template | asset properties | custom asset field | field label | field slug | required asset field | unique asset field -->
 <!-- requires: layout.manage.global -->
 
 In **Admin → Asset Layouts**, open a layout and add a field from the field palette. Each field needs a human-facing name and a stable lowercase `snake_case` slug. A slug starts with a letter, is unique within its layout, and is the durable key for saved values, asset filtering, and integrations; rename the displayed name freely, but avoid changing a slug after importing or integrating data.
