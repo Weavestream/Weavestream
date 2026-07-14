@@ -31,10 +31,142 @@ import type { AuthedUser } from '../common/current-user.decorator.js';
 import { Prisma } from '@prisma/client';
 import { assertStringIdList } from '../common/safe-id-list.js';
 import { ReconstructionWriterRegistry } from './reconstruction/reconstruction-writer.registry.js';
+import type { RecommendedDestination } from './drivers/integration-driver.js';
 
 export interface AuditMeta {
   ip: string;
   userAgent: string;
+}
+
+type RecommendedDestinationPrisma = Pick<
+  PrismaService,
+  'integrationResource' | 'assetLayout' | 'assetField' | 'integrationFieldMapping'
+> &
+  Partial<Pick<PrismaService, '$transaction'>>;
+
+/**
+ * Apply a driver's recommendation only to a completely untouched asset
+ * resource. Layouts/fields are global and deterministic; resource ownership
+ * and every administrator edit remain generic service concerns.
+ */
+export async function ensureResourceDestination(
+  prisma: RecommendedDestinationPrisma,
+  integrationId: string,
+  resourceKey: string,
+  recommendation: RecommendedDestination,
+): Promise<void> {
+  const current = await prisma.integrationResource.findUnique({
+    where: { integrationId_resourceKey: { integrationId, resourceKey } },
+    select: { id: true, assetLayoutId: true, _count: { select: { fieldMappings: true } } },
+  });
+  if (!current || current.assetLayoutId || current._count.fieldMappings > 0) return;
+
+  let layout = await prisma.assetLayout.findFirst({
+    where: { slug: recommendation.layout.slug, archivedAt: null },
+    select: { id: true, slug: true },
+  });
+  let createdLayout = false;
+  if (!layout) {
+    try {
+      layout = await prisma.assetLayout.create({
+        data: {
+          ...recommendation.layout,
+          position: 0,
+        },
+        select: { id: true, slug: true },
+      });
+      createdLayout = true;
+    } catch (error) {
+      if ((error as { code?: string }).code !== 'P2002') throw error;
+      layout = await prisma.assetLayout.findFirst({
+        where: { slug: recommendation.layout.slug, archivedAt: null },
+        select: { id: true, slug: true },
+      });
+      if (!layout) throw error;
+    }
+  }
+
+  const existingFields = await prisma.assetField.findMany({
+    where: { assetLayoutId: layout.id, archivedAt: null },
+    select: { id: true, slug: true, fieldType: true },
+  });
+  const existingSlugs = new Set(existingFields.map((field) => field.slug));
+  const missingFields = recommendation.fields.filter((field) => !existingSlugs.has(field.slug));
+  if (createdLayout && missingFields.length > 0) {
+    await prisma.assetField.createMany({
+      data: missingFields.map((field, index) => ({
+        assetLayoutId: layout!.id,
+        name: field.name,
+        slug: field.slug,
+        fieldType: field.fieldType,
+        position: existingFields.length + index,
+        isRequired: false,
+        isUniquePerCompany: false,
+        visibleToClients: true,
+        isPrimary:
+          field.isPrimary &&
+          !existingFields.some(
+            (candidate) =>
+              recommendation.fields.find((configured) => configured.slug === candidate.slug)
+                ?.isPrimary === true,
+          ),
+        showInTable: field.showInTable,
+        options: field.options as Prisma.InputJsonValue,
+      })),
+      skipDuplicates: true,
+    });
+  }
+  const fields = await prisma.assetField.findMany({
+    where: {
+      assetLayoutId: layout.id,
+      archivedAt: null,
+      slug: { in: recommendation.fields.map((field) => field.slug) },
+    },
+    select: { id: true, slug: true, fieldType: true },
+  });
+  const fieldBySlug = new Map(fields.map((field) => [field.slug, field.id]));
+  const compatible = recommendation.fields.every((recommended) =>
+    fields.some(
+      (field) => field.slug === recommended.slug && field.fieldType === recommended.fieldType,
+    ),
+  );
+  if (!compatible) return;
+
+  const apply = async (tx: RecommendedDestinationPrisma) => {
+    const fresh = await tx.integrationResource.findUnique({
+      where: { integrationId_resourceKey: { integrationId, resourceKey } },
+      select: { id: true, assetLayoutId: true, _count: { select: { fieldMappings: true } } },
+    });
+    if (!fresh || fresh.assetLayoutId || fresh._count.fieldMappings > 0) return;
+    const claimed = await tx.integrationResource.updateMany({
+      where: {
+        id: fresh.id,
+        assetLayoutId: null,
+        fieldMappings: { none: {} },
+      },
+      data: { assetLayoutId: layout!.id },
+    });
+    if (claimed.count !== 1) return;
+    await tx.integrationFieldMapping.createMany({
+      data: recommendation.fields
+        .filter((field) => field.mapResource !== false)
+        .map((field) => ({
+          resourceId: fresh.id,
+          sourceField: field.sourceField,
+          targetKind: 'asset' as const,
+          targetFieldId: fieldBySlug.get(field.slug)!,
+          syncDirection: field.syncDirection,
+          transform: Prisma.JsonNull,
+        })),
+      skipDuplicates: true,
+    });
+  };
+
+  if (typeof prisma.$transaction === 'function') {
+    await prisma.$transaction(async (tx) => apply(tx as unknown as RecommendedDestinationPrisma));
+  } else {
+    await apply(prisma);
+  }
 }
 
 /**
@@ -110,6 +242,7 @@ export class IntegrationsService {
   ): Promise<IntegrationDto> {
     const descriptor = this.drivers.describe(input.driver);
     this.validateDriverPayload(descriptor, input.config, input.secret);
+    this.validateDriverConfiguration(input.driver, input.config, input.secret);
 
     const created = await this.prisma.$transaction(async (tx) => {
       const row = await tx.integration.create({
@@ -155,6 +288,16 @@ export class IntegrationsService {
       return row;
     });
 
+    if (descriptor.resources.length > 0) {
+      const driver = this.drivers.get(input.driver);
+      for (const resource of descriptor.resources) {
+        const recommendation = driver.recommendedDestinations?.[resource.key];
+        if (recommendation) {
+          await ensureResourceDestination(this.prisma, created.id, resource.key, recommendation);
+        }
+      }
+    }
+
     await this.audit.log({
       actorId: actor.id,
       action: AUDIT_ACTIONS.integration.create,
@@ -192,8 +335,10 @@ export class IntegrationsService {
 
     if (input.config) {
       this.validateDriverPayload(descriptor, input.config, input.secret);
+      this.validateDriverConfiguration(existing.driver, input.config, input.secret);
     } else if (input.secret) {
       this.validateDriverPayload(descriptor, null, input.secret);
+      this.validateDriverConfiguration(existing.driver, null, input.secret);
     }
 
     const before = {
@@ -211,11 +356,8 @@ export class IntegrationsService {
         data: {
           name: input.name ?? undefined,
           status: input.status ?? undefined,
-          config: input.config
-            ? (input.config as Prisma.InputJsonValue)
-            : undefined,
-          syncCron:
-            input.syncCron === undefined ? undefined : input.syncCron ?? null,
+          config: input.config ? (input.config as Prisma.InputJsonValue) : undefined,
+          syncCron: input.syncCron === undefined ? undefined : (input.syncCron ?? null),
         },
       });
 
@@ -296,17 +438,12 @@ export class IntegrationsService {
     // tenant-scoped model (`IntegrationSyncRecord`, `Asset`). An
     // integration can fan out across many companies, so we collect the
     // distinct set of affected company ids and pass them as `in: [...]`.
-    const affectedCompanyIds = Array.from(
-      new Set(records.map((r) => r.companyId)),
-    );
+    const affectedCompanyIds = Array.from(new Set(records.map((r) => r.companyId)));
 
     await this.prisma.$transaction(async (tx) => {
       if (releasedAssetIds.length > 0) {
         const safeAssetIds = assertStringIdList(releasedAssetIds, 'releasedAssetIds');
-        const safeCompanyIds = assertStringIdList(
-          affectedCompanyIds,
-          'affectedCompanyIds',
-        );
+        const safeCompanyIds = assertStringIdList(affectedCompanyIds, 'affectedCompanyIds');
         // Cascade FKs would delete the sync-records rows when we
         // drop the parent integration anyway, but doing it explicitly
         // first lets us check the "is this asset still linked to any
@@ -395,16 +532,11 @@ export class IntegrationsService {
     });
     if (!row) throw new NotFoundException(`Integration ${id} not found`);
     if (!row.secret) {
-      throw new BadRequestException(
-        'Integration has no credential bundle configured.',
-      );
+      throw new BadRequestException('Integration has no credential bundle configured.');
     }
     let secret: Record<string, unknown>;
     try {
-      const json = this.crypto.decrypt(
-        row.secret.ciphertext,
-        integrationSecretAad(row.id),
-      );
+      const json = this.crypto.decrypt(row.secret.ciphertext, integrationSecretAad(row.id));
       const parsed = JSON.parse(json);
       if (!parsed || typeof parsed !== 'object') {
         throw new Error('decrypted secret is not a JSON object');
@@ -465,6 +597,10 @@ export class IntegrationsService {
           dependsOnResourceKeys: r.dependsOnResourceKeys,
         },
       });
+      const recommendation = driver.recommendedDestinations?.[r.key];
+      if (recommendation) {
+        await ensureResourceDestination(this.prisma, integrationId, r.key, recommendation);
+      }
     }
   }
 
@@ -479,21 +615,17 @@ export class IntegrationsService {
         _count: { select: { fieldMappings: true } },
       },
     });
-    return this.sortResources(driver, rows.map((r) => this.toResourceDto(driver, r)));
+    return this.sortResources(
+      driver,
+      rows.map((r) => this.toResourceDto(driver, r)),
+    );
   }
 
-  async getResource(
-    integrationId: string,
-    resourceKey: string,
-  ): Promise<IntegrationResourceDto> {
+  async getResource(integrationId: string, resourceKey: string): Promise<IntegrationResourceDto> {
     const integration = await this.requireIntegration(integrationId);
     const driver = this.drivers.get(integration.driver);
     this.assertResourceKey(driver.descriptor, resourceKey);
-    const row = await this.findOrCreateResource(
-      integrationId,
-      resourceKey,
-      driver.descriptor,
-    );
+    const row = await this.findOrCreateResource(integrationId, resourceKey, driver.descriptor);
     return this.toResourceDto(driver, row);
   }
 
@@ -555,19 +687,13 @@ export class IntegrationsService {
     const integration = await this.requireIntegration(integrationId);
     const driver = this.drivers.get(integration.driver);
     this.assertResourceKey(driver.descriptor, resourceKey);
-    const existing = await this.findOrCreateResource(
-      integrationId,
-      resourceKey,
-      driver.descriptor,
-    );
+    const existing = await this.findOrCreateResource(integrationId, resourceKey, driver.descriptor);
     const fieldMappingCount = await this.prisma.integrationFieldMapping.count({
       where: { resourceId: existing.id },
     });
 
     const nextLayoutId =
-      input.assetLayoutId === undefined
-        ? existing.assetLayoutId
-        : input.assetLayoutId;
+      input.assetLayoutId === undefined ? existing.assetLayoutId : input.assetLayoutId;
 
     if (input.assetLayoutId !== undefined) {
       if (input.assetLayoutId === null) {
@@ -613,13 +739,8 @@ export class IntegrationsService {
       data: {
         enabled: input.enabled ?? undefined,
         assetLayoutId:
-          input.assetLayoutId === undefined
-            ? undefined
-            : input.assetLayoutId ?? null,
-        matchKeyFieldIds:
-          input.matchKeyFieldIds === undefined
-            ? undefined
-            : input.matchKeyFieldIds,
+          input.assetLayoutId === undefined ? undefined : (input.assetLayoutId ?? null),
+        matchKeyFieldIds: input.matchKeyFieldIds === undefined ? undefined : input.matchKeyFieldIds,
       },
     });
 
@@ -653,11 +774,7 @@ export class IntegrationsService {
     const integration = await this.requireIntegration(integrationId);
     const driver = this.drivers.get(integration.driver);
     this.assertResourceKey(driver.descriptor, resourceKey);
-    const resource = await this.findOrCreateResource(
-      integrationId,
-      resourceKey,
-      driver.descriptor,
-    );
+    const resource = await this.findOrCreateResource(integrationId, resourceKey, driver.descriptor);
     const rows = await this.prisma.integrationFieldMapping.findMany({
       where: { resourceId: resource.id },
       orderBy: { sourceField: 'asc' },
@@ -694,11 +811,7 @@ export class IntegrationsService {
     const integration = await this.requireIntegration(integrationId);
     const driver = this.drivers.get(integration.driver);
     this.assertResourceKey(driver.descriptor, resourceKey);
-    const resource = await this.findOrCreateResource(
-      integrationId,
-      resourceKey,
-      driver.descriptor,
-    );
+    const resource = await this.findOrCreateResource(integrationId, resourceKey, driver.descriptor);
     if (!resource.assetLayoutId) {
       throw new BadRequestException(
         'Pick a target asset layout before configuring field mappings.',
@@ -719,9 +832,7 @@ export class IntegrationsService {
     for (const m of assetMappings) {
       const norm = m.sourceField.trim().toLowerCase();
       if (seenSource.has(norm)) {
-        throw new BadRequestException(
-          `Source field "${m.sourceField}" is mapped twice.`,
-        );
+        throw new BadRequestException(`Source field "${m.sourceField}" is mapped twice.`);
       }
       if (seenTarget.has(m.targetFieldId)) {
         throw new BadRequestException(
@@ -762,9 +873,7 @@ export class IntegrationsService {
             targetKind: 'asset',
             targetFieldId: m.targetFieldId,
             syncDirection: m.syncDirection,
-            transform: m.transform
-              ? (m.transform as Prisma.InputJsonValue)
-              : Prisma.JsonNull,
+            transform: m.transform ? (m.transform as Prisma.InputJsonValue) : Prisma.JsonNull,
           })),
         });
       }
@@ -831,10 +940,7 @@ export class IntegrationsService {
     });
   }
 
-  private assertResourceKey(
-    descriptor: DriverDescriptor,
-    resourceKey: string,
-  ): void {
+  private assertResourceKey(descriptor: DriverDescriptor, resourceKey: string): void {
     const ok = descriptor.resources.some((r) => r.key === resourceKey);
     if (!ok) {
       throw new BadRequestException(
@@ -852,16 +958,11 @@ export class IntegrationsService {
       throw new BadRequestException(`Asset layout ${assetLayoutId} not found`);
     }
     if (l.archivedAt || !l.isActive) {
-      throw new BadRequestException(
-        `Asset layout ${assetLayoutId} is archived or inactive.`,
-      );
+      throw new BadRequestException(`Asset layout ${assetLayoutId} is archived or inactive.`);
     }
   }
 
-  private async assertMatchKeysOnLayout(
-    assetLayoutId: string,
-    fieldIds: string[],
-  ): Promise<void> {
+  private async assertMatchKeysOnLayout(assetLayoutId: string, fieldIds: string[]): Promise<void> {
     if (fieldIds.length === 0) return;
     const fields = await this.prisma.assetField.findMany({
       where: { id: { in: fieldIds }, assetLayoutId, archivedAt: null },
@@ -902,6 +1003,15 @@ export class IntegrationsService {
     }
   }
 
+  private validateDriverConfiguration(
+    driverKey: string,
+    config: Record<string, unknown> | null | undefined,
+    secret: Record<string, unknown> | null | undefined,
+  ): void {
+    if (this.drivers.kindOf(driverKey) !== 'pull') return;
+    this.drivers.get(driverKey).validateConfiguration?.(config, secret);
+  }
+
   private resourceInclude() {
     return {
       include: {
@@ -915,9 +1025,7 @@ export class IntegrationsService {
     driver: { descriptor: DriverDescriptor },
     row: ResourceRowWithIncludes,
   ): IntegrationResourceDto {
-    const descriptor = driver.descriptor.resources.find(
-      (r) => r.key === row.resourceKey,
-    );
+    const descriptor = driver.descriptor.resources.find((r) => r.key === row.resourceKey);
     return {
       id: row.id,
       integrationId: row.integrationId,
@@ -945,9 +1053,7 @@ export class IntegrationsService {
     driver: { descriptor: DriverDescriptor },
     rows: IntegrationResourceDto[],
   ): IntegrationResourceDto[] {
-    const order = new Map(
-      driver.descriptor.resources.map((r, i) => [r.key, i] as const),
-    );
+    const order = new Map(driver.descriptor.resources.map((r, i) => [r.key, i] as const));
     return [...rows].sort(
       (a, b) =>
         (order.get(a.resourceKey) ?? Number.MAX_SAFE_INTEGER) -
@@ -956,11 +1062,8 @@ export class IntegrationsService {
   }
 
   private toDto(row: IntegrationRowWithIncludes): IntegrationDto {
-    const descriptor = this.drivers.has(row.driver)
-      ? this.drivers.describe(row.driver)
-      : null;
-    const descriptorResources: DriverResourceDescriptor[] =
-      descriptor?.resources ?? [];
+    const descriptor = this.drivers.has(row.driver) ? this.drivers.describe(row.driver) : null;
+    const descriptorResources: DriverResourceDescriptor[] = descriptor?.resources ?? [];
     const driverShim = {
       descriptor: {
         ...(descriptor ?? {}),
@@ -971,10 +1074,7 @@ export class IntegrationsService {
     let secretMask: Record<string, string> | null = null;
     if (row.secret) {
       try {
-        const json = this.crypto.decrypt(
-          row.secret.ciphertext,
-          integrationSecretAad(row.id),
-        );
+        const json = this.crypto.decrypt(row.secret.ciphertext, integrationSecretAad(row.id));
         const parsed = JSON.parse(json) as Record<string, unknown>;
         secretMask = {};
         for (const [k, v] of Object.entries(parsed ?? {})) {
@@ -993,8 +1093,7 @@ export class IntegrationsService {
     );
 
     const rawDefault = this.env.values.INTEGRATION_SYNC_DEFAULT_CRON;
-    const defaultCron =
-      rawDefault.toLowerCase() === 'off' ? null : rawDefault;
+    const defaultCron = rawDefault.toLowerCase() === 'off' ? null : rawDefault;
     return {
       id: row.id,
       driver: row.driver,
@@ -1029,7 +1128,9 @@ export function validateResourceRegistry(
     }
     for (const dependency of resource.dependsOnResourceKeys) {
       if (!resources.has(dependency)) {
-        throw new BadRequestException(`Resource ${resource.key} has missing dependency ${dependency}.`);
+        throw new BadRequestException(
+          `Resource ${resource.key} has missing dependency ${dependency}.`,
+        );
       }
     }
     if (resource.targetKind === 'asset' && resource.targetConfig.bindingResourceKey) {
@@ -1049,15 +1150,14 @@ export function validateResourceRegistry(
   buildDescriptorStages(descriptor.resources);
 }
 
-function buildDescriptorStages(
-  resources: readonly DriverResourceDescriptor[],
-): void {
+function buildDescriptorStages(resources: readonly DriverResourceDescriptor[]): void {
   const pending = new Map(resources.map((resource) => [resource.key, resource]));
   const completed = new Set<string>();
   while (pending.size > 0) {
-    const ready = resources.filter((resource) =>
-      pending.has(resource.key) &&
-      resource.dependsOnResourceKeys.every((dependency) => completed.has(dependency)),
+    const ready = resources.filter(
+      (resource) =>
+        pending.has(resource.key) &&
+        resource.dependsOnResourceKeys.every((dependency) => completed.has(dependency)),
     );
     if (ready.length === 0) {
       throw new BadRequestException('Resource dependency graph contains a cycle.');

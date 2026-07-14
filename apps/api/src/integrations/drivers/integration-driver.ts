@@ -11,6 +11,7 @@ import type {
   ReconstructionInput,
 } from '../reconstruction/reconstruction-target.js';
 import type { ReconstructionGapKind } from '@weavestream/shared';
+import type { FieldType } from '@prisma/client';
 
 /**
  * Phase 11 — universal integration driver port.
@@ -97,6 +98,29 @@ export interface LegacyDriverRecord {
   updatedAt: string | null;
 }
 
+export interface RecommendedDestinationField {
+  sourceField: string;
+  name: string;
+  slug: string;
+  fieldType: FieldType;
+  syncDirection: 'source_wins' | 'preserve_manual' | 'manual_only';
+  isPrimary: boolean;
+  showInTable: boolean;
+  options: Record<string, unknown>;
+  /** False creates/reuses the shared layout field without mapping this resource to it. */
+  mapResource?: boolean;
+}
+
+export interface RecommendedDestination {
+  layout: {
+    name: string;
+    slug: string;
+    icon: string;
+    color: string;
+  };
+  fields: readonly RecommendedDestinationField[];
+}
+
 export interface TypedDriverRecord {
   readonly reconstructionInput: ReconstructionInput;
   readonly externalId?: never;
@@ -175,6 +199,15 @@ export interface IntegrationDriver {
   /** Public descriptor used by the admin UI to render dynamic forms. */
   readonly descriptor: DriverDescriptor;
 
+  /** Optional generic bootstrap metadata; drivers never write destinations directly. */
+  readonly recommendedDestinations?: Readonly<Record<string, RecommendedDestination>>;
+
+  /** Optional strict persistence-boundary validation for driver-specific bundles. */
+  validateConfiguration?(
+    config: Record<string, unknown> | null | undefined,
+    secret: Record<string, unknown> | null | undefined,
+  ): void;
+
   /**
    * Validate a freshly-submitted (config, secret) pair against the
    * remote API. Returning normally = healthy. Throw on auth failure /
@@ -196,10 +229,7 @@ export interface IntegrationDriver {
   ): Promise<SourceFieldDto[]>;
 
   /** Walk paginated records for a single org. */
-  fetchRecords(
-    ctx: FetchRecordsContext,
-    cursor: string | null,
-  ): Promise<DriverFetchPage>;
+  fetchRecords(ctx: FetchRecordsContext, cursor: string | null): Promise<DriverFetchPage>;
 
   /**
    * Phase 12 — optional read-only ticket browse surface. Only
@@ -225,8 +255,7 @@ export interface IntegrationDriver {
  */
 export function isTicketingDriver(
   driver: IntegrationDriver,
-): driver is IntegrationDriver &
-  Required<Pick<IntegrationDriver, 'listTickets' | 'getTicket'>> {
+): driver is IntegrationDriver & Required<Pick<IntegrationDriver, 'listTickets' | 'getTicket'>> {
   return (
     driver.descriptor.capabilities.ticketing === true &&
     typeof driver.listTickets === 'function' &&

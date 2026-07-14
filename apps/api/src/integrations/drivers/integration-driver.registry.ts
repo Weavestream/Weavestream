@@ -6,6 +6,7 @@ import { NinjaOneDriver } from './ninjaone/ninjaone.driver.js';
 import { UniFiSiteManagerDriver } from './unifi/unifi.driver.js';
 import { CloudflareDriver } from './cloudflare/cloudflare.driver.js';
 import { CloudflareApiClient } from './cloudflare/cloudflare-api.client.js';
+import { BreezeDriver } from './breeze/breeze.driver.js';
 
 /**
  * Phase 11 — global registry of every available integration driver.
@@ -32,23 +33,18 @@ export class IntegrationDriverRegistry {
 
   constructor() {
     const pullDrivers: IntegrationDriver[] = [
+      new BreezeDriver(),
       new Action1Driver(),
       new NinjaOneDriver(),
       new UniFiSiteManagerDriver(),
     ];
-    const securityDrivers: CloudflareDriver[] = [
-      new CloudflareDriver(new CloudflareApiClient()),
-    ];
+    const securityDrivers: CloudflareDriver[] = [new CloudflareDriver(new CloudflareApiClient())];
 
     this.pullByKey = new Map(pullDrivers.map((d) => [d.key, d]));
     this.securityByKey = new Map(securityDrivers.map((d) => [d.key, d]));
     this.descriptorByKey = new Map([
-      ...pullDrivers.map(
-        (d) => [d.key, d.descriptor] as readonly [string, DriverDescriptor],
-      ),
-      ...securityDrivers.map(
-        (d) => [d.key, d.descriptor] as readonly [string, DriverDescriptor],
-      ),
+      ...pullDrivers.map((d) => [d.key, d.descriptor] as readonly [string, DriverDescriptor]),
+      ...securityDrivers.map((d) => [d.key, d.descriptor] as readonly [string, DriverDescriptor]),
     ]);
   }
 
@@ -99,9 +95,7 @@ export class IntegrationDriverRegistry {
   getSecurity(key: string): CloudflareDriver {
     const d = this.securityByKey.get(key);
     if (!d) {
-      throw new NotFoundException(
-        `Driver "${key}" is not a registered security driver.`,
-      );
+      throw new NotFoundException(`Driver "${key}" is not a registered security driver.`);
     }
     return d;
   }
