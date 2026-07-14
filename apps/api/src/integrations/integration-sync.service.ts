@@ -188,6 +188,7 @@ export class IntegrationSyncService {
       {
         kind: 'manual',
         integrationId,
+        syncRunId: run.id,
         triggeredBy: actor.id,
         mode,
         dryRun,
@@ -271,7 +272,14 @@ export class IntegrationSyncService {
     integrationId: string,
     requestedMode?: IntegrationSyncMode,
     now = new Date(),
+    deliveryKey?: string,
   ) {
+    if (deliveryKey) {
+      const persisted = await this.prisma.integrationSyncRun.findUnique({
+        where: { deliveryKey },
+      });
+      if (persisted) return persisted;
+    }
     let mode = requestedMode ?? await this.selectScheduledMode(integrationId, now);
     if (mode === 'full') {
       const activeFull = await this.prisma.integrationSyncRun.count({
@@ -292,9 +300,16 @@ export class IntegrationSyncService {
           mode,
           status: 'queued',
           dryRun: false,
+          ...(deliveryKey ? { deliveryKey } : {}),
         },
       });
     } catch (error) {
+      if (deliveryKey && isUniqueConstraintError(error)) {
+        const persisted = await this.prisma.integrationSyncRun.findUnique({
+          where: { deliveryKey },
+        });
+        if (persisted) return persisted;
+      }
       if (mode !== 'full' || !isUniqueConstraintError(error)) throw error;
       // The partial unique index is the authority for racing schedulers.
       return this.prisma.integrationSyncRun.create({
@@ -304,6 +319,7 @@ export class IntegrationSyncService {
           mode: 'incremental',
           status: 'queued',
           dryRun: false,
+          ...(deliveryKey ? { deliveryKey } : {}),
         },
       });
     }
@@ -388,8 +404,8 @@ export class IntegrationSyncService {
         }));
 
     await this.prisma.$transaction(async (tx) => {
-      await tx.integrationSyncRun.update({
-        where: { id: runId },
+      await tx.integrationSyncRun.updateMany({
+        where: { id: runId, status: 'queued' },
         data: { status: 'running', startedAt: new Date() },
       });
       for (const m of mappings) {
@@ -412,19 +428,22 @@ export class IntegrationSyncService {
               ? (zeroAggregateTotals() as unknown as Prisma.InputJsonValue)
               : Prisma.JsonNull,
           },
-          update: {
-            status: resourcesForMapping === 0 ? 'succeeded' : 'queued',
-            error: null,
-            totals: resourcesForMapping === 0
-              ? (zeroAggregateTotals() as unknown as Prisma.InputJsonValue)
-              : Prisma.JsonNull,
-            conflicts: Prisma.JsonNull,
-          },
+          update: {},
         });
       }
     });
 
-    for (const job of jobs) {
+    const queuedResults = await this.prisma.integrationSyncRunCompanyResult.findMany({
+      where: { syncRunId: runId, status: 'queued' },
+      select: { integrationCompanyMappingId: true, status: true },
+    });
+    const queuedMappingIds = new Set(
+      queuedResults
+        .filter((result) => result.status === 'queued')
+        .map((result) => result.integrationCompanyMappingId),
+    );
+    const fanoutJobs = jobs.filter((job) => queuedMappingIds.has(job.mappingId));
+    for (const job of fanoutJobs) {
       await this.queues.get(QueueNames.integrationSyncMapping).add(
         IntegrationSyncMappingJobNames.syncMapping,
         {
@@ -446,7 +465,7 @@ export class IntegrationSyncService {
 
     return {
       run: { id: run.id, integrationId: run.integrationId, mode: run.mode, dryRun: run.dryRun },
-      jobs,
+      jobs: fanoutJobs,
     };
   }
 

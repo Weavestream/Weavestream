@@ -89,18 +89,14 @@ export class IntegrationSyncOrchestratorWorker implements OnModuleDestroy {
     // The API already created an `IntegrationSyncRun` keyed by
     // `manual:<runId>`. Pull the most recent queued/running run for
     // this integration that has the same triggeredBy + dryRun flags.
-    const run = await this.prisma.integrationSyncRun.findFirst({
-      where: {
-        integrationId: payload.integrationId,
-        kind: 'manual',
-        triggeredBy: payload.triggeredBy,
-        mode: payload.mode,
-        dryRun: payload.dryRun,
-        status: { in: ['queued', 'running'] },
-      },
-      orderBy: { createdAt: 'desc' },
+    const run = await this.prisma.integrationSyncRun.findUnique({
+      where: { id: payload.syncRunId },
     });
-    if (!run) {
+    if (
+      !run || run.integrationId !== payload.integrationId || run.kind !== 'manual' ||
+      run.triggeredBy !== payload.triggeredBy || run.mode !== payload.mode ||
+      run.dryRun !== payload.dryRun || !['queued', 'running'].includes(run.status)
+    ) {
       this.logger.warn(
         `No queued manual run found for integration ${payload.integrationId} — skipping orchestrator`,
       );
@@ -138,17 +134,11 @@ export class IntegrationSyncOrchestratorWorker implements OnModuleDestroy {
       );
       return null;
     }
-    const persisted = await this.prisma.integrationSyncRun.findFirst({
-      where: {
-        integrationId: payload.integrationId,
-        kind: 'scheduled',
-        status: { in: ['queued', 'running'] },
-      },
-      orderBy: { createdAt: 'desc' },
-    });
-    const run = persisted ?? await this.sync.createScheduledRun(
+    const run = await this.sync.createScheduledRun(
       payload.integrationId,
       payload.mode,
+      new Date(),
+      scheduledDeliveryKey(job),
     );
     try {
       await this.sync.beginRun(run.id);
@@ -164,4 +154,9 @@ export class IntegrationSyncOrchestratorWorker implements OnModuleDestroy {
 function isFinalAttempt(job: Job<unknown, unknown, string>): boolean {
   const attempts = Math.max(1, Number(job.opts?.attempts ?? 1));
   return Number(job.attemptsMade ?? 0) + 1 >= attempts;
+}
+
+function scheduledDeliveryKey(job: Job<unknown, unknown, string>): string {
+  if (!job.id) throw new Error('Scheduled integration sync job is missing its delivery id.');
+  return `scheduled:${job.id}`.slice(0, 512);
 }

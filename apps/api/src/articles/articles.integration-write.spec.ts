@@ -1,6 +1,7 @@
 import { ArticlesService } from './articles.service.js';
 import { ArticleTargetWriter } from '../integrations/reconstruction/article-target.writer.js';
 import { transformBreezeRecord } from '../integrations/drivers/breeze/breeze.transforms.js';
+import { IntegrationProvenanceService } from '../integrations/reconstruction/integration-provenance.service.js';
 
 const ids = {
   company: '52000000-0000-0000-0000-000000000001',
@@ -47,6 +48,22 @@ function binding(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function fullProvenance(state: 'active' | 'stale') {
+  return {
+    integrationId: ids.integration,
+    externalOrgId: 'org',
+    resourceKey: 'articles',
+    externalId: 'org:articles:runbook',
+    sourceRevision: null,
+    sourceFingerprint: null,
+    firstSeenAt: '2026-07-01T00:00:00.000Z',
+    lastSeenAt: '2026-07-01T00:00:00.000Z',
+    lastSyncedAt: '2026-07-01T00:00:00.000Z',
+    ownership: 'breeze',
+    state,
+  };
+}
+
 function setup(options: { bound?: unknown; collision?: unknown; binding?: unknown; auditFails?: boolean } = {}) {
   let committed = false;
   let createdFolder: Record<string, unknown> | null = null;
@@ -72,7 +89,12 @@ function setup(options: { bound?: unknown; collision?: unknown; binding?: unknow
       aggregate: jest.fn().mockResolvedValue({ _max: { version: 1 } }),
       deleteMany: jest.fn(),
     },
-    integrationSyncRecord: { findUnique: jest.fn().mockResolvedValue(options.binding ?? null) },
+    upload: { updateMany: jest.fn(), deleteMany: jest.fn() },
+    integrationSyncRecord: {
+      findUnique: jest.fn().mockResolvedValue(options.binding ?? null),
+      findMany: jest.fn().mockResolvedValue([]),
+      update: jest.fn().mockResolvedValue({}),
+    },
     auditLog: { create: jest.fn() },
   };
   const prisma = {
@@ -231,6 +253,79 @@ describe('ArticlesService integration system writes', () => {
       }),
     }));
     expect(tx.articleVersion.create).toHaveBeenCalledTimes(1);
+    expect(tx.articleVersion.deleteMany).not.toHaveBeenCalled();
+  });
+
+  it('preserves manual text, attachments, and version history across a real stale sweep and native restore', async () => {
+    const oldManaged = '<!-- weavestream:breeze:managed:start -->\n# Old source\n<!-- weavestream:breeze:managed:end -->';
+    const manual = '\n\n## Operator notes\nKeep [manual attachment](upload://manual-1).';
+    const target = article({ markdownSource: oldManaged + manual });
+    const persistedBinding = binding({
+      id: 'binding-shared-article',
+      staleSince: null,
+      lastSeenAt: new Date('2026-07-01T00:00:00.000Z'),
+      provenance: fullProvenance('active'),
+    });
+    const versionHistory = [{ id: 'version-existing', version: 1 }];
+    const attachments = [{ id: 'manual-1', articleId: ids.article }];
+    const { service, prisma, audit, tx } = setup({ bound: target, binding: persistedBinding });
+    tx.integrationSyncRecord.findMany
+      .mockResolvedValueOnce([persistedBinding])
+      .mockResolvedValueOnce([]);
+    tx.integrationSyncRecord.update.mockImplementation(async ({ data }: { data: Record<string, unknown> }) => {
+      Object.assign(persistedBinding, data);
+      return persistedBinding;
+    });
+    tx.article.updateMany.mockImplementation(async ({ data }: { data: Record<string, unknown> }) => {
+      Object.assign(target, data);
+      return { count: 1 };
+    });
+    tx.articleVersion.create.mockImplementation(async ({ data }: { data: Record<string, unknown> }) => {
+      const created = { id: 'version-restored', ...data };
+      versionHistory.push(created as never);
+      return created;
+    });
+    tx.upload.updateMany.mockImplementation(async () => {
+      const count = attachments.length;
+      attachments.splice(0);
+      return { count };
+    });
+    tx.upload.deleteMany.mockImplementation(async () => {
+      const count = attachments.length;
+      attachments.splice(0);
+      return { count };
+    });
+
+    const staleAt = new Date('2026-07-14T12:00:00.000Z');
+    await expect(new IntegrationProvenanceService(prisma as never, audit as never).staleUnseen(
+      tx as never,
+      {
+        companyId: ids.company,
+        integrationId: ids.integration,
+        integrationCompanyMappingId: ids.mapping,
+        resourceId: ids.resource,
+        targetKind: 'article',
+        snapshotAt: staleAt,
+        auditActorId: ids.actor,
+      },
+    )).resolves.toEqual({ stale: 1, archived: 1 });
+    expect(target.archivedAt).toEqual(staleAt);
+
+    await expect(service.writeFromIntegration({
+      ...input,
+      existingTargetId: ids.article,
+      markdown: '<!-- weavestream:breeze:managed:start -->\n# New source\n<!-- weavestream:breeze:managed:end -->',
+    })).resolves.toMatchObject({ targetId: ids.article, change: 'restored' });
+
+    expect(target.id).toBe(ids.article);
+    expect(target.archivedAt).toBeNull();
+    expect(target.markdownSource).toContain('# New source');
+    expect(target.markdownSource).toContain('## Operator notes');
+    expect(target.markdownSource).toContain('upload://manual-1');
+    expect(attachments).toEqual([{ id: 'manual-1', articleId: ids.article }]);
+    expect(versionHistory).toHaveLength(2);
+    expect(tx.upload.updateMany).not.toHaveBeenCalled();
+    expect(tx.upload.deleteMany).not.toHaveBeenCalled();
     expect(tx.articleVersion.deleteMany).not.toHaveBeenCalled();
   });
 

@@ -227,6 +227,7 @@ export const integrationSyncOrchestratorJobSchema = z.discriminatedUnion('kind',
   z.object({
     kind: z.literal('manual'),
     integrationId: z.string().uuid(),
+    syncRunId: z.string().uuid(),
     triggeredBy: z.string().uuid(),
     mode: z.enum(['incremental', 'full']).default('incremental'),
     /**

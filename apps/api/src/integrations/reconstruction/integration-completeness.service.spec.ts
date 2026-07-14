@@ -105,6 +105,51 @@ describe('IntegrationCompletenessService', () => {
     }
   });
 
+  it.each([
+    ['blocked relation', 'relation'],
+    ['invalid-provenance subnet', 'subnet'],
+    ['blocked reservation', 'ip_reservation'],
+  ] as const)('does not classify a %s binding as synchronized current', async (_label, targetKind) => {
+    const prisma = completenessPrisma({
+      activeAssetFields: [], activeArticles: [], manualAssetFields: [],
+      staleAssetFields: [], staleArticles: [], gaps: [],
+    });
+    const record = {
+      id: `binding-${targetKind}`, state: targetKind === 'subnet' ? 'active' : 'blocked', targetKind,
+      assetId: null,
+      articleId: null,
+      subnetId: targetKind === 'subnet' ? 'subnet-authority' : null,
+      ipReservationId: targetKind === 'ip_reservation' ? 'reservation-authority' : null,
+      relationId: targetKind === 'relation' ? 'relation-authority' : null,
+      lastSyncedFieldChecksums: {},
+      provenance: targetKind === 'subnet'
+        ? { ownership: 'weavestream', state: 'active', resourceKey: 'subnets' }
+        : { ownership: 'breeze', state: 'blocked', resourceKey: targetKind },
+    };
+    prisma.integrationSyncRecord.findMany.mockResolvedValueOnce([record]);
+    if (targetKind === 'relation') {
+      prisma.relation.findMany.mockResolvedValueOnce([{
+        id: 'relation-authority', relationType: 'depends_on',
+        sourceType: 'Asset', sourceId: 'asset-a', targetType: 'Article', targetId: 'article-b',
+      }]);
+    }
+    if (targetKind === 'subnet') {
+      prisma.subnet.findMany.mockResolvedValueOnce([{
+        id: 'subnet-authority', description: 'Required firewall rules', archivedAt: null,
+      }]);
+    }
+    if (targetKind === 'ip_reservation') {
+      prisma.ipReservation.findMany.mockResolvedValueOnce([{
+        id: 'reservation-authority', notes: 'Firewall allocation',
+      }]);
+    }
+
+    const result = await new IntegrationCompletenessService(prisma as never)
+      .recalculate(prisma as never, scope());
+    const capability = targetKind === 'relation' ? 'service_dependencies' : 'ip_firewall';
+    expect(category(result, capability)).toBe('missing');
+  });
+
   it('ignores an unrelated manual relation outside the exact resource targets', async () => {
     const prisma = completenessPrisma({
       activeAssetFields: [], activeArticles: [], manualAssetFields: [],
@@ -369,27 +414,23 @@ function completenessPrisma(input: {
       id: 'active-asset-binding', state: 'active', targetKind: 'asset', assetId: activeAssetId,
       articleId: null, subnetId: null, ipReservationId: null, relationId: null,
       lastSyncedFieldChecksums: activeChecksums,
-      provenance: { ownership: 'breeze', state: 'active', resourceKey: 'sites' },
+      provenance: sourceProvenance('sites', 'active'),
     }] : []),
     ...(input.staleAssetFields.length > 0 ? [{
       id: 'stale-asset-binding', state: 'stale', targetKind: 'asset', assetId: staleAssetId,
       articleId: null, subnetId: null, ipReservationId: null, relationId: null,
       lastSyncedFieldChecksums: staleChecksums,
-      provenance: { ownership: 'breeze', state: 'stale', resourceKey: 'sites' },
+      provenance: sourceProvenance('sites', 'stale'),
     }] : []),
     ...input.activeArticles.map((entry, index) => ({
       id: `active-article-binding-${index}`, state: 'active', targetKind: 'article', assetId: null,
       articleId: articleId(activeArticleId, index), subnetId: null, ipReservationId: null, relationId: null,
-      lastSyncedFieldChecksums: {}, provenance: {
-        ownership: 'breeze', state: 'active', resourceKey: entry.resourceKey,
-      },
+      lastSyncedFieldChecksums: {}, provenance: sourceProvenance(entry.resourceKey, 'active'),
     })),
     ...input.staleArticles.map((entry, index) => ({
       id: `stale-article-binding-${index}`, state: 'stale', targetKind: 'article', assetId: null,
       articleId: articleId(staleArticleId, index), subnetId: null, ipReservationId: null, relationId: null,
-      lastSyncedFieldChecksums: {}, provenance: {
-        ownership: 'breeze', state: 'stale', resourceKey: entry.resourceKey,
-      },
+      lastSyncedFieldChecksums: {}, provenance: sourceProvenance(entry.resourceKey, 'stale'),
     })),
   ];
   const fieldValues = [
@@ -463,4 +504,16 @@ function category(
   capability: string,
 ): string | undefined {
   return result.items.find((item) => item.capability === capability)?.category;
+}
+
+function sourceProvenance(resourceKey: string, state: 'active' | 'stale') {
+  return {
+    integrationId: '00000000-0000-4000-8000-000000000099',
+    externalOrgId: 'org-1', resourceKey, externalId: `org-1:${resourceKey}:source-1`,
+    sourceRevision: null, sourceFingerprint: null,
+    firstSeenAt: '2026-07-13T00:00:00.000Z',
+    lastSeenAt: '2026-07-14T00:00:00.000Z',
+    lastSyncedAt: '2026-07-14T00:00:00.000Z',
+    ownership: 'breeze', state,
+  };
 }

@@ -1362,6 +1362,7 @@ model IntegrationSyncRun {
   integrationId String               @map("integration_id") @db.Uuid
   kind          IntegrationRunKind
   mode          IntegrationSyncMode @default(incremental)
+  deliveryKey   String?              @unique @map("delivery_key") @db.VarChar(512)
   status        IntegrationRunStatus @default(queued)
   dryRun        Boolean              @default(false) @map("dry_run")
   triggeredBy   String?              @map("triggered_by") @db.Uuid
@@ -1479,6 +1480,7 @@ model IntegrationSyncCheckpoint {
   integrationCompanyMappingId String    @map("integration_company_mapping_id") @db.Uuid
   resourceId                  String    @map("resource_id") @db.Uuid
   mode                        IntegrationSyncMode @default(incremental)
+  authoritative               Boolean   @default(true)
   cursor                      String?   @db.VarChar(4096)
   snapshotAt                  DateTime? @map("snapshot_at")
   highWaterAt                 DateTime? @map("high_water_at")

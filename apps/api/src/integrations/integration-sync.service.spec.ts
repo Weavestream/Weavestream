@@ -92,7 +92,7 @@ describe('IntegrationSyncService.triggerManual', () => {
     });
     expect(add).toHaveBeenCalledWith(
       'manual',
-      { kind: 'manual', integrationId: 'integration', triggeredBy: 'actor-1', mode: 'incremental', dryRun },
+      { kind: 'manual', integrationId: 'integration', syncRunId: 'run-1', triggeredBy: 'actor-1', mode: 'incremental', dryRun },
       expect.objectContaining({ jobId: 'manual-run-1', attempts: 2 }),
     );
     expect(audit.log).toHaveBeenCalledWith(expect.objectContaining({
@@ -132,7 +132,7 @@ describe('IntegrationSyncService.beginRun', () => {
   it('enqueues one whole-DAG job per mapping with the scheduled integration actor', async () => {
     const add = jest.fn();
     const tx = {
-      integrationSyncRun: { update: jest.fn() },
+      integrationSyncRun: { updateMany: jest.fn() },
       integrationSyncRunCompanyResult: { upsert: jest.fn() },
     };
     const prisma = {
@@ -147,6 +147,10 @@ describe('IntegrationSyncService.beginRun', () => {
       integrationResource: { findMany: jest.fn().mockResolvedValue([
         { id: 'reservation', resourceKey: 'reservations', dependsOnResourceKeys: ['subnets'] },
         { id: 'subnet', resourceKey: 'subnets', dependsOnResourceKeys: [] },
+      ]) },
+      integrationSyncRunCompanyResult: { findMany: jest.fn().mockResolvedValue([
+        { integrationCompanyMappingId: 'mapping-a', status: 'queued' },
+        { integrationCompanyMappingId: 'mapping-b', status: 'queued' },
       ]) },
       $transaction: jest.fn(async (callback: (client: typeof tx) => Promise<void>) => callback(tx)),
     };
@@ -171,6 +175,50 @@ describe('IntegrationSyncService.beginRun', () => {
     });
   });
 
+  it('preserves existing child progress and only refills queued fan-out jobs on retry', async () => {
+    const add = jest.fn();
+    const tx = {
+      integrationSyncRun: { updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
+      integrationSyncRunCompanyResult: { upsert: jest.fn() },
+    };
+    const prisma = {
+      integrationSyncRun: { findUnique: jest.fn().mockResolvedValue({
+        id: 'run', integrationId: 'integration', mode: 'full', dryRun: false, status: 'running',
+        triggeredBy: null, integration: { createdBy: 'creator' },
+      }) },
+      integrationCompanyMapping: { findMany: jest.fn().mockResolvedValue([
+        { id: 'mapping-queued', companyId: 'company-a' },
+        { id: 'mapping-complete', companyId: 'company-b' },
+      ]) },
+      integrationResource: { findMany: jest.fn().mockResolvedValue([
+        { id: 'devices', resourceKey: 'devices', dependsOnResourceKeys: [] },
+      ]) },
+      integrationSyncRunCompanyResult: { findMany: jest.fn().mockResolvedValue([
+        { integrationCompanyMappingId: 'mapping-queued', status: 'queued' },
+        { integrationCompanyMappingId: 'mapping-complete', status: 'succeeded' },
+      ]) },
+      $transaction: jest.fn(async (callback: (client: typeof tx) => Promise<void>) => callback(tx)),
+    };
+    const service = new IntegrationSyncService(
+      prisma as never, {} as never, { get: jest.fn().mockReturnValue({ add }) } as never,
+      {} as never,
+    );
+
+    await service.beginRun('run');
+
+    expect(tx.integrationSyncRun.updateMany).toHaveBeenCalledWith({
+      where: { id: 'run', status: 'queued' },
+      data: { status: 'running', startedAt: expect.any(Date) },
+    });
+    for (const call of tx.integrationSyncRunCompanyResult.upsert.mock.calls) {
+      expect(call[0].update).toEqual({});
+    }
+    expect(add).toHaveBeenCalledTimes(1);
+    expect(add).toHaveBeenCalledWith('sync-mapping', expect.objectContaining({
+      integrationCompanyMappingId: 'mapping-queued', mode: 'full',
+    }), expect.any(Object));
+  });
+
   it('skips an upstream organization that has no persisted enabled company mapping', async () => {
     const add = jest.fn();
     const listSourceOrgs = jest.fn().mockResolvedValue([
@@ -178,7 +226,7 @@ describe('IntegrationSyncService.beginRun', () => {
       { externalId: 'unmapped-org', name: 'Unmapped' },
     ]);
     const tx = {
-      integrationSyncRun: { update: jest.fn() },
+      integrationSyncRun: { updateMany: jest.fn() },
       integrationSyncRunCompanyResult: { upsert: jest.fn() },
     };
     const prisma = {
@@ -191,6 +239,9 @@ describe('IntegrationSyncService.beginRun', () => {
       ]) },
       integrationResource: { findMany: jest.fn().mockResolvedValue([
         { id: 'sites', resourceKey: 'sites', dependsOnResourceKeys: [] },
+      ]) },
+      integrationSyncRunCompanyResult: { findMany: jest.fn().mockResolvedValue([
+        { integrationCompanyMappingId: 'persisted-mapping', status: 'queued' },
       ]) },
       $transaction: jest.fn(async (callback: (client: typeof tx) => Promise<void>) => callback(tx)),
     };
@@ -229,6 +280,7 @@ describe('IntegrationSyncService scheduled reconstruction mode', () => {
       integrationSyncRun: {
         count: jest.fn().mockResolvedValue(options.activeFull ?? 0),
         create,
+        findUnique: jest.fn().mockResolvedValue(null),
       },
       integrationCompanyMapping: { count: jest.fn().mockResolvedValue(options.mappings ?? 2) },
       integrationResource: { count: jest.fn().mockResolvedValue(options.resources ?? 3) },
@@ -275,6 +327,35 @@ describe('IntegrationSyncService scheduled reconstruction mode', () => {
     });
     expect(create).toHaveBeenNthCalledWith(1, { data: expect.objectContaining({ mode: 'full' }) });
     expect(create).toHaveBeenNthCalledWith(2, { data: expect.objectContaining({ mode: 'incremental' }) });
+  });
+
+  it('returns the exact run already persisted for the same scheduled delivery key', async () => {
+    const { service, prisma, create } = setup();
+    prisma.integrationSyncRun.findUnique.mockResolvedValueOnce({
+      id: 'persisted-delivery-run', mode: 'full', deliveryKey: 'scheduled:tick-1',
+    });
+
+    await expect(service.createScheduledRun(
+      'integration', undefined, now, 'scheduled:tick-1',
+    )).resolves.toMatchObject({ id: 'persisted-delivery-run', mode: 'full' });
+    expect(create).not.toHaveBeenCalled();
+    expect(prisma.integrationSyncRun.count).not.toHaveBeenCalled();
+  });
+
+  it('re-reads the exact scheduled delivery after a same-key create race', async () => {
+    const collision = Object.assign(new Error('delivery key race'), { code: 'P2002' });
+    const { service, prisma, create } = setup();
+    create.mockReset().mockRejectedValueOnce(collision);
+    prisma.integrationSyncRun.findUnique
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({
+        id: 'race-winner', mode: 'full', deliveryKey: 'scheduled:tick-race',
+      });
+
+    await expect(service.createScheduledRun(
+      'integration', 'full', now, 'scheduled:tick-race',
+    )).resolves.toMatchObject({ id: 'race-winner', mode: 'full' });
+    expect(create).toHaveBeenCalledTimes(1);
   });
 });
 

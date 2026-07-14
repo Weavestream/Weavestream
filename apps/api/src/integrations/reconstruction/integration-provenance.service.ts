@@ -200,7 +200,7 @@ export class IntegrationProvenanceService {
           integrationCompanyMappingId: input.integrationCompanyMappingId,
           resourceId: input.resourceId,
           targetKind: input.targetKind,
-          state: 'active',
+          state: { in: ['active', 'blocked'] },
           lastSeenAt: { lt: input.snapshotAt },
           provenance: { path: ['ownership'], equals: 'breeze' },
         },
@@ -259,7 +259,7 @@ export class IntegrationProvenanceService {
           companyId: input.companyId,
           ip: '0.0.0.0',
           userAgent: 'weavestream-worker/integration-reconstruction',
-          before: { state: 'active' },
+          before: { state: row.state },
           after: { state: 'stale', targetKind: row.targetKind },
         });
       }
@@ -277,6 +277,7 @@ type StaleBinding = {
   articleId: string | null;
   relationId: string | null;
   staleSince: Date | null;
+  state: 'active' | 'blocked' | 'stale';
   provenance: unknown;
 };
 
@@ -379,7 +380,7 @@ async function findProtectedTargets(
       where: {
         companyId: input.companyId,
         targetKind: input.targetKind,
-        state: 'active',
+        state: { in: ['active', 'blocked'] },
         id: { notIn: staleRowIds },
         [targetField]: { in: batch },
       },

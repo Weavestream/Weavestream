@@ -185,7 +185,7 @@ describe('IntegrationProvenanceService', () => {
         integrationCompanyMappingId: ids.mapping,
         resourceId: ids.resource,
         targetKind,
-        state: 'active',
+        state: { in: ['active', 'blocked'] },
         lastSeenAt: { lt: staleAt },
       }),
       take: 201,
@@ -251,6 +251,34 @@ describe('IntegrationProvenanceService', () => {
       }));
     },
   );
+
+  it('includes an unseen blocked Breeze binding in an authoritative stale transition', async () => {
+    const blocked = binding('blocked-binding', 'article', 'article-blocked');
+    blocked.state = 'blocked';
+    blocked.provenance = { ...blocked.provenance, state: 'blocked' };
+    const tx = {
+      integrationSyncRecord: {
+        findMany: jest.fn().mockResolvedValueOnce([blocked]).mockResolvedValueOnce([]),
+        update: jest.fn(),
+      },
+      asset: { updateMany: jest.fn() }, article: { updateMany: jest.fn() },
+      subnet: { updateMany: jest.fn() }, searchIndex: { updateMany: jest.fn() },
+    };
+    const service = new IntegrationProvenanceService({} as never, {} as never);
+
+    await expect(service.staleUnseen(tx as never, {
+      integrationId: ids.integration, companyId: ids.company,
+      integrationCompanyMappingId: ids.mapping, resourceId: ids.resource,
+      targetKind: 'article', snapshotAt: new Date('2026-07-14T12:00:00.000Z'),
+      auditActorId: '00000000-0000-0000-0000-000000000005',
+    })).resolves.toEqual({ stale: 1, archived: 1 });
+    expect(tx.integrationSyncRecord.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ state: { in: ['active', 'blocked'] } }),
+    }));
+    expect(tx.integrationSyncRecord.update).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: 'blocked-binding' }, data: expect.objectContaining({ state: 'stale' }),
+    }));
+  });
 
   it('does not overwrite the asset search archive timestamp when the native row was already archived', async () => {
     const row = binding('asset-binding', 'asset', 'asset-1');
@@ -354,6 +382,7 @@ function binding(
     subnetId: targetKind === 'subnet' ? targetId : null,
     ipReservationId: targetKind === 'ip_reservation' ? targetId : null,
     relationId: targetKind === 'relation' ? targetId : null,
+    state: 'active' as 'active' | 'blocked' | 'stale',
     staleSince: null,
     provenance: {
       integrationId: ids.integration,

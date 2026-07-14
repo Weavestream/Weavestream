@@ -53,6 +53,7 @@ describe('IntegrationSyncMappingWorker DAG execution', () => {
     };
     const worker = new IntegrationSyncMappingWorker(
       {} as never, {} as never, prisma as never, sync as never, runner as never,
+      { persistGaps: jest.fn() } as never,
       { log: jest.fn() } as never,
     );
     const handle = (worker as unknown as { handle(job: {
@@ -98,6 +99,7 @@ describe('IntegrationSyncMappingWorker DAG execution', () => {
     };
     const worker = new IntegrationSyncMappingWorker(
       {} as never, {} as never, prisma as never, sync as never, runner as never,
+      { persistGaps: jest.fn() } as never,
       { log: jest.fn() } as never,
     );
     const handle = (worker as unknown as { handle(job: {
@@ -110,6 +112,60 @@ describe('IntegrationSyncMappingWorker DAG execution', () => {
       syncRunId: runId, integrationCompanyMappingId: mappingId, resourceId, mode: 'full',
     } });
     expect(runner.runMapping).toHaveBeenCalledWith(expect.objectContaining({ mode: 'full' }));
+  });
+
+  it('persists an exact-scope missing-dependency gap without resolving gaps or summaries', async () => {
+    const runId = '00000000-0000-0000-0000-000000000031';
+    const mappingId = '00000000-0000-0000-0000-000000000032';
+    const deviceId = '00000000-0000-0000-0000-000000000033';
+    const relationId = '00000000-0000-0000-0000-000000000034';
+    const tx = {};
+    const prisma = {
+      integrationSyncRun: { findUnique: jest.fn().mockResolvedValue({
+        id: runId, triggeredBy: null, integrationId: 'integration',
+        integration: { createdBy: 'creator' },
+      }) },
+      integrationCompanyMapping: { findUnique: jest.fn().mockResolvedValue({
+        id: mappingId, companyId: 'company', integrationId: 'integration',
+      }) },
+      integrationResource: { findMany: jest.fn().mockResolvedValue([
+        { id: deviceId, resourceKey: 'devices', dependsOnResourceKeys: [] },
+        { id: relationId, resourceKey: 'relations', dependsOnResourceKeys: ['devices'] },
+      ]) },
+      $transaction: jest.fn(async (callback: (client: typeof tx) => Promise<void>) => callback(tx)),
+    };
+    const runner = { runMapping: jest.fn().mockResolvedValue({
+      status: 'failed', resourceKey: 'devices', companyId: 'company',
+      totals: totalsForWorker(), conflicts: [], error: 'validation failed',
+    }) };
+    const sync = {
+      markMappingRunning: jest.fn(), mergeResourceResult: jest.fn(), closeRun: jest.fn(),
+    };
+    const provenance = {
+      persistGaps: jest.fn(), resolveAbsentGaps: jest.fn(),
+    };
+    const worker = new IntegrationSyncMappingWorker(
+      {} as never, {} as never, prisma as never, sync as never, runner as never,
+      provenance as never, { log: jest.fn() } as never,
+    );
+    const handle = (worker as unknown as { handle(job: {
+      data: unknown; attemptsMade?: number; opts?: { attempts?: number };
+    }): Promise<unknown> }).handle.bind(worker);
+
+    await handle({ data: {
+      syncRunId: runId, integrationCompanyMappingId: mappingId,
+      resourceId: deviceId, resourceIds: [deviceId, relationId],
+    } });
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+    expect(provenance.persistGaps).toHaveBeenCalledWith(tx, expect.objectContaining({
+      companyId: 'company', integrationCompanyMappingId: mappingId, resourceId: relationId,
+    }), [expect.objectContaining({
+      externalId: null, kind: 'missing_dependency',
+      details: expect.objectContaining({
+        reasonCode: 'dependency_unavailable', dependencyResourceKey: 'devices',
+      }),
+    })]);
+    expect(provenance.resolveAbsentGaps).not.toHaveBeenCalled();
   });
 
   it('rethrows a hard resource failure after persisting and closing the mapping', async () => {
@@ -139,6 +195,7 @@ describe('IntegrationSyncMappingWorker DAG execution', () => {
     const runner = { runMapping: jest.fn().mockResolvedValue(failure) };
     const worker = new IntegrationSyncMappingWorker(
       {} as never, {} as never, prisma as never, sync as never, runner as never,
+      { persistGaps: jest.fn() } as never,
       { log: jest.fn() } as never,
     );
     const handle = (worker as unknown as { handle(job: {

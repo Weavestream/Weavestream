@@ -16,6 +16,7 @@ import {
 } from '../../../api/src/integrations/integration-sync-runner.service.js';
 import { AUDIT_ACTIONS } from '../../../api/src/audit/audit-actions.js';
 import { AuditLogService } from '../../../api/src/audit/audit.service.js';
+import { IntegrationProvenanceService } from '../../../api/src/integrations/reconstruction/integration-provenance.service.js';
 
 const SYSTEM_AUDIT_USER_AGENT = 'weavestream-worker/integration-sync';
 
@@ -42,6 +43,7 @@ export class IntegrationSyncMappingWorker implements OnModuleDestroy {
     private readonly prisma: PrismaService,
     private readonly sync: IntegrationSyncService,
     private readonly runner: IntegrationSyncRunnerService,
+    private readonly provenance: IntegrationProvenanceService,
     private readonly audit: AuditLogService,
   ) {}
 
@@ -160,9 +162,14 @@ export class IntegrationSyncMappingWorker implements OnModuleDestroy {
         const unavailable = resource.dependsOnResourceKeys.filter(
           (dependency) => !selectedKeys.has(dependency) || failedKeys.has(dependency),
         );
-        const outcome = unavailable.length > 0
-          ? dependencySkipOutcome(resource.resourceKey, unavailable, mapping.companyId)
-          : await this.runner.runMapping({
+        let outcome: MappingRunOutcome;
+        if (unavailable.length > 0) {
+          await this.persistDependencyGaps(
+            mapping.companyId, mapping.id, resource.id, unavailable,
+          );
+          outcome = dependencySkipOutcome(resource.resourceKey, unavailable, mapping.companyId);
+        } else {
+          outcome = await this.runner.runMapping({
               syncRunId: run.id,
               integrationCompanyMappingId: mapping.id,
               resourceId: resource.id,
@@ -170,6 +177,7 @@ export class IntegrationSyncMappingWorker implements OnModuleDestroy {
               actorId: auditActorId,
               mode: payload.mode,
             });
+        }
         outcomes.push(outcome);
         if (outcome.status === 'failed') failedKeys.add(resource.resourceKey);
       }
@@ -205,6 +213,32 @@ export class IntegrationSyncMappingWorker implements OnModuleDestroy {
       );
     }
     return outcomes;
+  }
+
+  private async persistDependencyGaps(
+    companyId: string,
+    integrationCompanyMappingId: string,
+    resourceId: string,
+    dependencies: string[],
+  ): Promise<void> {
+    const observedAt = new Date();
+    await this.prisma.$transaction(async (tx) => {
+      await this.provenance.persistGaps(tx, {
+        companyId,
+        integrationCompanyMappingId,
+        resourceId,
+        observedAt,
+      }, dependencies.slice(0, 16).map((dependencyResourceKey) => ({
+        externalId: null,
+        syncRecordId: null,
+        kind: 'missing_dependency' as const,
+        message: 'A required reconstruction dependency was unavailable.',
+        details: {
+          reasonCode: 'dependency_unavailable',
+          dependencyResourceKey,
+        },
+      })));
+    });
   }
 }
 

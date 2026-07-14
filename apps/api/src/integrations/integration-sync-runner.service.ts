@@ -42,6 +42,7 @@ import {
 import { integrationAssetExternalSource } from './integration-asset-source.js';
 import { IntegrationProvenanceService } from './reconstruction/integration-provenance.service.js';
 import { IntegrationCompletenessService } from './reconstruction/integration-completeness.service.js';
+import { scanSensitiveMaterial } from './sensitive-material.js';
 
 /** Executes one resource inside a mapping DAG through its native writer. */
 
@@ -288,6 +289,9 @@ export class IntegrationSyncRunnerService {
       ? checkpoint.snapshotAt?.toISOString() ?? null
       : null;
     let traversalHighWater = checkpoint?.highWaterAt?.toISOString() ?? null;
+    let traversalAuthoritative = checkpoint?.cursor != null
+      ? checkpoint.authoritative ?? true
+      : true;
     const seenCursors = new Set<string>();
     if (cursor !== null) seenCursors.add(cursor);
     let pages = 0;
@@ -324,6 +328,7 @@ export class IntegrationSyncRunnerService {
 
         const pageTotals = emptyTotals();
         const pageConflicts: SyncRunConflict[] = [];
+        let pageAuthoritative = true;
         const processPage = async (tx: Prisma.TransactionClient): Promise<void> => {
           const runClaim = await tx.integrationSyncRun.updateMany({
             where: {
@@ -358,6 +363,7 @@ export class IntegrationSyncRunnerService {
               throw new Error(blocked.message);
             }
             this.accumulateBlockedInput(pageTotals, pageConflicts, blocked);
+            if (isNonAuthoritativeGap(blocked.kind)) pageAuthoritative = false;
             observeGap({
               externalId: blocked.externalId,
               syncRecordId: null,
@@ -365,6 +371,11 @@ export class IntegrationSyncRunnerService {
               message: blocked.message,
               details: { ...(blocked.details ?? {}) },
             });
+            if (!input.dryRun && blocked.externalId) {
+              await this.markBlockedBindingSeen(
+                tx, mapping, resource, blocked.externalId, observedAt,
+              );
+            }
           }
           for (const record of page.records) {
             pageTotals.fetched += 1;
@@ -376,6 +387,7 @@ export class IntegrationSyncRunnerService {
               reconstruction = this.toReconstructionInput(safeRecord, resource, mapping);
               this.assertTypedIdentity(reconstruction, resource.targetKind, mapping.externalOrgId, resource.resourceKey);
             } catch {
+              pageAuthoritative = false;
               pageTotals.blocked += 1;
               pageTotals.errors += 1;
               pageConflicts.push({
@@ -460,6 +472,9 @@ export class IntegrationSyncRunnerService {
               (gap) => gap.kind === 'synchronization_error',
             );
             if (retryableGap) throw new Error(retryableGap.message);
+            if (outcome.gaps.some((gap) => isNonAuthoritativeGap(gap.kind))) {
+              pageAuthoritative = false;
+            }
             this.accumulateWriterOutcome(
               pageTotals,
               pageConflicts,
@@ -537,7 +552,8 @@ export class IntegrationSyncRunnerService {
               resourceId: resource.id,
               observedAt,
             }, pageGaps);
-            if (page.terminal) {
+            const authoritativeThroughPage = traversalAuthoritative && pageAuthoritative;
+            if (page.terminal && authoritativeThroughPage) {
               await this.provenance.resolveAbsentGaps(tx, {
                 companyId: mapping.companyId,
                 integrationCompanyMappingId: mapping.id,
@@ -579,14 +595,18 @@ export class IntegrationSyncRunnerService {
                 companyId: mapping.companyId, integrationCompanyMappingId: mapping.id,
                 resourceId: resource.id, mode, cursor: page.terminal ? null : page.cursor,
                 snapshotAt: new Date(page.snapshotAt),
-                highWaterAt: highWater ? new Date(highWater) : null,
-                lastCompletedAt: page.terminal ? new Date() : null,
-                lastFullCompletedAt: page.terminal && mode === 'full' ? new Date() : null,
+                authoritative: authoritativeThroughPage,
+                highWaterAt: page.terminal && authoritativeThroughPage && highWater
+                  ? new Date(highWater) : checkpoint?.highWaterAt ?? null,
+                lastCompletedAt: page.terminal && authoritativeThroughPage ? new Date() : null,
+                lastFullCompletedAt: page.terminal && authoritativeThroughPage && mode === 'full'
+                  ? new Date() : null,
               },
               update: {
                 cursor: page.terminal ? null : page.cursor,
                 snapshotAt: new Date(page.snapshotAt),
-                ...(page.terminal ? {
+                authoritative: authoritativeThroughPage,
+                ...(page.terminal && authoritativeThroughPage ? {
                   highWaterAt: highWater ? new Date(highWater) : undefined,
                   lastCompletedAt: new Date(),
                   ...(mode === 'full' ? { lastFullCompletedAt: new Date() } : {}),
@@ -605,8 +625,18 @@ export class IntegrationSyncRunnerService {
         } else {
           await this.prisma.$transaction(async (tx) => processPage(tx), { timeout: 60_000 });
         }
+        traversalAuthoritative = traversalAuthoritative && pageAuthoritative;
         mergePageOutcome(totals, conflicts, pageTotals, pageConflicts);
-        if (page.terminal) break;
+        if (page.terminal) {
+          if (!traversalAuthoritative) {
+            return {
+              status: 'failed', totals, conflicts,
+              error: 'Resource evaluation was incomplete; last-known-good reconciliation state was preserved.',
+              companyId: mapping.companyId, resourceKey: resource.resourceKey,
+            };
+          }
+          break;
+        }
         if (!page.hasMore) {
           throw new BadRequestException(
             'Driver traversal ended without a terminal page.',
@@ -621,6 +651,54 @@ export class IntegrationSyncRunnerService {
       conflicts.push({ kind: 'driver_error', externalId: '', message: message.slice(0, 500) });
       return { status: 'failed', totals, conflicts, error: message.slice(0, 4_000), companyId: mapping.companyId, resourceKey: resource.resourceKey };
     }
+  }
+
+  private async markBlockedBindingSeen(
+    tx: Prisma.TransactionClient,
+    mapping: {
+      id: string;
+      integrationId: string;
+      companyId: string;
+      externalOrgId: string;
+    },
+    resource: { id: string; resourceKey: string },
+    externalId: string,
+    observedAt: Date,
+  ): Promise<void> {
+    const prefix = `${mapping.externalOrgId}:${resource.resourceKey}:`;
+    if (
+      externalId.length > 1_024 ||
+      !externalId.startsWith(prefix) ||
+      externalId.length === prefix.length ||
+      scanSensitiveMaterial(externalId) !== 'safe'
+    ) return;
+    const existing = await tx.integrationSyncRecord.findUnique({
+      where: {
+        integrationCompanyMappingId_resourceId_externalId: {
+          integrationCompanyMappingId: mapping.id,
+          resourceId: resource.id,
+          externalId,
+        },
+      },
+    });
+    const previous = parseProvenance(existing?.provenance);
+    if (!existing || !previous || previous.ownership !== 'breeze') return;
+    const provenance = this.provenance.buildProvenance({
+      integrationId: mapping.integrationId,
+      externalOrgId: previous.externalOrgId,
+      resourceKey: previous.resourceKey,
+      externalId: previous.externalId,
+      sourceRevision: previous.sourceRevision,
+      sourceFingerprint: previous.sourceFingerprint,
+      observedAt,
+      syncedAt: null,
+      state: 'blocked',
+      previous,
+    });
+    await tx.integrationSyncRecord.update({
+      where: { id: existing.id },
+      data: { state: 'blocked', staleSince: null, lastSeenAt: observedAt, provenance },
+    });
   }
 
   private toReconstructionInput(
@@ -902,6 +980,10 @@ function deriveLegacyHighWater(records: DriverRecord[]): string | null {
     if (!highest || canonical > highest) highest = canonical;
   }
   return highest;
+}
+
+function isNonAuthoritativeGap(kind: DriverBlockedInput['kind']): boolean {
+  return kind === 'validation' || kind === 'missing_dependency' || kind === 'synchronization_error';
 }
 
 function boundedLegacyProvenance(

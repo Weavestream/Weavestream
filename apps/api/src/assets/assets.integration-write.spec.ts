@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { transformBreezeRecord } from '../integrations/drivers/breeze/breeze.transforms.js';
 import { AssetTargetWriter } from '../integrations/reconstruction/asset-target.writer.js';
+import { IntegrationProvenanceService } from '../integrations/reconstruction/integration-provenance.service.js';
 import { TextareaStrategy } from '../field-types/strategies/text.strategy.js';
 
 jest.mock('../uploads/uploads.service.js', () => ({
@@ -97,6 +98,22 @@ function binding(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function fullProvenance(state: 'active' | 'stale') {
+  return {
+    integrationId: ids.integration,
+    externalOrgId: 'org-1',
+    resourceKey: 'devices',
+    externalId: 'org-1:devices:edge-01',
+    sourceRevision: null,
+    sourceFingerprint: null,
+    firstSeenAt: '2026-07-01T00:00:00.000Z',
+    lastSeenAt: '2026-07-01T00:00:00.000Z',
+    lastSyncedAt: '2026-07-01T00:00:00.000Z',
+    ownership: 'breeze',
+    state,
+  };
+}
+
 function setup(options: { target?: unknown; match?: unknown[]; binding?: unknown; auditFails?: boolean; textarea?: boolean } = {}) {
   let committed = false;
   const created = asset();
@@ -112,7 +129,12 @@ function setup(options: { target?: unknown; match?: unknown[]; binding?: unknown
     upload: { updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
     password: { updateMany: jest.fn(), deleteMany: jest.fn() },
     relation: { updateMany: jest.fn(), deleteMany: jest.fn() },
-    integrationSyncRecord: { findUnique: jest.fn().mockResolvedValue(options.binding ?? null) },
+    integrationSyncRecord: {
+      findUnique: jest.fn().mockResolvedValue(options.binding ?? null),
+      findMany: jest.fn().mockResolvedValue([]),
+      update: jest.fn().mockResolvedValue({}),
+    },
+    searchIndex: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
     auditLog: { create: jest.fn() },
   };
   const prisma = {
@@ -289,6 +311,101 @@ describe('AssetsService integration system writes', () => {
     expect(tx.password.updateMany).not.toHaveBeenCalled();
     expect(tx.password.deleteMany).not.toHaveBeenCalled();
     expect(tx.relation.updateMany).not.toHaveBeenCalled();
+    expect(tx.relation.deleteMany).not.toHaveBeenCalled();
+  });
+
+  it('preserves manual fields and dependent children across a real stale sweep and native restore', async () => {
+    const target = asset({
+      fieldValues: [{
+        id: 'fv-1', companyId: ids.company, assetId: ids.asset,
+        assetFieldId: ids.field, value: 'operator-edited-hostname',
+      }],
+    });
+    const persistedBinding = binding({
+      id: 'binding-shared-asset',
+      staleSince: null,
+      lastSeenAt: new Date('2026-07-01T00:00:00.000Z'),
+      provenance: fullProvenance('active'),
+    });
+    const manualUploads = [{ id: 'upload-manual' }];
+    const manualPasswords = [{ id: 'password-manual' }];
+    const manualRelations = [{ id: 'relation-manual' }];
+    const { service, prisma, audit, tx } = setup({ target, binding: persistedBinding });
+    tx.integrationSyncRecord.findMany
+      .mockResolvedValueOnce([persistedBinding])
+      .mockResolvedValueOnce([]);
+    tx.integrationSyncRecord.update.mockImplementation(async ({ data }: { data: Record<string, unknown> }) => {
+      Object.assign(persistedBinding, data);
+      return persistedBinding;
+    });
+    tx.asset.updateMany.mockImplementation(async ({ data }: { data: Record<string, unknown> }) => {
+      Object.assign(target, data);
+      return { count: 1 };
+    });
+    tx.upload.updateMany.mockImplementation(async () => {
+      const count = manualUploads.length;
+      manualUploads.splice(0);
+      return { count };
+    });
+    tx.password.updateMany.mockImplementation(async () => {
+      const count = manualPasswords.length;
+      manualPasswords.splice(0);
+      return { count };
+    });
+    tx.password.deleteMany.mockImplementation(async () => {
+      const count = manualPasswords.length;
+      manualPasswords.splice(0);
+      return { count };
+    });
+    tx.relation.updateMany.mockImplementation(async () => {
+      const count = manualRelations.length;
+      manualRelations.splice(0);
+      return { count };
+    });
+    tx.relation.deleteMany.mockImplementation(async () => {
+      const count = manualRelations.length;
+      manualRelations.splice(0);
+      return { count };
+    });
+
+    const staleAt = new Date('2026-07-14T12:00:00.000Z');
+    await expect(new IntegrationProvenanceService(prisma as never, audit as never).staleUnseen(
+      tx as never,
+      {
+        companyId: ids.company,
+        integrationId: ids.integration,
+        integrationCompanyMappingId: ids.mapping,
+        resourceId: ids.resource,
+        targetKind: 'asset',
+        snapshotAt: staleAt,
+        auditActorId: ids.actor,
+      },
+    )).resolves.toEqual({ stale: 1, archived: 1 });
+    expect(target.archivedAt).toEqual(staleAt);
+    expect(persistedBinding.state).toBe('stale');
+
+    await expect(service.writeFromIntegration({
+      ...input,
+      existingTargetId: ids.asset,
+      fieldValues: [{
+        targetFieldId: ids.field,
+        value: 'new-upstream-hostname',
+        syncDirection: 'preserve_manual',
+      }],
+      previousFieldChecksums: { [ids.field]: 'prior-source-checksum' },
+    })).resolves.toMatchObject({ targetId: ids.asset, change: 'restored' });
+
+    expect(target.id).toBe(ids.asset);
+    expect(target.archivedAt).toBeNull();
+    expect(target.fieldValues).toEqual([
+      expect.objectContaining({ value: 'operator-edited-hostname' }),
+    ]);
+    expect(manualUploads).toEqual([{ id: 'upload-manual' }]);
+    expect(manualPasswords).toEqual([{ id: 'password-manual' }]);
+    expect(manualRelations).toEqual([{ id: 'relation-manual' }]);
+    expect(tx.assetFieldValue.upsert).not.toHaveBeenCalled();
+    expect(tx.upload.updateMany).not.toHaveBeenCalled();
+    expect(tx.password.deleteMany).not.toHaveBeenCalled();
     expect(tx.relation.deleteMany).not.toHaveBeenCalled();
   });
 

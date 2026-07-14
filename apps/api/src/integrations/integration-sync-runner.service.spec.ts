@@ -322,7 +322,7 @@ describe('IntegrationSyncRunnerService writer dispatch', () => {
     ]);
   });
 
-  it('uses one snapshot marker across incremental pages so terminal resolution preserves page-one gaps', async () => {
+  it('uses one snapshot marker across incremental pages and preserves prior gaps after an incomplete page', async () => {
     const { service, driver, provenance } = setup();
     driver.fetchRecords
       .mockResolvedValueOnce({
@@ -337,10 +337,10 @@ describe('IntegrationSyncRunnerService writer dispatch', () => {
         records: [], hasMore: false, cursor: null, terminal: true,
         schemaVersion: '1', snapshotAt: '2026-07-14T10:00:00.000Z', blockedInputs: [],
       });
-    await service.runMapping({
+    await expect(service.runMapping({
       syncRunId: 'run', integrationCompanyMappingId: 'mapping', resourceId: 'resource',
       dryRun: false, actorId: 'actor', mode: 'incremental',
-    });
+    })).resolves.toMatchObject({ status: 'failed' });
     const gapCalls = provenance.persistGaps.mock.calls as unknown as Array<[
       unknown, { observedAt: Date }, unknown[],
     ]>;
@@ -348,10 +348,7 @@ describe('IntegrationSyncRunnerService writer dispatch', () => {
     expect(scopes).toHaveLength(2);
     expect(scopes[0]!.observedAt).toEqual(new Date('2026-07-14T10:00:00.000Z'));
     expect(scopes[1]!.observedAt).toEqual(scopes[0]!.observedAt);
-    expect(provenance.resolveAbsentGaps).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({ observedAt: scopes[0]!.observedAt }),
-    );
+    expect(provenance.resolveAbsentGaps).not.toHaveBeenCalled();
   });
 
   it('quarantines a mapped cross-company move before the native writer and persists a safe ambiguous gap', async () => {
@@ -390,6 +387,97 @@ describe('IntegrationSyncRunnerService writer dispatch', () => {
         details: { reasonCode: 'invalid_reconstruction_input' },
       }),
     ]);
+  });
+
+  it('commits valid siblings and safe validation gaps without authoritative terminal reconciliation', async () => {
+    const { service, driver, writer, tx, provenance, completeness } = setup();
+    driver.fetchRecords.mockResolvedValueOnce({
+      records: [
+        { reconstructionInput: input },
+        { reconstructionInput: { ...input, externalId: 'wrong-scope-id' } },
+      ],
+      hasMore: false, cursor: null, terminal: true,
+      snapshotAt: '2026-07-14T10:00:00.000Z',
+      sourceHighWater: '2026-07-14T09:00:00.000Z',
+    });
+
+    await expect(service.runMapping({
+      syncRunId: 'validation-run', integrationCompanyMappingId: 'mapping', resourceId: 'resource',
+      dryRun: false, actorId: 'actor', mode: 'full',
+    })).resolves.toMatchObject({ status: 'failed', totals: { created: 1, errors: 1 } });
+    expect(writer.write).toHaveBeenCalledTimes(1);
+    expect(tx.integrationSyncRecord.upsert).toHaveBeenCalledTimes(1);
+    expect(provenance.persistGaps).toHaveBeenCalledWith(expect.anything(), expect.anything(), [
+      expect.objectContaining({ kind: 'validation' }),
+    ]);
+    expect(provenance.resolveAbsentGaps).not.toHaveBeenCalled();
+    expect(provenance.staleUnseen).not.toHaveBeenCalled();
+    expect(completeness.recalculate).not.toHaveBeenCalled();
+    expect(tx.integrationSyncCheckpoint.upsert).toHaveBeenCalledWith(expect.objectContaining({
+      create: expect.objectContaining({ authoritative: false, lastCompletedAt: null }),
+      update: expect.objectContaining({ authoritative: false }),
+    }));
+    const checkpoint = (tx.integrationSyncCheckpoint.upsert.mock.calls as unknown as Array<[
+      { update: Record<string, unknown> },
+    ]>)[0]![0];
+    expect(checkpoint.update).not.toHaveProperty('highWaterAt');
+    expect(checkpoint.update).not.toHaveProperty('lastFullCompletedAt');
+  });
+
+  it('persists a non-retryable missing dependency without replacing incremental last-known-good state', async () => {
+    const { service, driver, tx, provenance, completeness } = setup();
+    driver.fetchRecords.mockResolvedValueOnce({
+      records: [], hasMore: false, cursor: null, terminal: true,
+      snapshotAt: '2026-07-14T10:00:00.000Z',
+      sourceHighWater: '2026-07-14T09:00:00.000Z',
+      blockedInputs: [{
+        kind: 'missing_dependency', externalId: null,
+        message: 'A required upstream dependency was unavailable.',
+        details: { reasonCode: 'dependency_unavailable', dependencyResourceKey: 'sites' },
+      }],
+    });
+
+    await expect(service.runMapping({
+      syncRunId: 'dependency-run', integrationCompanyMappingId: 'mapping', resourceId: 'resource',
+      dryRun: false, actorId: 'actor', mode: 'incremental',
+    })).resolves.toMatchObject({ status: 'failed', totals: { missingDependency: 1 } });
+    expect(provenance.persistGaps).toHaveBeenCalledWith(expect.anything(), expect.anything(), [
+      expect.objectContaining({ kind: 'missing_dependency' }),
+    ]);
+    expect(provenance.resolveAbsentGaps).not.toHaveBeenCalled();
+    expect(completeness.recalculate).not.toHaveBeenCalled();
+    expect(tx.integrationSyncCheckpoint.upsert).toHaveBeenCalledWith(expect.objectContaining({
+      create: expect.objectContaining({ authoritative: false, lastCompletedAt: null }),
+      update: expect.objectContaining({ authoritative: false }),
+    }));
+  });
+
+  it('marks a safely identified secret-blocked source binding seen and remains authoritative', async () => {
+    const { service, driver, tx, provenance, completeness } = setup({ staleBinding: true });
+    driver.fetchRecords.mockResolvedValueOnce({
+      records: [], hasMore: false, cursor: null, terminal: true,
+      snapshotAt: '2026-07-14T10:00:00.000Z',
+      blockedInputs: [{
+        kind: 'secret_blocked', externalId: input.externalId,
+        message: 'Credential material requires operator documentation.',
+        details: { reasonCode: 'secret_not_exported' },
+      }],
+    });
+
+    await expect(service.runMapping({
+      syncRunId: 'secret-run', integrationCompanyMappingId: 'mapping', resourceId: 'resource',
+      dryRun: false, actorId: 'actor', mode: 'full',
+    })).resolves.toMatchObject({ status: 'succeeded', totals: { secretBlocked: 1 } });
+    expect(tx.integrationSyncRecord.update).toHaveBeenCalledWith({
+      where: { id: 'binding-id' },
+      data: expect.objectContaining({
+        state: 'blocked', lastSeenAt: new Date('2026-07-14T10:00:00.000Z'),
+        provenance: expect.objectContaining({ ownership: 'breeze', state: 'blocked' }),
+      }),
+    });
+    expect(provenance.resolveAbsentGaps).toHaveBeenCalled();
+    expect(provenance.staleUnseen).toHaveBeenCalled();
+    expect(completeness.recalculate).toHaveBeenCalled();
   });
 
   it('caps legal per-record writer gaps and adds one safe overflow observation', async () => {

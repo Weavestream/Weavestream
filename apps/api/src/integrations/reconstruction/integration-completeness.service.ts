@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { createHash } from 'node:crypto';
+import { integrationProvenanceSchema } from '@weavestream/shared';
 import type { PrismaService } from '../../prisma/prisma.service.js';
 
 export const COMPLETENESS_CAPABILITIES = [
@@ -265,10 +266,11 @@ export class IntegrationCompletenessService {
       const checksums = jsonObject(record?.lastSyncedFieldChecksums);
       if (!record || !(field.assetFieldId in checksums)) manual.add(capability);
       else {
+        const evidenceState = sourceEvidenceState(record);
+        if (!evidenceState) continue;
         const allowed = sourceCapabilities(jsonObject(record.provenance)['resourceKey']);
         if (!allowed.has(capability)) continue;
-        if (record.state === 'active') active.add(capability);
-        else if (record.state === 'stale') stale.add(capability);
+        (evidenceState === 'active' ? active : stale).add(capability);
       }
     }
 
@@ -282,8 +284,8 @@ export class IntegrationCompletenessService {
       const resourceKey = jsonObject(record?.provenance)['resourceKey'];
       for (const capability of sourceManagedCapabilities(resourceKey, managed)) {
         if (!record) continue;
-        if (record.state === 'active') active.add(capability);
-        else if (record.state === 'stale') stale.add(capability);
+        const evidenceState = sourceEvidenceState(record);
+        if (evidenceState) (evidenceState === 'active' ? active : stale).add(capability);
       }
       // Manual text belongs to the operator, not Breeze. Preserve it when an
       // exact bound source article becomes stale/soft-archived; only unrelated
@@ -297,7 +299,8 @@ export class IntegrationCompletenessService {
     for (const relation of relations) {
       if (relationIdSet.has(relation.id)) {
         const record = records.find((candidate) => candidate.relationId === relation.id);
-        (record?.state === 'stale' ? stale : active).add('service_dependencies');
+        const evidenceState = sourceEvidenceState(record);
+        if (evidenceState) (evidenceState === 'active' ? active : stale).add('service_dependencies');
       } else if (
         endpointKeySet.has(endpointKey(relation.sourceType, relation.sourceId)) ||
         endpointKeySet.has(endpointKey(relation.targetType, relation.targetId))
@@ -310,12 +313,14 @@ export class IntegrationCompletenessService {
     for (const subnet of subnets) {
       if (!/firewall/i.test(subnet.description ?? '')) continue;
       const record = records.find((candidate) => candidate.subnetId === subnet.id);
-      (record?.state === 'stale' ? stale : active).add('ip_firewall');
+      const evidenceState = sourceEvidenceState(record);
+      if (evidenceState) (evidenceState === 'active' ? active : stale).add('ip_firewall');
     }
     for (const reservation of reservations) {
       if (!/firewall/i.test(reservation.notes ?? '')) continue;
       const record = records.find((candidate) => candidate.ipReservationId === reservation.id);
-      (record?.state === 'stale' ? stale : active).add('ip_firewall');
+      const evidenceState = sourceEvidenceState(record);
+      if (evidenceState) (evidenceState === 'active' ? active : stale).add('ip_firewall');
     }
 
     const gaps = await tx.integrationReconstructionGap.findMany({
@@ -351,6 +356,19 @@ interface Evidence {
   stale: Set<CompletenessCapability>;
   secretBlocked: Set<CompletenessCapability>;
   synchronizationError: Set<CompletenessCapability>;
+}
+
+function sourceEvidenceState(
+  record: { state: string; provenance: unknown } | null | undefined,
+): 'active' | 'stale' | null {
+  if (!record || (record.state !== 'active' && record.state !== 'stale')) return null;
+  const parsed = integrationProvenanceSchema.safeParse(record.provenance);
+  if (
+    !parsed.success ||
+    parsed.data.ownership !== 'breeze' ||
+    parsed.data.state !== record.state
+  ) return null;
+  return record.state;
 }
 
 function classify(capability: CompletenessCapability, evidence: Evidence): CompletenessCategory {

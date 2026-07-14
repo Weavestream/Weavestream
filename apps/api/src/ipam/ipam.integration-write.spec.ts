@@ -2,6 +2,7 @@ import { IpamService } from './ipam.service.js';
 import { IpReservationTargetWriter } from '../integrations/reconstruction/ipam-target.writer.js';
 import type { ReconstructionWriteContext } from '../integrations/reconstruction/reconstruction-target.js';
 import { transformBreezeRecord } from '../integrations/drivers/breeze/breeze.transforms.js';
+import { IntegrationProvenanceService } from '../integrations/reconstruction/integration-provenance.service.js';
 
 const ids = {
   company: '51000000-0000-0000-0000-000000000001',
@@ -53,6 +54,22 @@ function binding(targetKind: 'subnet' | 'ip_reservation', overrides: Record<stri
   };
 }
 
+function fullSubnetProvenance(state: 'active' | 'stale') {
+  return {
+    integrationId: ids.integration,
+    externalOrgId: 'org',
+    resourceKey: 'subnets',
+    externalId: 'org:subnets:lan',
+    sourceRevision: null,
+    sourceFingerprint: null,
+    firstSeenAt: '2026-07-01T00:00:00.000Z',
+    lastSeenAt: '2026-07-01T00:00:00.000Z',
+    lastSyncedAt: '2026-07-01T00:00:00.000Z',
+    ownership: 'breeze',
+    state,
+  };
+}
+
 function reservationRow(overrides: Record<string, unknown> = {}) {
   return {
     id: ids.reservation,
@@ -97,7 +114,10 @@ function setup(options: { subnet?: unknown; reservation?: unknown; subnetCollisi
     integrationSyncRecord: {
       findUnique: jest.fn().mockResolvedValue(options.binding ?? null),
       findFirst: jest.fn().mockResolvedValue(options.targetBinding ?? null),
+      findMany: jest.fn().mockResolvedValue([]),
+      update: jest.fn().mockResolvedValue({}),
     },
+    relation: { updateMany: jest.fn(), deleteMany: jest.fn() },
     auditLog: { create: jest.fn() },
   };
   const prisma = {
@@ -352,6 +372,67 @@ describe('IpamService integration system writes', () => {
       where: { id: ids.subnet, companyId: ids.company },
       data: expect.objectContaining({ archivedAt: null, cidr: '10.0.0.0/24' }),
     }));
+  });
+
+  it('preserves native identity and manual dependent relations across a real stale sweep and restore', async () => {
+    const target = subnetRow();
+    const persistedBinding = binding('subnet', {
+      id: 'binding-shared-subnet',
+      staleSince: null,
+      lastSeenAt: new Date('2026-07-01T00:00:00.000Z'),
+      provenance: fullSubnetProvenance('active'),
+    });
+    const manualRelations = [{ id: 'relation-manual', subnetId: ids.subnet }];
+    const { service, prisma, audit, tx } = setup({ subnet: target, binding: persistedBinding });
+    tx.integrationSyncRecord.findMany
+      .mockResolvedValueOnce([persistedBinding])
+      .mockResolvedValueOnce([]);
+    tx.integrationSyncRecord.update.mockImplementation(async ({ data }: { data: Record<string, unknown> }) => {
+      Object.assign(persistedBinding, data);
+      return persistedBinding;
+    });
+    tx.subnet.updateMany.mockImplementation(async ({ data }: { data: Record<string, unknown> }) => {
+      Object.assign(target, data);
+      return { count: 1 };
+    });
+    tx.relation.updateMany.mockImplementation(async () => {
+      const count = manualRelations.length;
+      manualRelations.splice(0);
+      return { count };
+    });
+    tx.relation.deleteMany.mockImplementation(async () => {
+      const count = manualRelations.length;
+      manualRelations.splice(0);
+      return { count };
+    });
+
+    const staleAt = new Date('2026-07-14T12:00:00.000Z');
+    await expect(new IntegrationProvenanceService(prisma as never, audit as never).staleUnseen(
+      tx as never,
+      {
+        companyId: ids.company,
+        integrationId: ids.integration,
+        integrationCompanyMappingId: ids.mapping,
+        resourceId: ids.resource,
+        targetKind: 'subnet',
+        snapshotAt: staleAt,
+        auditActorId: ids.actor,
+      },
+    )).resolves.toEqual({ stale: 1, archived: 1 });
+    expect(target.archivedAt).toEqual(staleAt);
+
+    await expect(service.writeSubnetFromIntegration({
+      ...subnetInput,
+      existingTargetId: ids.subnet,
+    })).resolves.toEqual({ targetId: ids.subnet, companyId: ids.company, change: 'restored' });
+
+    expect(target.id).toBe(ids.subnet);
+    expect(target.archivedAt).toBeNull();
+    expect(target.cidr).toBe('10.0.0.0/24');
+    expect(manualRelations).toEqual([{ id: 'relation-manual', subnetId: ids.subnet }]);
+    expect(tx.subnet.create).not.toHaveBeenCalled();
+    expect(tx.relation.updateMany).not.toHaveBeenCalled();
+    expect(tx.relation.deleteMany).not.toHaveBeenCalled();
   });
 
   it('updates native subnet facts through one stable UUID-backed source binding', async () => {

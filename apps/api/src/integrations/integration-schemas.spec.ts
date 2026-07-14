@@ -373,11 +373,17 @@ describe('integration zod schemas', () => {
 
     it('defaults manual queue jobs to incremental and permits an explicit full run', () => {
       expect(integrationSyncOrchestratorJobSchema.parse({
-        kind: 'manual', integrationId, triggeredBy,
+        kind: 'manual', integrationId, triggeredBy, syncRunId: integrationId,
       })).toMatchObject({ mode: 'incremental' });
       expect(integrationSyncOrchestratorJobSchema.parse({
-        kind: 'manual', integrationId, triggeredBy, mode: 'full',
+        kind: 'manual', integrationId, triggeredBy, syncRunId: integrationId, mode: 'full',
       })).toMatchObject({ mode: 'full' });
+    });
+
+    it('requires an exact persisted run id for every manual orchestrator delivery', () => {
+      expect(() => integrationSyncOrchestratorJobSchema.parse({
+        kind: 'manual', integrationId, triggeredBy,
+      })).toThrow();
     });
 
     it('leaves scheduled mode undecided unless the scheduler explicitly requests it', () => {
