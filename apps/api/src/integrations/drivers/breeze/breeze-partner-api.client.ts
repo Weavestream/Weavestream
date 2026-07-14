@@ -103,6 +103,7 @@ export class BreezePartnerApiClient {
       response = await fetchWithRetry(url, {
         method: 'GET',
         headers: { Accept: 'application/json', 'X-API-Key': apiKey },
+        redirect: 'manual',
         timeoutMs: ctx.http.timeoutMs,
         maxRetries: ctx.http.maxRetries,
         backoffMs: ctx.http.backoffMs,

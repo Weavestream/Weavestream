@@ -8,6 +8,7 @@ const SITE = '22222222-2222-4222-8222-222222222222';
 const DEVICE = '33333333-3333-4333-8333-333333333333';
 const REVISION = 'a'.repeat(64);
 const UPDATED = '2026-07-14T11:00:00.000Z';
+const UPDATED_SINCE = '2026-07-14T10:00:00.000Z';
 
 const base = { id: DEVICE, orgId: ORG, siteId: SITE, sourceUpdatedAt: UPDATED, revision: REVISION };
 const device = {
@@ -36,7 +37,7 @@ function ctx(resourceKey = 'devices'): FetchRecordsContext {
     resourceKey,
     filter: {},
     mode: 'incremental',
-    updatedSince: UPDATED,
+    updatedSince: UPDATED_SINCE,
     snapshotAt: null,
   };
 }
@@ -213,6 +214,8 @@ describe('Breeze transforms', () => {
       externalId: DEVICE,
       displayName: 'Workstation 01',
       updatedAt: UPDATED,
+      sourceRevision: REVISION,
+      sourceFingerprint: REVISION,
       fields: expect.objectContaining({ hostname: 'ws-01', breezeId: DEVICE }),
     });
     const serialized = JSON.stringify(record).toLowerCase();
@@ -389,7 +392,7 @@ describe('BreezeDriver transport delegation', () => {
       resource: 'devices',
       externalOrgId: ORG,
       cursor: null,
-      updatedSince: UPDATED,
+      updatedSince: UPDATED_SINCE,
     });
     expect(page).toMatchObject({
       schemaVersion: '1',
@@ -454,7 +457,43 @@ describe('BreezeDriver transport delegation', () => {
     );
   });
 
-  it('uses only a terminal incremental page for high-water and never retains failed traversal state', async () => {
+  it.each([
+    {
+      name: 'future record',
+      updatedSince: UPDATED,
+      data: [{ ...device, sourceUpdatedAt: '2026-07-14T12:00:00.001Z' }],
+    },
+    {
+      name: 'record equal to updatedSince',
+      updatedSince: UPDATED,
+      data: [device],
+    },
+    {
+      name: 'out-of-order incremental page',
+      updatedSince: '2026-07-14T10:00:00.000Z',
+      data: [
+        { ...device, sourceUpdatedAt: '2026-07-14T11:30:00.000Z' },
+        device,
+      ],
+    },
+  ])('rejects $name before emitting records', async ({ updatedSince, data }) => {
+    const client = {
+      testConnection: jest.fn(),
+      listOrganizations: jest.fn(),
+      fetchPage: jest.fn().mockResolvedValue({
+        schemaVersion: '1',
+        snapshotAt: '2026-07-14T12:00:00.000Z',
+        data,
+        nextCursor: null,
+        hasMore: false,
+      }),
+    };
+    await expect(
+      new BreezeDriver(client).fetchRecords({ ...ctx(), updatedSince }, null),
+    ).rejects.toThrow(/sourceUpdatedAt|incremental|order|snapshot/i);
+  });
+
+  it('emits per-page incremental high-water without retaining failed traversal state', async () => {
     const newer = { ...device, sourceUpdatedAt: '2026-07-14T11:30:00.000Z' };
     const client = {
       testConnection: jest.fn(),
@@ -486,7 +525,7 @@ describe('BreezeDriver transport delegation', () => {
     };
     const driver = new BreezeDriver(client);
     await expect(driver.fetchRecords(ctx(), null)).resolves.toMatchObject({
-      sourceHighWater: null,
+      sourceHighWater: '2026-07-14T11:30:00.000Z',
     });
     await expect(
       driver.fetchRecords({ ...ctx(), snapshotAt: '2026-07-14T12:00:00.000Z' }, 'cursor-1'),

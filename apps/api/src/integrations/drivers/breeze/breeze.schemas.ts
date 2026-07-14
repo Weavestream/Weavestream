@@ -360,6 +360,19 @@ export function breezeEnvelopeSchema<T extends z.ZodTypeAny>(recordSchema: T) {
           message: 'nextCursor must be present exactly when hasMore is true',
         });
       }
+      const snapshotAt = Date.parse(value.snapshotAt);
+      value.data.forEach((record, index) => {
+        const sourceUpdatedAt = Date.parse(
+          (record as { sourceUpdatedAt: string }).sourceUpdatedAt,
+        );
+        if (sourceUpdatedAt > snapshotAt) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['data', index, 'sourceUpdatedAt'],
+            message: 'sourceUpdatedAt cannot exceed snapshotAt',
+          });
+        }
+      });
     });
 }
 

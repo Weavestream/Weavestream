@@ -237,6 +237,66 @@ describe('IntegrationSyncRunnerService writer dispatch', () => {
     );
   });
 
+  it('rejects an A-B-A cursor cycle before committing or fetching A again', async () => {
+    const { service, driver, tx } = setup({ resumeCursor: 'A' });
+    driver.fetchRecords
+      .mockResolvedValueOnce({
+        records: [], hasMore: true, cursor: 'B', terminal: false,
+        schemaVersion: '1', snapshotAt: '2026-07-13T10:00:00.000Z',
+        sourceHighWater: '2026-07-13T09:30:00.000Z',
+      })
+      .mockResolvedValueOnce({
+        records: [{ reconstructionInput: input }], hasMore: true, cursor: 'A', terminal: false,
+        schemaVersion: '1', snapshotAt: '2026-07-13T10:00:00.000Z',
+        sourceHighWater: '2026-07-13T09:45:00.000Z',
+      });
+    await expect(service.runMapping({
+      syncRunId: 'run', integrationCompanyMappingId: 'mapping', resourceId: 'resource',
+      dryRun: false, actorId: 'actor', mode: 'incremental',
+    })).resolves.toMatchObject({ status: 'failed', error: expect.stringMatching(/cursor.*cycle/i) });
+    expect(driver.fetchRecords).toHaveBeenCalledTimes(2);
+    expect(tx.integrationSyncCheckpoint.upsert).toHaveBeenCalledTimes(1);
+    expect(tx.integrationSyncCheckpoint.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        create: expect.objectContaining({
+          cursor: 'B',
+          highWaterAt: new Date('2026-07-13T09:00:00.000Z'),
+        }),
+        update: expect.objectContaining({
+          cursor: 'B',
+        }),
+      }),
+    );
+    const checkpointCalls = tx.integrationSyncCheckpoint.upsert.mock.calls as unknown as Array<
+      [{ update: Record<string, unknown> }]
+    >;
+    expect(checkpointCalls[0]![0].update).not.toHaveProperty('highWaterAt');
+    expect(tx.integrationSyncRecord.upsert).not.toHaveBeenCalled();
+  });
+
+  it('rejects regressing page high-water before committing that page', async () => {
+    const { service, driver, tx } = setup();
+    driver.fetchRecords
+      .mockResolvedValueOnce({
+        records: [], hasMore: true, cursor: 'A', terminal: false,
+        schemaVersion: '1', snapshotAt: '2026-07-14T10:00:00.000Z',
+        sourceHighWater: '2026-07-14T09:30:00.000Z',
+      })
+      .mockResolvedValueOnce({
+        records: [{ reconstructionInput: input }], hasMore: false, cursor: null, terminal: true,
+        schemaVersion: '1', snapshotAt: '2026-07-14T10:00:00.000Z',
+        sourceHighWater: '2026-07-14T09:15:00.000Z',
+      });
+    await expect(service.runMapping({
+      syncRunId: 'run', integrationCompanyMappingId: 'mapping', resourceId: 'resource',
+      dryRun: false, actorId: 'actor', mode: 'incremental',
+    })).resolves.toMatchObject({
+      status: 'failed', error: expect.stringMatching(/high-water.*regress/i),
+    });
+    expect(tx.integrationSyncCheckpoint.upsert).toHaveBeenCalledTimes(1);
+    expect(tx.integrationSyncRecord.upsert).not.toHaveBeenCalled();
+  });
+
   it('rolls back a driver-declared retryable synchronization gap', async () => {
     const { service, driver, tx, order } = setup();
     driver.fetchRecords.mockResolvedValueOnce({
@@ -291,7 +351,10 @@ describe('IntegrationSyncRunnerService writer dispatch', () => {
       }],
     });
     driver.fetchRecords.mockResolvedValueOnce({
-      records: [{ externalId: 'raw-1', displayName: 'Device', fields: { serial: 'S1' }, updatedAt: null }],
+      records: [{
+        externalId: 'raw-1', displayName: 'Device', fields: { serial: 'S1' }, updatedAt: null,
+        sourceRevision: 'a'.repeat(64), sourceFingerprint: 'b'.repeat(64),
+      }],
       hasMore: false, cursor: null, terminal: true,
     });
     const legacy = {
@@ -358,6 +421,12 @@ describe('IntegrationSyncRunnerService writer dispatch', () => {
       }),
     }));
     expect(capturedOutcome).toMatchObject({ change: 'updated', gaps: [] });
+    expect(capturedOutcome).toMatchObject({
+      provenance: {
+        sourceRevision: 'a'.repeat(64),
+        sourceFingerprint: 'b'.repeat(64),
+      },
+    });
     expect(nativePort.writeFromIntegration).toHaveBeenCalled();
     expect(transactionBinding.externalId).toBe(
       dryRun ? 'raw-1' : 'org-1:devices:raw-1',

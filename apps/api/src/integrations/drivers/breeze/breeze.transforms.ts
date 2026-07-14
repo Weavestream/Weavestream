@@ -145,7 +145,14 @@ function legacy(
   fields: Record<string, unknown>,
   externalId = record.id,
 ): LegacyDriverRecord {
-  return { externalId, displayName, fields, updatedAt: record.sourceUpdatedAt };
+  return {
+    externalId,
+    displayName,
+    fields,
+    updatedAt: record.sourceUpdatedAt,
+    sourceRevision: record.revision,
+    sourceFingerprint: record.revision,
+  };
 }
 
 function source(record: BreezeRecordBase, resourceKey: BreezeResourceKey, sourceId: string) {

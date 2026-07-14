@@ -133,6 +133,23 @@ describe('BreezePartnerApiClient', () => {
     expect(fx.calls[0]!.url).not.toContain('top-secret-key');
   });
 
+  it('does not follow redirects or forward X-API-Key to another public origin', async () => {
+    const fx = installFetchScript([
+      {
+        status: 302,
+        body: '',
+        headers: { Location: 'https://redirected.example.test/steal' },
+      },
+      { body: envelope([]) },
+    ]);
+    await expect(new BreezePartnerApiClient().testConnection(context())).rejects.toThrow(
+      /Breeze partner API request failed/i,
+    );
+    expect(fx.calls).toHaveLength(1);
+    expect(fx.calls.filter((call) => call.url.startsWith('https://redirected.example.test/')))
+      .toHaveLength(0);
+  });
+
   it.each([
     'https://user:password@breeze.example.test',
     'https://breeze.example.test?apiKey=secret',
@@ -170,6 +187,7 @@ describe('BreezePartnerApiClient', () => {
     envelope([site()], { schemaVersion: '2' }),
     envelope([{ ...site(), unexpected: true }]),
     envelope([{ ...site(), id: `${SITE}\0` }]),
+    envelope([{ ...site(), sourceUpdatedAt: '2026-07-14T12:00:00.001Z' }]),
     envelope([site()], { nextCursor: 'next', hasMore: false }),
     envelope([site()], { snapshotAt: 'not-an-iso-date' }),
   ])('rejects an invalid strict envelope before returning data', async (body) => {

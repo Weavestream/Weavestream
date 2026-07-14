@@ -40,9 +40,17 @@ export interface AuditMeta {
 
 type RecommendedDestinationPrisma = Pick<
   PrismaService,
+  | 'integrationResource'
+  | 'assetLayout'
+  | 'assetField'
+  | 'integrationFieldMapping'
+  | '$transaction'
+>;
+
+type RecommendedDestinationTx = Pick<
+  RecommendedDestinationPrisma,
   'integrationResource' | 'assetLayout' | 'assetField' | 'integrationFieldMapping'
-> &
-  Partial<Pick<PrismaService, '$transaction'>>;
+>;
 
 /**
  * Apply a driver's recommendation only to a completely untouched asset
@@ -55,92 +63,69 @@ export async function ensureResourceDestination(
   resourceKey: string,
   recommendation: RecommendedDestination,
 ): Promise<void> {
-  const current = await prisma.integrationResource.findUnique({
-    where: { integrationId_resourceKey: { integrationId, resourceKey } },
-    select: { id: true, assetLayoutId: true, _count: { select: { fieldMappings: true } } },
-  });
-  if (!current || current.assetLayoutId || current._count.fieldMappings > 0) return;
+  const apply = async (tx: RecommendedDestinationTx): Promise<void> => {
+    const current = await tx.integrationResource.findUnique({
+      where: { integrationId_resourceKey: { integrationId, resourceKey } },
+      select: { id: true, assetLayoutId: true, _count: { select: { fieldMappings: true } } },
+    });
+    if (!current || current.assetLayoutId || current._count.fieldMappings > 0) return;
 
-  let layout = await prisma.assetLayout.findFirst({
-    where: { slug: recommendation.layout.slug, archivedAt: null },
-    select: { id: true, slug: true },
-  });
-  let createdLayout = false;
-  if (!layout) {
-    try {
-      layout = await prisma.assetLayout.create({
+    let layout = await tx.assetLayout.findFirst({
+      where: { slug: recommendation.layout.slug, archivedAt: null, isActive: true },
+      select: { id: true, slug: true, isActive: true },
+    });
+    const createdLayout = layout === null;
+    if (!layout) {
+      layout = await tx.assetLayout.create({
         data: {
           ...recommendation.layout,
           position: 0,
         },
-        select: { id: true, slug: true },
+        select: { id: true, slug: true, isActive: true },
       });
-      createdLayout = true;
-    } catch (error) {
-      if ((error as { code?: string }).code !== 'P2002') throw error;
-      layout = await prisma.assetLayout.findFirst({
-        where: { slug: recommendation.layout.slug, archivedAt: null },
-        select: { id: true, slug: true },
-      });
-      if (!layout) throw error;
     }
-  }
+    if (layout.isActive === false) return;
 
-  const existingFields = await prisma.assetField.findMany({
-    where: { assetLayoutId: layout.id, archivedAt: null },
-    select: { id: true, slug: true, fieldType: true },
-  });
-  const existingSlugs = new Set(existingFields.map((field) => field.slug));
-  const missingFields = recommendation.fields.filter((field) => !existingSlugs.has(field.slug));
-  if (createdLayout && missingFields.length > 0) {
-    await prisma.assetField.createMany({
-      data: missingFields.map((field, index) => ({
-        assetLayoutId: layout!.id,
-        name: field.name,
-        slug: field.slug,
-        fieldType: field.fieldType,
-        position: existingFields.length + index,
-        isRequired: false,
-        isUniquePerCompany: false,
-        visibleToClients: true,
-        isPrimary:
-          field.isPrimary &&
-          !existingFields.some(
-            (candidate) =>
-              recommendation.fields.find((configured) => configured.slug === candidate.slug)
-                ?.isPrimary === true,
-          ),
-        showInTable: field.showInTable,
-        options: field.options as Prisma.InputJsonValue,
-      })),
-      skipDuplicates: true,
+    if (createdLayout) {
+      await tx.assetField.createMany({
+        data: recommendation.fields.map((field, index) => ({
+          assetLayoutId: layout!.id,
+          name: field.name,
+          slug: field.slug,
+          fieldType: field.fieldType,
+          position: index,
+          isRequired: false,
+          isUniquePerCompany: false,
+          visibleToClients: true,
+          isPrimary: field.isPrimary,
+          showInTable: field.showInTable,
+          options: field.options as Prisma.InputJsonValue,
+        })),
+      });
+    }
+    const fields = await tx.assetField.findMany({
+      where: {
+        assetLayoutId: layout.id,
+        archivedAt: null,
+        slug: { in: recommendation.fields.map((field) => field.slug) },
+      },
+      select: { id: true, slug: true, fieldType: true },
     });
-  }
-  const fields = await prisma.assetField.findMany({
-    where: {
-      assetLayoutId: layout.id,
-      archivedAt: null,
-      slug: { in: recommendation.fields.map((field) => field.slug) },
-    },
-    select: { id: true, slug: true, fieldType: true },
-  });
-  const fieldBySlug = new Map(fields.map((field) => [field.slug, field.id]));
-  const compatible = recommendation.fields.every((recommended) =>
-    fields.some(
-      (field) => field.slug === recommended.slug && field.fieldType === recommended.fieldType,
-    ),
-  );
-  if (!compatible) return;
-
-  const apply = async (tx: RecommendedDestinationPrisma) => {
-    const fresh = await tx.integrationResource.findUnique({
-      where: { integrationId_resourceKey: { integrationId, resourceKey } },
-      select: { id: true, assetLayoutId: true, _count: { select: { fieldMappings: true } } },
-    });
-    if (!fresh || fresh.assetLayoutId || fresh._count.fieldMappings > 0) return;
+    const compatible = recommendation.fields.every((recommended) =>
+      fields.some(
+        (field) => field.slug === recommended.slug && field.fieldType === recommended.fieldType,
+      ),
+    );
+    if (!compatible) {
+      if (createdLayout) {
+        throw new Error('Recommended destination field creation was incomplete.');
+      }
+      return;
+    }
+    const fieldBySlug = new Map(fields.map((field) => [field.slug, field.id]));
     const claimed = await tx.integrationResource.updateMany({
       where: {
-        id: fresh.id,
+        id: current.id,
         assetLayoutId: null,
         fieldMappings: { none: {} },
       },
@@ -151,7 +136,7 @@ export async function ensureResourceDestination(
       data: recommendation.fields
         .filter((field) => field.mapResource !== false)
         .map((field) => ({
-          resourceId: fresh.id,
+          resourceId: current.id,
           sourceField: field.sourceField,
           targetKind: 'asset' as const,
           targetFieldId: fieldBySlug.get(field.slug)!,
@@ -162,10 +147,16 @@ export async function ensureResourceDestination(
     });
   };
 
-  if (typeof prisma.$transaction === 'function') {
-    await prisma.$transaction(async (tx) => apply(tx as unknown as RecommendedDestinationPrisma));
-  } else {
-    await apply(prisma);
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      await prisma.$transaction(async (tx) =>
+        apply(tx as unknown as RecommendedDestinationTx),
+      );
+      return;
+    } catch (error) {
+      if ((error as { code?: string }).code !== 'P2002') throw error;
+      if (attempt === 1) return;
+    }
   }
 }
 

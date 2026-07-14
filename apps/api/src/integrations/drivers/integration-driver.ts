@@ -96,6 +96,10 @@ export interface LegacyDriverRecord {
   fields: Record<string, unknown>;
   /** Optional driver-emitted last-modified hint (UTC ISO). */
   updatedAt: string | null;
+  /** Optional bounded source revision persisted as reconstruction provenance. */
+  sourceRevision?: string | null;
+  /** Optional bounded source fingerprint persisted as reconstruction provenance. */
+  sourceFingerprint?: string | null;
 }
 
 export interface RecommendedDestinationField {

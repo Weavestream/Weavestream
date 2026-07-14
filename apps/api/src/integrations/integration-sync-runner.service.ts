@@ -282,6 +282,9 @@ export class IntegrationSyncRunnerService {
     let snapshotAt = checkpoint?.cursor !== null && checkpoint?.cursor !== undefined
       ? checkpoint.snapshotAt?.toISOString() ?? null
       : null;
+    let traversalHighWater = checkpoint?.highWaterAt?.toISOString() ?? null;
+    const seenCursors = new Set<string>();
+    if (cursor !== null) seenCursors.add(cursor);
     let pages = 0;
     try {
       while (true) {
@@ -297,13 +300,19 @@ export class IntegrationSyncRunnerService {
         });
         schemaVersion = page.schemaVersion;
         snapshotAt = page.snapshotAt;
-        if (
-          page.terminal &&
-          page.sourceHighWater &&
-          checkpoint?.highWaterAt &&
-          page.sourceHighWater < checkpoint.highWaterAt.toISOString()
-        ) {
-          throw new BadRequestException('Driver sourceHighWater cannot regress the committed high-water mark.');
+        if (page.cursor !== null) {
+          if (seenCursors.has(page.cursor)) {
+            throw new BadRequestException('Driver page cursor cycle detected.');
+          }
+          seenCursors.add(page.cursor);
+        }
+        if (page.sourceHighWater) {
+          if (traversalHighWater && page.sourceHighWater < traversalHighWater) {
+            throw new BadRequestException(
+              'Driver source high-water cannot regress within a traversal.',
+            );
+          }
+          traversalHighWater = page.sourceHighWater;
         }
         pages += 1;
         if (pages > 1_000) throw new BadRequestException('Driver traversal exceeded 1000 pages.');
@@ -410,7 +419,7 @@ export class IntegrationSyncRunnerService {
           }
           if (!input.dryRun) {
             const highWater = page.terminal
-              ? page.sourceHighWater ?? deriveLegacyHighWater(page.records) ?? checkpoint?.highWaterAt?.toISOString() ?? null
+              ? traversalHighWater ?? deriveLegacyHighWater(page.records)
               : checkpoint?.highWaterAt?.toISOString() ?? null;
             await tx.integrationSyncCheckpoint.upsert({
               where: {
@@ -481,6 +490,11 @@ export class IntegrationSyncRunnerService {
       externalOrgId: mapping.externalOrgId,
       resourceKey: resource.resourceKey,
       sourceId: record.externalId,
+      revision: boundedLegacyProvenance(record.sourceRevision, 'sourceRevision'),
+      fingerprint: boundedLegacyProvenance(
+        record.sourceFingerprint,
+        'sourceFingerprint',
+      ),
       updatedAt: record.updatedAt,
     };
     const fieldValues = resource.fieldMappings
@@ -725,6 +739,19 @@ function deriveLegacyHighWater(records: DriverRecord[]): string | null {
     if (!highest || canonical > highest) highest = canonical;
   }
   return highest;
+}
+
+function boundedLegacyProvenance(
+  value: string | null | undefined,
+  field: string,
+): string | null {
+  if (value == null) return null;
+  if (typeof value !== 'string' || value.length > 256) {
+    throw new BadRequestException(
+      `Legacy driver ${field} must contain at most 256 characters.`,
+    );
+  }
+  return value;
 }
 
 function migrationProvenance(

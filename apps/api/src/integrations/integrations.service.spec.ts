@@ -93,7 +93,7 @@ describe('ensureResourceDestination', () => {
       slug: field.slug,
       fieldType: field.fieldType,
     }));
-    return {
+    const prisma = {
       integrationResource: {
         findUnique: jest
           .fn()
@@ -109,7 +109,7 @@ describe('ensureResourceDestination', () => {
         create: jest.fn().mockResolvedValue(layout),
       },
       assetField: {
-        findMany: jest.fn().mockResolvedValueOnce([]).mockResolvedValue(fields),
+        findMany: jest.fn().mockResolvedValue(fields),
         createMany: jest.fn().mockResolvedValue({ count: fields.length }),
       },
       integrationFieldMapping: {
@@ -118,6 +118,10 @@ describe('ensureResourceDestination', () => {
       },
       ...overrides,
     } as any;
+    prisma.$transaction ??= jest.fn(
+      async (callback: (tx: typeof prisma) => Promise<void>) => callback(prisma),
+    );
+    return prisma;
   }
 
   it('creates deterministic fields/mappings once and is repeatable', async () => {
@@ -197,6 +201,8 @@ describe('ensureResourceDestination', () => {
 
   it('re-reads a concurrent layout winner without mutating its fields', async () => {
     const prisma = fakePrisma();
+    prisma.$transaction = jest.fn(async (callback: (tx: typeof prisma) => Promise<void>) =>
+      callback(prisma));
     const winner = { id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', slug: 'breeze-devices' };
     prisma.assetLayout.findFirst.mockResolvedValueOnce(null).mockResolvedValue(winner);
     prisma.assetLayout.create.mockRejectedValue(
@@ -211,7 +217,77 @@ describe('ensureResourceDestination', () => {
     );
     await ensureResourceDestination(prisma, 'integration-1', 'devices', recommendation);
     expect(prisma.assetField.createMany).not.toHaveBeenCalled();
+    expect(prisma.$transaction).toHaveBeenCalledTimes(2);
     expect(prisma.integrationResource.updateMany).toHaveBeenCalledTimes(1);
     expect(prisma.integrationFieldMapping.createMany).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not attach an inactive recommended layout', async () => {
+    const prisma = fakePrisma();
+    prisma.assetLayout.findFirst.mockResolvedValue({
+      id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      slug: 'breeze-devices',
+      isActive: false,
+    });
+    prisma.assetField.findMany.mockReset().mockResolvedValue(
+      recommendation.fields.map((field, index) => ({
+        id: `${index + 1}`.padStart(8, '0') + '-0000-4000-8000-000000000000',
+        slug: field.slug,
+        fieldType: field.fieldType,
+      })),
+    );
+    await ensureResourceDestination(prisma, 'integration-1', 'devices', recommendation);
+    expect(prisma.integrationResource.updateMany).not.toHaveBeenCalled();
+    expect(prisma.integrationFieldMapping.createMany).not.toHaveBeenCalled();
+  });
+
+  it('rolls back a newly created layout when field creation is incomplete', async () => {
+    const state: { layout: null | { id: string; slug: string }; fields: unknown[] } = {
+      layout: null,
+      fields: [],
+    };
+    const tx = {
+      integrationResource: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: 'resource-1', assetLayoutId: null, _count: { fieldMappings: 0 },
+        }),
+        updateMany: jest.fn(),
+      },
+      assetLayout: {
+        findFirst: jest.fn(async () => state.layout),
+        create: jest.fn(async () => {
+          state.layout = {
+            id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', slug: 'breeze-devices',
+          };
+          return state.layout;
+        }),
+      },
+      assetField: {
+        findMany: jest.fn(async () => state.fields),
+        createMany: jest.fn(async () => {
+          state.fields = [{ slug: 'breeze-id' }];
+          return { count: 1 };
+        }),
+      },
+      integrationFieldMapping: { createMany: jest.fn() },
+    };
+    const prisma = {
+      ...tx,
+      $transaction: jest.fn(async (callback: (client: typeof tx) => Promise<void>) => {
+        const before = { layout: state.layout, fields: [...state.fields] };
+        try {
+          return await callback(tx);
+        } catch (error) {
+          state.layout = before.layout;
+          state.fields = before.fields;
+          throw error;
+        }
+      }),
+    } as any;
+    await expect(
+      ensureResourceDestination(prisma, 'integration-1', 'devices', recommendation),
+    ).rejects.toThrow(/field creation was incomplete/i);
+    expect(state).toEqual({ layout: null, fields: [] });
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
   });
 });

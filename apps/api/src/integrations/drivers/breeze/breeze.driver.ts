@@ -304,6 +304,7 @@ export class BreezeDriver implements IntegrationDriver {
     if (ctx.snapshotAt && page.snapshotAt !== ctx.snapshotAt) {
       throw new Error('Breeze partner API snapshot changed during traversal.');
     }
+    validatePageOrdering(page.data, page.snapshotAt, ctx.mode, ctx.updatedSince);
     for (const blocked of page.blocked ?? []) {
       if (
         blocked.orgId !== ctx.externalOrgId ||
@@ -325,7 +326,7 @@ export class BreezeDriver implements IntegrationDriver {
       return transformBreezeRecord(resource.data, record);
     });
     const highWater =
-      ctx.mode === 'incremental' && !page.hasMore ? maxSourceUpdatedAt(page.data) : null;
+      ctx.mode === 'incremental' ? maxSourceUpdatedAt(page.data) : null;
 
     return {
       records,
@@ -352,12 +353,42 @@ export class BreezeDriver implements IntegrationDriver {
 }
 
 function maxSourceUpdatedAt(records: unknown[]): string | null {
-  let highWater: string | null = null;
+  let highWater: number | null = null;
   for (const raw of records) {
-    const updatedAt = (raw as { sourceUpdatedAt: string }).sourceUpdatedAt;
-    if (!highWater || updatedAt > highWater) highWater = updatedAt;
+    const updatedAt = Date.parse((raw as { sourceUpdatedAt: string }).sourceUpdatedAt);
+    if (highWater === null || updatedAt > highWater) highWater = updatedAt;
   }
-  return highWater;
+  return highWater === null ? null : new Date(highWater).toISOString();
+}
+
+function validatePageOrdering(
+  records: unknown[],
+  snapshotAt: string,
+  mode: FetchRecordsContext['mode'],
+  updatedSince: string | null,
+): void {
+  const snapshotMillis = Date.parse(snapshotAt);
+  const updatedSinceMillis = updatedSince === null ? null : Date.parse(updatedSince);
+  let previousMillis: number | null = null;
+  for (const raw of records) {
+    const sourceUpdatedAt = (raw as { sourceUpdatedAt?: unknown }).sourceUpdatedAt;
+    const sourceMillis =
+      typeof sourceUpdatedAt === 'string' ? Date.parse(sourceUpdatedAt) : Number.NaN;
+    if (!Number.isFinite(sourceMillis) || sourceMillis > snapshotMillis) {
+      throw new Error('Breeze sourceUpdatedAt must not exceed the traversal snapshot.');
+    }
+    if (
+      mode === 'incremental' &&
+      updatedSinceMillis !== null &&
+      sourceMillis <= updatedSinceMillis
+    ) {
+      throw new Error('Breeze incremental records must be newer than updatedSince.');
+    }
+    if (previousMillis !== null && sourceMillis < previousMillis) {
+      throw new Error('Breeze sourceUpdatedAt values must be ordered within each page.');
+    }
+    previousMillis = sourceMillis;
+  }
 }
 
 function field(
