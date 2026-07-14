@@ -83,6 +83,24 @@ describe('integration zod schemas', () => {
       ).toThrow();
     });
 
+    it('bounds target configuration by persisted UTF-8 JSON bytes', () => {
+      const article = (template: string) => ({
+        key: 'articles',
+        label: 'Articles',
+        targetKind: 'article',
+        targetConfig: { template },
+      });
+
+      // PostgreSQL renders this JSONB value as {"template": "..."}.
+      expect(() => driverResourceDescriptorSchema.parse(article('x'.repeat(32_752)))).not.toThrow();
+      expect(() => driverResourceDescriptorSchema.parse(article('x'.repeat(32_753)))).toThrow(
+        /32768 bytes/i,
+      );
+      expect(() => driverResourceDescriptorSchema.parse(article('é'.repeat(16_377)))).toThrow(
+        /32768 bytes/i,
+      );
+    });
+
     it('rejects missing dependencies and dependency cycles', () => {
       expect(() =>
         driverDescriptorSchema.parse({
@@ -266,6 +284,29 @@ describe('integration zod schemas', () => {
         }),
       ).toThrow();
     });
+
+    it('bounds the complete transform by persisted UTF-8 JSON bytes', () => {
+      const targetFieldId = '00000000-0000-0000-0000-000000000010';
+      const mappingWithTruthyValues = (value: string) => ({
+        sourceField: 'enabled',
+        targetFieldId,
+        transform: {
+          steps: [
+            {
+              op: 'to_boolean',
+              truthy: Array.from({ length: 16 }, () => value),
+            },
+          ],
+        },
+      });
+
+      expect(() =>
+        fieldMappingDraftSchema.parse(mappingWithTruthyValues('x'.repeat(4096))),
+      ).toThrow(/65536 bytes/i);
+      expect(() =>
+        fieldMappingDraftSchema.parse(mappingWithTruthyValues('é'.repeat(2048))),
+      ).toThrow(/65536 bytes/i);
+    });
   });
 
   describe('staged sync job metadata', () => {
@@ -387,13 +428,53 @@ describe('integration zod schemas', () => {
       ).toBe('active');
     });
 
-    it('accepts bounded gap input/DTOs and rejects oversized or raw values', () => {
+    it('accepts a namespaced provenance identity up to 1024 characters', () => {
+      const externalOrgId = 'o'.repeat(256);
+      const resourceKey = 'r'.repeat(256);
+      const sourceId = 's'.repeat(256);
+      const provenance = {
+        integrationId: '00000000-0000-0000-0000-000000000004',
+        externalOrgId,
+        resourceKey,
+        externalId: `${externalOrgId}:${resourceKey}:${sourceId}`,
+        sourceRevision: null,
+        sourceFingerprint: null,
+        firstSeenAt: '2026-07-13T12:00:00.000Z',
+        lastSeenAt: '2026-07-13T12:00:00.000Z',
+        lastSyncedAt: '2026-07-13T12:00:01.000Z',
+        ownership: 'breeze',
+        state: 'active',
+      };
+
+      expect(() => integrationProvenanceSchema.parse(provenance)).not.toThrow();
+      expect(() =>
+        integrationProvenanceSchema.parse({ ...provenance, externalId: 'x'.repeat(1025) }),
+      ).toThrow();
+    });
+
+    it('accepts bounded allowlisted gap metadata', () => {
       const input = {
         ...identity,
         externalId: null,
         kind: 'missing_dependency',
         message: 'Device binding was not found',
-        details: { dependency: 'devices' },
+        details: {
+          reasonCode: 'dependency_not_found',
+          fieldPaths: ['network.gateway'],
+          dependencyResourceKey: 'devices',
+          dependencyExternalId: 'device-1',
+          validationCodes: ['required'],
+          unsupportedCapability: 'script_export',
+          candidateCount: 2,
+          sourceResource: 'scripts',
+          sourceOrgId: 'org-1',
+          sourceId: 'script-1',
+          targetKind: 'article',
+          targetId: '00000000-0000-0000-0000-000000000006',
+          statusCode: 422,
+          retryable: false,
+          schemaVersion: 1,
+        },
         firstSeenAt: '2026-07-13T12:00:00.000Z',
         lastSeenAt: '2026-07-13T12:01:00.000Z',
         resolvedAt: null,
@@ -405,22 +486,82 @@ describe('integration zod schemas', () => {
           ...input,
         }),
       ).not.toThrow();
+    });
+
+    it('rejects oversized, unknown, and excessive gap metadata', () => {
+      const input = {
+        ...identity,
+        externalId: null,
+        kind: 'validation',
+        message: 'Invalid source fields',
+        details: {},
+        firstSeenAt: '2026-07-13T12:00:00.000Z',
+        lastSeenAt: '2026-07-13T12:01:00.000Z',
+        resolvedAt: null,
+      };
       expect(() =>
         integrationReconstructionGapInputSchema.parse({
           ...input,
-          details: { reason: 'x'.repeat(4097) },
+          details: { dependencyExternalId: 'x'.repeat(4097) },
         }),
       ).toThrow();
       expect(() =>
         integrationReconstructionGapInputSchema.parse({
           ...input,
-          details: { dependency: undefined },
+          details: { unexpectedMetadata: 'not allowlisted' },
         }),
       ).toThrow();
       expect(() =>
         integrationReconstructionGapInputSchema.parse({
           ...input,
-          rawValue: 'must never persist',
+          details: { reasonCode: undefined },
+        }),
+      ).toThrow();
+      expect(() =>
+        integrationReconstructionGapInputSchema.parse({
+          ...input,
+          details: { fieldPaths: Array.from({ length: 65 }, (_, index) => `field.${index}`) },
+        }),
+      ).toThrow();
+      expect(() =>
+        integrationReconstructionGapInputSchema.parse({
+          ...input,
+          details: { fieldPaths: ['x'.repeat(513)] },
+        }),
+      ).toThrow();
+      expect(() =>
+        integrationReconstructionGapInputSchema.parse({
+          ...input,
+          details: {
+            fieldPaths: Array.from(
+              { length: 16 },
+              (_, index) => `field.${index}.${'x'.repeat(250)}`,
+            ),
+          },
+        }),
+      ).toThrow(/4096 bytes/i);
+    });
+
+    it.each([
+      ['nested apiKey', { context: { auth: { apiKey: 'provider-key' } } }],
+      ['nested raw payload', { metadata: { rawPayload: { host: 'device-1' } } }],
+      ['authorization key', { authorization: 'Bearer header.payload.signature' }],
+      ['private-key key', { privateKey: '-----BEGIN PRIVATE KEY-----' }],
+      ['provider credential key', { providerCredentials: { username: 'service' } }],
+      ['embedded basic credentials', { sourceId: 'https://user:password@example.test/device' }],
+      ['embedded bearer token', { dependencyExternalId: 'Bearer header.payload.signature' }],
+      ['token-like value', { sourceOrgId: 'ghp_abcdefghijklmnopqrstuvwxyz1234567890' }],
+    ])('rejects secret-bearing gap details: %s', (_label, details) => {
+      expect(() =>
+        integrationReconstructionGapInputSchema.parse({
+          ...identity,
+          externalId: null,
+          kind: 'secret_blocked',
+          message: 'Credential prevented source access',
+          details,
+          firstSeenAt: '2026-07-13T12:00:00.000Z',
+          lastSeenAt: '2026-07-13T12:01:00.000Z',
+          resolvedAt: null,
         }),
       ).toThrow();
     });

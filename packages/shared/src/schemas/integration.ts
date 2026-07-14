@@ -62,6 +62,26 @@ export const reconstructionGapKindSchema = z.enum([
 ]);
 export type ReconstructionGapKind = z.infer<typeof reconstructionGapKindSchema>;
 
+/**
+ * Approximate PostgreSQL JSONB text rendering for persistence byte limits.
+ * PostgreSQL separates object keys/values and collection entries with one
+ * space, so plain JSON.stringify would under-count the database CHECK value.
+ */
+const persistedJsonText = (value: unknown): string => {
+  if (value === null || typeof value !== 'object') {
+    return JSON.stringify(value) ?? 'null';
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map(persistedJsonText).join(', ')}]`;
+  }
+  return `{${Object.entries(value as Record<string, unknown>)
+    .map(([key, entry]) => `${JSON.stringify(key)}: ${persistedJsonText(entry)}`)
+    .join(', ')}}`;
+};
+
+const persistedJsonByteLength = (value: unknown): number =>
+  new TextEncoder().encode(persistedJsonText(value)).byteLength;
+
 // ---------------------------------------------------------------------
 // Driver descriptor (registry → admin UI)
 // ---------------------------------------------------------------------
@@ -205,6 +225,13 @@ export const driverResourceDescriptorSchema = z
     };
   }, resourceDescriptorUnion)
   .superRefine((resource, ctx) => {
+    if (persistedJsonByteLength(resource.targetConfig) > 32_768) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['targetConfig'],
+        message: 'targetConfig must serialize to at most 32768 bytes',
+      });
+    }
     if (resource.dependsOnResourceKeys.includes(resource.key)) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
@@ -606,7 +633,15 @@ export const integrationTransformSchema = z
   .object({
     steps: z.array(integrationTransformStepSchema).min(1).max(16),
   })
-  .strict();
+  .strict()
+  .superRefine((transform, ctx) => {
+    if (persistedJsonByteLength(transform) > 65_536) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'transform must serialize to at most 65536 bytes',
+      });
+    }
+  });
 export type IntegrationTransform = z.infer<typeof integrationTransformSchema>;
 
 export const fieldMappingDraftSchema = z
@@ -768,7 +803,7 @@ export const integrationProvenanceSchema = z
     integrationId: z.string().uuid(),
     externalOrgId: z.string().min(1).max(256),
     resourceKey: z.string().min(1).max(256),
-    externalId: z.string().min(1).max(256),
+    externalId: z.string().min(1).max(1024),
     sourceRevision: z.string().max(256).nullable(),
     sourceFingerprint: z.string().max(256).nullable(),
     firstSeenAt: z.string().datetime(),
@@ -780,40 +815,90 @@ export const integrationProvenanceSchema = z
   .strict();
 export type SafeIntegrationProvenance = z.infer<typeof integrationProvenanceSchema>;
 
-type GapJsonValue =
-  | null
-  | string
-  | number
-  | boolean
-  | GapJsonValue[]
-  | { [key: string]: GapJsonValue };
+const sensitiveGapKeyPattern =
+  /(secret|password|passwd|token|apikey|authorization|credential|privatekey|rawpayload|rawbody|rawrequest|rawresponse)/;
+const sensitiveGapValuePatterns = [
+  /\b(?:bearer|basic)\s+\S{8,}/i,
+  /-----BEGIN [A-Z ]*PRIVATE KEY-----/i,
+  /(?:^|[?&;\s])(?:api[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|password|passwd|authorization)=\S+/i,
+  /^[a-z][a-z0-9+.-]*:\/\/[^/\s:@]+:[^/\s@]+@/i,
+  /\b(?:gh[pousr]_|xox[baprs]-|sk-(?:live-|test-)?)[A-Za-z0-9_-]{16,}\b/i,
+  /\bAKIA[0-9A-Z]{16}\b/,
+  /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/,
+];
 
-const gapJsonValueSchema: z.ZodType<GapJsonValue> = z.lazy(() =>
-  z.union([
-    z.null(),
-    z.string(),
-    z.number(),
-    z.boolean(),
-    z.array(gapJsonValueSchema),
-    z.record(gapJsonValueSchema),
-  ]),
-);
-
-const boundedGapDetailsSchema = z.record(gapJsonValueSchema).superRefine((details, ctx) => {
-  let serialized: string;
-  try {
-    serialized = JSON.stringify(details);
-  } catch {
-    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'details must be JSON' });
-    return;
+const containsSensitiveGapMetadata = (value: unknown): boolean => {
+  if (typeof value === 'string') {
+    return sensitiveGapValuePatterns.some((pattern) => pattern.test(value));
   }
-  if (new TextEncoder().encode(serialized).byteLength > 4096) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message: 'details must serialize to at most 4096 bytes',
+  if (Array.isArray(value)) {
+    return value.some(containsSensitiveGapMetadata);
+  }
+  if (value && typeof value === 'object') {
+    return Object.entries(value as Record<string, unknown>).some(([key, entry]) => {
+      const normalizedKey = key.replace(/[^a-z0-9]/gi, '').toLowerCase();
+      return sensitiveGapKeyPattern.test(normalizedKey) || containsSensitiveGapMetadata(entry);
     });
   }
-});
+  return false;
+};
+
+const containsUndefinedGapMetadata = (value: unknown): boolean => {
+  if (value === undefined) return true;
+  if (Array.isArray(value)) return value.some(containsUndefinedGapMetadata);
+  if (value && typeof value === 'object') {
+    return Object.values(value as Record<string, unknown>).some(containsUndefinedGapMetadata);
+  }
+  return false;
+};
+
+const gapCodeSchema = z.string().min(1).max(128);
+const gapIdentitySchema = z.string().min(1).max(512);
+const allowlistedGapDetailsSchema = z
+  .object({
+    reasonCode: gapCodeSchema.optional(),
+    fieldPaths: z.array(z.string().min(1).max(512)).max(64).optional(),
+    dependencyResourceKey: driverResourceKeySchema.optional(),
+    dependencyExternalId: gapIdentitySchema.optional(),
+    validationCodes: z.array(gapCodeSchema).max(64).optional(),
+    unsupportedCapability: gapCodeSchema.optional(),
+    candidateCount: z.number().int().nonnegative().max(1_000_000).optional(),
+    sourceResource: driverResourceKeySchema.optional(),
+    sourceOrgId: z.string().min(1).max(256).optional(),
+    sourceId: gapIdentitySchema.optional(),
+    targetKind: integrationTargetKindSchema.optional(),
+    targetId: gapIdentitySchema.optional(),
+    statusCode: z.number().int().nonnegative().max(999).optional(),
+    retryable: z.boolean().optional(),
+    schemaVersion: z.number().int().min(1).max(65_535).optional(),
+  })
+  .strict()
+  .superRefine((details, ctx) => {
+    if (persistedJsonByteLength(details) > 4096) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'details must serialize to at most 4096 bytes',
+      });
+    }
+  });
+
+const boundedGapDetailsSchema = z
+  .unknown()
+  .superRefine((details, ctx) => {
+    if (containsUndefinedGapMetadata(details)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'details must contain only JSON values',
+      });
+    }
+    if (containsSensitiveGapMetadata(details)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'details must not contain sensitive keys or credential-like values',
+      });
+    }
+  })
+  .pipe(allowlistedGapDetailsSchema);
 
 const reconstructionGapShape = {
   companyId: z.string().uuid(),
