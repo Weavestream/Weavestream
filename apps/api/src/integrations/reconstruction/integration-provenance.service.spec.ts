@@ -20,9 +20,13 @@ describe('IntegrationProvenanceService', () => {
         firstSeenAt: '2026-07-13T00:00:00.000Z', lastSeenAt: '2026-07-14T00:00:00.000Z',
         lastSyncedAt: '2026-07-14T00:01:00.000Z', ownership: 'breeze', state: 'stale',
       },
-      asset: { name: 'HV-01' }, subnet: null, ipReservation: null, article: null,
-      companyMapping: { integration: { id: ids.integration, name: 'Breeze', driver: 'breeze' } },
-      resource: { resourceKey: 'devices' },
+      asset: { name: 'HV-01', companyId: ids.company }, subnet: null,
+      ipReservation: null, article: null, relation: null,
+      companyMapping: {
+        companyId: ids.company,
+        integration: { id: ids.integration, name: 'Breeze', driver: 'breeze' },
+      },
+      resource: { resourceKey: 'devices', integrationId: ids.integration },
     }]);
     const output = await readTargetProvenance({ integrationSyncRecord: { findMany } } as never, {
       companyId: ids.company, targetKind: 'asset', targetId: '00000000-0000-4000-8000-000000000010',
@@ -38,6 +42,55 @@ describe('IntegrationProvenanceService', () => {
     await expect(readTargetProvenance({ integrationSyncRecord: { findMany } } as never, {
       companyId: '00000000-0000-4000-8000-000000000099', targetKind: 'asset',
       targetId: '00000000-0000-4000-8000-000000000010',
+    })).resolves.toEqual([]);
+  });
+
+  it.each([
+    ['mapping company mismatch', {
+      mappingCompanyId: '00000000-0000-4000-8000-000000000091',
+    }],
+    ['resource integration mismatch', {
+      resourceIntegrationId: '00000000-0000-4000-8000-000000000092',
+    }],
+    ['provenance integration mismatch', {
+      provenanceIntegrationId: '00000000-0000-4000-8000-000000000093',
+    }],
+    ['native target company mismatch', {
+      targetCompanyId: '00000000-0000-4000-8000-000000000094',
+    }],
+  ])('omits provenance with inconsistent relational scope: %s', async (_label, mismatch) => {
+    const values = mismatch as Partial<{
+      mappingCompanyId: string;
+      resourceIntegrationId: string;
+      provenanceIntegrationId: string;
+      targetCompanyId: string;
+    }>;
+    const targetId = '00000000-0000-4000-8000-000000000010';
+    const findMany = jest.fn().mockResolvedValue([{
+      integrationCompanyMappingId: ids.mapping, resourceId: ids.resource,
+      targetKind: 'asset', assetId: targetId,
+      subnetId: null, ipReservationId: null, articleId: null, relationId: null,
+      state: 'active', staleSince: null,
+      provenance: {
+        integrationId: values.provenanceIntegrationId ?? ids.integration,
+        externalOrgId: 'org-a', resourceKey: 'devices', externalId: 'raw-upstream-id',
+        sourceRevision: null, sourceFingerprint: null,
+        firstSeenAt: '2026-07-13T00:00:00.000Z', lastSeenAt: '2026-07-14T00:00:00.000Z',
+        lastSyncedAt: '2026-07-14T00:01:00.000Z', ownership: 'breeze', state: 'active',
+      },
+      asset: { name: 'HV-01', companyId: values.targetCompanyId ?? ids.company },
+      subnet: null, ipReservation: null, article: null, relation: null,
+      companyMapping: {
+        companyId: values.mappingCompanyId ?? ids.company,
+        integration: { id: ids.integration, name: 'Breeze', driver: 'breeze' },
+      },
+      resource: {
+        resourceKey: 'devices',
+        integrationId: values.resourceIntegrationId ?? ids.integration,
+      },
+    }]);
+    await expect(readTargetProvenance({ integrationSyncRecord: { findMany } } as never, {
+      companyId: ids.company, targetKind: 'asset', targetId,
     })).resolves.toEqual([]);
   });
   it('preserves first seen while advancing safe active provenance', () => {

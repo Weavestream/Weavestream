@@ -42,3 +42,32 @@ it('does not render raw external identities in conflict details', async () => {
   expect(await screen.findByText(/Record requires review/)).toBeInTheDocument();
   expect(screen.queryByText(/raw-upstream-id/)).not.toBeInTheDocument();
 });
+
+it('renders per-resource activity when only reconstruction counters are nonzero', async () => {
+  const zeroes = {
+    fetched: 0, created: 0, updated: 0, unchanged: 0, claimed: 0, archived: 0,
+    skippedAmbiguous: 0, skippedManual: 0, skippedArchived: 0,
+    stale: 0, restored: 0, blocked: 0, secretBlocked: 0, missingDependency: 0, errors: 0,
+  };
+  const run = {
+    id: 'run-reconstruction', mode: 'full', kind: 'manual', status: 'succeeded', dryRun: false,
+    createdAt: '2026-07-14T00:00:00.000Z', startedAt: null,
+    totals: {
+      ...zeroes,
+      byResource: {
+        scripts: { ...zeroes, secretBlocked: 2 },
+        relations: { ...zeroes, missingDependency: 3 },
+      },
+    },
+  };
+  apiFetch.mockResolvedValueOnce({ ok: true, data: { run, companyResults: [] } });
+  render(<RunsTab integration={{ id: 'integration-1', resources: [
+    { resourceKey: 'scripts', resourceLabel: 'Scripts' },
+    { resourceKey: 'relations', resourceLabel: 'Relationships' },
+  ] } as never} mappings={[]} runs={[run] as never} />);
+  fireEvent.click(screen.getByRole('button'));
+  expect(await screen.findByText('Scripts')).toBeInTheDocument();
+  expect(screen.getByText('2 secret blocked')).toBeInTheDocument();
+  expect(screen.getByText('Relationships')).toBeInTheDocument();
+  expect(screen.getByText('3 missing dependency')).toBeInTheDocument();
+});

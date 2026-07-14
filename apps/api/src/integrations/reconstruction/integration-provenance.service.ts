@@ -33,12 +33,23 @@ export async function readTargetProvenance(
       integrationCompanyMappingId: true, resourceId: true, targetKind: true,
       assetId: true, subnetId: true, ipReservationId: true, articleId: true, relationId: true,
       state: true, staleSince: true, provenance: true,
-      asset: { select: { name: true } },
-      subnet: { select: { name: true } },
-      ipReservation: { select: { label: true, subnetId: true } },
-      article: { select: { title: true } },
-      companyMapping: { select: { integration: { select: { id: true, name: true, driver: true } } } },
-      resource: { select: { resourceKey: true } },
+      asset: { select: { name: true, companyId: true } },
+      subnet: { select: { name: true, companyId: true } },
+      ipReservation: {
+        select: {
+          label: true, subnetId: true, companyId: true,
+          subnet: { select: { companyId: true } },
+        },
+      },
+      article: { select: { title: true, companyId: true } },
+      relation: { select: { companyId: true } },
+      companyMapping: {
+        select: {
+          companyId: true,
+          integration: { select: { id: true, name: true, driver: true } },
+        },
+      },
+      resource: { select: { resourceKey: true, integrationId: true } },
     },
     orderBy: [{ lastSyncedAt: 'desc' }, { id: 'asc' }],
     take: 100,
@@ -46,6 +57,12 @@ export async function readTargetProvenance(
   return rows.flatMap((row) => {
     const provenance = integrationProvenanceSchema.safeParse(row.provenance);
     if (!provenance.success || provenance.data.state !== row.state) return [];
+    if (
+      row.companyMapping.companyId !== input.companyId ||
+      row.resource.integrationId !== row.companyMapping.integration.id ||
+      provenance.data.integrationId !== row.companyMapping.integration.id ||
+      provenance.data.resourceKey !== row.resource.resourceKey
+    ) return [];
     const target = safeProvenanceTarget(input.companyId, row);
     if (!target) return [];
     const dto = integrationTargetProvenanceSchema.safeParse({
@@ -378,29 +395,41 @@ function safeProvenanceTarget(
     targetKind: string;
     assetId: string | null; subnetId: string | null; ipReservationId: string | null;
     articleId: string | null; relationId: string | null;
-    asset: { name: string } | null; subnet: { name: string } | null;
-    ipReservation: { label: string; subnetId: string } | null;
-    article: { title: string } | null;
+    asset: { name: string; companyId: string } | null;
+    subnet: { name: string; companyId: string } | null;
+    ipReservation: {
+      label: string;
+      subnetId: string;
+      companyId: string;
+      subnet: { companyId: string };
+    } | null;
+    article: { title: string; companyId: string } | null;
+    relation: { companyId: string } | null;
   },
 ) {
-  if (row.targetKind === 'asset' && row.assetId && row.asset) return {
+  if (row.targetKind === 'asset' && row.assetId && row.asset?.companyId === companyId) return {
     targetKind: 'asset' as const, targetId: row.assetId, targetLabel: row.asset.name,
     targetHref: `/admin/companies/${companyId}/assets/${row.assetId}`,
   };
-  if (row.targetKind === 'subnet' && row.subnetId && row.subnet) return {
+  if (row.targetKind === 'subnet' && row.subnetId && row.subnet?.companyId === companyId) return {
     targetKind: 'subnet' as const, targetId: row.subnetId, targetLabel: row.subnet.name,
     targetHref: `/admin/companies/${companyId}/ipam/${row.subnetId}`,
   };
-  if (row.targetKind === 'ip_reservation' && row.ipReservationId && row.ipReservation) return {
+  if (
+    row.targetKind === 'ip_reservation' &&
+    row.ipReservationId &&
+    row.ipReservation?.companyId === companyId &&
+    row.ipReservation.subnet.companyId === companyId
+  ) return {
     targetKind: 'ip_reservation' as const, targetId: row.ipReservationId,
     targetLabel: row.ipReservation.label,
     targetHref: `/admin/companies/${companyId}/ipam/${row.ipReservation.subnetId}`,
   };
-  if (row.targetKind === 'article' && row.articleId && row.article) return {
+  if (row.targetKind === 'article' && row.articleId && row.article?.companyId === companyId) return {
     targetKind: 'article' as const, targetId: row.articleId, targetLabel: row.article.title,
     targetHref: `/admin/companies/${companyId}/articles/${row.articleId}`,
   };
-  if (row.targetKind === 'relation' && row.relationId) return {
+  if (row.targetKind === 'relation' && row.relationId && row.relation?.companyId === companyId) return {
     targetKind: 'relation' as const, targetId: row.relationId, targetLabel: 'Relationship', targetHref: null,
   };
   return null;

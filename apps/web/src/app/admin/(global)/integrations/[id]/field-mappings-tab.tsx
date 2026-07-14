@@ -162,10 +162,7 @@ export function FieldMappingsTab({
             maxWidth: 480,
           }}
         >
-          Enable {resourceLabel.toLowerCase()} to pick an asset layout, choose
-          match-key fields, and project upstream columns onto Weavestream
-          fields. Each resource binds to its own layout — devices and clients
-          can use different layouts in the same integration.
+          {disabledResourceDescription(resource)}
         </p>
         {enableError && <Tag tone="danger">{enableError}</Tag>}
         <Btn kind="primary" onClick={enableResource} loading={enablePending}>
@@ -198,6 +195,22 @@ export function FieldMappingsTab({
       onResourceUpdate={(next) => setResourceRow(next)}
     />
   );
+}
+
+function disabledResourceDescription(resource: DriverResourceDescriptor): string {
+  const label = resource.label.toLowerCase();
+  switch (resource.targetKind) {
+    case 'article':
+      return `Enable ${label} to configure the destination folder, visibility, and article template.`;
+    case 'subnet':
+      return `Enable ${label} to review CIDR normalization and native subnet identity matching.`;
+    case 'ip_reservation':
+      return `Enable ${label} to review IP normalization and native reservation identity matching.`;
+    case 'relation':
+      return `Enable ${label} to configure dependency resources and relationship type mapping.`;
+    case 'asset':
+      return `Enable ${label} to pick an asset layout, choose match-key fields, and project upstream columns onto Weavestream fields.`;
+  }
 }
 
 function ResourceEditor({

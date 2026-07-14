@@ -75,6 +75,30 @@ describe('FieldMappingsTab target-aware configuration', () => {
     expect(screen.getByLabelText('Type mapping (JSON)')).toHaveValue('{\n  "host_vm": "depends_on"\n}');
   });
 
+  it('uses target-aware enable instructions for disabled article and relation resources', () => {
+    render(<>
+      <FieldMappingsTab
+        integration={{ id: 'integration-1', resources: [] } as never}
+        mappings={[]} driver={{} as never}
+        resource={{
+          key: 'scripts', label: 'Scripts', targetKind: 'article',
+          targetConfig: { folderSlug: 'scripts' }, dependsOnResourceKeys: [],
+        } as never}
+      />
+      <FieldMappingsTab
+        integration={{ id: 'integration-1', resources: [] } as never}
+        mappings={[]} driver={{} as never}
+        resource={{
+          key: 'relationships', label: 'Relationships', targetKind: 'relation',
+          targetConfig: {}, dependsOnResourceKeys: ['devices'],
+        } as never}
+      />
+    </>);
+    expect(screen.getByText(/destination folder, visibility, and article template/i)).toBeInTheDocument();
+    expect(screen.getByText(/dependency resources and relationship type mapping/i)).toBeInTheDocument();
+    expect(screen.queryByText(/asset layout|match-key|project upstream/i)).not.toBeInTheDocument();
+  });
+
   it('round-trips every existing transform step when saving an asset mapping', async () => {
     const assetResource = resourceRow({
       resourceKey: 'devices', resourceLabel: 'Devices', targetKind: 'asset', targetConfig: {},

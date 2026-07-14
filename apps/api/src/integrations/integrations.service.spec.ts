@@ -77,6 +77,43 @@ describe('validateResourceTargetConfig', () => {
       sourceEndpoint: '/attacker-controlled-route', folderSlug: 'scripts', visibility: 'internal',
     })).toThrow(/descriptor-owned/i);
   });
+
+  it.each([
+    ['bindingResourceKey', { bindingResourceKey: 'foreign-resource' }],
+    ['sourceEndpoint', { sourceEndpoint: '/attacker-controlled-route' }],
+  ])('rejects an injected descriptor-owned %s when an asset descriptor omits it', (
+    _field,
+    targetConfig,
+  ) => {
+    const asset = {
+      key: 'devices', label: 'Devices', targetKind: 'asset',
+      targetConfig: {}, dependsOnResourceKeys: [],
+    } as const;
+    expect(() => validateResourceTargetConfig(asset as never, targetConfig))
+      .toThrow(/descriptor-owned/i);
+  });
+
+  it('rejects an injected article source endpoint while preserving approved mutable fields', () => {
+    const article = {
+      key: 'scripts', label: 'Scripts', targetKind: 'article',
+      targetConfig: { folderSlug: 'scripts', visibility: 'internal' },
+      dependsOnResourceKeys: [],
+    } as const;
+    expect(() => validateResourceTargetConfig(article as never, {
+      sourceEndpoint: '/attacker-controlled-route', folderSlug: 'scripts', visibility: 'internal',
+    })).toThrow(/descriptor-owned/i);
+    expect(validateResourceTargetConfig(article as never, {
+      folderSlug: 'procedures', visibility: 'company', template: '# {{title}}',
+    })).toEqual({ folderSlug: 'procedures', visibility: 'company', template: '# {{title}}' });
+
+    const relation = {
+      key: 'relationships', label: 'Relationships', targetKind: 'relation',
+      targetConfig: { sourceEndpoint: '/relationships' }, dependsOnResourceKeys: ['devices'],
+    } as const;
+    expect(validateResourceTargetConfig(relation as never, {
+      sourceEndpoint: '/relationships', typeMapping: { host_vm: 'depends_on' },
+    })).toEqual({ sourceEndpoint: '/relationships', typeMapping: { host_vm: 'depends_on' } });
+  });
 });
 
 it('rejects asset layout and match controls for non-asset resources', () => {
@@ -89,6 +126,12 @@ it('rejects asset layout and match controls for non-asset resources', () => {
   expect(() => assertResourcePatchCompatible({ targetKind: 'asset' } as never, {
     matchKeyFieldIds: [],
   })).not.toThrow();
+});
+
+it('rejects persisted resource target-kind drift before applying a patch', () => {
+  expect(() => (assertResourcePatchCompatible as unknown as (
+    descriptor: { targetKind: string }, input: object, persistedTargetKind: string,
+  ) => void)({ targetKind: 'article' }, {}, 'asset')).toThrow(/target kind/i);
 });
 
 describe('ensureResourceDestination', () => {
@@ -465,18 +508,50 @@ describe('reconstruction administration reads', () => {
       id: ids.summary, companyId: ids.company, integrationCompanyMappingId: ids.mapping,
       resourceId: ids.resource, counts, evaluatedAt: new Date('2026-07-14T01:00:00Z'),
       lastSuccessfulSyncAt: new Date('2026-07-14T00:59:00Z'),
-      company: { name: 'Acme' }, companyMapping: { externalOrgName: 'Acme upstream', externalOrgId: 'org-a' },
-      resource: { resourceKey: 'devices' },
+      company: { name: 'Acme' },
+      companyMapping: {
+        companyId: ids.company, integrationId: ids.integration,
+        externalOrgName: 'Raw upstream tenant', externalOrgId: 'raw-upstream-org-id',
+      },
+      resource: { resourceKey: 'devices', integrationId: ids.integration },
     }]);
 
-    await expect(service.getReconstructionCompleteness(ids.integration, {
+    const response = await service.getReconstructionCompleteness(ids.integration, {
       mappingId: ids.mapping, resourceId: ids.resource,
-    })).resolves.toMatchObject({ counts, rows: [{ resourceKey: 'devices', counts }] });
+    });
+    expect(response).toMatchObject({ counts, rows: [{ resourceKey: 'devices', counts }] });
+    expect(JSON.stringify(response)).not.toMatch(/Raw upstream tenant|raw-upstream-org-id/);
     expect(prisma.integrationReconstructionSummary.findMany).toHaveBeenCalledWith(
-      expect.objectContaining({ orderBy: [
-        { integrationCompanyMappingId: 'asc' }, { resourceId: 'asc' }, { id: 'asc' },
-      ] }),
+      expect.objectContaining({
+        where: expect.objectContaining({
+          companyMapping: { integrationId: ids.integration },
+          resource: { integrationId: ids.integration },
+        }),
+        orderBy: [
+          { integrationCompanyMappingId: 'asc' }, { resourceId: 'asc' }, { id: 'asc' },
+        ],
+      }),
     );
+  });
+
+  it.each([
+    ['foreign resource integration', ids.company, '00000000-0000-4000-8000-000000000099'],
+    ['mapping company mismatch', '00000000-0000-4000-8000-000000000098', ids.integration],
+  ])('rejects inconsistent completeness scope: %s', async (
+    _label,
+    mappingCompanyId,
+    resourceIntegrationId,
+  ) => {
+    const { prisma, service } = setup();
+    prisma.integrationReconstructionSummary.findMany.mockResolvedValueOnce([{
+      id: ids.summary, companyId: ids.company, integrationCompanyMappingId: ids.mapping,
+      resourceId: ids.resource, counts, evaluatedAt: new Date('2026-07-14T01:00:00Z'),
+      lastSuccessfulSyncAt: null, company: { name: 'Acme' },
+      companyMapping: { companyId: mappingCompanyId, integrationId: ids.integration },
+      resource: { resourceKey: 'devices', integrationId: resourceIntegrationId },
+    }]);
+    await expect(service.getReconstructionCompleteness(ids.integration, {}))
+      .rejects.toThrow(/inconsistent reconstruction scope/i);
   });
 
   it('rejects a mapping or resource outside the integration instead of returning an empty probe', async () => {
@@ -494,13 +569,16 @@ describe('reconstruction administration reads', () => {
       resourceId: ids.resource, kind: 'synchronization_error',
       message: 'Upstream record could not be synchronized.', details: { sourceId: 'must-not-leak' },
       firstSeenAt: new Date('2026-07-14T00:00:00Z'), lastSeenAt: new Date('2026-07-14T00:01:00Z'),
-      resolvedAt: null, company: { name: 'Acme' },
-      companyMapping: { externalOrgName: 'Acme upstream', externalOrgId: 'org-a' },
-      resource: { resourceKey: 'devices' },
+      createdAt: new Date('2026-07-14T00:00:00Z'), resolvedAt: null, company: { name: 'Acme' },
+      companyMapping: {
+        companyId: ids.company, integrationId: ids.integration,
+        externalOrgName: 'Raw upstream tenant', externalOrgId: 'raw-upstream-org-id',
+      },
+      resource: { resourceKey: 'devices', integrationId: ids.integration },
       syncRecord: {
         companyId: ids.company, integrationCompanyMappingId: ids.mapping, resourceId: ids.resource,
         targetKind: 'asset', assetId: ids.target, subnetId: null, ipReservationId: null,
-        articleId: null, relationId: null, asset: { name: 'HV-01' }, subnet: null,
+        articleId: null, relationId: null, asset: { name: 'HV-01', companyId: ids.company }, subnet: null,
         ipReservation: null, article: null,
       },
     };
@@ -512,6 +590,7 @@ describe('reconstruction administration reads', () => {
       mappingId: ids.mapping, resourceId: ids.resource, resolution: 'active', limit: 1,
     });
     expect(JSON.stringify(first)).not.toContain('must-not-leak');
+    expect(JSON.stringify(first)).not.toMatch(/Raw upstream tenant|raw-upstream-org-id/);
     expect(first.items[0]?.target).toMatchObject({ targetKind: 'asset', targetId: ids.target });
     expect(first.nextCursor).toEqual(expect.any(String));
 
@@ -523,10 +602,13 @@ describe('reconstruction administration reads', () => {
     expect(second.nextCursor).toBeNull();
     expect(prisma.integrationReconstructionGap.findMany.mock.calls[1]?.[0]).toEqual(
       expect.objectContaining({
-        where: expect.objectContaining({ OR: [
-          { lastSeenAt: { lt: new Date('2026-07-14T00:01:00.000Z') } },
-          { lastSeenAt: new Date('2026-07-14T00:01:00.000Z'), id: { gt: ids.gap } },
-        ] }),
+        where: expect.objectContaining({
+          resource: { integrationId: ids.integration },
+          OR: [
+            { createdAt: { lt: new Date('2026-07-14T00:00:00.000Z') } },
+            { createdAt: new Date('2026-07-14T00:00:00.000Z'), id: { gt: ids.gap } },
+          ],
+        }),
       }),
     );
 
@@ -540,25 +622,128 @@ describe('reconstruction administration reads', () => {
     })).rejects.toThrow(/cursor/i);
   });
 
+  it.each([
+    ['foreign resource integration', ids.company, '00000000-0000-4000-8000-000000000099'],
+    ['mapping company mismatch', '00000000-0000-4000-8000-000000000098', ids.integration],
+  ])('rejects inconsistent gap scope: %s', async (
+    _label,
+    mappingCompanyId,
+    resourceIntegrationId,
+  ) => {
+    const { prisma, service } = setup();
+    prisma.integrationReconstructionGap.findMany.mockResolvedValueOnce([{
+      id: ids.gap, companyId: ids.company, integrationCompanyMappingId: ids.mapping,
+      resourceId: ids.resource, kind: 'validation', message: 'Review required.',
+      firstSeenAt: new Date('2026-07-14T00:00:00Z'), lastSeenAt: new Date('2026-07-14T00:01:00Z'),
+      createdAt: new Date('2026-07-14T00:00:00Z'), resolvedAt: null, company: { name: 'Acme' },
+      companyMapping: { companyId: mappingCompanyId, integrationId: ids.integration },
+      resource: { resourceKey: 'devices', integrationId: resourceIntegrationId }, syncRecord: null,
+    }]);
+    await expect(service.listReconstructionGaps(ids.integration, { resolution: 'active', limit: 50 }))
+      .rejects.toThrow(/inconsistent reconstruction scope/i);
+  });
+
   it('does not return native target metadata from a non-exact gap binding', async () => {
     const { prisma, service } = setup();
     prisma.integrationReconstructionGap.findMany.mockResolvedValueOnce([{
       id: ids.gap, companyId: ids.company, integrationCompanyMappingId: ids.mapping,
       resourceId: ids.resource, kind: 'validation', message: 'Review required.',
       firstSeenAt: new Date('2026-07-14T00:00:00Z'), lastSeenAt: new Date('2026-07-14T00:01:00Z'),
-      resolvedAt: null, company: { name: 'Acme' },
-      companyMapping: { externalOrgName: 'Acme upstream', externalOrgId: 'org-a' },
-      resource: { resourceKey: 'devices' },
+      createdAt: new Date('2026-07-14T00:00:00Z'), resolvedAt: null, company: { name: 'Acme' },
+      companyMapping: { companyId: ids.company, integrationId: ids.integration },
+      resource: { resourceKey: 'devices', integrationId: ids.integration },
       syncRecord: {
         companyId: '00000000-0000-4000-8000-000000000099',
         integrationCompanyMappingId: ids.mapping, resourceId: ids.resource,
         targetKind: 'asset', assetId: ids.target, subnetId: null, ipReservationId: null,
-        articleId: null, relationId: null, asset: { name: 'Foreign asset' }, subnet: null,
+        articleId: null, relationId: null,
+        asset: { name: 'Foreign asset', companyId: '00000000-0000-4000-8000-000000000099' }, subnet: null,
         ipReservation: null, article: null,
       },
     }]);
     await expect(service.listReconstructionGaps(ids.integration, {
       resolution: 'active', limit: 50,
     })).resolves.toMatchObject({ items: [{ target: null }] });
+  });
+
+  it('does not return a target label when the native entity belongs to another company', async () => {
+    const { prisma, service } = setup();
+    prisma.integrationReconstructionGap.findMany.mockResolvedValueOnce([{
+      id: ids.gap, companyId: ids.company, integrationCompanyMappingId: ids.mapping,
+      resourceId: ids.resource, kind: 'validation', message: 'Review required.',
+      firstSeenAt: new Date('2026-07-14T00:00:00Z'), lastSeenAt: new Date('2026-07-14T00:01:00Z'),
+      createdAt: new Date('2026-07-14T00:00:00Z'), resolvedAt: null, company: { name: 'Acme' },
+      companyMapping: { companyId: ids.company, integrationId: ids.integration },
+      resource: { resourceKey: 'devices', integrationId: ids.integration },
+      syncRecord: {
+        companyId: ids.company, integrationCompanyMappingId: ids.mapping, resourceId: ids.resource,
+        targetKind: 'asset', assetId: ids.target, subnetId: null, ipReservationId: null,
+        articleId: null, relationId: null,
+        asset: { name: 'Foreign asset', companyId: '00000000-0000-4000-8000-000000000099' },
+        subnet: null, ipReservation: null, article: null, relation: null,
+      },
+    }]);
+    await expect(service.listReconstructionGaps(ids.integration, {
+      resolution: 'active', limit: 50,
+    })).resolves.toMatchObject({ items: [{ target: null }] });
+  });
+
+  it('traverses one immutable snapshot exactly once when lastSeenAt changes between pages', async () => {
+    const { prisma, service } = setup();
+    const row = (id: string, createdAt: string, lastSeenAt: string) => ({
+      id, companyId: ids.company, integrationCompanyMappingId: ids.mapping,
+      resourceId: ids.resource, kind: 'validation', message: 'Review required.',
+      firstSeenAt: new Date('2020-01-01T00:00:00Z'), lastSeenAt: new Date(lastSeenAt),
+      createdAt: new Date(createdAt), resolvedAt: null, company: { name: 'Acme' },
+      companyMapping: {
+        companyId: ids.company, integrationId: ids.integration,
+        externalOrgName: 'Raw upstream tenant', externalOrgId: 'raw-upstream-org-id',
+      },
+      resource: { resourceKey: 'devices', integrationId: ids.integration }, syncRecord: null,
+    });
+    const rows = [
+      row(ids.gap, '2020-01-03T00:00:00Z', '2020-01-03T00:00:00Z'),
+      row(ids.summary, '2020-01-02T00:00:00Z', '2020-01-02T00:00:00Z'),
+      row(ids.target, '2020-01-01T00:00:00Z', '2020-01-01T00:00:00Z'),
+    ];
+    prisma.integrationReconstructionGap.findMany.mockImplementation(async (args: any) => {
+      let candidates = [...rows];
+      if (args.where.createdAt?.lte) {
+        candidates = candidates.filter((candidate) => candidate.createdAt <= args.where.createdAt.lte);
+      }
+      const boundary = args.where.OR as Array<Record<string, any>> | undefined;
+      if (boundary) {
+        const key = boundary[0]?.createdAt ? 'createdAt' : 'lastSeenAt';
+        const value = boundary[0]?.[key]?.lt as Date;
+        const equalValue = boundary[1]?.[key] as Date;
+        const boundaryId = boundary[1]?.id?.gt as string;
+        candidates = candidates.filter((candidate) =>
+          candidate[key] < value || (candidate[key].getTime() === equalValue.getTime() && candidate.id > boundaryId),
+        );
+      }
+      const orderKey = Object.keys(args.orderBy[0])[0] as 'createdAt' | 'lastSeenAt';
+      candidates.sort((a, b) => b[orderKey].getTime() - a[orderKey].getTime() || a.id.localeCompare(b.id));
+      return candidates.slice(0, args.take);
+    });
+
+    const first = await service.listReconstructionGaps(ids.integration, {
+      resolution: 'active', limit: 1,
+    });
+    rows[1]!.lastSeenAt = new Date('2020-01-04T00:00:00Z');
+
+    const seen = first.items.map((item) => item.id);
+    const cursors = new Set<string>();
+    let cursor = first.nextCursor;
+    while (cursor) {
+      expect(cursors.has(cursor)).toBe(false);
+      cursors.add(cursor);
+      const page = await service.listReconstructionGaps(ids.integration, {
+        resolution: 'active', limit: 1, cursor,
+      });
+      seen.push(...page.items.map((item) => item.id));
+      cursor = page.nextCursor;
+    }
+    expect(seen).toEqual([ids.gap, ids.summary, ids.target]);
+    expect(new Set(seen).size).toBe(3);
   });
 });

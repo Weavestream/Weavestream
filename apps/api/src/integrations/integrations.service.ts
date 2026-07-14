@@ -707,10 +707,11 @@ export class IntegrationsService {
     const resourceDescriptor = driver.descriptor.resources.find(
       (resource) => resource.key === resourceKey,
     )!;
-    assertResourcePatchCompatible(resourceDescriptor, input);
-    const nextTargetConfig = input.targetConfig === undefined
-      ? (existing.targetConfig as Record<string, unknown>)
-      : validateResourceTargetConfig(resourceDescriptor, input.targetConfig);
+    assertResourcePatchCompatible(resourceDescriptor, input, existing.targetKind);
+    const nextTargetConfig = validateResourceTargetConfig(
+      resourceDescriptor,
+      input.targetConfig ?? (existing.targetConfig as Record<string, unknown>),
+    );
 
     const nextLayoutId =
       input.assetLayoutId === undefined ? existing.assetLayoutId : input.assetLayoutId;
@@ -801,13 +802,14 @@ export class IntegrationsService {
     const rows = await this.prisma.integrationReconstructionSummary.findMany({
       where: {
         companyMapping: { integrationId },
+        resource: { integrationId },
         ...(query.mappingId ? { integrationCompanyMappingId: query.mappingId } : {}),
         ...(query.resourceId ? { resourceId: query.resourceId } : {}),
       },
       include: {
         company: { select: { name: true } },
-        companyMapping: { select: { externalOrgName: true, externalOrgId: true } },
-        resource: { select: { resourceKey: true } },
+        companyMapping: { select: { companyId: true, integrationId: true } },
+        resource: { select: { resourceKey: true, integrationId: true } },
       },
       orderBy: [
         { integrationCompanyMappingId: 'asc' },
@@ -824,15 +826,13 @@ export class IntegrationsService {
       : null;
     const responseRows = rows.flatMap((row) => {
       if (!row.resourceId || !row.resource) return [];
+      assertReconstructionRowScope(integrationId, row.companyId, row.companyMapping, row.resource);
       const counts = reconstructionCompletenessCountsSchema.parse(row.counts);
-      const externalOrgName = row.companyMapping.externalOrgName?.trim()
-        || row.companyMapping.externalOrgId;
       return [{
         id: row.id,
         companyId: row.companyId,
         companyName: row.company.name,
         integrationCompanyMappingId: row.integrationCompanyMappingId,
-        externalOrgName,
         resourceId: row.resourceId,
         resourceKey: row.resource.resourceKey,
         resourceLabel: descriptor?.resources.find((resource) => resource.key === row.resource!.resourceKey)?.label
@@ -856,6 +856,7 @@ export class IntegrationsService {
     const cursor = query.cursor
       ? decodeGapCursor(query.cursor, integrationId, query, this.env.integrationActiveKey)
       : null;
+    const snapshotAt = cursor?.snapshotAt ?? new Date();
     const resolutionWhere = query.resolution === 'active'
       ? { resolvedAt: null }
       : query.resolution === 'resolved'
@@ -864,36 +865,47 @@ export class IntegrationsService {
     const rows = await this.prisma.integrationReconstructionGap.findMany({
       where: {
         companyMapping: { integrationId },
+        resource: { integrationId },
+        createdAt: { lte: snapshotAt },
         ...(query.mappingId ? { integrationCompanyMappingId: query.mappingId } : {}),
         ...(query.resourceId ? { resourceId: query.resourceId } : {}),
         ...(query.kind ? { kind: query.kind } : {}),
         ...resolutionWhere,
         ...(cursor ? {
           OR: [
-            { lastSeenAt: { lt: cursor.lastSeenAt } },
-            { lastSeenAt: cursor.lastSeenAt, id: { gt: cursor.id } },
+            { createdAt: { lt: cursor.createdAt } },
+            { createdAt: cursor.createdAt, id: { gt: cursor.id } },
           ],
         } : {}),
       },
       include: {
         company: { select: { name: true } },
-        companyMapping: { select: { externalOrgName: true, externalOrgId: true } },
-        resource: { select: { resourceKey: true } },
+        companyMapping: { select: { companyId: true, integrationId: true } },
+        resource: { select: { resourceKey: true, integrationId: true } },
         syncRecord: {
           select: {
             companyId: true, integrationCompanyMappingId: true, resourceId: true,
             targetKind: true,
             assetId: true, subnetId: true, ipReservationId: true, articleId: true, relationId: true,
-            asset: { select: { name: true } },
-            subnet: { select: { name: true } },
-            ipReservation: { select: { label: true, subnetId: true } },
-            article: { select: { title: true } },
+            asset: { select: { name: true, companyId: true } },
+            subnet: { select: { name: true, companyId: true } },
+            ipReservation: {
+              select: {
+                label: true, subnetId: true, companyId: true,
+                subnet: { select: { companyId: true } },
+              },
+            },
+            article: { select: { title: true, companyId: true } },
+            relation: { select: { companyId: true } },
           },
         },
       },
-      orderBy: [{ lastSeenAt: 'desc' }, { id: 'asc' }],
+      orderBy: [{ createdAt: 'desc' }, { id: 'asc' }],
       take: query.limit + 1,
     });
+    for (const row of rows) {
+      assertReconstructionRowScope(integrationId, row.companyId, row.companyMapping, row.resource);
+    }
     const hasMore = rows.length > query.limit;
     const pageRows = hasMore ? rows.slice(0, query.limit) : rows;
     const descriptor = this.drivers.has(integration.driver)
@@ -904,7 +916,6 @@ export class IntegrationsService {
       companyId: row.companyId,
       companyName: row.company.name,
       integrationCompanyMappingId: row.integrationCompanyMappingId,
-      externalOrgName: row.companyMapping.externalOrgName?.trim() || row.companyMapping.externalOrgId,
       resourceId: row.resourceId,
       resourceKey: row.resource.resourceKey,
       resourceLabel: descriptor?.resources.find((resource) => resource.key === row.resource.resourceKey)?.label
@@ -922,7 +933,13 @@ export class IntegrationsService {
     }));
     const last = pageRows.at(-1);
     const nextCursor = hasMore && last
-      ? encodeGapCursor({ id: last.id, lastSeenAt: last.lastSeenAt }, integrationId, query, this.env.integrationActiveKey)
+      ? encodeGapCursor(
+        { id: last.id, createdAt: last.createdAt },
+        snapshotAt,
+        integrationId,
+        query,
+        this.env.integrationActiveKey,
+      )
       : null;
     return integrationGapsPageSchema.parse({ items, nextCursor });
   }
@@ -1358,24 +1375,50 @@ export function validateResourceTargetConfig(
     : descriptor.targetKind === 'relation'
       ? new Set(['typeMapping'])
       : new Set<string>();
-  for (const [key, descriptorValue] of Object.entries(descriptor.targetConfig)) {
-    if (
-      !mutableKeys.has(key) &&
-      JSON.stringify(parsed.data.targetConfig[key as keyof typeof parsed.data.targetConfig]) !==
-        JSON.stringify(descriptorValue)
-    ) {
+  const descriptorTargetConfig = descriptor.targetConfig as Record<string, unknown>;
+  const parsedTargetConfig = parsed.data.targetConfig as Record<string, unknown>;
+  for (const [key, parsedValue] of Object.entries(parsedTargetConfig)) {
+    if (!mutableKeys.has(key) && (
+      !Object.hasOwn(descriptorTargetConfig, key) ||
+      JSON.stringify(parsedValue) !== JSON.stringify(descriptorTargetConfig[key])
+    )) {
       throw new BadRequestException(
         `Target configuration field "${key}" is descriptor-owned and cannot be changed.`,
       );
     }
   }
-  return parsed.data.targetConfig;
+  for (const [key, descriptorValue] of Object.entries(descriptorTargetConfig)) {
+    if (!mutableKeys.has(key) && !Object.hasOwn(parsedTargetConfig, key)) {
+      throw new BadRequestException(
+        `Target configuration field "${key}" is descriptor-owned and cannot be changed.`,
+      );
+    }
+    if (!mutableKeys.has(key) && JSON.stringify(parsedTargetConfig[key]) !== JSON.stringify(descriptorValue)) {
+      throw new BadRequestException(
+        `Target configuration field "${key}" is descriptor-owned and cannot be changed.`,
+      );
+    }
+  }
+  const validated: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(descriptorTargetConfig)) {
+    if (!mutableKeys.has(key)) validated[key] = value;
+  }
+  for (const [key, value] of Object.entries(parsedTargetConfig)) {
+    if (mutableKeys.has(key)) validated[key] = value;
+  }
+  return validated;
 }
 
 export function assertResourcePatchCompatible(
   descriptor: Pick<DriverResourceDescriptor, 'targetKind'>,
   input: Pick<UpdateIntegrationResourceInput, 'assetLayoutId' | 'matchKeyFieldIds'>,
+  persistedTargetKind: string = descriptor.targetKind,
 ): void {
+  if (persistedTargetKind !== descriptor.targetKind) {
+    throw new BadRequestException(
+      'Persisted resource target kind does not match the immutable driver descriptor.',
+    );
+  }
   if (
     descriptor.targetKind !== 'asset' &&
     (input.assetLayoutId !== undefined || input.matchKeyFieldIds !== undefined)
@@ -1431,7 +1474,28 @@ function addCompletenessCounts(target: CompletenessCountsValue, source: Complete
   }
 }
 
-type GapCursorPayload = { v: 1; id: string; lastSeenAt: string; scope: string };
+function assertReconstructionRowScope(
+  integrationId: string,
+  companyId: string,
+  companyMapping: { companyId: string; integrationId: string },
+  resource: { integrationId: string },
+): void {
+  if (
+    companyMapping.integrationId !== integrationId ||
+    resource.integrationId !== integrationId ||
+    companyMapping.companyId !== companyId
+  ) {
+    throw new BadRequestException('Inconsistent reconstruction scope.');
+  }
+}
+
+type GapCursorPayload = {
+  v: 2;
+  id: string;
+  createdAt: string;
+  snapshotAt: string;
+  scope: string;
+};
 
 function gapCursorScope(
   integrationId: string,
@@ -1447,20 +1511,22 @@ function gapCursorScope(
 }
 
 function encodeGapCursor(
-  row: { id: string; lastSeenAt: Date },
+  row: { id: string; createdAt: Date },
+  snapshotAt: Date,
   integrationId: string,
   query: IntegrationGapsQuery,
   key: Buffer,
 ): string {
   const payload: GapCursorPayload = {
-    v: 1,
+    v: 2,
     id: row.id,
-    lastSeenAt: row.lastSeenAt.toISOString(),
+    createdAt: row.createdAt.toISOString(),
+    snapshotAt: snapshotAt.toISOString(),
     scope: gapCursorScope(integrationId, query),
   };
   const encoded = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
   const signature = createHmac('sha256', key)
-    .update('weavestream-integration-gap-cursor-v1\0')
+    .update('weavestream-integration-gap-cursor-v2\0')
     .update(encoded)
     .digest('base64url');
   return `${encoded}.${signature}`;
@@ -1471,12 +1537,12 @@ function decodeGapCursor(
   integrationId: string,
   query: IntegrationGapsQuery,
   key: Buffer,
-): { id: string; lastSeenAt: Date } {
+): { id: string; createdAt: Date; snapshotAt: Date } {
   try {
     const [encoded, suppliedSignature, extra] = cursor.split('.');
     if (!encoded || !suppliedSignature || extra !== undefined) throw new Error('shape');
     const expectedSignature = createHmac('sha256', key)
-      .update('weavestream-integration-gap-cursor-v1\0')
+      .update('weavestream-integration-gap-cursor-v2\0')
       .update(encoded)
       .digest();
     const supplied = Buffer.from(suppliedSignature, 'base64url');
@@ -1485,17 +1551,23 @@ function decodeGapCursor(
     }
     const payload = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8')) as Partial<GapCursorPayload>;
     if (
-      payload.v !== 1 ||
+      payload.v !== 2 ||
       typeof payload.id !== 'string' ||
       !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(payload.id) ||
       payload.scope !== gapCursorScope(integrationId, query) ||
-      typeof payload.lastSeenAt !== 'string'
+      typeof payload.createdAt !== 'string' ||
+      typeof payload.snapshotAt !== 'string'
     ) throw new Error('payload');
-    const lastSeenAt = new Date(payload.lastSeenAt);
-    if (!Number.isFinite(lastSeenAt.getTime()) || lastSeenAt.toISOString() !== payload.lastSeenAt) {
+    const createdAt = new Date(payload.createdAt);
+    const snapshotAt = new Date(payload.snapshotAt);
+    if (
+      !Number.isFinite(createdAt.getTime()) || createdAt.toISOString() !== payload.createdAt ||
+      !Number.isFinite(snapshotAt.getTime()) || snapshotAt.toISOString() !== payload.snapshotAt ||
+      createdAt > snapshotAt
+    ) {
       throw new Error('date');
     }
-    return { id: payload.id, lastSeenAt };
+    return { id: payload.id, createdAt, snapshotAt };
   } catch {
     throw new BadRequestException('Invalid or mismatched reconstruction gap cursor.');
   }
@@ -1519,10 +1591,16 @@ function safeGapTarget(
     ipReservationId: string | null;
     articleId: string | null;
     relationId: string | null;
-    asset: { name: string } | null;
-    subnet: { name: string } | null;
-    ipReservation: { label: string; subnetId: string } | null;
-    article: { title: string } | null;
+    asset: { name: string; companyId: string } | null;
+    subnet: { name: string; companyId: string } | null;
+    ipReservation: {
+      label: string;
+      subnetId: string;
+      companyId: string;
+      subnet: { companyId: string };
+    } | null;
+    article: { title: string; companyId: string } | null;
+    relation: { companyId: string } | null;
   } | null,
 ): IntegrationNativeTarget | null {
   if (
@@ -1534,28 +1612,30 @@ function safeGapTarget(
   const companyId = scope.companyId;
   switch (record.targetKind) {
     case 'asset':
-      return record.assetId && record.asset ? {
+      return record.assetId && record.asset?.companyId === companyId ? {
         targetKind: 'asset', targetId: record.assetId, targetLabel: record.asset.name,
         targetHref: `/admin/companies/${companyId}/assets/${record.assetId}`,
       } : null;
     case 'subnet':
-      return record.subnetId && record.subnet ? {
+      return record.subnetId && record.subnet?.companyId === companyId ? {
         targetKind: 'subnet', targetId: record.subnetId, targetLabel: record.subnet.name,
         targetHref: `/admin/companies/${companyId}/ipam/${record.subnetId}`,
       } : null;
     case 'ip_reservation':
-      return record.ipReservationId && record.ipReservation ? {
+      return record.ipReservationId &&
+        record.ipReservation?.companyId === companyId &&
+        record.ipReservation.subnet.companyId === companyId ? {
         targetKind: 'ip_reservation', targetId: record.ipReservationId,
         targetLabel: record.ipReservation.label,
         targetHref: `/admin/companies/${companyId}/ipam/${record.ipReservation.subnetId}`,
       } : null;
     case 'article':
-      return record.articleId && record.article ? {
+      return record.articleId && record.article?.companyId === companyId ? {
         targetKind: 'article', targetId: record.articleId, targetLabel: record.article.title,
         targetHref: `/admin/companies/${companyId}/articles/${record.articleId}`,
       } : null;
     case 'relation':
-      return record.relationId ? {
+      return record.relationId && record.relation?.companyId === companyId ? {
         targetKind: 'relation', targetId: record.relationId,
         targetLabel: 'Relationship', targetHref: null,
       } : null;

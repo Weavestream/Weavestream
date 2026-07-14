@@ -403,6 +403,11 @@ function ResourceTotalsBreakdown({
         v.skippedAmbiguous > 0 ||
         v.skippedManual > 0 ||
         v.skippedArchived > 0 ||
+        v.stale > 0 ||
+        v.restored > 0 ||
+        v.blocked > 0 ||
+        v.secretBlocked > 0 ||
+        v.missingDependency > 0 ||
         v.errors > 0)
     );
   });

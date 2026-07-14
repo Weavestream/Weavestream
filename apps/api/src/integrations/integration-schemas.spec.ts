@@ -620,7 +620,7 @@ describe('integration zod schemas', () => {
         counts,
         rows: [{
           id: id('1'), companyId: id('2'), companyName: 'Acme',
-          integrationCompanyMappingId: id('3'), externalOrgName: 'Acme upstream',
+          integrationCompanyMappingId: id('3'),
           resourceId: id('4'), resourceKey: 'devices', resourceLabel: 'Devices',
           counts, evaluatedAt: '2026-07-14T01:00:00.000Z',
           lastSuccessfulSyncAt: '2026-07-14T00:59:00.000Z',
@@ -628,6 +628,10 @@ describe('integration zod schemas', () => {
       };
       expect(integrationCompletenessResponseSchema.parse(response)).toEqual(response);
       expect(() => integrationCompletenessResponseSchema.parse({ ...response, counts: { current: 1 } })).toThrow();
+      expect(() => integrationCompletenessResponseSchema.parse({
+        ...response,
+        rows: [{ ...response.rows[0], externalOrgName: 'Raw upstream tenant' }],
+      })).toThrow();
     });
 
     it('bounds and validates completeness and gap queries', () => {
@@ -657,7 +661,7 @@ describe('integration zod schemas', () => {
       const page = {
         items: [{
           id: id('9'), companyId: id('2'), companyName: 'Acme',
-          integrationCompanyMappingId: id('3'), externalOrgName: 'Acme upstream',
+          integrationCompanyMappingId: id('3'),
           resourceId: id('4'), resourceKey: 'devices', resourceLabel: 'Devices',
           kind: 'synchronization_error', message: 'Upstream record could not be synchronized.',
           firstSeenAt: '2026-07-14T00:00:00.000Z', lastSeenAt: '2026-07-14T00:01:00.000Z',
@@ -666,6 +670,10 @@ describe('integration zod schemas', () => {
         nextCursor: null,
       };
       expect(integrationGapsPageSchema.parse(page)).toEqual(page);
+      expect(() => integrationGapsPageSchema.parse({
+        ...page,
+        items: [{ ...page.items[0], externalOrgName: 'Raw upstream tenant' }],
+      })).toThrow();
       expect(() => integrationGapsPageSchema.parse({
         ...page,
         items: [{ ...page.items[0], details: { sourceValue: 'raw' } }],

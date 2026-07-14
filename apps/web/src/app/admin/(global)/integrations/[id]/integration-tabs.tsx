@@ -76,6 +76,44 @@ function resourceKeyFromTab(id: ResourceTabId): string {
   return id.slice('fields:'.length);
 }
 
+function resourceTabPresentation(resource: DriverResourceDescriptor): Pick<TabDescriptor, 'label' | 'help'> {
+  switch (resource.targetKind) {
+    case 'article':
+      return {
+        label: `${resource.label} articles`,
+        help: `Folder, visibility, and template configuration for ${resource.label.toLowerCase()}.`,
+      };
+    case 'subnet':
+      return {
+        label: `${resource.label} network`,
+        help: `Normalization and native subnet identity for ${resource.label.toLowerCase()}.`,
+      };
+    case 'ip_reservation':
+      return {
+        label: `${resource.label} reservations`,
+        help: `Normalization and native reservation identity for ${resource.label.toLowerCase()}.`,
+      };
+    case 'relation':
+      return {
+        label: `${resource.label} dependencies`,
+        help: `Dependency resources and type mapping for ${resource.label.toLowerCase()}.`,
+      };
+    case 'asset':
+      return {
+        label: `${resource.label} fields`,
+        help: `Layout, match keys, and field mappings for ${resource.label.toLowerCase()}.`,
+      };
+  }
+}
+
+function tabDomId(id: TabId): string {
+  return `integration-tab-${id.replace(/[^a-z0-9_-]/gi, '-')}`;
+}
+
+function panelDomId(id: TabId): string {
+  return `integration-panel-${id.replace(/[^a-z0-9_-]/gi, '-')}`;
+}
+
 export function IntegrationTabs({
   initialTab,
   integration,
@@ -110,8 +148,7 @@ export function IntegrationTabs({
           ];
     const resourceTabs: TabDescriptor[] = resources.map((r) => ({
       id: resourceTabId(r.key),
-      label: `${r.label} fields`,
-      help: `Layout, match keys, and field mappings for ${r.label.toLowerCase()}.`,
+      ...resourceTabPresentation(r),
       kind: 'resource',
       resource: r,
     }));
@@ -139,11 +176,25 @@ export function IntegrationTabs({
     router.replace(`/admin/integrations/${integration.id}?${params.toString()}`);
   }
 
+  function handleTabKeyDown(event: React.KeyboardEvent<HTMLButtonElement>, index: number) {
+    let nextIndex: number | null = null;
+    if (event.key === 'ArrowRight') nextIndex = (index + 1) % tabs.length;
+    if (event.key === 'ArrowLeft') nextIndex = (index - 1 + tabs.length) % tabs.length;
+    if (event.key === 'Home') nextIndex = 0;
+    if (event.key === 'End') nextIndex = tabs.length - 1;
+    if (nextIndex === null) return;
+    event.preventDefault();
+    const next = tabs[nextIndex]!;
+    navigate(next.id);
+    document.getElementById(tabDomId(next.id))?.focus();
+  }
+
   return (
     <div>
       <div
         role="tablist"
         aria-label="Integration sections"
+        aria-orientation="horizontal"
         style={{
           display: 'flex',
           gap: 2,
@@ -153,14 +204,18 @@ export function IntegrationTabs({
           overflowX: 'auto',
         }}
       >
-        {tabs.map((t) => {
+        {tabs.map((t, index) => {
           const active = t.id === tab;
           return (
             <button
               key={t.id}
+              id={tabDomId(t.id)}
               role="tab"
               aria-selected={active}
+              aria-controls={panelDomId(t.id)}
+              tabIndex={active ? 0 : -1}
               onClick={() => navigate(t.id)}
+              onKeyDown={(event) => handleTabKeyDown(event, index)}
               style={{
                 padding: '10px 14px',
                 fontSize: 13,
@@ -183,7 +238,13 @@ export function IntegrationTabs({
           );
         })}
       </div>
-      <div style={{ padding: 18 }}>
+      <div
+        id={panelDomId(tab)}
+        role="tabpanel"
+        aria-labelledby={tabDomId(tab)}
+        tabIndex={0}
+        style={{ padding: 18 }}
+      >
         {tab === 'creds' && (
           <CredentialsTab
             integration={integration}

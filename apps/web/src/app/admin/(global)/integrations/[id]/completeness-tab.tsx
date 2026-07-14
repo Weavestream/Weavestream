@@ -12,6 +12,7 @@ import {
 } from '@weavestream/shared';
 import { apiFetch } from '../../../../../lib/api';
 import { Btn, Tag } from '../../../../../components/ui';
+import { FormattedDateTime } from '../../../../../lib/timezone-context';
 
 const CATEGORIES = [
   ['synchronizedCurrent', 'Synchronized/current', 'ok'],
@@ -121,6 +122,37 @@ export function CompletenessTab({
               </div>
             ))}
           </div>
+          {summary.rows.length > 0 && (
+            <section>
+              <h4 style={{ margin: '0 0 8px', fontSize: 13 }}>Per mapping and resource</h4>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 8 }}>
+                {summary.rows.map((row) => (
+                  <article
+                    key={row.id}
+                    aria-label={`${row.companyName} ${row.resourceLabel} completeness`}
+                    style={{ border: '1px solid var(--line)', borderRadius: 7, padding: 10 }}
+                  >
+                    <div style={{ display: 'flex', gap: 7, alignItems: 'baseline', flexWrap: 'wrap' }}>
+                      <strong style={{ fontSize: 13 }}>{row.companyName}</strong>
+                      <span style={{ color: 'var(--muted)', fontSize: 12 }}>{row.resourceLabel}</span>
+                    </div>
+                    <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', marginTop: 8 }}>
+                      {CATEGORIES.map(([key, label, tone]) => (
+                        <Tag key={key} tone={tone}>{row.counts[key]} {label}</Tag>
+                      ))}
+                    </div>
+                    <div style={{ marginTop: 8, color: 'var(--muted)', fontSize: 11.5 }}>
+                      Evaluated <FormattedDateTime value={row.evaluatedAt} />
+                      {' · '}Last successful sync{' '}
+                      {row.lastSuccessfulSyncAt
+                        ? <FormattedDateTime value={row.lastSuccessfulSyncAt} />
+                        : 'Never'}
+                    </div>
+                  </article>
+                ))}
+              </div>
+            </section>
+          )}
           {summary.rows.length === 0 && gaps.length === 0 ? (
             <div style={emptyStyle}>No successful completeness evaluation exists for this scope.</div>
           ) : (
