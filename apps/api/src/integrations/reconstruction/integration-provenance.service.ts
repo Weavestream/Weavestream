@@ -13,10 +13,15 @@ import {
 import { AuditLogService } from '../../audit/audit.service.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { scanSensitiveMaterial } from '../sensitive-material.js';
+import {
+  integrationTargetAuditAction,
+  integrationTargetAuditAfter,
+} from '../../audit/audit-actions.js';
+import { RECONSTRUCTION_RUNTIME_LIMITS } from './reconstruction-limits.js';
 
 const DEFAULT_STALE_BATCH = 200;
 const DEFAULT_STALE_LIMIT = 10_000;
-const TARGET_MUTATION_BATCH = 500;
+const TARGET_MUTATION_BATCH = RECONSTRUCTION_RUNTIME_LIMITS.nativeMutationBatch;
 const MAX_GAPS_PER_PAGE = 1_000;
 
 export async function readTargetProvenance(
@@ -318,16 +323,24 @@ export class IntegrationProvenanceService {
         },
       });
       if (this.audit?.logWithClient) {
+        const targetId = targetIdForKind(row, row.targetKind);
         await this.audit.logWithClient(tx, {
           actorId: input.auditActorId,
-          action: 'integration.reconstruction.stale',
-          entityType: 'IntegrationSyncRecord',
-          entityId: row.id,
+          action: integrationTargetAuditAction('stale'),
+          entityType: 'IntegrationTarget',
+          entityId: targetId,
           companyId: input.companyId,
           ip: '0.0.0.0',
           userAgent: 'weavestream-worker/integration-reconstruction',
-          before: { state: row.state },
-          after: { state: 'stale', targetKind: row.targetKind },
+          after: integrationTargetAuditAfter({
+            integrationId: input.integrationId,
+            integrationCompanyMappingId: input.integrationCompanyMappingId,
+            resourceId: input.resourceId,
+            targetId,
+            targetKind: row.targetKind,
+            state: 'stale',
+            counts: { records: 1, gaps: 0 },
+          }),
         });
       }
     }

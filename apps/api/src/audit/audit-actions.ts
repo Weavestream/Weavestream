@@ -158,6 +158,11 @@ export const AUDIT_ACTIONS = {
     assetArchived: 'integration.asset.archived',
     assetReleased: 'integration.asset.released',
     matchAmbiguous: 'integration.match.ambiguous',
+    targetCreated: 'integration.target.created',
+    targetUpdated: 'integration.target.updated',
+    targetStale: 'integration.target.stale',
+    targetRestored: 'integration.target.restored',
+    targetBlocked: 'integration.target.blocked',
     // Cloudflare Rules Lists integration. `entityType: 'CloudflareIpList'`
     // for list-level rows; entry-level mutations carry the same entityId
     // (the list row) with the diff in `after`.
@@ -281,3 +286,81 @@ export const ALL_AUDIT_ACTIONS: string[] = [
   ...Object.values(AUDIT_ACTIONS.aiTool),
   ...Object.values(AUDIT_ACTIONS.tickets),
 ];
+
+export type IntegrationTargetAuditChange =
+  | 'created'
+  | 'updated'
+  | 'stale'
+  | 'restored'
+  | 'blocked';
+
+export type IntegrationTargetAuditKind =
+  | 'asset'
+  | 'subnet'
+  | 'ip_reservation'
+  | 'article'
+  | 'relation';
+
+export type IntegrationTargetAuditState = 'active' | 'stale' | 'blocked';
+
+export type IntegrationTargetAuditReasonCategory =
+  | 'secret_blocked'
+  | 'missing_dependency'
+  | 'validation'
+  | 'unsupported'
+  | 'ambiguous'
+  | 'synchronization_error';
+
+export interface IntegrationTargetAuditInput {
+  integrationId: string;
+  integrationCompanyMappingId: string;
+  resourceId: string;
+  targetId: string | null;
+  targetKind: IntegrationTargetAuditKind;
+  state: IntegrationTargetAuditState;
+  counts?: { records?: number; gaps?: number };
+  reasonCategory?: IntegrationTargetAuditReasonCategory;
+}
+
+export function integrationTargetAuditAction(
+  change: IntegrationTargetAuditChange,
+): string {
+  return {
+    created: AUDIT_ACTIONS.integration.targetCreated,
+    updated: AUDIT_ACTIONS.integration.targetUpdated,
+    stale: AUDIT_ACTIONS.integration.targetStale,
+    restored: AUDIT_ACTIONS.integration.targetRestored,
+    blocked: AUDIT_ACTIONS.integration.targetBlocked,
+  }[change];
+}
+
+/**
+ * Build the only payload shape allowed for reconstruction target lifecycle
+ * audit rows. Callers cannot pass upstream identifiers, source records, field
+ * values, article bodies, gap details, or credentials through this allowlist.
+ */
+export function integrationTargetAuditAfter(
+  input: IntegrationTargetAuditInput,
+): Record<string, unknown> {
+  const result: Record<string, unknown> = {
+    integrationId: input.integrationId,
+    integrationCompanyMappingId: input.integrationCompanyMappingId,
+    resourceId: input.resourceId,
+    targetId: input.targetId,
+    targetKind: input.targetKind,
+    state: input.state,
+  };
+  if (input.counts) {
+    result['counts'] = {
+      records: boundedAuditCount(input.counts.records),
+      gaps: boundedAuditCount(input.counts.gaps),
+    };
+  }
+  if (input.reasonCategory) result['reasonCategory'] = input.reasonCategory;
+  return result;
+}
+
+function boundedAuditCount(value: number | undefined): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.min(Math.max(Math.trunc(value ?? 0), 0), 1_000_000);
+}

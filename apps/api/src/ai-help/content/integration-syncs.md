@@ -15,6 +15,21 @@ Before running an asset-import integration, confirm all of the following:
 
 Save outstanding changes before starting a run.
 
+## Configure Breeze reconstruction sync
+<!-- aliases: configure Breeze reconstruction | Breeze RMM setup | Breeze Partner API | Breeze disaster recovery sync | Breeze documentation sync -->
+<!-- requires: integration.manage | sync.trigger -->
+
+1. In Breeze, create a read-only partner service principal with the scopes needed by the resources you will enable. A complete reconstruction uses `organizations:read`, `sites:read`, `devices:read`, `inventory:read`, `configuration:read`, `scripts:read`, `backup-configuration:read`, and `custom-fields:read`.
+2. Issue a `brz_sp_...` key, copy its one-time plaintext value, and store it only in Weavestream's **Partner API key** field. Set **Breeze URL** to the public Breeze origin; Weavestream adds `/api/v1/partner-api` paths.
+3. Select **Test connection**, then open **Organizations**. Map each Breeze organization UUID explicitly to one Weavestream company. Unmapped organizations are listed but never write company data.
+4. Review the resource tabs and recommended native destinations. Sites, devices, inventory, software, network equipment, virtual machines, and custom-field values use structured assets; networks use IPAM; policies, scripts, automations, backup configurations, and definitions use internal versioned articles; dependencies use relations.
+5. Keep source-owned fields as **Source wins**, operator-editable fields as **Preserve manual**, and local-only fields as **Manual only**. Breeze sync does not overwrite manual articles, relations, notes, uploads, or password references.
+6. Run a **Dry run**, inspect run history and reconstruction gaps, then run an incremental or full sync. A full sync marks unseen Breeze-owned bindings stale only after every page succeeds; a returned record restores its original native target.
+
+Blank schedules inherit the workspace default of every 15 minutes. Scheduled runs use a recent successful full checkpoint when possible and otherwise perform a full traversal; manual runs can select incremental or full mode. Credential, schema, cursor, rate-limit, timeout, cancellation, and partial-page failures preserve the last committed checkpoint and never authorize a stale sweep.
+
+Use **Completeness** to distinguish synchronized current, manually documented, secret blocked, missing, stale, and synchronization error. Secret-bearing definitions are represented only by safe gaps; rejected values and raw source records are not stored. Company export and PDF include the local reconstruction dossier so it remains usable when Breeze is unavailable. See the operator guide at `docs/integrations/breeze.md` for key rotation, private-network allowlisting, backup, limits, and recovery.
+
 ## Preview with a dry run
 <!-- aliases: dry run | preview sync | test import | check conflicts | sync without changes -->
 <!-- requires: sync.trigger -->

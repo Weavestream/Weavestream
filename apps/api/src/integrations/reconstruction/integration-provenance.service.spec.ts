@@ -252,7 +252,8 @@ describe('IntegrationProvenanceService', () => {
       password: { updateMany: jest.fn(), deleteMany: jest.fn() },
       searchIndex: { updateMany: jest.fn() },
     };
-    const service = new IntegrationProvenanceService({} as never, { logWithClient: jest.fn() } as never);
+    const audit = { logWithClient: jest.fn() };
+    const service = new IntegrationProvenanceService({} as never, audit as never);
 
     await expect(service.staleUnseen(tx as never, {
       integrationId: ids.integration,
@@ -301,6 +302,24 @@ describe('IntegrationProvenanceService', () => {
     expect(update.mock.calls[0][0]).toEqual(expect.objectContaining({
       data: expect.objectContaining({ state: 'stale', staleSince: staleAt }),
     }));
+    expect(audit.logWithClient).toHaveBeenCalledWith(tx, {
+      actorId: '00000000-0000-0000-0000-000000000005',
+      action: 'integration.target.stale',
+      entityType: 'IntegrationTarget',
+      entityId: targetId,
+      companyId: ids.company,
+      ip: '0.0.0.0',
+      userAgent: 'weavestream-worker/integration-reconstruction',
+      after: {
+        integrationId: ids.integration,
+        integrationCompanyMappingId: ids.mapping,
+        resourceId: ids.resource,
+        targetId,
+        targetKind,
+        state: 'stale',
+        counts: { records: 1, gaps: 0 },
+      },
+    });
   });
 
   it.each(['asset', 'article', 'subnet'] as const)(

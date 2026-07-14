@@ -175,6 +175,7 @@ describe('IntegrationSyncRunnerService writer dispatch', () => {
       assertIntegrationActor: options.unauthorized
         ? jest.fn().mockRejectedValue(new Error('forbidden'))
         : jest.fn().mockResolvedValue(undefined),
+      logWithClient: jest.fn().mockResolvedValue(undefined),
     };
     const writerRegistry = { get: jest.fn().mockReturnValue(writer) };
     const provenance = {
@@ -212,15 +213,107 @@ describe('IntegrationSyncRunnerService writer dispatch', () => {
   }
 
   it('dispatches typed input and commits its binding before the page checkpoint', async () => {
-    const { service, writer, tx, order } = setup();
+    const { service, writer, tx, order, audit } = setup();
     await expect(service.runMapping({
       syncRunId: 'run', integrationCompanyMappingId: 'mapping', resourceId: 'resource',
       dryRun: false, actorId: 'actor', mode: 'incremental',
     })).resolves.toMatchObject({ status: 'succeeded', totals: { created: 1 } });
     expect(writer.write).toHaveBeenCalledWith(expect.objectContaining({ tx, existingTargetId: null }), input);
+    expect(audit.logWithClient).toHaveBeenCalledWith(tx, {
+      actorId: 'actor',
+      action: 'integration.target.created',
+      entityType: 'IntegrationTarget',
+      entityId: 'subnet-id',
+      companyId: 'company',
+      ip: '0.0.0.0',
+      userAgent: 'weavestream-worker/integration-reconstruction',
+      after: {
+        integrationId: 'integration',
+        integrationCompanyMappingId: 'mapping',
+        resourceId: 'resource',
+        targetId: 'subnet-id',
+        targetKind: 'subnet',
+        state: 'active',
+        counts: { records: 1, gaps: 0 },
+      },
+    });
     expect(order).toEqual([
       'target+audit', 'binding', 'gaps', 'resolve-gaps', 'completeness', 'checkpoint',
     ]);
+  });
+
+  it.each([
+    { change: 'updated' as const, staleBinding: false, state: 'active' as const, gap: null },
+    { change: 'restored' as const, staleBinding: true, state: 'active' as const, gap: null },
+    {
+      change: 'blocked' as const,
+      staleBinding: false,
+      state: 'blocked' as const,
+      gap: {
+        kind: 'missing_dependency' as const,
+        message: 'A required native target dependency was unavailable.',
+        details: { reasonCode: 'dependency_not_found' },
+      },
+    },
+  ])('emits the exact safe generic $change target audit row', async ({
+    change,
+    staleBinding,
+    state,
+    gap,
+  }) => {
+    const { service, writer, tx, audit } = setup({ staleBinding });
+    writer.write.mockResolvedValueOnce({
+      targetKind: 'subnet',
+      targetId: 'subnet-id',
+      checksum: 'b'.repeat(64),
+      change,
+      provenance: {
+        integrationId: 'integration',
+        externalOrgId: 'org-1',
+        resourceKey: 'subnets',
+        externalId: input.externalId,
+        sourceRevision: null,
+        sourceFingerprint: null,
+        firstSeenAt: '2026-07-12T10:00:00.000Z',
+        lastSeenAt: '2026-07-14T10:00:00.000Z',
+        lastSyncedAt: state === 'active' ? '2026-07-14T10:00:00.000Z' : null,
+        ownership: 'breeze',
+        state,
+      },
+      gaps: gap ? [gap] : [],
+    });
+
+    await service.runMapping({
+      syncRunId: `${change}-run`,
+      integrationCompanyMappingId: 'mapping',
+      resourceId: 'resource',
+      dryRun: false,
+      actorId: 'actor',
+      mode: 'incremental',
+    });
+
+    expect(audit.logWithClient).toHaveBeenCalledWith(tx, {
+      actorId: 'actor',
+      action: `integration.target.${change}`,
+      entityType: 'IntegrationTarget',
+      entityId: 'subnet-id',
+      companyId: 'company',
+      ip: '0.0.0.0',
+      userAgent: 'weavestream-worker/integration-reconstruction',
+      after: {
+        integrationId: 'integration',
+        integrationCompanyMappingId: 'mapping',
+        resourceId: 'resource',
+        targetId: 'subnet-id',
+        targetKind: 'subnet',
+        state,
+        counts: { records: 1, gaps: gap ? 1 : 0 },
+        ...(gap ? { reasonCategory: 'missing_dependency' } : {}),
+      },
+    });
+    expect(JSON.stringify(audit.logWithClient.mock.calls)).not.toContain(
+      'dependency_not_found',
+    );
   });
 
   it('uses the stable full snapshot as the seen marker and commits gaps, stale sweep, completeness, then terminal checkpoint atomically', async () => {
@@ -1137,7 +1230,10 @@ describe('Breeze foundational asset composition', () => {
     const runner = new IntegrationSyncRunnerService(
       prisma as never,
       { values: { INTEGRATION_HTTP_TIMEOUT_MS: 100, INTEGRATION_HTTP_MAX_RETRIES: 0, INTEGRATION_HTTP_BACKOFF_MS: 100 } } as never,
-      { assertIntegrationActor: jest.fn().mockResolvedValue(undefined) } as never,
+      {
+        assertIntegrationActor: jest.fn().mockResolvedValue(undefined),
+        logWithClient: jest.fn().mockResolvedValue(undefined),
+      } as never,
       { loadDriverContext: jest.fn().mockResolvedValue({ config: { baseUrl: 'https://breeze.example' }, secret: { apiKey: 'key' } }) } as never,
       { get: jest.fn().mockReturnValue(breeze) } as never,
       { execute: jest.fn() } as never,

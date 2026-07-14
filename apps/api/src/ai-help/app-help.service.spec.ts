@@ -156,6 +156,10 @@ describe('searchAppHelpIndex', () => {
     ['Preview a sync without changes', 'integration-syncs/preview-with-a-dry-run'],
     ['Run imports automatically every six hours', 'integration-syncs/schedule-automatic-syncs'],
     [
+      'Configure Breeze reconstruction sync',
+      'integration-syncs/configure-breeze-reconstruction-sync',
+    ],
+    [
       'Register a Cloudflare Gateway IP list',
       'integrations/configure-cloudflare-zero-trust-lists',
     ],

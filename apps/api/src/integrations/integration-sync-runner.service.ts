@@ -43,6 +43,13 @@ import { integrationAssetExternalSource } from './integration-asset-source.js';
 import { IntegrationProvenanceService } from './reconstruction/integration-provenance.service.js';
 import { IntegrationCompletenessService } from './reconstruction/integration-completeness.service.js';
 import { scanSensitiveMaterial } from './sensitive-material.js';
+import {
+  integrationTargetAuditAction,
+  integrationTargetAuditAfter,
+} from '../audit/audit-actions.js';
+import { RECONSTRUCTION_RUNTIME_LIMITS } from './reconstruction/reconstruction-limits.js';
+
+export { RECONSTRUCTION_RUNTIME_LIMITS } from './reconstruction/reconstruction-limits.js';
 
 /** Executes one resource inside a mapping DAG through its native writer. */
 
@@ -88,7 +95,10 @@ export function validateDriverFetchPage(
     expectedSnapshotAt: string | null;
   },
 ): ValidatedDriverFetchPage {
-  if (!Array.isArray(page.records) || page.records.length > 10_000) {
+  if (
+    !Array.isArray(page.records) ||
+    page.records.length > RECONSTRUCTION_RUNTIME_LIMITS.recordsPerPage
+  ) {
     throw new BadRequestException('Driver page records are invalid or unbounded.');
   }
   const schemaVersion = page.schemaVersion ?? 'legacy';
@@ -118,7 +128,10 @@ export function validateDriverFetchPage(
     throw new BadRequestException('Driver page sourceHighWater cannot exceed snapshotAt.');
   }
   const blockedInputs = page.blockedInputs ?? [];
-  if (!Array.isArray(blockedInputs) || blockedInputs.length > 1_000) {
+  if (
+    !Array.isArray(blockedInputs) ||
+    blockedInputs.length > RECONSTRUCTION_RUNTIME_LIMITS.gapsPerPage
+  ) {
     throw new BadRequestException('Driver blockedInputs must contain at most 1000 entries.');
   }
   for (const blocked of blockedInputs) {
@@ -324,7 +337,9 @@ export class IntegrationSyncRunnerService {
           traversalHighWater = page.sourceHighWater;
         }
         pages += 1;
-        if (pages > 1_000) throw new BadRequestException('Driver traversal exceeded 1000 pages.');
+        if (pages > RECONSTRUCTION_RUNTIME_LIMITS.pagesPerTraversal) {
+          throw new BadRequestException('Driver traversal exceeded 1000 pages.');
+        }
 
         const pageTotals = emptyTotals();
         const pageConflicts: SyncRunConflict[] = [];
@@ -352,7 +367,9 @@ export class IntegrationSyncRunnerService {
           }> = [];
           let droppedGapCount = 0;
           const observeGap = (gap: (typeof pageGaps)[number]): void => {
-            if (pageGaps.length < 999) pageGaps.push(gap);
+            if (pageGaps.length < RECONSTRUCTION_RUNTIME_LIMITS.gapsPerPage - 1) {
+              pageGaps.push(gap);
+            }
             else droppedGapCount += 1;
           };
           for (const blocked of page.blockedInputs) {
@@ -482,6 +499,30 @@ export class IntegrationSyncRunnerService {
               outcome,
             );
             if (input.dryRun) continue;
+            if (outcome.change !== 'unchanged') {
+              const targetId = outcome.targetId || null;
+              await this.audit.logWithClient(tx, {
+                actorId: input.actorId!,
+                action: integrationTargetAuditAction(outcome.change),
+                entityType: 'IntegrationTarget',
+                entityId: targetId,
+                companyId: mapping.companyId,
+                ip: '0.0.0.0',
+                userAgent: 'weavestream-worker/integration-reconstruction',
+                after: integrationTargetAuditAfter({
+                  integrationId: mapping.integrationId,
+                  integrationCompanyMappingId: mapping.id,
+                  resourceId: resource.id,
+                  targetId,
+                  targetKind: outcome.targetKind,
+                  state: outcome.change === 'blocked' ? 'blocked' : 'active',
+                  counts: { records: 1, gaps: outcome.gaps.length },
+                  ...(outcome.gaps[0]
+                    ? { reasonCategory: outcome.gaps[0].kind }
+                    : {}),
+                }),
+              });
+            }
             const activeProvenance = this.provenance.buildProvenance({
               integrationId: mapping.integrationId,
               externalOrgId: reconstruction.source.externalOrgId,
@@ -1020,7 +1061,7 @@ function migrationProvenance(
   });
 }
 
-const MAX_RUN_CONFLICTS = 10_000;
+const MAX_RUN_CONFLICTS = RECONSTRUCTION_RUNTIME_LIMITS.conflictsPerRun;
 
 class DryRunPageRollback extends Error {}
 
