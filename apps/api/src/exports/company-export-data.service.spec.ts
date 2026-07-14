@@ -15,6 +15,8 @@ const ids = {
   relation: '00000000-0000-4000-8000-000000000012',
   syncA: '00000000-0000-4000-8000-000000000013',
   syncB: '00000000-0000-4000-8000-000000000014',
+  otherMapping: '00000000-0000-4000-8000-000000000015',
+  otherResource: '00000000-0000-4000-8000-000000000016',
 };
 
 const BLOCKED_SECRET = 'ghp_distinctiveBlockedSecretValue1234567890';
@@ -40,20 +42,28 @@ describe('CompanyExportDataService reconstruction export', () => {
     ]);
     prisma.assetFieldValue.findMany.mockResolvedValueOnce([
       {
-        id: 'field-value-b',
+        id: 'field-value-equipment',
         companyId: ids.company,
-        value: '10.20.30.20',
-        assetId: ids.assetB,
-        asset: { id: ids.assetB, companyId: ids.company, name: 'SW-01' },
-        assetField: { name: 'Management IP', fieldType: 'IP_ADDRESS' },
-      },
-      {
-        id: 'field-value-a',
-        companyId: ids.company,
-        value: '10.20.30.10',
+        value: '10.20.30.99',
         assetId: ids.assetA,
         asset: { id: ids.assetA, companyId: ids.company, name: 'APP-01' },
-        assetField: { name: 'Ethernet 0', fieldType: 'IP_ADDRESS' },
+        assetField: { name: 'Address', slug: 'address', fieldType: 'IP_ADDRESS' },
+      },
+      {
+        id: 'field-value-interfaces',
+        companyId: ids.company,
+        assetId: ids.assetA,
+        value: 'ID: 11111111-1111-4111-8111-111111111111 | Name: Ethernet 0 | MAC: 00:11:22:33:44:55 | Primary: yes',
+        asset: { id: ids.assetA, companyId: ids.company, name: 'APP-01' },
+        assetField: { name: 'Interfaces', slug: 'interfaces', fieldType: 'TEXTAREA' },
+      },
+      {
+        id: 'field-value-addresses',
+        companyId: ids.company,
+        assetId: ids.assetA,
+        value: 'ID: 22222222-2222-4222-8222-222222222222 | Interface ID: 11111111-1111-4111-8111-111111111111 | Interface: Ethernet 0 | Address: 10.20.30.10 | Family: IPv4 | Assignment: static | Reservation eligible: yes | Subnet mask: 255.255.255.0 | Active: yes | First seen: 2026-07-14T00:00:00.000Z | Deactivated: —',
+        asset: { id: ids.assetA, companyId: ids.company, name: 'APP-01' },
+        assetField: { name: 'Network Address History', slug: 'network-addresses', fieldType: 'TEXTAREA' },
       },
     ]);
     prisma.relation.findMany.mockResolvedValueOnce([
@@ -102,7 +112,6 @@ describe('CompanyExportDataService reconstruction export', () => {
       reservations: [{ ipAddress: '10.20.30.10', label: 'APP-01 static' }],
       occupants: [
         { ipAddress: '10.20.30.10', assetLabel: 'APP-01', interfaceLabel: 'Ethernet 0' },
-        { ipAddress: '10.20.30.20', assetLabel: 'SW-01', interfaceLabel: 'Management IP' },
       ],
     });
     expect(result.relations).toEqual([
@@ -147,6 +156,9 @@ describe('CompanyExportDataService reconstruction export', () => {
     expect(serialized).not.toContain('rawPayload');
     expect(serialized).not.toContain('details');
     expect(serialized).not.toContain('cross_company');
+    expect(serialized).not.toContain('10.20.30.99');
+    expect(serialized).not.toContain('11111111-1111-4111-8111-111111111111');
+    expect(serialized).not.toContain('22222222-2222-4222-8222-222222222222');
 
     expect(prisma.subnet.findMany).toHaveBeenCalledWith(expect.objectContaining({
       where: expect.objectContaining({ companyId: ids.company }),
@@ -155,7 +167,10 @@ describe('CompanyExportDataService reconstruction export', () => {
       where: expect.objectContaining({ companyId: ids.company }),
     }));
     expect(prisma.assetFieldValue.findMany).toHaveBeenCalledWith(expect.objectContaining({
-      where: expect.objectContaining({ companyId: ids.company }),
+      where: expect.objectContaining({
+        companyId: ids.company,
+        assetField: { slug: { in: ['interfaces', 'network-addresses'] } },
+      }),
     }));
     expect(prisma.relation.findMany).toHaveBeenCalledWith(expect.objectContaining({
       where: expect.objectContaining({ companyId: ids.company }),
@@ -242,6 +257,123 @@ describe('CompanyExportDataService reconstruction export', () => {
     expect(JSON.stringify(result)).not.toContain('FOREIGN-TARGET-LABEL');
   });
 
+  it.each([
+    ['same-company different mapping', ids.otherMapping, ids.resource],
+    ['same mapping different resource', ids.mapping, ids.otherResource],
+  ])('fails closed for a gap target bound through %s', async (
+    _label,
+    integrationCompanyMappingId,
+    resourceId,
+  ) => {
+    const { prisma, service } = setup();
+    const mismatched = {
+      ...syncRecord({ id: ids.syncA, state: 'active', targetId: ids.assetA, targetName: 'DO-NOT-LEAK' }),
+      integrationCompanyMappingId,
+      resourceId,
+    };
+    prisma.integrationReconstructionGap.findMany.mockResolvedValueOnce([{
+      ...gap('missing_dependency', 0),
+      syncRecord: mismatched,
+    }]);
+    // The mismatched row is attached to this gap only; it is not a valid
+    // independently selected provenance row for this export fixture.
+    prisma.integrationSyncRecord.findMany.mockResolvedValueOnce([]);
+
+    const result = await service.gather(ids.company, { includePasswords: false });
+
+    expect(result.reconstruction.gaps[0]?.target).toBeNull();
+    expect(JSON.stringify(result)).not.toContain('DO-NOT-LEAK');
+    expect(JSON.stringify(result)).not.toContain(`/assets/${ids.assetA}`);
+  });
+
+  it('projects synchronized Breeze assets and managed articles without source identifiers', async () => {
+    const { prisma, service } = setup();
+    const interfaceId = '11111111-1111-4111-8111-111111111111';
+    const addressId = '22222222-2222-4222-8222-222222222222';
+    const revision = 'distinctive-source-revision-abc123';
+    prisma.integrationSyncRecord.findMany.mockResolvedValueOnce([
+      syncRecord({ id: ids.syncA, state: 'active', targetId: ids.assetA, targetName: 'APP-01' }),
+      syncRecordForArticle(ids.article, 'APP-01 Offline Procedure', 'active'),
+    ]);
+    prisma.asset.findMany.mockResolvedValueOnce([assetRow(ids.assetA, null, [
+      fieldValue('Breeze ID', 'breeze-id', 'TEXT', ids.assetA, 0),
+      fieldValue('Source Revision', 'source-revision', 'TEXT', revision, 1),
+      fieldValue('Interfaces', 'interfaces', 'TEXTAREA', `ID: ${interfaceId} | Name: Ethernet 0 | MAC: 00:11:22:33:44:55 | Primary: yes`, 2),
+      fieldValue('Network Address History', 'network-addresses', 'TEXTAREA', `ID: ${addressId} | Interface ID: ${interfaceId} | Interface: Ethernet 0 | Address: 10.20.30.10 | Family: IPv4 | Assignment: static | Reservation eligible: yes | Active: yes`, 3),
+      fieldValue('Recovery role', 'recovery-role', 'TEXT', 'Primary application server', 4),
+      fieldValue('Recovery dependency', 'recovery-dependency', 'ASSET_REFERENCE', [ids.assetB], 5),
+    ])]).mockResolvedValueOnce([
+      { id: ids.assetB, name: 'DB-01 readable dependency' },
+    ]);
+    prisma.article.findMany.mockResolvedValueOnce([{
+      id: ids.article,
+      title: 'APP-01 Offline Procedure',
+      editorMode: 'markdown',
+      content: null,
+      markdownSource: `<!-- weavestream:breeze:managed:start -->\n# Rebuild APP-01\nInstall Windows Server from verified media.\nPolicy UUID: ${ids.assetA}\n## Source provenance\nSource UUID: ${ids.article}\nSource revision: ${revision}\nSource fingerprint: distinctive-fingerprint\nExported source date: 2026-07-14T00:00:00.000Z\n<!-- weavestream:breeze:managed:end -->`,
+      contentPlaintext: `Rebuild APP-01\nInstall Windows Server from verified media.\nSource UUID: ${ids.article}\nSource revision: ${revision}`,
+      updatedAt: NOW,
+      archivedAt: null,
+      folder: { name: 'Runbooks' },
+    }]);
+
+    const result = await service.gather(ids.company, { includePasswords: false });
+    const serialized = JSON.stringify(result);
+
+    expect(serialized).toContain('Primary application server');
+    expect(serialized).toContain('DB-01 readable dependency');
+    expect(serialized).toContain('Ethernet 0');
+    expect(serialized).toContain('10.20.30.10');
+    expect(serialized).toContain('Install Windows Server from verified media.');
+    expect(serialized).toContain('Last synchronized');
+    expect(serialized).toContain('Breeze');
+    for (const raw of [interfaceId, addressId, ids.assetB, revision, 'distinctive-fingerprint', 'Source UUID', 'Source revision', 'Source fingerprint', 'weavestream:breeze:managed']) {
+      expect(serialized).not.toContain(raw);
+    }
+  });
+
+  it('includes only stale-bound archived reconstruction records and labels topology last-known stale', async () => {
+    const { prisma, service } = setup();
+    const staleArticle = '00000000-0000-4000-8000-000000000081';
+    const unrelatedArticle = '00000000-0000-4000-8000-000000000082';
+    const staleRelation = '00000000-0000-4000-8000-000000000083';
+    prisma.integrationSyncRecord.findMany.mockResolvedValueOnce([
+      syncRecord({ id: ids.syncA, state: 'stale', targetId: ids.assetA, targetName: 'ARCHIVED-APP' }),
+      syncRecordForArticle(staleArticle, 'Archived recovery procedure', 'stale'),
+      syncRecordForSubnet(ids.subnetA, 'Archived recovery subnet'),
+      syncRecordForRelation(staleRelation),
+    ]);
+    prisma.asset.findMany.mockResolvedValueOnce([assetRow(ids.assetA, NOW, [])]);
+    prisma.article.findMany.mockResolvedValueOnce([
+      { id: staleArticle, title: 'Archived recovery procedure', editorMode: 'markdown', content: null, markdownSource: 'Last-known offline recovery steps', contentPlaintext: 'Last-known offline recovery steps', updatedAt: NOW, archivedAt: NOW, folder: null },
+      { id: unrelatedArticle, title: 'UNRELATED MANUAL ARCHIVE', editorMode: 'markdown', content: null, markdownSource: 'must not export', contentPlaintext: 'must not export', updatedAt: NOW, archivedAt: NOW, folder: null },
+    ]);
+    prisma.subnet.findMany.mockResolvedValueOnce([
+      { ...subnet(ids.subnetA, 'Archived recovery subnet', '10.20.30.0/24'), archivedAt: NOW },
+      { ...subnet(ids.subnetB, 'UNRELATED MANUAL SUBNET', '10.40.0.0/24'), archivedAt: NOW },
+    ]);
+    prisma.relation.findMany.mockResolvedValueOnce([
+      relation(staleRelation, ids.assetA, staleArticle, 'rebuild_procedure', 'Article'),
+    ]);
+    prisma.asset.findMany.mockResolvedValueOnce([
+      { id: ids.assetA, companyId: ids.company, name: 'ARCHIVED-APP', archivedAt: NOW },
+    ]);
+    prisma.article.findMany.mockResolvedValueOnce([
+      { id: staleArticle, companyId: ids.company, title: 'Archived recovery procedure', archivedAt: NOW },
+    ]);
+
+    const result = await service.gather(ids.company, { includePasswords: false });
+    const serialized = JSON.stringify(result);
+
+    expect(result.assets[0]).toMatchObject({ name: 'APP-01', reconstructionState: { state: 'stale' } });
+    expect(result.articles[0]).toMatchObject({ title: 'Archived recovery procedure', reconstructionState: { state: 'stale' } });
+    expect(result.ipam[0]).toMatchObject({ name: 'Archived recovery subnet', reconstructionState: { state: 'stale' } });
+    expect(result.relations[0]).toMatchObject({ reconstructionState: { state: 'stale' } });
+    expect(serialized).toContain('Last-known offline recovery steps');
+    expect(serialized).not.toContain('UNRELATED MANUAL');
+    expect(serialized).not.toContain(unrelatedArticle);
+  });
+
   it('rejects bounded export overflow instead of silently truncating', async () => {
     const { prisma, service } = setup();
     prisma.subnet.findMany.mockResolvedValueOnce(
@@ -293,6 +425,30 @@ function subnet(id: string, name: string, cidr: string) {
     id, companyId: ids.company, name, cidr, prefix: 24, vlanId: 20,
     gateway: cidr.replace('0/24', '1'), dhcpRangeStart: null, dhcpRangeEnd: null,
     description: `${name} description`,
+  };
+}
+
+function assetRow(id: string, archivedAt: Date | null, fieldValues: ReturnType<typeof fieldValue>[]) {
+  return {
+    id,
+    companyId: ids.company,
+    name: id === ids.assetA ? 'APP-01' : 'Asset',
+    archivedAt,
+    assetLayout: { name: 'Device Inventory' },
+    fieldValues,
+  };
+}
+
+function fieldValue(
+  name: string,
+  slug: string,
+  fieldType: string,
+  value: unknown,
+  position: number,
+) {
+  return {
+    value,
+    assetField: { name, slug, fieldType, position },
   };
 }
 
@@ -393,5 +549,51 @@ function syncRecord(input: {
       integration: { id: ids.integration, name: 'Breeze', driver: 'breeze' },
     },
     resource: { integrationId: ids.integration, resourceKey: 'devices' },
+  };
+}
+
+function syncRecordForArticle(
+  articleId: string,
+  title: string,
+  state: 'active' | 'stale',
+) {
+  const base = syncRecord({ id: `${articleId.slice(0, -1)}a`, state, targetId: ids.assetA, targetName: 'unused' });
+  return {
+    ...base,
+    targetKind: 'article',
+    assetId: null,
+    articleId,
+    asset: null,
+    article: { id: articleId, companyId: ids.company, title },
+    resource: { integrationId: ids.integration, resourceKey: 'knowledge-articles' },
+    provenance: { ...base.provenance, resourceKey: 'knowledge-articles' },
+  };
+}
+
+function syncRecordForSubnet(subnetId: string, name: string) {
+  const base = syncRecord({ id: `${subnetId.slice(0, -1)}b`, state: 'stale', targetId: ids.assetA, targetName: 'unused' });
+  return {
+    ...base,
+    targetKind: 'subnet',
+    assetId: null,
+    subnetId,
+    asset: null,
+    subnet: { id: subnetId, companyId: ids.company, name },
+    resource: { integrationId: ids.integration, resourceKey: 'network-segments' },
+    provenance: { ...base.provenance, resourceKey: 'network-segments' },
+  };
+}
+
+function syncRecordForRelation(relationId: string) {
+  const base = syncRecord({ id: `${relationId.slice(0, -1)}c`, state: 'stale', targetId: ids.assetA, targetName: 'unused' });
+  return {
+    ...base,
+    targetKind: 'relation',
+    assetId: null,
+    relationId,
+    asset: null,
+    relation: { id: relationId, companyId: ids.company },
+    resource: { integrationId: ids.integration, resourceKey: 'relations' },
+    provenance: { ...base.provenance, resourceKey: 'relations' },
   };
 }

@@ -1,4 +1,5 @@
 import PDFDocument from 'pdfkit';
+import { createRequire } from 'node:module';
 import { MAX_IMAGE_DECODE_PIXELS, tiptapToPlaintext } from '@weavestream/shared';
 import type { CompanyExportData } from '../../../api/src/exports/company-export-data.service.js';
 
@@ -10,9 +11,19 @@ interface PdfBuildOpts {
 // Layout constants
 // ---------------------------------------------------------------------------
 
-const FONT_NORMAL = 'Helvetica';
-const FONT_BOLD = 'Helvetica-Bold';
-const FONT_OBLIQUE = 'Helvetica-Oblique';
+const FONT_NORMAL = 'NotoSansCJK';
+const FONT_BOLD = 'NotoSansCJKBold';
+const FONT_OBLIQUE = 'NotoSansItalic';
+const fontRequire = createRequire(__filename);
+const FONT_NORMAL_PATH = fontRequire.resolve(
+  'noto-fontface-cjk-jp/fonts/Noto/NotoSansCJKjp-Regular.otf',
+);
+const FONT_BOLD_PATH = fontRequire.resolve(
+  'noto-fontface-cjk-jp/fonts/Noto/NotoSansCJKjp-Bold.otf',
+);
+const FONT_OBLIQUE_PATH = fontRequire.resolve(
+  'notosans-fontface/fonts/NotoSans-Italic.ttf',
+);
 
 const PAGE_WIDTH = 612; // letter
 const PAGE_HEIGHT = 792;
@@ -91,6 +102,7 @@ export async function buildCompanyExportPdf(
   data: CompanyExportData,
   opts: PdfBuildOpts = {},
 ): Promise<Buffer> {
+  data = sanitizePdfUserText(data);
   return new Promise((resolve, reject) => {
     const doc = new PDFDocument({
       size: 'LETTER',
@@ -104,7 +116,7 @@ export async function buildCompanyExportPdf(
       // already-emitted pages via switchToPage().
       bufferPages: true,
       info: {
-        Title: `Vault Export — ${data.company.name}`,
+        Title: `Vault Export - ${data.company.name}`,
         Author: 'Weavestream',
         CreationDate: data.exportedAt,
       },
@@ -115,6 +127,9 @@ export async function buildCompanyExportPdf(
         ? { userPassword: opts.pdfPassword, ownerPassword: opts.pdfPassword }
         : {}),
     });
+    doc.registerFont(FONT_NORMAL, FONT_NORMAL_PATH);
+    doc.registerFont(FONT_BOLD, FONT_BOLD_PATH);
+    doc.registerFont(FONT_OBLIQUE, FONT_OBLIQUE_PATH);
 
     const chunks: Buffer[] = [];
     doc.on('data', (chunk: Buffer) => chunks.push(chunk));
@@ -287,6 +302,30 @@ function fieldGrid(
   }
 }
 
+function measureFieldGrid(
+  doc: PDFKit.PDFDocument,
+  pairs: Array<[string, string | null | undefined]>,
+): number {
+  const present = pairs.filter(
+    ([, value]) => value !== null && value !== undefined && value !== '',
+  ) as Array<[string, string]>;
+  const colWidth = (CONTENT_WIDTH - 16) / 2;
+  let height = 0;
+  for (let index = 0; index < present.length; index += 2) {
+    const row = present.slice(index, index + 2);
+    doc.font(FONT_BOLD).fontSize(8);
+    const labelHeight = Math.max(...row.map(([label]) =>
+      doc.heightOfString(label.toUpperCase(), { width: colWidth }),
+    ));
+    doc.font(FONT_NORMAL).fontSize(10.5);
+    const valueHeight = Math.max(...row.map(([, value]) =>
+      doc.heightOfString(value, { width: colWidth }),
+    ));
+    height += labelHeight + valueHeight + doc.currentLineHeight() * 0.3;
+  }
+  return height;
+}
+
 function drawFieldCell(
   doc: PDFKit.PDFDocument,
   label: string,
@@ -454,7 +493,12 @@ function statusPalette(status: string): { fg: string; bg: string } {
 
 function formatDate(d: Date | null | undefined): string {
   if (!d) return '—';
-  return d.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+  return `${new Intl.DateTimeFormat('en-US', {
+    timeZone: 'UTC',
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+  }).format(d)} UTC`;
 }
 
 function formatBytes(bytes: number): string {
@@ -465,6 +509,12 @@ function formatBytes(bytes: number): string {
 
 function humanize(value: string): string {
   return value.replaceAll('_', ' ').replaceAll('-', ' ');
+}
+
+function staleRecordLabel(
+  state: NonNullable<CompanyExportData['assets'][number]['reconstructionState']>,
+): string {
+  return `LAST-KNOWN STALE · Stale since ${formatDate(state.staleSince)} · Source ${state.sourceLabel}`;
 }
 
 export function formatAssetFieldValue(field: ExportAssetField): string {
@@ -521,16 +571,36 @@ function isTiptapDocumentLike(value: unknown): boolean {
 
 function formatStoredDate(value: unknown, fieldType: string): string {
   const raw = typeof value === 'string' ? value : String(value);
-  const date = new Date(raw);
+  const date = fieldType === 'DATE' && /^\d{4}-\d{2}-\d{2}$/.test(raw)
+    ? new Date(`${raw}T00:00:00.000Z`)
+    : new Date(raw);
   if (Number.isNaN(date.getTime())) return raw;
   if (fieldType === 'DATE') return formatDate(date);
-  return date.toLocaleString('en-US', {
+  return `${new Intl.DateTimeFormat('en-US', {
+    timeZone: 'UTC',
     year: 'numeric',
     month: 'short',
     day: 'numeric',
     hour: '2-digit',
     minute: '2-digit',
-  });
+  }).format(date)} UTC`;
+}
+
+const EMOJI_SEQUENCE_RE = /\p{Extended_Pictographic}(?:\uFE0E|\uFE0F)?(?:\u200D\p{Extended_Pictographic}(?:\uFE0E|\uFE0F)?)*/gu;
+
+function sanitizePdfUserText<T>(value: T): T {
+  if (typeof value === 'string') {
+    return value.replace(EMOJI_SEQUENCE_RE, '[emoji omitted]') as T;
+  }
+  if (value instanceof Date || Buffer.isBuffer(value) || value === null) return value;
+  if (Array.isArray(value)) return value.map((entry) => sanitizePdfUserText(entry)) as T;
+  if (typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .map(([key, entry]) => [key, sanitizePdfUserText(entry)]),
+    ) as T;
+  }
+  return value;
 }
 
 function formatFileFieldValue(value: unknown): string {
@@ -888,6 +958,11 @@ function drawAssetCard(
   doc.font(FONT_BOLD).fontSize(11).fillColor(C.ink)
     .text(asset.name, titleX, startY, { width: innerWidth, lineBreak: false });
   doc.y = startY + 22;
+  if (asset.reconstructionState) {
+    doc.font(FONT_NORMAL).fontSize(8.5).fillColor(C.warn)
+      .text(staleRecordLabel(asset.reconstructionState), titleX, doc.y, { width: innerWidth });
+    doc.moveDown(0.25);
+  }
 
   for (const fv of asset.fields) {
     const raw = formatAssetFieldValue(fv);
@@ -1093,8 +1168,12 @@ function renderArticles(doc: PDFKit.PDFDocument, data: CompanyExportData): void 
 
     doc.font(FONT_BOLD).fontSize(14).fillColor(C.ink)
       .text(a.title, MARGIN_X, doc.y, { width: CONTENT_WIDTH });
-    doc.font(FONT_OBLIQUE).fontSize(9).fillColor(C.ink3)
+    doc.font(FONT_NORMAL).fontSize(9).fillColor(C.ink3)
       .text(`Folder: ${a.folderPath}  ·  Updated ${formatDate(a.updatedAt)}`, MARGIN_X, doc.y, { width: CONTENT_WIDTH });
+    if (a.reconstructionState) {
+      doc.font(FONT_NORMAL).fontSize(8.5).fillColor(C.warn)
+        .text(staleRecordLabel(a.reconstructionState), MARGIN_X, doc.y, { width: CONTENT_WIDTH });
+    }
     doc.moveDown(0.4);
 
     renderArticleBody(doc, a, TITLE);
@@ -1198,7 +1277,7 @@ function renderArticleImage(
       align: 'center',
     });
     doc.y = startY + maxHeight + 4;
-    doc.font(FONT_OBLIQUE).fontSize(8).fillColor(C.ink3)
+    doc.font(FONT_NORMAL).fontSize(8).fillColor(C.ink3)
       .text(label, MARGIN_X, doc.y, { width: CONTENT_WIDTH, align: 'center' });
     doc.moveDown(0.5);
   } catch {
@@ -1214,7 +1293,7 @@ function renderImageFallback(
   sectionTitle: string,
 ): void {
   ensureRoom(doc, 24, sectionTitle);
-  doc.font(FONT_OBLIQUE).fontSize(9).fillColor(C.ink3)
+  doc.font(FONT_NORMAL).fontSize(9).fillColor(C.ink3)
     .text(`[Image: ${label} - ${reason}]`, MARGIN_X, doc.y, {
       width: CONTENT_WIDTH,
     });
@@ -1340,6 +1419,11 @@ function renderIpam(doc: PDFKit.PDFDocument, data: CompanyExportData): void {
   data.ipam.forEach((subnet, subnetIndex) => {
     if (subnetIndex > 0) ensureRoom(doc, 90, TITLE);
     subheading(doc, `${subnet.name} - ${subnet.cidr}`, TITLE);
+    if (subnet.reconstructionState) {
+      doc.font(FONT_NORMAL).fontSize(8.5).fillColor(C.warn)
+        .text(staleRecordLabel(subnet.reconstructionState), MARGIN_X, doc.y, { width: CONTENT_WIDTH });
+      doc.moveDown(0.25);
+    }
     fieldGrid(doc, [
       ['CIDR / Prefix', `${subnet.cidr} (/${subnet.prefix})`],
       ['VLAN', subnet.vlanId === null ? null : String(subnet.vlanId)],
@@ -1421,7 +1505,9 @@ function renderRelationships(doc: PDFKit.PDFDocument, data: CompanyExportData): 
       doc,
       [
         relation.source.label,
-        humanize(relation.relationType),
+        relation.reconstructionState
+          ? `${humanize(relation.relationType)}\n${staleRecordLabel(relation.reconstructionState)}`
+          : humanize(relation.relationType),
         relation.target.label,
         formatDate(relation.createdAt),
       ],
@@ -1473,12 +1559,8 @@ function renderReconstruction(doc: PDFKit.PDFDocument, data: CompanyExportData):
   if (provenance.length > 0) {
     subheading(doc, 'Source provenance and age', TITLE);
     for (const source of provenance) {
-      ensureRoom(doc, 112, TITLE);
       const title = `${source.target.label} · ${humanize(source.state)}`;
-      doc.font(FONT_BOLD).fontSize(10.5).fillColor(
-        source.state === 'stale' ? C.warn : source.state === 'blocked' ? C.danger : C.ink,
-      ).text(title, MARGIN_X, doc.y, { width: CONTENT_WIDTH });
-      fieldGrid(doc, [
+      const sourceFields: Array<[string, string | null | undefined]> = [
         ['Source', source.sourceLabel],
         ['Resource', humanize(source.sourceResource)],
         ['Ownership', source.ownership],
@@ -1487,7 +1569,14 @@ function renderReconstruction(doc: PDFKit.PDFDocument, data: CompanyExportData):
         ['Last seen', formatDate(source.lastSeenAt)],
         ['Last synchronized', formatDate(source.lastSyncedAt)],
         ['Stale since', formatDate(source.staleSince)],
-      ], TITLE);
+      ];
+      doc.font(FONT_BOLD).fontSize(10.5);
+      const titleHeight = doc.heightOfString(title, { width: CONTENT_WIDTH });
+      ensureRoom(doc, titleHeight + measureFieldGrid(doc, sourceFields) + 12, TITLE);
+      doc.font(FONT_BOLD).fontSize(10.5).fillColor(
+        source.state === 'stale' ? C.warn : source.state === 'blocked' ? C.danger : C.ink,
+      ).text(title, MARGIN_X, doc.y, { width: CONTENT_WIDTH });
+      fieldGrid(doc, sourceFields, TITLE);
       doc.moveDown(0.35);
     }
   }
@@ -1503,9 +1592,22 @@ function drawReconstructionGap(
   gap: CompanyExportData['reconstruction']['gaps'][number],
   sectionTitle: string,
 ): void {
+  const innerWidth = CONTENT_WIDTH - 24;
+  const heading = `${gap.resourceLabel} · ${humanize(gap.kind)}`;
+  const target = gap.target ? ` · Target: ${gap.target.label}` : '';
+  const footer = `First seen ${formatDate(gap.firstSeenAt)} · Last seen ${formatDate(gap.lastSeenAt)}${target}`;
+  doc.font(FONT_BOLD).fontSize(10);
+  const headingHeight = doc.heightOfString(heading, { width: innerWidth });
   doc.font(FONT_NORMAL).fontSize(9.5);
-  const messageHeight = doc.heightOfString(gap.message, { width: CONTENT_WIDTH - 24 });
-  const boxHeight = Math.max(78, messageHeight + 58);
+  const messageHeight = doc.heightOfString(gap.message, { width: innerWidth });
+  doc.font(FONT_NORMAL).fontSize(8);
+  const footerHeight = doc.heightOfString(footer, { width: innerWidth });
+  const paddingTop = 10;
+  const headingMessageGap = 6;
+  const messageFooterGap = 8;
+  const paddingBottom = 10;
+  const boxHeight = paddingTop + headingHeight + headingMessageGap + messageHeight +
+    messageFooterGap + footerHeight + paddingBottom;
   ensureRoom(doc, boxHeight + 10, sectionTitle);
   const y = doc.y;
   doc.save();
@@ -1514,19 +1616,15 @@ function drawReconstructionGap(
     .roundedRect(MARGIN_X, y, CONTENT_WIDTH, boxHeight, 4).stroke();
   doc.restore();
   doc.font(FONT_BOLD).fontSize(10).fillColor(C.ink)
-    .text(`${gap.resourceLabel} · ${humanize(gap.kind)}`, MARGIN_X + 12, y + 10, {
-      width: CONTENT_WIDTH - 24,
+    .text(heading, MARGIN_X + 12, y + paddingTop, {
+      width: innerWidth,
     });
+  const messageY = y + paddingTop + headingHeight + headingMessageGap;
   doc.font(FONT_NORMAL).fontSize(9.5).fillColor(C.ink2)
-    .text(gap.message, MARGIN_X + 12, doc.y + 4, { width: CONTENT_WIDTH - 24 });
-  const target = gap.target ? ` · Target: ${gap.target.label}` : '';
-  doc.font(FONT_OBLIQUE).fontSize(8).fillColor(C.ink3)
-    .text(
-      `First seen ${formatDate(gap.firstSeenAt)} · Last seen ${formatDate(gap.lastSeenAt)}${target}`,
-      MARGIN_X + 12,
-      y + boxHeight - 18,
-      { width: CONTENT_WIDTH - 24 },
-    );
+    .text(gap.message, MARGIN_X + 12, messageY, { width: innerWidth });
+  const footerY = messageY + messageHeight + messageFooterGap;
+  doc.font(FONT_NORMAL).fontSize(8).fillColor(C.ink3)
+    .text(footer, MARGIN_X + 12, footerY, { width: innerWidth });
   doc.y = y + boxHeight + 8;
 }
 

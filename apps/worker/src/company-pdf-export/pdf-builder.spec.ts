@@ -7,7 +7,7 @@ import {
 } from './pdf-builder.js';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmdirSync, rmSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type { CompanyExportData } from '../../../api/src/exports/company-export-data.service.js';
 import {
@@ -245,9 +245,135 @@ describe('standalone reconstruction dossier PDF', () => {
     expect(text).toContain('network-diagram.gif - image/gif is not embeddable');
   });
 
+  it('embeds deterministic Unicode fonts and applies the explicit emoji fallback', async () => {
+    const base = companyPdfTestFixture();
+    const data: CompanyExportData = {
+      ...base,
+      company: { ...base.company, name: '東京復旧 株式会社 Пример восстановления 😀' },
+      articles: [{
+        ...base.articles[0]!,
+        title: '復旧手順 — Процедура',
+        contentPlaintext: 'サーバーを復元します。 Проверить сеть. 😀',
+      }],
+      relations: [{
+        ...base.relations[0]!,
+        source: { ...base.relations[0]!.source, label: 'ウェブサーバー' },
+        target: { ...base.relations[0]!.target, label: 'База данных' },
+      }],
+      reconstruction: {
+        ...base.reconstruction,
+        gaps: [{
+          ...base.reconstruction.gaps[0]!,
+          resourceLabel: 'ネットワーク Восстановление',
+          message: '静的アドレスを確認してください。 Проверить маршрут.',
+        }],
+      },
+    };
+
+    const pdf = await buildCompanyExportPdf(data);
+    const text = extractPdfText(pdf);
+    const fonts = inspectPdfFonts(pdf);
+
+    const compactText = text.replace(/\s+/g, '');
+    for (const expected of [
+      '東京復旧 株式会社 Пример восстановления',
+      '復旧手順',
+      'Процедура',
+      'サーバーを復元します。',
+      'Проверить сеть.',
+      'ウェブサーバー',
+      'База данных',
+      'ネットワーク Восстановление',
+      '静的アドレスを確認してください。',
+    ]) expect(compactText).toContain(expected.replace(/\s+/g, ''));
+    expect(text).toContain('[emoji omitted]');
+    expect(text).not.toContain('😀');
+    expect(text).not.toContain('�');
+    expect(fonts).toMatch(/Noto/i);
+    expect(fonts).not.toMatch(/\bno\b/i);
+  });
+
+  it('labels stale-bound records unmistakably as last-known stale', async () => {
+    const base = companyPdfTestFixture();
+    const stale = {
+      state: 'stale' as const,
+      staleSince: new Date('2026-07-14T00:30:00.000Z'),
+      sourceLabel: 'Breeze',
+    };
+    const pdf = await buildCompanyExportPdf({
+      ...base,
+      assets: base.assets.map((asset) => ({ ...asset, reconstructionState: stale })),
+      articles: base.articles.map((article) => ({ ...article, reconstructionState: stale })),
+      ipam: base.ipam.map((subnet) => ({ ...subnet, reconstructionState: stale })),
+      relations: base.relations.map((relation, index) => index === 0
+        ? { ...relation, reconstructionState: stale }
+        : relation),
+    });
+    const text = extractPdfText(pdf);
+
+    expect(text.match(/LAST-KNOWN STALE/g)).toHaveLength(4);
+    expect(text).toContain('Stale since Jul 14, 2026 UTC');
+  });
+
+  it('keeps UTC dates and the PDF hash invariant across process timezones', async () => {
+    const originalTimezone = process.env['TZ'];
+    const base = companyPdfTestFixture({
+      exportedAt: new Date('2026-07-14T00:30:00.000Z'),
+      company: {
+        ...companyPdfTestFixture().company,
+        createdAt: new Date('2026-07-14T00:30:00.000Z'),
+      },
+    });
+    try {
+      process.env['TZ'] = 'UTC';
+      const utc = await buildCompanyExportPdf(base);
+      process.env['TZ'] = 'America/Denver';
+      const denver = await buildCompanyExportPdf(base);
+
+      expect(createHash('sha256').update(denver).digest('hex'))
+        .toBe(createHash('sha256').update(utc).digest('hex'));
+      expect(extractPdfText(utc)).toContain('Jul 14, 2026 UTC');
+      expect(extractPdfText(denver)).toContain('Jul 14, 2026 UTC');
+    } finally {
+      if (originalTimezone === undefined) delete process.env['TZ'];
+      else process.env['TZ'] = originalTimezone;
+    }
+  });
+
+  it('paginates maximum-size gap headings, messages, and footers as measured cards', async () => {
+    const base = companyPdfTestFixture();
+    const resourceLabel = `MAX-LABEL-${'界'.repeat(246)}`;
+    const targetLabel = `MAX-TARGET-${'Ж'.repeat(245)}`;
+    const message = `MAX-MESSAGE-${'restore validation step '.repeat(24)}`.slice(0, 512);
+    const pdf = await buildCompanyExportPdf({
+      ...base,
+      reconstruction: {
+        ...base.reconstruction,
+        provenance: Array.from({ length: 8 }, (_, index) => ({
+          ...base.reconstruction.provenance[0]!,
+          target: { ...base.reconstruction.provenance[0]!.target, label: `Lead record ${index}` },
+        })),
+        gaps: [
+          { ...base.reconstruction.gaps[0]!, resourceLabel, message, target: { ...base.reconstruction.gaps[0]!.target!, label: targetLabel } },
+          { ...base.reconstruction.gaps[0]!, resourceLabel: 'FOLLOWING GAP CARD', message: 'FOLLOWING MESSAGE' },
+        ],
+      },
+    });
+    const { text, pages } = inspectPdf(pdf);
+
+    expect(pages).toBeGreaterThan(8);
+    expect((text.match(/界/g) ?? [])).toHaveLength(246);
+    const compactText = text.replace(/\s+/g, '');
+    expect(compactText).toContain(message.replace(/\s+/g, ''));
+    expect(compactText).toContain(targetLabel.replace(/\s+/g, ''));
+    expect(text).toContain('FOLLOWING GAP CARD');
+    expect(text.indexOf('FOLLOWING GAP CARD')).toBeGreaterThan(text.indexOf('MAX-MESSAGE'));
+    expect(text).toMatch(/Page \d+ of \d+/);
+  });
+
   it('builds a deterministic inspection fixture and optionally writes it under tmp/pdfs', async () => {
-    const first = await buildCompanyExportPdf(companyPdfTestFixture());
-    const second = await buildCompanyExportPdf(companyPdfTestFixture());
+    const first = await buildCompanyExportPdf(strengthenedInspectionFixture());
+    const second = await buildCompanyExportPdf(strengthenedInspectionFixture());
     expect(createHash('sha256').update(first).digest('hex'))
       .toBe(createHash('sha256').update(second).digest('hex'));
 
@@ -258,6 +384,14 @@ describe('standalone reconstruction dossier PDF', () => {
       writeFileSync(output, first);
     }
   });
+
+  it('removes only its empty scoped Poppler inspection directories', async () => {
+    inspectPdf(await buildCompanyExportPdf(companyPdfTestFixture()));
+    const pdfRoot = resolve(repoRoot(), 'tmp/pdfs');
+    const entries = existsSync(pdfRoot) ? readdirSync(pdfRoot) : [];
+    expect(entries.filter((entry) => /^jest-|^task-10-jest/.test(entry))).toEqual([]);
+    expect(existsSync(resolve(pdfRoot, `task-10-jest-${process.pid}`))).toBe(false);
+  });
 });
 
 function extractPdfText(pdf: Buffer): string {
@@ -265,21 +399,103 @@ function extractPdfText(pdf: Buffer): string {
 }
 
 function inspectPdf(pdf: Buffer): { text: string; pages: number } {
-  const root = resolve(repoRoot(), 'tmp/pdfs');
-  mkdirSync(root, { recursive: true });
-  const dir = mkdtempSync(resolve(root, 'jest-'));
-  const input = resolve(dir, 'fixture.pdf');
-  try {
-    writeFileSync(input, pdf);
+  return withPopplerPdf(pdf, (input) => {
     const text = execFileSync('pdftotext', [input, '-'], { encoding: 'utf8' });
     const info = execFileSync('pdfinfo', [input], { encoding: 'utf8' });
     const pages = Number(/^Pages:\s+(\d+)$/m.exec(info)?.[1] ?? '0');
     return { text, pages };
+  });
+}
+
+function inspectPdfFonts(pdf: Buffer): string {
+  return withPopplerPdf(pdf, (input) =>
+    execFileSync('pdffonts', [input], { encoding: 'utf8' }),
+  );
+}
+
+function withPopplerPdf<T>(pdf: Buffer, inspect: (input: string) => T): T {
+  const tmpRoot = resolve(repoRoot(), 'tmp');
+  const pdfRoot = resolve(tmpRoot, 'pdfs');
+  const scope = resolve(pdfRoot, `task-10-jest-${process.pid}`);
+  const createdTmpRoot = !existsSync(tmpRoot);
+  const createdPdfRoot = !existsSync(pdfRoot);
+  mkdirSync(scope, { recursive: true });
+  const dir = mkdtempSync(resolve(scope, 'inspection-'));
+  const input = resolve(dir, 'fixture.pdf');
+  try {
+    writeFileSync(input, pdf);
+    return inspect(input);
   } finally {
     rmSync(dir, { recursive: true, force: true });
+    removeEmptyDirectory(scope);
+    if (createdPdfRoot) removeEmptyDirectory(pdfRoot);
+    if (createdTmpRoot) removeEmptyDirectory(tmpRoot);
+  }
+}
+
+function removeEmptyDirectory(path: string): void {
+  try {
+    rmdirSync(path);
+  } catch {
+    // ENOTEMPTY means another concurrent inspection owns an artifact.
   }
 }
 
 function repoRoot(): string {
   return resolve(process.cwd(), '../..');
+}
+
+function strengthenedInspectionFixture(): CompanyExportData {
+  const base = companyPdfTestFixture();
+  const stale = {
+    state: 'stale' as const,
+    staleSince: new Date('2026-07-14T00:30:00.000Z'),
+    sourceLabel: 'Breeze',
+  };
+  return {
+    ...base,
+    company: { ...base.company, name: '東京復旧 株式会社 — Пример восстановления' },
+    assets: base.assets.map((asset) => ({
+      ...asset,
+      reconstructionState: stale,
+      fields: [...asset.fields, {
+        label: 'Offline recovery role',
+        fieldType: 'TEXT',
+        value: '復旧サーバー — Сервер восстановления',
+      }],
+    })),
+    articles: base.articles.map((article) => ({
+      ...article,
+      title: '復旧手順 — Процедура восстановления',
+      contentPlaintext: `${article.contentPlaintext ?? ''}\nサーバーを復元します。 Проверить сеть. 😀`,
+      reconstructionState: stale,
+    })),
+    ipam: base.ipam.map((subnet) => ({ ...subnet, reconstructionState: stale })),
+    relations: base.relations.map((relation, index) => index === 0
+      ? { ...relation, reconstructionState: stale }
+      : relation),
+    reconstruction: {
+      ...base.reconstruction,
+      provenance: Array.from({ length: 8 }, (_, index) => ({
+        ...base.reconstruction.provenance[0]!,
+        target: { ...base.reconstruction.provenance[0]!.target, label: `Last-known device ${index}` },
+      })),
+      gaps: [
+        {
+          ...base.reconstruction.gaps[0]!,
+          resourceLabel: `MAX-LABEL-${'界'.repeat(246)}`,
+          message: `MAX-MESSAGE-${'restore validation step '.repeat(24)}`.slice(0, 512),
+          target: {
+            ...base.reconstruction.gaps[0]!.target!,
+            label: `MAX-TARGET-${'Ж'.repeat(245)}`,
+          },
+        },
+        {
+          ...base.reconstruction.gaps[0]!,
+          resourceLabel: 'FOLLOWING GAP CARD',
+          message: 'FOLLOWING MESSAGE — 静的アドレスを確認してください。',
+        },
+      ],
+    },
+  };
 }

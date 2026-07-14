@@ -70,6 +70,13 @@ export interface ExportAsset {
   name: string;
   layoutName: string;
   fields: ExportAssetField[];
+  reconstructionState?: ExportReconstructionState;
+}
+
+export interface ExportReconstructionState {
+  state: 'stale';
+  staleSince: Date;
+  sourceLabel: string;
 }
 
 export interface ExportPassword {
@@ -96,6 +103,7 @@ export interface ExportArticle {
   contentPlaintext: string | null;
   images: ExportArticleImage[];
   updatedAt: Date;
+  reconstructionState?: ExportReconstructionState;
 }
 
 export interface ExportArticleImage {
@@ -152,6 +160,7 @@ export interface ExportSubnet {
   description: string | null;
   reservations: ExportIpReservation[];
   occupants: ExportSubnetOccupant[];
+  reconstructionState?: ExportReconstructionState;
 }
 
 export interface ExportRelationEndpoint {
@@ -165,6 +174,7 @@ export interface ExportRelation {
   source: ExportRelationEndpoint;
   target: ExportRelationEndpoint;
   createdAt: Date;
+  reconstructionState?: ExportReconstructionState;
 }
 
 export interface ExportNativeTarget {
@@ -236,6 +246,27 @@ export interface CompanyExportData {
   includePasswords: boolean;
 }
 
+interface SafeSyncBinding {
+  targetKind: IntegrationTargetKind;
+  targetId: string;
+  integrationCompanyMappingId: string;
+  resourceId: string;
+  state: IntegrationSyncState;
+  staleSince: Date | null;
+  sourceLabel: string;
+  resourceKey: string;
+  ownership: 'breeze' | 'weavestream';
+  firstSeenAt: Date;
+  lastSeenAt: Date;
+  lastSyncedAt: Date | null;
+  target: ExportNativeTarget;
+}
+
+interface SafeSyncBindingIndex {
+  all: SafeSyncBinding[];
+  byTarget: Map<string, SafeSyncBinding>;
+}
+
 // ---------------------------------------------------------------------------
 // Service
 // ---------------------------------------------------------------------------
@@ -251,6 +282,7 @@ export class CompanyExportDataService {
     companyId: string,
     opts: { includePasswords: boolean },
   ): Promise<CompanyExportData> {
+    const bindings = await this.fetchSafeSyncBindings(companyId);
     const [
       company,
       workspaceName,
@@ -268,14 +300,14 @@ export class CompanyExportDataService {
         this.fetchCompany(companyId),
         this.fetchWorkspaceName(),
         this.fetchMembers(companyId),
-        this.fetchAssets(companyId),
-        this.fetchArticles(companyId),
+        this.fetchAssets(companyId, bindings),
+        this.fetchArticles(companyId, bindings),
         this.fetchPasswords(companyId, opts.includePasswords),
         this.fetchDomains(companyId),
         this.fetchUploads(companyId),
-        this.fetchIpam(companyId),
-        this.fetchRelations(companyId),
-        this.fetchReconstruction(companyId),
+        this.fetchIpam(companyId, bindings),
+        this.fetchRelations(companyId, bindings),
+        this.fetchReconstruction(companyId, bindings),
       ]);
 
     if (!company) throw new Error(`Company ${companyId} not found`);
@@ -300,6 +332,69 @@ export class CompanyExportDataService {
   // -------------------------------------------------------------------------
   // Private fetchers
   // -------------------------------------------------------------------------
+
+  private async fetchSafeSyncBindings(companyId: string): Promise<SafeSyncBindingIndex> {
+    const rows = await this.prisma.integrationSyncRecord.findMany({
+      where: { companyId },
+      select: {
+        ...reconstructionTargetSelect,
+        id: true,
+        state: true,
+        staleSince: true,
+        provenance: true,
+        companyMapping: {
+          select: {
+            companyId: true,
+            integration: { select: { id: true, name: true, driver: true } },
+          },
+        },
+        resource: { select: { integrationId: true, resourceKey: true } },
+      },
+      orderBy: [{ targetKind: 'asc' }, { id: 'asc' }],
+      take: COMPANY_EXPORT_LIMITS.provenance + 1,
+    });
+    assertWithinExportLimit(rows, COMPANY_EXPORT_LIMITS.provenance, 'Source provenance');
+
+    const all = rows.flatMap((row): SafeSyncBinding[] => {
+      const parsed = integrationProvenanceSchema.safeParse(row.provenance);
+      const integration = row.companyMapping.integration;
+      const targetId = syncTargetId(row);
+      const target = safeExportTarget(companyId, row, {
+        integrationCompanyMappingId: row.integrationCompanyMappingId,
+        resourceId: row.resourceId,
+      });
+      if (
+        !parsed.success ||
+        !targetId ||
+        !target ||
+        row.companyId !== companyId ||
+        row.companyMapping.companyId !== companyId ||
+        row.resource.integrationId !== integration.id ||
+        parsed.data.integrationId !== integration.id ||
+        parsed.data.resourceKey !== row.resource.resourceKey ||
+        parsed.data.state !== row.state
+      ) return [];
+      return [{
+        targetKind: row.targetKind,
+        targetId,
+        integrationCompanyMappingId: row.integrationCompanyMappingId,
+        resourceId: row.resourceId,
+        state: row.state,
+        staleSince: row.staleSince,
+        sourceLabel: boundedText(integration.name, 256, 'Integration'),
+        resourceKey: boundedText(row.resource.resourceKey, 256, 'resource'),
+        ownership: parsed.data.ownership,
+        firstSeenAt: new Date(parsed.data.firstSeenAt),
+        lastSeenAt: new Date(parsed.data.lastSeenAt),
+        lastSyncedAt: parsed.data.lastSyncedAt ? new Date(parsed.data.lastSyncedAt) : null,
+        target,
+      }];
+    });
+    return {
+      all,
+      byTarget: new Map(all.map((binding) => [bindingKey(binding.targetKind, binding.targetId), binding])),
+    };
+  }
 
   private async fetchWorkspaceName(): Promise<string> {
     const row = await this.prisma.systemSetting.findUnique({
@@ -359,23 +454,34 @@ export class CompanyExportDataService {
     }));
   }
 
-  private async fetchAssets(companyId: string): Promise<ExportAsset[]> {
+  private async fetchAssets(
+    companyId: string,
+    bindings: SafeSyncBindingIndex,
+  ): Promise<ExportAsset[]> {
+    const staleIds = staleBoundIds(bindings, 'asset');
     const rows = await this.prisma.asset.findMany({
-      where: { companyId, archivedAt: null },
+      where: {
+        companyId,
+        OR: [
+          { archivedAt: null },
+          ...(staleIds.length > 0 ? [{ id: { in: staleIds }, archivedAt: { not: null } }] : []),
+        ],
+      },
       include: {
         assetLayout: { select: { name: true } },
         fieldValues: {
           include: {
-            assetField: { select: { name: true, fieldType: true, position: true } },
+            assetField: { select: { name: true, slug: true, fieldType: true, position: true } },
           },
         },
       },
       orderBy: [{ assetLayout: { name: 'asc' } }, { name: 'asc' }],
     });
 
+    const exportRows = rows.filter((row) => !row.archivedAt || staleIds.includes(row.id));
     const assetReferenceIds = new Set<string>();
     const tagIds = new Set<string>();
-    for (const asset of rows) {
+    for (const asset of exportRows) {
       for (const fv of asset.fieldValues) {
         if (fv.assetField.fieldType === 'ASSET_REFERENCE') {
           for (const id of listStrings(fv.value)) {
@@ -413,20 +519,31 @@ export class CompanyExportDataService {
     for (const r of assetReferenceRows) labelLookup.set(r.id, r.name);
     for (const r of tagRows) labelLookup.set(r.id, r.name);
 
-    return rows.map((a) => ({
+    return exportRows.map((a) => {
+      const binding = bindings.byTarget.get(bindingKey('asset', a.id));
+      return {
       name: a.name,
       layoutName: a.assetLayout.name,
       fields: a.fieldValues
         .slice()
         .sort((left, right) => left.assetField.position - right.assetField.position)
-        .map((fv) => {
+        .flatMap((fv): ExportAssetField[] => {
           const fieldType = fv.assetField.fieldType;
+          const safeValue = binding
+            ? safeSynchronizedAssetField(fv.assetField.slug, fv.assetField.name, fv.value)
+            : { include: true, value: fv.value };
+          if (!safeValue.include) return [];
           const needsLabels = fieldType === 'ASSET_REFERENCE' || fieldType === 'TAGS';
-          return {
+          const synchronizedLabels = binding && needsLabels
+            ? listStrings(fv.value)
+                .flatMap((id) => labelLookup.get(id) ?? (!UUID_RE.test(id) ? id : []))
+            : null;
+          if (synchronizedLabels && synchronizedLabels.length === 0) return [];
+          return [{
             label: fv.assetField.name,
             fieldType,
-            value: fv.value,
-            ...(needsLabels
+            value: synchronizedLabels ?? safeValue.value,
+            ...(needsLabels && !binding
               ? {
                   referenceLabels: Object.fromEntries(
                     listStrings(fv.value)
@@ -435,14 +552,26 @@ export class CompanyExportDataService {
                   ),
                 }
               : {}),
-          };
+          }];
         }),
-    }));
+      ...(staleExportState(binding) ? { reconstructionState: staleExportState(binding)! } : {}),
+    };
+    });
   }
 
-  private async fetchArticles(companyId: string): Promise<ExportArticle[]> {
+  private async fetchArticles(
+    companyId: string,
+    bindings: SafeSyncBindingIndex,
+  ): Promise<ExportArticle[]> {
+    const staleIds = staleBoundIds(bindings, 'article');
     const rows = await this.prisma.article.findMany({
-      where: { companyId, archivedAt: null },
+      where: {
+        companyId,
+        OR: [
+          { archivedAt: null },
+          ...(staleIds.length > 0 ? [{ id: { in: staleIds }, archivedAt: { not: null } }] : []),
+        ],
+      },
       select: {
         id: true,
         title: true,
@@ -451,13 +580,15 @@ export class CompanyExportDataService {
         markdownSource: true,
         contentPlaintext: true,
         updatedAt: true,
+        archivedAt: true,
         folder: { select: { name: true } },
       },
       orderBy: [{ folder: { name: 'asc' } }, { title: 'asc' }],
     });
+    const exportRows = rows.filter((row) => !row.archivedAt || staleIds.includes(row.id));
     const imageIds = new Set<string>();
     const imageIdsByArticle = new Map<string, string[]>();
-    for (const article of rows) {
+    for (const article of exportRows) {
       const body =
         article.editorMode === 'markdown' ? article.markdownSource : article.content;
       const ids = Array.from(extractEmbeddedUploadIds(body));
@@ -485,14 +616,19 @@ export class CompanyExportDataService {
         : [];
     const uploadsById = new Map(uploads.map((u) => [u.id.toLowerCase(), u]));
 
-    return rows.map((a) => ({
+    return exportRows.map((a) => {
+      const binding = bindings.byTarget.get(bindingKey('article', a.id));
+      const safeArticle = binding
+        ? safeSynchronizedArticle(a.markdownSource, a.contentPlaintext, binding)
+        : null;
+      return {
       id: a.id,
       title: a.title,
       folderPath: a.folder?.name ?? '/',
-      editorMode: a.editorMode as 'tiptap' | 'markdown',
-      content: a.content,
-      markdownSource: a.markdownSource,
-      contentPlaintext: a.contentPlaintext,
+      editorMode: safeArticle ? 'markdown' : a.editorMode as 'tiptap' | 'markdown',
+      content: safeArticle ? null : a.content,
+      markdownSource: safeArticle?.markdownSource ?? a.markdownSource,
+      contentPlaintext: safeArticle?.contentPlaintext ?? a.contentPlaintext,
       images: (imageIdsByArticle.get(a.id) ?? [])
         .map((id) => uploadsById.get(id))
         .filter((u): u is (typeof uploads)[number] => u !== undefined)
@@ -505,7 +641,9 @@ export class CompanyExportDataService {
           height: u.height,
         })),
       updatedAt: a.updatedAt,
-    }));
+      ...(staleExportState(binding) ? { reconstructionState: staleExportState(binding)! } : {}),
+    };
+    });
   }
 
   private async fetchPasswords(
@@ -656,9 +794,21 @@ export class CompanyExportDataService {
     }));
   }
 
-  private async fetchIpam(companyId: string): Promise<ExportSubnet[]> {
+  private async fetchIpam(
+    companyId: string,
+    bindings: SafeSyncBindingIndex,
+  ): Promise<ExportSubnet[]> {
+    const staleSubnetIds = staleBoundIds(bindings, 'subnet');
     const subnets = await this.prisma.subnet.findMany({
-      where: { companyId, archivedAt: null },
+      where: {
+        companyId,
+        OR: [
+          { archivedAt: null },
+          ...(staleSubnetIds.length > 0
+            ? [{ id: { in: staleSubnetIds }, archivedAt: { not: null } }]
+            : []),
+        ],
+      },
       select: {
         id: true,
         companyId: true,
@@ -670,14 +820,18 @@ export class CompanyExportDataService {
         dhcpRangeStart: true,
         dhcpRangeEnd: true,
         description: true,
+        archivedAt: true,
       },
       orderBy: [{ name: 'asc' }, { cidr: 'asc' }, { id: 'asc' }],
       take: COMPANY_EXPORT_LIMITS.subnets + 1,
     });
     assertWithinExportLimit(subnets, COMPANY_EXPORT_LIMITS.subnets, 'Subnets');
-    if (subnets.length === 0) return [];
+    const exportSubnets = subnets.filter(
+      (subnet) => !subnet.archivedAt || staleSubnetIds.includes(subnet.id),
+    );
+    if (exportSubnets.length === 0) return [];
 
-    const subnetIds = subnets.map((subnet) => subnet.id);
+    const subnetIds = exportSubnets.map((subnet) => subnet.id);
     const subnetIdSet = new Set(subnetIds);
     const [reservations, occupantRows] = await Promise.all([
       this.prisma.ipReservation.findMany({
@@ -697,8 +851,8 @@ export class CompanyExportDataService {
       this.prisma.assetFieldValue.findMany({
         where: {
           companyId,
-          asset: { companyId, archivedAt: null },
-          assetField: { fieldType: 'IP_ADDRESS' },
+          asset: { companyId },
+          assetField: { slug: { in: ['interfaces', 'network-addresses'] } },
         },
         select: {
           id: true,
@@ -706,7 +860,7 @@ export class CompanyExportDataService {
           assetId: true,
           value: true,
           asset: { select: { id: true, companyId: true, name: true } },
-          assetField: { select: { name: true, fieldType: true } },
+          assetField: { select: { name: true, slug: true, fieldType: true } },
         },
         orderBy: [{ assetId: 'asc' }, { id: 'asc' }],
         take: COMPANY_EXPORT_LIMITS.occupants + 1,
@@ -741,36 +895,78 @@ export class CompanyExportDataService {
       reservationsBySubnet.set(reservation.subnetId, list);
     }
 
-    const safeOccupants = occupantRows.flatMap((row) => {
+    const reservationIps = new Set(
+      reservations.map((reservation) => normalizeIpv4V4(reservation.ipAddress)).filter(Boolean),
+    );
+    const projectionsByAsset = new Map<string, {
+      assetId: string;
+      assetLabel: string;
+      interfaces: string[];
+      addresses: Array<Record<string, string>>;
+    }>();
+    for (const row of occupantRows) {
       if (
         row.companyId !== companyId ||
         row.asset.companyId !== companyId ||
         row.asset.id !== row.assetId ||
-        row.assetField.fieldType !== 'IP_ADDRESS' ||
-        typeof row.value !== 'string'
-      ) return [];
-      const ip = normalizeIpv4V4(row.value.split('/', 1)[0]!.trim());
-      if (!ip) return [];
-      return [{
-        ipAddress: ip,
+        typeof row.value !== 'string' ||
+        !bindings.byTarget.has(bindingKey('asset', row.assetId))
+      ) continue;
+      const current = projectionsByAsset.get(row.assetId) ?? {
+        assetId: row.assetId,
         assetLabel: boundedText(row.asset.name, 200, 'Asset'),
-        interfaceLabel: boundedText(row.assetField.name, 200, 'IP address'),
-        assetHref: `/admin/companies/${companyId}/assets/${row.asset.id}`,
-      }];
+        interfaces: [],
+        addresses: [],
+      };
+      if (row.assetField.slug === 'interfaces') {
+        current.interfaces.push(...parseBreezeProjection(row.value)
+          .map((item) => item['Name']?.trim() ?? '')
+          .filter(Boolean));
+      } else if (row.assetField.slug === 'network-addresses') {
+        current.addresses.push(...parseBreezeProjection(row.value));
+      }
+      projectionsByAsset.set(row.assetId, current);
+    }
+
+    const safeOccupants = [...projectionsByAsset.values()].flatMap((projection) => {
+      const interfaceNames = new Set(projection.interfaces);
+      return projection.addresses.flatMap((address): ExportSubnetOccupant[] => {
+        const interfaceLabel = address['Interface']?.trim();
+        const rawAddress = address['Address']?.split('/', 1)[0]?.trim();
+        const ip = rawAddress ? normalizeIpv4V4(rawAddress) : null;
+        const assignment = address['Assignment']?.trim().toLowerCase() ?? '';
+        const eligible = /^(?:yes|true|1)$/i.test(address['Reservation eligible']?.trim() ?? '');
+        const active = !/^(?:no|false|0)$/i.test(address['Active']?.trim() ?? '');
+        if (
+          !ip ||
+          !interfaceLabel ||
+          !interfaceNames.has(interfaceLabel) ||
+          !active ||
+          (!eligible && !['static', 'manual', 'reserved'].includes(assignment)) ||
+          !reservationIps.has(ip)
+        ) return [];
+        return [{
+          ipAddress: ip,
+          assetLabel: projection.assetLabel,
+          interfaceLabel: boundedText(interfaceLabel, 200, 'Interface'),
+          assetHref: `/admin/companies/${companyId}/assets/${projection.assetId}`,
+        }];
+      });
     });
 
     if (
-      subnets.length * safeOccupants.length >
+      exportSubnets.length * safeOccupants.length >
       COMPANY_EXPORT_LIMITS.ipamMembershipChecks
     ) {
       throw new Error('IPAM occupant matching exceeded the bounded export limit.');
     }
 
-    return subnets
+    return exportSubnets
       .map((subnet) => {
         if (subnet.companyId !== companyId) {
           throw new Error('Inconsistent IPAM export scope.');
         }
+        const binding = bindings.byTarget.get(bindingKey('subnet', subnet.id));
         return {
           name: boundedText(subnet.name, 200, 'Subnet'),
           cidr: subnet.cidr,
@@ -788,12 +984,16 @@ export class CompanyExportDataService {
             .sort((left, right) => compareIpv4(left.ipAddress, right.ipAddress) ||
               left.assetLabel.localeCompare(right.assetLabel) ||
               left.interfaceLabel.localeCompare(right.interfaceLabel)),
+          ...(staleExportState(binding) ? { reconstructionState: staleExportState(binding)! } : {}),
         };
       })
       .sort((left, right) => left.name.localeCompare(right.name) || left.cidr.localeCompare(right.cidr));
   }
 
-  private async fetchRelations(companyId: string): Promise<ExportRelation[]> {
+  private async fetchRelations(
+    companyId: string,
+    bindings: SafeSyncBindingIndex,
+  ): Promise<ExportRelation[]> {
     const rows = await this.prisma.relation.findMany({
       where: { companyId },
       select: {
@@ -823,16 +1023,36 @@ export class CompanyExportDataService {
     }
 
     const idsByType = relationEndpointIds(rows);
+    const staleAssetIds = new Set(staleBoundIds(bindings, 'asset'));
+    const staleArticleIds = new Set(staleBoundIds(bindings, 'article'));
     const [assets, articles, passwords] = await Promise.all([
       idsByType.asset.length > 0
         ? this.prisma.asset.findMany({
-            where: { companyId, id: { in: idsByType.asset }, archivedAt: null },
+            where: {
+              companyId,
+              id: { in: idsByType.asset },
+              OR: [
+                { archivedAt: null },
+                ...(staleAssetIds.size > 0
+                  ? [{ id: { in: [...staleAssetIds] }, archivedAt: { not: null } }]
+                  : []),
+              ],
+            },
             select: { id: true, companyId: true, name: true },
           })
         : [],
       idsByType.article.length > 0
         ? this.prisma.article.findMany({
-            where: { companyId, id: { in: idsByType.article }, archivedAt: null },
+            where: {
+              companyId,
+              id: { in: idsByType.article },
+              OR: [
+                { archivedAt: null },
+                ...(staleArticleIds.size > 0
+                  ? [{ id: { in: [...staleArticleIds] }, archivedAt: { not: null } }]
+                  : []),
+              ],
+            },
             select: { id: true, companyId: true, title: true },
           })
         : [],
@@ -872,22 +1092,34 @@ export class CompanyExportDataService {
         const target = endpoints.get(`${row.targetType}:${row.targetId}`);
         // Unknown, archived, or foreign-company polymorphic endpoints are
         // deliberately omitted rather than exposing their ids as labels.
-        return source && target
-          ? [{
+        if (!source || !target) return [];
+        const relationBinding = bindings.byTarget.get(bindingKey('relation', row.id));
+        const staleBindings = [
+          relationBinding,
+          bindings.byTarget.get(bindingKey(endpointKind(row.sourceType), row.sourceId)),
+          bindings.byTarget.get(bindingKey(endpointKind(row.targetType), row.targetId)),
+        ].filter((binding): binding is SafeSyncBinding => Boolean(binding?.state === 'stale'));
+        const state = staleBindings
+          .slice()
+          .sort((left, right) => (left.staleSince?.getTime() ?? 0) - (right.staleSince?.getTime() ?? 0))[0];
+        return [{
               relationType: boundedText(row.relationType, 128, 'related_to'),
               source,
               target,
               createdAt: row.createdAt,
-            }]
-          : [];
+              ...(staleExportState(state) ? { reconstructionState: staleExportState(state)! } : {}),
+            }];
       })
       .sort((left, right) => left.relationType.localeCompare(right.relationType) ||
         left.source.label.localeCompare(right.source.label) ||
         left.target.label.localeCompare(right.target.label));
   }
 
-  private async fetchReconstruction(companyId: string): Promise<CompanyExportData['reconstruction']> {
-    const [summaryRows, gapRows, provenanceRows] = await Promise.all([
+  private async fetchReconstruction(
+    companyId: string,
+    bindings: SafeSyncBindingIndex,
+  ): Promise<CompanyExportData['reconstruction']> {
+    const [summaryRows, gapRows] = await Promise.all([
       this.prisma.integrationReconstructionSummary.findMany({
         where: { companyId, resourceId: { not: null } },
         include: {
@@ -907,25 +1139,6 @@ export class CompanyExportDataService {
         orderBy: [{ kind: 'asc' }, { resourceId: 'asc' }, { firstSeenAt: 'asc' }, { id: 'asc' }],
         take: COMPANY_EXPORT_LIMITS.reconstructionGaps + 1,
       }),
-      this.prisma.integrationSyncRecord.findMany({
-        where: { companyId },
-        select: {
-          ...reconstructionTargetSelect,
-          id: true,
-          state: true,
-          staleSince: true,
-          provenance: true,
-          companyMapping: {
-            select: {
-              companyId: true,
-              integration: { select: { id: true, name: true, driver: true } },
-            },
-          },
-          resource: { select: { integrationId: true, resourceKey: true } },
-        },
-        orderBy: [{ targetKind: 'asc' }, { id: 'asc' }],
-        take: COMPANY_EXPORT_LIMITS.provenance + 1,
-      }),
     ]);
     assertWithinExportLimit(
       summaryRows,
@@ -936,11 +1149,6 @@ export class CompanyExportDataService {
       gapRows,
       COMPANY_EXPORT_LIMITS.reconstructionGaps,
       'Reconstruction gaps',
-    );
-    assertWithinExportLimit(
-      provenanceRows,
-      COMPANY_EXPORT_LIMITS.provenance,
-      'Source provenance',
     );
 
     const summaries = summaryRows.map((row) => {
@@ -969,38 +1177,26 @@ export class CompanyExportDataService {
         firstSeenAt: row.firstSeenAt,
         lastSeenAt: row.lastSeenAt,
         resolvedAt: row.resolvedAt,
-        target: safeExportTarget(companyId, row.syncRecord),
+        target: safeExportTarget(companyId, row.syncRecord, {
+          integrationCompanyMappingId: row.integrationCompanyMappingId,
+          resourceId: row.resourceId,
+        }),
       };
     }).sort((left, right) => left.kind.localeCompare(right.kind) ||
       left.resourceLabel.localeCompare(right.resourceLabel) ||
       left.message.localeCompare(right.message));
 
-    const provenance = provenanceRows.flatMap((row) => {
-      const parsed = integrationProvenanceSchema.safeParse(row.provenance);
-      const integration = row.companyMapping.integration;
-      if (
-        !parsed.success ||
-        row.companyId !== companyId ||
-        row.companyMapping.companyId !== companyId ||
-        row.resource.integrationId !== integration.id ||
-        parsed.data.integrationId !== integration.id ||
-        parsed.data.resourceKey !== row.resource.resourceKey ||
-        parsed.data.state !== row.state
-      ) return [];
-      const target = safeExportTarget(companyId, row);
-      if (!target) return [];
-      return [{
-        sourceLabel: boundedText(integration.name, 256, 'Integration'),
-        sourceResource: boundedText(row.resource.resourceKey, 256, 'resource'),
-        ownership: parsed.data.ownership,
-        state: row.state,
-        firstSeenAt: new Date(parsed.data.firstSeenAt),
-        lastSeenAt: new Date(parsed.data.lastSeenAt),
-        lastSyncedAt: parsed.data.lastSyncedAt ? new Date(parsed.data.lastSyncedAt) : null,
-        staleSince: row.staleSince,
-        target,
-      }];
-    }).sort((left, right) => left.target.label.localeCompare(right.target.label) ||
+    const provenance = bindings.all.map((row) => ({
+      sourceLabel: row.sourceLabel,
+      sourceResource: row.resourceKey,
+      ownership: row.ownership,
+      state: row.state,
+      firstSeenAt: row.firstSeenAt,
+      lastSeenAt: row.lastSeenAt,
+      lastSyncedAt: row.lastSyncedAt,
+      staleSince: row.staleSince,
+      target: row.target,
+    })).sort((left, right) => left.target.label.localeCompare(right.target.label) ||
       left.sourceResource.localeCompare(right.sourceResource) || left.state.localeCompare(right.state));
 
     return { summaries, gaps, provenance };
@@ -1127,6 +1323,8 @@ function safeExportTarget(
   companyId: string,
   record: {
     companyId: string;
+    integrationCompanyMappingId: string;
+    resourceId: string;
     targetKind: string;
     assetId: string | null;
     subnetId: string | null;
@@ -1144,8 +1342,19 @@ function safeExportTarget(
     article: { title: string; companyId: string } | null;
     relation: { companyId: string } | null;
   } | null,
+  expectedScope?: {
+    integrationCompanyMappingId: string;
+    resourceId: string;
+  },
 ): ExportNativeTarget | null {
-  if (!record || record.companyId !== companyId) return null;
+  if (
+    !record ||
+    record.companyId !== companyId ||
+    (expectedScope && (
+      record.integrationCompanyMappingId !== expectedScope.integrationCompanyMappingId ||
+      record.resourceId !== expectedScope.resourceId
+    ))
+  ) return null;
   switch (record.targetKind) {
     case 'asset':
       return record.assetId && record.asset?.companyId === companyId
@@ -1188,6 +1397,135 @@ function safeExportTarget(
     default:
       return null;
   }
+}
+
+function syncTargetId(record: {
+  targetKind: string;
+  assetId: string | null;
+  subnetId: string | null;
+  ipReservationId: string | null;
+  articleId: string | null;
+  relationId: string | null;
+}): string | null {
+  switch (record.targetKind) {
+    case 'asset': return record.assetId;
+    case 'subnet': return record.subnetId;
+    case 'ip_reservation': return record.ipReservationId;
+    case 'article': return record.articleId;
+    case 'relation': return record.relationId;
+    default: return null;
+  }
+}
+
+function bindingKey(kind: string, id: string): string {
+  return `${kind}:${id}`;
+}
+
+function staleBoundIds(
+  bindings: SafeSyncBindingIndex,
+  kind: IntegrationTargetKind,
+): string[] {
+  return bindings.all
+    .filter((binding) => binding.targetKind === kind && binding.state === 'stale' && binding.staleSince)
+    .map((binding) => binding.targetId)
+    .sort();
+}
+
+function staleExportState(
+  binding: SafeSyncBinding | undefined,
+): ExportReconstructionState | null {
+  return binding?.state === 'stale' && binding.staleSince
+    ? {
+        state: 'stale',
+        staleSince: binding.staleSince,
+        sourceLabel: binding.sourceLabel,
+      }
+    : null;
+}
+
+function endpointKind(type: string): IntegrationTargetKind {
+  if (type === 'Asset') return 'asset';
+  if (type === 'Article') return 'article';
+  return 'relation';
+}
+
+const RAW_SOURCE_FIELD_SLUGS = new Set([
+  'breeze-id',
+  'upstream-external-id',
+  'source-revision',
+  'source-fingerprint',
+  'site-id',
+  'host-device-id',
+]);
+const RAW_SOURCE_FIELD_NAMES = /^(?:breeze id|upstream external id|source revision|source fingerprint|site id|host device id)$/i;
+const UUID_TOKEN_RE = /\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/gi;
+const STRUCTURED_IDENTIFIER_KEY_RE = /^(?:id|interface id|source id|external id|uuid)$/i;
+
+function safeSynchronizedAssetField(
+  slug: string,
+  name: string,
+  value: unknown,
+): { include: boolean; value: unknown } {
+  if (RAW_SOURCE_FIELD_SLUGS.has(slug) || RAW_SOURCE_FIELD_NAMES.test(name)) {
+    return { include: false, value: null };
+  }
+  if (typeof value !== 'string') return { include: true, value };
+  if (slug === 'interfaces' || slug === 'network-addresses' || value.includes(' | ')) {
+    const lines = parseBreezeProjection(value).map((row) =>
+      Object.entries(row)
+        .filter(([key]) => !STRUCTURED_IDENTIFIER_KEY_RE.test(key))
+        .map(([key, cell]) => `${key}: ${stripRawSourceIdentifiers(cell)}`)
+        .join(' | '),
+    ).filter(Boolean);
+    return { include: lines.length > 0, value: lines.join('\n') };
+  }
+  return { include: true, value: stripRawSourceIdentifiers(value) };
+}
+
+function parseBreezeProjection(value: string): Array<Record<string, string>> {
+  return value.split(/\r?\n/).flatMap((line) => {
+    if (!line.trim() || line.startsWith('[projection truncated:')) return [];
+    const row: Record<string, string> = {};
+    for (const part of line.split(' | ')) {
+      const separator = part.indexOf(':');
+      if (separator <= 0) continue;
+      row[part.slice(0, separator).trim()] = part.slice(separator + 1).trim();
+    }
+    return Object.keys(row).length > 0 ? [row] : [];
+  });
+}
+
+function stripRawSourceIdentifiers(value: string): string {
+  return value.replace(UUID_TOKEN_RE, '[source identifier omitted]');
+}
+
+function safeSynchronizedArticle(
+  markdownSource: string | null,
+  contentPlaintext: string | null,
+  binding: SafeSyncBinding,
+): { markdownSource: string; contentPlaintext: string } {
+  const source = markdownSource ?? contentPlaintext ?? '';
+  const kept: string[] = [];
+  let inSourceProvenance = false;
+  for (const rawLine of source.split(/\r?\n/)) {
+    const line = rawLine.trimEnd();
+    if (/<!--\s*weavestream:breeze:managed:(?:start|end)\s*-->/i.test(line)) continue;
+    if (/^##\s+Source provenance\s*$/i.test(line)) {
+      inSourceProvenance = true;
+      continue;
+    }
+    if (inSourceProvenance) continue;
+    if (/^(?:source\s+(?:uuid|id|revision|fingerprint)|policy\s+(?:uuid|id)|target\s+(?:uuid|id)|destination\s+(?:uuid|id)|upstream\s+external\s+id|breeze\s+id)\s*:/i.test(line)) {
+      continue;
+    }
+    kept.push(stripRawSourceIdentifiers(line));
+  }
+  const lastSynced = binding.lastSyncedAt?.toISOString() ?? 'not recorded';
+  const safeMarkdown = `${kept.join('\n').trim()}\n\n## Local synchronization record\nSource: ${binding.sourceLabel}\nLast synchronized: ${lastSynced}`.trim();
+  return {
+    markdownSource: safeMarkdown,
+    contentPlaintext: safeMarkdown.replace(/^#{1,6}\s+/gm, '').trim(),
+  };
 }
 
 function boundedText(value: string, limit: number, fallback: string): string {
