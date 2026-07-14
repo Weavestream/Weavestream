@@ -443,11 +443,17 @@ export class IpamService {
     if (input.existingTargetId && !bound) {
       return ipamBlocked(input.companyId, 'missing_dependency', 'The bound subnet no longer exists.', 'target_not_found', input.existingTargetId);
     }
-    const collision = !bound
-      ? await readClient.subnet.findFirst({
-          where: { companyId: input.companyId, cidr: native.cidr, archivedAt: null },
-        })
-      : null;
+    const collision = await readClient.subnet.findFirst({
+      where: {
+        companyId: input.companyId,
+        cidr: native.cidr,
+        archivedAt: null,
+        ...(bound ? { id: { not: bound.id } } : {}),
+      },
+    });
+    if (collision && collision.companyId !== input.companyId) {
+      return { targetId: collision.id, companyId: collision.companyId, change: 'blocked' };
+    }
     const adoptedCanonicalTarget = !!collision;
     if (
       collision &&
@@ -461,8 +467,10 @@ export class IpamService {
     ) {
       return ipamBlocked(input.companyId, 'ambiguous', 'An unbound subnet already owns this CIDR.', 'manual_ownership', collision.id);
     }
-    const existing = bound ?? collision;
-    if (existing) await this.assertCidrFree(input.companyId, native.cidr, existing.id);
+    const existing = collision ?? bound;
+    if (existing) {
+      await this.assertCidrFree(input.companyId, native.cidr, existing.id, readClient);
+    }
     if (
       adoptedCanonicalTarget &&
       existing?.gateway &&
@@ -774,11 +782,17 @@ export class IpamService {
     if (input.existingTargetId && !bound) {
       return ipamBlocked(input.companyId, 'missing_dependency', 'The bound reservation no longer exists.', 'target_not_found', input.existingTargetId);
     }
-    const collision = !bound
-      ? await readClient.ipReservation.findFirst({
-          where: { companyId: input.companyId, subnetId: input.subnetId, ipAddress: native.ipAddress },
-        })
-      : null;
+    const collision = await readClient.ipReservation.findFirst({
+      where: {
+        companyId: input.companyId,
+        subnetId: input.subnetId,
+        ipAddress: native.ipAddress,
+        ...(bound ? { id: { not: bound.id } } : {}),
+      },
+    });
+    if (collision && collision.companyId !== input.companyId) {
+      return { targetId: collision.id, companyId: collision.companyId, change: 'blocked' };
+    }
     const adoptedCanonicalTarget = !!collision;
     if (
       collision &&
@@ -792,7 +806,7 @@ export class IpamService {
     ) {
       return ipamBlocked(input.companyId, 'ambiguous', 'An unbound reservation already owns this IP.', 'manual_ownership', collision.id);
     }
-    const existing = bound ?? collision;
+    const existing = collision ?? bound;
     if (existing && existing.subnetId !== input.subnetId) {
       return ipamBlocked(input.companyId, 'validation', 'The bound reservation belongs to another subnet.', 'target_subnet_mismatch', existing.id);
     }
@@ -924,6 +938,7 @@ export class IpamService {
     companyId: string,
     cidr: string,
     excludeId: string | null,
+    client: Pick<Prisma.TransactionClient, 'subnet'> | PrismaService = this.prisma,
   ): Promise<void> {
     const where: Prisma.SubnetWhereInput = {
       companyId,
@@ -931,7 +946,7 @@ export class IpamService {
       archivedAt: null,
     };
     if (excludeId) where.id = { not: excludeId };
-    const dup = await this.prisma.subnet.findFirst({ where });
+    const dup = await client.subnet.findFirst({ where });
     if (dup) {
       throw new ConflictException(
         `Subnet ${cidr} already exists for this company`,
