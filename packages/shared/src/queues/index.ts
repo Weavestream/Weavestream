@@ -267,7 +267,25 @@ export const integrationSyncMappingJobSchema = z.object({
    * mapping's `IntegrationSyncRunCompanyResult.totals.byResource`.
    */
   resourceId: z.string().uuid(),
+  mode: z.enum(['incremental', 'full']).default('incremental'),
+  stageIndex: z.number().int().nonnegative().optional(),
+  resourceIds: z.array(z.string().uuid()).max(64).optional(),
   dryRun: z.boolean().default(false),
+}).superRefine((job, ctx) => {
+  if (job.resourceIds && new Set(job.resourceIds).size !== job.resourceIds.length) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['resourceIds'],
+      message: 'resourceIds must be unique',
+    });
+  }
+  if (job.resourceIds && !job.resourceIds.includes(job.resourceId)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['resourceIds'],
+      message: 'resourceIds must contain resourceId',
+    });
+  }
 });
 
 export type IntegrationSyncMappingJob = z.infer<
@@ -432,4 +450,3 @@ export const UploadReaperJobNames = {
 } as const;
 export type UploadReaperJobName =
   (typeof UploadReaperJobNames)[keyof typeof UploadReaperJobNames];
-

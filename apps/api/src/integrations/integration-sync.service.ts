@@ -630,6 +630,11 @@ const TOTAL_KEYS = [
   'skippedAmbiguous',
   'skippedManual',
   'skippedArchived',
+  'stale',
+  'restored',
+  'blocked',
+  'secretBlocked',
+  'missingDependency',
   'errors',
 ] as const satisfies ReadonlyArray<keyof SyncRunResourceTotals>;
 
@@ -644,6 +649,11 @@ export function zeroResourceTotals(): SyncRunResourceTotals {
     skippedAmbiguous: 0,
     skippedManual: 0,
     skippedArchived: 0,
+    stale: 0,
+    restored: 0,
+    blocked: 0,
+    secretBlocked: 0,
+    missingDependency: 0,
     errors: 0,
   };
 }
@@ -699,6 +709,11 @@ function mergeAggregate(
     skippedAmbiguous: resourceTotals.skippedAmbiguous,
     skippedManual: resourceTotals.skippedManual,
     skippedArchived: resourceTotals.skippedArchived,
+    stale: resourceTotals.stale,
+    restored: resourceTotals.restored,
+    blocked: resourceTotals.blocked,
+    secretBlocked: resourceTotals.secretBlocked,
+    missingDependency: resourceTotals.missingDependency,
     errors: resourceTotals.errors,
   };
   return acc;

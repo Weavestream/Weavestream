@@ -192,6 +192,9 @@ describe('TENANT_SCOPED_MODELS (Phase 3+4 registry)', () => {
     'Upload',
     'MonitoredDomain',
     'DomainCheck',
+    'IntegrationSyncCheckpoint',
+    'IntegrationReconstructionSummary',
+    'IntegrationReconstructionGap',
   ])('includes %s', (model) => {
     expect(TENANT_SCOPED_MODELS.has(model)).toBe(true);
   });

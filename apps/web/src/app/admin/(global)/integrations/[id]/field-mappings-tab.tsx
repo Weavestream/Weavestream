@@ -286,12 +286,17 @@ function ResourceEditor({
       setLoadingMappings(false);
       if (!res.ok || !res.data) return;
       setFieldMappings(
-        res.data.map((m) => ({
-          rowId: m.id,
-          sourceField: m.sourceField,
-          targetFieldId: m.targetFieldId,
-          syncDirection: m.syncDirection,
-        })),
+        res.data
+          .filter(
+            (m): m is typeof m & { targetFieldId: string } =>
+              m.targetFieldId !== null,
+          )
+          .map((m) => ({
+            rowId: m.id,
+            sourceField: m.sourceField,
+            targetFieldId: m.targetFieldId,
+            syncDirection: m.syncDirection,
+          })),
       );
     })();
     return () => {

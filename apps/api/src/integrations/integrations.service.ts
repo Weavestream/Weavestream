@@ -133,6 +133,9 @@ export class IntegrationsService {
             integrationId: row.id,
             resourceKey: r.key,
             enabled: true,
+            targetKind: r.targetKind,
+            targetConfig: r.targetConfig as Prisma.InputJsonValue,
+            dependsOnResourceKeys: r.dependsOnResourceKeys,
           },
         });
       }
@@ -440,18 +443,23 @@ export class IntegrationsService {
   async reconcileResources(integrationId: string): Promise<void> {
     const integration = await this.requireIntegration(integrationId);
     const driver = this.drivers.get(integration.driver);
-    const existing = await this.prisma.integrationResource.findMany({
-      where: { integrationId },
-      select: { resourceKey: true },
-    });
-    const existingKeys = new Set(existing.map((e) => e.resourceKey));
     for (const r of driver.descriptor.resources) {
-      if (existingKeys.has(r.key)) continue;
-      await this.prisma.integrationResource.create({
-        data: {
+      await this.prisma.integrationResource.upsert({
+        where: {
+          integrationId_resourceKey: { integrationId, resourceKey: r.key },
+        },
+        create: {
           integrationId,
           resourceKey: r.key,
           enabled: true,
+          targetKind: r.targetKind,
+          targetConfig: r.targetConfig as Prisma.InputJsonValue,
+          dependsOnResourceKeys: r.dependsOnResourceKeys,
+        },
+        update: {
+          targetKind: r.targetKind,
+          targetConfig: r.targetConfig as Prisma.InputJsonValue,
+          dependsOnResourceKeys: r.dependsOnResourceKeys,
         },
       });
     }
@@ -478,7 +486,11 @@ export class IntegrationsService {
     const integration = await this.requireIntegration(integrationId);
     const driver = this.drivers.get(integration.driver);
     this.assertResourceKey(driver.descriptor, resourceKey);
-    const row = await this.findOrCreateResource(integrationId, resourceKey);
+    const row = await this.findOrCreateResource(
+      integrationId,
+      resourceKey,
+      driver.descriptor,
+    );
     return this.toResourceDto(driver, row);
   }
 
@@ -504,11 +516,17 @@ export class IntegrationsService {
         `Resource "${input.resourceKey}" is already enabled for this integration.`,
       );
     }
+    const resourceDescriptor = driver.descriptor.resources.find(
+      (resource) => resource.key === input.resourceKey,
+    )!;
     await this.prisma.integrationResource.create({
       data: {
         integrationId,
         resourceKey: input.resourceKey,
         enabled: true,
+        targetKind: resourceDescriptor.targetKind,
+        targetConfig: resourceDescriptor.targetConfig as Prisma.InputJsonValue,
+        dependsOnResourceKeys: resourceDescriptor.dependsOnResourceKeys,
       },
     });
     await this.audit.log({
@@ -534,7 +552,11 @@ export class IntegrationsService {
     const integration = await this.requireIntegration(integrationId);
     const driver = this.drivers.get(integration.driver);
     this.assertResourceKey(driver.descriptor, resourceKey);
-    const existing = await this.findOrCreateResource(integrationId, resourceKey);
+    const existing = await this.findOrCreateResource(
+      integrationId,
+      resourceKey,
+      driver.descriptor,
+    );
     const fieldMappingCount = await this.prisma.integrationFieldMapping.count({
       where: { resourceId: existing.id },
     });
@@ -628,7 +650,11 @@ export class IntegrationsService {
     const integration = await this.requireIntegration(integrationId);
     const driver = this.drivers.get(integration.driver);
     this.assertResourceKey(driver.descriptor, resourceKey);
-    const resource = await this.findOrCreateResource(integrationId, resourceKey);
+    const resource = await this.findOrCreateResource(
+      integrationId,
+      resourceKey,
+      driver.descriptor,
+    );
     const rows = await this.prisma.integrationFieldMapping.findMany({
       where: { resourceId: resource.id },
       orderBy: { sourceField: 'asc' },
@@ -644,11 +670,12 @@ export class IntegrationsService {
       resourceKey,
       sourceField: r.sourceField,
       targetFieldId: r.targetFieldId,
+      targetPath: r.targetPath,
       targetFieldName: r.targetField?.name ?? null,
       targetFieldSlug: r.targetField?.slug ?? null,
       targetFieldType: r.targetField?.fieldType ?? null,
       syncDirection: r.syncDirection,
-      transform: (r.transform ?? null) as Record<string, unknown> | null,
+      transform: (r.transform ?? null) as IntegrationFieldMappingDto['transform'],
       createdAt: r.createdAt.toISOString(),
       updatedAt: r.updatedAt.toISOString(),
     }));
@@ -664,16 +691,29 @@ export class IntegrationsService {
     const integration = await this.requireIntegration(integrationId);
     const driver = this.drivers.get(integration.driver);
     this.assertResourceKey(driver.descriptor, resourceKey);
-    const resource = await this.findOrCreateResource(integrationId, resourceKey);
+    const resource = await this.findOrCreateResource(
+      integrationId,
+      resourceKey,
+      driver.descriptor,
+    );
     if (!resource.assetLayoutId) {
       throw new BadRequestException(
         'Pick a target asset layout before configuring field mappings.',
       );
     }
 
+    const assetMappings = input.mappings.map((mapping) => {
+      if (!mapping.targetFieldId || mapping.targetPath) {
+        throw new BadRequestException(
+          'Asset resources require targetFieldId and cannot use targetPath.',
+        );
+      }
+      return { ...mapping, targetFieldId: mapping.targetFieldId };
+    });
+
     const seenSource = new Set<string>();
     const seenTarget = new Set<string>();
-    for (const m of input.mappings) {
+    for (const m of assetMappings) {
       const norm = m.sourceField.trim().toLowerCase();
       if (seenSource.has(norm)) {
         throw new BadRequestException(
@@ -688,17 +728,17 @@ export class IntegrationsService {
       seenSource.add(norm);
       seenTarget.add(m.targetFieldId);
     }
-    if (input.mappings.length > 0) {
+    if (assetMappings.length > 0) {
       const valid = await this.prisma.assetField.findMany({
         where: {
-          id: { in: input.mappings.map((m) => m.targetFieldId) },
+          id: { in: assetMappings.map((m) => m.targetFieldId) },
           assetLayoutId: resource.assetLayoutId,
           archivedAt: null,
         },
         select: { id: true },
       });
       const validSet = new Set(valid.map((v) => v.id));
-      for (const m of input.mappings) {
+      for (const m of assetMappings) {
         if (!validSet.has(m.targetFieldId)) {
           throw new BadRequestException(
             `Target field ${m.targetFieldId} does not belong to layout ${resource.assetLayoutId} or is archived.`,
@@ -711,11 +751,12 @@ export class IntegrationsService {
       await tx.integrationFieldMapping.deleteMany({
         where: { resourceId: { equals: resource.id } },
       });
-      if (input.mappings.length > 0) {
+      if (assetMappings.length > 0) {
         await tx.integrationFieldMapping.createMany({
-          data: input.mappings.map((m) => ({
+          data: assetMappings.map((m) => ({
             resourceId: resource.id,
             sourceField: m.sourceField.trim(),
+            targetKind: 'asset',
             targetFieldId: m.targetFieldId,
             syncDirection: m.syncDirection,
             transform: m.transform
@@ -753,6 +794,7 @@ export class IntegrationsService {
   private async findOrCreateResource(
     integrationId: string,
     resourceKey: string,
+    descriptor: DriverDescriptor,
   ) {
     const existing = await this.prisma.integrationResource.findUnique({
       where: { integrationId_resourceKey: { integrationId, resourceKey } },
@@ -762,11 +804,22 @@ export class IntegrationsService {
       },
     });
     if (existing) return existing;
+    const resourceDescriptor = descriptor.resources.find(
+      (resource) => resource.key === resourceKey,
+    );
+    if (!resourceDescriptor) {
+      throw new BadRequestException(
+        `Driver "${descriptor.key}" does not declare a resource named "${resourceKey}".`,
+      );
+    }
     return this.prisma.integrationResource.create({
       data: {
         integrationId,
         resourceKey,
         enabled: true,
+        targetKind: resourceDescriptor.targetKind,
+        targetConfig: resourceDescriptor.targetConfig as Prisma.InputJsonValue,
+        dependsOnResourceKeys: resourceDescriptor.dependsOnResourceKeys,
       },
       include: {
         assetLayout: { select: { name: true } },
@@ -868,6 +921,9 @@ export class IntegrationsService {
       resourceKey: row.resourceKey,
       resourceLabel: descriptor?.label ?? row.resourceKey,
       enabled: row.enabled,
+      targetKind: row.targetKind,
+      targetConfig: row.targetConfig as Record<string, unknown>,
+      dependsOnResourceKeys: row.dependsOnResourceKeys,
       assetLayoutId: row.assetLayoutId,
       assetLayoutName: row.assetLayout?.name ?? null,
       matchKeyFieldIds: row.matchKeyFieldIds,
@@ -962,6 +1018,9 @@ interface ResourceRowWithIncludes {
   integrationId: string;
   resourceKey: string;
   enabled: boolean;
+  targetKind: 'asset' | 'subnet' | 'ip_reservation' | 'article' | 'relation';
+  targetConfig: unknown;
+  dependsOnResourceKeys: string[];
   assetLayoutId: string | null;
   matchKeyFieldIds: string[];
   createdAt: Date;

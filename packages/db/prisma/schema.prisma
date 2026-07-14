@@ -291,6 +291,9 @@ model Company {
   // Cascade delete clears mappings if a company is hard-deleted, but
   // we never archive assets in that path — see `IntegrationCompanyMapping`.
   integrationMappings IntegrationCompanyMapping[]
+  integrationSyncCheckpoints         IntegrationSyncCheckpoint[]
+  integrationReconstructionSummaries IntegrationReconstructionSummary[]
+  integrationReconstructionGaps      IntegrationReconstructionGap[]
 
   @@index([type])
   @@index([parentCompanyId])
@@ -678,6 +681,7 @@ model Article {
   folder    Folder?          @relation(fields: [folderId], references: [id], onDelete: SetNull)
   starredBy StarredArticle[]
   versions  ArticleVersion[]
+  integrationSyncRecords IntegrationSyncRecord[]
 
   // Active-slug uniqueness per company enforced by a partial unique index
   // (company_id, slug) WHERE archived_at IS NULL.
@@ -776,6 +780,8 @@ model Relation {
   relationType String   @map("relation_type")
   createdBy    String?  @map("created_by") @db.Uuid
   createdAt    DateTime @default(now()) @map("created_at")
+
+  integrationSyncRecords IntegrationSyncRecord[]
 
   @@unique([sourceType, sourceId, targetType, targetId, relationType])
   @@index([companyId, sourceType, sourceId])
@@ -1136,6 +1142,29 @@ enum IntegrationStatus {
   DISABLED
 }
 
+enum IntegrationTargetKind {
+  asset
+  subnet
+  ip_reservation
+  article
+  relation
+}
+
+enum IntegrationSyncState {
+  active
+  stale
+  blocked
+}
+
+enum ReconstructionGapKind {
+  secret_blocked
+  missing_dependency
+  validation
+  unsupported
+  ambiguous
+  synchronization_error
+}
+
 model Integration {
   id            String            @id @default(uuid()) @db.Uuid
   driver        String
@@ -1181,6 +1210,9 @@ model IntegrationResource {
   /// Driver-validated short key (e.g. 'devices', 'clients', 'records').
   resourceKey      String   @map("resource_key")
   enabled          Boolean  @default(true)
+  targetKind            IntegrationTargetKind @default(asset) @map("target_kind")
+  targetConfig          Json                  @default("{}") @map("target_config")
+  dependsOnResourceKeys String[]              @default([]) @map("depends_on_resource_keys")
   /// Target layout for this resource. NULL while the operator is still
   /// configuring it — runs short-circuit with a "missing layout" error
   /// in that state.
@@ -1195,8 +1227,12 @@ model IntegrationResource {
   assetLayout   AssetLayout?              @relation(fields: [assetLayoutId], references: [id], onDelete: Restrict)
   fieldMappings IntegrationFieldMapping[]
   syncRecords   IntegrationSyncRecord[]
+  syncCheckpoints         IntegrationSyncCheckpoint[]
+  reconstructionSummaries IntegrationReconstructionSummary[]
+  reconstructionGaps      IntegrationReconstructionGap[]
 
   @@unique([integrationId, resourceKey])
+  @@unique([id, targetKind])
   @@index([assetLayoutId])
   @@map("integration_resources")
 }
@@ -1248,6 +1284,9 @@ model IntegrationCompanyMapping {
   company     Company                           @relation(fields: [companyId], references: [id], onDelete: Cascade)
   syncRecords IntegrationSyncRecord[]
   runResults  IntegrationSyncRunCompanyResult[]
+  syncCheckpoints         IntegrationSyncCheckpoint[]
+  reconstructionSummaries IntegrationReconstructionSummary[]
+  reconstructionGaps      IntegrationReconstructionGap[]
 
   @@unique([integrationId, externalOrgId])
   @@index([companyId, integrationId])
@@ -1278,18 +1317,21 @@ model IntegrationFieldMapping {
   /// different layouts with different source-field projections.
   resourceId    String                   @map("resource_id") @db.Uuid
   sourceField   String                   @map("source_field")
-  targetFieldId String                   @map("target_field_id") @db.Uuid
+  targetKind    IntegrationTargetKind    @default(asset) @map("target_kind")
+  targetFieldId String?                  @map("target_field_id") @db.Uuid
+  targetPath    String?                  @map("target_path") @db.VarChar(4096)
   syncDirection IntegrationSyncDirection @default(source_wins) @map("sync_direction")
   /// Optional transform descriptor; null means identity.
   transform     Json?
   createdAt     DateTime                 @default(now()) @map("created_at")
   updatedAt     DateTime                 @updatedAt @map("updated_at")
 
-  resource    IntegrationResource @relation(fields: [resourceId], references: [id], onDelete: Cascade)
-  targetField AssetField          @relation(fields: [targetFieldId], references: [id], onDelete: Cascade)
+  resource    IntegrationResource @relation(fields: [resourceId, targetKind], references: [id, targetKind], onDelete: Cascade)
+  targetField AssetField?         @relation(fields: [targetFieldId], references: [id], onDelete: Cascade)
 
   @@unique([resourceId, sourceField])
   @@index([targetFieldId])
+  @@index([resourceId, targetKind])
   @@map("integration_field_mappings")
 }
 
@@ -1381,9 +1423,19 @@ model IntegrationSyncRecord {
   resourceId                  String   @map("resource_id") @db.Uuid
   syncRunId                   String?  @map("sync_run_id") @db.Uuid
   companyId                   String   @map("company_id") @db.Uuid
-  assetId                     String   @map("asset_id") @db.Uuid
+  targetKind                  IntegrationTargetKind @default(asset) @map("target_kind")
+  assetId                     String?               @map("asset_id") @db.Uuid
+  subnetId                    String?               @map("subnet_id") @db.Uuid
+  ipReservationId             String?               @map("ip_reservation_id") @db.Uuid
+  articleId                   String?               @map("article_id") @db.Uuid
+  relationId                  String?               @map("relation_id") @db.Uuid
   externalId                  String   @map("external_id")
   lastSyncedAt                DateTime @map("last_synced_at")
+  state                       IntegrationSyncState  @default(active)
+  lastSeenAt                  DateTime              @map("last_seen_at")
+  staleSince                  DateTime?             @map("stale_since")
+  sourceUpdatedAt             DateTime?             @map("source_updated_at")
+  provenance                  Json                  @default("{}")
   /// SHA-256 hex of the canonicalised JSON body returned by the driver
   /// during the most recent successful upsert. Identical checksum on
   /// the next run = nothing to do.
@@ -1395,15 +1447,97 @@ model IntegrationSyncRecord {
   updatedAt                   DateTime @updatedAt @map("updated_at")
 
   companyMapping IntegrationCompanyMapping @relation(fields: [integrationCompanyMappingId], references: [id], onDelete: Cascade)
-  resource       IntegrationResource       @relation(fields: [resourceId], references: [id], onDelete: Cascade)
-  asset          Asset                     @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  resource           IntegrationResource            @relation(fields: [resourceId, targetKind], references: [id, targetKind], onDelete: Cascade)
+  asset              Asset?                         @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  subnet             Subnet?                        @relation(fields: [subnetId], references: [id], onDelete: Cascade)
+  ipReservation      IpReservation?                 @relation(fields: [ipReservationId], references: [id], onDelete: Cascade)
+  article            Article?                       @relation(fields: [articleId], references: [id], onDelete: Cascade)
+  relation           Relation?                      @relation(fields: [relationId], references: [id], onDelete: Cascade)
   syncRun        IntegrationSyncRun?       @relation(fields: [syncRunId], references: [id], onDelete: SetNull)
+  reconstructionGaps IntegrationReconstructionGap[]
 
   @@unique([integrationCompanyMappingId, resourceId, externalId])
   @@index([assetId])
+  @@index([subnetId])
+  @@index([ipReservationId])
+  @@index([articleId])
+  @@index([relationId])
   @@index([companyId, integrationCompanyMappingId])
-  @@index([resourceId])
+  @@index([resourceId, targetKind])
   @@map("integration_sync_records")
+}
+
+model IntegrationSyncCheckpoint {
+  id                          String    @id @default(uuid()) @db.Uuid
+  companyId                   String    @map("company_id") @db.Uuid
+  integrationCompanyMappingId String    @map("integration_company_mapping_id") @db.Uuid
+  resourceId                  String    @map("resource_id") @db.Uuid
+  cursor                      String?   @db.VarChar(4096)
+  snapshotAt                  DateTime? @map("snapshot_at")
+  highWaterAt                 DateTime? @map("high_water_at")
+  lastCompletedAt             DateTime? @map("last_completed_at")
+  lastFullCompletedAt         DateTime? @map("last_full_completed_at")
+  createdAt                   DateTime  @default(now()) @map("created_at")
+  updatedAt                   DateTime  @updatedAt @map("updated_at")
+
+  company        Company                   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  companyMapping IntegrationCompanyMapping @relation(fields: [integrationCompanyMappingId], references: [id], onDelete: Cascade)
+  resource       IntegrationResource       @relation(fields: [resourceId], references: [id], onDelete: Cascade)
+
+  @@unique([integrationCompanyMappingId, resourceId])
+  @@index([companyId, integrationCompanyMappingId])
+  @@index([resourceId, lastCompletedAt])
+  @@map("integration_sync_checkpoints")
+}
+
+model IntegrationReconstructionSummary {
+  id                          String    @id @default(uuid()) @db.Uuid
+  companyId                   String    @map("company_id") @db.Uuid
+  integrationCompanyMappingId String    @map("integration_company_mapping_id") @db.Uuid
+  resourceId                  String?   @map("resource_id") @db.Uuid
+  summaryKey                  String    @default("all") @map("summary_key") @db.VarChar(128)
+  counts                      Json      @default("{}")
+  evaluatedAt                 DateTime  @map("evaluated_at")
+  lastSuccessfulSyncAt        DateTime? @map("last_successful_sync_at")
+  createdAt                   DateTime  @default(now()) @map("created_at")
+  updatedAt                   DateTime  @updatedAt @map("updated_at")
+
+  company        Company                   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  companyMapping IntegrationCompanyMapping @relation(fields: [integrationCompanyMappingId], references: [id], onDelete: Cascade)
+  resource       IntegrationResource?      @relation(fields: [resourceId], references: [id], onDelete: Cascade)
+
+  @@unique([integrationCompanyMappingId, summaryKey])
+  @@index([companyId, evaluatedAt])
+  @@index([resourceId, evaluatedAt])
+  @@map("integration_reconstruction_summaries")
+}
+
+model IntegrationReconstructionGap {
+  id                          String                @id @default(uuid()) @db.Uuid
+  companyId                   String                @map("company_id") @db.Uuid
+  integrationCompanyMappingId String                @map("integration_company_mapping_id") @db.Uuid
+  resourceId                  String                @map("resource_id") @db.Uuid
+  syncRecordId                String?               @map("sync_record_id") @db.Uuid
+  dedupeKey                   String                @map("dedupe_key") @db.VarChar(256)
+  kind                        ReconstructionGapKind
+  message                     String                @db.VarChar(512)
+  details                     Json                  @default("{}")
+  firstSeenAt                 DateTime              @map("first_seen_at")
+  lastSeenAt                  DateTime              @map("last_seen_at")
+  resolvedAt                  DateTime?             @map("resolved_at")
+  createdAt                   DateTime              @default(now()) @map("created_at")
+  updatedAt                   DateTime              @updatedAt @map("updated_at")
+
+  company        Company                   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  companyMapping IntegrationCompanyMapping @relation(fields: [integrationCompanyMappingId], references: [id], onDelete: Cascade)
+  resource       IntegrationResource       @relation(fields: [resourceId], references: [id], onDelete: Cascade)
+  syncRecord     IntegrationSyncRecord?    @relation(fields: [syncRecordId], references: [id], onDelete: SetNull)
+
+  @@unique([integrationCompanyMappingId, resourceId, dedupeKey])
+  @@index([companyId, resolvedAt, lastSeenAt])
+  @@index([resourceId, resolvedAt, kind])
+  @@index([syncRecordId])
+  @@map("integration_reconstruction_gaps")
 }
 
 // Cloudflare Zero Trust Gateway Lists integration — a registered
@@ -1585,6 +1719,7 @@ model Subnet {
   updatedAt   DateTime  @updatedAt @map("updated_at")
 
   reservations IpReservation[]
+  integrationSyncRecords IntegrationSyncRecord[]
 
   @@index([companyId, archivedAt])
   @@map("subnets")
@@ -1606,6 +1741,7 @@ model IpReservation {
   updatedAt DateTime @updatedAt @map("updated_at")
 
   subnet Subnet @relation(fields: [subnetId], references: [id], onDelete: Cascade)
+  integrationSyncRecords IntegrationSyncRecord[]
 
   @@unique([subnetId, ipAddress])
   @@index([companyId, subnetId])

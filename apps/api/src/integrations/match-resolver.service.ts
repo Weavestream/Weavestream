@@ -88,7 +88,10 @@ export class MatchResolverService {
       },
       select: { assetId: true },
     });
-    if (existing) return { kind: 'reuse', assetId: existing.assetId };
+    if (existing?.assetId) return { kind: 'reuse', assetId: existing.assetId };
+    if (existing) {
+      throw new Error('Asset matching encountered a non-asset integration binding');
+    }
 
     const linked = await this.prisma.asset.findFirst({
       where: {

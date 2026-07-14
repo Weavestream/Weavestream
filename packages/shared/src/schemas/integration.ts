@@ -26,9 +26,7 @@ export const integrationSyncDirectionSchema = z.enum([
   'preserve_manual',
   'manual_only',
 ]);
-export type IntegrationSyncDirectionValue = z.infer<
-  typeof integrationSyncDirectionSchema
->;
+export type IntegrationSyncDirectionValue = z.infer<typeof integrationSyncDirectionSchema>;
 
 export const integrationRunKindSchema = z.enum(['manual', 'scheduled']);
 export type IntegrationRunKindValue = z.infer<typeof integrationRunKindSchema>;
@@ -41,6 +39,28 @@ export const integrationRunStatusSchema = z.enum([
   'cancelled',
 ]);
 export type IntegrationRunStatusValue = z.infer<typeof integrationRunStatusSchema>;
+
+export const integrationTargetKindSchema = z.enum([
+  'asset',
+  'subnet',
+  'ip_reservation',
+  'article',
+  'relation',
+]);
+export type IntegrationTargetKind = z.infer<typeof integrationTargetKindSchema>;
+
+export const integrationSyncStateSchema = z.enum(['active', 'stale', 'blocked']);
+export type IntegrationSyncState = z.infer<typeof integrationSyncStateSchema>;
+
+export const reconstructionGapKindSchema = z.enum([
+  'secret_blocked',
+  'missing_dependency',
+  'validation',
+  'unsupported',
+  'ambiguous',
+  'synchronization_error',
+]);
+export type ReconstructionGapKind = z.infer<typeof reconstructionGapKindSchema>;
 
 // ---------------------------------------------------------------------
 // Driver descriptor (registry → admin UI)
@@ -66,9 +86,7 @@ export const driverFieldDescriptorSchema = z.object({
   required: z.boolean().default(false),
   description: z.string().nullable().optional(),
   /** Allowed `select` options. */
-  options: z
-    .array(z.object({ value: z.string(), label: z.string() }))
-    .optional(),
+  options: z.array(z.object({ value: z.string(), label: z.string() })).optional(),
   /** Driver-recommended default for booleans / selects / numbers. */
   default: z.unknown().optional(),
 });
@@ -84,8 +102,16 @@ export type DriverFieldDescriptor = z.infer<typeof driverFieldDescriptorSchema>;
  * resource drivers (Action1) declare a single `'records'` entry; the
  * UI still renders one resource tab so the editor stays uniform.
  */
-export const driverResourceDescriptorSchema = z.object({
-  key: z.string().min(1),
+const driverResourceKeySchema = z
+  .string()
+  .min(1)
+  .max(128)
+  .regex(/^[a-z0-9][a-z0-9_-]*$/);
+const sourceEndpointSchema = z.string().min(1).max(256).startsWith('/');
+const boundedTargetStringSchema = z.string().min(1).max(128);
+
+const resourceDescriptorBaseShape = {
+  key: driverResourceKeySchema,
   label: z.string().min(1),
   description: z.string().nullable().optional(),
   /**
@@ -94,13 +120,111 @@ export const driverResourceDescriptorSchema = z.object({
    * — the driver does not enforce it.
    */
   defaultMatchKeyHint: z.string().nullable().optional(),
+  dependsOnResourceKeys: z.array(driverResourceKeySchema).max(64).default([]),
+} as const;
+
+const assetTargetConfigSchema = z
+  .object({
+    sourceEndpoint: sourceEndpointSchema.optional(),
+    bindingResourceKey: driverResourceKeySchema.optional(),
+  })
+  .strict();
+const subnetTargetConfigSchema = z
+  .object({
+    sourceEndpoint: sourceEndpointSchema.optional(),
+    normalization: z.literal('cidr').optional(),
+  })
+  .strict();
+const ipReservationTargetConfigSchema = z
+  .object({
+    sourceEndpoint: sourceEndpointSchema.optional(),
+    normalization: z.literal('ip').optional(),
+  })
+  .strict();
+const articleTargetConfigSchema = z
+  .object({
+    sourceEndpoint: sourceEndpointSchema.optional(),
+    folderSlug: boundedTargetStringSchema.optional(),
+    visibility: z.enum(['company', 'internal']).optional(),
+    template: z.string().max(32_768).optional(),
+  })
+  .strict();
+const relationTargetConfigSchema = z
+  .object({
+    sourceEndpoint: sourceEndpointSchema.optional(),
+    typeMapping: z
+      .record(boundedTargetStringSchema, boundedTargetStringSchema)
+      .superRefine((mapping, ctx) => {
+        if (Object.keys(mapping).length > 128) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: 'typeMapping may contain at most 128 entries',
 });
+        }
+      })
+      .optional(),
+  })
+  .strict();
 
-export type DriverResourceDescriptor = z.infer<
-  typeof driverResourceDescriptorSchema
->;
+const resourceDescriptorUnion = z.discriminatedUnion('targetKind', [
+  z.object({
+    ...resourceDescriptorBaseShape,
+    targetKind: z.literal('asset'),
+    targetConfig: assetTargetConfigSchema.default({}),
+  }),
+  z.object({
+    ...resourceDescriptorBaseShape,
+    targetKind: z.literal('subnet'),
+    targetConfig: subnetTargetConfigSchema.default({}),
+  }),
+  z.object({
+    ...resourceDescriptorBaseShape,
+    targetKind: z.literal('ip_reservation'),
+    targetConfig: ipReservationTargetConfigSchema.default({}),
+  }),
+  z.object({
+    ...resourceDescriptorBaseShape,
+    targetKind: z.literal('article'),
+    targetConfig: articleTargetConfigSchema.default({}),
+  }),
+  z.object({
+    ...resourceDescriptorBaseShape,
+    targetKind: z.literal('relation'),
+    targetConfig: relationTargetConfigSchema.default({}),
+  }),
+]);
 
-export const driverDescriptorSchema = z.object({
+export const driverResourceDescriptorSchema = z
+  .preprocess((input) => {
+    if (!input || typeof input !== 'object' || Array.isArray(input)) return input;
+    const descriptor = input as Record<string, unknown>;
+    return {
+      ...descriptor,
+      targetKind: descriptor['targetKind'] ?? 'asset',
+      targetConfig: descriptor['targetConfig'] ?? {},
+    };
+  }, resourceDescriptorUnion)
+  .superRefine((resource, ctx) => {
+    if (resource.dependsOnResourceKeys.includes(resource.key)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['dependsOnResourceKeys'],
+        message: 'A resource cannot depend on itself',
+      });
+    }
+    if (new Set(resource.dependsOnResourceKeys).size !== resource.dependsOnResourceKeys.length) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['dependsOnResourceKeys'],
+        message: 'Dependency keys must be unique',
+      });
+    }
+  });
+
+export type DriverResourceDescriptor = z.infer<typeof driverResourceDescriptorSchema>;
+
+export const driverDescriptorSchema = z
+  .object({
   /** Stable id used as `Integration.driver` and in registry lookups. */
   key: z.string().min(1),
   label: z.string().min(1),
@@ -143,6 +267,52 @@ export const driverDescriptorSchema = z.object({
      */
     ticketing: z.boolean().default(false),
   }),
+  })
+  .superRefine((driver, ctx) => {
+    const keys = driver.resources.map((resource) => resource.key);
+    if (new Set(keys).size !== keys.length) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['resources'],
+        message: 'Resource keys must be unique',
+      });
+      return;
+    }
+
+    const resourcesByKey = new Map(driver.resources.map((resource) => [resource.key, resource]));
+    for (const [index, resource] of driver.resources.entries()) {
+      for (const dependency of resource.dependsOnResourceKeys) {
+        if (!resourcesByKey.has(dependency)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['resources', index, 'dependsOnResourceKeys'],
+            message: `Unknown resource dependency: ${dependency}`,
+          });
+        }
+      }
+    }
+
+    const visiting = new Set<string>();
+    const visited = new Set<string>();
+    const hasCycle = (key: string): boolean => {
+      if (visiting.has(key)) return true;
+      if (visited.has(key)) return false;
+      visiting.add(key);
+      const resource = resourcesByKey.get(key);
+      for (const dependency of resource?.dependsOnResourceKeys ?? []) {
+        if (resourcesByKey.has(dependency) && hasCycle(dependency)) return true;
+      }
+      visiting.delete(key);
+      visited.add(key);
+      return false;
+    };
+    if (keys.some(hasCycle)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['resources'],
+        message: 'Resource dependency graph contains a cycle',
+      });
+    }
 });
 
 export type DriverDescriptor = z.infer<typeof driverDescriptorSchema>;
@@ -196,6 +366,9 @@ export const integrationResourceDtoSchema = z.object({
   /** Driver-declared label (snapshotted from the descriptor). */
   resourceLabel: z.string(),
   enabled: z.boolean(),
+  targetKind: integrationTargetKindSchema,
+  targetConfig: z.record(z.unknown()),
+  dependsOnResourceKeys: z.array(driverResourceKeySchema),
   assetLayoutId: z.string().uuid().nullable(),
   assetLayoutName: z.string().nullable(),
   matchKeyFieldIds: z.array(z.string().uuid()),
@@ -205,9 +378,7 @@ export const integrationResourceDtoSchema = z.object({
   updatedAt: z.string(),
 });
 
-export type IntegrationResourceDto = z.infer<
-  typeof integrationResourceDtoSchema
->;
+export type IntegrationResourceDto = z.infer<typeof integrationResourceDtoSchema>;
 
 export const createIntegrationResourceSchema = z.object({
   resourceKey: z.string().min(1),
@@ -225,12 +396,8 @@ export const updateIntegrationResourceSchema = z
     message: 'At least one field must be provided',
   });
 
-export type CreateIntegrationResourceInput = z.infer<
-  typeof createIntegrationResourceSchema
->;
-export type UpdateIntegrationResourceInput = z.infer<
-  typeof updateIntegrationResourceSchema
->;
+export type CreateIntegrationResourceInput = z.infer<typeof createIntegrationResourceSchema>;
+export type UpdateIntegrationResourceInput = z.infer<typeof updateIntegrationResourceSchema>;
 
 export const integrationDtoSchema = z.object({
   id: z.string().uuid(),
@@ -356,29 +523,111 @@ export const integrationCompanyMappingDtoSchema = z.object({
   updatedAt: z.string(),
 });
 
-export type IntegrationCompanyMappingDto = z.infer<
-  typeof integrationCompanyMappingDtoSchema
->;
+export type IntegrationCompanyMappingDto = z.infer<typeof integrationCompanyMappingDtoSchema>;
 
 // ---------------------------------------------------------------------
 // Field-mapping CRUD (GLOBAL — one row per (integration, sourceField))
 // ---------------------------------------------------------------------
 
-export const fieldMappingDraftSchema = z.object({
+const transformOptionStringSchema = z.string().max(4096);
+const transformPathSchema = z.string().min(1).max(4096);
+const transformPathArraySchema = z.array(transformPathSchema).min(1).max(128);
+const simpleTransformStep = <T extends string>(op: T) => z.object({ op: z.literal(op) }).strict();
+const enumLookupMappingSchema = z
+  .record(transformOptionStringSchema, transformOptionStringSchema)
+  .superRefine((mapping, ctx) => {
+    if (Object.keys(mapping).length > 128) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'enum_lookup mapping may contain at most 128 entries',
+      });
+    }
+  });
+const enumLookupStepSchema = z
+  .object({
+    op: z.literal('enum_lookup'),
+    mapping: enumLookupMappingSchema,
+    fallback: transformOptionStringSchema.optional(),
+  })
+  .strict();
+
+export const integrationTransformStepSchema = z.discriminatedUnion('op', [
+  simpleTransformStep('trim'),
+  simpleTransformStep('lowercase'),
+  simpleTransformStep('uppercase'),
+  simpleTransformStep('to_number'),
+  z
+    .object({
+      op: z.literal('to_boolean'),
+      truthy: z.array(transformOptionStringSchema).max(128).optional(),
+      falsy: z.array(transformOptionStringSchema).max(128).optional(),
+    })
+    .strict(),
+  z
+    .object({
+      op: z.literal('to_date'),
+      format: transformOptionStringSchema.optional(),
+    })
+    .strict(),
+  enumLookupStepSchema,
+  z.object({ op: z.literal('first_nonempty'), paths: transformPathArraySchema }).strict(),
+  z
+    .object({
+      op: z.literal('join'),
+      paths: transformPathArraySchema,
+      separator: transformOptionStringSchema,
+    })
+    .strict(),
+  z
+    .object({ op: z.literal('format_bytes'), precision: z.number().int().min(0).max(6).optional() })
+    .strict(),
+  simpleTransformStep('normalize_cidr'),
+  simpleTransformStep('normalize_ip'),
+  z
+    .object({
+      op: z.literal('markdown_table'),
+      columns: z
+        .array(
+          z
+            .object({
+              header: transformOptionStringSchema,
+              path: transformPathSchema,
+            })
+            .strict(),
+        )
+        .min(1)
+        .max(128),
+    })
+    .strict(),
+]);
+export type IntegrationTransformStep = z.infer<typeof integrationTransformStepSchema>;
+
+export const integrationTransformSchema = z
+  .object({
+    steps: z.array(integrationTransformStepSchema).min(1).max(16),
+  })
+  .strict();
+export type IntegrationTransform = z.infer<typeof integrationTransformSchema>;
+
+export const fieldMappingDraftSchema = z
+  .object({
   sourceField: z.string().min(1),
-  targetFieldId: z.string().uuid(),
+    targetFieldId: z.string().uuid().nullable().optional(),
+    targetPath: z.string().min(1).max(4096).nullable().optional(),
   syncDirection: integrationSyncDirectionSchema.default('source_wins'),
-  transform: z.record(z.unknown()).nullable().optional(),
-});
+    transform: integrationTransformSchema.nullable().optional(),
+  })
+  .refine(
+    (mapping) => Number(mapping.targetFieldId != null) + Number(mapping.targetPath != null) === 1,
+    { message: 'Exactly one of targetFieldId or targetPath must be provided' },
+  );
 
 export const replaceFieldMappingsSchema = z.object({
   mappings: z.array(fieldMappingDraftSchema),
 });
 
 export type FieldMappingDraft = z.infer<typeof fieldMappingDraftSchema>;
-export type ReplaceFieldMappingsInput = z.infer<
-  typeof replaceFieldMappingsSchema
->;
+export type ReplaceFieldMappingsInput = z.infer<typeof replaceFieldMappingsSchema>;
 
 export const integrationFieldMappingDtoSchema = z.object({
   id: z.string().uuid(),
@@ -386,19 +635,18 @@ export const integrationFieldMappingDtoSchema = z.object({
   resourceId: z.string().uuid(),
   resourceKey: z.string(),
   sourceField: z.string(),
-  targetFieldId: z.string().uuid(),
+  targetFieldId: z.string().uuid().nullable(),
+  targetPath: z.string().nullable(),
   targetFieldSlug: z.string().nullable(),
   targetFieldName: z.string().nullable(),
   targetFieldType: z.string().nullable(),
   syncDirection: integrationSyncDirectionSchema,
-  transform: z.record(z.unknown()).nullable(),
+  transform: integrationTransformSchema.nullable(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
 
-export type IntegrationFieldMappingDto = z.infer<
-  typeof integrationFieldMappingDtoSchema
->;
+export type IntegrationFieldMappingDto = z.infer<typeof integrationFieldMappingDtoSchema>;
 
 // ---------------------------------------------------------------------
 // Sync run history
@@ -480,13 +728,16 @@ const baseSyncRunTotalsShape = {
    * the row is purged and the next sync creates a fresh asset.
    */
   skippedArchived: z.number().int().nonnegative().default(0),
+  stale: z.number().int().nonnegative().default(0),
+  restored: z.number().int().nonnegative().default(0),
+  blocked: z.number().int().nonnegative().default(0),
+  secretBlocked: z.number().int().nonnegative().default(0),
+  missingDependency: z.number().int().nonnegative().default(0),
   errors: z.number().int().nonnegative().default(0),
 } as const;
 
 export const syncRunResourceTotalsSchema = z.object(baseSyncRunTotalsShape);
-export type SyncRunResourceTotals = z.infer<
-  typeof syncRunResourceTotalsSchema
->;
+export type SyncRunResourceTotals = z.infer<typeof syncRunResourceTotalsSchema>;
 
 export const syncRunTotalsSchema = z.object({
   ...baseSyncRunTotalsShape,
@@ -502,12 +753,7 @@ export const syncRunTotalsSchema = z.object({
 export type SyncRunTotals = z.infer<typeof syncRunTotalsSchema>;
 
 export const syncRunConflictSchema = z.object({
-  kind: z.enum([
-    'ambiguous_match',
-    'manual_skip',
-    'validation_error',
-    'driver_error',
-  ]),
+  kind: z.enum(['ambiguous_match', 'manual_skip', 'validation_error', 'driver_error']),
   externalId: z.string(),
   /** Free-form summary line for the run viewer. */
   message: z.string(),
@@ -516,3 +762,78 @@ export const syncRunConflictSchema = z.object({
 });
 
 export type SyncRunConflict = z.infer<typeof syncRunConflictSchema>;
+
+export const integrationProvenanceSchema = z
+  .object({
+    integrationId: z.string().uuid(),
+    externalOrgId: z.string().min(1).max(256),
+    resourceKey: z.string().min(1).max(256),
+    externalId: z.string().min(1).max(256),
+    sourceRevision: z.string().max(256).nullable(),
+    sourceFingerprint: z.string().max(256).nullable(),
+    firstSeenAt: z.string().datetime(),
+    lastSeenAt: z.string().datetime(),
+    lastSyncedAt: z.string().datetime(),
+    ownership: z.enum(['breeze', 'weavestream']),
+    state: integrationSyncStateSchema,
+  })
+  .strict();
+export type SafeIntegrationProvenance = z.infer<typeof integrationProvenanceSchema>;
+
+type GapJsonValue =
+  | null
+  | string
+  | number
+  | boolean
+  | GapJsonValue[]
+  | { [key: string]: GapJsonValue };
+
+const gapJsonValueSchema: z.ZodType<GapJsonValue> = z.lazy(() =>
+  z.union([
+    z.null(),
+    z.string(),
+    z.number(),
+    z.boolean(),
+    z.array(gapJsonValueSchema),
+    z.record(gapJsonValueSchema),
+  ]),
+);
+
+const boundedGapDetailsSchema = z.record(gapJsonValueSchema).superRefine((details, ctx) => {
+  let serialized: string;
+  try {
+    serialized = JSON.stringify(details);
+  } catch {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'details must be JSON' });
+    return;
+  }
+  if (new TextEncoder().encode(serialized).byteLength > 4096) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'details must serialize to at most 4096 bytes',
+    });
+  }
+});
+
+const reconstructionGapShape = {
+  companyId: z.string().uuid(),
+  integrationCompanyMappingId: z.string().uuid(),
+  resourceId: z.string().uuid(),
+  externalId: z.string().max(512).nullable(),
+  kind: reconstructionGapKindSchema,
+  message: z.string().min(1).max(512),
+  details: boundedGapDetailsSchema,
+  firstSeenAt: z.string().datetime(),
+  lastSeenAt: z.string().datetime(),
+  resolvedAt: z.string().datetime().nullable(),
+} as const;
+
+export const integrationReconstructionGapInputSchema = z.object(reconstructionGapShape).strict();
+export type IntegrationReconstructionGapInput = z.infer<
+  typeof integrationReconstructionGapInputSchema
+>;
+
+export const integrationReconstructionGapDtoSchema = z
+  .object({ id: z.string().uuid(), ...reconstructionGapShape })
+  .strict();
+export type IntegrationReconstructionGapDto = z.infer<typeof integrationReconstructionGapDtoSchema>;

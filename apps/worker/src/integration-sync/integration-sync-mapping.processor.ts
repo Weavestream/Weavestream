@@ -209,6 +209,11 @@ function zeroTotals() {
     skippedAmbiguous: 0,
     skippedManual: 0,
     skippedArchived: 0,
+    stale: 0,
+    restored: 0,
+    blocked: 0,
+    secretBlocked: 0,
+    missingDependency: 0,
     errors: 1,
   };
 }

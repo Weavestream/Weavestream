@@ -185,6 +185,9 @@ export class UniFiSiteManagerDriver implements IntegrationDriver {
       {
         key: UNIFI_RESOURCE_DEVICES,
         label: 'Devices',
+        targetKind: 'asset',
+        targetConfig: {},
+        dependsOnResourceKeys: [],
         description:
           'UniFi-managed network devices (switches, access points, gateways) reported by the Site Manager API.',
         defaultMatchKeyHint: 'mac',
@@ -192,6 +195,9 @@ export class UniFiSiteManagerDriver implements IntegrationDriver {
       {
         key: UNIFI_RESOURCE_CLIENTS,
         label: 'Clients',
+        targetKind: 'asset',
+        targetConfig: {},
+        dependsOnResourceKeys: [],
         description:
           'Connected client devices reported by the UniFi Network Integration API for every site under each mapped console.',
         defaultMatchKeyHint: 'name',

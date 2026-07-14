@@ -313,6 +313,9 @@ export class NinjaOneDriver implements IntegrationDriver {
       {
         key: NINJAONE_AGENT_RESOURCE_KEY,
         label: 'Agent devices',
+        targetKind: 'asset',
+        targetConfig: {},
+        dependsOnResourceKeys: [],
         description:
           'Workstations, servers, and other endpoints with the NinjaOne agent installed (Windows, Linux, macOS).',
         defaultMatchKeyHint: 'uid',
@@ -327,6 +330,9 @@ export class NinjaOneDriver implements IntegrationDriver {
       {
         key: NINJAONE_NMS_RESOURCE_KEY,
         label: 'Network & non-agent devices',
+        targetKind: 'asset',
+        targetConfig: {},
+        dependsOnResourceKeys: [],
         description:
           'NMS-discovered network gear (switches, firewalls, printers, VoIP) plus VMware / Hyper-V / Xen guest VMs and hypervisor management nodes — anything NinjaOne tracks without a local agent.',
         defaultMatchKeyHint: 'uid',

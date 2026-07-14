@@ -92,7 +92,15 @@ export function IntegrationTabs({
     const resources: DriverResourceDescriptor[] =
       driver?.resources && driver.resources.length > 0
         ? driver.resources
-        : [{ key: 'records', label: 'Records' }];
+        : [
+            {
+              key: 'records',
+              label: 'Records',
+              targetKind: 'asset',
+              targetConfig: {},
+              dependsOnResourceKeys: [],
+            },
+          ];
     const resourceTabs: TabDescriptor[] = resources.map((r) => ({
       id: resourceTabId(r.key),
       label: `${r.label} fields`,
@@ -194,7 +202,13 @@ export function IntegrationTabs({
               (tabs.find((t) => t.id === tab && t.kind === 'resource') as
                 | (TabDescriptor & { kind: 'resource' })
                 | undefined)?.resource ??
-              { key, label: key };
+              {
+                key,
+                label: key,
+                targetKind: 'asset' as const,
+                targetConfig: {},
+                dependsOnResourceKeys: [],
+              };
             return (
               <FieldMappingsTab
                 integration={integration}

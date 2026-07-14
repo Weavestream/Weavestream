@@ -52,6 +52,9 @@ export const TENANT_SCOPED_MODELS = new Set<string>([
   'IntegrationCompanyMapping',
   'IntegrationSyncRunCompanyResult',
   'IntegrationSyncRecord',
+  'IntegrationSyncCheckpoint',
+  'IntegrationReconstructionSummary',
+  'IntegrationReconstructionGap',
   // IPAM: company-scoped subnet registry and manual IP reservations.
   'Subnet',
   'IpReservation',

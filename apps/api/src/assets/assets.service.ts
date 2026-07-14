@@ -1224,6 +1224,7 @@ export class AssetsService {
       }
     >();
     for (const r of rows) {
+      if (!r.assetId) continue;
       const checksums = (r.lastSyncedFieldChecksums ?? {}) as Record<
         string,
         unknown

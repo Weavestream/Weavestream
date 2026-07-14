@@ -150,6 +150,9 @@ export class Action1Driver implements IntegrationDriver {
       {
         key: 'records',
         label: 'Endpoints',
+        targetKind: 'asset',
+        targetConfig: {},
+        dependsOnResourceKeys: [],
         description:
           'Action1 managed endpoints (workstations / servers) per organisation.',
         defaultMatchKeyHint: 'MAC',
@@ -570,4 +573,3 @@ const ACTION1_KNOWN_FIELDS: SourceFieldDto[] = [
   { key: 'reboot_required', label: 'Reboot required', hintType: 'BOOLEAN', alwaysPresent: false },
   { key: 'group', label: 'Endpoint group', hintType: 'TEXT', alwaysPresent: false },
 ];
-

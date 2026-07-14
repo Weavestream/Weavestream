@@ -150,6 +150,11 @@ export class IntegrationSyncRunnerService {
         resourceKey: resource.resourceKey,
       };
     }
+    if (resource.targetKind !== 'asset') {
+      throw new BadRequestException(
+        `Integration resource "${resource.resourceKey}" targets ${resource.targetKind}; the legacy asset runner only accepts asset targets.`,
+      );
+    }
     if (!resource.assetLayoutId || !resource.assetLayout) {
       throw new BadRequestException(
         `Integration ${mapping.integrationId} resource "${resource.resourceKey}" has no asset layout configured.`,
@@ -187,9 +192,17 @@ export class IntegrationSyncRunnerService {
       filter: (mapping.filter ?? {}) as Record<string, unknown>,
     };
 
-    const writableMappings = resource.fieldMappings
-      .filter((m) => m.targetField.archivedAt === null)
-      .filter((m) => m.syncDirection !== 'manual_only');
+    const writableMappings = resource.fieldMappings.filter(
+      (
+        m,
+      ): m is typeof m & {
+        targetField: NonNullable<typeof m.targetField>;
+      } =>
+        m.targetKind === 'asset' &&
+        m.targetField !== null &&
+        m.targetField.archivedAt === null &&
+        m.syncDirection !== 'manual_only',
+    );
 
     // Fingerprint of the projection config — included in every
     // per-record checksum so a mapping change (re-pick of source key,
@@ -513,9 +526,14 @@ export class IntegrationSyncRunnerService {
       });
       if (sync && sync.checksum === recordChecksum) {
         args.totals.unchanged += 1;
+        const syncedAt = new Date();
         await this.prisma.integrationSyncRecord.update({
           where: { id: sync.id },
-          data: { lastSyncedAt: new Date(), syncRunId: args.syncRunId },
+          data: {
+            lastSyncedAt: syncedAt,
+            lastSeenAt: syncedAt,
+            syncRunId: args.syncRunId,
+          },
         });
         return;
       }
@@ -547,6 +565,7 @@ export class IntegrationSyncRunnerService {
           externalId: args.record.externalId,
           displayName: args.record.displayName,
         });
+        const syncedAt = new Date();
         await tx.integrationSyncRecord.upsert({
           where: {
             integrationCompanyMappingId_resourceId_externalId: {
@@ -561,13 +580,15 @@ export class IntegrationSyncRunnerService {
             assetId: args.resolution.kind === 'reuse' ? args.resolution.assetId : '',
             companyId: args.mapping.companyId,
             externalId: args.record.externalId,
-            lastSyncedAt: new Date(),
+            lastSyncedAt: syncedAt,
+            lastSeenAt: syncedAt,
             checksum: recordChecksum,
             lastSyncedFieldChecksums: writeResult.fieldChecksums,
             syncRunId: args.syncRunId,
           },
           update: {
-            lastSyncedAt: new Date(),
+            lastSyncedAt: syncedAt,
+            lastSeenAt: syncedAt,
             checksum: recordChecksum,
             lastSyncedFieldChecksums: writeResult.fieldChecksums,
             syncRunId: args.syncRunId,
@@ -632,6 +653,7 @@ export class IntegrationSyncRunnerService {
           externalId: args.record.externalId,
           displayName: args.record.displayName,
         });
+        const syncedAt = new Date();
         await tx.integrationSyncRecord.create({
           data: {
             integrationCompanyMappingId: args.mapping.id,
@@ -639,7 +661,8 @@ export class IntegrationSyncRunnerService {
             assetId: args.resolution.kind === 'claim' ? args.resolution.assetId : '',
             companyId: args.mapping.companyId,
             externalId: args.record.externalId,
-            lastSyncedAt: new Date(),
+            lastSyncedAt: syncedAt,
+            lastSeenAt: syncedAt,
             checksum: recordChecksum,
             lastSyncedFieldChecksums: writeResult.fieldChecksums,
             syncRunId: args.syncRunId,
@@ -688,6 +711,7 @@ export class IntegrationSyncRunnerService {
         previousChecksums: {},
         totals: args.totals,
       });
+      const syncedAt = new Date();
       await tx.integrationSyncRecord.create({
         data: {
           integrationCompanyMappingId: args.mapping.id,
@@ -695,7 +719,8 @@ export class IntegrationSyncRunnerService {
           assetId: created.id,
           companyId: args.mapping.companyId,
           externalId: args.record.externalId,
-          lastSyncedAt: new Date(),
+          lastSyncedAt: syncedAt,
+          lastSeenAt: syncedAt,
           checksum: recordChecksum,
           lastSyncedFieldChecksums: writeResult.fieldChecksums,
           syncRunId: args.syncRunId,
@@ -990,7 +1015,8 @@ export class IntegrationSyncRunnerService {
       select: { id: true, assetId: true, externalId: true },
     });
     const disappeared = stale.filter(
-      (s) => !args.seenExternalIds.has(s.externalId),
+      (s): s is typeof s & { assetId: string } =>
+        s.assetId !== null && !args.seenExternalIds.has(s.externalId),
     );
     if (disappeared.length === 0) return;
 
@@ -1067,6 +1093,11 @@ function emptyTotals(): SyncRunTotals {
     skippedAmbiguous: 0,
     skippedManual: 0,
     skippedArchived: 0,
+    stale: 0,
+    restored: 0,
+    blocked: 0,
+    secretBlocked: 0,
+    missingDependency: 0,
     errors: 0,
   };
 }
