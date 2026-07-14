@@ -13,9 +13,19 @@ All notable changes to Weavestream are documented here. The format follows [Keep
 
 ## [Unreleased]
 
+## [1.8.15] - 2026-07-14
+
 ### Added
 
 - **Patch-first AI article editing.** Focused AI edits now propose exact passage replacements instead of regenerating the complete article, reducing output size and preserving unchanged content more reliably on smaller local models. Whole-document replacement remains available for explicit rewrites. Patch previews and Apply share the same exact-match rules, and stale, missing, or ambiguous passages are refused without partial writes.
+- **Product help AI tool (`get_app_help`).** The chat assistant can now answer "how do I use Weavestream" questions — creating asset layouts, configuring integrations, mapping organizations, running syncs — from release-matched instructions bundled with the deployed application. The content is read-only and strictly separated from live tenant data: it explains the current UI and required permissions but cannot inspect real assets, mappings, or sync state, and when no help section qualifies with sufficient confidence the assistant says so rather than guessing. Deployment, Docker, environment, database, and server-administration topics are intentionally excluded. Access is scoped to non-portal roles (`CLIENT_USER` excluded), and every call is audited with the question and returned content redacted to SHA-256 hashes.
+- **Installable app (PWA).** Weavestream now ships a web app manifest and standalone icons (including a maskable variant), so it can be installed to a device home screen or dock and launched as a standalone window.
+- **Profile "Memberships" tab.** The profile page now lists the signed-in user's company memberships and their per-company roles alongside the existing profile, appearance, security, and sessions tabs.
+
+### Changed
+
+- **Layout builder field palette refreshed.** The asset layout builder now promotes the most common field types for quicker access, labels field types by their display name instead of internal slugs, adds an explanatory tooltip to the Linked Asset field type, and expands the available layout color and icon options.
+- **AI chat links open in the current tab.** Markdown links in assistant responses no longer force a new browser tab, keeping navigation consistent with the rest of the app.
 
 ## [1.8.14] - 2026-07-10
 
@@ -61,7 +71,7 @@ All notable changes to Weavestream are documented here. The format follows [Keep
 ### Fixed
 
 - **Admin tools no longer crash on self-hosted installs served over plain HTTP.** When Weavestream is opened over `http://` by IP address (for example `http://192.168.1.20:3000`), the browser treats the origin as non-secure and does not expose `crypto.randomUUID()`, which produced a `crypto.randomUUID is not a function` error in the layout builder (creating a layout from a template or dragging in a new field), integration field-mapping rows, and AI chat tabs. These browser-only temporary IDs now use a shared helper that falls back to the Web Crypto `getRandomValues` API, which remains available on non-secure origins. Serving Weavestream over HTTPS behind a TLS reverse proxy remains the recommended production configuration.
-92
+
 ## [1.8.12] - 2026-07-03
 
 _No notable changes._ Documentation-only maintenance release (Docker troubleshooting notes); no application changes since 1.8.11.
@@ -592,7 +602,9 @@ Initial public release.
 
 ---
 
-[Unreleased]: https://github.com/Weavestream/Weavestream/compare/v1.8.13...HEAD
+[Unreleased]: https://github.com/Weavestream/Weavestream/compare/v1.8.15...HEAD
+[1.8.15]: https://github.com/Weavestream/Weavestream/releases/tag/v1.8.15
+[1.8.14]: https://github.com/Weavestream/Weavestream/releases/tag/v1.8.14
 [1.8.13]: https://github.com/Weavestream/Weavestream/releases/tag/v1.8.13
 [1.8.12]: https://github.com/Weavestream/Weavestream/releases/tag/v1.8.12
 [1.8.11]: https://github.com/Weavestream/Weavestream/releases/tag/v1.8.11
