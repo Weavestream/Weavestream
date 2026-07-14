@@ -179,6 +179,34 @@ describe('searchAppHelpIndex', () => {
     expect(searchAppHelpIndex(index, question).matches).toEqual([]);
   });
 
+  it('does not block asset-help questions that mention sql/database/container', () => {
+    // Regression for F6: these tokens name assets in an IT-docs product,
+    // so the live-state blocklist must not short-circuit them to [].
+    const root = tempRoot();
+    writeFileSync(
+      join(root, 'assets.md'),
+      [
+        '# Asset help',
+        '',
+        '## Add a SQL Server asset',
+        '<!-- aliases: sql server | database asset | container asset -->',
+        '',
+        'Open the company, choose Assets, then add the SQL Server layout.',
+      ].join('\n'),
+      'utf8',
+    );
+    const scoped = loadAppHelpIndex(root);
+    for (const question of [
+      'How do I add a SQL Server asset?',
+      'How do I document a database asset?',
+      'How do I link a container asset?',
+    ]) {
+      expect(searchAppHelpIndex(scoped, question).matches[0]?.sectionId).toBe(
+        'assets/add-a-sql-server-asset',
+      );
+    }
+  });
+
   it('returns at most three complete sections', () => {
     const out = searchAppHelpIndex(index, 'integration mapping sync fields');
     expect(out.matches.length).toBeLessThanOrEqual(3);

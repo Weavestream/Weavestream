@@ -14,11 +14,12 @@ import type { ArticleDetail } from '../../lib/server-api';
 import { Icon } from '../ui';
 import { useChatPanel, type ChatPageContextSnapshot, type ChatTab } from './chat-panel-provider';
 import { SaveAsArticleDialog } from './save-as-article-dialog';
+import { isRewriteTargetHallucinated } from './tool-call-classify';
 
 type PatchSource =
   | { status: 'idle' }
   | { status: 'loading' }
-  | { status: 'ready'; markdown: string; revision: number }
+  | { status: 'ready'; markdown: string; revision: number; isRichText: boolean }
   | { status: 'error'; message: string };
 
 type PatchPreview =
@@ -70,7 +71,16 @@ export function ToolCallCard({
     (isPatch || isRewrite) && typeof toolCall.arguments['article_id'] === 'string'
       ? toolCall.arguments['article_id']
       : null;
-  const previewCompanyId = state.pageContext?.companyId ?? state.companyContext?.companyId ?? null;
+  // Prefer the server-resolved company on the proposal (F2): it lets the
+  // patch preview fetch the article even from a chat with no company
+  // shell (global-admin / freeform tabs), where page/company context is
+  // absent and Apply would otherwise be permanently disabled. Falls back
+  // to page/company context for legacy rows persisted before this field.
+  const previewCompanyId =
+    toolCall.targetCompanyId ??
+    state.pageContext?.companyId ??
+    state.companyContext?.companyId ??
+    null;
   const patchPreviewKey =
     isPatch && rawTargetArticleId && previewCompanyId
       ? `${previewCompanyId}:${rawTargetArticleId}`
@@ -109,7 +119,28 @@ export function ToolCallCard({
           : tiptapDocToMarkdown(article.content);
       setLoadedPatchSource({
         key: patchPreviewKey,
-        source: { status: 'ready', markdown, revision: article.revision },
+        source: {
+          status: 'ready',
+          markdown,
+          revision: article.revision,
+          // Applying edits to a rich-text article flips it to Markdown
+          // mode server-side (F10) — surfaced as a card warning below.
+          isRichText: article.editorMode !== 'markdown',
+        },
+      });
+    }).catch(() => {
+      // apiFetch swallows AbortError (returns a sentinel) but RE-THROWS
+      // network failures. Without this handler a transient blip left the
+      // card stuck on "Loading preview…" forever (deps never change, so
+      // no retry) and surfaced an unhandled rejection. Fail into an error
+      // source so Apply shows a message instead of hanging.
+      if (controller.signal.aborted) return;
+      setLoadedPatchSource({
+        key: patchPreviewKey,
+        source: {
+          status: 'error',
+          message: 'The article could not be loaded for a safe preview.',
+        },
       });
     });
     return () => controller.abort();
@@ -168,8 +199,16 @@ export function ToolCallCard({
     }
     return ids;
   })();
-  const rewriteTargetIsHallucinated =
-    isRewrite && !!targetArticleId && !knownArticleIds.has(targetArticleId);
+  // A rewrite whose target isn't the current page / an @-mention AND has
+  // no server-captured basis is a hallucinated id → route to create.
+  // The basis check (F2) keeps a `get_article`-found article in a freeform
+  // tab classified as a real edit. See `isRewriteTargetHallucinated`.
+  const rewriteTargetIsHallucinated = isRewriteTargetHallucinated({
+    isRewrite,
+    targetArticleId,
+    knownArticleIds,
+    baseRevision: toolCall.baseRevision,
+  });
   // Treat hallucinated update targets exactly like a `create_article`
   // proposal — the header, preview, and Apply flow all route through
   // the Save-as-article dialog. The server-side fallback in
@@ -191,6 +230,14 @@ export function ToolCallCard({
     args.title,
     args.edits,
   );
+  // A patch that applies edits to a rich-text article converts it to
+  // Markdown mode on the server (F10). Warn before Apply — a title-only
+  // patch (no edits) leaves the body/mode untouched, so no warning.
+  const patchConvertsToMarkdown =
+    isPatch &&
+    args.edits !== undefined &&
+    patchSource.status === 'ready' &&
+    patchSource.isRichText;
 
   const header = treatAsCreate
     ? `Proposed: create "${args.title ?? 'new article'}"`
@@ -366,6 +413,25 @@ export function ToolCallCard({
           />
         </button>
       </div>
+
+      {patchConvertsToMarkdown && (
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'flex-start',
+            gap: 6,
+            padding: '6px 10px',
+            borderBottom: '1px solid var(--line)',
+            background: 'var(--panel-2)',
+            color: 'var(--warn, #b7791f)',
+            fontSize: 11,
+            lineHeight: 1.4,
+          }}
+        >
+          <Icon.warn size={11} style={{ flexShrink: 0, marginTop: 1 }} />
+          <span>Applying converts this rich-text article to Markdown formatting.</span>
+        </div>
+      )}
 
       {showDiff && (
         <div

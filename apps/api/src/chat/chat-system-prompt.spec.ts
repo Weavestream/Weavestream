@@ -18,6 +18,20 @@ describe('buildSystemPrompt app help guidance', () => {
     expect(prompt).toContain('App-help sections have no href and need no link');
   });
 
+  it('omits get_app_help from a CLIENT_USER prompt (F13)', () => {
+    const clientActor = {
+      id: 'user-2',
+      email: 'client@example.com',
+      role: 'CLIENT_USER',
+    } as AuthedUser;
+    const prompt = buildSystemPrompt(clientActor);
+    expect(prompt).not.toContain('get_app_help');
+    expect(prompt).not.toContain('authoritative reference for the deployed UI');
+    // Other read tools are still described.
+    expect(prompt).toContain('search(query');
+    expect(prompt).toContain('get_article(article_id');
+  });
+
   it('does not grant an asset or integration mutation tool', () => {
     const prompt = buildSystemPrompt(actor, {
       companyId: '11111111-1111-1111-1111-111111111111',

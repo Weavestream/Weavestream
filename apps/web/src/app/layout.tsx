@@ -22,13 +22,18 @@ export const metadata: Metadata = {
   title: 'Weavestream',
   description: 'IT documentation',
   robots: { index: false, follow: false },
-  // Belt-and-suspenders: the App Router already wires icon.tsx /
-  // apple-icon.tsx via convention, but declaring them here means any
-  // consumer reading `metadata.icons` (e.g. a future PWA manifest)
-  // sees the same source of truth.
+  // The favicon remains generated from the brand mark. iOS receives a
+  // dedicated, opaque 180px Home Screen icon; the PWA manifest declares
+  // the corresponding cross-platform sizes separately.
   icons: {
     icon: '/icon',
-    apple: '/apple-icon',
+    apple: [
+      {
+        url: '/brand/pwa-icon-180.png',
+        sizes: '180x180',
+        type: 'image/png',
+      },
+    ],
   },
 };
 

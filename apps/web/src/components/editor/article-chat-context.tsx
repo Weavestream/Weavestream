@@ -1,9 +1,13 @@
 'use client';
 
 import { useCallback } from 'react';
-import type { ArticleEditorMode } from '@weavestream/shared';
+// SHARED DOM-free walker (not the client turndown converter): the AI
+// chat reads this projection, and a patch's old_text must match the
+// shared-walker base the preview and server apply run against (F1). The
+// two converters diverge on bullet lists, italics, and horizontal rules,
+// which broke exact-match patches from the read-only article view.
+import { tiptapDocToMarkdown, type ArticleEditorMode } from '@weavestream/shared';
 import { useChatPageContext } from '../chat-panel/use-chat-page-context';
-import { tiptapDocToMarkdown } from '../../lib/article-format';
 
 /**
  * Client-side bridge that lets a server-rendered article view page

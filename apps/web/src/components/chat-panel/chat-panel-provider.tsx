@@ -24,7 +24,13 @@ import {
 } from '../../lib/chat-api';
 import { apiFetch } from '../../lib/api';
 import { streamChatMessage, type ChatStreamMeta } from '../../lib/chat-stream';
-import { tiptapDocToMarkdown } from '../../lib/article-format';
+// Project attached rich-text articles for the model with the SHARED
+// walker — the same converter the patch preview and server apply use —
+// so the markdown the model copies `old_text` from matches the base
+// `applyArticleTextEdits` runs against byte-for-byte. The client
+// turndown converter (lib/article-format) diverges on bullet lists,
+// italics, and horizontal rules, which broke exact-match patches (F1).
+import { tiptapDocToMarkdown } from '@weavestream/shared';
 import { assetToMarkdown } from '../../lib/asset-format';
 import { domainToMarkdown } from '../../lib/domain-format';
 import { randomClientId } from '../../lib/client-id';
@@ -1514,9 +1520,11 @@ function safeGetMarkdown(ctx: ChatPageContextSnapshot): string {
 
 /**
  * Fetch a referenced article and project it to markdown the LLM can
- * consume. Tiptap docs are converted via the existing client-side
- * helper (we don't want a server-side Tiptap engine in v1). Returns
- * `null` on any failure so callers can skip the mention silently.
+ * consume. Tiptap docs are converted via the shared DOM-free walker
+ * (`@weavestream/shared` `tiptapDocToMarkdown`) — identical to the patch
+ * preview and server apply, so a model-authored `old_text` matches the
+ * base a patch is applied against. Returns `null` on any failure so
+ * callers can skip the mention silently.
  */
 async function fetchArticleAsMarkdown(
   companyId: string,

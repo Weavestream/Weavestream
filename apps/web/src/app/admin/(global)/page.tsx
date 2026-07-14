@@ -1,14 +1,6 @@
 import Link from 'next/link';
 import { PageBody, PageHeader } from '../../../components/shell/page-header';
-import {
-  CompanyAvatar,
-  Icon,
-  LayoutSwatch,
-  Panel,
-  StarButton,
-  Stat,
-  Tag,
-} from '../../../components/ui';
+import { CompanyAvatar, Icon, LayoutSwatch, Panel, StarButton, Stat } from '../../../components/ui';
 import type { EntityType } from '../../../components/ui/star-button';
 import {
   getAdminStats,
@@ -94,37 +86,6 @@ export default async function AdminDashboard() {
         </div>
 
         <DomainAlertsPanel alerts={alerts} />
-        <Panel title="You">
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 10, fontSize: 13 }}>
-            <Row
-              label="Email"
-              value={
-                <code style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>{me.email}</code>
-              }
-            />
-            <Row label="Role" value={<Tag tone="accent">{me.role}</Tag>} />
-            <Row
-              label="Two-factor"
-              value={me.mfaEnabled ? <Tag tone="ok">enabled</Tag> : <Tag tone="warn">pending</Tag>}
-            />
-            <Row
-              label="Memberships"
-              value={
-                me.memberships.length === 0 ? (
-                  <span style={{ color: 'var(--muted)' }}>none</span>
-                ) : (
-                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                    {me.memberships.map((m) => (
-                      <Tag key={m.id} tone="info">
-                        {m.company.name}
-                      </Tag>
-                    ))}
-                  </div>
-                )
-              }
-            />
-          </div>
-        </Panel>
       </PageBody>
     </>
   );
@@ -571,25 +532,4 @@ function relative(iso: string): string {
   if (diff < 30 * day) return `${Math.floor(diff / day)}d ago`;
   if (diff < 365 * day) return `${Math.floor(diff / (30 * day))}mo ago`;
   return `${Math.floor(diff / (365 * day))}y ago`;
-}
-
-function Row({ label, value }: { label: string; value: React.ReactNode }) {
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-      <div
-        style={{
-          fontFamily: 'var(--font-mono)',
-          fontSize: 10.5,
-          color: 'var(--muted)',
-          textTransform: 'uppercase',
-          letterSpacing: 0.6,
-          width: 120,
-          flexShrink: 0,
-        }}
-      >
-        {label}
-      </div>
-      <div style={{ flex: 1, minWidth: 0 }}>{value}</div>
-    </div>
-  );
 }

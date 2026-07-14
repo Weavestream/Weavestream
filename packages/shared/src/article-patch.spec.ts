@@ -1,4 +1,8 @@
-import { applyArticleTextEdits, articlePatchPayloadChars } from './article-patch.js';
+import {
+  applyArticleTextEdits,
+  articlePatchPayloadChars,
+  rawArticlePatchPayloadChars,
+} from './article-patch.js';
 
 describe('applyArticleTextEdits', () => {
   it('applies replacements, insertions, and deletions in order', () => {
@@ -35,6 +39,15 @@ describe('applyArticleTextEdits', () => {
     ).toEqual({ ok: false, code: 'ambiguous', editIndex: 0 });
   });
 
+  it('rejects a self-overlapping ambiguous match', () => {
+    // `----` occurs at offsets 0, 1, and 2 inside `------`; resuming the
+    // second search after the first full match would miss the overlaps
+    // and silently replace the leftmost run.
+    expect(
+      applyArticleTextEdits('------', [{ old_text: '----', new_text: '====' }]),
+    ).toEqual({ ok: false, code: 'ambiguous', editIndex: 0 });
+  });
+
   it('matches unicode and line endings exactly', () => {
     expect(
       applyArticleTextEdits('Café\r\nnext', [{ old_text: 'Café\r\n', new_text: '💡\r\n' }]),
@@ -45,5 +58,26 @@ describe('applyArticleTextEdits', () => {
 describe('articlePatchPayloadChars', () => {
   it('counts old and replacement text', () => {
     expect(articlePatchPayloadChars([{ old_text: 'old', new_text: 'newer' }])).toBe(8);
+  });
+});
+
+describe('rawArticlePatchPayloadChars', () => {
+  it('sums string fields on well-formed raw edits', () => {
+    expect(
+      rawArticlePatchPayloadChars([{ old_text: 'old', new_text: 'newer' }]),
+    ).toBe(8);
+  });
+
+  it('ignores non-array input and non-string / missing fields', () => {
+    expect(rawArticlePatchPayloadChars(null)).toBe(0);
+    expect(rawArticlePatchPayloadChars('nope')).toBe(0);
+    expect(
+      rawArticlePatchPayloadChars([
+        { old_text: 'keep', new_text: 42 },
+        { old_text: null },
+        'garbage',
+        { new_text: 'add' },
+      ]),
+    ).toBe(7);
   });
 });

@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Panel, Tag } from '../../components/ui';
 import { FormattedDateTime } from '../../lib/timezone-context';
-import { roleLabel } from '../../lib/roles';
+import { membershipRoleLabel, roleLabel } from '../../lib/roles';
 import type { Me } from '../../lib/server-api';
 import { ProfileForm } from './profile-form';
 import { PasswordForm } from './password-form';
@@ -12,7 +12,7 @@ import { SessionsList } from './sessions-list';
 import { AppearanceForm } from './appearance-form';
 import { MfaBackupCodes } from './mfa-backup-codes';
 
-type TabId = 'profile' | 'appearance' | 'security' | 'sessions';
+type TabId = 'profile' | 'memberships' | 'appearance' | 'security' | 'sessions';
 
 type Session = {
   id: string;
@@ -28,6 +28,11 @@ const TABS: Array<{ id: TabId; label: string; help: string }> = [
     id: 'profile',
     label: 'Profile',
     help: 'Your name, email, and timezone.',
+  },
+  {
+    id: 'memberships',
+    label: 'Memberships',
+    help: 'Companies your account can access.',
   },
   {
     id: 'appearance',
@@ -121,6 +126,74 @@ export function MeTabs({
         {tab === 'profile' && (
           <Panel title="Identity" flush>
             <ProfileForm me={me} />
+          </Panel>
+        )}
+
+        {tab === 'memberships' && (
+          <Panel title={`Memberships (${me.memberships.length})`} flush>
+            {me.memberships.length === 0 ? (
+              <p style={{ margin: 0, color: 'var(--muted)', fontSize: 13 }}>
+                No explicit company memberships are assigned to your account.
+              </p>
+            ) : (
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+                  gap: 12,
+                }}
+              >
+                {me.memberships.map((membership) => (
+                  <div
+                    key={membership.id}
+                    style={{
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: 12,
+                      padding: 14,
+                      border: '1px solid var(--line)',
+                      borderRadius: 6,
+                      background: 'var(--panel-2)',
+                    }}
+                  >
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                      <span style={{ color: 'var(--text)', fontSize: 14, fontWeight: 500 }}>
+                        {membership.company.name}
+                      </span>
+                      <span
+                        style={{
+                          color: 'var(--dim)',
+                          fontFamily: 'var(--font-mono)',
+                          fontSize: 11,
+                        }}
+                      >
+                        /{membership.company.slug}
+                      </span>
+                    </div>
+                    <div
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: 12,
+                        flexWrap: 'wrap',
+                      }}
+                    >
+                      <Tag tone="accent">{membershipRoleLabel(membership.role)}</Tag>
+                      <span style={{ color: 'var(--dim)', fontSize: 11.5 }}>
+                        {membership.expiresAt ? (
+                          <>
+                            Expires <FormattedDateTime value={membership.expiresAt} />
+                          </>
+                        ) : (
+                          'No expiration'
+                        )}
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </Panel>
         )}
 

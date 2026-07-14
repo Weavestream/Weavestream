@@ -12,7 +12,7 @@ type Session = {
   current: boolean;
 };
 
-const VALID_TABS = ['profile', 'appearance', 'security', 'sessions'] as const;
+const VALID_TABS = ['profile', 'memberships', 'appearance', 'security', 'sessions'] as const;
 type TabId = (typeof VALID_TABS)[number];
 
 export default async function MePage({
@@ -34,7 +34,7 @@ export default async function MePage({
       <PageHeader
         crumbs={[{ label: 'Account', href: '/me' }, { label: 'Profile' }]}
         title="Your profile"
-        description="Manage your name, password, and active sessions."
+        description="Manage your profile, memberships, security, and active sessions."
       />
       <PageBody>
         <Panel noPad>

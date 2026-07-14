@@ -14,11 +14,11 @@ import type {
 } from '@weavestream/shared';
 import {
   applyArticleTextEdits,
-  articlePatchPayloadChars,
   createArticleToolInputSchema,
   MAX_ARTICLE_PATCH_CHARS,
   MAX_MARKDOWN_SOURCE,
   patchArticleToolInputSchema,
+  rawArticlePatchPayloadChars,
   splitMarkdownTitleAndBody,
   stripNullArgs,
   tiptapDocToMarkdown,
@@ -201,12 +201,18 @@ export class ChatToolCallService {
     requestCompanyId: string | undefined,
     auditMeta: AuditMeta,
   ): Promise<string> {
-    const args = patchArticleToolInputSchema.parse(stripNullArgs(toolCall.arguments));
+    const rawArgs = stripNullArgs(toolCall.arguments);
+    // Enforce the aggregate patch-size cap BEFORE the field-level parse.
+    // The per-field max is itself MAX_ARTICLE_PATCH_CHARS and the strict
+    // tool JSON-schema converter can't express a cross-field sum, so this
+    // is the gate that stops up-to-12 edits carrying megabytes past
+    // validation (F12).
+    if (rawArticlePatchPayloadChars(rawArgs['edits']) > MAX_ARTICLE_PATCH_CHARS) {
+      throw new BadRequestException('Article patch is too large.');
+    }
+    const args = patchArticleToolInputSchema.parse(rawArgs);
     if (args.title === undefined && args.edits === undefined) {
       throw new BadRequestException('Tool call did not propose any change.');
-    }
-    if (args.edits && articlePatchPayloadChars(args.edits) > MAX_ARTICLE_PATCH_CHARS) {
-      throw new BadRequestException('Article patch is too large.');
     }
 
     const targetCompanyId = await this.articles.findCompanyIdForArticle(args.article_id);

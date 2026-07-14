@@ -5,6 +5,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   formatDate,
   formatDateTime,
+  // The SHARED DOM-free walker — used ONLY to project the live editor
+  // body for the AI chat, so what the model sees matches the patch
+  // preview and server apply byte-for-byte (F1). The client turndown
+  // converter below stays for the user-facing editor mode switch.
+  tiptapDocToMarkdown as tiptapDocToSharedMarkdown,
   type ArticleEditorMode,
 } from '@weavestream/shared';
 import { apiFetch } from '../../../../../lib/api';
@@ -144,7 +149,10 @@ export function ArticleForm({
   const getEditorMarkdown = useCallback((): string => {
     if (editorModeRef.current === 'markdown') return markdownRef.current ?? '';
     try {
-      return tiptapDocToMarkdown(docRef.current);
+      // SHARED converter (not the client turndown one): the AI chat reads
+      // this, and its patch old_text must match the shared-walker base the
+      // preview and server apply run against (F1).
+      return tiptapDocToSharedMarkdown(docRef.current);
     } catch {
       return '';
     }
