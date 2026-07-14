@@ -50,7 +50,7 @@ Create a **UniFi Site Manager** integration with a Site Manager **API Key**. Lea
 Configure **Devices fields** for switches, access points, gateways, and other managed network devices. Configure **Clients fields** separately for connected clients. Devices suggest `mac` as an upstream matching value; clients suggest `name`. Choose match keys that correspond to fields on the selected target layout, save the mappings, activate the integration, and dry-run it before importing.
 
 ## Configure Cloudflare Zero Trust Lists
-<!-- aliases: connect cloudflare | cloudflare gateway list | zero trust ip list | register cloudflare list -->
+<!-- aliases: connect cloudflare | cloudflare gateway list | zero trust ip list | register cloudflare list | register cloudflare gateway ip list -->
 <!-- requires: integration.manage -->
 
 Create a **Cloudflare Zero Trust Lists** integration using the **Cloudflare Account ID** and an **API Token** scoped to **Account → Zero Trust → Edit**. This manages Gateway IP lists, not the unrelated WAF Account Filter Lists API.

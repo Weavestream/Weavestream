@@ -58,5 +58,14 @@ export async function resolvePortalCompany(
     }
   }
 
+  // Dev-only Safari gotcha (not a bug in this code — leave the throw
+  // as-is): this `notFound()` is logged by Next's bundled React
+  // *development* reconciler via `performance.measure(name, { start,
+  // end, detail })`. WebKit rejects that call for an aborted render and
+  // raises a bare `TypeError` ("Type error" at `measure [native
+  // code]`), which pops the Next.js dev error overlay even though the
+  // 404 renders fine. The instrumentation is stripped from the
+  // production React build (zero prod impact) and doesn't reproduce in
+  // Chromium. Revisit only if Next bundles a React that guards the call.
   notFound();
 }

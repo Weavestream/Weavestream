@@ -1,7 +1,7 @@
 # Assets
 
 ## Create, edit, and find assets
-<!-- aliases: new asset | add asset | create server | add device | asset inventory | edit asset | find asset -->
+<!-- aliases: new asset | create asset | add asset | create server | add device | asset inventory | edit asset | find asset -->
 <!-- requires: asset.write | asset.read -->
 
 Assets are company-scoped records created from global asset layouts. Open a company, choose **Assets**, then select **New asset**. Pick a layout, complete its required fields, and select **Create asset**. A value for a field marked **Unique per company** cannot duplicate another asset using that layout in the same company.

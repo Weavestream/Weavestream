@@ -131,10 +131,10 @@ describe('searchAppHelpIndex', () => {
   const index = loadAppHelpIndex(REAL_CONTENT);
 
   it.each([
-    ['How do I create an asset?', 'assets/create-an-asset'],
+    ['How do I create an asset?', 'assets/create-edit-and-find-assets'],
     [
       'How do I add a dropdown field to a server template?',
-      'asset-layouts/add-and-arrange-layout-fields',
+      'asset-layouts/add-and-configure-layout-fields',
     ],
     [
       'How do integrations work?',
