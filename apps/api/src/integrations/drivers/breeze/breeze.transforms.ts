@@ -88,6 +88,9 @@ export function transformBreezeRecord(
   if (isDesiredConfigurationResource(resource.data) && inspectDesiredConfiguration(record) !== 'safe') {
     throw new BreezeSensitiveDefinitionError(record.id, record.orgId);
   }
+  if (BREEZE_ENDPOINT_BY_RESOURCE[resource.data] === 'scripts' && isSensitiveScriptContent(record.content)) {
+    throw new BreezeSensitiveDefinitionError(record.id, record.orgId);
+  }
   if (
     BREEZE_ENDPOINT_BY_RESOURCE[resource.data] === 'custom-fields' &&
     record.values.some((value: Record<string, unknown>) => stableJson(value.value).length > 50_000)
@@ -559,13 +562,6 @@ function containsCredentialAssignment(value: string): boolean {
       return true;
     }
   }
-  const flags = value.matchAll(
-    /(?:^|\s)--?([A-Za-z][A-Za-z0-9_-]{0,127})(?:=|\s+)(?:"[^"\r\n]+"|'[^'\r\n]+'|[^\s;]+)/gimu,
-  );
-  for (const flag of flags) {
-    const compact = (flag[1] ?? '').replace(/[^A-Za-z0-9]/gu, '').toLowerCase();
-    if (FORBIDDEN_CONFIGURATION_KEYS.has(compact)) return true;
-  }
   if (
     /\bConvertTo-SecureString\b/iu.test(value) &&
     /(?:^|\s)-AsPlainText(?:\s|$)/iu.test(value) &&
@@ -583,6 +579,36 @@ function isSecretLikeConfigurationValue(value: string): boolean {
     || (/^[A-Za-z0-9_.-]{1,128}$/u.test(value)
       && splitConfigurationFieldName(value).some((token) => FORBIDDEN_CONFIGURATION_KEYS.has(token)))
     || highEntropyCandidates.some(candidateLooksHighEntropy);
+}
+
+function isSensitiveScriptContent(content: string): boolean {
+  if (
+    /\bConvertTo-SecureString\b/iu.test(content) &&
+    /(?:^|\s)-AsPlainText(?:\s|$)/iu.test(content)
+  ) {
+    return true;
+  }
+  const hasForbiddenIdentifier = (identifier: string | undefined) =>
+    splitConfigurationFieldName(identifier ?? '')
+      .some((token) => FORBIDDEN_CONFIGURATION_KEYS.has(token));
+  for (const match of content.matchAll(/[A-Za-z][A-Za-z0-9_.-]*/gu)) {
+    const identifier = match[0];
+    const prefix = content.slice(Math.max(0, (match.index ?? 0) - 2), match.index ?? 0);
+    if (prefix === '--' && identifier.toLowerCase() === 'password-policy') continue;
+    if (hasForbiddenIdentifier(identifier)) return true;
+  }
+  for (const match of content.matchAll(
+    /(?:^|[\s{[,;|&])(?:export\s+|setx?(?:\s+\/M)?\s+)?["']?\$?(?:env:)?([A-Za-z][A-Za-z0-9_-]{0,127})["']?\s*(?==|:)/gimu,
+  )) {
+    if (hasForbiddenIdentifier(match[1])) return true;
+  }
+  for (const match of content.matchAll(
+    /(?:^|\s)--?([A-Za-z][A-Za-z0-9_-]{0,127})(?=$|[\s=])/gimu,
+  )) {
+    const compact = (match[1] ?? '').replace(/[^A-Za-z0-9]/gu, '').toLowerCase();
+    if (FORBIDDEN_CONFIGURATION_KEYS.has(compact)) return true;
+  }
+  return false;
 }
 
 function renderDesiredConfiguration(

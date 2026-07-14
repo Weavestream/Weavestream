@@ -548,7 +548,6 @@ describe('Breeze transforms', () => {
   });
 
   it.each([
-    'echo password policy enabled',
     'tool --password-policy enabled --mode rebuild',
     'echo secretary tokenize ordinary prose',
     'postgresql://database.example/rebuild',
@@ -557,6 +556,16 @@ describe('Breeze transforms', () => {
       ...base, siteId: null, sourceScope: 'organization', name: 'Safe rebuild', description: null,
       category: 'build', osTypes: ['linux'], language: 'bash', content, parameters: null,
       timeoutSeconds: 300, runAs: 'system', version: 1, exitCodeSeverityMapping: null,
+    })).not.toThrow();
+  });
+
+  it('does not apply content-only identifier quarantine to ordinary descriptive fields', () => {
+    expect(() => transformBreezeRecord('scripts', {
+      ...base, siteId: null, sourceScope: 'organization', name: 'Credential policy documentation',
+      description: 'Usage documentation mentions tool --password without carrying a value.',
+      category: 'documentation', osTypes: ['linux'], language: 'bash', content: 'echo safe',
+      parameters: null, timeoutSeconds: 300, runAs: 'system', version: 1,
+      exitCodeSeverityMapping: null,
     })).not.toThrow();
   });
 
@@ -1276,6 +1285,42 @@ describe('Breeze transforms', () => {
 });
 
 describe('BreezeDriver transport delegation', () => {
+  it.each([
+    'Usage: tool --password',
+    '{"password":""}',
+    'set PASSWORD=',
+    'TODO rotate DB_PASSWORD later',
+    'Help: provide credential before running',
+    'ConvertTo-SecureString hunter2 -AsPlainText -Force',
+    'ConvertTo-SecureString -String hunter2 -AsPlainText -Force',
+  ])('quarantines credential-semantic script syntax, continues a safe sibling, and leaks nothing: %s', async (content) => {
+    const unsafeName = 'Unsafe syntax sentinel';
+    const unsafe = {
+      ...base, siteId: null, sourceScope: 'organization', name: unsafeName, description: null,
+      category: null, osTypes: ['windows'], language: 'powershell', content, parameters: null,
+      timeoutSeconds: 30, runAs: 'system', version: 1, exitCodeSeverityMapping: null,
+    };
+    const safe = { ...unsafe, id: SEGMENT, name: 'Safe sibling', content: 'tool --password-policy enabled' };
+    const client = {
+      testConnection: jest.fn(), listOrganizations: jest.fn(),
+      fetchPage: jest.fn().mockResolvedValue({
+        schemaVersion: '1', snapshotAt: '2026-07-14T12:00:00.000Z', data: [unsafe, safe],
+        nextCursor: null, hasMore: false,
+      }),
+    };
+    const page = await new BreezeDriver(client).fetchRecords(
+      { ...ctx('scripts'), mode: 'full', updatedSince: null }, null,
+    );
+    expect(page.records).toHaveLength(1);
+    expect(page.blockedInputs).toEqual([expect.objectContaining({
+      kind: 'secret_blocked', externalId: `${ORG}:scripts:${DEVICE}`,
+      details: expect.objectContaining({ reasonCode: 'secret_detected', sourceId: DEVICE }),
+    })]);
+    const serialized = JSON.stringify(page);
+    expect(serialized).not.toContain(content);
+    expect(serialized).not.toContain(unsafeName);
+  });
+
   it('keeps maximum automation dependency fan-out lossless within 10,000-record continuation pages', async () => {
     const uuid = (value: number) =>
       `${value.toString(16).padStart(8, '0')}-0000-4000-8000-${value.toString(16).padStart(12, '0')}`;
