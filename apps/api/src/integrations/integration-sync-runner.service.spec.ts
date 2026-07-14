@@ -452,6 +452,62 @@ describe('IntegrationSyncRunnerService writer dispatch', () => {
     }));
   });
 
+  it('loads a persisted non-authoritative cursor on a second process invocation and preserves last-known-good terminal state', async () => {
+    const { service, driver, tx, prisma, provenance, completeness } = setup();
+    let persistedCheckpoint: Record<string, unknown> | null = null;
+    prisma.integrationSyncCheckpoint.findUnique.mockImplementation(async () => persistedCheckpoint);
+    tx.integrationSyncCheckpoint.upsert.mockImplementation((async ({ create, update }: {
+      create: Record<string, unknown>;
+      update: Record<string, unknown>;
+    }) => {
+      persistedCheckpoint = persistedCheckpoint
+        ? { ...persistedCheckpoint, ...update }
+        : { ...create };
+      return persistedCheckpoint;
+    }) as never);
+    driver.fetchRecords
+      .mockResolvedValueOnce({
+        records: [{ reconstructionInput: { ...input, externalId: 'wrong-scope-id' } }],
+        hasMore: true,
+        cursor: 'page-2',
+        terminal: false,
+        snapshotAt: '2026-07-14T10:00:00.000Z',
+        sourceHighWater: '2026-07-14T09:00:00.000Z',
+      })
+      .mockRejectedValueOnce(new Error('process interrupted after checkpoint'));
+
+    await expect(service.runMapping({
+      syncRunId: 'resume-run-1', integrationCompanyMappingId: 'mapping', resourceId: 'resource',
+      dryRun: false, actorId: 'actor', mode: 'full',
+    })).resolves.toMatchObject({ status: 'failed', error: 'process interrupted after checkpoint' });
+    expect(persistedCheckpoint).toMatchObject({
+      cursor: 'page-2', authoritative: false, highWaterAt: null,
+      lastCompletedAt: null, lastFullCompletedAt: null,
+    });
+
+    provenance.resolveAbsentGaps.mockClear();
+    provenance.staleUnseen.mockClear();
+    completeness.recalculate.mockClear();
+    driver.fetchRecords.mockReset().mockResolvedValueOnce({
+      records: [], hasMore: false, cursor: null, terminal: true,
+      snapshotAt: '2026-07-14T10:00:00.000Z',
+      sourceHighWater: '2026-07-14T09:30:00.000Z',
+    });
+
+    await expect(service.runMapping({
+      syncRunId: 'resume-run-2', integrationCompanyMappingId: 'mapping', resourceId: 'resource',
+      dryRun: false, actorId: 'actor', mode: 'full',
+    })).resolves.toMatchObject({ status: 'failed', error: expect.stringContaining('incomplete') });
+    expect(prisma.integrationSyncCheckpoint.findUnique).toHaveBeenCalledTimes(2);
+    expect(provenance.resolveAbsentGaps).not.toHaveBeenCalled();
+    expect(provenance.staleUnseen).not.toHaveBeenCalled();
+    expect(completeness.recalculate).not.toHaveBeenCalled();
+    expect(persistedCheckpoint).toMatchObject({
+      cursor: null, authoritative: false, highWaterAt: null,
+      lastCompletedAt: null, lastFullCompletedAt: null,
+    });
+  });
+
   it('marks a safely identified secret-blocked source binding seen and remains authoritative', async () => {
     const { service, driver, tx, provenance, completeness } = setup({ staleBinding: true });
     driver.fetchRecords.mockResolvedValueOnce({
@@ -478,6 +534,128 @@ describe('IntegrationSyncRunnerService writer dispatch', () => {
     expect(provenance.resolveAbsentGaps).toHaveBeenCalled();
     expect(provenance.staleUnseen).toHaveBeenCalled();
     expect(completeness.recalculate).toHaveBeenCalled();
+  });
+
+  it('recovers an exact secret-blocked Breeze binding to the same native target on a later valid source record', async () => {
+    const { service, driver, tx, prisma, writerRegistry, provenance } = setup();
+    const integrationId = '00000000-0000-4000-8000-000000000031';
+    const targetId = '00000000-0000-4000-8000-000000000032';
+    const layoutId = '00000000-0000-4000-8000-000000000033';
+    const fieldId = '00000000-0000-4000-8000-000000000034';
+    const externalId = 'org-1:devices:device-1';
+    const assetInput: AssetReconstructionInput = {
+      targetKind: 'asset',
+      externalId,
+      source: { externalOrgId: 'org-1', resourceKey: 'devices', sourceId: 'device-1' },
+      name: 'Device 1',
+      assetLayoutId: layoutId,
+      matchKeyFieldIds: [],
+      fieldValues: [{ targetFieldId: fieldId, value: 'Device 1', syncDirection: 'source_wins' }],
+    };
+    let persistedBinding = {
+      id: 'binding-id', integrationCompanyMappingId: 'mapping', resourceId: 'resource',
+      externalId, companyId: 'company', targetKind: 'asset', assetId: targetId,
+      subnetId: null, ipReservationId: null, articleId: null, relationId: null,
+      state: 'active', staleSince: new Date('2026-07-13T10:00:00.000Z'),
+      checksum: 'a'.repeat(64), lastSyncedFieldChecksums: {},
+      lastSeenAt: new Date('2026-07-13T10:00:00.000Z'),
+      companyMapping: { integrationId, externalOrgId: 'org-1' },
+      resource: { integrationId, resourceKey: 'devices' },
+      provenance: {
+        integrationId, externalOrgId: 'org-1', resourceKey: 'devices', externalId,
+        sourceRevision: null, sourceFingerprint: null,
+        firstSeenAt: '2026-07-12T10:00:00.000Z', lastSeenAt: '2026-07-13T10:00:00.000Z',
+        lastSyncedAt: '2026-07-13T10:00:00.000Z', ownership: 'breeze', state: 'active',
+      },
+    };
+    prisma.integrationCompanyMapping.findUnique.mockResolvedValue({
+      id: 'mapping', integrationId, companyId: 'company', externalOrgId: 'org-1',
+      filter: {}, integration: { id: integrationId, driver: 'typed' },
+    });
+    prisma.integrationResource.findFirst.mockResolvedValue({
+      id: 'resource', integrationId, resourceKey: 'devices', enabled: true,
+      targetKind: 'asset', targetConfig: {}, dependsOnResourceKeys: [],
+      assetLayoutId: layoutId, assetLayout: { fields: [] }, matchKeyFieldIds: [],
+      fieldMappings: [{
+        sourceField: 'name', syncDirection: 'source_wins', transform: null,
+        targetField: { id: fieldId, slug: 'name', fieldType: 'TEXT', options: {}, archivedAt: null },
+      }],
+    });
+    tx.integrationSyncRecord.findUnique.mockImplementation(async () => persistedBinding);
+    tx.integrationSyncRecord.update.mockImplementation(async ({ data }: { data: Record<string, unknown> }) => {
+      persistedBinding = { ...persistedBinding, ...data } as typeof persistedBinding;
+      return persistedBinding;
+    });
+    tx.integrationSyncRecord.upsert.mockImplementation((async ({ update }: { update: Record<string, unknown> }) => {
+      persistedBinding = { ...persistedBinding, ...update } as typeof persistedBinding;
+      return persistedBinding;
+    }) as never);
+    provenance.buildProvenance.mockImplementation(((value: {
+      previous?: Record<string, unknown>;
+      state?: string;
+      observedAt?: Date;
+      syncedAt?: Date | null;
+    }) => ({
+      ...value.previous,
+      state: value.state,
+      lastSeenAt: value.observedAt?.toISOString(),
+      lastSyncedAt: value.syncedAt?.toISOString() ?? value.previous?.lastSyncedAt ?? null,
+    })) as never);
+    const nativePort = { writeFromIntegration: jest.fn(async (nativeInput: {
+      integrationCompanyMappingId: string; resourceId: string; externalId: string;
+      integrationId: string; companyId: string; existingTargetId?: string | null;
+    }) => {
+      await expect(hasEligibleNativeBinding(tx as never, {
+        integrationCompanyMappingId: nativeInput.integrationCompanyMappingId,
+        resourceId: nativeInput.resourceId,
+        externalId: nativeInput.externalId,
+        integrationId: nativeInput.integrationId,
+        companyId: nativeInput.companyId,
+        targetKind: 'asset',
+        targetId: nativeInput.existingTargetId!,
+      })).resolves.toBe(true);
+      return { targetId, companyId: nativeInput.companyId, change: 'updated' as const };
+    }) };
+    writerRegistry.get.mockReturnValue(new AssetTargetWriter(nativePort));
+    driver.fetchRecords
+      .mockResolvedValueOnce({
+        records: [], hasMore: false, cursor: null, terminal: true,
+        snapshotAt: '2026-07-14T10:00:00.000Z',
+        blockedInputs: [{
+          kind: 'secret_blocked', externalId,
+          message: 'Credential material requires operator documentation.',
+          details: { reasonCode: 'secret_not_exported' },
+        }],
+      })
+      .mockResolvedValueOnce({
+        records: [{ reconstructionInput: assetInput }],
+        hasMore: false, cursor: null, terminal: true,
+        snapshotAt: '2026-07-14T11:00:00.000Z',
+      });
+
+    await expect(service.runMapping({
+      syncRunId: 'blocked-run', integrationCompanyMappingId: 'mapping', resourceId: 'resource',
+      dryRun: false, actorId: 'actor', mode: 'incremental',
+    })).resolves.toMatchObject({ status: 'succeeded', totals: { secretBlocked: 1 } });
+    expect(persistedBinding).toMatchObject({
+      assetId: targetId, state: 'blocked',
+      provenance: expect.objectContaining({ state: 'blocked', ownership: 'breeze' }),
+    });
+
+    provenance.resolveAbsentGaps.mockClear();
+    const recovery = await service.runMapping({
+      syncRunId: 'recovery-run', integrationCompanyMappingId: 'mapping', resourceId: 'resource',
+      dryRun: false, actorId: 'actor', mode: 'incremental',
+    });
+    expect(nativePort.writeFromIntegration).toHaveBeenCalledWith(expect.objectContaining({
+      existingTargetId: targetId,
+    }));
+    expect(recovery).toMatchObject({ status: 'succeeded', totals: { updated: 1 } });
+    expect(persistedBinding).toMatchObject({
+      assetId: targetId, state: 'active', staleSince: null,
+      provenance: expect.objectContaining({ state: 'active', ownership: 'breeze' }),
+    });
+    expect(provenance.resolveAbsentGaps).toHaveBeenCalledTimes(1);
   });
 
   it('caps legal per-record writer gaps and adds one safe overflow observation', async () => {

@@ -268,7 +268,7 @@ export function contextGap(
     });
   }
   const previous = ctx.previousProvenance;
-  if (ctx.existingTargetId && (!previous || previous.ownership !== 'breeze' || previous.state === 'blocked')) {
+  if (ctx.existingTargetId && (!previous || previous.ownership !== 'breeze')) {
     return safeGap('ambiguous', 'The existing target is not owned by an active Breeze binding.', {
       reasonCode: 'manual_ownership',
       candidateCount: 1,

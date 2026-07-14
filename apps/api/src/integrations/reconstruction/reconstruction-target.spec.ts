@@ -92,6 +92,14 @@ describe('reconstruction safety outcomes', () => {
     expect(gap).toMatchObject({ details: { reasonCode: 'manual_ownership' } });
   });
 
+  it('permits an exact Breeze-owned blocked binding to recover on a later valid source record', () => {
+    const blocked = buildProvenance(context(), input, 'blocked');
+    expect(contextGap(context({
+      existingTargetId: ids.target,
+      previousProvenance: blocked,
+    }), input)).toBeNull();
+  });
+
   it('does not replace manual provenance when a bound retry is malformed', () => {
     const manual = {
       ...buildProvenance(context(), input),

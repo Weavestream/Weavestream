@@ -114,7 +114,10 @@ describe('IntegrationSyncMappingWorker DAG execution', () => {
     expect(runner.runMapping).toHaveBeenCalledWith(expect.objectContaining({ mode: 'full' }));
   });
 
-  it('persists an exact-scope missing-dependency gap without resolving gaps or summaries', async () => {
+  it.each([
+    ['real', false],
+    ['dry-run', true],
+  ] as const)('%s dependency skip only persists an exact-scope gap for a real run', async (_label, dryRun) => {
     const runId = '00000000-0000-0000-0000-000000000031';
     const mappingId = '00000000-0000-0000-0000-000000000032';
     const deviceId = '00000000-0000-0000-0000-000000000033';
@@ -155,16 +158,22 @@ describe('IntegrationSyncMappingWorker DAG execution', () => {
     await handle({ data: {
       syncRunId: runId, integrationCompanyMappingId: mappingId,
       resourceId: deviceId, resourceIds: [deviceId, relationId],
+      dryRun,
     } });
-    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
-    expect(provenance.persistGaps).toHaveBeenCalledWith(tx, expect.objectContaining({
-      companyId: 'company', integrationCompanyMappingId: mappingId, resourceId: relationId,
-    }), [expect.objectContaining({
-      externalId: null, kind: 'missing_dependency',
-      details: expect.objectContaining({
-        reasonCode: 'dependency_unavailable', dependencyResourceKey: 'devices',
-      }),
-    })]);
+    if (dryRun) {
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+      expect(provenance.persistGaps).not.toHaveBeenCalled();
+    } else {
+      expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+      expect(provenance.persistGaps).toHaveBeenCalledWith(tx, expect.objectContaining({
+        companyId: 'company', integrationCompanyMappingId: mappingId, resourceId: relationId,
+      }), [expect.objectContaining({
+        externalId: null, kind: 'missing_dependency',
+        details: expect.objectContaining({
+          reasonCode: 'dependency_unavailable', dependencyResourceKey: 'devices',
+        }),
+      })]);
+    }
     expect(provenance.resolveAbsentGaps).not.toHaveBeenCalled();
   });
 

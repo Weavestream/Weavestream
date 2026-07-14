@@ -98,7 +98,7 @@ function binding(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function fullProvenance(state: 'active' | 'stale') {
+function fullProvenance(state: 'active' | 'stale' | 'blocked') {
   return {
     integrationId: ids.integration,
     externalOrgId: 'org-1',
@@ -314,6 +314,26 @@ describe('AssetsService integration system writes', () => {
     expect(tx.relation.deleteMany).not.toHaveBeenCalled();
   });
 
+  it('updates the same native asset from an exact complete blocked Breeze binding', async () => {
+    const target = asset({ name: 'Old Edge' });
+    const { service, tx } = setup({
+      target,
+      binding: binding({
+        state: 'blocked',
+        provenance: fullProvenance('blocked'),
+      }),
+    });
+
+    await expect(service.writeFromIntegration({
+      ...input,
+      existingTargetId: ids.asset,
+    })).resolves.toMatchObject({ targetId: ids.asset, change: 'updated' });
+    expect(tx.asset.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: ids.asset, companyId: ids.company },
+      data: expect.objectContaining({ name: 'Edge 01' }),
+    }));
+  });
+
   it('preserves manual fields and dependent children across a real stale sweep and native restore', async () => {
     const target = asset({
       fieldValues: [{
@@ -341,6 +361,15 @@ describe('AssetsService integration system writes', () => {
     tx.asset.updateMany.mockImplementation(async ({ data }: { data: Record<string, unknown> }) => {
       Object.assign(target, data);
       return { count: 1 };
+    });
+    tx.assetFieldValue.upsert.mockImplementation(async () => {
+      target.fieldValues.splice(0);
+      return {};
+    });
+    tx.assetFieldValue.deleteMany.mockImplementation(async () => {
+      const count = target.fieldValues.length;
+      target.fieldValues.splice(0);
+      return { count };
     });
     tx.upload.updateMany.mockImplementation(async () => {
       const count = manualUploads.length;
@@ -404,6 +433,7 @@ describe('AssetsService integration system writes', () => {
     expect(manualPasswords).toEqual([{ id: 'password-manual' }]);
     expect(manualRelations).toEqual([{ id: 'relation-manual' }]);
     expect(tx.assetFieldValue.upsert).not.toHaveBeenCalled();
+    expect(tx.assetFieldValue.deleteMany).not.toHaveBeenCalled();
     expect(tx.upload.updateMany).not.toHaveBeenCalled();
     expect(tx.password.deleteMany).not.toHaveBeenCalled();
     expect(tx.relation.deleteMany).not.toHaveBeenCalled();

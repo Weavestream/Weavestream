@@ -41,7 +41,7 @@ function client(row: Record<string, unknown>) {
 }
 
 describe('hasEligibleNativeBinding persisted provenance identity', () => {
-  it.each(['active', 'stale'] as const)('accepts complete %s persisted identity', async (state) => {
+  it.each(['active', 'stale', 'blocked'] as const)('accepts complete exact %s persisted identity', async (state) => {
     const row = record({
       state,
       provenance: { ...record().provenance as object, state },
@@ -79,6 +79,28 @@ describe('hasEligibleNativeBinding persisted provenance identity', () => {
     ).resolves.toBe(false);
 
     const eligibleExternalId = 'org-1:devices:asset-2';
+    targetClient.integrationSyncRecord.findFirst.mockResolvedValue(
+      record({
+        externalId: eligibleExternalId,
+        state: 'blocked',
+        provenance: {
+          ...record().provenance as object,
+          externalId: eligibleExternalId,
+          state: 'blocked',
+        },
+      }),
+    );
+    await expect(
+      hasEligibleNativeTargetBinding(targetClient, {
+        integrationCompanyMappingId: identity.integrationCompanyMappingId,
+        resourceId: identity.resourceId,
+        integrationId: identity.integrationId,
+        companyId: identity.companyId,
+        targetKind: identity.targetKind,
+        targetId: identity.targetId,
+      }),
+    ).resolves.toBe(false);
+
     targetClient.integrationSyncRecord.findFirst.mockResolvedValue(
       record({
         externalId: eligibleExternalId,

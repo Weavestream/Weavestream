@@ -55,7 +55,7 @@ export async function hasEligibleNativeBinding(
       resource: { select: { integrationId: true, resourceKey: true } },
     },
   });
-  return isEligibleNativeBinding(record, input);
+  return isEligibleNativeBinding(record, input, true);
 }
 
 export async function hasEligibleNativeTargetBinding(
@@ -91,13 +91,14 @@ export async function hasEligibleNativeTargetBinding(
     },
   });
   return record
-    ? isEligibleNativeBinding(record, { ...input, externalId: String(record.externalId) })
+    ? isEligibleNativeBinding(record, { ...input, externalId: String(record.externalId) }, false)
     : false;
 }
 
 function isEligibleNativeBinding(
   record: Record<string, unknown> | null,
   input: Parameters<typeof hasEligibleNativeBinding>[1],
+  allowBlocked: boolean,
 ): boolean {
   if (!record) return false;
   const provenance = record.provenance;
@@ -109,7 +110,8 @@ function isEligibleNativeBinding(
   const source = provenance as Record<string, unknown>;
   const mappingIdentity = companyMapping as Record<string, unknown>;
   const resourceIdentity = resource as Record<string, unknown>;
-  const eligibleState = record.state === 'active' || record.state === 'stale';
+  const eligibleState = record.state === 'active' || record.state === 'stale' ||
+    (allowBlocked && record.state === 'blocked');
   return eligibleState &&
     source.ownership === 'breeze' &&
     source.state === record.state &&

@@ -164,9 +164,11 @@ export class IntegrationSyncMappingWorker implements OnModuleDestroy {
         );
         let outcome: MappingRunOutcome;
         if (unavailable.length > 0) {
-          await this.persistDependencyGaps(
-            mapping.companyId, mapping.id, resource.id, unavailable,
-          );
+          if (!payload.dryRun) {
+            await this.persistDependencyGaps(
+              mapping.companyId, mapping.id, resource.id, unavailable,
+            );
+          }
           outcome = dependencySkipOutcome(resource.resourceKey, unavailable, mapping.companyId);
         } else {
           outcome = await this.runner.runMapping({
