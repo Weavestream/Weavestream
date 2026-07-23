@@ -809,6 +809,9 @@ export class IntegrationsService {
       where: {
         companyMapping: { integrationId },
         resource: { integrationId },
+        // Cleared (non-participant) tombstones keep the evaluation clock
+        // alive but are not scorecards.
+        clearedAt: null,
         ...(query.mappingId ? { integrationCompanyMappingId: query.mappingId } : {}),
         ...(query.resourceId ? { resourceId: query.resourceId } : {}),
       },

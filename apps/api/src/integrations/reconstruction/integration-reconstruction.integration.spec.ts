@@ -1316,6 +1316,456 @@ describeIfDb('Breeze reconstruction disposable PostgreSQL dossier', () => {
       } },
     })).resolves.toMatchObject({ cursor: null, authoritative: true });
   }, 120_000);
+
+  it('never lets an older evaluation that finishes later move the scorecard or gaps backward', async () => {
+    const completeness = new IntegrationCompletenessService(prisma as never);
+    const older = new Date('2026-07-20T10:00:00.000Z');
+    const newer = new Date('2026-07-20T11:00:00.000Z');
+    const newest = new Date('2026-07-20T12:00:00.000Z');
+    const scopeAt = (evaluatedAt: Date) => ({
+      companyId: ids.companyA,
+      integrationCompanyMappingId: ids.mappingA,
+      resourceId: ids.scripts,
+      evaluatedAt,
+    });
+    const summaryWhere = { integrationCompanyMappingId_summaryKey: {
+      integrationCompanyMappingId: ids.mappingA,
+      summaryKey: ids.scripts,
+    } };
+    const completenessGaps = () => prisma.integrationReconstructionGap.findMany({
+      where: {
+        integrationCompanyMappingId: ids.mappingA,
+        resourceId: ids.scripts,
+        dedupeKey: { startsWith: 'completeness:' },
+      },
+      orderBy: { dedupeKey: 'asc' },
+      select: { id: true, lastSeenAt: true, resolvedAt: true, firstSeenAt: true },
+    });
+    const provenanceScopeAt = (observedAt: Date) => ({
+      companyId: ids.companyA,
+      integrationCompanyMappingId: ids.mappingA,
+      resourceId: ids.scripts,
+      observedAt,
+    });
+    const observation = {
+      externalId: `${ORG_A}:scripts:script-9`,
+      syncRecordId: null,
+      kind: 'validation' as const,
+      message: 'Input requires operator review.',
+      details: { reasonCode: 'schema_mismatch' },
+    };
+    const validationGap = () => prisma.integrationReconstructionGap.findFirstOrThrow({
+      where: { integrationCompanyMappingId: ids.mappingA, resourceId: ids.scripts, kind: 'validation' },
+    });
+
+    // A provenance gap observed before any authoritative evaluation
+    // exists inserts freely — seeding the scope's watermark tombstone
+    // as its serialization point in the same transaction. The seed's
+    // clock is the neutral epoch: non-terminal pages never advance the
+    // authoritative watermark.
+    await prisma.$transaction((tx) => provenance.persistGaps(tx, provenanceScopeAt(older), [observation]));
+    await expect(validationGap()).resolves.toMatchObject({ resolvedAt: null, lastSeenAt: older });
+    await expect(prisma.integrationReconstructionSummary.findUniqueOrThrow({ where: summaryWhere }))
+      .resolves.toMatchObject({ evaluatedAt: new Date(0), clearedAt: older });
+
+    // The newer evaluation of an empty scripts scope commits first.
+    const fresh = await prisma.$transaction((tx) => completeness.recalculate(tx, scopeAt(newer)));
+    expect(fresh.applied).toBe(true);
+    expect(fresh.counts.missing).toBe(10);
+    const summaryAfterNewer = await prisma.integrationReconstructionSummary
+      .findUniqueOrThrow({ where: summaryWhere });
+    expect(summaryAfterNewer.evaluatedAt).toEqual(newer);
+    const gapsAfterNewer = await completenessGaps();
+    expect(gapsAfterNewer).toHaveLength(10);
+    expect(gapsAfterNewer.every((gap) => gap.resolvedAt === null)).toBe(true);
+
+    // The older run replays after it: nothing may move backward.
+    const stale = await prisma.$transaction((tx) => completeness.recalculate(tx, scopeAt(older)));
+    expect(stale.applied).toBe(false);
+    await expect(prisma.integrationReconstructionSummary.findUniqueOrThrow({ where: summaryWhere }))
+      .resolves.toMatchObject({ evaluatedAt: newer, counts: summaryAfterNewer.counts as object });
+    await expect(completenessGaps()).resolves.toEqual(gapsAfterNewer);
+
+    // A stale non-participant clear may not delete the newer scorecard
+    // or resolve the gaps the newer evaluation refreshed.
+    await prisma.$transaction((tx) => completeness.clearNonParticipant(tx, scopeAt(older)));
+    await expect(prisma.integrationReconstructionSummary.findUniqueOrThrow({ where: summaryWhere }))
+      .resolves.toMatchObject({ evaluatedAt: newer });
+    await expect(completenessGaps()).resolves.toEqual(gapsAfterNewer);
+
+    // Provenance-side gaps follow the same clock: a page write from an
+    // older run cannot reopen a gap a newer sweep resolved, while a
+    // genuinely newer observation still reopens it.
+    await prisma.$transaction((tx) => provenance.resolveAbsentGaps(tx, provenanceScopeAt(newer)));
+    await expect(validationGap()).resolves.toMatchObject({ resolvedAt: newer });
+    await prisma.$transaction((tx) => provenance.persistGaps(tx, provenanceScopeAt(older), [observation]));
+    await expect(validationGap()).resolves.toMatchObject({ resolvedAt: newer, lastSeenAt: older });
+    await prisma.$transaction((tx) => provenance.persistGaps(tx, provenanceScopeAt(newest), [observation]));
+    await expect(validationGap()).resolves
+      .toMatchObject({ resolvedAt: null, lastSeenAt: newest, firstSeenAt: older });
+
+    // A genuinely newer non-participant clear still wins: the scorecard
+    // becomes a tombstone (never deleted — `evaluatedAt` must survive as
+    // the scope's evaluation clock), completeness gaps are resolved,
+    // provenance gaps untouched.
+    await prisma.$transaction((tx) => completeness.clearNonParticipant(tx, scopeAt(newest)));
+    await expect(prisma.integrationReconstructionSummary.findUniqueOrThrow({ where: summaryWhere }))
+      .resolves.toMatchObject({ clearedAt: newest, evaluatedAt: newest, counts: {} });
+    const clearedGaps = await completenessGaps();
+    expect(clearedGaps.every((gap) => gap.resolvedAt?.getTime() === newest.getTime())).toBe(true);
+    await expect(validationGap()).resolves.toMatchObject({ resolvedAt: null });
+
+    // The tombstone keeps the clock: a stale recalculation arriving after
+    // the clear must not resurrect a scorecard or reopen resolved gaps.
+    const afterClear = await prisma.$transaction((tx) => completeness.recalculate(tx, scopeAt(older)));
+    expect(afterClear.applied).toBe(false);
+    await expect(prisma.integrationReconstructionSummary.findUniqueOrThrow({ where: summaryWhere }))
+      .resolves.toMatchObject({ clearedAt: newest, evaluatedAt: newest });
+    await expect(completenessGaps()).resolves.toEqual(clearedGaps);
+
+    // The tombstone is also the insert watermark: a first observation
+    // from a stale snapshot cannot create an open gap a newer completed
+    // sweep already disproved, while a genuinely newer observation can.
+    const beyondNewest = new Date('2026-07-20T13:00:00.000Z');
+    const lateObservation = {
+      externalId: `${ORG_A}:scripts:script-late`,
+      syncRecordId: null,
+      kind: 'validation' as const,
+      message: 'Late observation requires operator review.',
+      details: { reasonCode: 'schema_mismatch' },
+    };
+    await prisma.$transaction((tx) => provenance.persistGaps(tx, provenanceScopeAt(older), [lateObservation]));
+    await expect(prisma.integrationReconstructionGap.count({
+      where: {
+        integrationCompanyMappingId: ids.mappingA,
+        resourceId: ids.scripts,
+        message: 'Late observation requires operator review.',
+      },
+    })).resolves.toBe(0);
+    await prisma.$transaction((tx) => provenance.persistGaps(tx, provenanceScopeAt(beyondNewest), [lateObservation]));
+    await expect(prisma.integrationReconstructionGap.findFirstOrThrow({
+      where: {
+        integrationCompanyMappingId: ids.mappingA,
+        resourceId: ids.scripts,
+        message: 'Late observation requires operator review.',
+      },
+    })).resolves.toMatchObject({
+      resolvedAt: null,
+      firstSeenAt: beyondNewest,
+      lastSeenAt: beyondNewest,
+      details: { reasonCode: 'schema_mismatch' },
+    });
+  }, 30_000);
+
+  it('queues overlapping transactions on the scope watermark lock in both interleavings', async () => {
+    const completeness = new IntegrationCompletenessService(prisma as never);
+    const compScopeAt = (evaluatedAt: Date) => ({
+      companyId: ids.companyA,
+      integrationCompanyMappingId: ids.mappingA,
+      resourceId: ids.scripts,
+      evaluatedAt,
+    });
+    const provScopeAt = (observedAt: Date) => ({
+      companyId: ids.companyA,
+      integrationCompanyMappingId: ids.mappingA,
+      resourceId: ids.scripts,
+      observedAt,
+    });
+    const observationAt = (externalRef: string, message: string) => ({
+      externalId: `${ORG_A}:scripts:${externalRef}`,
+      syncRecordId: null,
+      kind: 'validation' as const,
+      message,
+      details: { reasonCode: 'schema_mismatch' },
+    });
+    const gapByMessage = (message: string) => prisma.integrationReconstructionGap.findFirst({
+      where: {
+        integrationCompanyMappingId: ids.mappingA,
+        resourceId: ids.scripts,
+        message,
+      },
+    });
+    const txOptions = { maxWait: 10_000, timeout: 20_000 };
+    const settle = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+    // Seed the watermark so the scope has a lockable summary row.
+    const base = new Date('2026-07-21T10:00:00.000Z');
+    await prisma.$transaction((tx) => completeness.recalculate(tx, compScopeAt(base)));
+
+    // Interleaving 1: a newer sweep holds the watermark lock,
+    // uncommitted. A stale first observation must queue behind it and
+    // then see the committed advanced watermark — never the stale
+    // pre-sweep value its snapshot would have shown without the lock.
+    const older = new Date('2026-07-21T10:30:00.000Z');
+    const newer = new Date('2026-07-21T11:00:00.000Z');
+    const staleMessage = 'Overlap observation requires operator review.';
+    const order: string[] = [];
+    let releaseSweep!: () => void;
+    const sweepGate = new Promise<void>((resolve) => { releaseSweep = resolve; });
+    let markSweepParked!: () => void;
+    const sweepParked = new Promise<void>((resolve) => { markSweepParked = resolve; });
+    const sweep = prisma.$transaction(async (tx) => {
+      await provenance.resolveAbsentGaps(tx, provScopeAt(newer));
+      await completeness.recalculate(tx, compScopeAt(newer));
+      markSweepParked();
+      await sweepGate;
+    }, txOptions).then(() => order.push('sweep-committed'));
+    await sweepParked;
+    const staleInsert = prisma.$transaction(
+      (tx) => provenance.persistGaps(tx, provScopeAt(older), [observationAt('script-overlap-stale', staleMessage)]),
+      txOptions,
+    ).then(() => order.push('stale-insert-committed'));
+    await settle(400);
+    // Still blocked on the watermark lock: without it, the stale insert
+    // would already have committed an open gap the in-flight sweep can
+    // no longer see.
+    expect(order).toEqual([]);
+    releaseSweep();
+    await Promise.all([sweep, staleInsert]);
+    expect(order).toEqual(['sweep-committed', 'stale-insert-committed']);
+    await expect(gapByMessage(staleMessage)).resolves.toBeNull();
+
+    // Interleaving 2: the observation holds the lock first, so the
+    // terminal sweep queues behind it and its resolution scan sees the
+    // committed row instead of missing a mid-flight insert.
+    const observed = new Date('2026-07-21T12:00:00.000Z');
+    const sweepAt = new Date('2026-07-21T13:00:00.000Z');
+    const freshMessage = 'Queued observation requires operator review.';
+    const secondOrder: string[] = [];
+    let releaseInsert!: () => void;
+    const insertGate = new Promise<void>((resolve) => { releaseInsert = resolve; });
+    let markInsertParked!: () => void;
+    const insertParked = new Promise<void>((resolve) => { markInsertParked = resolve; });
+    const heldInsert = prisma.$transaction(async (tx) => {
+      await provenance.persistGaps(tx, provScopeAt(observed), [observationAt('script-overlap-queued', freshMessage)]);
+      markInsertParked();
+      await insertGate;
+    }, txOptions).then(() => secondOrder.push('insert-committed'));
+    await insertParked;
+    const trailingSweep = prisma.$transaction(
+      (tx) => provenance.resolveAbsentGaps(tx, provScopeAt(sweepAt)),
+      txOptions,
+    ).then(() => secondOrder.push('sweep-committed'));
+    await settle(400);
+    expect(secondOrder).toEqual([]);
+    releaseInsert();
+    await Promise.all([heldInsert, trailingSweep]);
+    expect(secondOrder).toEqual(['insert-committed', 'sweep-committed']);
+    await expect(gapByMessage(freshMessage)).resolves.toMatchObject({
+      resolvedAt: sweepAt,
+      lastSeenAt: observed,
+    });
+  }, 30_000);
+
+  it('serializes even the very first evaluations of a scope by seeding the watermark row', async () => {
+    const completeness = new IntegrationCompletenessService(prisma as never);
+    const older = new Date('2026-07-22T10:00:00.000Z');
+    const newer = new Date('2026-07-22T11:00:00.000Z');
+    const scopeFor = (resourceId: string) => ({
+      comp: (evaluatedAt: Date) => ({
+        companyId: ids.companyA,
+        integrationCompanyMappingId: ids.mappingA,
+        resourceId,
+        evaluatedAt,
+      }),
+      prov: (observedAt: Date) => ({
+        companyId: ids.companyA,
+        integrationCompanyMappingId: ids.mappingA,
+        resourceId,
+        observedAt,
+      }),
+      summaryWhere: { integrationCompanyMappingId_summaryKey: {
+        integrationCompanyMappingId: ids.mappingA,
+        summaryKey: resourceId,
+      } },
+      gapByMessage: (message: string) => prisma.integrationReconstructionGap.findFirst({
+        where: { integrationCompanyMappingId: ids.mappingA, resourceId, message },
+      }),
+    });
+    const observationAt = (externalRef: string, message: string) => ({
+      externalId: `${ORG_A}:cold:${externalRef}`,
+      syncRecordId: null,
+      kind: 'validation' as const,
+      message,
+      details: { reasonCode: 'schema_mismatch' },
+    });
+    const txOptions = { maxWait: 10_000, timeout: 20_000 };
+    const settle = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+    // Interleaving 1, virgin scope: the first-ever sweep seeds and holds
+    // the watermark; a concurrent stale first observation must queue
+    // behind it and then skip against the committed advanced watermark.
+    const cold = scopeFor(ids.scripts);
+    const staleMessage = 'Cold-start observation requires operator review.';
+    const order: string[] = [];
+    let releaseSweep!: () => void;
+    const sweepGate = new Promise<void>((resolve) => { releaseSweep = resolve; });
+    let markSweepParked!: () => void;
+    const sweepParked = new Promise<void>((resolve) => { markSweepParked = resolve; });
+    const sweep = prisma.$transaction(async (tx) => {
+      await provenance.resolveAbsentGaps(tx, cold.prov(newer));
+      await completeness.recalculate(tx, cold.comp(newer));
+      markSweepParked();
+      await sweepGate;
+    }, txOptions).then(() => order.push('sweep-committed'));
+    await sweepParked;
+    const staleInsert = prisma.$transaction(
+      (tx) => provenance.persistGaps(tx, cold.prov(older), [observationAt('stale', staleMessage)]),
+      txOptions,
+    ).then(() => order.push('stale-insert-committed'));
+    await settle(400);
+    expect(order).toEqual([]);
+    releaseSweep();
+    await Promise.all([sweep, staleInsert]);
+    expect(order).toEqual(['sweep-committed', 'stale-insert-committed']);
+    await expect(cold.gapByMessage(staleMessage)).resolves.toBeNull();
+    await expect(prisma.integrationReconstructionSummary.findUniqueOrThrow({ where: cold.summaryWhere }))
+      .resolves.toMatchObject({ evaluatedAt: newer, clearedAt: null });
+
+    // Interleaving 2, second virgin scope: the first observation seeds
+    // and holds the watermark; the first-ever sweep queues behind the
+    // uncommitted seed (its own seed insert waits out the winner) and
+    // then resolves the committed observation.
+    const cold2 = scopeFor(ids.deviceRelationships);
+    const queuedMessage = 'Cold-start queued observation requires operator review.';
+    const secondOrder: string[] = [];
+    let releaseInsert!: () => void;
+    const insertGate = new Promise<void>((resolve) => { releaseInsert = resolve; });
+    let markInsertParked!: () => void;
+    const insertParked = new Promise<void>((resolve) => { markInsertParked = resolve; });
+    const heldInsert = prisma.$transaction(async (tx) => {
+      await provenance.persistGaps(tx, cold2.prov(older), [observationAt('queued', queuedMessage)]);
+      markInsertParked();
+      await insertGate;
+    }, txOptions).then(() => secondOrder.push('insert-committed'));
+    await insertParked;
+    const trailingSweep = prisma.$transaction(
+      (tx) => provenance.resolveAbsentGaps(tx, cold2.prov(newer)),
+      txOptions,
+    ).then(() => secondOrder.push('sweep-committed'));
+    await settle(400);
+    expect(secondOrder).toEqual([]);
+    releaseInsert();
+    await Promise.all([heldInsert, trailingSweep]);
+    expect(secondOrder).toEqual(['insert-committed', 'sweep-committed']);
+    await expect(cold2.gapByMessage(queuedMessage)).resolves.toMatchObject({
+      resolvedAt: newer,
+      lastSeenAt: older,
+    });
+    // The seed tombstone persists as the scope's serialization row —
+    // invisible to readers, carrying the neutral epoch clock so it can
+    // never reject a later terminal evaluation.
+    await expect(prisma.integrationReconstructionSummary.findUniqueOrThrow({ where: cold2.summaryWhere }))
+      .resolves.toMatchObject({ evaluatedAt: new Date(0), clearedAt: older });
+  }, 30_000);
+
+  it('lets a failed non-terminal page seed the lock without advancing the authoritative clock', async () => {
+    const completeness = new IntegrationCompletenessService(prisma as never);
+    // A run against a newer (possibly clock-skewed) snapshot observes a
+    // gap on a virgin scope, seeds the watermark, and then the run dies
+    // before any terminal evaluation.
+    const failedRunSnapshot = new Date('2026-07-23T12:00:00.000Z');
+    const validRunSnapshot = new Date('2026-07-23T09:00:00.000Z');
+    const scopeIds = {
+      companyId: ids.companyA,
+      integrationCompanyMappingId: ids.mappingA,
+      resourceId: ids.scripts,
+    };
+    const summaryWhere = { integrationCompanyMappingId_summaryKey: {
+      integrationCompanyMappingId: ids.mappingA,
+      summaryKey: ids.scripts,
+    } };
+    await prisma.$transaction((tx) => provenance.persistGaps(
+      tx,
+      { ...scopeIds, observedAt: failedRunSnapshot },
+      [{
+        externalId: `${ORG_A}:scripts:script-doomed`,
+        syncRecordId: null,
+        kind: 'validation' as const,
+        message: 'Doomed-run observation requires operator review.',
+        details: { reasonCode: 'schema_mismatch' },
+      }],
+    ));
+
+    // A later legitimate authoritative run with an OLDER snapshot must
+    // still claim the scorecard: the seed has no clock authority.
+    const result = await prisma.$transaction(async (tx) => {
+      await provenance.resolveAbsentGaps(tx, { ...scopeIds, observedAt: validRunSnapshot });
+      return completeness.recalculate(tx, { ...scopeIds, evaluatedAt: validRunSnapshot });
+    });
+    expect(result.applied).toBe(true);
+    await expect(prisma.integrationReconstructionSummary.findUniqueOrThrow({ where: summaryWhere }))
+      .resolves.toMatchObject({ evaluatedAt: validRunSnapshot, clearedAt: null });
+    // The doomed run's observation keeps its own row-level recency: a
+    // sweep from an older snapshot must not resolve it.
+    await expect(prisma.integrationReconstructionGap.findFirstOrThrow({
+      where: { ...scopeIds, message: 'Doomed-run observation requires operator review.' },
+    })).resolves.toMatchObject({ resolvedAt: null, lastSeenAt: failedRunSnapshot });
+  }, 30_000);
+
+  it('fails closed on inconsistent tenant scope instead of locking or seeding across companies', async () => {
+    const completeness = new IntegrationCompletenessService(prisma as never);
+    const evaluatedAt = new Date('2026-07-23T10:00:00.000Z');
+    const observedAt = new Date('2026-07-23T10:30:00.000Z');
+    const observation = {
+      externalId: `${ORG_A}:scripts:script-cross-tenant`,
+      syncRecordId: null,
+      kind: 'validation' as const,
+      message: 'Cross-tenant observation must never persist.',
+      details: { reasonCode: 'schema_mismatch' },
+    };
+    // Legitimate watermark for company A's mapping.
+    await prisma.$transaction((tx) => completeness.recalculate(tx, {
+      companyId: ids.companyA,
+      integrationCompanyMappingId: ids.mappingA,
+      resourceId: ids.scripts,
+      evaluatedAt,
+    }));
+    const summaryBefore = await prisma.integrationReconstructionSummary.findUniqueOrThrow({
+      where: { integrationCompanyMappingId_summaryKey: {
+        integrationCompanyMappingId: ids.mappingA,
+        summaryKey: ids.scripts,
+      } },
+    });
+
+    // Company B's id paired with company A's mapping: the scoped probe
+    // finds nothing, the seed's mapping-binding guard blocks, and the
+    // scoped re-lock fails closed — no foreign row locked, nothing
+    // written.
+    await expect(prisma.$transaction((tx) => provenance.persistGaps(tx, {
+      companyId: ids.companyB,
+      integrationCompanyMappingId: ids.mappingA,
+      resourceId: ids.scripts,
+      observedAt,
+    }, [observation]))).rejects.toThrow('Reconstruction watermark scope mismatch.');
+    await expect(prisma.integrationReconstructionGap.count({
+      where: { message: observation.message },
+    })).resolves.toBe(0);
+    await expect(prisma.integrationReconstructionSummary.findUniqueOrThrow({
+      where: { integrationCompanyMappingId_summaryKey: {
+        integrationCompanyMappingId: ids.mappingA,
+        summaryKey: ids.scripts,
+      } },
+    })).resolves.toMatchObject({
+      companyId: ids.companyA,
+      evaluatedAt: summaryBefore.evaluatedAt,
+      updatedAt: summaryBefore.updatedAt,
+    });
+
+    // Same inconsistent pairing on a scope with no summary row at all:
+    // the seed must not materialize a cross-scope row either.
+    await expect(prisma.$transaction((tx) => provenance.persistGaps(tx, {
+      companyId: ids.companyB,
+      integrationCompanyMappingId: ids.mappingA,
+      resourceId: ids.deviceRelationships,
+      observedAt,
+    }, [observation]))).rejects.toThrow('Reconstruction watermark scope mismatch.');
+    await expect(prisma.integrationReconstructionSummary.findUnique({
+      where: { integrationCompanyMappingId_summaryKey: {
+        integrationCompanyMappingId: ids.mappingA,
+        summaryKey: ids.deviceRelationships,
+      } },
+    })).resolves.toBeNull();
+  }, 30_000);
 });
 
 async function buildAssetWriter(prisma: PrismaClient, audit: AuditLogService) {

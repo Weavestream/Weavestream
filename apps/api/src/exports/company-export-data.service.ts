@@ -1157,7 +1157,9 @@ export class CompanyExportDataService {
   ): Promise<CompanyExportData['reconstruction']> {
     const [summaryRows, gapRows] = await Promise.all([
       this.prisma.integrationReconstructionSummary.findMany({
-        where: { companyId, resourceId: { not: null } },
+        // Cleared (non-participant) tombstones keep the evaluation clock
+        // alive but are not scorecards.
+        where: { companyId, resourceId: { not: null }, clearedAt: null },
         include: {
           companyMapping: { select: { companyId: true, integrationId: true } },
           resource: { select: { integrationId: true, resourceKey: true } },

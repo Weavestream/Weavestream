@@ -48,14 +48,26 @@ describe('IntegrationCompletenessService', () => {
       synchronizationError: 1,
     });
     expect(result.items.map((item) => item.capability)).toEqual([...COMPLETENESS_CAPABILITIES]);
-    expect(prisma.integrationReconstructionSummary.upsert).toHaveBeenCalledWith(expect.objectContaining({
-      where: { integrationCompanyMappingId_summaryKey: {
+    expect(result.applied).toBe(true);
+    expect(prisma.integrationReconstructionSummary.updateMany).toHaveBeenCalledWith({
+      where: {
+        companyId: ids.company,
         integrationCompanyMappingId: ids.mapping,
         summaryKey: ids.resource,
-      } },
-      create: expect.objectContaining({ counts: result.counts }),
-      update: expect.objectContaining({ counts: result.counts }),
-    }));
+        evaluatedAt: { lte: new Date('2026-07-14T12:00:00.000Z') },
+      },
+      data: expect.objectContaining({
+        counts: result.counts,
+        evaluatedAt: new Date('2026-07-14T12:00:00.000Z'),
+        clearedAt: null,
+      }),
+    });
+    // Lock-order contract: the summary (scope clock) is acquired before
+    // any gap write on every completeness path.
+    const summaryOrder = prisma.integrationReconstructionSummary.updateMany.mock
+      .invocationCallOrder[0]!;
+    const firstGapOrder = prisma.$executeRaw.mock.invocationCallOrder[0]!;
+    expect(summaryOrder).toBeLessThan(firstGapOrder);
   });
 
   it('lets current synchronized evidence win, keeps manual distinct, and never treats stale as current', async () => {
@@ -385,7 +397,14 @@ describe('IntegrationCompletenessService', () => {
     const service = new IntegrationCompletenessService(prisma as never);
     await service.recalculate(prisma as never, scope());
 
-    expect(prisma.integrationReconstructionGap.upsert).toHaveBeenCalledTimes(10);
+    expect(prisma.$executeRaw).toHaveBeenCalledTimes(10);
+    for (const [strings, ...values] of prisma.$executeRaw.mock.calls) {
+      const sql = (strings as readonly string[]).join('?');
+      expect(sql).toContain('ON CONFLICT');
+      expect(sql).toContain('WHERE NOT EXISTS');
+      expect(values.some((value: unknown) =>
+        typeof value === 'string' && /^completeness:[0-9a-f]{64}$/.test(value))).toBe(true);
+    }
     expect(prisma.integrationReconstructionGap.updateMany).toHaveBeenCalledWith(expect.objectContaining({
       where: expect.objectContaining({
         companyId: ids.company,
@@ -396,8 +415,70 @@ describe('IntegrationCompletenessService', () => {
         lastSeenAt: { lt: scope().evaluatedAt },
       }),
     }));
-    expect(JSON.stringify(prisma.integrationReconstructionGap.upsert.mock.calls))
+    expect(JSON.stringify(prisma.$executeRaw.mock.calls))
       .not.toMatch(/password|token|secret-value/i);
+    expect(JSON.stringify(prisma.integrationReconstructionGap.updateMany.mock.calls))
+      .not.toMatch(/password|token|secret-value/i);
+  });
+
+  it('skips every gap write when a strictly newer evaluation already holds the scorecard', async () => {
+    const prisma = completenessPrisma({
+      activeAssetFields: [], activeArticles: [], manualAssetFields: [],
+      staleAssetFields: [], staleArticles: [], gaps: [],
+    });
+    prisma.integrationReconstructionSummary.updateMany.mockResolvedValue({ count: 0 });
+    prisma.integrationReconstructionSummary.createMany.mockResolvedValue({ count: 0 });
+    const result = await new IntegrationCompletenessService(prisma as never)
+      .recalculate(prisma as never, scope());
+
+    expect(result.applied).toBe(false);
+    expect(result.counts.missing).toBe(10);
+    // guarded write, lost insert race, one guarded retry — then stop
+    expect(prisma.integrationReconstructionSummary.updateMany).toHaveBeenCalledTimes(2);
+    expect(prisma.integrationReconstructionSummary.createMany).toHaveBeenCalledWith(
+      expect.objectContaining({ skipDuplicates: true }),
+    );
+    // a stale evaluation must not reopen, refresh, resolve, or create gaps
+    expect(prisma.$executeRaw).not.toHaveBeenCalled();
+    expect(prisma.integrationReconstructionGap.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('recovers the scorecard through one guarded retry after losing a concurrent insert race', async () => {
+    const prisma = completenessPrisma({
+      activeAssetFields: [], activeArticles: [], manualAssetFields: [],
+      staleAssetFields: [], staleArticles: [], gaps: [],
+    });
+    prisma.integrationReconstructionSummary.updateMany
+      .mockResolvedValueOnce({ count: 0 })
+      .mockResolvedValueOnce({ count: 1 });
+    prisma.integrationReconstructionSummary.createMany.mockResolvedValue({ count: 0 });
+    const result = await new IntegrationCompletenessService(prisma as never)
+      .recalculate(prisma as never, scope());
+
+    expect(result.applied).toBe(true);
+    expect(prisma.integrationReconstructionSummary.updateMany).toHaveBeenCalledTimes(2);
+    expect(prisma.$executeRaw).toHaveBeenCalledTimes(10);
+  });
+
+  it('carries the recency guard on every gap write and retries once after a lost gap insert race', async () => {
+    const prisma = completenessPrisma({
+      activeAssetFields: [], activeArticles: [], manualAssetFields: [],
+      staleAssetFields: [], staleArticles: [], gaps: [],
+    });
+    prisma.$executeRaw.mockResolvedValue(0);
+    await new IntegrationCompletenessService(prisma as never)
+      .recalculate(prisma as never, scope());
+
+    const guarded = prisma.integrationReconstructionGap.updateMany.mock.calls
+      .filter(([arg]: [{ where: { dedupeKey?: unknown } }]) => typeof arg.where.dedupeKey === 'string');
+    expect(guarded).toHaveLength(20);
+    for (const [arg] of guarded) {
+      expect(arg.where.OR).toEqual([
+        { resolvedAt: null, lastSeenAt: { lte: scope().evaluatedAt } },
+        { resolvedAt: { lte: scope().evaluatedAt } },
+      ]);
+      expect(arg.data).toMatchObject({ resolvedAt: null, lastSeenAt: scope().evaluatedAt });
+    }
   });
 
   it('does not replace the last-known-good summary when collection fails', async () => {
@@ -409,43 +490,72 @@ describe('IntegrationCompletenessService', () => {
     const service = new IntegrationCompletenessService(prisma as never);
 
     await expect(service.recalculate(prisma as never, scope())).rejects.toThrow('temporary database failure');
-    expect(prisma.integrationReconstructionSummary.upsert).not.toHaveBeenCalled();
+    expect(prisma.integrationReconstructionSummary.updateMany).not.toHaveBeenCalled();
+    expect(prisma.integrationReconstructionSummary.createMany).not.toHaveBeenCalled();
     expect(prisma.integrationReconstructionGap.updateMany).not.toHaveBeenCalled();
   });
 
-  it('clears the scorecard and resolves completeness gaps for non-participating resources', async () => {
+  it('tombstones the scorecard and resolves completeness gaps for non-participating resources', async () => {
     const prisma = completenessPrisma({
       activeAssetFields: [], activeArticles: [], manualAssetFields: [],
       staleAssetFields: [], staleArticles: [], gaps: [],
     });
-    const tx = {
-      ...prisma,
-      integrationReconstructionSummary: { deleteMany: jest.fn() },
-    };
     const service = new IntegrationCompletenessService(prisma as never);
-    await service.clearNonParticipant(tx as never, scope());
+    await service.clearNonParticipant(prisma as never, scope());
 
-    expect(tx.integrationReconstructionGap.updateMany).toHaveBeenCalledWith({
+    // The summary is tombstoned in place (never deleted): `evaluatedAt`
+    // must survive as the scope's evaluation clock.
+    expect(prisma.integrationReconstructionSummary.updateMany).toHaveBeenCalledWith({
+      where: {
+        companyId: ids.company,
+        integrationCompanyMappingId: ids.mapping,
+        summaryKey: ids.resource,
+        evaluatedAt: { lte: scope().evaluatedAt },
+      },
+      data: {
+        counts: {},
+        evaluatedAt: scope().evaluatedAt,
+        lastSuccessfulSyncAt: scope().evaluatedAt,
+        clearedAt: scope().evaluatedAt,
+      },
+    });
+    expect(prisma.integrationReconstructionGap.updateMany).toHaveBeenCalledWith({
       where: {
         companyId: ids.company,
         integrationCompanyMappingId: ids.mapping,
         resourceId: ids.resource,
         resolvedAt: null,
         dedupeKey: { startsWith: 'completeness:' },
+        lastSeenAt: { lte: scope().evaluatedAt },
       },
       data: { resolvedAt: scope().evaluatedAt },
     });
-    expect(tx.integrationReconstructionSummary.deleteMany).toHaveBeenCalledWith({
-      where: {
-        companyId: ids.company,
-        integrationCompanyMappingId: ids.mapping,
-        resourceId: ids.resource,
-        summaryKey: ids.resource,
-      },
+    // Lock-order contract with recalculate: the summary row is acquired
+    // before any gap row on every completeness path, so concurrent mixed
+    // paths queue on the summary instead of deadlocking.
+    const summaryOrder = prisma.integrationReconstructionSummary.updateMany.mock
+      .invocationCallOrder[0]!;
+    const gapOrder = prisma.integrationReconstructionGap.updateMany.mock
+      .invocationCallOrder[0]!;
+    expect(summaryOrder).toBeLessThan(gapOrder);
+    // Only the scoped scorecard artifacts are touched — no gap creation
+    // for a resource that never participates.
+    expect(prisma.$executeRaw).not.toHaveBeenCalled();
+  });
+
+  it('leaves gaps a newer evaluation refreshed untouched when a stale clear replays', async () => {
+    const prisma = completenessPrisma({
+      activeAssetFields: [], activeArticles: [], manualAssetFields: [],
+      staleAssetFields: [], staleArticles: [], gaps: [],
     });
-    // Only the scoped scorecard artifacts are touched — no upserts, no
-    // record or gap creation for a resource that never participates.
-    expect(tx.integrationReconstructionGap.upsert).not.toHaveBeenCalled();
+    prisma.integrationReconstructionSummary.updateMany.mockResolvedValue({ count: 0 });
+    prisma.integrationReconstructionSummary.createMany.mockResolvedValue({ count: 0 });
+    const service = new IntegrationCompletenessService(prisma as never);
+    await service.clearNonParticipant(prisma as never, scope());
+
+    expect(prisma.integrationReconstructionSummary.updateMany).toHaveBeenCalledTimes(2);
+    expect(prisma.integrationReconstructionGap.updateMany).not.toHaveBeenCalled();
+    expect(prisma.$executeRaw).not.toHaveBeenCalled();
   });
 });
 
@@ -521,10 +631,16 @@ function completenessPrisma(input: {
           ...(gap.sourceResource ? { sourceResource: gap.sourceResource } : {}),
         },
       }))),
-      upsert: jest.fn(),
-      updateMany: jest.fn(),
+      // Fresh-state default: the guarded update finds no row, the raw
+      // watermark-guarded insert wins. Race tests override per call.
+      updateMany: jest.fn().mockResolvedValue({ count: 0 }),
     },
-    integrationReconstructionSummary: { upsert: jest.fn() },
+    integrationReconstructionSummary: {
+      updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+      createMany: jest.fn().mockResolvedValue({ count: 1 }),
+    },
+    // The gap insert path is a raw watermark-guarded statement.
+    $executeRaw: jest.fn().mockResolvedValue(1),
     assetFieldValue: {
       findMany: jest.fn().mockResolvedValue(fieldValues),
     },

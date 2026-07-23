@@ -3,6 +3,7 @@ import { Prisma } from '@prisma/client';
 import { createHash } from 'node:crypto';
 import { integrationProvenanceSchema } from '@weavestream/shared';
 import { PrismaService } from '../../prisma/prisma.service.js';
+import { upsertReconstructionGap } from './integration-provenance.service.js';
 
 export const COMPLETENESS_CAPABILITIES = [
   'administrative_credential',
@@ -62,6 +63,7 @@ export class IntegrationCompletenessService {
   ): Promise<{
     counts: CompletenessCounts;
     items: Array<{ capability: CompletenessCapability; category: CompletenessCategory }>;
+    applied: boolean;
   }> {
     const evidence = await this.collectEvidence(tx, scope);
     const items = COMPLETENESS_CAPABILITIES.map((capability) => ({
@@ -71,35 +73,37 @@ export class IntegrationCompletenessService {
     const counts = emptyCounts();
     for (const item of items) counts[countKey(item.category)] += 1;
 
+    // The summary row is written first and doubles as the scope's
+    // evaluation clock AND its serialization point: the guarded update
+    // takes the row lock, so overlapping evaluations of one scope queue
+    // here (the same row `lockScopeWatermark` locks on the provenance
+    // paths) and whichever holds the newest `evaluatedAt` owns the
+    // scorecard and the right to touch completeness gaps. When a
+    // strictly newer evaluation already holds the row, this whole
+    // recalculation is stale and must not write gaps either — reopening
+    // or re-creating a gap a newer run resolved would move the dossier
+    // backwards. Summary-first is also the lock-order contract: every
+    // path acquires the summary row before any gap row, so mixed
+    // concurrent paths queue on the summary instead of deadlocking
+    // across the two tables.
+    const applied = await this.writeSummary(tx, scope, {
+      counts: counts as unknown as Prisma.InputJsonValue,
+      clearedAt: null,
+    });
+    if (!applied) return { counts, items, applied };
+
     for (const item of items.filter((candidate) => candidate.category === 'missing')) {
       const dedupeKey = `completeness:${createHash('sha256').update(item.capability).digest('hex')}`;
-      await tx.integrationReconstructionGap.upsert({
-        where: {
-          integrationCompanyMappingId_resourceId_dedupeKey: {
-            integrationCompanyMappingId: scope.integrationCompanyMappingId,
-            resourceId: scope.resourceId,
-            dedupeKey,
-          },
-        },
-        create: {
-          companyId: scope.companyId,
-          integrationCompanyMappingId: scope.integrationCompanyMappingId,
-          resourceId: scope.resourceId,
-          syncRecordId: null,
-          dedupeKey,
-          kind: 'unsupported',
-          message: `Document the missing ${displayCapability(item.capability)} requirement.`,
-          details: { unsupportedCapability: item.capability },
-          firstSeenAt: scope.evaluatedAt,
-          lastSeenAt: scope.evaluatedAt,
-          resolvedAt: null,
-        },
-        update: {
-          message: `Document the missing ${displayCapability(item.capability)} requirement.`,
-          details: { unsupportedCapability: item.capability },
-          lastSeenAt: scope.evaluatedAt,
-          resolvedAt: null,
-        },
+      await upsertReconstructionGap(tx, {
+        companyId: scope.companyId,
+        integrationCompanyMappingId: scope.integrationCompanyMappingId,
+        resourceId: scope.resourceId,
+        dedupeKey,
+        syncRecordId: null,
+        kind: 'unsupported',
+        message: `Document the missing ${displayCapability(item.capability)} requirement.`,
+        details: { unsupportedCapability: item.capability },
+        seenAt: scope.evaluatedAt,
       });
     }
     await tx.integrationReconstructionGap.updateMany({
@@ -113,29 +117,53 @@ export class IntegrationCompletenessService {
       },
       data: { resolvedAt: scope.evaluatedAt },
     });
-    await tx.integrationReconstructionSummary.upsert({
-      where: {
-        integrationCompanyMappingId_summaryKey: {
-          integrationCompanyMappingId: scope.integrationCompanyMappingId,
-          summaryKey: scope.resourceId,
-        },
-      },
-      create: {
+    return { counts, items, applied };
+  }
+
+  /**
+   * Newest-evaluation-wins write for the scorecard row. The recency
+   * guard is the WHERE clause of the write itself, not a prior read:
+   * `evaluatedAt <= scope.evaluatedAt` keeps an equal-timestamp replay
+   * idempotent while a strictly newer stored evaluation wins. The
+   * insert path uses `createMany(skipDuplicates)` because a thrown
+   * unique violation would abort the caller's surrounding transaction;
+   * losing that insert race falls through to one more guarded update
+   * against the now-visible row (READ COMMITTED re-snapshots per
+   * statement), so a newer evaluation is never silently dropped.
+   * Returns false when the stored evaluation is newer than this one.
+   */
+  private async writeSummary(
+    tx: Prisma.TransactionClient,
+    scope: CompletenessScope,
+    row: { counts: Prisma.InputJsonValue; clearedAt: Date | null },
+  ): Promise<boolean> {
+    const where = {
+      companyId: scope.companyId,
+      integrationCompanyMappingId: scope.integrationCompanyMappingId,
+      summaryKey: scope.resourceId,
+      evaluatedAt: { lte: scope.evaluatedAt },
+    };
+    const data = {
+      counts: row.counts,
+      evaluatedAt: scope.evaluatedAt,
+      lastSuccessfulSyncAt: scope.evaluatedAt,
+      clearedAt: row.clearedAt,
+    };
+    const updated = await tx.integrationReconstructionSummary.updateMany({ where, data });
+    if (updated.count > 0) return true;
+    const created = await tx.integrationReconstructionSummary.createMany({
+      data: [{
         companyId: scope.companyId,
         integrationCompanyMappingId: scope.integrationCompanyMappingId,
         resourceId: scope.resourceId,
         summaryKey: scope.resourceId,
-        counts: counts as unknown as Prisma.InputJsonValue,
-        evaluatedAt: scope.evaluatedAt,
-        lastSuccessfulSyncAt: scope.evaluatedAt,
-      },
-      update: {
-        counts: counts as unknown as Prisma.InputJsonValue,
-        evaluatedAt: scope.evaluatedAt,
-        lastSuccessfulSyncAt: scope.evaluatedAt,
-      },
+        ...data,
+      }],
+      skipDuplicates: true,
     });
-    return { counts, items };
+    if (created.count > 0) return true;
+    const retried = await tx.integrationReconstructionSummary.updateMany({ where, data });
+    return retried.count > 0;
   }
 
   /**
@@ -145,14 +173,26 @@ export class IntegrationCompletenessService {
    * drivers like NinjaOne or Action1 never claimed to provide dossier
    * documentation, so scoring them reports permanently-"missing"
    * capabilities and manufactures unresolvable "Document the missing …"
-   * gaps. Resolves any previously persisted completeness gaps and removes
-   * the summary row for the scope so affected resources self-heal on
-   * their next successful sync.
+   * gaps. Resolves any previously persisted completeness gaps and
+   * tombstones the summary row (`clearedAt` set, counts emptied) so
+   * affected resources self-heal on their next successful sync. The
+   * summary is tombstoned rather than deleted because `evaluatedAt`
+   * doubles as the scope's evaluation clock: deleting the row would let
+   * an older concurrent recalculation find no row and recreate a stale
+   * scorecard through its insert path. The tombstone write comes FIRST
+   * — the same summary-then-gaps lock order as `recalculate` — and gap
+   * resolution only proceeds when this evaluation owns the clock, so a
+   * stale clear cannot resolve gaps a newer evaluation refreshed.
    */
   async clearNonParticipant(
     tx: Prisma.TransactionClient,
     scope: CompletenessScope,
   ): Promise<void> {
+    const applied = await this.writeSummary(tx, scope, {
+      counts: {},
+      clearedAt: scope.evaluatedAt,
+    });
+    if (!applied) return;
     await tx.integrationReconstructionGap.updateMany({
       where: {
         companyId: scope.companyId,
@@ -160,16 +200,9 @@ export class IntegrationCompletenessService {
         resourceId: scope.resourceId,
         resolvedAt: null,
         dedupeKey: { startsWith: 'completeness:' },
+        lastSeenAt: { lte: scope.evaluatedAt },
       },
       data: { resolvedAt: scope.evaluatedAt },
-    });
-    await tx.integrationReconstructionSummary.deleteMany({
-      where: {
-        companyId: scope.companyId,
-        integrationCompanyMappingId: scope.integrationCompanyMappingId,
-        resourceId: scope.resourceId,
-        summaryKey: scope.resourceId,
-      },
     });
   }
 

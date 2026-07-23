@@ -131,9 +131,10 @@ describe('IntegrationProvenanceService', () => {
   });
 
   it('deduplicates safe gaps without hashing the message or rejected value and resolves only older scope gaps', async () => {
-    const upsert = jest.fn();
-    const updateMany = jest.fn();
-    const tx = { integrationReconstructionGap: { upsert, updateMany } };
+    const updateMany = jest.fn().mockResolvedValue({ count: 0 });
+    const $executeRaw = jest.fn().mockResolvedValue(1);
+    const $queryRaw = jest.fn().mockResolvedValue([{ id: 'watermark-row' }]);
+    const tx = { integrationReconstructionGap: { updateMany }, $executeRaw, $queryRaw };
     const service = new IntegrationProvenanceService({} as never, {} as never);
     const scope = {
       companyId: ids.company,
@@ -149,9 +150,10 @@ describe('IntegrationProvenanceService', () => {
       message: 'Definition requires manual remediation.',
       details: { reasonCode: 'inline_secret' },
     }]);
-    const firstKey = upsert.mock.calls[0][0].where.integrationCompanyMappingId_resourceId_dedupeKey.dedupeKey;
+    // The guarded update always leads with the dedupe key in its where.
+    const firstKey = updateMany.mock.calls[0][0].where.dedupeKey;
+    expect(typeof firstKey).toBe('string');
 
-    upsert.mockClear();
     await service.persistGaps(tx as never, scope, [{
       externalId: 'org-a:scripts:script-1',
       syncRecordId: null,
@@ -159,8 +161,7 @@ describe('IntegrationProvenanceService', () => {
       message: 'Different safe operator wording.',
       details: { reasonCode: 'inline_secret' },
     }]);
-    expect(upsert.mock.calls[0][0].where.integrationCompanyMappingId_resourceId_dedupeKey.dedupeKey)
-      .toBe(firstKey);
+    expect(updateMany.mock.calls[1][0].where.dedupeKey).toBe(firstKey);
 
     await service.resolveAbsentGaps(tx as never, scope);
     expect(updateMany).toHaveBeenCalledWith({
@@ -174,12 +175,15 @@ describe('IntegrationProvenanceService', () => {
       },
       data: { resolvedAt: scope.observedAt },
     });
-    expect(JSON.stringify(upsert.mock.calls)).not.toContain('rejected-secret-value');
+    expect(JSON.stringify($executeRaw.mock.calls)).not.toContain('rejected-secret-value');
+    expect(JSON.stringify(updateMany.mock.calls)).not.toContain('rejected-secret-value');
   });
 
   it('drops a credential-like external identity before persistence and dedupe', async () => {
-    const upsert = jest.fn();
-    const tx = { integrationReconstructionGap: { upsert, updateMany: jest.fn() } };
+    const updateMany = jest.fn().mockResolvedValue({ count: 0 });
+    const $executeRaw = jest.fn().mockResolvedValue(1);
+    const $queryRaw = jest.fn().mockResolvedValue([{ id: 'watermark-row' }]);
+    const tx = { integrationReconstructionGap: { updateMany }, $executeRaw, $queryRaw };
     const service = new IntegrationProvenanceService({} as never, {} as never);
     const credentialIdentity = 'password=super-secret-value-that-must-not-persist';
     await service.persistGaps(tx as never, {
@@ -194,7 +198,166 @@ describe('IntegrationProvenanceService', () => {
       message: 'Input requires operator review.',
       details: { reasonCode: 'unsafe_identity' },
     }]);
-    expect(JSON.stringify(upsert.mock.calls)).not.toContain(credentialIdentity);
+    expect(JSON.stringify($executeRaw.mock.calls)).not.toContain(credentialIdentity);
+    expect(JSON.stringify(updateMany.mock.calls)).not.toContain(credentialIdentity);
+  });
+
+  it('guards every gap write by recency and stops after one retry when a newer run owns the row', async () => {
+    const updateMany = jest.fn().mockResolvedValue({ count: 0 });
+    const $executeRaw = jest.fn().mockResolvedValue(0);
+    const $queryRaw = jest.fn().mockResolvedValue([{ id: 'watermark-row' }]);
+    const tx = { integrationReconstructionGap: { updateMany }, $executeRaw, $queryRaw };
+    const service = new IntegrationProvenanceService({} as never, {} as never);
+    const observedAt = new Date('2026-07-14T12:00:00.000Z');
+
+    await service.persistGaps(tx as never, {
+      companyId: ids.company,
+      integrationCompanyMappingId: ids.mapping,
+      resourceId: ids.resource,
+      observedAt,
+    }, [{
+      externalId: 'org-a:scripts:script-1',
+      syncRecordId: 'binding-1',
+      kind: 'secret_blocked',
+      message: 'Definition requires manual remediation.',
+      details: { reasonCode: 'inline_secret' },
+    }]);
+
+    // initial guarded write plus exactly one post-insert-race retry
+    expect(updateMany).toHaveBeenCalledTimes(2);
+    for (const [arg] of updateMany.mock.calls) {
+      expect(typeof arg.where.dedupeKey).toBe('string');
+      expect(arg.where.OR).toEqual([
+        { resolvedAt: null, lastSeenAt: { lte: observedAt } },
+        { resolvedAt: { lte: observedAt } },
+      ]);
+      expect(arg.data).toMatchObject({ resolvedAt: null, lastSeenAt: observedAt });
+    }
+    // the insert is a single statement carrying both the conflict skip
+    // and the scope-watermark predicate
+    expect($executeRaw).toHaveBeenCalledTimes(1);
+    const [strings] = $executeRaw.mock.calls[0];
+    const sql = (strings as readonly string[]).join('?');
+    expect(sql).toContain('ON CONFLICT');
+    expect(sql).toContain('WHERE NOT EXISTS');
+    expect(sql).toContain('"evaluated_at" >');
+    // the scope watermark lock is taken before any gap row is touched,
+    // preserving the summary-first lock order shared with the
+    // completeness paths
+    expect($queryRaw).toHaveBeenCalledTimes(1);
+    const [lockStrings] = $queryRaw.mock.calls[0];
+    const lockSql = (lockStrings as readonly string[]).join('?');
+    expect(lockSql).toContain('FOR UPDATE');
+    expect(lockSql).toContain('"company_id"');
+    expect($queryRaw.mock.invocationCallOrder[0]!)
+      .toBeLessThan(updateMany.mock.invocationCallOrder[0]!);
+    // the watermark subquery of the insert is tenant-scoped as well
+    const gapInsertSql = ($executeRaw.mock.calls[0][0] as readonly string[]).join('?');
+    expect(gapInsertSql).toContain('summary."company_id"');
+  });
+
+  it('seeds a cleared watermark tombstone before any gap work on a never-evaluated scope', async () => {
+    const updateMany = jest.fn().mockResolvedValue({ count: 0 });
+    const $executeRaw = jest.fn().mockResolvedValue(1);
+    const $queryRaw = jest.fn().mockResolvedValue([]);
+    const tx = { integrationReconstructionGap: { updateMany }, $executeRaw, $queryRaw };
+    const service = new IntegrationProvenanceService({} as never, {} as never);
+
+    await service.persistGaps(tx as never, {
+      companyId: ids.company,
+      integrationCompanyMappingId: ids.mapping,
+      resourceId: ids.resource,
+      observedAt: new Date('2026-07-14T12:00:00.000Z'),
+    }, [{
+      externalId: 'org-a:scripts:script-cold',
+      syncRecordId: null,
+      kind: 'secret_blocked',
+      message: 'Definition requires manual remediation.',
+      details: { reasonCode: 'inline_secret' },
+    }]);
+
+    // FOR UPDATE found nothing, so the row is seeded as a cleared
+    // tombstone before any gap statement runs — first evaluations get a
+    // serialization point too.
+    const [seedStrings, ...seedValues] = $executeRaw.mock.calls[0];
+    const seedSql = (seedStrings as readonly string[]).join('?');
+    expect(seedSql).toContain('integration_reconstruction_summaries');
+    expect(seedSql).toContain('ON CONFLICT');
+    expect(seedSql).toContain('"cleared_at"');
+    // the seed is gated on the mapping belonging to the caller's
+    // company, so inconsistent scope input cannot create a cross-scope
+    // row
+    expect(seedSql).toContain('integration_company_mappings');
+    // The seed's evaluatedAt is the NEUTRAL epoch, never the page's
+    // snapshot time: this helper runs on non-terminal pages, and a seed
+    // carrying the snapshot time would survive a failed run and reject
+    // legitimate older-snapshot terminal evaluations. Only terminal
+    // writes may advance the clock.
+    expect(seedValues.filter((value: unknown) =>
+      value instanceof Date && value.getTime() === 0)).toHaveLength(1);
+    expect($executeRaw.mock.invocationCallOrder[0]!)
+      .toBeLessThan(updateMany.mock.invocationCallOrder[0]!);
+    // the winning seed already holds the new row's lock: one probe, no re-lock
+    expect($queryRaw).toHaveBeenCalledTimes(1);
+    // the gap insert still follows as the second raw statement
+    expect($executeRaw).toHaveBeenCalledTimes(2);
+  });
+
+  it('re-acquires the watermark lock after losing a concurrent seed race', async () => {
+    const updateMany = jest.fn().mockResolvedValue({ count: 0 });
+    const $executeRaw = jest.fn()
+      .mockResolvedValueOnce(0)
+      .mockResolvedValue(1);
+    const $queryRaw = jest.fn()
+      .mockResolvedValueOnce([])
+      .mockResolvedValue([{ id: 'watermark-row' }]);
+    const tx = { integrationReconstructionGap: { updateMany }, $executeRaw, $queryRaw };
+    const service = new IntegrationProvenanceService({} as never, {} as never);
+
+    await service.persistGaps(tx as never, {
+      companyId: ids.company,
+      integrationCompanyMappingId: ids.mapping,
+      resourceId: ids.resource,
+      observedAt: new Date('2026-07-14T12:00:00.000Z'),
+    }, [{
+      externalId: 'org-a:scripts:script-cold-race',
+      syncRecordId: null,
+      kind: 'secret_blocked',
+      message: 'Definition requires manual remediation.',
+      details: { reasonCode: 'inline_secret' },
+    }]);
+
+    // probe (empty) → seed lost to a concurrent transaction → the
+    // second FOR UPDATE queues on the committed winner before gap work
+    expect($queryRaw).toHaveBeenCalledTimes(2);
+    expect($queryRaw.mock.invocationCallOrder[1]!)
+      .toBeLessThan(updateMany.mock.invocationCallOrder[0]!);
+  });
+
+  it('fails closed instead of proceeding unserialized when the scope pairing is inconsistent', async () => {
+    const updateMany = jest.fn();
+    // probe empty, seed blocked (mapping-binding guard or foreign-row
+    // conflict), re-lock still finds nothing in the caller's scope
+    const $executeRaw = jest.fn().mockResolvedValue(0);
+    const $queryRaw = jest.fn().mockResolvedValue([]);
+    const tx = { integrationReconstructionGap: { updateMany }, $executeRaw, $queryRaw };
+    const service = new IntegrationProvenanceService({} as never, {} as never);
+
+    await expect(service.persistGaps(tx as never, {
+      companyId: ids.company,
+      integrationCompanyMappingId: ids.mapping,
+      resourceId: ids.resource,
+      observedAt: new Date('2026-07-14T12:00:00.000Z'),
+    }, [{
+      externalId: 'org-a:scripts:script-mismatch',
+      syncRecordId: null,
+      kind: 'validation',
+      message: 'Input requires operator review.',
+      details: { reasonCode: 'unsafe_identity' },
+    }])).rejects.toThrow('Reconstruction watermark scope mismatch.');
+    // no gap statement may run without the scoped lock
+    expect(updateMany).not.toHaveBeenCalled();
+    expect($executeRaw).toHaveBeenCalledTimes(1);
   });
 
   it('detects the same source UUID under another mapping without reading or mutating a target', async () => {

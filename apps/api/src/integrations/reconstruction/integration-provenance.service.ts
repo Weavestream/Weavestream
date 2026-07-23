@@ -89,6 +89,220 @@ export async function readTargetProvenance(
   });
 }
 
+/**
+ * Applies a gap observation only when it is at least as recent as the
+ * stored row. Concurrent evaluations of one scope commit in arbitrary
+ * order, so the recency guard lives in the WHERE clause of the write:
+ * an older run finishing later must not reopen a gap a newer run
+ * resolved, move `lastSeenAt` backwards, or replace newer observation
+ * content. A resolved gap keeps its old `lastSeenAt`, so recency for
+ * resolved rows is carried by `resolvedAt` — hence the two guard arms.
+ *
+ * The insert path is a single raw statement because it needs two
+ * things Prisma's client API cannot express together: `ON CONFLICT DO
+ * NOTHING` (a thrown unique violation would abort the caller's
+ * surrounding transaction) and a cross-row `WHERE NOT EXISTS` recency
+ * predicate against the scope's summary row. The summary's
+ * `evaluatedAt` is the durable per-scope watermark — advanced by every
+ * terminal authoritative evaluation, participant or not (clears write
+ * a tombstone, never delete) — so a first observation from a stale
+ * snapshot cannot insert an open gap that a newer completed sweep
+ * already disproved. Row predicates alone cannot cover this case: they
+ * only protect keys that already exist. No summary row means no newer
+ * sweep has ever completed, and the insert proceeds (with
+ * `lockScopeWatermark` seeding the row on first touch, this branch is
+ * effectively unreachable for provenance callers, but the predicate
+ * stays correct without relying on that).
+ *
+ * The `NOT EXISTS` subquery reads committed rows only, which is why
+ * every caller runs under the scope watermark lock (persistGaps and
+ * resolveAbsentGaps take it via `lockScopeWatermark`; the completeness
+ * paths' guarded summary update self-locks): overlapping transactions
+ * queue on the summary row, so the watermark this predicate evaluates
+ * is always committed and final, never a value a concurrent
+ * uncommitted sweep is about to advance.
+ *
+ * The statement is fully parameterized via the tagged template. It
+ * bypasses the tenant-scoping middleware like every other
+ * service-layer reconstruction write; `company_id` is bound explicitly
+ * from the caller-derived scope.
+ *
+ * When the insert loses a concurrent same-key race, the final guarded
+ * update re-applies against the now-visible row (READ COMMITTED
+ * re-snapshots per statement) so a newer observation is never silently
+ * dropped.
+ */
+export async function upsertReconstructionGap(
+  tx: Prisma.TransactionClient,
+  input: {
+    companyId: string;
+    integrationCompanyMappingId: string;
+    resourceId: string;
+    dedupeKey: string;
+    syncRecordId: string | null;
+    kind: ReconstructionGapKind;
+    message: string;
+    details: Prisma.InputJsonValue;
+    seenAt: Date;
+  },
+): Promise<void> {
+  const where = {
+    companyId: input.companyId,
+    integrationCompanyMappingId: input.integrationCompanyMappingId,
+    resourceId: input.resourceId,
+    dedupeKey: input.dedupeKey,
+    OR: [
+      { resolvedAt: null, lastSeenAt: { lte: input.seenAt } },
+      { resolvedAt: { lte: input.seenAt } },
+    ],
+  };
+  const data = {
+    syncRecordId: input.syncRecordId,
+    kind: input.kind,
+    message: input.message,
+    details: input.details,
+    lastSeenAt: input.seenAt,
+    resolvedAt: null,
+  };
+  const updated = await tx.integrationReconstructionGap.updateMany({ where, data });
+  if (updated.count > 0) return;
+  const inserted = await tx.$executeRaw`
+    INSERT INTO "integration_reconstruction_gaps" (
+      "company_id", "integration_company_mapping_id", "resource_id",
+      "sync_record_id", "dedupe_key", "kind", "message", "details",
+      "first_seen_at", "last_seen_at", "resolved_at", "updated_at"
+    )
+    SELECT
+      ${input.companyId}::uuid,
+      ${input.integrationCompanyMappingId}::uuid,
+      ${input.resourceId}::uuid,
+      ${input.syncRecordId}::uuid,
+      ${input.dedupeKey},
+      ${input.kind}::"ReconstructionGapKind",
+      ${input.message},
+      ${JSON.stringify(input.details)}::jsonb,
+      ${input.seenAt},
+      ${input.seenAt},
+      NULL,
+      CURRENT_TIMESTAMP
+    WHERE NOT EXISTS (
+      SELECT 1 FROM "integration_reconstruction_summaries" AS summary
+      WHERE summary."company_id" = ${input.companyId}::uuid
+        AND summary."integration_company_mapping_id" = ${input.integrationCompanyMappingId}::uuid
+        AND summary."summary_key" = ${input.resourceId}
+        AND summary."evaluated_at" > ${input.seenAt}
+    )
+    ON CONFLICT ("integration_company_mapping_id", "resource_id", "dedupe_key")
+    DO NOTHING
+  `;
+  if (inserted > 0) return;
+  await tx.integrationReconstructionGap.updateMany({ where, data });
+}
+
+/**
+ * Locks the scope's summary/watermark row (`FOR UPDATE`) for the rest
+ * of the caller's transaction, creating it when absent. This is the
+ * per-scope serialization point for all gap-state mutation: gap
+ * observation (`persistGaps`), terminal resolution
+ * (`resolveAbsentGaps`), and the completeness paths (whose guarded
+ * summary UPDATE takes the same row lock implicitly). It must be
+ * acquired BEFORE any gap row — the shared summary-first lock order —
+ * so overlapping transactions queue here instead of deadlocking
+ * across the two tables or interleaving a sweep with a mid-flight
+ * stale insert.
+ *
+ * `FOR UPDATE` locks nothing when the row does not exist, which would
+ * leave concurrent FIRST evaluations of a scope unserialized. The
+ * absent case therefore seeds the row: a cleared tombstone (readers
+ * filter `clearedAt`; `clearedAt` records the seed time for
+ * observability) whose `evaluatedAt` is the NEUTRAL epoch, not the
+ * caller's snapshot time. Only terminal authoritative evaluations may
+ * advance the clock: this helper runs on non-terminal pages, and a
+ * page transaction commits independently of its run — a seed carrying
+ * the page's snapshot time would survive a failed run and then reject
+ * every legitimate terminal evaluation with an older snapshot
+ * (`writeSummary`'s `lte` guard), leaving the scope a hidden
+ * tombstone and no scorecard. The epoch is inert on both guards: the
+ * insert predicate is strict `>` so it never blocks a gap write, and
+ * the terminal guard is `lte` so any real evaluation claims the row.
+ * Existing rows are only ever locked here, never modified. The seed
+ * insert uses `ON CONFLICT DO NOTHING`, which also arbitrates
+ * concurrent seeders — the loser waits out the winner's commit inside
+ * the insert, then the final `FOR UPDATE` sees the committed row
+ * (READ COMMITTED re-snapshots per statement) and queues on it.
+ *
+ * All statements here are tenant-scoped (`company_id` in every
+ * predicate — raw queries bypass the tenant middleware), the seed is
+ * additionally gated on the mapping actually belonging to the
+ * caller's company, and the post-conflict re-lock fails closed when
+ * it cannot find exactly one row in the caller's scope.
+ */
+const WATERMARK_SEED_EVALUATED_AT = new Date(0);
+
+async function lockScopeWatermark(
+  tx: Prisma.TransactionClient,
+  scope: Pick<
+    ProvenanceScope,
+    'companyId' | 'integrationCompanyMappingId' | 'resourceId' | 'observedAt'
+  >,
+): Promise<void> {
+  // Every watermark statement carries the tenant predicate: these raw
+  // queries bypass the tenant middleware, and locking or reading a row
+  // outside the caller's company scope is never acceptable — even
+  // under inconsistent scope input.
+  const locked = await tx.$queryRaw<Array<{ id: string }>>`
+    SELECT "id" FROM "integration_reconstruction_summaries"
+    WHERE "company_id" = ${scope.companyId}::uuid
+      AND "integration_company_mapping_id" = ${scope.integrationCompanyMappingId}::uuid
+      AND "summary_key" = ${scope.resourceId}
+    FOR UPDATE
+  `;
+  if (locked.length > 0) return;
+  // The seed only materializes when the mapping really belongs to the
+  // caller's company — the binding is enforced in the write predicate,
+  // so inconsistent scope input cannot create a cross-scope row.
+  const seeded = await tx.$executeRaw`
+    INSERT INTO "integration_reconstruction_summaries" (
+      "company_id", "integration_company_mapping_id", "resource_id",
+      "summary_key", "counts", "evaluated_at", "last_successful_sync_at",
+      "cleared_at", "updated_at"
+    )
+    SELECT
+      ${scope.companyId}::uuid,
+      ${scope.integrationCompanyMappingId}::uuid,
+      ${scope.resourceId}::uuid,
+      ${scope.resourceId},
+      '{}'::jsonb,
+      ${WATERMARK_SEED_EVALUATED_AT},
+      NULL,
+      ${scope.observedAt},
+      CURRENT_TIMESTAMP
+    WHERE EXISTS (
+      SELECT 1 FROM "integration_company_mappings" AS mapping
+      WHERE mapping."id" = ${scope.integrationCompanyMappingId}::uuid
+        AND mapping."company_id" = ${scope.companyId}::uuid
+    )
+    ON CONFLICT ("integration_company_mapping_id", "summary_key") DO NOTHING
+  `;
+  if (seeded > 0) return;
+  const relocked = await tx.$queryRaw<Array<{ id: string }>>`
+    SELECT "id" FROM "integration_reconstruction_summaries"
+    WHERE "company_id" = ${scope.companyId}::uuid
+      AND "integration_company_mapping_id" = ${scope.integrationCompanyMappingId}::uuid
+      AND "summary_key" = ${scope.resourceId}
+    FOR UPDATE
+  `;
+  // A consistent caller that lost the seed race always finds the
+  // winner's row here (the winner wrote the same company scope). Zero
+  // rows means the scope pairing is inconsistent — the stored row (or
+  // the mapping) belongs to another company — and proceeding would
+  // mean running unserialized and writing cross-scope gap rows. Fail
+  // closed instead.
+  if (relocked.length !== 1) {
+    throw new BadRequestException('Reconstruction watermark scope mismatch.');
+  }
+}
+
 export interface ProvenanceBuildInput {
   integrationId: string;
   externalOrgId: string;
@@ -166,6 +380,15 @@ export class IntegrationProvenanceService {
     if (observations.length > MAX_GAPS_PER_PAGE) {
       throw new BadRequestException('Gap observations exceeded the bounded page limit.');
     }
+    if (observations.length === 0) return;
+    // Serialization point, acquired BEFORE any gap row (the summary-first
+    // lock order shared with recalculate/clearNonParticipant): the
+    // insert path's watermark predicate reads committed rows only, so
+    // without this lock an overlapping uncommitted sweep could advance
+    // the watermark and resolve gaps while a stale observation still
+    // saw the previous watermark and inserted. Queueing here means the
+    // watermark is always committed and stable when the predicate runs.
+    await lockScopeWatermark(tx, scope);
     for (const observation of observations) {
       const message = safeGapMessage(observation.kind, observation.message);
       const safeExternalId = safeGapExternalId(observation.externalId);
@@ -186,35 +409,16 @@ export class IntegrationProvenanceService {
         kind: parsed.kind,
         details: parsed.details,
       });
-      await tx.integrationReconstructionGap.upsert({
-        where: {
-          integrationCompanyMappingId_resourceId_dedupeKey: {
-            integrationCompanyMappingId: scope.integrationCompanyMappingId,
-            resourceId: scope.resourceId,
-            dedupeKey,
-          },
-        },
-        create: {
-          companyId: scope.companyId,
-          integrationCompanyMappingId: scope.integrationCompanyMappingId,
-          resourceId: scope.resourceId,
-          syncRecordId: observation.syncRecordId,
-          dedupeKey,
-          kind: parsed.kind,
-          message: parsed.message,
-          details: parsed.details as Prisma.InputJsonValue,
-          firstSeenAt: scope.observedAt,
-          lastSeenAt: scope.observedAt,
-          resolvedAt: null,
-        },
-        update: {
-          syncRecordId: observation.syncRecordId,
-          kind: parsed.kind,
-          message: parsed.message,
-          details: parsed.details as Prisma.InputJsonValue,
-          lastSeenAt: scope.observedAt,
-          resolvedAt: null,
-        },
+      await upsertReconstructionGap(tx, {
+        companyId: scope.companyId,
+        integrationCompanyMappingId: scope.integrationCompanyMappingId,
+        resourceId: scope.resourceId,
+        dedupeKey,
+        syncRecordId: observation.syncRecordId,
+        kind: parsed.kind,
+        message: parsed.message,
+        details: parsed.details as Prisma.InputJsonValue,
+        seenAt: scope.observedAt,
       });
     }
   }
@@ -223,6 +427,11 @@ export class IntegrationProvenanceService {
     tx: Prisma.TransactionClient,
     scope: ProvenanceScope,
   ): Promise<void> {
+    // Same serialization point as persistGaps: the terminal sweep must
+    // not scan while a concurrent stale observation is mid-insert, or
+    // the sweep misses it and the stale gap survives open. Whichever
+    // transaction queues second sees the other's committed writes.
+    await lockScopeWatermark(tx, scope);
     await tx.integrationReconstructionGap.updateMany({
       where: {
         companyId: scope.companyId,

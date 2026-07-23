@@ -1513,6 +1513,11 @@ model IntegrationReconstructionSummary {
   counts                      Json      @default("{}")
   evaluatedAt                 DateTime  @map("evaluated_at")
   lastSuccessfulSyncAt        DateTime? @map("last_successful_sync_at")
+  // Non-null marks a cleared (non-participant) scorecard tombstone. The row
+  // is deliberately kept instead of deleted: `evaluatedAt` doubles as the
+  // scope's evaluation clock, and deleting it would let an older concurrent
+  // evaluation recreate stale state. Readers must filter `clearedAt: null`.
+  clearedAt                   DateTime? @map("cleared_at")
   createdAt                   DateTime  @default(now()) @map("created_at")
   updatedAt                   DateTime  @updatedAt @map("updated_at")
 
