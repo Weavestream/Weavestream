@@ -27,8 +27,10 @@ import {
   type DriverBlockedInput,
   type DriverRecord,
   type FetchRecordsContext,
+  type LegacyDriverRecord,
 } from './drivers/integration-driver.js';
 import { describeError } from '../common/describe-error.js';
+import { FieldTypesRegistry } from '../field-types/field-types.registry.js';
 import { IntegrationTransformService } from './transforms/integration-transform.service.js';
 import { ReconstructionWriterRegistry } from './reconstruction/reconstruction-writer.registry.js';
 import {
@@ -195,6 +197,7 @@ export class IntegrationSyncRunnerService {
     private readonly writers: ReconstructionWriterRegistry,
     private readonly provenance: IntegrationProvenanceService,
     private readonly completeness: IntegrationCompletenessService,
+    private readonly fieldTypes: FieldTypesRegistry,
   ) {}
 
   async runMapping(input: MappingRunInput): Promise<MappingRunOutcome> {
@@ -308,6 +311,18 @@ export class IntegrationSyncRunnerService {
     const seenCursors = new Set<string>();
     if (cursor !== null) seenCursors.add(cursor);
     let pages = 0;
+    // Per-field legacy projection drops accumulate across the traversal and
+    // surface as ONE authority-neutral gap observation per page flush
+    // (externalId null + stable reasonCode share one dedupe row), so a
+    // fleet-wide bad mapping stays a single operator-visible row instead of
+    // one per device — and never fails the run or blocks the record.
+    const legacyFieldDrops = new Map<string, number>();
+    const recordLegacyFieldDrop = (drop: LegacyFieldDrop): void => {
+      const path = [...`${drop.sourceField} -> ${drop.targetSlug}`]
+        .slice(0, 256)
+        .join('');
+      legacyFieldDrops.set(path, (legacyFieldDrops.get(path) ?? 0) + 1);
+    };
     try {
       while (true) {
         const rawPage = await driver.fetchRecords(
@@ -402,7 +417,9 @@ export class IntegrationSyncRunnerService {
               ? stripNul(record)
               : record;
             try {
-              reconstruction = this.toReconstructionInput(safeRecord, resource, mapping);
+              reconstruction = this.toReconstructionInput(
+                safeRecord, resource, mapping, recordLegacyFieldDrop,
+              );
               if (reconstruction === null) continue;
               this.assertTypedIdentity(reconstruction, resource.targetKind, mapping.externalOrgId, resource.resourceKey);
             } catch {
@@ -576,6 +593,9 @@ export class IntegrationSyncRunnerService {
               details: { ...(gap.details ?? {}) },
             });
           }
+          if (legacyFieldDrops.size > 0) {
+            observeGap(legacyFieldDropGap(legacyFieldDrops));
+          }
           if (!input.dryRun) {
             await this.audit.logManyWithClient(tx, targetAuditEntries);
             if (droppedGapCount > 0) {
@@ -617,12 +637,25 @@ export class IntegrationSyncRunnerService {
                 pageTotals.stale += reconciled.stale;
                 pageTotals.archived += reconciled.archived;
               }
-              await this.completeness.recalculate(tx, {
-                companyId: mapping.companyId,
-                integrationCompanyMappingId: mapping.id,
-                resourceId: resource.id,
-                evaluatedAt: observedAt,
-              });
+              // The capability scorecard only applies to dossier drivers
+              // (Breeze). Asset-projection drivers clear any previously
+              // persisted scorecard instead, so misclassified resources
+              // self-heal on their next authoritative sync.
+              if (driver.descriptor?.capabilities?.reconstructionCompleteness === true) {
+                await this.completeness.recalculate(tx, {
+                  companyId: mapping.companyId,
+                  integrationCompanyMappingId: mapping.id,
+                  resourceId: resource.id,
+                  evaluatedAt: observedAt,
+                });
+              } else {
+                await this.completeness.clearNonParticipant(tx, {
+                  companyId: mapping.companyId,
+                  integrationCompanyMappingId: mapping.id,
+                  resourceId: resource.id,
+                  evaluatedAt: observedAt,
+                });
+              }
             }
             const highWater = page.terminal
               ? traversalHighWater ?? deriveLegacyHighWater(page.records)
@@ -753,6 +786,7 @@ export class IntegrationSyncRunnerService {
       integrationId: string;
       integration: { driver: string };
     },
+    onFieldDrop?: (drop: LegacyFieldDrop) => void,
   ): ReconstructionInput | null {
     if (record.reconstructionInput !== undefined) return record.reconstructionInput;
     if (resource.targetKind !== 'asset' || !resource.assetLayoutId) {
@@ -795,18 +829,9 @@ export class IntegrationSyncRunnerService {
       );
       if (selectedFieldMappings.length === 0) return null;
     }
-    const fieldValues = selectedFieldMappings
-      .map((field) => {
-        const raw = record.fields[field.sourceField];
-        const value = field.transform
-          ? this.transforms.execute(raw, integrationTransformSchema.parse(field.transform), record.fields)
-          : raw;
-        return {
-          targetFieldId: field.targetField!.id,
-          value,
-          syncDirection: field.syncDirection,
-        };
-      });
+    const fieldValues = selectedFieldMappings.flatMap((field) =>
+      this.projectLegacyFieldValue(record, field, onFieldDrop),
+    );
     return {
       targetKind: 'asset',
       externalId: `${source.externalOrgId}:${source.resourceKey}:${source.sourceId}`,
@@ -830,6 +855,68 @@ export class IntegrationSyncRunnerService {
             }
           : {}),
     } satisfies AssetReconstructionInput;
+  }
+
+  /**
+   * Legacy-driver field projection with the pre-reconstruction
+   * `projectFields` semantics, so one raw RMM value can never block or
+   * corrupt the whole record:
+   *   - source key absent           → skip the mapping entirely; the stored
+   *     value survives (wrong-case mappings must never null good data);
+   *   - null / '' (post-transform)  → propagate an intentional clear;
+   *   - anything else               → coerce through the field-type
+   *     strategy and drop only this field when the result cannot
+   *     round-trip its `valueSchema`.
+   * Drops are reported to `onFieldDrop` so the caller can surface them as
+   * authority-neutral reconstruction gaps; they must never fail the run.
+   * Typed driver inputs (`record.reconstructionInput`) never reach this
+   * path and stay strictly validated.
+   */
+  private projectLegacyFieldValue(
+    record: LegacyDriverRecord,
+    field: ResourceForReconstruction['fieldMappings'][number],
+    onFieldDrop?: (drop: LegacyFieldDrop) => void,
+  ): Array<{
+    targetFieldId: string;
+    value: unknown;
+    syncDirection: 'source_wins' | 'preserve_manual' | 'manual_only';
+  }> {
+    if (!Object.prototype.hasOwnProperty.call(record.fields, field.sourceField)) {
+      return [];
+    }
+    const targetField = field.targetField!;
+    const projected = (value: unknown) => [
+      {
+        targetFieldId: targetField.id,
+        value,
+        syncDirection: field.syncDirection,
+      },
+    ];
+    try {
+      const raw = record.fields[field.sourceField];
+      const value = field.transform
+        ? this.transforms.execute(raw, integrationTransformSchema.parse(field.transform), record.fields)
+        : raw;
+      if (value === null || value === undefined || value === '') return projected(null);
+      const strategy = this.fieldTypes.get(targetField.fieldType as never);
+      const options = (targetField.options ?? {}) as Record<string, unknown>;
+      const normalized = strategy.normalize(value, options);
+      if (normalized === null || normalized === undefined) return projected(null);
+      if (!strategy.valueSchema(options).safeParse(normalized).success) {
+        this.logger.debug(
+          `toReconstructionInput: dropping ${field.sourceField} -> ${targetField.slug}; normalized value failed valueSchema`,
+        );
+        onFieldDrop?.({ sourceField: field.sourceField, targetSlug: targetField.slug });
+        return [];
+      }
+      return projected(normalized);
+    } catch (error) {
+      this.logger.debug(
+        `toReconstructionInput: dropping ${field.sourceField} -> ${targetField.slug}; ${describeError(error)}`,
+      );
+      onFieldDrop?.({ sourceField: field.sourceField, targetSlug: targetField.slug });
+      return [];
+    }
   }
 
   private assertTypedIdentity(
@@ -1056,6 +1143,51 @@ function deriveLegacyHighWater(records: DriverRecord[]): string | null {
 
 function isNonAuthoritativeGap(kind: DriverBlockedInput['kind']): boolean {
   return kind === 'validation' || kind === 'missing_dependency' || kind === 'synchronization_error';
+}
+
+interface LegacyFieldDrop {
+  sourceField: string;
+  targetSlug: string;
+}
+
+/**
+ * One aggregated, authority-neutral observation for every legacy field
+ * value dropped during a traversal. `kind: 'unsupported'` deliberately
+ * stays outside `isNonAuthoritativeGap` — a dropped field must never turn
+ * the page non-authoritative or fail the run. `externalId: null` plus the
+ * stable reasonCode keep one dedupe row per (mapping, resource) no matter
+ * how many devices share the bad mapping; the affected mappings are
+ * enumerated in `details.fieldPaths`, bounded so the persisted details
+ * always satisfy the allowlisted gap schema (≤64 entries, ≤4096 bytes).
+ */
+function legacyFieldDropGap(drops: ReadonlyMap<string, number>): {
+  externalId: null;
+  syncRecordId: null;
+  kind: DriverBlockedInput['kind'];
+  message: string;
+  details: Record<string, unknown>;
+} {
+  const fieldPaths: string[] = [];
+  let bytes = 0;
+  for (const path of [...drops.keys()].sort()) {
+    bytes += Buffer.byteLength(JSON.stringify(path), 'utf8') + 2;
+    if (fieldPaths.length >= 64 || bytes > 2_800) break;
+    fieldPaths.push(path);
+  }
+  let candidateCount = 0;
+  for (const count of drops.values()) candidateCount += count;
+  return {
+    externalId: null,
+    syncRecordId: null,
+    kind: 'unsupported',
+    message:
+      'Mapped source values could not be represented in their target field types; the affected fields were skipped while their records synced.',
+    details: {
+      reasonCode: 'legacy_value_not_representable',
+      fieldPaths,
+      candidateCount: Math.min(candidateCount, 1_000_000),
+    },
+  };
 }
 
 function boundedLegacyProvenance(

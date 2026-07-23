@@ -328,7 +328,15 @@ export class BreezeDriver implements IntegrationDriver {
         BREEZE_RESOURCE_KEYS.filter((key) => key !== 'device-relationships'),
       ),
     ],
-    capabilities: { kind: 'pull', listSourceOrgs: true, dryRun: true, ticketing: false },
+    capabilities: {
+      kind: 'pull',
+      listSourceOrgs: true,
+      dryRun: true,
+      ticketing: false,
+      // Breeze syncs reconstruction dossiers, so its resources are scored
+      // against the ten documentation capabilities after every sync.
+      reconstructionCompleteness: true,
+    },
   });
 
   constructor(private readonly client: BreezeClientPort = new BreezePartnerApiClient()) {}

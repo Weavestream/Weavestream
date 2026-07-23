@@ -25,7 +25,7 @@ In Breeze, create a partner service principal for Weavestream. Human JWTs and or
 
 A deliberately narrower integration may omit a scope only when every resource that requires it will remain disabled. No listed scope permits remote access, command execution, secret reads, user management, or administrative writes.
 
-Use the public Breeze origin as **Breeze URL**, for example `https://breeze.example.com`. Do not add credentials, query parameters, fragments, or `/api/v1/partner-api` to the value. Weavestream validates and appends the allowlisted Partner API paths and sends the key only in `X-API-Key`; redirects do not receive the key.
+Use the public Breeze origin as **Breeze URL**, for example `https://breeze.example.com`. Do not add credentials, query parameters, fragments, or `/api/v1/partner-api` to the value. Weavestream validates and appends the allowlisted Partner API paths and sends the key only in `X-API-Key`; redirects do not receive the key. The Partner API surface (`/api/v1/partner-api/...`, introduced in the July 2026 Breeze release) must exist on the deployment — on an older Breeze every partner request 404s, so upgrade Breeze first.
 
 ### Private Breeze deployments
 
@@ -74,7 +74,7 @@ Only an exact Breeze-owned binding for the same integration, organization mappin
 - **Incremental** starts from the last committed high-water checkpoint and applies changed source records.
 - **Full** traverses the complete source snapshot. Only a terminal, authoritative full traversal may mark unseen exact Breeze-owned bindings stale.
 
-A blank integration schedule inherits `INTEGRATION_SYNC_DEFAULT_CRON`, which defaults to `*/15 * * * *` (every 15 minutes). Set an explicit five-field UTC cron for a different interval, or set the global default to `off` for manual-only blank schedules. Manual runs can select incremental or full mode.
+A blank integration schedule inherits `INTEGRATION_SYNC_DEFAULT_CRON`, which defaults to `*/15 * * * *` (every 15 minutes). Pick an explicit interval preset in the integration's schedule dropdown for a different cadence (stored as a five-field UTC cron), or set the global default to `off` for manual-only inherited schedules. Manual runs can select incremental or full mode.
 
 Scheduled delivery uses a stable delivery key so a repeated scheduler delivery does not create a duplicate run. If every enabled mapping/resource scope has a successful full checkpoint from the preceding 24 hours, the scheduler selects incremental; otherwise it selects full. At most one full run per integration may be queued or running, and a racing full request falls back to incremental. Do not launch overlapping runs to evade a provider rate limit.
 

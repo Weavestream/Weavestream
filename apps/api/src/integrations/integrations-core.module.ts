@@ -30,6 +30,10 @@ import type {
 } from './reconstruction/reconstruction-target.js';
 import { IntegrationProvenanceService } from './reconstruction/integration-provenance.service.js';
 import { IntegrationCompletenessService } from './reconstruction/integration-completeness.service.js';
+import { AssetsService } from '../assets/assets.service.js';
+import { IpamService } from '../ipam/ipam.service.js';
+import { ArticlesService } from '../articles/articles.service.js';
+import { RelationsService } from '../relations/relations.service.js';
 
 /**
  * Phase 11 — shared integration services.
@@ -54,11 +58,31 @@ import { IntegrationCompletenessService } from './reconstruction/integration-com
   providers: [
     IntegrationDriverRegistry,
     IntegrationTransformService,
-    AssetTargetWriter,
-    SubnetTargetWriter,
-    IpReservationTargetWriter,
-    ArticleTargetWriter,
-    RelationTargetWriter,
+    {
+      provide: AssetTargetWriter,
+      inject: [AssetsService],
+      useFactory: (assets: AssetsService) => new AssetTargetWriter(assets),
+    },
+    {
+      provide: SubnetTargetWriter,
+      inject: [IpamService],
+      useFactory: (ipam: IpamService) => new SubnetTargetWriter(ipam),
+    },
+    {
+      provide: IpReservationTargetWriter,
+      inject: [IpamService],
+      useFactory: (ipam: IpamService) => new IpReservationTargetWriter(ipam),
+    },
+    {
+      provide: ArticleTargetWriter,
+      inject: [ArticlesService],
+      useFactory: (articles: ArticlesService) => new ArticleTargetWriter(articles),
+    },
+    {
+      provide: RelationTargetWriter,
+      inject: [RelationsService],
+      useFactory: (relations: RelationsService) => new RelationTargetWriter(relations),
+    },
     {
       provide: ReconstructionWriterRegistry,
       inject: [

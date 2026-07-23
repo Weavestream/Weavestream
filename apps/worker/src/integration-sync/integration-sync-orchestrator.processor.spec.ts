@@ -84,6 +84,7 @@ describe('IntegrationSyncOrchestratorWorker persisted modes', () => {
       createScheduledRun: jest.fn().mockResolvedValue({
         id: 'active-run',
         mode: 'incremental',
+        status: 'running',
         deliveryKey: 'scheduled:tick-1',
         shouldBegin: false,
       }),
@@ -98,6 +99,33 @@ describe('IntegrationSyncOrchestratorWorker persisted modes', () => {
       id: 'tick-2', data: { kind: 'scheduled', integrationId },
     } as never)).resolves.toEqual({ runId: 'active-run', coalesced: true });
     expect(sync.beginRun).not.toHaveBeenCalled();
+  });
+
+  it('acks a replayed delivery whose run already settled instead of failing it', async () => {
+    const prisma = {
+      integration: { findUnique: jest.fn().mockResolvedValue({ id: integrationId, status: 'ACTIVE' }) },
+      integrationCompanyMapping: { count: jest.fn().mockResolvedValue(1) },
+    };
+    const sync = {
+      createScheduledRun: jest.fn().mockResolvedValue({
+        id: 'settled-run',
+        mode: 'incremental',
+        status: 'succeeded',
+        deliveryKey: 'scheduled:tick-replay',
+        shouldBegin: false,
+      }),
+      beginRun: jest.fn(),
+      failRun: jest.fn(),
+    };
+    const worker = new IntegrationSyncOrchestratorWorker(
+      {} as never, {} as never, prisma as never, sync as never,
+    );
+
+    await expect(handleOf(worker)({
+      id: 'tick-replay', data: { kind: 'scheduled', integrationId }, attemptsMade: 1, opts: { attempts: 2 },
+    } as never)).resolves.toEqual({ runId: 'settled-run', coalesced: true });
+    expect(sync.beginRun).not.toHaveBeenCalled();
+    expect(sync.failRun).not.toHaveBeenCalled();
   });
 
   it('retries the same scheduled delivery and refills its queued fan-out', async () => {

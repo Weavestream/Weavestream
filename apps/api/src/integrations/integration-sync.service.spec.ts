@@ -159,6 +159,80 @@ describe('IntegrationSyncService.triggerManual', () => {
 });
 
 describe('IntegrationSyncService.beginRun', () => {
+  it.each([
+    {
+      label: 'no enabled mappings',
+      mappings: [],
+      resources: [{ id: 'devices', resourceKey: 'devices', dependsOnResourceKeys: [] }],
+      expectedChildResults: 0,
+    },
+    {
+      label: 'no eligible resources',
+      mappings: [{ id: 'mapping-a', companyId: 'company-a' }],
+      resources: [],
+      expectedChildResults: 1,
+    },
+  ])('atomically succeeds a zero-work run with $label', async ({
+    mappings,
+    resources,
+    expectedChildResults,
+  }) => {
+    const add = jest.fn();
+    const tx = {
+      integrationSyncRun: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+      integrationSyncRunCompanyResult: { upsert: jest.fn() },
+      integration: { update: jest.fn() },
+    };
+    const prisma = {
+      integrationSyncRun: { findUnique: jest.fn().mockResolvedValue({
+        id: 'run', integrationId: 'integration', mode: 'incremental', dryRun: false,
+        status: 'queued', startedAt: null, triggeredBy: null,
+        integration: { createdBy: 'creator' },
+      }) },
+      integrationCompanyMapping: { findMany: jest.fn().mockResolvedValue(mappings) },
+      integrationResource: { findMany: jest.fn().mockResolvedValue(resources) },
+      integrationSyncRunCompanyResult: { findMany: jest.fn() },
+      $transaction: jest.fn(
+        async (callback: (client: typeof tx) => Promise<boolean>) => callback(tx),
+      ),
+    };
+    const audit = { log: jest.fn() };
+    const service = new IntegrationSyncService(
+      prisma as never, audit as never,
+      { get: jest.fn().mockReturnValue({ add }) } as never, {} as never,
+    );
+
+    await expect(service.beginRun('run')).resolves.toMatchObject({ jobs: [] });
+
+    expect(tx.integrationSyncRun.updateMany).toHaveBeenCalledWith({
+      where: { id: 'run', status: { in: ['queued', 'running'] } },
+      data: expect.objectContaining({
+        status: 'succeeded', startedAt: expect.any(Date), finishedAt: expect.any(Date),
+        totals: totals(0), error: null,
+      }),
+    });
+    expect(tx.integrationSyncRunCompanyResult.upsert).toHaveBeenCalledTimes(
+      expectedChildResults,
+    );
+    if (expectedChildResults > 0) {
+      expect(tx.integrationSyncRunCompanyResult.upsert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          create: expect.objectContaining({ status: 'succeeded', totals: totals(0) }),
+        }),
+      );
+    }
+    expect(tx.integration.update).toHaveBeenCalledWith({
+      where: { id: 'integration' },
+      data: expect.objectContaining({ lastRunAt: expect.any(Date), lastRunStatus: 'succeeded' }),
+    });
+    expect(prisma.integrationSyncRunCompanyResult.findMany).not.toHaveBeenCalled();
+    expect(add).not.toHaveBeenCalled();
+    expect(audit.log).toHaveBeenCalledWith(expect.objectContaining({
+      actorId: 'creator', action: 'integration.sync.finished', entityId: 'run',
+      after: { totals: totals(0) },
+    }));
+  });
+
   it('enqueues one whole-DAG job per mapping with the scheduled integration actor', async () => {
     const add = jest.fn();
     const tx = {
@@ -473,18 +547,36 @@ describe('IntegrationSyncService scheduled reconstruction mode', () => {
     expect(create).toHaveBeenNthCalledWith(2, { data: expect.objectContaining({ mode: 'incremental' }) });
   });
 
-  it('returns the exact run already persisted for the same scheduled delivery key', async () => {
-    const { service, prisma, create } = setup();
-    prisma.integrationSyncRun.findUnique.mockResolvedValueOnce({
-      id: 'persisted-delivery-run', mode: 'full', deliveryKey: 'scheduled:tick-1',
-    });
+  it.each(['queued', 'running'] as const)(
+    'returns the exact run already persisted for the same scheduled delivery key while %s',
+    async (status) => {
+      const { service, prisma, create } = setup();
+      prisma.integrationSyncRun.findUnique.mockResolvedValueOnce({
+        id: 'persisted-delivery-run', mode: 'full', status, deliveryKey: 'scheduled:tick-1',
+      });
 
-    await expect(service.createScheduledRun(
-      'integration', undefined, now, 'scheduled:tick-1',
-    )).resolves.toMatchObject({ id: 'persisted-delivery-run', mode: 'full', shouldBegin: true });
-    expect(create).not.toHaveBeenCalled();
-    expect(prisma.integrationSyncRun.count).not.toHaveBeenCalled();
-  });
+      await expect(service.createScheduledRun(
+        'integration', undefined, now, 'scheduled:tick-1',
+      )).resolves.toMatchObject({ id: 'persisted-delivery-run', mode: 'full', shouldBegin: true });
+      expect(create).not.toHaveBeenCalled();
+      expect(prisma.integrationSyncRun.count).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(['succeeded', 'failed', 'cancelled'] as const)(
+    'coalesces a replayed delivery whose run already %s instead of re-beginning it',
+    async (status) => {
+      const { service, prisma, create } = setup();
+      prisma.integrationSyncRun.findUnique.mockResolvedValueOnce({
+        id: 'settled-delivery-run', mode: 'full', status, deliveryKey: 'scheduled:tick-1',
+      });
+
+      await expect(service.createScheduledRun(
+        'integration', undefined, now, 'scheduled:tick-1',
+      )).resolves.toMatchObject({ id: 'settled-delivery-run', shouldBegin: false });
+      expect(create).not.toHaveBeenCalled();
+    },
+  );
 
   it('re-reads the exact scheduled delivery after a same-key create race', async () => {
     const collision = Object.assign(new Error('delivery key race'), { code: 'P2002' });
@@ -493,7 +585,7 @@ describe('IntegrationSyncService scheduled reconstruction mode', () => {
     prisma.integrationSyncRun.findUnique
       .mockResolvedValueOnce(null)
       .mockResolvedValueOnce({
-        id: 'race-winner', mode: 'full', deliveryKey: 'scheduled:tick-race',
+        id: 'race-winner', mode: 'full', status: 'queued', deliveryKey: 'scheduled:tick-race',
       });
 
     await expect(service.createScheduledRun(
@@ -553,4 +645,52 @@ describe('IntegrationSyncService.closeRun cancellation', () => {
     expect(tx.integration.update).not.toHaveBeenCalled();
     expect(audit.log).not.toHaveBeenCalled();
   });
+});
+
+describe('IntegrationSyncService.failRun', () => {
+  function setupFailRun(run: Record<string, unknown> | null, transitionCount: number) {
+    const prisma = {
+      integrationSyncRun: {
+        findUnique: jest.fn().mockResolvedValue(run),
+        updateMany: jest.fn().mockResolvedValue({ count: transitionCount }),
+      },
+    };
+    const audit = { log: jest.fn() };
+    const service = new IntegrationSyncService(
+      prisma as never, audit as never, {} as never, {} as never,
+    );
+    return { service, prisma, audit };
+  }
+
+  it.each(['queued', 'running'] as const)('fails an active (%s) run and audits the transition', async (status) => {
+    const { service, prisma, audit } = setupFailRun(
+      { id: 'run-1', status, triggeredBy: 'actor-1' }, 1,
+    );
+
+    await service.failRun('run-1', 'fan-out exploded');
+
+    expect(prisma.integrationSyncRun.updateMany).toHaveBeenCalledWith({
+      where: { id: 'run-1', status: { in: ['queued', 'running'] } },
+      data: expect.objectContaining({ status: 'failed', error: 'fan-out exploded' }),
+    });
+    expect(audit.log).toHaveBeenCalledWith(expect.objectContaining({
+      actorId: 'actor-1', entityId: 'run-1',
+    }));
+  });
+
+  it.each(['succeeded', 'cancelled', 'failed'] as const)(
+    'never rewrites a %s run when a replayed delivery exhausts its retries',
+    async (status) => {
+      const { service, prisma, audit } = setupFailRun(
+        { id: 'run-1', status, triggeredBy: 'actor-1' }, 0,
+      );
+
+      await service.failRun('run-1', 'late replay failure');
+
+      expect(prisma.integrationSyncRun.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+        where: { id: 'run-1', status: { in: ['queued', 'running'] } },
+      }));
+      expect(audit.log).not.toHaveBeenCalled();
+    },
+  );
 });

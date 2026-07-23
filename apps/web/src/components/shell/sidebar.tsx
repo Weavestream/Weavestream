@@ -5,6 +5,7 @@ import { usePathname } from 'next/navigation';
 import { useEffect, useId, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { AppLogo, CompanyMark, Icon, type IconName, Kbd } from '../ui';
 import { useSearchPalette } from '../search/search-palette-provider';
+import { useSidebarActiveOverride } from './sidebar-active';
 
 export type SidebarItem = {
   id: string;
@@ -112,7 +113,7 @@ export function Sidebar({
    */
   onSearch?: () => void;
   /**
-   * `fixed` — the traditional 232 px aside that sits beside the main
+   * `fixed` — the traditional 248 px aside that sits beside the main
    * content. Used on desktop.
    * `drawer` — fills its parent container (the `Sheet` used on mobile
    * viewports) and notifies the caller on nav so the drawer can auto-
@@ -141,11 +142,19 @@ export function Sidebar({
 
   // Pick the single best matching nav item so "index" routes (e.g.
   // Dashboard at /admin) don't also light up when the user is on a
-  // deeper page like /admin/companies. Strategy: exact match wins; if
-  // no exact match, the item with the longest `href` prefix wins.
+  // deeper page like /admin/companies. Strategy: a page-mounted
+  // `SidebarActive` override wins when it names a real item (e.g. an
+  // asset detail forcing its layout's entry, which pathname matching
+  // can't know); then the shell-level `activeId` prop; then exact
+  // pathname match; then the longest `href` prefix.
+  const activeOverride = useSidebarActiveOverride();
   const bestMatchId = (() => {
+    const items = sections.flatMap((s) => s.items);
+    if (activeOverride && items.some((i) => i.id === activeOverride)) {
+      return activeOverride;
+    }
     if (activeId) return activeId;
-    const all = sections.flatMap((s) => s.items).filter((i) => i.href);
+    const all = items.filter((i) => i.href);
     const exact = all.find((i) => i.href === pathname);
     if (exact) return exact.id;
     const prefixed = all
@@ -160,7 +169,7 @@ export function Sidebar({
     <aside
       className={className}
       style={{
-        width: isDrawer ? '100%' : 232,
+        width: isDrawer ? '100%' : 248,
         flexShrink: 0,
         background: 'var(--surface)',
         borderRight: isDrawer ? 'none' : '1px solid var(--line)',
@@ -397,7 +406,7 @@ function SidebarHeader({
 /**
  * Inline popover used as the sidebar title control when the viewer
  * has multiple tenants to pick from. Keeps everything inside the
- * 232-wide aside — the popover floats a few pixels below the header
+ * 248-wide aside — the popover floats a few pixels below the header
  * row and uses `position: absolute` relative to the header, so it
  * stacks above the nav without any portal juggling.
  *
@@ -648,7 +657,17 @@ function NavItem({
           const IconCmp = Icon[item.icon];
           return <IconCmp size={14} stroke={1.5} />;
         })()}
-      <span style={{ flex: 1 }}>{item.label}</span>
+      <span
+        style={{
+          flex: 1,
+          minWidth: 0,
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+        }}
+      >
+        {item.label}
+      </span>
       {item.count !== undefined && (
         <span
           style={{

@@ -208,6 +208,7 @@ export class UniFiSiteManagerDriver implements IntegrationDriver {
       listSourceOrgs: true,
       dryRun: true,
       ticketing: false,
+      reconstructionCompleteness: false,
     },
   };
 

@@ -22,7 +22,7 @@ export type ToolbarVariant = 'sidebar' | 'topbar';
 /**
  * Per-variant geometry shared by every icon button in the toolbar.
  * `sidebar` keeps the original 26×26 / 14px / 1.5 stroke that fits
- * the 232px footer. `topbar` is the slightly larger 30×30 / 18px /
+ * the 248px footer. `topbar` is the slightly larger 30×30 / 18px /
  * 1.75 stroke used by the global header cluster — a touch thicker so
  * the glyphs read at a glance next to the breadcrumbs.
  */
@@ -41,7 +41,7 @@ const VARIANT_DIMS: Record<
  * be a single click away from every page in the shell.
  *
  * The `variant` prop picks the geometry: `sidebar` keeps the original
- * 26×26 targets that fit the 232px aside; `topbar` bumps to 30×30
+ * 26×26 targets that fit the 248px aside; `topbar` bumps to 30×30
  * with a slightly thicker stroke so the glyphs read at breadcrumb
  * eye-level. The active page gets an accent tint to match the main
  * `NavItem` treatment.

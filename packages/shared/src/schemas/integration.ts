@@ -296,6 +296,18 @@ export const driverDescriptorSchema = z
      * the dispatcher.
      */
     ticketing: z.boolean().default(false),
+    /**
+     * Driver participates in the Breeze reconstruction-completeness model:
+     * its synced records are a disaster-recovery dossier, so the framework
+     * evaluates the ten documentation capabilities (credentials, backup /
+     * restore, rebuild steps, …) after every authoritative sync and
+     * surfaces "Document the missing …" gaps for absent ones. Default
+     * false: asset-projection drivers (NinjaOne, Action1, UniFi, …) only
+     * mirror inventory fields — scoring them against dossier requirements
+     * would report permanently-missing capabilities they never claimed to
+     * provide.
+     */
+    reconstructionCompleteness: z.boolean().default(false),
   }),
   })
   .superRefine((driver, ctx) => {

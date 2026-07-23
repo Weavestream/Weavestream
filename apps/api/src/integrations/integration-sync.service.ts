@@ -278,7 +278,7 @@ export class IntegrationSyncService {
       const persisted = await this.prisma.integrationSyncRun.findUnique({
         where: { deliveryKey },
       });
-      if (persisted) return { ...persisted, shouldBegin: true as const };
+      if (persisted) return { ...persisted, shouldBegin: canBeginPersistedDelivery(persisted.status) };
     }
 
     const activeBlocker = await this.findActiveScheduledBlocker(integrationId);
@@ -316,7 +316,7 @@ export class IntegrationSyncService {
         const persisted = await this.prisma.integrationSyncRun.findUnique({
           where: { deliveryKey },
         });
-        if (persisted) return { ...persisted, shouldBegin: true as const };
+        if (persisted) return { ...persisted, shouldBegin: canBeginPersistedDelivery(persisted.status) };
       }
 
       const raceWinner = await this.findActiveScheduledBlocker(integrationId);
@@ -344,7 +344,7 @@ export class IntegrationSyncService {
           const persisted = await this.prisma.integrationSyncRun.findUnique({
             where: { deliveryKey },
           });
-          if (persisted) return { ...persisted, shouldBegin: true as const };
+          if (persisted) return { ...persisted, shouldBegin: canBeginPersistedDelivery(persisted.status) };
         }
         const fallbackWinner = await this.findActiveScheduledBlocker(integrationId);
         if (fallbackWinner) return { ...fallbackWinner, shouldBegin: false as const };
@@ -397,6 +397,7 @@ export class IntegrationSyncService {
         mode: true,
         dryRun: true,
         status: true,
+        startedAt: true,
         triggeredBy: true,
         integration: { select: { createdBy: true } },
       },
@@ -441,6 +442,72 @@ export class IntegrationSyncService {
           companyId: mapping.companyId,
           auditActorId,
         }));
+
+    if (jobs.length === 0) {
+      const finishedAt = new Date();
+      const totals = zeroAggregateTotals();
+      const finalized = await this.prisma.$transaction(async (tx) => {
+        const transition = await tx.integrationSyncRun.updateMany({
+          where: { id: runId, status: { in: ['queued', 'running'] } },
+          data: {
+            status: 'succeeded',
+            startedAt: run.startedAt ?? finishedAt,
+            finishedAt,
+            totals: totals as unknown as Prisma.InputJsonValue,
+            error: null,
+          },
+        });
+        if (transition.count === 0) return false;
+
+        for (const mapping of mappings) {
+          await tx.integrationSyncRunCompanyResult.upsert({
+            where: {
+              syncRunId_integrationCompanyMappingId: {
+                syncRunId: runId,
+                integrationCompanyMappingId: mapping.id,
+              },
+            },
+            create: {
+              syncRunId: runId,
+              integrationCompanyMappingId: mapping.id,
+              companyId: mapping.companyId,
+              status: 'succeeded',
+              startedAt: finishedAt,
+              finishedAt,
+              totals: totals as unknown as Prisma.InputJsonValue,
+            },
+            update: {},
+          });
+        }
+        await tx.integration.update({
+          where: { id: run.integrationId },
+          data: { lastRunAt: finishedAt, lastRunStatus: 'succeeded' },
+        });
+        return true;
+      });
+
+      if (finalized) {
+        await this.audit.log({
+          actorId: auditActorId,
+          action: AUDIT_ACTIONS.integration.syncRunFinished,
+          entityType: 'IntegrationSyncRun',
+          entityId: runId,
+          ip: '0.0.0.0',
+          userAgent: 'worker',
+          before: null,
+          after: { totals },
+        });
+      }
+      return {
+        run: {
+          id: run.id,
+          integrationId: run.integrationId,
+          mode: run.mode,
+          dryRun: run.dryRun,
+        },
+        jobs: [],
+      };
+    }
 
     await this.prisma.$transaction(async (tx) => {
       await tx.integrationSyncRun.updateMany({
@@ -758,14 +825,17 @@ export class IntegrationSyncService {
       where: { id: runId },
     });
     if (!run) return;
-    await this.prisma.integrationSyncRun.update({
-      where: { id: runId },
+    const transition = await this.prisma.integrationSyncRun.updateMany({
+      where: { id: runId, status: { in: ['queued', 'running'] } },
       data: {
         status: 'failed',
         finishedAt: new Date(),
         error: error.slice(0, 4_000),
       },
     });
+    // Replayed deliveries and cancellation can race this final-attempt
+    // fallback. A settled outcome is authoritative — never rewrite it.
+    if (transition.count === 0) return;
     await this.audit.log({
       actorId: run.triggeredBy,
       action: AUDIT_ACTIONS.integration.syncRunFailed,
@@ -916,6 +986,18 @@ function isUniqueConstraintError(error: unknown): boolean {
   return Boolean(
     error && typeof error === 'object' && 'code' in error && error.code === 'P2002',
   );
+}
+
+/**
+ * A redelivered scheduled occurrence may only re-enter `beginRun` while its
+ * persisted run is still claimable. A settled delivery must coalesce instead:
+ * `beginRun` throws on terminal statuses, and the final-attempt `failRun`
+ * fallback would then rewrite the settled outcome as failed.
+ */
+function canBeginPersistedDelivery(
+  status: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled',
+): boolean {
+  return status === 'queued' || status === 'running';
 }
 
 const TOTAL_KEYS = [

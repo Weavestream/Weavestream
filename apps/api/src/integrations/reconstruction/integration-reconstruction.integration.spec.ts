@@ -1402,6 +1402,7 @@ function buildRunner(
     writers as never,
     provenance,
     new IntegrationCompletenessService(prisma as never),
+    new FieldTypesRegistry(),
   );
 }
 

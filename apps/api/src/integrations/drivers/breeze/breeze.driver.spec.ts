@@ -172,6 +172,7 @@ describe('BreezeDriver descriptor', () => {
       listSourceOrgs: true,
       dryRun: true,
       ticketing: false,
+      reconstructionCompleteness: true,
     });
     expect(descriptor.configFields.map((field) => field.key)).toEqual(['baseUrl']);
     expect(descriptor.secretFields.map((field) => field.key)).toEqual(['apiKey']);
@@ -711,14 +712,16 @@ describe('Breeze transforms', () => {
         graphics: 'NVIDIA T1000',
         motherboard: expect.stringContaining('Dell'),
         biosVersion: '1.2.3',
-        disks: expect.stringContaining(DISK),
-        interfaces: expect.stringContaining('00:11:22:33:44:55'),
-        networkAddresses: expect.stringContaining('10.20.0.99'),
+        disks: 'C: · NTFS · 512 GB · Disk 0',
+        interfaces: 'Ethernet · MAC 00:11:22:33:44:55 · primary',
+        networkAddresses: expect.stringContaining(
+          '10.20.0.99 · ipv4 · dhcp · on Ethernet · mask 255.255.255.0 · active · first seen 2026-02-01',
+        ),
         gateways: expect.stringContaining('10.20.0.1'),
         dnsServers: expect.stringContaining('1.1.1.1'),
         warrantyStatus: 'active',
         warrantyEndsOn: '2028-01-01',
-        virtualMachines: expect.stringContaining(VM),
+        virtualMachines: 'Build VM · gen 2 · 8192 MB · 4 vCPU · RCT · vm-guid-1',
         inventoryCompleteness: expect.stringContaining('addresses: 2/2 complete'),
       }),
     });
@@ -757,7 +760,8 @@ describe('Breeze transforms', () => {
     expect(software).toMatchObject({
       externalId: DEVICE,
       fields: expect.objectContaining({
-        installedSoftware: expect.stringContaining(SOFTWARE),
+        installedSoftware:
+          'Weave Agent 2.4.0 · Weavestream · installed 2026-01-02 · managed',
         softwareCompleteness: 'software: 1/1 complete',
       }),
     });
@@ -767,7 +771,7 @@ describe('Breeze transforms', () => {
       software: [{ ...softwareRecord.software[0], name: 'Renamed Agent' }],
     });
     expect(renamed[0]).toMatchObject({ externalId: DEVICE });
-    expect(JSON.stringify(renamed[0])).toContain(SOFTWARE);
+    expect(JSON.stringify(renamed[0])).toContain('Renamed Agent 2.4.0');
   });
 
   it('maps site inventory, canonical subnets, and only eligible current static reservations', () => {
@@ -776,7 +780,8 @@ describe('Breeze transforms', () => {
       externalId: SITE,
       fields: expect.objectContaining({
         breezeId: SITE,
-        networkEquipment: expect.stringContaining(EQUIPMENT),
+        networkEquipment:
+          'Core Switch · switch · 10.20.0.2 · MAC 00:aa:bb:cc:dd:ee · Cisco C9300',
         networkSegments: expect.stringContaining('10.20.0.0/24'),
         inventoryCompleteness: expect.stringContaining('networkEquipment: 1/1 complete'),
       }),
@@ -1013,7 +1018,8 @@ describe('Breeze transforms', () => {
     const [inventory] = transformBreezeRecord('device-inventory', input);
     const informational = JSON.stringify(inventory);
     expect(informational).toContain('2001:db8::20');
-    expect(informational.toLowerCase()).toContain('assignment');
+    expect(informational.toLowerCase()).toContain('vpn');
+    expect(informational.toLowerCase()).toContain('link-local');
     expect(transformBreezeRecord('ip-reservations', input)).toHaveLength(1);
 
     expect(() =>
@@ -1204,7 +1210,9 @@ describe('Breeze transforms', () => {
   it('accepts the actual schema maximum software rows within the guarded response bound', () => {
     const software = Array.from({ length: 1_000 }, (_, index) => ({
       id: `${String(index).padStart(8, '0')}-0000-4000-8000-000000000000`,
-      name: `Package ${index}`,
+      // Realistic long names keep 1000 compact lines above the 50k projection
+      // limit so the truncation path stays exercised at the schema maximum.
+      name: `Package ${index} Enterprise Security Agent Extended Edition Build`,
       version: null,
       vendor: null,
       installedOn: null,
@@ -1232,6 +1240,9 @@ describe('Breeze transforms', () => {
       ...deviceInventory.addresses[1],
       id: `${(index + 1).toString(16).padStart(8, '0')}-0000-4000-8000-000000000000`,
       address: `10.${Math.floor(index / 250)}.${Math.floor((index % 250) / 50)}.${(index % 50) + 1}`,
+      // Long name keeps 500 compact lines above the 50k projection limit so
+      // the truncation path stays exercised.
+      interfaceName: 'Management Uplink Interface 0123456789',
     }));
     const [record] = transformBreezeRecord('device-inventory', {
       ...deviceInventory,

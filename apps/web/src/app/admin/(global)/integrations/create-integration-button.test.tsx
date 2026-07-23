@@ -63,11 +63,34 @@ describe('CreateIntegrationButton', () => {
     expect(push).toHaveBeenCalledWith('/admin/integrations/integration-1');
   });
 
-  it('explains blank cron inheritance', () => {
+  it('defaults the schedule to inheriting the global default and explains the off switch', () => {
     render(<CreateIntegrationButton drivers={[breeze]} />);
     fireEvent.click(screen.getByRole('button', { name: 'New integration' }));
 
-    expect(screen.getByText(/blank to inherit the global default/i)).toHaveTextContent(/off/i);
+    expect(screen.getByLabelText('Sync schedule')).toHaveValue('');
+    expect(screen.getByRole('option', { name: 'Inherit global default' })).toBeInTheDocument();
+    expect(screen.getByText(/inherits the global default/i)).toHaveTextContent(/off/i);
+  });
+
+  it('sends the chosen interval preset as the stored cron', async () => {
+    apiFetch.mockResolvedValue({ ok: true, data: { id: 'integration-1' } });
+    render(<CreateIntegrationButton drivers={[breeze]} />);
+    fireEvent.click(screen.getByRole('button', { name: 'New integration' }));
+
+    fireEvent.change(screen.getByLabelText('Display name'), { target: { value: 'Breeze production' } });
+    fireEvent.change(screen.getByLabelText('Breeze URL *'), { target: { value: 'https://breeze.example' } });
+    fireEvent.change(screen.getByLabelText('Partner API key *'), { target: { value: 'secret-key' } });
+    fireEvent.change(screen.getByLabelText('Sync schedule'), { target: { value: '0 */6 * * *' } });
+    expect(screen.getByRole('option', { name: 'Every 6 hours' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+
+    await waitFor(() => expect(apiFetch).toHaveBeenCalledWith('/admin/integrations', expect.objectContaining({
+      method: 'POST',
+      body: JSON.stringify({
+        driver: 'breeze', name: 'Breeze production', config: { baseUrl: 'https://breeze.example' },
+        secret: { apiKey: 'secret-key' }, syncCron: '0 */6 * * *', status: 'PAUSED',
+      }),
+    })));
   });
 
   it('reports failures through a secret-safe toast', async () => {

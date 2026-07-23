@@ -47,32 +47,6 @@ export class BreezeBoundedDefinitionError extends Error {
   }
 }
 
-const DISK_COLUMNS = [
-  ['ID', 'id'], ['Mount', 'mountPoint'], ['Device', 'device'],
-  ['File system', 'fileSystem'], ['Total GB', 'totalGb'],
-] as const;
-const INTERFACE_COLUMNS = [
-  ['ID', 'id'], ['Name', 'name'], ['MAC', 'macAddress'], ['Primary', 'primary'],
-] as const;
-const ADDRESS_COLUMNS = [
-  ['ID', 'id'], ['Interface ID', 'interfaceId'], ['Interface', 'interfaceName'],
-  ['Address', 'address'], ['Family', 'family'], ['Assignment', 'assignment'],
-  ['Reservation eligible', 'reservationEligible'], ['Subnet mask', 'subnetMask'],
-  ['Active', 'active'], ['First seen', 'firstSeenAt'], ['Deactivated', 'deactivatedAt'],
-] as const;
-const VM_COLUMNS = [
-  ['ID', 'id'], ['External ID', 'externalId'], ['Name', 'name'],
-  ['Generation', 'generation'], ['Memory MB', 'memoryMb'], ['Processors', 'processorCount'],
-  ['RCT', 'rctEnabled'], ['Passthrough disks', 'passthroughDisks'],
-] as const;
-const EQUIPMENT_COLUMNS = [
-  ['ID', 'id'], ['Type', 'type'], ['Name', 'name'], ['Address', 'address'],
-  ['MAC', 'macAddress'], ['Manufacturer', 'manufacturer'], ['Model', 'model'],
-] as const;
-const SOFTWARE_COLUMNS = [
-  ['ID', 'id'], ['Name', 'name'], ['Version', 'version'], ['Vendor', 'vendor'],
-  ['Installed', 'installedOn'], ['Managed', 'managed'],
-] as const;
 
 export function transformBreezeRecord(
   rawResource: BreezeResourceKey,
@@ -147,18 +121,17 @@ export function transformBreezeRecord(
       ];
     case 'device-inventory': {
       if (record.subjectType !== 'device') return [];
-      const diskProjection = formatRowsProjection(record.disks, DISK_COLUMNS);
-      const interfaceProjection = formatRowsProjection(record.interfaces, INTERFACE_COLUMNS);
-      const addressProjection = formatRowsProjection(record.addresses, ADDRESS_COLUMNS);
+      const diskProjection = formatDiskProjection(record.disks);
+      const interfaceProjection = formatInterfaceProjection(record.interfaces);
+      const addressProjection = formatAddressProjection(record.addresses);
       const gatewayProjection = formatUniqueTextProjection(
         record.addresses.map((address: Record<string, unknown>) => address.gateway),
       );
       const dnsServerProjection = formatUniqueTextProjection(
         record.addresses.flatMap((address: Record<string, unknown>) => address.dnsServers),
       );
-      const virtualMachineProjection = formatRowsProjection(
+      const virtualMachineProjection = formatVirtualMachineProjection(
         record.virtualMachines,
-        VM_COLUMNS,
       );
       return [
         legacy(
@@ -210,22 +183,21 @@ export function transformBreezeRecord(
         ),
       ];
     }
-    case 'site-inventory':
+    case 'site-inventory': {
       if (record.subjectType !== 'site') return [];
+      const equipmentProjection = formatEquipmentProjection(record.networkEquipment);
+      const segmentProjection = formatNetworkSegments(record.networkSegments);
       return [
         legacy(
           record,
           `Site ${record.siteSubjectId}`,
           {
             breezeId: record.siteSubjectId,
-            networkEquipment: formatRows(record.networkEquipment, EQUIPMENT_COLUMNS),
-            networkSegments: formatNetworkSegments(record.networkSegments).text,
+            networkEquipment: equipmentProjection.text,
+            networkSegments: segmentProjection.text,
             inventoryCompleteness: formatCollections(record.collections, {
-              networkEquipment: formatRowsProjection(
-                record.networkEquipment,
-                EQUIPMENT_COLUMNS,
-              ),
-              networkSegments: formatNetworkSegments(record.networkSegments),
+              networkEquipment: equipmentProjection,
+              networkSegments: segmentProjection,
             }),
             sourceRevision: record.revision,
             sourceFingerprint: record.revision,
@@ -233,18 +205,20 @@ export function transformBreezeRecord(
           record.siteSubjectId,
         ),
       ];
-    case 'device-software':
+    }
+    case 'device-software': {
+      const softwareProjection = formatSoftwareProjection(record.software);
       return [
         legacy(
           record,
           `Software ${record.deviceId}`,
           {
             breezeId: record.deviceId,
-            installedSoftware: formatRows(record.software, SOFTWARE_COLUMNS),
+            installedSoftware: softwareProjection.text,
             softwareCompleteness: formatCollection(
               'software',
               record.collection,
-              formatRowsProjection(record.software, SOFTWARE_COLUMNS),
+              softwareProjection,
             ),
             sourceRevision: record.revision,
             sourceFingerprint: record.revision,
@@ -252,6 +226,7 @@ export function transformBreezeRecord(
           record.deviceId,
         ),
       ];
+    }
     case 'network-equipment':
       if (record.subjectType !== 'site') return [];
       return record.networkEquipment.map((equipment: Record<string, any>) =>
@@ -844,32 +819,174 @@ function formatNetworkSegments(
   segments: Array<Record<string, unknown>>,
 ): StructuredProjection {
   return formatLinesProjection(
-    segments
-      .map(
-        (segment) =>
-          `${segment.id} | ${normalizeCidrV4(String(segment.cidr)) ?? `invalid: ${segment.cidr}`}`,
-      )
-      .sort(),
+    [...new Set(
+      segments.map(
+        (segment) => normalizeCidrV4(String(segment.cidr)) ?? `invalid: ${segment.cidr}`,
+      ),
+    )].sort(),
   );
 }
 
-function formatRows(
+// Projection lines are operator-facing text; Breeze row UUIDs carry no meaning
+// for readers, so lines show source facts only. Rendering must stay
+// deterministic (stable sort, stable segments) so unchanged source data keeps
+// producing byte-identical field values across syncs.
+function projectRows(
   rows: Array<Record<string, unknown>>,
-  columns: ReadonlyArray<readonly [label: string, key: string]>,
-): string {
-  return formatRowsProjection(rows, columns).text;
+  render: (row: Record<string, unknown>) => string,
+  sortKey: (row: Record<string, unknown>) => string,
+): StructuredProjection {
+  const lines = mergeRowsById(rows)
+    .map((row) => ({ key: sortKey(row), text: render(row) }))
+    .sort(
+      (left, right) =>
+        left.key.localeCompare(right.key) || left.text.localeCompare(right.text),
+    )
+    .map((entry) => entry.text);
+  return formatLinesProjection([...new Set(lines)]);
 }
 
-function formatRowsProjection(
+// Breeze occasionally reports the same row twice with conflicting flags (e.g.
+// one interface row with primary=yes and one with primary=no). Without the
+// UUID in the line, those would render as confusing near-duplicates; merge
+// them instead — booleans OR together, first non-empty value wins otherwise.
+function mergeRowsById(
   rows: Array<Record<string, unknown>>,
-  columns: ReadonlyArray<readonly [label: string, key: string]>,
+): Array<Record<string, unknown>> {
+  const merged = new Map<string, Record<string, unknown>>();
+  for (const [index, row] of rows.entries()) {
+    const key = row.id ? String(row.id) : `__row_${index}`;
+    const existing = merged.get(key);
+    if (!existing) {
+      merged.set(key, { ...row });
+      continue;
+    }
+    for (const [field, value] of Object.entries(row)) {
+      if (typeof value === 'boolean') {
+        existing[field] = existing[field] === true || value;
+      } else if (
+        existing[field] === null ||
+        existing[field] === undefined ||
+        existing[field] === ''
+      ) {
+        existing[field] = value;
+      }
+    }
+  }
+  return [...merged.values()];
+}
+
+function inline(value: unknown): string {
+  if (value === null || value === undefined) return '';
+  return String(value).replaceAll('\n', ' ').slice(0, 2_000);
+}
+
+function segmentLine(parts: Array<string | false | null | undefined>): string {
+  return parts
+    .filter((part): part is string => typeof part === 'string' && part.length > 0)
+    .join(' · ');
+}
+
+function shortDate(value: unknown): string {
+  return inline(value).slice(0, 10);
+}
+
+function formatDiskProjection(rows: Array<Record<string, unknown>>): StructuredProjection {
+  return projectRows(
+    rows,
+    (disk) =>
+      segmentLine([
+        inline(disk.mountPoint),
+        inline(disk.fileSystem),
+        typeof disk.totalGb === 'number'
+          ? `${Number.isInteger(disk.totalGb) ? disk.totalGb : disk.totalGb.toFixed(1)} GB`
+          : '',
+        inline(disk.device),
+      ]),
+    (disk) => inline(disk.mountPoint),
+  );
+}
+
+function formatInterfaceProjection(rows: Array<Record<string, unknown>>): StructuredProjection {
+  return projectRows(
+    rows,
+    (row) =>
+      segmentLine([
+        inline(row.name),
+        row.macAddress ? `MAC ${inline(row.macAddress)}` : '',
+        row.primary === true && 'primary',
+      ]),
+    (row) => `${row.primary === true ? '0' : '1'}:${inline(row.name)}`,
+  );
+}
+
+function formatAddressProjection(rows: Array<Record<string, unknown>>): StructuredProjection {
+  return projectRows(
+    rows,
+    (row) =>
+      segmentLine([
+        inline(row.address),
+        inline(row.family),
+        row.assignment === 'unknown' ? '' : inline(row.assignment),
+        row.interfaceName ? `on ${inline(row.interfaceName)}` : '',
+        row.subnetMask ? `mask ${inline(row.subnetMask)}` : '',
+        row.reservationEligible === true && 'reservation eligible',
+        row.active === true ? 'active' : 'inactive',
+        row.firstSeenAt ? `first seen ${shortDate(row.firstSeenAt)}` : '',
+        row.deactivatedAt ? `deactivated ${shortDate(row.deactivatedAt)}` : '',
+      ]),
+    (row) => `${inline(row.interfaceName)}:${inline(row.family)}:${inline(row.address)}`,
+  );
+}
+
+function formatVirtualMachineProjection(
+  rows: Array<Record<string, unknown>>,
 ): StructuredProjection {
-  const lines = [...rows]
-    .sort((left, right) => String(left.id ?? '').localeCompare(String(right.id ?? '')))
-    .map((row) =>
-      columns.map(([label, key]) => `${label}: ${displayValue(row[key])}`).join(' | '),
-    );
-  return formatLinesProjection(lines);
+  return projectRows(
+    rows,
+    (row) =>
+      segmentLine([
+        inline(row.name),
+        row.generation === null || row.generation === undefined
+          ? ''
+          : `gen ${inline(row.generation)}`,
+        typeof row.memoryMb === 'number' ? `${row.memoryMb} MB` : '',
+        typeof row.processorCount === 'number' ? `${row.processorCount} vCPU` : '',
+        row.rctEnabled === true && 'RCT',
+        row.passthroughDisks === true && 'passthrough disks',
+        inline(row.externalId),
+      ]),
+    (row) => inline(row.name),
+  );
+}
+
+function formatEquipmentProjection(rows: Array<Record<string, unknown>>): StructuredProjection {
+  return projectRows(
+    rows,
+    (row) =>
+      segmentLine([
+        inline(row.name),
+        inline(row.type).replaceAll('_', ' '),
+        inline(row.address),
+        row.macAddress ? `MAC ${inline(row.macAddress)}` : '',
+        [inline(row.manufacturer), inline(row.model)].filter(Boolean).join(' '),
+      ]),
+    (row) => `${inline(row.name)}:${inline(row.address)}`,
+  );
+}
+
+function formatSoftwareProjection(rows: Array<Record<string, unknown>>): StructuredProjection {
+  return projectRows(
+    rows,
+    (row) =>
+      segmentLine([
+        row.version ? `${inline(row.name)} ${inline(row.version)}` : inline(row.name),
+        inline(row.vendor),
+        row.installedOn ? `installed ${inline(row.installedOn)}` : '',
+        row.managed === true && 'managed',
+      ]),
+    (row) => `${inline(row.name)}:${inline(row.version)}`,
+  );
 }
 
 function formatLinesProjection(lines: string[]): StructuredProjection {

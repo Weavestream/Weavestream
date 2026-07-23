@@ -142,7 +142,7 @@ export class IntegrationSyncOrchestratorWorker implements OnModuleDestroy {
     );
     if (run.shouldBegin === false) {
       this.logger.debug(
-        `Coalescing scheduled occurrence into active run ${run.id} for ${payload.integrationId}`,
+        `Coalescing scheduled occurrence into run ${run.id} (status ${run.status}) for ${payload.integrationId}`,
       );
       return { runId: run.id, coalesced: true };
     }

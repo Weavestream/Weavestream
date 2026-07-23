@@ -13,7 +13,10 @@ import { BreezeDriver } from './drivers/breeze/breeze.driver.js';
 import { buildResourceExecutionStages } from './integration-sync.service.js';
 import type { AssetReconstructionInput } from './reconstruction/reconstruction-target.js';
 import { z } from 'zod';
+import { integrationReconstructionGapInputSchema } from '@weavestream/shared';
 import { integrationAssetExternalSource } from './integration-asset-source.js';
+import { FieldTypesRegistry } from '../field-types/field-types.registry.js';
+import { assetReconstructionInputSchema } from './reconstruction/reconstruction-target.js';
 
 jest.mock('../uploads/uploads.service.js', () => ({
   UploadsService: class UploadsService {},
@@ -88,6 +91,7 @@ describe('IntegrationSyncRunnerService writer dispatch', () => {
     resumeCursor?: string;
     cancelled?: boolean;
     staleBinding?: boolean;
+    completenessParticipant?: boolean;
   } = {}) {
     const order: string[] = [];
     let pending: string[] = [];
@@ -152,11 +156,14 @@ describe('IntegrationSyncRunnerService writer dispatch', () => {
         }
       }),
     };
-    const driver = { fetchRecords: jest.fn().mockResolvedValue({
-      records: [{ reconstructionInput: input }], hasMore: false, cursor: null,
-      terminal: true, snapshotAt: '2026-07-14T10:00:00.000Z',
-      sourceHighWater: '2026-07-14T09:00:00.000Z',
-    }) };
+    const driver = {
+      descriptor: { capabilities: { reconstructionCompleteness: options.completenessParticipant ?? true } },
+      fetchRecords: jest.fn().mockResolvedValue({
+        records: [{ reconstructionInput: input }], hasMore: false, cursor: null,
+        terminal: true, snapshotAt: '2026-07-14T10:00:00.000Z',
+        sourceHighWater: '2026-07-14T09:00:00.000Z',
+      }),
+    };
     const writer = { write: jest.fn<
       Promise<ReconstructionWriteOutcome>,
       [ReconstructionWriteContext, ReconstructionInput]
@@ -198,6 +205,7 @@ describe('IntegrationSyncRunnerService writer dispatch', () => {
     };
     const completeness = {
       recalculate: jest.fn(async () => { pending.push('completeness'); }),
+      clearNonParticipant: jest.fn(async () => { pending.push('completeness-clear'); }),
     };
     const service = new IntegrationSyncRunnerService(
       prisma as never,
@@ -209,6 +217,7 @@ describe('IntegrationSyncRunnerService writer dispatch', () => {
       writerRegistry as never,
       provenance as never,
       completeness as never,
+      new FieldTypesRegistry(),
     );
     return { service, writer, writerRegistry, tx, order, driver, audit, prisma, provenance, completeness };
   }
@@ -248,13 +257,13 @@ describe('IntegrationSyncRunnerService writer dispatch', () => {
         fieldMappings: [
           {
             sourceField: definitionA,
-            targetField: { id: targetA, archivedAt: null },
+            targetField: { id: targetA, slug: 'rack', fieldType: 'TEXT', options: {}, archivedAt: null },
             transform: null,
             syncDirection: 'preserve_manual',
           },
           {
             sourceField: definitionB,
-            targetField: { id: targetB, archivedAt: null },
+            targetField: { id: targetB, slug: 'shelf', fieldType: 'TEXT', options: {}, archivedAt: null },
             transform: null,
             syncDirection: 'manual_only',
           },
@@ -303,7 +312,7 @@ describe('IntegrationSyncRunnerService writer dispatch', () => {
         matchKeyFieldIds: [],
         fieldMappings: [{
           sourceField: definitionA,
-          targetField: { id: targetA, archivedAt: null },
+          targetField: { id: targetA, slug: 'rack', fieldType: 'TEXT', options: {}, archivedAt: null },
           transform: null,
           syncDirection: 'source_wins',
         }],
@@ -328,7 +337,7 @@ describe('IntegrationSyncRunnerService writer dispatch', () => {
     const targetFieldId = '00000000-0000-4000-8000-000000000301';
     const fieldMapping = (sourceField: string) => ({
       sourceField,
-      targetField: { id: targetFieldId, archivedAt: null },
+      targetField: { id: targetFieldId, slug: 'rack', fieldType: 'TEXT', options: {}, archivedAt: null },
       transform: null,
       syncDirection: 'source_wins',
     });
@@ -355,6 +364,186 @@ describe('IntegrationSyncRunnerService writer dispatch', () => {
         integration: { driver: 'breeze' },
       },
     )).toThrow(/distinct|target field|custom-field/i);
+  });
+
+  it('projects legacy driver values with pre-reconstruction tolerance', () => {
+    const { service } = setup();
+    const textField = '00000000-0000-4000-8000-000000000401';
+    const datetimeField = '00000000-0000-4000-8000-000000000402';
+    const booleanField = '00000000-0000-4000-8000-000000000403';
+    const absentField = '00000000-0000-4000-8000-000000000404';
+    const clearedField = '00000000-0000-4000-8000-000000000405';
+    const convert = service as unknown as {
+      toReconstructionInput(
+        record: Record<string, unknown>,
+        resource: Record<string, unknown>,
+        mapping: Record<string, unknown>,
+        onFieldDrop?: (drop: { sourceField: string; targetSlug: string }) => void,
+      ): AssetReconstructionInput | null;
+    };
+    const mapField = (sourceField: string, id: string, fieldType: string) => ({
+      sourceField,
+      targetField: { id, slug: sourceField, fieldType, options: {}, archivedAt: null },
+      transform: null,
+      syncDirection: 'source_wins',
+    });
+    const drops: Array<{ sourceField: string; targetSlug: string }> = [];
+    const converted = convert.toReconstructionInput(
+      {
+        externalId: 'device-1',
+        displayName: 'Device 1',
+        fields: {
+          // Raw RMM shapes: numbers for TEXT, epoch seconds for DATETIME,
+          // stringly booleans, '' clears — exactly what NinjaOne/Action1 emit.
+          memoryCapacity: 17179869184,
+          osLastBootTime: 1752570000,
+          rebootRequired: 'true',
+          assignedUser: '',
+        },
+        updatedAt: null,
+      },
+      {
+        id: 'resource',
+        resourceKey: 'records',
+        targetKind: 'asset',
+        targetConfig: {},
+        assetLayoutId: '00000000-0000-4000-8000-000000000007',
+        matchKeyFieldIds: [],
+        fieldMappings: [
+          mapField('memoryCapacity', textField, 'TEXT'),
+          mapField('osLastBootTime', datetimeField, 'DATETIME'),
+          mapField('rebootRequired', booleanField, 'BOOLEAN'),
+          mapField('systemSerialNumber', absentField, 'TEXT'),
+          mapField('assignedUser', clearedField, 'TEXT'),
+        ],
+      },
+      {
+        externalOrgId: 'org-1',
+        integrationId: '00000000-0000-4000-8000-000000000001',
+        integration: { driver: 'ninjaone' },
+      },
+      (drop) => drops.push(drop),
+    );
+
+    expect(converted?.fieldValues).toEqual([
+      // Coerced through the field-type strategy so strict native
+      // validation downstream accepts what the RMM actually sends.
+      { targetFieldId: textField, value: '17179869184', syncDirection: 'source_wins' },
+      // rebootRequired: 'true' → real boolean.
+      { targetFieldId: booleanField, value: true, syncDirection: 'source_wins' },
+      // '' propagates an intentional upstream clear.
+      { targetFieldId: clearedField, value: null, syncDirection: 'source_wins' },
+      // osLastBootTime (epoch seconds → not ISO) is dropped WITHOUT
+      // blocking the record; systemSerialNumber (absent key) is skipped
+      // so the stored value survives.
+    ]);
+    // The projected record must round-trip the strict writer schema —
+    // an absent source key must never poison it with `undefined`.
+    expect(() => assetReconstructionInputSchema.parse(converted)).not.toThrow();
+    // Only the value-schema drop is reported for gap observation — the
+    // absent key (skip) and the intentional clear are not drops.
+    expect(drops).toEqual([
+      { sourceField: 'osLastBootTime', targetSlug: 'osLastBootTime' },
+    ]);
+  });
+
+  it('surfaces dropped legacy field values as one authority-neutral unsupported gap while the run succeeds', async () => {
+    const { service, driver, prisma, provenance, writer, tx } = setup();
+    const textField = '00000000-0000-4000-8000-000000000501';
+    const datetimeField = '00000000-0000-4000-8000-000000000502';
+    prisma.integrationResource.findFirst.mockResolvedValueOnce({
+      id: 'resource', integrationId: 'integration', resourceKey: 'records', enabled: true,
+      targetKind: 'asset', targetConfig: {}, dependsOnResourceKeys: [],
+      assetLayoutId: '00000000-0000-4000-8000-000000000007',
+      assetLayout: { fields: [] }, matchKeyFieldIds: [],
+      fieldMappings: [
+        {
+          sourceField: 'deviceName',
+          targetField: { id: textField, slug: 'device_name', fieldType: 'TEXT', options: {}, archivedAt: null },
+          transform: null, syncDirection: 'source_wins',
+        },
+        {
+          sourceField: 'osLastBootTime',
+          targetField: { id: datetimeField, slug: 'os_last_boot_time', fieldType: 'DATETIME', options: {}, archivedAt: null },
+          transform: null, syncDirection: 'source_wins',
+        },
+      ],
+    });
+    driver.fetchRecords.mockResolvedValueOnce({
+      // A whole fleet shares the same bad mapping (epoch seconds into a
+      // DATETIME field) — the drop must stay one bounded observation.
+      records: [
+        { externalId: 'device-1', displayName: 'Device 1', fields: { deviceName: 'Alpha', osLastBootTime: 1752570000 }, updatedAt: null },
+        { externalId: 'device-2', displayName: 'Device 2', fields: { deviceName: 'Beta', osLastBootTime: 1752570001 }, updatedAt: null },
+      ],
+      hasMore: false, cursor: null, terminal: true,
+      snapshotAt: '2026-07-14T10:00:00.000Z',
+    });
+    writer.write.mockImplementation(async (_ctx, record) => ({
+      targetKind: 'asset', targetId: 'asset-id', checksum: 'c'.repeat(64), change: 'created',
+      provenance: {
+        integrationId: 'integration', externalOrgId: 'org-1', resourceKey: 'records',
+        externalId: record.externalId, sourceRevision: null, sourceFingerprint: null,
+        firstSeenAt: '2026-07-14T10:00:00.000Z', lastSeenAt: '2026-07-14T10:00:00.000Z',
+        lastSyncedAt: '2026-07-14T10:00:00.000Z', ownership: 'breeze', state: 'active',
+      },
+      gaps: [],
+    }));
+
+    await expect(service.runMapping({
+      syncRunId: 'drop-run', integrationCompanyMappingId: 'mapping', resourceId: 'resource',
+      dryRun: false, actorId: 'actor', mode: 'incremental',
+    })).resolves.toMatchObject({
+      status: 'succeeded',
+      totals: { fetched: 2, created: 2, blocked: 0, errors: 0 },
+    });
+
+    // The representable sibling field still syncs on every record.
+    expect(writer.write).toHaveBeenCalledTimes(2);
+    const [, firstWritten] = writer.write.mock.calls[0]! as unknown as [unknown, AssetReconstructionInput];
+    expect(firstWritten.fieldValues).toEqual([
+      { targetFieldId: textField, value: 'Alpha', syncDirection: 'source_wins' },
+    ]);
+
+    // Both devices collapse into ONE mapping-level observation whose
+    // dedupe discriminators (null externalId + stable reasonCode) keep a
+    // fleet with the same bad mapping to a single persisted row.
+    expect(provenance.persistGaps).toHaveBeenCalledWith(expect.anything(), expect.anything(), [
+      expect.objectContaining({
+        kind: 'unsupported',
+        externalId: null,
+        details: {
+          reasonCode: 'legacy_value_not_representable',
+          fieldPaths: ['osLastBootTime -> os_last_boot_time'],
+          candidateCount: 2,
+        },
+      }),
+    ]);
+    // The observation must satisfy the real persistence schema so
+    // persistGaps can never throw (and fail the run) over a drop gap.
+    const observation = (provenance.persistGaps.mock.calls[0]! as unknown as [
+      unknown, unknown, Array<Record<string, unknown>>,
+    ])[2][0]!;
+    expect(integrationReconstructionGapInputSchema.safeParse({
+      companyId: '00000000-0000-4000-8000-000000000901',
+      integrationCompanyMappingId: '00000000-0000-4000-8000-000000000902',
+      resourceId: '00000000-0000-4000-8000-000000000903',
+      externalId: observation.externalId as string | null,
+      kind: observation.kind,
+      message: observation.message,
+      details: observation.details,
+      firstSeenAt: '2026-07-14T10:00:00.000Z',
+      lastSeenAt: '2026-07-14T10:00:00.000Z',
+      resolvedAt: null,
+    }).success).toBe(true);
+
+    // Authority-neutral: the traversal stays authoritative, absent gaps
+    // resolve, and the terminal checkpoint completes normally.
+    expect(provenance.resolveAbsentGaps).toHaveBeenCalledTimes(1);
+    expect(tx.integrationSyncCheckpoint.upsert).toHaveBeenCalledWith(expect.objectContaining({
+      create: expect.objectContaining({ authoritative: true }),
+      update: expect.objectContaining({ authoritative: true }),
+    }));
   });
 
   it('dispatches typed input and commits its binding before the page checkpoint', async () => {
@@ -384,6 +573,21 @@ describe('IntegrationSyncRunnerService writer dispatch', () => {
     }]);
     expect(order).toEqual([
       'target+audit', 'binding', 'gaps', 'resolve-gaps', 'completeness', 'checkpoint',
+    ]);
+  });
+
+  it('clears instead of scoring completeness for non-dossier drivers', async () => {
+    const { service, order, completeness } = setup({ completenessParticipant: false });
+    await expect(service.runMapping({
+      syncRunId: 'run', integrationCompanyMappingId: 'mapping', resourceId: 'resource',
+      dryRun: false, actorId: 'actor', mode: 'incremental',
+    })).resolves.toMatchObject({ status: 'succeeded', totals: { created: 1 } });
+    expect(completeness.recalculate).not.toHaveBeenCalled();
+    expect(completeness.clearNonParticipant).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      companyId: 'company', integrationCompanyMappingId: 'mapping', resourceId: 'resource',
+    }));
+    expect(order).toEqual([
+      'target+audit', 'binding', 'gaps', 'resolve-gaps', 'completeness-clear', 'checkpoint',
     ]);
   });
 
@@ -1420,6 +1624,7 @@ describe('Breeze foundational asset composition', () => {
         findMoveConflict: jest.fn().mockResolvedValue(null),
       } as never,
       { recalculate: jest.fn() } as never,
+      new FieldTypesRegistry(),
     );
 
     await expect(runner.runMapping({ syncRunId: 'run-site', integrationCompanyMappingId: mapping, resourceId: siteResourceId, dryRun: false, actorId: 'actor' }))

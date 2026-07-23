@@ -1,7 +1,7 @@
 /** @jest-environment jsdom */
 import '@testing-library/jest-dom';
 import { render, screen } from '@testing-library/react';
-import { ProvenanceBadge } from './provenance-badge';
+import { ProvenanceBadge, provenanceAttention } from './provenance-badge';
 
 describe('ProvenanceBadge', () => {
   it('uses accessible state/ownership/source/date text and never renders raw source values', () => {
@@ -38,5 +38,16 @@ describe('ProvenanceBadge', () => {
       target: { targetKind: 'article', targetId: crypto.randomUUID(), targetLabel: 'Script', targetHref: null },
     }} />);
     expect(screen.getByText(label)).toBeInTheDocument();
+  });
+});
+
+describe('provenanceAttention', () => {
+  const rec = (state: 'active' | 'stale' | 'blocked') => ({ state }) as never;
+
+  it('maps blocked over stale over all-active', () => {
+    expect(provenanceAttention([])).toBeUndefined();
+    expect(provenanceAttention([rec('active')])).toBeUndefined();
+    expect(provenanceAttention([rec('active'), rec('stale')])).toBe('warn');
+    expect(provenanceAttention([rec('stale'), rec('blocked')])).toBe('danger');
   });
 });

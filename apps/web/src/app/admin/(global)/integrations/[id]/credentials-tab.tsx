@@ -18,6 +18,11 @@ import {
   Tag,
   useToast,
 } from '../../../../../components/ui';
+import {
+  SyncScheduleSelect,
+  syncScheduleHelp,
+  syncScheduleLabel,
+} from '../../../../../components/integrations/sync-schedule';
 import { DriverFieldsEditor } from '../driver-fields-editor';
 import { safeIntegrationProblemMessage } from '../integration-feedback';
 
@@ -251,23 +256,19 @@ export function CredentialsTab({
           </Field>
         </div>
         <Field
-          label={
-            driver?.capabilities.kind === 'security'
-              ? 'Drift sweep schedule (cron)'
-              : 'Sync schedule (cron)'
-          }
+          label={syncScheduleLabel(
+            driver?.capabilities.kind === 'security' ? 'security' : 'pull',
+          )}
           htmlFor="i-cron"
-          help={
-            driver?.capabilities.kind === 'security'
-              ? "5-field UTC cron, e.g. '*/15 * * * *'. Drift between Cloudflare and Weavestream is auto-healed on every tick. Leave blank to inherit the global default; administrators can set that default to 'off' to disable scheduled runs."
-              : "5-field UTC cron, e.g. '0 */6 * * *'. Leave blank to inherit the global default; administrators can set that default to 'off' to disable scheduled runs."
-          }
+          help={syncScheduleHelp(
+            driver?.capabilities.kind === 'security' ? 'security' : 'pull',
+            syncCron,
+          )}
         >
-          <Input
+          <SyncScheduleSelect
             id="i-cron"
             value={syncCron}
-            onChange={(e) => setSyncCron(e.target.value)}
-            placeholder="*/15 * * * *"
+            onChange={setSyncCron}
           />
         </Field>
       </section>

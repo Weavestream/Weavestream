@@ -365,4 +365,24 @@ describe('BreezePartnerApiClient', () => {
       await expect(promise).rejects.not.toThrow(/top-secret-key/);
     },
   );
+
+  it('preserves the underlying transport failure as the sanitized error cause', async () => {
+    installFetchScript([{ error: new Error('connect ECONNREFUSED 1.2.3.4:443') }]);
+    const promise = new BreezePartnerApiClient().testConnection(context());
+    await expect(promise).rejects.toThrow(/Breeze partner API request failed/i);
+    await expect(promise).rejects.toMatchObject({
+      cause: expect.objectContaining({ message: 'connect ECONNREFUSED 1.2.3.4:443' }),
+    });
+  });
+
+  it('passes redacted egress-guard refusals through unmasked', async () => {
+    const refusal = Object.assign(
+      new Error('Egress blocked for https://breeze.example.test/: 1.2.3.4 is in blocked range'),
+      { name: 'EgressBlockedError' },
+    );
+    installFetchScript([{ error: refusal }]);
+    await expect(new BreezePartnerApiClient().testConnection(context())).rejects.toThrow(
+      /Egress blocked/,
+    );
+  });
 });

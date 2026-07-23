@@ -139,6 +139,8 @@ function UtilizationBar({ row }: { row: SubnetRow }) {
         <div
           style={{
             width: `${pct}%`,
+            // keep non-zero usage visible even when it rounds to 0%
+            minWidth: row.utilization.claimed > 0 ? 4 : undefined,
             height: '100%',
             borderRadius: 3,
             background:

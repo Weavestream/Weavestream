@@ -38,7 +38,7 @@ const STATIC_TABS_HEAD: TabDescriptor[] = [
   {
     id: 'creds',
     label: 'Credentials & schedule',
-    help: 'Update the secret, status, or cron expression.',
+    help: 'Update the secret, status, or sync schedule.',
     kind: 'static',
   },
   {

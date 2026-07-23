@@ -18,7 +18,7 @@ Cloudflare Zero Trust Lists is different: Weavestream manages registered Gateway
 2. Select **New integration**.
 3. Choose the driver and enter a specific **Display name**.
 4. Complete the driver’s configuration and credential fields.
-5. Optionally enter a five-field UTC cron expression under **Sync schedule (cron)**. A blank field inherits the global `INTEGRATION_SYNC_DEFAULT_CRON` value, which defaults to every 15 minutes. An administrator can set that global value to `off` to disable inherited scheduled runs.
+5. Optionally pick an interval under **Sync schedule** — presets range from every 5 minutes to every 24 hours. **Inherit global default** follows the `INTEGRATION_SYNC_DEFAULT_CRON` value, which defaults to every 15 minutes. An administrator can set that global value to `off` to disable inherited scheduled runs.
 6. Select **Create**.
 
 New integrations start paused. On **Credentials & schedule**, select **Test connection**, finish organization and resource configuration, change **Status** to active, and select **Save changes**.

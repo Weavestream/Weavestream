@@ -82,9 +82,32 @@ describe('CredentialsTab', () => {
     expect(screen.getByRole('button', { name: 'Run sync now' })).toBeDisabled();
   });
 
-  it('explains blank cron inheritance', () => {
+  it('explains schedule inheritance while no interval is chosen', () => {
     render(<CredentialsTab integration={integration as never} mappings={mappings} driver={driver} />);
-    expect(screen.getByText(/blank to inherit the global default/i)).toHaveTextContent(/off/i);
+    expect(screen.getByLabelText('Sync schedule')).toHaveValue('');
+    expect(screen.getByText(/inherits the global default/i)).toHaveTextContent(/off/i);
+  });
+
+  it('saves a picked interval preset as the stored cron', async () => {
+    render(<CredentialsTab integration={integration as never} mappings={mappings} driver={driver} />);
+    fireEvent.change(screen.getByLabelText('Sync schedule'), { target: { value: '*/30 * * * *' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+    await waitFor(() => expect(apiFetch).toHaveBeenCalledWith('/admin/integrations/integration-1', {
+      method: 'PATCH', body: JSON.stringify({ syncCron: '*/30 * * * *' }),
+    }));
+  });
+
+  it('surfaces a legacy hand-written cron as a Custom option and can clear back to inherit', async () => {
+    render(<CredentialsTab integration={{ ...integration, syncCron: '7 3 * * 2' } as never} mappings={mappings} driver={driver} />);
+    const select = screen.getByLabelText('Sync schedule');
+    expect(select).toHaveValue('7 3 * * 2');
+    expect(screen.getByRole('option', { name: 'Custom — 7 3 * * 2 (UTC cron)' })).toBeInTheDocument();
+
+    fireEvent.change(select, { target: { value: '' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+    await waitFor(() => expect(apiFetch).toHaveBeenCalledWith('/admin/integrations/integration-1', {
+      method: 'PATCH', body: JSON.stringify({ syncCron: null }),
+    }));
   });
 
   it('reports credential-save failures without echoing secrets', async () => {

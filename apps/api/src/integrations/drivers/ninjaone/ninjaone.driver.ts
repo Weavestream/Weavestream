@@ -347,6 +347,7 @@ export class NinjaOneDriver implements IntegrationDriver {
       // Ticketing add-on (404s from `/v2/ticketing/*` map to an empty
       // list / clear "not enabled" error rather than crashing).
       ticketing: true,
+      reconstructionCompleteness: false,
     },
   };
 

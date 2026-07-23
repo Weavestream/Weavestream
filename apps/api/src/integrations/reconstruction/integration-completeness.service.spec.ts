@@ -412,6 +412,41 @@ describe('IntegrationCompletenessService', () => {
     expect(prisma.integrationReconstructionSummary.upsert).not.toHaveBeenCalled();
     expect(prisma.integrationReconstructionGap.updateMany).not.toHaveBeenCalled();
   });
+
+  it('clears the scorecard and resolves completeness gaps for non-participating resources', async () => {
+    const prisma = completenessPrisma({
+      activeAssetFields: [], activeArticles: [], manualAssetFields: [],
+      staleAssetFields: [], staleArticles: [], gaps: [],
+    });
+    const tx = {
+      ...prisma,
+      integrationReconstructionSummary: { deleteMany: jest.fn() },
+    };
+    const service = new IntegrationCompletenessService(prisma as never);
+    await service.clearNonParticipant(tx as never, scope());
+
+    expect(tx.integrationReconstructionGap.updateMany).toHaveBeenCalledWith({
+      where: {
+        companyId: ids.company,
+        integrationCompanyMappingId: ids.mapping,
+        resourceId: ids.resource,
+        resolvedAt: null,
+        dedupeKey: { startsWith: 'completeness:' },
+      },
+      data: { resolvedAt: scope().evaluatedAt },
+    });
+    expect(tx.integrationReconstructionSummary.deleteMany).toHaveBeenCalledWith({
+      where: {
+        companyId: ids.company,
+        integrationCompanyMappingId: ids.mapping,
+        resourceId: ids.resource,
+        summaryKey: ids.resource,
+      },
+    });
+    // Only the scoped scorecard artifacts are touched — no upserts, no
+    // record or gap creation for a resource that never participates.
+    expect(tx.integrationReconstructionGap.upsert).not.toHaveBeenCalled();
+  });
 });
 
 function scope() {

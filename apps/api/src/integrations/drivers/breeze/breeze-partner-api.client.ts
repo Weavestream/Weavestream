@@ -120,7 +120,14 @@ export class BreezePartnerApiClient {
       });
     } catch (error) {
       if (error instanceof DriverRateLimitError) throw error;
-      throw new Error('Breeze partner API request failed.');
+      // Egress-guard refusals carry an already-redacted URL + reason and
+      // fetchWithRetry rethrows them precisely so the operator can see
+      // why the destination was refused — pass them through unmasked.
+      if (error instanceof Error && error.name === 'EgressBlockedError') throw error;
+      // The replacement message stays generic because upstream error text
+      // could echo request material; the original failure travels on
+      // `cause` so describeError / log serializers can surface it.
+      throw new Error('Breeze partner API request failed.', { cause: error });
     }
     if (response.status === 401 || response.status === 403) {
       throw new DriverAuthError('Breeze partner API credentials were rejected.');
@@ -131,8 +138,8 @@ export class BreezePartnerApiClient {
     let raw: unknown;
     try {
       raw = await response.json();
-    } catch {
-      throw new Error('Breeze partner API returned invalid response data.');
+    } catch (error) {
+      throw new Error('Breeze partner API returned invalid response data.', { cause: error });
     }
     if (
       !raw ||
@@ -145,8 +152,8 @@ export class BreezePartnerApiClient {
       const schema = breezeEnvelopeSchema(breezeRecordSchemaByEndpoint[endpoint]);
       const validated = schema.parse(raw);
       return schema.parse(sanitizeBreezeText(validated)) as BreezePartnerEnvelope<T>;
-    } catch {
-      throw new Error('Breeze partner API returned invalid response data.');
+    } catch (error) {
+      throw new Error('Breeze partner API returned invalid response data.', { cause: error });
     }
   }
 }

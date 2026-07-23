@@ -437,7 +437,9 @@ export class IntegrationsService {
       select: { assetId: true, companyId: true },
     });
 
-    const releasedAssetIds = records.map((r) => r.assetId);
+    const releasedAssetIds = records
+      .map((r) => r.assetId)
+      .filter((assetId): assetId is string => assetId !== null);
 
     // Tenant middleware requires `companyId` on every write to a
     // tenant-scoped model (`IntegrationSyncRecord`, `Asset`). An
@@ -505,6 +507,10 @@ export class IntegrationsService {
       },
     });
     for (const r of records) {
+      // Native-backed sync records have no Asset to release. Their rows were
+      // removed by the integration cascade, but they must not produce an
+      // asset-release audit entry with a null entity id.
+      if (r.assetId === null) continue;
       await this.audit.log({
         actorId: actor.id,
         action: AUDIT_ACTIONS.integration.assetReleased,

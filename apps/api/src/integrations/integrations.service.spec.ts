@@ -466,6 +466,101 @@ describe('ensureResourceDestination', () => {
   });
 });
 
+describe('integration deletion', () => {
+  const ids = {
+    actor: '00000000-0000-4000-8000-000000000001',
+    integration: '00000000-0000-4000-8000-000000000002',
+    company: '00000000-0000-4000-8000-000000000003',
+    asset: '00000000-0000-4000-8000-000000000004',
+  };
+
+  function setup(records: Array<{ assetId: string | null; companyId: string }>) {
+    const tx = {
+      integrationSyncRecord: {
+        deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+      asset: { updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
+      integration: { delete: jest.fn().mockResolvedValue({ id: ids.integration }) },
+    };
+    const prisma = {
+      integration: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: ids.integration,
+          driver: 'breeze',
+          name: 'Breeze',
+        }),
+      },
+      integrationSyncRecord: { findMany: jest.fn().mockResolvedValue(records) },
+      $transaction: jest.fn(async (callback: (client: typeof tx) => Promise<void>) =>
+        callback(tx)),
+    };
+    const audit = { log: jest.fn().mockResolvedValue(undefined) };
+    const scheduler = { refreshFor: jest.fn().mockResolvedValue(undefined) };
+    const service = new IntegrationsService(
+      prisma as never, {} as never, audit as never, {} as never,
+      {} as never, scheduler as never, {} as never,
+    );
+    return { service, tx, audit, scheduler };
+  }
+
+  it('releases and audits only asset targets from mixed sync records', async () => {
+    const { service, tx, audit } = setup([
+      { assetId: ids.asset, companyId: ids.company },
+      { assetId: null, companyId: ids.company },
+    ]);
+
+    await service.delete(
+      { id: ids.actor } as never,
+      ids.integration,
+      { ip: '127.0.0.1', userAgent: 'jest' },
+    );
+
+    expect(tx.integrationSyncRecord.deleteMany).toHaveBeenCalledWith({
+      where: {
+        assetId: { in: [ids.asset] },
+        companyId: { in: [ids.company] },
+        companyMapping: { integrationId: ids.integration },
+      },
+    });
+    expect(tx.asset.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ id: { in: [ids.asset] } }),
+    }));
+    expect(audit.log).toHaveBeenCalledTimes(2);
+    expect(audit.log).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      entityType: 'Integration',
+      after: { releasedAssetCount: 1 },
+    }));
+    expect(audit.log).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      entityType: 'Asset',
+      entityId: ids.asset,
+    }));
+  });
+
+  it('deletes a native-only integration without asset cleanup or null asset audits', async () => {
+    const { service, tx, audit, scheduler } = setup([
+      { assetId: null, companyId: ids.company },
+    ]);
+
+    await service.delete(
+      { id: ids.actor } as never,
+      ids.integration,
+      { ip: '127.0.0.1', userAgent: 'jest' },
+    );
+
+    expect(tx.integrationSyncRecord.deleteMany).not.toHaveBeenCalled();
+    expect(tx.integrationSyncRecord.findMany).not.toHaveBeenCalled();
+    expect(tx.asset.updateMany).not.toHaveBeenCalled();
+    expect(tx.integration.delete).toHaveBeenCalledWith({ where: { id: ids.integration } });
+    expect(scheduler.refreshFor).toHaveBeenCalledWith(ids.integration);
+    expect(audit.log).toHaveBeenCalledTimes(1);
+    expect(audit.log).toHaveBeenCalledWith(expect.objectContaining({
+      entityType: 'Integration',
+      after: { releasedAssetCount: 0 },
+    }));
+  });
+});
+
 describe('reconstruction administration reads', () => {
   const ids = {
     integration: '00000000-0000-4000-8000-000000000001',

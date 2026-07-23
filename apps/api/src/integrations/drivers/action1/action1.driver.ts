@@ -163,6 +163,7 @@ export class Action1Driver implements IntegrationDriver {
       listSourceOrgs: true,
       dryRun: true,
       ticketing: false,
+      reconstructionCompleteness: false,
     },
   };
 

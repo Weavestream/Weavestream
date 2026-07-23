@@ -2,7 +2,7 @@ import { BadRequestException, Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { createHash } from 'node:crypto';
 import { integrationProvenanceSchema } from '@weavestream/shared';
-import type { PrismaService } from '../../prisma/prisma.service.js';
+import { PrismaService } from '../../prisma/prisma.service.js';
 
 export const COMPLETENESS_CAPABILITIES = [
   'administrative_credential',
@@ -136,6 +136,41 @@ export class IntegrationCompletenessService {
       },
     });
     return { counts, items };
+  }
+
+  /**
+   * Resources whose driver does not participate in the reconstruction
+   * completeness model (descriptor `capabilities.reconstructionCompleteness`
+   * is false) must not carry capability scorecards: asset-projection
+   * drivers like NinjaOne or Action1 never claimed to provide dossier
+   * documentation, so scoring them reports permanently-"missing"
+   * capabilities and manufactures unresolvable "Document the missing …"
+   * gaps. Resolves any previously persisted completeness gaps and removes
+   * the summary row for the scope so affected resources self-heal on
+   * their next successful sync.
+   */
+  async clearNonParticipant(
+    tx: Prisma.TransactionClient,
+    scope: CompletenessScope,
+  ): Promise<void> {
+    await tx.integrationReconstructionGap.updateMany({
+      where: {
+        companyId: scope.companyId,
+        integrationCompanyMappingId: scope.integrationCompanyMappingId,
+        resourceId: scope.resourceId,
+        resolvedAt: null,
+        dedupeKey: { startsWith: 'completeness:' },
+      },
+      data: { resolvedAt: scope.evaluatedAt },
+    });
+    await tx.integrationReconstructionSummary.deleteMany({
+      where: {
+        companyId: scope.companyId,
+        integrationCompanyMappingId: scope.integrationCompanyMappingId,
+        resourceId: scope.resourceId,
+        summaryKey: scope.resourceId,
+      },
+    });
   }
 
   private async collectEvidence(

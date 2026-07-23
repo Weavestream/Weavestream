@@ -18,6 +18,11 @@ import {
   Tag,
   useToast,
 } from '../../../../components/ui';
+import {
+  SyncScheduleSelect,
+  syncScheduleHelp,
+  syncScheduleLabel,
+} from '../../../../components/integrations/sync-schedule';
 import { DriverFieldsEditor } from './driver-fields-editor';
 import { safeIntegrationProblemMessage } from './integration-feedback';
 
@@ -215,17 +220,19 @@ export function CreateIntegrationButton({
             />
           )}
           <Field
-            label="Sync schedule (cron)"
+            label={syncScheduleLabel(
+              driver?.capabilities.kind === 'security' ? 'security' : 'pull',
+            )}
             htmlFor="i-cron"
-            help={
-              "5-field cron expression in UTC, e.g. '*/15 * * * *'. Leave blank to inherit the global default; administrators can set that default to 'off' to disable scheduled runs."
-            }
+            help={syncScheduleHelp(
+              driver?.capabilities.kind === 'security' ? 'security' : 'pull',
+              syncCron,
+            )}
           >
-            <Input
+            <SyncScheduleSelect
               id="i-cron"
               value={syncCron}
-              onChange={(e) => setSyncCron(e.target.value)}
-              placeholder="*/15 * * * *"
+              onChange={setSyncCron}
             />
           </Field>
           {error && <Tag tone="danger">{error}</Tag>}
