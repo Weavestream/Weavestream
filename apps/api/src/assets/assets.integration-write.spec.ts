@@ -949,4 +949,110 @@ describe('AssetsService integration system writes', () => {
       .mockResolvedValueOnce({ id: ids.manual });
     await expect(collisionSetup.service.writeFromIntegration(input)).rejects.toThrow();
   });
+
+  it('reports a terminal identity conflict when a caller-transaction create loses the unique race', async () => {
+    const { service, prisma, audit, tx } = setup();
+    tx.asset.create.mockRejectedValue(
+      Object.assign(new Error('Unique constraint failed'), { code: 'P2002' }),
+    );
+
+    await expect(service.writeFromIntegration({ ...input, tx: tx as never })).resolves.toMatchObject({
+      change: 'blocked',
+      gap: {
+        kind: 'synchronization_error',
+        details: { reasonCode: 'external_identity_conflict' },
+      },
+    });
+
+    // The caller transaction is aborted by the unique violation, so the
+    // loser must stop after the failed statement: exactly one attempt,
+    // no field writes, no audit row, no nested transaction.
+    expect(tx.asset.create).toHaveBeenCalledTimes(1);
+    expect(tx.assetFieldValue.upsert).not.toHaveBeenCalled();
+    expect(audit.logWithClient).not.toHaveBeenCalled();
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('retries a standalone create that loses the unique race and lands on the winner', async () => {
+    const winner = asset({ name: 'Old Edge' });
+    const { service, prisma, tx } = setup();
+    tx.asset.create.mockRejectedValueOnce(
+      Object.assign(new Error('Unique constraint failed'), { code: 'P2002' }),
+    );
+    // Attempt 1 sees neither a binding nor an identity row; the winner's
+    // page commits between the failed create and the retry's fresh read.
+    prisma.integrationSyncRecord.findUnique
+      .mockResolvedValueOnce(null)
+      .mockResolvedValue(binding());
+    prisma.asset.findUnique.mockResolvedValue(winner);
+    tx.integrationSyncRecord.findUnique.mockResolvedValue(binding());
+
+    await expect(service.writeFromIntegration(input)).resolves.toMatchObject({
+      targetId: ids.asset,
+      change: 'updated',
+    });
+
+    expect(tx.asset.create).toHaveBeenCalledTimes(1);
+    expect(tx.asset.updateMany).toHaveBeenCalledTimes(1);
+    expect(prisma.$transaction).toHaveBeenCalledTimes(2);
+  });
+
+  it('reports a terminal identity conflict when adopting identity onto a bound manual asset loses the race', async () => {
+    const target = asset({ externalId: null, externalSource: null, name: 'Old Edge' });
+    const { service, audit, tx } = setup({ target, binding: binding() });
+    tx.asset.updateMany.mockRejectedValue(
+      Object.assign(new Error('Unique constraint failed'), { code: 'P2002' }),
+    );
+
+    await expect(service.writeFromIntegration({
+      ...input,
+      tx: tx as never,
+      existingTargetId: ids.asset,
+    })).resolves.toMatchObject({
+      change: 'blocked',
+      gap: {
+        kind: 'synchronization_error',
+        details: { reasonCode: 'external_identity_conflict' },
+      },
+    });
+
+    // Terminal on the first attempt — no guarded-update retry budget is
+    // spent against an aborted transaction.
+    expect(tx.asset.updateMany).toHaveBeenCalledTimes(1);
+    expect(tx.assetFieldValue.upsert).not.toHaveBeenCalled();
+    expect(audit.logWithClient).not.toHaveBeenCalled();
+  });
+});
+
+describe('AssetsService interactive identity writes', () => {
+  const actor = { id: ids.actor, role: 'SUPER_ADMIN' } as never;
+  const meta = { ip: '127.0.0.1', userAgent: 'jest' };
+
+  it('maps a lost create race on the identity indexes to the ExternalIdTaken 409', async () => {
+    const { service, prisma, tx } = setup();
+    tx.asset.create.mockRejectedValue(
+      Object.assign(new Error('Unique constraint failed'), { code: 'P2002' }),
+    );
+
+    await expect(
+      service.create(
+        actor,
+        ids.company,
+        {
+          assetLayoutId: ids.layout,
+          name: 'Edge 01',
+          externalId: 'org-1:devices:edge-01',
+          externalSource: 'breeze',
+          fieldValues: { hostname: 'edge-01' },
+        } as never,
+        meta,
+      ),
+    ).rejects.toMatchObject({
+      status: 409,
+      response: expect.objectContaining({ error: 'ExternalIdTaken' }),
+    });
+
+    // The pre-check ran and passed — the 409 came from the index backstop.
+    expect(prisma.asset.findFirst).toHaveBeenCalled();
+  });
 });

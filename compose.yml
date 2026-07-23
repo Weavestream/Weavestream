@@ -120,8 +120,11 @@ services:
       timeout: 5s
       retries: 3
       # start_period covers worst-case migration time on a slow NAS
-      # before the healthcheck starts counting failures.
-      start_period: 120s
+      # before the healthcheck starts counting failures. Sized for
+      # migrations that wait out live sync transactions (0062 queues
+      # behind in-flight 60s page transactions before its dedup) with
+      # headroom for the index builds.
+      start_period: 240s
 
   worker:
     image: ghcr.io/weavestream/weavestream-worker:${WEAVESTREAM_VERSION:-latest}

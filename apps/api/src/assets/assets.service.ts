@@ -24,6 +24,7 @@ import { readTargetProvenance } from '../integrations/reconstruction/integration
 import { FILTERABLE_FIELD_TYPES } from '@weavestream/shared';
 import type { FileFieldEntry } from '@weavestream/shared';
 import { PrismaService } from '../prisma/prisma.service.js';
+import { isUniqueConstraintError } from '../prisma/prisma-errors.js';
 import { AuditLogService } from '../audit/audit.service.js';
 import { FieldTypesRegistry } from '../field-types/field-types.registry.js';
 import { RelationsService } from '../relations/relations.service.js';
@@ -101,6 +102,52 @@ function legacyIntegrationExternalSource(
   return input.externalSource === `breeze:${input.integrationId}`
     ? 'breeze'
     : null;
+}
+
+/**
+ * Raised when one of the partial unique indexes on
+ * (companyId, externalSource, externalId) — migration 0062 — rejects a
+ * write that raced another identity claim past `assertExternalIdFree`.
+ * Carries no payload; each catch site translates it for its write mode.
+ */
+class AssetExternalIdentityConflictError extends Error {
+  constructor() {
+    super('Another asset claimed this external identity concurrently.');
+  }
+}
+
+/** The 409 payload shape shared by the pre-check and the index backstop. */
+function externalIdTakenConflict(
+  externalId: string,
+  externalSource: string | null,
+): ConflictException {
+  return new ConflictException({
+    error: 'ExternalIdTaken',
+    externalId,
+    externalSource,
+    message: `Another asset already carries external id "${externalId}".`,
+  });
+}
+
+/**
+ * Outcome for an integration write that lost an identity race to a
+ * concurrent writer. Under a caller-provided transaction the unique
+ * violation has already aborted the surrounding page transaction, so a
+ * re-read is impossible — report a retryable synchronization gap; the
+ * runner rolls the page back and the next run resolves against the
+ * winner (or lands on the pre-check's `manual_ownership`/409 block if
+ * the conflict persists). Standalone writes retry from a fresh read.
+ */
+function integrationIdentityConflictResult(
+  input: IntegrationAssetWriteInput,
+): IntegrationAssetWriteResult | 'revision_conflict' {
+  if (!input.tx) return 'revision_conflict';
+  return integrationAssetBlocked(
+    input.companyId,
+    'synchronization_error',
+    'Another asset claimed this external identity while reconstruction was writing.',
+    'external_identity_conflict',
+  );
 }
 
 export interface IntegrationAssetWriteResult {
@@ -411,17 +458,29 @@ export class AssetsService {
     }
 
     const asset = await this.prisma.$transaction(async (tx) => {
-      const created = await tx.asset.create({
-        data: {
-          companyId,
-          assetLayoutId: layout.id,
-          name,
-          externalId: input.externalId ?? null,
-          externalSource: input.externalSource ?? null,
-          createdBy: actor.id,
-          updatedBy: actor.id,
-        },
-      });
+      let created: Asset;
+      try {
+        created = await tx.asset.create({
+          data: {
+            companyId,
+            assetLayoutId: layout.id,
+            name,
+            externalId: input.externalId ?? null,
+            externalSource: input.externalSource ?? null,
+            createdBy: actor.id,
+            updatedBy: actor.id,
+          },
+        });
+      } catch (error) {
+        // Backstop for the `assertExternalIdFree` pre-check above: the
+        // 0062 partial identity indexes reject a concurrent claim of the
+        // same external identity. Surface the same 409 as the pre-check
+        // rather than a 500.
+        if (input.externalId && isUniqueConstraintError(error)) {
+          throw externalIdTakenConflict(input.externalId, input.externalSource ?? null);
+        }
+        throw error;
+      }
 
       await this.persistFieldValues(
         tx,
@@ -491,15 +550,21 @@ export class AssetsService {
 
     await this.assertUniqueValues(layout, companyId, validated, id);
 
-    if (input.externalId !== undefined) {
-      if (input.externalId !== null) {
-        await this.assertExternalIdFree(
-          companyId,
-          input.externalId,
-          input.externalSource ?? existing.externalSource,
-          id,
-        );
-      }
+    // The identity pair this update would leave on the row. A
+    // source-only change (external_source moves while external_id is
+    // untouched) can collide just like an external_id change, so the
+    // pre-check compares the resulting pair, not just the incoming id.
+    const nextExternalId =
+      input.externalId !== undefined ? input.externalId : existing.externalId;
+    const nextExternalSource =
+      input.externalSource !== undefined
+        ? input.externalSource
+        : existing.externalSource;
+    if (
+      nextExternalId !== null &&
+      (input.externalId !== undefined || input.externalSource !== undefined)
+    ) {
+      await this.assertExternalIdFree(companyId, nextExternalId, nextExternalSource, id);
     }
 
     const primaryField = layout.fields.find((f) => f.isPrimary && f.archivedAt === null);
@@ -528,17 +593,27 @@ export class AssetsService {
       // supplied" guard. The `{ id, companyId }` pair also defends
       // against a cross-tenant id collision (cheap belt-and-suspenders
       // on top of the `findFirst` pre-check above).
-      await tx.asset.updateMany({
-        where: { id, companyId },
-        data: {
-          name: nextName,
-          ...(input.externalId !== undefined ? { externalId: input.externalId } : {}),
-          ...(input.externalSource !== undefined
-            ? { externalSource: input.externalSource }
-            : {}),
-          updatedBy: actor.id,
-        },
-      });
+      try {
+        await tx.asset.updateMany({
+          where: { id, companyId },
+          data: {
+            name: nextName,
+            ...(input.externalId !== undefined ? { externalId: input.externalId } : {}),
+            ...(input.externalSource !== undefined
+              ? { externalSource: input.externalSource }
+              : {}),
+            updatedBy: actor.id,
+          },
+        });
+      } catch (error) {
+        // Backstop for the `assertExternalIdFree` pre-check above — only
+        // an update whose resulting identity pair is non-null can trip
+        // the 0062 partial indexes.
+        if (nextExternalId != null && isUniqueConstraintError(error)) {
+          throw externalIdTakenConflict(nextExternalId, nextExternalSource);
+        }
+        throw error;
+      }
       await this.persistFieldValues(tx, layout, id, companyId, validated, actor.id, meta);
       await this.linkFileFieldUploadsToAsset(tx, companyId, id, layout, validated);
       // Phase 6: rewrite the denormalised plaintext so the asset's
@@ -579,7 +654,11 @@ export class AssetsService {
    * Bound updates are optimistic: each attempt merges against the row
    * (and field values) it read and the UPDATE refuses (in its WHERE
    * clause) if the row moved, so a concurrent operator edit is never
-   * overwritten or misclassified from a stale snapshot.
+   * overwritten or misclassified from a stale snapshot. External
+   * identity is additionally backed by the 0062 partial unique indexes:
+   * a create or identity adoption that races past `assertExternalIdFree`
+   * surfaces as a retryable `external_identity_conflict` gap instead of
+   * a duplicate row.
    */
   async writeFromIntegration(
     input: IntegrationAssetWriteInput,
@@ -617,13 +696,24 @@ export class AssetsService {
     );
 
     for (let attempt = 0; attempt < INTEGRATION_WRITE_MAX_ATTEMPTS; attempt += 1) {
-      const result = await this.attemptIntegrationAssetWrite(input, {
-        layout,
-        fieldById,
-        directionByFieldId,
-        writableBySlug,
-        normalizedForMatch,
-      });
+      let result: IntegrationAssetWriteResult | 'revision_conflict';
+      try {
+        result = await this.attemptIntegrationAssetWrite(input, {
+          layout,
+          fieldById,
+          directionByFieldId,
+          writableBySlug,
+          normalizedForMatch,
+        });
+      } catch (error) {
+        if (!(error instanceof AssetExternalIdentityConflictError)) throw error;
+        const conflict = integrationIdentityConflictResult(input);
+        // Terminal under a caller transaction (already aborted by the
+        // unique violation — no further statements may run on it);
+        // standalone attempts re-enter the loop against a fresh read.
+        if (conflict !== 'revision_conflict') return conflict;
+        continue;
+      }
       if (result !== 'revision_conflict') return result;
     }
     return integrationAssetBlocked(
@@ -643,7 +733,10 @@ export class AssetsService {
    * (`archivedAt`, `updatedAt`) in its WHERE clause.
    * `'revision_conflict'` reports a zero-row match — the asset changed
    * after the read (operator field edit, rename, archive, or restore) —
-   * and `writeFromIntegration` retries from a fresh read.
+   * and `writeFromIntegration` retries from a fresh read. Identity
+   * unique-violations (0062) throw `AssetExternalIdentityConflictError`
+   * through the — now aborted — transaction; the attempt loop in
+   * `writeFromIntegration` translates them per write mode.
    */
   private async attemptIntegrationAssetWrite(
     input: IntegrationAssetWriteInput,
@@ -814,17 +907,31 @@ export class AssetsService {
           input.auditActorId,
           INTEGRATION_AUDIT_META,
         );
-        const row = await tx.asset.create({
-          data: {
-            companyId: input.companyId,
-            assetLayoutId: input.assetLayoutId,
-            name: input.name,
-            externalId: input.externalId,
-            externalSource: input.externalSource ?? null,
-            createdBy: input.auditActorId,
-            updatedBy: input.auditActorId,
-          },
-        });
+        let row: Asset;
+        try {
+          row = await tx.asset.create({
+            data: {
+              companyId: input.companyId,
+              assetLayoutId: input.assetLayoutId,
+              name: input.name,
+              externalId: input.externalId,
+              externalSource: input.externalSource ?? null,
+              createdBy: input.auditActorId,
+              updatedBy: input.auditActorId,
+            },
+          });
+        } catch (error) {
+          // The only unique constraints on `assets` are the uuid primary
+          // key and the 0062 partial identity indexes, so a P2002 from
+          // this statement is a lost identity race — not a tag or field
+          // conflict from elsewhere in the transaction. Rethrown through
+          // the (possibly caller-provided) transaction to the attempt
+          // loop, which must not issue further statements on it.
+          if (isUniqueConstraintError(error)) {
+            throw new AssetExternalIdentityConflictError();
+          }
+          throw error;
+        }
         await this.persistFieldValues(
           tx,
           layout,
@@ -875,35 +982,48 @@ export class AssetsService {
           fieldsChanged,
         });
         if (plannedChange !== 'unchanged') {
-          const guarded = await tx.asset.updateMany({
-            where: {
-              id: target!.id,
-              companyId: input.companyId,
-              // Optimistic-concurrency guard riding the WHERE clause —
-              // the `update()` idiom. Asset has no `revision` column, so
-              // the guard pins `updatedAt` (Prisma bumps it on every
-              // client write, and interactive edits always touch the
-              // asset row even for field-only saves) plus `archivedAt`
-              // for the restore classification. Zero rows means the
-              // `preserve_manual` checksum gate and the identity/field
-              // diff above were derived from a stale snapshot; the
-              // caller re-reads instead of overwriting a newer operator
-              // edit.
-              archivedAt: target!.archivedAt,
-              updatedAt: target!.updatedAt,
-            },
-            data: {
-              ...(restored ? { archivedAt: null } : {}),
-              ...(sameIdentity
-                ? {
-                    name: input.name,
-                    externalId: input.externalId,
-                    externalSource: input.externalSource ?? null,
-                  }
-                : {}),
-              updatedBy: input.auditActorId,
-            },
-          });
+          let guarded: Prisma.BatchPayload;
+          try {
+            guarded = await tx.asset.updateMany({
+              where: {
+                id: target!.id,
+                companyId: input.companyId,
+                // Optimistic-concurrency guard riding the WHERE clause —
+                // the `update()` idiom. Asset has no `revision` column, so
+                // the guard pins `updatedAt` (Prisma bumps it on every
+                // client write, and interactive edits always touch the
+                // asset row even for field-only saves) plus `archivedAt`
+                // for the restore classification. Zero rows means the
+                // `preserve_manual` checksum gate and the identity/field
+                // diff above were derived from a stale snapshot; the
+                // caller re-reads instead of overwriting a newer operator
+                // edit.
+                archivedAt: target!.archivedAt,
+                updatedAt: target!.updatedAt,
+              },
+              data: {
+                ...(restored ? { archivedAt: null } : {}),
+                ...(sameIdentity
+                  ? {
+                      name: input.name,
+                      externalId: input.externalId,
+                      externalSource: input.externalSource ?? null,
+                    }
+                  : {}),
+                updatedBy: input.auditActorId,
+              },
+            });
+          } catch (error) {
+            // A `sameIdentity` write may adopt an (externalId,
+            // externalSource) pair another asset claimed after
+            // `assertExternalIdFree` ran — the 0062 partial indexes
+            // reject the stale adoption. Rethrown to the attempt loop;
+            // the transaction is aborted and must not be reused.
+            if (sameIdentity && isUniqueConstraintError(error)) {
+              throw new AssetExternalIdentityConflictError();
+            }
+            throw error;
+          }
           if (guarded.count === 0) {
             return { status: 'conflict' as const };
           }
@@ -1469,12 +1589,7 @@ export class AssetsService {
       select: { id: true },
     });
     if (clash) {
-      throw new ConflictException({
-        error: 'ExternalIdTaken',
-        externalId,
-        externalSource,
-        message: `Another asset already carries external id "${externalId}".`,
-      });
+      throw externalIdTakenConflict(externalId, externalSource);
     }
   }
 

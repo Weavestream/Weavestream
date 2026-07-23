@@ -590,10 +590,13 @@ model Asset {
   @@index([companyId, assetLayoutId, archivedAt])
   @@index([companyId, name])
   @@index([companyId, updatedAt])
-  // Phase 11: unique-by-source so the resolver can claim a row by
-  // (companyId, externalSource, externalId) without scanning. NULLs
-  // are allowed (manual assets) — handled by the partial unique index
-  // in the migration.
+  // Phase 11: lookup index (0020) so the resolver can claim a row by
+  // (companyId, externalSource, externalId) without scanning. External
+  // identity is additionally UNIQUE via two partial indexes in
+  // migration 0062 (one for rows with an externalSource, one for
+  // NULL-source rows) — Prisma cannot express partial uniques, so only
+  // the plain lookup index appears here. Manual assets (NULL
+  // externalId) sit outside both unique indexes.
   @@index([companyId, externalSource, externalId])
   @@map("assets")
 }

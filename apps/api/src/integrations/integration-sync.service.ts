@@ -19,6 +19,7 @@ import {
 } from '@weavestream/shared';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service.js';
+import { isUniqueConstraintError } from '../prisma/prisma-errors.js';
 import { AuditLogService } from '../audit/audit.service.js';
 import { AUDIT_ACTIONS } from '../audit/audit-actions.js';
 import { QueuesService } from '../queues/queues.service.js';
@@ -980,12 +981,6 @@ function aggregateTotals(values: unknown[]): SyncRunTotals {
   }
   if (Object.keys(byResource).length > 0) acc.byResource = byResource;
   return acc;
-}
-
-function isUniqueConstraintError(error: unknown): boolean {
-  return Boolean(
-    error && typeof error === 'object' && 'code' in error && error.code === 'P2002',
-  );
 }
 
 /**
