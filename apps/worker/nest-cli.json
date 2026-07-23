@@ -5,6 +5,13 @@
   "entryFile": "worker/src/main",
   "compilerOptions": {
     "deleteOutDir": true,
-    "tsConfigPath": "tsconfig.json"
+    "tsConfigPath": "tsconfig.json",
+    "assets": [
+      {
+        "include": "company-pdf-export/fonts/**/*",
+        "outDir": "dist/worker/src"
+      }
+    ],
+    "watchAssets": true
   }
 }

@@ -153,11 +153,11 @@ describe('searchAppHelpIndex', () => {
       'How do I set up intergation field maping?',
       'integration-mappings/configure-field-projections',
     ],
-    ['Preview a sync without changes', 'integration-syncs/preview-with-a-dry-run'],
-    ['Run imports automatically every six hours', 'integration-syncs/schedule-automatic-syncs'],
+    ['Preview a sync without changes', 'integrations/preview-with-a-dry-run'],
+    ['Run imports automatically every six hours', 'integrations/schedule-automatic-syncs'],
     [
       'Configure Breeze reconstruction sync',
-      'integration-syncs/configure-breeze-reconstruction-sync',
+      'integrations/configure-breeze-reconstruction-sync',
     ],
     [
       'Register a Cloudflare Gateway IP list',

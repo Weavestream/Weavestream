@@ -257,7 +257,13 @@ describe('ArticlesService integration system writes', () => {
       markdown: '<!-- weavestream:breeze:managed:start -->\n# New source\n<!-- weavestream:breeze:managed:end -->',
     })).resolves.toMatchObject({ targetId: ids.article, change: 'restored' });
     expect(tx.article.updateMany).toHaveBeenCalledWith(expect.objectContaining({
-      where: { id: ids.article, companyId: ids.company },
+      where: {
+        id: ids.article,
+        companyId: ids.company,
+        revision: 1,
+        archivedAt: new Date('2026-07-02T00:00:00.000Z'),
+        updatedAt: new Date('2026-07-01T00:00:00.000Z'),
+      },
       data: expect.objectContaining({
         archivedAt: null,
         markdownSource: expect.stringContaining('## Operator notes'),
@@ -338,6 +344,64 @@ describe('ArticlesService integration system writes', () => {
     expect(tx.upload.updateMany).not.toHaveBeenCalled();
     expect(tx.upload.deleteMany).not.toHaveBeenCalled();
     expect(tx.articleVersion.deleteMany).not.toHaveBeenCalled();
+  });
+
+  it('re-reads and re-merges when an operator edit lands between read and write', async () => {
+    const managed = (body: string) =>
+      `<!-- weavestream:breeze:managed:start -->\n${body}\n<!-- weavestream:breeze:managed:end -->`;
+    const first = article({ markdownSource: `${managed('# Old source')}\n\n## Notes v1`, revision: 4 });
+    const reread = article({
+      markdownSource: `${managed('# Old source')}\n\n## Notes v2`,
+      revision: 5,
+      updatedAt: new Date('2026-07-03T00:00:00.000Z'),
+    });
+    const { service, prisma, tx } = setup({ binding: binding() });
+    prisma.article.findUnique.mockResolvedValueOnce(first).mockResolvedValueOnce(reread);
+    const writes: Array<{ where: Record<string, unknown>; data: { markdownSource: string } }> = [];
+    tx.article.updateMany.mockImplementation(async (args: { where: Record<string, unknown>; data: { markdownSource: string } }) => {
+      writes.push(args);
+      // First guarded attempt loses the race; the retry wins.
+      return { count: writes.length === 1 ? 0 : 1 };
+    });
+
+    await expect(service.writeFromIntegration({
+      ...input, existingTargetId: ids.article, markdown: managed('# New source'),
+    })).resolves.toMatchObject({ targetId: ids.article, change: 'updated' });
+
+    expect(writes).toHaveLength(2);
+    expect(writes[0]!.where).toMatchObject({ revision: 4, archivedAt: null });
+    expect(writes[1]!.where).toMatchObject({
+      id: ids.article,
+      companyId: ids.company,
+      revision: 5,
+      archivedAt: null,
+      updatedAt: new Date('2026-07-03T00:00:00.000Z'),
+    });
+    expect(writes[1]!.data.markdownSource).toContain('# New source');
+    expect(writes[1]!.data.markdownSource).toContain('## Notes v2');
+    expect(writes[1]!.data.markdownSource).not.toContain('## Notes v1');
+    expect(tx.articleVersion.create).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports a synchronization gap when the guarded update keeps conflicting', async () => {
+    const { service, prisma, audit, tx } = setup({ bound: article(), binding: binding() });
+    tx.article.updateMany.mockResolvedValue({ count: 0 });
+
+    await expect(service.writeFromIntegration({
+      ...input, existingTargetId: ids.article, markdown: '# Changed body',
+    })).resolves.toMatchObject({
+      targetId: ids.article,
+      change: 'blocked',
+      gap: {
+        kind: 'synchronization_error',
+        details: { reasonCode: 'target_revision_conflict' },
+      },
+    });
+
+    expect(tx.article.updateMany).toHaveBeenCalledTimes(3);
+    expect(prisma.article.findUnique).toHaveBeenCalledTimes(3);
+    expect(tx.articleVersion.create).not.toHaveBeenCalled();
+    expect(audit.logWithClient).not.toHaveBeenCalled();
   });
 
   it.each([

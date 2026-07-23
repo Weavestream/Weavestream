@@ -272,7 +272,7 @@ export class IntegrationsService {
           data: {
             integrationId: row.id,
             resourceKey: r.key,
-            enabled: true,
+            enabled: r.defaultEnabled ?? true,
             targetKind: r.targetKind,
             targetConfig: r.targetConfig as Prisma.InputJsonValue,
             dependsOnResourceKeys: r.dependsOnResourceKeys,
@@ -605,7 +605,7 @@ export class IntegrationsService {
         create: {
           integrationId,
           resourceKey: r.key,
-          enabled: true,
+          enabled: r.defaultEnabled ?? true,
           targetKind: r.targetKind,
           targetConfig: r.targetConfig as Prisma.InputJsonValue,
           dependsOnResourceKeys: r.dependsOnResourceKeys,
@@ -677,7 +677,7 @@ export class IntegrationsService {
       data: {
         integrationId,
         resourceKey: input.resourceKey,
-        enabled: true,
+        enabled: resourceDescriptor.defaultEnabled ?? true,
         targetKind: resourceDescriptor.targetKind,
         targetConfig: resourceDescriptor.targetConfig as Prisma.InputJsonValue,
         dependsOnResourceKeys: resourceDescriptor.dependsOnResourceKeys,
@@ -1135,7 +1135,7 @@ export class IntegrationsService {
       data: {
         integrationId,
         resourceKey,
-        enabled: true,
+        enabled: resourceDescriptor.defaultEnabled ?? true,
         targetKind: resourceDescriptor.targetKind,
         targetConfig: resourceDescriptor.targetConfig as Prisma.InputJsonValue,
         dependsOnResourceKeys: resourceDescriptor.dependsOnResourceKeys,

@@ -120,6 +120,14 @@ const INTEGRATION_AUDIT_META: AuditMeta = {
   userAgent: 'weavestream-worker/integration-reconstruction',
 };
 
+/**
+ * Guarded-attempt budget for `writeFromIntegration` when a concurrent
+ * operator write invalidates the observed asset snapshot. A retry
+ * costs one re-read and re-merge; exhaustion is reported as a
+ * `synchronization_error` gap so the next sync run tries again.
+ */
+const INTEGRATION_WRITE_MAX_ATTEMPTS = 3;
+
 export interface AssetListOptions {
   layoutId?: string;
   q?: string;
@@ -568,12 +576,14 @@ export class AssetsService {
    * Explicit non-request asset write used by reconstruction workers.
    * It shares layout/field validation and persistence with interactive
    * writes but receives a real audit actor and company scope directly.
+   * Bound updates are optimistic: each attempt merges against the row
+   * (and field values) it read and the UPDATE refuses (in its WHERE
+   * clause) if the row moved, so a concurrent operator edit is never
+   * overwritten or misclassified from a stale snapshot.
    */
   async writeFromIntegration(
     input: IntegrationAssetWriteInput,
   ): Promise<IntegrationAssetWriteResult> {
-    const runTransaction = <T>(callback: (tx: Prisma.TransactionClient) => Promise<T>) =>
-      input.tx ? callback(input.tx) : this.prisma.$transaction(callback);
     const readClient = input.tx ?? this.prisma;
     await this.audit.assertIntegrationActor(input.auditActorId, input.companyId);
     const layout = await this.loadLayout(input.assetLayoutId, readClient);
@@ -605,6 +615,50 @@ export class AssetsService {
       'SUPER_ADMIN',
       'update',
     );
+
+    for (let attempt = 0; attempt < INTEGRATION_WRITE_MAX_ATTEMPTS; attempt += 1) {
+      const result = await this.attemptIntegrationAssetWrite(input, {
+        layout,
+        fieldById,
+        directionByFieldId,
+        writableBySlug,
+        normalizedForMatch,
+      });
+      if (result !== 'revision_conflict') return result;
+    }
+    return integrationAssetBlocked(
+      input.companyId,
+      'synchronization_error',
+      'The asset was modified concurrently while reconstruction was writing it.',
+      'target_revision_conflict',
+      input.existingTargetId ?? '',
+    );
+  }
+
+  /**
+   * One guarded attempt of the integration asset write. The
+   * `preserve_manual` checksum gate, the identity/restore diff, and the
+   * per-field merge are computed from the `target` row (and its field
+   * values) read here, and the UPDATE pins that observed snapshot
+   * (`archivedAt`, `updatedAt`) in its WHERE clause.
+   * `'revision_conflict'` reports a zero-row match — the asset changed
+   * after the read (operator field edit, rename, archive, or restore) —
+   * and `writeFromIntegration` retries from a fresh read.
+   */
+  private async attemptIntegrationAssetWrite(
+    input: IntegrationAssetWriteInput,
+    prepared: {
+      layout: LayoutWithFields;
+      fieldById: Map<string, AssetField>;
+      directionByFieldId: Map<string, IntegrationAssetWriteInput['fieldValues'][number]>;
+      writableBySlug: Record<string, unknown>;
+      normalizedForMatch: Record<string, unknown>;
+    },
+  ): Promise<IntegrationAssetWriteResult | 'revision_conflict'> {
+    const runTransaction = <T>(callback: (tx: Prisma.TransactionClient) => Promise<T>) =>
+      input.tx ? callback(input.tx) : this.prisma.$transaction(callback);
+    const readClient = input.tx ?? this.prisma;
+    const { layout, fieldById, directionByFieldId, writableBySlug, normalizedForMatch } = prepared;
     const resolution = await this.resolveIntegrationAssetTarget(
       input,
       layout,
@@ -702,11 +756,23 @@ export class AssetsService {
         readClient,
       );
     }
+    // Classification must stay read-only until the optimistic guard has
+    // matched. TAGS pre-resolution can create global Tag rows and audit
+    // entries, so running the side-effecting canonicalizer before the guard
+    // would commit orphan side effects when an attempt loses the race.
+    const classificationValues =
+      target || input.dryRun
+        ? await this.canonicalizeFieldValuesForDryRun(
+            layout,
+            valuesToWrite,
+            readClient,
+          )
+        : null;
     if (input.dryRun) {
       if (target && !(await this.hasEligibleAssetBinding(readClient, input, target.id))) {
         return integrationAssetBlocked(input.companyId, 'ambiguous', 'The existing asset is not owned by an eligible reconstruction binding.', 'manual_ownership', target.id);
       }
-      const dryRunValues = await this.canonicalizeFieldValuesForDryRun(layout, valuesToWrite);
+      const dryRunValues = classificationValues!;
       const fieldsChanged = Object.entries(dryRunValues).some(
         ([slug, value]) => assetFieldChecksum(existingValues[slug]) !== assetFieldChecksum(value),
       );
@@ -796,15 +862,9 @@ export class AssetsService {
       targetId = target.id;
       const outcome = await runTransaction(async (tx) => {
         if (!(await this.hasEligibleAssetBinding(tx, input, target.id))) {
-          return { blocked: true as const };
+          return { status: 'blocked' as const };
         }
-        const canonicalValues = await this.canonicalizeFieldValues(
-          tx,
-          layout,
-          valuesToWrite,
-          input.auditActorId,
-          INTEGRATION_AUDIT_META,
-        );
+        let canonicalValues = classificationValues!;
         const fieldsChanged = Object.entries(canonicalValues).some(
           ([slug, value]) => assetFieldChecksum(existingValues[slug]) !== assetFieldChecksum(value),
         );
@@ -815,8 +875,23 @@ export class AssetsService {
           fieldsChanged,
         });
         if (plannedChange !== 'unchanged') {
-          await tx.asset.updateMany({
-            where: { id: target!.id, companyId: input.companyId },
+          const guarded = await tx.asset.updateMany({
+            where: {
+              id: target!.id,
+              companyId: input.companyId,
+              // Optimistic-concurrency guard riding the WHERE clause —
+              // the `update()` idiom. Asset has no `revision` column, so
+              // the guard pins `updatedAt` (Prisma bumps it on every
+              // client write, and interactive edits always touch the
+              // asset row even for field-only saves) plus `archivedAt`
+              // for the restore classification. Zero rows means the
+              // `preserve_manual` checksum gate and the identity/field
+              // diff above were derived from a stale snapshot; the
+              // caller re-reads instead of overwriting a newer operator
+              // edit.
+              archivedAt: target!.archivedAt,
+              updatedAt: target!.updatedAt,
+            },
             data: {
               ...(restored ? { archivedAt: null } : {}),
               ...(sameIdentity
@@ -829,6 +904,20 @@ export class AssetsService {
               updatedBy: input.auditActorId,
             },
           });
+          if (guarded.count === 0) {
+            return { status: 'conflict' as const };
+          }
+          // Side-effecting field resolution is safe only after the guarded
+          // row update succeeds. If this creates a global Tag, the tag, its
+          // audit row, and the asset field write now share the successful
+          // transaction outcome.
+          canonicalValues = await this.canonicalizeFieldValues(
+            tx,
+            layout,
+            valuesToWrite,
+            input.auditActorId,
+            INTEGRATION_AUDIT_META,
+          );
           await this.persistFieldValues(
             tx,
             layout,
@@ -852,10 +941,13 @@ export class AssetsService {
             after: { integrationId: input.integrationId, change: plannedChange },
           });
         }
-        return { blocked: false as const, change: plannedChange, canonicalValues };
+        return { status: 'written' as const, change: plannedChange, canonicalValues };
       });
-      if (outcome.blocked) {
+      if (outcome.status === 'blocked') {
         return integrationAssetBlocked(input.companyId, 'ambiguous', 'The existing asset is not owned by an eligible reconstruction binding.', 'manual_ownership', target.id);
+      }
+      if (outcome.status === 'conflict') {
+        return 'revision_conflict';
       }
       this.updateIntegrationFieldChecksums(
         directionByFieldId,
@@ -1464,6 +1556,7 @@ export class AssetsService {
   private async canonicalizeFieldValuesForDryRun(
     layout: LayoutWithFields,
     values: Record<string, unknown>,
+    client: Pick<Prisma.TransactionClient, 'tag'> | PrismaService = this.prisma,
   ): Promise<Record<string, unknown>> {
     const canonical: Record<string, unknown> = {};
     for (const [slug, rawValue] of Object.entries(values)) {
@@ -1488,7 +1581,7 @@ export class AssetsService {
         .map((entry) => entry.name.trim().toLowerCase());
       const rows = names.length === 0
         ? []
-        : await this.prisma.tag.findMany({
+        : await client.tag.findMany({
             where: { nameLower: { in: Array.from(new Set(names)) } },
             select: { id: true, nameLower: true },
           });

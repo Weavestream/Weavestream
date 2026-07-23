@@ -128,7 +128,7 @@ Full guided walkthrough on the docs site: [docs.weavestream.io/getting-started](
 | [docs.weavestream.io/features/passwords](https://docs.weavestream.io/features/passwords/) | Everyone |
 | [docs.weavestream.io/features/articles](https://docs.weavestream.io/features/articles/) | Everyone |
 | [docs.weavestream.io/features/ipam](https://docs.weavestream.io/features/ipam/) | Everyone |
-| [docs.weavestream.io/features/integrations](https://docs.weavestream.io/features/integrations/) | Everyone |
+| [docs.weavestream.io/integrations](https://docs.weavestream.io/integrations/) | Everyone |
 | [docs.weavestream.io/guides/security-center](https://docs.weavestream.io/guides/security-center/) | Everyone |
 
 ## Project status

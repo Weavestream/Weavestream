@@ -1,5 +1,5 @@
 import PDFDocument from 'pdfkit';
-import { createRequire } from 'node:module';
+import { resolve } from 'node:path';
 import { MAX_IMAGE_DECODE_PIXELS, tiptapToPlaintext } from '@weavestream/shared';
 import type { CompanyExportData } from '../../../api/src/exports/company-export-data.service.js';
 
@@ -13,17 +13,8 @@ interface PdfBuildOpts {
 
 const FONT_NORMAL = 'NotoSansCJK';
 const FONT_BOLD = 'NotoSansCJKBold';
-const FONT_OBLIQUE = 'NotoSansItalic';
-const fontRequire = createRequire(__filename);
-const FONT_NORMAL_PATH = fontRequire.resolve(
-  'noto-fontface-cjk-jp/fonts/Noto/NotoSansCJKjp-Regular.otf',
-);
-const FONT_BOLD_PATH = fontRequire.resolve(
-  'noto-fontface-cjk-jp/fonts/Noto/NotoSansCJKjp-Bold.otf',
-);
-const FONT_OBLIQUE_PATH = fontRequire.resolve(
-  'notosans-fontface/fonts/NotoSans-Italic.ttf',
-);
+const FONT_NORMAL_PATH = resolve(__dirname, 'fonts/NotoSansCJKjp-Regular.otf');
+const FONT_BOLD_PATH = resolve(__dirname, 'fonts/NotoSansCJKjp-Bold.otf');
 
 const PAGE_WIDTH = 612; // letter
 const PAGE_HEIGHT = 792;
@@ -129,7 +120,6 @@ export async function buildCompanyExportPdf(
     });
     doc.registerFont(FONT_NORMAL, FONT_NORMAL_PATH);
     doc.registerFont(FONT_BOLD, FONT_BOLD_PATH);
-    doc.registerFont(FONT_OBLIQUE, FONT_OBLIQUE_PATH);
 
     const chunks: Buffer[] = [];
     doc.on('data', (chunk: Buffer) => chunks.push(chunk));
@@ -921,7 +911,8 @@ function renderMembers(doc: PDFKit.PDFDocument, data: CompanyExportData): void {
   sectionBanner(doc, TITLE, `${data.members.length} ${plural(data.members.length, 'member')}`);
 
   if (data.members.length === 0) {
-    doc.font(FONT_OBLIQUE).fontSize(10).fillColor(C.ink3).text('No members.');
+    doc.font(FONT_NORMAL).fontSize(10).fillColor(C.ink3)
+      .text('No members.', { oblique: true });
     return;
   }
 
@@ -1015,12 +1006,12 @@ function drawAssetCard(
     doc.font(FONT_NORMAL).fontSize(10).fillColor(C.ink2)
       .text(text, titleX, doc.y, { width: innerWidth });
     if (truncated) {
-      doc.font(FONT_OBLIQUE).fontSize(8).fillColor(C.ink3)
+      doc.font(FONT_NORMAL).fontSize(8).fillColor(C.ink3)
         .text(
           `[truncated — ${raw.length.toLocaleString()} chars total]`,
           titleX,
           doc.y,
-          { width: innerWidth },
+          { width: innerWidth, oblique: true },
         );
     }
     doc.moveDown(0.3);
@@ -1042,7 +1033,8 @@ function renderPasswords(doc: PDFKit.PDFDocument, data: CompanyExportData): void
   sectionBanner(doc, TITLE, SUBTITLE);
 
   if (data.passwords.length === 0) {
-    doc.font(FONT_OBLIQUE).fontSize(10).fillColor(C.ink3).text('No passwords.');
+    doc.font(FONT_NORMAL).fontSize(10).fillColor(C.ink3)
+      .text('No passwords.', { oblique: true });
     return;
   }
 
@@ -1439,8 +1431,11 @@ function renderIpam(doc: PDFKit.PDFDocument, data: CompanyExportData): void {
     `${data.ipam.length} ${plural(data.ipam.length, 'subnet')} · ${reservationCount} reserved · ${occupantCount} occupied`,
   );
   if (data.ipam.length === 0) {
-    doc.font(FONT_OBLIQUE).fontSize(10).fillColor(C.ink3)
-      .text('No subnets or address assignments.', MARGIN_X, doc.y, { width: CONTENT_WIDTH });
+    doc.font(FONT_NORMAL).fontSize(10).fillColor(C.ink3)
+      .text('No subnets or address assignments.', MARGIN_X, doc.y, {
+        width: CONTENT_WIDTH,
+        oblique: true,
+      });
     return;
   }
 
@@ -1518,8 +1513,11 @@ function renderRelationships(doc: PDFKit.PDFDocument, data: CompanyExportData): 
     `${data.relations.length} ${plural(data.relations.length, 'relationship')}`,
   );
   if (data.relations.length === 0) {
-    doc.font(FONT_OBLIQUE).fontSize(10).fillColor(C.ink3)
-      .text('No relationships or dependency links.', MARGIN_X, doc.y, { width: CONTENT_WIDTH });
+    doc.font(FONT_NORMAL).fontSize(10).fillColor(C.ink3)
+      .text('No relationships or dependency links.', MARGIN_X, doc.y, {
+        width: CONTENT_WIDTH,
+        oblique: true,
+      });
     return;
   }
   const table: TableSpec = {
@@ -1554,12 +1552,12 @@ function renderReconstruction(doc: PDFKit.PDFDocument, data: CompanyExportData):
     `${summaries.length} summaries · ${provenance.length} source records · ${gaps.length} active gaps`,
   );
   if (summaries.length === 0 && gaps.length === 0 && provenance.length === 0) {
-    doc.font(FONT_OBLIQUE).fontSize(10).fillColor(C.ink3)
+    doc.font(FONT_NORMAL).fontSize(10).fillColor(C.ink3)
       .text(
         'No reconstruction summaries, gaps, or source provenance.',
         MARGIN_X,
         doc.y,
-        { width: CONTENT_WIDTH },
+        { width: CONTENT_WIDTH, oblique: true },
       );
     return;
   }
@@ -1665,8 +1663,11 @@ function renderDomains(doc: PDFKit.PDFDocument, data: CompanyExportData): void {
   );
 
   if (data.domains.length === 0) {
-    doc.font(FONT_OBLIQUE).fontSize(10).fillColor(C.ink3)
-      .text('No monitored domains.', MARGIN_X, doc.y, { width: CONTENT_WIDTH });
+    doc.font(FONT_NORMAL).fontSize(10).fillColor(C.ink3)
+      .text('No monitored domains.', MARGIN_X, doc.y, {
+        width: CONTENT_WIDTH,
+        oblique: true,
+      });
     return;
   }
 

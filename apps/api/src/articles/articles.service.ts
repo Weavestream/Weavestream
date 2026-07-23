@@ -75,6 +75,14 @@ const INTEGRATION_AUDIT_META: AuditMeta = {
 };
 
 /**
+ * Guarded-attempt budget for `writeFromIntegration` when a concurrent
+ * operator write invalidates the observed article snapshot. A retry
+ * costs one re-read and re-merge; exhaustion is reported as a
+ * `synchronization_error` gap so the next sync run tries again.
+ */
+const INTEGRATION_WRITE_MAX_ATTEMPTS = 3;
+
+/**
  * Thrown by `update()` when an `expectedRevision` guard matched zero
  * rows — the article was edited (or archived) after the caller's base
  * revision was captured. Only the AI chat apply path passes
@@ -676,12 +684,13 @@ export class ArticlesService {
    * Non-request Markdown writer for reconstruction. A target may only be
    * updated by an explicit existing binding; deterministic slug collisions
    * without a binding are reported instead of overwriting manual content.
+   * Bound updates are optimistic: each attempt merges against the row it
+   * read and the UPDATE refuses (in its WHERE clause) if the row moved,
+   * so a concurrent operator edit is never overwritten from stale input.
    */
   async writeFromIntegration(
     input: IntegrationArticleWriteInput,
   ): Promise<IntegrationArticleWriteResult> {
-    const runTransaction = <T>(callback: (tx: Prisma.TransactionClient) => Promise<T>) =>
-      input.tx ? callback(input.tx) : this.prisma.$transaction(callback);
     const lookupClient = input.tx ?? this.prisma;
     await this.audit.assertIntegrationActor(input.auditActorId, input.companyId);
     let native: Extract<CreateArticleInput, { editorMode: 'markdown' }>;
@@ -707,6 +716,37 @@ export class ArticlesService {
       }
     }
 
+    for (let attempt = 0; attempt < INTEGRATION_WRITE_MAX_ATTEMPTS; attempt += 1) {
+      const result = await this.attemptIntegrationArticleWrite(input, native);
+      if (result !== 'revision_conflict') return result;
+    }
+    return articleBlocked(
+      input.companyId,
+      'synchronization_error',
+      'The article was modified concurrently while reconstruction was writing it.',
+      'target_revision_conflict',
+      input.existingTargetId ?? '',
+    );
+  }
+
+  /**
+   * One guarded attempt of the integration article write. The managed-
+   * region merge and the changed/restored classification are computed
+   * from the `bound` row read here, and the UPDATE pins that observed
+   * snapshot (`revision`, `archivedAt`, `updatedAt`) in its WHERE
+   * clause. `'revision_conflict'` reports a zero-row match — the
+   * article changed after the read (operator edit, archive/restore,
+   * move, or draft-discard revert) — and `writeFromIntegration`
+   * retries from a fresh read.
+   */
+  private async attemptIntegrationArticleWrite(
+    input: IntegrationArticleWriteInput,
+    parsed: Extract<CreateArticleInput, { editorMode: 'markdown' }>,
+  ): Promise<IntegrationArticleWriteResult | 'revision_conflict'> {
+    const runTransaction = <T>(callback: (tx: Prisma.TransactionClient) => Promise<T>) =>
+      input.tx ? callback(input.tx) : this.prisma.$transaction(callback);
+    const lookupClient = input.tx ?? this.prisma;
+    let native = parsed;
     const sourceSlug = native.slug ?? input.slug;
     const bound = input.existingTargetId
       ? await lookupClient.article.findUnique({ where: { id: input.existingTargetId } })
@@ -891,10 +931,23 @@ export class ArticlesService {
     } else if (changed || restored) {
       const outcome = await runTransaction(async (tx) => {
         if (!(await this.hasEligibleArticleBinding(tx, input, bound.id))) {
-          return { blocked: true as const };
+          return { status: 'blocked' as const };
         }
-        await tx.article.updateMany({
-          where: { id: bound.id, companyId: input.companyId },
+        const guarded = await tx.article.updateMany({
+          where: {
+            id: bound.id,
+            companyId: input.companyId,
+            // Optimistic-concurrency guard riding the WHERE clause —
+            // the `update()` idiom. `revision` alone is not enough:
+            // archive, restore, move, and draft-discard revert all
+            // write the row without bumping it, so the guard pins
+            // every observed field the merge and diff above were
+            // derived from. Zero rows means the snapshot went stale;
+            // the caller re-reads instead of overwriting a newer edit.
+            revision: bound.revision,
+            archivedAt: bound.archivedAt,
+            updatedAt: bound.updatedAt,
+          },
           data: {
             ...data,
             ...(restored ? { archivedAt: null } : {}),
@@ -902,6 +955,9 @@ export class ArticlesService {
             updatedBy: input.auditActorId,
           },
         });
+        if (guarded.count === 0) {
+          return { status: 'conflict' as const };
+        }
         const updated = await tx.article.findFirstOrThrow({
           where: { id: bound.id, companyId: input.companyId },
         });
@@ -933,10 +989,13 @@ export class ArticlesService {
           userAgent: INTEGRATION_AUDIT_META.userAgent,
           after: { integrationId: input.integrationId, slug: updated.slug },
         });
-        return { blocked: false as const, article: updated };
+        return { status: 'written' as const, article: updated };
       });
-      if (outcome.blocked) {
+      if (outcome.status === 'blocked') {
         return articleBlocked(input.companyId, 'ambiguous', 'The existing article is not owned by an eligible reconstruction binding.', 'manual_ownership', bound.id, 1);
+      }
+      if (outcome.status === 'conflict') {
+        return 'revision_conflict';
       }
       article = outcome.article;
       change = restored ? 'restored' : 'updated';

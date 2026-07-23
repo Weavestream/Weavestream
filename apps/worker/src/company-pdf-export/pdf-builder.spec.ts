@@ -8,7 +8,16 @@ import {
 } from './pdf-builder.js';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmdirSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmdirSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { resolve } from 'node:path';
 import type { CompanyExportData } from '../../../api/src/exports/company-export-data.service.js';
 import {
@@ -18,6 +27,22 @@ import {
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
 const UPLOAD_ID = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb';
+
+describe('vendored PDF fonts', () => {
+  it.each([
+    [
+      'NotoSansCJKjp-Regular.otf',
+      '68a3fc98800b2a27b371f2fb79991daf3633bd89309d4ffaa6946fd587f375b5',
+    ],
+    [
+      'NotoSansCJKjp-Bold.otf',
+      'e53dcb0dcb2922e45d01aae1ebd2f382bb81d4229b18b6b883bd170678af1f76',
+    ],
+  ])('matches the recorded SHA-256 for %s', (filename, expected) => {
+    const font = readFileSync(resolve(__dirname, 'fonts', filename));
+    expect(createHash('sha256').update(font).digest('hex')).toBe(expected);
+  });
+});
 
 describe('PDF export formatting helpers', () => {
   it('resolves asset reference UUIDs to names', () => {

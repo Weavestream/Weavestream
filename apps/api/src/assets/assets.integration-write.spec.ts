@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { transformBreezeRecord } from '../integrations/drivers/breeze/breeze.transforms.js';
 import { AssetTargetWriter } from '../integrations/reconstruction/asset-target.writer.js';
@@ -114,11 +115,20 @@ function fullProvenance(state: 'active' | 'stale' | 'blocked') {
   };
 }
 
-function setup(options: { target?: unknown; match?: unknown[]; binding?: unknown; auditFails?: boolean; textarea?: boolean } = {}) {
+function setup(options: {
+  target?: unknown;
+  match?: unknown[];
+  binding?: unknown;
+  auditFails?: boolean;
+  textarea?: boolean;
+  layout?: unknown;
+  strategy?: unknown;
+} = {}) {
   let committed = false;
   const created = asset();
+  const selectedLayout = options.layout ?? layout;
   const tx = {
-    assetLayout: { findUnique: jest.fn().mockResolvedValue(layout) },
+    assetLayout: { findUnique: jest.fn().mockResolvedValue(selectedLayout) },
     asset: {
       create: jest.fn().mockResolvedValue(created),
       updateMany: jest.fn().mockResolvedValue({ count: 1 }),
@@ -154,7 +164,7 @@ function setup(options: { target?: unknown; match?: unknown[]; binding?: unknown
     }),
   };
   const prisma = {
-    assetLayout: { findUnique: jest.fn().mockResolvedValue(layout) },
+    assetLayout: { findUnique: jest.fn().mockResolvedValue(selectedLayout) },
     integrationSyncRecord: { findUnique: jest.fn().mockResolvedValue(options.binding ?? null) },
     asset: {
       findUnique: jest.fn().mockResolvedValue(options.target ?? null),
@@ -176,11 +186,16 @@ function setup(options: { target?: unknown; match?: unknown[]; binding?: unknown
       : jest.fn().mockResolvedValue(undefined),
   };
   const registry = {
-    get: jest.fn().mockReturnValue(options.textarea ? new TextareaStrategy() : {
-      valueSchema: () => z.string(),
-      normalize: (value: unknown) => value,
-      toPlaintext: (value: unknown) => String(value),
-    }),
+    get: jest.fn().mockReturnValue(
+      options.strategy ??
+        (options.textarea
+          ? new TextareaStrategy()
+          : {
+              valueSchema: () => z.string(),
+              normalize: (value: unknown) => value,
+              toPlaintext: (value: unknown) => String(value),
+            }),
+    ),
   };
   const searchIndex = { upsertAsset: jest.fn().mockResolvedValue(undefined) };
   const service = new AssetsService(
@@ -407,7 +422,12 @@ describe('AssetsService integration system writes', () => {
       previousFieldChecksums: { [ids.field]: 'prior-source-checksum' },
     })).resolves.toMatchObject({ targetId: ids.asset, change: 'restored' });
     expect(tx.asset.updateMany).toHaveBeenCalledWith(expect.objectContaining({
-      where: { id: ids.asset, companyId: ids.company },
+      where: expect.objectContaining({
+        id: ids.asset,
+        companyId: ids.company,
+        archivedAt: new Date('2026-07-02T00:00:00.000Z'),
+        updatedAt: new Date('2026-07-01T00:00:00.000Z'),
+      }),
       data: expect.objectContaining({ archivedAt: null }),
     }));
     expect(tx.assetFieldValue.upsert).not.toHaveBeenCalled();
@@ -433,9 +453,135 @@ describe('AssetsService integration system writes', () => {
       existingTargetId: ids.asset,
     })).resolves.toMatchObject({ targetId: ids.asset, change: 'updated' });
     expect(tx.asset.updateMany).toHaveBeenCalledWith(expect.objectContaining({
-      where: { id: ids.asset, companyId: ids.company },
+      where: expect.objectContaining({
+        id: ids.asset,
+        companyId: ids.company,
+        archivedAt: null,
+        updatedAt: new Date('2026-07-01T00:00:00.000Z'),
+      }),
       data: expect.objectContaining({ name: 'Edge 01' }),
     }));
+  });
+
+  it('re-reads and re-merges when an operator edit lands between read and write', async () => {
+    const checksum = (value: unknown) =>
+      createHash('sha256').update(JSON.stringify(value ?? null)).digest('hex');
+    const first = asset();
+    const reread = asset({
+      updatedAt: new Date('2026-07-03T00:00:00.000Z'),
+      fieldValues: [{
+        id: 'fv-1', companyId: ids.company, assetId: ids.asset,
+        assetFieldId: ids.field, value: 'operator-edited-hostname',
+      }],
+    });
+    const { service, prisma, tx } = setup({ binding: binding() });
+    prisma.asset.findUnique.mockResolvedValueOnce(first).mockResolvedValueOnce(reread);
+    const writes: Array<{ where: Record<string, unknown> }> = [];
+    tx.asset.updateMany.mockImplementation(async (args: { where: Record<string, unknown> }) => {
+      // The guarded attempt loses the race; the retry re-reads and,
+      // seeing the operator's newer value, preserves it instead.
+      writes.push(args);
+      return { count: 0 };
+    });
+
+    await expect(service.writeFromIntegration({
+      ...input,
+      existingTargetId: ids.asset,
+      fieldValues: [{
+        targetFieldId: ids.field, value: 'new-upstream-hostname', syncDirection: 'preserve_manual',
+      }],
+      previousFieldChecksums: { [ids.field]: checksum('edge-01') },
+    })).resolves.toMatchObject({
+      targetId: ids.asset,
+      change: 'unchanged',
+      fieldChecksums: { [ids.field]: checksum('operator-edited-hostname') },
+    });
+
+    expect(writes).toHaveLength(1);
+    expect(writes[0]!.where).toMatchObject({
+      id: ids.asset,
+      companyId: ids.company,
+      archivedAt: null,
+      updatedAt: new Date('2026-07-01T00:00:00.000Z'),
+    });
+    expect(prisma.asset.findUnique).toHaveBeenCalledTimes(2);
+    expect(tx.assetFieldValue.upsert).not.toHaveBeenCalled();
+  });
+
+  it('does not run side-effecting field resolution before a guarded write succeeds', async () => {
+    const checksum = (value: unknown) =>
+      createHash('sha256').update(JSON.stringify(value ?? null)).digest('hex');
+    const tagField = { ...field, name: 'Tags', slug: 'tags', fieldType: 'TAGS' };
+    const tagLayout = { ...layout, fields: [tagField] };
+    const first = asset({
+      fieldValues: [{
+        id: 'fv-1', companyId: ids.company, assetId: ids.asset,
+        assetFieldId: ids.field, value: ['old-tag-id'],
+      }],
+    });
+    const reread = asset({
+      updatedAt: new Date('2026-07-03T00:00:00.000Z'),
+      fieldValues: [{
+        id: 'fv-1', companyId: ids.company, assetId: ids.asset,
+        assetFieldId: ids.field, value: ['operator-tag-id'],
+      }],
+    });
+    const preResolve = jest.fn().mockResolvedValue(['created-tag-id']);
+    const strategy = {
+      valueSchema: () =>
+        z.array(z.union([z.string(), z.object({ name: z.string() })])),
+      preResolve,
+      normalize: (value: unknown) => value,
+      toPlaintext: () => '',
+    };
+    const { service, prisma, tx } = setup({
+      binding: binding(),
+      layout: tagLayout,
+      strategy,
+    });
+    prisma.asset.findUnique.mockResolvedValueOnce(first).mockResolvedValueOnce(reread);
+    tx.asset.updateMany.mockResolvedValue({ count: 0 });
+
+    await expect(service.writeFromIntegration({
+      ...input,
+      existingTargetId: ids.asset,
+      fieldValues: [{
+        targetFieldId: ids.field,
+        value: [{ name: 'Upstream' }],
+        syncDirection: 'preserve_manual',
+      }],
+      previousFieldChecksums: { [ids.field]: checksum(['old-tag-id']) },
+    })).resolves.toMatchObject({
+      targetId: ids.asset,
+      change: 'unchanged',
+      fieldChecksums: { [ids.field]: checksum(['operator-tag-id']) },
+    });
+
+    expect(tx.asset.updateMany).toHaveBeenCalledTimes(1);
+    expect(preResolve).not.toHaveBeenCalled();
+    expect(tx.assetFieldValue.upsert).not.toHaveBeenCalled();
+  });
+
+  it('reports a synchronization gap when the guarded update keeps conflicting', async () => {
+    const { service, prisma, audit, tx } = setup({ target: asset({ name: 'Old Edge' }), binding: binding() });
+    tx.asset.updateMany.mockResolvedValue({ count: 0 });
+
+    await expect(service.writeFromIntegration({
+      ...input,
+      existingTargetId: ids.asset,
+    })).resolves.toMatchObject({
+      targetId: ids.asset,
+      change: 'blocked',
+      gap: {
+        kind: 'synchronization_error',
+        details: { reasonCode: 'target_revision_conflict' },
+      },
+    });
+
+    expect(tx.asset.updateMany).toHaveBeenCalledTimes(3);
+    expect(prisma.asset.findUnique).toHaveBeenCalledTimes(3);
+    expect(tx.assetFieldValue.upsert).not.toHaveBeenCalled();
+    expect(audit.logWithClient).not.toHaveBeenCalled();
   });
 
   it('preserves manual fields and dependent children across a real stale sweep and native restore', async () => {

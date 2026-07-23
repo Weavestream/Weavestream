@@ -38,7 +38,7 @@ See [Key Concepts](/overview/concepts/) for the full terminology reference.
 | [User management](/features/users/) | Role, membership, default access, capabilities, invite-only onboarding, and forced MFA |
 | [Audit log](/features/audit/) | Append-only, tamper-resistant mutation history |
 | [Full-text search](/features/search/) | PostgreSQL-backed search across articles, assets, and uploads |
-| [Integrations](/features/integrations/) | External system sync into tenant asset records |
+| [Integrations](/integrations/) | External system sync into tenant asset records |
 
 ## Deployment model
 

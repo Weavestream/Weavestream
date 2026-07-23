@@ -21,7 +21,7 @@ Use this section as a module reference for Weavestream. Each page explains what 
 [!card title="Password Vault" text="Encrypted credential records with TOTP secrets, breach checks, generator support, access restrictions, and version history." icon="lock" layout="compact"](/features/passwords/)
 [!card title="Domain & SSL Monitoring" text="WHOIS, DNS, HTTP, and TLS checks for monitored hostnames, with history and expiration tracking." icon="globe" layout="compact"](/features/domains/)
 [!card title="IP Address Management (IPAM)" text="Tenant-scoped IPv4 subnets, occupancy detection, reservations, conflict detection, and address-space visualization." icon="table" layout="compact"](/features/ipam/)
-[!card title="Integrations" text="Built-in integration drivers for syncing external inventory into tenant asset records on demand or on a schedule." icon="plug" layout="compact"](/features/integrations/)
+[!card title="Integrations" text="Built-in integration drivers for syncing external inventory into tenant asset records on demand or on a schedule." icon="plug" layout="compact"](/integrations/)
 
 ## Access, Visibility, And Audit
 

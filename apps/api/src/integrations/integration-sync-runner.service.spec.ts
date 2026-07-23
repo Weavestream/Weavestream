@@ -1691,9 +1691,22 @@ describe('Breeze foundational asset composition', () => {
       const identity = args.where?.integrationCompanyMappingId_resourceId_externalId;
       return identity ? bindings.get(`${identity.integrationCompanyMappingId}:${identity.resourceId}:${identity.externalId}`) ?? null : null;
     };
+    // writeFromIntegration reads through the caller-provided tx, so the tx
+    // mock must expose the same read delegates as a real TransactionClient
+    // over the shared in-memory store.
+    const assetReads = {
+      findUnique: jest.fn(async ({ where }: { where: { id: string } }) => assets.get(where.id) ?? null),
+      findFirst: jest.fn(async ({ where }: { where: { companyId: string; externalId: string; externalSource: string | null; NOT?: { id: string } } }) =>
+        [...assets.values()].find((row) => row.companyId === where.companyId && row.externalId === where.externalId && row.externalSource === where.externalSource && row.id !== where.NOT?.id) ?? null),
+      findMany: jest.fn().mockResolvedValue([]),
+    };
+    const assetLayoutReads = { findUnique: jest.fn().mockResolvedValue(assetLayout) };
+    const assetFieldValueReads = { findFirst: jest.fn().mockResolvedValue(null) };
     const tx = {
       integrationSyncRun: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+      assetLayout: assetLayoutReads,
       asset: {
+        ...assetReads,
         create: jest.fn(async ({ data }: { data: Omit<StoredAsset, 'id' | 'fieldValues' | 'createdAt' | 'updatedAt'> }) => {
           const row: StoredAsset = {
             ...data,
@@ -1711,6 +1724,7 @@ describe('Breeze foundational asset composition', () => {
         }),
       },
       assetFieldValue: {
+        ...assetFieldValueReads,
         upsert: jest.fn(async ({ where, create, update }: { where: { assetId_assetFieldId: { assetId: string; assetFieldId: string } }; create: { companyId: string; assetId: string; assetFieldId: string; value: unknown }; update: { value: unknown } }) => {
           const row = assets.get(where.assetId_assetFieldId.assetId)!;
           const existing = row.fieldValues.find((value) => value.assetFieldId === where.assetId_assetFieldId.assetFieldId);
@@ -1729,15 +1743,10 @@ describe('Breeze foundational asset composition', () => {
       auditLog: { create: jest.fn() },
     };
     const prisma = {
-      assetLayout: { findUnique: jest.fn().mockResolvedValue(assetLayout) },
+      assetLayout: assetLayoutReads,
       integrationSyncRecord: { findUnique: jest.fn(bindingLookup) },
-      asset: {
-        findUnique: jest.fn(async ({ where }: { where: { id: string } }) => assets.get(where.id) ?? null),
-        findFirst: jest.fn(async ({ where }: { where: { companyId: string; externalId: string; externalSource: string | null; NOT?: { id: string } } }) =>
-          [...assets.values()].find((row) => row.companyId === where.companyId && row.externalId === where.externalId && row.externalSource === where.externalSource && row.id !== where.NOT?.id) ?? null),
-        findMany: jest.fn().mockResolvedValue([]),
-      },
-      assetFieldValue: { findFirst: jest.fn().mockResolvedValue(null) },
+      asset: assetReads,
+      assetFieldValue: assetFieldValueReads,
       tag: { findMany: jest.fn().mockResolvedValue([]) },
       $transaction: jest.fn(async (callback: (client: typeof tx) => Promise<unknown>) => callback(tx)),
     };

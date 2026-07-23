@@ -50,9 +50,9 @@ function setup(options: { bound?: unknown; composite?: unknown; binding?: unknow
     password: { findFirst: jest.fn() },
     relation: {
       findUnique: jest.fn().mockResolvedValue(options.bound ?? null),
-      upsert: jest.fn().mockImplementation(async () => {
+      createMany: jest.fn().mockImplementation(async () => {
         relationWritten = true;
-        return relation();
+        return { count: 1 };
       }),
       updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       deleteMany: jest.fn().mockResolvedValue({ count: 1 }),
@@ -72,7 +72,6 @@ function setup(options: { bound?: unknown; composite?: unknown; binding?: unknow
     relation: {
       findUnique: jest.fn().mockResolvedValue(options.bound ?? null),
       findFirst: jest.fn().mockResolvedValue(options.composite ?? null),
-      upsert: tx.relation.upsert,
     },
     integrationSyncRecord: { findUnique: jest.fn().mockResolvedValue(options.binding ?? null) },
     $transaction: jest.fn(async (callback: (client: unknown) => Promise<unknown>) => {
@@ -185,7 +184,7 @@ describe('RelationsService integration system writes', () => {
       await expect(new RelationTargetWriter(success.service).write(
         context(success, successResolve), relationInput,
       )).resolves.toMatchObject({ change: 'created', targetKind: 'relation' });
-      expect(success.tx.relation.upsert).toHaveBeenCalled();
+      expect(success.tx.relation.createMany).toHaveBeenCalled();
 
       const missing = setup();
       const missingResolve = jest.fn()
@@ -196,7 +195,7 @@ describe('RelationsService integration system writes', () => {
       )).resolves.toMatchObject({
         change: 'blocked', gaps: [expect.objectContaining({ kind: 'missing_dependency' })],
       });
-      expect(missing.tx.relation.upsert).not.toHaveBeenCalled();
+      expect(missing.tx.relation.createMany).not.toHaveBeenCalled();
 
       const crossCompany = setup();
       const crossResolve = jest.fn()
@@ -207,7 +206,7 @@ describe('RelationsService integration system writes', () => {
       )).resolves.toMatchObject({
         change: 'blocked', gaps: [expect.objectContaining({ kind: 'validation', details: { reasonCode: 'dependency_company_mismatch' } })],
       });
-      expect(crossCompany.tx.relation.upsert).not.toHaveBeenCalled();
+      expect(crossCompany.tx.relation.createMany).not.toHaveBeenCalled();
     },
   );
 
@@ -274,9 +273,10 @@ describe('RelationsService integration system writes', () => {
       resourceKey: 'devices',
       externalId: `${orgId}:devices:${deviceId}`,
     });
-    expect(harness.tx.relation.upsert).toHaveBeenCalledWith(
+    expect(harness.tx.relation.createMany).toHaveBeenCalledWith(
       expect.objectContaining({
-        create: expect.objectContaining({ relationType: 'site_device' }),
+        data: [expect.objectContaining({ relationType: 'site_device' })],
+        skipDuplicates: true,
       }),
     );
     expect(harness.audit.logWithClient).toHaveBeenCalledWith(
@@ -292,7 +292,7 @@ describe('RelationsService integration system writes', () => {
       companyId: ids.company,
       change: 'created',
     });
-    expect(tx.relation.upsert).toHaveBeenCalledTimes(1);
+    expect(tx.relation.createMany).toHaveBeenCalledTimes(1);
     expect(audit.logWithClient).toHaveBeenCalledWith(
       tx,
       expect.objectContaining({
@@ -311,7 +311,7 @@ describe('RelationsService integration system writes', () => {
       existingTargetId: ids.relation,
     })).resolves.toEqual({ targetId: ids.relation, companyId: ids.company, change: 'unchanged' });
     expect(prisma.$transaction).not.toHaveBeenCalled();
-    expect(tx.relation.upsert).not.toHaveBeenCalled();
+    expect(tx.relation.createMany).not.toHaveBeenCalled();
   });
 
   it('rejects an arbitrary manual relation before mutation', async () => {
@@ -345,7 +345,15 @@ describe('RelationsService integration system writes', () => {
       ...input, existingTargetId: ids.relation,
     })).resolves.toEqual({ targetId: ids.relation, companyId: ids.company, change: 'updated' });
     expect(tx.relation.updateMany).toHaveBeenCalledWith({
-      where: { id: ids.relation, companyId: ids.company },
+      where: {
+        id: ids.relation,
+        companyId: ids.company,
+        sourceType: 'Asset',
+        sourceId: ids.asset,
+        targetType: 'Article',
+        targetId: ids.article,
+        relationType: 'old-type',
+      },
       data: {
         sourceType: input.sourceType,
         sourceId: input.sourceId,
@@ -355,7 +363,7 @@ describe('RelationsService integration system writes', () => {
       },
     });
     expect(tx.relation.deleteMany).not.toHaveBeenCalled();
-    expect(tx.relation.upsert).not.toHaveBeenCalled();
+    expect(tx.relation.createMany).not.toHaveBeenCalled();
     expect(persistedBinding.relationId).toBe(ids.relation);
     expect(audit.logWithClient).toHaveBeenCalledWith(
       tx,
@@ -364,6 +372,69 @@ describe('RelationsService integration system writes', () => {
         entityId: ids.relation,
       }),
     );
+  });
+
+  it('re-reads instead of resurrecting a relation deleted between read and write', async () => {
+    const existing = relation({ relationType: 'old-type' });
+    const { service, prisma, audit, tx } = setup({ binding: binding() });
+    prisma.relation.findUnique.mockResolvedValueOnce(existing).mockResolvedValueOnce(null);
+    // The guarded attempt loses the race (row deleted after the read);
+    // the retry re-reads and reports the missing target cleanly.
+    tx.relation.updateMany.mockResolvedValue({ count: 0 });
+
+    await expect(service.writeFromIntegration({
+      ...input,
+      existingTargetId: ids.relation,
+    })).resolves.toMatchObject({
+      change: 'blocked',
+      gap: { kind: 'missing_dependency', details: { reasonCode: 'target_not_found' } },
+    });
+
+    expect(tx.relation.updateMany).toHaveBeenCalledTimes(1);
+    expect(tx.relation.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ id: ids.relation, relationType: 'old-type' }),
+    }));
+    expect(audit.logWithClient).not.toHaveBeenCalled();
+  });
+
+  it('reports a synchronization gap when the guarded update keeps conflicting', async () => {
+    const existing = relation({ relationType: 'old-type' });
+    const { service, prisma, audit, tx } = setup({ bound: existing, binding: binding() });
+    tx.relation.updateMany.mockResolvedValue({ count: 0 });
+
+    await expect(service.writeFromIntegration({
+      ...input,
+      existingTargetId: ids.relation,
+    })).resolves.toMatchObject({
+      targetId: ids.relation,
+      change: 'blocked',
+      gap: {
+        kind: 'synchronization_error',
+        details: { reasonCode: 'target_revision_conflict' },
+      },
+    });
+
+    expect(tx.relation.updateMany).toHaveBeenCalledTimes(3);
+    expect(prisma.relation.findUnique).toHaveBeenCalledTimes(3);
+    expect(audit.logWithClient).not.toHaveBeenCalled();
+  });
+
+  it('does not claim a composite owner created between read and write', async () => {
+    const { service, prisma, audit, tx } = setup();
+    // Zero inserted rows: another writer claimed the composite key
+    // after the pre-check; the retry re-reads and reports ownership.
+    tx.relation.createMany.mockResolvedValue({ count: 0 });
+    prisma.relation.findFirst
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(relation({ createdBy: ids.other }));
+
+    await expect(service.writeFromIntegration(input)).resolves.toMatchObject({
+      change: 'blocked',
+      gap: { kind: 'ambiguous', details: { reasonCode: 'manual_ownership' } },
+    });
+
+    expect(tx.relation.createMany).toHaveBeenCalledTimes(1);
+    expect(audit.logWithClient).not.toHaveBeenCalled();
   });
 
   it('uses the caller page transaction for endpoint, target, composite, and binding reads', async () => {
@@ -413,7 +484,7 @@ describe('RelationsService integration system writes', () => {
       companyId: ids.company,
       change: 'created',
     });
-    expect(created.tx.relation.upsert).toHaveBeenCalledTimes(1);
+    expect(created.tx.relation.createMany).toHaveBeenCalledTimes(1);
     expect(created.prisma.asset.findFirst).not.toHaveBeenCalled();
     expect(created.prisma.article.findFirst).not.toHaveBeenCalled();
     expect(created.prisma.$transaction).not.toHaveBeenCalled();
@@ -426,7 +497,7 @@ describe('RelationsService integration system writes', () => {
       change: 'blocked',
       gap: { details: { reasonCode: 'manual_ownership' } },
     });
-    expect(collision.tx.relation.upsert).not.toHaveBeenCalled();
+    expect(collision.tx.relation.createMany).not.toHaveBeenCalled();
     expect(collision.prisma.relation.findFirst).not.toHaveBeenCalled();
   });
 
@@ -449,7 +520,7 @@ describe('RelationsService integration system writes', () => {
     const { service, prisma, tx } = setup();
     await expect(service.writeFromIntegration({ ...input, dryRun: true })).resolves.toMatchObject({ change: 'created' });
     expect(prisma.$transaction).not.toHaveBeenCalled();
-    expect(tx.relation.upsert).not.toHaveBeenCalled();
+    expect(tx.relation.createMany).not.toHaveBeenCalled();
   });
 
   it('blocks wrong-company dependencies and unbound composite collisions', async () => {

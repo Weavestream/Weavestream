@@ -334,6 +334,14 @@ describe('BreezeDriver descriptor', () => {
         targetConfig: { sourceEndpoint: '/device-relationships' },
       },
     ]);
+    // Device relationships cannot sync until the operator defines custom
+    // field values, so it must seed disabled; every other resource keeps
+    // the enabled-by-default behavior.
+    expect(
+      descriptor.resources
+        .filter((resource) => resource.defaultEnabled === false)
+        .map((resource) => resource.key),
+    ).toEqual(['device-relationships']);
   });
 
   it('recommends deterministic site/device destinations without status or last-seen fields', () => {

@@ -224,3 +224,81 @@ describe('IntegrationsService secret boundary', () => {
     loggerError.mockRestore();
   });
 });
+
+describe('IntegrationsService resource seeding', () => {
+  it('seeds rows enabled unless the descriptor opts the resource out', async () => {
+    const actor = { id: '00000000-0000-4000-8000-000000000010' } as never;
+    const meta = { ip: '127.0.0.1', userAgent: 'jest' };
+    const id = '00000000-0000-4000-8000-000000000012';
+    const now = new Date('2026-07-14T00:00:00.000Z');
+    const row = {
+      id,
+      driver: 'breeze',
+      name: 'Breeze',
+      status: 'PAUSED',
+      config: {},
+      syncCron: null,
+      createdBy: '00000000-0000-4000-8000-000000000010',
+      createdAt: now,
+      updatedAt: now,
+      lastRunAt: null,
+      lastRunStatus: null,
+      secret: null,
+      resources: [],
+      _count: { companyMappings: 0 },
+    };
+    const tx = {
+      integration: { create: jest.fn().mockResolvedValue(row) },
+      integrationResource: { create: jest.fn() },
+      integrationSecret: { create: jest.fn() },
+    };
+    const prisma = {
+      integration: { findUnique: jest.fn(async () => row) },
+      $transaction: jest.fn(async (callback: (client: typeof tx) => Promise<unknown>) => callback(tx)),
+    };
+    const descriptor = {
+      key: 'breeze', label: 'Breeze', description: null, iconKey: null,
+      configFields: [], secretFields: [],
+      resources: [
+        {
+          key: 'devices', label: 'Devices', targetKind: 'asset',
+          targetConfig: {}, dependsOnResourceKeys: [],
+        },
+        {
+          key: 'device-relationships', label: 'Device relationships', targetKind: 'relation',
+          targetConfig: {}, dependsOnResourceKeys: ['devices'], defaultEnabled: false,
+        },
+      ],
+      capabilities: { kind: 'pull', listSourceOrgs: true, dryRun: true, ticketing: false },
+    };
+    const drivers = {
+      describe: jest.fn().mockReturnValue(descriptor),
+      get: jest.fn().mockReturnValue({}),
+      kindOf: jest.fn().mockReturnValue('pull'),
+      has: jest.fn().mockReturnValue(true),
+    };
+    const service = new IntegrationsService(
+      prisma as never,
+      { encrypt: jest.fn(), decrypt: jest.fn() } as never,
+      { log: jest.fn(), logChange: jest.fn() } as never,
+      drivers as never,
+      { values: { INTEGRATION_SYNC_DEFAULT_CRON: '*/15 * * * *' } } as never,
+      { refreshFor: jest.fn() } as never,
+      {} as never,
+    );
+
+    await service.create(actor, { driver: 'breeze', name: 'Breeze', config: {}, status: 'PAUSED' }, meta);
+
+    expect(
+      tx.integrationResource.create.mock.calls.map(
+        ([{ data }]: [{ data: { resourceKey: string; enabled: boolean } }]) => [
+          data.resourceKey,
+          data.enabled,
+        ],
+      ),
+    ).toEqual([
+      ['devices', true],
+      ['device-relationships', false],
+    ]);
+  });
+});

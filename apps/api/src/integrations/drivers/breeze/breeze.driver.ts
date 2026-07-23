@@ -326,6 +326,9 @@ export class BreezeDriver implements IntegrationDriver {
         'relation',
         { sourceEndpoint: '/device-relationships' },
         BREEZE_RESOURCE_KEYS.filter((key) => key !== 'device-relationships'),
+        // Runs fail until the operator defines custom field values, so
+        // fresh integrations must not sync this resource unprompted.
+        { defaultEnabled: false },
       ),
     ],
     capabilities: {
@@ -678,6 +681,7 @@ function resource(
   targetKind: string,
   targetConfig: Record<string, unknown>,
   dependsOnResourceKeys: readonly string[] = [],
+  options: { defaultEnabled?: boolean } = {},
 ) {
   return {
     key,
@@ -685,6 +689,7 @@ function resource(
     targetKind,
     targetConfig,
     dependsOnResourceKeys: [...dependsOnResourceKeys],
+    ...options,
   };
 }
 

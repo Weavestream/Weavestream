@@ -143,6 +143,15 @@ const resourceDescriptorBaseShape = {
    * — the driver does not enforce it.
    */
   defaultMatchKeyHint: z.string().nullable().optional(),
+  /**
+   * Whether newly seeded `IntegrationResource` rows start with
+   * `enabled: true`. Absent means enabled. Drivers set `false` for
+   * resources that need operator configuration before a sync run can
+   * succeed (e.g. Breeze device relationships, which fail until custom
+   * field values are defined). Only applies at row creation — the
+   * operator's own enable/disable choice is never overwritten.
+   */
+  defaultEnabled: z.boolean().optional(),
   dependsOnResourceKeys: z.array(driverResourceKeySchema).max(64).default([]),
 } as const;
 
