@@ -71,9 +71,18 @@ export function containsSensitiveMaterial(value: unknown): boolean {
 }
 
 function looksHighEntropy(value: string): boolean {
-  const candidate = value.trim();
-  if (candidate.length < 40 || candidate.length > 4096 || /\s/.test(candidate)) return false;
-  if (!/^[A-Za-z0-9+/_=-]+$/.test(candidate)) return false;
+  // Inspect every maximal token-shaped run instead of the whole string. A
+  // high-entropy secret concatenated into surrounding text — e.g. through a
+  // `join` or markdown_table separator — must not be laundered by neighbouring
+  // whitespace or punctuation that breaks the run apart. Runs outside the
+  // 40–4096 length window are ignored, so large legitimate base64 payloads and
+  // short identifiers stay safe exactly as before.
+  const runs = value.match(/[A-Za-z0-9+/_=-]+/g);
+  return runs !== null && runs.some(isHighEntropyToken);
+}
+
+function isHighEntropyToken(candidate: string): boolean {
+  if (candidate.length < 40 || candidate.length > 4096) return false;
   const counts = new Map<string, number>();
   for (const char of candidate) counts.set(char, (counts.get(char) ?? 0) + 1);
   let entropy = 0;

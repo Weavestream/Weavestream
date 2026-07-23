@@ -43,4 +43,28 @@ describe('scanSensitiveMaterial', () => {
     });
     expect(scanSensitiveMaterial(value)).toBe('bounds_exceeded');
   });
+
+  it('flags a high-entropy token even when embedded in surrounding text', () => {
+    // The entropy scan inspects each token run, so a secret concatenated with a
+    // whitespace or punctuation separator cannot be laundered by its neighbours.
+    const secret = 'Kf9mZ2pQ7rL4wXbn6vT8cH3dSjY0aGeU4iO1kPqRtWc';
+    expect(scanSensitiveMaterial(secret)).toBe('sensitive');
+    expect(scanSensitiveMaterial(`device ${secret} active`)).toBe('sensitive');
+    expect(scanSensitiveMaterial(`${secret}: Firewall`)).toBe('sensitive');
+    expect(scanSensitiveMaterial({ note: `key = ${secret}` })).toBe('sensitive');
+  });
+
+  it('keeps benign inventory labels, digests, and large payloads safe', () => {
+    expect(scanSensitiveMaterial('Main Firewall Rack 3 Building A')).toBe('safe');
+    expect(scanSensitiveMaterial('edge-router-01.datacenter-west.internal.example.com')).toBe('safe');
+    // SHA-256 hex digest: 16-symbol alphabet caps entropy below the threshold
+    // and offers only two character classes, so digests are not secrets.
+    expect(
+      scanSensitiveMaterial('e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'),
+    ).toBe('safe');
+    // A genuinely high-entropy blob longer than 4096 chars (a large legitimate
+    // payload) stays outside the detection window.
+    const bigBlob = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'.repeat(70);
+    expect(scanSensitiveMaterial(bigBlob)).toBe('safe');
+  });
 });

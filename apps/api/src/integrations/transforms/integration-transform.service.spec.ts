@@ -63,6 +63,45 @@ describe('IntegrationTransformService', () => {
     ).toThrow(expect.objectContaining({ code: 'INVALID_JOIN_VALUE' }));
   });
 
+  it('rejects an opaque secret embedded via a join separator without echoing it', () => {
+    // Bare, this opaque token trips the entropy scan; a whitespace separator
+    // must not launder it into an accepted aggregate. Each resolved scalar is
+    // classified at the join boundary, before concatenation.
+    const secret = 'Kf9mZ2pQ7rL4wXbn6vT8cH3dSjY0aGeU4iO1kPqRtWc';
+    const root = { token: secret, label: 'Firewall' };
+    try {
+      service.execute(null, { steps: [{ op: 'join', paths: ['token', 'label'], separator: ': ' }] }, root);
+      throw new Error('expected transform to fail');
+    } catch (error) {
+      expect(error).toBeInstanceOf(IntegrationTransformError);
+      expect(error).toMatchObject({ code: 'SECRET_INPUT' });
+      expect((error as Error).message).toBe('Transform input contains sensitive material.');
+      expect((error as Error).message).not.toContain(secret);
+    }
+  });
+
+  it('rejects a secret-bearing markdown_table cell before assembling the table', () => {
+    const secret = 'Kf9mZ2pQ7rL4wXbn6vT8cH3dSjY0aGeU4iO1kPqRtWc';
+    expect(() =>
+      service.execute(
+        [{ name: 'edge-01', key: secret }],
+        {
+          steps: [
+            {
+              op: 'markdown_table',
+              columns: [
+                { header: 'Name', path: 'name' },
+                { header: 'Key', path: 'key' },
+              ],
+            },
+          ],
+        },
+      ),
+    ).toThrow(
+      expect.objectContaining({ code: 'SECRET_INPUT', message: 'Transform input contains sensitive material.' }),
+    );
+  });
+
   it('formats bytes with IEC units', () => {
     expect(service.execute(0, { steps: [{ op: 'format_bytes' }] })).toBe('0 B');
     expect(service.execute(1536, { steps: [{ op: 'format_bytes', precision: 1 }] })).toBe('1.5 KiB');

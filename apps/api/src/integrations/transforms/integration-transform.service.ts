@@ -34,6 +34,7 @@ export type IntegrationTransformErrorCode =
   | 'INVALID_TABLE'
   | 'TOO_MANY_TABLE_ROWS'
   | 'OUTPUT_TOO_LARGE'
+  | 'SECRET_INPUT'
   | 'SECRET_OUTPUT';
 
 export class IntegrationTransformError extends Error {
@@ -238,7 +239,20 @@ function stringifyScalar(value: unknown): string {
     if (typeof value === 'number' && !Number.isFinite(value)) {
       throw new IntegrationTransformError('INVALID_JOIN_VALUE', 'Join paths must resolve to safe scalar values.');
     }
-    return String(value);
+    const scalar = String(value);
+    // Classify each resolved provider scalar BEFORE it is concatenated into a
+    // larger string. `execute` only scans the assembled output, and
+    // `looksHighEntropy` inspects token runs, so a separator or neighbouring
+    // value could otherwise embed an opaque secret in a way that survives the
+    // aggregate. Rejecting at the scalar boundary holds the invariant for every
+    // concatenating op (`join`, `markdown_table`) regardless of separator.
+    if (containsSensitiveMaterial(scalar)) {
+      throw new IntegrationTransformError(
+        'SECRET_INPUT',
+        'Transform input contains sensitive material.',
+      );
+    }
+    return scalar;
   }
   throw new IntegrationTransformError('INVALID_JOIN_VALUE', 'Join paths must resolve to safe scalar values.');
 }
