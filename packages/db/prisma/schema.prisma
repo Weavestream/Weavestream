@@ -1482,6 +1482,7 @@ model IntegrationSyncCheckpoint {
   mode                        IntegrationSyncMode @default(incremental)
   authoritative               Boolean   @default(true)
   cursor                      String?   @db.VarChar(4096)
+  schemaVersion               String?   @map("schema_version") @db.VarChar(32)
   snapshotAt                  DateTime? @map("snapshot_at")
   highWaterAt                 DateTime? @map("high_water_at")
   lastCompletedAt             DateTime? @map("last_completed_at")

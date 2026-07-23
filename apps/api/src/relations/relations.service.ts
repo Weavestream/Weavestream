@@ -202,6 +202,7 @@ export class RelationsService implements RelationPort {
   ): Promise<IntegrationRelationWriteResult> {
     const runTransaction = <T>(callback: (tx: Prisma.TransactionClient) => Promise<T>) =>
       input.tx ? callback(input.tx) : this.prisma.$transaction(callback);
+    const readClient = input.tx ?? this.prisma;
     if (!this.audit) throw new Error('Integration relation audit service is unavailable.');
     await this.audit.assertIntegrationActor(input.auditActorId, input.companyId);
     const sourceKind = TYPE_TO_KIND[input.sourceType];
@@ -210,19 +211,19 @@ export class RelationsService implements RelationPort {
       return relationBlocked(input.companyId, 'validation', 'Relation endpoint type is invalid.', 'invalid_endpoint_kind');
     }
     try {
-      await this.assertEndpointsInCompany({
+      await this.assertEndpointsInCompanyWithClient({
         companyId: input.companyId,
         sourceType: sourceKind,
         sourceId: input.sourceId,
         targetType: targetKind,
         targetId: input.targetId,
-      });
+      }, readClient);
     } catch {
       return relationBlocked(input.companyId, 'missing_dependency', 'A relation endpoint was not found in the write company.', 'dependency_not_found');
     }
 
     const bound = input.existingTargetId
-      ? await this.prisma.relation.findUnique({ where: { id: input.existingTargetId } })
+      ? await readClient.relation.findUnique({ where: { id: input.existingTargetId } })
       : null;
     if (bound && bound.companyId !== input.companyId) {
       return { targetId: bound.id, companyId: bound.companyId, change: 'blocked' };
@@ -239,7 +240,7 @@ export class RelationsService implements RelationPort {
       targetId: input.targetId,
       relationType: input.relationType,
     };
-    const existingComposite = await this.prisma.relation.findFirst({ where: key });
+    const existingComposite = await readClient.relation.findFirst({ where: key });
     if (!bound && existingComposite) {
       return relationBlocked(input.companyId, 'ambiguous', 'An unbound relation already owns this composite key.', 'manual_ownership', existingComposite.id, 1);
     }
@@ -254,7 +255,7 @@ export class RelationsService implements RelationPort {
       bound.targetId === key.targetId &&
       bound.relationType === key.relationType;
     if (bound && (input.dryRun || sameComposite)) {
-      if (!(await this.hasEligibleRelationBinding(input.tx ?? this.prisma, input, bound.id))) {
+      if (!(await this.hasEligibleRelationBinding(readClient, input, bound.id))) {
         return relationBlocked(input.companyId, 'ambiguous', 'The existing relation is not owned by an eligible reconstruction binding.', 'manual_ownership', bound.id, 1);
       }
     }
@@ -273,19 +274,29 @@ export class RelationsService implements RelationPort {
       if (bound && !(await this.hasEligibleRelationBinding(tx, input, bound.id))) {
         return { blocked: true as const, targetId: bound.id };
       }
+      let row: { id: string } | null;
       if (bound) {
-        await this.unlink({
-          companyId: input.companyId,
-          sourceType: bound.sourceType,
-          sourceId: bound.sourceId,
-          targetType: bound.targetType,
-          targetId: bound.targetId,
-          relationType: bound.relationType,
-          tx,
+        const updated = await tx.relation.updateMany({
+          where: { id: bound.id, companyId: input.companyId },
+          data: {
+            sourceType: key.sourceType,
+            sourceId: key.sourceId,
+            targetType: key.targetType,
+            targetId: key.targetId,
+            relationType: key.relationType,
+          },
         });
+        if (updated.count !== 1) {
+          throw new Error('Relation update did not preserve its target.');
+        }
+        row = await tx.relation.findFirst({
+          where: { id: bound.id, companyId: input.companyId },
+          select: { id: true },
+        });
+      } else {
+        await this.link({ ...key, actorId: input.auditActorId, tx });
+        row = await tx.relation.findFirst({ where: key, select: { id: true } });
       }
-      await this.link({ ...key, actorId: input.auditActorId, tx });
-      const row = await tx.relation.findFirst({ where: key, select: { id: true } });
       if (!row) throw new Error('Relation write did not produce a target.');
       await this.audit!.logWithClient(tx, {
         actorId: input.auditActorId,
@@ -684,6 +695,19 @@ export class RelationsService implements RelationPort {
     targetType: RelationEndpointKind;
     targetId: string;
   }): Promise<void> {
+    await this.assertEndpointsInCompanyWithClient(args, this.prisma);
+  }
+
+  private async assertEndpointsInCompanyWithClient(
+    args: {
+      companyId: string;
+      sourceType: RelationEndpointKind;
+      sourceId: string;
+      targetType: RelationEndpointKind;
+      targetId: string;
+    },
+    client: Pick<Prisma.TransactionClient, 'asset' | 'article' | 'password'> | PrismaService,
+  ): Promise<void> {
     const checks: Array<Promise<unknown>> = [];
     const queue = [
       { kind: args.sourceType, id: args.sourceId, label: 'source' as const },
@@ -692,7 +716,7 @@ export class RelationsService implements RelationPort {
     for (const endpoint of queue) {
       const lookup =
         endpoint.kind === 'asset'
-          ? this.prisma.asset.findFirst({
+          ? client.asset.findFirst({
               where: {
                 id: endpoint.id,
                 companyId: args.companyId,
@@ -701,7 +725,7 @@ export class RelationsService implements RelationPort {
               select: { id: true },
             })
           : endpoint.kind === 'article'
-            ? this.prisma.article.findFirst({
+            ? client.article.findFirst({
                 where: {
                   id: endpoint.id,
                   companyId: args.companyId,
@@ -709,7 +733,7 @@ export class RelationsService implements RelationPort {
                 },
                 select: { id: true },
               })
-            : this.prisma.password.findFirst({
+            : client.password.findFirst({
                 where: {
                   id: endpoint.id,
                   companyId: args.companyId,

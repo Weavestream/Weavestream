@@ -43,11 +43,24 @@ function binding(overrides: Record<string, unknown> = {}) {
 
 function setup(options: { bound?: unknown; composite?: unknown; binding?: unknown; auditFails?: boolean } = {}) {
   let committed = false;
+  let relationWritten = false;
   const tx = {
+    asset: { findFirst: jest.fn().mockResolvedValue({ id: ids.asset }) },
+    article: { findFirst: jest.fn().mockResolvedValue({ id: ids.article }) },
+    password: { findFirst: jest.fn() },
     relation: {
-      upsert: jest.fn().mockResolvedValue(relation()),
+      findUnique: jest.fn().mockResolvedValue(options.bound ?? null),
+      upsert: jest.fn().mockImplementation(async () => {
+        relationWritten = true;
+        return relation();
+      }),
+      updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       deleteMany: jest.fn().mockResolvedValue({ count: 1 }),
-      findFirst: jest.fn().mockResolvedValue(relation()),
+      findFirst: jest.fn().mockImplementation(async (args: { where: Record<string, unknown> }) => {
+        if ('id' in args.where) return options.bound ?? relation();
+        if (options.composite !== undefined) return options.composite;
+        return relationWritten ? relation() : null;
+      }),
     },
     integrationSyncRecord: { findUnique: jest.fn().mockResolvedValue(options.binding ?? null) },
     auditLog: { create: jest.fn() },
@@ -313,13 +326,108 @@ describe('RelationsService integration system writes', () => {
 
   it('updates a verified relation composite and preserves its exact target id', async () => {
     const existing = relation({ relationType: 'old-type' });
-    const { service } = setup({
+    const persistedBinding = binding({
+      state: 'stale',
+      provenance: {
+        integrationId: ids.integration,
+        externalOrgId: 'org',
+        resourceKey: 'relations',
+        externalId: 'org:relations:runbook',
+        ownership: 'breeze',
+        state: 'stale',
+      },
+    });
+    const { service, audit, tx } = setup({
       bound: existing,
-      binding: binding({ state: 'stale', provenance: { integrationId: ids.integration, externalOrgId: 'org', resourceKey: 'relations', externalId: 'org:relations:runbook', ownership: 'breeze', state: 'stale' } }),
+      binding: persistedBinding,
     });
     await expect(service.writeFromIntegration({
       ...input, existingTargetId: ids.relation,
     })).resolves.toEqual({ targetId: ids.relation, companyId: ids.company, change: 'updated' });
+    expect(tx.relation.updateMany).toHaveBeenCalledWith({
+      where: { id: ids.relation, companyId: ids.company },
+      data: {
+        sourceType: input.sourceType,
+        sourceId: input.sourceId,
+        targetType: input.targetType,
+        targetId: input.targetId,
+        relationType: input.relationType,
+      },
+    });
+    expect(tx.relation.deleteMany).not.toHaveBeenCalled();
+    expect(tx.relation.upsert).not.toHaveBeenCalled();
+    expect(persistedBinding.relationId).toBe(ids.relation);
+    expect(audit.logWithClient).toHaveBeenCalledWith(
+      tx,
+      expect.objectContaining({
+        action: 'integration.relation.updated',
+        entityId: ids.relation,
+      }),
+    );
+  });
+
+  it('uses the caller page transaction for endpoint, target, composite, and binding reads', async () => {
+    const existing = relation();
+    const { service, prisma, tx } = setup({
+      bound: existing,
+      composite: existing,
+      binding: binding(),
+    });
+
+    await expect(service.writeFromIntegration({
+      ...input,
+      existingTargetId: ids.relation,
+      tx: tx as never,
+    })).resolves.toEqual({
+      targetId: ids.relation,
+      companyId: ids.company,
+      change: 'unchanged',
+    });
+
+    expect(tx.asset.findFirst).toHaveBeenCalled();
+    expect(tx.article.findFirst).toHaveBeenCalled();
+    expect(tx.relation.findUnique).toHaveBeenCalledWith({ where: { id: ids.relation } });
+    expect(tx.relation.findFirst).toHaveBeenCalledWith({
+      where: expect.objectContaining({ companyId: ids.company, relationType: input.relationType }),
+    });
+    expect(tx.integrationSyncRecord.findUnique).toHaveBeenCalled();
+    expect(prisma.asset.findFirst).not.toHaveBeenCalled();
+    expect(prisma.article.findFirst).not.toHaveBeenCalled();
+    expect(prisma.relation.findUnique).not.toHaveBeenCalled();
+    expect(prisma.relation.findFirst).not.toHaveBeenCalled();
+    expect(prisma.integrationSyncRecord.findUnique).not.toHaveBeenCalled();
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('creates with same-page endpoints and blocks same-page composite collisions', async () => {
+    const created = setup();
+    created.tx.relation.findFirst
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(relation());
+
+    await expect(created.service.writeFromIntegration({
+      ...input,
+      tx: created.tx as never,
+    })).resolves.toEqual({
+      targetId: ids.relation,
+      companyId: ids.company,
+      change: 'created',
+    });
+    expect(created.tx.relation.upsert).toHaveBeenCalledTimes(1);
+    expect(created.prisma.asset.findFirst).not.toHaveBeenCalled();
+    expect(created.prisma.article.findFirst).not.toHaveBeenCalled();
+    expect(created.prisma.$transaction).not.toHaveBeenCalled();
+
+    const collision = setup({ composite: relation() });
+    await expect(collision.service.writeFromIntegration({
+      ...input,
+      tx: collision.tx as never,
+    })).resolves.toMatchObject({
+      change: 'blocked',
+      gap: { details: { reasonCode: 'manual_ownership' } },
+    });
+    expect(collision.tx.relation.upsert).not.toHaveBeenCalled();
+    expect(collision.prisma.relation.findFirst).not.toHaveBeenCalled();
   });
 
   it.each([

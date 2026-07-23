@@ -300,7 +300,14 @@ export class IntegrationSyncRunnerService {
     };
 
     let cursor = checkpoint?.cursor ?? null;
-    let schemaVersion: string | null = null;
+    // A mid-traversal resume must keep the schema version that produced the
+    // pages already written under this snapshot; a driver that comes back
+    // with a different version fails validation instead of silently mixing
+    // wire schemas within one snapshot. Null (pre-column checkpoints) pins
+    // nothing, matching a fresh traversal.
+    let schemaVersion: string | null = cursor !== null
+      ? checkpoint?.schemaVersion ?? null
+      : null;
     let snapshotAt = checkpoint?.cursor !== null && checkpoint?.cursor !== undefined
       ? checkpoint.snapshotAt?.toISOString() ?? null
       : null;
@@ -671,6 +678,7 @@ export class IntegrationSyncRunnerService {
               create: {
                 companyId: mapping.companyId, integrationCompanyMappingId: mapping.id,
                 resourceId: resource.id, mode, cursor: page.terminal ? null : page.cursor,
+                schemaVersion: page.terminal ? null : page.schemaVersion,
                 snapshotAt: new Date(page.snapshotAt),
                 authoritative: authoritativeThroughPage,
                 highWaterAt: page.terminal && authoritativeThroughPage && highWater
@@ -681,6 +689,7 @@ export class IntegrationSyncRunnerService {
               },
               update: {
                 cursor: page.terminal ? null : page.cursor,
+                schemaVersion: page.terminal ? null : page.schemaVersion,
                 snapshotAt: new Date(page.snapshotAt),
                 authoritative: authoritativeThroughPage,
                 ...(page.terminal && authoritativeThroughPage ? {

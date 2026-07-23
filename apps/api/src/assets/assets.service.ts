@@ -574,8 +574,9 @@ export class AssetsService {
   ): Promise<IntegrationAssetWriteResult> {
     const runTransaction = <T>(callback: (tx: Prisma.TransactionClient) => Promise<T>) =>
       input.tx ? callback(input.tx) : this.prisma.$transaction(callback);
+    const readClient = input.tx ?? this.prisma;
     await this.audit.assertIntegrationActor(input.auditActorId, input.companyId);
-    const layout = await this.loadLayout(input.assetLayoutId);
+    const layout = await this.loadLayout(input.assetLayoutId, readClient);
     if (layout.archivedAt) {
       return integrationAssetBlocked(input.companyId, 'validation', 'The asset layout is archived.', 'layout_archived');
     }
@@ -608,6 +609,7 @@ export class AssetsService {
       input,
       layout,
       normalizedForMatch,
+      readClient,
     );
     if (resolution.ambiguous) {
       return integrationAssetBlocked(
@@ -669,6 +671,7 @@ export class AssetsService {
       input.companyId,
       valuesToWrite,
       target?.id ?? null,
+      readClient,
     );
 
     const legacyExternalSource = legacyIntegrationExternalSource(input);
@@ -696,10 +699,11 @@ export class AssetsService {
         input.externalId,
         input.externalSource ?? null,
         target.id,
+        readClient,
       );
     }
     if (input.dryRun) {
-      if (target && !(await this.hasEligibleAssetBinding(input.tx ?? this.prisma, input, target.id))) {
+      if (target && !(await this.hasEligibleAssetBinding(readClient, input, target.id))) {
         return integrationAssetBlocked(input.companyId, 'ambiguous', 'The existing asset is not owned by an eligible reconstruction binding.', 'manual_ownership', target.id);
       }
       const dryRunValues = await this.canonicalizeFieldValuesForDryRun(layout, valuesToWrite);
@@ -734,6 +738,7 @@ export class AssetsService {
         input.externalId,
         input.externalSource ?? null,
         null,
+        readClient,
       );
       const created = await runTransaction(async (tx) => {
         const canonicalValues = await this.canonicalizeFieldValues(
@@ -1163,18 +1168,19 @@ export class AssetsService {
     input: IntegrationAssetWriteInput,
     layout: LayoutWithFields,
     values: Record<string, unknown>,
+    client: Pick<Prisma.TransactionClient, 'asset' | 'integrationSyncRecord'> | PrismaService = this.prisma,
   ): Promise<{
     target: (Asset & { fieldValues: AssetFieldValue[] }) | null;
     ambiguous: boolean;
   }> {
     const byId = async (id: string) =>
-      this.prisma.asset.findUnique({ where: { id }, include: { fieldValues: true } });
+      client.asset.findUnique({ where: { id }, include: { fieldValues: true } });
 
     if (input.existingTargetId) {
       return { target: await byId(input.existingTargetId), ambiguous: false };
     }
 
-    const bound = await this.prisma.integrationSyncRecord.findUnique({
+    const bound = await client.integrationSyncRecord.findUnique({
       where: {
         integrationCompanyMappingId_resourceId_externalId: {
           integrationCompanyMappingId: input.integrationCompanyMappingId,
@@ -1189,7 +1195,7 @@ export class AssetsService {
     }
 
     if (input.externalSource) {
-      const identity = await this.prisma.asset.findFirst({
+      const identity = await client.asset.findFirst({
         where: {
           companyId: input.companyId,
           externalSource: input.externalSource,
@@ -1221,7 +1227,7 @@ export class AssetsService {
         },
       });
     }
-    const candidates = await this.prisma.asset.findMany({
+    const candidates = await client.asset.findMany({
       where: {
         companyId: input.companyId,
         assetLayoutId: input.assetLayoutId,
@@ -1249,8 +1255,11 @@ export class AssetsService {
     };
   }
 
-  private async loadLayout(layoutId: string): Promise<LayoutWithFields> {
-    const layout = await this.prisma.assetLayout.findUnique({
+  private async loadLayout(
+    layoutId: string,
+    client: Pick<Prisma.TransactionClient, 'assetLayout'> | PrismaService = this.prisma,
+  ): Promise<LayoutWithFields> {
+    const layout = await client.assetLayout.findUnique({
       where: { id: layoutId },
       include: { fields: { orderBy: { position: 'asc' } } },
     });
@@ -1319,6 +1328,7 @@ export class AssetsService {
     companyId: string,
     values: Record<string, unknown>,
     excludeAssetId: string | null,
+    client: Pick<Prisma.TransactionClient, 'assetFieldValue'> | PrismaService = this.prisma,
   ): Promise<void> {
     for (const field of layout.fields) {
       if (field.archivedAt !== null) continue;
@@ -1326,7 +1336,7 @@ export class AssetsService {
       const value = values[field.slug];
       if (value === null || value === undefined || value === '') continue;
 
-      const clash = await this.prisma.assetFieldValue.findFirst({
+      const clash = await client.assetFieldValue.findFirst({
         where: {
           companyId,
           assetFieldId: field.id,
@@ -1355,8 +1365,9 @@ export class AssetsService {
     externalId: string,
     externalSource: string | null,
     excludeAssetId: string | null,
+    client: Pick<Prisma.TransactionClient, 'asset'> | PrismaService = this.prisma,
   ): Promise<void> {
-    const clash = await this.prisma.asset.findFirst({
+    const clash = await client.asset.findFirst({
       where: {
         companyId,
         externalId,

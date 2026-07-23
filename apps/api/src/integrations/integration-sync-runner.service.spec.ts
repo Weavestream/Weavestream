@@ -89,6 +89,7 @@ describe('IntegrationSyncRunnerService writer dispatch', () => {
     unauthorized?: boolean;
     completedCheckpoint?: boolean;
     resumeCursor?: string;
+    resumeSchemaVersion?: string;
     cancelled?: boolean;
     staleBinding?: boolean;
     completenessParticipant?: boolean;
@@ -140,6 +141,7 @@ describe('IntegrationSyncRunnerService writer dispatch', () => {
         options.completedCheckpoint || options.resumeCursor !== undefined
           ? {
               cursor: options.resumeCursor ?? null,
+              schemaVersion: options.resumeSchemaVersion ?? null,
               snapshotAt: new Date('2026-07-13T10:00:00.000Z'),
               highWaterAt: new Date('2026-07-13T09:00:00.000Z'),
             }
@@ -953,7 +955,7 @@ describe('IntegrationSyncRunnerService writer dispatch', () => {
       dryRun: false, actorId: 'actor', mode: 'full',
     })).resolves.toMatchObject({ status: 'failed', error: 'process interrupted after checkpoint' });
     expect(persistedCheckpoint).toMatchObject({
-      cursor: 'page-2', authoritative: false, highWaterAt: null,
+      cursor: 'page-2', schemaVersion: 'legacy', authoritative: false, highWaterAt: null,
       lastCompletedAt: null, lastFullCompletedAt: null,
     });
 
@@ -975,9 +977,26 @@ describe('IntegrationSyncRunnerService writer dispatch', () => {
     expect(provenance.staleUnseen).not.toHaveBeenCalled();
     expect(completeness.recalculate).not.toHaveBeenCalled();
     expect(persistedCheckpoint).toMatchObject({
-      cursor: null, authoritative: false, highWaterAt: null,
+      cursor: null, schemaVersion: null, authoritative: false, highWaterAt: null,
       lastCompletedAt: null, lastFullCompletedAt: null,
     });
+  });
+
+  it('fails a resumed traversal whose driver schema version diverges from the checkpoint', async () => {
+    const { service, driver, tx } = setup({ resumeCursor: 'page-2', resumeSchemaVersion: 'v1' });
+    driver.fetchRecords.mockResolvedValueOnce({
+      records: [], hasMore: true, cursor: 'page-3', terminal: false,
+      schemaVersion: 'v2', snapshotAt: '2026-07-13T10:00:00.000Z',
+    });
+
+    await expect(service.runMapping({
+      syncRunId: 'resume-schema-run', integrationCompanyMappingId: 'mapping', resourceId: 'resource',
+      dryRun: false, actorId: 'actor', mode: 'full',
+    })).resolves.toMatchObject({
+      status: 'failed',
+      error: expect.stringContaining('schemaVersion must remain stable'),
+    });
+    expect(tx.integrationSyncCheckpoint.upsert).not.toHaveBeenCalled();
   });
 
   it('marks a safely identified secret-blocked source binding seen and remains authoritative', async () => {

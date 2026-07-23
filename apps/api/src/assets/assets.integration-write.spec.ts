@@ -118,13 +118,18 @@ function setup(options: { target?: unknown; match?: unknown[]; binding?: unknown
   let committed = false;
   const created = asset();
   const tx = {
+    assetLayout: { findUnique: jest.fn().mockResolvedValue(layout) },
     asset: {
       create: jest.fn().mockResolvedValue(created),
       updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+      findUnique: jest.fn().mockResolvedValue(options.target ?? null),
+      findFirst: jest.fn().mockResolvedValue(null),
+      findMany: jest.fn().mockResolvedValue(options.match ?? []),
     },
     assetFieldValue: {
       upsert: jest.fn().mockResolvedValue({}),
       deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
+      findFirst: jest.fn().mockResolvedValue(null),
     },
     upload: { updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
     password: { updateMany: jest.fn(), deleteMany: jest.fn() },
@@ -264,6 +269,93 @@ describe('AssetsService integration system writes', () => {
     });
     expect(prisma.$transaction).not.toHaveBeenCalled();
     expect(audit.logWithClient).toHaveBeenCalledWith(tx, expect.any(Object));
+    expect(tx.assetLayout.findUnique).toHaveBeenCalled();
+    expect(tx.integrationSyncRecord.findUnique).toHaveBeenCalled();
+    expect(tx.asset.findFirst).toHaveBeenCalled();
+    expect(tx.assetFieldValue.findFirst).not.toHaveBeenCalled();
+    expect(prisma.assetLayout.findUnique).not.toHaveBeenCalled();
+    expect(prisma.integrationSyncRecord.findUnique).not.toHaveBeenCalled();
+    expect(prisma.asset.findUnique).not.toHaveBeenCalled();
+    expect(prisma.asset.findFirst).not.toHaveBeenCalled();
+    expect(prisma.asset.findMany).not.toHaveBeenCalled();
+    expect(prisma.assetFieldValue.findFirst).not.toHaveBeenCalled();
+  });
+
+  it('resolves a same-page asset binding and target through the caller transaction', async () => {
+    const target = asset();
+    const persistedBinding = binding();
+    const { service, prisma, tx } = setup({ target, binding: persistedBinding });
+
+    await expect(service.writeFromIntegration({
+      ...input,
+      tx: tx as never,
+    })).resolves.toMatchObject({
+      targetId: ids.asset,
+      change: 'unchanged',
+    });
+
+    expect(tx.integrationSyncRecord.findUnique).toHaveBeenCalled();
+    expect(tx.asset.findUnique).toHaveBeenCalledWith({
+      where: { id: ids.asset },
+      include: { fieldValues: true },
+    });
+    expect(prisma.integrationSyncRecord.findUnique).not.toHaveBeenCalled();
+    expect(prisma.asset.findUnique).not.toHaveBeenCalled();
+  });
+
+  it('uses same-page match candidates without escaping to root Prisma', async () => {
+    const candidate = asset();
+    const persistedBinding = binding();
+    const { service, prisma, tx } = setup({ match: [candidate], binding: persistedBinding });
+    tx.integrationSyncRecord.findUnique
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(persistedBinding);
+
+    await expect(service.writeFromIntegration({
+      ...input,
+      matchKeyFieldIds: [ids.field],
+      tx: tx as never,
+    })).resolves.toMatchObject({
+      targetId: ids.asset,
+      change: 'unchanged',
+    });
+
+    expect(tx.asset.findMany).toHaveBeenCalled();
+    expect(prisma.asset.findMany).not.toHaveBeenCalled();
+  });
+
+  it('detects same-page unique-field and external-identity collisions before create', async () => {
+    const unique = setup();
+    unique.tx.assetLayout.findUnique.mockResolvedValue({
+      ...layout,
+      fields: [{ ...field, isUniquePerCompany: true }],
+    });
+    unique.tx.assetFieldValue.findFirst.mockResolvedValue({
+      asset: { id: ids.manual, name: 'Manual asset' },
+    });
+
+    await expect(unique.service.writeFromIntegration({
+      ...input,
+      tx: unique.tx as never,
+    })).rejects.toMatchObject({
+      response: expect.objectContaining({ error: 'UniqueFieldViolation' }),
+    });
+    expect(unique.tx.asset.create).not.toHaveBeenCalled();
+    expect(unique.prisma.assetFieldValue.findFirst).not.toHaveBeenCalled();
+
+    const identity = setup();
+    identity.tx.asset.findFirst
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ id: ids.manual });
+
+    await expect(identity.service.writeFromIntegration({
+      ...input,
+      tx: identity.tx as never,
+    })).rejects.toMatchObject({
+      response: expect.objectContaining({ error: 'ExternalIdTaken' }),
+    });
+    expect(identity.tx.asset.create).not.toHaveBeenCalled();
+    expect(identity.prisma.asset.findFirst).not.toHaveBeenCalled();
   });
 
   it.each([
