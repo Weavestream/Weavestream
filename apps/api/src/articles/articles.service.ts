@@ -830,10 +830,83 @@ export class ArticlesService {
       return articleBlocked(input.companyId, 'validation', 'Article input failed native validation.', 'native_validation');
     }
 
-    if (!managedFolderId && input.folderSlug && !input.dryRun) {
-      const folderSlug = input.folderSlug;
-      const folderName = input.folderName ?? folderSlug;
-      const folder = await runTransaction(async (tx) => {
+    // Projection reads the mutable `native`, so the write transaction can
+    // re-derive `data`/`changed` after a managed-folder create patches
+    // `folderId` in.
+    const projectWrite = () => {
+      const body = this.projectArticleBody(native);
+      const data = {
+        folderId: native.folderId ?? null,
+        title: native.title,
+        slug: sourceSlug,
+        visibleToClients: native.visibleToClients ?? true,
+        ...body,
+      };
+      const restored = bound?.archivedAt != null;
+      const changed =
+        !bound ||
+        bound.folderId !== data.folderId ||
+        bound.title !== data.title ||
+        bound.slug !== data.slug ||
+        bound.visibleToClients !== data.visibleToClients ||
+        bound.editorMode !== data.editorMode ||
+        bound.markdownSource !== data.markdownSource;
+      return { data, restored, changed };
+    };
+
+    const folderPending = !managedFolderId && Boolean(input.folderSlug) && !input.dryRun;
+    let projected: ReturnType<typeof projectWrite> | null = null;
+    if (!folderPending) {
+      // The projection is final (no folder create pending), so the read-only
+      // outcomes — dry-run report, unchanged classification — resolve without
+      // opening a write transaction. A pending folder create always forces
+      // `changed` (the new folder id cannot equal `bound.folderId`), so
+      // skipping this block never skips a reachable dry-run/unchanged return.
+      projected = projectWrite();
+      const { changed, restored } = projected;
+      if (bound && (input.dryRun || (!changed && !restored))) {
+        if (!(await this.hasEligibleArticleBinding(input.tx ?? this.prisma, input, bound.id))) {
+          return articleBlocked(input.companyId, 'ambiguous', 'The existing article is not owned by an eligible reconstruction binding.', 'manual_ownership', bound.id, 1);
+        }
+      }
+      if (input.dryRun) {
+        return {
+          targetId: bound?.id ?? '',
+          companyId: input.companyId,
+          change: bound ? (restored ? 'restored' : changed ? 'updated' : 'unchanged') : 'created',
+        };
+      }
+      if (bound && !changed && !restored) {
+        return { targetId: bound.id, companyId: input.companyId, change: 'unchanged' };
+      }
+    }
+
+    // One transaction covers the managed-folder create and the article write.
+    // Refusals are decided before anything is written: the binding
+    // eligibility check precedes the folder create, so a blocked record
+    // never strands a folder — a caller-supplied tx commits blocked
+    // outcomes as part of its page, so an undo there is not an option.
+    // After the folder exists (the article row's folderId needs it),
+    // thrown write errors roll a service-owned transaction back on their
+    // own and propagate to a caller-supplied tx's own rollback handling.
+    // The one write-then-refuse remnant is the guarded-update conflict, so
+    // the folder create is scoped to a savepoint: rolling back to it
+    // discards the folder and its audit row in both transaction modes
+    // without disturbing earlier work in a caller-supplied tx. A retry
+    // re-reads and re-creates the folder if it still needs one, and a
+    // retry that ends blocked has nothing pending to strand.
+    return runTransaction(async (tx): Promise<IntegrationArticleWriteResult | 'revision_conflict'> => {
+      if (bound && !(await this.hasEligibleArticleBinding(tx, input, bound.id))) {
+        return articleBlocked(input.companyId, 'ambiguous', 'The existing article is not owned by an eligible reconstruction binding.', 'manual_ownership', bound.id, 1);
+      }
+      if (folderPending && input.folderSlug) {
+        const folderSlug = input.folderSlug;
+        const folderName = input.folderName ?? folderSlug;
+        // Fixed-literal statement, no interpolation (savepoint names
+        // cannot be bound as parameters). Scopes the folder create so the
+        // guarded-update conflict below can discard it; the ROLLBACK TO
+        // at that site must name this same savepoint.
+        await tx.$executeRaw`SAVEPOINT weavestream_managed_folder`;
         const row = await tx.folder.create({
           data: {
             companyId: input.companyId,
@@ -855,46 +928,12 @@ export class ArticlesService {
           userAgent: INTEGRATION_AUDIT_META.userAgent,
           after: { integrationId: input.integrationId, slug: row.slug },
         });
-        return row;
-      });
-      managedFolderId = folder.id;
-      native = { ...native, folderId: managedFolderId };
-    }
-
-    const body = this.projectArticleBody(native);
-    const data = {
-      folderId: native.folderId ?? null,
-      title: native.title,
-      slug: sourceSlug,
-      visibleToClients: native.visibleToClients ?? true,
-      ...body,
-    };
-    const restored = bound?.archivedAt != null;
-    const changed =
-      !bound ||
-      bound.folderId !== data.folderId ||
-      bound.title !== data.title ||
-      bound.slug !== data.slug ||
-      bound.visibleToClients !== data.visibleToClients ||
-      bound.editorMode !== data.editorMode ||
-      bound.markdownSource !== data.markdownSource;
-    if (bound && (input.dryRun || (!changed && !restored))) {
-      if (!(await this.hasEligibleArticleBinding(input.tx ?? this.prisma, input, bound.id))) {
-        return articleBlocked(input.companyId, 'ambiguous', 'The existing article is not owned by an eligible reconstruction binding.', 'manual_ownership', bound.id, 1);
+        managedFolderId = row.id;
+        native = { ...native, folderId: managedFolderId };
       }
-    }
-    if (input.dryRun) {
-      return {
-        targetId: bound?.id ?? '',
-        companyId: input.companyId,
-        change: bound ? (restored ? 'restored' : changed ? 'updated' : 'unchanged') : 'created',
-      };
-    }
+      const { data, changed, restored } = projected ?? projectWrite();
 
-    let article: Article;
-    let change: IntegrationArticleWriteResult['change'];
-    if (!bound) {
-      article = await runTransaction(async (tx) => {
+      if (!bound) {
         const row = await tx.article.create({
           data: {
             companyId: input.companyId,
@@ -925,86 +964,80 @@ export class ArticlesService {
           userAgent: INTEGRATION_AUDIT_META.userAgent,
           after: { integrationId: input.integrationId, slug: row.slug },
         });
-        return row;
-      });
-      change = 'created';
-    } else if (changed || restored) {
-      const outcome = await runTransaction(async (tx) => {
-        if (!(await this.hasEligibleArticleBinding(tx, input, bound.id))) {
-          return { status: 'blocked' as const };
-        }
-        const guarded = await tx.article.updateMany({
-          where: {
-            id: bound.id,
-            companyId: input.companyId,
-            // Optimistic-concurrency guard riding the WHERE clause —
-            // the `update()` idiom. `revision` alone is not enough:
-            // archive, restore, move, and draft-discard revert all
-            // write the row without bumping it, so the guard pins
-            // every observed field the merge and diff above were
-            // derived from. Zero rows means the snapshot went stale;
-            // the caller re-reads instead of overwriting a newer edit.
-            revision: bound.revision,
-            archivedAt: bound.archivedAt,
-            updatedAt: bound.updatedAt,
-          },
-          data: {
-            ...data,
-            ...(restored ? { archivedAt: null } : {}),
-            revision: { increment: 1 },
-            updatedBy: input.auditActorId,
-          },
-        });
-        if (guarded.count === 0) {
-          return { status: 'conflict' as const };
-        }
-        const updated = await tx.article.findFirstOrThrow({
-          where: { id: bound.id, companyId: input.companyId },
-        });
-        if (changed) {
-          const max = await tx.articleVersion.aggregate({
-            where: { articleId: bound.id, companyId: input.companyId },
-            _max: { version: true },
-          });
-          await tx.articleVersion.create({
-            data: {
-              articleId: bound.id,
-              companyId: input.companyId,
-              version: (max._max.version ?? 0) + 1,
-              isDraft: false,
-              ...this.versionRowBodyFromArticle(updated),
-              changedFields: this.computeChangedFields(bound, updated),
-              changedBy: input.auditActorId,
-              changeReason: `integration:${input.integrationId}`,
-            },
-          });
-        }
-        await this.audit.logWithClient(tx, {
-          actorId: input.auditActorId,
-          action: restored ? AUDIT_ACTIONS.article.restore : AUDIT_ACTIONS.article.update,
-          entityType: 'Article',
-          entityId: updated.id,
-          companyId: input.companyId,
-          ip: INTEGRATION_AUDIT_META.ip,
-          userAgent: INTEGRATION_AUDIT_META.userAgent,
-          after: { integrationId: input.integrationId, slug: updated.slug },
-        });
-        return { status: 'written' as const, article: updated };
-      });
-      if (outcome.status === 'blocked') {
-        return articleBlocked(input.companyId, 'ambiguous', 'The existing article is not owned by an eligible reconstruction binding.', 'manual_ownership', bound.id, 1);
+        return { targetId: row.id, companyId: input.companyId, change: 'created' };
       }
-      if (outcome.status === 'conflict') {
+
+      if (!changed && !restored) {
+        // Unreachable in practice: the block above the transaction returns
+        // the unchanged outcome unless a pending folder create forced
+        // `changed`. Kept so an unchanged row is never rewritten.
+        return { targetId: bound.id, companyId: input.companyId, change: 'unchanged' };
+      }
+      const guarded = await tx.article.updateMany({
+        where: {
+          id: bound.id,
+          companyId: input.companyId,
+          // Optimistic-concurrency guard riding the WHERE clause —
+          // the `update()` idiom. `revision` alone is not enough:
+          // archive, restore, move, and draft-discard revert all
+          // write the row without bumping it, so the guard pins
+          // every observed field the merge and diff above were
+          // derived from. Zero rows means the snapshot went stale;
+          // the caller re-reads instead of overwriting a newer edit.
+          revision: bound.revision,
+          archivedAt: bound.archivedAt,
+          updatedAt: bound.updatedAt,
+        },
+        data: {
+          ...data,
+          ...(restored ? { archivedAt: null } : {}),
+          revision: { increment: 1 },
+          updatedBy: input.auditActorId,
+        },
+      });
+      if (guarded.count === 0) {
+        if (folderPending) {
+          // Discard this attempt's folder create (and its audit row) so no
+          // later outcome — a retry that blocks, an exhausted-conflict gap,
+          // a caller-committed page — can strand an empty managed folder.
+          // Fixed-literal statement, no interpolation.
+          await tx.$executeRaw`ROLLBACK TO SAVEPOINT weavestream_managed_folder`;
+        }
         return 'revision_conflict';
       }
-      article = outcome.article;
-      change = restored ? 'restored' : 'updated';
-    } else {
-      article = bound;
-      change = 'unchanged';
-    }
-
-    return { targetId: article.id, companyId: input.companyId, change };
+      const updated = await tx.article.findFirstOrThrow({
+        where: { id: bound.id, companyId: input.companyId },
+      });
+      if (changed) {
+        const max = await tx.articleVersion.aggregate({
+          where: { articleId: bound.id, companyId: input.companyId },
+          _max: { version: true },
+        });
+        await tx.articleVersion.create({
+          data: {
+            articleId: bound.id,
+            companyId: input.companyId,
+            version: (max._max.version ?? 0) + 1,
+            isDraft: false,
+            ...this.versionRowBodyFromArticle(updated),
+            changedFields: this.computeChangedFields(bound, updated),
+            changedBy: input.auditActorId,
+            changeReason: `integration:${input.integrationId}`,
+          },
+        });
+      }
+      await this.audit.logWithClient(tx, {
+        actorId: input.auditActorId,
+        action: restored ? AUDIT_ACTIONS.article.restore : AUDIT_ACTIONS.article.update,
+        entityType: 'Article',
+        entityId: updated.id,
+        companyId: input.companyId,
+        ip: INTEGRATION_AUDIT_META.ip,
+        userAgent: INTEGRATION_AUDIT_META.userAgent,
+        after: { integrationId: input.integrationId, slug: updated.slug },
+      });
+      return { targetId: updated.id, companyId: input.companyId, change: restored ? 'restored' : 'updated' };
+    });
   }
 
   private hasEligibleArticleBinding(

@@ -67,9 +67,19 @@ function fullProvenance(state: 'active' | 'stale') {
 function setup(options: { bound?: unknown; collision?: unknown; binding?: unknown; auditFails?: boolean } = {}) {
   let committed = false;
   let createdFolder: Record<string, unknown> | null = null;
+  let savepointFolder: Record<string, unknown> | null = null;
   const created = article();
   const updated = article({ markdownSource: '# Updated', revision: 2 });
   const tx = {
+    // Minimal savepoint semantics for the one piece of state the mock
+    // tracks transactionally: the managed folder created by the service.
+    // Tagged-template call, so the statement arrives as a strings array.
+    $executeRaw: jest.fn(async (strings: readonly string[]) => {
+      const sql = Array.isArray(strings) ? strings.join('') : String(strings);
+      if (sql.startsWith('SAVEPOINT ')) savepointFolder = createdFolder;
+      if (sql.startsWith('ROLLBACK TO SAVEPOINT ')) createdFolder = savepointFolder;
+      return 0;
+    }),
     folder: {
       findFirst: jest.fn(async () => createdFolder),
       create: jest.fn(async () => {
@@ -147,7 +157,7 @@ function setup(options: { bound?: unknown; collision?: unknown; binding?: unknow
     {} as never,
     {} as never,
   );
-  return { service, prisma, audit, tx, wasCommitted: () => committed };
+  return { service, prisma, audit, tx, wasCommitted: () => committed, pendingFolder: () => createdFolder };
 }
 
 const input = {
@@ -508,6 +518,83 @@ describe('ArticlesService integration system writes', () => {
     await service.writeFromIntegration({ ...shared, externalId: 'org:articles:second', slug: 'second' });
     expect(tx.folder.create).toHaveBeenCalledTimes(1);
     expect(tx.article.create).toHaveBeenCalledTimes(2);
+  });
+
+  it('creates the managed folder in the same transaction as the article so a failed create rolls both back', async () => {
+    const { service, prisma, tx, wasCommitted } = setup();
+    tx.article.create.mockRejectedValue(new Error('unique violation'));
+    await expect(service.writeFromIntegration({
+      ...input,
+      folderSlug: 'breeze-scripts',
+      folderName: 'Breeze Scripts',
+    })).rejects.toThrow('unique violation');
+    expect(tx.folder.create).toHaveBeenCalledTimes(1);
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+    expect(wasCommitted()).toBe(false);
+  });
+
+  it('refuses a bound write before creating the managed folder', async () => {
+    const { service, tx } = setup({ bound: article() });
+    await expect(service.writeFromIntegration({
+      ...input,
+      existingTargetId: ids.article,
+      folderSlug: 'breeze-scripts',
+      folderName: 'Breeze Scripts',
+    })).resolves.toMatchObject({ change: 'blocked', gap: { details: { reasonCode: 'manual_ownership' } } });
+    expect(tx.folder.create).not.toHaveBeenCalled();
+    expect(tx.article.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('writes no managed folder into a caller-supplied transaction for a refused bound write', async () => {
+    const { service, prisma, tx } = setup({ bound: article() });
+    await expect(service.writeFromIntegration({
+      ...input,
+      tx: tx as never,
+      existingTargetId: ids.article,
+      folderSlug: 'breeze-scripts',
+      folderName: 'Breeze Scripts',
+    })).resolves.toMatchObject({ change: 'blocked', gap: { details: { reasonCode: 'manual_ownership' } } });
+    expect(tx.folder.create).not.toHaveBeenCalled();
+    expect(tx.article.updateMany).not.toHaveBeenCalled();
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('rolls the pending folder back to its savepoint on every conflicted attempt in a caller-supplied transaction', async () => {
+    const { service, prisma, tx, pendingFolder } = setup({ bound: article(), binding: binding() });
+    tx.article.updateMany.mockResolvedValue({ count: 0 });
+    await expect(service.writeFromIntegration({
+      ...input,
+      tx: tx as never,
+      existingTargetId: ids.article,
+      markdown: '# Changed body',
+      folderSlug: 'breeze-scripts',
+      folderName: 'Breeze Scripts',
+    })).resolves.toMatchObject({ change: 'blocked', gap: { details: { reasonCode: 'target_revision_conflict' } } });
+    // Each attempt re-creates the folder inside its savepoint and discards
+    // it on conflict; exhaustion leaves nothing for the page tx to commit.
+    expect(tx.folder.create).toHaveBeenCalledTimes(3);
+    expect(pendingFolder()).toBeNull();
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('leaves no pending folder when a conflict retry re-reads a blocked article in a caller-supplied transaction', async () => {
+    const { service, tx, pendingFolder } = setup({ binding: binding() });
+    tx.article.findUnique
+      .mockResolvedValueOnce(article())
+      .mockResolvedValueOnce(article({ editorMode: 'tiptap', content: { type: 'doc' }, markdownSource: null }));
+    tx.article.updateMany.mockResolvedValueOnce({ count: 0 });
+    await expect(service.writeFromIntegration({
+      ...input,
+      tx: tx as never,
+      existingTargetId: ids.article,
+      markdown: '# Changed body',
+      folderSlug: 'breeze-scripts',
+      folderName: 'Breeze Scripts',
+    })).resolves.toMatchObject({ change: 'blocked', gap: { details: { reasonCode: 'managed_region_invalid' } } });
+    expect(tx.folder.create).toHaveBeenCalledTimes(1);
+    const executed = tx.$executeRaw.mock.calls.map(([strings]) => (Array.isArray(strings) ? strings.join('') : String(strings)));
+    expect(executed).toContain('ROLLBACK TO SAVEPOINT weavestream_managed_folder');
+    expect(pendingFolder()).toBeNull();
   });
 
   it.each([

@@ -264,7 +264,9 @@ function formatBytes(value: unknown, precision: number): string {
   }
   if (bytes === 0) return '0 B';
   const units = ['B', 'KiB', 'MiB', 'GiB', 'TiB', 'PiB', 'EiB'];
-  const exponent = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+  // Clamp at 0 for sub-byte values: floor(log(0.5)/log(1024)) is -1, which
+  // would index units[-1] and scale in the wrong direction.
+  const exponent = Math.min(Math.max(Math.floor(Math.log(bytes) / Math.log(1024)), 0), units.length - 1);
   const scaled = bytes / 1024 ** exponent;
   return exponent === 0 ? `${scaled.toFixed(0)} B` : `${scaled.toFixed(precision)} ${units[exponent]}`;
 }

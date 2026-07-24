@@ -104,6 +104,7 @@ describe('IntegrationTransformService', () => {
 
   it('formats bytes with IEC units', () => {
     expect(service.execute(0, { steps: [{ op: 'format_bytes' }] })).toBe('0 B');
+    expect(service.execute(0.5, { steps: [{ op: 'format_bytes' }] })).toBe('1 B');
     expect(service.execute(1536, { steps: [{ op: 'format_bytes', precision: 1 }] })).toBe('1.5 KiB');
   });
 
