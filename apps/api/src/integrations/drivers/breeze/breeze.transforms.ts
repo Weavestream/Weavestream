@@ -63,8 +63,14 @@ export function transformBreezeRecord(
   const validated = schema.parse(rawRecord);
   const record = schema.parse(sanitizeBreezeText(validated)) as BreezeRecordBase &
     Record<string, any>;
-  if (isDesiredConfigurationResource(resource.data) && inspectDesiredConfiguration(record) !== 'safe') {
-    throw new BreezeSensitiveDefinitionError(record.id, record.orgId);
+  if (isDesiredConfigurationResource(resource.data)) {
+    const inspection = inspectDesiredConfiguration(record);
+    if (inspection === 'sensitive') {
+      throw new BreezeSensitiveDefinitionError(record.id, record.orgId);
+    }
+    if (inspection === 'bounds_exceeded') {
+      throw new BreezeBoundedDefinitionError(record.id, record.orgId);
+    }
   }
   if (BREEZE_ENDPOINT_BY_RESOURCE[resource.data] === 'scripts' && isSensitiveScriptContent(record.content)) {
     throw new BreezeSensitiveDefinitionError(record.id, record.orgId);

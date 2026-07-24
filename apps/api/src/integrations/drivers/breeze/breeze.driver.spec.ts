@@ -1,7 +1,10 @@
 import type { FetchRecordsContext, IntegrationContext } from '../integration-driver.js';
 import { driverDescriptorSchema } from '@weavestream/shared';
 import { BreezeDriver } from './breeze.driver.js';
-import { transformBreezeRecord } from './breeze.transforms.js';
+import {
+  BreezeBoundedDefinitionError,
+  transformBreezeRecord,
+} from './breeze.transforms.js';
 import { TextStrategy, TextareaStrategy } from '../../../field-types/strategies/text.strategy.js';
 import {
   MAX_RECONSTRUCTION_INPUT_BYTES,
@@ -533,6 +536,20 @@ describe('Breeze transforms', () => {
     const highEntropy = 'JBSWY3DPEHPK3PXP'.repeat(3);
     expect(() => transformBreezeRecord('configuration-policies', policy({ value: highEntropy })))
       .toThrow(/blocked|secret|sensitive/i);
+  });
+
+  it('preserves a benign desired-configuration inspection bound as a bounded error', () => {
+    const oversizedPolicy = {
+      ...base, siteId: null, sourceScope: 'organization', name: 'Large benign policy',
+      description: null, status: 'active',
+      features: [{
+        id: SEGMENT, type: 'settings', policyId: null,
+        settings: { documentation: 'x'.repeat(12_289) },
+      }],
+    };
+
+    expect(() => transformBreezeRecord('configuration-policies', oversizedPolicy))
+      .toThrow(BreezeBoundedDefinitionError);
   });
 
   it.each([
@@ -1455,6 +1472,42 @@ describe('BreezeDriver transport delegation', () => {
     const serialized = JSON.stringify(page);
     expect(serialized).not.toContain(oversizedName);
     expect(serialized).not.toContain('x'.repeat(1_100));
+  });
+
+  it('reports an inspection-bounded definition as validation instead of a secret block', async () => {
+    const oversized = {
+      ...base, siteId: null, sourceScope: 'organization', name: 'Large benign policy',
+      description: null, status: 'active',
+      features: [{
+        id: SEGMENT, type: 'settings', policyId: null,
+        settings: { documentation: 'x'.repeat(12_289) },
+      }],
+    };
+    const safe = {
+      ...oversized, id: SEGMENT, name: 'Safe sibling',
+      features: [{ ...oversized.features[0], settings: { documentation: 'Routine policy' } }],
+    };
+    const client = {
+      testConnection: jest.fn(), listOrganizations: jest.fn(),
+      fetchPage: jest.fn().mockResolvedValue({
+        schemaVersion: '1', snapshotAt: '2026-07-14T12:00:00.000Z', data: [oversized, safe],
+        nextCursor: null, hasMore: false,
+      }),
+    };
+
+    const page = await new BreezeDriver(client).fetchRecords(
+      { ...ctx('configuration-policies'), mode: 'full', updatedSince: null }, null,
+    );
+
+    expect(page.records).toHaveLength(1);
+    expect(page.blockedInputs).toEqual([expect.objectContaining({
+      kind: 'validation',
+      externalId: `${ORG}:configuration-policies:${DEVICE}`,
+      details: expect.objectContaining({ reasonCode: 'bounded_input', sourceId: DEVICE }),
+    })]);
+    expect(page.blockedInputs).not.toEqual([
+      expect.objectContaining({ kind: 'secret_blocked' }),
+    ]);
   });
 
   it('converts a malicious inline definition to a safe blocked input and continues safe records', async () => {
