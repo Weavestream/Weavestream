@@ -1,8 +1,11 @@
 import { PrismaClient } from '@prisma/client';
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 
 const SAFE_DATABASE_NAME = /^weavestream_task11_[a-z0-9_]+$/;
 const SAFE_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]', '::1', 'postgres']);
+const MAX_IDENTIFIER_BYTES = 63;
+const RUN_DIGEST_LENGTH = 12;
 
 export interface ReconstructionDatabaseTemplate {
   databaseName: string;
@@ -59,7 +62,19 @@ export function reconstructionRunDatabaseName(
   }
   const suffix = runToken.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
   if (!suffix) throw new Error('A non-empty reconstruction database run token is required.');
-  return `${templateName}_${suffix}`.slice(0, 63).replace(/_+$/g, '');
+  // PostgreSQL caps identifiers at 63 bytes, and truncating the assembled name eats the run token
+  // first: a template name near the cap collapsed concurrent runs onto one database — or onto the
+  // template itself, which reset() truncates and drop() drops. Reserve the tail for a digest of the
+  // whole token so uniqueness survives truncation of either half.
+  const digest = createHash('sha256').update(runToken).digest('hex').slice(0, RUN_DIGEST_LENGTH);
+  const stem = `${templateName}_${suffix}`
+    .slice(0, MAX_IDENTIFIER_BYTES - RUN_DIGEST_LENGTH - 1)
+    .replace(/_+$/g, '');
+  const databaseName = `${stem}_${digest}`;
+  if (!SAFE_DATABASE_NAME.test(databaseName) || databaseName === templateName) {
+    throw new Error('Unsafe reconstruction database run name.');
+  }
+  return databaseName;
 }
 
 export async function createDisposableReconstructionDatabase(

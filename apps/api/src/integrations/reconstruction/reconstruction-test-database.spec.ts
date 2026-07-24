@@ -31,4 +31,32 @@ describe('Task 11 disposable database safety', () => {
     expect(first.length).toBeLessThanOrEqual(63);
     expect(JSON.stringify(template)).not.toContain('password');
   });
+
+  it('keeps run databases distinct and off the template when the template name fills the identifier limit', () => {
+    const templateName = `weavestream_task11_${'x'.repeat(44)}`;
+    expect(templateName).toHaveLength(63);
+
+    const first = reconstructionRunDatabaseName(templateName, '4321-aaaaaaaa');
+    const second = reconstructionRunDatabaseName(templateName, '4321-bbbbbbbb');
+
+    expect(first).not.toBe(second);
+    expect(first).not.toBe(templateName);
+    expect(second).not.toBe(templateName);
+    expect(first).toMatch(/^weavestream_task11_[a-z0-9_]+$/);
+    expect(second).toMatch(/^weavestream_task11_[a-z0-9_]+$/);
+    expect(first.length).toBeLessThanOrEqual(63);
+    expect(second.length).toBeLessThanOrEqual(63);
+  });
+
+  it('preserves run token entropy that falls past the truncation boundary', () => {
+    const templateName = 'weavestream_task11_template';
+    const shared = 'a'.repeat(60);
+
+    const first = reconstructionRunDatabaseName(templateName, `${shared}-1`);
+    const second = reconstructionRunDatabaseName(templateName, `${shared}-2`);
+
+    expect(first).not.toBe(second);
+    expect(first).toMatch(/^weavestream_task11_[a-z0-9_]+$/);
+    expect(first.length).toBeLessThanOrEqual(63);
+  });
 });
