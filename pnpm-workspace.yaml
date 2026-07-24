@@ -6,6 +6,23 @@ confirmModulesPurge: false
 
 overrides:
   multer: 2.2.0
+  # `next` pins postcss to an exact 8.4.31, which carries
+  # GHSA-6g55-p6wh-862q (arbitrary file read) and GHSA-r28c-9q8g-f849
+  # (path traversal), both via sourceMappingURL auto-loading in CSS
+  # comments. The pin means no lockfile refresh can move it — an
+  # override is the only lever. Drop this entry once next's own pin
+  # reaches >=8.5.18. Pinned exactly, like multer above, so the resolver
+  # cannot drift onto a release too new to have cleared pnpm's
+  # minimum-release-age supply-chain gate.
+  postcss: 8.5.19
+  # next carries its own optional sharp (^0.34.5) for next/image
+  # optimization, which this app does not use — every image is a plain
+  # <img> served through the API. That copy still trips the libvips
+  # advisories (CVE-2026-33327/33328/35590/35591), so it is forced onto
+  # the same 0.35.x the API depends on. Deliberately outside next's
+  # declared range: it dedupes two full sharp+libvips binary sets down
+  # to one, and the next/image path that would exercise it is unused.
+  sharp: 0.35.3
 
 supportedArchitectures:
   os:

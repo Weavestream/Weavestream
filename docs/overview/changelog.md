@@ -13,6 +13,10 @@ All notable changes to Weavestream are documented here. The format follows [Keep
 
 ## [Unreleased]
 
+### Security
+
+- **Dependency advisories patched.** `sharp` moves to 0.35.3 (libvips 8.18.3), clearing four inherited libvips CVEs (CVE-2026-33327, -33328, -35590, -35591) that applied to image upload, thumbnail, and PDF export processing. `postcss` is pinned to 8.5.19 through a resolution override, clearing an arbitrary file read (GHSA-6g55-p6wh-862q) and a path traversal (GHSA-r28c-9q8g-f849) via `sourceMappingURL` auto-loading — Next.js pins postcss exactly, so an override is the only way to move it. Next.js itself moved to 16.2.11 in 1.9.0, clearing two SSRF advisories, an App Router middleware bypass, and a denial of service.
+
 ## [1.9.0] - 2026-07-24
 
 ### Added
