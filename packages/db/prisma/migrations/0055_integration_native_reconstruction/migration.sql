@@ -2,6 +2,57 @@
 -- native reconstruction targets while preserving every existing binding as
 -- an active asset binding.
 
+-- The previous schema did not bound transform size. Fail before making any
+-- schema changes if legacy rows cannot satisfy the new constraint, and give
+-- operators enough information to remediate those rows before retrying.
+--
+-- Full preflight query:
+--   SELECT "id", octet_length("transform"::TEXT) AS "transform_bytes"
+--   FROM "integration_field_mappings"
+--   WHERE "transform" IS NOT NULL
+--     AND octet_length("transform"::TEXT) > 65536
+--   ORDER BY "transform_bytes" DESC, "id";
+--
+-- Remediation: reduce each reported transform to at most 65536 bytes, or set
+-- it to NULL only when an identity transform is correct for that mapping.
+DO $$
+DECLARE
+    oversized_mapping_count BIGINT;
+    oversized_mapping_ids TEXT;
+BEGIN
+    SELECT COUNT(*)
+    INTO oversized_mapping_count
+    FROM "integration_field_mappings"
+    WHERE "transform" IS NOT NULL
+      AND octet_length("transform"::TEXT) > 65536;
+
+    IF oversized_mapping_count > 0 THEN
+        SELECT string_agg(oversized."id"::TEXT, ', ' ORDER BY oversized."id"::TEXT)
+        INTO oversized_mapping_ids
+        FROM (
+            SELECT "id"
+            FROM "integration_field_mappings"
+            WHERE "transform" IS NOT NULL
+              AND octet_length("transform"::TEXT) > 65536
+            ORDER BY "id"
+            LIMIT 20
+        ) AS oversized;
+
+        RAISE EXCEPTION USING
+            ERRCODE = '23514',
+            MESSAGE = format(
+                'Migration 0055 cannot enforce the 65536-byte transform limit: %s legacy integration_field_mappings row(s) are oversized',
+                oversized_mapping_count
+            ),
+            DETAIL = format(
+                'Affected mapping IDs (up to 20): %s',
+                oversized_mapping_ids
+            ),
+            HINT = 'Run the preflight SELECT documented at the top of this migration, then reduce each transform to at most 65536 bytes or set it to NULL only if identity behavior is intended.';
+    END IF;
+END
+$$;
+
 CREATE TYPE "IntegrationTargetKind" AS ENUM (
     'asset', 'subnet', 'ip_reservation', 'article', 'relation'
 );
