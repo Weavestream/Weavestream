@@ -423,6 +423,26 @@ export class IntegrationProvenanceService {
     }
   }
 
+  /**
+   * Public entry to the scope serialization point. A page transaction
+   * MUST queue here before its first target or binding write (the
+   * runner does, for non-dry-run pages): pages acquire locks in
+   * target→binding order while the stale sweep transitions bindings
+   * before archiving targets, so without a common top lock the two can
+   * deadlock — or worse, a page blocked on a binding the sweep just
+   * transitioned resumes after the sweep's commit and reactivates a
+   * binding whose target was archived moments earlier, with the page's
+   * target write already behind it. Queueing on the watermark first
+   * gives every same-scope transaction a total order: a page that
+   * waits out a sweep then reads the committed stale state and takes
+   * the writer's restore path (which un-archives the target), and a
+   * sweep that waits out a page sees the committed refresh and its
+   * write-predicate guard skips the binding.
+   */
+  async lockScope(tx: Prisma.TransactionClient, scope: ProvenanceScope): Promise<void> {
+    await lockScopeWatermark(tx, scope);
+  }
+
   async resolveAbsentGaps(
     tx: Prisma.TransactionClient,
     scope: ProvenanceScope,
@@ -464,12 +484,48 @@ export class IntegrationProvenanceService {
     return rows.length > 0 ? { count: rows.length } : null;
   }
 
+  /**
+   * Full-reconciliation stale sweep. The candidate scan below is only
+   * an optimistic pre-filter: between it and the mutation a concurrent
+   * page can refresh `last_seen_at`, an operator can claim ownership,
+   * or another sweep can transition the row. The stale transition
+   * therefore re-checks the entire selection predicate in the WHERE
+   * clause of the write, and every downstream effect — target
+   * archiving, audit entries, counters — is keyed off the rows the
+   * write actually transitioned (RETURNING), never off the scan.
+   * Under READ COMMITTED the UPDATE re-evaluates its predicate against
+   * the newest committed row version after any lock wait, so a
+   * concurrently refreshed binding drops out of the sweep instead of
+   * being clobbered to stale and having its fresh target archived.
+   * Rows skipped by the guard stay active, which also makes them
+   * protect any shared target in `findProtectedTargets`.
+   *
+   * The write predicate alone cannot order this sweep against a page
+   * whose refresh commits AFTER the guarded update: the sweep locks
+   * bindings before targets while pages write targets before bindings,
+   * an inversion that can deadlock (page holds the target, wants the
+   * binding; sweep holds the binding, wants the target) or let a page
+   * blocked on a transitioned binding reactivate it right after this
+   * transaction archived its target. The sweep therefore queues on the
+   * scope watermark before scanning — the same serialization point
+   * page transactions acquire before their first scope write
+   * (`lockScope`) — so same-scope transactions never interleave at
+   * all. Inside the runner's terminal page this re-lock is a no-op
+   * (`resolveAbsentGaps` already holds the row); it is load-bearing
+   * for direct callers.
+   */
   async staleUnseen(
     tx: Prisma.TransactionClient,
     input: StaleSweepInput,
   ): Promise<{ stale: number; archived: number }> {
     const batchSize = Math.min(Math.max(input.batchSize ?? DEFAULT_STALE_BATCH, 1), 500);
     const maxRecords = Math.min(Math.max(input.maxRecords ?? DEFAULT_STALE_LIMIT, 1), 10_000);
+    await lockScopeWatermark(tx, {
+      companyId: input.companyId,
+      integrationCompanyMappingId: input.integrationCompanyMappingId,
+      resourceId: input.resourceId,
+      observedAt: input.snapshotAt,
+    });
     const rows: StaleBinding[] = [];
     let cursor: string | undefined;
     let scanned = 0;
@@ -503,24 +559,19 @@ export class IntegrationProvenanceService {
       if (!cursor) break;
     }
 
-    const protectedTargetIds = await findProtectedTargets(tx, input, rows);
-    let archived = 0;
-    archived += await archiveTargetGroup(
-      tx, 'asset', input,
-      targetIds(rows, 'asset').filter((id) => !protectedTargetIds.has(id)),
-    );
-    archived += await archiveTargetGroup(
-      tx, 'article', input,
-      targetIds(rows, 'article').filter((id) => !protectedTargetIds.has(id)),
-    );
-    archived += await archiveTargetGroup(
-      tx, 'subnet', input,
-      targetIds(rows, 'subnet').filter((id) => !protectedTargetIds.has(id)),
-    );
-
+    // Guarded transition BEFORE any target mutation. The predicate is
+    // the candidate filter restated at write time (tenant scope is in
+    // the predicate too — raw statements bypass the tenant
+    // middleware), so only rows that are still unseen, still
+    // integration-owned, and still active/blocked at mutation time
+    // transition. RETURNING is the sole source of truth for which
+    // bindings went stale; the transition also leaves each survivor
+    // row-locked until commit, so no concurrent page can refresh it
+    // between here and the target archive below.
+    const survivors: StaleTargetRef[] = [];
     for (let offset = 0; offset < rows.length; offset += TARGET_MUTATION_BATCH) {
       const batch = rows.slice(offset, offset + TARGET_MUTATION_BATCH);
-      await tx.$executeRaw(Prisma.sql`
+      const transitioned = await tx.$queryRaw<StaleTargetRef[]>(Prisma.sql`
         UPDATE "integration_sync_records"
         SET
           "state" = 'stale'::"IntegrationSyncState",
@@ -528,10 +579,41 @@ export class IntegrationProvenanceService {
           "provenance" = jsonb_set("provenance", '{state}', '"stale"'::jsonb, true),
           "updated_at" = CURRENT_TIMESTAMP
         WHERE "id" IN (${Prisma.join(batch.map((row) => Prisma.sql`${row.id}::uuid`))})
+          AND "company_id" = ${input.companyId}::uuid
+          AND "integration_company_mapping_id" = ${input.integrationCompanyMappingId}::uuid
+          AND "resource_id" = ${input.resourceId}::uuid
+          AND "state" IN ('active'::"IntegrationSyncState", 'blocked'::"IntegrationSyncState")
+          AND "last_seen_at" < ${input.snapshotAt}
+          AND "provenance"->>'ownership' = 'breeze'
+        RETURNING
+          "id",
+          "target_kind" AS "targetKind",
+          "asset_id" AS "assetId",
+          "subnet_id" AS "subnetId",
+          "ip_reservation_id" AS "ipReservationId",
+          "article_id" AS "articleId",
+          "relation_id" AS "relationId"
       `);
+      survivors.push(...transitioned);
     }
+
+    const protectedTargetIds = await findProtectedTargets(tx, input, survivors);
+    let archived = 0;
+    archived += await archiveTargetGroup(
+      tx, 'asset', input,
+      targetIds(survivors, 'asset').filter((id) => !protectedTargetIds.has(id)),
+    );
+    archived += await archiveTargetGroup(
+      tx, 'article', input,
+      targetIds(survivors, 'article').filter((id) => !protectedTargetIds.has(id)),
+    );
+    archived += await archiveTargetGroup(
+      tx, 'subnet', input,
+      targetIds(survivors, 'subnet').filter((id) => !protectedTargetIds.has(id)),
+    );
+
     if (this.audit?.logManyWithClient) {
-      const auditEntries: AuditEntry[] = rows.map((row) => {
+      const auditEntries: AuditEntry[] = survivors.map((row) => {
         const targetId = targetIdForKind(row, row.targetKind);
         return {
           actorId: input.auditActorId,
@@ -554,11 +636,12 @@ export class IntegrationProvenanceService {
       });
       await this.audit.logManyWithClient(tx, auditEntries);
     }
-    return { stale: rows.length, archived };
+    return { stale: survivors.length, archived };
   }
 }
 
-type StaleBinding = {
+/** Columns RETURNING hands back from the guarded stale transition. */
+type StaleTargetRef = {
   id: string;
   targetKind: IntegrationTargetKind;
   assetId: string | null;
@@ -566,6 +649,9 @@ type StaleBinding = {
   ipReservationId: string | null;
   articleId: string | null;
   relationId: string | null;
+};
+
+type StaleBinding = StaleTargetRef & {
   staleSince: Date | null;
   state: 'active' | 'blocked' | 'stale';
   provenance: unknown;
@@ -602,7 +688,7 @@ function gapDedupeKey(observation: {
 }
 
 function targetIds(
-  rows: readonly StaleBinding[],
+  rows: readonly StaleTargetRef[],
   kind: 'asset' | 'article' | 'subnet',
 ): string[] {
   const key = kind === 'asset' ? 'assetId' : kind === 'article' ? 'articleId' : 'subnetId';
@@ -695,7 +781,7 @@ async function archiveTargetGroup(
 async function findProtectedTargets(
   tx: Prisma.TransactionClient,
   input: StaleSweepInput,
-  rows: readonly StaleBinding[],
+  rows: readonly StaleTargetRef[],
 ): Promise<Set<string>> {
   if (!['asset', 'article', 'subnet'].includes(input.targetKind)) return new Set();
   const ids = targetIds(rows, input.targetKind as 'asset' | 'article' | 'subnet');
@@ -736,7 +822,7 @@ async function findProtectedTargets(
   return protectedIds;
 }
 
-function targetIdForKind(row: StaleBinding, kind: IntegrationTargetKind): string {
+function targetIdForKind(row: StaleTargetRef, kind: IntegrationTargetKind): string {
   if (kind === 'asset') return row.assetId ?? '';
   if (kind === 'article') return row.articleId ?? '';
   if (kind === 'subnet') return row.subnetId ?? '';

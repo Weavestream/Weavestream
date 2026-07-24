@@ -119,16 +119,29 @@ function setup(options: { subnet?: unknown; reservation?: unknown; subnetCollisi
     },
     relation: { updateMany: jest.fn(), deleteMany: jest.fn() },
     auditLog: { create: jest.fn() },
-    $executeRaw: jest.fn(async (query: { values?: unknown[] }) => {
-      if (!options.binding || typeof options.binding !== 'object') return 0;
-      const staleSince = query.values?.find((value) => value instanceof Date) as Date | undefined;
+    // Tagged-template call (strings array) = the scope watermark lock
+    // probe; Prisma.sql-object call = the guarded stale transition,
+    // which reports survivors via RETURNING.
+    $queryRaw: jest.fn(async (query: readonly string[] | { values?: unknown[] }) => {
+      if (Array.isArray(query)) return [{ id: 'watermark-row' }];
+      if (!options.binding || typeof options.binding !== 'object') return [];
+      const values = (query as { values?: unknown[] }).values;
+      const staleSince = values?.find((value) => value instanceof Date) as Date | undefined;
       const current = options.binding as Record<string, any>;
       Object.assign(current, {
         state: 'stale',
         staleSince: staleSince ?? current.staleSince,
         provenance: { ...current.provenance, state: 'stale' },
       });
-      return 1;
+      return [{
+        id: current.id ?? 'binding-row',
+        targetKind: current.targetKind,
+        assetId: current.assetId ?? null,
+        subnetId: current.subnetId ?? null,
+        ipReservationId: current.ipReservationId ?? null,
+        articleId: current.articleId ?? null,
+        relationId: current.relationId ?? null,
+      }];
     }),
   };
   const prisma = {

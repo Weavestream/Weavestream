@@ -200,6 +200,7 @@ describe('IntegrationSyncRunnerService writer dispatch', () => {
         firstSeenAt: '2026-07-14T10:00:00.000Z', lastSeenAt: '2026-07-14T10:00:00.000Z',
         lastSyncedAt: '2026-07-14T10:00:00.000Z', ownership: 'breeze', state: 'active',
       }),
+      lockScope: jest.fn(async () => { pending.push('lock-scope'); }),
       persistGaps: jest.fn(async () => { pending.push('gaps'); }),
       resolveAbsentGaps: jest.fn(async () => { pending.push('resolve-gaps'); }),
       staleUnseen: jest.fn(async () => { pending.push('stale-sweep'); return { stale: 2, archived: 1 }; }),
@@ -574,7 +575,7 @@ describe('IntegrationSyncRunnerService writer dispatch', () => {
       },
     }]);
     expect(order).toEqual([
-      'target+audit', 'binding', 'gaps', 'resolve-gaps', 'completeness', 'checkpoint',
+      'lock-scope', 'target+audit', 'binding', 'gaps', 'resolve-gaps', 'completeness', 'checkpoint',
     ]);
   });
 
@@ -589,7 +590,7 @@ describe('IntegrationSyncRunnerService writer dispatch', () => {
       companyId: 'company', integrationCompanyMappingId: 'mapping', resourceId: 'resource',
     }));
     expect(order).toEqual([
-      'target+audit', 'binding', 'gaps', 'resolve-gaps', 'completeness-clear', 'checkpoint',
+      'lock-scope', 'target+audit', 'binding', 'gaps', 'resolve-gaps', 'completeness-clear', 'checkpoint',
     ]);
   });
 
@@ -713,8 +714,16 @@ describe('IntegrationSyncRunnerService writer dispatch', () => {
     expect(completeness.recalculate).toHaveBeenCalledWith(tx, expect.objectContaining({
       evaluatedAt: new Date('2026-07-14T10:00:00.000Z'),
     }));
+    // The scope lock leads every page: pages queue on the watermark
+    // BEFORE their first target/binding write so a concurrent stale
+    // sweep (binding-first) can never interleave with page writes
+    // (target-first) — the lock-order-inversion deadlock and the
+    // archive-then-reactivate anomaly are both structurally excluded.
+    expect(provenance.lockScope).toHaveBeenCalledWith(tx, expect.objectContaining({
+      resourceId: 'resource', observedAt: new Date('2026-07-14T10:00:00.000Z'),
+    }));
     expect(order).toEqual([
-      'target+audit', 'binding', 'gaps', 'resolve-gaps',
+      'lock-scope', 'target+audit', 'binding', 'gaps', 'resolve-gaps',
       'stale-sweep', 'completeness', 'checkpoint',
     ]);
   });
@@ -790,8 +799,8 @@ describe('IntegrationSyncRunnerService writer dispatch', () => {
     expect(checkpoints[1]!.update).toHaveProperty('lastFullCompletedAt');
     expect(checkpoints[1]!.update['highWaterAt']).toEqual(new Date('2026-07-14T09:45:00.000Z'));
     expect(order).toEqual([
-      'target+audit', 'binding', 'gaps', 'checkpoint',
-      'target+audit', 'binding', 'gaps', 'resolve-gaps',
+      'lock-scope', 'target+audit', 'binding', 'gaps', 'checkpoint',
+      'lock-scope', 'target+audit', 'binding', 'gaps', 'resolve-gaps',
       'stale-sweep', 'completeness', 'checkpoint',
     ]);
   });
@@ -1228,13 +1237,16 @@ describe('IntegrationSyncRunnerService writer dispatch', () => {
   });
 
   it('keeps dry runs free of binding and checkpoint writes', async () => {
-    const { service, tx } = setup();
+    const { service, tx, provenance } = setup();
     await service.runMapping({
       syncRunId: 'run', integrationCompanyMappingId: 'mapping', resourceId: 'resource',
       dryRun: true, actorId: 'actor', mode: 'full',
     });
     expect(tx.integrationSyncRecord.upsert).not.toHaveBeenCalled();
     expect(tx.integrationSyncCheckpoint.upsert).not.toHaveBeenCalled();
+    // The scope lock's absent-row branch seeds the watermark row — a
+    // write — so dry runs must never take it.
+    expect(provenance.lockScope).not.toHaveBeenCalled();
   });
 
   it('rolls target/audit, binding, and checkpoint work back when the page checkpoint fails', async () => {
@@ -1639,8 +1651,8 @@ describe('Breeze foundational asset composition', () => {
       { get: jest.fn().mockReturnValue(assetWriter) } as never,
       {
         buildProvenance: jest.fn(({ previous }: { previous: unknown }) => previous),
-        persistGaps: jest.fn(), resolveAbsentGaps: jest.fn(), staleUnseen: jest.fn(),
-        findMoveConflict: jest.fn().mockResolvedValue(null),
+        lockScope: jest.fn(), persistGaps: jest.fn(), resolveAbsentGaps: jest.fn(),
+        staleUnseen: jest.fn(), findMoveConflict: jest.fn().mockResolvedValue(null),
       } as never,
       { recalculate: jest.fn() } as never,
       new FieldTypesRegistry(),

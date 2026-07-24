@@ -380,6 +380,24 @@ export class IntegrationSyncRunnerService {
             );
           }
           const observedAt = new Date(page.snapshotAt);
+          if (!input.dryRun) {
+            // Scope serialization point, acquired BEFORE the first
+            // target or binding write of the page. Pages lock targets
+            // before bindings while the stale sweep transitions
+            // bindings before archiving targets; without this common
+            // top lock, overlapping same-scope transactions can
+            // deadlock on that inversion or reactivate a binding whose
+            // target a sweep archived after the page's own target
+            // write had already run. Dry runs write nothing and skip
+            // it (the lock's absent-row branch would seed the
+            // watermark tombstone — a write).
+            await this.provenance.lockScope(tx, {
+              companyId: mapping.companyId,
+              integrationCompanyMappingId: mapping.id,
+              resourceId: resource.id,
+              observedAt,
+            });
+          }
           const pageGaps: Array<{
             externalId: string | null;
             syncRecordId: string | null;

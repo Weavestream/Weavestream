@@ -845,6 +845,135 @@ describeIfDb('Breeze reconstruction disposable PostgreSQL dossier', () => {
     expect(JSON.stringify(auditRows)).not.toContain(BLOCKED_SECRET);
   });
 
+  it('skips a binding refreshed by a concurrent commit between the sweep scan and the guarded stale transition', async () => {
+    const staleAt = new Date(SNAPSHOT);
+    const refreshedAt = new Date('2026-07-14T12:30:00.000Z');
+    let refreshedMidSweep = false;
+    const result = await prisma.$transaction(async (tx) => {
+      // Forwarding client whose candidate scan triggers the CR-011
+      // interleaving: the moment the sweep has selected its stale
+      // candidates, a concurrent page commits a fresh observation of
+      // the same binding on a separate connection (auto-commit,
+      // outside the sweep's transaction).
+      const sweepTx = {
+        integrationSyncRecord: {
+          findMany: async (args: Parameters<typeof tx.integrationSyncRecord.findMany>[0]) => {
+            const page = await tx.integrationSyncRecord.findMany(args);
+            if (!refreshedMidSweep) {
+              refreshedMidSweep = true;
+              await prisma.integrationSyncRecord.update({
+                where: { id: ids.syncDevice },
+                data: {
+                  lastSeenAt: refreshedAt,
+                  provenance: {
+                    ...provenanceFor('devices', `${ORG_A}:devices:${DEVICE}`),
+                    lastSeenAt: refreshedAt.toISOString(),
+                  },
+                },
+              });
+            }
+            return page;
+          },
+        },
+        $queryRaw: tx.$queryRaw.bind(tx),
+        $executeRaw: tx.$executeRaw.bind(tx),
+        asset: tx.asset,
+        article: tx.article,
+        subnet: tx.subnet,
+        searchIndex: tx.searchIndex,
+        auditLog: tx.auditLog,
+      } as unknown as Prisma.TransactionClient;
+      return provenance.staleUnseen(sweepTx, {
+        integrationId: ids.integration,
+        companyId: ids.companyA,
+        integrationCompanyMappingId: ids.mappingA,
+        resourceId: ids.devices,
+        targetKind: 'asset',
+        snapshotAt: staleAt,
+        auditActorId: ids.actor,
+      });
+    });
+
+    // The guarded transition re-evaluates its predicate against the
+    // committed refresh, so the binding drops out of the sweep: no
+    // stale flip, no target archive, no audit entry.
+    expect(refreshedMidSweep).toBe(true);
+    expect(result).toEqual({ stale: 0, archived: 0 });
+    await expect(prisma.integrationSyncRecord.findUniqueOrThrow({ where: { id: ids.syncDevice } }))
+      .resolves.toMatchObject({ state: 'active', staleSince: null, lastSeenAt: refreshedAt });
+    const asset = await prisma.asset.findUniqueOrThrow({ where: { id: ids.deviceA } });
+    expect(asset.archivedAt).toBeNull();
+    await expect(prisma.auditLog.findMany({
+      where: { companyId: ids.companyA, action: 'integration.target.stale' },
+    })).resolves.toEqual([]);
+  });
+
+  it('serializes a page holding target and binding locks against a concurrent sweep without deadlock or clobber', async () => {
+    const staleAt = new Date(SNAPSHOT);
+    const refreshedAt = new Date('2026-07-14T12:30:00.000Z');
+    let releasePage!: () => void;
+    const pageHold = new Promise<void>((resolve) => { releasePage = resolve; });
+    let signalPageWritesDone!: () => void;
+    const pageWritesDone = new Promise<void>((resolve) => { signalPageWritesDone = resolve; });
+
+    // A page-shaped transaction in the runner's lock order: scope
+    // watermark first, then the native target, then the binding — held
+    // open while a full-reconciliation sweep starts. Without the
+    // common top lock this pair is the reviewer's P1: opposite
+    // target/binding lock ordering deadlocks when the page updated the
+    // target, and a page blocked only on the binding resumes after the
+    // sweep's commit and reactivates a binding whose target the sweep
+    // archived. With the watermark first, the sweep queues before
+    // scanning and then its write-predicate guard sees the committed
+    // refresh.
+    const page = prisma.$transaction(async (tx) => {
+      await provenance.lockScope(tx, {
+        companyId: ids.companyA,
+        integrationCompanyMappingId: ids.mappingA,
+        resourceId: ids.devices,
+        observedAt: refreshedAt,
+      });
+      await tx.asset.update({
+        where: { id: ids.deviceA },
+        data: { updatedBy: ids.actor },
+      });
+      await tx.integrationSyncRecord.update({
+        where: { id: ids.syncDevice },
+        data: {
+          lastSeenAt: refreshedAt,
+          provenance: {
+            ...provenanceFor('devices', `${ORG_A}:devices:${DEVICE}`),
+            lastSeenAt: refreshedAt.toISOString(),
+          },
+        },
+      });
+      signalPageWritesDone();
+      await pageHold;
+    }, { timeout: 30_000 });
+
+    await pageWritesDone;
+    const sweep = prisma.$transaction((tx) => provenance.staleUnseen(tx, {
+      integrationId: ids.integration,
+      companyId: ids.companyA,
+      integrationCompanyMappingId: ids.mappingA,
+      resourceId: ids.devices,
+      targetKind: 'asset',
+      snapshotAt: staleAt,
+      auditActorId: ids.actor,
+    }), { timeout: 30_000 });
+    // Give the sweep time to queue on the watermark the page holds,
+    // then let the page commit; any interleaving must end the same way.
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    releasePage();
+    await page;
+
+    await expect(sweep).resolves.toEqual({ stale: 0, archived: 0 });
+    await expect(prisma.integrationSyncRecord.findUniqueOrThrow({ where: { id: ids.syncDevice } }))
+      .resolves.toMatchObject({ state: 'active', staleSince: null, lastSeenAt: refreshedAt });
+    const asset = await prisma.asset.findUniqueOrThrow({ where: { id: ids.deviceA } });
+    expect(asset.archivedAt).toBeNull();
+  });
+
   it('composes the real Breeze request seam, registry, every native writer, completeness, export, and PDF idempotently', async () => {
     const breeze = new BreezeDriver(new BreezePartnerApiClient());
     installFetchScript([{ body: envelope([

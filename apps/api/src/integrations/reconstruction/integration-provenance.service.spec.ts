@@ -413,7 +413,9 @@ describe('IntegrationProvenanceService', () => {
       upload: { updateMany: jest.fn(), deleteMany: jest.fn() },
       password: { updateMany: jest.fn(), deleteMany: jest.fn() },
       searchIndex: { updateMany: jest.fn() },
-      $executeRaw: jest.fn().mockResolvedValue(1),
+      $queryRaw: jest.fn()
+        .mockResolvedValueOnce([{ id: 'watermark-row' }])
+        .mockResolvedValue(rows),
     };
     const audit = { logManyWithClient: jest.fn() };
     const service = new IntegrationProvenanceService({} as never, audit as never);
@@ -462,7 +464,38 @@ describe('IntegrationProvenanceService', () => {
     expect(tx.password.updateMany).not.toHaveBeenCalled();
     expect(tx.password.deleteMany).not.toHaveBeenCalled();
     expect(tx.integrationSyncRecord.update).not.toHaveBeenCalled();
-    expect(tx.$executeRaw).toHaveBeenCalledTimes(1);
+    expect(tx.$queryRaw).toHaveBeenCalledTimes(2);
+    // The sweep queues on the scope watermark BEFORE scanning — the
+    // same serialization point page transactions take before their
+    // first scope write — so same-scope transactions never interleave.
+    // (The lock probe is a tagged-template call: arg 0 is the strings
+    // array, unlike the Prisma.sql-object mutation call below.)
+    const [lockStrings] = tx.$queryRaw.mock.calls[0]!;
+    const lockSql = (lockStrings as readonly string[]).join('?');
+    expect(lockSql).toContain('FOR UPDATE');
+    expect(lockSql).toContain('"company_id"');
+    expect(tx.$queryRaw.mock.invocationCallOrder[0]!)
+      .toBeLessThan(findMany.mock.invocationCallOrder[0]!);
+    // The stale transition re-checks the full selection predicate in
+    // the WHERE clause of the write and stays tenant-scoped (raw SQL
+    // bypasses the tenant middleware); survivors come from RETURNING.
+    const mutation = tx.$queryRaw.mock.calls[1]![0] as { sql: string; values: unknown[] };
+    expect(mutation.sql).toContain('"company_id" =');
+    expect(mutation.sql).toContain('"integration_company_mapping_id" =');
+    expect(mutation.sql).toContain('"resource_id" =');
+    expect(mutation.sql).toContain('"state" IN (');
+    expect(mutation.sql).toContain('"last_seen_at" <');
+    expect(mutation.sql).toContain(`"provenance"->>'ownership' = 'breeze'`);
+    expect(mutation.sql).toContain('RETURNING');
+    expect(mutation.values).toEqual(
+      expect.arrayContaining([ids.company, ids.mapping, ids.resource, staleAt]),
+    );
+    // Targets are archived only AFTER the guarded transition confirmed
+    // which bindings actually went stale.
+    if (archiveDelegate) {
+      expect(tx.$queryRaw.mock.invocationCallOrder[1]!)
+        .toBeLessThan(tx[archiveDelegate].updateMany.mock.invocationCallOrder[0]!);
+    }
     expect(audit.logManyWithClient).toHaveBeenCalledWith(tx, [{
       actorId: '00000000-0000-0000-0000-000000000005',
       action: 'integration.target.stale',
@@ -497,7 +530,9 @@ describe('IntegrationProvenanceService', () => {
         integrationSyncRecord: { findMany, update: jest.fn() },
         asset: { updateMany: jest.fn() }, article: { updateMany: jest.fn() },
         subnet: { updateMany: jest.fn() }, searchIndex: { updateMany: jest.fn() },
-        $executeRaw: jest.fn().mockResolvedValue(1),
+        $queryRaw: jest.fn()
+          .mockResolvedValueOnce([{ id: 'watermark-row' }])
+          .mockResolvedValue([disappearing]),
       };
       const service = new IntegrationProvenanceService({} as never, {} as never);
       await expect(service.staleUnseen(tx as never, {
@@ -511,13 +546,62 @@ describe('IntegrationProvenanceService', () => {
       })).resolves.toEqual({ stale: 1, archived: 0 });
       expect(tx[targetKind].updateMany).not.toHaveBeenCalled();
       expect(tx.integrationSyncRecord.update).not.toHaveBeenCalled();
-      expect(tx.$executeRaw).toHaveBeenCalledTimes(1);
+      expect(tx.$queryRaw).toHaveBeenCalledTimes(2);
       expect(findMany).toHaveBeenLastCalledWith(expect.objectContaining({
         where: expect.not.objectContaining({ provenance: expect.anything() }),
         distinct: [targetKind === 'asset' ? 'assetId' : targetKind === 'article' ? 'articleId' : 'subnetId'],
       }));
     },
   );
+
+  it('never archives a target whose binding was refreshed between the scan and the guarded transition', async () => {
+    const staleAt = new Date('2026-07-14T12:00:00.000Z');
+    const genuinelyStale = binding('genuinely-stale', 'asset', 'asset-stale');
+    const refreshedMidFlight = binding('refreshed-mid-flight', 'asset', 'asset-fresh');
+    const findMany = jest.fn()
+      .mockResolvedValueOnce([genuinelyStale, refreshedMidFlight])
+      .mockResolvedValue([]);
+    const tx = {
+      integrationSyncRecord: { findMany, update: jest.fn() },
+      asset: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+      article: { updateMany: jest.fn() }, subnet: { updateMany: jest.fn() },
+      searchIndex: { updateMany: jest.fn() },
+      // The guarded UPDATE returns only rows still satisfying the
+      // stale predicate at write time: a concurrent page refreshed the
+      // second binding's last_seen_at after the scan, so RETURNING
+      // omits it.
+      $queryRaw: jest.fn()
+        .mockResolvedValueOnce([{ id: 'watermark-row' }])
+        .mockResolvedValue([genuinelyStale]),
+    };
+    const audit = { logManyWithClient: jest.fn() };
+    const service = new IntegrationProvenanceService({} as never, audit as never);
+
+    await expect(service.staleUnseen(tx as never, {
+      integrationId: ids.integration, companyId: ids.company,
+      integrationCompanyMappingId: ids.mapping, resourceId: ids.resource,
+      targetKind: 'asset', snapshotAt: staleAt,
+      auditActorId: '00000000-0000-0000-0000-000000000005',
+    })).resolves.toEqual({ stale: 1, archived: 1 });
+
+    // Only the surviving binding's target is archived; the refreshed
+    // binding's target is untouched, unaudited, and uncounted.
+    expect(tx.asset.updateMany).toHaveBeenCalledTimes(1);
+    expect(tx.asset.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: { in: ['asset-stale'] }, companyId: ids.company, archivedAt: null },
+    }));
+    expect(tx.searchIndex.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ entityId: { in: ['asset-stale'] } }),
+    }));
+    const entries = audit.logManyWithClient.mock.calls[0]![1];
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toEqual(expect.objectContaining({ entityId: 'asset-stale' }));
+    // The refreshed binding is absent from the protected-target
+    // exclusion list, so as a live record it shields any shared target.
+    expect(findMany).toHaveBeenLastCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ id: { notIn: ['genuinely-stale'] } }),
+    }));
+  });
 
   it('batches 501 binding provenance transitions and target-level audits', async () => {
     const staleAt = new Date('2026-07-14T12:00:00.000Z');
@@ -537,7 +621,10 @@ describe('IntegrationProvenanceService', () => {
       })) },
       article: { updateMany: jest.fn() }, subnet: { updateMany: jest.fn() },
       searchIndex: { updateMany: jest.fn() },
-      $executeRaw: jest.fn().mockResolvedValue(500),
+      $queryRaw: jest.fn()
+        .mockResolvedValueOnce([{ id: 'watermark-row' }])
+        .mockResolvedValueOnce(rows.slice(0, 500))
+        .mockResolvedValueOnce(rows.slice(500)),
     };
     const audit = { logManyWithClient: jest.fn().mockResolvedValue(undefined) };
     const service = new IntegrationProvenanceService({} as never, audit as never);
@@ -550,7 +637,7 @@ describe('IntegrationProvenanceService', () => {
     })).resolves.toEqual({ stale: 501, archived: 501 });
 
     expect(tx.integrationSyncRecord.update).not.toHaveBeenCalled();
-    expect(tx.$executeRaw).toHaveBeenCalledTimes(2);
+    expect(tx.$queryRaw).toHaveBeenCalledTimes(3);
     expect(audit.logManyWithClient).toHaveBeenCalledTimes(1);
     const entries = audit.logManyWithClient.mock.calls[0]![1];
     expect(entries).toHaveLength(501);
@@ -575,7 +662,9 @@ describe('IntegrationProvenanceService', () => {
       },
       asset: { updateMany: jest.fn() }, article: { updateMany: jest.fn() },
       subnet: { updateMany: jest.fn() }, searchIndex: { updateMany: jest.fn() },
-      $executeRaw: jest.fn().mockResolvedValue(1),
+      $queryRaw: jest.fn()
+        .mockResolvedValueOnce([{ id: 'watermark-row' }])
+        .mockResolvedValue([blocked]),
     };
     const service = new IntegrationProvenanceService({} as never, {} as never);
 
@@ -589,7 +678,7 @@ describe('IntegrationProvenanceService', () => {
       where: expect.objectContaining({ state: { in: ['active', 'blocked'] } }),
     }));
     expect(tx.integrationSyncRecord.update).not.toHaveBeenCalled();
-    expect(tx.$executeRaw).toHaveBeenCalledTimes(1);
+    expect(tx.$queryRaw).toHaveBeenCalledTimes(2);
   });
 
   it('does not overwrite the asset search archive timestamp when the native row was already archived', async () => {
@@ -602,7 +691,9 @@ describe('IntegrationProvenanceService', () => {
       asset: { updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
       article: { updateMany: jest.fn() }, subnet: { updateMany: jest.fn() },
       searchIndex: { updateMany: jest.fn() },
-      $executeRaw: jest.fn().mockResolvedValue(1),
+      $queryRaw: jest.fn()
+        .mockResolvedValueOnce([{ id: 'watermark-row' }])
+        .mockResolvedValue([row]),
     };
     const service = new IntegrationProvenanceService({} as never, {} as never);
     await expect(service.staleUnseen(tx as never, {
@@ -619,6 +710,7 @@ describe('IntegrationProvenanceService', () => {
       integrationSyncRecord: { findMany: jest.fn().mockResolvedValue([]), update: jest.fn() },
       asset: { updateMany: jest.fn() }, article: { updateMany: jest.fn() },
       subnet: { updateMany: jest.fn() }, searchIndex: { updateMany: jest.fn() },
+      $queryRaw: jest.fn().mockResolvedValue([{ id: 'watermark-row' }]),
     };
     const service = new IntegrationProvenanceService({} as never, {} as never);
     await service.staleUnseen(tx as never, {
@@ -639,6 +731,7 @@ describe('IntegrationProvenanceService', () => {
     const tx = {
       integrationSyncRecord: { findMany: jest.fn().mockResolvedValue([]), update: jest.fn() },
       asset: { updateMany: jest.fn() }, article: { updateMany: jest.fn() }, subnet: { updateMany: jest.fn() },
+      $queryRaw: jest.fn().mockResolvedValue([{ id: 'watermark-row' }]),
     };
     const service = new IntegrationProvenanceService({} as never, {} as never);
     await service.staleUnseen(tx as never, {
@@ -663,6 +756,7 @@ describe('IntegrationProvenanceService', () => {
     const tx = {
       integrationSyncRecord: { findMany: jest.fn().mockResolvedValue(rows), update: jest.fn() },
       asset: { updateMany: jest.fn() }, article: { updateMany: jest.fn() }, subnet: { updateMany: jest.fn() },
+      $queryRaw: jest.fn().mockResolvedValue([{ id: 'watermark-row' }]),
     };
     const service = new IntegrationProvenanceService({} as never, {} as never);
     await expect(service.staleUnseen(tx as never, {
