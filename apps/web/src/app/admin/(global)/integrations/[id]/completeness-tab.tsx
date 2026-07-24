@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   integrationCompletenessResponseSchema,
   integrationGapsPageSchema,
@@ -41,51 +41,81 @@ export function CompletenessTab({
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Monotonic scope generation, bumped whenever the filters change and on
+  // unmount. `loadMore` captures it at request time so a page that lands
+  // after the operator moved the filters can be dropped: its rows would be
+  // appended to a different scope's list, and its cursor would keep paging
+  // the scope that is no longer on screen.
+  const scopeRef = useRef(0);
+
   useEffect(() => {
-    let cancelled = false;
+    scopeRef.current += 1;
+    const scope = scopeRef.current;
     (async () => {
       setLoading(true);
+      setLoadingMore(false);
       setError(null);
       const query = scopeQuery(mappingId, resourceId);
-      const [summaryResult, gapsResult] = await Promise.all([
-        apiFetch(`/admin/integrations/${integrationId}/completeness${query}`),
-        apiFetch(`/admin/integrations/${integrationId}/gaps${appendQuery(query, 'resolution=active&limit=50')}`),
-      ]);
-      if (cancelled) return;
-      setLoading(false);
-      if (!summaryResult.ok || !gapsResult.ok) {
-        setError(problemMessage(summaryResult.problem ?? gapsResult.problem));
-        return;
+      try {
+        const [summaryResult, gapsResult] = await Promise.all([
+          apiFetch(`/admin/integrations/${integrationId}/completeness${query}`),
+          apiFetch(`/admin/integrations/${integrationId}/gaps${appendQuery(query, 'resolution=active&limit=50')}`),
+        ]);
+        if (scopeRef.current !== scope) return;
+        setLoading(false);
+        if (!summaryResult.ok || !gapsResult.ok) {
+          setError(problemMessage(summaryResult.problem ?? gapsResult.problem));
+          return;
+        }
+        const parsedSummary = integrationCompletenessResponseSchema.safeParse(summaryResult.data);
+        const parsedGaps = integrationGapsPageSchema.safeParse(gapsResult.data);
+        if (!parsedSummary.success || !parsedGaps.success) {
+          setError('The completeness response was invalid.');
+          return;
+        }
+        setSummary(parsedSummary.data);
+        setGaps(parsedGaps.data.items);
+        setNextCursor(parsedGaps.data.nextCursor);
+      } catch {
+        // apiFetch rethrows non-abort network failures — don't leave the tab
+        // stuck on "Loading completeness…" with no error and no way to retry.
+        if (scopeRef.current !== scope) return;
+        setLoading(false);
+        setError(problemMessage(null));
       }
-      const parsedSummary = integrationCompletenessResponseSchema.safeParse(summaryResult.data);
-      const parsedGaps = integrationGapsPageSchema.safeParse(gapsResult.data);
-      if (!parsedSummary.success || !parsedGaps.success) {
-        setError('The completeness response was invalid.');
-        return;
-      }
-      setSummary(parsedSummary.data);
-      setGaps(parsedGaps.data.items);
-      setNextCursor(parsedGaps.data.nextCursor);
     })();
-    return () => { cancelled = true; };
+    return () => { scopeRef.current += 1; };
   }, [integrationId, mappingId, resourceId]);
 
   async function loadMore() {
     if (!nextCursor) return;
+    const scope = scopeRef.current;
     setLoadingMore(true);
     const query = appendQuery(
       scopeQuery(mappingId, resourceId),
       `resolution=active&limit=50&cursor=${encodeURIComponent(nextCursor)}`,
     );
-    const result = await apiFetch(`/admin/integrations/${integrationId}/gaps${query}`);
-    setLoadingMore(false);
-    const parsed = result.ok ? integrationGapsPageSchema.safeParse(result.data) : null;
-    if (!parsed?.success) {
-      setError(problemMessage(result.problem));
-      return;
+    try {
+      const result = await apiFetch(`/admin/integrations/${integrationId}/gaps${query}`);
+      // Filters moved while this page was in flight: the effect for the new
+      // scope has already reset the list and the button, so drop this page
+      // rather than appending it to a scope it does not belong to.
+      if (scopeRef.current !== scope) return;
+      setLoadingMore(false);
+      const parsed = result.ok ? integrationGapsPageSchema.safeParse(result.data) : null;
+      if (!parsed?.success) {
+        setError(problemMessage(result.problem));
+        return;
+      }
+      setGaps((current) => [...current, ...parsed.data.items]);
+      setNextCursor(parsed.data.nextCursor);
+    } catch {
+      // Same rethrow contract as the filter effect — a network failure must
+      // not leave "Load more" spinning and permanently disabled.
+      if (scopeRef.current !== scope) return;
+      setLoadingMore(false);
+      setError(problemMessage(null));
     }
-    setGaps((current) => [...current, ...parsed.data.items]);
-    setNextCursor(parsed.data.nextCursor);
   }
 
   return (

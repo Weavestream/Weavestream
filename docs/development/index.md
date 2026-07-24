@@ -17,6 +17,12 @@ End users deploying published images should use the [Quickstart](/getting-starte
 - **pnpm 11.x** via Corepack. Run `corepack enable` once; later `pnpm` commands use the exact 11.x version declared in `package.json`. Keep that pin current with the latest pnpm 11 release rather than using a floating range.
 - **Docker Engine 24+** with Docker Compose v2.
 - **openssl** on macOS, Linux, or WSL; Windows users can use the PowerShell keygen script.
+- **Poppler and libxml2 command-line tools** (optional, test-only). The company PDF export specs read the rendered PDF back with `pdftotext`, `pdfinfo`, and `pdffonts`, and parse the exported XMP with `xmllint`. Without them those specs skip with an install hint; the rest of `pnpm test` is unaffected.
+
+```bash
+sudo apt-get install -y poppler-utils libxml2-utils   # Debian/Ubuntu/WSL
+brew install poppler                                  # macOS — xmllint ships with the OS
+```
 
 ## 1. Clone And Install
 
@@ -94,6 +100,9 @@ pnpm --filter @weavestream/api cli create-admin
 pnpm lint               # repo-wide ESLint
 pnpm typecheck          # tsc --noEmit everywhere
 pnpm test               # Jest plus package-level test scripts
+                        # PDF inspection specs skip without poppler-utils/
+                        # libxml2-utils; set WEAVESTREAM_REQUIRE_PDF_TOOLS=1
+                        # to make a missing binary a failure (CI does).
 pnpm audit              # prod-only, high-severity audit
 
 pnpm prisma:migrate     # prisma migrate dev

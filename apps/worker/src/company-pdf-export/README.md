@@ -1,5 +1,14 @@
 # Company PDF export inspection fixture
 
+The spec's inspection assertions and the manual workflow below both shell out to the Poppler and libxml2 CLIs. Install them first:
+
+```bash
+sudo apt-get install -y poppler-utils libxml2-utils   # Debian/Ubuntu/WSL
+brew install poppler                                  # macOS — xmllint ships with the OS
+```
+
+Without them the inspection specs skip with an install hint; set `WEAVESTREAM_REQUIRE_PDF_TOOLS=1` (as CI does) to turn a missing binary into a failure instead.
+
 The PDF builder spec contains a deterministic, non-secret company reconstruction fixture. From the repository root, generate it and render every page with Poppler:
 
 ```bash

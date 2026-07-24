@@ -1,5 +1,6 @@
 import type { IntegrationTargetProvenance } from '@weavestream/shared';
 import { Tag } from '../ui';
+import { FormattedDateTime } from '../../lib/timezone-context';
 
 const STATE = {
   active: { label: 'Active source record', tone: 'ok' },
@@ -83,7 +84,7 @@ function DateTerm({ label, value, last }: { label: string; value: string | null;
           whiteSpace: 'nowrap',
         }}
       >
-        {value ? new Date(value).toLocaleString() : 'Never'}
+        {value ? <FormattedDateTime value={value} /> : 'Never'}
       </dd>
     </div>
   );

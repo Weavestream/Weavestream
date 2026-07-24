@@ -18,7 +18,7 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs';
-import { resolve } from 'node:path';
+import { delimiter, resolve } from 'node:path';
 import type { CompanyExportData } from '../../../api/src/exports/company-export-data.service.js';
 import {
   companyPdfTestFixture,
@@ -27,6 +27,88 @@ import {
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
 const UPLOAD_ID = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb';
+
+/**
+ * External oracles these specs read the rendered PDF back with: Poppler
+ * (`pdftotext`/`pdfinfo`/`pdffonts`) for text, page counts, embedded fonts
+ * and AES-256 encryption, libxml2 (`xmllint`) for the exported XMP packet.
+ * Neither ships with Node, so an unprovisioned checkout used to fail two
+ * dozen specs with a bare `spawnSync pdftotext ENOENT`.
+ *
+ * Resolve them once up front instead: without them the inspection specs
+ * skip with an install hint, and where they are required — explicit
+ * `WEAVESTREAM_REQUIRE_PDF_TOOLS`, else a truthy `CI` — a missing binary
+ * is a hard failure, so a provisioning regression can never silently drop
+ * the credential-rendering and encryption coverage.
+ */
+const PDF_INSPECTION_TOOLS = [
+  'pdftotext',
+  'pdfinfo',
+  'pdffonts',
+  'xmllint',
+] as const;
+
+function resolvesOnPath(binary: string): boolean {
+  // Mirrors how execFileSync itself resolves a bare command name.
+  const extensions =
+    process.platform === 'win32'
+      ? (process.env['PATHEXT'] ?? '.EXE;.CMD;.BAT').split(';')
+      : [''];
+  return (process.env['PATH'] ?? '')
+    .split(delimiter)
+    .filter((entry) => entry.length > 0)
+    .some((entry) =>
+      extensions.some((extension) =>
+        existsSync(resolve(entry, `${binary}${extension}`)),
+      ),
+    );
+}
+
+const missingPdfTools = PDF_INSPECTION_TOOLS.filter(
+  (tool) => !resolvesOnPath(tool),
+);
+
+const FALSE_ENV_VALUES = ['0', 'false', 'no'];
+
+/** `undefined` when unset or empty, so callers can fall through. */
+function envFlag(name: string): boolean | undefined {
+  const value = process.env[name]?.trim().toLowerCase();
+  if (value === undefined || value === '') return undefined;
+  return !FALSE_ENV_VALUES.includes(value);
+}
+
+const pdfToolsRequired =
+  envFlag('WEAVESTREAM_REQUIRE_PDF_TOOLS') ?? envFlag('CI') ?? false;
+
+function missingPdfToolsMessage(): string {
+  return [
+    `Missing PDF inspection tools on PATH: ${missingPdfTools.join(', ')}.`,
+    'Install them, then re-run this spec:',
+    '  Debian/Ubuntu: sudo apt-get install -y poppler-utils libxml2-utils',
+    '  macOS (Homebrew): brew install poppler   # xmllint ships with macOS',
+    'Set WEAVESTREAM_REQUIRE_PDF_TOOLS=0 to skip the inspection specs.',
+  ].join('\n');
+}
+
+const itWithPdfTools = missingPdfTools.length === 0 ? it : it.skip;
+
+if (missingPdfTools.length > 0 && !pdfToolsRequired) {
+  console.warn(`Skipping PDF inspection specs.\n${missingPdfToolsMessage()}`);
+}
+
+describe('PDF inspection tooling', () => {
+  // Reports a real signal wherever it can: green once the tools are on
+  // PATH, red when they are required and absent. Only an unprovisioned
+  // developer machine — where the skip is the point — sits it out.
+  const itWhenMeaningful =
+    pdfToolsRequired || missingPdfTools.length === 0 ? it : it.skip;
+
+  itWhenMeaningful('resolves Poppler and libxml2 on PATH', () => {
+    const status =
+      missingPdfTools.length === 0 ? 'all present' : missingPdfToolsMessage();
+    expect(status).toBe('all present');
+  });
+});
 
 describe('vendored PDF fonts', () => {
   it.each([
@@ -240,7 +322,7 @@ describe('pdfEmbedSizeBlockReason (WS-027 decompression-bomb gate)', () => {
 });
 
 describe('standalone reconstruction dossier PDF', () => {
-  it('renders essential IPAM, topology, procedures, provenance, dates, and safe gaps as text', async () => {
+  itWithPdfTools('renders essential IPAM, topology, procedures, provenance, dates, and safe gaps as text', async () => {
     const pdf = await buildCompanyExportPdf(companyPdfTestFixture());
     const text = extractPdfText(pdf);
 
@@ -265,7 +347,7 @@ describe('standalone reconstruction dossier PDF', () => {
     expect(text).not.toContain(FIXTURE_BLOCKED_SECRET);
   });
 
-  it('renders explicit empty-state sections', async () => {
+  itWithPdfTools('renders explicit empty-state sections', async () => {
     const pdf = await buildCompanyExportPdf(companyPdfTestFixture({
       assets: [],
       articles: [],
@@ -283,7 +365,7 @@ describe('standalone reconstruction dossier PDF', () => {
     expect(text).toContain('No reconstruction summaries, gaps, or source provenance.');
   });
 
-  it('omits the reconstruction dossier entirely when Breeze is not active', async () => {
+  itWithPdfTools('omits the reconstruction dossier entirely when Breeze is not active', async () => {
     const pdf = await buildCompanyExportPdf(
       companyPdfTestFixture({ breezeIntegrationActive: false }),
     );
@@ -299,7 +381,7 @@ describe('standalone reconstruction dossier PDF', () => {
     expect(text).toContain('Monitored Domains');
   });
 
-  it('starts every article on a fresh page', async () => {
+  itWithPdfTools('starts every article on a fresh page', async () => {
     const base = companyPdfTestFixture();
     const data = companyPdfTestFixture({
       articles: [
@@ -331,7 +413,7 @@ describe('standalone reconstruction dossier PDF', () => {
     expect(continuedAt).toBeLessThan(text.indexOf('Second Runbook'));
   });
 
-  it('truncates oversized table headers without stalling the worker', async () => {
+  itWithPdfTools('truncates oversized table headers without stalling the worker', async () => {
     const base = companyPdfTestFixture();
     // Body cells stay small so the table renders as a table and the
     // header actually reaches the ellipsis truncation path.
@@ -359,7 +441,7 @@ describe('standalone reconstruction dossier PDF', () => {
     expect(text).toContain('AFTER-WIDE-TABLE');
   });
 
-  it('degrades page-tall table rows to preformatted text instead of corrupting pagination', async () => {
+  itWithPdfTools('degrades page-tall table rows to preformatted text instead of corrupting pagination', async () => {
     const base = companyPdfTestFixture();
     // ~400 words in one cell measures far beyond one page at the
     // two-column cell width — undrawable as a single table row.
@@ -390,7 +472,7 @@ describe('standalone reconstruction dossier PDF', () => {
     expect(text).toMatch(/Page \d+ of \d+/);
   });
 
-  it('renders article markdown structure: numbering, tables, tasks, code, symbols', async () => {
+  itWithPdfTools('renders article markdown structure: numbering, tables, tasks, code, symbols', async () => {
     const base = companyPdfTestFixture();
     const markdownSource = [
       '# Failover Runbook',
@@ -443,7 +525,7 @@ describe('standalone reconstruction dossier PDF', () => {
     expect(text).toContain('Escalate to on-call if replication stalls.');
   });
 
-  it('paginates long tables and wraps long safe messages with continuation context', async () => {
+  itWithPdfTools('paginates long tables and wraps long safe messages with continuation context', async () => {
     const base = companyPdfTestFixture();
     const longSafeMessage =
       'Document the ordered restoration validation steps for this application service. '.repeat(18).trim();
@@ -484,7 +566,7 @@ describe('standalone reconstruction dossier PDF', () => {
     expect(text).toContain('Document the ordered restoration validation steps');
   });
 
-  it('preserves existing plaintext-password and article-image fallback behavior', async () => {
+  itWithPdfTools('preserves existing plaintext-password and article-image fallback behavior', async () => {
     const base = companyPdfTestFixture();
     const data: CompanyExportData = {
       ...base,
@@ -526,7 +608,7 @@ describe('standalone reconstruction dossier PDF', () => {
     expect(text).toContain('network-diagram.gif - image/gif is not embeddable');
   });
 
-  it('embeds deterministic Unicode fonts and applies the explicit emoji fallback', async () => {
+  itWithPdfTools('embeds deterministic Unicode fonts and applies the explicit emoji fallback', async () => {
     const base = companyPdfTestFixture();
     const data: CompanyExportData = {
       ...base,
@@ -574,7 +656,7 @@ describe('standalone reconstruction dossier PDF', () => {
     expect(fonts).not.toMatch(/\bno\b/i);
   });
 
-  it('normalizes exotic prose spaces to plain space while credentials stay flagged', async () => {
+  itWithPdfTools('normalizes exotic prose spaces to plain space while credentials stay flagged', async () => {
     const base = companyPdfTestFixture();
     const data: CompanyExportData = {
       ...base,
@@ -613,7 +695,7 @@ describe('standalone reconstruction dossier PDF', () => {
     expect(pdfSafeUserText('全角\u3000スペース')).toBe('全角\u3000スペース');
   });
 
-  it('flags unrenderable credentials explicitly and encodes prose deterministically', async () => {
+  itWithPdfTools('flags unrenderable credentials explicitly and encodes prose deterministically', async () => {
     const base = companyPdfTestFixture();
     const password = 'Pass😀-1️⃣-🇺🇸';
     const totp = 'OTP😀-1️⃣-🇺🇸';
@@ -654,7 +736,7 @@ describe('standalone reconstruction dossier PDF', () => {
       .toBe(createHash('sha256').update(second).digest('hex'));
   });
 
-  it('renders literal-notation credentials byte-exact and flags encoded ones apart', async () => {
+  itWithPdfTools('renders literal-notation credentials byte-exact and flags encoded ones apart', async () => {
     const base = companyPdfTestFixture();
     const data: CompanyExportData = {
       ...base,
@@ -694,7 +776,7 @@ describe('standalone reconstruction dossier PDF', () => {
     expect(decodePdfNotation('Notes [U+1F600] [[[[')).toBe('Notes 😀 [[');
   });
 
-  it('renders packaged-font credentials byte-exact without escape notation', async () => {
+  itWithPdfTools('renders packaged-font credentials byte-exact without escape notation', async () => {
     const base = companyPdfTestFixture();
     const password = 'Pa[ss]word-[[x]]-€céntr-木';
     const totp = 'JBSWY3DPEHPK3PXP';
@@ -712,7 +794,7 @@ describe('standalone reconstruction dossier PDF', () => {
     expect(text).not.toContain('Not literal');
   });
 
-  it('encodes control and formatting characters in credentials instead of normalizing them', async () => {
+  itWithPdfTools('encodes control and formatting characters in credentials instead of normalizing them', async () => {
     const base = companyPdfTestFixture();
     // Tab, zero-width space, NBSP, and soft hyphen all "render" but are
     // normalized or dropped by PDF layout/extraction — the literal path
@@ -734,7 +816,7 @@ describe('standalone reconstruction dossier PDF', () => {
     expect(decodePdfNotation('OTP[U+000A]QR')).toBe(totp);
   });
 
-  it('rejects default-ignorable and unassigned code points from the literal credential path', async () => {
+  itWithPdfTools('rejects default-ignorable and unassigned code points from the literal credential path', async () => {
     const base = companyPdfTestFixture();
     // U+034F (Combining Grapheme Joiner) is a Mark that extraction
     // rewrites; U+2065 is unassigned but default-ignorable. Both sit
@@ -754,7 +836,7 @@ describe('standalone reconstruction dossier PDF', () => {
     expect(decodePdfNotation('[U+0061+034F]b[U+2065]c')).toBe(password);
   });
 
-  it('rejects range-approved code points the packaged fonts cannot actually draw', async () => {
+  itWithPdfTools('rejects range-approved code points the packaged fonts cannot actually draw', async () => {
     const base = companyPdfTestFixture();
     // U+0104 sits in Latin Extended-A, inside the approved ranges, but
     // Noto Sans CJK JP ships no glyph for it - rendered literally it
@@ -777,7 +859,7 @@ describe('standalone reconstruction dossier PDF', () => {
     expect(text).toContain('Ogonek [U+0104] probe');
   });
 
-  it('parses serialized rich-text notes and fields before display encoding', async () => {
+  itWithPdfTools('parses serialized rich-text notes and fields before display encoding', async () => {
     const base = companyPdfTestFixture();
     const serialized = JSON.stringify({
       type: 'doc',
@@ -809,7 +891,7 @@ describe('standalone reconstruction dossier PDF', () => {
     expect(text).not.toContain('"type"');
   });
 
-  it('encrypts password-protected exports with AES-256 and requires the password', async () => {
+  itWithPdfTools('encrypts password-protected exports with AES-256 and requires the password', async () => {
     const password = 'correct-horse-battery-staple';
     const pdf = await buildCompanyExportPdf(companyPdfTestFixture(), {
       pdfPassword: password,
@@ -828,7 +910,7 @@ describe('standalone reconstruction dossier PDF', () => {
     expect(text).toContain('München Café Systems');
   });
 
-  it('sanitizes XML-special company names out of metadata but not page content', async () => {
+  itWithPdfTools('sanitizes XML-special company names out of metadata but not page content', async () => {
     const password = 'correct-horse-battery-staple';
     const base = companyPdfTestFixture();
     const data: CompanyExportData = {
@@ -862,7 +944,7 @@ describe('standalone reconstruction dossier PDF', () => {
     expect(plain.toString('latin1')).not.toContain('/Metadata');
   });
 
-  it('labels stale-bound records unmistakably as last-known stale', async () => {
+  itWithPdfTools('labels stale-bound records unmistakably as last-known stale', async () => {
     const base = companyPdfTestFixture();
     const stale = {
       state: 'stale' as const,
@@ -884,7 +966,7 @@ describe('standalone reconstruction dossier PDF', () => {
     expect(text).toContain('Stale since Jul 14, 2026');
   });
 
-  it('keeps UTC dates and the PDF hash invariant across process timezones', async () => {
+  itWithPdfTools('keeps UTC dates and the PDF hash invariant across process timezones', async () => {
     const originalTimezone = process.env['TZ'];
     const base = companyPdfTestFixture({
       exportedAt: new Date('2026-07-14T00:30:00.000Z'),
@@ -912,7 +994,7 @@ describe('standalone reconstruction dossier PDF', () => {
     }
   });
 
-  it('paginates maximum-size gap headings, messages, and footers as measured cards', async () => {
+  itWithPdfTools('paginates maximum-size gap headings, messages, and footers as measured cards', async () => {
     const base = companyPdfTestFixture();
     const resourceLabel = `MAX-LABEL-${'界'.repeat(246)}`;
     const targetLabel = `MAX-TARGET-${'Ж'.repeat(245)}`;
@@ -957,7 +1039,7 @@ describe('standalone reconstruction dossier PDF', () => {
     }
   });
 
-  it('removes only its empty scoped Poppler inspection directories', async () => {
+  itWithPdfTools('removes only its empty scoped Poppler inspection directories', async () => {
     inspectPdf(await buildCompanyExportPdf(companyPdfTestFixture()));
     const pdfRoot = resolve(repoRoot(), 'tmp/pdfs');
     const entries = existsSync(pdfRoot) ? readdirSync(pdfRoot) : [];

@@ -47,7 +47,5 @@ docs/permissions.md
 .cursor/plans/
 .cursor/
 .cursor/rules/
-AGENTS.md
-CLAUDE.md
 .zed
 .zed/rules/

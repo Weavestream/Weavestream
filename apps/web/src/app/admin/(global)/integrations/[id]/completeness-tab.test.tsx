@@ -1,6 +1,6 @@
 /** @jest-environment jsdom */
 import '@testing-library/jest-dom';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { CompletenessTab } from './completeness-tab';
 import { apiFetch } from '../../../../../lib/api';
 
@@ -101,6 +101,99 @@ describe('CompletenessTab', () => {
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
       expect.stringContaining(`resourceId=${ids.resource}`),
     ));
+  });
+
+  it('drops a load-more page that lands after the filters changed', async () => {
+    const summary = { ok: true, status: 200, data: {
+      counts: { synchronizedCurrent: 0, manuallyDocumented: 0, secretBlocked: 0, missing: 0, stale: 0, synchronizationError: 0 },
+      rows: [],
+    } };
+    const gap = (id: string, message: string) => ({
+      id, companyId: ids.company, companyName: 'Acme',
+      integrationCompanyMappingId: ids.mapping,
+      resourceId: ids.resource, resourceKey: 'devices', resourceLabel: 'Devices',
+      kind: 'secret_blocked', message,
+      firstSeenAt: '2026-07-13T00:00:00.000Z', lastSeenAt: '2026-07-14T00:00:00.000Z',
+      resolvedAt: null, target: null,
+    });
+    let releaseStalePage!: (value: unknown) => void;
+    fetchMock.mockImplementation(async (url) => {
+      const path = String(url);
+      if (path.includes('/completeness')) return summary as never;
+      if (path.includes('cursor=')) {
+        return new Promise((resolve) => { releaseStalePage = resolve; }) as never;
+      }
+      return {
+        ok: true, status: 200,
+        data: path.includes(`resourceId=${ids.resource}`)
+          ? { items: [gap(ids.gap2, 'Second scope gap.')], nextCursor: null }
+          : { items: [gap(ids.gap1, 'First scope gap.')], nextCursor: 'cursor-1' },
+      } as never;
+    });
+
+    render(<CompletenessTab
+      integrationId="integration-1"
+      mappings={[{ id: ids.mapping, companyName: 'Acme', externalOrgName: 'Acme upstream' } as never]}
+      resources={[{ id: ids.resource, resourceKey: 'devices', resourceLabel: 'Devices' } as never]}
+    />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /load more/i }));
+    await waitFor(() => expect(releaseStalePage).toBeDefined());
+
+    fireEvent.change(screen.getByLabelText('Resource'), { target: { value: ids.resource } });
+    expect(await screen.findByText('Second scope gap.')).toBeInTheDocument();
+
+    // Flush the resolution and every render it triggers before asserting an
+    // absence — a bare waitFor on "not in the document" passes on its first
+    // synchronous check, before the stale append would have landed.
+    await act(async () => {
+      releaseStalePage({
+        ok: true, status: 200,
+        data: { items: [gap(ids.gap1, 'Stale scope gap.')], nextCursor: 'cursor-2' },
+      });
+    });
+    expect(screen.queryByText('Stale scope gap.')).not.toBeInTheDocument();
+    expect(screen.getByText('Second scope gap.')).toBeInTheDocument();
+    // The dropped page's cursor must not revive paging for the old scope.
+    expect(screen.queryByRole('button', { name: /load more/i })).not.toBeInTheDocument();
+  });
+
+  it('surfaces a rejected initial load instead of staying on the loading state', async () => {
+    fetchMock.mockRejectedValue(new TypeError('Failed to fetch'));
+    render(<CompletenessTab integrationId="integration-1" mappings={[]} resources={[]} />);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load completeness.');
+    expect(screen.queryByText('Loading completeness…')).not.toBeInTheDocument();
+  });
+
+  it('clears the load-more button when its request is rejected', async () => {
+    const summary = { ok: true, status: 200, data: {
+      counts: { synchronizedCurrent: 0, manuallyDocumented: 0, secretBlocked: 0, missing: 0, stale: 0, synchronizationError: 0 },
+      rows: [],
+    } };
+    fetchMock.mockImplementation(async (url) => {
+      const path = String(url);
+      if (path.includes('/completeness')) return summary as never;
+      if (path.includes('cursor=')) throw new TypeError('Failed to fetch');
+      return { ok: true, status: 200, data: {
+        items: [{
+          id: ids.gap1, companyId: ids.company, companyName: 'Acme',
+          integrationCompanyMappingId: ids.mapping,
+          resourceId: ids.resource, resourceKey: 'devices', resourceLabel: 'Devices',
+          kind: 'secret_blocked', message: 'Only gap.',
+          firstSeenAt: '2026-07-13T00:00:00.000Z', lastSeenAt: '2026-07-14T00:00:00.000Z',
+          resolvedAt: null, target: null,
+        }], nextCursor: 'cursor-1',
+      } } as never;
+    });
+
+    render(<CompletenessTab integrationId="integration-1" mappings={[]} resources={[]} />);
+    fireEvent.click(await screen.findByRole('button', { name: /load more/i }));
+
+    // Before the fix the rejection escaped as an unhandled promise: no error
+    // was ever surfaced and the button stayed spinning and disabled.
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load completeness.');
+    expect(screen.queryByRole('button', { name: /load more/i })).not.toBeInTheDocument();
   });
 
   it('renders loading, error, and empty states', async () => {

@@ -1,6 +1,7 @@
 /** @jest-environment jsdom */
 import '@testing-library/jest-dom';
 import { render, screen } from '@testing-library/react';
+import { TimezoneProvider } from '../../lib/timezone-context';
 import { ProvenanceBadge, provenanceAttention } from './provenance-badge';
 
 describe('ProvenanceBadge', () => {
@@ -38,6 +39,26 @@ describe('ProvenanceBadge', () => {
       target: { targetKind: 'article', targetId: crypto.randomUUID(), targetLabel: 'Script', targetHref: null },
     }} />);
     expect(screen.getByText(label)).toBeInTheDocument();
+  });
+
+  it.each([
+    ['UTC', 'Jul 10, 2026, 12:00 AM'],
+    ['America/New_York', 'Jul 9, 2026, 08:00 PM'],
+  ])('renders timestamps in the viewer timezone (%s), not the ambient one', (tz, expected) => {
+    render(
+      <TimezoneProvider timezone={tz}>
+        <ProvenanceBadge provenance={{
+          integrationId: crypto.randomUUID(), integrationName: 'Breeze',
+          integrationCompanyMappingId: crypto.randomUUID(), resourceId: crypto.randomUUID(),
+          sourceLabel: 'Breeze', sourceResource: 'devices', ownership: 'breeze', state: 'active',
+          firstSeenAt: '2026-07-10T00:00:00.000Z', lastSeenAt: '2026-07-10T00:00:00.000Z',
+          lastSyncedAt: null, staleSince: null,
+          target: { targetKind: 'asset', targetId: crypto.randomUUID(), targetLabel: 'HV-01', targetHref: null },
+        } as never} />
+      </TimezoneProvider>,
+    );
+    expect(screen.getAllByText(expected)).toHaveLength(2);
+    expect(screen.getByText('Never')).toBeInTheDocument();
   });
 });
 
