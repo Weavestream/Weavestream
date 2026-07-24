@@ -1,4 +1,7 @@
-import { integrationSyncMappingJobSchema } from '@weavestream/shared';
+import {
+  integrationSyncMappingJobSchema,
+  integrationSyncOrchestratorJobSchema,
+} from '@weavestream/shared';
 import { IntegrationSyncOrchestratorWorker } from './integration-sync-orchestrator.processor.js';
 
 describe('integration sync orchestrator staged payload', () => {
@@ -15,6 +18,29 @@ describe('integration sync orchestrator staged payload', () => {
     });
     expect(job.resourceIds).toHaveLength(2);
     expect(job.auditActorId).toBe('00000000-0000-0000-0000-000000000005');
+  });
+
+  // Pre-upgrade payloads persisted in Redis must keep parsing until every
+  // supported upgrade path has drained them.
+  it('accepts both drained pre-DAG payload generations', () => {
+    const manual = integrationSyncOrchestratorJobSchema.parse({
+      kind: 'manual',
+      integrationId: '00000000-0000-0000-0000-000000000001',
+      triggeredBy: '00000000-0000-0000-0000-000000000002',
+      dryRun: false,
+    });
+    expect(manual.syncRunId).toBeUndefined();
+    expect(manual).toMatchObject({ mode: 'incremental' });
+
+    const mapping = integrationSyncMappingJobSchema.parse({
+      syncRunId: '00000000-0000-0000-0000-000000000003',
+      integrationCompanyMappingId: '00000000-0000-0000-0000-000000000004',
+      resourceId: '00000000-0000-0000-0000-000000000005',
+      dryRun: false,
+    });
+    expect(mapping.resourceIds).toBeUndefined();
+    expect(mapping.stageIndex).toBeUndefined();
+    expect(mapping).toMatchObject({ mode: 'incremental' });
   });
 });
 
@@ -177,6 +203,54 @@ describe('IntegrationSyncOrchestratorWorker persisted modes', () => {
     });
     expect(prisma.integrationSyncRun.findFirst).not.toHaveBeenCalled();
     expect(sync.beginRun).toHaveBeenCalledWith(integrationId);
+  });
+
+  it('recovers a drained pre-DAG manual job through the legacy most-recent-run lookup', async () => {
+    const prisma = {
+      integrationSyncRun: {
+        findUnique: jest.fn(),
+        findFirst: jest.fn().mockResolvedValue({
+          id: 'legacy-run', integrationId, kind: 'manual', triggeredBy: actorId,
+          mode: 'incremental', dryRun: true, status: 'queued',
+        }),
+      },
+    };
+    const sync = { beginRun: jest.fn(), failRun: jest.fn() };
+    const worker = new IntegrationSyncOrchestratorWorker(
+      {} as never, {} as never, prisma as never, sync as never,
+    );
+
+    await expect(handleOf(worker)({ data: {
+      kind: 'manual', integrationId, triggeredBy: actorId, dryRun: true,
+    } })).resolves.toEqual({ runId: 'legacy-run' });
+    expect(prisma.integrationSyncRun.findUnique).not.toHaveBeenCalled();
+    expect(prisma.integrationSyncRun.findFirst).toHaveBeenCalledWith({
+      where: {
+        integrationId, kind: 'manual', triggeredBy: actorId, dryRun: true,
+        status: { in: ['queued', 'running'] },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+    expect(sync.beginRun).toHaveBeenCalledWith('legacy-run');
+  });
+
+  it('skips a drained pre-DAG manual job with no live run instead of erroring', async () => {
+    const prisma = {
+      integrationSyncRun: {
+        findUnique: jest.fn(),
+        findFirst: jest.fn().mockResolvedValue(null),
+      },
+    };
+    const sync = { beginRun: jest.fn(), failRun: jest.fn() };
+    const worker = new IntegrationSyncOrchestratorWorker(
+      {} as never, {} as never, prisma as never, sync as never,
+    );
+
+    await expect(handleOf(worker)({ data: {
+      kind: 'manual', integrationId, triggeredBy: actorId, dryRun: false,
+    } })).resolves.toBeNull();
+    expect(sync.beginRun).not.toHaveBeenCalled();
+    expect(sync.failRun).not.toHaveBeenCalled();
   });
 
   it('rejects an exact manual run id whose persisted authority does not match the payload', async () => {

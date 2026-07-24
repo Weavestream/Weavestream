@@ -109,7 +109,8 @@ describe('IntegrationSyncMappingWorker DAG execution', () => {
     }): Promise<unknown> }).handle.bind(worker);
 
     await handle({ data: {
-      syncRunId: runId, integrationCompanyMappingId: mappingId, resourceId, mode: 'full',
+      syncRunId: runId, integrationCompanyMappingId: mappingId, resourceId,
+      resourceIds: [resourceId], mode: 'full',
     } });
     expect(runner.runMapping).toHaveBeenCalledWith(expect.objectContaining({ mode: 'full' }));
   });
@@ -214,6 +215,7 @@ describe('IntegrationSyncMappingWorker DAG execution', () => {
     }): Promise<unknown> }).handle.bind(worker);
     await expect(handle({ data: {
       syncRunId: runId, integrationCompanyMappingId: mappingId, resourceId,
+      resourceIds: [resourceId],
     }, attemptsMade: 0, opts: { attempts: 3 } })).rejects.toThrow(/transport failed/);
     expect(sync.mergeResourceResult).not.toHaveBeenCalled();
     expect(sync.closeRun).not.toHaveBeenCalled();
@@ -221,6 +223,7 @@ describe('IntegrationSyncMappingWorker DAG execution', () => {
 
     await expect(handle({ data: {
       syncRunId: runId, integrationCompanyMappingId: mappingId, resourceId,
+      resourceIds: [resourceId],
     }, attemptsMade: 2, opts: { attempts: 3 } })).rejects.toThrow(/transport failed/);
     expect(runner.runMapping).toHaveBeenCalledWith(expect.objectContaining({ actorId: 'creator' }));
     expect(sync.mergeResourceResult).toHaveBeenCalledTimes(1);
@@ -230,12 +233,112 @@ describe('IntegrationSyncMappingWorker DAG execution', () => {
     runner.runMapping.mockRejectedValueOnce(new Error('unexpected preflight failure'));
     await expect(handle({ data: {
       syncRunId: runId, integrationCompanyMappingId: mappingId, resourceId,
+      resourceIds: [resourceId],
     }, attemptsMade: 2, opts: { attempts: 3 } })).rejects.toThrow(/unexpected preflight/);
     expect(sync.failMappingJob).toHaveBeenCalledWith(expect.objectContaining({
       runId,
       mappingId,
       error: 'unexpected preflight failure',
     }));
+  });
+});
+
+describe('IntegrationSyncMappingWorker legacy per-resource jobs', () => {
+  // Jobs enqueued by a pre-DAG orchestrator (no `resourceIds`) survive an
+  // upgrade in Redis and must drain under that generation's contract.
+  const runId = '00000000-0000-0000-0000-000000000041';
+  const mappingId = '00000000-0000-0000-0000-000000000042';
+  const resourceId = '00000000-0000-0000-0000-000000000043';
+
+  function build(overrides: {
+    runner?: { runMapping: jest.Mock };
+    resources?: unknown[];
+    fanoutCount?: number;
+  }) {
+    const prisma = {
+      integrationSyncRun: { findUnique: jest.fn().mockResolvedValue({
+        id: runId, triggeredBy: null, integrationId: 'integration',
+        integration: { createdBy: 'creator' },
+      }) },
+      integrationCompanyMapping: { findUnique: jest.fn().mockResolvedValue({
+        id: mappingId, companyId: 'company', integrationId: 'integration',
+      }) },
+      integrationResource: {
+        findMany: jest.fn().mockResolvedValue(overrides.resources ?? [
+          { id: resourceId, resourceKey: 'devices', dependsOnResourceKeys: [] },
+        ]),
+        findFirst: jest.fn().mockResolvedValue({ resourceKey: 'devices' }),
+        count: jest.fn().mockResolvedValue(overrides.fanoutCount ?? 1),
+      },
+      $transaction: jest.fn(),
+    };
+    const runner = overrides.runner ?? { runMapping: jest.fn().mockResolvedValue({
+      status: 'succeeded', resourceKey: 'devices', companyId: 'company',
+      totals: { ...totalsForWorker(), errors: 0 }, conflicts: [], error: null,
+    }) };
+    const sync = {
+      markMappingRunning: jest.fn(), mergeResourceResult: jest.fn(), closeRun: jest.fn(),
+      failMappingJob: jest.fn(),
+    };
+    const provenance = { persistGaps: jest.fn() };
+    const worker = new IntegrationSyncMappingWorker(
+      {} as never, {} as never, prisma as never, sync as never, runner as never,
+      provenance as never, { log: jest.fn() } as never,
+    );
+    const handle = (worker as unknown as { handle(job: {
+      data: unknown; attemptsMade?: number; opts?: { attempts?: number };
+    }): Promise<unknown> }).handle.bind(worker);
+    return { prisma, runner, sync, provenance, handle };
+  }
+
+  it('runs a dep-carrying resource ungated and merges with the fan-out-wide count', async () => {
+    const { runner, sync, provenance, handle } = build({
+      resources: [
+        // Deps point at siblings that run as independent legacy jobs (or were
+        // backfilled by a post-upgrade driver refresh) — they must not gate.
+        { id: resourceId, resourceKey: 'devices', dependsOnResourceKeys: ['companies'] },
+      ],
+      fanoutCount: 3,
+    });
+
+    await handle({ data: {
+      syncRunId: runId, integrationCompanyMappingId: mappingId, resourceId,
+    } });
+    expect(runner.runMapping).toHaveBeenCalledWith(expect.objectContaining({
+      resourceId, mode: 'incremental',
+    }));
+    expect(provenance.persistGaps).not.toHaveBeenCalled();
+    expect(sync.mergeResourceResult).toHaveBeenCalledTimes(1);
+    expect(sync.mergeResourceResult).toHaveBeenCalledWith(expect.objectContaining({
+      resourceKey: 'devices', status: 'succeeded', expectedResources: 3,
+    }));
+    expect(sync.closeRun).toHaveBeenCalledTimes(1);
+  });
+
+  it('persists a final-attempt crash as that resource\'s failure, not the whole mapping\'s', async () => {
+    const runner = { runMapping: jest.fn().mockRejectedValue(new Error('driver exploded')) };
+    const { sync, handle } = build({ runner, fanoutCount: 2 });
+
+    await expect(handle({ data: {
+      syncRunId: runId, integrationCompanyMappingId: mappingId, resourceId,
+    }, attemptsMade: 2, opts: { attempts: 3 } })).rejects.toThrow(/driver exploded/);
+    expect(sync.failMappingJob).not.toHaveBeenCalled();
+    expect(sync.mergeResourceResult).toHaveBeenCalledWith(expect.objectContaining({
+      resourceKey: 'devices', status: 'failed', expectedResources: 2,
+      error: 'driver exploded',
+    }));
+    expect(sync.closeRun).toHaveBeenCalledTimes(1);
+  });
+
+  it('skips a legacy job whose resource no longer exists instead of failing the mapping', async () => {
+    const { runner, sync, handle } = build({ resources: [] });
+
+    await expect(handle({ data: {
+      syncRunId: runId, integrationCompanyMappingId: mappingId, resourceId,
+    }, attemptsMade: 2, opts: { attempts: 3 } })).resolves.toBeNull();
+    expect(runner.runMapping).not.toHaveBeenCalled();
+    expect(sync.mergeResourceResult).not.toHaveBeenCalled();
+    expect(sync.failMappingJob).not.toHaveBeenCalled();
   });
 });
 

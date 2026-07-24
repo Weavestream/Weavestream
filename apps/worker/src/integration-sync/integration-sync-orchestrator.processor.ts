@@ -89,14 +89,8 @@ export class IntegrationSyncOrchestratorWorker implements OnModuleDestroy {
     // The API already created an `IntegrationSyncRun` keyed by
     // `manual:<runId>`. Pull the most recent queued/running run for
     // this integration that has the same triggeredBy + dryRun flags.
-    const run = await this.prisma.integrationSyncRun.findUnique({
-      where: { id: payload.syncRunId },
-    });
-    if (
-      !run || run.integrationId !== payload.integrationId || run.kind !== 'manual' ||
-      run.triggeredBy !== payload.triggeredBy || run.mode !== payload.mode ||
-      run.dryRun !== payload.dryRun || !['queued', 'running'].includes(run.status)
-    ) {
+    const run = await this.resolveManualRun(payload);
+    if (!run) {
       this.logger.warn(
         `No queued manual run found for integration ${payload.integrationId} — skipping orchestrator`,
       );
@@ -110,6 +104,43 @@ export class IntegrationSyncOrchestratorWorker implements OnModuleDestroy {
       throw e;
     }
     return { runId: run.id };
+  }
+
+  /**
+   * Two payload generations coexist while queues drain across an
+   * upgrade (jobs persist in Redis):
+   *   - current jobs pin their run with `syncRunId`; every claimed
+   *     attribute must match the row or the job is dropped.
+   *   - legacy jobs (pre-DAG API) carry no `syncRunId`; recover the
+   *     row the way that generation's worker did — the most recent
+   *     queued/running manual run for the same integration,
+   *     triggeredBy, and dryRun. No `mode` comparison: the field
+   *     didn't exist, so the row's own (defaulted) mode is
+   *     authoritative and `beginRun` reads it from the row anyway.
+   */
+  private async resolveManualRun(
+    payload: Extract<IntegrationSyncOrchestratorJob, { kind: 'manual' }>,
+  ) {
+    if (payload.syncRunId) {
+      const run = await this.prisma.integrationSyncRun.findUnique({
+        where: { id: payload.syncRunId },
+      });
+      const matches =
+        run && run.integrationId === payload.integrationId && run.kind === 'manual' &&
+        run.triggeredBy === payload.triggeredBy && run.mode === payload.mode &&
+        run.dryRun === payload.dryRun && ['queued', 'running'].includes(run.status);
+      return matches ? run : null;
+    }
+    return this.prisma.integrationSyncRun.findFirst({
+      where: {
+        integrationId: payload.integrationId,
+        kind: 'manual',
+        triggeredBy: payload.triggeredBy,
+        dryRun: payload.dryRun,
+        status: { in: ['queued', 'running'] },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
   }
 
   private async handleScheduled(

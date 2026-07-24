@@ -386,10 +386,15 @@ describe('integration zod schemas', () => {
       })).toMatchObject({ mode: 'full' });
     });
 
-    it('requires an exact persisted run id for every manual orchestrator delivery', () => {
-      expect(() => integrationSyncOrchestratorJobSchema.parse({
+    it('still accepts a drained pre-DAG manual delivery that carries no run id', () => {
+      // Jobs enqueued before the reconstruction release survive an upgrade
+      // in Redis; the worker resolves their run via the legacy lookup, so
+      // the schema must keep parsing them (CR-012).
+      const legacy = integrationSyncOrchestratorJobSchema.parse({
         kind: 'manual', integrationId, triggeredBy,
-      })).toThrow();
+      });
+      expect(legacy.kind === 'manual' && legacy.syncRunId).toBeUndefined();
+      expect(legacy).toMatchObject({ mode: 'incremental', dryRun: false });
     });
 
     it('leaves scheduled mode undecided unless the scheduler explicitly requests it', () => {

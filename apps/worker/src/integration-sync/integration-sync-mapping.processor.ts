@@ -88,15 +88,75 @@ export class IntegrationSyncMappingWorker implements OnModuleDestroy {
       return await this.executeMappingDag(payload, job);
     } catch (error) {
       if (isFinalAttempt(job) && !(error instanceof FinalizedMappingError)) {
-        await this.sync.failMappingJob({
-          runId: payload.syncRunId,
-          mappingId: payload.integrationCompanyMappingId,
-          error: error instanceof Error ? error.message : String(error),
-          actorId: payload.auditActorId ?? null,
-        });
+        const message = error instanceof Error ? error.message : String(error);
+        if (payload.resourceIds) {
+          await this.sync.failMappingJob({
+            runId: payload.syncRunId,
+            mappingId: payload.integrationCompanyMappingId,
+            error: message,
+            actorId: payload.auditActorId ?? null,
+          });
+        } else {
+          // Legacy per-resource job: force-failing the mapping row would
+          // desync it from the pending siblings' merge math — persist the
+          // crash as this one resource's failed outcome instead, exactly
+          // like the generation that enqueued it did.
+          await this.failLegacyResourceJob(payload, message);
+        }
       }
       throw error;
     }
+  }
+
+  private async failLegacyResourceJob(
+    payload: IntegrationSyncMappingJob,
+    message: string,
+  ): Promise<void> {
+    const run = await this.prisma.integrationSyncRun.findUnique({
+      where: { id: payload.syncRunId },
+      select: {
+        id: true,
+        triggeredBy: true,
+        integration: { select: { createdBy: true } },
+      },
+    });
+    const mapping = await this.prisma.integrationCompanyMapping.findUnique({
+      where: { id: payload.integrationCompanyMappingId },
+      select: { id: true, companyId: true, integrationId: true },
+    });
+    const resource = mapping && await this.prisma.integrationResource.findFirst({
+      where: { id: payload.resourceId, integrationId: mapping.integrationId },
+      select: { resourceKey: true },
+    });
+    // Without a resolvable (run, mapping, resource) there is no sibling
+    // arithmetic to keep truthful — the merge path would have skipped the
+    // job the same way.
+    if (!run || !mapping || !resource) return;
+    const expectedResources = await this.prisma.integrationResource.count({
+      where: {
+        integrationId: mapping.integrationId,
+        enabled: true,
+        assetLayoutId: { not: null },
+        fieldMappings: { some: {} },
+      },
+    });
+    await this.sync.mergeResourceResult({
+      runId: run.id,
+      mappingId: mapping.id,
+      resourceKey: resource.resourceKey,
+      companyId: mapping.companyId,
+      expectedResources,
+      status: 'failed',
+      totals: zeroTotals(),
+      conflicts: [
+        { kind: 'driver_error', externalId: '', message: message.slice(0, 500) },
+      ],
+      error: message.slice(0, 4_000),
+      actorId: run.triggeredBy ?? run.integration.createdBy ?? null,
+      ip: '0.0.0.0',
+      userAgent: SYSTEM_AUDIT_USER_AGENT,
+    });
+    await this.sync.closeRun(run.id, run.triggeredBy ?? null);
   }
 
   private async executeMappingDag(
@@ -118,12 +178,26 @@ export class IntegrationSyncMappingWorker implements OnModuleDestroy {
       select: { id: true, companyId: true, integrationId: true },
     });
     if (!mapping || mapping.integrationId !== run.integrationId) return null;
+    // Legacy generation: a pre-DAG orchestrator fanned out one job per
+    // (mapping, resource) with no `resourceIds`, and those jobs survive an
+    // upgrade in Redis. They must run under that generation's contract —
+    // no dependency gating (siblings run independently in parallel) and a
+    // fan-out-wide expected-resource count — or a drained queue marks
+    // mappings terminal after 1/N resources and records false
+    // `dependency_unavailable` gaps.
+    const legacy = !payload.resourceIds;
     const requestedIds = payload.resourceIds ?? [payload.resourceId];
     const resources = await this.prisma.integrationResource.findMany({
       where: { id: { in: requestedIds }, integrationId: mapping.integrationId },
       select: { id: true, resourceKey: true, dependsOnResourceKeys: true },
     });
     if (resources.length !== requestedIds.length) {
+      if (legacy) {
+        this.logger.warn(
+          `Resource ${payload.resourceId} not found for mapping ${payload.integrationCompanyMappingId} — skipping legacy job`,
+        );
+        return null;
+      }
       throw new Error('One or more mapping DAG resources do not belong to the integration.');
     }
     const selectedKeys = new Set(resources.map((resource) => resource.resourceKey));
@@ -159,7 +233,11 @@ export class IntegrationSyncMappingWorker implements OnModuleDestroy {
     const outcomes: MappingRunOutcome[] = [];
     for (const stage of orderedStages) {
       for (const resource of stage) {
-        const unavailable = resource.dependsOnResourceKeys.filter(
+        // Legacy jobs predate dependency gating: their siblings run as
+        // independent queue jobs, so deps declared on the row (possibly
+        // backfilled by a post-upgrade driver-definition refresh) must
+        // not skip the resource here.
+        const unavailable = legacy ? [] : resource.dependsOnResourceKeys.filter(
           (dependency) => !selectedKeys.has(dependency) || failedKeys.has(dependency),
         );
         let outcome: MappingRunOutcome;
@@ -192,13 +270,28 @@ export class IntegrationSyncMappingWorker implements OnModuleDestroy {
     if (retryable && !isFinalAttempt(job)) {
       throw new Error(retryable.error ?? `Resource ${retryable.resourceKey} failed.`);
     }
+    // Legacy siblings each merge one resource into the shared mapping row;
+    // the row may only reach a terminal state once every sibling reports.
+    // The count must mirror the pre-DAG orchestrator's fan-out filter
+    // exactly (its non-asset targets didn't exist yet), or drained queues
+    // close mappings early / never.
+    const expectedResources = legacy
+      ? await this.prisma.integrationResource.count({
+          where: {
+            integrationId: mapping.integrationId,
+            enabled: true,
+            assetLayoutId: { not: null },
+            fieldMappings: { some: {} },
+          },
+        })
+      : resources.length;
     for (const outcome of outcomes) {
       await this.sync.mergeResourceResult({
         runId: run.id,
         mappingId: mapping.id,
         resourceKey: outcome.resourceKey,
         companyId: mapping.companyId,
-        expectedResources: resources.length,
+        expectedResources,
         status: outcome.status,
         totals: outcome.totals,
         conflicts: outcome.conflicts,
