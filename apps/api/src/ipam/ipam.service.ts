@@ -561,10 +561,18 @@ export class IpamService {
         if (!(await this.hasEligibleIpamBinding(tx, input, 'subnet', existing.id, adoptedCanonicalTarget))) {
           return ipamBlocked(input.companyId, 'ambiguous', 'The existing subnet is not owned by an eligible reconstruction binding.', 'manual_ownership', existing.id);
         }
-        await tx.subnet.updateMany({
-          where: { id: existing.id, companyId: input.companyId },
+        const applied = await tx.subnet.updateMany({
+          where: {
+            id: existing.id,
+            companyId: input.companyId,
+            archivedAt: existing.archivedAt,
+            ...canonicalWritePremise(existing, SUBNET_CANONICAL_FIELDS),
+          },
           data: { ...data, ...(restored ? { archivedAt: null } : {}), updatedBy: input.auditActorId },
         });
+        if (applied.count === 0) {
+          return ipamBlocked(input.companyId, 'synchronization_error', 'The canonical subnet changed during reconciliation; the write was not applied.', 'canonical_write_race', existing.id);
+        }
         const row = await tx.subnet.findFirstOrThrow({
           where: { id: existing.id, companyId: input.companyId },
         });
@@ -894,10 +902,18 @@ export class IpamService {
         if (!(await this.hasEligibleIpamBinding(tx, input, 'ip_reservation', existing.id, adoptedCanonicalTarget))) {
           return ipamBlocked(input.companyId, 'ambiguous', 'The existing reservation is not owned by an eligible reconstruction binding.', 'manual_ownership', existing.id);
         }
-        await tx.ipReservation.updateMany({
-          where: { id: existing.id, companyId: input.companyId },
+        const applied = await tx.ipReservation.updateMany({
+          where: {
+            id: existing.id,
+            companyId: input.companyId,
+            subnetId: existing.subnetId,
+            ...canonicalWritePremise(existing, RESERVATION_CANONICAL_FIELDS),
+          },
           data: { ...data, updatedBy: input.auditActorId },
         });
+        if (applied.count === 0) {
+          return ipamBlocked(input.companyId, 'synchronization_error', 'The canonical reservation changed during reconciliation; the write was not applied.', 'canonical_write_race', existing.id);
+        }
         const row = await tx.ipReservation.findFirstOrThrow({
           where: { id: existing.id, companyId: input.companyId },
         });
@@ -1123,6 +1139,11 @@ const RESERVATION_CANONICAL_FIELDS: readonly CanonicalFieldPolicy<CanonicalReser
  * - the first non-null optional value becomes canonical;
  * - an absent optional assertion preserves the canonical value;
  * - two differing non-null assertions block instead of overwriting.
+ *
+ * The reconciled data is only valid against the snapshot it was derived
+ * from; integration writers re-assert that snapshot in the UPDATE's WHERE
+ * clause (see canonicalWritePremise) so a concurrent commit surfaces as a
+ * `canonical_write_race` gap instead of a lost update.
  */
 function reconcileCanonicalFields<T extends object>(
   existing: T,
@@ -1142,6 +1163,24 @@ function reconcileCanonicalFields<T extends object>(
     if (current !== next) conflicts.push(policy.path);
   }
   return { data, conflicts };
+}
+
+/**
+ * WHERE fragment re-asserting the snapshot a reconciliation was derived
+ * from. Guarding the UPDATE with it makes first-non-null adoption atomic
+ * under READ COMMITTED: a concurrent commit changes the row, the predicate
+ * matches zero rows, and the writer reports the race instead of
+ * overwriting the other source's assertion.
+ */
+function canonicalWritePremise<T extends object>(
+  existing: T,
+  policies: readonly CanonicalFieldPolicy<T>[],
+): Partial<T> {
+  const premise: Partial<T> = {};
+  for (const policy of policies) {
+    premise[policy.field] = existing[policy.field];
+  }
+  return premise;
 }
 
 function ipToUint32(ip: string): number | null {

@@ -1736,6 +1736,9 @@ model Subnet {
   canonicalCidr Unsupported("inet") @default(dbgenerated()) @map("canonical_cidr")
   prefix      Int
   vlanId      Int?      @map("vlan_id")
+  // gateway and the DHCP bounds are pinned to canonical dotted-decimal
+  // IPv4 by check constraints (migration 0065), so text equality on them
+  // is host-identity equality.
   gateway     String?
   dhcpRangeStart String? @map("dhcp_range_start")
   dhcpRangeEnd   String? @map("dhcp_range_end")
@@ -1760,6 +1763,9 @@ model IpReservation {
   id        String   @id @default(uuid()) @db.Uuid
   companyId String   @map("company_id") @db.Uuid
   subnetId  String   @map("subnet_id") @db.Uuid
+  // Pinned to canonical dotted-decimal IPv4 by a check constraint
+  // (migration 0065); the [subnetId, ipAddress] unique key therefore
+  // cannot hold alias spellings of one host.
   ipAddress String   @map("ip_address")
   label     String
   notes     String?

@@ -318,6 +318,39 @@ describe('IpamService integration system writes', () => {
     expect(wasCommitted()).toBe(false);
   });
 
+  it('blocks instead of overwriting when the canonical subnet changes mid-write', async () => {
+    const { service, audit, tx } = setup({ subnet: subnetRow(), binding: binding('subnet') });
+    tx.subnet.updateMany.mockResolvedValue({ count: 0 });
+
+    await expect(service.writeSubnetFromIntegration({
+      ...subnetInput,
+      existingTargetId: ids.subnet,
+      description: 'race description',
+      tx: tx as never,
+    })).resolves.toMatchObject({
+      targetId: ids.subnet,
+      change: 'blocked',
+      gap: {
+        kind: 'synchronization_error',
+        details: { reasonCode: 'canonical_write_race' },
+      },
+    });
+    expect(tx.subnet.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          id: ids.subnet,
+          name: 'LAN',
+          cidr: '10.0.0.0/24',
+          vlanId: null,
+          gateway: '10.0.0.1',
+          description: null,
+          archivedAt: null,
+        }),
+      }),
+    );
+    expect(audit.logWithClient).not.toHaveBeenCalled();
+  });
+
   it('rejects an arbitrary existing subnet before mutation', async () => {
     const { service, tx } = setup({ subnet: subnetRow({ name: 'Manual LAN' }) });
     await expect(service.writeSubnetFromIntegration({
@@ -404,7 +437,11 @@ describe('IpamService integration system writes', () => {
     })).resolves.toEqual({ targetId: ids.subnet, companyId: ids.company, change: 'restored' });
     expect(tx.subnet.create).not.toHaveBeenCalled();
     expect(tx.subnet.updateMany).toHaveBeenCalledWith(expect.objectContaining({
-      where: { id: ids.subnet, companyId: ids.company },
+      where: expect.objectContaining({
+        id: ids.subnet,
+        companyId: ids.company,
+        archivedAt: new Date('2026-07-02T00:00:00.000Z'),
+      }),
       data: expect.objectContaining({ archivedAt: null, cidr: '10.0.0.0/24' }),
     }));
   });
@@ -499,7 +536,12 @@ describe('IpamService integration system writes', () => {
     ).resolves.toMatchObject({ targetId: ids.subnet, change: 'updated' });
     expect(tx.subnet.updateMany).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { id: ids.subnet, companyId: ids.company },
+        where: expect.objectContaining({
+          id: ids.subnet,
+          companyId: ids.company,
+          name: 'LAN',
+          cidr: '10.0.0.0/24',
+        }),
         data: expect.objectContaining({ name: 'Renamed LAN', cidr: '10.1.0.0/24' }),
       }),
     );
@@ -896,7 +938,11 @@ describe('IpamService integration system writes', () => {
     ).resolves.toMatchObject({ targetId: ids.reservation, change: 'updated' });
     expect(tx.ipReservation.updateMany).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { id: ids.reservation, companyId: ids.company },
+        where: expect.objectContaining({
+          id: ids.reservation,
+          companyId: ids.company,
+          ipAddress: '10.0.0.50',
+        }),
         data: expect.objectContaining({ ipAddress: '10.0.0.51' }),
       }),
     );
@@ -1001,6 +1047,49 @@ describe('IpamService integration system writes', () => {
       },
     });
     expect(tx.ipReservation.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('blocks instead of overwriting when the canonical reservation changes mid-write', async () => {
+    const { service, audit, tx } = setup({
+      subnet: subnetRow(),
+      reservation: reservationRow(),
+      binding: binding('ip_reservation'),
+    });
+    tx.ipReservation.updateMany.mockResolvedValue({ count: 0 });
+
+    await expect(service.writeReservationFromIntegration({
+      companyId: ids.company,
+      integrationId: ids.integration,
+      integrationCompanyMappingId: ids.mapping,
+      resourceId: ids.resource,
+      externalId: 'org:reservations:printer',
+      auditActorId: ids.actor,
+      dryRun: false,
+      existingTargetId: ids.reservation,
+      subnetId: ids.subnet,
+      ipAddress: '10.0.0.50',
+      label: 'Renamed Printer',
+      tx: tx as never,
+    })).resolves.toMatchObject({
+      targetId: ids.reservation,
+      change: 'blocked',
+      gap: {
+        kind: 'synchronization_error',
+        details: { reasonCode: 'canonical_write_race' },
+      },
+    });
+    expect(tx.ipReservation.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          id: ids.reservation,
+          subnetId: ids.subnet,
+          ipAddress: '10.0.0.50',
+          label: 'Printer',
+          notes: null,
+        }),
+      }),
+    );
+    expect(audit.logWithClient).not.toHaveBeenCalled();
   });
 
   it('blocks a later page from changing a reservation after canonical sharing', async () => {
