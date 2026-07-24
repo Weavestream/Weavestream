@@ -19,11 +19,16 @@ import {
   LayoutSwatch,
   MobileCardRow,
   Panel,
+  ShowMore,
   Tag,
   Textarea,
   type DataColumn,
 } from '../../../../../../components/ui';
 import { AddressGrid } from '../address-grid';
+import {
+  ProvenanceBadge,
+  provenanceAttention,
+} from '../../../../../../components/integrations/provenance-badge';
 
 type Tab = 'occupants' | 'reservations' | 'grid';
 
@@ -372,6 +377,8 @@ export function SubnetDetailView({
           <div
             style={{
               width: `${pct}%`,
+              // keep non-zero usage visible even when it rounds to 0%
+              minWidth: utilization.claimed > 0 ? 4 : undefined,
               height: '100%',
               borderRadius: 5,
               background:
@@ -647,6 +654,17 @@ export function SubnetDetailView({
           dhcpRangeEnd={subnet.dhcpRangeEnd}
           companyId={companyId}
         />
+      )}
+
+      {detail.provenance.length > 0 && (
+        <ShowMore attention={provenanceAttention(detail.provenance)}>
+          {detail.provenance.map((provenance) => (
+            <ProvenanceBadge
+              key={`${provenance.integrationId}:${provenance.resourceId}`}
+              provenance={provenance}
+            />
+          ))}
+        </ShowMore>
       )}
 
       {resDialog && (

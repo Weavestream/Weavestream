@@ -356,7 +356,7 @@ function VaultArchiveWizard() {
         <Field
           label="PDF password (optional)"
           htmlFor="pdf-password"
-          help="If set, the PDF is AES-encrypted and requires this password to open."
+          help="If set, the PDF is AES-256-encrypted and requires this password to open. Protection is only as strong as the password you choose."
         >
           <Input
             id="pdf-password"

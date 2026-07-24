@@ -19,6 +19,7 @@ import { RichTextView } from '../../../../../components/editor/rich-text-view';
 import { AttachmentsPanel } from '../../../../../components/upload/attachments-panel';
 import { CredentialsPanel } from '../../../../../components/passwords/credentials-panel';
 import { vaultLinkLabel, vaultLinkUrl } from '../../../../../lib/vault-link';
+import { SidebarActive } from '../../../../../components/shell/sidebar-active';
 
 /**
  * Portal asset detail (read-only mirror of the admin page).
@@ -79,6 +80,7 @@ export default async function PortalAssetDetailPage({
 
   return (
     <>
+      <SidebarActive id={`layout:${asset.assetLayoutId}`} />
       <PageHeader
         crumbs={[
           { label: company.name, href: portalBase },
@@ -119,7 +121,7 @@ export default async function PortalAssetDetailPage({
               <div
                 style={{
                   display: 'grid',
-                  gridTemplateColumns: '140px minmax(0, 1fr)',
+                  gridTemplateColumns: '180px minmax(0, 1fr)',
                   gap: '10px 20px',
                 }}
               >

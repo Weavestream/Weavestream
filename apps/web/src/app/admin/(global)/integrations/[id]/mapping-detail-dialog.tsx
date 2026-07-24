@@ -57,7 +57,9 @@ export function MappingDetailDialog({
       const problem = res.problem as
         | { detail?: string; title?: string }
         | undefined;
-      setError(problem?.detail ?? problem?.title ?? 'Could not save mapping.');
+      const message = problem?.detail ?? problem?.title ?? 'Could not save mapping.';
+      setError(message);
+      toast.push(message, 'danger');
       return;
     }
     toast.push('Mapping saved.', 'ok');

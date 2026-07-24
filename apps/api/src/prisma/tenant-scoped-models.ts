@@ -52,6 +52,9 @@ export const TENANT_SCOPED_MODELS = new Set<string>([
   'IntegrationCompanyMapping',
   'IntegrationSyncRunCompanyResult',
   'IntegrationSyncRecord',
+  'IntegrationSyncCheckpoint',
+  'IntegrationReconstructionSummary',
+  'IntegrationReconstructionGap',
   // IPAM: company-scoped subnet registry and manual IP reservations.
   'Subnet',
   'IpReservation',
@@ -109,7 +112,12 @@ export function assertTenantScope(
 
   const isWrite = WRITE_ACTIONS.has(params.action);
   const where = (params.args['where'] ?? {}) as Record<string, unknown>;
-  const data = (params.args['data'] ?? {}) as Record<string, unknown>;
+  // `createMany` carries `data` as an array of rows; every row must be
+  // scoped on its own. Single-payload actions normalise to a one-row
+  // array so both shapes share the extraction below.
+  const dataRows: Array<Record<string, unknown>> = Array.isArray(params.args['data'])
+    ? (params.args['data'] as Array<Record<string, unknown>>)
+    : [(params.args['data'] ?? {}) as Record<string, unknown>];
   // `upsert` splits its payload into `create` / `update` instead of a
   // single `data` object; either side carrying a valid companyId is
   // sufficient to scope the row.
@@ -132,12 +140,27 @@ export function assertTenantScope(
   const scopeFromWhere = extractCompanyIds(where['companyId']);
   const scopeFromData = isWrite
     ? [
-        ...extractCompanyIds(data['companyId']),
+        ...dataRows.flatMap((row) => extractCompanyIds(row['companyId'])),
         ...extractCompanyIds(create['companyId']),
         ...extractCompanyIds(update['companyId']),
       ]
     : [];
   const candidates = isWrite ? scopeFromData.concat(scopeFromWhere) : scopeFromWhere;
+
+  // A createMany call has no `where` to fall back on, so a single row
+  // without a companyId fails the whole call (closed) — one in-scope
+  // sibling must not vouch for a row the middleware cannot see.
+  if (
+    isWrite &&
+    Array.isArray(params.args['data']) &&
+    dataRows.some((row) => extractCompanyIds(row['companyId']).length === 0)
+  ) {
+    throw new TenantScopeViolationError(
+      params.model,
+      params.action,
+      'a createMany row is missing companyId',
+    );
+  }
 
   if (candidates.length === 0) {
     throw new TenantScopeViolationError(

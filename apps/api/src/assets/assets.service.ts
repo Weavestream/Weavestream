@@ -5,6 +5,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { createHash } from 'node:crypto';
 import type {
   Prisma,
   Asset,
@@ -18,9 +19,12 @@ import type {
   UpdateAssetInput,
   UserRole,
 } from '@weavestream/shared';
+import type { IntegrationTargetProvenance } from '@weavestream/shared';
+import { readTargetProvenance } from '../integrations/reconstruction/integration-provenance.service.js';
 import { FILTERABLE_FIELD_TYPES } from '@weavestream/shared';
 import type { FileFieldEntry } from '@weavestream/shared';
 import { PrismaService } from '../prisma/prisma.service.js';
+import { isUniqueConstraintError } from '../prisma/prisma-errors.js';
 import { AuditLogService } from '../audit/audit.service.js';
 import { FieldTypesRegistry } from '../field-types/field-types.registry.js';
 import { RelationsService } from '../relations/relations.service.js';
@@ -31,11 +35,151 @@ import { StarsService } from '../stars/stars.service.js';
 import { TagsService } from '../tags/tags.service.js';
 import { buildAssetZodSchema } from './build-asset-schema.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
+import { expandMatchValueVariants } from '../integrations/match-resolver.service.js';
+import { hasEligibleNativeBinding } from '../integrations/reconstruction/native-binding-ownership.js';
 
 export interface AuditMeta {
   ip: string;
   userAgent: string;
 }
+
+/**
+ * Write-side field checksum recorded into
+ * `IntegrationSyncRecord.lastSyncedFieldChecksums`. Exported so readers
+ * (company export, WS-CR-019) can verify field-level integration
+ * authorship against the exact algorithm the writer used.
+ */
+export function assetFieldChecksum(value: unknown): string {
+  return createHash('sha256').update(JSON.stringify(value ?? null)).digest('hex');
+}
+
+export function classifyIntegrationAssetChange(input: {
+  exists: boolean;
+  restored: boolean;
+  identityChanged: boolean;
+  fieldsChanged: boolean;
+}): IntegrationAssetWriteResult['change'] {
+  if (!input.exists) return 'created';
+  if (input.restored) return 'restored';
+  return input.identityChanged || input.fieldsChanged ? 'updated' : 'unchanged';
+}
+
+function integrationAssetBlocked(
+  companyId: string,
+  kind: 'missing_dependency' | 'validation' | 'ambiguous' | 'synchronization_error',
+  message: string,
+  reasonCode: string,
+  targetId = '',
+): IntegrationAssetWriteResult {
+  return {
+    targetId,
+    companyId,
+    change: 'blocked',
+    gap: { kind, message, details: { reasonCode } },
+  };
+}
+
+export interface IntegrationAssetWriteInput {
+  tx?: Prisma.TransactionClient;
+  companyId: string;
+  integrationId: string;
+  integrationCompanyMappingId: string;
+  resourceId: string;
+  auditActorId: string;
+  dryRun: boolean;
+  externalId: string;
+  externalSource?: string;
+  existingTargetId?: string | null;
+  ownershipBinding?: { resourceId: string; externalId: string };
+  name: string;
+  assetLayoutId: string;
+  matchKeyFieldIds: string[];
+  fieldValues: Array<{
+    targetFieldId: string;
+    value: unknown;
+    syncDirection: 'source_wins' | 'preserve_manual' | 'manual_only';
+  }>;
+  previousFieldChecksums: Readonly<Record<string, string>>;
+}
+
+function legacyIntegrationExternalSource(
+  input: IntegrationAssetWriteInput,
+): string | null {
+  return input.externalSource === `breeze:${input.integrationId}`
+    ? 'breeze'
+    : null;
+}
+
+/**
+ * Raised when one of the partial unique indexes on
+ * (companyId, externalSource, externalId) — migration 0062 — rejects a
+ * write that raced another identity claim past `assertExternalIdFree`.
+ * Carries no payload; each catch site translates it for its write mode.
+ */
+class AssetExternalIdentityConflictError extends Error {
+  constructor() {
+    super('Another asset claimed this external identity concurrently.');
+  }
+}
+
+/** The 409 payload shape shared by the pre-check and the index backstop. */
+function externalIdTakenConflict(
+  externalId: string,
+  externalSource: string | null,
+): ConflictException {
+  return new ConflictException({
+    error: 'ExternalIdTaken',
+    externalId,
+    externalSource,
+    message: `Another asset already carries external id "${externalId}".`,
+  });
+}
+
+/**
+ * Outcome for an integration write that lost an identity race to a
+ * concurrent writer. Under a caller-provided transaction the unique
+ * violation has already aborted the surrounding page transaction, so a
+ * re-read is impossible — report a retryable synchronization gap; the
+ * runner rolls the page back and the next run resolves against the
+ * winner (or lands on the pre-check's `manual_ownership`/409 block if
+ * the conflict persists). Standalone writes retry from a fresh read.
+ */
+function integrationIdentityConflictResult(
+  input: IntegrationAssetWriteInput,
+): IntegrationAssetWriteResult | 'revision_conflict' {
+  if (!input.tx) return 'revision_conflict';
+  return integrationAssetBlocked(
+    input.companyId,
+    'synchronization_error',
+    'Another asset claimed this external identity while reconstruction was writing.',
+    'external_identity_conflict',
+  );
+}
+
+export interface IntegrationAssetWriteResult {
+  targetId: string;
+  companyId: string;
+  change: 'created' | 'updated' | 'unchanged' | 'restored' | 'blocked';
+  fieldChecksums?: Record<string, string>;
+  gap?: {
+    kind: 'missing_dependency' | 'validation' | 'ambiguous' | 'synchronization_error';
+    message: string;
+    details?: { reasonCode?: string; candidateCount?: number };
+  };
+}
+
+const INTEGRATION_AUDIT_META: AuditMeta = {
+  ip: '0.0.0.0',
+  userAgent: 'weavestream-worker/integration-reconstruction',
+};
+
+/**
+ * Guarded-attempt budget for `writeFromIntegration` when a concurrent
+ * operator write invalidates the observed asset snapshot. A retry
+ * costs one re-read and re-merge; exhaustion is reported as a
+ * `synchronization_error` gap so the next sync run tries again.
+ */
+const INTEGRATION_WRITE_MAX_ATTEMPTS = 3;
 
 export interface AssetListOptions {
   layoutId?: string;
@@ -95,9 +239,10 @@ export interface SerializedAsset {
     integrationName: string;
     driver: string;
     resourceKey: string;
-    externalId: string;
     lastSyncedAt: Date;
   }>;
+  /** Safe, tenant-scoped reconstruction provenance for the exact native target. */
+  provenance: IntegrationTargetProvenance[];
   fieldValues: Record<string, unknown>;
   fields: Array<{
     id: string;
@@ -286,6 +431,11 @@ export class AssetsService {
     await this.hydrateTagFields([serialized]);
     await this.hydrateActors([serialized]);
     await this.hydrateSyncMetadata(companyId, [serialized]);
+    serialized.provenance = await readTargetProvenance(this.prisma, {
+      companyId,
+      targetKind: 'asset',
+      targetId: id,
+    });
     return serialized;
   }
 
@@ -314,17 +464,29 @@ export class AssetsService {
     }
 
     const asset = await this.prisma.$transaction(async (tx) => {
-      const created = await tx.asset.create({
-        data: {
-          companyId,
-          assetLayoutId: layout.id,
-          name,
-          externalId: input.externalId ?? null,
-          externalSource: input.externalSource ?? null,
-          createdBy: actor.id,
-          updatedBy: actor.id,
-        },
-      });
+      let created: Asset;
+      try {
+        created = await tx.asset.create({
+          data: {
+            companyId,
+            assetLayoutId: layout.id,
+            name,
+            externalId: input.externalId ?? null,
+            externalSource: input.externalSource ?? null,
+            createdBy: actor.id,
+            updatedBy: actor.id,
+          },
+        });
+      } catch (error) {
+        // Backstop for the `assertExternalIdFree` pre-check above: the
+        // 0062 partial identity indexes reject a concurrent claim of the
+        // same external identity. Surface the same 409 as the pre-check
+        // rather than a 500.
+        if (input.externalId && isUniqueConstraintError(error)) {
+          throw externalIdTakenConflict(input.externalId, input.externalSource ?? null);
+        }
+        throw error;
+      }
 
       await this.persistFieldValues(
         tx,
@@ -394,15 +556,21 @@ export class AssetsService {
 
     await this.assertUniqueValues(layout, companyId, validated, id);
 
-    if (input.externalId !== undefined) {
-      if (input.externalId !== null) {
-        await this.assertExternalIdFree(
-          companyId,
-          input.externalId,
-          input.externalSource ?? existing.externalSource,
-          id,
-        );
-      }
+    // The identity pair this update would leave on the row. A
+    // source-only change (external_source moves while external_id is
+    // untouched) can collide just like an external_id change, so the
+    // pre-check compares the resulting pair, not just the incoming id.
+    const nextExternalId =
+      input.externalId !== undefined ? input.externalId : existing.externalId;
+    const nextExternalSource =
+      input.externalSource !== undefined
+        ? input.externalSource
+        : existing.externalSource;
+    if (
+      nextExternalId !== null &&
+      (input.externalId !== undefined || input.externalSource !== undefined)
+    ) {
+      await this.assertExternalIdFree(companyId, nextExternalId, nextExternalSource, id);
     }
 
     const primaryField = layout.fields.find((f) => f.isPrimary && f.archivedAt === null);
@@ -431,17 +599,27 @@ export class AssetsService {
       // supplied" guard. The `{ id, companyId }` pair also defends
       // against a cross-tenant id collision (cheap belt-and-suspenders
       // on top of the `findFirst` pre-check above).
-      await tx.asset.updateMany({
-        where: { id, companyId },
-        data: {
-          name: nextName,
-          ...(input.externalId !== undefined ? { externalId: input.externalId } : {}),
-          ...(input.externalSource !== undefined
-            ? { externalSource: input.externalSource }
-            : {}),
-          updatedBy: actor.id,
-        },
-      });
+      try {
+        await tx.asset.updateMany({
+          where: { id, companyId },
+          data: {
+            name: nextName,
+            ...(input.externalId !== undefined ? { externalId: input.externalId } : {}),
+            ...(input.externalSource !== undefined
+              ? { externalSource: input.externalSource }
+              : {}),
+            updatedBy: actor.id,
+          },
+        });
+      } catch (error) {
+        // Backstop for the `assertExternalIdFree` pre-check above — only
+        // an update whose resulting identity pair is non-null can trip
+        // the 0062 partial indexes.
+        if (nextExternalId != null && isUniqueConstraintError(error)) {
+          throw externalIdTakenConflict(nextExternalId, nextExternalSource);
+        }
+        throw error;
+      }
       await this.persistFieldValues(tx, layout, id, companyId, validated, actor.id, meta);
       await this.linkFileFieldUploadsToAsset(tx, companyId, id, layout, validated);
       // Phase 6: rewrite the denormalised plaintext so the asset's
@@ -473,6 +651,474 @@ export class AssetsService {
     });
 
     return this.get(actor, companyId, id);
+  }
+
+  /**
+   * Explicit non-request asset write used by reconstruction workers.
+   * It shares layout/field validation and persistence with interactive
+   * writes but receives a real audit actor and company scope directly.
+   * Bound updates are optimistic: each attempt merges against the row
+   * (and field values) it read and the UPDATE refuses (in its WHERE
+   * clause) if the row moved, so a concurrent operator edit is never
+   * overwritten or misclassified from a stale snapshot. External
+   * identity is additionally backed by the 0062 partial unique indexes:
+   * a create or identity adoption that races past `assertExternalIdFree`
+   * surfaces as a retryable `external_identity_conflict` gap instead of
+   * a duplicate row.
+   */
+  async writeFromIntegration(
+    input: IntegrationAssetWriteInput,
+  ): Promise<IntegrationAssetWriteResult> {
+    const readClient = input.tx ?? this.prisma;
+    await this.audit.assertIntegrationActor(input.auditActorId, input.companyId);
+    const layout = await this.loadLayout(input.assetLayoutId, readClient);
+    if (layout.archivedAt) {
+      return integrationAssetBlocked(input.companyId, 'validation', 'The asset layout is archived.', 'layout_archived');
+    }
+    const fieldById = new Map(layout.fields.map((field) => [field.id, field]));
+    if (
+      input.matchKeyFieldIds.some((id) => !fieldById.has(id)) ||
+      input.fieldValues.some((entry) => !fieldById.has(entry.targetFieldId))
+    ) {
+      return integrationAssetBlocked(input.companyId, 'validation', 'A configured asset field is not part of the target layout.', 'field_layout_mismatch');
+    }
+
+    const writableBySlug: Record<string, unknown> = {};
+    const directionByFieldId = new Map<string, IntegrationAssetWriteInput['fieldValues'][number]>();
+    for (const entry of input.fieldValues) {
+      if (directionByFieldId.has(entry.targetFieldId)) {
+        return integrationAssetBlocked(input.companyId, 'validation', 'An asset field is mapped more than once.', 'duplicate_target_field');
+      }
+      directionByFieldId.set(entry.targetFieldId, entry);
+      if (entry.syncDirection !== 'manual_only') {
+        writableBySlug[fieldById.get(entry.targetFieldId)!.slug] = entry.value;
+      }
+    }
+    const normalizedForMatch = this.validateValues(
+      layout,
+      writableBySlug,
+      'SUPER_ADMIN',
+      'update',
+    );
+
+    for (let attempt = 0; attempt < INTEGRATION_WRITE_MAX_ATTEMPTS; attempt += 1) {
+      let result: IntegrationAssetWriteResult | 'revision_conflict';
+      try {
+        result = await this.attemptIntegrationAssetWrite(input, {
+          layout,
+          fieldById,
+          directionByFieldId,
+          writableBySlug,
+          normalizedForMatch,
+        });
+      } catch (error) {
+        if (!(error instanceof AssetExternalIdentityConflictError)) throw error;
+        const conflict = integrationIdentityConflictResult(input);
+        // Terminal under a caller transaction (already aborted by the
+        // unique violation — no further statements may run on it);
+        // standalone attempts re-enter the loop against a fresh read.
+        if (conflict !== 'revision_conflict') return conflict;
+        continue;
+      }
+      if (result !== 'revision_conflict') return result;
+    }
+    return integrationAssetBlocked(
+      input.companyId,
+      'synchronization_error',
+      'The asset was modified concurrently while reconstruction was writing it.',
+      'target_revision_conflict',
+      input.existingTargetId ?? '',
+    );
+  }
+
+  /**
+   * One guarded attempt of the integration asset write. The
+   * `preserve_manual` checksum gate, the identity/restore diff, and the
+   * per-field merge are computed from the `target` row (and its field
+   * values) read here, and the UPDATE pins that observed snapshot
+   * (`archivedAt`, `updatedAt`) in its WHERE clause.
+   * `'revision_conflict'` reports a zero-row match — the asset changed
+   * after the read (operator field edit, rename, archive, or restore) —
+   * and `writeFromIntegration` retries from a fresh read. Identity
+   * unique-violations (0062) throw `AssetExternalIdentityConflictError`
+   * through the — now aborted — transaction; the attempt loop in
+   * `writeFromIntegration` translates them per write mode.
+   */
+  private async attemptIntegrationAssetWrite(
+    input: IntegrationAssetWriteInput,
+    prepared: {
+      layout: LayoutWithFields;
+      fieldById: Map<string, AssetField>;
+      directionByFieldId: Map<string, IntegrationAssetWriteInput['fieldValues'][number]>;
+      writableBySlug: Record<string, unknown>;
+      normalizedForMatch: Record<string, unknown>;
+    },
+  ): Promise<IntegrationAssetWriteResult | 'revision_conflict'> {
+    const runTransaction = <T>(callback: (tx: Prisma.TransactionClient) => Promise<T>) =>
+      input.tx ? callback(input.tx) : this.prisma.$transaction(callback);
+    const readClient = input.tx ?? this.prisma;
+    const { layout, fieldById, directionByFieldId, writableBySlug, normalizedForMatch } = prepared;
+    const resolution = await this.resolveIntegrationAssetTarget(
+      input,
+      layout,
+      normalizedForMatch,
+      readClient,
+    );
+    if (resolution.ambiguous) {
+      return integrationAssetBlocked(
+        input.companyId,
+        'ambiguous',
+        'Multiple assets match the configured asset keys.',
+        'ambiguous_match',
+      );
+    }
+    const target = resolution.target;
+    if (input.existingTargetId && !target) {
+      return integrationAssetBlocked(
+        input.companyId,
+        'missing_dependency',
+        'The bound asset no longer exists.',
+        'target_not_found',
+        input.existingTargetId,
+      );
+    }
+    if (target?.companyId !== undefined && target.companyId !== input.companyId) {
+      return { targetId: target.id, companyId: target.companyId, change: 'blocked' };
+    }
+    if (target && target.assetLayoutId !== input.assetLayoutId) {
+      return integrationAssetBlocked(input.companyId, 'validation', 'The bound asset uses a different layout.', 'target_layout_mismatch', target.id);
+    }
+
+    const normalized = this.validateValues(
+      layout,
+      writableBySlug,
+      'SUPER_ADMIN',
+      target ? 'update' : 'write',
+    );
+    const fieldChecksums: Record<string, string> = {};
+    const valuesToWrite: Record<string, unknown> = {};
+    const existingValues = target
+      ? this.currentValuesAsMap(layout, target.fieldValues)
+      : {};
+    for (const [fieldId, entry] of directionByFieldId) {
+      const field = fieldById.get(fieldId)!;
+      const stored = existingValues[field.slug];
+      const storedChecksum = assetFieldChecksum(stored);
+      if (entry.syncDirection === 'manual_only') continue;
+      const previousChecksum = input.previousFieldChecksums[fieldId];
+      if (
+        entry.syncDirection === 'preserve_manual' &&
+        stored !== null &&
+        stored !== undefined &&
+        previousChecksum !== undefined &&
+        previousChecksum !== storedChecksum
+      ) {
+        // The recorded baseline stays the last integration-authored
+        // checksum. Recording the manual value's checksum instead would
+        // adopt the operator edit as "last synced", so the next run to
+        // reach this path would see no edit and overwrite it —
+        // preserve_manual retains the operator value until the operator
+        // reverts the field to the last synced value themselves.
+        fieldChecksums[fieldId] = previousChecksum;
+        continue;
+      }
+      const value = normalized[field.slug];
+      valuesToWrite[field.slug] = value;
+      fieldChecksums[fieldId] = assetFieldChecksum(value);
+    }
+    await this.assertUniqueValues(
+      layout,
+      input.companyId,
+      valuesToWrite,
+      target?.id ?? null,
+      readClient,
+    );
+
+    const legacyExternalSource = legacyIntegrationExternalSource(input);
+    const sameIdentity =
+      !target ||
+      target.externalSource === null ||
+      (target.externalId === input.externalId &&
+        (target.externalSource === (input.externalSource ?? null) ||
+          target.externalSource === legacyExternalSource));
+    const identityChanged =
+      !!target &&
+      sameIdentity &&
+      (target.name !== input.name ||
+        target.externalId !== input.externalId ||
+        target.externalSource !== (input.externalSource ?? null));
+    const restored = target?.archivedAt != null;
+    if (
+      target &&
+      sameIdentity &&
+      (target.externalId !== input.externalId ||
+        target.externalSource !== (input.externalSource ?? null))
+    ) {
+      await this.assertExternalIdFree(
+        input.companyId,
+        input.externalId,
+        input.externalSource ?? null,
+        target.id,
+        readClient,
+      );
+    }
+    // Classification must stay read-only until the optimistic guard has
+    // matched. TAGS pre-resolution can create global Tag rows and audit
+    // entries, so running the side-effecting canonicalizer before the guard
+    // would commit orphan side effects when an attempt loses the race.
+    const classificationValues =
+      target || input.dryRun
+        ? await this.canonicalizeFieldValuesForDryRun(
+            layout,
+            valuesToWrite,
+            readClient,
+          )
+        : null;
+    if (input.dryRun) {
+      if (target && !(await this.hasEligibleAssetBinding(readClient, input, target.id))) {
+        return integrationAssetBlocked(input.companyId, 'ambiguous', 'The existing asset is not owned by an eligible reconstruction binding.', 'manual_ownership', target.id);
+      }
+      const dryRunValues = classificationValues!;
+      const fieldsChanged = Object.entries(dryRunValues).some(
+        ([slug, value]) => assetFieldChecksum(existingValues[slug]) !== assetFieldChecksum(value),
+      );
+      this.updateIntegrationFieldChecksums(
+        directionByFieldId,
+        fieldById,
+        valuesToWrite,
+        dryRunValues,
+        fieldChecksums,
+      );
+      return {
+        targetId: target?.id ?? '',
+        companyId: input.companyId,
+        change: classifyIntegrationAssetChange({
+          exists: !!target,
+          restored,
+          identityChanged,
+          fieldsChanged,
+        }),
+        fieldChecksums,
+      };
+    }
+
+    let change: IntegrationAssetWriteResult['change'];
+    let targetId: string;
+    if (!target) {
+      await this.assertExternalIdFree(
+        input.companyId,
+        input.externalId,
+        input.externalSource ?? null,
+        null,
+        readClient,
+      );
+      const created = await runTransaction(async (tx) => {
+        const canonicalValues = await this.canonicalizeFieldValues(
+          tx,
+          layout,
+          valuesToWrite,
+          input.auditActorId,
+          INTEGRATION_AUDIT_META,
+        );
+        let row: Asset;
+        try {
+          row = await tx.asset.create({
+            data: {
+              companyId: input.companyId,
+              assetLayoutId: input.assetLayoutId,
+              name: input.name,
+              externalId: input.externalId,
+              externalSource: input.externalSource ?? null,
+              createdBy: input.auditActorId,
+              updatedBy: input.auditActorId,
+            },
+          });
+        } catch (error) {
+          // The only unique constraints on `assets` are the uuid primary
+          // key and the 0062 partial identity indexes, so a P2002 from
+          // this statement is a lost identity race — not a tag or field
+          // conflict from elsewhere in the transaction. Rethrown through
+          // the (possibly caller-provided) transaction to the attempt
+          // loop, which must not issue further statements on it.
+          if (isUniqueConstraintError(error)) {
+            throw new AssetExternalIdentityConflictError();
+          }
+          throw error;
+        }
+        await this.persistFieldValues(
+          tx,
+          layout,
+          row.id,
+          input.companyId,
+          canonicalValues,
+          input.auditActorId,
+          INTEGRATION_AUDIT_META,
+          true,
+        );
+        await this.linkFileFieldUploadsToAsset(tx, input.companyId, row.id, layout, canonicalValues);
+        await this.searchIndex.upsertAsset(tx, row.id);
+        await this.audit.logWithClient(tx, {
+          actorId: input.auditActorId,
+          action: 'integration.asset.created',
+          entityType: 'Asset',
+          entityId: row.id,
+          companyId: input.companyId,
+          ip: INTEGRATION_AUDIT_META.ip,
+          userAgent: INTEGRATION_AUDIT_META.userAgent,
+          after: { integrationId: input.integrationId, change: 'created' },
+        });
+        return { row, canonicalValues };
+      });
+      targetId = created.row.id;
+      this.updateIntegrationFieldChecksums(
+        directionByFieldId,
+        fieldById,
+        valuesToWrite,
+        created.canonicalValues,
+        fieldChecksums,
+      );
+      change = 'created';
+    } else {
+      targetId = target.id;
+      const outcome = await runTransaction(async (tx) => {
+        if (!(await this.hasEligibleAssetBinding(tx, input, target.id))) {
+          return { status: 'blocked' as const };
+        }
+        let canonicalValues = classificationValues!;
+        const fieldsChanged = Object.entries(canonicalValues).some(
+          ([slug, value]) => assetFieldChecksum(existingValues[slug]) !== assetFieldChecksum(value),
+        );
+        const plannedChange = classifyIntegrationAssetChange({
+          exists: true,
+          restored,
+          identityChanged,
+          fieldsChanged,
+        });
+        if (plannedChange !== 'unchanged') {
+          let guarded: Prisma.BatchPayload;
+          try {
+            guarded = await tx.asset.updateMany({
+              where: {
+                id: target!.id,
+                companyId: input.companyId,
+                // Optimistic-concurrency guard riding the WHERE clause —
+                // the `update()` idiom. Asset has no `revision` column, so
+                // the guard pins `updatedAt` (Prisma bumps it on every
+                // client write, and interactive edits always touch the
+                // asset row even for field-only saves) plus `archivedAt`
+                // for the restore classification. Zero rows means the
+                // `preserve_manual` checksum gate and the identity/field
+                // diff above were derived from a stale snapshot; the
+                // caller re-reads instead of overwriting a newer operator
+                // edit.
+                archivedAt: target!.archivedAt,
+                updatedAt: target!.updatedAt,
+              },
+              data: {
+                ...(restored ? { archivedAt: null } : {}),
+                ...(sameIdentity
+                  ? {
+                      name: input.name,
+                      externalId: input.externalId,
+                      externalSource: input.externalSource ?? null,
+                    }
+                  : {}),
+                updatedBy: input.auditActorId,
+              },
+            });
+          } catch (error) {
+            // A `sameIdentity` write may adopt an (externalId,
+            // externalSource) pair another asset claimed after
+            // `assertExternalIdFree` ran — the 0062 partial indexes
+            // reject the stale adoption. Rethrown to the attempt loop;
+            // the transaction is aborted and must not be reused.
+            if (sameIdentity && isUniqueConstraintError(error)) {
+              throw new AssetExternalIdentityConflictError();
+            }
+            throw error;
+          }
+          if (guarded.count === 0) {
+            return { status: 'conflict' as const };
+          }
+          // Side-effecting field resolution is safe only after the guarded
+          // row update succeeds. If this creates a global Tag, the tag, its
+          // audit row, and the asset field write now share the successful
+          // transaction outcome.
+          canonicalValues = await this.canonicalizeFieldValues(
+            tx,
+            layout,
+            valuesToWrite,
+            input.auditActorId,
+            INTEGRATION_AUDIT_META,
+          );
+          await this.persistFieldValues(
+            tx,
+            layout,
+            target!.id,
+            input.companyId,
+            canonicalValues,
+            input.auditActorId,
+            INTEGRATION_AUDIT_META,
+            true,
+          );
+          await this.linkFileFieldUploadsToAsset(tx, input.companyId, target!.id, layout, canonicalValues);
+          await this.searchIndex.upsertAsset(tx, target!.id);
+          await this.audit.logWithClient(tx, {
+            actorId: input.auditActorId,
+            action: 'integration.asset.updated',
+            entityType: 'Asset',
+            entityId: target!.id,
+            companyId: input.companyId,
+            ip: INTEGRATION_AUDIT_META.ip,
+            userAgent: INTEGRATION_AUDIT_META.userAgent,
+            after: { integrationId: input.integrationId, change: plannedChange },
+          });
+        }
+        return { status: 'written' as const, change: plannedChange, canonicalValues };
+      });
+      if (outcome.status === 'blocked') {
+        return integrationAssetBlocked(input.companyId, 'ambiguous', 'The existing asset is not owned by an eligible reconstruction binding.', 'manual_ownership', target.id);
+      }
+      if (outcome.status === 'conflict') {
+        return 'revision_conflict';
+      }
+      this.updateIntegrationFieldChecksums(
+        directionByFieldId,
+        fieldById,
+        valuesToWrite,
+        outcome.canonicalValues,
+        fieldChecksums,
+      );
+      change = outcome.change;
+    }
+
+    return { targetId, companyId: input.companyId, change, fieldChecksums };
+  }
+
+  private async hasEligibleAssetBinding(
+    client: Parameters<typeof hasEligibleNativeBinding>[0],
+    input: IntegrationAssetWriteInput,
+    targetId: string,
+  ): Promise<boolean> {
+    const exact = await hasEligibleNativeBinding(client, {
+      integrationCompanyMappingId: input.integrationCompanyMappingId,
+      resourceId: input.resourceId,
+      externalId: input.externalId,
+      integrationId: input.integrationId,
+      companyId: input.companyId,
+      targetKind: 'asset',
+      targetId,
+    });
+    if (exact || !input.ownershipBinding) return exact;
+    return hasEligibleNativeBinding(client, {
+      integrationCompanyMappingId: input.integrationCompanyMappingId,
+      resourceId: input.ownershipBinding.resourceId,
+      externalId: input.ownershipBinding.externalId,
+      integrationId: input.integrationId,
+      companyId: input.companyId,
+      targetKind: 'asset',
+      targetId,
+    });
   }
 
   // --------------------------------------------------------------------
@@ -743,8 +1389,102 @@ export class AssetsService {
   // Validation + persistence
   // --------------------------------------------------------------------
 
-  private async loadLayout(layoutId: string): Promise<LayoutWithFields> {
-    const layout = await this.prisma.assetLayout.findUnique({
+  private async resolveIntegrationAssetTarget(
+    input: IntegrationAssetWriteInput,
+    layout: LayoutWithFields,
+    values: Record<string, unknown>,
+    client: Pick<Prisma.TransactionClient, 'asset' | 'integrationSyncRecord'> | PrismaService = this.prisma,
+  ): Promise<{
+    target: (Asset & { fieldValues: AssetFieldValue[] }) | null;
+    ambiguous: boolean;
+  }> {
+    const byId = async (id: string) =>
+      client.asset.findUnique({ where: { id }, include: { fieldValues: true } });
+
+    if (input.existingTargetId) {
+      return { target: await byId(input.existingTargetId), ambiguous: false };
+    }
+
+    const bound = await client.integrationSyncRecord.findUnique({
+      where: {
+        integrationCompanyMappingId_resourceId_externalId: {
+          integrationCompanyMappingId: input.integrationCompanyMappingId,
+          resourceId: input.resourceId,
+          externalId: input.externalId,
+        },
+      },
+      select: { assetId: true },
+    });
+    if (bound?.assetId) {
+      return { target: await byId(bound.assetId), ambiguous: false };
+    }
+
+    if (input.externalSource) {
+      const identity = await client.asset.findFirst({
+        where: {
+          companyId: input.companyId,
+          externalSource: input.externalSource,
+          externalId: input.externalId,
+          archivedAt: null,
+        },
+        include: { fieldValues: true },
+      });
+      if (identity) return { target: identity, ambiguous: false };
+    }
+
+    if (input.matchKeyFieldIds.length === 0) return { target: null, ambiguous: false };
+    const clauses: Prisma.AssetWhereInput[] = [];
+    for (const fieldId of input.matchKeyFieldIds) {
+      const field = layout.fields.find((candidate) => candidate.id === fieldId);
+      const value = field ? values[field.slug] : undefined;
+      if (!field || value === null || value === undefined || value === '') {
+        return { target: null, ambiguous: false };
+      }
+      clauses.push({
+        fieldValues: {
+          some: {
+            companyId: input.companyId,
+            assetFieldId: fieldId,
+            OR: expandMatchValueVariants(field.fieldType, value).map((variant) => ({
+              value: { equals: variant as Prisma.InputJsonValue },
+            })),
+          },
+        },
+      });
+    }
+    const candidates = await client.asset.findMany({
+      where: {
+        companyId: input.companyId,
+        assetLayoutId: input.assetLayoutId,
+        archivedAt: null,
+        AND: clauses,
+        integrationSyncRecords: {
+          none: {
+            integrationCompanyMappingId: input.integrationCompanyMappingId,
+            resourceId: input.resourceId,
+          },
+        },
+      },
+      include: { fieldValues: true },
+      take: 2,
+    });
+    const compatible = candidates.filter(
+      (candidate) =>
+        candidate.externalSource !== null &&
+        candidate.externalSource === (input.externalSource ?? null) &&
+        candidate.externalId === input.externalId,
+    );
+    return {
+      target: compatible.length === 1 ? compatible[0]! : null,
+      ambiguous: candidates.length > 1,
+    };
+  }
+
+  private async loadLayout(
+    layoutId: string,
+    client: Pick<Prisma.TransactionClient, 'assetLayout'> | PrismaService = this.prisma,
+  ): Promise<LayoutWithFields> {
+    const layout = await client.assetLayout.findUnique({
       where: { id: layoutId },
       include: { fields: { orderBy: { position: 'asc' } } },
     });
@@ -813,6 +1553,7 @@ export class AssetsService {
     companyId: string,
     values: Record<string, unknown>,
     excludeAssetId: string | null,
+    client: Pick<Prisma.TransactionClient, 'assetFieldValue'> | PrismaService = this.prisma,
   ): Promise<void> {
     for (const field of layout.fields) {
       if (field.archivedAt !== null) continue;
@@ -820,7 +1561,7 @@ export class AssetsService {
       const value = values[field.slug];
       if (value === null || value === undefined || value === '') continue;
 
-      const clash = await this.prisma.assetFieldValue.findFirst({
+      const clash = await client.assetFieldValue.findFirst({
         where: {
           companyId,
           assetFieldId: field.id,
@@ -849,8 +1590,9 @@ export class AssetsService {
     externalId: string,
     externalSource: string | null,
     excludeAssetId: string | null,
+    client: Pick<Prisma.TransactionClient, 'asset'> | PrismaService = this.prisma,
   ): Promise<void> {
-    const clash = await this.prisma.asset.findFirst({
+    const clash = await client.asset.findFirst({
       where: {
         companyId,
         externalId,
@@ -860,12 +1602,7 @@ export class AssetsService {
       select: { id: true },
     });
     if (clash) {
-      throw new ConflictException({
-        error: 'ExternalIdTaken',
-        externalId,
-        externalSource,
-        message: `Another asset already carries external id "${externalId}".`,
-      });
+      throw externalIdTakenConflict(externalId, externalSource);
     }
   }
 
@@ -895,6 +1632,101 @@ export class AssetsService {
     return bySlug;
   }
 
+  private updateIntegrationFieldChecksums(
+    directionByFieldId: Map<string, IntegrationAssetWriteInput['fieldValues'][number]>,
+    fieldById: Map<string, AssetField>,
+    requestedValues: Record<string, unknown>,
+    canonicalValues: Record<string, unknown>,
+    checksums: Record<string, string>,
+  ): void {
+    for (const [fieldId] of directionByFieldId) {
+      const field = fieldById.get(fieldId);
+      if (!field || !Object.prototype.hasOwnProperty.call(requestedValues, field.slug)) continue;
+      checksums[fieldId] = assetFieldChecksum(canonicalValues[field.slug]);
+    }
+  }
+
+  private async canonicalizeFieldValues(
+    tx: Prisma.TransactionClient,
+    layout: LayoutWithFields,
+    values: Record<string, unknown>,
+    actorId: string | null,
+    meta: AuditMeta | null,
+  ): Promise<Record<string, unknown>> {
+    const canonical: Record<string, unknown> = {};
+    for (const [slug, rawValue] of Object.entries(values)) {
+      const field = layout.fields.find((candidate) => candidate.slug === slug && candidate.archivedAt === null);
+      if (!field || rawValue === null || rawValue === undefined) {
+        canonical[slug] = rawValue;
+        continue;
+      }
+      const strategy = this.registry.get(field.fieldType);
+      const options = (field.options ?? {}) as Record<string, unknown>;
+      let value: unknown = rawValue;
+      if (strategy.preResolve) {
+        value = await strategy.preResolve(value, options, {
+          tx,
+          tags: this.tags,
+          actorId,
+          audit: meta
+            ? { actorId, ip: meta.ip, userAgent: meta.userAgent }
+            : null,
+        });
+        if (value !== null && value !== undefined) {
+          value = strategy.normalize(value, options);
+        }
+      }
+      canonical[slug] = value;
+    }
+    return canonical;
+  }
+
+  private async canonicalizeFieldValuesForDryRun(
+    layout: LayoutWithFields,
+    values: Record<string, unknown>,
+    client: Pick<Prisma.TransactionClient, 'tag'> | PrismaService = this.prisma,
+  ): Promise<Record<string, unknown>> {
+    const canonical: Record<string, unknown> = {};
+    for (const [slug, rawValue] of Object.entries(values)) {
+      const field = layout.fields.find((candidate) => candidate.slug === slug && candidate.archivedAt === null);
+      if (!field || rawValue === null || rawValue === undefined) {
+        canonical[slug] = rawValue;
+        continue;
+      }
+      const strategy = this.registry.get(field.fieldType);
+      if (!strategy.preResolve) {
+        canonical[slug] = rawValue;
+        continue;
+      }
+      if (field.fieldType !== 'TAGS' || !Array.isArray(rawValue)) {
+        canonical[slug] = rawValue;
+        continue;
+      }
+      const names = rawValue
+        .filter((entry): entry is { name: string } =>
+          !!entry && typeof entry === 'object' && typeof (entry as { name?: unknown }).name === 'string',
+        )
+        .map((entry) => entry.name.trim().toLowerCase());
+      const rows = names.length === 0
+        ? []
+        : await client.tag.findMany({
+            where: { nameLower: { in: Array.from(new Set(names)) } },
+            select: { id: true, nameLower: true },
+          });
+      const byName = new Map(rows.map((row) => [row.nameLower, row.id]));
+      const resolved = rawValue.map((entry) => {
+        if (typeof entry === 'string') return entry;
+        if (entry && typeof entry === 'object' && typeof (entry as { name?: unknown }).name === 'string') {
+          const name = (entry as { name: string }).name.trim().toLowerCase();
+          return byName.get(name) ?? `pending-tag:${name}`;
+        }
+        return entry;
+      });
+      canonical[slug] = strategy.normalize(resolved, (field.options ?? {}) as Record<string, unknown>);
+    }
+    return canonical;
+  }
+
   /**
    * Upsert / delete AssetFieldValue rows, then call per-field onRelate
    * hooks (ASSET_REFERENCE → Relation sync) inside the same transaction.
@@ -909,32 +1741,17 @@ export class AssetsService {
     values: Record<string, unknown>,
     actorId: string | null,
     meta: AuditMeta | null,
+    preResolved = false,
   ): Promise<void> {
-    for (const [slug, rawValue] of Object.entries(values)) {
+    const canonical = preResolved
+      ? values
+      : await this.canonicalizeFieldValues(tx, layout, values, actorId, meta);
+    for (const [slug, value] of Object.entries(canonical)) {
       const field = layout.fields.find((f) => f.slug === slug && f.archivedAt === null);
       if (!field) continue;
 
       const strategy = this.registry.get(field.fieldType);
       const options = (field.options ?? {}) as Record<string, unknown>;
-
-      let value = rawValue;
-      // Strategies with `preResolve` (currently TAGS) need DB access to
-      // canonicalise their wire shape — e.g. upsert unknown tag names
-      // into the global `tags` table. Run that here, inside the tx, so
-      // tag rows and the asset write succeed or fail together.
-      if (value !== null && value !== undefined && strategy.preResolve) {
-        value = await strategy.preResolve(value, options, {
-          tx,
-          tags: this.tags,
-          actorId,
-          audit: meta
-            ? { actorId, ip: meta.ip, userAgent: meta.userAgent }
-            : null,
-        });
-        if (value !== null && value !== undefined) {
-          value = strategy.normalize(value, options);
-        }
-      }
 
       if (value === null || value === undefined) {
         await tx.assetFieldValue.deleteMany({
@@ -1201,7 +2018,6 @@ export class AssetsService {
       where: { companyId, assetId: { in: ids } },
       select: {
         assetId: true,
-        externalId: true,
         lastSyncedAt: true,
         lastSyncedFieldChecksums: true,
         resource: { select: { resourceKey: true } },
@@ -1224,6 +2040,7 @@ export class AssetsService {
       }
     >();
     for (const r of rows) {
+      if (!r.assetId) continue;
       const checksums = (r.lastSyncedFieldChecksums ?? {}) as Record<
         string,
         unknown
@@ -1233,7 +2050,6 @@ export class AssetsService {
         integrationName: r.companyMapping.integration.name,
         driver: r.companyMapping.integration.driver,
         resourceKey: r.resource.resourceKey,
-        externalId: r.externalId,
         lastSyncedAt: r.lastSyncedAt,
       };
       const entry = aggregated.get(r.assetId);
@@ -1325,6 +2141,7 @@ export class AssetsService {
       lastSyncedAt: null,
       syncedFieldIds: [],
       syncSources: [],
+      provenance: [],
       fieldValues,
       fields: visibleFields
         .sort((a, b) => a.position - b.position)

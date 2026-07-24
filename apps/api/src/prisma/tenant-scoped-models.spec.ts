@@ -175,6 +175,45 @@ describe('assertTenantScope', () => {
       ),
     ).toThrow(TenantScopeViolationError);
   });
+
+  it('createMany scopes every row in its data array', () => {
+    expect(() =>
+      assertTenantScope(
+        {
+          model: 'Asset',
+          action: 'createMany',
+          args: { data: [{ companyId: 'c-1' }, { companyId: 'c-2' }] },
+        },
+        baseCtx,
+        scoped,
+      ),
+    ).not.toThrow();
+    expect(() =>
+      assertTenantScope(
+        {
+          model: 'Asset',
+          action: 'createMany',
+          args: { data: [{ companyId: 'c-1' }, { companyId: 'c-99' }] },
+        },
+        baseCtx,
+        scoped,
+      ),
+    ).toThrow(TenantScopeViolationError);
+    // One unscoped row fails the whole call even when a sibling row is
+    // in scope — an in-scope sibling must not vouch for a row the
+    // middleware cannot see.
+    expect(() =>
+      assertTenantScope(
+        {
+          model: 'Asset',
+          action: 'createMany',
+          args: { data: [{ companyId: 'c-1' }, {}] },
+        },
+        baseCtx,
+        scoped,
+      ),
+    ).toThrow(TenantScopeViolationError);
+  });
 });
 
 describe('TENANT_SCOPED_MODELS (Phase 3+4 registry)', () => {
@@ -192,6 +231,9 @@ describe('TENANT_SCOPED_MODELS (Phase 3+4 registry)', () => {
     'Upload',
     'MonitoredDomain',
     'DomainCheck',
+    'IntegrationSyncCheckpoint',
+    'IntegrationReconstructionSummary',
+    'IntegrationReconstructionGap',
   ])('includes %s', (model) => {
     expect(TENANT_SCOPED_MODELS.has(model)).toBe(true);
   });

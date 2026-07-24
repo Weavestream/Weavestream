@@ -7,6 +7,8 @@ import {
 } from '@nestjs/common';
 import type { Prisma, Subnet, IpReservation } from '@prisma/client';
 import {
+  createIpReservationSchema,
+  createSubnetSchema,
   normalizeCidrV4,
   usableHostCount,
   ipInCidr,
@@ -15,15 +17,78 @@ import {
   type CreateIpReservationInput,
   type UpdateIpReservationInput,
 } from '@weavestream/shared';
+import type { IntegrationTargetProvenance } from '@weavestream/shared';
+import { readTargetProvenance } from '../integrations/reconstruction/integration-provenance.service.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { AuditLogService } from '../audit/audit.service.js';
+import {
+  hasEligibleNativeBinding,
+  hasEligibleNativeSiblingBinding,
+  hasEligibleNativeTargetBinding,
+} from '../integrations/reconstruction/native-binding-ownership.js';
 import { AUDIT_ACTIONS } from '../audit/audit-actions.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
+import { isUniqueConstraintError } from '../prisma/prisma-errors.js';
 
 export interface AuditMeta {
   ip: string;
   userAgent: string;
 }
+
+export interface IntegrationSubnetWriteInput {
+  tx?: Prisma.TransactionClient;
+  companyId: string;
+  integrationId: string;
+  integrationCompanyMappingId: string;
+  resourceId: string;
+  externalId: string;
+  auditActorId: string;
+  dryRun: boolean;
+  existingTargetId?: string | null;
+  name: string;
+  cidr: string;
+  vlanId?: number | null;
+  gateway?: string | null;
+  dhcpRangeStart?: string | null;
+  dhcpRangeEnd?: string | null;
+  description?: string | null;
+}
+
+export interface IntegrationReservationWriteInput {
+  tx?: Prisma.TransactionClient;
+  companyId: string;
+  integrationId: string;
+  integrationCompanyMappingId: string;
+  resourceId: string;
+  externalId: string;
+  auditActorId: string;
+  dryRun: boolean;
+  existingTargetId?: string | null;
+  subnetId: string;
+  ipAddress: string;
+  label: string;
+  notes?: string | null;
+}
+
+export interface IntegrationIpamWriteResult {
+  targetId: string;
+  companyId: string;
+  change: 'created' | 'updated' | 'unchanged' | 'restored' | 'blocked';
+  gap?: {
+    kind: 'missing_dependency' | 'validation' | 'ambiguous' | 'synchronization_error';
+    message: string;
+    details?: {
+      reasonCode?: string;
+      candidateCount?: number;
+      fieldPaths?: string[];
+    };
+  };
+}
+
+const INTEGRATION_AUDIT_META: AuditMeta = {
+  ip: '0.0.0.0',
+  userAgent: 'weavestream-worker/integration-reconstruction',
+};
 
 export interface SubnetOccupant {
   ip: string;
@@ -50,6 +115,7 @@ export interface SubnetDetail {
   occupants: SubnetOccupant[];
   reservations: IpReservation[];
   conflicts: Array<{ ip: string; entries: SubnetOccupant[] }>;
+  provenance: IntegrationTargetProvenance[];
 }
 
 @Injectable()
@@ -124,7 +190,12 @@ export class IpamService {
       if (entries.length > 1) conflicts.push({ ip, entries });
     }
 
-    return { subnet, utilization, occupants, reservations, conflicts };
+    const provenance = await readTargetProvenance(this.prisma, {
+      companyId,
+      targetKind: 'subnet',
+      targetId: id,
+    });
+    return { subnet, utilization, occupants, reservations, conflicts, provenance };
   }
 
   async listOccupants(
@@ -276,21 +347,26 @@ export class IpamService {
 
     await this.assertCidrFree(companyId, cidr, null);
 
-    const row = await this.prisma.subnet.create({
-      data: {
-        companyId,
-        name: input.name,
-        cidr,
-        prefix,
-        vlanId: input.vlanId ?? null,
-        gateway: input.gateway ?? null,
-        dhcpRangeStart: input.dhcpRangeStart ?? null,
-        dhcpRangeEnd: input.dhcpRangeEnd ?? null,
-        description: input.description ?? null,
-        createdBy: actor.id,
-        updatedBy: actor.id,
-      },
-    });
+    let row: Subnet;
+    try {
+      row = await this.prisma.subnet.create({
+        data: {
+          companyId,
+          name: input.name,
+          cidr,
+          prefix,
+          vlanId: input.vlanId ?? null,
+          gateway: input.gateway ?? null,
+          dhcpRangeStart: input.dhcpRangeStart ?? null,
+          dhcpRangeEnd: input.dhcpRangeEnd ?? null,
+          description: input.description ?? null,
+          createdBy: actor.id,
+          updatedBy: actor.id,
+        },
+      });
+    } catch (error) {
+      this.rethrowCidrConflict(error, cidr);
+    }
 
     await this.audit.log({
       actorId: actor.id,
@@ -334,10 +410,14 @@ export class IpamService {
       data.prefix = Number(cidr.split('/')[1]);
     }
 
-    await this.prisma.subnet.updateMany({
-      where: { id, companyId },
-      data,
-    });
+    try {
+      await this.prisma.subnet.updateMany({
+        where: { id, companyId },
+        data,
+      });
+    } catch (error) {
+      this.rethrowCidrConflict(error, String(data.cidr ?? existing.cidr));
+    }
     const row = await this.getSubnetById(actor, companyId, id);
 
     await this.audit.log({
@@ -353,6 +433,178 @@ export class IpamService {
     });
 
     return row;
+  }
+
+  async writeSubnetFromIntegration(
+    input: IntegrationSubnetWriteInput,
+  ): Promise<IntegrationIpamWriteResult> {
+    const runTransaction = <T>(callback: (tx: Prisma.TransactionClient) => Promise<T>) =>
+      input.tx ? callback(input.tx) : this.prisma.$transaction(callback);
+    await this.audit.assertIntegrationActor(input.auditActorId, input.companyId);
+    let native: ReturnType<typeof createSubnetSchema.parse>;
+    try {
+      native = createSubnetSchema.parse({
+        name: input.name,
+        cidr: input.cidr,
+        vlanId: input.vlanId,
+        gateway: input.gateway,
+        dhcpRangeStart: input.dhcpRangeStart,
+        dhcpRangeEnd: input.dhcpRangeEnd,
+        description: input.description,
+      });
+    } catch {
+      return ipamBlocked(input.companyId, 'validation', 'Subnet input failed native validation.', 'native_validation');
+    }
+    const readClient = input.tx ?? this.prisma;
+
+    const bound = input.existingTargetId
+      ? await readClient.subnet.findUnique({ where: { id: input.existingTargetId } })
+      : null;
+    if (bound && bound.companyId !== input.companyId) {
+      return { targetId: bound.id, companyId: bound.companyId, change: 'blocked' };
+    }
+    if (input.existingTargetId && !bound) {
+      return ipamBlocked(input.companyId, 'missing_dependency', 'The bound subnet no longer exists.', 'target_not_found', input.existingTargetId);
+    }
+    const collision = await readClient.subnet.findFirst({
+      where: {
+        companyId: input.companyId,
+        cidr: native.cidr,
+        archivedAt: null,
+        ...(bound ? { id: { not: bound.id } } : {}),
+      },
+    });
+    if (collision && collision.companyId !== input.companyId) {
+      return { targetId: collision.id, companyId: collision.companyId, change: 'blocked' };
+    }
+    const adoptedCanonicalTarget = !!collision;
+    if (
+      collision &&
+      !(await this.hasEligibleIpamBinding(
+        input.tx ?? this.prisma,
+        input,
+        'subnet',
+        collision.id,
+        true,
+      ))
+    ) {
+      return ipamBlocked(input.companyId, 'ambiguous', 'An unbound subnet already owns this CIDR.', 'manual_ownership', collision.id);
+    }
+    const existing = collision ?? bound;
+    if (existing) {
+      await this.assertCidrFree(input.companyId, native.cidr, existing.id, readClient);
+    }
+    const sharedCanonicalTarget = !!existing && (
+      adoptedCanonicalTarget ||
+      await this.hasEligibleIpamSiblingBinding(
+        readClient,
+        input,
+        'subnet',
+        existing!.id,
+      )
+    );
+    const incomingData: CanonicalSubnetData = {
+      name: native.name,
+      cidr: native.cidr,
+      prefix: Number(native.cidr.split('/')[1]),
+      vlanId: native.vlanId ?? null,
+      gateway: native.gateway ?? null,
+      dhcpRangeStart: native.dhcpRangeStart ?? null,
+      dhcpRangeEnd: native.dhcpRangeEnd ?? null,
+      description: native.description ?? null,
+    };
+    const canonical = existing && sharedCanonicalTarget
+      ? reconcileCanonicalFields(existing, incomingData, SUBNET_CANONICAL_FIELDS)
+      : { data: incomingData, conflicts: [] };
+    if (canonical.conflicts.length > 0) {
+      return ipamBlocked(
+        input.companyId,
+        'validation',
+        'Canonical subnet sources disagree on shared fields.',
+        'canonical_field_conflict',
+        existing!.id,
+        canonical.conflicts,
+      );
+    }
+
+    const data = canonical.data;
+    const changed =
+      !existing ||
+      existing.name !== data.name ||
+      existing.cidr !== data.cidr ||
+      existing.vlanId !== data.vlanId ||
+      existing.gateway !== data.gateway ||
+      existing.dhcpRangeStart !== data.dhcpRangeStart ||
+      existing.dhcpRangeEnd !== data.dhcpRangeEnd ||
+      existing.description !== data.description;
+    const restored = existing?.archivedAt != null;
+    if (input.dryRun) {
+      if (existing && !(await this.hasEligibleIpamBinding(input.tx ?? this.prisma, input, 'subnet', existing.id, adoptedCanonicalTarget))) {
+        return ipamBlocked(input.companyId, 'ambiguous', 'The existing subnet is not owned by an eligible reconstruction binding.', 'manual_ownership', existing.id);
+      }
+      return {
+        targetId: existing?.id ?? '',
+        companyId: input.companyId,
+        change: existing ? (restored ? 'restored' : changed ? 'updated' : 'unchanged') : 'created',
+      };
+    }
+
+    if (existing) {
+      const change: IntegrationIpamWriteResult['change'] = restored ? 'restored' : changed ? 'updated' : 'unchanged';
+      if (change === 'unchanged') {
+        if (!(await this.hasEligibleIpamBinding(input.tx ?? this.prisma, input, 'subnet', existing.id, adoptedCanonicalTarget))) {
+          return ipamBlocked(input.companyId, 'ambiguous', 'The existing subnet is not owned by an eligible reconstruction binding.', 'manual_ownership', existing.id);
+        }
+        return { targetId: existing.id, companyId: input.companyId, change };
+      }
+      return runTransaction(async (tx) => {
+        if (!(await this.hasEligibleIpamBinding(tx, input, 'subnet', existing.id, adoptedCanonicalTarget))) {
+          return ipamBlocked(input.companyId, 'ambiguous', 'The existing subnet is not owned by an eligible reconstruction binding.', 'manual_ownership', existing.id);
+        }
+        const applied = await tx.subnet.updateMany({
+          where: {
+            id: existing.id,
+            companyId: input.companyId,
+            archivedAt: existing.archivedAt,
+            ...canonicalWritePremise(existing, SUBNET_CANONICAL_FIELDS),
+          },
+          data: { ...data, ...(restored ? { archivedAt: null } : {}), updatedBy: input.auditActorId },
+        });
+        if (applied.count === 0) {
+          return ipamBlocked(input.companyId, 'synchronization_error', 'The canonical subnet changed during reconciliation; the write was not applied.', 'canonical_write_race', existing.id);
+        }
+        const row = await tx.subnet.findFirstOrThrow({
+          where: { id: existing.id, companyId: input.companyId },
+        });
+        await this.audit.logWithClient(tx, {
+          actorId: input.auditActorId,
+          action: change === 'restored' ? AUDIT_ACTIONS.subnet.restore : AUDIT_ACTIONS.subnet.update,
+          entityType: 'Subnet',
+          entityId: row.id,
+          companyId: input.companyId,
+          ip: INTEGRATION_AUDIT_META.ip,
+          userAgent: INTEGRATION_AUDIT_META.userAgent,
+          after: { integrationId: input.integrationId, cidr: row.cidr },
+        });
+        return { targetId: row.id, companyId: input.companyId, change };
+      });
+    }
+    return runTransaction(async (tx) => {
+      const row = await tx.subnet.create({
+        data: { companyId: input.companyId, ...data, createdBy: input.auditActorId, updatedBy: input.auditActorId },
+      });
+      await this.audit.logWithClient(tx, {
+        actorId: input.auditActorId,
+        action: AUDIT_ACTIONS.subnet.create,
+        entityType: 'Subnet',
+        entityId: row.id,
+        companyId: input.companyId,
+        ip: INTEGRATION_AUDIT_META.ip,
+        userAgent: INTEGRATION_AUDIT_META.userAgent,
+        after: { integrationId: input.integrationId, cidr: row.cidr },
+      });
+      return { targetId: row.id, companyId: input.companyId, change: 'created' as const };
+    });
   }
 
   async archiveSubnet(
@@ -391,10 +643,14 @@ export class IpamService {
     const existing = await this.getSubnetById(actor, companyId, id);
     if (!existing.archivedAt) return existing;
     await this.assertCidrFree(companyId, existing.cidr, id);
-    await this.prisma.subnet.updateMany({
-      where: { id, companyId },
-      data: { archivedAt: null, updatedBy: actor.id },
-    });
+    try {
+      await this.prisma.subnet.updateMany({
+        where: { id, companyId },
+        data: { archivedAt: null, updatedBy: actor.id },
+      });
+    } catch (error) {
+      this.rethrowCidrConflict(error, existing.cidr);
+    }
     const row = await this.getSubnetById(actor, companyId, id);
 
     await this.audit.log({
@@ -531,6 +787,213 @@ export class IpamService {
     }
   }
 
+  async writeReservationFromIntegration(
+    input: IntegrationReservationWriteInput,
+  ): Promise<IntegrationIpamWriteResult> {
+    const runTransaction = <T>(callback: (tx: Prisma.TransactionClient) => Promise<T>) =>
+      input.tx ? callback(input.tx) : this.prisma.$transaction(callback);
+    await this.audit.assertIntegrationActor(input.auditActorId, input.companyId);
+    let native: ReturnType<typeof createIpReservationSchema.parse>;
+    try {
+      native = createIpReservationSchema.parse({
+        ipAddress: input.ipAddress,
+        label: input.label,
+        notes: input.notes,
+      });
+    } catch {
+      return ipamBlocked(input.companyId, 'validation', 'Reservation input failed native validation.', 'native_validation');
+    }
+    const readClient = input.tx ?? this.prisma;
+    const subnet = await readClient.subnet.findUnique({ where: { id: input.subnetId } });
+    if (!subnet) {
+      return ipamBlocked(input.companyId, 'missing_dependency', 'The reservation subnet was not found.', 'dependency_not_found');
+    }
+    if (subnet.companyId !== input.companyId) {
+      return ipamBlocked(input.companyId, 'validation', 'The reservation subnet belongs to another company.', 'dependency_company_mismatch', subnet.id);
+    }
+    if (!ipInCidr(native.ipAddress, subnet.cidr)) {
+      return ipamBlocked(input.companyId, 'validation', 'The reservation IP is outside its subnet.', 'ip_outside_subnet');
+    }
+    const bound = input.existingTargetId
+      ? await readClient.ipReservation.findUnique({ where: { id: input.existingTargetId } })
+      : null;
+    if (bound && bound.companyId !== input.companyId) {
+      return { targetId: bound.id, companyId: bound.companyId, change: 'blocked' };
+    }
+    if (input.existingTargetId && !bound) {
+      return ipamBlocked(input.companyId, 'missing_dependency', 'The bound reservation no longer exists.', 'target_not_found', input.existingTargetId);
+    }
+    const collision = await readClient.ipReservation.findFirst({
+      where: {
+        companyId: input.companyId,
+        subnetId: input.subnetId,
+        ipAddress: native.ipAddress,
+        ...(bound ? { id: { not: bound.id } } : {}),
+      },
+    });
+    if (collision && collision.companyId !== input.companyId) {
+      return { targetId: collision.id, companyId: collision.companyId, change: 'blocked' };
+    }
+    const adoptedCanonicalTarget = !!collision;
+    if (
+      collision &&
+      !(await this.hasEligibleIpamBinding(
+        input.tx ?? this.prisma,
+        input,
+        'ip_reservation',
+        collision.id,
+        true,
+      ))
+    ) {
+      return ipamBlocked(input.companyId, 'ambiguous', 'An unbound reservation already owns this IP.', 'manual_ownership', collision.id);
+    }
+    const existing = collision ?? bound;
+    if (existing && existing.subnetId !== input.subnetId) {
+      return ipamBlocked(input.companyId, 'validation', 'The bound reservation belongs to another subnet.', 'target_subnet_mismatch', existing.id);
+    }
+    const sharedCanonicalTarget = !!existing && (
+      adoptedCanonicalTarget ||
+      await this.hasEligibleIpamSiblingBinding(
+        readClient,
+        input,
+        'ip_reservation',
+        existing.id,
+      )
+    );
+    const incomingData: CanonicalReservationData = {
+      ipAddress: native.ipAddress,
+      label: native.label,
+      notes: native.notes ?? null,
+    };
+    const canonical = existing && sharedCanonicalTarget
+      ? reconcileCanonicalFields(existing, incomingData, RESERVATION_CANONICAL_FIELDS)
+      : { data: incomingData, conflicts: [] };
+    if (canonical.conflicts.length > 0) {
+      return ipamBlocked(
+        input.companyId,
+        'validation',
+        'Canonical reservation sources disagree on shared fields.',
+        'canonical_field_conflict',
+        existing!.id,
+        canonical.conflicts,
+      );
+    }
+    const data = canonical.data;
+    const changed =
+      !existing ||
+      existing.ipAddress !== data.ipAddress ||
+      existing.label !== data.label ||
+      existing.notes !== data.notes;
+    if (input.dryRun) {
+      if (existing && !(await this.hasEligibleIpamBinding(input.tx ?? this.prisma, input, 'ip_reservation', existing.id, adoptedCanonicalTarget))) {
+        return ipamBlocked(input.companyId, 'ambiguous', 'The existing reservation is not owned by an eligible reconstruction binding.', 'manual_ownership', existing.id);
+      }
+      return { targetId: existing?.id ?? '', companyId: input.companyId, change: existing ? (changed ? 'updated' : 'unchanged') : 'created' };
+    }
+    const change: IntegrationIpamWriteResult['change'] = existing ? (changed ? 'updated' : 'unchanged') : 'created';
+    if (existing) {
+      if (!changed) {
+        if (!(await this.hasEligibleIpamBinding(input.tx ?? this.prisma, input, 'ip_reservation', existing.id, adoptedCanonicalTarget))) {
+          return ipamBlocked(input.companyId, 'ambiguous', 'The existing reservation is not owned by an eligible reconstruction binding.', 'manual_ownership', existing.id);
+        }
+        return { targetId: existing.id, companyId: input.companyId, change };
+      }
+      return runTransaction(async (tx) => {
+        if (!(await this.hasEligibleIpamBinding(tx, input, 'ip_reservation', existing.id, adoptedCanonicalTarget))) {
+          return ipamBlocked(input.companyId, 'ambiguous', 'The existing reservation is not owned by an eligible reconstruction binding.', 'manual_ownership', existing.id);
+        }
+        const applied = await tx.ipReservation.updateMany({
+          where: {
+            id: existing.id,
+            companyId: input.companyId,
+            subnetId: existing.subnetId,
+            ...canonicalWritePremise(existing, RESERVATION_CANONICAL_FIELDS),
+          },
+          data: { ...data, updatedBy: input.auditActorId },
+        });
+        if (applied.count === 0) {
+          return ipamBlocked(input.companyId, 'synchronization_error', 'The canonical reservation changed during reconciliation; the write was not applied.', 'canonical_write_race', existing.id);
+        }
+        const row = await tx.ipReservation.findFirstOrThrow({
+          where: { id: existing.id, companyId: input.companyId },
+        });
+        await this.audit.logWithClient(tx, {
+          actorId: input.auditActorId,
+          action: AUDIT_ACTIONS.subnet.reservationUpdate,
+          entityType: 'IpReservation',
+          entityId: row.id,
+          companyId: input.companyId,
+          ip: INTEGRATION_AUDIT_META.ip,
+          userAgent: INTEGRATION_AUDIT_META.userAgent,
+          after: { integrationId: input.integrationId, subnetId: input.subnetId },
+        });
+        return { targetId: row.id, companyId: input.companyId, change };
+      });
+    }
+    return runTransaction(async (tx) => {
+      const row = await tx.ipReservation.create({
+        data: {
+          companyId: input.companyId,
+          subnetId: input.subnetId,
+          ...data,
+          createdBy: input.auditActorId,
+          updatedBy: input.auditActorId,
+        },
+      });
+      await this.audit.logWithClient(tx, {
+        actorId: input.auditActorId,
+        action: AUDIT_ACTIONS.subnet.reservationCreate,
+        entityType: 'IpReservation',
+        entityId: row.id,
+        companyId: input.companyId,
+        ip: INTEGRATION_AUDIT_META.ip,
+        userAgent: INTEGRATION_AUDIT_META.userAgent,
+        after: { integrationId: input.integrationId, subnetId: input.subnetId },
+      });
+      return { targetId: row.id, companyId: input.companyId, change: 'created' as const };
+    });
+  }
+
+  private hasEligibleIpamBinding(
+    client: Parameters<typeof hasEligibleNativeBinding>[0],
+    input: IntegrationSubnetWriteInput | IntegrationReservationWriteInput,
+    targetKind: 'subnet' | 'ip_reservation',
+    targetId: string,
+    allowCanonicalTarget = false,
+  ): Promise<boolean> {
+    const identity = {
+      integrationCompanyMappingId: input.integrationCompanyMappingId,
+      resourceId: input.resourceId,
+      integrationId: input.integrationId,
+      companyId: input.companyId,
+      targetKind,
+      targetId,
+    };
+    return hasEligibleNativeBinding(client, { ...identity, externalId: input.externalId }).then(
+      (exact) =>
+        exact || !allowCanonicalTarget
+          ? exact
+          : hasEligibleNativeTargetBinding(client, identity),
+    );
+  }
+
+  private hasEligibleIpamSiblingBinding(
+    client: Parameters<typeof hasEligibleNativeSiblingBinding>[0],
+    input: IntegrationSubnetWriteInput | IntegrationReservationWriteInput,
+    targetKind: 'subnet' | 'ip_reservation',
+    targetId: string,
+  ): Promise<boolean> {
+    return hasEligibleNativeSiblingBinding(client, {
+      integrationCompanyMappingId: input.integrationCompanyMappingId,
+      resourceId: input.resourceId,
+      externalId: input.externalId,
+      integrationId: input.integrationId,
+      companyId: input.companyId,
+      targetKind,
+      targetId,
+    });
+  }
+
   async deleteReservation(
     actor: AuthedUser,
     companyId: string,
@@ -568,19 +1031,32 @@ export class IpamService {
     companyId: string,
     cidr: string,
     excludeId: string | null,
+    client: Pick<Prisma.TransactionClient, 'subnet'> | PrismaService = this.prisma,
   ): Promise<void> {
+    // Text equality here IS canonical equality: `subnets_cidr_canonical_check`
+    // pins `cidr` to `canonical_cidr::text`, and Prisma cannot bind CIDR
+    // strings to the inet column (bare-IP parameter parsing).
     const where: Prisma.SubnetWhereInput = {
       companyId,
       cidr,
       archivedAt: null,
     };
     if (excludeId) where.id = { not: excludeId };
-    const dup = await this.prisma.subnet.findFirst({ where });
+    const dup = await client.subnet.findFirst({ where });
     if (dup) {
       throw new ConflictException(
         `Subnet ${cidr} already exists for this company`,
       );
     }
+  }
+
+  private rethrowCidrConflict(error: unknown, cidr: string): never {
+    if (isUniqueConstraintError(error)) {
+      throw new ConflictException(
+        `Subnet ${cidr} already exists for this company`,
+      );
+    }
+    throw error;
   }
 }
 
@@ -594,6 +1070,117 @@ function compareIpv4(a: string, b: string): number {
   if (ai === null) return 1;
   if (bi === null) return -1;
   return ai - bi;
+}
+
+function ipamBlocked(
+  companyId: string,
+  kind: 'missing_dependency' | 'validation' | 'ambiguous' | 'synchronization_error',
+  message: string,
+  reasonCode: string,
+  targetId = '',
+  fieldPaths?: string[],
+): IntegrationIpamWriteResult {
+  return {
+    targetId,
+    companyId,
+    change: 'blocked',
+    gap: {
+      kind,
+      message,
+      details: {
+        reasonCode,
+        ...(fieldPaths?.length ? { fieldPaths } : {}),
+      },
+    },
+  };
+}
+
+type CanonicalSubnetData = Pick<
+  Subnet,
+  | 'name'
+  | 'cidr'
+  | 'prefix'
+  | 'vlanId'
+  | 'gateway'
+  | 'dhcpRangeStart'
+  | 'dhcpRangeEnd'
+  | 'description'
+>;
+type CanonicalReservationData = Pick<
+  IpReservation,
+  'ipAddress' | 'label' | 'notes'
+>;
+type CanonicalFieldPolicy<T> = {
+  field: keyof T;
+  path: string;
+  nullable: boolean;
+};
+
+const SUBNET_CANONICAL_FIELDS: readonly CanonicalFieldPolicy<CanonicalSubnetData>[] = [
+  { field: 'name', path: 'name', nullable: false },
+  { field: 'cidr', path: 'cidr', nullable: false },
+  { field: 'prefix', path: 'prefix', nullable: false },
+  { field: 'vlanId', path: 'vlanId', nullable: true },
+  { field: 'gateway', path: 'gateway', nullable: true },
+  { field: 'dhcpRangeStart', path: 'dhcpRangeStart', nullable: true },
+  { field: 'dhcpRangeEnd', path: 'dhcpRangeEnd', nullable: true },
+  { field: 'description', path: 'description', nullable: true },
+];
+
+const RESERVATION_CANONICAL_FIELDS: readonly CanonicalFieldPolicy<CanonicalReservationData>[] = [
+  { field: 'ipAddress', path: 'ipAddress', nullable: false },
+  { field: 'label', path: 'label', nullable: false },
+  { field: 'notes', path: 'notes', nullable: true },
+];
+
+/**
+ * Canonical IPAM field policy:
+ * - identity and required values must agree exactly;
+ * - the first non-null optional value becomes canonical;
+ * - an absent optional assertion preserves the canonical value;
+ * - two differing non-null assertions block instead of overwriting.
+ *
+ * The reconciled data is only valid against the snapshot it was derived
+ * from; integration writers re-assert that snapshot in the UPDATE's WHERE
+ * clause (see canonicalWritePremise) so a concurrent commit surfaces as a
+ * `canonical_write_race` gap instead of a lost update.
+ */
+function reconcileCanonicalFields<T extends object>(
+  existing: T,
+  incoming: T,
+  policies: readonly CanonicalFieldPolicy<T>[],
+): { data: T; conflicts: string[] } {
+  const data = { ...incoming };
+  const conflicts: string[] = [];
+  for (const policy of policies) {
+    const current = existing[policy.field];
+    const next = incoming[policy.field];
+    if (policy.nullable && next == null) {
+      data[policy.field] = current;
+      continue;
+    }
+    if (policy.nullable && current == null) continue;
+    if (current !== next) conflicts.push(policy.path);
+  }
+  return { data, conflicts };
+}
+
+/**
+ * WHERE fragment re-asserting the snapshot a reconciliation was derived
+ * from. Guarding the UPDATE with it makes first-non-null adoption atomic
+ * under READ COMMITTED: a concurrent commit changes the row, the predicate
+ * matches zero rows, and the writer reports the race instead of
+ * overwriting the other source's assertion.
+ */
+function canonicalWritePremise<T extends object>(
+  existing: T,
+  policies: readonly CanonicalFieldPolicy<T>[],
+): Partial<T> {
+  const premise: Partial<T> = {};
+  for (const policy of policies) {
+    premise[policy.field] = existing[policy.field];
+  }
+  return premise;
 }
 
 function ipToUint32(ip: string): number | null {

@@ -43,6 +43,11 @@ Before opening a PR, please make sure:
 - [ ] `pnpm lint` passes.
 - [ ] `pnpm typecheck` passes.
 - [ ] `pnpm test` passes (or you've added tests covering the new behavior).
+      The company PDF export specs need the Poppler and libxml2 CLIs:
+      `apt-get install poppler-utils libxml2-utils`, or on macOS
+      `brew install poppler`. They skip with an install hint when those
+      are missing, so install them before touching the PDF exporter —
+      CI requires them.
 - [ ] `pnpm install --frozen-lockfile` passes (if you changed any `package.json`, commit the updated `pnpm-lock.yaml`).
 - [ ] If you added or changed environment variables, the docs are in sync.
       A new **required** variable goes in both `.env.example` and

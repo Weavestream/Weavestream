@@ -192,7 +192,7 @@ Integration credential bundles (API tokens, secrets) are encrypted with the same
 
 | Variable | Default | Notes |
 |---|---|---|
-| `INTEGRATION_SYNC_DEFAULT_CRON` | `0 */4 * * *` | 5-field cron expression used as the global default sync schedule. Set to `off` to disable all scheduled syncs workspace-wide (manual runs from **Admin → Integrations** still work). Integrations with a per-record `syncCron` override this value. |
+| `INTEGRATION_SYNC_DEFAULT_CRON` | `*/15 * * * *` | 5-field cron expression used as the global default sync schedule. Set to `off` to disable inherited/default schedules workspace-wide; integrations with an explicit per-record `syncCron` still run on that schedule. Manual runs from **Admin → Integrations** continue to work. |
 
 ### Concurrency
 

@@ -6,6 +6,12 @@ import type {
   TicketListFilter,
   TicketListResponse,
 } from '@weavestream/shared';
+import type {
+  ReconstructionGapDetails,
+  ReconstructionInput,
+} from '../reconstruction/reconstruction-target.js';
+import type { ReconstructionGapKind } from '@weavestream/shared';
+import type { FieldType } from '@prisma/client';
 
 /**
  * Phase 11 — universal integration driver port.
@@ -70,6 +76,9 @@ export interface FetchRecordsContext extends IntegrationContext {
   readonly resourceKey: string;
   /** Mapping-level filter blob (driver-validated). */
   readonly filter: Record<string, unknown>;
+  readonly mode: 'incremental' | 'full';
+  readonly updatedSince: string | null;
+  readonly snapshotAt: string | null;
 }
 
 /**
@@ -77,15 +86,70 @@ export interface FetchRecordsContext extends IntegrationContext {
  * own field names. The framework projects this through
  * `IntegrationFieldMapping` rows onto Weavestream `AssetField` slugs.
  */
-export interface DriverRecord {
+export interface LegacyDriverRecord {
+  readonly reconstructionInput?: undefined;
   /** Stable, unique-within-org external id (Action1 endpoint id). */
   externalId: string;
   /** Driver-side display name; used as the asset's primary name fallback. */
   displayName: string | null;
   /** Flat map of source-field key → raw value. */
   fields: Record<string, unknown>;
+  /**
+   * Optional immutable source definition key used to select exactly one
+   * configured field mapping. Records without a matching mapping are skipped.
+   */
+  mappingSourceField?: string;
   /** Optional driver-emitted last-modified hint (UTC ISO). */
   updatedAt: string | null;
+  /** Optional bounded source revision persisted as reconstruction provenance. */
+  sourceRevision?: string | null;
+  /** Optional bounded source fingerprint persisted as reconstruction provenance. */
+  sourceFingerprint?: string | null;
+  /** Optional exact native dependency binding; source identity remains externalId. */
+  bindingRef?: {
+    resourceKey: string;
+    externalId: string;
+  };
+}
+
+export interface RecommendedDestinationField {
+  sourceField: string;
+  name: string;
+  slug: string;
+  fieldType: FieldType;
+  syncDirection: 'source_wins' | 'preserve_manual' | 'manual_only';
+  isPrimary: boolean;
+  showInTable: boolean;
+  options: Record<string, unknown>;
+  /** False creates/reuses the shared layout field without mapping this resource to it. */
+  mapResource?: boolean;
+}
+
+export interface RecommendedDestination {
+  layout: {
+    name: string;
+    slug: string;
+    icon: string;
+    color: string;
+  };
+  fields: readonly RecommendedDestinationField[];
+}
+
+export interface TypedDriverRecord {
+  readonly reconstructionInput: ReconstructionInput;
+  readonly externalId?: never;
+  readonly displayName?: never;
+  readonly fields?: never;
+  readonly updatedAt?: never;
+}
+
+export type DriverRecord = LegacyDriverRecord | TypedDriverRecord;
+
+export interface DriverBlockedInput {
+  kind: ReconstructionGapKind;
+  externalId: string | null;
+  message: string;
+  details?: ReconstructionGapDetails;
 }
 
 /**
@@ -98,6 +162,15 @@ export interface DriverFetchPage {
   hasMore: boolean;
   /** Opaque cursor for the next call. */
   cursor: string | null;
+  schemaVersion?: string;
+  snapshotAt?: string | null;
+  blockedInputs?: DriverBlockedInput[];
+  sourceHighWater?: string | null;
+  terminal?: boolean;
+}
+
+export interface LegacyDriverFetchPage extends Omit<DriverFetchPage, 'records'> {
+  records: LegacyDriverRecord[];
 }
 
 export class DriverAuthError extends Error {
@@ -140,6 +213,15 @@ export interface IntegrationDriver {
   /** Public descriptor used by the admin UI to render dynamic forms. */
   readonly descriptor: DriverDescriptor;
 
+  /** Optional generic bootstrap metadata; drivers never write destinations directly. */
+  readonly recommendedDestinations?: Readonly<Record<string, RecommendedDestination>>;
+
+  /** Optional strict persistence-boundary validation for driver-specific bundles. */
+  validateConfiguration?(
+    config: Record<string, unknown> | null | undefined,
+    secret: Record<string, unknown> | null | undefined,
+  ): void;
+
   /**
    * Validate a freshly-submitted (config, secret) pair against the
    * remote API. Returning normally = healthy. Throw on auth failure /
@@ -161,10 +243,7 @@ export interface IntegrationDriver {
   ): Promise<SourceFieldDto[]>;
 
   /** Walk paginated records for a single org. */
-  fetchRecords(
-    ctx: FetchRecordsContext,
-    cursor: string | null,
-  ): Promise<DriverFetchPage>;
+  fetchRecords(ctx: FetchRecordsContext, cursor: string | null): Promise<DriverFetchPage>;
 
   /**
    * Phase 12 — optional read-only ticket browse surface. Only
@@ -190,8 +269,7 @@ export interface IntegrationDriver {
  */
 export function isTicketingDriver(
   driver: IntegrationDriver,
-): driver is IntegrationDriver &
-  Required<Pick<IntegrationDriver, 'listTickets' | 'getTicket'>> {
+): driver is IntegrationDriver & Required<Pick<IntegrationDriver, 'listTickets' | 'getTicket'>> {
   return (
     driver.descriptor.capabilities.ticketing === true &&
     typeof driver.listTickets === 'function' &&

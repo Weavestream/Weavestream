@@ -15,8 +15,8 @@ import type {
 } from '@weavestream/shared';
 import {
   DriverAuthError,
-  type DriverFetchPage,
-  type DriverRecord,
+  type LegacyDriverFetchPage,
+  type LegacyDriverRecord,
   type FetchRecordsContext,
   type IntegrationContext,
   type IntegrationDriver,
@@ -313,6 +313,9 @@ export class NinjaOneDriver implements IntegrationDriver {
       {
         key: NINJAONE_AGENT_RESOURCE_KEY,
         label: 'Agent devices',
+        targetKind: 'asset',
+        targetConfig: {},
+        dependsOnResourceKeys: [],
         description:
           'Workstations, servers, and other endpoints with the NinjaOne agent installed (Windows, Linux, macOS).',
         defaultMatchKeyHint: 'uid',
@@ -327,6 +330,9 @@ export class NinjaOneDriver implements IntegrationDriver {
       {
         key: NINJAONE_NMS_RESOURCE_KEY,
         label: 'Network & non-agent devices',
+        targetKind: 'asset',
+        targetConfig: {},
+        dependsOnResourceKeys: [],
         description:
           'NMS-discovered network gear (switches, firewalls, printers, VoIP) plus VMware / Hyper-V / Xen guest VMs and hypervisor management nodes — anything NinjaOne tracks without a local agent.',
         defaultMatchKeyHint: 'uid',
@@ -341,6 +347,7 @@ export class NinjaOneDriver implements IntegrationDriver {
       // Ticketing add-on (404s from `/v2/ticketing/*` map to an empty
       // list / clear "not enabled" error rather than crashing).
       ticketing: true,
+      reconstructionCompleteness: false,
     },
   };
 
@@ -536,7 +543,7 @@ export class NinjaOneDriver implements IntegrationDriver {
   async fetchRecords(
     ctx: FetchRecordsContext,
     cursor: string | null,
-  ): Promise<DriverFetchPage> {
+  ): Promise<LegacyDriverFetchPage> {
     assertExpectedResourceKey(ctx.resourceKey);
     const { baseUrl } = parseConfig(ctx.config);
     const token = await this.getAccessToken(ctx);
@@ -601,7 +608,7 @@ export class NinjaOneDriver implements IntegrationDriver {
         )
       : resourceScoped;
 
-    const records: DriverRecord[] = filtered.map((d) => {
+    const records: LegacyDriverRecord[] = filtered.map((d) => {
       const fields = normalizeNinjaOneRecordFields(d);
       return {
         externalId: String(d.id),

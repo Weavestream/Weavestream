@@ -17,6 +17,7 @@ import {
   type SidebarSection,
   type SidebarSwitcherEntry,
 } from './sidebar';
+import { SidebarActiveProvider } from './sidebar-active';
 import { MobileShellChrome } from './mobile-nav';
 import {
   StickyNoteProvider,
@@ -359,6 +360,7 @@ export function CompanyShell({
         },
       }}
     >
+    <SidebarActiveProvider>
     <SearchPaletteProvider
       scopedCompany={{ id: company.id, name: company.name }}
       defaults={me.searchDefaults}
@@ -397,6 +399,7 @@ export function CompanyShell({
         <ChatPanel />
       </div>
     </SearchPaletteProvider>
+    </SidebarActiveProvider>
     </ShellScopeProvider>
     </StickyNoteProvider>
     </TimezoneProvider>

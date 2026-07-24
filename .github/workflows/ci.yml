@@ -68,6 +68,12 @@ jobs:
     env:
       DATABASE_URL: postgresql://weavestream:weavestream@localhost:5432/weavestream_test
       REDIS_URL: redis://localhost:6379/0
+      # The company-PDF-export specs skip themselves when Poppler/libxml2
+      # are absent (a clean contributor checkout). CI provisions both
+      # below, so here a missing binary must fail the build instead —
+      # otherwise a broken install step silently drops the credential
+      # rendering and AES-256 encryption coverage.
+      WEAVESTREAM_REQUIRE_PDF_TOOLS: "1"
     steps:
       - uses: actions/checkout@v5
       - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
@@ -84,6 +90,12 @@ jobs:
       # audit_log immutability trigger from migration 0032) run against
       # a schema that matches production.
       - run: pnpm --filter @weavestream/db prisma:deploy
+      # The company-PDF-export specs shell out to poppler
+      # (pdftotext/pdfinfo/pdffonts) to verify rendered credential text and
+      # AES-256 encryption, and to xmllint to parse exported XMP.
+      # Neither ships on the ubuntu-24.04 runner image.
+      - name: Install PDF inspection tools (poppler-utils, libxml2-utils)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends poppler-utils libxml2-utils
       - run: pnpm -r test
 
   prisma-migrate-dry-run:

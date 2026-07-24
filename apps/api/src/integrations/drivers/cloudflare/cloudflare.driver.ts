@@ -70,6 +70,7 @@ export class CloudflareDriver {
       listSourceOrgs: false,
       dryRun: false,
       ticketing: false,
+      reconstructionCompleteness: false,
     },
   };
 

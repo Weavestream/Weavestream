@@ -2,11 +2,124 @@ import { AuditLogService } from './audit.service.js';
 
 function makePrisma() {
   return {
+    user: {
+      findFirst: jest.fn().mockResolvedValue({ id: 'actor-1' }),
+    },
     auditLog: {
       create: jest.fn().mockResolvedValue(undefined),
+      createMany: jest.fn().mockResolvedValue({ count: 0 }),
     },
   };
 }
+
+describe('AuditLogService integration transaction boundary', () => {
+  it('writes through the supplied transaction client', async () => {
+    const prisma = makePrisma();
+    const tx = {
+      auditLog: {
+        create: jest.fn().mockResolvedValue({ id: 'audit-1' }),
+      },
+    };
+    const svc = new AuditLogService(prisma as never);
+
+    await svc.logWithClient(tx as never, {
+      actorId: 'actor-1',
+      action: 'integration.asset.created',
+      entityType: 'Asset',
+      entityId: 'asset-1',
+      companyId: 'company-1',
+      after: { integrationId: 'integration-1', change: 'created' },
+    });
+
+    expect(tx.auditLog.create).toHaveBeenCalledTimes(1);
+    expect(prisma.auditLog.create).not.toHaveBeenCalled();
+  });
+
+  it('persists many transaction-scoped audit entries with one bounded write', async () => {
+    const prisma = makePrisma();
+    const tx = {
+      auditLog: {
+        create: jest.fn(),
+        createMany: jest.fn().mockResolvedValue({ count: 2 }),
+      },
+    };
+    const svc = new AuditLogService(prisma as never);
+
+    await svc.logManyWithClient(tx as never, [{
+      actorId: 'actor-1', action: 'integration.target.created',
+      entityType: 'IntegrationTarget', entityId: 'asset-1', companyId: 'company-1',
+      after: { targetId: 'asset-1' },
+    }, {
+      actorId: 'actor-1', action: 'integration.target.updated',
+      entityType: 'IntegrationTarget', entityId: 'asset-2', companyId: 'company-1',
+      after: { targetId: 'asset-2' },
+    }]);
+
+    expect(tx.auditLog.createMany).toHaveBeenCalledTimes(1);
+    expect(tx.auditLog.createMany).toHaveBeenCalledWith({ data: [
+      expect.objectContaining({ action: 'integration.target.created', entityId: 'asset-1' }),
+      expect.objectContaining({ action: 'integration.target.updated', entityId: 'asset-2' }),
+    ] });
+    expect(tx.auditLog.create).not.toHaveBeenCalled();
+    expect(prisma.auditLog.createMany).not.toHaveBeenCalled();
+  });
+
+  it('requires a persisted active authorized integration audit actor', async () => {
+    const prisma = makePrisma();
+    prisma.user.findFirst.mockResolvedValue(null);
+    const svc = new AuditLogService(prisma as never);
+
+    await expect(
+      svc.assertIntegrationActor('actor-1', 'company-1'),
+    ).rejects.toThrow('Integration audit actor is not active or authorized.');
+    expect(prisma.user.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ id: 'actor-1', isActive: true, deactivatedAt: null }),
+      }),
+    );
+  });
+
+  it('only authorizes an operator through an active, unexpired FULL membership', async () => {
+    const prisma = makePrisma();
+    const svc = new AuditLogService(prisma as never);
+
+    await svc.assertIntegrationActor('actor-1', 'company-1');
+
+    expect(prisma.user.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          OR: expect.arrayContaining([
+            expect.objectContaining({
+              role: 'OPERATOR',
+              OR: expect.arrayContaining([
+                {
+                  memberships: {
+                    some: {
+                      companyId: 'company-1',
+                      role: 'FULL',
+                      revokedAt: null,
+                      OR: [{ expiresAt: null }, { expiresAt: { gt: expect.any(Date) } }],
+                    },
+                  },
+                },
+                {
+                  globalAccess: 'FULL',
+                  memberships: {
+                    none: {
+                      companyId: 'company-1',
+                      revokedAt: null,
+                      OR: [{ expiresAt: null }, { expiresAt: { gt: expect.any(Date) } }],
+                    },
+                  },
+                },
+              ]),
+            }),
+          ]),
+        }),
+      }),
+    );
+  });
+});
 
 describe('AuditLogService.logChange (Phase 9a)', () => {
   it('writes a row containing only the changed fields', async () => {

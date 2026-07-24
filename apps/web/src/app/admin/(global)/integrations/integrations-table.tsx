@@ -8,6 +8,10 @@ import {
   Tag,
   type DataColumn,
 } from '../../../../components/ui';
+import {
+  describeSyncCron,
+  syncCronSortMinutes,
+} from '../../../../components/integrations/sync-schedule';
 
 /**
  * Phase 11 — table view for the global integration list.
@@ -142,12 +146,19 @@ export function IntegrationsTable({
         id: 'cron',
         header: 'Schedule',
         width: 180,
-        mono: true,
-        sortValue: (r) => r.effectiveSyncCron?.toLowerCase() ?? null,
+        sortValue: (r) => syncCronSortMinutes(r.effectiveSyncCron),
         render: (r) =>
           r.effectiveSyncCron ? (
-            <span style={{ color: 'var(--text-2)' }}>
-              {r.effectiveSyncCron}
+            <span
+              title={r.effectiveSyncCron}
+              style={{
+                color: 'var(--text-2)',
+                fontFamily: describeSyncCron(r.effectiveSyncCron)
+                  ? undefined
+                  : 'var(--font-mono)',
+              }}
+            >
+              {describeSyncCron(r.effectiveSyncCron) ?? r.effectiveSyncCron}
               {!r.syncCron && (
                 <span style={{ color: 'var(--dim)', marginLeft: 6 }}>
                   (default)
@@ -258,8 +269,11 @@ export function IntegrationsTable({
             )}
           </MobileCardRow>
           {r.effectiveSyncCron && (
-            <MobileCardRow label="Schedule" mono>
-              {r.effectiveSyncCron}
+            <MobileCardRow
+              label="Schedule"
+              mono={!describeSyncCron(r.effectiveSyncCron)}
+            >
+              {describeSyncCron(r.effectiveSyncCron) ?? r.effectiveSyncCron}
               {!r.syncCron && ' (default)'}
             </MobileCardRow>
           )}

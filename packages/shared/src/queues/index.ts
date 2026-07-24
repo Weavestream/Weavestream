@@ -222,11 +222,22 @@ export const integrationSyncOrchestratorJobSchema = z.discriminatedUnion('kind',
   z.object({
     kind: z.literal('scheduled'),
     integrationId: z.string().uuid(),
+    mode: z.enum(['incremental', 'full']).optional(),
   }),
   z.object({
     kind: z.literal('manual'),
     integrationId: z.string().uuid(),
+    /**
+     * Rolling-upgrade compatibility: jobs enqueued by a pre-DAG API
+     * (≤ the release before reconstruction sync) carry no `syncRunId`.
+     * Those jobs survive the upgrade in Redis, so the field must stay
+     * optional until every supported upgrade path has drained them —
+     * the worker falls back to the legacy most-recent-queued-run lookup
+     * when it is absent. New producers always set it.
+     */
+    syncRunId: z.string().uuid().optional(),
     triggeredBy: z.string().uuid(),
+    mode: z.enum(['incremental', 'full']).default('incremental'),
     /**
      * When true the worker computes every resolution but writes nothing
      * — used by the admin UI's "Test sync" button to validate mappings.
@@ -267,7 +278,37 @@ export const integrationSyncMappingJobSchema = z.object({
    * mapping's `IntegrationSyncRunCompanyResult.totals.byResource`.
    */
   resourceId: z.string().uuid(),
+  mode: z.enum(['incremental', 'full']).default('incremental'),
+  stageIndex: z.number().int().nonnegative().optional(),
+  /**
+   * Present on every job the DAG-aware orchestrator enqueues: the full
+   * dependency-ordered resource set the single per-mapping job executes.
+   *
+   * Absent exactly on legacy-generation jobs — a pre-DAG orchestrator
+   * fanned out one job per (mapping, resource) and those jobs survive an
+   * upgrade in Redis. The worker keys its compatibility branch on this
+   * field (`resourceIds` absent ⇒ legacy per-resource semantics), so it
+   * must stay optional until every supported upgrade path has drained
+   * pre-DAG queues. Do not make it required.
+   */
+  resourceIds: z.array(z.string().uuid()).max(64).optional(),
+  auditActorId: z.string().uuid().nullable().optional(),
   dryRun: z.boolean().default(false),
+}).superRefine((job, ctx) => {
+  if (job.resourceIds && new Set(job.resourceIds).size !== job.resourceIds.length) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['resourceIds'],
+      message: 'resourceIds must be unique',
+    });
+  }
+  if (job.resourceIds && !job.resourceIds.includes(job.resourceId)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['resourceIds'],
+      message: 'resourceIds must contain resourceId',
+    });
+  }
 });
 
 export type IntegrationSyncMappingJob = z.infer<
@@ -432,4 +473,3 @@ export const UploadReaperJobNames = {
 } as const;
 export type UploadReaperJobName =
   (typeof UploadReaperJobNames)[keyof typeof UploadReaperJobNames];
-

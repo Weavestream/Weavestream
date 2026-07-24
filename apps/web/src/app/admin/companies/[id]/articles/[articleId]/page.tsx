@@ -11,7 +11,7 @@ import {
 } from '../../../../../../lib/server-api';
 import { canWriteCompany } from '../../../../../../lib/roles';
 import { TopBar } from '../../../../../../components/shell/top-bar';
-import { Icon, LinkBtn, Panel, StarButton, Tag } from '../../../../../../components/ui';
+import { Icon, LinkBtn, Panel, ShowMore, StarButton, Tag } from '../../../../../../components/ui';
 import { buildTerm } from '../../../../../../lib/term';
 import { companyCrumbs } from '../../../../../../lib/company-crumbs';
 import { ArticleBody } from '../../../../../../components/editor/article-body';
@@ -22,6 +22,10 @@ import { LinkedItemsPanel } from '../../../../../../components/relations';
 import { AttachmentsPanel } from '../../../../../../components/upload/attachments-panel';
 import { ArticleActions } from '../article-actions';
 import { HistoryTrigger } from './history-trigger';
+import {
+  ProvenanceBadge,
+  provenanceAttention,
+} from '../../../../../../components/integrations/provenance-badge';
 
 export async function generateMetadata({
   params,
@@ -225,20 +229,28 @@ export default async function ArticleReadPage({
             entityId={article.id}
             editable={manage && !article.archivedAt}
           />
-          <Panel title="Last activity">
-            <Row label="Created" value={new Date(article.createdAt).toLocaleString()} />
-            {article.createdByUser && (
-              <Row label="Created by" value={article.createdByUser.name} />
-            )}
-            <Row
-              label="Updated"
-              value={new Date(article.updatedAt).toLocaleString()}
-              last={!article.updatedByUser}
-            />
-            {article.updatedByUser && (
-              <Row label="Updated by" value={article.updatedByUser.name} last />
-            )}
-          </Panel>
+          <ShowMore attention={provenanceAttention(article.provenance)}>
+            <Panel title="Last activity">
+              <Row label="Created" value={new Date(article.createdAt).toLocaleString()} />
+              {article.createdByUser && (
+                <Row label="Created by" value={article.createdByUser.name} />
+              )}
+              <Row
+                label="Updated"
+                value={new Date(article.updatedAt).toLocaleString()}
+                last={!article.updatedByUser}
+              />
+              {article.updatedByUser && (
+                <Row label="Updated by" value={article.updatedByUser.name} last />
+              )}
+            </Panel>
+            {article.provenance.map((provenance) => (
+              <ProvenanceBadge
+                key={`${provenance.integrationId}:${provenance.resourceId}`}
+                provenance={provenance}
+              />
+            ))}
+          </ShowMore>
         </aside>
       </div>
     </>

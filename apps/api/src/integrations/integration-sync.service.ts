@@ -10,6 +10,7 @@ import {
   QueueNames,
   stripNul,
   syncRunTotalsSchema,
+  type IntegrationSyncMode,
   type IntegrationSyncRunCompanyResultDto,
   type IntegrationSyncRunDto,
   type SyncRunConflict,
@@ -18,6 +19,7 @@ import {
 } from '@weavestream/shared';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service.js';
+import { isUniqueConstraintError } from '../prisma/prisma-errors.js';
 import { AuditLogService } from '../audit/audit.service.js';
 import { AUDIT_ACTIONS } from '../audit/audit-actions.js';
 import { QueuesService } from '../queues/queues.service.js';
@@ -120,6 +122,7 @@ export class IntegrationSyncService {
     integrationId: string,
     dryRun: boolean,
     meta: AuditMeta,
+    mode: IntegrationSyncMode = 'incremental',
   ): Promise<IntegrationSyncRunDto> {
     const integration = await this.prisma.integration.findUnique({
       where: { id: integrationId },
@@ -148,8 +151,10 @@ export class IntegrationSyncService {
       where: {
         integrationId,
         enabled: true,
-        assetLayoutId: { not: null },
-        fieldMappings: { some: {} },
+        OR: [
+          { targetKind: { not: 'asset' } },
+          { targetKind: 'asset', assetLayoutId: { not: null }, fieldMappings: { some: {} } },
+        ],
       },
     });
     if (enabledResourceCount === 0) {
@@ -158,22 +163,35 @@ export class IntegrationSyncService {
       );
     }
 
-    const run = await this.prisma.integrationSyncRun.create({
-      data: {
-        integrationId,
-        kind: 'manual',
-        status: 'queued',
-        dryRun,
-        triggeredBy: actor.id,
-      },
-    });
+    let run;
+    try {
+      run = await this.prisma.integrationSyncRun.create({
+        data: {
+          integrationId,
+          kind: 'manual',
+          mode,
+          status: 'queued',
+          dryRun,
+          triggeredBy: actor.id,
+        },
+      });
+    } catch (error) {
+      if (mode === 'full' && isUniqueConstraintError(error)) {
+        throw new BadRequestException(
+          'A scheduled sync or full reconstruction sync is already queued or running for this integration.',
+        );
+      }
+      throw error;
+    }
 
     await this.queues.get(QueueNames.integrationSyncOrchestrator).add(
       IntegrationSyncOrchestratorJobNames.manual,
       {
         kind: 'manual',
         integrationId,
+        syncRunId: run.id,
         triggeredBy: actor.id,
+        mode,
         dryRun,
       },
       {
@@ -191,11 +209,160 @@ export class IntegrationSyncService {
       ip: meta.ip,
       userAgent: meta.userAgent,
       before: null,
-      after: { kind: 'manual', dryRun, mappings: enabledMappingCount },
+      after: { kind: 'manual', mode, dryRun, mappings: enabledMappingCount },
     });
 
     const userIndex = await this.resolveTriggeredByUsers([run]);
     return toRunDto(run, userIndex);
+  }
+
+  /**
+   * Choose a scheduled mode from durable full checkpoints. Every enabled
+   * mapping × enabled/configured resource scope must have completed a full
+   * traversal in the preceding 24 hours; raw or disabled checkpoint rows do
+   * not satisfy the requirement.
+   */
+  async selectScheduledMode(
+    integrationId: string,
+    now = new Date(),
+  ): Promise<IntegrationSyncMode> {
+    const activeFull = await this.prisma.integrationSyncRun.count({
+      where: {
+        integrationId,
+        mode: 'full',
+        status: { in: ['queued', 'running'] },
+      },
+    });
+    if (activeFull > 0) return 'incremental';
+
+    const configuredResourceWhere = {
+      integrationId,
+      enabled: true,
+      OR: [
+        { targetKind: { not: 'asset' as const } },
+        {
+          targetKind: 'asset' as const,
+          assetLayoutId: { not: null },
+          fieldMappings: { some: {} },
+        },
+      ],
+    };
+    const [mappingCount, resourceCount] = await Promise.all([
+      this.prisma.integrationCompanyMapping.count({
+        where: { integrationId, enabled: true },
+      }),
+      this.prisma.integrationResource.count({ where: configuredResourceWhere }),
+    ]);
+    const expectedScopes = mappingCount * resourceCount;
+    if (expectedScopes === 0) return 'incremental';
+
+    const fullCutoff = new Date(now.getTime() - 24 * 60 * 60 * 1_000);
+    const recentFullCheckpoints = await this.prisma.integrationSyncCheckpoint.count({
+      where: {
+        mode: 'full',
+        lastFullCompletedAt: { gte: fullCutoff },
+        companyMapping: { integrationId, enabled: true },
+        resource: configuredResourceWhere,
+      },
+    });
+    return recentFullCheckpoints >= expectedScopes ? 'incremental' : 'full';
+  }
+
+  /** Persist the scheduled decision once, before any fan-out or retry. */
+  async createScheduledRun(
+    integrationId: string,
+    requestedMode?: IntegrationSyncMode,
+    now = new Date(),
+    deliveryKey?: string,
+  ) {
+    if (deliveryKey) {
+      const persisted = await this.prisma.integrationSyncRun.findUnique({
+        where: { deliveryKey },
+      });
+      if (persisted) return { ...persisted, shouldBegin: canBeginPersistedDelivery(persisted.status) };
+    }
+
+    const activeBlocker = await this.findActiveScheduledBlocker(integrationId);
+    if (activeBlocker) {
+      return { ...activeBlocker, shouldBegin: false as const };
+    }
+
+    let mode = requestedMode ?? await this.selectScheduledMode(integrationId, now);
+    if (mode === 'full') {
+      const activeFull = await this.prisma.integrationSyncRun.count({
+        where: {
+          integrationId,
+          mode: 'full',
+          status: { in: ['queued', 'running'] },
+        },
+      });
+      if (activeFull > 0) mode = 'incremental';
+    }
+
+    try {
+      const created = await this.prisma.integrationSyncRun.create({
+        data: {
+          integrationId,
+          kind: 'scheduled',
+          mode,
+          status: 'queued',
+          dryRun: false,
+          ...(deliveryKey ? { deliveryKey } : {}),
+        },
+      });
+      return { ...created, shouldBegin: true as const };
+    } catch (error) {
+      if (!isUniqueConstraintError(error)) throw error;
+      if (deliveryKey) {
+        const persisted = await this.prisma.integrationSyncRun.findUnique({
+          where: { deliveryKey },
+        });
+        if (persisted) return { ...persisted, shouldBegin: canBeginPersistedDelivery(persisted.status) };
+      }
+
+      const raceWinner = await this.findActiveScheduledBlocker(integrationId);
+      if (raceWinner) return { ...raceWinner, shouldBegin: false as const };
+
+      if (mode !== 'full') throw error;
+      // A manual full may have won the separate full-run guard. Scheduled
+      // work may continue incrementally, but remains subject to the durable
+      // scheduled single-flight guard below.
+      try {
+        const created = await this.prisma.integrationSyncRun.create({
+          data: {
+            integrationId,
+            kind: 'scheduled',
+            mode: 'incremental',
+            status: 'queued',
+            dryRun: false,
+            ...(deliveryKey ? { deliveryKey } : {}),
+          },
+        });
+        return { ...created, shouldBegin: true as const };
+      } catch (fallbackError) {
+        if (!isUniqueConstraintError(fallbackError)) throw fallbackError;
+        if (deliveryKey) {
+          const persisted = await this.prisma.integrationSyncRun.findUnique({
+            where: { deliveryKey },
+          });
+          if (persisted) return { ...persisted, shouldBegin: canBeginPersistedDelivery(persisted.status) };
+        }
+        const fallbackWinner = await this.findActiveScheduledBlocker(integrationId);
+        if (fallbackWinner) return { ...fallbackWinner, shouldBegin: false as const };
+        throw fallbackError;
+      }
+    }
+  }
+
+  private findActiveScheduledBlocker(integrationId: string) {
+    return this.prisma.integrationSyncRun.findFirst({
+      where: {
+        integrationId,
+        status: { in: ['queued', 'running'] },
+        OR: [{ kind: 'scheduled' }, { mode: 'full' }],
+      },
+      orderBy: [{ mode: 'desc' }, { status: 'desc' }, { createdAt: 'asc' }],
+    });
   }
 
   // -------------------------------------------------------------------
@@ -214,12 +381,13 @@ export class IntegrationSyncService {
    * still outstanding before the row reaches a terminal state.
    */
   async beginRun(runId: string): Promise<{
-    run: { id: string; integrationId: string; dryRun: boolean };
+    run: { id: string; integrationId: string; mode: IntegrationSyncMode; dryRun: boolean };
     jobs: Array<{
       mappingId: string;
       resourceId: string;
-      resourceKey: string;
+      resourceIds: string[];
       companyId: string;
+      auditActorId: string | null;
     }>;
   }> {
     const run = await this.prisma.integrationSyncRun.findUnique({
@@ -227,8 +395,12 @@ export class IntegrationSyncService {
       select: {
         id: true,
         integrationId: true,
+        mode: true,
         dryRun: true,
         status: true,
+        startedAt: true,
+        triggeredBy: true,
+        integration: { select: { createdBy: true } },
       },
     });
     if (!run) throw new NotFoundException(`Sync run ${runId} not found`);
@@ -246,27 +418,101 @@ export class IntegrationSyncService {
       where: {
         integrationId: run.integrationId,
         enabled: true,
-        // Skip half-configured resources so a missing layout on one
-        // resource doesn't block sync for the other resources of the
-        // same integration.
-        assetLayoutId: { not: null },
-        fieldMappings: { some: {} },
+        OR: [
+          { targetKind: { not: 'asset' } },
+          { targetKind: 'asset', assetLayoutId: { not: null }, fieldMappings: { some: {} } },
+        ],
       },
-      select: { id: true, resourceKey: true },
+      select: { id: true, resourceKey: true, dependsOnResourceKeys: true },
     });
+    let orderedResources = resources;
+    try {
+      orderedResources = buildResourceExecutionStages(resources).flat();
+    } catch {
+      // Missing/disabled dependencies are carried to the worker so it can
+      // produce a visible bounded skip instead of silently omitting them.
+    }
+    const resourceIds = orderedResources.map((resource) => resource.id);
+    const auditActorId = run.triggeredBy ?? run.integration.createdBy ?? null;
+    const jobs = resourceIds.length === 0
+      ? []
+      : mappings.map((mapping) => ({
+          mappingId: mapping.id,
+          resourceId: resourceIds[0]!,
+          resourceIds,
+          companyId: mapping.companyId,
+          auditActorId,
+        }));
 
-    const jobs = mappings.flatMap((m) =>
-      resources.map((r) => ({
-        mappingId: m.id,
-        resourceId: r.id,
-        resourceKey: r.resourceKey,
-        companyId: m.companyId,
-      })),
-    );
+    if (jobs.length === 0) {
+      const finishedAt = new Date();
+      const totals = zeroAggregateTotals();
+      const finalized = await this.prisma.$transaction(async (tx) => {
+        const transition = await tx.integrationSyncRun.updateMany({
+          where: { id: runId, status: { in: ['queued', 'running'] } },
+          data: {
+            status: 'succeeded',
+            startedAt: run.startedAt ?? finishedAt,
+            finishedAt,
+            totals: totals as unknown as Prisma.InputJsonValue,
+            error: null,
+          },
+        });
+        if (transition.count === 0) return false;
+
+        for (const mapping of mappings) {
+          await tx.integrationSyncRunCompanyResult.upsert({
+            where: {
+              syncRunId_integrationCompanyMappingId: {
+                syncRunId: runId,
+                integrationCompanyMappingId: mapping.id,
+              },
+            },
+            create: {
+              syncRunId: runId,
+              integrationCompanyMappingId: mapping.id,
+              companyId: mapping.companyId,
+              status: 'succeeded',
+              startedAt: finishedAt,
+              finishedAt,
+              totals: totals as unknown as Prisma.InputJsonValue,
+            },
+            update: {},
+          });
+        }
+        await tx.integration.update({
+          where: { id: run.integrationId },
+          data: { lastRunAt: finishedAt, lastRunStatus: 'succeeded' },
+        });
+        return true;
+      });
+
+      if (finalized) {
+        await this.audit.log({
+          actorId: auditActorId,
+          action: AUDIT_ACTIONS.integration.syncRunFinished,
+          entityType: 'IntegrationSyncRun',
+          entityId: runId,
+          ip: '0.0.0.0',
+          userAgent: 'worker',
+          before: null,
+          after: { totals },
+        });
+      }
+      return {
+        run: {
+          id: run.id,
+          integrationId: run.integrationId,
+          mode: run.mode,
+          dryRun: run.dryRun,
+        },
+        jobs: [],
+      };
+    }
 
     await this.prisma.$transaction(async (tx) => {
-      await tx.integrationSyncRun.update({
-        where: { id: runId },
+      await tx.integrationSyncRun.updateMany({
+        where: { id: runId, status: 'queued' },
         data: { status: 'running', startedAt: new Date() },
       });
       for (const m of mappings) {
@@ -289,29 +535,35 @@ export class IntegrationSyncService {
               ? (zeroAggregateTotals() as unknown as Prisma.InputJsonValue)
               : Prisma.JsonNull,
           },
-          update: {
-            status: resourcesForMapping === 0 ? 'succeeded' : 'queued',
-            error: null,
-            totals: resourcesForMapping === 0
-              ? (zeroAggregateTotals() as unknown as Prisma.InputJsonValue)
-              : Prisma.JsonNull,
-            conflicts: Prisma.JsonNull,
-          },
+          update: {},
         });
       }
     });
 
-    for (const job of jobs) {
+    const queuedResults = await this.prisma.integrationSyncRunCompanyResult.findMany({
+      where: { syncRunId: runId, status: 'queued' },
+      select: { integrationCompanyMappingId: true, status: true },
+    });
+    const queuedMappingIds = new Set(
+      queuedResults
+        .filter((result) => result.status === 'queued')
+        .map((result) => result.integrationCompanyMappingId),
+    );
+    const fanoutJobs = jobs.filter((job) => queuedMappingIds.has(job.mappingId));
+    for (const job of fanoutJobs) {
       await this.queues.get(QueueNames.integrationSyncMapping).add(
         IntegrationSyncMappingJobNames.syncMapping,
         {
           syncRunId: runId,
           integrationCompanyMappingId: job.mappingId,
           resourceId: job.resourceId,
+          resourceIds: job.resourceIds,
+          auditActorId: job.auditActorId,
+          mode: run.mode,
           dryRun: run.dryRun,
         },
         {
-          jobId: `mapping-${runId}-${job.mappingId}-${job.resourceId}`,
+          jobId: `mapping-${runId}-${job.mappingId}`,
           attempts: 3,
           backoff: { type: 'exponential', delay: 10_000 },
         },
@@ -319,8 +571,8 @@ export class IntegrationSyncService {
     }
 
     return {
-      run: { id: run.id, integrationId: run.integrationId, dryRun: run.dryRun },
-      jobs,
+      run: { id: run.id, integrationId: run.integrationId, mode: run.mode, dryRun: run.dryRun },
+      jobs: fanoutJobs,
     };
   }
 
@@ -374,6 +626,7 @@ export class IntegrationSyncService {
         current?.totals,
         args.resourceKey,
         resourceTotals,
+        args.status,
       );
       const existingConflicts = appendConflicts(
         current?.conflicts,
@@ -384,27 +637,17 @@ export class IntegrationSyncService {
         Object.keys(existingTotals.byResource ?? {}),
       );
       const allDone = completedKeys.size >= args.expectedResources;
-      // Aggregate failure: the whole row fails if ANY resource
-      // failed. Otherwise we wait until everyone has reported in.
-      const previousFailure = current?.status === 'failed';
+      const anyResourceFailed = Object.values(
+        existingTotals.byResource ?? {},
+      ).some((resource) => resource.status === 'failed');
       const nextStatus: 'queued' | 'running' | 'succeeded' | 'failed' =
-        args.status === 'failed' || previousFailure
-          ? allDone
-            ? 'failed'
-            : 'running'
-          : allDone
-            ? 'succeeded'
-            : 'running';
+        !allDone ? 'running' : anyResourceFailed ? 'failed' : 'succeeded';
 
-      const mergedError =
-        args.error && current?.error
-          ? `${current.error}\n[${args.resourceKey}] ${args.error}`.slice(
-              0,
-              4_000,
-            )
-          : args.error
-            ? `[${args.resourceKey}] ${args.error}`.slice(0, 4_000)
-            : current?.error ?? null;
+      const mergedError = replaceResourceError(
+        current?.error,
+        args.resourceKey,
+        args.error,
+      );
 
       await tx.integrationSyncRunCompanyResult.update({
         where: { id: current!.id },
@@ -452,6 +695,7 @@ export class IntegrationSyncService {
       include: { companyResults: true },
     });
     if (!run) return;
+    if (run.status === 'cancelled') return;
 
     const aggregated = aggregateTotals(run.companyResults.map((r) => r.totals));
     const anyFailed = run.companyResults.some((r) => r.status === 'failed');
@@ -462,9 +706,9 @@ export class IntegrationSyncService {
 
     const status = anyFailed ? 'failed' : 'succeeded';
 
-    await this.prisma.$transaction(async (tx) => {
-      await tx.integrationSyncRun.update({
-        where: { id: runId },
+    const finalized = await this.prisma.$transaction(async (tx) => {
+      const transition = await tx.integrationSyncRun.updateMany({
+        where: { id: runId, status: { in: ['queued', 'running'] } },
         data: {
           status,
           finishedAt: new Date(),
@@ -478,6 +722,9 @@ export class IntegrationSyncService {
             : null,
         },
       });
+      // Cancellation can race the read above. The conditional transition is
+      // authoritative and prevents a late child from reviving the run.
+      if (transition.count === 0) return false;
       await tx.integration.update({
         where: { id: run.integrationId },
         data: {
@@ -485,7 +732,9 @@ export class IntegrationSyncService {
           lastRunStatus: status,
         },
       });
+      return true;
     });
+    if (!finalized) return;
 
     await this.audit.log({
       actorId,
@@ -502,20 +751,92 @@ export class IntegrationSyncService {
     });
   }
 
+  /** Final-attempt fallback for mapping jobs that throw outside a resource outcome. */
+  async failMappingJob(args: {
+    runId: string;
+    mappingId: string;
+    error: string;
+    actorId: string | null;
+  }): Promise<void> {
+    const current = await this.prisma.integrationSyncRunCompanyResult.findUnique({
+      where: {
+        syncRunId_integrationCompanyMappingId: {
+          syncRunId: args.runId,
+          integrationCompanyMappingId: args.mappingId,
+        },
+      },
+      select: {
+        id: true,
+        companyId: true,
+        totals: true,
+        conflicts: true,
+        syncRun: {
+          select: {
+            triggeredBy: true,
+            integration: { select: { createdBy: true } },
+          },
+        },
+      },
+    });
+    if (!current) return;
+    const auditActorId =
+      args.actorId ??
+      current.syncRun.triggeredBy ??
+      current.syncRun.integration.createdBy ??
+      null;
+    const parsedTotals = syncRunTotalsSchema.safeParse(current.totals);
+    const totals = parsedTotals.success ? parsedTotals.data : zeroAggregateTotals();
+    totals.errors += 1;
+    const conflicts = appendConflicts(
+      current.conflicts,
+      '__mapping__',
+      [{
+        kind: 'driver_error',
+        externalId: '',
+        message: args.error.slice(0, 500),
+      }],
+    );
+    await this.prisma.integrationSyncRunCompanyResult.update({
+      where: { id: current.id },
+      data: {
+        status: 'failed',
+        finishedAt: new Date(),
+        totals: stripNul(totals) as unknown as Prisma.InputJsonValue,
+        conflicts: stripNul(conflicts) as unknown as Prisma.InputJsonValue,
+        error: stripNul(args.error.slice(0, 4_000)),
+      },
+    });
+    await this.audit.log({
+      actorId: auditActorId,
+      action: AUDIT_ACTIONS.integration.syncMappingFailed,
+      entityType: 'IntegrationCompanyMapping',
+      entityId: args.mappingId,
+      companyId: current.companyId,
+      ip: '0.0.0.0',
+      userAgent: 'worker',
+      before: null,
+      after: { runId: args.runId, error: args.error.slice(0, 4_000) },
+    });
+    await this.closeRun(args.runId, auditActorId);
+  }
+
   /** Worker-side: bail out a run that exploded outside per-mapping scope. */
   async failRun(runId: string, error: string): Promise<void> {
     const run = await this.prisma.integrationSyncRun.findUnique({
       where: { id: runId },
     });
     if (!run) return;
-    await this.prisma.integrationSyncRun.update({
-      where: { id: runId },
+    const transition = await this.prisma.integrationSyncRun.updateMany({
+      where: { id: runId, status: { in: ['queued', 'running'] } },
       data: {
         status: 'failed',
         finishedAt: new Date(),
         error: error.slice(0, 4_000),
       },
     });
+    // Replayed deliveries and cancellation can race this final-attempt
+    // fallback. A settled outcome is authoritative — never rewrite it.
+    if (transition.count === 0) return;
     await this.audit.log({
       actorId: run.triggeredBy,
       action: AUDIT_ACTIONS.integration.syncRunFailed,
@@ -551,6 +872,46 @@ export class IntegrationSyncService {
   }
 }
 
+export interface ResourceExecutionNode {
+  id: string;
+  resourceKey: string;
+  dependsOnResourceKeys: string[];
+}
+
+export function buildResourceExecutionStages<T extends ResourceExecutionNode>(
+  resources: readonly T[],
+): T[][] {
+  const byKey = new Map(resources.map((resource) => [resource.resourceKey, resource]));
+  if (byKey.size !== resources.length) throw new BadRequestException('Resource keys must be unique.');
+  for (const resource of resources) {
+    for (const dependency of resource.dependsOnResourceKeys) {
+      if (!byKey.has(dependency)) {
+        throw new BadRequestException(
+          `Resource ${resource.resourceKey} has missing dependency ${dependency}.`,
+        );
+      }
+    }
+  }
+  const pending = new Map(byKey);
+  const completed = new Set<string>();
+  const stages: T[][] = [];
+  while (pending.size > 0) {
+    const stage = resources.filter((resource) =>
+      pending.has(resource.resourceKey) &&
+      resource.dependsOnResourceKeys.every((dependency) => completed.has(dependency)),
+    );
+    if (stage.length === 0) {
+      throw new BadRequestException('Resource dependency graph contains a cycle.');
+    }
+    stages.push(stage);
+    for (const resource of stage) {
+      pending.delete(resource.resourceKey);
+      completed.add(resource.resourceKey);
+    }
+  }
+  return stages;
+}
+
 // ---------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------
@@ -562,6 +923,7 @@ function toRunDto(
     id: string;
     integrationId: string;
     kind: 'manual' | 'scheduled';
+    mode: IntegrationSyncMode;
     status: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
     dryRun: boolean;
     triggeredBy: string | null;
@@ -578,6 +940,7 @@ function toRunDto(
     id: row.id,
     integrationId: row.integrationId,
     kind: row.kind,
+    mode: row.mode,
     status: row.status,
     dryRun: row.dryRun,
     triggeredBy: row.triggeredBy,
@@ -620,6 +983,18 @@ function aggregateTotals(values: unknown[]): SyncRunTotals {
   return acc;
 }
 
+/**
+ * A redelivered scheduled occurrence may only re-enter `beginRun` while its
+ * persisted run is still claimable. A settled delivery must coalesce instead:
+ * `beginRun` throws on terminal statuses, and the final-attempt `failRun`
+ * fallback would then rewrite the settled outcome as failed.
+ */
+function canBeginPersistedDelivery(
+  status: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled',
+): boolean {
+  return status === 'queued' || status === 'running';
+}
+
 const TOTAL_KEYS = [
   'fetched',
   'created',
@@ -630,6 +1005,11 @@ const TOTAL_KEYS = [
   'skippedAmbiguous',
   'skippedManual',
   'skippedArchived',
+  'stale',
+  'restored',
+  'blocked',
+  'secretBlocked',
+  'missingDependency',
   'errors',
 ] as const satisfies ReadonlyArray<keyof SyncRunResourceTotals>;
 
@@ -644,6 +1024,11 @@ export function zeroResourceTotals(): SyncRunResourceTotals {
     skippedAmbiguous: 0,
     skippedManual: 0,
     skippedArchived: 0,
+    stale: 0,
+    restored: 0,
+    blocked: 0,
+    secretBlocked: 0,
+    missingDependency: 0,
     errors: 0,
   };
 }
@@ -655,21 +1040,18 @@ export function zeroAggregateTotals(): SyncRunTotals {
 /**
  * Fold one resource's per-record counters into the per-mapping result
  * row's `byResource` map AND into the top-level summed counters.
- * Idempotent on a fresh `byResource` entry; each resource only reports
- * once per run so we don't need to deduplicate.
+ * A retry replaces the prior resource entry and the top-level totals are
+ * re-derived from the map, so replay cannot double-count.
  */
-function mergeAggregate(
+export function mergeAggregate(
   raw: unknown,
   resourceKey: string,
   resourceTotals: SyncRunTotals,
+  status: 'succeeded' | 'failed',
 ): SyncRunTotals {
   const acc: SyncRunTotals = zeroAggregateTotals();
   if (raw && typeof raw === 'object') {
     const r = raw as Record<string, unknown>;
-    for (const k of TOTAL_KEYS) {
-      const n = Number(r[k] ?? 0);
-      if (Number.isFinite(n)) acc[k] = n;
-    }
     const existingByResource = r.byResource;
     if (existingByResource && typeof existingByResource === 'object') {
       acc.byResource = {} as Record<string, SyncRunResourceTotals>;
@@ -683,11 +1065,11 @@ function mergeAggregate(
           const n = Number(partial[k] ?? 0);
           if (Number.isFinite(n)) totals[k] = n;
         }
+        totals.status = partial.status === 'failed' ? 'failed' : 'succeeded';
         acc.byResource![key] = totals;
       }
     }
   }
-  for (const k of TOTAL_KEYS) acc[k] += resourceTotals[k];
   acc.byResource = acc.byResource ?? {};
   acc.byResource[resourceKey] = {
     fetched: resourceTotals.fetched,
@@ -699,8 +1081,17 @@ function mergeAggregate(
     skippedAmbiguous: resourceTotals.skippedAmbiguous,
     skippedManual: resourceTotals.skippedManual,
     skippedArchived: resourceTotals.skippedArchived,
+    stale: resourceTotals.stale,
+    restored: resourceTotals.restored,
+    blocked: resourceTotals.blocked,
+    secretBlocked: resourceTotals.secretBlocked,
+    missingDependency: resourceTotals.missingDependency,
     errors: resourceTotals.errors,
+    status,
   };
+  for (const totals of Object.values(acc.byResource)) {
+    for (const k of TOTAL_KEYS) acc[k] += totals[k];
+  }
   return acc;
 }
 
@@ -717,7 +1108,20 @@ function appendConflicts(
     ? (raw as ConflictWithResource[])
     : [];
   return [
-    ...existing,
+    ...existing.filter((conflict) => conflict.resourceKey !== resourceKey),
     ...next.map((c) => ({ ...c, resourceKey })),
   ];
+}
+
+function replaceResourceError(
+  raw: string | null | undefined,
+  resourceKey: string,
+  next: string | null,
+): string | null {
+  const prefix = `[${resourceKey}] `;
+  const retained = (raw ?? '')
+    .split('\n')
+    .filter((line) => line.length > 0 && !line.startsWith(prefix));
+  if (next) retained.push(`${prefix}${next.replace(/\s+/g, ' ')}`);
+  return retained.join('\n').slice(0, 4_000) || null;
 }

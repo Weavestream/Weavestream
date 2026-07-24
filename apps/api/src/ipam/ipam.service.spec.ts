@@ -1,4 +1,5 @@
-import { computeUtilization } from './ipam.service.js';
+import { ConflictException } from '@nestjs/common';
+import { computeUtilization, IpamService } from './ipam.service.js';
 import {
   normalizeCidrV4,
   usableHostCount,
@@ -114,5 +115,84 @@ describe('computeUtilization', () => {
     expect(result.totalUsable).toBe(1);
     expect(result.claimed).toBe(1);
     expect(result.free).toBe(0);
+  });
+});
+
+describe('canonical CIDR write races', () => {
+  const actor = { id: '51000000-0000-0000-0000-000000000002' };
+  const companyId = '51000000-0000-0000-0000-000000000001';
+  const subnetId = '51000000-0000-0000-0000-000000000004';
+  const meta = { ip: '127.0.0.1', userAgent: 'jest' };
+  const uniqueError = () => Object.assign(new Error('unique'), { code: 'P2002' });
+  const subnet = (archivedAt: Date | null = null) => ({
+    id: subnetId,
+    companyId,
+    name: 'LAN',
+    cidr: '10.0.0.0/24',
+    prefix: 24,
+    vlanId: null,
+    gateway: null,
+    dhcpRangeStart: null,
+    dhcpRangeEnd: null,
+    description: null,
+    archivedAt,
+    createdBy: actor.id,
+    updatedBy: actor.id,
+    createdAt: new Date('2026-07-01T00:00:00.000Z'),
+    updatedAt: new Date('2026-07-01T00:00:00.000Z'),
+  });
+
+  it('maps a create race lost at the canonical unique index to ConflictException', async () => {
+    const prisma = {
+      subnet: {
+        findFirst: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockRejectedValue(uniqueError()),
+      },
+    };
+    const service = new IpamService(prisma as never, { log: jest.fn() } as never);
+
+    await expect(service.createSubnet(
+      actor as never,
+      companyId,
+      { name: 'LAN', cidr: '10.0.0.42/24' },
+      meta,
+    )).rejects.toBeInstanceOf(ConflictException);
+  });
+
+  it('maps update and restore races lost at the canonical unique index to ConflictException', async () => {
+    const active = subnet();
+    const updatePrisma = {
+      subnet: {
+        findFirst: jest.fn()
+          .mockResolvedValueOnce(active)
+          .mockResolvedValueOnce(null),
+        updateMany: jest.fn().mockRejectedValue(uniqueError()),
+      },
+    };
+    const updateService = new IpamService(updatePrisma as never, { log: jest.fn() } as never);
+    await expect(updateService.updateSubnet(
+      actor as never,
+      companyId,
+      subnetId,
+      { cidr: '10.1.0.42/24' },
+      meta,
+    )).rejects.toBeInstanceOf(ConflictException);
+
+    const archived = subnet(new Date('2026-07-02T00:00:00.000Z'));
+    const restorePrisma = {
+      subnet: {
+        findFirst: jest.fn()
+          .mockResolvedValueOnce(archived)
+          .mockResolvedValueOnce(null),
+        updateMany: jest.fn().mockRejectedValue(uniqueError()),
+      },
+    };
+    const restoreService = new IpamService(restorePrisma as never, { log: jest.fn() } as never);
+    await expect(restoreService.restoreSubnet(
+      actor as never,
+      companyId,
+      subnetId,
+      meta,
+    )).rejects.toBeInstanceOf(ConflictException);
   });
 });

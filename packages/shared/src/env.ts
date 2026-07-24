@@ -117,7 +117,7 @@ export const envSchema = z.object({
   // repeat pattern when an Integration row sets `syncCron = null` and
   // status = ACTIVE. Set to the literal string "off" to disable the
   // global scheduler — manual runs from the admin UI still work.
-  INTEGRATION_SYNC_DEFAULT_CRON: z.string().min(1).default('0 */4 * * *'),
+  INTEGRATION_SYNC_DEFAULT_CRON: z.string().min(1).default('*/15 * * * *'),
   INTEGRATION_SYNC_ORCHESTRATOR_CONCURRENCY: intFromString(1, 50).default(2),
   INTEGRATION_SYNC_MAPPING_CONCURRENCY: intFromString(1, 100).default(5),
   INTEGRATION_HTTP_TIMEOUT_MS: intFromString(1_000, 120_000).default(30_000),

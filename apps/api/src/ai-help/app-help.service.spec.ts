@@ -131,10 +131,10 @@ describe('searchAppHelpIndex', () => {
   const index = loadAppHelpIndex(REAL_CONTENT);
 
   it.each([
-    ['How do I create an asset?', 'assets/create-edit-and-find-assets'],
+    ['How do I create an asset?', 'assets/create-an-asset'],
     [
       'How do I add a dropdown field to a server template?',
-      'asset-layouts/add-and-configure-layout-fields',
+      'asset-layouts/add-and-arrange-layout-fields',
     ],
     [
       'How do integrations work?',
@@ -153,8 +153,12 @@ describe('searchAppHelpIndex', () => {
       'How do I set up intergation field maping?',
       'integration-mappings/configure-field-projections',
     ],
-    ['Preview a sync without changes', 'integration-syncs/preview-with-a-dry-run'],
-    ['Run imports automatically every six hours', 'integration-syncs/schedule-automatic-syncs'],
+    ['Preview a sync without changes', 'integrations/preview-with-a-dry-run'],
+    ['Run imports automatically every six hours', 'integrations/schedule-automatic-syncs'],
+    [
+      'Configure Breeze reconstruction sync',
+      'integrations/configure-breeze-reconstruction-sync',
+    ],
     [
       'Register a Cloudflare Gateway IP list',
       'integrations/configure-cloudflare-zero-trust-lists',

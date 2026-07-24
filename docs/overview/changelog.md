@@ -13,6 +13,59 @@ All notable changes to Weavestream are documented here. The format follows [Keep
 
 ## [Unreleased]
 
+## [1.9.0] - 2026-07-24
+
+### Added
+
+- **Breeze reconstruction sync.** A new read-only integration driver copies durable, non-secret reconstruction facts from Breeze into native Weavestream records via the Breeze Partner API. It does not install an agent, copy monitoring state, run commands, or write back to Breeze, and the resulting company data, export, and PDF stay usable when Breeze is offline. Enabled resources execute as an acyclic dependency graph — sites before devices, subnets before reservations, endpoints before relations — with cycles rejected. Runs come in three modes: **dry run** (fetch, validate, transform, report, roll back), **incremental** (from the last committed high-water checkpoint), and **full** (complete source snapshot; only a terminal authoritative full traversal may mark unseen records stale). Requires the Partner API surface introduced in the July 2026 Breeze release; older Breeze deployments return 404 for every partner request. See the [Breeze integration guide](/integrations/breeze/).
+- **Integrations can now write native records beyond assets.** The reconstruction layer adds typed target writers for **IPAM subnets and IP reservations**, **versioned internal articles** (configuration policies, assignments, scripts, automations, backup configurations, and custom-field definitions), and **relations** between synced records — alongside the existing asset writer. Each target carries its own Breeze-owned binding; missing or cross-company relation endpoints become safe gaps rather than dangling or cross-tenant edges.
+- **Per-resource ownership rules.** Each mapping now declares how sync interacts with operator edits: **Source wins** (always update from the provider), **Preserve manual** (accept the provider until an operator changes the value, then keep the operator's), and **Manual only** (never written by sync). Only an exact provider-owned binding for the same integration, organization mapping, resource, company, target kind, and native target may mutate that target — sync can never claim a manual or differently-owned record.
+- **Reconstruction completeness view.** A new tab on the integration detail page reports six separate states per scope — *Synchronized current*, *Manually documented*, *Secret blocked*, *Missing*, *Stale*, and *Synchronization error* — with a paginated list of active gaps filtered by organization mapping and resource. Backed by new `integration.manage`-gated `/completeness` and `/gaps` endpoints.
+- **Source provenance on record detail pages.** Assets, articles, and subnets show where their data came from — source label and resource, first seen, last seen, last synchronized, stale since, and whether the record is source-owned or Weavestream-owned. Provenance sits behind a new collapsible "show more" disclosure alongside activity history, with a coloured attention dot so a stale or blocked source record is never buried entirely.
+- **Opt-in scalar custom fields.** Custom-field definitions and values are walked through independent cursors and mapped per definition: a mapping's source field is the immutable definition ID and its target is a distinct field on the provider's asset layout. A value row writes only the field mapped to its definition; unmapped definitions write no native state, and the mutable provider field key/name stay display metadata rather than mapping identity.
+- **Sync schedule interval picker.** Integration create and credentials surfaces now offer human interval presets (every 5 minutes through every 24 hours) instead of a raw cron box, shared across all drivers. Storage remains a five-field UTC cron, so existing rows and the API contract are unchanged; a hand-entered cron that matches no preset is surfaced as a "Custom" option holding the exact value and is never silently rewritten.
+- **Manual runs can select incremental or full mode.** The trigger-sync action now takes an explicit mode instead of always deciding for the operator.
+- **Reconstruction dossier in company export and PDF.** Ordinary company exports and PDFs now include reconstruction summaries, safe completeness gaps, source provenance, and stale-record labels on assets, subnets, and relations. The dossier uses local labels and contains the essential procedure text — raw provider payloads, provider configuration, rejected values, and secret-derived content are excluded — and the section renders only for companies with an active reconstruction integration.
+- **Full Unicode coverage in PDF exports.** Exports now embed Noto Sans CJK JP (regular and bold) and check glyph coverage with `fontkit`, so CJK and other non-Latin content renders instead of dropping out. Credential text renders byte-exact or is flagged with explicit `[U+hex]` notation rather than silently losing characters.
+- **Sidebar nav can be pinned by the page.** Asset detail pages now highlight their layout's sidebar entry instead of "All assets", via a page-mounted active-item override that URL prefix matching cannot express.
+
+### Changed
+
+- **Default integration sync cadence is now every 15 minutes.** `INTEGRATION_SYNC_DEFAULT_CRON` changed from `0 */4 * * *` to `*/15 * * * *`. Setting it to `off` now disables only *inherited* schedules — integrations with an explicit `syncCron` continue to run on their own schedule, and manual runs are unaffected.
+- **Organization mappings can no longer be reassigned to a different company.** Editing a mapping's company was accepted before; it now returns a 400 asking the operator to delete the mapping and create a new one, so an established set of native targets cannot silently change tenant.
+- **Driver resource descriptors gained target metadata.** Resources now declare their target kind, target configuration, dependencies, and whether they are enabled by default. Action1, NinjaOne, UniFi, and Cloudflare declare asset targets and opt out of reconstruction completeness — their sync behaviour is unchanged. Breeze device relationships ship disabled by default.
+- **Integration field-mapping UI adapts to the target kind.** Non-asset resources get their own editors (folder/visibility/template for articles, CIDR and reservation identity for IPAM, dependency and relationship-type mapping for relations), and disabled resources explain what enabling them will configure.
+- **Sidebar widened from 232 px to 248 px.**
+- **API container health check start period raised from 120 s to 240 s**, sized for migration 0062 queuing behind in-flight sync page transactions plus headroom for its index builds.
+- **In-app AI help content for integrations rewritten** to cover reconstruction targets, ownership rules, completeness, and run modes; the separate integration-syncs help page was folded into it.
+
+### Fixed
+
+- **Manual edits to integration-authored fields now survive later upstream changes.** The original integration-authored checksum is retained when an operator edit is detected, so a "preserve manual" field is not re-captured by the next sync that touches the record.
+- **Markdown tables no longer break on backslashes.** The Tiptap → Markdown converter escapes backslashes before pipes, so a cell containing `\` produces a valid GFM table instead of corrupt row grammar.
+- **Repeated scheduler deliveries no longer create duplicate runs.** Scheduled syncs carry a stable delivery key, at most one full run per integration may be queued or running, and a racing full request falls back to incremental.
+- **Tag creation inside a transaction writes its audit row on the same client**, so a rolled-back write can no longer leave an orphan `tag.create` audit entry.
+
+### Security
+
+- **Password-protected PDF exports now use AES-256.** Encrypted exports select PDF 1.7 Extension Level 3 (V=5/R=5, AESV3), replacing PDFKit's default 40-bit RC4 handler, with explicit permissions that keep credential text copyable for readers that authenticate. Unencrypted exports keep the byte-stable PDF 1.3 output. CBC is fixed by the PDF standard, so the workspace AES-256-GCM rule cannot apply to in-file PDF encryption.
+- **Secret-like reconstruction content is quarantined, not stored.** A bounded scanner rejects provider content matching credential key names, bearer/basic headers, PEM private keys, credential-bearing URLs and query parameters, common provider token prefixes, AWS access key IDs, JWTs, and high-entropy strings. Rejected items become a `secret_blocked` gap that names the fact without ever persisting the value, and no bypass is offered. Password values are never requested from the provider or decrypted for reconstruction.
+- **Tenant scope enforced on every reconstruction read and write.** Reconstruction reads are company-scoped at the query layer, cross-company endpoints degrade to safe gaps, and writes are guarded by recency and tenant predicates rather than check-then-act.
+- **Asset external identity is now unique at the database layer** (migration 0062, partial unique indexes for sourced and NULL-source rows), with unique-violation races classified and retried instead of surfacing as errors. The migration dedupes existing duplicates and parks any bindings it could not retarget — because a concurrent sync transaction held them — in a helper table that a background drain service converges after deploy.
+- **Concurrent canonical writes can no longer lose updates.** Reconstruction gained a per-scope watermark row that serialises gap mutations, a scope serialisation lock for syncs, and `clearedAt` tombstoning so an older concurrent evaluation cannot revert newer scope state.
+- **Canonical network identity enforced in the database.** Migrations 0064 and 0065 pin subnet CIDRs to their canonical form and normalise gateway, DHCP bounds, and reservation host IPs to canonical dotted-decimal, so alias spellings of one network or host can no longer defeat the unique keys.
+- **Reconstruction input is bounded by bytes, not just row counts**, with a transform-size preflight, per-page record and gap caps, page-count and write-attempt limits, and bounded configuration inspection that fails closed on error.
+- **Reconstruction lifecycle audit rows carry safe payloads only.** `integration.target.created`, `.updated`, `.stale`, `.restored`, and `.blocked` record local integration/mapping/resource/target identity, target kind and state, bounded counts, and an optional safe reason category — never external IDs, raw source or provenance data, provider configuration, content, gap details, rejected values, or credentials. Resources fail closed as `missing_audit_actor` before any native writer runs when no authorised actor is available.
+- **Partner API credentials are encrypted at rest** with the kid-tagged `INTEGRATION_SECRET_KEY` envelope, sent only in the `X-API-Key` header, never refilled as plaintext in the UI, and never forwarded across redirects. Outbound requests keep the existing SSRF and DNS-rebinding guard, with each redirect hop revalidated rather than treated as an allowlist bypass.
+- **UUID redaction widened to RFC 9562.** The export redaction pattern now covers UUID versions 6–8 in addition to the previously matched versions.
+- **CI fails when PDF inspection tooling is missing.** The company-PDF-export specs shell out to Poppler and libxml2 to verify rendered credential text, AES-256 encryption, and exported XMP. They skip with an install hint on a clean contributor checkout, but CI installs both and sets `WEAVESTREAM_REQUIRE_PDF_TOOLS=1` so a broken install step fails the build instead of silently dropping that coverage.
+
+### Documentation
+
+- **Integrations documentation promoted to its own section.** `/features/integrations/` was replaced by a dedicated `/integrations/` area with an overview page and per-provider guides for [Action1](/integrations/action1/), [Breeze](/integrations/breeze/), [Cloudflare](/integrations/cloudflare/), [NinjaOne](/integrations/ninjaone/), and [UniFi](/integrations/unifi/).
+- **Breeze operations guide** covering required read scopes, private-deployment egress configuration, resource ordering, ownership rules, run modes and scheduling, retry/limit/checkpoint bounds, completeness states, export and offline recovery, and recovery playbooks for credential failure, schema/cursor failure, rate limiting, and blocked definitions.
+- **Development prerequisites** now list the optional Poppler and libxml2 command-line tools used by the PDF export specs.
+
 ## [1.8.15] - 2026-07-14
 
 ### Added
@@ -602,7 +655,8 @@ Initial public release.
 
 ---
 
-[Unreleased]: https://github.com/Weavestream/Weavestream/compare/v1.8.15...HEAD
+[Unreleased]: https://github.com/Weavestream/Weavestream/compare/v1.9.0...HEAD
+[1.9.0]: https://github.com/Weavestream/Weavestream/releases/tag/v1.9.0
 [1.8.15]: https://github.com/Weavestream/Weavestream/releases/tag/v1.8.15
 [1.8.14]: https://github.com/Weavestream/Weavestream/releases/tag/v1.8.14
 [1.8.13]: https://github.com/Weavestream/Weavestream/releases/tag/v1.8.13

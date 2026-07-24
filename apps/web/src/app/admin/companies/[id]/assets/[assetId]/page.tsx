@@ -13,7 +13,7 @@ import {
 } from '../../../../../../lib/server-api';
 import { canWriteCompany } from '../../../../../../lib/roles';
 import { PageBody, PageHeader } from '../../../../../../components/shell/page-header';
-import { Icon, LayoutSwatch, Panel, Tag } from '../../../../../../components/ui';
+import { Icon, LayoutSwatch, Panel, ShowMore, Tag } from '../../../../../../components/ui';
 import { buildTerm } from '../../../../../../lib/term';
 import { companyCrumbs } from '../../../../../../lib/company-crumbs';
 import { RichTextView } from '../../../../../../components/editor/rich-text-view';
@@ -22,7 +22,12 @@ import { AttachmentsPanel } from '../../../../../../components/upload/attachment
 import { CredentialsPanel } from '../../../../../../components/passwords/credentials-panel';
 import { vaultLinkLabel, vaultLinkUrl } from '../../../../../../lib/vault-link';
 import { AssetChatContext } from '../../../../../../components/chat-panel/asset-chat-context';
+import { SidebarActive } from '../../../../../../components/shell/sidebar-active';
 import { AssetActions } from './asset-actions';
+import {
+  ProvenanceBadge,
+  provenanceAttention,
+} from '../../../../../../components/integrations/provenance-badge';
 
 export async function generateMetadata({
   params,
@@ -68,6 +73,7 @@ export default async function AssetDetailPage({
   return (
     <>
       <AssetChatContext asset={asset} />
+      <SidebarActive id={`layout:${asset.assetLayoutId}`} />
       <PageHeader
         crumbs={companyCrumbs(
           term,
@@ -114,7 +120,7 @@ export default async function AssetDetailPage({
               <div
                 style={{
                   display: 'grid',
-                  gridTemplateColumns: '140px minmax(0, 1fr)',
+                  gridTemplateColumns: '180px minmax(0, 1fr)',
                   gap: '10px 20px',
                 }}
               >
@@ -207,74 +213,114 @@ export default async function AssetDetailPage({
               editable={manage && !asset.archivedAt}
             />
 
-            <Panel title="Last activity">
-              {(() => {
-                const rows: React.ReactNode[] = [];
-                rows.push(
-                  <Row
-                    key="created"
-                    label="Created"
-                    value={new Date(asset.createdAt).toLocaleString()}
-                  />,
-                );
-                if (createdBy) {
+            <ShowMore attention={provenanceAttention(asset.provenance)}>
+              <Panel title="Last activity">
+                {(() => {
+                  const rows: React.ReactNode[] = [];
                   rows.push(
                     <Row
-                      key="created-by"
-                      label="Created by"
-                      value={createdBy.name}
+                      key="created"
+                      label="Created"
+                      value={new Date(asset.createdAt).toLocaleString()}
                     />,
                   );
-                }
-                rows.push(
-                  <Row
-                    key="updated"
-                    label="Updated"
-                    value={new Date(asset.updatedAt).toLocaleString()}
-                  />,
-                );
-                if (updatedBy) {
+                  if (createdBy) {
+                    rows.push(
+                      <Row
+                        key="created-by"
+                        label="Created by"
+                        value={createdBy.name}
+                      />,
+                    );
+                  }
                   rows.push(
                     <Row
-                      key="updated-by"
-                      label="Updated by"
-                      value={updatedBy.name}
+                      key="updated"
+                      label="Updated"
+                      value={new Date(asset.updatedAt).toLocaleString()}
                     />,
                   );
-                }
-                for (const src of asset.syncSources) {
-                  rows.push(
-                    <Row
-                      key={`sync-${src.integrationId}-${src.resourceKey}-${src.externalId}`}
-                      label={`Synced · ${src.driver.toLowerCase()}`}
-                      value={relative(new Date(src.lastSyncedAt))}
-                      title={`${src.resourceKey} · external id ${src.externalId} · last synced ${new Date(src.lastSyncedAt).toLocaleString()}`}
-                    />,
+                  if (updatedBy) {
+                    rows.push(
+                      <Row
+                        key="updated-by"
+                        label="Updated by"
+                        value={updatedBy.name}
+                      />,
+                    );
+                  }
+                  // One row per integration; an asset can carry several sync
+                  // records for the same integration (e.g. one per Breeze
+                  // custom-field value), which would render as duplicate rows.
+                  const syncByIntegration = new Map<
+                    string,
+                    {
+                      driver: string;
+                      integrationName: string;
+                      lastSyncedAt: string;
+                      resourceKeys: Set<string>;
+                    }
+                  >();
+                  for (const src of asset.syncSources) {
+                    const entry = syncByIntegration.get(src.integrationId);
+                    if (!entry) {
+                      syncByIntegration.set(src.integrationId, {
+                        driver: src.driver,
+                        integrationName: src.integrationName,
+                        lastSyncedAt: src.lastSyncedAt,
+                        resourceKeys: new Set([src.resourceKey]),
+                      });
+                    } else {
+                      entry.resourceKeys.add(src.resourceKey);
+                      if (
+                        Date.parse(src.lastSyncedAt) >
+                        Date.parse(entry.lastSyncedAt)
+                      ) {
+                        entry.lastSyncedAt = src.lastSyncedAt;
+                      }
+                    }
+                  }
+                  for (const [integrationId, src] of syncByIntegration) {
+                    rows.push(
+                      <Row
+                        key={`sync-${integrationId}`}
+                        label={`Synced · ${src.driver.toLowerCase()}`}
+                        value={relative(new Date(src.lastSyncedAt))}
+                        title={`${src.integrationName} · ${[...src.resourceKeys].join(', ')} · last synced ${new Date(src.lastSyncedAt).toLocaleString()}`}
+                      />,
+                    );
+                  }
+                  if (asset.archivedAt) {
+                    rows.push(
+                      <Row
+                        key="archived"
+                        label="Archived"
+                        value={new Date(asset.archivedAt).toLocaleString()}
+                      />,
+                    );
+                  }
+                  // Strip the bottom border from the final row.
+                  return rows.map((node, i) =>
+                    i === rows.length - 1 && React.isValidElement(node)
+                      ? React.cloneElement(
+                          node as React.ReactElement<RowProps>,
+                          { last: true },
+                        )
+                      : node,
                   );
-                }
-                if (asset.archivedAt) {
-                  rows.push(
-                    <Row
-                      key="archived"
-                      label="Archived"
-                      value={new Date(asset.archivedAt).toLocaleString()}
-                    />,
-                  );
-                }
-                // Strip the bottom border from the final row.
-                return rows.map((node, i) =>
-                  i === rows.length - 1 && React.isValidElement(node)
-                    ? React.cloneElement(
-                        node as React.ReactElement<RowProps>,
-                        { last: true },
-                      )
-                    : node,
-                );
-              })()}
-            </Panel>
+                })()}
+              </Panel>
+
+              {asset.provenance.map((provenance) => (
+                <ProvenanceBadge
+                  key={`${provenance.integrationId}:${provenance.resourceId}`}
+                  provenance={provenance}
+                />
+              ))}
+            </ShowMore>
 
             <Link
-              href={`/admin/companies/${companyId}/assets`}
+              href={`/admin/companies/${companyId}/layouts/${asset.layoutSlug}`}
               style={{
                 display: 'inline-flex',
                 alignItems: 'center',

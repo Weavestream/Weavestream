@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { Prisma, type Article, type ArticleVersion } from '@prisma/client';
 import {
+  createArticleSchema,
   markdownExcerpt,
   markdownToPlaintext,
   tiptapExcerpt,
@@ -17,6 +18,7 @@ import {
   type MoveArticleInput,
   type UpdateArticleInput,
   type UserRole,
+  type IntegrationTargetProvenance,
 } from '@weavestream/shared';
 import { requireTenantContext } from '@weavestream/shared/server';
 import { PrismaService } from '../prisma/prisma.service.js';
@@ -28,11 +30,57 @@ import { RelationsService } from '../relations/relations.service.js';
 import { scopedCompanyLookupWhere } from '../ai-tools/entity-scope.js';
 import { diffRemovedUploadIds, extractEmbeddedUploadIds } from './article-uploads.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
+import { hasEligibleNativeBinding } from '../integrations/reconstruction/native-binding-ownership.js';
+import { readTargetProvenance } from '../integrations/reconstruction/integration-provenance.service.js';
 
 export interface AuditMeta {
   ip: string;
   userAgent: string;
 }
+
+export interface IntegrationArticleWriteInput {
+  tx?: Prisma.TransactionClient;
+  companyId: string;
+  integrationId: string;
+  integrationCompanyMappingId: string;
+  resourceId: string;
+  externalId: string;
+  auditActorId: string;
+  dryRun: boolean;
+  existingTargetId?: string | null;
+  title: string;
+  slug: string;
+  folderId: string | null;
+  folderSlug?: string;
+  folderName?: string;
+  sourceFingerprintUnchanged?: boolean;
+  markdown: string;
+  visibleToClients: boolean;
+}
+
+export interface IntegrationArticleWriteResult {
+  targetId: string;
+  companyId: string;
+  change: 'created' | 'updated' | 'unchanged' | 'restored' | 'blocked';
+  gap?: {
+    kind: 'missing_dependency' | 'validation' | 'ambiguous' | 'synchronization_error';
+    message: string;
+    details?: { reasonCode?: string; candidateCount?: number };
+  };
+}
+
+const INTEGRATION_AUDIT_META: AuditMeta = {
+  ip: '0.0.0.0',
+  userAgent: 'weavestream-worker/integration-reconstruction',
+};
+
+/**
+ * Guarded-attempt budget for `writeFromIntegration` when a concurrent
+ * operator write invalidates the observed article snapshot. A retry
+ * costs one re-read and re-merge; exhaustion is reported as a
+ * `synchronization_error` gap so the next sync run tries again.
+ */
+const INTEGRATION_WRITE_MAX_ATTEMPTS = 3;
 
 /**
  * Thrown by `update()` when an `expectedRevision` guard matched zero
@@ -96,6 +144,8 @@ export interface SerializedArticle {
    * accurate value, and it always loads a detail before opening.
    */
   hasDraft: boolean;
+  /** Safe, tenant-scoped reconstruction provenance for this exact article. */
+  provenance: IntegrationTargetProvenance[];
 }
 
 /**
@@ -206,6 +256,11 @@ export class ArticlesService {
     out.isStarred = await this.stars.isStarred(actor.id, 'article', id);
     out.hasDraft = await this.resolveHasDraft(companyId, id);
     await this.hydrateActors([out]);
+    out.provenance = await readTargetProvenance(this.prisma, {
+      companyId,
+      targetKind: 'article',
+      targetId: id,
+    });
     return out;
   }
 
@@ -225,6 +280,11 @@ export class ArticlesService {
     out.isStarred = await this.stars.isStarred(actor.id, 'article', row.id);
     out.hasDraft = await this.resolveHasDraft(companyId, row.id);
     await this.hydrateActors([out]);
+    out.provenance = await readTargetProvenance(this.prisma, {
+      companyId,
+      targetKind: 'article',
+      targetId: row.id,
+    });
     return out;
   }
 
@@ -618,6 +678,382 @@ export class ArticlesService {
     out.hasDraft = versionKind === 'draft';
     await this.hydrateActors([out]);
     return out;
+  }
+
+  /**
+   * Non-request Markdown writer for reconstruction. A target may only be
+   * updated by an explicit existing binding; deterministic slug collisions
+   * without a binding are reported instead of overwriting manual content.
+   * Bound updates are optimistic: each attempt merges against the row it
+   * read and the UPDATE refuses (in its WHERE clause) if the row moved,
+   * so a concurrent operator edit is never overwritten from stale input.
+   */
+  async writeFromIntegration(
+    input: IntegrationArticleWriteInput,
+  ): Promise<IntegrationArticleWriteResult> {
+    const lookupClient = input.tx ?? this.prisma;
+    await this.audit.assertIntegrationActor(input.auditActorId, input.companyId);
+    let native: Extract<CreateArticleInput, { editorMode: 'markdown' }>;
+    try {
+      native = createArticleSchema.parse({
+        title: input.title,
+        slug: input.slug,
+        folderId: input.folderId,
+        editorMode: 'markdown',
+        markdownSource: input.markdown,
+        visibleToClients: input.visibleToClients,
+      }) as Extract<CreateArticleInput, { editorMode: 'markdown' }>;
+    } catch {
+      return articleBlocked(input.companyId, 'validation', 'Article input failed native validation.', 'native_validation');
+    }
+    if (native.folderId) {
+      const folder = await lookupClient.folder.findFirst({
+        where: { id: native.folderId, companyId: input.companyId, archivedAt: null },
+        select: { id: true },
+      });
+      if (!folder) {
+        return articleBlocked(input.companyId, 'missing_dependency', 'The article folder was not found.', 'dependency_not_found');
+      }
+    }
+
+    for (let attempt = 0; attempt < INTEGRATION_WRITE_MAX_ATTEMPTS; attempt += 1) {
+      const result = await this.attemptIntegrationArticleWrite(input, native);
+      if (result !== 'revision_conflict') return result;
+    }
+    return articleBlocked(
+      input.companyId,
+      'synchronization_error',
+      'The article was modified concurrently while reconstruction was writing it.',
+      'target_revision_conflict',
+      input.existingTargetId ?? '',
+    );
+  }
+
+  /**
+   * One guarded attempt of the integration article write. The managed-
+   * region merge and the changed/restored classification are computed
+   * from the `bound` row read here, and the UPDATE pins that observed
+   * snapshot (`revision`, `archivedAt`, `updatedAt`) in its WHERE
+   * clause. `'revision_conflict'` reports a zero-row match — the
+   * article changed after the read (operator edit, archive/restore,
+   * move, or draft-discard revert) — and `writeFromIntegration`
+   * retries from a fresh read.
+   */
+  private async attemptIntegrationArticleWrite(
+    input: IntegrationArticleWriteInput,
+    parsed: Extract<CreateArticleInput, { editorMode: 'markdown' }>,
+  ): Promise<IntegrationArticleWriteResult | 'revision_conflict'> {
+    const runTransaction = <T>(callback: (tx: Prisma.TransactionClient) => Promise<T>) =>
+      input.tx ? callback(input.tx) : this.prisma.$transaction(callback);
+    const lookupClient = input.tx ?? this.prisma;
+    let native = parsed;
+    const sourceSlug = native.slug ?? input.slug;
+    const bound = input.existingTargetId
+      ? await lookupClient.article.findUnique({ where: { id: input.existingTargetId } })
+      : null;
+    if (bound && bound.companyId !== input.companyId) {
+      return { targetId: bound.id, companyId: bound.companyId, change: 'blocked' };
+    }
+    if (input.existingTargetId && !bound) {
+      return articleBlocked(input.companyId, 'missing_dependency', 'The bound article no longer exists.', 'target_not_found', input.existingTargetId);
+    }
+    if (bound && (bound.archivedAt || bound.slug !== sourceSlug)) {
+      const slugOwner = await lookupClient.article.findFirst({
+        where: {
+          companyId: input.companyId,
+          slug: sourceSlug,
+          archivedAt: null,
+          NOT: { id: bound.id },
+        },
+        select: { id: true },
+      });
+      if (slugOwner) {
+        return articleBlocked(input.companyId, 'ambiguous', 'Another article owns the source slug.', 'manual_ownership', slugOwner.id, 1);
+      }
+    }
+    if (!bound) {
+      const collision = await lookupClient.article.findFirst({
+        where: { companyId: input.companyId, slug: sourceSlug, archivedAt: null },
+        select: { id: true },
+      });
+      if (collision) {
+        return articleBlocked(input.companyId, 'ambiguous', 'An unbound article already owns this slug.', 'manual_ownership', collision.id, 1);
+      }
+    }
+
+    let managedFolderId = native.folderId ?? null;
+    if (!managedFolderId && input.folderSlug) {
+      const existingFolder = await lookupClient.folder.findFirst({
+        where: {
+          companyId: input.companyId,
+          parentId: null,
+          slug: input.folderSlug,
+          archivedAt: null,
+        },
+        select: { id: true },
+      });
+      managedFolderId = existingFolder?.id ?? null;
+    }
+
+    if (bound && (bound.editorMode !== 'markdown' || bound.markdownSource === null)) {
+      return articleBlocked(
+        input.companyId,
+        'validation',
+        'The source-managed article body is unavailable.',
+        'managed_region_invalid',
+        bound.id,
+      );
+    }
+    const mergedMarkdown = bound?.markdownSource
+      ? mergeIntegrationManagedMarkdown(
+          bound.markdownSource,
+          input.markdown,
+          input.sourceFingerprintUnchanged === true,
+        )
+      : input.markdown;
+    if (mergedMarkdown === null) {
+      return articleBlocked(
+        input.companyId,
+        'validation',
+        'The source-managed article region is missing or malformed.',
+        'managed_region_invalid',
+        bound?.id,
+      );
+    }
+    try {
+      native = createArticleSchema.parse({
+        ...native,
+        folderId: managedFolderId,
+        markdownSource: mergedMarkdown,
+      }) as Extract<CreateArticleInput, { editorMode: 'markdown' }>;
+    } catch {
+      return articleBlocked(input.companyId, 'validation', 'Article input failed native validation.', 'native_validation');
+    }
+
+    // Projection reads the mutable `native`, so the write transaction can
+    // re-derive `data`/`changed` after a managed-folder create patches
+    // `folderId` in.
+    const projectWrite = () => {
+      const body = this.projectArticleBody(native);
+      const data = {
+        folderId: native.folderId ?? null,
+        title: native.title,
+        slug: sourceSlug,
+        visibleToClients: native.visibleToClients ?? true,
+        ...body,
+      };
+      const restored = bound?.archivedAt != null;
+      const changed =
+        !bound ||
+        bound.folderId !== data.folderId ||
+        bound.title !== data.title ||
+        bound.slug !== data.slug ||
+        bound.visibleToClients !== data.visibleToClients ||
+        bound.editorMode !== data.editorMode ||
+        bound.markdownSource !== data.markdownSource;
+      return { data, restored, changed };
+    };
+
+    const folderPending = !managedFolderId && Boolean(input.folderSlug) && !input.dryRun;
+    let projected: ReturnType<typeof projectWrite> | null = null;
+    if (!folderPending) {
+      // The projection is final (no folder create pending), so the read-only
+      // outcomes — dry-run report, unchanged classification — resolve without
+      // opening a write transaction. A pending folder create always forces
+      // `changed` (the new folder id cannot equal `bound.folderId`), so
+      // skipping this block never skips a reachable dry-run/unchanged return.
+      projected = projectWrite();
+      const { changed, restored } = projected;
+      if (bound && (input.dryRun || (!changed && !restored))) {
+        if (!(await this.hasEligibleArticleBinding(input.tx ?? this.prisma, input, bound.id))) {
+          return articleBlocked(input.companyId, 'ambiguous', 'The existing article is not owned by an eligible reconstruction binding.', 'manual_ownership', bound.id, 1);
+        }
+      }
+      if (input.dryRun) {
+        return {
+          targetId: bound?.id ?? '',
+          companyId: input.companyId,
+          change: bound ? (restored ? 'restored' : changed ? 'updated' : 'unchanged') : 'created',
+        };
+      }
+      if (bound && !changed && !restored) {
+        return { targetId: bound.id, companyId: input.companyId, change: 'unchanged' };
+      }
+    }
+
+    // One transaction covers the managed-folder create and the article write.
+    // Refusals are decided before anything is written: the binding
+    // eligibility check precedes the folder create, so a blocked record
+    // never strands a folder — a caller-supplied tx commits blocked
+    // outcomes as part of its page, so an undo there is not an option.
+    // After the folder exists (the article row's folderId needs it),
+    // thrown write errors roll a service-owned transaction back on their
+    // own and propagate to a caller-supplied tx's own rollback handling.
+    // The one write-then-refuse remnant is the guarded-update conflict, so
+    // the folder create is scoped to a savepoint: rolling back to it
+    // discards the folder and its audit row in both transaction modes
+    // without disturbing earlier work in a caller-supplied tx. A retry
+    // re-reads and re-creates the folder if it still needs one, and a
+    // retry that ends blocked has nothing pending to strand.
+    return runTransaction(async (tx): Promise<IntegrationArticleWriteResult | 'revision_conflict'> => {
+      if (bound && !(await this.hasEligibleArticleBinding(tx, input, bound.id))) {
+        return articleBlocked(input.companyId, 'ambiguous', 'The existing article is not owned by an eligible reconstruction binding.', 'manual_ownership', bound.id, 1);
+      }
+      if (folderPending && input.folderSlug) {
+        const folderSlug = input.folderSlug;
+        const folderName = input.folderName ?? folderSlug;
+        // Fixed-literal statement, no interpolation (savepoint names
+        // cannot be bound as parameters). Scopes the folder create so the
+        // guarded-update conflict below can discard it; the ROLLBACK TO
+        // at that site must name this same savepoint.
+        await tx.$executeRaw`SAVEPOINT weavestream_managed_folder`;
+        const row = await tx.folder.create({
+          data: {
+            companyId: input.companyId,
+            parentId: null,
+            name: folderName,
+            slug: folderSlug,
+            icon: 'book-open',
+            position: 0,
+            createdBy: input.auditActorId,
+          },
+        });
+        await this.audit.logWithClient(tx, {
+          actorId: input.auditActorId,
+          action: 'folder.create',
+          entityType: 'Folder',
+          entityId: row.id,
+          companyId: input.companyId,
+          ip: INTEGRATION_AUDIT_META.ip,
+          userAgent: INTEGRATION_AUDIT_META.userAgent,
+          after: { integrationId: input.integrationId, slug: row.slug },
+        });
+        managedFolderId = row.id;
+        native = { ...native, folderId: managedFolderId };
+      }
+      const { data, changed, restored } = projected ?? projectWrite();
+
+      if (!bound) {
+        const row = await tx.article.create({
+          data: {
+            companyId: input.companyId,
+            ...data,
+            createdBy: input.auditActorId,
+            updatedBy: input.auditActorId,
+          },
+        });
+        await tx.articleVersion.create({
+          data: {
+            articleId: row.id,
+            companyId: input.companyId,
+            version: 1,
+            isDraft: false,
+            ...this.versionRowBodyFromArticle(row),
+            changedFields: [...VERSIONED_FIELDS],
+            changedBy: input.auditActorId,
+            changeReason: `integration:${input.integrationId}`,
+          },
+        });
+        await this.audit.logWithClient(tx, {
+          actorId: input.auditActorId,
+          action: AUDIT_ACTIONS.article.create,
+          entityType: 'Article',
+          entityId: row.id,
+          companyId: input.companyId,
+          ip: INTEGRATION_AUDIT_META.ip,
+          userAgent: INTEGRATION_AUDIT_META.userAgent,
+          after: { integrationId: input.integrationId, slug: row.slug },
+        });
+        return { targetId: row.id, companyId: input.companyId, change: 'created' };
+      }
+
+      if (!changed && !restored) {
+        // Unreachable in practice: the block above the transaction returns
+        // the unchanged outcome unless a pending folder create forced
+        // `changed`. Kept so an unchanged row is never rewritten.
+        return { targetId: bound.id, companyId: input.companyId, change: 'unchanged' };
+      }
+      const guarded = await tx.article.updateMany({
+        where: {
+          id: bound.id,
+          companyId: input.companyId,
+          // Optimistic-concurrency guard riding the WHERE clause —
+          // the `update()` idiom. `revision` alone is not enough:
+          // archive, restore, move, and draft-discard revert all
+          // write the row without bumping it, so the guard pins
+          // every observed field the merge and diff above were
+          // derived from. Zero rows means the snapshot went stale;
+          // the caller re-reads instead of overwriting a newer edit.
+          revision: bound.revision,
+          archivedAt: bound.archivedAt,
+          updatedAt: bound.updatedAt,
+        },
+        data: {
+          ...data,
+          ...(restored ? { archivedAt: null } : {}),
+          revision: { increment: 1 },
+          updatedBy: input.auditActorId,
+        },
+      });
+      if (guarded.count === 0) {
+        if (folderPending) {
+          // Discard this attempt's folder create (and its audit row) so no
+          // later outcome — a retry that blocks, an exhausted-conflict gap,
+          // a caller-committed page — can strand an empty managed folder.
+          // Fixed-literal statement, no interpolation.
+          await tx.$executeRaw`ROLLBACK TO SAVEPOINT weavestream_managed_folder`;
+        }
+        return 'revision_conflict';
+      }
+      const updated = await tx.article.findFirstOrThrow({
+        where: { id: bound.id, companyId: input.companyId },
+      });
+      if (changed) {
+        const max = await tx.articleVersion.aggregate({
+          where: { articleId: bound.id, companyId: input.companyId },
+          _max: { version: true },
+        });
+        await tx.articleVersion.create({
+          data: {
+            articleId: bound.id,
+            companyId: input.companyId,
+            version: (max._max.version ?? 0) + 1,
+            isDraft: false,
+            ...this.versionRowBodyFromArticle(updated),
+            changedFields: this.computeChangedFields(bound, updated),
+            changedBy: input.auditActorId,
+            changeReason: `integration:${input.integrationId}`,
+          },
+        });
+      }
+      await this.audit.logWithClient(tx, {
+        actorId: input.auditActorId,
+        action: restored ? AUDIT_ACTIONS.article.restore : AUDIT_ACTIONS.article.update,
+        entityType: 'Article',
+        entityId: updated.id,
+        companyId: input.companyId,
+        ip: INTEGRATION_AUDIT_META.ip,
+        userAgent: INTEGRATION_AUDIT_META.userAgent,
+        after: { integrationId: input.integrationId, slug: updated.slug },
+      });
+      return { targetId: updated.id, companyId: input.companyId, change: restored ? 'restored' : 'updated' };
+    });
+  }
+
+  private hasEligibleArticleBinding(
+    client: Parameters<typeof hasEligibleNativeBinding>[0],
+    input: IntegrationArticleWriteInput,
+    targetId: string,
+  ): Promise<boolean> {
+    return hasEligibleNativeBinding(client, {
+      integrationCompanyMappingId: input.integrationCompanyMappingId,
+      resourceId: input.resourceId,
+      externalId: input.externalId,
+      integrationId: input.integrationId,
+      companyId: input.companyId,
+      targetKind: 'article',
+      targetId,
+    });
   }
 
   async move(
@@ -1544,6 +1980,7 @@ export class ArticlesService {
       // this with the real value via `resolveHasDraft` or knowledge
       // local to the tx.
       hasDraft: false,
+      provenance: [],
     };
   }
 
@@ -1574,4 +2011,56 @@ export class ArticlesService {
       if (a.updatedBy) a.updatedByUser = byId.get(a.updatedBy) ?? null;
     }
   }
+}
+
+function articleBlocked(
+  companyId: string,
+  kind: 'missing_dependency' | 'validation' | 'ambiguous' | 'synchronization_error',
+  message: string,
+  reasonCode: string,
+  targetId = '',
+  candidateCount?: number,
+): IntegrationArticleWriteResult {
+  return {
+    targetId,
+    companyId,
+    change: 'blocked',
+    gap: {
+      kind,
+      message,
+      details: {
+        reasonCode,
+        ...(candidateCount !== undefined ? { candidateCount } : {}),
+      },
+    },
+  };
+}
+
+const INTEGRATION_MANAGED_START = '<!-- weavestream:breeze:managed:start -->';
+const INTEGRATION_MANAGED_END = '<!-- weavestream:breeze:managed:end -->';
+
+function mergeIntegrationManagedMarkdown(
+  existing: string,
+  incoming: string,
+  fingerprintUnchanged: boolean,
+): string | null {
+  const region = (markdown: string) => {
+    const starts = markdown.split(INTEGRATION_MANAGED_START).length - 1;
+    const ends = markdown.split(INTEGRATION_MANAGED_END).length - 1;
+    const start = markdown.indexOf(INTEGRATION_MANAGED_START);
+    const end = markdown.indexOf(INTEGRATION_MANAGED_END);
+    return { starts, ends, start, end, valid: starts === 1 && ends === 1 && start < end };
+  };
+  const current = region(existing);
+  const next = region(incoming);
+  if (current.starts === 0 && current.ends === 0 && next.starts === 0 && next.ends === 0) return incoming;
+  if (!current.valid || !next.valid) return null;
+  if (fingerprintUnchanged) return existing;
+  const incomingRegion = incoming.slice(
+    next.start,
+    next.end + INTEGRATION_MANAGED_END.length,
+  );
+  return `${existing.slice(0, current.start)}${incomingRegion}${existing.slice(
+    current.end + INTEGRATION_MANAGED_END.length,
+  )}`;
 }

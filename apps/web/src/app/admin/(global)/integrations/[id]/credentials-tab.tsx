@@ -18,7 +18,13 @@ import {
   Tag,
   useToast,
 } from '../../../../../components/ui';
+import {
+  SyncScheduleSelect,
+  syncScheduleHelp,
+  syncScheduleLabel,
+} from '../../../../../components/integrations/sync-schedule';
 import { DriverFieldsEditor } from '../driver-fields-editor';
+import { safeIntegrationProblemMessage } from '../integration-feedback';
 
 const STATUSES: Array<{ value: IntegrationStatusValue; label: string }> = [
   { value: 'ACTIVE', label: 'Active — scheduled syncs run, manual sync allowed' },
@@ -128,7 +134,13 @@ export function CredentialsTab({
       const problem = res.problem as
         | { detail?: string; title?: string }
         | undefined;
-      setError(problem?.detail ?? problem?.title ?? 'Could not save changes.');
+      const message = safeIntegrationProblemMessage(
+        problem,
+        'Could not save changes.',
+        rotateSecret ? secret : {},
+      );
+      setError(message);
+      toast.push(message, 'danger');
       return;
     }
     toast.push('Integration saved.', 'ok');
@@ -244,23 +256,19 @@ export function CredentialsTab({
           </Field>
         </div>
         <Field
-          label={
-            driver?.capabilities.kind === 'security'
-              ? 'Drift sweep schedule (cron)'
-              : 'Sync schedule (cron)'
-          }
+          label={syncScheduleLabel(
+            driver?.capabilities.kind === 'security' ? 'security' : 'pull',
+          )}
           htmlFor="i-cron"
-          help={
-            driver?.capabilities.kind === 'security'
-              ? "5-field UTC cron, e.g. '*/15 * * * *'. Drift between Cloudflare and Weavestream is auto-healed on every tick. Leave blank for manual-only. Schedule changes apply on the next API restart."
-              : "5-field UTC cron, e.g. '0 */6 * * *'. Leave blank for manual-only."
-          }
+          help={syncScheduleHelp(
+            driver?.capabilities.kind === 'security' ? 'security' : 'pull',
+            syncCron,
+          )}
         >
-          <Input
+          <SyncScheduleSelect
             id="i-cron"
             value={syncCron}
-            onChange={(e) => setSyncCron(e.target.value)}
-            placeholder="*/15 * * * *"
+            onChange={setSyncCron}
           />
         </Field>
       </section>

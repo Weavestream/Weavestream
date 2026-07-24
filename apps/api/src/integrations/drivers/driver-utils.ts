@@ -6,6 +6,7 @@ export interface FetchWithRetryOpts {
   method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
   headers?: Record<string, string>;
   body?: string;
+  redirect?: 'follow' | 'manual' | 'error';
   timeoutMs: number;
   maxRetries: number;
   backoffMs: number;
@@ -33,6 +34,7 @@ export async function fetchWithRetry(
         method: opts.method,
         headers: opts.headers,
         body: opts.body,
+        redirect: opts.redirect,
         timeoutMs: opts.timeoutMs,
       });
       if (res.status === 429) {

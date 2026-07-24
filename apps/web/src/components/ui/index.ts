@@ -13,6 +13,7 @@ export { LinkBtn, type LinkBtnProps } from './link-btn';
 export { Tag, type TagTone } from './tag';
 export { Kbd } from './kbd';
 export { Panel } from './panel';
+export { ShowMore } from './show-more';
 export { CompanyMark } from './company-mark';
 export { CompanyAvatar } from './company-avatar';
 export { LayoutSwatch } from './layout-swatch';

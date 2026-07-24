@@ -2,6 +2,8 @@ import { BadRequestException, Injectable } from '@nestjs/common';
 import type { Prisma } from '@prisma/client';
 import type { UserRole } from '@weavestream/shared';
 import { PrismaService } from '../prisma/prisma.service.js';
+import { AuditLogService } from '../audit/audit.service.js';
+import { hasEligibleNativeBinding } from '../integrations/reconstruction/native-binding-ownership.js';
 import type {
   RelationPort,
   RelationReplaceCtx,
@@ -19,6 +21,29 @@ export interface LinkInput {
   tx?: Prisma.TransactionClient;
 }
 
+function relationBlocked(
+  companyId: string,
+  kind: 'missing_dependency' | 'validation' | 'ambiguous' | 'synchronization_error',
+  message: string,
+  reasonCode: string,
+  targetId = '',
+  candidateCount?: number,
+): IntegrationRelationWriteResult {
+  return {
+    targetId,
+    companyId,
+    change: 'blocked',
+    gap: {
+      kind,
+      message,
+      details: {
+        reasonCode,
+        ...(candidateCount !== undefined ? { candidateCount } : {}),
+      },
+    },
+  };
+}
+
 export interface UnlinkInput {
   companyId: string;
   sourceType: string;
@@ -27,6 +52,42 @@ export interface UnlinkInput {
   targetId: string;
   relationType: string;
   tx?: Prisma.TransactionClient;
+}
+
+/**
+ * Guarded-attempt budget for `writeFromIntegration` when a concurrent
+ * write invalidates the observed relation snapshot. A retry costs one
+ * re-read; exhaustion is reported as a `synchronization_error` gap so
+ * the next sync run tries again.
+ */
+const INTEGRATION_WRITE_MAX_ATTEMPTS = 3;
+
+export interface IntegrationRelationWriteInput {
+  tx?: Prisma.TransactionClient;
+  companyId: string;
+  integrationId: string;
+  integrationCompanyMappingId: string;
+  resourceId: string;
+  externalId: string;
+  auditActorId: string;
+  dryRun: boolean;
+  existingTargetId?: string | null;
+  sourceType: 'Asset' | 'Article';
+  sourceId: string;
+  targetType: 'Asset' | 'Article';
+  targetId: string;
+  relationType: string;
+}
+
+export interface IntegrationRelationWriteResult {
+  targetId: string;
+  companyId: string;
+  change: 'created' | 'updated' | 'unchanged' | 'restored' | 'blocked';
+  gap?: {
+    kind: 'missing_dependency' | 'validation' | 'ambiguous' | 'synchronization_error';
+    message: string;
+    details?: { reasonCode?: string; candidateCount?: number };
+  };
 }
 
 export interface CleanupForAssetInput {
@@ -112,7 +173,10 @@ const TYPE_TO_KIND: Record<string, RelationEndpointKind> = {
  */
 @Injectable()
 export class RelationsService implements RelationPort {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly audit?: AuditLogService,
+  ) {}
 
   async link(input: LinkInput): Promise<void> {
     this.guardSameCompany(input);
@@ -137,6 +201,211 @@ export class RelationsService implements RelationPort {
         createdBy: input.actorId,
       },
       update: {}, // idempotent
+    });
+  }
+
+  /**
+   * Explicit same-company relation entry point for reconstruction. A
+   * relation row's entire mutable state is its composite key, so bound
+   * updates are optimistic: each attempt classifies against the row it
+   * read and the UPDATE pins the full observed composite in its WHERE
+   * clause, while creates insert through the composite unique index
+   * (`createMany` + `skipDuplicates`) so a concurrently created owner
+   * is never silently claimed. Either zero-row write retries from a
+   * fresh read.
+   */
+  async writeFromIntegration(
+    input: IntegrationRelationWriteInput,
+  ): Promise<IntegrationRelationWriteResult> {
+    const readClient = input.tx ?? this.prisma;
+    if (!this.audit) throw new Error('Integration relation audit service is unavailable.');
+    await this.audit.assertIntegrationActor(input.auditActorId, input.companyId);
+    const sourceKind = TYPE_TO_KIND[input.sourceType];
+    const targetKind = TYPE_TO_KIND[input.targetType];
+    if (!sourceKind || !targetKind) {
+      return relationBlocked(input.companyId, 'validation', 'Relation endpoint type is invalid.', 'invalid_endpoint_kind');
+    }
+    try {
+      await this.assertEndpointsInCompanyWithClient({
+        companyId: input.companyId,
+        sourceType: sourceKind,
+        sourceId: input.sourceId,
+        targetType: targetKind,
+        targetId: input.targetId,
+      }, readClient);
+    } catch {
+      return relationBlocked(input.companyId, 'missing_dependency', 'A relation endpoint was not found in the write company.', 'dependency_not_found');
+    }
+
+    for (let attempt = 0; attempt < INTEGRATION_WRITE_MAX_ATTEMPTS; attempt += 1) {
+      const result = await this.attemptIntegrationRelationWrite(input);
+      if (result !== 'revision_conflict') return result;
+    }
+    return relationBlocked(
+      input.companyId,
+      'synchronization_error',
+      'The relation was modified concurrently while reconstruction was writing it.',
+      'target_revision_conflict',
+      input.existingTargetId ?? '',
+    );
+  }
+
+  /**
+   * One guarded attempt of the integration relation write. The
+   * unchanged/updated classification and the manual-ownership checks
+   * are computed from the rows read here; the UPDATE pins the observed
+   * composite key in its WHERE clause and the create relies on the
+   * composite unique index (`skipDuplicates`). `'revision_conflict'`
+   * reports a zero-row write — the relation was deleted, rewritten, or
+   * its composite key was claimed after the read — and
+   * `writeFromIntegration` retries from a fresh read.
+   */
+  private async attemptIntegrationRelationWrite(
+    input: IntegrationRelationWriteInput,
+  ): Promise<IntegrationRelationWriteResult | 'revision_conflict'> {
+    const runTransaction = <T>(callback: (tx: Prisma.TransactionClient) => Promise<T>) =>
+      input.tx ? callback(input.tx) : this.prisma.$transaction(callback);
+    const readClient = input.tx ?? this.prisma;
+    const bound = input.existingTargetId
+      ? await readClient.relation.findUnique({ where: { id: input.existingTargetId } })
+      : null;
+    if (bound && bound.companyId !== input.companyId) {
+      return { targetId: bound.id, companyId: bound.companyId, change: 'blocked' };
+    }
+    if (input.existingTargetId && !bound) {
+      return relationBlocked(input.companyId, 'missing_dependency', 'The bound relation no longer exists.', 'target_not_found', input.existingTargetId);
+    }
+
+    const key = {
+      companyId: input.companyId,
+      sourceType: input.sourceType,
+      sourceId: input.sourceId,
+      targetType: input.targetType,
+      targetId: input.targetId,
+      relationType: input.relationType,
+    };
+    const existingComposite = await readClient.relation.findFirst({ where: key });
+    if (!bound && existingComposite) {
+      return relationBlocked(input.companyId, 'ambiguous', 'An unbound relation already owns this composite key.', 'manual_ownership', existingComposite.id, 1);
+    }
+    if (bound && existingComposite && existingComposite.id !== bound.id) {
+      return relationBlocked(input.companyId, 'ambiguous', 'Another relation owns the requested composite key.', 'manual_ownership', existingComposite.id, 1);
+    }
+    const sameComposite =
+      bound &&
+      bound.sourceType === key.sourceType &&
+      bound.sourceId === key.sourceId &&
+      bound.targetType === key.targetType &&
+      bound.targetId === key.targetId &&
+      bound.relationType === key.relationType;
+    if (bound && (input.dryRun || sameComposite)) {
+      if (!(await this.hasEligibleRelationBinding(readClient, input, bound.id))) {
+        return relationBlocked(input.companyId, 'ambiguous', 'The existing relation is not owned by an eligible reconstruction binding.', 'manual_ownership', bound.id, 1);
+      }
+    }
+    if (input.dryRun) {
+      return {
+        targetId: bound?.id ?? '',
+        companyId: input.companyId,
+        change: bound ? (sameComposite ? 'unchanged' : 'updated') : 'created',
+      };
+    }
+    if (sameComposite) {
+      return { targetId: bound.id, companyId: input.companyId, change: 'unchanged' };
+    }
+
+    const outcome = await runTransaction(async (tx) => {
+      if (bound && !(await this.hasEligibleRelationBinding(tx, input, bound.id))) {
+        return { status: 'blocked' as const, targetId: bound.id };
+      }
+      let row: { id: string };
+      if (bound) {
+        const updated = await tx.relation.updateMany({
+          where: {
+            id: bound.id,
+            companyId: input.companyId,
+            // Optimistic-concurrency guard riding the WHERE clause —
+            // the `update()` idiom. A relation row's entire mutable
+            // state is its composite key, so pinning the observed
+            // composite is the full snapshot (`Relation` has no
+            // `updatedAt`). Zero rows means the row was deleted or
+            // rewritten after the read; the caller re-reads instead of
+            // resurrecting or overwriting it.
+            sourceType: bound.sourceType,
+            sourceId: bound.sourceId,
+            targetType: bound.targetType,
+            targetId: bound.targetId,
+            relationType: bound.relationType,
+          },
+          data: {
+            sourceType: key.sourceType,
+            sourceId: key.sourceId,
+            targetType: key.targetType,
+            targetId: key.targetId,
+            relationType: key.relationType,
+          },
+        });
+        if (updated.count === 0) {
+          return { status: 'conflict' as const };
+        }
+        row = { id: bound.id };
+      } else {
+        this.guardSameCompany(key);
+        // Create through the composite unique index instead of an
+        // idempotent upsert: `skipDuplicates` makes a concurrently
+        // created owner report zero rows (no transaction-aborting
+        // P2002), so the retry re-reads and reports `manual_ownership`
+        // rather than silently claiming a row this write did not
+        // insert.
+        const created = await tx.relation.createMany({
+          data: [{ ...key, createdBy: input.auditActorId }],
+          skipDuplicates: true,
+        });
+        if (created.count === 0) {
+          return { status: 'conflict' as const };
+        }
+        const inserted = await tx.relation.findFirst({ where: key, select: { id: true } });
+        if (!inserted) throw new Error('Relation write did not produce a target.');
+        row = inserted;
+      }
+      await this.audit!.logWithClient(tx, {
+        actorId: input.auditActorId,
+        action: bound ? 'integration.relation.updated' : 'integration.relation.created',
+        entityType: 'Relation',
+        entityId: row.id,
+        companyId: input.companyId,
+        ip: '0.0.0.0',
+        userAgent: 'weavestream-worker/integration-reconstruction',
+        after: { integrationId: input.integrationId, change: bound ? 'updated' : 'created' },
+      });
+      return { status: 'written' as const, targetId: row.id };
+    });
+    if (outcome.status === 'blocked') {
+      return relationBlocked(input.companyId, 'ambiguous', 'The existing relation is not owned by an eligible reconstruction binding.', 'manual_ownership', outcome.targetId, 1);
+    }
+    if (outcome.status === 'conflict') {
+      return 'revision_conflict';
+    }
+    return {
+      targetId: outcome.targetId,
+      companyId: input.companyId,
+      change: bound ? 'updated' : 'created',
+    };
+  }
+
+  private hasEligibleRelationBinding(
+    client: Parameters<typeof hasEligibleNativeBinding>[0],
+    input: IntegrationRelationWriteInput,
+    targetId: string,
+  ): Promise<boolean> {
+    return hasEligibleNativeBinding(client, {
+      integrationCompanyMappingId: input.integrationCompanyMappingId,
+      resourceId: input.resourceId,
+      externalId: input.externalId,
+      integrationId: input.integrationId,
+      companyId: input.companyId,
+      targetKind: 'relation',
+      targetId,
     });
   }
 
@@ -499,6 +768,19 @@ export class RelationsService implements RelationPort {
     targetType: RelationEndpointKind;
     targetId: string;
   }): Promise<void> {
+    await this.assertEndpointsInCompanyWithClient(args, this.prisma);
+  }
+
+  private async assertEndpointsInCompanyWithClient(
+    args: {
+      companyId: string;
+      sourceType: RelationEndpointKind;
+      sourceId: string;
+      targetType: RelationEndpointKind;
+      targetId: string;
+    },
+    client: Pick<Prisma.TransactionClient, 'asset' | 'article' | 'password'> | PrismaService,
+  ): Promise<void> {
     const checks: Array<Promise<unknown>> = [];
     const queue = [
       { kind: args.sourceType, id: args.sourceId, label: 'source' as const },
@@ -507,7 +789,7 @@ export class RelationsService implements RelationPort {
     for (const endpoint of queue) {
       const lookup =
         endpoint.kind === 'asset'
-          ? this.prisma.asset.findFirst({
+          ? client.asset.findFirst({
               where: {
                 id: endpoint.id,
                 companyId: args.companyId,
@@ -516,7 +798,7 @@ export class RelationsService implements RelationPort {
               select: { id: true },
             })
           : endpoint.kind === 'article'
-            ? this.prisma.article.findFirst({
+            ? client.article.findFirst({
                 where: {
                   id: endpoint.id,
                   companyId: args.companyId,
@@ -524,7 +806,7 @@ export class RelationsService implements RelationPort {
                 },
                 select: { id: true },
               })
-            : this.prisma.password.findFirst({
+            : client.password.findFirst({
                 where: {
                   id: endpoint.id,
                   companyId: args.companyId,

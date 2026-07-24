@@ -7,8 +7,8 @@ import type {
 } from '@weavestream/shared';
 import {
   DriverAuthError,
-  type DriverFetchPage,
-  type DriverRecord,
+  type LegacyDriverFetchPage,
+  type LegacyDriverRecord,
   type FetchRecordsContext,
   type IntegrationContext,
   type IntegrationDriver,
@@ -150,6 +150,9 @@ export class Action1Driver implements IntegrationDriver {
       {
         key: 'records',
         label: 'Endpoints',
+        targetKind: 'asset',
+        targetConfig: {},
+        dependsOnResourceKeys: [],
         description:
           'Action1 managed endpoints (workstations / servers) per organisation.',
         defaultMatchKeyHint: 'MAC',
@@ -160,6 +163,7 @@ export class Action1Driver implements IntegrationDriver {
       listSourceOrgs: true,
       dryRun: true,
       ticketing: false,
+      reconstructionCompleteness: false,
     },
   };
 
@@ -342,7 +346,7 @@ export class Action1Driver implements IntegrationDriver {
   async fetchRecords(
     ctx: FetchRecordsContext,
     cursor: string | null,
-  ): Promise<DriverFetchPage> {
+  ): Promise<LegacyDriverFetchPage> {
     const { baseUrl } = parseConfig(ctx.config);
     const token = await this.getAccessToken(ctx);
     const filter = action1FilterSchema.parse(ctx.filter ?? {});
@@ -371,7 +375,7 @@ export class Action1Driver implements IntegrationDriver {
       ? raw.filter((e) => filter.groups!.includes(String(e.group ?? '')))
       : raw;
 
-    const records: DriverRecord[] = filtered.map((e) => {
+    const records: LegacyDriverRecord[] = filtered.map((e) => {
       const fields = normalizeAction1RecordFields(e);
       return {
         externalId: String(e.id),
@@ -570,4 +574,3 @@ const ACTION1_KNOWN_FIELDS: SourceFieldDto[] = [
   { key: 'reboot_required', label: 'Reboot required', hintType: 'BOOLEAN', alwaysPresent: false },
   { key: 'group', label: 'Endpoint group', hintType: 'TEXT', alwaysPresent: false },
 ];
-
