@@ -152,7 +152,14 @@ export function IntegrationTabs({
       kind: 'resource',
       resource: r,
     }));
-    return [...STATIC_TABS_HEAD, ...resourceTabs, ...STATIC_TABS_TAIL];
+    // Completeness only exists for drivers that opt into the
+    // reconstruction-completeness model (currently Breeze). Other
+    // drivers never carry scorecards, so the tab would only ever show
+    // an empty dashboard.
+    const tail = driver?.capabilities?.reconstructionCompleteness
+      ? STATIC_TABS_TAIL
+      : STATIC_TABS_TAIL.filter((t) => t.id !== 'completeness');
+    return [...STATIC_TABS_HEAD, ...resourceTabs, ...tail];
   }, [driver]);
 
   // Resolve the initial tab against the descriptor list. Legacy `fields`

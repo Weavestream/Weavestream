@@ -1,5 +1,6 @@
 import {
   hasEligibleNativeBinding,
+  hasEligibleNativeSiblingBinding,
   hasEligibleNativeTargetBinding,
 } from './native-binding-ownership.js';
 
@@ -120,5 +121,51 @@ describe('hasEligibleNativeBinding persisted provenance identity', () => {
         targetId: identity.targetId,
       }),
     ).resolves.toBe(true);
+  });
+
+  it('recognizes only complete eligible sibling bindings', async () => {
+    const siblingExternalId = 'org-1:devices:asset-2';
+    const eligible = record({
+      externalId: siblingExternalId,
+      provenance: {
+        ...record().provenance as object,
+        externalId: siblingExternalId,
+      },
+    });
+    const siblingClient = {
+      integrationSyncRecord: {
+        findUnique: jest.fn(),
+        findMany: jest.fn().mockResolvedValue([
+          record({
+            externalId: 'org-1:devices:forged',
+            provenance: { ...record().provenance as object, ownership: 'weavestream' },
+          }),
+          eligible,
+        ]),
+      },
+    };
+
+    await expect(
+      hasEligibleNativeSiblingBinding(siblingClient, identity),
+    ).resolves.toBe(true);
+    expect(siblingClient.integrationSyncRecord.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          externalId: { not: identity.externalId },
+          assetId: identity.targetId,
+        }),
+        take: 256,
+      }),
+    );
+
+    siblingClient.integrationSyncRecord.findMany.mockResolvedValue([
+      record({
+        externalId: 'org-1:devices:forged',
+        provenance: { ...record().provenance as object, ownership: 'weavestream' },
+      }),
+    ]);
+    await expect(
+      hasEligibleNativeSiblingBinding(siblingClient, identity),
+    ).resolves.toBe(false);
   });
 });

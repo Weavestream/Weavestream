@@ -23,10 +23,12 @@ import { PrismaService } from '../prisma/prisma.service.js';
 import { AuditLogService } from '../audit/audit.service.js';
 import {
   hasEligibleNativeBinding,
+  hasEligibleNativeSiblingBinding,
   hasEligibleNativeTargetBinding,
 } from '../integrations/reconstruction/native-binding-ownership.js';
 import { AUDIT_ACTIONS } from '../audit/audit-actions.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
+import { isUniqueConstraintError } from '../prisma/prisma-errors.js';
 
 export interface AuditMeta {
   ip: string;
@@ -75,7 +77,11 @@ export interface IntegrationIpamWriteResult {
   gap?: {
     kind: 'missing_dependency' | 'validation' | 'ambiguous' | 'synchronization_error';
     message: string;
-    details?: { reasonCode?: string; candidateCount?: number };
+    details?: {
+      reasonCode?: string;
+      candidateCount?: number;
+      fieldPaths?: string[];
+    };
   };
 }
 
@@ -341,21 +347,26 @@ export class IpamService {
 
     await this.assertCidrFree(companyId, cidr, null);
 
-    const row = await this.prisma.subnet.create({
-      data: {
-        companyId,
-        name: input.name,
-        cidr,
-        prefix,
-        vlanId: input.vlanId ?? null,
-        gateway: input.gateway ?? null,
-        dhcpRangeStart: input.dhcpRangeStart ?? null,
-        dhcpRangeEnd: input.dhcpRangeEnd ?? null,
-        description: input.description ?? null,
-        createdBy: actor.id,
-        updatedBy: actor.id,
-      },
-    });
+    let row: Subnet;
+    try {
+      row = await this.prisma.subnet.create({
+        data: {
+          companyId,
+          name: input.name,
+          cidr,
+          prefix,
+          vlanId: input.vlanId ?? null,
+          gateway: input.gateway ?? null,
+          dhcpRangeStart: input.dhcpRangeStart ?? null,
+          dhcpRangeEnd: input.dhcpRangeEnd ?? null,
+          description: input.description ?? null,
+          createdBy: actor.id,
+          updatedBy: actor.id,
+        },
+      });
+    } catch (error) {
+      this.rethrowCidrConflict(error, cidr);
+    }
 
     await this.audit.log({
       actorId: actor.id,
@@ -399,10 +410,14 @@ export class IpamService {
       data.prefix = Number(cidr.split('/')[1]);
     }
 
-    await this.prisma.subnet.updateMany({
-      where: { id, companyId },
-      data,
-    });
+    try {
+      await this.prisma.subnet.updateMany({
+        where: { id, companyId },
+        data,
+      });
+    } catch (error) {
+      this.rethrowCidrConflict(error, String(data.cidr ?? existing.cidr));
+    }
     const row = await this.getSubnetById(actor, companyId, id);
 
     await this.audit.log({
@@ -479,34 +494,40 @@ export class IpamService {
     if (existing) {
       await this.assertCidrFree(input.companyId, native.cidr, existing.id, readClient);
     }
-    if (
-      adoptedCanonicalTarget &&
-      existing?.gateway &&
-      native.gateway &&
-      existing.gateway !== native.gateway
-    ) {
-      return ipamBlocked(
-        input.companyId,
-        'validation',
-        'Canonical subnet sources disagree on a non-null gateway.',
-        'canonical_gateway_conflict',
-        existing.id,
-      );
-    }
-
-    const data = {
+    const sharedCanonicalTarget = !!existing && (
+      adoptedCanonicalTarget ||
+      await this.hasEligibleIpamSiblingBinding(
+        readClient,
+        input,
+        'subnet',
+        existing!.id,
+      )
+    );
+    const incomingData: CanonicalSubnetData = {
       name: native.name,
       cidr: native.cidr,
       prefix: Number(native.cidr.split('/')[1]),
       vlanId: native.vlanId ?? null,
-      gateway:
-        adoptedCanonicalTarget && native.gateway == null
-          ? existing?.gateway ?? null
-          : native.gateway ?? null,
+      gateway: native.gateway ?? null,
       dhcpRangeStart: native.dhcpRangeStart ?? null,
       dhcpRangeEnd: native.dhcpRangeEnd ?? null,
       description: native.description ?? null,
     };
+    const canonical = existing && sharedCanonicalTarget
+      ? reconcileCanonicalFields(existing, incomingData, SUBNET_CANONICAL_FIELDS)
+      : { data: incomingData, conflicts: [] };
+    if (canonical.conflicts.length > 0) {
+      return ipamBlocked(
+        input.companyId,
+        'validation',
+        'Canonical subnet sources disagree on shared fields.',
+        'canonical_field_conflict',
+        existing!.id,
+        canonical.conflicts,
+      );
+    }
+
+    const data = canonical.data;
     const changed =
       !existing ||
       existing.name !== data.name ||
@@ -614,10 +635,14 @@ export class IpamService {
     const existing = await this.getSubnetById(actor, companyId, id);
     if (!existing.archivedAt) return existing;
     await this.assertCidrFree(companyId, existing.cidr, id);
-    await this.prisma.subnet.updateMany({
-      where: { id, companyId },
-      data: { archivedAt: null, updatedBy: actor.id },
-    });
+    try {
+      await this.prisma.subnet.updateMany({
+        where: { id, companyId },
+        data: { archivedAt: null, updatedBy: actor.id },
+      });
+    } catch (error) {
+      this.rethrowCidrConflict(error, existing.cidr);
+    }
     const row = await this.getSubnetById(actor, companyId, id);
 
     await this.audit.log({
@@ -818,7 +843,34 @@ export class IpamService {
     if (existing && existing.subnetId !== input.subnetId) {
       return ipamBlocked(input.companyId, 'validation', 'The bound reservation belongs to another subnet.', 'target_subnet_mismatch', existing.id);
     }
-    const data = { ipAddress: native.ipAddress, label: native.label, notes: native.notes ?? null };
+    const sharedCanonicalTarget = !!existing && (
+      adoptedCanonicalTarget ||
+      await this.hasEligibleIpamSiblingBinding(
+        readClient,
+        input,
+        'ip_reservation',
+        existing.id,
+      )
+    );
+    const incomingData: CanonicalReservationData = {
+      ipAddress: native.ipAddress,
+      label: native.label,
+      notes: native.notes ?? null,
+    };
+    const canonical = existing && sharedCanonicalTarget
+      ? reconcileCanonicalFields(existing, incomingData, RESERVATION_CANONICAL_FIELDS)
+      : { data: incomingData, conflicts: [] };
+    if (canonical.conflicts.length > 0) {
+      return ipamBlocked(
+        input.companyId,
+        'validation',
+        'Canonical reservation sources disagree on shared fields.',
+        'canonical_field_conflict',
+        existing!.id,
+        canonical.conflicts,
+      );
+    }
+    const data = canonical.data;
     const changed =
       !existing ||
       existing.ipAddress !== data.ipAddress ||
@@ -909,6 +961,23 @@ export class IpamService {
     );
   }
 
+  private hasEligibleIpamSiblingBinding(
+    client: Parameters<typeof hasEligibleNativeSiblingBinding>[0],
+    input: IntegrationSubnetWriteInput | IntegrationReservationWriteInput,
+    targetKind: 'subnet' | 'ip_reservation',
+    targetId: string,
+  ): Promise<boolean> {
+    return hasEligibleNativeSiblingBinding(client, {
+      integrationCompanyMappingId: input.integrationCompanyMappingId,
+      resourceId: input.resourceId,
+      externalId: input.externalId,
+      integrationId: input.integrationId,
+      companyId: input.companyId,
+      targetKind,
+      targetId,
+    });
+  }
+
   async deleteReservation(
     actor: AuthedUser,
     companyId: string,
@@ -948,6 +1017,9 @@ export class IpamService {
     excludeId: string | null,
     client: Pick<Prisma.TransactionClient, 'subnet'> | PrismaService = this.prisma,
   ): Promise<void> {
+    // Text equality here IS canonical equality: `subnets_cidr_canonical_check`
+    // pins `cidr` to `canonical_cidr::text`, and Prisma cannot bind CIDR
+    // strings to the inet column (bare-IP parameter parsing).
     const where: Prisma.SubnetWhereInput = {
       companyId,
       cidr,
@@ -960,6 +1032,15 @@ export class IpamService {
         `Subnet ${cidr} already exists for this company`,
       );
     }
+  }
+
+  private rethrowCidrConflict(error: unknown, cidr: string): never {
+    if (isUniqueConstraintError(error)) {
+      throw new ConflictException(
+        `Subnet ${cidr} already exists for this company`,
+      );
+    }
+    throw error;
   }
 }
 
@@ -981,13 +1062,86 @@ function ipamBlocked(
   message: string,
   reasonCode: string,
   targetId = '',
+  fieldPaths?: string[],
 ): IntegrationIpamWriteResult {
   return {
     targetId,
     companyId,
     change: 'blocked',
-    gap: { kind, message, details: { reasonCode } },
+    gap: {
+      kind,
+      message,
+      details: {
+        reasonCode,
+        ...(fieldPaths?.length ? { fieldPaths } : {}),
+      },
+    },
   };
+}
+
+type CanonicalSubnetData = Pick<
+  Subnet,
+  | 'name'
+  | 'cidr'
+  | 'prefix'
+  | 'vlanId'
+  | 'gateway'
+  | 'dhcpRangeStart'
+  | 'dhcpRangeEnd'
+  | 'description'
+>;
+type CanonicalReservationData = Pick<
+  IpReservation,
+  'ipAddress' | 'label' | 'notes'
+>;
+type CanonicalFieldPolicy<T> = {
+  field: keyof T;
+  path: string;
+  nullable: boolean;
+};
+
+const SUBNET_CANONICAL_FIELDS: readonly CanonicalFieldPolicy<CanonicalSubnetData>[] = [
+  { field: 'name', path: 'name', nullable: false },
+  { field: 'cidr', path: 'cidr', nullable: false },
+  { field: 'prefix', path: 'prefix', nullable: false },
+  { field: 'vlanId', path: 'vlanId', nullable: true },
+  { field: 'gateway', path: 'gateway', nullable: true },
+  { field: 'dhcpRangeStart', path: 'dhcpRangeStart', nullable: true },
+  { field: 'dhcpRangeEnd', path: 'dhcpRangeEnd', nullable: true },
+  { field: 'description', path: 'description', nullable: true },
+];
+
+const RESERVATION_CANONICAL_FIELDS: readonly CanonicalFieldPolicy<CanonicalReservationData>[] = [
+  { field: 'ipAddress', path: 'ipAddress', nullable: false },
+  { field: 'label', path: 'label', nullable: false },
+  { field: 'notes', path: 'notes', nullable: true },
+];
+
+/**
+ * Canonical IPAM field policy:
+ * - identity and required values must agree exactly;
+ * - the first non-null optional value becomes canonical;
+ * - an absent optional assertion preserves the canonical value;
+ * - two differing non-null assertions block instead of overwriting.
+ */
+function reconcileCanonicalFields<T extends object>(
+  existing: T,
+  incoming: T,
+  policies: readonly CanonicalFieldPolicy<T>[],
+): { data: T; conflicts: string[] } {
+  const data = { ...incoming };
+  const conflicts: string[] = [];
+  for (const policy of policies) {
+    const current = existing[policy.field];
+    const next = incoming[policy.field];
+    if (policy.nullable && next == null) {
+      data[policy.field] = current;
+      continue;
+    }
+    if (policy.nullable && current == null) continue;
+    if (current !== next) conflicts.push(policy.path);
+  }
+  return { data, conflicts };
 }
 
 function ipToUint32(ip: string): number | null {

@@ -114,7 +114,7 @@ function setup(options: { subnet?: unknown; reservation?: unknown; subnetCollisi
     integrationSyncRecord: {
       findUnique: jest.fn().mockResolvedValue(options.binding ?? null),
       findFirst: jest.fn().mockResolvedValue(options.targetBinding ?? null),
-      findMany: jest.fn().mockResolvedValue([]),
+      findMany: jest.fn().mockResolvedValue(options.targetBinding ? [options.targetBinding] : []),
       update: jest.fn().mockResolvedValue({}),
     },
     relation: { updateMany: jest.fn(), deleteMany: jest.fn() },
@@ -168,6 +168,7 @@ function setup(options: { subnet?: unknown; reservation?: unknown; subnetCollisi
     integrationSyncRecord: {
       findUnique: jest.fn().mockResolvedValue(options.binding ?? null),
       findFirst: jest.fn().mockResolvedValue(options.targetBinding ?? null),
+      findMany: jest.fn().mockResolvedValue(options.targetBinding ? [options.targetBinding] : []),
     },
     $transaction: jest.fn(async (callback: (client: unknown) => Promise<unknown>) => {
       const result = await callback(tx);
@@ -305,6 +306,16 @@ describe('IpamService integration system writes', () => {
       tx,
       expect.objectContaining({ actorId: ids.actor, after: expect.objectContaining({ integrationId: ids.integration }) }),
     );
+  });
+
+  it('aborts a mapping transaction that loses the canonical CIDR create race', async () => {
+    const { service, audit, tx, wasCommitted } = setup();
+    const unique = Object.assign(new Error('canonical CIDR race'), { code: 'P2002' });
+    tx.subnet.create.mockRejectedValue(unique);
+
+    await expect(service.writeSubnetFromIntegration(subnetInput)).rejects.toBe(unique);
+    expect(audit.logWithClient).not.toHaveBeenCalled();
+    expect(wasCommitted()).toBe(false);
   });
 
   it('rejects an arbitrary existing subnet before mutation', async () => {
@@ -563,10 +574,22 @@ describe('IpamService integration system writes', () => {
     });
   });
 
-  it('blocks a cross-page canonical subnet convergence with conflicting non-null gateways', async () => {
+  it.each([
+    ['name', { name: 'Other LAN' }, ['name']],
+    ['VLAN', { vlanId: 20 }, ['vlanId']],
+    ['gateway', { gateway: '10.0.0.2' }, ['gateway']],
+    ['DHCP range', { dhcpRangeStart: '10.0.0.100', dhcpRangeEnd: '10.0.0.200' }, ['dhcpRangeStart', 'dhcpRangeEnd']],
+    ['description', { description: 'Other description' }, ['description']],
+  ])('blocks canonical subnet convergence when %s conflicts', async (_field, override, fieldPaths) => {
     const firstExternalId = 'org:subnets:11111111-1111-4111-8111-111111111111';
     const { service, tx } = setup({
-      subnetCollision: subnetRow({ gateway: '10.0.0.1' }),
+      subnetCollision: subnetRow({
+        vlanId: 10,
+        gateway: '10.0.0.1',
+        dhcpRangeStart: '10.0.0.50',
+        dhcpRangeEnd: '10.0.0.99',
+        description: 'Canonical description',
+      }),
       targetBinding: binding('subnet', {
         externalId: firstExternalId,
         provenance: {
@@ -584,12 +607,95 @@ describe('IpamService integration system writes', () => {
       service.writeSubnetFromIntegration({
         ...subnetInput,
         externalId: 'org:subnets:22222222-2222-4222-8222-222222222222',
-        gateway: '10.0.0.2',
+        vlanId: 10,
+        dhcpRangeStart: '10.0.0.50',
+        dhcpRangeEnd: '10.0.0.99',
+        description: 'Canonical description',
+        ...override,
         tx: tx as never,
       }),
     ).resolves.toMatchObject({
       change: 'blocked',
-      gap: { kind: 'validation', details: { reasonCode: 'canonical_gateway_conflict' } },
+      gap: {
+        kind: 'validation',
+        details: { reasonCode: 'canonical_field_conflict', fieldPaths },
+      },
+    });
+    expect(tx.subnet.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('preserves first non-null canonical subnet values when a sibling omits them', async () => {
+    const firstExternalId = 'org:subnets:11111111-1111-4111-8111-111111111111';
+    const canonical = subnetRow({
+      vlanId: 10,
+      gateway: '10.0.0.1',
+      dhcpRangeStart: '10.0.0.50',
+      dhcpRangeEnd: '10.0.0.99',
+      description: 'Canonical description',
+    });
+    const { service, tx } = setup({
+      subnetCollision: canonical,
+      targetBinding: binding('subnet', {
+        externalId: firstExternalId,
+        provenance: {
+          integrationId: ids.integration,
+          externalOrgId: 'org',
+          resourceKey: 'subnets',
+          externalId: firstExternalId,
+          ownership: 'breeze',
+          state: 'active',
+        },
+      }),
+    });
+
+    await expect(service.writeSubnetFromIntegration({
+      ...subnetInput,
+      externalId: 'org:subnets:22222222-2222-4222-8222-222222222222',
+      vlanId: null,
+      gateway: null,
+      dhcpRangeStart: null,
+      dhcpRangeEnd: null,
+      description: null,
+      tx: tx as never,
+    })).resolves.toEqual({
+      targetId: ids.subnet,
+      companyId: ids.company,
+      change: 'unchanged',
+    });
+    expect(tx.subnet.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('blocks a later page from changing a subnet field after canonical sharing', async () => {
+    const siblingExternalId = 'org:subnets:22222222-2222-4222-8222-222222222222';
+    const { service, tx } = setup({
+      subnet: subnetRow(),
+      binding: binding('subnet'),
+      targetBinding: binding('subnet', {
+        externalId: siblingExternalId,
+        provenance: {
+          integrationId: ids.integration,
+          externalOrgId: 'org',
+          resourceKey: 'subnets',
+          externalId: siblingExternalId,
+          ownership: 'breeze',
+          state: 'active',
+        },
+      }),
+    });
+
+    await expect(service.writeSubnetFromIntegration({
+      ...subnetInput,
+      existingTargetId: ids.subnet,
+      name: 'Oscillating LAN',
+      tx: tx as never,
+    })).resolves.toMatchObject({
+      change: 'blocked',
+      gap: {
+        details: {
+          reasonCode: 'canonical_field_conflict',
+          fieldPaths: ['name'],
+        },
+      },
     });
     expect(tx.subnet.updateMany).not.toHaveBeenCalled();
   });
@@ -621,7 +727,11 @@ describe('IpamService integration system writes', () => {
         state: 'active',
       },
     });
-    const canonical = subnetRow({ id: ids.other, cidr: '10.1.0.0/24', gateway: '10.1.0.1' });
+    const canonical = subnetRow({
+      id: ids.other,
+      cidr: '10.1.0.0/24',
+      gateway: '10.1.0.1',
+    });
     const { service, tx } = setup({
       subnet: subnetRow(),
       subnetCollision: canonical,
@@ -666,7 +776,10 @@ describe('IpamService integration system writes', () => {
     });
     const { service, tx } = setup({
       subnet: subnetRow(),
-      subnetCollision: subnetRow({ id: ids.other, cidr: '10.1.0.0/24' }),
+      subnetCollision: subnetRow({
+        id: ids.other,
+        cidr: '10.1.0.0/24',
+      }),
       binding: exactBinding,
     });
 
@@ -844,6 +957,94 @@ describe('IpamService integration system writes', () => {
     });
     expect(tx.integrationSyncRecord.findFirst).toHaveBeenCalled();
     expect(tx.ipReservation.findFirst).toHaveBeenCalled();
+  });
+
+  it.each([
+    ['label', { label: 'Other Printer' }, ['label']],
+    ['notes', { notes: 'Other notes' }, ['notes']],
+  ])('blocks canonical reservation convergence when %s conflicts', async (_field, override, fieldPaths) => {
+    const firstExternalId = 'org:reservations:11111111-1111-4111-8111-111111111111';
+    const { service, tx } = setup({
+      subnet: subnetRow(),
+      reservationCollision: reservationRow({ notes: 'Canonical notes' }),
+      targetBinding: binding('ip_reservation', {
+        externalId: firstExternalId,
+        provenance: {
+          integrationId: ids.integration,
+          externalOrgId: 'org',
+          resourceKey: 'reservations',
+          externalId: firstExternalId,
+          ownership: 'breeze',
+          state: 'active',
+        },
+      }),
+    });
+
+    await expect(service.writeReservationFromIntegration({
+      companyId: ids.company,
+      integrationId: ids.integration,
+      integrationCompanyMappingId: ids.mapping,
+      resourceId: ids.resource,
+      externalId: 'org:reservations:22222222-2222-4222-8222-222222222222',
+      auditActorId: ids.actor,
+      dryRun: false,
+      subnetId: ids.subnet,
+      ipAddress: '10.0.0.50',
+      label: 'Printer',
+      notes: 'Canonical notes',
+      ...override,
+      tx: tx as never,
+    })).resolves.toMatchObject({
+      change: 'blocked',
+      gap: {
+        details: { reasonCode: 'canonical_field_conflict', fieldPaths },
+      },
+    });
+    expect(tx.ipReservation.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('blocks a later page from changing a reservation after canonical sharing', async () => {
+    const siblingExternalId = 'org:reservations:22222222-2222-4222-8222-222222222222';
+    const { service, tx } = setup({
+      subnet: subnetRow(),
+      reservation: reservationRow(),
+      binding: binding('ip_reservation'),
+      targetBinding: binding('ip_reservation', {
+        externalId: siblingExternalId,
+        provenance: {
+          integrationId: ids.integration,
+          externalOrgId: 'org',
+          resourceKey: 'reservations',
+          externalId: siblingExternalId,
+          ownership: 'breeze',
+          state: 'active',
+        },
+      }),
+    });
+
+    await expect(service.writeReservationFromIntegration({
+      companyId: ids.company,
+      integrationId: ids.integration,
+      integrationCompanyMappingId: ids.mapping,
+      resourceId: ids.resource,
+      externalId: 'org:reservations:printer',
+      auditActorId: ids.actor,
+      dryRun: false,
+      existingTargetId: ids.reservation,
+      subnetId: ids.subnet,
+      ipAddress: '10.0.0.50',
+      label: 'Oscillating Printer',
+      tx: tx as never,
+    })).resolves.toMatchObject({
+      change: 'blocked',
+      gap: {
+        details: {
+          reasonCode: 'canonical_field_conflict',
+          fieldPaths: ['label'],
+        },
+      },
+    });
+    expect(tx.ipReservation.updateMany).not.toHaveBeenCalled();
   });
 
   it('rebinds an exact UUID reservation source from A to an eligible canonical target B in the page transaction', async () => {

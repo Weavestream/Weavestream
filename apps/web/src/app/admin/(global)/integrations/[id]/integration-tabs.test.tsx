@@ -19,6 +19,7 @@ describe('IntegrationTabs', () => {
 
   it('renders credentials, organizations, then Breeze site/device resource tabs in descriptor order', () => {
     const driver = {
+      capabilities: { reconstructionCompleteness: true },
       resources: [
         { key: 'sites', label: 'Sites', targetKind: 'asset', targetConfig: {}, dependsOnResourceKeys: [] },
         { key: 'devices', label: 'Devices', targetKind: 'asset', targetConfig: {}, dependsOnResourceKeys: ['sites'] },
@@ -34,6 +35,43 @@ describe('IntegrationTabs', () => {
 
     expect(screen.getAllByRole('tab').map((tab) => tab.textContent)).toEqual([
       'Credentials & schedule', 'Organizations', 'Sites fields', 'Devices fields', 'Completeness', 'Run history',
+    ]);
+  });
+
+  it('hides the Completeness tab for drivers without the reconstruction-completeness capability', () => {
+    const driver = {
+      capabilities: { reconstructionCompleteness: false },
+      resources: [
+        { key: 'records', label: 'Records', targetKind: 'asset', targetConfig: {}, dependsOnResourceKeys: [] },
+      ],
+    } as never;
+    render(<IntegrationTabs
+      initialTab="completeness"
+      integration={{ id: 'integration-1' } as never}
+      mappings={[]}
+      runs={[]}
+      driver={driver}
+    />);
+
+    expect(screen.queryByRole('tab', { name: 'Completeness' })).not.toBeInTheDocument();
+    // A deep-linked ?tab=completeness falls back to the credentials tab.
+    expect(screen.getByRole('tab', { name: 'Credentials & schedule' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByText('credentials panel')).toBeInTheDocument();
+    expect(screen.queryByText('completeness panel')).not.toBeInTheDocument();
+  });
+
+  it('hides the Completeness tab when the driver descriptor is unavailable', () => {
+    render(<IntegrationTabs
+      initialTab="creds"
+      integration={{ id: 'integration-1' } as never}
+      mappings={[]}
+      runs={[]}
+      driver={null}
+    />);
+
+    expect(screen.queryByRole('tab', { name: 'Completeness' })).not.toBeInTheDocument();
+    expect(screen.getAllByRole('tab').map((tab) => tab.textContent)).toEqual([
+      'Credentials & schedule', 'Organizations', 'Records fields', 'Run history',
     ]);
   });
 

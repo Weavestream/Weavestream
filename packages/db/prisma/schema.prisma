@@ -1725,6 +1725,15 @@ model Subnet {
   companyId   String    @map("company_id") @db.Uuid
   name        String
   cidr        String
+  // Database-derived network identity used by the partial unique index
+  // `subnets_company_canonical_cidr_active`. PostgreSQL's `network(inet)`
+  // collapses equivalent host-bit representations to one CIDR key.
+  // Unsupported: Prisma binds inet parameters via bare-IP parsing (CIDR
+  // strings throw AddrParseError) and strips the mask on readback, so the
+  // client must never filter on or return this column. Query the `cidr`
+  // text column instead — `subnets_cidr_canonical_check` pins it to
+  // `canonical_cidr::text`, so text equality IS canonical equality.
+  canonicalCidr Unsupported("inet") @default(dbgenerated()) @map("canonical_cidr")
   prefix      Int
   vlanId      Int?      @map("vlan_id")
   gateway     String?
