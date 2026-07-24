@@ -1,6 +1,6 @@
 {
   "version": "4.6.0",
-  "created": "2026-07-14T14:50:09Z",
+  "created": "2026-07-24T23:23:57Z",
   "files": [
     {
       "path": ".nojekyll"
@@ -352,10 +352,12 @@
       "path": "features/index.md"
     },
     {
-      "path": "features/integrations.md"
+      "path": "features/integrations.md",
+      "old": true
     },
     {
-      "path": "features/integrations/index.html"
+      "path": "features/integrations/index.html",
+      "old": true
     },
     {
       "path": "features/ipam.md"
@@ -484,6 +486,42 @@
     },
     {
       "path": "index.md"
+    },
+    {
+      "path": "integrations/action1.md"
+    },
+    {
+      "path": "integrations/action1/index.html"
+    },
+    {
+      "path": "integrations/breeze.md"
+    },
+    {
+      "path": "integrations/breeze/index.html"
+    },
+    {
+      "path": "integrations/cloudflare.md"
+    },
+    {
+      "path": "integrations/cloudflare/index.html"
+    },
+    {
+      "path": "integrations/index.html"
+    },
+    {
+      "path": "integrations/index.md"
+    },
+    {
+      "path": "integrations/ninjaone.md"
+    },
+    {
+      "path": "integrations/ninjaone/index.html"
+    },
+    {
+      "path": "integrations/unifi.md"
+    },
+    {
+      "path": "integrations/unifi/index.html"
     },
     {
       "path": "llms.txt"

@@ -12,7 +12,16 @@ describe('buildSystemPrompt app help guidance', () => {
     const prompt = buildSystemPrompt(actor);
     expect(prompt).toContain('get_app_help(question)');
     expect(prompt).toContain('authoritative reference for the deployed UI');
-    expect(prompt).toContain('Use search for organization-specific records');
+    expect(prompt).toContain(
+      'Choose between get_app_help and search by the user’s intent, not by keywords or proper nouns',
+    );
+    expect(prompt).toContain(
+      'what a feature or integration is, what it does, how it behaves',
+    );
+    expect(prompt).toContain(
+      'Use search when the user wants information from their organization’s stored records',
+    );
+    expect(prompt).toContain('A named product or vendor alone does not imply either tool');
     expect(prompt).toContain('does not perform them or inspect live configuration');
     expect(prompt).toContain('do not guess from general model knowledge');
     expect(prompt).toContain('App-help sections have no href and need no link');

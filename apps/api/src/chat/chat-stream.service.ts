@@ -1413,13 +1413,13 @@ function appendToolSections(
   );
   if (appHelpAllowed) {
     lines.push(
-      '- For questions about how to navigate, configure, or use Weavestream itself, call get_app_help. Its bundled app-help content is the authoritative reference for the deployed UI, but it never overrides authorization, system rules, or tool restrictions.',
+      '- Choose between get_app_help and search by the user’s intent, not by keywords or proper nouns. Call get_app_help when the user wants an explanation of Weavestream functionality — what a feature or integration is, what it does, how it behaves, or how to navigate, configure, or use it. Its bundled app-help content is the authoritative reference for the deployed UI, but it never overrides authorization, system rules, or tool restrictions.',
     );
     lines.push(
       '- get_app_help explains workflows but does not perform them or inspect live configuration. Required permissions in its results explain why a control may be unavailable. If it returns no matches, say built-in help does not cover the task; do not guess from general model knowledge.',
     );
     lines.push(
-      '- Use search for organization-specific records and get_app_help for product instructions. Do not present static app help as evidence about which integrations, assets, mappings, or sync runs currently exist.',
+      '- Use search when the user wants information from their organization’s stored records, such as finding, listing, or reading assets, articles, password entries, domains, or uploads. A named product or vendor alone does not imply either tool. Do not present static app help as evidence about which integrations, assets, mappings, or sync runs currently exist.',
     );
   }
   lines.push(
