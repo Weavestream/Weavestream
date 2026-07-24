@@ -1,8 +1,12 @@
 import {
+  MAX_RECONSTRUCTION_INPUT_BYTES,
+  articleReconstructionInputSchema,
   blockedOutcome,
   buildProvenance,
   contextGap,
   invalidInputOutcome,
+  reconstructionInputByteLength,
+  type ArticleReconstructionInput,
   type AssetReconstructionInput,
   type ReconstructionWriteContext,
 } from './reconstruction-target.js';
@@ -117,5 +121,50 @@ describe('reconstruction safety outcomes', () => {
       externalOrgId: 'manual-org',
       externalId: manual.externalId,
     });
+  });
+});
+
+describe('reconstruction input byte bounds', () => {
+  const articleInput: ArticleReconstructionInput = {
+    targetKind: 'article',
+    externalId: 'org-1:procedures:article-1',
+    source: {
+      externalOrgId: 'org-1',
+      resourceKey: 'procedures',
+      sourceId: 'article-1',
+    },
+    title: 'Unicode boundary',
+    slug: 'unicode-boundary',
+    folderId: null,
+    markdown: 'placeholder',
+    visibleToClients: false,
+  };
+
+  function utf8Text(bytes: number): string {
+    return `${'界'.repeat(Math.floor(bytes / 3))}${'a'.repeat(bytes % 3)}`;
+  }
+
+  it('accepts a non-ASCII article at the serialized UTF-8 byte ceiling', () => {
+    const emptyBytes = reconstructionInputByteLength({ ...articleInput, markdown: '' });
+    const candidate = {
+      ...articleInput,
+      markdown: utf8Text(MAX_RECONSTRUCTION_INPUT_BYTES - emptyBytes),
+    };
+
+    expect(candidate.markdown.length).toBeLessThan(MAX_RECONSTRUCTION_INPUT_BYTES);
+    expect(reconstructionInputByteLength(candidate)).toBe(MAX_RECONSTRUCTION_INPUT_BYTES);
+    expect(articleReconstructionInputSchema.safeParse(candidate).success).toBe(true);
+  });
+
+  it('rejects one additional UTF-8 byte even when the character count is below the ceiling', () => {
+    const emptyBytes = reconstructionInputByteLength({ ...articleInput, markdown: '' });
+    const candidate = {
+      ...articleInput,
+      markdown: utf8Text(MAX_RECONSTRUCTION_INPUT_BYTES - emptyBytes + 1),
+    };
+
+    expect(candidate.markdown.length).toBeLessThan(MAX_RECONSTRUCTION_INPUT_BYTES);
+    expect(reconstructionInputByteLength(candidate)).toBe(MAX_RECONSTRUCTION_INPUT_BYTES + 1);
+    expect(articleReconstructionInputSchema.safeParse(candidate).success).toBe(false);
   });
 });

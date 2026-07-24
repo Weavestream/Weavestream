@@ -9,7 +9,7 @@ import {
   type SafeIntegrationProvenance,
 } from '@weavestream/shared';
 
-const MAX_INPUT_BYTES = 262_144;
+export const MAX_RECONSTRUCTION_INPUT_BYTES = 262_144;
 const MAX_INPUT_DEPTH = 8;
 const MAX_INPUT_ENTRIES = 1_024;
 const BLOCKED_CHECKSUM = createHash('sha256')
@@ -102,7 +102,7 @@ export const articleReconstructionInputSchema = z
     folderId: z.string().uuid().nullable(),
     folderSlug: z.string().min(1).max(80).regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/).optional(),
     folderName: z.string().trim().min(1).max(200).optional(),
-    markdown: z.string().min(1).max(1_000_000),
+    markdown: z.string().min(1),
     visibleToClients: z.boolean(),
   })
   .strict()
@@ -535,8 +535,11 @@ function assertBoundedReconstructionInput(value: unknown, ctx: z.RefinementCtx):
   }
   try {
     const measured = measureJson(value);
-    if (measured.bytes > MAX_INPUT_BYTES) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Input exceeds 262144 UTF-8 bytes.' });
+    if (measured.bytes > MAX_RECONSTRUCTION_INPUT_BYTES) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `Input exceeds ${MAX_RECONSTRUCTION_INPUT_BYTES} UTF-8 bytes.`,
+      });
     }
     if (measured.depth > MAX_INPUT_DEPTH) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Input nesting exceeds 8 levels.' });
@@ -570,7 +573,13 @@ function measureJson(value: unknown): { bytes: number; depth: number; entries: n
     seen.delete(entry);
   };
   visit(value, 0);
-  return { bytes: Buffer.byteLength(JSON.stringify(value), 'utf8'), depth: maxDepth, entries };
+  return { bytes: reconstructionInputByteLength(value), depth: maxDepth, entries };
+}
+
+export function reconstructionInputByteLength(value: unknown): number {
+  const json = JSON.stringify(value);
+  if (json === undefined) throw new Error('not JSON');
+  return Buffer.byteLength(json, 'utf8');
 }
 
 function canonicalJson(value: unknown): unknown {

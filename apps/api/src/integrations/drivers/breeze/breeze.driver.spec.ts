@@ -3,6 +3,11 @@ import { driverDescriptorSchema } from '@weavestream/shared';
 import { BreezeDriver } from './breeze.driver.js';
 import { transformBreezeRecord } from './breeze.transforms.js';
 import { TextStrategy, TextareaStrategy } from '../../../field-types/strategies/text.strategy.js';
+import {
+  MAX_RECONSTRUCTION_INPUT_BYTES,
+  articleReconstructionInputSchema,
+  reconstructionInputByteLength,
+} from '../../reconstruction/reconstruction-target.js';
 
 const ORG = '11111111-1111-4111-8111-111111111111';
 const SITE = '22222222-2222-4222-8222-222222222222';
@@ -496,7 +501,10 @@ describe('Breeze transforms', () => {
 
     for (const rendered of [policy, assignment, script, automation, backup]) {
       expect(rendered.slug.length).toBeLessThanOrEqual(80);
-      expect(rendered.markdown.length).toBeLessThanOrEqual(1_000_000);
+      expect(reconstructionInputByteLength(rendered)).toBeLessThanOrEqual(
+        MAX_RECONSTRUCTION_INPUT_BYTES,
+      );
+      expect(articleReconstructionInputSchema.safeParse(rendered).success).toBe(true);
     }
   });
 
@@ -627,7 +635,9 @@ describe('Breeze transforms', () => {
       onFailure: 'stop', notificationTargets: null, dependencies: [],
     }) as Array<{ reconstructionInput: Record<string, any> }>;
     expect(automation!.reconstructionInput.markdown).toContain('500.');
-    expect(automation!.reconstructionInput.markdown.length).toBeLessThanOrEqual(500_000);
+    expect(reconstructionInputByteLength(automation!.reconstructionInput)).toBeLessThanOrEqual(
+      MAX_RECONSTRUCTION_INPUT_BYTES,
+    );
 
     const features = Array.from({ length: 500 }, (_, index) => ({
       id: `00000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`,
@@ -638,7 +648,9 @@ describe('Breeze transforms', () => {
       status: 'active', features,
     }) as Array<{ reconstructionInput: Record<string, any> }>;
     expect(policy!.reconstructionInput.markdown).toContain(features[499]!.id);
-    expect(policy!.reconstructionInput.markdown.length).toBeLessThanOrEqual(500_000);
+    expect(reconstructionInputByteLength(policy!.reconstructionInput)).toBeLessThanOrEqual(
+      MAX_RECONSTRUCTION_INPUT_BYTES,
+    );
 
   });
 
@@ -651,6 +663,29 @@ describe('Breeze transforms', () => {
       enabled: true, trigger: { type: 'manual' }, conditions: null, actions,
       onFailure: 'stop', notificationTargets: null, dependencies: [],
     })).toThrow(/native field bound/i);
+  });
+
+  it('enforces the shared serialized byte ceiling for non-ASCII projections', () => {
+    const automation = (instructions: string) => ({
+      ...base, siteId: null, sourceScope: 'organization', name: 'Unicode boundary',
+      description: null, enabled: true, trigger: { type: 'manual' }, conditions: null,
+      actions: Array.from({ length: 500 }, (_, index) => ({ type: 'step', index, instructions })),
+      onFailure: 'stop', notificationTargets: null, dependencies: [],
+    });
+    const [nearBoundary] = transformBreezeRecord(
+      'automations',
+      automation('界'.repeat(140)),
+    ) as Array<{ reconstructionInput: Record<string, any> }>;
+
+    expect(reconstructionInputByteLength(nearBoundary!.reconstructionInput)).toBeGreaterThan(
+      MAX_RECONSTRUCTION_INPUT_BYTES - 50_000,
+    );
+    expect(articleReconstructionInputSchema.safeParse(nearBoundary!.reconstructionInput).success)
+      .toBe(true);
+    expect(() => transformBreezeRecord(
+      'automations',
+      automation('界'.repeat(180)),
+    )).toThrow(/native field bound/i);
   });
 
   it('neutralizes source-supplied managed marker tokens and emits exactly one region', () => {

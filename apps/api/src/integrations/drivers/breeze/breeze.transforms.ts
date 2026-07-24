@@ -1,5 +1,9 @@
 import type { DriverRecord, LegacyDriverRecord, TypedDriverRecord } from '../integration-driver.js';
 import { ipInCidr, normalizeCidrV4, normalizeIpv4V4 } from '@weavestream/shared';
+import {
+  MAX_RECONSTRUCTION_INPUT_BYTES,
+  reconstructionInputByteLength,
+} from '../../reconstruction/reconstruction-target.js';
 import type {
   ArticleReconstructionInput,
   IpReservationReconstructionInput,
@@ -411,6 +415,9 @@ function typedArticle(
     markdown,
     visibleToClients: false,
   };
+  if (reconstructionInputByteLength(input) > MAX_RECONSTRUCTION_INPUT_BYTES) {
+    throw new BreezeBoundedDefinitionError(record.id, record.orgId);
+  }
   return { reconstructionInput: input };
 }
 
@@ -634,7 +641,6 @@ function renderDesiredConfiguration(
   if (markdown.split(MANAGED_START).length !== 2 || markdown.split(MANAGED_END).length !== 2) {
     throw new Error('Breeze desired configuration produced invalid managed-region markers.');
   }
-  if (markdown.length > 500_000) throw new BreezeBoundedDefinitionError(record.id, record.orgId);
   return markdown;
 }
 
