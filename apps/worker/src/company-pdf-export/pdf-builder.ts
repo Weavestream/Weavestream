@@ -1,4 +1,6 @@
 import PDFDocument from 'pdfkit';
+import { create as parseFontCmap } from 'fontkit';
+import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { MAX_IMAGE_DECODE_PIXELS, tiptapToPlaintext } from '@weavestream/shared';
 import type { CompanyExportData } from '../../../api/src/exports/company-export-data.service.js';
@@ -15,6 +17,16 @@ const FONT_NORMAL = 'NotoSansCJK';
 const FONT_BOLD = 'NotoSansCJKBold';
 const FONT_NORMAL_PATH = resolve(__dirname, 'fonts/NotoSansCJKjp-Regular.otf');
 const FONT_BOLD_PATH = resolve(__dirname, 'fonts/NotoSansCJKjp-Bold.otf');
+
+// One read serves both consumers: the cmaps the packaged-code-point gate
+// consults and the bytes PDFKit embeds are the same buffers, so glyph
+// coverage checks can never diverge from what actually renders.
+const FONT_NORMAL_DATA = readFileSync(FONT_NORMAL_PATH);
+const FONT_BOLD_DATA = readFileSync(FONT_BOLD_PATH);
+const PACKAGED_FONT_CMAPS = [
+  parseFontCmap(FONT_NORMAL_DATA),
+  parseFontCmap(FONT_BOLD_DATA),
+];
 
 const PAGE_WIDTH = 612; // letter
 const PAGE_HEIGHT = 792;
@@ -93,7 +105,6 @@ export async function buildCompanyExportPdf(
   data: CompanyExportData,
   opts: PdfBuildOpts = {},
 ): Promise<Buffer> {
-  data = encodePdfUserText(data);
   return new Promise((resolve, reject) => {
     const doc = new PDFDocument({
       size: 'LETTER',
@@ -107,19 +118,40 @@ export async function buildCompanyExportPdf(
       // already-emitted pages via switchToPage().
       bufferPages: true,
       info: {
-        Title: `Vault Export - ${data.company.name}`,
+        Title: pdfMetadataTitle(data.company.name),
         Author: 'Weavestream',
         CreationDate: data.exportedAt,
       },
       // PDFKit's `userPassword` opens the document; `ownerPassword`
       // controls printing/copying. We set them to the same value so a
       // single shared secret unlocks everything.
+      //
+      // `pdfVersion: '1.7ext3'` selects PDFKit's strongest handler:
+      // AES-256 (V=5/R=5, AESV3 crypt filter, Adobe Extension Level 3).
+      // CBC mode is fixed by the PDF standard — conforming readers accept
+      // no other AES mode, so the AES-256-GCM house rule cannot apply to
+      // in-file PDF encryption. Scoped to the password branch so
+      // unencrypted exports keep the byte-stable PDF 1.3 output; the XMP
+      // packet PDF >= 1.4 emits carries the Title, which is why the
+      // metadata title is XML-sanitized (see pdfMetadataTitle).
+      // Explicit permissions keep text copy available to readers that
+      // authenticate the shared secret as the *user* password —
+      // credentials in a vault archive must stay copyable.
       ...(opts.pdfPassword
-        ? { userPassword: opts.pdfPassword, ownerPassword: opts.pdfPassword }
+        ? {
+            pdfVersion: '1.7ext3' as const,
+            userPassword: opts.pdfPassword,
+            ownerPassword: opts.pdfPassword,
+            permissions: {
+              printing: 'highResolution' as const,
+              copying: true,
+              contentAccessibility: true,
+            },
+          }
         : {}),
     });
-    doc.registerFont(FONT_NORMAL, FONT_NORMAL_PATH);
-    doc.registerFont(FONT_BOLD, FONT_BOLD_PATH);
+    doc.registerFont(FONT_NORMAL, FONT_NORMAL_DATA);
+    doc.registerFont(FONT_BOLD, FONT_BOLD_DATA);
 
     const chunks: Buffer[] = [];
     doc.on('data', (chunk: Buffer) => chunks.push(chunk));
@@ -150,6 +182,27 @@ export async function buildCompanyExportPdf(
       reject(err as Error);
     }
   });
+}
+
+/**
+ * Document-metadata title. The string reaches two sinks: the Info
+ * dictionary (accepts any text) and — for PDF >= 1.4, i.e. every
+ * encrypted export — an XMP packet that PDFKit interpolates WITHOUT XML
+ * escaping. Escaping here would display entities in the Info title, so
+ * strip instead; the company name renders untouched in the page content
+ * either way. Two filters: characters outside XML 1.0's Char production
+ * (#x9|#xA|#xD|[#x20-#xD7FF]|[#xE000-#xFFFD]|[#x10000-#x10FFFF] — so
+ * U+FFFE/U+FFFF, lone surrogates, raw C0), then the XML-special
+ * characters, controls/format characters, and the supplementary-plane
+ * noncharacters XML technically permits.
+ */
+function pdfMetadataTitle(companyName: string): string {
+  const safe = companyName
+    .replace(/[^\u0020-\uD7FF\uE000-\uFFFD\u{10000}-\u{10FFFF}]/gu, ' ')
+    .replace(/[&<>\p{Cc}\p{Cf}\p{Noncharacter_Code_Point}]/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return safe ? `Vault Export - ${safe}` : 'Vault Export';
 }
 
 // ---------------------------------------------------------------------------
@@ -209,7 +262,10 @@ function paintBanner(
   if (subtitle) {
     doc.fillColor('#cbd5e1')
       .font(FONT_NORMAL).fontSize(10)
-      .text(subtitle, MARGIN_X, 46, { width: CONTENT_WIDTH, lineBreak: false });
+      .text(pdfSafeUserText(subtitle), MARGIN_X, 46, {
+        width: CONTENT_WIDTH,
+        lineBreak: false,
+      });
   }
   doc.restore();
 }
@@ -240,6 +296,55 @@ function field(
   sectionTitle?: string,
 ): void {
   if (value === null || value === undefined || value === '') return;
+  drawLabeledValue(doc, label, pdfSafeUserText(value), sectionTitle);
+}
+
+const CREDENTIAL_ENCODING_NOTE =
+  'Not literal - contains characters the PDF cannot reproduce exactly ' +
+  '(missing from the packaged fonts, or normalized by PDF text layout). ' +
+  'To recover the value, decode each "[U+hex]" marker to its code points ' +
+  'and read "[[" as a literal "[".';
+
+/**
+ * Credential values must survive copy/paste byte-exact (CR-020). When
+ * every grapheme both renders in the packaged fonts and survives text
+ * extraction unchanged, the value is drawn verbatim — no bracket
+ * doubling, no substitution. Otherwise we refuse to print a
+ * silently-mutated string: a warning names the encoding, then the
+ * reversible [U+hex] form follows so a recovery operator still has the
+ * bytes. The warning's presence is what distinguishes an encoded value
+ * from a credential that literally contains [U+...] notation.
+ */
+function credentialField(
+  doc: PDFKit.PDFDocument,
+  label: string,
+  value: string | null | undefined,
+  sectionTitle?: string,
+): void {
+  if (value === null || value === undefined || value === '') return;
+  if (isCredentialLiteralText(value)) {
+    drawLabeledValue(doc, label, value, sectionTitle);
+    return;
+  }
+  ensureRoom(doc, 46, sectionTitle);
+  doc.font(FONT_BOLD).fontSize(8).fillColor(C.ink3)
+    .text(label.toUpperCase(), MARGIN_X, doc.y, {
+      width: CONTENT_WIDTH,
+      characterSpacing: 0.4,
+    });
+  doc.font(FONT_NORMAL).fontSize(8).fillColor(C.warn)
+    .text(CREDENTIAL_ENCODING_NOTE, MARGIN_X, doc.y, { width: CONTENT_WIDTH });
+  doc.font(FONT_NORMAL).fontSize(10.5).fillColor(C.ink)
+    .text(pdfSafeCredentialText(value), MARGIN_X, doc.y, { width: CONTENT_WIDTH });
+  doc.moveDown(0.45);
+}
+
+function drawLabeledValue(
+  doc: PDFKit.PDFDocument,
+  label: string,
+  displayValue: string,
+  sectionTitle?: string,
+): void {
   ensureRoom(doc, 30, sectionTitle);
   doc.font(FONT_BOLD).fontSize(8).fillColor(C.ink3)
     .text(label.toUpperCase(), MARGIN_X, doc.y, {
@@ -247,7 +352,7 @@ function field(
       characterSpacing: 0.4,
     });
   doc.font(FONT_NORMAL).fontSize(10.5).fillColor(C.ink)
-    .text(value, MARGIN_X, doc.y, { width: CONTENT_WIDTH });
+    .text(displayValue, MARGIN_X, doc.y, { width: CONTENT_WIDTH });
   doc.moveDown(0.45);
 }
 
@@ -261,9 +366,7 @@ function fieldGrid(
   pairs: Array<[string, string | null | undefined]>,
   sectionTitle?: string,
 ): void {
-  const present = pairs.filter(
-    ([, v]) => v !== null && v !== undefined && v !== '',
-  ) as Array<[string, string]>;
+  const present = presentDisplayPairs(pairs);
   if (present.length === 0) return;
 
   const colWidth = (CONTENT_WIDTH - 16) / 2;
@@ -296,9 +399,7 @@ function measureFieldGrid(
   doc: PDFKit.PDFDocument,
   pairs: Array<[string, string | null | undefined]>,
 ): number {
-  const present = pairs.filter(
-    ([, value]) => value !== null && value !== undefined && value !== '',
-  ) as Array<[string, string]>;
+  const present = presentDisplayPairs(pairs);
   const colWidth = (CONTENT_WIDTH - 16) / 2;
   let height = 0;
   for (let index = 0; index < present.length; index += 2) {
@@ -314,6 +415,18 @@ function measureFieldGrid(
     height += labelHeight + valueHeight + doc.currentLineHeight() * 0.3;
   }
   return height;
+}
+
+/**
+ * Shared by fieldGrid and measureFieldGrid so the measured strings are
+ * exactly the drawn strings: same presence filter, same display encoding.
+ */
+function presentDisplayPairs(
+  pairs: Array<[string, string | null | undefined]>,
+): Array<[string, string]> {
+  return pairs
+    .filter(([, value]) => value !== null && value !== undefined && value !== '')
+    .map(([label, value]) => [label, pdfSafeUserText(value as string)]);
 }
 
 function drawFieldCell(
@@ -336,7 +449,7 @@ function subheading(doc: PDFKit.PDFDocument, text: string, sectionTitle?: string
   ensureRoom(doc, 38, sectionTitle);
   doc.moveDown(0.6);
   doc.font(FONT_BOLD).fontSize(11).fillColor(C.ink2)
-    .text(text, MARGIN_X, doc.y, { width: CONTENT_WIDTH });
+    .text(pdfSafeUserText(text), MARGIN_X, doc.y, { width: CONTENT_WIDTH });
   doc.moveDown(0.15);
   // Tiny accent rule to anchor the heading.
   const y = doc.y;
@@ -384,6 +497,7 @@ function tableRow(
   rowIndex: number,
   colorOverrides: Record<number, string> = {},
 ): void {
+  cols = cols.map((col) => pdfSafeUserText(col));
   if (doc.y + ROW_HEIGHT > pageBottomBoundary()) {
     doc.addPage();
     drawSlimBanner(doc, table.title);
@@ -417,6 +531,7 @@ function wrappedTableRow(
   table: TableSpec,
   rowIndex: number,
 ): void {
+  cols = cols.map((col) => pdfSafeUserText(col));
   doc.font(FONT_NORMAL).fontSize(8.5);
   const cellHeights = cols.map((col, index) =>
     doc.heightOfString(col, { width: table.widths[index]! - 12 }),
@@ -578,24 +693,118 @@ function formatStoredDate(value: unknown, fieldType: string): string {
 
 const PDF_GRAPHEME_SEGMENTER = new Intl.Segmenter('en', { granularity: 'grapheme' });
 
+/**
+ * Display-text encoding (CR-020: applied at draw/measure time, never to
+ * the export DTO — parsers upstream of rendering must see raw bytes).
+ * Graphemes the packaged fonts cover pass through with `[` doubled to
+ * `[[`; anything else becomes a reversible `[U+hex]` marker.
+ */
 export function pdfSafeUserText(value: string): string {
+  return encodeDisplayText(value, isPackagedPdfGrapheme);
+}
+
+/**
+ * Credential variant: also encodes characters PDF text layout or
+ * extraction rewrites even though they are nominally "packaged" — tabs
+ * and newlines collapse to spaces, DEL/C1 have no glyphs, exotic
+ * separators extract as plain space, and format characters (soft
+ * hyphen, ZWSP, bidi controls) vanish. Prose keeps them raw (notes and
+ * articles want real newlines); credential output may not.
+ */
+function pdfSafeCredentialText(value: string): string {
+  return encodeDisplayText(value, isCredentialLiteralGrapheme);
+}
+
+function encodeDisplayText(
+  value: string,
+  isLiteralGrapheme: (segment: string) => boolean,
+): string {
   let encoded = '';
   for (const { segment } of PDF_GRAPHEME_SEGMENTER.segment(value)) {
-    const codePoints = [...segment].map((character) => character.codePointAt(0)!);
-    if (codePoints.every(isPackagedPdfCodePoint)) {
+    if (isLiteralGrapheme(segment)) {
       encoded += segment.replaceAll('[', '[[');
       continue;
     }
-    encoded += `[U+${codePoints
+    encoded += `[U+${[...segment]
+      .map((character) => character.codePointAt(0)!)
       .map((codePoint) => codePoint.toString(16).toUpperCase().padStart(4, '0'))
       .join('+')}]`;
   }
   return encoded;
 }
 
+/**
+ * True when pdfSafeCredentialText would substitute nothing, i.e. the
+ * value draws AND text-extracts byte-exact. Bracket doubling is a
+ * notation concern, not a renderability one, so `[` counts as literal.
+ */
+function isCredentialLiteralText(value: string): boolean {
+  for (const { segment } of PDF_GRAPHEME_SEGMENTER.segment(value)) {
+    if (!isCredentialLiteralGrapheme(segment)) return false;
+  }
+  return true;
+}
+
+function isCredentialLiteralGrapheme(segment: string): boolean {
+  return isPackagedPdfGrapheme(segment) &&
+    [...segment].every((character) =>
+      isExtractionStableCodePoint(character.codePointAt(0)!),
+    );
+}
+
+function isPackagedPdfGrapheme(segment: string): boolean {
+  return [...segment].every((character) =>
+    isPackagedPdfCodePoint(character.codePointAt(0)!),
+  );
+}
+
+/**
+ * Fail-closed whitelist — a blocklist here has leaked twice, and a
+ * credential must NEVER print mutated. A code point may render
+ * literally only when it belongs to a visible-glyph general category
+ * (Letter, Mark, Number, Punctuation, Symbol) AND is not
+ * default-ignorable: U+034F COMBINING GRAPHEME JOINER is a Mark that
+ * extraction drops, and default-ignorables are invisible by definition
+ * (the property also covers reserved ranges like U+2065). Everything
+ * else — controls, separators, format characters, unassigned code
+ * points, surrogates, private use, noncharacters — takes the marked
+ * [U+hex] path. Plain space is the one whitelisted separator: it draws
+ * a real advance and extracts as itself.
+ */
+const CREDENTIAL_LITERAL_CATEGORY_RE = /^[\p{L}\p{M}\p{N}\p{P}\p{S}]$/u;
+const CREDENTIAL_INVISIBLE_RE = /^\p{Default_Ignorable_Code_Point}$/u;
+
+function isExtractionStableCodePoint(codePoint: number): boolean {
+  if (codePoint === 0x20) return true;
+  const character = String.fromCodePoint(codePoint);
+  return CREDENTIAL_LITERAL_CATEGORY_RE.test(character) &&
+    !CREDENTIAL_INVISIBLE_RE.test(character);
+}
+
+const PACKAGED_GLYPH_CACHE = new Map<number, boolean>();
+
+/**
+ * "Packaged" must be provable, not approximate: a code point qualifies
+ * only when it falls in the approved script ranges AND both vendored
+ * cmaps carry a real glyph for it. The ranges alone overstate coverage —
+ * Noto Sans CJK JP ships no glyph for 1052 range-approved code points
+ * (e.g. U+0104 LATIN CAPITAL LETTER A WITH OGONEK), and a missing glyph
+ * renders .notdef, which text extraction rewrites. Tab/LF/CR pass for
+ * prose flow only (PDFKit converts them to breaks/gaps; no glyph
+ * exists); the credential whitelist independently excludes them as Cc.
+ */
 function isPackagedPdfCodePoint(codePoint: number): boolean {
-  return codePoint === 0x09 || codePoint === 0x0a || codePoint === 0x0d ||
-    (codePoint >= 0x20 && codePoint <= 0x024f) ||
+  if (codePoint === 0x09 || codePoint === 0x0a || codePoint === 0x0d) return true;
+  const cached = PACKAGED_GLYPH_CACHE.get(codePoint);
+  if (cached !== undefined) return cached;
+  const packaged = isApprovedPdfScriptRange(codePoint) &&
+    PACKAGED_FONT_CMAPS.every((font) => font.hasGlyphForCodePoint(codePoint));
+  PACKAGED_GLYPH_CACHE.set(codePoint, packaged);
+  return packaged;
+}
+
+function isApprovedPdfScriptRange(codePoint: number): boolean {
+  return (codePoint >= 0x20 && codePoint <= 0x024f) ||
     (codePoint >= 0x0300 && codePoint <= 0x036f) ||
     (codePoint >= 0x0400 && codePoint <= 0x052f) ||
     (codePoint >= 0x2000 && codePoint <= 0x206f && codePoint !== 0x200d) ||
@@ -608,21 +817,6 @@ function isPackagedPdfCodePoint(codePoint: number): boolean {
     (codePoint >= 0xac00 && codePoint <= 0xd7af) ||
     (codePoint >= 0xf900 && codePoint <= 0xfaff) ||
     (codePoint >= 0xff00 && codePoint <= 0xffef);
-}
-
-function encodePdfUserText<T>(value: T): T {
-  if (typeof value === 'string') {
-    return pdfSafeUserText(value) as T;
-  }
-  if (value instanceof Date || Buffer.isBuffer(value) || value === null) return value;
-  if (Array.isArray(value)) return value.map((entry) => encodePdfUserText(entry)) as T;
-  if (typeof value === 'object') {
-    return Object.fromEntries(
-      Object.entries(value as Record<string, unknown>)
-        .map(([key, entry]) => [key, encodePdfUserText(entry)]),
-    ) as T;
-  }
-  return value;
 }
 
 function formatFileFieldValue(value: unknown): string {
@@ -674,6 +868,9 @@ function decorateFooters(doc: PDFKit.PDFDocument, data: CompanyExportData): void
   const range = doc.bufferedPageRange();
   if (range.count === 0) return;
   const total = range.count;
+  const footerLeft = pdfSafeUserText(
+    `Confidential · Vault Archive · ${data.company.name}`,
+  );
   for (let i = 0; i < total; i++) {
     doc.switchToPage(range.start + i);
 
@@ -691,12 +888,10 @@ function decorateFooters(doc: PDFKit.PDFDocument, data: CompanyExportData): void
     doc.restore();
 
     doc.font(FONT_NORMAL).fontSize(8).fillColor(C.ink3)
-      .text(
-        `Confidential · Vault Archive · ${data.company.name}`,
-        MARGIN_X,
-        y,
-        { width: CONTENT_WIDTH * 0.7, lineBreak: false },
-      );
+      .text(footerLeft, MARGIN_X, y, {
+        width: CONTENT_WIDTH * 0.7,
+        lineBreak: false,
+      });
     doc.text(
       `Page ${i + 1} of ${total}`,
       MARGIN_X + CONTENT_WIDTH * 0.7,
@@ -721,10 +916,12 @@ function renderCover(doc: PDFKit.PDFDocument, data: CompanyExportData): void {
 
   doc.fillColor(C.white)
     .font(FONT_BOLD).fontSize(11)
-    .text(`${data.workspaceName.toUpperCase()} · CONFIDENTIAL`, MARGIN_X, 96, {
-      width: CONTENT_WIDTH,
-      characterSpacing: 1.5,
-    });
+    .text(
+      pdfSafeUserText(`${data.workspaceName.toUpperCase()} · CONFIDENTIAL`),
+      MARGIN_X,
+      96,
+      { width: CONTENT_WIDTH, characterSpacing: 1.5 },
+    );
 
   doc.fillColor(C.white)
     .font(FONT_BOLD).fontSize(40)
@@ -732,7 +929,7 @@ function renderCover(doc: PDFKit.PDFDocument, data: CompanyExportData): void {
 
   doc.fillColor('#cbd5e1')
     .font(FONT_NORMAL).fontSize(20)
-    .text(data.company.name, MARGIN_X, 200, { width: CONTENT_WIDTH });
+    .text(pdfSafeUserText(data.company.name), MARGIN_X, 200, { width: CONTENT_WIDTH });
 
   doc.fillColor('#94a3b8')
     .font(FONT_NORMAL).fontSize(10)
@@ -979,11 +1176,14 @@ function drawAssetCard(
   doc.rect(accentX, startY, 3, 18).fill(C.cardAccent);
   doc.restore();
   doc.font(FONT_BOLD).fontSize(11).fillColor(C.ink)
-    .text(asset.name, titleX, startY, { width: innerWidth, lineBreak: false });
+    .text(pdfSafeUserText(asset.name), titleX, startY, {
+      width: innerWidth,
+      lineBreak: false,
+    });
   doc.y = startY + 22;
   if (asset.reconstructionState) {
     doc.font(FONT_NORMAL).fontSize(8.5).fillColor(C.warn)
-      .text(staleRecordLabel(asset.reconstructionState), titleX, doc.y, { width: innerWidth });
+      .text(pdfSafeUserText(staleRecordLabel(asset.reconstructionState)), titleX, doc.y, { width: innerWidth });
     doc.moveDown(0.25);
   }
 
@@ -991,7 +1191,9 @@ function drawAssetCard(
     const raw = formatAssetFieldValue(fv);
     if (!raw) continue;
     const truncated = raw.length > ASSET_VALUE_MAX_CHARS;
-    const text = truncated ? raw.slice(0, ASSET_VALUE_MAX_CHARS) : raw;
+    // Truncate the raw value, then display-encode: slicing an encoded
+    // string could split a [U+...] marker and break reversibility.
+    const text = pdfSafeUserText(truncated ? raw.slice(0, ASSET_VALUE_MAX_CHARS) : raw);
 
     ensureRoom(doc, 24, sectionTitle);
     const lineY = doc.y;
@@ -999,7 +1201,7 @@ function drawAssetCard(
     doc.rect(accentX, lineY, 1, 14).fill(C.cardBorder);
     doc.restore();
     doc.font(FONT_BOLD).fontSize(8).fillColor(C.ink3)
-      .text(`${fv.label.toUpperCase()}`, titleX, lineY, {
+      .text(pdfSafeUserText(fv.label.toUpperCase()), titleX, lineY, {
         width: innerWidth,
         characterSpacing: 0.4,
       });
@@ -1068,7 +1270,10 @@ function drawPasswordCard(
   doc.restore();
 
   doc.font(FONT_BOLD).fontSize(11).fillColor(C.ink)
-    .text(p.name, titleX, startY, { width: innerWidth - 90, lineBreak: false });
+    .text(pdfSafeUserText(p.name), titleX, startY, {
+      width: innerWidth - 90,
+      lineBreak: false,
+    });
 
   // Right-side meta: pwned badge if applicable
   if (p.pwnedCount && p.pwnedCount > 0) {
@@ -1094,10 +1299,11 @@ function drawPasswordCard(
   );
 
   if (includePlaintext) {
-    // Credential strings use the full width. Reversible U+ fallback
-    // notation must not lose punctuation at narrow column line wraps.
-    field(doc, 'Password', p.password, sectionTitle);
-    field(doc, 'TOTP secret', p.totpSecret, sectionTitle);
+    // Byte-exact or explicitly flagged — never silently rewritten
+    // (CR-020). Notes are prose: parse the rich text first, then let
+    // field() apply the display encoding to the extracted plaintext.
+    credentialField(doc, 'Password', p.password, sectionTitle);
+    credentialField(doc, 'TOTP secret', p.totpSecret, sectionTitle);
     const notes = richTextToPlaintext(p.notes);
     if (notes) field(doc, 'Notes', notes, sectionTitle);
   }
@@ -1187,12 +1393,17 @@ function renderArticles(doc: PDFKit.PDFDocument, data: CompanyExportData): void 
     if (i > 0) ensureRoom(doc, 80, TITLE);
 
     doc.font(FONT_BOLD).fontSize(14).fillColor(C.ink)
-      .text(a.title, MARGIN_X, doc.y, { width: CONTENT_WIDTH });
+      .text(pdfSafeUserText(a.title), MARGIN_X, doc.y, { width: CONTENT_WIDTH });
     doc.font(FONT_NORMAL).fontSize(9).fillColor(C.ink3)
-      .text(`Folder: ${a.folderPath}  ·  Updated ${formatDate(a.updatedAt)}`, MARGIN_X, doc.y, { width: CONTENT_WIDTH });
+      .text(
+        pdfSafeUserText(`Folder: ${a.folderPath}  ·  Updated ${formatDate(a.updatedAt)}`),
+        MARGIN_X,
+        doc.y,
+        { width: CONTENT_WIDTH },
+      );
     if (a.reconstructionState) {
       doc.font(FONT_NORMAL).fontSize(8.5).fillColor(C.warn)
-        .text(staleRecordLabel(a.reconstructionState), MARGIN_X, doc.y, { width: CONTENT_WIDTH });
+        .text(pdfSafeUserText(staleRecordLabel(a.reconstructionState)), MARGIN_X, doc.y, { width: CONTENT_WIDTH });
     }
     doc.moveDown(0.4);
 
@@ -1249,7 +1460,7 @@ function renderArticleText(
   if (!clean) return;
   ensureRoom(doc, 28, sectionTitle);
   doc.font(FONT_NORMAL).fontSize(10).fillColor(C.ink2)
-    .text(clean, MARGIN_X, doc.y, {
+    .text(pdfSafeUserText(clean), MARGIN_X, doc.y, {
       width: CONTENT_WIDTH,
       align: 'left',
       paragraphGap: 4,
@@ -1298,7 +1509,10 @@ function renderArticleImage(
     });
     doc.y = startY + maxHeight + 4;
     doc.font(FONT_NORMAL).fontSize(8).fillColor(C.ink3)
-      .text(label, MARGIN_X, doc.y, { width: CONTENT_WIDTH, align: 'center' });
+      .text(pdfSafeUserText(label), MARGIN_X, doc.y, {
+        width: CONTENT_WIDTH,
+        align: 'center',
+      });
     doc.moveDown(0.5);
   } catch {
     doc.y = startY;
@@ -1314,7 +1528,7 @@ function renderImageFallback(
 ): void {
   ensureRoom(doc, 24, sectionTitle);
   doc.font(FONT_NORMAL).fontSize(9).fillColor(C.ink3)
-    .text(`[Image: ${label} - ${reason}]`, MARGIN_X, doc.y, {
+    .text(`[Image: ${pdfSafeUserText(label)} - ${reason}]`, MARGIN_X, doc.y, {
       width: CONTENT_WIDTH,
     });
   doc.moveDown(0.35);
@@ -1444,7 +1658,7 @@ function renderIpam(doc: PDFKit.PDFDocument, data: CompanyExportData): void {
     subheading(doc, `${subnet.name} - ${subnet.cidr}`, TITLE);
     if (subnet.reconstructionState) {
       doc.font(FONT_NORMAL).fontSize(8.5).fillColor(C.warn)
-        .text(staleRecordLabel(subnet.reconstructionState), MARGIN_X, doc.y, { width: CONTENT_WIDTH });
+        .text(pdfSafeUserText(staleRecordLabel(subnet.reconstructionState)), MARGIN_X, doc.y, { width: CONTENT_WIDTH });
       doc.moveDown(0.25);
     }
     fieldGrid(doc, [
@@ -1466,18 +1680,18 @@ function renderIpam(doc: PDFKit.PDFDocument, data: CompanyExportData): void {
         doc.rect(MARGIN_X, y, 3, 18).fill(C.cardAccent);
         doc.restore();
         doc.font(FONT_BOLD).fontSize(10.5).fillColor(C.ink)
-          .text(reservation.ipAddress, MARGIN_X + 12, y, {
+          .text(pdfSafeUserText(reservation.ipAddress), MARGIN_X + 12, y, {
             width: 110,
             lineBreak: false,
           });
         doc.font(FONT_NORMAL).fontSize(10).fillColor(C.ink2)
-          .text(reservation.label, MARGIN_X + 126, y, {
+          .text(pdfSafeUserText(reservation.label), MARGIN_X + 126, y, {
             width: CONTENT_WIDTH - 126,
           });
         doc.y = Math.max(doc.y, y + 22);
         if (reservation.notes) {
           doc.font(FONT_NORMAL).fontSize(9).fillColor(C.ink3)
-            .text(reservation.notes, MARGIN_X + 12, doc.y, {
+            .text(pdfSafeUserText(reservation.notes), MARGIN_X + 12, doc.y, {
               width: CONTENT_WIDTH - 12,
             });
         }
@@ -1567,7 +1781,7 @@ function renderReconstruction(doc: PDFKit.PDFDocument, data: CompanyExportData):
     for (const summary of summaries) {
       ensureRoom(doc, 122, TITLE);
       doc.font(FONT_BOLD).fontSize(11).fillColor(C.ink)
-        .text(summary.resourceLabel, MARGIN_X, doc.y, { width: CONTENT_WIDTH });
+        .text(pdfSafeUserText(summary.resourceLabel), MARGIN_X, doc.y, { width: CONTENT_WIDTH });
       fieldGrid(doc, [
         ['Synchronized current', String(summary.counts.synchronizedCurrent)],
         ['Manually documented', String(summary.counts.manuallyDocumented)],
@@ -1585,7 +1799,9 @@ function renderReconstruction(doc: PDFKit.PDFDocument, data: CompanyExportData):
   if (provenance.length > 0) {
     subheading(doc, 'Source provenance and age', TITLE);
     for (const source of provenance) {
-      const title = `${source.target.label} · ${humanize(source.state)}`;
+      const title = pdfSafeUserText(
+        `${source.target.label} · ${humanize(source.state)}`,
+      );
       const sourceFields: Array<[string, string | null | undefined]> = [
         ['Source', source.sourceLabel],
         ['Resource', humanize(source.sourceResource)],
@@ -1619,13 +1835,18 @@ function drawReconstructionGap(
   sectionTitle: string,
 ): void {
   const innerWidth = CONTENT_WIDTH - 24;
-  const heading = `${gap.resourceLabel} · ${humanize(gap.kind)}`;
+  // Display-encode before measuring — the drawn strings must be the
+  // measured strings or the card box misfits its content.
+  const heading = pdfSafeUserText(`${gap.resourceLabel} · ${humanize(gap.kind)}`);
   const target = gap.target ? ` · Target: ${gap.target.label}` : '';
-  const footer = `First seen ${formatDate(gap.firstSeenAt)} · Last seen ${formatDate(gap.lastSeenAt)}${target}`;
+  const footer = pdfSafeUserText(
+    `First seen ${formatDate(gap.firstSeenAt)} · Last seen ${formatDate(gap.lastSeenAt)}${target}`,
+  );
+  const message = pdfSafeUserText(gap.message);
   doc.font(FONT_BOLD).fontSize(10);
   const headingHeight = doc.heightOfString(heading, { width: innerWidth });
   doc.font(FONT_NORMAL).fontSize(9.5);
-  const messageHeight = doc.heightOfString(gap.message, { width: innerWidth });
+  const messageHeight = doc.heightOfString(message, { width: innerWidth });
   doc.font(FONT_NORMAL).fontSize(8);
   const footerHeight = doc.heightOfString(footer, { width: innerWidth });
   const paddingTop = 10;
@@ -1647,7 +1868,7 @@ function drawReconstructionGap(
     });
   const messageY = y + paddingTop + headingHeight + headingMessageGap;
   doc.font(FONT_NORMAL).fontSize(9.5).fillColor(C.ink2)
-    .text(gap.message, MARGIN_X + 12, messageY, { width: innerWidth });
+    .text(message, MARGIN_X + 12, messageY, { width: innerWidth });
   const footerY = messageY + messageHeight + messageFooterGap;
   doc.font(FONT_NORMAL).fontSize(8).fillColor(C.ink3)
     .text(footer, MARGIN_X + 12, footerY, { width: innerWidth });

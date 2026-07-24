@@ -84,6 +84,11 @@ jobs:
       # audit_log immutability trigger from migration 0032) run against
       # a schema that matches production.
       - run: pnpm --filter @weavestream/db prisma:deploy
+      # The company-PDF-export specs shell out to poppler
+      # (pdftotext/pdfinfo) to verify rendered credential text and
+      # AES-256 encryption, and to xmllint to parse exported XMP.
+      # Neither ships on the ubuntu-24.04 runner image.
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends poppler-utils libxml2-utils
       - run: pnpm -r test
 
   prisma-migrate-dry-run:

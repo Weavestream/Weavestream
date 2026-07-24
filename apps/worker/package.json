@@ -20,6 +20,7 @@
     "@weavestream/shared": "workspace:*",
     "bullmq": "^5.76.2",
     "dotenv": "^17.4.2",
+    "fontkit": "^2.0.4",
     "ioredis": "^5.4.1",
     "nestjs-pino": "^4.1.0",
     "nodemailer": "^9.0.1",

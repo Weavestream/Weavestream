@@ -1674,7 +1674,9 @@ const RAW_SOURCE_FIELD_SLUGS = new Set([
   'host-device-id',
 ]);
 const RAW_SOURCE_FIELD_NAMES = /^(?:breeze id|upstream external id|source revision|source fingerprint|site id|host device id)$/i;
-const UUID_TOKEN_RE = /\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/gi;
+// Versions 1-8: upstream RMMs increasingly mint UUIDv7 record ids, and
+// RFC 9562 keeps the 10xx variant nibble for v6-v8, so [89ab] still holds.
+const UUID_TOKEN_RE = /\b[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/gi;
 const STRUCTURED_IDENTIFIER_KEY_RE = /^(?:id|interface id|source id|external id|uuid)$/i;
 
 function safeSynchronizedAssetField(

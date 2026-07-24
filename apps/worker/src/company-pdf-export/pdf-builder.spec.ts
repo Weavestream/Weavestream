@@ -319,7 +319,7 @@ describe('standalone reconstruction dossier PDF', () => {
     expect(fonts).not.toMatch(/\bno\b/i);
   });
 
-  it('renders emoji credentials reversibly and unsupported prose deterministically', async () => {
+  it('flags unrenderable credentials explicitly and encodes prose deterministically', async () => {
     const base = companyPdfTestFixture();
     const password = 'Pass😀-1️⃣-🇺🇸';
     const totp = 'OTP😀-1️⃣-🇺🇸';
@@ -349,6 +349,9 @@ describe('standalone reconstruction dossier PDF', () => {
       expect(decodePdfNotation(encoded)).toBe(value);
       expect(text.replace(/\s+/g, '')).toContain(encoded.replace(/\s+/g, ''));
     }
+    // CR-020: unrenderable credentials never print silently mutated —
+    // the password and TOTP cards each carry the explicit encoding note.
+    expect(text.match(/Not literal/g) ?? []).toHaveLength(2);
     expect(text).toContain('[U+1F600]');
     expect(text).toContain('[U+0031+FE0F+20E3]');
     expect(text).toContain('[U+1F1FA+1F1F8]');
@@ -357,52 +360,212 @@ describe('standalone reconstruction dossier PDF', () => {
       .toBe(createHash('sha256').update(second).digest('hex'));
   });
 
-  it('keeps Unicode markers injective when credentials contain literal notation', async () => {
+  it('renders literal-notation credentials byte-exact and flags encoded ones apart', async () => {
     const base = companyPdfTestFixture();
-    const originals = [
-      'Pass😀',
-      'Pass[U+1F600]',
-      'OTP1️⃣',
-      'OTP[U+0031+FE0F+20E3]',
-      'Notes 😀 1️⃣ [[',
-      'Notes [U+1F600] [U+0031+FE0F+20E3] [[',
-    ];
     const data: CompanyExportData = {
       ...base,
       includePasswords: true,
       passwords: [
         {
           ...base.passwords[0]!,
-          title: 'Encoded graphemes',
-          password: originals[0]!,
-          totpSecret: originals[2]!,
-          notes: originals[4]!,
+          name: 'Literal notation',
+          password: 'Pass[U+1F600]',
+          totpSecret: 'OTP[U+0031+FE0F+20E3]',
+          notes: 'Notes [U+1F600] [U+0031+FE0F+20E3] [[',
         },
         {
           ...base.passwords[0]!,
-          title: 'Literal notation',
-          password: originals[1]!,
-          totpSecret: originals[3]!,
-          notes: originals[5]!,
+          name: 'Encoded graphemes',
+          password: 'Pass😀',
+          totpSecret: 'OTP1️⃣',
+          notes: 'Notes 😀 [[',
         },
       ],
     };
 
     const text = extractPdfText(await buildCompanyExportPdf(data));
-    const encoded = originals.map(pdfSafeUserText);
 
-    expect(new Set(encoded).size).toBe(originals.length);
-    expect(encoded[0]).toBe('Pass[U+1F600]');
-    expect(encoded[1]).toBe('Pass[[U+1F600]');
-    expect(encoded[2]).toBe('OTP[U+0031+FE0F+20E3]');
-    expect(encoded[3]).toBe('OTP[[U+0031+FE0F+20E3]');
-    expect(encoded[4]).toContain('[[[[');
-    for (const [index, representation] of encoded.entries()) {
-      const offset = text.indexOf(representation);
-      expect(offset).toBeGreaterThanOrEqual(0);
-      const extractedRepresentation = text.slice(offset, offset + representation.length);
-      expect(decodePdfNotation(extractedRepresentation)).toBe(originals[index]);
-    }
+    // A credential that literally contains the notation renders
+    // byte-exact — no bracket doubling (CR-020).
+    expect(text).not.toContain('Pass[[U+1F600]');
+    expect(text).not.toContain('OTP[[U+0031+FE0F+20E3]');
+    // The unrenderable credential draws the same marker string, so both
+    // cards show it; the warning note is what tells them apart.
+    expect(text.match(/Pass\[U\+1F600\]/g) ?? []).toHaveLength(2);
+    expect(text.match(/OTP\[U\+0031\+FE0F\+20E3\]/g) ?? []).toHaveLength(2);
+    expect(text.match(/Not literal/g) ?? []).toHaveLength(2);
+    // Notes are prose: they keep the reversible display notation.
+    expect(text).toContain('Notes [[U+1F600] [[U+0031+FE0F+20E3] [[[[');
+    expect(text).toContain('Notes [U+1F600] [[[[');
+    expect(decodePdfNotation('Notes [U+1F600] [[[[')).toBe('Notes 😀 [[');
+  });
+
+  it('renders packaged-font credentials byte-exact without escape notation', async () => {
+    const base = companyPdfTestFixture();
+    const password = 'Pa[ss]word-[[x]]-€céntr-木';
+    const totp = 'JBSWY3DPEHPK3PXP';
+    const data: CompanyExportData = {
+      ...base,
+      includePasswords: true,
+      passwords: [{ ...base.passwords[0]!, password, totpSecret: totp }],
+    };
+
+    const text = extractPdfText(await buildCompanyExportPdf(data));
+
+    expect(text).toContain(password);
+    expect(text).toContain(totp);
+    expect(text).not.toContain('Pa[[ss]word');
+    expect(text).not.toContain('Not literal');
+  });
+
+  it('encodes control and formatting characters in credentials instead of normalizing them', async () => {
+    const base = companyPdfTestFixture();
+    // Tab, zero-width space, NBSP, and soft hyphen all "render" but are
+    // normalized or dropped by PDF layout/extraction — the literal path
+    // must reject them and the encoded form must mark every one.
+    const password = 'A\tB\u200Bc\u00A0d\u00ADe';
+    const totp = 'OTP\nQR';
+    const data: CompanyExportData = {
+      ...base,
+      includePasswords: true,
+      passwords: [{ ...base.passwords[0]!, password, totpSecret: totp }],
+    };
+
+    const text = extractPdfText(await buildCompanyExportPdf(data));
+
+    expect(text).toContain('A[U+0009]B[U+200B]c[U+00A0]d[U+00AD]e');
+    expect(text).toContain('OTP[U+000A]QR');
+    expect(text.match(/Not literal/g) ?? []).toHaveLength(2);
+    expect(decodePdfNotation('A[U+0009]B[U+200B]c[U+00A0]d[U+00AD]e')).toBe(password);
+    expect(decodePdfNotation('OTP[U+000A]QR')).toBe(totp);
+  });
+
+  it('rejects default-ignorable and unassigned code points from the literal credential path', async () => {
+    const base = companyPdfTestFixture();
+    // U+034F (Combining Grapheme Joiner) is a Mark that extraction
+    // rewrites; U+2065 is unassigned but default-ignorable. Both sit
+    // inside packaged font ranges, so only the fail-closed whitelist
+    // keeps them off the literal path.
+    const password = 'a\u034Fb\u2065c';
+    const data: CompanyExportData = {
+      ...base,
+      includePasswords: true,
+      passwords: [{ ...base.passwords[0]!, password }],
+    };
+
+    const text = extractPdfText(await buildCompanyExportPdf(data));
+
+    expect(text).toContain('[U+0061+034F]b[U+2065]c');
+    expect(text.match(/Not literal/g) ?? []).toHaveLength(1);
+    expect(decodePdfNotation('[U+0061+034F]b[U+2065]c')).toBe(password);
+  });
+
+  it('rejects range-approved code points the packaged fonts cannot actually draw', async () => {
+    const base = companyPdfTestFixture();
+    // U+0104 sits in Latin Extended-A, inside the approved ranges, but
+    // Noto Sans CJK JP ships no glyph for it - rendered literally it
+    // draws .notdef and extracts as a space. Only the font's own cmap
+    // can prove coverage.
+    const password = 'A\u0104B';
+    const data: CompanyExportData = {
+      ...base,
+      includePasswords: true,
+      company: { ...base.company, quickNotes: 'Ogonek \u0104 probe' },
+      passwords: [{ ...base.passwords[0]!, password }],
+    };
+
+    const text = extractPdfText(await buildCompanyExportPdf(data));
+
+    expect(text).toContain('A[U+0104]B');
+    expect(text.match(/Not literal/g) ?? []).toHaveLength(1);
+    expect(decodePdfNotation('A[U+0104]B')).toBe(password);
+    // Prose shares the cmap gate: a readable marker instead of tofu.
+    expect(text).toContain('Ogonek [U+0104] probe');
+  });
+
+  it('parses serialized rich-text notes and fields before display encoding', async () => {
+    const base = companyPdfTestFixture();
+    const serialized = JSON.stringify({
+      type: 'doc',
+      content: [{
+        type: 'paragraph',
+        content: [{ type: 'text', text: 'Rotate quarterly [ops] 😀' }],
+      }],
+    });
+    const data: CompanyExportData = {
+      ...base,
+      includePasswords: true,
+      passwords: [{ ...base.passwords[0]!, notes: serialized }],
+      assets: [{
+        ...base.assets[0]!,
+        fields: [
+          ...base.assets[0]!.fields,
+          { label: 'Runbook', fieldType: 'RICH_TEXT', value: serialized },
+        ],
+      }],
+    };
+
+    const text = extractPdfText(await buildCompanyExportPdf(data));
+
+    // The serialized Tiptap JSON must parse (the old whole-DTO encode
+    // pass doubled its brackets first, so JSON.parse failed and the raw
+    // mangled JSON rendered as prose).
+    const compact = text.replace(/\s+/g, '');
+    expect(compact.match(/Rotatequarterly\[\[ops\]\[U\+1F600\]/g) ?? []).toHaveLength(2);
+    expect(text).not.toContain('"type"');
+  });
+
+  it('encrypts password-protected exports with AES-256 and requires the password', async () => {
+    const password = 'correct-horse-battery-staple';
+    const pdf = await buildCompanyExportPdf(companyPdfTestFixture(), {
+      pdfPassword: password,
+    });
+
+    // The /Encrypt dictionary is necessarily plaintext in the file.
+    const raw = pdf.toString('latin1');
+    expect(raw).toContain('/AESV3');
+    expect(raw).toContain('/V 5');
+    expect(raw).toContain('/R 5');
+
+    const { lockedError, text, info } = inspectEncryptedPdf(pdf, password);
+    expect(lockedError).toMatch(/password/i);
+    expect(info).toMatch(/algorithm:AES-256/);
+    expect(text).toContain('Vault Archive');
+    expect(text).toContain('München Café Systems');
+  });
+
+  it('sanitizes XML-special company names out of metadata but not page content', async () => {
+    const password = 'correct-horse-battery-staple';
+    const base = companyPdfTestFixture();
+    const data: CompanyExportData = {
+      ...base,
+      company: { ...base.company, name: 'A & B <Ops> Café\uFFFE\uFFFF' },
+    };
+
+    const encrypted = await buildCompanyExportPdf(data, { pdfPassword: password });
+    const { text, info, meta } = inspectEncryptedPdf(encrypted, password);
+
+    // Page content keeps the exact name; the Info/XMP title is stripped
+    // of XML-special characters because PDFKit interpolates the XMP
+    // packet without escaping.
+    expect(text).toContain('A & B <Ops> Café');
+    expect(info).toContain('Vault Export - A B Ops Café');
+    expect(meta).toContain('<dc:title>');
+    expect(meta).toContain('Vault Export - A B Ops Café');
+    expect(meta).not.toContain('& B');
+    expect(meta).not.toContain('<Ops>');
+
+    // Substrings are not proof of well-formedness (U+FFFE would pass
+    // them) - the packet must parse as XML.
+    const packet = meta.slice(meta.indexOf('<?xpacket'), meta.lastIndexOf('?>') + 2);
+    expect(packet).toContain('<x:xmpmeta');
+    expect(() =>
+      execFileSync('xmllint', ['--noout', '-'], { input: packet, encoding: 'utf8' }),
+    ).not.toThrow();
+
+    // Unencrypted exports stay PDF 1.3 and never emit an XMP packet.
+    const plain = await buildCompanyExportPdf(data);
+    expect(plain.toString('latin1')).not.toContain('/Metadata');
   });
 
   it('labels stale-bound records unmistakably as last-known stale', async () => {
@@ -523,6 +686,30 @@ function inspectPdfFonts(pdf: Buffer): string {
   return withPopplerPdf(pdf, (input) =>
     execFileSync('pdffonts', [input], { encoding: 'utf8' }),
   );
+}
+
+function inspectEncryptedPdf(
+  pdf: Buffer,
+  password: string,
+): { lockedError: string; text: string; info: string; meta: string } {
+  return withPopplerPdf(pdf, (input) => {
+    let lockedError = '';
+    try {
+      execFileSync('pdftotext', [input, '-'], { encoding: 'utf8' });
+    } catch (err) {
+      lockedError = String((err as { stderr?: unknown }).stderr ?? err);
+    }
+    const text = execFileSync('pdftotext', ['-upw', password, input, '-'], {
+      encoding: 'utf8',
+    });
+    const info = execFileSync('pdfinfo', ['-upw', password, input], {
+      encoding: 'utf8',
+    });
+    const meta = execFileSync('pdfinfo', ['-meta', '-upw', password, input], {
+      encoding: 'utf8',
+    });
+    return { lockedError, text, info, meta };
+  });
 }
 
 function withPopplerPdf<T>(pdf: Buffer, inspect: (input: string) => T): T {

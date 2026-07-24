@@ -305,8 +305,16 @@ describe('CompanyExportDataService reconstruction export', () => {
     const { prisma, service } = setup();
     const interfaceId = '11111111-1111-4111-8111-111111111111';
     const addressId = '22222222-2222-4222-8222-222222222222';
+    // CR-022: modern UUID versions (v6-v8) must redact like v1-v5 —
+    // upstream sources mint v7 ids, and these sit in a non-identifier
+    // cell so the token regex, not the key filter, must catch them.
+    const modernSourceIds = [
+      '33333333-3333-6333-8333-333333333333',
+      '018f6b1e-7c1a-7abc-9def-0123456789ab',
+      '44444444-4444-8444-a444-444444444444',
+    ];
     const revision = 'distinctive-source-revision-abc123';
-    const interfacesValue = `ID: ${interfaceId} | Name: Ethernet 0 | MAC: 00:11:22:33:44:55 | Primary: yes`;
+    const interfacesValue = `ID: ${interfaceId} | Name: Ethernet 0 | MAC: 00:11:22:33:44:55 | Primary: yes | Notes: uplinks ${modernSourceIds.join(' then ')}`;
     const addressesValue = `ID: ${addressId} | Interface ID: ${interfaceId} | Interface: Ethernet 0 | Address: 10.20.30.10 | Family: IPv4 | Assignment: static | Reservation eligible: yes | Active: yes`;
     prisma.integrationSyncRecord.findMany.mockResolvedValueOnce([
       syncRecord({
@@ -353,7 +361,8 @@ describe('CompanyExportDataService reconstruction export', () => {
     expect(serialized).toContain('Install Windows Server from verified media.');
     expect(serialized).toContain('Last synchronized');
     expect(serialized).toContain('Breeze');
-    for (const raw of [interfaceId, addressId, revision, 'distinctive-fingerprint', 'Source UUID', 'Source revision', 'Source fingerprint', 'weavestream:breeze:managed']) {
+    expect(serialized).toContain('uplinks');
+    for (const raw of [interfaceId, addressId, ...modernSourceIds, revision, 'distinctive-fingerprint', 'Source UUID', 'Source revision', 'Source fingerprint', 'weavestream:breeze:managed']) {
       expect(serialized).not.toContain(raw);
     }
     // WS-CR-019: the operator-curated reference field is not integration
