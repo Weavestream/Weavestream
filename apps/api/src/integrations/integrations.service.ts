@@ -46,6 +46,10 @@ import type { RecommendedDestination } from './drivers/integration-driver.js';
 import { integrationAssetExternalSource } from './integration-asset-source.js';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { scanSensitiveMaterial } from './sensitive-material.js';
+import {
+  getTenantContext,
+  runWithTenantContext,
+} from '@weavestream/shared/server';
 
 export interface AuditMeta {
   ip: string;
@@ -803,30 +807,35 @@ export class IntegrationsService {
     integrationId: string,
     query: IntegrationCompletenessQuery,
   ): Promise<IntegrationCompletenessResponse> {
-    const integration = await this.requireIntegration(integrationId);
-    await this.assertReconstructionReadScope(integrationId, query);
-    const rows = await this.prisma.integrationReconstructionSummary.findMany({
-      where: {
-        companyMapping: { integrationId },
-        resource: { integrationId },
-        // Cleared (non-participant) tombstones keep the evaluation clock
-        // alive but are not scorecards.
-        clearedAt: null,
-        ...(query.mappingId ? { integrationCompanyMappingId: query.mappingId } : {}),
-        ...(query.resourceId ? { resourceId: query.resourceId } : {}),
-      },
-      include: {
-        company: { select: { name: true } },
-        companyMapping: { select: { companyId: true, integrationId: true } },
-        resource: { select: { resourceKey: true, integrationId: true } },
-      },
-      orderBy: [
-        { integrationCompanyMappingId: 'asc' },
-        { resourceId: 'asc' },
-        { id: 'asc' },
-      ],
-      take: 10_001,
-    });
+    const { integration, companyIds } =
+      await this.requireReconstructionReadScope(integrationId, query);
+    const rows = companyIds.length === 0
+      ? []
+      : await this.withReconstructionCompanyScope(companyIds, () =>
+          this.prisma.integrationReconstructionSummary.findMany({
+            where: {
+              companyId: { in: companyIds },
+              companyMapping: { integrationId },
+              resource: { integrationId },
+              // Cleared (non-participant) tombstones keep the evaluation clock
+              // alive but are not scorecards.
+              clearedAt: null,
+              ...(query.mappingId ? { integrationCompanyMappingId: query.mappingId } : {}),
+              ...(query.resourceId ? { resourceId: query.resourceId } : {}),
+            },
+            include: {
+              company: { select: { name: true } },
+              companyMapping: { select: { companyId: true, integrationId: true } },
+              resource: { select: { resourceKey: true, integrationId: true } },
+            },
+            orderBy: [
+              { integrationCompanyMappingId: 'asc' },
+              { resourceId: 'asc' },
+              { id: 'asc' },
+            ],
+            take: 10_001,
+          }),
+        );
     if (rows.length > 10_000) {
       throw new BadRequestException('Completeness results exceeded the bounded limit.');
     }
@@ -860,8 +869,8 @@ export class IntegrationsService {
     integrationId: string,
     query: IntegrationGapsQuery,
   ): Promise<IntegrationGapsPage> {
-    const integration = await this.requireIntegration(integrationId);
-    await this.assertReconstructionReadScope(integrationId, query);
+    const { integration, companyIds } =
+      await this.requireReconstructionReadScope(integrationId, query);
     const cursor = query.cursor
       ? decodeGapCursor(query.cursor, integrationId, query, this.env.integrationActiveKey)
       : null;
@@ -871,8 +880,9 @@ export class IntegrationsService {
       : query.resolution === 'resolved'
         ? { resolvedAt: { not: null } }
         : {};
-    const rows = await this.prisma.integrationReconstructionGap.findMany({
+    const read = () => this.prisma.integrationReconstructionGap.findMany({
       where: {
+        companyId: { in: companyIds },
         companyMapping: { integrationId },
         resource: { integrationId },
         createdAt: { lte: snapshotAt },
@@ -912,6 +922,9 @@ export class IntegrationsService {
       orderBy: [{ createdAt: 'desc' }, { id: 'asc' }],
       take: query.limit + 1,
     });
+    const rows = companyIds.length === 0
+      ? []
+      : await this.withReconstructionCompanyScope(companyIds, read);
     for (const row of rows) {
       assertReconstructionRowScope(integrationId, row.companyId, row.companyMapping, row.resource);
     }
@@ -953,16 +966,36 @@ export class IntegrationsService {
     return integrationGapsPageSchema.parse({ items, nextCursor });
   }
 
-  private async assertReconstructionReadScope(
+  private async requireReconstructionReadScope(
     integrationId: string,
     query: { mappingId?: string; resourceId?: string },
-  ): Promise<void> {
-    if (query.mappingId) {
-      const mapping = await this.prisma.integrationCompanyMapping.findFirst({
-        where: { id: query.mappingId, integrationId },
-        select: { id: true },
-      });
-      if (!mapping) throw new NotFoundException('Integration mapping not found');
+  ) {
+    // Integration administration is globally authorized by
+    // `integration.manage`. Resolve only mapping ids + company ids through
+    // that global parent so the tenant-scoped read below can carry an exact,
+    // integration-bound company allow-list.
+    const integration = await this.prisma.integration.findUnique({
+      where: { id: integrationId },
+      select: {
+        id: true,
+        driver: true,
+        companyMappings: {
+          // The unfiltered branch enumerates every mapped company — the
+          // scope predicate needs the explicit id list, so its IN clause
+          // is bounded by the integration's mapping count.
+          ...(query.mappingId ? { where: { id: query.mappingId } } : {}),
+          select: { id: true, companyId: true },
+        },
+      },
+    });
+    if (!integration) {
+      throw new NotFoundException(`Integration ${integrationId} not found`);
+    }
+    const selectedMapping = query.mappingId
+      ? integration.companyMappings.find((mapping) => mapping.id === query.mappingId)
+      : null;
+    if (query.mappingId && !selectedMapping) {
+      throw new NotFoundException('Integration mapping not found');
     }
     if (query.resourceId) {
       const resource = await this.prisma.integrationResource.findFirst({
@@ -971,6 +1004,22 @@ export class IntegrationsService {
       });
       if (!resource) throw new NotFoundException('Integration resource not found');
     }
+    const companyIds = selectedMapping
+      ? [selectedMapping.companyId]
+      : [...new Set(integration.companyMappings.map((mapping) => mapping.companyId))];
+    return { integration, companyIds };
+  }
+
+  private withReconstructionCompanyScope<T>(
+    companyIds: string[],
+    read: () => Promise<T>,
+  ): Promise<T> {
+    const tenant = getTenantContext();
+    if (!tenant) return read();
+    return runWithTenantContext(
+      { ...tenant, allowedCompanyIds: companyIds },
+      read,
+    );
   }
 
   // -------------------------------------------------------------------

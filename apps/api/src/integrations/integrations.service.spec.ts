@@ -3,6 +3,12 @@ import { IntegrationsService, ensureResourceDestination, validateResourceRegistr
 import { NotFoundException } from '@nestjs/common';
 import type { RecommendedDestination } from './drivers/integration-driver.js';
 import { BREEZE_RECOMMENDED_DESTINATIONS } from './drivers/breeze/breeze.driver.js';
+import {
+  getTenantContext,
+  runWithTenantContext,
+  type TenantContext,
+} from '@weavestream/shared/server';
+import { assertTenantScope } from '../prisma/tenant-scoped-models.js';
 
 const baseDescriptor = {
   key: 'test',
@@ -578,9 +584,12 @@ describe('reconstruction administration reads', () => {
 
   function setup() {
     const prisma = {
-      integration: { findUnique: jest.fn().mockResolvedValue({ id: ids.integration, driver: 'breeze' }) },
-      integrationCompanyMapping: {
-        findFirst: jest.fn().mockResolvedValue({ id: ids.mapping }),
+      integration: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: ids.integration,
+          driver: 'breeze',
+          companyMappings: [{ id: ids.mapping, companyId: ids.company }],
+        }),
       },
       integrationResource: {
         findFirst: jest.fn().mockResolvedValue({ id: ids.resource }),
@@ -595,6 +604,41 @@ describe('reconstruction administration reads', () => {
       {} as never, {} as never,
     );
     return { prisma, service };
+  }
+
+  function limitedOperatorTenant(): TenantContext {
+    return {
+      userId: '00000000-0000-4000-8000-000000000010',
+      role: 'OPERATOR',
+      email: 'operator@example.test',
+      allowedCompanyIds: [],
+      isSuperAdmin: false,
+      globalAccess: 'NONE',
+      requestId: 'req-cr-014',
+      ip: '127.0.0.1',
+      userAgent: 'jest',
+    };
+  }
+
+  // Replaces the reconstruction read mocks with ones that run the real
+  // tenant-scope assertion and record the allowedCompanyIds each read
+  // executed under.
+  function observeTenantScopedReads(prisma: ReturnType<typeof setup>['prisma']): string[][] {
+    const observedScopes: string[][] = [];
+    const install = (findMany: jest.Mock, model: string) => {
+      findMany.mockImplementation(async (args: object) => {
+        const scopedTenant = getTenantContext()!;
+        observedScopes.push(scopedTenant.allowedCompanyIds);
+        assertTenantScope(
+          { model, action: 'findMany', args: args as Record<string, unknown> },
+          scopedTenant,
+        );
+        return [];
+      });
+    };
+    install(prisma.integrationReconstructionSummary.findMany, 'IntegrationReconstructionSummary');
+    install(prisma.integrationReconstructionGap.findMany, 'IntegrationReconstructionGap');
+    return observedScopes;
   }
 
   it('returns deterministic explicit completeness rows and six-category totals', async () => {
@@ -651,10 +695,84 @@ describe('reconstruction administration reads', () => {
 
   it('rejects a mapping or resource outside the integration instead of returning an empty probe', async () => {
     const { prisma, service } = setup();
-    prisma.integrationCompanyMapping.findFirst.mockResolvedValueOnce(null);
+    prisma.integration.findUnique.mockResolvedValueOnce({
+      id: ids.integration,
+      driver: 'breeze',
+      companyMappings: [],
+    });
     await expect(service.getReconstructionCompleteness(ids.integration, { mappingId: ids.mapping }))
       .rejects.toBeInstanceOf(NotFoundException);
     expect(prisma.integrationReconstructionSummary.findMany).not.toHaveBeenCalled();
+  });
+
+  it('supplies an exact integration company scope for a limited global operator', async () => {
+    const { prisma, service } = setup();
+    const observedScopes = observeTenantScopedReads(prisma);
+
+    await runWithTenantContext(limitedOperatorTenant(), async () => {
+      await service.getReconstructionCompleteness(ids.integration, {});
+      await service.listReconstructionGaps(ids.integration, {
+        resolution: 'active',
+        limit: 50,
+      });
+      expect(getTenantContext()?.allowedCompanyIds).toEqual([]);
+    });
+
+    expect(observedScopes).toEqual([[ids.company], [ids.company]]);
+    expect(prisma.integrationReconstructionSummary.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ companyId: { in: [ids.company] } }),
+      }),
+    );
+    expect(prisma.integrationReconstructionGap.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ companyId: { in: [ids.company] } }),
+      }),
+    );
+  });
+
+  it('narrows the scope to the selected mapping company when mappingId is provided', async () => {
+    const { prisma, service } = setup();
+    // Two mappings on the integration; the mock deliberately ignores the
+    // nested mapping filter so the in-memory narrowing must hold on its own.
+    prisma.integration.findUnique.mockResolvedValue({
+      id: ids.integration,
+      driver: 'breeze',
+      companyMappings: [
+        { id: ids.mapping, companyId: ids.company },
+        {
+          id: '00000000-0000-4000-8000-000000000012',
+          companyId: '00000000-0000-4000-8000-000000000011',
+        },
+      ],
+    });
+    const observedScopes = observeTenantScopedReads(prisma);
+
+    await runWithTenantContext(limitedOperatorTenant(), async () => {
+      await service.getReconstructionCompleteness(ids.integration, { mappingId: ids.mapping });
+      await service.listReconstructionGaps(ids.integration, {
+        mappingId: ids.mapping,
+        resolution: 'active',
+        limit: 50,
+      });
+    });
+
+    expect(observedScopes).toEqual([[ids.company], [ids.company]]);
+    expect(prisma.integration.findUnique).toHaveBeenCalledWith(
+      expect.objectContaining({
+        select: expect.objectContaining({
+          companyMappings: expect.objectContaining({ where: { id: ids.mapping } }),
+        }),
+      }),
+    );
+    expect(prisma.integrationReconstructionGap.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          companyId: { in: [ids.company] },
+          integrationCompanyMappingId: ids.mapping,
+        }),
+      }),
+    );
   });
 
   it('returns bounded safe gaps and rejects a tampered or cross-filter cursor', async () => {
