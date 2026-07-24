@@ -17,6 +17,7 @@ import {
 } from '../crypto/secret-encryption.service.js';
 import { extractEmbeddedUploadIds } from '../articles/article-uploads.js';
 import { scanSensitiveMaterial } from '../integrations/sensitive-material.js';
+import { assetFieldChecksum } from '../assets/assets.service.js';
 
 // ---------------------------------------------------------------------------
 // Export data shapes
@@ -261,6 +262,21 @@ interface SafeSyncBinding {
   lastSeenAt: Date;
   lastSyncedAt: Date | null;
   target: ExportNativeTarget;
+  /**
+   * `AssetField.id → sha256` of the value this binding's sync last
+   * recorded (`IntegrationSyncRecord.lastSyncedFieldChecksums`). An
+   * exact match against the stored value is the field-level proof of
+   * integration authorship (WS-CR-019).
+   */
+  fieldChecksums: Readonly<Record<string, string>>;
+  /**
+   * `AssetField.id`s the binding's resource currently maps with a
+   * writable direction (`IntegrationFieldMapping.targetFieldId`,
+   * excluding `manual_only` — those are dormant and never checksummed).
+   * A writable-mapped field with no recorded checksum has unknown
+   * authorship and stays sanitized.
+   */
+  managedFieldIds: ReadonlySet<string>;
 }
 
 interface SafeSyncBindingIndex {
@@ -343,13 +359,27 @@ export class CompanyExportDataService {
         state: true,
         staleSince: true,
         provenance: true,
+        lastSyncedFieldChecksums: true,
         companyMapping: {
           select: {
             companyId: true,
             integration: { select: { id: true, name: true, driver: true } },
           },
         },
-        resource: { select: { integrationId: true, resourceKey: true } },
+        resource: {
+          select: {
+            integrationId: true,
+            resourceKey: true,
+            fieldMappings: {
+              // manual_only mappings are dormant by contract — the writer
+              // never records checksums for them, so counting them as
+              // integration-managed would sanitize operator-owned values
+              // forever instead of for a closing legacy window.
+              where: { targetFieldId: { not: null }, syncDirection: { not: 'manual_only' } },
+              select: { targetFieldId: true, syncDirection: true },
+            },
+          },
+        },
       },
       orderBy: [{ targetKind: 'asc' }, { id: 'asc' }],
       take: COMPANY_EXPORT_LIMITS.provenance + 1,
@@ -390,6 +420,13 @@ export class CompanyExportDataService {
         lastSeenAt: new Date(parsed.data.lastSeenAt),
         lastSyncedAt: parsed.data.lastSyncedAt ? new Date(parsed.data.lastSyncedAt) : null,
         target,
+        fieldChecksums: safeFieldChecksums(row.lastSyncedFieldChecksums),
+        managedFieldIds: new Set(
+          (row.resource.fieldMappings ?? [])
+            .filter((mapping) => mapping.syncDirection !== 'manual_only')
+            .map((mapping) => mapping.targetFieldId)
+            .filter((id): id is string => typeof id === 'string'),
+        ),
       }];
     });
     all.sort(compareSafeBindings);
@@ -526,7 +563,7 @@ export class CompanyExportDataService {
 
     return exportRows.map((a) => {
       const targetBindings = bindings.byTarget.get(bindingKey('asset', a.id)) ?? [];
-      const binding = preferredBreezeBinding(targetBindings);
+      const breezeBindings = breezeOwnedBindings(targetBindings);
       const staleState = staleExportState(targetBindings);
       return {
       name: a.name,
@@ -536,12 +573,24 @@ export class CompanyExportDataService {
         .sort((left, right) => left.assetField.position - right.assetField.position)
         .flatMap((fv): ExportAssetField[] => {
           const fieldType = fv.assetField.fieldType;
-          const safeValue = binding
-            ? safeSynchronizedAssetField(fv.assetField.slug, fv.assetField.name, fv.value)
+          // WS-CR-019: authorship is decided per field, not per asset. A
+          // synchronized asset can carry operator-authored values; those
+          // export verbatim instead of being parsed as projection text.
+          const synchronizedField =
+            breezeBindings.length > 0 &&
+            synchronizedFieldProvenance(breezeBindings, fv.assetFieldId, fv.value) ===
+              'integration';
+          const safeValue = breezeBindings.length > 0
+            ? safeSynchronizedAssetField(
+                fv.assetField.slug,
+                fv.assetField.name,
+                fv.value,
+                synchronizedField,
+              )
             : { include: true, value: fv.value };
           if (!safeValue.include) return [];
           const needsLabels = fieldType === 'ASSET_REFERENCE' || fieldType === 'TAGS';
-          const synchronizedLabels = binding && needsLabels
+          const synchronizedLabels = synchronizedField && needsLabels
             ? listStrings(fv.value)
                 .flatMap((id) => labelLookup.get(id) ?? (!UUID_RE.test(id) ? id : []))
             : null;
@@ -550,7 +599,7 @@ export class CompanyExportDataService {
             label: fv.assetField.name,
             fieldType,
             value: synchronizedLabels ?? safeValue.value,
-            ...(needsLabels && !binding
+            ...(needsLabels && !synchronizedField
               ? {
                   referenceLabels: Object.fromEntries(
                     listStrings(fv.value)
@@ -867,6 +916,7 @@ export class CompanyExportDataService {
           id: true,
           companyId: true,
           assetId: true,
+          assetFieldId: true,
           value: true,
           asset: { select: { id: true, companyId: true, name: true } },
           assetField: { select: { name: true, slug: true, fieldType: true } },
@@ -920,12 +970,20 @@ export class CompanyExportDataService {
       addresses: Array<Record<string, string>>;
     }>();
     for (const row of occupantRows) {
+      // WS-CR-019: deriving subnet occupants from a field value demands
+      // positive proof the value is the integration's own projection — an
+      // exact per-field checksum match. Operator-authored or unproven
+      // text is never reconstructed into structured inventory.
       if (
         row.companyId !== companyId ||
         row.asset.companyId !== companyId ||
         row.asset.id !== row.assetId ||
         typeof row.value !== 'string' ||
-        !preferredBreezeBinding(bindings.byTarget.get(bindingKey('asset', row.assetId)) ?? [])
+        !integrationAuthoredFieldValue(
+          breezeOwnedBindings(bindings.byTarget.get(bindingKey('asset', row.assetId)) ?? []),
+          row.assetFieldId,
+          row.value,
+        )
       ) continue;
       const current = projectionsByAsset.get(row.assetId) ?? {
         assetId: row.assetId,
@@ -1526,6 +1584,69 @@ function breezeOwnedBindings(bindings: SafeSyncBinding[]): SafeSyncBinding[] {
   );
 }
 
+const FIELD_CHECKSUM_RE = /^[0-9a-f]{64}$/;
+
+/**
+ * Defensive parse of `IntegrationSyncRecord.lastSyncedFieldChecksums`.
+ * Entries that are not sha256 hex are dropped — they can never prove
+ * authorship, and a malformed map must not disable the checks for the
+ * well-formed entries beside it.
+ */
+function safeFieldChecksums(value: unknown): Readonly<Record<string, string>> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>).filter(
+      (entry): entry is [string, string] =>
+        typeof entry[1] === 'string' && FIELD_CHECKSUM_RE.test(entry[1]),
+    ),
+  );
+}
+
+/**
+ * Exact field-level proof of integration authorship (WS-CR-019): the
+ * stored value hashes to what a breeze-owned binding's sync last
+ * recorded for this `AssetField`.
+ */
+function integrationAuthoredFieldValue(
+  breezeBindings: SafeSyncBinding[],
+  assetFieldId: string,
+  value: unknown,
+): boolean {
+  if (breezeBindings.length === 0) return false;
+  const checksum = assetFieldChecksum(value);
+  return breezeBindings.some(
+    (binding) => binding.fieldChecksums[assetFieldId] === checksum,
+  );
+}
+
+/**
+ * Field-level provenance on a synchronized asset (WS-CR-019):
+ *   - checksum match on any breeze-owned binding → 'integration';
+ *   - checksum recorded but different → the operator changed the value
+ *     after the last sync → 'manual';
+ *   - no checksum recorded but the field is a current mapping target →
+ *     authorship unknown (row predates checksum tracking) → fail closed
+ *     as 'integration' so the value stays sanitized until the next sync
+ *     records proof;
+ *   - neither recorded nor mapped → the integration does not manage the
+ *     field → 'manual'.
+ */
+function synchronizedFieldProvenance(
+  breezeBindings: SafeSyncBinding[],
+  assetFieldId: string,
+  value: unknown,
+): 'integration' | 'manual' {
+  if (integrationAuthoredFieldValue(breezeBindings, assetFieldId, value)) {
+    return 'integration';
+  }
+  if (breezeBindings.some((binding) => binding.fieldChecksums[assetFieldId] !== undefined)) {
+    return 'manual';
+  }
+  return breezeBindings.some((binding) => binding.managedFieldIds.has(assetFieldId))
+    ? 'integration'
+    : 'manual';
+}
+
 function compareSafeBindings(left: SafeSyncBinding, right: SafeSyncBinding): number {
   return left.targetKind.localeCompare(right.targetKind) ||
     left.targetId.localeCompare(right.targetId) ||
@@ -1560,10 +1681,19 @@ function safeSynchronizedAssetField(
   slug: string,
   name: string,
   value: unknown,
+  integrationAuthored: boolean,
 ): { include: boolean; value: unknown } {
+  // Source-identifier slugs/names stay reserved on synchronized assets
+  // regardless of who last wrote the bytes — a value in a field named
+  // "Breeze ID" on a bound asset is a source identifier either way.
   if (RAW_SOURCE_FIELD_SLUGS.has(slug) || RAW_SOURCE_FIELD_NAMES.test(name)) {
     return { include: false, value: null };
   }
+  // WS-CR-019: projection parsing and identifier stripping apply only to
+  // values with verified (or, for mapped-but-unproven legacy rows,
+  // presumed) integration authorship. Operator-authored values on
+  // synchronized assets export verbatim.
+  if (!integrationAuthored) return { include: true, value };
   if (typeof value !== 'string') return { include: true, value };
   if (slug === 'interfaces' || slug === 'network-addresses' || value.includes(' | ')) {
     const lines = parseBreezeProjection(value).map((row) =>

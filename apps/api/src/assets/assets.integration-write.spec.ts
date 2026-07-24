@@ -433,7 +433,12 @@ describe('AssetsService integration system writes', () => {
         targetFieldId: ids.field, value: 'new-upstream-hostname', syncDirection: 'preserve_manual',
       }],
       previousFieldChecksums: { [ids.field]: 'prior-source-checksum' },
-    })).resolves.toMatchObject({ targetId: ids.asset, change: 'restored' });
+    })).resolves.toMatchObject({
+      targetId: ids.asset,
+      change: 'restored',
+      // The preserved field keeps the integration-authored baseline.
+      fieldChecksums: { [ids.field]: 'prior-source-checksum' },
+    });
     expect(tx.asset.updateMany).toHaveBeenCalledWith(expect.objectContaining({
       where: expect.objectContaining({
         id: ids.asset,
@@ -507,7 +512,7 @@ describe('AssetsService integration system writes', () => {
     })).resolves.toMatchObject({
       targetId: ids.asset,
       change: 'unchanged',
-      fieldChecksums: { [ids.field]: checksum('operator-edited-hostname') },
+      fieldChecksums: { [ids.field]: checksum('edge-01') },
     });
 
     expect(writes).toHaveLength(1);
@@ -519,6 +524,56 @@ describe('AssetsService integration system writes', () => {
     });
     expect(prisma.asset.findUnique).toHaveBeenCalledTimes(2);
     expect(tx.assetFieldValue.upsert).not.toHaveBeenCalled();
+  });
+
+  it('preserves an operator edit across subsequent runs as upstream keeps changing', async () => {
+    const checksum = (value: unknown) =>
+      createHash('sha256').update(JSON.stringify(value ?? null)).digest('hex');
+    const integrationBaseline = checksum('edge-01');
+    const target = asset({
+      fieldValues: [{
+        id: 'fv-1', companyId: ids.company, assetId: ids.asset,
+        assetFieldId: ids.field, value: 'operator-edited-hostname',
+      }],
+    });
+    const { service, tx } = setup({ target, binding: binding() });
+
+    // Run 1: upstream changed after an operator edit. The write is
+    // skipped and the integration-authored baseline is carried forward —
+    // not replaced with the manual value's checksum.
+    const first = await service.writeFromIntegration({
+      ...input,
+      existingTargetId: ids.asset,
+      fieldValues: [{
+        targetFieldId: ids.field, value: 'new-upstream-hostname', syncDirection: 'preserve_manual',
+      }],
+      previousFieldChecksums: { [ids.field]: integrationBaseline },
+    });
+    expect(first).toMatchObject({
+      targetId: ids.asset,
+      change: 'unchanged',
+      fieldChecksums: { [ids.field]: integrationBaseline },
+    });
+
+    // Run 2: the runner persisted run 1's checksums verbatim into
+    // lastSyncedFieldChecksums and feeds them back while upstream
+    // changes again. Adopting the manual checksum as the baseline in
+    // run 1 would make this run treat the field as unedited and
+    // overwrite the operator's value.
+    await expect(service.writeFromIntegration({
+      ...input,
+      existingTargetId: ids.asset,
+      fieldValues: [{
+        targetFieldId: ids.field, value: 'changed-again-hostname', syncDirection: 'preserve_manual',
+      }],
+      previousFieldChecksums: first.fieldChecksums ?? {},
+    })).resolves.toMatchObject({
+      targetId: ids.asset,
+      change: 'unchanged',
+      fieldChecksums: { [ids.field]: integrationBaseline },
+    });
+    expect(tx.assetFieldValue.upsert).not.toHaveBeenCalled();
+    expect(tx.asset.updateMany).not.toHaveBeenCalled();
   });
 
   it('does not run side-effecting field resolution before a guarded write succeeds', async () => {
@@ -567,7 +622,7 @@ describe('AssetsService integration system writes', () => {
     })).resolves.toMatchObject({
       targetId: ids.asset,
       change: 'unchanged',
-      fieldChecksums: { [ids.field]: checksum(['operator-tag-id']) },
+      fieldChecksums: { [ids.field]: checksum(['old-tag-id']) },
     });
 
     expect(tx.asset.updateMany).toHaveBeenCalledTimes(1);
@@ -685,7 +740,12 @@ describe('AssetsService integration system writes', () => {
         syncDirection: 'preserve_manual',
       }],
       previousFieldChecksums: { [ids.field]: 'prior-source-checksum' },
-    })).resolves.toMatchObject({ targetId: ids.asset, change: 'restored' });
+    })).resolves.toMatchObject({
+      targetId: ids.asset,
+      change: 'restored',
+      // The preserved field keeps the integration-authored baseline.
+      fieldChecksums: { [ids.field]: 'prior-source-checksum' },
+    });
 
     expect(target.id).toBe(ids.asset);
     expect(target.archivedAt).toBeNull();

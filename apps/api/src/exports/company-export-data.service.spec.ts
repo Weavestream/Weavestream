@@ -1,4 +1,5 @@
 import { CompanyExportDataService } from './company-export-data.service.js';
+import { assetFieldChecksum } from '../assets/assets.service.js';
 
 const ids = {
   company: '00000000-0000-4000-8000-000000000001',
@@ -25,6 +26,8 @@ const NOW = new Date('2026-07-14T12:00:00.000Z');
 describe('CompanyExportDataService reconstruction export', () => {
   it('gathers deterministic company-scoped IPAM, relations, safe gaps, and provenance', async () => {
     const { prisma, service, crypto } = setup();
+    const interfacesValue = 'ID: 11111111-1111-4111-8111-111111111111 | Name: Ethernet 0 | MAC: 00:11:22:33:44:55 | Primary: yes';
+    const addressesValue = 'ID: 22222222-2222-4222-8222-222222222222 | Interface ID: 11111111-1111-4111-8111-111111111111 | Interface: Ethernet 0 | Address: 10.20.30.10 | Family: IPv4 | Assignment: static | Reservation eligible: yes | Subnet mask: 255.255.255.0 | Active: yes | First seen: 2026-07-14T00:00:00.000Z | Deactivated: —';
     prisma.subnet.findMany.mockResolvedValueOnce([
       subnet(ids.subnetB, 'Zeta VLAN', '10.30.0.0/24'),
       subnet(ids.subnetA, 'Core Network', '10.20.30.0/24'),
@@ -46,6 +49,7 @@ describe('CompanyExportDataService reconstruction export', () => {
         companyId: ids.company,
         value: '10.20.30.99',
         assetId: ids.assetA,
+        assetFieldId: 'field-address',
         asset: { id: ids.assetA, companyId: ids.company, name: 'APP-01' },
         assetField: { name: 'Address', slug: 'address', fieldType: 'IP_ADDRESS' },
       },
@@ -53,7 +57,8 @@ describe('CompanyExportDataService reconstruction export', () => {
         id: 'field-value-interfaces',
         companyId: ids.company,
         assetId: ids.assetA,
-        value: 'ID: 11111111-1111-4111-8111-111111111111 | Name: Ethernet 0 | MAC: 00:11:22:33:44:55 | Primary: yes',
+        assetFieldId: 'field-interfaces',
+        value: interfacesValue,
         asset: { id: ids.assetA, companyId: ids.company, name: 'APP-01' },
         assetField: { name: 'Interfaces', slug: 'interfaces', fieldType: 'TEXTAREA' },
       },
@@ -61,7 +66,8 @@ describe('CompanyExportDataService reconstruction export', () => {
         id: 'field-value-addresses',
         companyId: ids.company,
         assetId: ids.assetA,
-        value: 'ID: 22222222-2222-4222-8222-222222222222 | Interface ID: 11111111-1111-4111-8111-111111111111 | Interface: Ethernet 0 | Address: 10.20.30.10 | Family: IPv4 | Assignment: static | Reservation eligible: yes | Subnet mask: 255.255.255.0 | Active: yes | First seen: 2026-07-14T00:00:00.000Z | Deactivated: —',
+        assetFieldId: 'field-network-addresses',
+        value: addressesValue,
         asset: { id: ids.assetA, companyId: ids.company, name: 'APP-01' },
         assetField: { name: 'Network Address History', slug: 'network-addresses', fieldType: 'TEXTAREA' },
       },
@@ -95,7 +101,16 @@ describe('CompanyExportDataService reconstruction export', () => {
     );
     prisma.integrationSyncRecord.findMany.mockResolvedValueOnce([
       syncRecord({ id: ids.syncB, state: 'stale', targetId: ids.assetB, targetName: 'SW-01' }),
-      syncRecord({ id: ids.syncA, state: 'active', targetId: ids.assetA, targetName: 'APP-01' }),
+      syncRecord({
+        id: ids.syncA,
+        state: 'active',
+        targetId: ids.assetA,
+        targetName: 'APP-01',
+        fieldChecksums: {
+          'field-interfaces': assetFieldChecksum(interfacesValue),
+          'field-network-addresses': assetFieldChecksum(addressesValue),
+        },
+      }),
     ]);
 
     const result = await service.gather(ids.company, { includePasswords: false });
@@ -291,15 +306,26 @@ describe('CompanyExportDataService reconstruction export', () => {
     const interfaceId = '11111111-1111-4111-8111-111111111111';
     const addressId = '22222222-2222-4222-8222-222222222222';
     const revision = 'distinctive-source-revision-abc123';
+    const interfacesValue = `ID: ${interfaceId} | Name: Ethernet 0 | MAC: 00:11:22:33:44:55 | Primary: yes`;
+    const addressesValue = `ID: ${addressId} | Interface ID: ${interfaceId} | Interface: Ethernet 0 | Address: 10.20.30.10 | Family: IPv4 | Assignment: static | Reservation eligible: yes | Active: yes`;
     prisma.integrationSyncRecord.findMany.mockResolvedValueOnce([
-      syncRecord({ id: ids.syncA, state: 'active', targetId: ids.assetA, targetName: 'APP-01' }),
+      syncRecord({
+        id: ids.syncA,
+        state: 'active',
+        targetId: ids.assetA,
+        targetName: 'APP-01',
+        fieldChecksums: {
+          'field-interfaces': assetFieldChecksum(interfacesValue),
+          'field-network-addresses': assetFieldChecksum(addressesValue),
+        },
+      }),
       syncRecordForArticle(ids.article, 'APP-01 Offline Procedure', 'active'),
     ]);
     prisma.asset.findMany.mockResolvedValueOnce([assetRow(ids.assetA, null, [
       fieldValue('Breeze ID', 'breeze-id', 'TEXT', ids.assetA, 0),
       fieldValue('Source Revision', 'source-revision', 'TEXT', revision, 1),
-      fieldValue('Interfaces', 'interfaces', 'TEXTAREA', `ID: ${interfaceId} | Name: Ethernet 0 | MAC: 00:11:22:33:44:55 | Primary: yes`, 2),
-      fieldValue('Network Address History', 'network-addresses', 'TEXTAREA', `ID: ${addressId} | Interface ID: ${interfaceId} | Interface: Ethernet 0 | Address: 10.20.30.10 | Family: IPv4 | Assignment: static | Reservation eligible: yes | Active: yes`, 3),
+      fieldValue('Interfaces', 'interfaces', 'TEXTAREA', interfacesValue, 2),
+      fieldValue('Network Address History', 'network-addresses', 'TEXTAREA', addressesValue, 3),
       fieldValue('Recovery role', 'recovery-role', 'TEXT', 'Primary application server', 4),
       fieldValue('Recovery dependency', 'recovery-dependency', 'ASSET_REFERENCE', [ids.assetB], 5),
     ])]).mockResolvedValueOnce([
@@ -327,9 +353,19 @@ describe('CompanyExportDataService reconstruction export', () => {
     expect(serialized).toContain('Install Windows Server from verified media.');
     expect(serialized).toContain('Last synchronized');
     expect(serialized).toContain('Breeze');
-    for (const raw of [interfaceId, addressId, ids.assetB, revision, 'distinctive-fingerprint', 'Source UUID', 'Source revision', 'Source fingerprint', 'weavestream:breeze:managed']) {
+    for (const raw of [interfaceId, addressId, revision, 'distinctive-fingerprint', 'Source UUID', 'Source revision', 'Source fingerprint', 'weavestream:breeze:managed']) {
       expect(serialized).not.toContain(raw);
     }
+    // WS-CR-019: the operator-curated reference field is not integration
+    // data — it keeps its stored ids plus the readable-label lookup
+    // (identical treatment to reference fields on unsynchronized assets).
+    expect(result.assets[0]?.fields.find((field) => field.label === 'Recovery dependency'))
+      .toEqual({
+        label: 'Recovery dependency',
+        fieldType: 'ASSET_REFERENCE',
+        value: [ids.assetB],
+        referenceLabels: { [ids.assetB]: 'DB-01 readable dependency' },
+      });
   });
 
   it('includes only stale-bound archived reconstruction records and labels topology last-known stale', async () => {
@@ -387,8 +423,19 @@ describe('CompanyExportDataService reconstruction export', () => {
     const subnet16 = '00000000-0000-4000-8000-000000000091';
     const subnet24 = '00000000-0000-4000-8000-000000000092';
     const mask = expectedOccupants === 0 ? '255.255.255.128' : '255.255.255.0';
+    const interfacesValue = 'ID: 11111111-1111-4111-8111-111111111111 | Name: Ethernet 0 | MAC: 00:11:22:33:44:55 | Primary: yes';
+    const addressesValue = `ID: 22222222-2222-4222-8222-222222222222 | Interface ID: 11111111-1111-4111-8111-111111111111 | Interface: Ethernet 0 | Address: 10.20.30.10 | Family: IPv4 | Assignment: static | Reservation eligible: yes | Subnet mask: ${mask} | Active: yes`;
     prisma.integrationSyncRecord.findMany.mockResolvedValueOnce([
-      syncRecord({ id: ids.syncA, state: 'active', targetId: ids.assetA, targetName: 'APP-01' }),
+      syncRecord({
+        id: ids.syncA,
+        state: 'active',
+        targetId: ids.assetA,
+        targetName: 'APP-01',
+        fieldChecksums: {
+          'field-interfaces': assetFieldChecksum(interfacesValue),
+          'field-network-addresses': assetFieldChecksum(addressesValue),
+        },
+      }),
     ]);
     prisma.subnet.findMany.mockResolvedValueOnce([
       { ...subnet(subnet16, 'Campus /16', '10.20.0.0/16'), prefix: 16, archivedAt: null },
@@ -408,13 +455,15 @@ describe('CompanyExportDataService reconstruction export', () => {
     prisma.assetFieldValue.findMany.mockResolvedValueOnce([
       {
         id: 'interfaces', companyId: ids.company, assetId: ids.assetA,
-        value: 'ID: 11111111-1111-4111-8111-111111111111 | Name: Ethernet 0 | MAC: 00:11:22:33:44:55 | Primary: yes',
+        assetFieldId: 'field-interfaces',
+        value: interfacesValue,
         asset: { id: ids.assetA, companyId: ids.company, name: 'APP-01' },
         assetField: { name: 'Interfaces', slug: 'interfaces', fieldType: 'TEXTAREA' },
       },
       {
         id: 'addresses', companyId: ids.company, assetId: ids.assetA,
-        value: `ID: 22222222-2222-4222-8222-222222222222 | Interface ID: 11111111-1111-4111-8111-111111111111 | Interface: Ethernet 0 | Address: 10.20.30.10 | Family: IPv4 | Assignment: static | Reservation eligible: yes | Subnet mask: ${mask} | Active: yes`,
+        assetFieldId: 'field-network-addresses',
+        value: addressesValue,
         asset: { id: ids.assetA, companyId: ids.company, name: 'APP-01' },
         assetField: { name: 'Network Address History', slug: 'network-addresses', fieldType: 'TEXTAREA' },
       },
@@ -471,6 +520,149 @@ describe('CompanyExportDataService reconstruction export', () => {
     expect(serialized).toContain('Breeze ID');
     expect(serialized).toContain('## Source provenance');
     expect(serialized).toContain('This heading is authored and must remain.');
+  });
+
+  it('exports operator-authored values on synchronized assets verbatim', async () => {
+    const { prisma, service } = setup();
+    const manualUuid = '44444444-4444-4444-8444-444444444444';
+    const manualNotes = 'Uplink A | Uplink B | verify failover order after maintenance';
+    prisma.integrationSyncRecord.findMany.mockResolvedValueOnce([
+      syncRecord({ id: ids.syncA, state: 'active', targetId: ids.assetA, targetName: 'APP-01' }),
+    ]);
+    prisma.asset.findMany.mockResolvedValueOnce([assetRow(ids.assetA, null, [
+      fieldValue('Deployment notes', 'deployment-notes', 'TEXTAREA', manualNotes, 0),
+      fieldValue('Warranty reference', 'warranty-reference', 'TEXT', `Contract ${manualUuid}`, 1),
+    ])]);
+
+    const result = await service.gather(ids.company, { includePasswords: false });
+
+    // WS-CR-019: fields the integration does not manage are operator
+    // data — never parsed as projection text, omitted, or identifier-
+    // stripped, even though the asset itself is Breeze-bound.
+    expect(result.assets[0]?.fields).toEqual([
+      { label: 'Deployment notes', fieldType: 'TEXTAREA', value: manualNotes },
+      { label: 'Warranty reference', fieldType: 'TEXT', value: `Contract ${manualUuid}` },
+    ]);
+  });
+
+  it('exports operator-edited synchronized fields verbatim and never mints occupants from them', async () => {
+    const { prisma, service } = setup();
+    const interfaceId = '11111111-1111-4111-8111-111111111111';
+    const addressId = '22222222-2222-4222-8222-222222222222';
+    const syncedInterfaces = `ID: ${interfaceId} | Name: Ethernet 0 | MAC: 00:11:22:33:44:55 | Primary: yes`;
+    const syncedAddresses = `ID: ${addressId} | Interface ID: ${interfaceId} | Interface: Ethernet 0 | Address: 10.20.30.10 | Family: IPv4 | Assignment: static | Reservation eligible: yes | Subnet mask: 255.255.255.0 | Active: yes`;
+    const editedInterfaces = `${syncedInterfaces} | Operator note: replaced NIC`;
+    const editedAddresses = `${syncedAddresses} | Operator note: readdressed by hand`;
+    prisma.integrationSyncRecord.findMany.mockResolvedValueOnce([
+      syncRecord({
+        id: ids.syncA,
+        state: 'active',
+        targetId: ids.assetA,
+        targetName: 'APP-01',
+        fieldChecksums: {
+          'field-interfaces': assetFieldChecksum(syncedInterfaces),
+          'field-network-addresses': assetFieldChecksum(syncedAddresses),
+        },
+      }),
+    ]);
+    prisma.asset.findMany.mockResolvedValueOnce([assetRow(ids.assetA, null, [
+      fieldValue('Interfaces', 'interfaces', 'TEXTAREA', editedInterfaces, 0),
+    ])]);
+    prisma.subnet.findMany.mockResolvedValueOnce([
+      subnet(ids.subnetA, 'Core Network', '10.20.30.0/24'),
+    ]);
+    prisma.ipReservation.findMany.mockResolvedValueOnce([
+      {
+        id: ids.reservation,
+        companyId: ids.company,
+        subnetId: ids.subnetA,
+        ipAddress: '10.20.30.10',
+        label: 'APP-01 static',
+        notes: null,
+        subnet: { companyId: ids.company },
+      },
+    ]);
+    prisma.assetFieldValue.findMany.mockResolvedValueOnce([
+      {
+        id: 'edited-interfaces', companyId: ids.company, assetId: ids.assetA,
+        assetFieldId: 'field-interfaces',
+        value: editedInterfaces,
+        asset: { id: ids.assetA, companyId: ids.company, name: 'APP-01' },
+        assetField: { name: 'Interfaces', slug: 'interfaces', fieldType: 'TEXTAREA' },
+      },
+      {
+        id: 'edited-addresses', companyId: ids.company, assetId: ids.assetA,
+        assetFieldId: 'field-network-addresses',
+        value: editedAddresses,
+        asset: { id: ids.assetA, companyId: ids.company, name: 'APP-01' },
+        assetField: { name: 'Network Address History', slug: 'network-addresses', fieldType: 'TEXTAREA' },
+      },
+    ]);
+
+    const result = await service.gather(ids.company, { includePasswords: false });
+
+    // The recorded checksum no longer matches: the operator owns these
+    // bytes now. They export unmodified, and structured inventory is
+    // never reconstructed from them.
+    expect(result.assets[0]?.fields).toEqual([
+      { label: 'Interfaces', fieldType: 'TEXTAREA', value: editedInterfaces },
+    ]);
+    expect(result.ipam.flatMap((row) => row.occupants)).toEqual([]);
+  });
+
+  it('keeps sanitizing mapped synchronized fields until authorship is recorded', async () => {
+    const { prisma, service } = setup();
+    const interfaceId = '11111111-1111-4111-8111-111111111111';
+    prisma.integrationSyncRecord.findMany.mockResolvedValueOnce([
+      syncRecord({
+        id: ids.syncA,
+        state: 'active',
+        targetId: ids.assetA,
+        targetName: 'APP-01',
+        fieldMappings: [{ targetFieldId: 'field-interfaces', syncDirection: 'source_wins' }],
+      }),
+    ]);
+    prisma.asset.findMany.mockResolvedValueOnce([assetRow(ids.assetA, null, [
+      fieldValue('Interfaces', 'interfaces', 'TEXTAREA', `ID: ${interfaceId} | Name: Ethernet 0`, 0),
+    ])]);
+
+    const result = await service.gather(ids.company, { includePasswords: false });
+
+    // A mapped field with no recorded checksum (legacy sync row) has
+    // unknown authorship — it fails closed to the sanitized projection
+    // until the next sync records field-level proof.
+    expect(result.assets[0]?.fields).toEqual([
+      { label: 'Interfaces', fieldType: 'TEXTAREA', value: 'Name: Ethernet 0' },
+    ]);
+    expect(JSON.stringify(result)).not.toContain(interfaceId);
+  });
+
+  it('never treats manual_only mapped fields as integration-managed', async () => {
+    const { prisma, service } = setup();
+    // manual_only mappings are dormant: the writer never records a
+    // checksum for them, so the "unproven → sanitize" legacy window
+    // would never close. They must classify as operator data.
+    const maintenanceWindow = 'Sat 22:00-02:00 | Sun 04:00-06:00';
+    prisma.integrationSyncRecord.findMany.mockResolvedValueOnce([
+      syncRecord({
+        id: ids.syncA,
+        state: 'active',
+        targetId: ids.assetA,
+        targetName: 'APP-01',
+        fieldMappings: [
+          { targetFieldId: 'field-maintenance-window', syncDirection: 'manual_only' },
+        ],
+      }),
+    ]);
+    prisma.asset.findMany.mockResolvedValueOnce([assetRow(ids.assetA, null, [
+      fieldValue('Maintenance window', 'maintenance-window', 'TEXTAREA', maintenanceWindow, 0),
+    ])]);
+
+    const result = await service.gather(ids.company, { includePasswords: false });
+
+    expect(result.assets[0]?.fields).toEqual([
+      { label: 'Maintenance window', fieldType: 'TEXTAREA', value: maintenanceWindow },
+    ]);
   });
 
   it('derives Breeze projection and stale state deterministically from all mixed bindings', async () => {
@@ -581,6 +773,7 @@ function fieldValue(
   position: number,
 ) {
   return {
+    assetFieldId: `field-${slug}`,
     value,
     assetField: { name, slug, fieldType, position },
   };
@@ -645,6 +838,8 @@ function syncRecord(input: {
   state: 'active' | 'stale';
   targetId: string;
   targetName: string;
+  fieldChecksums?: Record<string, string>;
+  fieldMappings?: Array<{ targetFieldId: string | null; syncDirection: string }>;
 }) {
   const stale = input.state === 'stale';
   return {
@@ -660,6 +855,7 @@ function syncRecord(input: {
     relationId: null,
     state: input.state,
     staleSince: stale ? new Date('2026-07-14T11:00:00.000Z') : null,
+    lastSyncedFieldChecksums: input.fieldChecksums ?? {},
     provenance: {
       integrationId: ids.integration,
       externalOrgId: 'raw-upstream-org-id',
@@ -682,7 +878,11 @@ function syncRecord(input: {
       companyId: ids.company,
       integration: { id: ids.integration, name: 'Breeze', driver: 'breeze' },
     },
-    resource: { integrationId: ids.integration, resourceKey: 'devices' },
+    resource: {
+      integrationId: ids.integration,
+      resourceKey: 'devices',
+      fieldMappings: input.fieldMappings ?? [],
+    },
   };
 }
 
@@ -699,7 +899,7 @@ function syncRecordForArticle(
     articleId,
     asset: null,
     article: { id: articleId, companyId: ids.company, title },
-    resource: { integrationId: ids.integration, resourceKey: 'knowledge-articles' },
+    resource: { integrationId: ids.integration, resourceKey: 'knowledge-articles', fieldMappings: [] },
     provenance: { ...base.provenance, resourceKey: 'knowledge-articles' },
   };
 }
@@ -713,7 +913,7 @@ function syncRecordForSubnet(subnetId: string, name: string) {
     subnetId,
     asset: null,
     subnet: { id: subnetId, companyId: ids.company, name },
-    resource: { integrationId: ids.integration, resourceKey: 'network-segments' },
+    resource: { integrationId: ids.integration, resourceKey: 'network-segments', fieldMappings: [] },
     provenance: { ...base.provenance, resourceKey: 'network-segments' },
   };
 }
@@ -727,7 +927,7 @@ function syncRecordForRelation(relationId: string) {
     relationId,
     asset: null,
     relation: { id: relationId, companyId: ids.company },
-    resource: { integrationId: ids.integration, resourceKey: 'relations' },
+    resource: { integrationId: ids.integration, resourceKey: 'relations', fieldMappings: [] },
     provenance: { ...base.provenance, resourceKey: 'relations' },
   };
 }

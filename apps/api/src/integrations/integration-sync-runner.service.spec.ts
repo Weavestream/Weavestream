@@ -1834,13 +1834,18 @@ describe('Breeze foundational asset composition', () => {
     deviceA.fieldValues.find((value) => value.assetFieldId === manualField)!.value = 'operator override';
     deviceA.fieldValues.push({ id: 'manual-value', companyId: company, assetId: deviceA.id, assetFieldId: manualOnlyField, value: 'keep manual only' });
     await expect(write(integrationA, 'devices', 'device-uuid', 'Renamed laptop', 'serial-2', 'replace attempt')).resolves.toMatchObject({ change: 'updated' });
+    // A later run with a changed upstream value must still preserve the
+    // operator override: the persisted lastSyncedFieldChecksums baseline
+    // is the last integration-authored checksum, never the adopted
+    // manual one, so the preserve gate keeps firing run after run.
+    await expect(write(integrationA, 'devices', 'device-uuid', 'Renamed laptop', 'serial-3', 'second replace attempt')).resolves.toMatchObject({ change: 'updated' });
     await expect(write(integrationB, 'devices', 'device-uuid', 'Renamed laptop', 'serial-other', 'other partner')).resolves.toMatchObject({ change: 'created' });
 
     expect(assets.size).toBe(3);
     const deviceB = assets.get(targets.get(`${integrationB}:${org}:devices:device-uuid`)!)!;
     expect(deviceA.name).toBe('Renamed laptop');
     expect(Object.fromEntries(deviceA.fieldValues.map((value) => [value.assetFieldId, value.value]))).toMatchObject({
-      [sourceField]: 'serial-2', [manualField]: 'operator override', [manualOnlyField]: 'keep manual only',
+      [sourceField]: 'serial-3', [manualField]: 'operator override', [manualOnlyField]: 'keep manual only',
     });
     expect(deviceB.id).not.toBe(deviceA.id);
     expect(deviceA.externalId).toBe(deviceB.externalId);

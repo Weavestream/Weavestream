@@ -43,7 +43,13 @@ export interface AuditMeta {
   userAgent: string;
 }
 
-function assetFieldChecksum(value: unknown): string {
+/**
+ * Write-side field checksum recorded into
+ * `IntegrationSyncRecord.lastSyncedFieldChecksums`. Exported so readers
+ * (company export, WS-CR-019) can verify field-level integration
+ * authorship against the exact algorithm the writer used.
+ */
+export function assetFieldChecksum(value: unknown): string {
   return createHash('sha256').update(JSON.stringify(value ?? null)).digest('hex');
 }
 
@@ -799,14 +805,21 @@ export class AssetsService {
       const stored = existingValues[field.slug];
       const storedChecksum = assetFieldChecksum(stored);
       if (entry.syncDirection === 'manual_only') continue;
+      const previousChecksum = input.previousFieldChecksums[fieldId];
       if (
         entry.syncDirection === 'preserve_manual' &&
         stored !== null &&
         stored !== undefined &&
-        input.previousFieldChecksums[fieldId] !== undefined &&
-        input.previousFieldChecksums[fieldId] !== storedChecksum
+        previousChecksum !== undefined &&
+        previousChecksum !== storedChecksum
       ) {
-        fieldChecksums[fieldId] = storedChecksum;
+        // The recorded baseline stays the last integration-authored
+        // checksum. Recording the manual value's checksum instead would
+        // adopt the operator edit as "last synced", so the next run to
+        // reach this path would see no edit and overwrite it —
+        // preserve_manual retains the operator value until the operator
+        // reverts the field to the last synced value themselves.
+        fieldChecksums[fieldId] = previousChecksum;
         continue;
       }
       const value = normalized[field.slug];

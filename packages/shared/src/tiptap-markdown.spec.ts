@@ -174,6 +174,25 @@ describe('tiptapDocToMarkdown', () => {
     expect(md).toBe(['| a\\|b<br>second |', '| --- |'].join('\n'));
   });
 
+  it('escapes backslashes before pipes so pipes stay inside table cells', () => {
+    const cell = (value: string): TiptapNode => ({
+      type: 'tableCell',
+      content: [paragraph(text(value))],
+    });
+    const md = tiptapDocToMarkdown(
+      doc({
+        type: 'table',
+        content: [
+          {
+            type: 'tableRow',
+            content: [cell(String.raw`a\|b`), cell(String.raw`c\\|d`)],
+          },
+        ],
+      }),
+    );
+    expect(md).toBe([String.raw`| a\\\|b | c\\\\\|d |`, '| --- | --- |'].join('\n'));
+  });
+
   it('renders images, horizontal rules and hard breaks', () => {
     const md = tiptapDocToMarkdown(
       doc(

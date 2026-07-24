@@ -150,9 +150,9 @@ function renderTable(table: TiptapNode): string {
 }
 
 /**
- * A table cell as a single line: paragraphs joined with `<br>`, pipes
- * escaped, embedded newlines flattened — multi-line cells break GFM
- * table grammar.
+ * A table cell as a single line: paragraphs joined with `<br>`,
+ * backslashes and pipes escaped, embedded newlines flattened — multi-line
+ * cells break GFM table grammar.
  */
 function renderTableCell(cell: TiptapNode): string {
   const parts = (cell.content ?? [])
@@ -162,7 +162,7 @@ function renderTableCell(cell: TiptapNode): string {
         : renderBlock(child),
     )
     .filter((p) => p.length > 0);
-  return parts.join('<br>').replace(/\n/g, '<br>').replace(/\|/g, '\\|');
+  return parts.join('<br>').replace(/\n/g, '<br>').replace(/\\/g, '\\\\').replace(/\|/g, '\\|');
 }
 
 function renderImage(node: TiptapNode): string {
