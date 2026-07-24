@@ -57,9 +57,10 @@ export function companyPdfTestFixture(
       folderPath: 'Breeze Procedures',
       editorMode: 'markdown',
       content: null,
-      markdownSource: '# Rebuild APP-01',
+      markdownSource:
+        '# Rebuild APP-01\n\n1. Install Windows Server from verified media.\n2. Restore the application database.\n3. Validate HTTPS and queue processing.',
       contentPlaintext:
-        '1. Install Windows Server from verified media.\n2. Restore the application database.\n3. Validate HTTPS and queue processing.',
+        'Rebuild APP-01\n1. Install Windows Server from verified media.\n2. Restore the application database.\n3. Validate HTTPS and queue processing.',
       images: [],
       updatedAt: new Date('2026-07-14T10:00:00.000Z'),
     }],
@@ -134,6 +135,7 @@ export function companyPdfTestFixture(
         target: { kind: 'asset', label: 'APP-01', href: assetHref },
       }],
     },
+    breezeIntegrationActive: true,
     exportedAt: new Date('2026-07-14T12:00:00.000Z'),
     includePasswords: false,
   };

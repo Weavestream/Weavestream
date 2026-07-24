@@ -6,6 +6,9 @@
 declare module 'fontkit' {
   export interface PackagedFontCmap {
     hasGlyphForCodePoint(codePoint: number): boolean;
+    /** Cap height in font units (`capHeight / unitsPerEm` = em ratio). */
+    capHeight: number;
+    unitsPerEm: number;
   }
   export function create(buffer: Buffer): PackagedFontCmap;
 }

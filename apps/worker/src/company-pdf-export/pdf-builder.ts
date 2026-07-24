@@ -2,7 +2,11 @@ import PDFDocument from 'pdfkit';
 import { create as parseFontCmap } from 'fontkit';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { MAX_IMAGE_DECODE_PIXELS, tiptapToPlaintext } from '@weavestream/shared';
+import {
+  MAX_IMAGE_DECODE_PIXELS,
+  tiptapDocToMarkdown,
+  tiptapToPlaintext,
+} from '@weavestream/shared';
 import type { CompanyExportData } from '../../../api/src/exports/company-export-data.service.js';
 
 interface PdfBuildOpts {
@@ -27,6 +31,31 @@ const PACKAGED_FONT_CMAPS = [
   parseFontCmap(FONT_NORMAL_DATA),
   parseFontCmap(FONT_BOLD_DATA),
 ];
+
+/**
+ * Cap-height ratio of the packaged fonts (identical for regular/bold:
+ * 733/1000). PDFKit anchors `text(x, y)` at the top of the line box and
+ * the CJK fonts carry a 1.16em ascender, so top-anchored text inside a
+ * fixed-height box lands visibly below center. Boxed text (banners,
+ * table header pills, badges) is therefore drawn with
+ * `baseline: 'alphabetic'` at a baseline computed from the cap height,
+ * which is font-independent by construction.
+ */
+const CAP_HEIGHT_RATIO = Math.max(
+  ...PACKAGED_FONT_CMAPS.map((font) => font.capHeight / font.unitsPerEm),
+);
+
+/**
+ * Baseline that vertically centers a run of capital-height text inside
+ * a box drawn from `boxTop` with height `boxHeight`.
+ */
+function capCenteredBaseline(
+  boxTop: number,
+  boxHeight: number,
+  fontSize: number,
+): number {
+  return boxTop + (boxHeight + CAP_HEIGHT_RATIO * fontSize) / 2;
+}
 
 const PAGE_WIDTH = 612; // letter
 const PAGE_HEIGHT = 792;
@@ -73,29 +102,47 @@ const C = {
 type ExportAssetField = CompanyExportData['assets'][number]['fields'][number];
 type ExportArticle = CompanyExportData['articles'][number];
 
-export type ArticleSegment =
-  | { kind: 'text'; text: string }
-  | { kind: 'image'; uploadId: string | null; fallbackLabel: string | null };
-
 const ARTICLE_IMAGE_RE =
   /\/api\/v1\/companies\/[0-9a-f-]{36}\/uploads\/([0-9a-f-]{36})/i;
 
-const TIPTAP_BLOCK_TYPES = new Set([
-  'paragraph',
-  'heading',
-  'blockquote',
-  'listItem',
-  'bulletList',
-  'orderedList',
-  'codeBlock',
-  'taskList',
-  'taskItem',
-  'table',
-  'tableRow',
-  'tableHeader',
-  'tableCell',
-  'horizontalRule',
-]);
+// ---------------------------------------------------------------------------
+// Article markdown model
+// ---------------------------------------------------------------------------
+// Articles render from one common representation: markdown. Tiptap
+// documents are projected through the shared `tiptapDocToMarkdown`
+// walker; markdown-mode articles use their source directly. The blocks
+// below are what the layout engine draws — a deliberate GFM subset
+// (the article editor's own node set), parsed line-by-line with no
+// dependency on a markdown engine.
+
+export interface MarkdownInlineRun {
+  text: string;
+  bold?: boolean;
+  italic?: boolean;
+  code?: boolean;
+  strike?: boolean;
+  link?: boolean;
+}
+
+export interface MarkdownListItem {
+  /** Rendered marker: '•' for bullets, '3.' for ordered items. */
+  marker: string;
+  /** Task-list state; null for plain list items. */
+  task: 'checked' | 'unchecked' | null;
+  runs: MarkdownInlineRun[];
+  /** Nested blocks (sub-lists, continuation paragraphs). */
+  children: MarkdownBlock[];
+}
+
+export type MarkdownBlock =
+  | { kind: 'heading'; level: number; runs: MarkdownInlineRun[] }
+  | { kind: 'paragraph'; runs: MarkdownInlineRun[] }
+  | { kind: 'list'; items: MarkdownListItem[] }
+  | { kind: 'code'; lines: string[] }
+  | { kind: 'quote'; blocks: MarkdownBlock[] }
+  | { kind: 'table'; rows: string[][] }
+  | { kind: 'rule' }
+  | { kind: 'image'; uploadId: string | null; label: string | null };
 
 // ---------------------------------------------------------------------------
 // Public entry point
@@ -169,7 +216,10 @@ export async function buildCompanyExportPdf(
       if (data.articles.length > 0) renderArticles(doc, data);
       renderIpam(doc, data);
       renderRelationships(doc, data);
-      renderReconstruction(doc, data);
+      // The reconstruction dossier documents Breeze-synchronized state;
+      // without an active Breeze integration for this company the
+      // section (and its cover-page row) is meaningless noise.
+      if (data.breezeIntegrationActive) renderReconstruction(doc, data);
       renderDomains(doc, data);
       if (data.uploads.length > 0) renderUploads(doc, data);
 
@@ -256,15 +306,23 @@ function paintBanner(
   doc.rect(0, 0, PAGE_WIDTH, BANNER_HEIGHT).fill(C.banner);
   // Accent stripe along the bottom of the banner.
   doc.rect(0, BANNER_HEIGHT, PAGE_WIDTH, 3).fill(C.bannerAccent);
+  // Baseline-anchored so the CJK fonts' tall ascender cannot push the
+  // text into the accent stripe: title caps start ~22 from the top,
+  // the subtitle clears the stripe by its descender plus 7px.
   doc.fillColor(C.white)
     .font(FONT_BOLD).fontSize(20)
-    .text(title, MARGIN_X, 22, { width: CONTENT_WIDTH, lineBreak: false });
+    .text(title, MARGIN_X, 22 + CAP_HEIGHT_RATIO * 20, {
+      width: CONTENT_WIDTH,
+      lineBreak: false,
+      baseline: 'alphabetic',
+    });
   if (subtitle) {
     doc.fillColor('#cbd5e1')
       .font(FONT_NORMAL).fontSize(10)
-      .text(pdfSafeUserText(subtitle), MARGIN_X, 46, {
+      .text(pdfSafeUserText(subtitle), MARGIN_X, BANNER_HEIGHT - 10, {
         width: CONTENT_WIDTH,
         lineBreak: false,
+        baseline: 'alphabetic',
       });
   }
   doc.restore();
@@ -275,9 +333,10 @@ function drawSlimBanner(doc: PDFKit.PDFDocument, title: string): void {
   doc.rect(0, 0, PAGE_WIDTH, 28).fill(C.banner);
   doc.fillColor(C.white)
     .font(FONT_BOLD).fontSize(11)
-    .text(`${title} (continued)`, MARGIN_X, 9, {
+    .text(`${title} (continued)`, MARGIN_X, capCenteredBaseline(0, 28, 11), {
       width: CONTENT_WIDTH,
       lineBreak: false,
+      baseline: 'alphabetic',
     });
   doc.restore();
   doc.x = MARGIN_X;
@@ -471,19 +530,35 @@ interface TableSpec {
   widths: number[];
   /** Per-column horizontal alignment. */
   aligns?: ('left' | 'right')[];
+  /** Left edge; defaults to the page margin. */
+  x?: number;
+}
+
+function tableOrigin(table: TableSpec): { left: number; width: number } {
+  return {
+    left: table.x ?? MARGIN_X,
+    width: table.widths.reduce((total, width) => total + width, 0),
+  };
 }
 
 function drawTableHeaderRow(doc: PDFKit.PDFDocument, table: TableSpec): void {
   const headerY = doc.y;
+  const { left, width } = tableOrigin(table);
   // Header background pill.
   doc.save();
-  doc.rect(MARGIN_X, headerY - 4, CONTENT_WIDTH, ROW_HEIGHT).fill(C.banner);
+  doc.rect(left, headerY - 4, width, ROW_HEIGHT).fill(C.banner);
   doc.fillColor(C.white).font(FONT_BOLD).fontSize(9);
-  let x = MARGIN_X + 6;
+  const baseline = capCenteredBaseline(headerY - 4, ROW_HEIGHT, 9);
+  let x = left + 6;
   table.headers.forEach((h, i) => {
     const w = table.widths[i]! - 12;
     const align = table.aligns?.[i] ?? 'left';
-    doc.text(h, x, headerY, { width: w, lineBreak: false, align });
+    doc.text(fitText(doc, h, w, FONT_BOLD, 9), x, baseline, {
+      width: w,
+      lineBreak: false,
+      align,
+      baseline: 'alphabetic',
+    });
     x += table.widths[i]!;
   });
   doc.restore();
@@ -498,6 +573,7 @@ function tableRow(
   colorOverrides: Record<number, string> = {},
 ): void {
   cols = cols.map((col) => pdfSafeUserText(col));
+  const { left, width } = tableOrigin(table);
   if (doc.y + ROW_HEIGHT > pageBottomBoundary()) {
     doc.addPage();
     drawSlimBanner(doc, table.title);
@@ -508,11 +584,11 @@ function tableRow(
   // Zebra striping
   if (rowIndex % 2 === 1) {
     doc.save();
-    doc.rect(MARGIN_X, rowY - 2, CONTENT_WIDTH, ROW_HEIGHT).fill(C.zebra);
+    doc.rect(left, rowY - 2, width, ROW_HEIGHT).fill(C.zebra);
     doc.restore();
   }
 
-  let x = MARGIN_X + 6;
+  let x = left + 6;
   cols.forEach((col, i) => {
     const cellW = table.widths[i]! - 12;
     const align = table.aligns?.[i] ?? 'left';
@@ -525,6 +601,34 @@ function tableRow(
   doc.y = rowY + ROW_HEIGHT;
 }
 
+/**
+ * Tallest row `wrappedTableRow` can draw intact: the content area of a
+ * continuation page (slim banner content starts at 44, the header row
+ * is re-drawn) minus row paddings. A taller row survives its single
+ * page break and PDFKit then auto-paginates each CELL independently —
+ * columns land on different pages and `doc.y` ends up wherever the
+ * last cell's overflow finished.
+ */
+const MAX_WRAPPED_ROW_HEIGHT =
+  PAGE_HEIGHT - MARGIN_BOTTOM - 44 - ROW_HEIGHT - 24;
+
+/**
+ * Row-box height for already-display-encoded cells. Shared by the draw
+ * path and the markdown table renderer's degrade decision so the two
+ * can never measure differently.
+ */
+function encodedWrappedRowHeight(
+  doc: PDFKit.PDFDocument,
+  encodedCols: string[],
+  table: TableSpec,
+): number {
+  doc.font(FONT_NORMAL).fontSize(8.5);
+  const cellHeights = encodedCols.map((col, index) =>
+    doc.heightOfString(col, { width: table.widths[index]! - 12 }),
+  );
+  return Math.max(ROW_HEIGHT, ...cellHeights.map((height) => height + 10));
+}
+
 function wrappedTableRow(
   doc: PDFKit.PDFDocument,
   cols: string[],
@@ -532,11 +636,14 @@ function wrappedTableRow(
   rowIndex: number,
 ): void {
   cols = cols.map((col) => pdfSafeUserText(col));
-  doc.font(FONT_NORMAL).fontSize(8.5);
-  const cellHeights = cols.map((col, index) =>
-    doc.heightOfString(col, { width: table.widths[index]! - 12 }),
-  );
-  const rowHeight = Math.max(ROW_HEIGHT, ...cellHeights.map((height) => height + 10));
+  const { left, width } = tableOrigin(table);
+  const measured = encodedWrappedRowHeight(doc, cols, table);
+  // Backstop only — every caller keeps cells bounded (the markdown
+  // renderer degrades page-tall tables to preformatted text first).
+  // Clamping with an explicit per-cell ellipsis beats the alternative:
+  // unclamped overflow makes PDFKit paginate cells independently.
+  const clamped = measured > MAX_WRAPPED_ROW_HEIGHT;
+  const rowHeight = clamped ? MAX_WRAPPED_ROW_HEIGHT : measured;
   if (doc.y + rowHeight > pageBottomBoundary()) {
     doc.addPage();
     drawSlimBanner(doc, table.title);
@@ -546,23 +653,40 @@ function wrappedTableRow(
   const rowY = doc.y;
   if (rowIndex % 2 === 1) {
     doc.save();
-    doc.rect(MARGIN_X, rowY - 2, CONTENT_WIDTH, rowHeight).fill(C.zebra);
+    doc.rect(left, rowY - 2, width, rowHeight).fill(C.zebra);
     doc.restore();
   }
-  let x = MARGIN_X + 6;
+  let x = left + 6;
   cols.forEach((col, index) => {
     const cellWidth = table.widths[index]! - 12;
     doc.font(FONT_NORMAL).fontSize(8.5).fillColor(C.ink)
-      .text(col, x, rowY + 4, { width: cellWidth, align: table.aligns?.[index] ?? 'left' });
+      .text(col, x, rowY + 4, {
+        width: cellWidth,
+        align: table.aligns?.[index] ?? 'left',
+        ...(clamped ? { height: rowHeight - 10, ellipsis: true } : {}),
+      });
     x += table.widths[index]!;
   });
   doc.y = rowY + rowHeight;
 }
 
 /**
- * Pixel-perfect ellipsis truncation. Linear shrink is plenty fast for
- * cell-sized strings (a few hundred chars max); we don't need a binary
- * search here.
+ * More graphemes than any drawable cell can show: the widest cell
+ * (CONTENT_WIDTH) over the narrowest visible advance at the smallest
+ * table size is ~320 glyphs; the margin absorbs zero-advance combining
+ * marks. Text beyond the cap cannot move the ellipsis cut, so it is
+ * never measured — article table headers are user content and a single
+ * header line can be hundreds of kilobytes.
+ */
+const FIT_TEXT_MAX_GRAPHEMES = 2000;
+
+/**
+ * Pixel ellipsis truncation in O(log n) measurements: binary-search
+ * the longest grapheme prefix whose width with '…' still fits. The
+ * previous drop-one-rescan-all loop was quadratic — a valid
+ * 5,000-character article table header stalled the export worker for
+ * over 30 seconds. Grapheme slicing (not code units) keeps combining
+ * sequences intact at the cut.
  */
 function fitText(
   doc: PDFKit.PDFDocument,
@@ -572,12 +696,28 @@ function fitText(
   size: number,
 ): string {
   doc.font(font).fontSize(size);
-  if (doc.widthOfString(text) <= maxWidth) return text;
-  let cut = text;
-  while (cut.length > 1 && doc.widthOfString(cut + '…') > maxWidth) {
-    cut = cut.slice(0, -1);
+  const graphemes = [...PDF_GRAPHEME_SEGMENTER.segment(text)]
+    .map((entry) => entry.segment);
+  const overCap = graphemes.length > FIT_TEXT_MAX_GRAPHEMES;
+  if (!overCap && doc.widthOfString(text) <= maxWidth) return text;
+
+  const candidates = overCap
+    ? graphemes.slice(0, FIT_TEXT_MAX_GRAPHEMES)
+    : graphemes;
+  // Over the cap the full candidate prefix may fit (more text exists,
+  // so '…' is still truthful); otherwise the text measured too wide
+  // and at least one grapheme must go.
+  let low = 0;
+  let high = overCap ? candidates.length : candidates.length - 1;
+  while (low < high) {
+    const mid = Math.ceil((low + high) / 2);
+    if (doc.widthOfString(candidates.slice(0, mid).join('') + '…') <= maxWidth) {
+      low = mid;
+    } else {
+      high = mid - 1;
+    }
   }
-  return cut + '…';
+  return candidates.slice(0, low).join('') + '…';
 }
 
 // ---------------------------------------------------------------------------
@@ -596,14 +736,20 @@ function statusPalette(status: string): { fg: string; bg: string } {
 // Formatters
 // ---------------------------------------------------------------------------
 
+/**
+ * Date-only display. Evaluated in UTC for determinism, but without a
+ * "UTC" suffix — a bare date carries no time, so the label was noise
+ * that wrapped narrow table columns. Datetime formats (which do show a
+ * time) keep the suffix.
+ */
 function formatDate(d: Date | null | undefined): string {
   if (!d) return '—';
-  return `${new Intl.DateTimeFormat('en-US', {
+  return new Intl.DateTimeFormat('en-US', {
     timeZone: 'UTC',
     year: 'numeric',
     month: 'short',
     day: 'numeric',
-  }).format(d)} UTC`;
+  }).format(d);
 }
 
 function formatBytes(bytes: number): string {
@@ -693,6 +839,16 @@ function formatStoredDate(value: unknown, fieldType: string): string {
 
 const PDF_GRAPHEME_SEGMENTER = new Intl.Segmenter('en', { granularity: 'grapheme' });
 
+// Space separators other than plain space and U+3000 (intentional CJK
+// typography, provably renderable) collapse to U+0020 in prose display.
+// Pasted/AI text glues words to numbers with NBSP/NNBSP/thin space
+// (U+00A0, U+202F, U+2009), and ICU ≥72 emits U+202F before AM/PM in
+// formatted times — no glyph in the packaged CJK fonts, so they surface
+// as "[U+202F]" marker noise. Credentials must NEVER take this path:
+// keep the replace in pdfSafeUserText, NOT in shared encodeDisplayText,
+// or the password byte-exact-or-flagged guarantee (CR-020) breaks.
+const PROSE_SPACE_SEPARATOR_RE = /(?![ \u3000])\p{Zs}/gu;
+
 /**
  * Display-text encoding (CR-020: applied at draw/measure time, never to
  * the export DTO — parsers upstream of rendering must see raw bytes).
@@ -700,7 +856,10 @@ const PDF_GRAPHEME_SEGMENTER = new Intl.Segmenter('en', { granularity: 'grapheme
  * `[[`; anything else becomes a reversible `[U+hex]` marker.
  */
 export function pdfSafeUserText(value: string): string {
-  return encodeDisplayText(value, isPackagedPdfGrapheme);
+  return encodeDisplayText(
+    value.replace(PROSE_SPACE_SEPARATOR_RE, ' '),
+    isPackagedPdfGrapheme,
+  );
 }
 
 /**
@@ -803,13 +962,26 @@ function isPackagedPdfCodePoint(codePoint: number): boolean {
   return packaged;
 }
 
+/**
+ * Script/symbol blocks the export is willing to typeset. This is only
+ * the first half of the gate — `isPackagedPdfCodePoint` still requires
+ * a real glyph in BOTH vendored cmaps, so widening a range can never
+ * print tofu. The symbol blocks (arrows, math operators, technical,
+ * enclosed alphanumerics, box drawing, geometric shapes, misc symbols,
+ * dingbats) exist because runbook prose routinely contains → ✓ ⚠ ▶ —
+ * all carried by Noto Sans CJK — and rendering them as [U+hex] markers
+ * read as artifacts.
+ */
 function isApprovedPdfScriptRange(codePoint: number): boolean {
   return (codePoint >= 0x20 && codePoint <= 0x024f) ||
     (codePoint >= 0x0300 && codePoint <= 0x036f) ||
     (codePoint >= 0x0400 && codePoint <= 0x052f) ||
     (codePoint >= 0x2000 && codePoint <= 0x206f && codePoint !== 0x200d) ||
+    (codePoint >= 0x2070 && codePoint <= 0x209f) ||
     (codePoint >= 0x20a0 && codePoint <= 0x20cf) ||
-    (codePoint >= 0x2100 && codePoint <= 0x214f) ||
+    (codePoint >= 0x2100 && codePoint <= 0x23ff) ||
+    (codePoint >= 0x2460 && codePoint <= 0x24ff) ||
+    (codePoint >= 0x2500 && codePoint <= 0x27bf) ||
     (codePoint >= 0x3000 && codePoint <= 0x30ff) ||
     (codePoint >= 0x31f0 && codePoint <= 0x31ff) ||
     (codePoint >= 0x3400 && codePoint <= 0x4dbf) ||
@@ -940,20 +1112,6 @@ function renderCover(doc: PDFKit.PDFDocument, data: CompanyExportData): void {
       { width: CONTENT_WIDTH },
     );
 
-  // Summary card
-  const cardY = 382;
-  const cardH = 292;
-  doc.save();
-  doc.roundedRect(MARGIN_X, cardY, CONTENT_WIDTH, cardH, 6).fill(C.white);
-  doc.restore();
-
-  doc.fillColor(C.ink3)
-    .font(FONT_BOLD).fontSize(9)
-    .text('CONTENTS', MARGIN_X + 24, cardY + 22, {
-      characterSpacing: 1.5,
-      width: CONTENT_WIDTH - 48,
-    });
-
   const items: Array<[string, string]> = [
     ['Company details', '1 record'],
     [
@@ -982,10 +1140,14 @@ function renderCover(doc: PDFKit.PDFDocument, data: CompanyExportData): void {
       'Relationships',
       `${data.relations.length} ${plural(data.relations.length, 'relation')}`,
     ],
-    [
-      'Reconstruction dossier',
-      `${data.reconstruction.gaps.length} active ${plural(data.reconstruction.gaps.length, 'gap')}`,
-    ],
+    // Mirrors the section gate: no active Breeze integration, no
+    // dossier — neither in the body nor on the cover.
+    ...(data.breezeIntegrationActive
+      ? [[
+          'Reconstruction dossier',
+          `${data.reconstruction.gaps.length} active ${plural(data.reconstruction.gaps.length, 'gap')}`,
+        ] as [string, string]]
+      : []),
     [
       'Monitored domains',
       `${data.domains.length} ${plural(data.domains.length, 'domain')}`,
@@ -995,6 +1157,21 @@ function renderCover(doc: PDFKit.PDFDocument, data: CompanyExportData): void {
       `${data.uploads.length} ${plural(data.uploads.length, 'file')}`,
     ],
   ];
+
+  // Summary card sized to its rows (48px header, 22px per row, 24px
+  // bottom padding — 292 at the full ten rows).
+  const cardY = 382;
+  const cardH = 48 + items.length * 22 + 24;
+  doc.save();
+  doc.roundedRect(MARGIN_X, cardY, CONTENT_WIDTH, cardH, 6).fill(C.white);
+  doc.restore();
+
+  doc.fillColor(C.ink3)
+    .font(FONT_BOLD).fontSize(9)
+    .text('CONTENTS', MARGIN_X + 24, cardY + 22, {
+      characterSpacing: 1.5,
+      width: CONTENT_WIDTH - 48,
+    });
 
   let listY = cardY + 48;
   items.forEach(([label, value], i) => {
@@ -1269,21 +1446,23 @@ function drawPasswordCard(
   doc.rect(MARGIN_X, startY, 3, 18).fill(C.cardAccent);
   doc.restore();
 
+  // Measure the pwned badge first: it is right-aligned to the content
+  // edge and the title must yield to its actual width (large breach
+  // counts previously pushed the pill past the margin).
+  const pwnedLabel =
+    p.pwnedCount && p.pwnedCount > 0
+      ? `Pwned · ${p.pwnedCount.toLocaleString()}`
+      : null;
+  const badgeW = pwnedLabel ? badgeWidth(doc, pwnedLabel) : 0;
+  const titleWidth = innerWidth - (badgeW > 0 ? badgeW + 10 : 0);
   doc.font(FONT_BOLD).fontSize(11).fillColor(C.ink)
-    .text(pdfSafeUserText(p.name), titleX, startY, {
-      width: innerWidth - 90,
+    .text(fitText(doc, pdfSafeUserText(p.name), titleWidth, FONT_BOLD, 11), titleX, startY, {
+      width: titleWidth,
       lineBreak: false,
     });
 
-  // Right-side meta: pwned badge if applicable
-  if (p.pwnedCount && p.pwnedCount > 0) {
-    drawBadge(
-      doc,
-      `Pwned · ${p.pwnedCount.toLocaleString()}`,
-      MARGIN_X + CONTENT_WIDTH - 90,
-      startY,
-      'danger',
-    );
+  if (pwnedLabel) {
+    drawBadge(doc, pwnedLabel, MARGIN_X + CONTENT_WIDTH - badgeW, startY, 'danger');
   }
   doc.y = startY + 22;
 
@@ -1325,6 +1504,12 @@ function drawPasswordCard(
   doc.moveDown(0.5);
 }
 
+/** Pill width for `drawBadge`'s text at its fixed 8pt bold face. */
+function badgeWidth(doc: PDFKit.PDFDocument, text: string): number {
+  doc.font(FONT_BOLD).fontSize(8);
+  return doc.widthOfString(text) + 14;
+}
+
 function drawBadge(
   doc: PDFKit.PDFDocument,
   text: string,
@@ -1345,9 +1530,10 @@ function drawBadge(
   const w = doc.widthOfString(text) + 14;
   doc.save();
   doc.roundedRect(x, y, w, 16, 8).fill(palette.bg);
-  doc.fillColor(palette.fg).text(text, x + 7, y + 4, {
+  doc.fillColor(palette.fg).text(text, x + 7, capCenteredBaseline(y, 16, 8), {
     width: w - 14,
     lineBreak: false,
+    baseline: 'alphabetic',
   });
   doc.restore();
 }
@@ -1390,7 +1576,12 @@ function renderArticles(doc: PDFKit.PDFDocument, data: CompanyExportData): void 
   );
 
   data.articles.forEach((a, i) => {
-    if (i > 0) ensureRoom(doc, 80, TITLE);
+    // Every article opens on a fresh page; the first starts under the
+    // section banner, the rest under the slim continuation banner.
+    if (i > 0) {
+      doc.addPage();
+      drawSlimBanner(doc, TITLE);
+    }
 
     doc.font(FONT_BOLD).fontSize(14).fillColor(C.ink)
       .text(pdfSafeUserText(a.title), MARGIN_X, doc.y, { width: CONTENT_WIDTH });
@@ -1408,19 +1599,28 @@ function renderArticles(doc: PDFKit.PDFDocument, data: CompanyExportData): void 
     doc.moveDown(0.4);
 
     renderArticleBody(doc, a, TITLE);
-    doc.moveDown(0.6);
-
-    // Soft separator between articles (only if there are more to come).
-    if (i < data.articles.length - 1) {
-      doc.save();
-      doc.strokeColor(C.ruleSoft).lineWidth(0.5)
-        .moveTo(MARGIN_X, doc.y)
-        .lineTo(MARGIN_X + CONTENT_WIDTH, doc.y)
-        .stroke();
-      doc.restore();
-      doc.moveDown(0.6);
-    }
   });
+}
+
+/**
+ * Single article representation: markdown. Tiptap documents project
+ * through the shared GFM walker so numbered lists, tables, task lists,
+ * code fences, and headings survive into the PDF instead of being
+ * flattened to plaintext (the old behavior dropped list numbering and
+ * table structure entirely).
+ */
+function articleMarkdown(
+  article: Pick<
+    ExportArticle,
+    'editorMode' | 'content' | 'markdownSource' | 'contentPlaintext'
+  >,
+): string {
+  if (article.editorMode === 'tiptap') {
+    const markdown = tiptapDocToMarkdown(article.content);
+    if (markdown) return markdown;
+    return article.contentPlaintext ?? '';
+  }
+  return article.markdownSource ?? article.contentPlaintext ?? '';
 }
 
 function renderArticleBody(
@@ -1428,56 +1628,382 @@ function renderArticleBody(
   article: ExportArticle,
   sectionTitle: string,
 ): void {
-  if (article.editorMode !== 'tiptap') {
-    renderArticleText(doc, article.contentPlaintext ?? '', sectionTitle);
-    return;
-  }
-
-  const segments = articleSegmentsFromTiptap(article.content);
-  if (segments.length === 0) {
-    renderArticleText(doc, article.contentPlaintext ?? '', sectionTitle);
-    return;
-  }
-
+  const markdown = articleMarkdown(article);
+  if (!markdown.trim()) return;
   const imagesById = new Map(
     article.images.map((image) => [image.uploadId.toLowerCase(), image]),
   );
-  for (const segment of segments) {
-    if (segment.kind === 'text') {
-      renderArticleText(doc, segment.text, sectionTitle);
+  renderMarkdownBlocks(
+    doc,
+    parseMarkdownBlocks(markdown),
+    imagesById,
+    MARGIN_X,
+    CONTENT_WIDTH,
+    sectionTitle,
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Markdown block rendering
+// ---------------------------------------------------------------------------
+
+const ARTICLE_TEXT_SIZE = 10;
+const CODE_TEXT_SIZE = 8.5;
+/** Body copy is 10pt under a 14pt article title; headings nest between. */
+const HEADING_SIZES: Record<number, number> = {
+  1: 13,
+  2: 12,
+  3: 11,
+  4: 10.5,
+  5: 10,
+  6: 9.5,
+};
+
+function renderMarkdownBlocks(
+  doc: PDFKit.PDFDocument,
+  blocks: MarkdownBlock[],
+  imagesById: Map<string, ExportArticle['images'][number]>,
+  x: number,
+  width: number,
+  sectionTitle: string,
+): void {
+  for (const block of blocks) {
+    renderMarkdownBlock(doc, block, imagesById, x, width, sectionTitle);
+  }
+}
+
+function renderMarkdownBlock(
+  doc: PDFKit.PDFDocument,
+  block: MarkdownBlock,
+  imagesById: Map<string, ExportArticle['images'][number]>,
+  x: number,
+  width: number,
+  sectionTitle: string,
+): void {
+  switch (block.kind) {
+    case 'heading': {
+      const size = HEADING_SIZES[block.level] ?? 9.5;
+      ensureRoom(doc, size * 2.6, sectionTitle);
+      doc.moveDown(0.35);
+      drawInlineRuns(doc, block.runs, x, width, {
+        size,
+        color: C.ink,
+        baseFont: FONT_BOLD,
+        sectionTitle,
+      });
+      doc.moveDown(0.2);
+      return;
+    }
+    case 'paragraph':
+      ensureRoom(doc, 26, sectionTitle);
+      drawInlineRuns(doc, block.runs, x, width, {
+        size: ARTICLE_TEXT_SIZE,
+        color: C.ink2,
+        baseFont: FONT_NORMAL,
+        sectionTitle,
+      });
+      doc.moveDown(0.4);
+      return;
+    case 'list':
+      renderMarkdownList(doc, block.items, imagesById, x, width, sectionTitle);
+      doc.moveDown(0.3);
+      return;
+    case 'code':
+      renderMarkdownCode(doc, block.lines, x, width, sectionTitle);
+      return;
+    case 'quote':
+      renderMarkdownQuote(doc, block, imagesById, x, width, sectionTitle);
+      return;
+    case 'table':
+      renderMarkdownTable(doc, block.rows, x, width, sectionTitle);
+      return;
+    case 'rule': {
+      ensureRoom(doc, 16, sectionTitle);
+      doc.moveDown(0.25);
+      const y = doc.y;
+      doc.save();
+      doc.strokeColor(C.rule).lineWidth(0.75)
+        .moveTo(x, y).lineTo(x + width, y).stroke();
+      doc.restore();
+      doc.moveDown(0.55);
+      return;
+    }
+    case 'image':
+      renderArticleImage(doc, imagesById, block, sectionTitle);
+      return;
+  }
+}
+
+interface InlineRunStyle {
+  size: number;
+  color: string;
+  baseFont: string;
+  sectionTitle: string;
+}
+
+/**
+ * Draw styled inline runs as one wrapped flow. PDFKit's `continued`
+ * option keeps a single line wrapper across calls, so font/color
+ * changes mid-paragraph reflow correctly; both packaged fonts share
+ * identical vertical metrics, so mixed-face lines keep one height.
+ */
+function drawInlineRuns(
+  doc: PDFKit.PDFDocument,
+  runs: MarkdownInlineRun[],
+  x: number,
+  width: number,
+  style: InlineRunStyle,
+): void {
+  const drawable = runs.filter((run) => run.text.length > 0);
+  if (drawable.length === 0) return;
+  doc.x = x;
+  drawable.forEach((run, index) => {
+    doc.font(run.bold || style.baseFont === FONT_BOLD ? FONT_BOLD : FONT_NORMAL)
+      .fontSize(style.size)
+      .fillColor(run.link ? C.cardAccent : run.code ? C.ink : style.color);
+    doc.text(pdfSafeUserText(run.text), {
+      width,
+      continued: index < drawable.length - 1,
+      ...(run.italic ? { oblique: true } : {}),
+      ...(run.strike ? { strike: true } : {}),
+    });
+  });
+  doc.x = MARGIN_X;
+}
+
+function renderMarkdownList(
+  doc: PDFKit.PDFDocument,
+  items: MarkdownListItem[],
+  imagesById: Map<string, ExportArticle['images'][number]>,
+  x: number,
+  width: number,
+  sectionTitle: string,
+): void {
+  doc.font(FONT_NORMAL).fontSize(ARTICLE_TEXT_SIZE);
+  const markerColumn = Math.max(
+    14,
+    ...items.map((item) =>
+      item.task ? 15 : doc.widthOfString(item.marker) + 6,
+    ),
+  );
+  for (const item of items) {
+    ensureRoom(doc, 22, sectionTitle);
+    const lineY = doc.y;
+    if (item.task) {
+      drawTaskCheckbox(doc, x, lineY, item.task === 'checked');
     } else {
-      renderArticleImage(doc, imagesById, segment, sectionTitle);
+      doc.font(FONT_NORMAL).fontSize(ARTICLE_TEXT_SIZE).fillColor(C.ink3)
+        .text(item.marker, x, lineY, {
+          width: markerColumn - 2,
+          lineBreak: false,
+        });
+      doc.y = lineY;
+    }
+    if (item.runs.length > 0) {
+      drawInlineRuns(doc, item.runs, x + markerColumn, width - markerColumn, {
+        size: ARTICLE_TEXT_SIZE,
+        color: C.ink2,
+        baseFont: FONT_NORMAL,
+        sectionTitle,
+      });
+    } else {
+      // Marker-only item (all content is nested blocks): keep the row.
+      doc.y = lineY + 14;
+    }
+    doc.moveDown(0.12);
+    for (const child of item.children) {
+      renderMarkdownBlock(
+        doc,
+        child,
+        imagesById,
+        x + markerColumn,
+        width - markerColumn,
+        sectionTitle,
+      );
     }
   }
 }
 
-function renderArticleText(
+/**
+ * Vector checkbox for task-list items. The packaged CJK fonts carry no
+ * ☐/☑ glyphs, and the old plaintext path leaked literal "[x]" markers
+ * into the PDF — drawing the mark keeps the semantics without tofu.
+ */
+function drawTaskCheckbox(
   doc: PDFKit.PDFDocument,
-  text: string,
+  x: number,
+  textTop: number,
+  checked: boolean,
+): void {
+  // Optically center an 8px box on the 10pt cap band (cap top sits
+  // ~4.3px below the line-box top with the packaged fonts).
+  const boxY = textTop + 3.9;
+  doc.save();
+  if (checked) {
+    doc.roundedRect(x + 0.5, boxY, 8, 8, 1.5)
+      .lineWidth(0.9)
+      .fillAndStroke(C.okBg, C.ok);
+    doc.moveTo(x + 2.6, boxY + 4.3)
+      .lineTo(x + 4.1, boxY + 5.8)
+      .lineTo(x + 6.6, boxY + 2.3)
+      .lineWidth(1.1)
+      .strokeColor(C.ok)
+      .stroke();
+  } else {
+    doc.roundedRect(x + 0.5, boxY, 8, 8, 1.5)
+      .lineWidth(0.9)
+      .strokeColor(C.ink4)
+      .stroke();
+  }
+  doc.restore();
+}
+
+/**
+ * Fenced code: a seamless run of per-line background strips (so page
+ * breaks need no box-height pre-measurement), preformatted text, no
+ * whitespace collapsing.
+ */
+function renderMarkdownCode(
+  doc: PDFKit.PDFDocument,
+  lines: string[],
+  x: number,
+  width: number,
   sectionTitle: string,
 ): void {
-  const clean = text.replace(/[ \t]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim();
-  if (!clean) return;
-  ensureRoom(doc, 28, sectionTitle);
-  doc.font(FONT_NORMAL).fontSize(10).fillColor(C.ink2)
-    .text(pdfSafeUserText(clean), MARGIN_X, doc.y, {
-      width: CONTENT_WIDTH,
-      align: 'left',
-      paragraphGap: 4,
-    });
-  doc.moveDown(0.3);
+  const content = lines.length > 0 ? lines : [''];
+  const innerX = x + 8;
+  const innerWidth = width - 16;
+  const pad = 4;
+  doc.moveDown(0.15);
+  ensureRoom(doc, 30, sectionTitle);
+  const paintPad = () => {
+    doc.save();
+    doc.rect(x, doc.y, width, pad).fill(C.cardBg);
+    doc.restore();
+    doc.y += pad;
+  };
+  paintPad();
+  for (const raw of content) {
+    const text = pdfSafeUserText(raw.replace(/\t/g, '  ')) || ' ';
+    doc.font(FONT_NORMAL).fontSize(CODE_TEXT_SIZE);
+    const lineHeight = doc.heightOfString(text, { width: innerWidth });
+    if (doc.y + lineHeight > pageBottomBoundary()) {
+      doc.addPage();
+      drawSlimBanner(doc, sectionTitle);
+      paintPad();
+    }
+    const lineY = doc.y;
+    doc.save();
+    doc.rect(x, lineY, width, lineHeight).fill(C.cardBg);
+    doc.restore();
+    doc.fillColor(C.ink2).text(text, innerX, lineY, { width: innerWidth });
+    doc.y = lineY + lineHeight;
+  }
+  paintPad();
+  doc.moveDown(0.5);
+}
+
+function renderMarkdownQuote(
+  doc: PDFKit.PDFDocument,
+  block: Extract<MarkdownBlock, { kind: 'quote' }>,
+  imagesById: Map<string, ExportArticle['images'][number]>,
+  x: number,
+  width: number,
+  sectionTitle: string,
+): void {
+  ensureRoom(doc, 26, sectionTitle);
+  const startY = doc.y;
+  const pagesBefore = doc.bufferedPageRange().count;
+  renderMarkdownBlocks(doc, block.blocks, imagesById, x + 14, width - 14, sectionTitle);
+  // The accent bar spans the quote on its final page; when the quote
+  // crossed a page break the earlier portion keeps its indent, which
+  // still reads as quoted.
+  const barTop = doc.bufferedPageRange().count === pagesBefore ? startY : 44;
+  const barHeight = doc.y - barTop - 6;
+  if (barHeight > 2) {
+    doc.save();
+    doc.rect(x + 2, barTop, 2.5, barHeight).fill(C.cardBorder);
+    doc.restore();
+  }
+  doc.moveDown(0.2);
+}
+
+function renderMarkdownTable(
+  doc: PDFKit.PDFDocument,
+  rows: string[][],
+  x: number,
+  width: number,
+  sectionTitle: string,
+): void {
+  if (rows.length === 0) return;
+  const columnCount = Math.max(1, ...rows.map((row) => row.length));
+  // Beyond eight columns the cells are too narrow to wrap readably —
+  // degrade to preformatted rows rather than emitting confetti.
+  if (columnCount > 8) {
+    renderMarkdownCode(
+      doc,
+      rows.map((row) => row.join(' | ')),
+      x,
+      width,
+      sectionTitle,
+    );
+    return;
+  }
+  const baseWidth = Math.floor(width / columnCount);
+  const widths = Array.from({ length: columnCount }, (_, index) =>
+    index === columnCount - 1 ? width - baseWidth * (columnCount - 1) : baseWidth,
+  );
+  const [headerCells, ...bodyRows] = rows as [string[], ...string[][]];
+  const table: TableSpec = {
+    title: sectionTitle,
+    headers: padCells(headerCells, columnCount).map((cell) => pdfSafeUserText(cell)),
+    widths,
+    x,
+  };
+  // A row taller than a continuation page cannot be drawn as a table
+  // row at all (see MAX_WRAPPED_ROW_HEIGHT). Degrade the whole table to
+  // preformatted rows — they paginate line-by-line and keep every
+  // cell's content, where a clamped table row would truncate it.
+  const pageTallRow = bodyRows.some((cells) =>
+    encodedWrappedRowHeight(
+      doc,
+      padCells(cells, columnCount).map((cell) => pdfSafeUserText(cell)),
+      table,
+    ) > MAX_WRAPPED_ROW_HEIGHT,
+  );
+  if (pageTallRow) {
+    renderMarkdownCode(
+      doc,
+      rows.map((row) => row.join(' | ')),
+      x,
+      width,
+      sectionTitle,
+    );
+    return;
+  }
+  doc.moveDown(0.15);
+  ensureRoom(doc, ROW_HEIGHT * 3, sectionTitle);
+  drawTableHeaderRow(doc, table);
+  bodyRows.forEach((cells, index) =>
+    wrappedTableRow(doc, padCells(cells, columnCount), table, index),
+  );
+  doc.moveDown(0.4);
+}
+
+function padCells(cells: string[], columnCount: number): string[] {
+  return Array.from({ length: columnCount }, (_, index) => cells[index] ?? '');
 }
 
 function renderArticleImage(
   doc: PDFKit.PDFDocument,
   imagesById: Map<string, ExportArticle['images'][number]>,
-  segment: Extract<ArticleSegment, { kind: 'image' }>,
+  block: Extract<MarkdownBlock, { kind: 'image' }>,
   sectionTitle: string,
 ): void {
-  const image = segment.uploadId
-    ? imagesById.get(segment.uploadId.toLowerCase())
+  const image = block.uploadId
+    ? imagesById.get(block.uploadId.toLowerCase())
     : undefined;
-  const label = image?.filename ?? segment.fallbackLabel ?? 'embedded image';
+  const label = image?.filename ?? block.label ?? 'embedded image';
 
   if (!image) {
     renderImageFallback(doc, label, 'not found', sectionTitle);
@@ -1534,67 +2060,435 @@ function renderImageFallback(
   doc.moveDown(0.35);
 }
 
-export function articleSegmentsFromTiptap(value: unknown): ArticleSegment[] {
-  const segments: ArticleSegment[] = [];
+// ---------------------------------------------------------------------------
+// Markdown block parsing (GFM subset, line-based, dependency-free)
+// ---------------------------------------------------------------------------
 
-  const appendText = (text: string) => {
-    if (!text) return;
-    const previous = segments[segments.length - 1];
-    if (previous?.kind === 'text') {
-      previous.text += text;
-      return;
-    }
-    segments.push({ kind: 'text', text });
+const FENCE_OPEN_RE = /^ {0,3}(`{3,}|~{3,})/;
+const HEADING_RE = /^ {0,3}(#{1,6})\s+(.*?)\s*#*\s*$/;
+const QUOTE_RE = /^ {0,3}>\s?(.*)$/;
+const RULE_RE = /^ {0,3}(?:(?:-[ \t]*){3,}|(?:\*[ \t]*){3,}|(?:_[ \t]*){3,})$/;
+const SETEXT_H1_RE = /^ {0,3}=+\s*$/;
+const SETEXT_H2_RE = /^ {0,3}-{2,}\s*$/;
+const LIST_ITEM_RE = /^(\s*)([-*+]|\d{1,9}[.)])\s+(\S.*)$/;
+const STANDALONE_IMAGE_RE =
+  /^ {0,3}!\[([^\]]*)\]\(([^()\s]+)(?:\s+"[^"]*")?\)\s*$/;
+const TABLE_DIVIDER_RE =
+  /^ {0,3}\|?[ \t]*:?-{2,}:?[ \t]*(?:\|[ \t]*:?-{2,}:?[ \t]*)*\|?\s*$/;
+const TASK_PREFIX_RE = /^\[([ xX])\]\s+(.*)$/;
+
+/**
+ * Parse markdown into the block model the PDF renderer draws. Coverage
+ * is the article editor's markdown dialect (what `tiptapDocToMarkdown`
+ * emits plus common hand-authored GFM): headings, setext H1, ordered /
+ * bullet / task lists with nesting, pipe tables, fenced code,
+ * blockquotes, thematic breaks, and upload-backed images. Unknown
+ * constructs degrade to paragraphs — never dropped.
+ */
+export function parseMarkdownBlocks(markdown: string): MarkdownBlock[] {
+  return parseBlockLines(markdown.replace(/\r\n?/g, '\n').split('\n'), 0);
+}
+
+/**
+ * Nesting cap for quotes and lists. Parsing recurses once per level, so
+ * without a cap a crafted article (500KB of ">" fits the source limit)
+ * would overflow the stack and kill the export job. Beyond the cap,
+ * deeper structure degrades to paragraph text.
+ */
+const MARKDOWN_MAX_NESTING = 12;
+
+function parseBlockLines(lines: string[], depth: number): MarkdownBlock[] {
+  const blocks: MarkdownBlock[] = [];
+  let paragraph: string[] = [];
+
+  const flushParagraph = (): void => {
+    if (paragraph.length === 0) return;
+    const runs = parseInlineRuns(paragraph.join('\n'));
+    paragraph = [];
+    if (runs.length > 0) blocks.push({ kind: 'paragraph', runs });
   };
 
-  const walk = (node: unknown): void => {
-    if (!node || typeof node !== 'object') return;
-    const n = node as {
-      type?: string;
-      text?: string;
-      attrs?: Record<string, unknown>;
-      content?: unknown[];
-    };
+  for (let index = 0; index < lines.length; ) {
+    const line = lines[index]!;
 
-    if (n.type === 'text' && typeof n.text === 'string') {
-      appendText(n.text);
-      return;
-    }
-    if (n.type === 'hardBreak' || n.type === 'horizontalRule') {
-      appendText('\n');
-      return;
-    }
-    if (n.type === 'mention' || n.type === 'internalLink') {
-      const label = stringAttr(n.attrs, 'label') ?? stringAttr(n.attrs, 'title');
-      if (label) appendText(label);
-      return;
-    }
-    if (n.type === 'image') {
-      const src = stringAttr(n.attrs, 'src');
-      const uploadId = src ? extractUploadId(src) : null;
-      const fallbackLabel =
-        stringAttr(n.attrs, 'alt') ?? stringAttr(n.attrs, 'title') ?? uploadId;
-      segments.push({ kind: 'image', uploadId, fallbackLabel });
-      return;
+    if (line.trim().length === 0) {
+      flushParagraph();
+      index += 1;
+      continue;
     }
 
-    const children = Array.isArray(n.content) ? n.content : [];
-    for (const child of children) walk(child);
-    if (n.type && TIPTAP_BLOCK_TYPES.has(n.type)) appendText('\n');
-  };
+    const fence = FENCE_OPEN_RE.exec(line);
+    if (fence) {
+      flushParagraph();
+      const marker = fence[1]!;
+      const codeLines: string[] = [];
+      index += 1;
+      while (index < lines.length && !closesFence(lines[index]!, marker)) {
+        codeLines.push(lines[index]!);
+        index += 1;
+      }
+      index += 1; // closing fence (or EOF)
+      blocks.push({ kind: 'code', lines: codeLines });
+      continue;
+    }
 
-  walk(value);
-  return segments.filter((segment) =>
-    segment.kind === 'image' ? true : segment.text.trim().length > 0,
+    const heading = HEADING_RE.exec(line);
+    if (heading) {
+      flushParagraph();
+      blocks.push({
+        kind: 'heading',
+        level: heading[1]!.length,
+        runs: parseInlineRuns(heading[2]!),
+      });
+      index += 1;
+      continue;
+    }
+
+    if (paragraph.length > 0 && SETEXT_H1_RE.test(line)) {
+      const runs = parseInlineRuns(paragraph.join('\n'));
+      paragraph = [];
+      blocks.push({ kind: 'heading', level: 1, runs });
+      index += 1;
+      continue;
+    }
+    if (paragraph.length > 0 && SETEXT_H2_RE.test(line)) {
+      const runs = parseInlineRuns(paragraph.join('\n'));
+      paragraph = [];
+      blocks.push({ kind: 'heading', level: 2, runs });
+      index += 1;
+      continue;
+    }
+
+    if (RULE_RE.test(line)) {
+      flushParagraph();
+      blocks.push({ kind: 'rule' });
+      index += 1;
+      continue;
+    }
+
+    if (QUOTE_RE.test(line) && depth < MARKDOWN_MAX_NESTING) {
+      flushParagraph();
+      const quoted: string[] = [];
+      while (index < lines.length) {
+        const quoteLine = QUOTE_RE.exec(lines[index]!);
+        if (!quoteLine) break;
+        quoted.push(quoteLine[1]!);
+        index += 1;
+      }
+      blocks.push({ kind: 'quote', blocks: parseBlockLines(quoted, depth + 1) });
+      continue;
+    }
+
+    const image = STANDALONE_IMAGE_RE.exec(line);
+    if (image) {
+      flushParagraph();
+      const uploadId = extractUploadId(image[2]!);
+      blocks.push({ kind: 'image', uploadId, label: image[1] || uploadId });
+      index += 1;
+      continue;
+    }
+
+    if (isTableStart(lines, index)) {
+      flushParagraph();
+      const rows: string[][] = [splitTableRow(lines[index]!)];
+      index += 2; // header + divider
+      while (
+        index < lines.length &&
+        lines[index]!.includes('|') &&
+        lines[index]!.trim().length > 0 &&
+        !LIST_ITEM_RE.test(lines[index]!)
+      ) {
+        rows.push(splitTableRow(lines[index]!));
+        index += 1;
+      }
+      blocks.push({ kind: 'table', rows });
+      continue;
+    }
+
+    const listStart = LIST_ITEM_RE.exec(line);
+    // GFM: bullet lists interrupt paragraphs freely; ordered lists only
+    // when numbered 1 (so prose like "1986. A fine year" stays prose).
+    if (
+      listStart &&
+      depth < MARKDOWN_MAX_NESTING &&
+      (paragraph.length === 0 || /^(?:[-*+]|1[.)])$/.test(listStart[2]!))
+    ) {
+      flushParagraph();
+      const parsed = parseListAt(lines, index, depth);
+      blocks.push(parsed.block);
+      index = parsed.next;
+      continue;
+    }
+
+    paragraph.push(line);
+    index += 1;
+  }
+  flushParagraph();
+  return blocks;
+}
+
+function closesFence(line: string, opener: string): boolean {
+  const close = /^ {0,3}(`{3,}|~{3,})\s*$/.exec(line);
+  return Boolean(
+    close &&
+      close[1]![0] === opener[0] &&
+      close[1]!.length >= opener.length,
   );
 }
 
-function stringAttr(
-  attrs: Record<string, unknown> | undefined,
-  key: string,
-): string | null {
-  const value = attrs?.[key];
-  return typeof value === 'string' && value.length > 0 ? value : null;
+function isTableStart(lines: string[], index: number): boolean {
+  const line = lines[index]!;
+  const divider = lines[index + 1];
+  return (
+    line.includes('|') &&
+    divider !== undefined &&
+    divider.includes('|') &&
+    TABLE_DIVIDER_RE.test(divider) &&
+    splitTableRow(line).length > 0
+  );
+}
+
+/**
+ * Split a row on unescaped pipes. A pipe is a delimiter only when
+ * preceded by an EVEN number of backslashes: `\|` is a literal pipe,
+ * but `\\|` is an escaped (literal) backslash followed by a delimiter —
+ * a naive `\|`-replace gets that parity wrong and merges the cells.
+ * Cells keep their raw text, backslashes included; the backslash
+ * escapes themselves are decoded later by `inlinePlaintext`.
+ */
+function splitOnUnescapedPipes(content: string): string[] {
+  const cells: string[] = [];
+  let current = '';
+  let backslashes = 0;
+  for (const character of content) {
+    if (character === '\\') {
+      backslashes += 1;
+      current += character;
+      continue;
+    }
+    if (character === '|' && backslashes % 2 === 0) {
+      cells.push(current);
+      current = '';
+    } else {
+      current += character;
+    }
+    backslashes = 0;
+  }
+  cells.push(current);
+  return cells;
+}
+
+/**
+ * Split a pipe-table row into plaintext cells: split on unescaped
+ * pipes, drop the empty edge cells produced by wrapping delimiters
+ * (interior empty cells are real; a trailing `\|` never splits, so its
+ * cell survives intact), fold `<br>` back to newlines, and strip
+ * inline markdown down to its visible text.
+ */
+function splitTableRow(line: string): string[] {
+  const cells = splitOnUnescapedPipes(line.trim());
+  if (cells.length > 1 && cells[0]!.trim() === '') cells.shift();
+  if (cells.length > 1 && cells[cells.length - 1]!.trim() === '') cells.pop();
+  return cells.map((cell) =>
+    inlinePlaintext(cell.replace(/<br\s*\/?>/gi, '\n').trim()),
+  );
+}
+
+function parseListAt(
+  lines: string[],
+  start: number,
+  depth: number,
+): { block: MarkdownBlock; next: number } {
+  const items: MarkdownListItem[] = [];
+  const baseIndent = LIST_ITEM_RE.exec(lines[start]!)![1]!.length;
+  let index = start;
+
+  while (index < lines.length) {
+    const head = LIST_ITEM_RE.exec(lines[index]!);
+    if (!head) break;
+    const marker = head[2]!;
+    const contentIndent = head[1]!.length + marker.length + 1;
+    const contentLines: string[] = [head[3]!];
+    index += 1;
+
+    while (index < lines.length) {
+      const line = lines[index]!;
+      if (line.trim().length === 0) {
+        // Blank inside an item survives only when indented content
+        // follows; otherwise the list (or this item) has ended.
+        const following = lines[index + 1];
+        if (
+          following !== undefined &&
+          following.trim().length > 0 &&
+          leadingSpaces(following) >= contentIndent
+        ) {
+          contentLines.push('');
+          index += 1;
+          continue;
+        }
+        break;
+      }
+      const itemMatch = LIST_ITEM_RE.exec(line);
+      if (itemMatch && itemMatch[1]!.length <= baseIndent + 1) break;
+      if (leadingSpaces(line) >= contentIndent || itemMatch) {
+        // Nested block or continuation — dedent to the item's column.
+        contentLines.push(line.slice(Math.min(contentIndent, leadingSpaces(line))));
+        index += 1;
+        continue;
+      }
+      // Lazy continuation of the item's opening paragraph.
+      contentLines.push(line);
+      index += 1;
+    }
+
+    items.push(buildListItem(marker, contentLines, depth));
+
+    // Blank lines between items keep the list alive when a sibling
+    // item follows.
+    let lookahead = index;
+    while (lookahead < lines.length && lines[lookahead]!.trim().length === 0) {
+      lookahead += 1;
+    }
+    const sibling =
+      lookahead < lines.length ? LIST_ITEM_RE.exec(lines[lookahead]!) : null;
+    if (
+      sibling &&
+      sibling[1]!.length >= baseIndent &&
+      sibling[1]!.length <= baseIndent + 1
+    ) {
+      index = lookahead;
+      continue;
+    }
+    break;
+  }
+  return { block: { kind: 'list', items }, next: index };
+}
+
+function leadingSpaces(line: string): number {
+  return line.length - line.trimStart().length;
+}
+
+function buildListItem(
+  marker: string,
+  contentLines: string[],
+  depth: number,
+): MarkdownListItem {
+  let task: MarkdownListItem['task'] = null;
+  let firstLine = contentLines[0] ?? '';
+  const taskMatch = TASK_PREFIX_RE.exec(firstLine);
+  if (taskMatch) {
+    task = taskMatch[1] === ' ' ? 'unchecked' : 'checked';
+    firstLine = taskMatch[2]!;
+  }
+  const blocks = parseBlockLines([firstLine, ...contentLines.slice(1)], depth + 1);
+  const [headBlock, ...rest] = blocks;
+  if (headBlock && headBlock.kind === 'paragraph') {
+    return { marker: displayMarker(marker), task, runs: headBlock.runs, children: rest };
+  }
+  return { marker: displayMarker(marker), task, runs: [], children: blocks };
+}
+
+function displayMarker(marker: string): string {
+  if (marker === '-' || marker === '*' || marker === '+') return '•';
+  return marker.endsWith(')') ? `${marker.slice(0, -1)}.` : marker;
+}
+
+// ---------------------------------------------------------------------------
+// Inline markdown parsing
+// ---------------------------------------------------------------------------
+
+// Ordered alternation: code spans bind tightest, then images/links,
+// then emphasis. Underscore emphasis is deliberately not parsed —
+// runbook text is full of snake_case identifiers, and the article
+// editor's own projection only ever emits `*` emphasis.
+const INLINE_TOKEN_RE = new RegExp(
+  [
+    '(?<codeticks>`+)(?<code>[\\s\\S]+?)\\k<codeticks>',
+    '!\\[(?<imgalt>[^\\]]*)\\]\\((?<imgsrc>[^()\\s]+)(?:\\s+"[^"]*")?\\)',
+    '\\[(?<linklabel>[^\\]]+)\\]\\((?<linkhref>[^()\\s]+)(?:\\s+"[^"]*")?\\)',
+    '\\*\\*(?<bold>\\S|\\S[\\s\\S]*?\\S)\\*\\*',
+    '\\*(?<italic>\\S|\\S[^*\\n]*?\\S)\\*',
+    '~~(?<strike>\\S|\\S[\\s\\S]*?\\S)~~',
+    '<br\\s*/?>',
+  ].join('|'),
+  'gi',
+);
+
+const MARKDOWN_ESCAPE_RE = /\\([\\`*_{}[\]()#+\-.!|~<>"'])/g;
+
+type InlineStyleFlags = Pick<
+  MarkdownInlineRun,
+  'bold' | 'italic' | 'code' | 'strike' | 'link'
+>;
+
+function parseInlineRuns(
+  text: string,
+  base: InlineStyleFlags = {},
+): MarkdownInlineRun[] {
+  const runs: MarkdownInlineRun[] = [];
+  appendInlineRuns(runs, text, base);
+  return runs.filter((run) => run.text.length > 0);
+}
+
+function appendInlineRuns(
+  runs: MarkdownInlineRun[],
+  text: string,
+  base: InlineStyleFlags,
+): void {
+  const push = (value: string, flags: InlineStyleFlags): void => {
+    if (!value) return;
+    const previous = runs[runs.length - 1];
+    if (previous && sameInlineStyle(previous, flags)) {
+      previous.text += value;
+      return;
+    }
+    runs.push({ text: value, ...flags });
+  };
+
+  let cursor = 0;
+  INLINE_TOKEN_RE.lastIndex = 0;
+  for (const match of text.matchAll(INLINE_TOKEN_RE)) {
+    push(unescapeMarkdown(text.slice(cursor, match.index)), base);
+    cursor = match.index + match[0].length;
+    const groups = match.groups ?? {};
+    if (groups['code'] !== undefined) {
+      push(groups['code'], { ...base, code: true });
+    } else if (groups['imgsrc'] !== undefined) {
+      // Inline (non-standalone) image: keep the alt text in the flow.
+      push(unescapeMarkdown(groups['imgalt'] ?? ''), base);
+    } else if (groups['linklabel'] !== undefined) {
+      appendInlineRuns(runs, groups['linklabel'], { ...base, link: true });
+    } else if (groups['bold'] !== undefined) {
+      appendInlineRuns(runs, groups['bold'], { ...base, bold: true });
+    } else if (groups['italic'] !== undefined) {
+      appendInlineRuns(runs, groups['italic'], { ...base, italic: true });
+    } else if (groups['strike'] !== undefined) {
+      appendInlineRuns(runs, groups['strike'], { ...base, strike: true });
+    } else {
+      push('\n', base); // <br>
+    }
+  }
+  push(unescapeMarkdown(text.slice(cursor)), base);
+}
+
+function sameInlineStyle(run: MarkdownInlineRun, flags: InlineStyleFlags): boolean {
+  return (
+    Boolean(run.bold) === Boolean(flags.bold) &&
+    Boolean(run.italic) === Boolean(flags.italic) &&
+    Boolean(run.code) === Boolean(flags.code) &&
+    Boolean(run.strike) === Boolean(flags.strike) &&
+    Boolean(run.link) === Boolean(flags.link)
+  );
+}
+
+function unescapeMarkdown(text: string): string {
+  return text.replace(MARKDOWN_ESCAPE_RE, '$1');
+}
+
+function inlinePlaintext(text: string): string {
+  return parseInlineRuns(text)
+    .map((run) => run.text)
+    .join('');
 }
 
 function extractUploadId(src: string): string | null {

@@ -719,6 +719,27 @@ describe('CompanyExportDataService reconstruction export', () => {
     await expect(service.gather(ids.company, { includePasswords: false }))
       .rejects.toThrow(/subnets exceeded the bounded export limit/i);
   });
+
+  it('reports breezeIntegrationActive from an enabled, non-disabled breeze mapping', async () => {
+    const { prisma, service } = setup();
+
+    const inactive = await service.gather(ids.company, { includePasswords: false });
+    expect(inactive.breezeIntegrationActive).toBe(false);
+    // Scoped to THIS company's enabled mappings on a live breeze driver
+    // — the query is the authorization boundary, not post-filtering.
+    expect(prisma.integrationCompanyMapping.findFirst).toHaveBeenCalledWith({
+      where: {
+        companyId: ids.company,
+        enabled: true,
+        integration: { driver: 'breeze', status: { not: 'DISABLED' } },
+      },
+      select: { id: true },
+    });
+
+    prisma.integrationCompanyMapping.findFirst.mockResolvedValueOnce({ id: ids.mapping });
+    const active = await service.gather(ids.company, { includePasswords: false });
+    expect(active.breezeIntegrationActive).toBe(true);
+  });
 });
 
 function setup() {
@@ -739,6 +760,7 @@ function setup() {
     integrationReconstructionSummary: { findMany: jest.fn().mockResolvedValue([]) },
     integrationReconstructionGap: { findMany: jest.fn().mockResolvedValue([]) },
     integrationSyncRecord: { findMany: jest.fn().mockResolvedValue([]) },
+    integrationCompanyMapping: { findFirst: jest.fn().mockResolvedValue(null) },
   };
   const crypto = { decrypt: jest.fn() };
   const service = new CompanyExportDataService(prisma as never, crypto as never);

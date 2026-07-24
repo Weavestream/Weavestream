@@ -243,6 +243,13 @@ export interface CompanyExportData {
     gaps: ExportSafeReconstructionGap[];
     provenance: ExportSourceProvenance[];
   };
+  /**
+   * True when the company has an enabled mapping on a non-disabled
+   * Breeze integration. The PDF renders the reconstruction dossier
+   * only for such companies — for everyone else the section is
+   * inapplicable noise.
+   */
+  breezeIntegrationActive: boolean;
   exportedAt: Date;
   includePasswords: boolean;
 }
@@ -312,6 +319,7 @@ export class CompanyExportDataService {
       ipam,
       relations,
       reconstruction,
+      breezeIntegrationActive,
     ] =
       await Promise.all([
         this.fetchCompany(companyId),
@@ -325,6 +333,7 @@ export class CompanyExportDataService {
         this.fetchIpam(companyId, bindings),
         this.fetchRelations(companyId, bindings),
         this.fetchReconstruction(companyId, bindings),
+        this.fetchBreezeIntegrationActive(companyId),
       ]);
 
     if (!company) throw new Error(`Company ${companyId} not found`);
@@ -341,6 +350,7 @@ export class CompanyExportDataService {
       ipam,
       relations,
       reconstruction,
+      breezeIntegrationActive,
       exportedAt: new Date(),
       includePasswords: opts.includePasswords,
     };
@@ -436,6 +446,25 @@ export class CompanyExportDataService {
       byTarget.set(key, [...(byTarget.get(key) ?? []), binding]);
     }
     return { all, byTarget };
+  }
+
+  /**
+   * Whether this company currently has Breeze set up: an enabled
+   * company mapping whose integration runs the breeze driver and is
+   * not DISABLED. PAUSED still counts — a temporarily paused sync
+   * leaves the dossier's last-known state meaningful, while DISABLED
+   * (or no mapping) means the feature is off for this customer.
+   */
+  private async fetchBreezeIntegrationActive(companyId: string): Promise<boolean> {
+    const mapping = await this.prisma.integrationCompanyMapping.findFirst({
+      where: {
+        companyId,
+        enabled: true,
+        integration: { driver: 'breeze', status: { not: 'DISABLED' } },
+      },
+      select: { id: true },
+    });
+    return mapping !== null;
   }
 
   private async fetchWorkspaceName(): Promise<string> {

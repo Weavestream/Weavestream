@@ -1,7 +1,7 @@
 import {
-  articleSegmentsFromTiptap,
   buildCompanyExportPdf,
   formatAssetFieldValue,
+  parseMarkdownBlocks,
   pdfEmbedSizeBlockReason,
   pdfSafeUserText,
   richTextToPlaintext,
@@ -90,36 +90,131 @@ describe('PDF export formatting helpers', () => {
     );
   });
 
-  it('turns Tiptap image nodes into image segments, not filename text', () => {
-    const segments = articleSegmentsFromTiptap({
-      type: 'doc',
-      content: [
-        {
-          type: 'paragraph',
-          content: [{ type: 'text', text: 'Before image' }],
-        },
-        {
-          type: 'image',
-          attrs: {
-            src: `/api/v1/companies/${COMPANY_ID}/uploads/${UPLOAD_ID}/image`,
-            alt: '94a9686619cabcaa31ab5d59308af037.png',
-          },
-        },
-        {
-          type: 'paragraph',
-          content: [{ type: 'text', text: 'After image' }],
-        },
-      ],
-    });
+});
 
-    expect(segments).toEqual([
-      { kind: 'text', text: 'Before image\n' },
+describe('parseMarkdownBlocks', () => {
+  it('extracts headings, nested lists, tables, and upload-backed images', () => {
+    const blocks = parseMarkdownBlocks([
+      '## Steps',
+      '',
+      '1. First',
+      '2. Second',
+      '   - nested note',
+      '',
+      '| A | B |',
+      '| --- | --- |',
+      '| 1 | pipe \\| kept |',
+      '',
+      `![diagram.png](/api/v1/companies/${COMPANY_ID}/uploads/${UPLOAD_ID}/image)`,
+    ].join('\n'));
+
+    expect(blocks).toEqual([
+      { kind: 'heading', level: 2, runs: [{ text: 'Steps' }] },
       {
-        kind: 'image',
-        uploadId: UPLOAD_ID,
-        fallbackLabel: '94a9686619cabcaa31ab5d59308af037.png',
+        kind: 'list',
+        items: [
+          expect.objectContaining({
+            marker: '1.',
+            task: null,
+            runs: [{ text: 'First' }],
+            children: [],
+          }),
+          expect.objectContaining({
+            marker: '2.',
+            task: null,
+            runs: [{ text: 'Second' }],
+            children: [
+              {
+                kind: 'list',
+                items: [
+                  expect.objectContaining({
+                    marker: '•',
+                    runs: [{ text: 'nested note' }],
+                  }),
+                ],
+              },
+            ],
+          }),
+        ],
       },
-      { kind: 'text', text: 'After image\n' },
+      { kind: 'table', rows: [['A', 'B'], ['1', 'pipe | kept']] },
+      { kind: 'image', uploadId: UPLOAD_ID, label: 'diagram.png' },
+    ]);
+  });
+
+  it('parses task items and inline styling without leaking syntax', () => {
+    const blocks = parseMarkdownBlocks('- [x] Done **now** `code`\n- [ ] Later');
+
+    expect(blocks).toEqual([{
+      kind: 'list',
+      items: [
+        expect.objectContaining({
+          task: 'checked',
+          runs: [
+            { text: 'Done ' },
+            { text: 'now', bold: true },
+            { text: ' ' },
+            { text: 'code', code: true },
+          ],
+        }),
+        expect.objectContaining({ task: 'unchecked', runs: [{ text: 'Later' }] }),
+      ],
+    }]);
+  });
+
+  it('splits table rows on unescaped pipes only (backslash parity)', () => {
+    // Cell projections escape backslashes first, then pipes, so:
+    //   `\|`  = literal pipe (no split)
+    //   `\\|` = literal backslash, then a real delimiter (split)
+    //   trailing `\|` without a closing delimiter keeps its cell.
+    const blocks = parseMarkdownBlocks([
+      '| A | B |',
+      '| --- | --- |',
+      '| C:\\\\temp\\|dir | plain |',
+      '| keep\\\\ | split |',
+      'c | trailing\\|',
+    ].join('\n'));
+
+    expect(blocks).toEqual([{
+      kind: 'table',
+      rows: [
+        ['A', 'B'],
+        ['C:\\temp|dir', 'plain'],
+        ['keep\\', 'split'],
+        ['c', 'trailing|'],
+      ],
+    }]);
+  });
+
+  it('caps quote/list nesting instead of recursing per level (stack safety)', () => {
+    // 40k ">" fits well inside the 500KB article source limit; parsing
+    // must not recurse once per marker.
+    const deepQuote = `${'>'.repeat(40_000)} bottom`;
+    const deepList = Array.from({ length: 200 }, (_, level) =>
+      `${' '.repeat(level * 2)}- level ${level}`).join('\n');
+
+    expect(() => parseMarkdownBlocks(deepQuote)).not.toThrow();
+    expect(() => parseMarkdownBlocks(deepList)).not.toThrow();
+
+    // Content beyond the cap degrades to text — never dropped.
+    expect(JSON.stringify(parseMarkdownBlocks(deepQuote))).toContain('bottom');
+    expect(JSON.stringify(parseMarkdownBlocks(deepList))).toContain('level 199');
+  });
+
+  it('keeps fenced code verbatim and blockquotes structured', () => {
+    const blocks = parseMarkdownBlocks(
+      '```bash\npg_ctl promote -D /data\n```\n\n> Escalate **fast**.',
+    );
+
+    expect(blocks).toEqual([
+      { kind: 'code', lines: ['pg_ctl promote -D /data'] },
+      {
+        kind: 'quote',
+        blocks: [{
+          kind: 'paragraph',
+          runs: [{ text: 'Escalate ' }, { text: 'fast', bold: true }, { text: '.' }],
+        }],
+      },
     ]);
   });
 });
@@ -186,6 +281,166 @@ describe('standalone reconstruction dossier PDF', () => {
     expect(text).toContain('No relationships or dependency links.');
     expect(text).toContain('Reconstruction Dossier');
     expect(text).toContain('No reconstruction summaries, gaps, or source provenance.');
+  });
+
+  it('omits the reconstruction dossier entirely when Breeze is not active', async () => {
+    const pdf = await buildCompanyExportPdf(
+      companyPdfTestFixture({ breezeIntegrationActive: false }),
+    );
+    const text = extractPdfText(pdf);
+
+    // Neither the section banner nor the cover-page contents row.
+    expect(text).not.toMatch(/Reconstruction [Dd]ossier/);
+    expect(text).not.toMatch(/Synchronized current/i);
+    expect(text).not.toContain('Source provenance and age');
+    // Every other section still renders.
+    expect(text).toContain('Relationships / Topology');
+    expect(text).toContain('IP Address Management');
+    expect(text).toContain('Monitored Domains');
+  });
+
+  it('starts every article on a fresh page', async () => {
+    const base = companyPdfTestFixture();
+    const data = companyPdfTestFixture({
+      articles: [
+        {
+          ...base.articles[0]!,
+          title: 'First Runbook',
+          markdownSource: 'Alpha body.',
+          contentPlaintext: null,
+        },
+        {
+          ...base.articles[0]!,
+          id: '00000000-0000-4000-8000-000000000042',
+          title: 'Second Runbook',
+          markdownSource: 'Beta body.',
+          contentPlaintext: null,
+        },
+      ],
+    });
+
+    const text = extractPdfText(await buildCompanyExportPdf(data));
+
+    // Both articles easily fit one page — the break is forced, so the
+    // second article sits under a slim continuation banner.
+    expect(text).toContain('First Runbook');
+    expect(text).toContain('Second Runbook');
+    expect(text).toContain('Articles (continued)');
+    const continuedAt = text.indexOf('Articles (continued)');
+    expect(continuedAt).toBeGreaterThan(text.indexOf('Alpha body.'));
+    expect(continuedAt).toBeLessThan(text.indexOf('Second Runbook'));
+  });
+
+  it('truncates oversized table headers without stalling the worker', async () => {
+    const base = companyPdfTestFixture();
+    // Body cells stay small so the table renders as a table and the
+    // header actually reaches the ellipsis truncation path.
+    const markdownSource = [
+      `| ${'H'.repeat(5_000)} | Status |`,
+      '| --- | --- |',
+      '| ok | fine |',
+      '',
+      'AFTER-WIDE-TABLE',
+    ].join('\n');
+    const data = companyPdfTestFixture({
+      articles: [{ ...base.articles[0]!, markdownSource, contentPlaintext: null }],
+    });
+
+    const started = Date.now();
+    const text = extractPdfText(await buildCompanyExportPdf(data));
+
+    // The quadratic drop-one-rescan-all truncation took >30s on this
+    // input; the binary search finishes with the whole build in well
+    // under this generous bound.
+    expect(Date.now() - started).toBeLessThan(10_000);
+    expect(text).toContain('…');
+    expect(text).toContain('Status');
+    expect(text).toContain('fine');
+    expect(text).toContain('AFTER-WIDE-TABLE');
+  });
+
+  it('degrades page-tall table rows to preformatted text instead of corrupting pagination', async () => {
+    const base = companyPdfTestFixture();
+    // ~400 words in one cell measures far beyond one page at the
+    // two-column cell width — undrawable as a single table row.
+    const huge = Array.from({ length: 400 }, (_, index) => `cellword${index}`).join(' ');
+    const markdownSource = [
+      '# Big Table',
+      '',
+      '| Key | Value |',
+      '| --- | --- |',
+      `| big | ${huge} |`,
+      '',
+      'AFTER-TABLE-PARAGRAPH',
+    ].join('\n');
+    const data = companyPdfTestFixture({
+      articles: [{ ...base.articles[0]!, markdownSource, contentPlaintext: null }],
+    });
+
+    const { text, pages } = inspectPdf(await buildCompanyExportPdf(data));
+
+    // Every cell survives (preformatted, not clamped), and the flow
+    // after the table stays in order — doc.y was not corrupted.
+    expect(text).toContain('cellword0');
+    expect(text).toContain('cellword399');
+    expect(text).toContain('AFTER-TABLE-PARAGRAPH');
+    expect(text.indexOf('AFTER-TABLE-PARAGRAPH'))
+      .toBeGreaterThan(text.indexOf('cellword399'));
+    expect(pages).toBeGreaterThan(2);
+    expect(text).toMatch(/Page \d+ of \d+/);
+  });
+
+  it('renders article markdown structure: numbering, tables, tasks, code, symbols', async () => {
+    const base = companyPdfTestFixture();
+    const markdownSource = [
+      '# Failover Runbook',
+      '',
+      'Promote the standby, then verify replication → lag stays low.',
+      '',
+      '1. Stop application traffic.',
+      '2. Promote the standby database.',
+      '3. Update DNS records.',
+      '',
+      '- [x] Snapshot taken',
+      '- [ ] Stakeholders notified',
+      '',
+      '| Host | Role | VLAN |',
+      '| --- | --- | --- |',
+      '| db-01 | primary | 30 |',
+      '| db-02 | standby \\| reserve | 40 |',
+      '',
+      '```bash',
+      'pg_ctl promote -D /var/lib/postgres',
+      '```',
+      '',
+      '> Escalate to on-call if replication stalls.',
+    ].join('\n');
+    const data = companyPdfTestFixture({
+      articles: [{ ...base.articles[0]!, markdownSource, contentPlaintext: null }],
+    });
+
+    const text = extractPdfText(await buildCompanyExportPdf(data));
+
+    expect(text).toContain('Failover Runbook');
+    // Ordered lists keep their numbering.
+    expect(text).toContain('3.');
+    expect(text).toContain('Update DNS records.');
+    // Task items draw vector checkboxes — no "[x]" marker artifacts.
+    expect(text).toContain('Snapshot taken');
+    expect(text).toContain('Stakeholders notified');
+    expect(text).not.toContain('[x]');
+    expect(text).not.toContain('- [ ]');
+    // Table cells survive, including escaped pipes.
+    expect(text).toContain('VLAN');
+    expect(text).toContain('db-01');
+    expect(text).toContain('standby | reserve');
+    // Fenced code keeps its content, sheds its fences.
+    expect(text).toContain('pg_ctl promote -D /var/lib/postgres');
+    expect(text).not.toContain('```');
+    // Arrows are packaged glyphs — literal, never [U+2192] markers.
+    expect(text).toContain('→');
+    expect(text).not.toContain('[U+2192]');
+    expect(text).toContain('Escalate to on-call if replication stalls.');
   });
 
   it('paginates long tables and wraps long safe messages with continuation context', async () => {
@@ -279,7 +534,7 @@ describe('standalone reconstruction dossier PDF', () => {
       articles: [{
         ...base.articles[0]!,
         title: '復旧手順 — Процедура',
-        contentPlaintext: 'サーバーを復元します。 Проверить сеть. 😀',
+        markdownSource: 'サーバーを復元します。 Проверить сеть. 😀',
       }],
       relations: [{
         ...base.relations[0]!,
@@ -319,6 +574,45 @@ describe('standalone reconstruction dossier PDF', () => {
     expect(fonts).not.toMatch(/\bno\b/i);
   });
 
+  it('normalizes exotic prose spaces to plain space while credentials stay flagged', async () => {
+    const base = companyPdfTestFixture();
+    const data: CompanyExportData = {
+      ...base,
+      includePasswords: true,
+      articles: [{
+        ...base.articles[0]!,
+        title: 'Why Organizations Choose Rocky Linux\u202F9',
+        markdownSource: 'Version\u00A09 ships\u2009fast.',
+        contentPlaintext: null,
+      }],
+      passwords: [{
+        ...base.passwords[0]!,
+        password: 'secret\u202Fwith-nnbsp',
+        totpSecret: 'OTP\u00A0SECRET',
+        notes: null,
+      }],
+    };
+
+    const text = extractPdfText(await buildCompanyExportPdf(data));
+
+    // Prose: NBSP/NNBSP/thin space collapse to plain space — words stay
+    // joined by a real space instead of "[U+202F]" marker noise.
+    expect(text).toContain('Why Organizations Choose Rocky Linux 9');
+    expect(text).toContain('Version 9 ships fast.');
+    expect(text).not.toContain('Rocky Linux[U+202F]9');
+    expect(text).not.toContain('Version[U+00A0]9');
+    expect(text).not.toContain('ships[U+2009]fast');
+
+    // Credentials never take the normalization path (CR-020): the same
+    // separators stay byte-exact-or-flagged with the explicit note.
+    expect(text).toContain('secret[U+202F]with-nnbsp');
+    expect(text).toContain('OTP[U+00A0]SECRET');
+    expect(text.match(/Not literal/g) ?? []).toHaveLength(2);
+
+    // U+3000 is intentional CJK typography and provably renderable.
+    expect(pdfSafeUserText('全角\u3000スペース')).toBe('全角\u3000スペース');
+  });
+
   it('flags unrenderable credentials explicitly and encodes prose deterministically', async () => {
     const base = companyPdfTestFixture();
     const password = 'Pass😀-1️⃣-🇺🇸';
@@ -333,7 +627,7 @@ describe('standalone reconstruction dossier PDF', () => {
       includePasswords: true,
       company: { ...base.company, quickNotes: `Arabic ${arabic} Hebrew ${hebrew}` },
       passwords: [{ ...base.passwords[0]!, password, totpSecret: totp, notes }],
-      articles: [{ ...base.articles[0]!, contentPlaintext: `Devanagari ${devanagari}` }],
+      articles: [{ ...base.articles[0]!, markdownSource: `Devanagari ${devanagari}` }],
       reconstruction: {
         ...base.reconstruction,
         gaps: [{ ...base.reconstruction.gaps[0]!, message: `Thai ${thai}` }],
@@ -587,7 +881,7 @@ describe('standalone reconstruction dossier PDF', () => {
     const text = extractPdfText(pdf);
 
     expect(text.match(/LAST-KNOWN STALE/g)).toHaveLength(4);
-    expect(text).toContain('Stale since Jul 14, 2026 UTC');
+    expect(text).toContain('Stale since Jul 14, 2026');
   });
 
   it('keeps UTC dates and the PDF hash invariant across process timezones', async () => {
@@ -607,8 +901,11 @@ describe('standalone reconstruction dossier PDF', () => {
 
       expect(createHash('sha256').update(denver).digest('hex'))
         .toBe(createHash('sha256').update(utc).digest('hex'));
-      expect(extractPdfText(utc)).toContain('Jul 14, 2026 UTC');
-      expect(extractPdfText(denver)).toContain('Jul 14, 2026 UTC');
+      // Dates are evaluated on the UTC calendar regardless of process
+      // timezone — in Denver local time this instant is still Jul 13,
+      // and the byte-identical hashes above prove nothing shifted.
+      expect(extractPdfText(utc)).toContain('Jul 14, 2026');
+      expect(extractPdfText(denver)).toContain('Jul 14, 2026');
     } finally {
       if (originalTimezone === undefined) delete process.env['TZ'];
       else process.env['TZ'] = originalTimezone;
@@ -764,6 +1061,8 @@ function strengthenedInspectionFixture(): CompanyExportData {
       password: 'Pass😀-[U+1F600]-1️⃣-🇺🇸',
       totpSecret: 'OTP1️⃣-[U+0031+FE0F+20E3]-[[',
       notes: 'Reversible notes 😀 [U+1F600] 1️⃣ [restore] [[',
+      // Wide badge text — exercises the measured right-aligned pill.
+      pwnedCount: 52_256_179,
     })),
     assets: base.assets.map((asset) => ({
       ...asset,
@@ -777,7 +1076,7 @@ function strengthenedInspectionFixture(): CompanyExportData {
     articles: base.articles.map((article) => ({
       ...article,
       title: '復旧手順 — Процедура восстановления',
-      contentPlaintext: `${article.contentPlaintext ?? ''}\nサーバーを復元します。 Проверить сеть. 😀 1️⃣ 🇺🇸\nLiteral brackets [restore] and marker [U+1F600].\nDevanagari नमस्ते · Thai สวัสดี`,
+      markdownSource: `${article.markdownSource ?? ''}\n\nサーバーを復元します。 Проверить сеть. 😀 1️⃣ 🇺🇸\nLiteral brackets [restore] and marker [U+1F600].\nDevanagari नमस्ते · Thai สวัสดี\n\n| Interface → | VLAN |\n| --- | --- |\n| eth0 → trunk | 30 |\n\n- [x] Failover tested\n- [ ] Runbook reviewed`,
       reconstructionState: stale,
     })),
     ipam: base.ipam.map((subnet) => ({ ...subnet, reconstructionState: stale })),
