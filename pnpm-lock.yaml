@@ -378,12 +378,24 @@ importers:
       '@weavestream/shared':
         specifier: workspace:*
         version: link:../../packages/shared
+      '@zxcvbn-ts/core':
+        specifier: ^3.0.4
+        version: 3.0.4
+      '@zxcvbn-ts/language-common':
+        specifier: ^3.0.4
+        version: 3.0.4
+      '@zxcvbn-ts/language-en':
+        specifier: ^3.0.2
+        version: 3.0.2
       bullmq:
         specifier: ^5.76.2
         version: 5.76.2
       dotenv:
         specifier: ^17.4.2
         version: 17.4.2
+      file-type:
+        specifier: ^21.3.4
+        version: 21.3.4
       fontkit:
         specifier: ^2.0.4
         version: 2.0.4
@@ -396,6 +408,9 @@ importers:
       nodemailer:
         specifier: ^9.0.1
         version: 9.0.1
+      otplib:
+        specifier: ^12.0.1
+        version: 12.0.1
       pdfkit:
         specifier: ^0.18.0
         version: 0.18.0
@@ -411,6 +426,9 @@ importers:
       rxjs:
         specifier: ^7.8.1
         version: 7.8.2
+      sharp:
+        specifier: 0.35.3
+        version: 0.35.3(@types/node@24.12.2)
       undici:
         specifier: ^8.5.0
         version: 8.5.0

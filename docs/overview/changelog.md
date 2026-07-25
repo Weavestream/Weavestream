@@ -13,11 +13,17 @@ All notable changes to Weavestream are documented here. The format follows [Keep
 
 ## [Unreleased]
 
-### Security
+## [1.9.1] - 2026-07-24
 
-- **Dependency advisories patched.** `sharp` moves to 0.35.3 (libvips 8.18.3), clearing four inherited libvips CVEs (CVE-2026-33327, -33328, -35590, -35591) that applied to image upload, thumbnail, and PDF export processing. `postcss` is pinned to 8.5.19 through a resolution override, clearing an arbitrary file read (GHSA-6g55-p6wh-862q) and a path traversal (GHSA-r28c-9q8g-f849) via `sourceMappingURL` auto-loading — Next.js pins postcss exactly, so an override is the only way to move it. Next.js itself moved to 16.2.11 in 1.9.0, clearing two SSRF advisories, an App Router middleware bypass, and a denial of service.
+### Fixed
+
+- **The worker container no longer crash-loops on startup.** 1.9.0 wired the integration reconstruction writers into the worker so they could create native assets, subnets, articles, and relations through the same services the API uses. That pulled `AssetsService` — and transitively the uploads and passwords services — into the worker's module graph for the first time. Those services require `sharp`, `otplib`, `file-type`, and the `@zxcvbn-ts` packages, which were declared only by the API and therefore absent from the worker image, so the worker exited with `Cannot find module 'sharp'` before it could consume a single job. The worker now declares the six runtime packages it actually loads. Background work handled by the worker — integration syncs, scheduled backups, company exports and PDFs, alert email, and thumbnail generation — was unavailable while the container was restarting; the API and web containers were unaffected.
 
 ## [1.9.0] - 2026-07-24
+
+### Security
+
+- **Dependency advisories patched.** `sharp` moves to 0.35.3 (libvips 8.18.3), clearing four inherited libvips CVEs (CVE-2026-33327, -33328, -35590, -35591) that applied to image upload, thumbnail, and PDF export processing. `postcss` is pinned to 8.5.19 through a resolution override, clearing an arbitrary file read (GHSA-6g55-p6wh-862q) and a path traversal (GHSA-r28c-9q8g-f849) via `sourceMappingURL` auto-loading — Next.js pins postcss exactly, so an override is the only way to move it. Next.js moved to 16.2.11, clearing two SSRF advisories, an App Router middleware bypass, and a denial of service.
 
 ### Added
 
@@ -659,7 +665,8 @@ Initial public release.
 
 ---
 
-[Unreleased]: https://github.com/Weavestream/Weavestream/compare/v1.9.0...HEAD
+[Unreleased]: https://github.com/Weavestream/Weavestream/compare/v1.9.1...HEAD
+[1.9.1]: https://github.com/Weavestream/Weavestream/releases/tag/v1.9.1
 [1.9.0]: https://github.com/Weavestream/Weavestream/releases/tag/v1.9.0
 [1.8.15]: https://github.com/Weavestream/Weavestream/releases/tag/v1.8.15
 [1.8.14]: https://github.com/Weavestream/Weavestream/releases/tag/v1.8.14
