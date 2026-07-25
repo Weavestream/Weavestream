@@ -110,10 +110,35 @@ export const Icon = {
       <path d="M7 13a1 1 0 0 0 2 0" />
     </IconBase>
   ),
+  // A cog, not a sun. This previously shared `sun`'s exact ray path and
+  // differed only in hub radius (2 vs 3), so it read as a sun wherever
+  // it stood in for settings. The ring is what separates the two: teeth
+  // that start *on* a circle are a gear, rays floating off a dot are a
+  // sun. Hub r=2, ring r=4.7, eight teeth running from r=4.5 (just
+  // inside the ring, so they meet it rather than float) out to r=7 —
+  // the same extent the sun's rays use, which is as far as the 16 box
+  // allows at a 1.5 stroke. That leaves ~1.5 units of tooth proud of
+  // the ring, enough to still read as a cog at the 14px nav size.
   gear: (p: IconProps) => (
     <IconBase {...p}>
       <circle cx="8" cy="8" r="2" />
-      <path d="M8 1v2M8 13v2M1 8h2M13 8h2M3 3l1.5 1.5M11.5 11.5L13 13M3 13l1.5-1.5M11.5 4.5L13 3" />
+      <circle cx="8" cy="8" r="4.7" />
+      <path d="M8 3.5V1M8 12.5v2.5M3.5 8H1M12.5 8h2.5M4.8 4.8L3 3M11.2 11.2L13 13M4.8 11.2L3 13M11.2 4.8L13 3" />
+    </IconBase>
+  ),
+  // Settings at nav size. A toothed gear is inherently dense at 14px —
+  // ~1.3px of tooth proud of the ring, ~1px between hub and ring — so
+  // nav entries use these faders instead: every stroke is axis-aligned
+  // and nothing is nested, which is what survives at that size. `gear`
+  // stays for larger contexts (empty states, headers) where its detail
+  // has room to land.
+  //
+  // Three full-height tracks at x=3.5/8/12.5, each with a 4-wide knob,
+  // set at different heights so no two knobs sit on the same row.
+  sliders: (p: IconProps) => (
+    <IconBase {...p}>
+      <path d="M3.5 2v12M8 2v12M12.5 2v12" />
+      <path d="M1.5 5h4M6 10h4M10.5 6.5h4" />
     </IconBase>
   ),
   grid: (p: IconProps) => (

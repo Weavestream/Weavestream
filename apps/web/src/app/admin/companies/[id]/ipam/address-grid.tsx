@@ -280,7 +280,7 @@ function GridCell({ cell, companyId }: { cell: CellData; companyId: string }) {
             left: '50%',
             transform: 'translateX(-50%)',
             background: 'var(--surface)',
-            border: '1px solid var(--border)',
+            border: '1px solid var(--line-2)',
             borderRadius: 6,
             padding: '6px 10px',
             fontSize: 12,

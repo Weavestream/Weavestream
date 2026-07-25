@@ -1,9 +1,11 @@
 import {
+  DEFAULT_SHOW_ITEM_COUNTS,
   publicUiPreferencesSchema,
   uiAccentSchema,
   uiAccentValues,
   uiThemeSchema,
   uiThemeValues,
+  userUiPreferencesSchema,
   userUiPreferencesUpdateSchema,
 } from '@weavestream/shared';
 
@@ -70,13 +72,50 @@ describe('userUiPreferencesUpdateSchema', () => {
     expect(userUiPreferencesUpdateSchema.safeParse({}).success).toBe(false);
   });
 
-  it('rejects garbage values in either slot', () => {
+  it('rejects garbage values in any slot', () => {
     expect(
       userUiPreferencesUpdateSchema.safeParse({ uiTheme: 'neon' }).success,
     ).toBe(false);
     expect(
       userUiPreferencesUpdateSchema.safeParse({ uiAccent: 'fuchsia' }).success,
     ).toBe(false);
+    // A truthy string must not sneak past as `true` — density is a
+    // real boolean on the wire, not a coerced one.
+    expect(
+      userUiPreferencesUpdateSchema.safeParse({ showItemCounts: 'yes' })
+        .success,
+    ).toBe(false);
+  });
+
+  it('accepts showItemCounts alone, in both positions', () => {
+    expect(
+      userUiPreferencesUpdateSchema.parse({ showItemCounts: true }),
+    ).toEqual({ showItemCounts: true });
+    // `false` is a meaningful patch, not an absent field — the refine
+    // counts keys, so turning counts back off must survive it.
+    expect(
+      userUiPreferencesUpdateSchema.parse({ showItemCounts: false }),
+    ).toEqual({ showItemCounts: false });
+  });
+});
+
+describe('userUiPreferencesSchema', () => {
+  it('requires all three fields — it is the resolved /auth/me payload', () => {
+    expect(
+      userUiPreferencesSchema.safeParse({ uiTheme: 'dark', uiAccent: 'lime' })
+        .success,
+    ).toBe(false);
+    expect(
+      userUiPreferencesSchema.parse({
+        uiTheme: 'dark',
+        uiAccent: 'lime',
+        showItemCounts: false,
+      }),
+    ).toEqual({ uiTheme: 'dark', uiAccent: 'lime', showItemCounts: false });
+  });
+
+  it('defaults counts off', () => {
+    expect(DEFAULT_SHOW_ITEM_COUNTS).toBe(false);
   });
 });
 

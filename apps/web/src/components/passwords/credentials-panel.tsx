@@ -108,7 +108,7 @@ export async function CredentialsPanel({
               key={p.id}
               style={{
                 padding: '10px 14px',
-                borderTop: '1px solid var(--border)',
+                borderTop: '1px solid var(--line)',
                 opacity: p.archivedAt ? 0.55 : 1,
                 display: 'flex',
                 flexDirection: 'column',

@@ -1172,7 +1172,7 @@ function FolderRow({
         gap: 8,
         padding: `6px 14px 6px ${14 + depth * 12}px`,
         background: active ? 'var(--panel-2)' : 'transparent',
-        color: active ? 'var(--fg)' : 'var(--muted)',
+        color: active ? 'var(--text)' : 'var(--muted)',
         border: 0,
         cursor: 'pointer',
         fontSize: 13,

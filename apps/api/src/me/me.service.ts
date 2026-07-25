@@ -55,6 +55,7 @@ export class MeService {
         searchDefaults: true,
         uiTheme: true,
         uiAccent: true,
+        showItemCounts: true,
         createdAt: true,
         lastLoginAt: true,
         memberships: {
@@ -83,6 +84,7 @@ export class MeService {
       preferences: {
         uiTheme: themeFromDb(user.uiTheme),
         uiAccent: accentFromDb(user.uiAccent),
+        showItemCounts: user.showItemCounts,
       },
     };
   }
@@ -91,10 +93,14 @@ export class MeService {
     actor: AuthedUser,
     input: UserUiPreferencesUpdate,
     meta: { ip: string; userAgent: string },
-  ): Promise<{ uiTheme: ReturnType<typeof themeFromDb>; uiAccent: ReturnType<typeof accentFromDb> }> {
+  ): Promise<{
+    uiTheme: ReturnType<typeof themeFromDb>;
+    uiAccent: ReturnType<typeof accentFromDb>;
+    showItemCounts: boolean;
+  }> {
     const before = await this.prisma.user.findUnique({
       where: { id: actor.id },
-      select: { uiTheme: true, uiAccent: true },
+      select: { uiTheme: true, uiAccent: true, showItemCounts: true },
     });
     if (!before) throw new NotFoundException();
 
@@ -107,8 +113,11 @@ export class MeService {
         ...(input.uiAccent !== undefined
           ? { uiAccent: accentToDb(input.uiAccent) }
           : {}),
+        ...(input.showItemCounts !== undefined
+          ? { showItemCounts: input.showItemCounts }
+          : {}),
       },
-      select: { uiTheme: true, uiAccent: true },
+      select: { uiTheme: true, uiAccent: true, showItemCounts: true },
     });
 
     // Audit only if something actually changed — the update refine in
@@ -116,7 +125,8 @@ export class MeService {
     // value twice shouldn't spam the log.
     const changed =
       before.uiTheme !== updated.uiTheme ||
-      before.uiAccent !== updated.uiAccent;
+      before.uiAccent !== updated.uiAccent ||
+      before.showItemCounts !== updated.showItemCounts;
     if (changed) {
       await this.audit.log({
         actorId: actor.id,
@@ -128,10 +138,12 @@ export class MeService {
         before: {
           uiTheme: themeFromDb(before.uiTheme),
           uiAccent: accentFromDb(before.uiAccent),
+          showItemCounts: before.showItemCounts,
         },
         after: {
           uiTheme: themeFromDb(updated.uiTheme),
           uiAccent: accentFromDb(updated.uiAccent),
+          showItemCounts: updated.showItemCounts,
         },
       });
     }
@@ -139,6 +151,7 @@ export class MeService {
     return {
       uiTheme: themeFromDb(updated.uiTheme),
       uiAccent: accentFromDb(updated.uiAccent),
+      showItemCounts: updated.showItemCounts,
     };
   }
 

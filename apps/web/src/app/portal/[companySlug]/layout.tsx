@@ -7,14 +7,12 @@ import {
   getAssetCountsByLayout,
   getMe,
   getMeForMetadata,
-  getSettings,
   listDomains,
   listLayouts,
   listPasswords,
   listSubnets,
 } from '../../../lib/server-api';
 import { resolvePortalCompany } from '../../../lib/portal-company';
-import { buildTerm } from '../../../lib/term';
 
 export async function generateMetadata({
   params,
@@ -104,16 +102,19 @@ export default async function PortalLayout({
     );
   }
 
-  const [settings, layouts, counts, domainList, passwordList, subnetList] =
+  // No `getSettings()` here: the portal sidebar shows the client's own
+  // company, never the install's workspace name, and the tenant
+  // terminology that used to need it moved out of this shell. Fetching
+  // it anyway would put an unrelated (and separately throttled) request
+  // on the critical path of every portal render.
+  const [layouts, counts, domainList, passwordList, subnetList] =
     await Promise.all([
-      getSettings(),
       listLayouts(),
       getAssetCountsByLayout(company.id),
       listDomains(company.id, { limit: 1 }),
       listPasswords(company.id),
       listSubnets(company.id),
     ]);
-  const term = buildTerm(settings);
   const passwordCount = passwordList.filter((p) => !p.archivedAt).length;
 
   return (
@@ -122,7 +123,6 @@ export default async function PortalLayout({
       company={company}
       layouts={layouts}
       counts={counts}
-      term={term}
       mode="portal"
       portalHasDomains={domainList.items.length > 0}
       portalHasPasswords={passwordCount > 0}

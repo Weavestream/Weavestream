@@ -4,19 +4,10 @@ import type {
   LayoutSummary,
   Me,
 } from '../../lib/server-api';
-import {
-  activeMemberships,
-  canAccessAdminShell,
-  initialsFromName,
-  membershipRoleLabel,
-} from '../../lib/roles';
-import type { Term } from '../../lib/term';
+import { canAccessAdminShell, initialsFromName } from '../../lib/roles';
+import { companyShellNav } from '../../lib/company-shell-nav';
 import { LayoutSwatch } from '../ui';
-import {
-  Sidebar,
-  type SidebarSection,
-  type SidebarSwitcherEntry,
-} from './sidebar';
+import { Sidebar, type SidebarSection } from './sidebar';
 import { SidebarActiveProvider } from './sidebar-active';
 import { MobileShellChrome } from './mobile-nav';
 import {
@@ -62,7 +53,7 @@ export function CompanyShell({
   company,
   layouts,
   counts,
-  term,
+  workspaceName,
   mode = 'admin',
   activeId,
   children,
@@ -81,7 +72,14 @@ export function CompanyShell({
   company: Pick<CompanyListItem, 'id' | 'name' | 'slug'>;
   layouts: LayoutSummary[];
   counts: Record<string, number>;
-  term: Term;
+  /**
+   * `settings.workspaceName` — the install's own name, shown in the
+   * sidebar header on admin surfaces so it matches the `AdminShell`
+   * aside. Unused in portal mode, where the sidebar shows the client's
+   * company instead. Falls back to the company name if a caller omits
+   * it, which keeps the header populated rather than blank.
+   */
+  workspaceName?: string;
   mode?: CompanyShellMode;
   activeId?: string;
   children: ReactNode;
@@ -240,7 +238,12 @@ export function CompanyShell({
         id: `layout:${l.id}`,
         label: l.name,
         icon: 'box',
-        leading: <LayoutSwatch icon={l.icon} color={l.color} size={18} />,
+        // Bare glyph in the layout's colour, no chip: `size={14}` is
+        // what `NavItem` renders its own icons at, so a layout entry
+        // lines up with Home/Articles/Photos above it.
+        leading: (
+          <LayoutSwatch icon={l.icon} color={l.color} size={14} frame={false} />
+        ),
         href: `${base}/layouts/${l.slug}`,
         count: counts[l.id] ?? 0,
       })),
@@ -260,7 +263,7 @@ export function CompanyShell({
         {
           id: 'admin-console',
           label: 'Admin console',
-          icon: 'gear',
+          icon: 'sliders',
           href: '/admin',
         },
       ],
@@ -271,58 +274,28 @@ export function CompanyShell({
   // identity now lives in a single surface so we don't duplicate it
   // in the sidebar footer too.
 
-  // Header link targets diverge by mode:
-  //   admin   : logo -> /admin,                  title -> /admin/companies
-  //   portal  : logo -> /             (when the user has options to
-  //              pick from — i.e. >1 membership or operator access),
-  //              title -> popover picker for multi-membership clients,
-  //                       /admin/companies for operators, static otherwise
-  const operatorAccess = adminAccess;
-  const portalMemberships = activeMemberships(me);
-  const hasMultipleMemberships = portalMemberships.length > 1;
-  const hasOptions = hasMultipleMemberships || operatorAccess;
-  const homeHref = isAdmin
-    ? '/admin'
-    : hasOptions
-      ? operatorAccess
-        ? '/admin'
-        : '/'
-      : undefined;
-  // A multi-membership client gets a real in-sidebar picker instead
-  // of a link back to `/` (which would just round-trip through the
-  // last-used cookie and land them on the same company). Operators
-  // still use `/admin/companies` since that's their full switcher.
-  const showPortalSwitcher = !isAdmin && hasMultipleMemberships;
-  const titleHref =
-    isAdmin
-      ? '/admin/companies'
-      : showPortalSwitcher
-        ? undefined
-        : hasOptions
-          ? operatorAccess
-            ? '/admin/companies'
-            : '/'
-          : undefined;
-  const switcherEntries: SidebarSwitcherEntry[] | null = showPortalSwitcher
-    ? portalMemberships
-        .slice()
-        .sort((a, b) => a.company.name.localeCompare(b.company.name))
-        .map((m) => ({
-          id: m.id,
-          name: m.company.name,
-          subtitle: `/${m.company.slug} · ${membershipRoleLabel(m.role)}`,
-          href: `/portal/${m.company.slug}`,
-          active: m.company.id === company.id,
-        }))
-    : null;
+  // Header link targets, derived in `companyShellNav` so the "a client
+  // user is never handed an /admin href" invariant is covered by tests
+  // rather than by reading the ternaries. Admin mode is one block (the
+  // workspace identity → /admin); the portal splits by how many
+  // tenants the viewer can actually reach.
+  const { homeHref, titleHref, switcherEntries } = companyShellNav(
+    me,
+    company,
+    mode,
+  );
 
   const sidebarWorkspace = {
-    name: company.name,
-    // The mono "All {companies}" subtitle doubles as a company-picker
-    // affordance on the admin side. In portal mode it promises
-    // switching that clients can't actually do, so we drop it and let
-    // the title block breathe.
-    subtitle: isAdmin ? `All ${term.other}` : undefined,
+    // Admin: the install's own name, matching the sidebar on every
+    // global `/admin/**` page, so the aside reads the same wherever an
+    // operator is. Portal: the client's own company — a client user has
+    // no notion of the MSP's workspace, and their company name is the
+    // one identity that means anything in that shell.
+    name: isAdmin ? (workspaceName ?? company.name) : company.name,
+    // No subtitle on the admin side: the old one was the "All
+    // {companies}" picker affordance, not information. Portal never had
+    // one — it promised switching clients can't do.
+    subtitle: undefined,
     homeHref,
     titleHref,
     titleSwitcher: switcherEntries
@@ -337,7 +310,7 @@ export function CompanyShell({
   //             AI chat has no scoped context for end clients, so we
   //             hide the toggle (the panel itself still mounts for
   //             operators browsing portal routes if they reopen it).
-  const showStarred = isAdmin || operatorAccess;
+  const showStarred = isAdmin || adminAccess;
   const showExpirations = isAdmin;
   const showChat = isAdmin;
 
@@ -370,6 +343,7 @@ export function CompanyShell({
           workspace={sidebarWorkspace}
           sections={sections}
           activeId={activeId}
+          showCounts={me.preferences.showItemCounts}
           className="hide-on-mobile"
         />
         <main
@@ -383,12 +357,17 @@ export function CompanyShell({
           }}
         >
           <MobileShellChrome
-            workspaceName={company.name}
+            // Same identity the desktop sidebar header shows — the
+            // install's workspace name on admin surfaces, the client's
+            // own company on the portal. Passing `company.name` here
+            // made the mobile bar disagree with every wider viewport.
+            workspaceName={sidebarWorkspace.name}
             sidebar={
               <Sidebar
                 workspace={sidebarWorkspace}
                 sections={sections}
                 activeId={activeId}
+                showCounts={me.preferences.showItemCounts}
                 variant="drawer"
               />
             }

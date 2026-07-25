@@ -536,7 +536,13 @@ function ToolbarIconLink({
   );
 }
 
-function ToolbarIconButton({
+/**
+ * Icon-only toolbar button. Exported so other members of the shell
+ * chrome — the mobile search trigger in `MobileShellChrome` — sit on
+ * exactly the same geometry and hover treatment as the shortcuts they
+ * share a cluster with, instead of re-deriving the sizes inline.
+ */
+export function ToolbarIconButton({
   buttonRef,
   icon,
   label,

@@ -158,7 +158,7 @@ export async function AdminShell({
     adminItems.push({
       id: 'settings',
       label: 'Settings',
-      icon: 'gear',
+      icon: 'sliders',
       href: '/admin/settings',
     });
   }
@@ -196,12 +196,11 @@ export async function AdminShell({
 
   const sidebarWorkspace = {
     ...workspace,
-    // Admin shell: logo is always the global dashboard, and the
-    // title block doubles as the company picker — clicking it lands
-    // on `/admin/companies`, which is the canonical list and switcher
-    // surface.
+    // The whole block is the global dashboard. It used to carry a
+    // second destination — the title half linked to `/admin/companies`
+    // as the company picker — which now lives in the top-bar scope
+    // pill, with the `Companies` nav entry below as the other route in.
     homeHref: '/admin',
-    titleHref: '/admin/companies',
   };
 
   return (
@@ -231,6 +230,7 @@ export async function AdminShell({
           workspace={sidebarWorkspace}
           sections={sections}
           activeId={activeId}
+          showCounts={me.preferences.showItemCounts}
           className="hide-on-mobile"
         />
         <main
@@ -250,6 +250,7 @@ export async function AdminShell({
                 workspace={sidebarWorkspace}
                 sections={sections}
                 activeId={activeId}
+                showCounts={me.preferences.showItemCounts}
                 variant="drawer"
               />
             }

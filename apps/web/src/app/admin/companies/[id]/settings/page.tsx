@@ -8,6 +8,7 @@ import {
 import { canWriteCompany } from '../../../../../lib/roles';
 import { PageBody, PageHeader } from '../../../../../components/shell/page-header';
 import { buildTerm } from '../../../../../lib/term';
+import { companyCrumbs } from '../../../../../lib/company-crumbs';
 import { CompanySettingsForm } from './settings-form';
 
 export default async function CompanySettingsPage({
@@ -26,11 +27,7 @@ export default async function CompanySettingsPage({
   return (
     <>
       <PageHeader
-        crumbs={[
-          { label: term.other, href: '/admin/companies' },
-          { label: company.name, href: `/admin/companies/${id}` },
-          { label: 'Settings' },
-        ]}
+        crumbs={companyCrumbs(term, company, { label: 'Settings' })}
         title={`${company.name} · Settings`}
         description={`Edit identity, contact, address, and notes for this ${term.one.toLowerCase()}.`}
       />

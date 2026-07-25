@@ -3,8 +3,7 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useEffect, useId, useRef, useState, type CSSProperties, type ReactNode } from 'react';
-import { AppLogo, CompanyMark, Icon, type IconName, Kbd } from '../ui';
-import { useSearchPalette } from '../search/search-palette-provider';
+import { AppLogo, CompanyMark, Icon, type IconName } from '../ui';
 import { useSidebarActiveOverride } from './sidebar-active';
 
 export type SidebarItem = {
@@ -54,17 +53,19 @@ export type SidebarWorkspace = {
    */
   subtitle?: string;
   /**
-   * Where the logo/mark links. Always the "leave the current scope"
-   * control: `/admin` for operators, portal home for clients. Omit to
-   * render the logo as a static chip (e.g. on the login page).
+   * Where the header block links: `/admin` for operators, portal home
+   * for clients. With no `titleHref`/`titleSwitcher` set — every admin
+   * surface — the mark *and* the name are one link to this. Omit to
+   * render a static block (e.g. the login page).
    */
   homeHref?: string;
   /**
-   * Where the title+subtitle block links. Used as the "pick a
-   * different company" control when the sidebar is company-scoped
-   * (points at `/admin/companies`), or omitted when there's no
-   * meaningful target (e.g. a client portal user with a single
-   * membership).
+   * A destination for the title half that differs from `homeHref`,
+   * splitting the block back into two controls. Only the portal uses
+   * it now, for an operator or single-membership client whose title
+   * target isn't their home. Company-scoped admin pages used to point
+   * it at `/admin/companies` as the company picker; that moved to the
+   * top-bar scope pill.
    */
   titleHref?: string;
   /**
@@ -91,7 +92,7 @@ export function Sidebar({
   workspace,
   sections,
   activeId,
-  onSearch,
+  showCounts = false,
   variant = 'fixed',
   onNavigate,
   className,
@@ -100,18 +101,21 @@ export function Sidebar({
   sections: SidebarSection[];
   activeId?: string;
   /**
+   * Render each nav item's `count`. Off by default — the totals are
+   * ambient density, not something anyone navigates by — and turned on
+   * per user under Appearance in their profile.
+   *
+   * Scoped to `count` alone. `badge` is a warning signal (expiring
+   * domains, stale passwords, subnet conflicts) and renders either way:
+   * a density preference must not be able to hide an anomaly.
+   */
+  showCounts?: boolean;
+  /**
    * Optional class piped to the outer `<aside>`. Used by `AdminShell`
    * and `CompanyShell` to attach the `.desktop-only` helper so the
    * fixed sidebar hides on phones while the drawer variant takes over.
    */
   className?: string;
-  /**
-   * Optional override for the search button click. By default we
-   * fall back to the nearest `SearchPaletteProvider`, so every shell
-   * that mounts one gets working click-to-open behaviour without
-   * having to thread the callback through.
-   */
-  onSearch?: () => void;
   /**
    * `fixed` — the traditional 248 px aside that sits beside the main
    * content. Used on desktop.
@@ -130,15 +134,6 @@ export function Sidebar({
 }) {
   const isDrawer = variant === 'drawer';
   const pathname = usePathname();
-  // Default the sidebar search button to the palette provider mounted
-  // by each shell. Falling back to the hook keeps the button live even
-  // when individual shells don't pass `onSearch`, and mirrors the
-  // behaviour of the top-bar trigger.
-  const palette = useSearchPalette();
-  const handleSearchClick = () => {
-    (onSearch ?? palette.open)();
-    onNavigate?.();
-  };
 
   // Pick the single best matching nav item so "index" routes (e.g.
   // Dashboard at /admin) don't also light up when the user is on a
@@ -181,34 +176,19 @@ export function Sidebar({
     >
       <SidebarHeader workspace={workspace} onNavigate={onNavigate} />
 
-      <div style={{ padding: 10 }}>
-        <button
-          type="button"
-          onClick={handleSearchClick}
-          aria-label="Open search"
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 8,
-            height: 28,
-            padding: '0 9px',
-            background: 'var(--panel-2)',
-            borderRadius: 5,
-            border: '1px solid var(--line)',
-            color: 'var(--dim)',
-            width: '100%',
-            cursor: 'pointer',
-          }}
-        >
-          <Icon.search size={12} />
-          <span style={{ flex: 1, fontSize: 12, textAlign: 'left' }}>Search everything</span>
-          <Kbd>⌘K</Kbd>
-        </button>
-      </div>
-
       <div
         className="scroll"
-        style={{ flex: 1, overflow: 'auto', padding: '0 8px 12px', minHeight: 0 }}
+        style={{
+          flex: 1,
+          overflow: 'auto',
+          // Top inset stands in for the search block that used to sit
+          // between the header and the nav — search lives in the top
+          // bar now. With the rule gone too, this gap is the only thing
+          // separating the workspace name from the first nav item, so
+          // it runs wider than the 10px the search block had.
+          padding: '14px 8px 12px',
+          minHeight: 0,
+        }}
       >
         {sections.map((section, idx) => (
           <div key={section.title ?? `section-${idx}`}>
@@ -219,6 +199,7 @@ export function Sidebar({
                   key={item.id}
                   item={item}
                   active={isActive(item)}
+                  showCount={showCounts}
                   onNavigate={onNavigate}
                 />
               ))}
@@ -231,22 +212,22 @@ export function Sidebar({
 }
 
 /**
- * Header row. Structured as two independent controls:
+ * Header row — the workspace identity block.
  *
- *  1. The logo/mark is a link to `workspace.homeHref` (when supplied).
- *     This is the "leave the current scope and return to the global
- *     dashboard" affordance.
- *  2. The title+subtitle block is a separate link to
- *     `workspace.titleHref`. On admin pages this points at the company
- *     list (`/admin/companies`), which doubles as the company picker;
- *     on company-scoped pages it's the same target so the switch is
- *     one click away. Clients with a single membership get a plain
- *     static block since there's nowhere meaningful to go.
+ * On admin surfaces this is now a single control: mark + workspace
+ * name, linking to `workspace.homeHref`. The title half used to be a
+ * second, separate link to `/admin/companies` — the company picker —
+ * which is why the two halves were deliberately kept apart. That
+ * picker moved into the top-bar scope pill, so with one destination
+ * left there is no longer anything for a split to express, and one
+ * link over the whole block is the honest shape.
  *
- * Keeping the two halves as *separate* links (rather than one outer
- * link wrapping both) is intentional: an outer link would steal clicks
- * from the inner one in every browser and make the logo + title act
- * identically, which is the behaviour we explicitly want to avoid.
+ * The split still exists where a second destination genuinely does:
+ *   - `titleSwitcher` — the client portal's tenant picker for users
+ *     with more than one membership.
+ *   - `titleHref` — a title-only destination distinct from home.
+ * In both cases the mark keeps its own link and the title renders as
+ * its own control beside it, as before.
  */
 function SidebarHeader({
   workspace,
@@ -312,46 +293,71 @@ function SidebarHeader({
       workspace.titleGlyph
     );
 
+  const splitTitle = !!workspace.titleSwitcher || !!workspace.titleHref;
+  const rowStyle: CSSProperties = {
+    padding: '10px 10px 8px',
+    display: 'flex',
+    alignItems: 'center',
+    gap: 4,
+    position: 'relative',
+  };
+  // Shell links opt out of Next's viewport/hover prefetch: each
+  // prefetch of a dynamic `/admin/**` route triggers a full SSR render
+  // (8+ API calls for the company-scoped layout alone), and the sidebar
+  // is the omnipresent multiplier that was burning through the per-user
+  // throttle budget even for a single operator. First click still feels
+  // fast because Next streams RSC mid-navigation; the "instant"
+  // prefetch win on dynamic routes is marginal anyway. In-page content
+  // links (list rows, row-level actions) keep the default prefetch.
+  const markStyle: CSSProperties = {
+    display: 'flex',
+    alignItems: 'center',
+    padding: 3,
+    borderRadius: 6,
+    marginRight: 2,
+  };
+
+  // No competing destination: the whole block is one link home.
+  if (!splitTitle) {
+    const inner = (
+      <>
+        <span style={markStyle}>{logoMark}</span>
+        {titleBlock}
+        {titleGlyph}
+      </>
+    );
+    return workspace.homeHref ? (
+      <Link
+        href={workspace.homeHref}
+        title="Go to home"
+        onClick={onNavigate}
+        prefetch={false}
+        style={{ ...rowStyle, color: 'inherit' }}
+        className="sidebar-home-block"
+      >
+        {inner}
+      </Link>
+    ) : (
+      <div style={rowStyle}>{inner}</div>
+    );
+  }
+
   return (
-    <div
-      style={{
-        padding: '10px 10px 8px',
-        borderBottom: '1px solid var(--line)',
-        display: 'flex',
-        alignItems: 'center',
-        gap: 4,
-        position: 'relative',
-      }}
-    >
+    <div style={rowStyle}>
       {workspace.homeHref ? (
         <Link
           href={workspace.homeHref}
           aria-label="Go to home"
           title="Go to home"
           onClick={onNavigate}
-          // Shell links opt out of Next's viewport/hover prefetch: each
-          // prefetch of a dynamic `/admin/**` route triggers a full SSR
-          // render (8+ API calls for the company-scoped layout alone),
-          // and the sidebar is the omnipresent multiplier that was
-          // burning through the per-user throttle budget even for a
-          // single operator. First click still feels fast because Next
-          // streams RSC mid-navigation; the "instant" prefetch win on
-          // dynamic routes is marginal anyway. In-page content links
-          // (list rows, row-level actions) keep the default prefetch.
           prefetch={false}
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            padding: 3,
-            borderRadius: 6,
-            marginRight: 2,
-          }}
+          style={markStyle}
           className="sidebar-home"
         >
           {logoMark}
         </Link>
       ) : (
-        <div style={{ padding: 3, marginRight: 2 }}>{logoMark}</div>
+        <div style={markStyle}>{logoMark}</div>
       )}
       {workspace.titleSwitcher ? (
         <TitleSwitcher
@@ -384,21 +390,7 @@ function SidebarHeader({
           {titleBlock}
           {titleGlyph}
         </Link>
-      ) : (
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 8,
-            flex: 1,
-            minWidth: 0,
-            padding: '4px 6px',
-          }}
-        >
-          {titleBlock}
-          {titleGlyph}
-        </div>
-      )}
+      ) : null}
     </div>
   );
 }
@@ -616,10 +608,12 @@ function SectionHead({ children }: { children: ReactNode }) {
 function NavItem({
   item,
   active,
+  showCount,
   onNavigate,
 }: {
   item: SidebarItem;
   active: boolean;
+  showCount: boolean;
   onNavigate?: () => void;
 }) {
   const content: CSSProperties = {
@@ -668,7 +662,7 @@ function NavItem({
       >
         {item.label}
       </span>
-      {item.count !== undefined && (
+      {showCount && item.count !== undefined && (
         <span
           style={{
             fontFamily: 'var(--font-mono)',
@@ -682,12 +676,24 @@ function NavItem({
       {item.badge && (
         <span
           style={{
+            // Sized so a *two*-digit badge is still a circle, which is
+            // the common case for these counts. Mono advance is 0.6em,
+            // so at 10px two digits measure 12 and the 4px side padding
+            // brings the box to 20 — exactly the height. One digit
+            // falls back to `minWidth`, and three or more stretch it
+            // into a pill, which is fine.
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            height: 20,
+            minWidth: 20,
+            padding: '0 4px',
             fontFamily: 'var(--font-mono)',
             fontSize: 10,
+            lineHeight: 1,
             color: 'var(--warn)',
             background: 'var(--warn-soft)',
-            padding: '1px 5px',
-            borderRadius: 3,
+            borderRadius: 999,
           }}
         >
           {item.badge}

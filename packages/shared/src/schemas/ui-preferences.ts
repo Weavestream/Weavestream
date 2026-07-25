@@ -27,26 +27,36 @@ export const uiAccentSchema = z.enum(uiAccentValues);
 
 export const DEFAULT_UI_THEME: UiTheme = 'system';
 export const DEFAULT_UI_ACCENT: UiAccent = 'lime';
+/**
+ * Sidebar item counts are opt-in. They are ambient density — nobody
+ * navigates by them — so the default is off, for new and existing users
+ * alike. Note this governs the neutral totals only; the warning badges
+ * beside them stay visible either way.
+ */
+export const DEFAULT_SHOW_ITEM_COUNTS = false;
 
 /** Full resolved preference payload returned by /auth/me. */
 export const userUiPreferencesSchema = z.object({
   uiTheme: uiThemeSchema,
   uiAccent: uiAccentSchema,
+  showItemCounts: z.boolean(),
 });
 export type UserUiPreferences = z.infer<typeof userUiPreferencesSchema>;
 
 /**
- * PATCH /me/preferences payload. Partial — either field may be sent
- * alone to change just the theme or just the accent. At least one must
- * be present to avoid no-op writes that still spend an audit row.
+ * PATCH /me/preferences payload. Partial — any field may be sent alone
+ * to change just that one. At least one must be present to avoid no-op
+ * writes that still spend an audit row.
  */
 export const userUiPreferencesUpdateSchema = z
   .object({
     uiTheme: uiThemeSchema.optional(),
     uiAccent: uiAccentSchema.optional(),
+    showItemCounts: z.boolean().optional(),
   })
   .refine((v) => Object.keys(v).length > 0, {
-    message: 'At least one of uiTheme or uiAccent must be provided',
+    message:
+      'At least one of uiTheme, uiAccent, or showItemCounts must be provided',
   });
 
 export type UserUiPreferencesUpdate = z.infer<

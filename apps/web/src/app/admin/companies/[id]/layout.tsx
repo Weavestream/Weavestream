@@ -13,7 +13,6 @@ import {
   getSettings,
   throwUnlessFound,
 } from '../../../../lib/server-api';
-import { buildTerm } from '../../../../lib/term';
 
 /**
  * Shell + title-template for every page under `/admin/companies/[id]`.
@@ -81,7 +80,6 @@ export default async function CompanyScopedLayout({
   // catch-all that was surfacing 429s from the Docker throttler as a
   // misleading 404 page.
   const company = throwUnlessFound(companyRes, `/companies/${id}`);
-  const term = buildTerm(settings);
 
   const domainCount = domainList.items.length;
   const domainBadge = domainList.items.filter((d) =>
@@ -126,7 +124,7 @@ export default async function CompanyScopedLayout({
       company={company}
       layouts={layouts}
       counts={counts}
-      term={term}
+      workspaceName={settings.workspaceName}
       domainCount={domainCount}
       domainBadge={domainBadge}
       passwordCount={passwordCount}

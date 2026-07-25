@@ -83,7 +83,10 @@ export function PageBody({ children }: { children: ReactNode }) {
     <div
       className="page-body-tight"
       style={{
-        padding: 20,
+        // Extra top inset: the sticky header ends in a hard 1px rule,
+        // and content starting at the same 20px it uses on the sides
+        // reads as crowded against it.
+        padding: '30px 20px 20px',
         display: 'flex',
         flexDirection: 'column',
         gap: 16,

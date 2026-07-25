@@ -115,7 +115,11 @@ export default function AppError({
               padding: '9px 16px',
               background: 'transparent',
               color: 'var(--text, #e5e5e7)',
-              border: '1px solid var(--border, #2a2a30)',
+              // `--line-2` (the control/card token) rather than the
+              // undefined `--border` this used to read: with a hardcoded
+              // fallback the declaration stayed valid and quietly painted
+              // one dark hex in both themes.
+              border: '1px solid var(--line-2)',
               borderRadius: 6,
               fontSize: 13,
               fontWeight: 500,
@@ -313,7 +317,10 @@ function RateLimitedPanel({ seconds }: { seconds: number }) {
               ? 'var(--accent, #c6ff3f)'
               : 'var(--panel-2, #1a1a1f)',
             color: ready ? '#0b0b0d' : 'var(--dim, #6a6a72)',
-            border: ready ? 0 : '1px solid var(--border, #2a2a30)',
+            // Same fix as the Reload button above. `--line-2` also stays
+            // legible over the disabled fill; `--line` would vanish
+            // against `--panel-2` in dark.
+            border: ready ? 0 : '1px solid var(--line-2)',
             borderRadius: 6,
             fontSize: 13,
             fontWeight: 600,

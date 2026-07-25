@@ -11,6 +11,7 @@ export {
 } from './btn';
 export { LinkBtn, type LinkBtnProps } from './link-btn';
 export { Tag, type TagTone } from './tag';
+export { Toggle } from './toggle';
 export { Kbd } from './kbd';
 export { Panel } from './panel';
 export { ShowMore } from './show-more';

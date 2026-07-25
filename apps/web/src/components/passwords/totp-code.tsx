@@ -159,9 +159,14 @@ export function TotpCode({
         alignItems: 'center',
         gap: 10,
         padding: 10,
-        border: '1px solid var(--border)',
+        border: '1px solid var(--line-2)',
         borderRadius: 8,
-        background: 'var(--bg-elev, #f9fafb)',
+        // `--elev` rather than `--panel-2`: this card sits one grid row
+        // below the `PasswordRevealField` value box inside the same
+        // `Panel`, filling the same role, and that box is `--elev`.
+        // `--panel-2` reads as a heavier, different element in light
+        // theme, where the reveal field is flush white.
+        background: 'var(--elev)',
       }}
     >
       <div
@@ -170,7 +175,11 @@ export function TotpCode({
           width: 36,
           height: 36,
           borderRadius: '50%',
-          background: `conic-gradient(var(--accent, #2563eb) ${progress * 360}deg, var(--border) 0deg)`,
+          // `--line-3` rather than the card's `--line-2`: the unfilled
+          // arc is a 4px track carrying the countdown, not a hairline, so
+          // it needs the strongest line token to read against the ring's
+          // inner fill.
+          background: `conic-gradient(var(--accent, #2563eb) ${progress * 360}deg, var(--line-3) 0deg)`,
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
@@ -181,7 +190,9 @@ export function TotpCode({
             width: 28,
             height: 28,
             borderRadius: '50%',
-            background: 'var(--bg-elev, #f9fafb)',
+            // Matches the card fill so the ring reads as a donut cut out
+            // of the card rather than a disc floating on it.
+            background: 'var(--elev)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
@@ -198,7 +209,7 @@ export function TotpCode({
             'ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, monospace',
           fontSize: 22,
           letterSpacing: 4,
-          color: 'var(--fg)',
+          color: 'var(--text)',
           flex: 1,
         }}
       >

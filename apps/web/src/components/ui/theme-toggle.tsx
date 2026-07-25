@@ -1,9 +1,13 @@
 'use client';
 
-import { useEffect, useState } from 'react';
 import type { UiTheme } from '@weavestream/shared';
 import { Icon } from './icon';
 import { apiFetch } from '../../lib/api';
+import {
+  applyDomTheme,
+  useDomTheme,
+  useThemeHydrated,
+} from '../../lib/hooks/use-dom-theme';
 
 /**
  * Phase 9b.1 — quick dark ↔ light flip. Authenticated users persist the
@@ -25,21 +29,14 @@ export function ThemeToggle({
   authenticated?: boolean;
 }) {
   // We can't read the theme synchronously on the server render (the
-  // layout already applied the right class), so on mount we sample the
-  // <html data-theme> attribute to initialise state.
-  const [theme, setTheme] = useState<'dark' | 'light'>('dark');
-  const [mounted, setMounted] = useState(false);
-
-  useEffect(() => {
-    const current = document.documentElement.dataset.theme;
-    setTheme(current === 'light' ? 'light' : 'dark');
-    setMounted(true);
-  }, []);
+  // layout already applied the right class), so the value comes from
+  // the live `<html data-theme>` attribute — see `useDomTheme`.
+  const theme = useDomTheme();
+  const mounted = useThemeHydrated();
 
   async function toggle() {
     const next: UiTheme = theme === 'dark' ? 'light' : 'dark';
-    setTheme(next);
-    document.documentElement.dataset.theme = next;
+    applyDomTheme(next);
 
     if (authenticated) {
       const res = await apiFetch('/me/preferences', {

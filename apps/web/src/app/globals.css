@@ -84,7 +84,7 @@
    * viewport width without crowding touch targets. Applied opt-in
    * via the class so desktop scoping is unchanged. */
   .page-body-tight {
-    padding: 16px !important;
+    padding: 22px 16px 16px !important;
   }
   /* Sub-row under the TopBar (title + actions) stacks on mobile so
    * action buttons drop below the heading instead of wrapping a
@@ -194,10 +194,59 @@
   display: none;
 }
 
-/* Sidebar header affordances. The logo link and the title-block link
- * are independent controls (leave scope vs. switch workspace), so we
- * hint at that separately with two subtle hover states. */
+/* Top-bar chips — the company scope pill at the head of the breadcrumb
+ * trail and the search trigger beside it. Both sit on `--bg` at rest
+ * and lift a step on hover so they read as one family of controls
+ * rather than two unrelated boxes.
+ *
+ * The skin (fill, border, radius) lives here rather than inline so the
+ * hover state can actually win — an inline `background` outranks any
+ * class selector, which is what quietly defeats `.sidebar-title-link`
+ * on its button variant. Layout stays inline with the rest of the
+ * component. */
+/* Only the hover state lives here. The resting fill, border, and radius
+ * are inline in `top-bar.tsx` on purpose: this border has now gone
+ * missing twice, and an inline declaration cannot lose to load order,
+ * an HMR-stale stylesheet, or a future global reset. That costs the
+ * `!important` below, since inline outranks any class selector.
+ *
+ * `--line-2` rather than `--line` for the border: these chips are
+ * filled, so it is drawn against `--panel-2`, not against the page. In
+ * dark theme `--line` (#222) on a #1c1c1c fill is invisible and the box
+ * survives only because the fill separates from `--bg`; in light theme
+ * the fill is within 1% of `--bg` and the border is the only thing
+ * drawing the box at all. One step up reads in both. */
+.topbar-chip {
+  transition:
+    background 120ms ease,
+    border-color 120ms ease;
+}
+button.topbar-chip:hover {
+  background: var(--elev) !important;
+  border-color: var(--line-3) !important;
+}
+/* The scope pill is a container of two independent links (company →
+ * picker, section → section index), so the hover lands on the segment
+ * under the cursor, not the whole chip. The container's `overflow:
+ * hidden` rounds the outer corners of these fills. */
+.topbar-chip-seg {
+  transition: background 120ms ease;
+}
+.topbar-chip-seg:hover {
+  background: var(--elev);
+}
+
+/* Sidebar header affordances. Where the mark and the title still have
+ * separate destinations (the portal's tenant switcher), they hover
+ * separately; on admin surfaces the whole block is one link home and
+ * lights up as a unit. */
 .sidebar-home:hover {
+  background: var(--panel-2);
+}
+.sidebar-home-block {
+  transition: background 140ms ease;
+}
+.sidebar-home-block:hover {
   background: var(--panel-2);
 }
 .sidebar-title-link {

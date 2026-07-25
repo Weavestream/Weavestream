@@ -23,6 +23,7 @@ import {
   Tag,
 } from '../../../../components/ui';
 import { buildTerm } from '../../../../lib/term';
+import { companyCrumbs } from '../../../../lib/company-crumbs';
 import {
   buildMapsUrl,
   companyAccent,
@@ -91,7 +92,7 @@ export default async function CompanyDetailPage({ params }: { params: Promise<{ 
   return (
     <>
       <PageHeader
-        crumbs={[{ label: term.other, href: '/admin/companies' }, { label: company.name }]}
+        crumbs={companyCrumbs(term, company)}
         title={
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 12 }}>
             <CompanyAvatar
@@ -265,15 +266,6 @@ function HeaderMeta({ company }: { company: CompanyDetail }) {
     >
       <Tag tone={companyTypeTone(company.type)}>{companyTypeLabel(company.type)}</Tag>
       {company.archivedAt ? <Tag tone="warn">archived</Tag> : <Tag tone="ok">active</Tag>}
-      <span
-        style={{
-          fontFamily: 'var(--font-mono)',
-          fontSize: 11.5,
-          color: 'var(--dim)',
-        }}
-      >
-        /{company.slug}
-      </span>
       {company.parent && (
         <Link
           href={`/admin/companies/${company.parent.id}`}

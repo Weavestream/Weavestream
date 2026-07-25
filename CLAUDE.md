@@ -2,12 +2,43 @@
 
 ## App Development Standards
 
+### All apps
+
+- **Naming.** The product is **Weavestream** — never shortened to "Weave" in UI copy, docs, or comments. The AI assistant feature is **"Ask anything"**.
 - Before adding new helpers, components, formatting logic, or utilities, search the codebase for an existing common/global function or component and reuse it when it fits.
 - Do not duplicate behavior that already exists in shared modules. Prefer extending the existing shared abstraction only when the use case is genuinely reusable.
-- When adding a table in the web app, use the global table standard: `DataTable`, `DataColumn`, and `MobileCardRow` from `apps/web/src/components/ui`.
+- Logic shared between `apps/web` and `apps/mobile` (types, Zod schemas, framework-free formatters) belongs in `packages/shared` and is imported by both. Never copy a helper across app boundaries.
+
+### Desktop web app (`apps/web`)
+
+- When adding a table, use the global table standard: `DataTable`, `DataColumn`, and `MobileCardRow` from `apps/web/src/components/ui`.
 - Follow the existing assets table pattern in `apps/web/src/app/admin/companies/[id]/assets/assets-table.tsx`: define typed columns, provide sort values where useful, set sensible column widths, and supply `renderMobileCard` for mobile.
 - Do not add one-off table markup unless the global table cannot support the use case; if so, explain why in the change.
-- When adding a new page or major page section, include mobile view optimization as part of the implementation. Ensure filters/actions wrap cleanly, dense content has a mobile-friendly layout, and tables/cards remain usable on narrow screens.
+- When adding a new page or major page section, include mobile view optimization as part of the implementation. Ensure filters/actions wrap cleanly, dense content has a mobile-friendly layout, and tables/cards remain usable on narrow screens. This is responsive-desktop work and is separate from the dedicated mobile app below.
+
+### Mobile app (`apps/mobile`)
+
+The dedicated field-technician UI, served as a same-origin PWA at `/m`. See `Build_Plan/Mobile/mobile-pwa-build-plan.md` and the design handoff alongside it.
+
+- **Subtraction is the product. Every field gets a tier before it gets a pixel:**
+  - **T1 — what a technician needs day to day.** Always visible.
+  - **T2 — what may be useful to see in the field.** Behind a "show more" disclosure.
+  - **T3 — what can wait for a laptop.** Cut from mobile entirely.
+
+  Default to T3. "The desktop shows it" and "it's in the Prisma model" are not arguments for T1. Reading a schema and rendering what's there is the specific way this app degrades into the dense UI it exists to replace — when a screen seems to need more, ask rather than assume.
+- **Tiering applies only to fields Weavestream defines.** Customer-defined content is shown in full: an asset detail screen renders **every field on its layout**, in `position` order, no cap and no disclosure. The MSP built that layout because they needed those fields; which of their own fields matter onsite is not ours to decide.
+- `AssetField.showInTable` is **not** an importance signal — it controls column density in the asset overview table. It informs the mobile *list card* (`isPrimary || showInTable`, by `position`), never the detail screen.
+- Mirror the disclosure doctrine in `apps/web/src/components/ui/show-more.tsx` (build mobile's own component, don't import it): primary content — credentials, linked items — never goes inside a disclosure, and the collapsed label carries an attention indicator when what's hidden needs review, so collapsing never buries an anomaly.
+- The table standard above does **not** apply here. Mobile uses card lists; do not import `DataTable`, `DataColumn`, or any `apps/web` component into `apps/mobile`.
+- **Color tokens are inherited; geometry tokens are not.** Consume the existing semantic vars from `apps/web/src/styles/tokens.css` (`--accent`, `--accent-ink`, `--accent-soft`, `--bg`, `--surface`, `--line`, `--text`, `--muted`, `--danger`) rather than literal hexes, so the user's accent preference and any future palette tweak carry over. Radii, type scale, and touch sizing are mobile's own (9–30px vs desktop's 3–8px). Where the design handoff's hexes differ slightly from the tokens, the tokens win.
+- Mobile pins `data-theme="light"` for v1. Using the shared vars keeps a dark mode nearly free later.
+- Articles are **read-only** on mobile — no editor, no drafts, no version history. Note that `Article.editorMode` is `'tiptap' | 'markdown'`, so a reader must handle both `content` (ProseMirror JSON) and `markdownSource`. Never enable raw-HTML passthrough in the Markdown renderer.
+- The bundle must stay statically buildable. No server-render dependency, no framework server APIs. This is what keeps a future Capacitor build a packaging step rather than a port.
+- Minimum 44pt tap targets; respect `env(safe-area-inset-*)` on any screen-edge-anchored UI.
+- Use `randomClientId()` rather than `crypto.randomUUID()` — the app is routinely served over plain HTTP to LAN devices during development, where secure-context crypto APIs are undefined.
+- **Never persist a revealed secret to disk.** Reveal responses stay in memory and clear on blur/background. Whether *metadata* (password names, usernames, asset fields) may be cached to disk is an open decision — until it is made, do not enable a global TanStack Query persister; that plugin cannot distinguish a list query from a reveal query.
+- Do not add a client-side token-refresh interceptor. `AuthGuard.silentRefresh` rotates the session cookie server-side on any expired-access-token request, so a same-origin client stays authenticated with no client logic. A 401 means the session is genuinely gone — route to login, never retry.
+- Client-side org scope, filters, and cached IDs are UI conveniences only. Authorization is always re-derived server-side from the session (see §1).
 
 ---
 

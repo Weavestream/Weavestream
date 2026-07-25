@@ -210,6 +210,12 @@ model User {
   // the correct theme on the very first byte without calling /auth/me.
   uiTheme                   UiTheme              @default(SYSTEM) @map("ui_theme")
   uiAccent                  UiAccent             @default(LIME) @map("ui_accent")
+  // Sidebar item counts (assets per layout, domains, passwords, subnets).
+  // Off by default and for every existing row: the counts are ambient
+  // density rather than something a user navigates by, so they are opt-in.
+  // Warning badges are NOT covered by this — an anomaly must stay visible
+  // whatever the density setting.
+  showItemCounts            Boolean              @default(false) @map("show_item_counts")
   createdAt                 DateTime             @default(now()) @map("created_at")
   updatedAt                 DateTime             @updatedAt @map("updated_at")
   lastLoginAt               DateTime?            @map("last_login_at")

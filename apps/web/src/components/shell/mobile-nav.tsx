@@ -2,12 +2,24 @@
 
 import { useState, type ReactNode } from 'react';
 import { AppLogo, Icon, Sheet } from '../ui';
+import { useSearchPalette } from '../search/search-palette-provider';
+import { useShellScope } from './shell-scope-context';
+import { ToolbarIconButton } from './sidebar-toolbar';
+import { TopBarActions } from './top-bar-actions';
 
 /**
  * Phase 9c mobile chrome. Renders a compact sticky top bar with a
  * hamburger trigger and workspace wordmark on viewports below
  * Tailwind's `md` breakpoint, and hides itself on desktop so the
  * traditional fixed-sidebar shell is untouched.
+ *
+ * This bar also carries the global chrome that `TopBar` hides below
+ * 768px — the search trigger and the Expirations / Starred / account
+ * cluster. `TopBar` renders those for desktop only (`hide-on-mobile`),
+ * and search no longer lives in the sidebar, so without them here a
+ * touch user has no way to reach either: search would be
+ * keyboard-shortcut-only, and the account menu (profile, theme, sign
+ * out) unreachable entirely.
  *
  * The `sidebar` prop is a ready-to-render ReactNode (typically a
  * `<Sidebar variant="drawer" />` built on the server). We close the
@@ -24,6 +36,12 @@ export function MobileShellChrome({
   sidebar: ReactNode;
 }) {
   const [open, setOpen] = useState(false);
+  // Gated on the shell scope rather than on the palette hook, matching
+  // `TopBar`: `useSearchPalette()` returns a no-op context outside a
+  // provider, so it can't tell us whether a palette actually exists.
+  // Both shells that mount this chrome provide the two together.
+  const palette = useSearchPalette();
+  const shellScope = useShellScope();
 
   return (
     <>
@@ -57,6 +75,7 @@ export function MobileShellChrome({
             background: 'var(--panel)',
             color: 'var(--text)',
             cursor: 'pointer',
+            flexShrink: 0,
           }}
         >
           <Icon.menu size={16} />
@@ -85,6 +104,27 @@ export function MobileShellChrome({
             {workspaceName}
           </span>
         </div>
+        {shellScope && (
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 4,
+              // The workspace name owns the slack and ellipsises; the
+              // controls keep their full width on the narrowest phone.
+              flexShrink: 0,
+            }}
+          >
+            <ToolbarIconButton
+              icon="search"
+              label="Open search"
+              active={palette.isOpen}
+              onClick={palette.open}
+              variant="topbar"
+            />
+            <TopBarActions variant="mobile" />
+          </div>
+        )}
       </div>
 
       <Sheet

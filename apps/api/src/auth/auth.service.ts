@@ -38,7 +38,11 @@ export interface LoginResult {
   mfaSetupRequired: boolean;
   mfaChallengeRequired: boolean;
   user: { id: string; email: string; name: string; role: string };
-  preferences: { uiTheme: UiTheme; uiAccent: UiAccent };
+  preferences: {
+    uiTheme: UiTheme;
+    uiAccent: UiAccent;
+    showItemCounts: boolean;
+  };
 }
 
 @Injectable()
@@ -145,6 +149,7 @@ export class AuthService {
       preferences: {
         uiTheme: themeFromDb(user.uiTheme),
         uiAccent: accentFromDb(user.uiAccent),
+        showItemCounts: user.showItemCounts,
       },
     };
   }
@@ -337,6 +342,7 @@ export class AuthService {
       preferences: {
         uiTheme: themeFromDb(user.uiTheme),
         uiAccent: accentFromDb(user.uiAccent),
+        showItemCounts: user.showItemCounts,
       },
     };
   }
@@ -448,6 +454,7 @@ export class AuthService {
       preferences: {
         uiTheme: themeFromDb(user.uiTheme),
         uiAccent: accentFromDb(user.uiAccent),
+        showItemCounts: user.showItemCounts,
       },
     };
   }

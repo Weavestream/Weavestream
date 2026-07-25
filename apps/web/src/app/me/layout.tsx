@@ -56,13 +56,11 @@ export default async function MeLayout({ children }: { children: ReactNode }) {
   const membership = preferredMembership(me, lastCompany);
   if (!membership) redirect('/access-pending');
 
-  const [settings, layouts, counts, domainList] = await Promise.all([
-    getSettings(),
+  const [layouts, counts, domainList] = await Promise.all([
     listLayouts(),
     getAssetCountsByLayout(membership.company.id),
     listDomains(membership.company.id, { limit: 1 }),
   ]);
-  const term = buildTerm(settings);
 
   return (
     <CompanyShell
@@ -70,7 +68,6 @@ export default async function MeLayout({ children }: { children: ReactNode }) {
       company={membership.company}
       layouts={layouts}
       counts={counts}
-      term={term}
       mode="portal"
       activeId="me"
       portalHasDomains={domainList.items.length > 0}

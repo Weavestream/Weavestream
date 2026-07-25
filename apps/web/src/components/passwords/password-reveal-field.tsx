@@ -242,11 +242,11 @@ export function PasswordRevealField(props: PasswordRevealFieldProps) {
             style={{
               flex: 1,
               padding: '6px 8px',
-              border: '1px solid var(--border)',
+              border: '1px solid var(--line-2)',
               borderRadius: 6,
               fontSize: 13,
               background: 'var(--elev)',
-              color: 'var(--fg)',
+              color: 'var(--text)',
             }}
           />
           <Btn
@@ -290,7 +290,7 @@ export function PasswordRevealField(props: PasswordRevealFieldProps) {
             userSelect: plaintext ? 'none' : 'auto',
             overflowX: 'auto',
             whiteSpace: 'nowrap',
-            color: 'var(--fg)',
+            color: 'var(--text)',
           }}
         >
           {plaintext ?? MASK}

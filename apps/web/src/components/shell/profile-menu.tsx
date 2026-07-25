@@ -11,6 +11,11 @@ import {
 } from 'react';
 import type { UiTheme } from '@weavestream/shared';
 import { apiFetch } from '../../lib/api';
+import {
+  applyDomTheme,
+  useDomTheme,
+  useThemeHydrated,
+} from '../../lib/hooks/use-dom-theme';
 import { Icon } from '../ui';
 import type { ShellScopeMe } from './shell-scope-context';
 
@@ -260,21 +265,20 @@ function MenuLink({
  * Mirrors the same persistence flow: optimistic DOM flip first, then
  * `PATCH /me/preferences` (with a `POST /public/ui-prefs` fallback for
  * the 401 edge-case mid-session-expiry).
+ *
+ * The displayed value comes from `useDomTheme()` rather than a local
+ * mount-time sample: this menu is mounted twice at once (desktop
+ * `TopBar` + `MobileShellChrome`), so a copy taken when the popover
+ * opened would go stale the moment the other instance — or the `/me`
+ * appearance form, or an OS light/dark flip — changed the theme.
  */
 function AppearanceRow() {
-  const [theme, setTheme] = useState<'dark' | 'light'>('dark');
-  const [mounted, setMounted] = useState(false);
-
-  useEffect(() => {
-    const current = document.documentElement.dataset.theme;
-    setTheme(current === 'light' ? 'light' : 'dark');
-    setMounted(true);
-  }, []);
+  const theme = useDomTheme();
+  const mounted = useThemeHydrated();
 
   async function flip() {
     const next: UiTheme = theme === 'dark' ? 'light' : 'dark';
-    setTheme(next);
-    document.documentElement.dataset.theme = next;
+    applyDomTheme(next);
     const res = await apiFetch('/me/preferences', {
       method: 'PATCH',
       body: JSON.stringify({ uiTheme: next }),

@@ -10,7 +10,7 @@ import {
   type UserUiPreferences,
 } from '@weavestream/shared';
 import { apiFetch } from '../../lib/api';
-import { Btn, Icon, useToast } from '../../components/ui';
+import { Btn, Icon, Toggle, useToast } from '../../components/ui';
 
 /**
  * Phase 9b.1 — "Appearance" panel on /me. Lets the user pick theme and
@@ -27,6 +27,7 @@ export function AppearanceForm({ initial }: { initial: UserUiPreferences }) {
   const toast = useToast();
   const [theme, setTheme] = useState<UiTheme>(initial.uiTheme);
   const [accent, setAccent] = useState<UiAccent>(initial.uiAccent);
+  const [showCounts, setShowCounts] = useState(initial.showItemCounts);
   const [pending, setPending] = useState(false);
   // Track the live-preview effect so unmount / reset restores the DOM
   // even if the user navigates away without saving.
@@ -73,7 +74,10 @@ export function AppearanceForm({ initial }: { initial: UserUiPreferences }) {
     document.documentElement.dataset.accent = accent;
   }, [accent]);
 
-  const dirty = theme !== initial.uiTheme || accent !== initial.uiAccent;
+  const dirty =
+    theme !== initial.uiTheme ||
+    accent !== initial.uiAccent ||
+    showCounts !== initial.showItemCounts;
 
   async function save() {
     setPending(true);
@@ -81,7 +85,11 @@ export function AppearanceForm({ initial }: { initial: UserUiPreferences }) {
       '/me/preferences',
       {
         method: 'PATCH',
-        body: JSON.stringify({ uiTheme: theme, uiAccent: accent }),
+        body: JSON.stringify({
+          uiTheme: theme,
+          uiAccent: accent,
+          showItemCounts: showCounts,
+        }),
       },
     );
     setPending(false);
@@ -103,6 +111,7 @@ export function AppearanceForm({ initial }: { initial: UserUiPreferences }) {
   function reset() {
     setTheme(initial.uiTheme);
     setAccent(initial.uiAccent);
+    setShowCounts(initial.showItemCounts);
   }
 
   return (
@@ -173,6 +182,17 @@ export function AppearanceForm({ initial }: { initial: UserUiPreferences }) {
               onSelect={() => setAccent(value)}
             />
           ))}
+        </div>
+      </FormRow>
+
+      <FormRow label="Density">
+        <div style={{ display: 'grid', gap: 10, maxWidth: 560 }}>
+          <Toggle
+            label="Show item counts in the sidebar"
+            help="Totals beside each nav entry. Warning badges — expiring domains, stale passwords, subnet conflicts — always show."
+            checked={showCounts}
+            onChange={setShowCounts}
+          />
         </div>
       </FormRow>
 

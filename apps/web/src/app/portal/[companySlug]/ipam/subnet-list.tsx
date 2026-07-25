@@ -131,7 +131,11 @@ function UtilizationBar({ row }: { row: SubnetRow }) {
           flex: 1,
           height: 6,
           borderRadius: 3,
-          background: 'var(--surface-2)',
+          // `--surface-2` was defined nowhere and had no fallback, so this
+          // declaration was invalid and dropped — the bar has never drawn a
+          // track, only the filled portion. `--line-3` matches the other
+          // tracks in the app (strength meter, TOTP countdown ring).
+          background: 'var(--line-3)',
           overflow: 'hidden',
           minWidth: 60,
         }}
@@ -147,7 +151,7 @@ function UtilizationBar({ row }: { row: SubnetRow }) {
               pct > 90
                 ? 'var(--danger)'
                 : pct > 70
-                  ? 'var(--warning, orange)'
+                  ? 'var(--warn)'
                   : 'var(--accent)',
           }}
         />

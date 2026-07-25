@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { apiFetch } from '../../lib/api';
-import { Btn, Field, Input, useToast } from '../../components/ui';
+import { Btn, Field, Input, Toggle, useToast } from '../../components/ui';
 import { isOperator } from '../../lib/roles';
 import type { Me } from '../../lib/server-api';
 import { TimezonePicker } from './timezone-picker';
@@ -129,43 +129,3 @@ export function ProfileForm({ me }: { me: Me }) {
   );
 }
 
-function Toggle({
-  label,
-  help,
-  checked,
-  onChange,
-}: {
-  label: string;
-  help?: string;
-  checked: boolean;
-  onChange: (v: boolean) => void;
-}) {
-  return (
-    <label
-      style={{
-        display: 'flex',
-        alignItems: 'flex-start',
-        gap: 12,
-        padding: '10px 12px',
-        border: '1px solid var(--border)',
-        borderRadius: 10,
-        cursor: 'pointer',
-        background: checked ? 'color-mix(in oklab, var(--accent) 10%, transparent)' : 'transparent',
-        transition: 'background 120ms ease, border-color 120ms ease',
-      }}
-    >
-      <input
-        type="checkbox"
-        checked={checked}
-        onChange={(e) => onChange(e.target.checked)}
-        style={{ marginTop: 3, accentColor: 'var(--accent)' }}
-      />
-      <span style={{ display: 'grid', gap: 2 }}>
-        <span style={{ fontSize: 13.5, color: 'var(--text)', fontWeight: 500 }}>{label}</span>
-        {help ? (
-          <span style={{ fontSize: 12, color: 'var(--dim)' }}>{help}</span>
-        ) : null}
-      </span>
-    </label>
-  );
-}
