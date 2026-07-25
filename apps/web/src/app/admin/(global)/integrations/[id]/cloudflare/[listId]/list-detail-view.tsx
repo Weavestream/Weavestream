@@ -342,7 +342,7 @@ export function ListDetailView({
         columns={columns}
         rows={rows}
         empty="No entries yet — add one above."
-        stickyFirstColumn={false}
+        stickyColumns={0}
       />
 
       <EntryFormDialog

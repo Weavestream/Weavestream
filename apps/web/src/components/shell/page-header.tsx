@@ -83,10 +83,11 @@ export function PageBody({ children }: { children: ReactNode }) {
     <div
       className="page-body-tight"
       style={{
-        // Extra top inset: the sticky header ends in a hard 1px rule,
-        // and content starting at the same 20px it uses on the sides
-        // reads as crowded against it.
-        padding: '30px 20px 20px',
+        // No bottom inset here on purpose — `min-height: 0` below lets
+        // this box be shrunk under its own content, and padding the
+        // content has already spilled past buys nothing. The trailing
+        // inset is the spacer element at the end of this list instead.
+        padding: '20px 20px 0',
         display: 'flex',
         flexDirection: 'column',
         gap: 16,
@@ -102,6 +103,34 @@ export function PageBody({ children }: { children: ReactNode }) {
       }}
     >
       {children}
+      {/*
+        Trailing inset under the last card/table.
+
+        This cannot be `padding-bottom` on the box above. `PageBody` is
+        `flex: 1; min-height: 0` inside the scrolling `main` — that is
+        what lets a `fillHeight` Panel be constrained to the viewport
+        instead of growing the page — but it also lets the box be shrunk
+        *below* its own content. On a page taller than the viewport the
+        content spills straight past the box, and bottom padding is
+        painted inside the shrunken box, above the spill. The scrollable
+        overflow region ends at the last child's border box, so the last
+        panel sits flush on the bottom edge with nothing under it.
+
+        A real trailing element *is* a descendant border box, so it
+        survives the spill. It carries its size inline rather than in a
+        stylesheet rule on purpose: an earlier `::after` version of this
+        never generated a box in Safari, and inline geometry ships with
+        the server-rendered markup instead of depending on a separate
+        stylesheet resolving the pseudo-element the same way.
+
+        `marginTop` cancels the flex `gap` so the result is exactly the
+        page inset and not inset + gap, which also keeps `fillHeight`
+        pages at the geometry they had when padding still worked.
+      */}
+      <div
+        aria-hidden
+        style={{ height: 20, flex: '0 0 auto', marginTop: -16 }}
+      />
     </div>
   );
 }

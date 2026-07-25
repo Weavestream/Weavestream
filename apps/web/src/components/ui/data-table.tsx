@@ -142,10 +142,12 @@ const headCellBase: CSSProperties = {
 };
 
 /**
- * Fallback width used for the first column when `stickyFirstColumn` is
- * enabled but the consumer didn't set `width`. A sticky column without a
- * defined width can collapse under `tableLayout: fixed`, so we lock in a
- * sensible default and warn in dev so the consumer can pick a better one.
+ * Fallback width used for a pinned column whose `width` is missing or
+ * non-numeric. Pinned columns are laid out at an exact pixel width so
+ * each one's `left` offset can be the running sum of the widths before
+ * it; a content-sized or percentage column would drift out of alignment
+ * as the table reflows. We lock in a sensible default and warn in dev so
+ * the consumer can pick a better one.
  */
 const STICKY_FALLBACK_WIDTH = 220;
 
@@ -249,7 +251,7 @@ export function DataTable<T extends { id: string }>({
   renderMobileCard,
   defaultSort,
   disableSort = false,
-  stickyFirstColumn = true,
+  stickyColumns = 1,
   fillHeight = false,
 }: {
   columns: DataColumn<T>[];
@@ -283,11 +285,16 @@ export function DataTable<T extends { id: string }>({
    */
   disableSort?: boolean;
   /**
-   * When true (default), the leftmost column is pinned in place during
-   * horizontal scroll. The first column should have a `width` set; if
-   * it doesn't, a 220 px fallback is used and a dev warning is logged.
+   * How many leading columns are pinned in place during horizontal
+   * scroll. Defaults to 1; pass 0 to disable pinning entirely, or 2+
+   * when the leftmost column isn't the one that identifies the row
+   * (e.g. the layouts table, where an "Order" control precedes the
+   * name). Pinned columns should each have a numeric `width` — their
+   * left offsets are the running sum of those widths; a missing or
+   * non-numeric width falls back to 220 px with a dev warning.
+   * Only the first pinned column carries the drag-to-resize handle.
    */
-  stickyFirstColumn?: boolean;
+  stickyColumns?: number;
   /**
    * Stretch the table wrapper to fill the available height of a flex
    * parent and scroll the body internally. Combined with the existing
@@ -376,20 +383,56 @@ export function DataTable<T extends { id: string }>({
     if (el.dataset.scrolled !== next) el.dataset.scrolled = next;
   }, []);
 
-  // User-resizable first column. We only resize the sticky one because
-  // its width is the only one that materially affects the available
-  // space for trailing columns (those collapse via `tableLayout: fixed`
-  // already). The override lives in component state — not persisted —
-  // so it resets on navigation, matching the no-localStorage policy
-  // documented in the plan's "out of scope" section.
-  const firstCol = columns[0];
-  const firstColBaseWidth =
-    firstCol && typeof firstCol.width === 'number'
-      ? firstCol.width
-      : firstCol && firstCol.width === undefined && stickyFirstColumn
-        ? STICKY_FALLBACK_WIDTH
-        : null;
+  // Leading columns pinned during horizontal scroll. Clamped so a
+  // caller can't pin more columns than exist.
+  const stickyCount = Math.max(
+    0,
+    Math.min(Math.trunc(stickyColumns) || 0, columns.length),
+  );
+
+  // Each pinned column is laid out at an exact pixel width so the next
+  // one's `left` can be the running sum of the widths before it.
+  const stickyBaseWidths = useMemo(
+    () =>
+      columns.slice(0, stickyCount).map((c) => {
+        if (typeof c.width === 'number') return c.width;
+        if (process.env.NODE_ENV !== 'production') {
+          console.warn(
+            `[DataTable] Pinned column "${c.id}" has no numeric width; falling back to ${STICKY_FALLBACK_WIDTH}px.`,
+          );
+        }
+        return STICKY_FALLBACK_WIDTH;
+      }),
+    [columns, stickyCount],
+  );
+
+  // User-resizable first column. We only resize the leading pinned one
+  // because its width is the only one that materially affects the
+  // available space for trailing columns (those collapse via
+  // `tableLayout: fixed` already). The override lives in component
+  // state — not persisted — so it resets on navigation, matching the
+  // no-localStorage policy documented in the plan's "out of scope"
+  // section.
+  const firstColBaseWidth = stickyBaseWidths[0] ?? null;
   const [firstColOverride, setFirstColOverride] = useState<number | null>(null);
+
+  const stickyWidths = useMemo(
+    () =>
+      stickyBaseWidths.map((w, i) =>
+        i === 0 && firstColOverride != null ? firstColOverride : w,
+      ),
+    [stickyBaseWidths, firstColOverride],
+  );
+
+  // `left` for each pinned column is the running sum of the widths
+  // before it. Quadratic, but there are only ever a couple of them.
+  const stickyLefts = useMemo(
+    () =>
+      stickyWidths.map((_, i) =>
+        stickyWidths.slice(0, i).reduce((sum, w) => sum + w, 0),
+      ),
+    [stickyWidths],
+  );
   const resizeStateRef = useRef<{ startX: number; startWidth: number } | null>(
     null,
   );
@@ -554,47 +597,39 @@ export function DataTable<T extends { id: string }>({
           <tr>
             {columns.map((c, idx) => {
               const sortable = isColumnSortable(c);
-              const isSticky = stickyFirstColumn && idx === 0;
+              const isSticky = idx < stickyCount;
+              const isLastSticky = idx === stickyCount - 1;
               const isSorted = sortState?.columnId === c.id;
               const ariaSort: 'none' | 'ascending' | 'descending' = isSorted
                 ? sortState!.direction === 'asc'
                   ? 'ascending'
                   : 'descending'
                 : 'none';
-              const baseStickyWidth =
-                isSticky && c.width === undefined
-                  ? STICKY_FALLBACK_WIDTH
-                  : c.width;
-              const effectiveWidth =
-                isSticky && firstColOverride != null
-                  ? firstColOverride
-                  : baseStickyWidth;
-              if (
-                isSticky &&
-                c.width === undefined &&
-                process.env.NODE_ENV !== 'production'
-              ) {
-                console.warn(
-                  `[DataTable] First column "${c.id}" has no width but stickyFirstColumn is enabled; falling back to ${STICKY_FALLBACK_WIDTH}px.`,
-                );
-              }
+              const effectiveWidth = isSticky ? stickyWidths[idx] : c.width;
               const stickyStyle: CSSProperties = isSticky
                 ? {
                     position: 'sticky',
-                    left: 0,
-                    zIndex: 2,
+                    left: stickyLefts[idx],
+                    // Earlier pinned columns paint above later ones so
+                    // the first column's resize handle — which overhangs
+                    // its right edge by 3px — stays hoverable and
+                    // draggable instead of being buried under the next
+                    // pinned column. Each header cell also sits one
+                    // above its own body cells (see the `<td>` below) so
+                    // rows still scroll underneath the header.
+                    zIndex: 2 + (stickyCount - 1 - idx),
                     background: 'var(--panel)',
                   }
                 : {};
               const showResizeHandle =
-                isSticky && firstColBaseWidth != null;
+                idx === 0 && isSticky && firstColBaseWidth != null;
               // Sizing strategy: with `tableLayout: 'auto'`, columns grow
-              // to fit content. The sticky first column must remain a
-              // fixed width (so the resize handle, shadow, and left-edge
-              // alignment behave predictably), so we lock it via
-              // width+min+max. Other columns use `minWidth` only — their
-              // declared `width` acts as a sensible starting size that
-              // content can grow.
+              // to fit content. Pinned columns must remain a fixed width
+              // (so the resize handle, shadow, and the left offsets of
+              // any pinned column after them behave predictably), so we
+              // lock them via width+min+max. Other columns use
+              // `minWidth` only — their declared `width` acts as a
+              // sensible starting size that content can grow.
               const widthStyle: CSSProperties = isSticky
                 ? {
                     width: effectiveWidth,
@@ -607,7 +642,11 @@ export function DataTable<T extends { id: string }>({
               return (
                 <th
                   key={c.id}
-                  className={isSticky ? 'dt-sticky dt-sticky-head' : undefined}
+                  className={
+                    isSticky
+                      ? `dt-sticky dt-sticky-head${isLastSticky ? ' dt-sticky-last' : ''}`
+                      : undefined
+                  }
                   aria-sort={sortable ? ariaSort : undefined}
                   style={{
                     ...headCellBase,
@@ -691,20 +730,19 @@ export function DataTable<T extends { id: string }>({
                 }}
               >
                 {columns.map((c, idx) => {
-                  const isSticky = stickyFirstColumn && idx === 0;
-                  const baseStickyWidth =
-                    isSticky && c.width === undefined
-                      ? STICKY_FALLBACK_WIDTH
-                      : c.width;
-                  const effectiveWidth =
-                    isSticky && firstColOverride != null
-                      ? firstColOverride
-                      : baseStickyWidth;
+                  const isSticky = idx < stickyCount;
+                  const isLastSticky = idx === stickyCount - 1;
+                  const effectiveWidth = isSticky ? stickyWidths[idx] : c.width;
                   const stickyStyle: CSSProperties = isSticky
                     ? {
                         position: 'sticky',
-                        left: 0,
-                        zIndex: 1,
+                        left: stickyLefts[idx],
+                        // Mirrors the header's descending order, one
+                        // level lower, so column N's header always wins
+                        // over column N's cells. Cross-column ties are
+                        // harmless — pinned columns never overlap each
+                        // other horizontally.
+                        zIndex: 1 + (stickyCount - 1 - idx),
                         background: 'var(--panel)',
                       }
                     : {};
@@ -720,7 +758,11 @@ export function DataTable<T extends { id: string }>({
                   return (
                     <td
                       key={c.id}
-                      className={isSticky ? 'dt-sticky' : undefined}
+                      className={
+                        isSticky
+                          ? `dt-sticky${isLastSticky ? ' dt-sticky-last' : ''}`
+                          : undefined
+                      }
                       style={{
                         ...cellBase,
                         textAlign: c.align ?? 'left',

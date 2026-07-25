@@ -27,6 +27,20 @@ export function registerStepUpOpener(fn: Opener | null): void {
 }
 
 /**
+ * Whether a modal is actually available to prompt with.
+ *
+ * `requestStepUp` resolves `false` for two very different reasons: the
+ * user saw the prompt and declined it, or there was no prompt to decline
+ * (provider not mounted). Callers that want to treat a deliberate
+ * dismissal as a non-error must be able to tell those apart — otherwise
+ * a genuinely broken step-up path is reported as "user cancelled" and
+ * disappears silently.
+ */
+export function hasStepUpOpener(): boolean {
+  return opener !== null;
+}
+
+/**
  * Open the step-up modal (or join the in-flight one) and resolve to
  * whether the user completed it. Concurrent callers share a single
  * prompt — essential when a page fires several blocked requests at once.

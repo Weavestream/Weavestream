@@ -504,7 +504,7 @@ export function LayoutBuilder({
           style={{
             flex: 1,
             overflow: 'auto',
-            padding: '16px',
+            padding: '16px 16px 0',
             display: 'flex',
             flexDirection: 'column',
             gap: 16,
@@ -600,6 +600,15 @@ export function LayoutBuilder({
               })}
             </ul>
           )}
+          {/* Trailing inset: this div is the scroll container, and a
+              scroll container's block-end padding never reaches the
+              scrollable overflow region, so the last field card would
+              sit flush on the bottom edge. `marginTop` cancels the
+              flex gap. See the same note in `PageBody`. */}
+          <div
+            aria-hidden
+            style={{ height: 16, flex: '0 0 auto', marginTop: -16 }}
+          />
         </div>
       </div>
     );

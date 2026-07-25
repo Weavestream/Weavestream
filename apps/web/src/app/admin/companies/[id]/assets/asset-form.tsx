@@ -282,12 +282,20 @@ export function AssetForm({
         style={{
           flex: 1,
           overflow: 'auto',
-          padding: '24px 24px 40px',
+          // Bottom inset rides on the centred column, not here: this
+          // element is the scroll container, and a scroll container's
+          // block-end padding is dropped from the scrollable overflow
+          // region, so the form would end flush on the bottom edge.
+          // `flex-start` is what makes that work — the default
+          // `stretch` sizes the column to the viewport and its own
+          // padding would land above the overflowing content.
+          padding: '24px 24px 0',
           display: 'flex',
           justifyContent: 'center',
+          alignItems: 'flex-start',
         }}
       >
-        <div style={{ width: '100%', maxWidth: 780 }}>
+        <div style={{ width: '100%', maxWidth: 780, paddingBottom: 40 }}>
           <div
             style={{
               padding: '12px 14px',

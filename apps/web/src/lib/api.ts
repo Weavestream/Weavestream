@@ -1,14 +1,25 @@
 'use client';
 
 import { ensureCsrf } from './csrf';
-import { isStepUpProblem, requestStepUp } from './step-up';
+import { hasStepUpOpener, isStepUpProblem, requestStepUp } from './step-up';
 
 export async function apiFetch<T>(
   path: string,
   // `__stepUpRetried` is internal bookkeeping for the step-up retry — it
   // is destructured out below and never forwarded to `fetch`.
   init: RequestInit & { __stepUpRetried?: boolean } = {},
-): Promise<{ ok: boolean; status: number; data: T | null; problem?: unknown }> {
+): Promise<{
+  ok: boolean;
+  status: number;
+  data: T | null;
+  problem?: unknown;
+  // Set only when the user was shown the step-up prompt and dismissed it.
+  // Callers may treat that as a non-event (no error toast); every other
+  // step-up 403 is a real failure and must still be reported. See the
+  // interception block below for why `isStepUpProblem` alone can't carry
+  // this meaning.
+  stepUpCancelled?: boolean;
+}> {
   const { __stepUpRetried, ...reqInit } = init;
   const method = (reqInit.method ?? 'GET').toUpperCase();
   const headers = new Headers(reqInit.headers);
@@ -49,9 +60,26 @@ export async function apiFetch<T>(
       !__stepUpRetried &&
       (reqInit.body === undefined || typeof reqInit.body === 'string')
     ) {
+      // Capture this BEFORE prompting: `requestStepUp` resolves `false`
+      // both when the user declines and when no opener is registered,
+      // and only the former is a deliberate user choice.
+      const prompted = hasStepUpOpener();
       const completed = await requestStepUp(problem.factor ?? 'password');
       if (completed) {
         return apiFetch<T>(path, { ...init, __stepUpRetried: true });
+      }
+      if (prompted) {
+        // The user saw the challenge and dismissed it. Distinct from
+        // "no modal was available" and from a retry that came back 403
+        // anyway (`__stepUpRetried`, which never reaches this branch) —
+        // both of those are real failures the caller must surface.
+        return {
+          ok: false,
+          status: res.status,
+          data,
+          problem,
+          stepUpCancelled: true,
+        };
       }
     }
 

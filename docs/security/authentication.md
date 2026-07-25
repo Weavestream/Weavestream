@@ -63,11 +63,22 @@ During the MFA challenge step at `/mfa/challenge`, enter any valid backup code i
 
 ### Management
 
-Users can view and regenerate backup codes from **My Account → MFA → Regenerate codes**.
+Existing backup codes **cannot be viewed**. Only the Argon2 hashes are stored, so
+the server cannot reproduce a code once it has been issued — the plaintext is
+shown exactly once, at the moment it is generated. If you no longer have your
+codes, replace them with a fresh set from **My Account → Security → MFA backup
+codes → Regenerate codes**.
 
-- Regenerating creates a fresh set of 10 codes
+- Regenerating creates a fresh set of 10 codes, displayed once
 - Previous codes are invalidated when you regenerate
-- First-time MFA enrollment automatically issues backup codes
+- Regenerating requires a valid recent step-up re-authentication. If your
+  session has not confirmed within the step-up window (`STEP_UP_TTL_SEC`,
+  15 minutes by default — see [Environment](../configuration/environment.md)),
+  you are prompted for a TOTP code or one of your remaining backup codes. This
+  is a session-wide window, not a per-action prompt: a session that stepped up
+  recently for another sensitive action is not challenged again
+- First-time MFA enrollment automatically issues backup codes; the enrollment
+  screen's **Continue** button requires confirming you have saved them
 
 ## Session Management
 

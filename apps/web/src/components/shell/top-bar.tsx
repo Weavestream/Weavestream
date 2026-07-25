@@ -263,7 +263,10 @@ export function TopBar({
         <div
           className={subClassName}
           style={{
-            padding: '0 20px 10px',
+            // Top inset separates the title block from the chip row
+            // above it — at `0` the company name sits directly under
+            // the scope pill and the two read as one crowded stack.
+            padding: '10px 20px 10px',
             display: 'flex',
             alignItems: 'flex-end',
             justifyContent: 'space-between',

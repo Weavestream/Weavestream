@@ -335,6 +335,10 @@ export function LayoutsList({
           columns={columns}
           rows={orderedRows}
           disableSort
+          // The reorder controls sit in front of the name, so pin both:
+          // pinning only column 0 would scroll the row's identity out of
+          // view and leave a pair of anonymous up/down buttons behind.
+          stickyColumns={canReorder ? 2 : 1}
           renderMobileCard={(l) => {
             const activeIdx = active.findIndex((a) => a.id === l.id);
             const isActiveRow = activeIdx >= 0;

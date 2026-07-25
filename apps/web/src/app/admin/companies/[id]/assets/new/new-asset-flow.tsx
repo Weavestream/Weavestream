@@ -62,12 +62,17 @@ export function NewAssetFlow({
           style={{
             flex: 1,
             overflow: 'auto',
-            padding: '28px 24px',
+            // Bottom inset on the centred column rather than here —
+            // see the same note in `asset-form.tsx`: a scroll
+            // container's block-end padding never reaches the
+            // scrollable overflow region.
+            padding: '28px 24px 0',
             display: 'flex',
             justifyContent: 'center',
+            alignItems: 'flex-start',
           }}
         >
-          <div style={{ width: '100%', maxWidth: 780 }}>
+          <div style={{ width: '100%', maxWidth: 780, paddingBottom: 28 }}>
             <h1
               style={{
                 fontSize: 20,

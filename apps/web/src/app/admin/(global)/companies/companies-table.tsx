@@ -58,6 +58,12 @@ export function CompaniesTable({
       {
         id: 'name',
         header: term.one,
+        // Pinned alongside the star column, so this needs an explicit
+        // width: pinned columns are laid out at an exact pixel width to
+        // keep the left offsets stable. Previously this column was the
+        // one that soaked up the table's slack; that now goes to the
+        // scrolling columns to its right.
+        width: 320,
         sortValue: (r) => r.name.toLowerCase(),
         render: (r) => (
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -209,6 +215,10 @@ export function CompaniesTable({
         columns={canManage ? columns : columns.filter((c) => c.id !== 'status')}
         rows={rows}
         rowHref={(r) => `/admin/companies/${r.id}`}
+        // The star toggle sits in front of the name, so pin both:
+        // pinning only column 0 would scroll the row's identity out of
+        // view and leave an anonymous star behind.
+        stickyColumns={2}
         empty={
           q
             ? `No ${lower(term.other)} match "${q}".`

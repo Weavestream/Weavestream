@@ -2,6 +2,10 @@
 
 import { useState } from 'react';
 import { apiFetch } from '../../lib/api';
+import {
+  BackupCodeList,
+  copyBackupCodesToClipboard,
+} from '../../components/auth/backup-code-list';
 import { Btn, Dialog, Icon, useToast } from '../../components/ui';
 
 type RegenerateResponse = { backupCodes: string[] };
@@ -21,6 +25,12 @@ export function MfaBackupCodes({ enabled }: { enabled: boolean }) {
     });
     setPending(false);
     if (!res.ok || !res.data) {
+      // This route is step-up gated, and a dismissed challenge comes back
+      // as the original 403. That is the user declining, not a failure —
+      // stay silent, matching `downloadWithStepUp`. Every other outcome
+      // (including a step-up 403 with no modal available, or a retry that
+      // stayed blocked) is real and must be reported.
+      if (res.stepUpCancelled) return;
       toast.push('Could not regenerate backup codes.', 'danger');
       return;
     }
@@ -29,13 +39,13 @@ export function MfaBackupCodes({ enabled }: { enabled: boolean }) {
 
   async function copyCodes() {
     if (!codes) return;
-    try {
-      await navigator.clipboard.writeText(codes.join('\n'));
+    if (await copyBackupCodesToClipboard(codes)) {
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
-    } catch {
-      // noop — user can still read the codes
+      toast.push('Backup codes copied.', 'ok');
+      return;
     }
+    toast.push('Clipboard unavailable — copy them manually.', 'warn');
   }
 
   return (
@@ -63,32 +73,9 @@ export function MfaBackupCodes({ enabled }: { enabled: boolean }) {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
           <p style={{ margin: 0, fontSize: 13, color: 'var(--text-2)', lineHeight: 1.5 }}>
             Store these somewhere safe. Each code can be used once instead of your
-            authenticator code.
+            authenticator code. Your previous codes no longer work.
           </p>
-          <div
-            style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
-              gap: 8,
-              padding: 12,
-              background: 'var(--panel-2)',
-              border: '1px solid var(--line-2)',
-              borderRadius: 8,
-            }}
-          >
-            {codes?.map((code) => (
-              <code
-                key={code}
-                style={{
-                  fontFamily: 'var(--font-mono)',
-                  fontSize: 12,
-                  color: 'var(--text)',
-                }}
-              >
-                {code}
-              </code>
-            ))}
-          </div>
+          {codes && <BackupCodeList codes={codes} />}
         </div>
       </Dialog>
     </>

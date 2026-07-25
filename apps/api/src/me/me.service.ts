@@ -18,6 +18,7 @@ import { PasswordService } from '../auth/password.service.js';
 import { MfaBackupCodeService } from '../auth/mfa-backup-code.service.js';
 import { LockoutService } from '../auth/lockout.service.js';
 import { AuditLogService } from '../audit/audit.service.js';
+import { AUDIT_ACTIONS } from '../audit/audit-actions.js';
 import {
   accentFromDb,
   accentToDb,
@@ -333,7 +334,7 @@ export class MeService {
     const backupCodes = await this.backupCodes.replaceForUser(actor.id);
     await this.audit.log({
       actorId: actor.id,
-      action: 'auth.mfa.backup.regenerate',
+      action: AUDIT_ACTIONS.auth.mfaBackupRegenerate,
       entityType: 'User',
       entityId: actor.id,
       ip: meta.ip,

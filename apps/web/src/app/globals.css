@@ -84,7 +84,7 @@
    * viewport width without crowding touch targets. Applied opt-in
    * via the class so desktop scoping is unchanged. */
   .page-body-tight {
-    padding: 22px 16px 16px !important;
+    padding: 16px 16px 0 !important;
   }
   /* Sub-row under the TopBar (title + actions) stacks on mobile so
    * action buttons drop below the heading instead of wrapping a
@@ -325,12 +325,15 @@ button.topbar-chip:hover {
   border-radius: 2px;
 }
 
-/* DataTable rows + sticky first column. Row hover background is
+/* DataTable rows + pinned leading columns. Row hover background is
  * intentionally omitted — action buttons inside rows have their own
  * hover affordance and a row-level wash competes with that signal.
- * The right-edge shadow on the sticky column only appears once the
- * wrap div has been scrolled past 0 — see the `data-scrolled`
- * attribute toggled by `onScroll`. */
+ * The right-edge shadow marks the boundary between the pinned block
+ * and the scrolling columns, so it goes on the *last* pinned column
+ * only (`dt-sticky-last`) — a table pinning two columns must not cast
+ * a shadow between them. It appears once the wrap div has been
+ * scrolled past 0 — see the `data-scrolled` attribute toggled by
+ * `onScroll`. */
 .dt-row-clickable {
   cursor: pointer;
 }
@@ -338,7 +341,7 @@ button.topbar-chip:hover {
 .dt-sticky-head {
   background: var(--panel);
 }
-.dt-wrap[data-scrolled='true'] .dt-sticky {
+.dt-wrap[data-scrolled='true'] .dt-sticky-last {
   box-shadow:
     1px 0 0 var(--line),
     6px 0 12px -6px rgba(0, 0, 0, 0.35);

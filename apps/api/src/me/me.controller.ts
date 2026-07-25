@@ -23,6 +23,7 @@ import { MeService } from './me.service.js';
 import { CurrentUser, type AuthedUser } from '../common/current-user.decorator.js';
 import { AuthedOnly } from '../rbac/require-permission.decorator.js';
 import { ZodBody } from '../common/zod-validation.pipe.js';
+import { RequireStepUp } from '../auth/step-up/require-step-up.decorator.js';
 import { setUiCookie } from '../auth/cookies.js';
 import { EnvService } from '../config/env.service.js';
 import { ipOf, userAgentOf as uaOf } from '../common/request-meta.js';
@@ -77,6 +78,24 @@ export class MeController {
 
   @Post('mfa/backup-codes/regenerate')
   @HttpCode(HttpStatus.OK)
+  // A fresh code set is a durable persistence credential — ten single-use
+  // bypasses of the second factor — so it needs a valid recent step-up,
+  // matching admin reset-MFA (`users.controller.ts`).
+  //
+  // Note this is NOT a per-action prompt: `StepUpGuard` accepts any proof
+  // still inside the session's step-up window (`STEP_UP_TTL_SEC`, default
+  // 900s, max 3600s), so a session that stepped up moments ago for some
+  // other sensitive action regenerates without being challenged again.
+  // That is the deliberate, codebase-wide behaviour; if regeneration ever
+  // needs to prompt every time, that requires a per-action proof in
+  // `StepUpService`, which is session-keyed today.
+  //
+  // The edge-level cap matches change-password / step-up / MFA verify. No
+  // dedicated lockout counter: this handler verifies no credential inline,
+  // so the grinding surface is `POST /auth/step-up/verify`, which already
+  // has its own throttle and a per-user `stepup:fail:` counter.
+  @Throttle({ global: { limit: 10, ttl: 60_000 } })
+  @RequireStepUp()
   async regenerateMfaBackupCodes(@CurrentUser() user: AuthedUser, @Req() req: Request) {
     return this.me.regenerateMfaBackupCodes(user, {
       ip: ipOf(req),

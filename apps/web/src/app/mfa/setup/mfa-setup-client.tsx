@@ -3,7 +3,12 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { apiFetch } from '../../../lib/api';
-import { Btn, Field, Input } from '../../../components/ui';
+import { copyToClipboard } from '../../../lib/clipboard';
+import {
+  BackupCodeList,
+  copyBackupCodesToClipboard,
+} from '../../../components/auth/backup-code-list';
+import { Btn, Field, Input, useToast } from '../../../components/ui';
 
 interface EnrollResponse {
   secret: string;
@@ -18,6 +23,7 @@ interface VerifyResponse {
 
 export default function MfaSetupClient() {
   const router = useRouter();
+  const toast = useToast();
   const [secret, setSecret] = useState<string | null>(null);
   const [otpauthUrl, setOtpauthUrl] = useState<string | null>(null);
   const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
@@ -25,6 +31,7 @@ export default function MfaSetupClient() {
   const [copied, setCopied] = useState(false);
   const [copiedCodes, setCopiedCodes] = useState(false);
   const [backupCodes, setBackupCodes] = useState<string[] | null>(null);
+  const [acknowledged, setAcknowledged] = useState(false);
   const [token, setToken] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
@@ -62,26 +69,32 @@ export default function MfaSetupClient() {
     router.push('/');
   }
 
+  // Both copy paths go through the shared clipboard helper rather than
+  // `navigator.clipboard` directly: that API is undefined on a non-secure
+  // origin, and this app is routinely served over plain HTTP to LAN
+  // devices, where the previous code failed silently. The helper falls
+  // back to `execCommand('copy')`, and returns whether the copy landed so
+  // we can tell the user the truth either way.
   async function copySecret() {
     if (!secret) return;
-    try {
-      await navigator.clipboard.writeText(secret);
+    if (await copyToClipboard(secret)) {
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
-    } catch {
-      // noop — user can still read the secret
+      toast.push('Secret copied.', 'ok');
+      return;
     }
+    toast.push('Clipboard unavailable — copy it manually.', 'warn');
   }
 
-  async function copyBackupCodes() {
+  async function onCopyBackupCodes() {
     if (!backupCodes) return;
-    try {
-      await navigator.clipboard.writeText(backupCodes.join('\n'));
+    if (await copyBackupCodesToClipboard(backupCodes)) {
       setCopiedCodes(true);
       setTimeout(() => setCopiedCodes(false), 1500);
-    } catch {
-      // noop — user can still read the codes
+      toast.push('Backup codes copied.', 'ok');
+      return;
     }
+    toast.push('Clipboard unavailable — copy them manually.', 'warn');
   }
 
   const ready = Boolean(qrDataUrl && secret);
@@ -91,37 +104,38 @@ export default function MfaSetupClient() {
       <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
         <p style={{ margin: 0, fontSize: 13, color: 'var(--text-2)', lineHeight: 1.5 }}>
           Save these recovery codes now. Each code works once if you lose access to
-          your authenticator.
+          your authenticator. They are not stored in a readable form and cannot be
+          shown again — you can only replace them with a fresh set.
         </p>
-        <div
+        <BackupCodeList codes={backupCodes} />
+        <label
           style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+            display: 'flex',
+            alignItems: 'center',
             gap: 8,
-            padding: 12,
-            background: 'var(--panel-2)',
-            border: '1px solid var(--line-2)',
-            borderRadius: 8,
+            fontSize: 13,
+            color: 'var(--text)',
+            cursor: 'pointer',
           }}
         >
-          {backupCodes.map((code) => (
-            <code
-              key={code}
-              style={{
-                fontFamily: 'var(--font-mono)',
-                fontSize: 12,
-                color: 'var(--text)',
-              }}
-            >
-              {code}
-            </code>
-          ))}
-        </div>
+          <input
+            type="checkbox"
+            checked={acknowledged}
+            onChange={(e) => setAcknowledged(e.target.checked)}
+          />
+          I&rsquo;ve saved these codes somewhere safe.
+        </label>
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-          <Btn type="button" kind="outline" size="md" onClick={copyBackupCodes}>
+          <Btn type="button" kind="outline" size="md" onClick={onCopyBackupCodes}>
             {copiedCodes ? 'Copied' : 'Copy codes'}
           </Btn>
-          <Btn type="button" kind="primary" size="md" onClick={() => router.push('/')}>
+          <Btn
+            type="button"
+            kind="primary"
+            size="md"
+            disabled={!acknowledged}
+            onClick={() => router.push('/')}
+          >
             Continue
           </Btn>
         </div>
