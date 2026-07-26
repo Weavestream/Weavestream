@@ -1,12 +1,25 @@
 import { useQuery } from '@tanstack/react-query';
 import { Navigate, Outlet, useLocation } from '@tanstack/react-router';
-import { createContext, useContext, useEffect, type ReactNode } from 'react';
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useMemo,
+  type ReactNode,
+} from 'react';
+import type {
+  GlobalAccess,
+  MembershipRole,
+  PlatformCapability,
+  UserRole,
+} from '@weavestream/shared';
 import { ApiError, apiFetch } from '../lib/api';
 import { OrgProvider, useOrgScope, type Org } from '../lib/org-scope';
 import { useScopedNavigate, useStaleScopeGuard } from '../lib/scoped-nav';
 import { recoveryRouteFor } from '../lib/session-recovery';
 import {
   TAB_ROOTS,
+  hideTabBarFor,
   rememberLocation,
   rememberedLocation,
   tabIdForPath,
@@ -30,11 +43,28 @@ import { SkeletonList } from '../components/states';
  * change.
  */
 
+/**
+ * The slice of `/auth/me` this app consumes. Note the memberships are
+ * the **flat** `{ companyId }` shape — the web `/me` endpoint nests
+ * `company: { id, name, slug }` instead. The shared access helpers
+ * (`effectiveCompanyAccess` et al.) accept either, and `Me` satisfies
+ * their structural `ViewerLike`, which is what `useCompanyAccess`
+ * relies on to gate write UI.
+ */
+export interface MeMembership {
+  companyId: string;
+  role: MembershipRole;
+  expiresAt: string | null;
+}
+
 export interface Me {
   id: string;
   email: string;
   name?: string | null;
-  role?: string | null;
+  role: UserRole;
+  globalAccess: GlobalAccess | null;
+  platformCapabilities: PlatformCapability[];
+  memberships: MeMembership[];
 }
 
 const MeContext = createContext<Me | null>(null);
@@ -123,12 +153,30 @@ function Shell() {
 
   const pathname = location.pathname;
   const activeTab = tabIdForPath(pathname);
-  const sheet = (location.search as ShellSearch | undefined)?.sheet;
 
-  // Remember where each tab is, so tapping it later comes back here.
+  // The sheet param rides alongside whatever search the current screen
+  // owns (the passwords list's filter chips live in `?folder=`/`?view=`).
+  // Opening and closing the sheet must carry those keys along, or a
+  // filtered list loses its filter the moment the org sheet closes.
+  const rawSearch = (location.search ?? {}) as Record<string, unknown>;
+  const sheet = rawSearch.sheet as ShellSearch['sheet'];
+  // Memoized on the location's (structurally stable) search object so
+  // the remember-effect below keys off real changes, not new object
+  // identities per render.
+  const searchSansSheet = useMemo(
+    () =>
+      Object.fromEntries(
+        Object.entries(rawSearch).filter(([key]) => key !== 'sheet'),
+      ),
+    [rawSearch],
+  );
+
+  // Remember where each tab is — WITH its screen-owned search params
+  // (minus the sheet overlay), so returning to a filtered list restores
+  // the filter instead of silently unfiltering it.
   useEffect(() => {
-    rememberLocation(pathname);
-  }, [pathname]);
+    rememberLocation(pathname, searchSansSheet);
+  }, [pathname, searchSansSheet]);
 
   function onSelectTab(tab: TabId) {
     // Second tap on the active tab pops to its root; `replace` so
@@ -137,15 +185,17 @@ function Shell() {
       navigate({ to: TAB_ROOTS[tab], replace: true });
       return;
     }
-    navigate({ to: rememberedLocation(tab) });
+    const loc = rememberedLocation(tab);
+    navigate({ to: loc.path, search: loc.search });
   }
 
   // Opening **pushes**: that is what makes the back button close the sheet
   // instead of leaving the screen. Closing **replaces**, which consumes the
   // pushed entry so back doesn't immediately re-open it.
   const showSheet = (which: NonNullable<ShellSearch['sheet']>) =>
-    navigate({ to: pathname, search: { sheet: which } });
-  const closeSheet = () => navigate({ to: pathname, replace: true, search: {} });
+    navigate({ to: pathname, search: { ...searchSansSheet, sheet: which } });
+  const closeSheet = () =>
+    navigate({ to: pathname, replace: true, search: searchSansSheet });
 
   /**
    * Switching org is one coordinated step, owned here because it is the
@@ -178,12 +228,15 @@ function Shell() {
       <div className="flex h-dvh flex-col overflow-hidden bg-bg">
         <Outlet />
 
-        <TabBar
-          activeTab={activeTab}
-          onSelectTab={onSelectTab}
-          // Ask is presented over the current tab, not routed to.
-          onAsk={() => showSheet('ask')}
-        />
+        {/* Create/edit forms own the whole viewport — see hideTabBarFor. */}
+        {!hideTabBarFor(pathname) && (
+          <TabBar
+            activeTab={activeTab}
+            onSelectTab={onSelectTab}
+            // Ask is presented over the current tab, not routed to.
+            onAsk={() => showSheet('ask')}
+          />
+        )}
 
         <OrgSheet
           open={sheet === 'org'}

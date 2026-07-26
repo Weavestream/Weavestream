@@ -2,8 +2,8 @@ import {
   PASSWORD_GENERATOR_SEPARATOR_CHARS,
   type PasswordGeneratorDefaults,
   type PasswordGeneratorPreset,
-} from '@weavestream/shared';
-import { getWordBucket } from './wordlist';
+} from '../schemas/password-generator.js';
+import { getWordBucket } from './wordlist.js';
 
 /**
  * Phase 10 — client-side passphrase generator.

@@ -16,6 +16,7 @@ export default {
         bg: 'var(--bg)',
         surface: 'var(--surface)',
         panel: 'var(--panel)',
+        'panel-2': 'var(--panel-2)',
         elev: 'var(--elev)',
         line: 'var(--line)',
         'line-2': 'var(--line-2)',
@@ -103,6 +104,7 @@ export default {
         'safe-t': 'env(safe-area-inset-top)',
         'safe-b': 'env(safe-area-inset-bottom)',
         'edge-b': 'var(--pad-edge-b)',
+        'edge-t': 'var(--pad-edge-t)',
         'safe-l': 'env(safe-area-inset-left)',
         'safe-r': 'env(safe-area-inset-right)',
       },
@@ -110,6 +112,11 @@ export default {
       boxShadow: {
         ask: 'var(--shadow-ask)',
         seg: 'var(--shadow-seg)',
+      },
+
+      maxWidth: {
+        // The one shared content column — see tokens.css.
+        page: 'var(--page-max-w)',
       },
 
       zIndex: {

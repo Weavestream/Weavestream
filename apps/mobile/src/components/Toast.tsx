@@ -32,6 +32,14 @@ const ToastContext = createContext<{
   push: (message: string, tone?: Tone) => void;
 } | null>(null);
 
+/** Tint layered over an opaque base — see the note at the render site. */
+const TONE_BACKGROUND: Record<Tone, string> = {
+  default: 'var(--surface)',
+  ok: 'linear-gradient(var(--ok-soft), var(--ok-soft)), var(--surface)',
+  danger:
+    'linear-gradient(var(--danger-soft), var(--danger-soft)), var(--surface)',
+};
+
 const VISIBLE_MS = 4000;
 
 export function ToastProvider({ children }: { children: ReactNode }) {
@@ -67,14 +75,17 @@ export function ToastProvider({ children }: { children: ReactNode }) {
           <div
             key={t.id}
             className={
-              'pointer-events-auto w-full max-w-md rounded-card border px-4 py-3 ' +
-              'text-body shadow-seg ' +
-              (t.tone === 'danger'
-                ? 'border-line bg-danger-soft text-text'
-                : t.tone === 'ok'
-                  ? 'border-line bg-ok-soft text-text'
-                  : 'border-line bg-surface text-text')
+              'pointer-events-auto w-full max-w-md rounded-card border border-line ' +
+              'px-4 py-3 text-body text-text shadow-seg'
             }
+            // Opaque, tinted. The `-soft` tokens are 12%-alpha TINTS
+            // meant to layer on an opaque surface — used alone as a
+            // floating toast's background, the list bleeds through and
+            // the message is hard to read. Compositing the tint over
+            // `--surface` keeps the tone without the transparency.
+            // (Desktop's toasts are flat `--panel`; the tone tint is
+            // mobile's own addition.)
+            style={{ background: TONE_BACKGROUND[t.tone] }}
           >
             {t.message}
           </div>

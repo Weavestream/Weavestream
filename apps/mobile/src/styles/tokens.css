@@ -113,6 +113,28 @@
    * inset, and adding it again wastes a row of content on notched phones. */
   --pad-edge-b: max(env(safe-area-inset-bottom), 12px);
 
+  /* Top counterpart, owned by whichever bar sits at the top of a screen
+   * (ScreenHeader, a detail screen's back row, a form screen's Cancel/Save
+   * bar). In standalone display mode the status bar overlays the page, so
+   * a bare `pt-2.5` puts the org row underneath it; in a browser tab the
+   * inset is 0 and the floor keeps the resting rhythm. Exactly one element
+   * per screen applies this — content below a header must not. */
+  --pad-edge-t: max(env(safe-area-inset-top), 10px);
+
+  /* Single content column, shared by EVERY screen surface (headers,
+   * scroll bodies, form chrome) via `max-w-page` — always on the same
+   * element as the horizontal padding, so all screens' content edges
+   * agree by construction.
+   *
+   * The value is a readability cap, not a phone frame: 672px ≈ Apple's
+   * readable-content width (Material's single-column guidance is
+   * similar). On phones and most windows it never engages — content
+   * fills the width with the normal 16px gutters; it only stops a
+   * full-bleed desktop window from stretching a card list to comic
+   * width. Auth screens (BareScreen) keep their narrower form column
+   * deliberately. */
+  --page-max-w: 672px;
+
   /* ---- Stacking order ----
    * These genuinely stack: the org sheet can be open with a toast over
    * it, and step-up can arrive on top of both. Declared in one place so

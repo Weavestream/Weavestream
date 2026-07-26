@@ -30,7 +30,10 @@ export function ScreenHeader({
   filters?: ReactNode;
 }) {
   return (
-    <header className="flex shrink-0 flex-col gap-3.5 px-4 pb-3 pt-2.5">
+    // `max-w-page` on the SAME element as the padding — the one shared
+    // column pattern (see tokens.css) that keeps every screen's content
+    // edges identical at any window width.
+    <header className="mx-auto flex w-full max-w-page shrink-0 flex-col gap-3.5 px-4 pb-3 pt-edge-t">
       <div className="flex items-center justify-between gap-2">
         {/* The whole group is the tap target, per the handoff. */}
         <button

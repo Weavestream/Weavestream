@@ -1,6 +1,7 @@
 import {
   TAB_ROOTS,
   clearRememberedLocations,
+  hideTabBarFor,
   rememberLocation,
   rememberedLocation,
   tabIdForPath,
@@ -41,31 +42,66 @@ describe('tabIdForPath', () => {
   });
 });
 
+describe('hideTabBarFor', () => {
+  it('hides the tab bar on the form routes', () => {
+    expect(hideTabBarFor('/passwords/new')).toBe(true);
+    expect(hideTabBarFor('/passwords/abc-123/edit')).toBe(true);
+    expect(hideTabBarFor('/m/passwords/new')).toBe(true);
+    expect(hideTabBarFor('/m/passwords/abc-123/edit')).toBe(true);
+  });
+
+  it('keeps the bar everywhere else, including lookalike segments', () => {
+    expect(hideTabBarFor('/passwords')).toBe(false);
+    expect(hideTabBarFor('/passwords/abc-123')).toBe(false);
+    // "edit"/"new" in the wrong position must not blank the bar.
+    expect(hideTabBarFor('/passwords/new/edit/x')).toBe(false);
+    expect(hideTabBarFor('/passwords/edit')).toBe(false);
+    expect(hideTabBarFor('/articles/new')).toBe(false);
+    expect(hideTabBarFor('/more')).toBe(false);
+  });
+});
+
 describe('remembered locations', () => {
   beforeEach(() => clearRememberedLocations());
 
   it('falls back to the tab root when nothing is remembered', () => {
-    expect(rememberedLocation('passwords')).toBe(TAB_ROOTS.passwords);
-    expect(rememberedLocation('more')).toBe('/more');
+    expect(rememberedLocation('passwords')).toEqual({ path: TAB_ROOTS.passwords });
+    expect(rememberedLocation('more')).toEqual({ path: '/more' });
   });
 
   it('returns to the last path visited in that tab', () => {
     rememberLocation('/passwords/abc');
-    expect(rememberedLocation('passwords')).toBe('/passwords/abc');
+    expect(rememberedLocation('passwords').path).toBe('/passwords/abc');
     // Other tabs are unaffected.
-    expect(rememberedLocation('assets')).toBe('/assets');
+    expect(rememberedLocation('assets').path).toBe('/assets');
+  });
+
+  it('remembers the screen-owned search params with the path', () => {
+    // The passwords list's filter chips live in `?folder=`/`?view=` —
+    // restoring the tab without them silently unfilters the list.
+    rememberLocation('/passwords', { folder: 'f1' });
+    expect(rememberedLocation('passwords')).toEqual({
+      path: '/passwords',
+      search: { folder: 'f1' },
+    });
+    // Empty search normalizes away rather than restoring `?`-noise.
+    rememberLocation('/passwords', {});
+    expect(rememberedLocation('passwords')).toEqual({
+      path: '/passwords',
+      search: undefined,
+    });
   });
 
   it('keeps one location per tab, independently', () => {
     rememberLocation('/passwords/abc');
     rememberLocation('/assets/9');
-    expect(rememberedLocation('passwords')).toBe('/passwords/abc');
-    expect(rememberedLocation('assets')).toBe('/assets/9');
+    expect(rememberedLocation('passwords').path).toBe('/passwords/abc');
+    expect(rememberedLocation('assets').path).toBe('/assets/9');
   });
 
   it('ignores paths that belong to no tab', () => {
     rememberLocation('/login');
-    expect(rememberedLocation('passwords')).toBe('/passwords');
+    expect(rememberedLocation('passwords').path).toBe('/passwords');
   });
 
   it('clears every tab on an org switch, not just the visible one', () => {
@@ -78,8 +114,8 @@ describe('remembered locations', () => {
 
     clearRememberedLocations();
 
-    expect(rememberedLocation('passwords')).toBe('/passwords');
-    expect(rememberedLocation('assets')).toBe('/assets');
-    expect(rememberedLocation('articles')).toBe('/articles');
+    expect(rememberedLocation('passwords').path).toBe('/passwords');
+    expect(rememberedLocation('assets').path).toBe('/assets');
+    expect(rememberedLocation('articles').path).toBe('/articles');
   });
 });

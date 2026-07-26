@@ -73,11 +73,16 @@ export function Screen({
   return (
     <main
       className={
-        'mx-auto flex min-h-0 w-full max-w-md flex-1 flex-col gap-4 ' +
+        // `max-w-page` = the one shared content column (tokens.css),
+        // identical on headers and bodies so nothing misaligns at any
+        // window width.
+        'mx-auto flex min-h-0 w-full max-w-page flex-1 flex-col gap-4 ' +
         // NOT `pb-safe-b`: the tab bar below already carries the
         // bottom inset. This is plain clearance so the last card
-        // doesn't butt against the tab bar's top border.
-        `overflow-y-auto px-4 pb-5 pt-safe-t ${className}`
+        // doesn't butt against the tab bar's top border. No top inset
+        // either — the header above owns `pt-edge-t`, and stacking a
+        // second safe-area pad here would double it on notched phones.
+        `overflow-y-auto px-4 pb-5 ${className}`
       }
     >
       {children}

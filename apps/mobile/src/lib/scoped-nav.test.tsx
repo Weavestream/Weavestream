@@ -22,7 +22,12 @@ import {
 } from '@tanstack/react-router';
 import { render, screen, waitFor } from '@testing-library/react';
 import type { Org } from './org-scope';
-import { readOrgStamp, useScopedNavigate, useStaleScopeGuard } from './scoped-nav';
+import {
+  readOrgStamp,
+  readUpIsBack,
+  useScopedNavigate,
+  useStaleScopeGuard,
+} from './scoped-nav';
 
 const ORG_A: Org = { id: 'org-a', name: 'Acme', initials: 'AC', subtitle: null };
 const ORG_B: Org = { id: 'org-b', name: 'Beta', initials: 'BE', subtitle: null };
@@ -144,6 +149,38 @@ describe('useScopedNavigate', () => {
     await waitFor(() =>
       expect(readOrgStamp(router.state.location.state)).toBeNull(),
     );
+  });
+
+  it('stamps upIsBack only when asked, and a replace preserves it', async () => {
+    // The stamp is what lets a labeled back chevron pop history safely
+    // (see use-back.ts); an entry without it must read as false.
+    const router = await mount('/passwords');
+
+    scopedNavigate!({ to: '/passwords/abc', upIsBack: true });
+    await waitFor(() =>
+      expect(router.state.location.pathname).toBe('/passwords/abc'),
+    );
+    expect(readUpIsBack(router.state.location.state)).toBe(true);
+
+    // A replace on top (create form → new detail) keeps the stamp,
+    // because the parent entry behind it hasn't changed.
+    scopedNavigate!({ to: '/passwords/def', replace: true });
+    await waitFor(() =>
+      expect(router.state.location.pathname).toBe('/passwords/def'),
+    );
+    expect(readUpIsBack(router.state.location.state)).toBe(true);
+
+    // A fresh push without the flag is unstamped.
+    scopedNavigate!({ to: '/assets' });
+    await waitFor(() => expect(router.state.location.pathname).toBe('/assets'));
+    expect(readUpIsBack(router.state.location.state)).toBe(false);
+  });
+
+  it('readUpIsBack tolerates junk state', () => {
+    expect(readUpIsBack(undefined)).toBe(false);
+    expect(readUpIsBack(null)).toBe(false);
+    expect(readUpIsBack({ upIsBack: 'yes' })).toBe(false);
+    expect(readUpIsBack({ upIsBack: true })).toBe(true);
   });
 
   it('pushes by default and replaces when asked', async () => {

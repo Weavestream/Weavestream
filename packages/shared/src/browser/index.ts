@@ -15,3 +15,5 @@ export * from './client-id.js';
 export * from './clipboard.js';
 export * from './cookies.js';
 export * from './csrf.js';
+export * from './password-generator.js';
+export * from './wordlist.js';

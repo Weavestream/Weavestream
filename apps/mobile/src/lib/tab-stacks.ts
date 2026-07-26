@@ -26,7 +26,19 @@ export const TAB_ROOTS: Record<TabId, string> = {
   more: '/more',
 };
 
-const remembered = new Map<TabId, string>();
+export interface RememberedLocation {
+  path: string;
+  /**
+   * Search params to restore with the path — the passwords list's
+   * filter chips live in `?folder=`/`?view=`, and returning to a tab
+   * without them silently unfilters the list. The `sheet` overlay
+   * param is never remembered (the Shell strips it before calling
+   * `rememberLocation`) — restoring a tab must not reopen a sheet.
+   */
+  search?: Record<string, unknown>;
+}
+
+const remembered = new Map<TabId, RememberedLocation>();
 
 /**
  * Which tab a path belongs to.
@@ -43,14 +55,22 @@ export function tabIdForPath(pathname: string): TabId | null {
 }
 
 /** Record where a tab currently is, so a later tap on it comes back. */
-export function rememberLocation(pathname: string): void {
+export function rememberLocation(
+  pathname: string,
+  search?: Record<string, unknown>,
+): void {
   const tab = tabIdForPath(pathname);
-  if (tab) remembered.set(tab, pathname);
+  if (!tab) return;
+  const hasSearch = search !== undefined && Object.keys(search).length > 0;
+  remembered.set(tab, {
+    path: pathname,
+    search: hasSearch ? search : undefined,
+  });
 }
 
-/** Where tapping `tab` should go: its remembered path, else its root. */
-export function rememberedLocation(tab: TabId): string {
-  return remembered.get(tab) ?? TAB_ROOTS[tab];
+/** Where tapping `tab` should go: its remembered location, else its root. */
+export function rememberedLocation(tab: TabId): RememberedLocation {
+  return remembered.get(tab) ?? { path: TAB_ROOTS[tab] };
 }
 
 /**
@@ -63,4 +83,24 @@ export function rememberedLocation(tab: TabId): string {
  */
 export function clearRememberedLocations(): void {
   remembered.clear();
+}
+
+/**
+ * Whether the tab bar should be hidden for this path.
+ *
+ * The create/edit forms are ordinary routed pages that own the whole
+ * viewport (Cancel / Save top bar, keyboard below). Hiding the bar at the
+ * shell beats rendering a fixed overlay on top of it: there is nothing
+ * focusable left behind the form, so no dialog semantics, focus trap, or
+ * scroll lock are needed, and hardware back keeps working untouched.
+ *
+ * Segment-based like `tabIdForPath`, tolerating the `/m` basepath for the
+ * same reason. New full-viewport routes are appended here deliberately.
+ */
+export function hideTabBarFor(pathname: string): boolean {
+  const segments = pathname.split('/').filter(Boolean);
+  if (segments[0] === 'm') segments.shift();
+  if (segments[0] !== 'passwords') return false;
+  if (segments.length === 2 && segments[1] === 'new') return true;
+  return segments.length === 3 && segments[2] === 'edit';
 }

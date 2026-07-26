@@ -29,7 +29,7 @@ import {
   type TermPresetId,
 } from '../../../../lib/term';
 import type { Settings } from '../../../../lib/server-api';
-import { generatePassword } from '../../../../lib/password-generator';
+import { generatePassword } from '@weavestream/shared/browser';
 
 /**
  * Settings form — one source of truth for `system_settings`. The preset

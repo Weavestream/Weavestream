@@ -1,20 +1,25 @@
 'use client';
 
 import type { CSSProperties } from 'react';
+import {
+  PASSWORD_STRENGTH_LABELS,
+  PASSWORD_STRENGTH_TONES,
+  type PasswordStrengthTone,
+} from '@weavestream/shared';
 
-const LABELS = ['Very weak', 'Weak', 'Fair', 'Strong', 'Very strong'];
-// `--warn` / `--ok`, not `--warning` / `--success`: the latter two are
-// defined nowhere in the token set, so every score of 2+ used to paint
-// its hardcoded fallback identically in both themes while score 0–1
-// (on the real `--danger` token) shifted correctly — an inconsistency
-// within a single row of bars.
-const TONES = [
-  'var(--danger)',
-  'var(--danger)',
-  'var(--warn)',
-  'var(--ok)',
-  'var(--ok)',
-];
+const LABELS = PASSWORD_STRENGTH_LABELS;
+// The shared tones are semantic names; this is the desktop mapping to
+// CSS. `--warn` / `--ok`, not `--warning` / `--success`: the latter two
+// are defined nowhere in the token set, so every score of 2+ used to
+// paint its hardcoded fallback identically in both themes while score
+// 0–1 (on the real `--danger` token) shifted correctly — an
+// inconsistency within a single row of bars.
+const TONE_TO_CSS: Record<PasswordStrengthTone, string> = {
+  danger: 'var(--danger)',
+  warn: 'var(--warn)',
+  ok: 'var(--ok)',
+};
+const TONES = PASSWORD_STRENGTH_TONES.map((tone) => TONE_TO_CSS[tone]);
 
 /**
  * Compact 0..4 strength bar sourced from zxcvbn (computed server-side

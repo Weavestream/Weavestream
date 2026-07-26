@@ -12,6 +12,9 @@ import { MfaSetupHandoffScreen } from './screens/MfaSetupHandoffScreen';
 import { MoreTab } from './screens/MoreTab';
 import { PlaceholderTab } from './screens/PlaceholderTab';
 import { TabShell } from './screens/TabShell';
+import { PasswordsListScreen } from './features/passwords/PasswordsListScreen';
+import { PasswordDetailScreen } from './features/passwords/PasswordDetailScreen';
+import { PasswordFormScreen } from './features/passwords/PasswordFormScreen';
 import { signOutAndReset } from './lib/sign-out';
 
 /**
@@ -60,13 +63,53 @@ const tabsLayoutRoute = createRoute({
 const passwordsRoute = createRoute({
   getParentRoute: () => tabsLayoutRoute,
   path: '/passwords',
+  /**
+   * Chip filters ride the search params so back-from-detail restores
+   * the filtered view. Undeclared params are dropped on navigation —
+   * same reason the layout route declares `sheet`.
+   */
+  validateSearch: (
+    search: Record<string, unknown>,
+  ): { folder?: string; view?: 'attention' | 'archived' } => {
+    const out: { folder?: string; view?: 'attention' | 'archived' } = {};
+    if (typeof search.folder === 'string' && search.folder) out.folder = search.folder;
+    if (search.view === 'attention' || search.view === 'archived') out.view = search.view;
+    return out;
+  },
   component: function PasswordsRoute() {
-    return (
-      <PlaceholderTab
-        title="Passwords"
-        note="Credentials for this organization arrive in the next release."
-      />
-    );
+    const filter = passwordsRoute.useSearch();
+    return <PasswordsListScreen filter={filter} />;
+  },
+});
+
+const passwordDetailRoute = createRoute({
+  getParentRoute: () => tabsLayoutRoute,
+  path: '/passwords/$passwordId',
+  component: function PasswordDetailRoute() {
+    const { passwordId } = passwordDetailRoute.useParams();
+    return <PasswordDetailScreen passwordId={passwordId} />;
+  },
+});
+
+// Full-viewport form pages. The static `/passwords/new` outranks the
+// `$passwordId` param in TanStack's route scoring, so there is no
+// ambiguity with the detail route. The Shell hides the tab bar for
+// both paths (`hideTabBarFor`), which is what makes them ordinary
+// routed pages rather than overlays.
+const passwordNewRoute = createRoute({
+  getParentRoute: () => tabsLayoutRoute,
+  path: '/passwords/new',
+  component: function PasswordNewRoute() {
+    return <PasswordFormScreen mode="create" />;
+  },
+});
+
+const passwordEditRoute = createRoute({
+  getParentRoute: () => tabsLayoutRoute,
+  path: '/passwords/$passwordId/edit',
+  component: function PasswordEditRoute() {
+    const { passwordId } = passwordEditRoute.useParams();
+    return <PasswordFormScreen mode="edit" passwordId={passwordId} />;
   },
 });
 
@@ -180,6 +223,9 @@ const routeTree = rootRoute.addChildren([
     indexRoute,
     appRoute,
     passwordsRoute,
+    passwordNewRoute,
+    passwordDetailRoute,
+    passwordEditRoute,
     articlesRoute,
     assetsRoute,
     moreRoute,

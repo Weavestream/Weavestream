@@ -24,5 +24,12 @@
     "tsBuildInfoFile": "./dist/browser/.tsbuildinfo"
   },
   "include": ["src/browser/**/*.ts"],
-  "exclude": ["src/browser/**/*.spec.ts"]
+  "exclude": ["src/browser/**/*.spec.ts"],
+  // `password-generator.ts` imports from `../schemas/`, which sits
+  // outside this project's `rootDir`. The reference makes `tsc -b`
+  // resolve that import against the main project's emitted
+  // declarations instead of erroring with TS6059 — and the emitted
+  // CJS `require('../schemas/…js')` lands correctly because both
+  // projects share the `dist/` root.
+  "references": [{ "path": "./tsconfig.json" }]
 }

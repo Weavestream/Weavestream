@@ -64,7 +64,10 @@ export function MoreTab() {
     // device without scrolling: that holds at the default text size, and
     // large text, an error banner, or the keyboard must degrade to
     // scrolling rather than clipping the sign-out button off the screen.
-    <main className="flex min-h-0 flex-1 flex-col gap-3.25 overflow-y-auto px-4.5 pb-5 pt-2">
+    // `max-w-page mx-auto` = the shared content column every screen
+    // uses (see tokens.css), and `pt-edge-t` because this screen has
+    // no header above it to own the status-bar inset.
+    <main className="mx-auto flex min-h-0 w-full max-w-page flex-1 flex-col gap-3.25 overflow-y-auto px-4.5 pb-5 pt-edge-t">
       <Title>More</Title>
 
       <Card className="flex items-center gap-3.25 p-3.25">

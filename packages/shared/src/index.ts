@@ -12,6 +12,8 @@
  * are erased by TypeScript before any bundler sees them.
  */
 export * from './roles.js';
+export * from './password-strength.js';
+export * from './safe-external-href.js';
 export * from './date-format.js';
 export * from './ui-cookie.js';
 export * from './schemas/index.js';

@@ -40,6 +40,24 @@ export function readOrgStamp(state: unknown): string | null | undefined {
   return typeof value === 'string' ? value : undefined;
 }
 
+/**
+ * Whether this history entry was pushed **directly from its parent
+ * screen** (list → detail, detail → edit), stamped at push time via
+ * `upIsBack`.
+ *
+ * The labeled back chevron ("‹ Passwords") is an UP affordance, but
+ * browser history is chronological ACROSS tabs — after
+ * detail → More-tab → Passwords-tab, the current detail entry's
+ * previous history entry is the More screen, so a blind
+ * `history.back()` would send "‹ Passwords" to More. `useBackOr` pops
+ * history only when this stamp says the parent really is one entry
+ * behind; otherwise it navigates structurally.
+ */
+export function readUpIsBack(state: unknown): boolean {
+  if (typeof state !== 'object' || state === null) return false;
+  return (state as Record<string, unknown>).upIsBack === true;
+}
+
 export interface ScopedNavigateOptions {
   /**
    * Target path. Typed as `string` rather than the router's route-literal
@@ -60,6 +78,14 @@ export interface ScopedNavigateOptions {
    * the guard.
    */
   orgId?: string | null;
+  /**
+   * Mark the pushed entry as "the parent screen is one history entry
+   * behind" — set ONLY when pushing a child directly from its parent
+   * (list → detail, detail → edit). See `readUpIsBack`. Survives a
+   * later `replace` (create form → new detail) because the state
+   * updater spreads the previous entry's state.
+   */
+  upIsBack?: boolean;
 }
 
 export function useScopedNavigate() {
@@ -67,7 +93,7 @@ export function useScopedNavigate() {
   const { currentOrg } = useOrgScope();
 
   return useCallback(
-    ({ to, replace, search, orgId }: ScopedNavigateOptions) => {
+    ({ to, replace, search, orgId, upIsBack }: ScopedNavigateOptions) => {
       const stampedOrgId = orgId !== undefined ? orgId : (currentOrg?.id ?? null);
       // One cast, for the `to: string` reason above. `state` uses the
       // updater form so the router's own internal keys survive.
@@ -75,10 +101,18 @@ export function useScopedNavigate() {
         to,
         replace,
         search,
-        state: (prev: Record<string, unknown>) => ({
-          ...prev,
-          orgId: stampedOrgId,
-        }),
+        state: (prev: Record<string, unknown>) => {
+          const next: Record<string, unknown> = { ...prev, orgId: stampedOrgId };
+          // `upIsBack` is POSITIONAL ("my parent is one entry behind"),
+          // and `prev` here is the entry being navigated AWAY from — so
+          // a push must never inherit it (or a stamped detail would
+          // leak the stamp onto the More tab and re-break the chevron),
+          // while a replace keeps it (same stack position, e.g. the
+          // create form replacing itself with the new detail).
+          if (upIsBack) next.upIsBack = true;
+          else if (!replace) delete next.upIsBack;
+          return next;
+        },
       } as never);
     },
     [navigate, currentOrg],

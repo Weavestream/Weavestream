@@ -11,7 +11,7 @@ import {
 } from '@weavestream/shared';
 import { Btn, Icon, useToast } from '../ui';
 import { copyToClipboard } from '@weavestream/shared/browser';
-import { generatePassword } from '../../lib/password-generator';
+import { generatePassword } from '@weavestream/shared/browser';
 
 /**
  * Passphrase-generator popover anchored inside `SecretInput`.

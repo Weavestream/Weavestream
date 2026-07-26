@@ -70,6 +70,137 @@ export const MANAGER_PRESET: readonly PlatformCapability[] = [
 ] as const;
 
 // ───────────────────────────────────────────────────────────────────
+// RBAC v2 — capability + access resolution
+// ───────────────────────────────────────────────────────────────────
+//
+// Mirrors `apps/api/src/rbac/permission.service.ts`. Clients use these
+// only to *hide* unreachable controls; the server is still the source
+// of truth and will 403 anything stale.
+//
+// Promoted from `apps/web/src/lib/roles.ts` so `apps/mobile` can gate
+// its write UI without importing across the app boundary. The types
+// are **structural** because the two apps' `/me` payloads differ in
+// one load-bearing way: the web `/me` nests `company: { id }` on each
+// membership, while `/auth/me` (which mobile consumes) returns a flat
+// `companyId`. `activeMembershipFor` accepts either — matching only
+// one shape would silently evaluate every mobile check to NONE.
+
+/** The slice of a membership row the access helpers need. */
+export interface MembershipLike {
+  role: MembershipRole;
+  expiresAt: string | null;
+  /** Flat shape (`/auth/me`). */
+  companyId?: string;
+  /** Nested shape (`/me`). */
+  company?: { id: string };
+}
+
+/**
+ * The smallest possible "viewer" identity the helpers need to evaluate
+ * a permission check. Both apps' `Me` types satisfy it structurally.
+ */
+export interface ViewerLike {
+  role: UserRole;
+  globalAccess: GlobalAccess | null;
+  platformCapabilities: readonly PlatformCapability[];
+  memberships: readonly MembershipLike[];
+}
+
+export type CompanyAccess = 'FULL' | 'READONLY' | 'NONE';
+
+/**
+ * Non-revoked, non-expired memberships for the current user. The API
+ * already hides revoked rows from `/me`, but expiry is a client-side
+ * clock comparison so we normalise it here. Generic so callers keep
+ * their own richer membership type on the way out.
+ */
+export function activeMemberships<M extends MembershipLike>(me: {
+  memberships: readonly M[];
+}): M[] {
+  const now = Date.now();
+  return me.memberships.filter(
+    (m) => !m.expiresAt || new Date(m.expiresAt).getTime() > now,
+  );
+}
+
+export function activeMembershipFor<M extends MembershipLike>(
+  me: { memberships: readonly M[] } | null | undefined,
+  companyId: string,
+): M | null {
+  if (!me) return null;
+  return (
+    activeMemberships(me).find(
+      (m) => (m.company?.id ?? m.companyId) === companyId,
+    ) ?? null
+  );
+}
+
+/**
+ * Per-company effective access for the current viewer. Resolution
+ * order matches the API's `can()`:
+ *   1. SUPER_ADMIN → always FULL
+ *   2. Active `Membership` on the company → its role wins (FULL or READONLY)
+ *   3. Operator with `globalAccess=FULL/READONLY` → that tier
+ *   4. Anything else → NONE
+ */
+export function effectiveCompanyAccess(
+  me: ViewerLike | null | undefined,
+  companyId: string,
+): CompanyAccess {
+  if (!me) return 'NONE';
+  if (me.role === 'SUPER_ADMIN') return 'FULL';
+
+  const membership = activeMembershipFor(me, companyId);
+  if (membership) return membership.role;
+
+  // Only OPERATORs ever benefit from the global tier — CONTRACTOR and
+  // CLIENT_USER without a matching membership get nothing.
+  if (me.role === 'OPERATOR') {
+    if (me.globalAccess === 'FULL') return 'FULL';
+    if (me.globalAccess === 'READONLY') return 'READONLY';
+  }
+
+  return 'NONE';
+}
+
+export function canReadCompany(
+  me: ViewerLike | null | undefined,
+  companyId: string,
+): boolean {
+  return effectiveCompanyAccess(me, companyId) !== 'NONE';
+}
+
+export function canWriteCompany(
+  me: ViewerLike | null | undefined,
+  companyId: string,
+): boolean {
+  return effectiveCompanyAccess(me, companyId) === 'FULL';
+}
+
+/**
+ * Capability check. SUPER_ADMIN implicitly holds every capability; an
+ * OPERATOR holds only the ones explicitly granted on `User.platformCapabilities`.
+ * CONTRACTOR/CLIENT_USER never hold capabilities.
+ */
+export function hasCapability(
+  me: Pick<ViewerLike, 'role' | 'platformCapabilities'> | null | undefined,
+  capability: PlatformCapability,
+): boolean {
+  if (!me) return false;
+  if (me.role === 'SUPER_ADMIN') return true;
+  return me.platformCapabilities.includes(capability);
+}
+
+export function hasAnyCapability(
+  me: Pick<ViewerLike, 'role' | 'platformCapabilities'> | null | undefined,
+  capabilities: readonly PlatformCapability[],
+): boolean {
+  if (!me) return false;
+  if (me.role === 'SUPER_ADMIN') return true;
+  return capabilities.some((c) => me.platformCapabilities.includes(c));
+}
+
+// ───────────────────────────────────────────────────────────────────
 // Display helpers
 // ───────────────────────────────────────────────────────────────────
 //
