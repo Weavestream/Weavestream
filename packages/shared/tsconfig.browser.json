@@ -18,7 +18,10 @@
     "types": [],
     "rootDir": "./src/browser",
     "outDir": "./dist/browser",
-    "composite": true
+    "composite": true,
+    // See the note in tsconfig.json — kept with its output so a deleted
+    // `dist` cannot leave tsc believing there is nothing to emit.
+    "tsBuildInfoFile": "./dist/browser/.tsbuildinfo"
   },
   "include": ["src/browser/**/*.ts"],
   "exclude": ["src/browser/**/*.spec.ts"]
