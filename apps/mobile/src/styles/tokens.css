@@ -1,0 +1,76 @@
+/* Weavestream Mobile — design tokens.
+ *
+ * Split by axis, deliberately: **inherit color, own the geometry.**
+ *
+ * Color comes from the shared file below, so the user's accent preference
+ * carries over from desktop, `--accent-ink` stays the tested foreground
+ * for `--accent`, and a future palette change lands on both apps at once.
+ *
+ * Geometry cannot be shared and is defined here. The radius scale settles
+ * it on its own: desktop is 3/5/8px, mobile is 9–30px. A 3px card and a
+ * 16px card are different visual languages and one set of `--radius-*`
+ * vars cannot serve both. Same for type scale and touch sizing.
+ *
+ * Values below come from the design handoff's spec tables
+ * (Build_Plan/Mobile/design_handoff_weavestream_mobile/README.md).
+ * Where the handoff's hexes differ from the shared tokens, the tokens
+ * win — the handoff was drawn independently and lands a hair off the
+ * real palette (its `#fbfbf9` frame vs `--bg: #fafaf9`, its `#e6e5e0`
+ * border vs `--line: #ebe9e4`). Matching the existing values costs
+ * nothing visually and avoids a slow brand fork.
+ *
+ * NOTE: the handoff's fixed teal `#0d7d72` is NOT used. Accent is
+ * `--accent`, which follows the user's preference — so the resting UI is
+ * lime (the default) unless they chose teal. Anything deriving from the
+ * accent (the raised Ask button's glow, the copy-button fill) must
+ * derive from the var, or it desaturates against a non-teal accent.
+ */
+@import '@weavestream/shared/styles/color-tokens.css';
+
+:root {
+  /* ---- Radii (handoff §Radius) ---- */
+  --r-tile: 9px; /* org tile */
+  --r-seg: 10px; /* segmented-control segment */
+  --r-chip: 11px; /* filter chip */
+  --r-btn: 12px; /* icon buttons, dashed chips */
+  --r-pill: 13px; /* primary button, avatars */
+  --r-field: 14px; /* inputs, copy button */
+  --r-card: 16px; /* list cards, sign out */
+  --r-group: 18px; /* grouped containers, profile card */
+  --r-ask: 20px; /* raised Ask button, chat bubbles */
+  --r-sheet: 30px; /* bottom-sheet top corners */
+
+  /* ---- Sizes (handoff §Sizes — "non-negotiable") ---- */
+  --tap-min: 44px; /* minimum touch target */
+  --control-h: 48px; /* standard interactive height */
+  --card-min-h: 74px; /* password/list card */
+  --row-min-h: 70px; /* org + search result row */
+  --group-row-h: 54px; /* row inside a grouped list */
+  --chip-h: 38px;
+  --tab-icon: 25px;
+  --ask-size: 60px;
+
+  /* ---- Type scale (handoff §Typography) ---- */
+  --fs-screen-title: 30px; /* letter-spacing -0.025em */
+  --fs-sheet-title: 25px; /* -0.02em */
+  --fs-org-name: 19px; /* -0.015em */
+  --fs-card-title: 17px; /* -0.01em */
+  --fs-body: 16px;
+  --fs-meta: 14px; /* mono */
+  --fs-section: 12px; /* mono, 0.1em, uppercase */
+  --fs-tab: 11px;
+
+  /* Self-hosted woff2, Latin subset only (see fonts.css). A CDN is
+   * impossible regardless of preference: the `/m` CSP is
+   * `default-src 'self'`. Family names are Fontsource's, not the
+   * marketing names — it ships Geist as 'Geist Sans'. */
+  --font-sans: 'Geist Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI',
+    system-ui, sans-serif;
+  --font-mono: 'Geist Mono', ui-monospace, 'SF Mono', Menlo, Consolas,
+    monospace;
+
+  /* Derived from --accent so it tracks the user's palette rather than
+   * baking in the handoff's teal. */
+  --shadow-ask: 0 12px 26px -10px color-mix(in oklab, var(--accent) 80%, transparent);
+  --shadow-seg: 0 1px 3px rgba(20, 20, 18, 0.1);
+}

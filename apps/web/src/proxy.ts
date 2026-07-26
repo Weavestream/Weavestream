@@ -8,6 +8,7 @@ import {
   normalizeClientIp,
   resolveClientIpFromXff,
 } from './lib/client-ip';
+import { buildCsp } from './lib/csp';
 import { getActiveIpRules } from './lib/ip-rules-cache';
 import {
   ACCESS_COOKIE_NAME,
@@ -35,51 +36,16 @@ export async function proxy(req: NextRequest) {
     req.nextUrl.protocol === 'https:' ||
     req.headers.get('x-forwarded-proto') === 'https';
 
-  // Next.js dev server (webpack HMR + React Refresh) relies on eval() to
-  // hot-swap modules. Permit it in development only; production CSP stays
-  // strict (nonce + strict-dynamic, no unsafe-eval).
+  // Two policies, chosen by path — see `lib/csp.ts` for both and for why
+  // the `/m` branch cannot reuse the main one. Kept in a next-free module
+  // so it can be unit-tested; this one can't be.
   const isDev = process.env.NODE_ENV !== 'production';
-  const scriptSrc = isDev
-    ? `script-src 'self' 'nonce-${nonce}' 'strict-dynamic' 'unsafe-eval'`
-    : `script-src 'self' 'nonce-${nonce}' 'strict-dynamic'`;
-
-  // Every thumbnail, attachment, logo, and export PDF is streamed
-  // through the API (`/uploads/:id/image`, `/export/job/:id/download`).
-  // That keeps the CSP same-origin only, and means a single reverse-
-  // proxy entry covers the whole app.
-
-  // Dev also needs websocket access for HMR; production keeps connect-src tight.
-  const connectSrc = [
-    'connect-src',
-    "'self'",
-    ...(isDev ? ['ws:', 'wss:'] : []),
-  ].join(' ');
-
-  // No browser render path uses data: or blob: images — the editor stores
-  // same-origin `/uploads/:id/image` URLs, Tiptap's default allowBase64:false
-  // rejects pasted data: images, and the data: URLs in icon.tsx/apple-icon.tsx
-  // are consumed server-side by Satori. Re-add a scheme here only when a
-  // feature actually needs it (e.g. blob: for client-side upload previews).
-  const imgSrc = ['img-src', "'self'"].join(' ');
-
-  // style-src keeps 'unsafe-inline': Next.js streams inline <style> tags for
-  // CSS-in-JS/fonts and React `style=` attributes need style-src-attr
-  // 'unsafe-inline' regardless. With script-src locked to nonce +
-  // strict-dynamic, style injection alone is not an XSS vector (worst case is
-  // exfiltration-via-CSS, which requires an HTML-injection primitive that the
-  // script policy already contains). Revisit if Next.js ships nonce'd styles.
-  const csp = [
-    "default-src 'self'",
-    scriptSrc,
-    "style-src 'self' 'unsafe-inline'",
-    imgSrc,
-    connectSrc,
-    "object-src 'none'",
-    "frame-ancestors 'none'",
-    "base-uri 'self'",
-    "form-action 'self'",
-    ...(isHttps ? ['upgrade-insecure-requests'] : []),
-  ].join('; ');
+  const csp = buildCsp({
+    pathname: req.nextUrl.pathname,
+    nonce,
+    isDev,
+    isHttps,
+  });
 
   const requestHeaders = new Headers(req.headers);
   requestHeaders.set('x-nonce', nonce);

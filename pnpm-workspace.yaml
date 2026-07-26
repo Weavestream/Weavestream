@@ -23,6 +23,17 @@ overrides:
   # declared range: it dedupes two full sharp+libvips binary sets down
   # to one, and the next/image path that would exercise it is unused.
   sharp: 0.35.3
+  # Two React apps (`apps/web` on Next, `apps/mobile` on Vite) declaring
+  # independent ranges let pnpm resolve two copies of the React types.
+  # TypeScript treats those as *unrelated* nominal types, so a `Ref`
+  # produced under one is not assignable to a `Ref` expected by the
+  # other — the failure surfaces as "Two different types with this name
+  # exist" in files that touch neither app's boundary, and as
+  # "cannot be named without a reference to .pnpm/@types+react@..."
+  # during `next build`. Forcing one copy is the only fix that holds as
+  # both apps' ranges drift; bump both together.
+  "@types/react": 19.2.17
+  "@types/react-dom": 19.2.3
 
 supportedArchitectures:
   os:

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import { randomClientId } from '../../../../../../lib/client-id';
+import { randomClientId } from '@weavestream/shared/browser';
 import { lower } from '../../../../../../lib/term';
 import { useTerm } from '../../../../../../lib/term-context';
 import {

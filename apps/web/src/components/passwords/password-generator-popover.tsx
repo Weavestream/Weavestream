@@ -10,7 +10,7 @@ import {
   type PasswordGeneratorSeparator,
 } from '@weavestream/shared';
 import { Btn, Icon, useToast } from '../ui';
-import { copyToClipboard } from '../../lib/clipboard';
+import { copyToClipboard } from '@weavestream/shared/browser';
 import { generatePassword } from '../../lib/password-generator';
 
 /**

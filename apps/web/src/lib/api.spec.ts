@@ -3,12 +3,16 @@ import { apiFetch } from './api';
 const requestStepUp = jest.fn();
 const hasStepUpOpener = jest.fn();
 
-jest.mock('./csrf', () => ({ ensureCsrf: async () => 'csrf-token' }));
+jest.mock('@weavestream/shared/browser', () => ({
+  ensureCsrf: async () => 'csrf-token',
+}));
+// `isStepUpProblem` is deliberately NOT mocked — it now lives in
+// `@weavestream/shared`, which loads for real here, so these tests
+// exercise the actual `step_up_required` narrowing rather than a
+// local re-implementation that could drift from it.
 jest.mock('./step-up', () => ({
   requestStepUp: (...a: unknown[]) => requestStepUp(...a),
   hasStepUpOpener: () => hasStepUpOpener(),
-  isStepUpProblem: (p: unknown) =>
-    typeof p === 'object' && p !== null && (p as { code?: unknown }).code === 'step_up_required',
 }));
 
 /** Minimal Response stand-in — apiFetch only touches these four members. */

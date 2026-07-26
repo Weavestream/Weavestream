@@ -1,0 +1,28 @@
+{
+  // ts-jest runs under CommonJS; the app itself builds as ESM via Vite.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "module": "CommonJS",
+    "moduleResolution": "Node",
+    "incremental": false,
+    "jsx": "react-jsx",
+    "types": ["node", "jest", "@testing-library/jest-dom"],
+    // `moduleResolution: Node` (required for ts-jest's CommonJS emit)
+    // predates package `exports` maps, so it cannot follow
+    // `@weavestream/shared/browser` to its declarations. Point at them
+    // directly — the same workaround `apps/api/tsconfig.json` uses for
+    // the main entry. Jest's own resolver handles the exports map at
+    // runtime; this is purely to satisfy tsc.
+    "paths": {
+      "@/*": ["src/*"],
+      "@weavestream/shared": ["../../packages/shared/dist/index.d.ts"],
+      "@weavestream/shared/browser": [
+        "../../packages/shared/dist/browser/index.d.ts"
+      ]
+    }
+  },
+  // Override the app config's spec exclusions — this project exists to
+  // typecheck exactly those files.
+  "exclude": ["dist", "node_modules"],
+  "include": ["src", "test"]
+}

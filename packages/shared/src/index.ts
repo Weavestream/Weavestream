@@ -13,6 +13,7 @@
  */
 export * from './roles.js';
 export * from './date-format.js';
+export * from './ui-cookie.js';
 export * from './schemas/index.js';
 export * from './queues/index.js';
 export * from './templates/index.js';

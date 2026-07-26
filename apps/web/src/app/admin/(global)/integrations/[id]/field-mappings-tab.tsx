@@ -14,7 +14,7 @@ import type {
   SourceFieldDto,
 } from '@weavestream/shared';
 import { apiFetch } from '../../../../../lib/api';
-import { randomClientId } from '../../../../../lib/client-id';
+import { randomClientId } from '@weavestream/shared/browser';
 import {
   Btn,
   Field,

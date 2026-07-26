@@ -10,7 +10,7 @@ const push = jest.fn();
 
 jest.mock('next/navigation', () => ({ useRouter: () => ({ push, refresh: jest.fn() }) }));
 jest.mock('../../../lib/api', () => ({ apiFetch: (...a: unknown[]) => apiFetch(...a) }));
-jest.mock('../../../lib/clipboard', () => ({
+jest.mock('@weavestream/shared/browser', () => ({
   copyToClipboard: (...a: unknown[]) => copyToClipboard(...a),
 }));
 jest.mock('../../../components/ui', () => ({

@@ -21,6 +21,7 @@ WORKDIR /repo
 FROM base AS deps
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml* .npmrc* ./
 COPY apps/web/package.json ./apps/web/
+COPY apps/mobile/package.json ./apps/mobile/
 COPY packages/config/package.json ./packages/config/
 COPY packages/shared/package.json ./packages/shared/
 RUN --mount=type=cache,id=pnpm,target=/pnpm/store \
@@ -31,6 +32,7 @@ FROM deps AS build
 COPY tsconfig.base.json tsconfig.json ./
 COPY packages/config ./packages/config
 COPY packages/shared ./packages/shared
+COPY apps/mobile ./apps/mobile
 COPY apps/web ./apps/web
 # NEXT_PUBLIC_* is baked at build time, so the version must flow into
 # this stage — not just the runner.
@@ -41,7 +43,15 @@ ENV NEXT_TELEMETRY_DISABLED=1 \
 # @weavestream/shared is a workspace dep whose package.json points to
 # `dist/index.js`, so it must be compiled before `next build` can
 # resolve its exports.
+#
+# @weavestream/mobile must build BEFORE the web app: its postbuild
+# publishes the PWA bundle into `apps/web/public/m` and the per-accent
+# HTML shells into `apps/web/mobile-shell`, both of which `next build`
+# then validates (via apps/web's prebuild guard) and ships. A host-built
+# bundle cannot be substituted — `.dockerignore` excludes `**/dist`, so
+# it has to be produced inside this stage.
 RUN pnpm --filter @weavestream/shared build \
+ && pnpm --filter @weavestream/mobile build \
  && pnpm --filter @weavestream/web build
 
 # ───── runner ─────
@@ -63,6 +73,12 @@ WORKDIR /app
 COPY --from=build /repo/node_modules ./node_modules
 COPY --from=build /repo/apps/web/.next ./apps/web/.next
 COPY --from=build /repo/apps/web/public ./apps/web/public
+# The mobile PWA's HTML shells (one per accent) + build marker. Kept
+# outside `public/` on purpose: a shell reachable as a static file would
+# bypass the `/m` route handler's `no-store` and accent selection, and a
+# second cacheable entry point going stale is the classic PWA white
+# screen. `app/m/[[...slug]]/route.ts` reads them from here.
+COPY --from=build /repo/apps/web/mobile-shell ./apps/web/mobile-shell
 COPY --from=build /repo/apps/web/package.json ./apps/web/package.json
 COPY --from=build /repo/apps/web/next.config.js ./apps/web/next.config.js
 COPY --from=build /repo/apps/web/node_modules ./apps/web/node_modules

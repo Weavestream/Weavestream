@@ -137,6 +137,33 @@ const nextConfig = {
           { key: 'Content-Security-Policy', value: "default-src 'none'" },
         ],
       },
+      // The mobile PWA's hashed assets.
+      //
+      // NOTE: deliberately NO `Cache-Control: immutable` here, and do not
+      // re-add one. `headers()` matches by pathname and knows nothing
+      // about the response, so the rule also applied to requests for
+      // assets that DO NOT EXIST — which the `/m` catch-all answers with
+      // a 404. It also *replaces* any Cache-Control the route handler
+      // sets, so the handler cannot opt out.
+      //
+      // The result was a 404 cached for a year against a content-hashed
+      // URL. That is a rollback landmine: a browser that requests
+      // `/m/assets/index-<hash>.js` during a deploy race (shell fetched
+      // from build A, assets already replaced by build B) caches the
+      // miss, and if that build is ever rolled back the same browser
+      // serves the cached 404 forever and the app is dead for that user.
+      // Low probability, permanent consequence, no server-side fix.
+      //
+      // Assets therefore fall back to Next's public-folder default
+      // (`max-age=0` + ETag), which is what every other file under
+      // `public/` already gets — repeat loads are cheap 304s. Aggressive
+      // asset caching for the PWA belongs in the Phase 3 service worker,
+      // where it can be versioned and invalidated deliberately, rather
+      // than in an HTTP header that cannot distinguish a hit from a miss.
+      {
+        source: '/m/assets/:path*',
+        headers: [{ key: 'X-Content-Type-Options', value: 'nosniff' }],
+      },
     ];
   },
 };

@@ -5,6 +5,7 @@
     { "path": "./packages/shared" },
     { "path": "./packages/db" },
     { "path": "./apps/api" },
-    { "path": "./apps/web" }
+    { "path": "./apps/web" },
+    { "path": "./apps/mobile" }
   ]
 }

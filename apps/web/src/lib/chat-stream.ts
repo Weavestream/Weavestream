@@ -5,7 +5,7 @@ import type {
   ChatToolCallDto,
   ChatTurnIntent,
 } from '@weavestream/shared';
-import { ensureCsrf } from './csrf';
+import { ensureCsrf } from '@weavestream/shared/browser';
 
 /**
  * Streams an assistant reply for the given conversation. The server

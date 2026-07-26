@@ -49,3 +49,13 @@ docs/permissions.md
 .cursor/rules/
 .zed
 .zed/rules/
+
+# Mobile PWA build output, published into apps/web by
+# apps/mobile/scripts/emit-to-web.mjs. All three are generated:
+# public/m holds the hashed assets, mobile-shell holds the per-accent
+# HTML variants + build marker, and .mobile-stage is the atomic-swap
+# staging area (cleared on every publish, but ignored so an interrupted
+# build can never be committed or swept into a Docker context).
+apps/web/public/m/
+apps/web/mobile-shell/
+apps/web/.mobile-stage/

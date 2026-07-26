@@ -1,7 +1,8 @@
 'use client';
 
-import { ensureCsrf } from './csrf';
-import { hasStepUpOpener, isStepUpProblem, requestStepUp } from './step-up';
+import { ensureCsrf } from '@weavestream/shared/browser';
+import { isStepUpProblem } from '@weavestream/shared';
+import { hasStepUpOpener, requestStepUp } from './step-up';
 
 export async function apiFetch<T>(
   path: string,

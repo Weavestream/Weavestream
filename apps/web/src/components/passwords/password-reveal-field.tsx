@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { apiFetch } from '../../lib/api';
-import { copyToClipboard, copyWithPromise } from '../../lib/clipboard';
+import { copyToClipboard, copyWithPromise } from '@weavestream/shared/browser';
 import { Btn, Icon, useToast } from '../ui';
 
 const AUTO_HIDE_MS = 30_000;
