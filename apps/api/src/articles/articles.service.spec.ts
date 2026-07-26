@@ -1013,17 +1013,21 @@ describe('ArticlesService', () => {
   });
 
   describe('list', () => {
-    it('orders by archivedAt (nulls first) then title alphabetically', async () => {
+    it('orders by archivedAt (nulls first), title, then id as the cursor tie-breaker', async () => {
       const { prisma, audit, stars, uploads, relations } = makeStubs();
       const findManySpy = jest.spyOn(prisma.article, 'findMany');
-       
+
       const svc = new ArticlesService(prisma as any, audit as any, stars as any, uploads as any, relations as any);
 
       await svc.list(actor(), 'c-1');
 
+      // The trailing { id: 'asc' } is load-bearing: Prisma cursor
+      // pagination needs a unique total order or duplicate titles make
+      // pages skip/repeat rows. Real ordering semantics are covered by
+      // articles.pagination.db.spec.ts (this fake ignores orderBy).
       expect(findManySpy).toHaveBeenCalledWith(
         expect.objectContaining({
-          orderBy: [{ archivedAt: 'asc' }, { title: 'asc' }],
+          orderBy: [{ archivedAt: 'asc' }, { title: 'asc' }, { id: 'asc' }],
         }),
       );
     });

@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ApiError, StepUpCancelledError } from '../../lib/api';
+import { ApiError, StepUpCancelledError, isRestrictedError } from '../../lib/api';
 import { redirectToLogin } from '../../lib/navigate';
 import { useToast } from '../../components/Toast';
-import { isReasonRequired, isRestrictedError, revealPassword } from './api';
+import { isReasonRequired, revealPassword } from './api';
 import { consumeUniversalClipboardNotice } from './clipboard-guard';
 import { copySecret } from './copy';
 

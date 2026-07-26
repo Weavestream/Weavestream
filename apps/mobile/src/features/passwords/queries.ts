@@ -12,7 +12,6 @@ import {
   createPassword,
   fetchPasswordDetail,
   fetchPasswordFolders,
-  fetchPasswordRelations,
   fetchPasswords,
   restorePassword,
   updatePassword,
@@ -77,14 +76,6 @@ export function usePasswordFolders(companyId: string | null) {
   return useQuery({
     queryKey: ['password-folders', companyId] as const,
     queryFn: () => fetchPasswordFolders(companyId!),
-    enabled: companyId !== null,
-  });
-}
-
-export function usePasswordRelations(companyId: string | null, passwordId: string) {
-  return useQuery({
-    queryKey: ['relations', companyId, 'password', passwordId] as const,
-    queryFn: () => fetchPasswordRelations(companyId!, passwordId),
     enabled: companyId !== null,
   });
 }

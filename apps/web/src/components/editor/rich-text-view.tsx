@@ -3,7 +3,7 @@
 import { useEditor, EditorContent } from '@tiptap/react';
 import { useMemo } from 'react';
 import { getArticleBodyExtensions } from './article-tiptap-extensions';
-import { normaliseTiptapDoc } from '../../lib/tiptap-doc';
+import { normaliseTiptapDoc } from '@weavestream/shared';
 import './editor.css';
 
 /**

@@ -15,7 +15,10 @@ import { TabShell } from './screens/TabShell';
 import { PasswordsListScreen } from './features/passwords/PasswordsListScreen';
 import { PasswordDetailScreen } from './features/passwords/PasswordDetailScreen';
 import { PasswordFormScreen } from './features/passwords/PasswordFormScreen';
+import { ArticlesListScreen } from './features/articles/ArticlesListScreen';
+import { ArticleDetailScreen } from './features/articles/ArticleDetailScreen';
 import { signOutAndReset } from './lib/sign-out';
+import { UUID_RE } from './lib/uuid';
 
 /**
  * Routes are mounted under `basepath: '/m'`, so `/passwords` here is
@@ -116,13 +119,28 @@ const passwordEditRoute = createRoute({
 const articlesRoute = createRoute({
   getParentRoute: () => tabsLayoutRoute,
   path: '/articles',
+  /**
+   * `folder` must be a UUID or it is dropped: a tampered/mangled deep
+   * link (`?folder=abc`) would otherwise be forwarded to the API, which
+   * now 400s malformed folder ids — a dropped param degrades to the
+   * unfiltered list instead of an error screen.
+   */
+  validateSearch: (search: Record<string, unknown>): { folder?: string } => {
+    const folder = search.folder;
+    return typeof folder === 'string' && UUID_RE.test(folder) ? { folder } : {};
+  },
   component: function ArticlesRoute() {
-    return (
-      <PlaceholderTab
-        title="Articles"
-        note="Runbooks and documentation arrive in the next release."
-      />
-    );
+    const filter = articlesRoute.useSearch();
+    return <ArticlesListScreen filter={filter} />;
+  },
+});
+
+const articleDetailRoute = createRoute({
+  getParentRoute: () => tabsLayoutRoute,
+  path: '/articles/$articleId',
+  component: function ArticleDetailRoute() {
+    const { articleId } = articleDetailRoute.useParams();
+    return <ArticleDetailScreen articleId={articleId} />;
   },
 });
 
@@ -227,6 +245,7 @@ const routeTree = rootRoute.addChildren([
     passwordDetailRoute,
     passwordEditRoute,
     articlesRoute,
+    articleDetailRoute,
     assetsRoute,
     moreRoute,
   ]),

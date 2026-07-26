@@ -74,6 +74,12 @@ jobs:
       # otherwise a broken install step silently drops the credential
       # rendering and AES-256 encryption coverage.
       WEAVESTREAM_REQUIRE_PDF_TOOLS: "1"
+      # DB-mutating integration specs (folder visibility CTE, articles
+      # cursor pagination) are explicit opt-in: locally, @prisma/client
+      # loads the workspace .env, so a DATABASE_URL gate would silently
+      # run them against the DEVELOPMENT database on every `pnpm test`.
+      # This job's throwaway service database is where they belong.
+      WEAVESTREAM_RUN_DB_INTEGRATION_TESTS: "1"
     steps:
       - uses: actions/checkout@v5
       - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0

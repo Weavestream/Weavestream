@@ -19,7 +19,9 @@
     "@tanstack/react-router": "^1.170.18",
     "@weavestream/shared": "workspace:*",
     "react": "^19.2.8",
-    "react-dom": "^19.2.8"
+    "react-dom": "^19.2.8",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1"
   },
   "devDependencies": {
     "@material-symbols/svg-400": "0.45.9",

@@ -15,11 +15,11 @@ import { useOrgScope } from '../../lib/org-scope';
 import { useCompanyAccess } from '../../lib/use-company-access';
 import { useScopedNavigate } from '../../lib/scoped-nav';
 import { useOpenOrgSheet } from '../../screens/TabShell';
-import { isReasonRequired, isRestrictedError, revealPassword } from './api';
+import { isReasonRequired, revealPassword } from './api';
 import { needsAttention } from './attention';
 import { consumeUniversalClipboardNotice } from './clipboard-guard';
 import { copySecret } from './copy';
-import { ApiError, StepUpCancelledError } from '../../lib/api';
+import { ApiError, StepUpCancelledError, isRestrictedError } from '../../lib/api';
 import { redirectToLogin } from '../../lib/navigate';
 import {
   useArchivedPasswords,

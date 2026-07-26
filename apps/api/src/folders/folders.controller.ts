@@ -32,23 +32,30 @@ export class FoldersController {
 
   @Get()
   @RequirePermission('article.read', { companyIdFrom: 'params.companyId' })
-  async list(@Param('companyId', new ParseUUIDPipe()) companyId: string) {
-    return { items: await this.folders.tree(companyId) };
+  async list(
+    @CurrentUser() actor: AuthedUser,
+    @Param('companyId', new ParseUUIDPipe()) companyId: string,
+  ) {
+    return { items: await this.folders.tree(actor, companyId) };
   }
 
   @Get('tree')
   @RequirePermission('article.read', { companyIdFrom: 'params.companyId' })
-  async tree(@Param('companyId', new ParseUUIDPipe()) companyId: string) {
-    return { items: await this.folders.tree(companyId) };
+  async tree(
+    @CurrentUser() actor: AuthedUser,
+    @Param('companyId', new ParseUUIDPipe()) companyId: string,
+  ) {
+    return { items: await this.folders.tree(actor, companyId) };
   }
 
   @Get(':id')
   @RequirePermission('article.read', { companyIdFrom: 'params.companyId' })
   async get(
+    @CurrentUser() actor: AuthedUser,
     @Param('companyId', new ParseUUIDPipe()) companyId: string,
     @Param('id', new ParseUUIDPipe()) id: string,
   ) {
-    return this.folders.get(companyId, id);
+    return this.folders.get(actor, companyId, id);
   }
 
   @Post()

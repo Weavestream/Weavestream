@@ -4,7 +4,7 @@ import { marked } from 'marked';
 import TurndownService from 'turndown';
 import { gfm } from 'turndown-plugin-gfm';
 import { getArticleBodyExtensions } from '../components/editor/article-tiptap-extensions';
-import { normaliseTiptapDoc } from './tiptap-doc';
+import { normaliseTiptapDoc } from '@weavestream/shared';
 
 const articleBodyExtensions = getArticleBodyExtensions();
 

@@ -168,3 +168,53 @@ export const articleVersionDetailSchema = articleVersionSummarySchema.extend({
 
 export type ArticleVersionSummary = z.infer<typeof articleVersionSummarySchema>;
 export type ArticleVersionDetail = z.infer<typeof articleVersionDetailSchema>;
+
+/** `{ id, name }` stub the API hydrates for createdBy/updatedBy. */
+export const articleActorRefSchema = z.object({
+  id: z.string().uuid(),
+  name: z.string(),
+});
+
+/**
+ * Wire shape of `GET /companies/:id/articles` items AND
+ * `GET /companies/:id/articles/:id` — the server serializes both through
+ * the same path, so list rows carry the full body too (list responses
+ * just hard-code `hasDraft: false` and `isStarred: false`).
+ *
+ * `content` stays `unknown`: it is Tiptap/ProseMirror JSON that readers
+ * must feed through `normaliseTiptapDoc` anyway (legacy `{ v, plain }`
+ * rows exist), so deep-typing it here would only invite direct access.
+ *
+ * `provenance` is deliberately omitted: the wire superset is fine under
+ * structural typing, no mobile/web reader consumes it from this type,
+ * and typing it would drag the integration-provenance vocabulary into
+ * every client that imports the article shape.
+ */
+export const articleSchema = z.object({
+  id: z.string().uuid(),
+  companyId: z.string().uuid(),
+  folderId: z.string().uuid().nullable(),
+  title: z.string(),
+  slug: z.string(),
+  editorMode: articleEditorModeSchema,
+  content: z.unknown().nullable(),
+  markdownSource: z.string().nullable(),
+  contentPlaintext: z.string(),
+  excerpt: z.string().nullable(),
+  visibleToClients: z.boolean(),
+  revision: z.number().int(),
+  archivedAt: z.string().nullable(),
+  createdBy: z.string().uuid().nullable(),
+  updatedBy: z.string().uuid().nullable(),
+  createdByUser: articleActorRefSchema.nullable(),
+  updatedByUser: articleActorRefSchema.nullable(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  isStarred: z.boolean(),
+  hasDraft: z.boolean(),
+});
+
+export type ArticleActorRef = z.infer<typeof articleActorRefSchema>;
+export type ArticleSummary = z.infer<typeof articleSchema>;
+/** Same wire shape as the list rows; alias kept for call-site clarity. */
+export type ArticleDetail = ArticleSummary;

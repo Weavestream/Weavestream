@@ -1,8 +1,8 @@
-import type { JSONContent } from '@tiptap/react';
+import { isValidTiptapDoc, type TiptapDoc } from './tiptap.js';
 
 /**
  * Coerce any value the API or local state may hand us into a Tiptap
- * `JSONContent` doc. Handles three shapes:
+ * doc. Handles three shapes:
  *
  *   1. A real Tiptap doc — `{ type: 'doc', content: [...] }`. Returned as-is.
  *   2. A legacy Phase-3 wrapper — `{ v: TiptapDoc, plain: string }`.
@@ -12,15 +12,16 @@ import type { JSONContent } from '@tiptap/react';
  *
  * Anything else (null, empty object, missing `type`) falls through to an
  * empty doc rather than crashing the editor / read view.
+ *
+ * Tightened on promotion to shared (Phase 2b): both the direct root and
+ * the unwrapped legacy `v` must pass `isValidTiptapDoc` — previously any
+ * object merely *containing* a `type` key was returned, which let a
+ * non-doc root (`{ v: { type: 'paragraph' } }`) escape as a "doc". Such
+ * values now fall through to the empty doc instead.
  */
-export function normaliseTiptapDoc(value: unknown): JSONContent {
-  if (
-    value &&
-    typeof value === 'object' &&
-    'type' in (value as Record<string, unknown>) &&
-    (value as { type?: unknown }).type === 'doc'
-  ) {
-    return value as JSONContent;
+export function normaliseTiptapDoc(value: unknown): TiptapDoc {
+  if (isValidTiptapDoc(value)) {
+    return value;
   }
 
   if (
@@ -29,12 +30,8 @@ export function normaliseTiptapDoc(value: unknown): JSONContent {
     'v' in (value as Record<string, unknown>)
   ) {
     const inner = (value as { v: unknown }).v;
-    if (
-      inner &&
-      typeof inner === 'object' &&
-      'type' in (inner as Record<string, unknown>)
-    ) {
-      return inner as JSONContent;
+    if (isValidTiptapDoc(inner)) {
+      return inner;
     }
   }
 

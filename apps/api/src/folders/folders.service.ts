@@ -4,6 +4,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import type { Folder } from '@prisma/client';
 import type {
   ArchiveFolderInput,
@@ -48,15 +49,74 @@ export class FoldersService {
   // Read
   // ------------------------------------------------------------------
 
-  async tree(companyId: string): Promise<SerializedFolderNode[]> {
+  /**
+   * Folder ids a CLIENT_USER may know exist: folders holding at least one
+   * non-archived `visibleToClients` article, plus their ancestor chain
+   * (so a visible leaf stays reachable in the tree). Everything else —
+   * internal-only branches included — must stay invisible: folder *names*
+   * and counts are themselves information (CLAUDE.md §1), and before this
+   * helper the tree endpoint handed a client user the full internal
+   * taxonomy.
+   *
+   * One recursive CTE so the visibility predicate lives in SQL, not in
+   * application pruning. `company_id` and `archived_at IS NULL` are bound
+   * in BOTH branches, and the two arms combine with UNION (not UNION ALL):
+   * the row dedup is also what terminates a malformed `parentId` cycle,
+   * which the database does not prohibit. DISTINCT in the anchor guards
+   * the multiple-visible-articles-per-folder case against a future
+   * rewrite of EXISTS into a JOIN.
+   */
+  private async clientVisibleFolderIds(companyId: string): Promise<Set<string>> {
+    const rows = await this.prisma.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+      WITH RECURSIVE visible AS (
+        SELECT DISTINCT f.id, f.parent_id
+        FROM folders f
+        WHERE f.company_id = ${companyId}::uuid
+          AND f.archived_at IS NULL
+          AND EXISTS (
+            SELECT 1 FROM articles a
+            WHERE a.company_id = ${companyId}::uuid
+              AND a.folder_id = f.id
+              AND a.archived_at IS NULL
+              AND a.visible_to_clients = TRUE
+          )
+        UNION
+        SELECT p.id, p.parent_id
+        FROM folders p
+        JOIN visible v ON v.parent_id = p.id
+        WHERE p.company_id = ${companyId}::uuid
+          AND p.archived_at IS NULL
+      )
+      SELECT id FROM visible
+    `);
+    return new Set(rows.map((r) => r.id));
+  }
+
+  async tree(actor: AuthedUser, companyId: string): Promise<SerializedFolderNode[]> {
+    // Client users get the pruned tree and visible-only counts; every
+    // other role sees the exact pre-existing behaviour.
+    const clientVisible =
+      actor.role === 'CLIENT_USER'
+        ? await this.clientVisibleFolderIds(companyId)
+        : null;
+
+    const folderWhere: Prisma.FolderWhereInput = { companyId, archivedAt: null };
+    if (clientVisible) folderWhere.id = { in: [...clientVisible] };
+    const countWhere: Prisma.ArticleWhereInput = {
+      companyId,
+      archivedAt: null,
+      folderId: { not: null },
+    };
+    if (clientVisible) countWhere.visibleToClients = true;
+
     const [folders, counts] = await Promise.all([
       this.prisma.folder.findMany({
-        where: { companyId, archivedAt: null },
+        where: folderWhere,
         orderBy: [{ position: 'asc' }, { name: 'asc' }],
       }),
       this.prisma.article.groupBy({
         by: ['folderId'],
-        where: { companyId, archivedAt: null, folderId: { not: null } },
+        where: countWhere,
         _count: { _all: true },
       }),
     ]);
@@ -83,8 +143,27 @@ export class FoldersService {
     return roots;
   }
 
-  async get(companyId: string, id: string): Promise<SerializedFolder> {
-    const f = await this.prisma.folder.findFirst({ where: { id, companyId } });
+  async get(actor: AuthedUser, companyId: string, id: string): Promise<SerializedFolder> {
+    // Same client-visibility rule as tree(): a folder with no visible
+    // article anywhere in its subtree does not exist for a CLIENT_USER.
+    // The allowlist is computed BEFORE any row is read and folded into
+    // the read's own WHERE (authorization at the query layer, CLAUDE.md
+    // §1) — so for a client user, a hidden folder and a nonexistent one
+    // take the identical path: CTE, then a findFirst that returns null.
+    // Checking after the read would both fetch an unauthorized row and
+    // leak existence through timing (the CTE only running for rows that
+    // exist). 404, not 403, keeps the endpoint oracle-free like the
+    // articles reads; knowing the UUID is never authorization.
+    const clientVisible =
+      actor.role === 'CLIENT_USER'
+        ? await this.clientVisibleFolderIds(companyId)
+        : null;
+    const f = await this.prisma.folder.findFirst({
+      where: {
+        companyId,
+        id: clientVisible ? { equals: id, in: [...clientVisible] } : id,
+      },
+    });
     if (!f) throw new NotFoundException();
     return this.serialize(f);
   }

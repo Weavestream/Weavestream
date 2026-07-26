@@ -125,3 +125,212 @@
     }
   }
 }
+
+/* ── Prose (article bodies, RICH_TEXT field values) ─────────────────
+ * One typography block serving BOTH render paths — the Tiptap walker
+ * (TiptapView) and react-markdown (MarkdownBody) — so the two formats
+ * cannot drift apart visually. Descendant selectors on purpose:
+ * react-markdown's default elements carry no classNames, and mirroring
+ * the desktop's editor.css approach keeps this one block instead of a
+ * components map that re-styles every tag.
+ * Tokens only — no literal hexes (CLAUDE.md). */
+@layer components {
+  .m-prose {
+    font-size: var(--fs-body);
+    line-height: 1.7;
+    color: var(--text-2);
+    overflow-wrap: break-word;
+  }
+  .m-prose p {
+    margin: 0 0 0.9em;
+  }
+  .m-prose > :first-child {
+    margin-top: 0;
+  }
+  .m-prose > :last-child {
+    margin-bottom: 0;
+  }
+  .m-prose h1,
+  .m-prose h2,
+  .m-prose h3,
+  .m-prose h4,
+  .m-prose h5,
+  .m-prose h6 {
+    font-weight: 600;
+    color: var(--text);
+    margin: 1.4em 0 0.4em;
+    line-height: 1.25;
+  }
+  .m-prose h1 {
+    font-size: 24px;
+    letter-spacing: -0.02em;
+  }
+  .m-prose h2 {
+    font-size: 20px;
+    letter-spacing: -0.015em;
+  }
+  .m-prose h3,
+  .m-prose h4,
+  .m-prose h5,
+  .m-prose h6 {
+    font-size: 17px;
+    letter-spacing: -0.01em;
+  }
+  .m-prose ul,
+  .m-prose ol {
+    list-style: revert;
+    padding-left: 22px;
+    margin: 0 0 0.9em;
+  }
+  .m-prose li {
+    margin: 0.15em 0;
+  }
+  .m-prose li > p {
+    margin-bottom: 0.15em;
+  }
+  /* Task lists: the walker emits ul[data-tasklist]; react-markdown
+   * (remark-gfm) emits li.task-list-item. */
+  .m-prose ul[data-tasklist],
+  .m-prose li.task-list-item {
+    list-style: none;
+  }
+  .m-prose ul[data-tasklist] {
+    padding-left: 2px;
+  }
+  .m-prose .m-task {
+    display: flex;
+    gap: 8px;
+    align-items: flex-start;
+  }
+  .m-prose input[type='checkbox'] {
+    accent-color: var(--accent);
+    width: 18px;
+    height: 18px;
+    margin-top: 3px;
+    flex-shrink: 0;
+  }
+  .m-prose li.task-list-item input[type='checkbox'] {
+    margin-right: 6px;
+  }
+  .m-prose blockquote {
+    border-left: 3px solid var(--line-2);
+    margin: 0 0 0.9em;
+    padding: 2px 0 2px 14px;
+    color: var(--muted);
+  }
+  .m-prose code {
+    font-family: var(--font-mono);
+    font-size: 0.875em;
+    background: var(--panel-2);
+    border-radius: 5px;
+    padding: 1px 5px;
+  }
+  /* Runbook commands must not soft-wrap mid-flag: horizontal scroll
+   * inside the block instead. */
+  .m-prose pre {
+    background: var(--panel-2);
+    border: 1px solid var(--line);
+    border-radius: var(--r-btn);
+    padding: 12px 14px;
+    margin: 0 0 0.9em;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  .m-prose pre code {
+    background: none;
+    border-radius: 0;
+    padding: 0;
+    font-size: 13.5px;
+    line-height: 1.6;
+    white-space: pre;
+  }
+  /* 44px tap floor, inline edition. The global button floor can't
+   * reach prose links: min-height is ignored on non-replaced inline
+   * boxes, and inline-block would let padding grow the line box and
+   * break mid-link wrapping. Instead, expand the HIT box: block
+   * padding on an inline box paints/hit-tests outside the line box
+   * without moving any line, and negative inline margins cancel the
+   * horizontal padding so text position is untouched. ~19px glyph box
+   * + 2×13px ≥ 44px vertically; the 6px horizontal bleed stays below
+   * the word gap so neighbouring links don't cover each other. */
+  .m-prose a {
+    color: var(--accent-text);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+    padding-block: 13px;
+    padding-inline: 6px;
+    margin-inline: -6px;
+  }
+  /* Footnote refs/backrefs are single superscript glyphs (~8px), the
+   * smallest targets in the app, and their neighbours are plain text —
+   * so they get a wider invisible apron. Full 44px width would need
+   * ±18px, which makes back-to-back refs ([^1][^2]) cover each other's
+   * glyph completely; ±14px keeps a tap on the visible digit winning
+   * while the pair already sits inside one fingertip anyway. These
+   * attributes exist because MarkdownBody forwards remark-gfm's anchor
+   * attrs; the Tiptap path has no footnotes. */
+  .m-prose a[data-footnote-ref],
+  .m-prose a[data-footnote-backref] {
+    padding-block: 15px;
+    padding-inline: 14px;
+    margin-inline: -14px;
+  }
+  .m-prose img {
+    max-width: 100%;
+    height: auto;
+    border-radius: var(--r-btn);
+    display: block;
+    margin: 0 0 0.9em;
+  }
+  .m-prose hr {
+    border: 0;
+    border-top: 1px solid var(--line);
+    margin: 1.2em 0;
+  }
+  /* The scroll wrapper is what keeps a wide table from making the whole
+   * Screen scroll horizontally; nowrap cells are what make the wrapper
+   * scroll instead of cells crushing to 40px columns. Negative margins
+   * bleed the scroll area to the screen edge. */
+  .m-prose-tablewrap {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    margin: 0 -16px 0.9em;
+    padding: 0 16px;
+  }
+  .m-prose table {
+    border-collapse: collapse;
+    font-size: 15px;
+    min-width: 100%;
+  }
+  .m-prose th,
+  .m-prose td {
+    border: 1px solid var(--line);
+    padding: 8px 10px;
+    text-align: left;
+    vertical-align: top;
+    white-space: nowrap;
+  }
+  .m-prose th {
+    background: var(--panel-2);
+    font-weight: 600;
+    color: var(--text);
+  }
+  .m-prose td p,
+  .m-prose th p {
+    margin: 0;
+  }
+  /* Inline mention pill (inert in v1 — see MentionPill.tsx). A span,
+   * so the global 44px button floor never applies. */
+  .m-mention {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    vertical-align: baseline;
+    background: var(--accent-soft);
+    color: var(--accent-deep);
+    border-radius: 7px;
+    padding: 1px 7px;
+    font-weight: 500;
+    font-size: 0.94em;
+  }
+}

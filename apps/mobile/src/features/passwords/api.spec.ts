@@ -2,12 +2,11 @@ import {
   buildCreatePayload,
   buildUpdatePayload,
   isReasonRequired,
-  isRestrictedError,
   notesToPlaintext,
   validateTotpSecret,
   type PasswordFormValues,
 } from './api';
-import { ApiError, StepUpCancelledError } from '../../lib/api';
+import { ApiError } from '../../lib/api';
 import { makePasswordDetail } from './test-fixtures';
 
 function form(over: Partial<PasswordFormValues> = {}): PasswordFormValues {
@@ -157,7 +156,6 @@ describe('validateTotpSecret', () => {
 
 describe('error classifiers', () => {
   const reasonProblem = { status: 400, error: 'ReasonRequired' };
-  const stepUpProblem = { status: 403, code: 'step_up_required', factor: 'password' };
 
   it('isReasonRequired matches only the 400 + error extension pair', () => {
     expect(isReasonRequired(new ApiError(400, reasonProblem))).toBe(true);
@@ -166,10 +164,5 @@ describe('error classifiers', () => {
     expect(isReasonRequired(new Error('x'))).toBe(false);
   });
 
-  it('isRestrictedError = 403 that is neither a step-up demand nor a step-up cancel', () => {
-    expect(isRestrictedError(new ApiError(403, { detail: 'not on allow-list' }))).toBe(true);
-    expect(isRestrictedError(new ApiError(403, stepUpProblem))).toBe(false);
-    expect(isRestrictedError(new StepUpCancelledError(stepUpProblem))).toBe(false);
-    expect(isRestrictedError(new ApiError(404, null))).toBe(false);
-  });
+  // isRestrictedError moved to lib/api.ts (Phase 2b) — see lib/api.spec.ts.
 });

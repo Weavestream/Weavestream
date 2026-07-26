@@ -45,3 +45,44 @@ export const archiveFolderSchema = z.object({
 export type CreateFolderInput = z.infer<typeof createFolderSchema>;
 export type UpdateFolderInput = z.infer<typeof updateFolderSchema>;
 export type ArchiveFolderInput = z.infer<typeof archiveFolderSchema>;
+
+/**
+ * Wire shape of `GET /companies/:id/folders` (and `/folders/tree`) items:
+ * the article-folder tree, nested via `children`. `articleCount` counts
+ * non-archived articles directly in the folder (client users see
+ * visible-only counts — the server filters before serializing).
+ *
+ * Recursive, so the interface is declared first and the schema refers to
+ * itself through `z.lazy` (same pattern as `tiptapNodeSchema`).
+ */
+export interface FolderNode {
+  id: string;
+  companyId: string;
+  parentId: string | null;
+  name: string;
+  slug: string;
+  icon: string | null;
+  position: number;
+  archivedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+  articleCount: number;
+  children: FolderNode[];
+}
+
+export const folderNodeSchema: z.ZodType<FolderNode> = z.lazy(() =>
+  z.object({
+    id: z.string().uuid(),
+    companyId: z.string().uuid(),
+    parentId: z.string().uuid().nullable(),
+    name: z.string(),
+    slug: z.string(),
+    icon: z.string().nullable(),
+    position: z.number().int(),
+    archivedAt: z.string().nullable(),
+    createdAt: z.string(),
+    updatedAt: z.string(),
+    articleCount: z.number().int(),
+    children: z.array(folderNodeSchema),
+  }),
+);

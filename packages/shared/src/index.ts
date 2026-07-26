@@ -20,6 +20,7 @@ export * from './schemas/index.js';
 export * from './queues/index.js';
 export * from './templates/index.js';
 export * from './tiptap.js';
+export * from './tiptap-doc.js';
 export * from './tiptap-markdown.js';
 export * from './markdown.js';
 export * from './article-patch.js';

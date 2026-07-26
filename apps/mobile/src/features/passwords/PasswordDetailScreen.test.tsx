@@ -224,7 +224,7 @@ describe('PasswordDetailScreen', () => {
     expect(deletes).toHaveLength(1);
   });
 
-  it('related password rows navigate; asset/article rows are inert', async () => {
+  it('related password and article rows navigate; asset rows are inert until 2c', async () => {
     route({
       relations: {
         password: [
@@ -245,7 +245,15 @@ describe('PasswordDetailScreen', () => {
             subtitle: '10.20.0.1',
           },
         ],
-        article: [],
+        article: [
+          {
+            relationId: 'r3',
+            kind: 'article',
+            id: 'a0000000-0000-4000-8000-0000000000c3',
+            title: 'Reboot order runbook',
+            subtitle: null,
+          },
+        ],
       },
     });
     renderDetail();
@@ -253,6 +261,11 @@ describe('PasswordDetailScreen', () => {
     fireEvent.click(await screen.findByRole('button', { name: /Linked credential/ }));
     expect(navigateMock).toHaveBeenCalledWith({
       to: '/passwords/a0000000-0000-4000-8000-0000000000b2',
+    });
+    // Article rows became navigable in 2b, now that /articles/:id exists.
+    fireEvent.click(screen.getByRole('button', { name: /Reboot order runbook/ }));
+    expect(navigateMock).toHaveBeenCalledWith({
+      to: '/articles/a0000000-0000-4000-8000-0000000000c3',
     });
     // The asset row renders, but not as anything tappable.
     expect(screen.getByText('RTR-PINES-01')).toBeInTheDocument();

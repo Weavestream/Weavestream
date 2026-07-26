@@ -74,3 +74,35 @@ export function safeExternalHref(raw: string): string | null {
     return null;
   }
 }
+
+/**
+ * Href policy for links and images inside *prose* — article bodies and
+ * rich-text field values, where same-origin references are legitimate
+ * authoring (an image stored as `/api/v1/companies/…/uploads/…/image`,
+ * a remark-gfm footnote `#fn-1`, a relative runbook link).
+ *
+ * `safeExternalHref` alone corrupts those: its scheme-less promotion
+ * turns `/docs/x` into `https://docs/x`. So clearly same-origin/relative
+ * forms pass verbatim, and only the rest goes through the external
+ * policy:
+ *
+ *  - Rooted paths (`/x`) — but NOT `//host` or `/\host`, which browsers
+ *    treat as scheme-relative (backslash is normalised to slash in
+ *    special-scheme URLs), so both fall to the external branch.
+ *  - Fragments (`#fn-1`) and query-only (`?tab=2`) references.
+ *  - Dot-relative paths (`./x`, `../x`). A `//` *inside* a relative-path
+ *    reference stays path, never authority, so these can't smuggle a
+ *    host.
+ *
+ * Control characters are rejected before any classification — URL
+ * parsers strip \t\n\r, which would otherwise let `/a\tb`-style values
+ * reassemble into something else downstream.
+ */
+export function safeProseHref(raw: string): string | null {
+  const value = raw.trim();
+  if (value.length === 0 || CONTROL_CHARS_RE.test(value)) return null;
+  if (/^\/(?![/\\])/.test(value)) return value; // rooted path
+  if (/^[#?]/.test(value)) return value; // fragment / query
+  if (/^\.{1,2}\//.test(value)) return value; // ./x  ../x
+  return safeExternalHref(value);
+}

@@ -10,6 +10,8 @@ import {
 } from 'react';
 import { ApiError, apiFetch } from './api';
 import { clearRememberedLocations } from './tab-stacks';
+// Shared UUID shape check (`localStorage` is untrusted input).
+import { UUID_RE } from './uuid';
 
 /**
  * Which client organization the app is scoped to.
@@ -23,10 +25,6 @@ import { clearRememberedLocations } from './tab-stacks';
 
 const STORAGE_KEY = 'ws_m_org';
 const SCOPE_QUERY_KEY = ['org-scope'] as const;
-
-/** Cheap shape check — `localStorage` is untrusted input. */
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export interface Org {
   id: string;

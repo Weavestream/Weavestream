@@ -6,6 +6,10 @@
     "moduleResolution": "Node",
     "incremental": false,
     "jsx": "react-jsx",
+    // ts-jest refuses to transform the .js of the ESM markdown cone
+    // (see jest.config.cjs ESM_MD_DEPS) without allowJs. Harmless to the
+    // typecheck: src/ and test/ contain no plain JS.
+    "allowJs": true,
     "types": ["node", "jest", "@testing-library/jest-dom"],
     // `moduleResolution: Node` (required for ts-jest's CommonJS emit)
     // predates package `exports` maps, so it cannot follow

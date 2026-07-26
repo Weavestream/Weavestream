@@ -18,7 +18,7 @@ import { ResizableImage } from './image-extension';
 import { buildMentionExtension } from './mention-extension';
 import { SlashMenu } from './slash-menu';
 import { uploadFile } from '../../lib/upload-client';
-import { normaliseTiptapDoc } from '../../lib/tiptap-doc';
+import { normaliseTiptapDoc } from '@weavestream/shared';
 import './editor.css';
 
 /**

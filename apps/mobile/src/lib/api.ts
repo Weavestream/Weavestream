@@ -142,3 +142,21 @@ export function shouldRetry(failureCount: number, error: unknown): boolean {
   if (error instanceof ApiError && error.status < 500) return false;
   return failureCount < 2;
 }
+
+/**
+ * An access denial on a record the user can otherwise reach — e.g. a
+ * password's `restrictedToUserIds`, or any future per-record gate. The
+ * server sends a plain 403 with no stable code, so this is "403 that is
+ * neither a step-up demand nor the user declining one". (CLIENT_USERs
+ * get a 404 instead — deliberately no existence oracle — which surfaces
+ * as the generic not-found state.)
+ *
+ * Lives here rather than in a feature folder because passwords and
+ * articles both branch on it, and features must not import from each
+ * other.
+ */
+export function isRestrictedError(err: unknown): boolean {
+  if (!(err instanceof ApiError) || err.status !== 403) return false;
+  if (err instanceof StepUpCancelledError) return false;
+  return !isStepUpProblem(err.problem);
+}

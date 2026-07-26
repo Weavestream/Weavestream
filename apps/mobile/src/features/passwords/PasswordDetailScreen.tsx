@@ -1,7 +1,8 @@
-import { useRef, type ReactNode } from 'react';
+import { useRef } from 'react';
 import { copyToClipboard } from '@weavestream/shared/browser';
 import { formatDate, formatShortDateTime } from '@weavestream/shared';
 import { DetailHeader } from '../../components/DetailHeader';
+import { MetaRow } from '../../components/MetaRow';
 import { ShowMore } from '../../components/ShowMore';
 import { Icon } from '../../components/Icon';
 import {
@@ -18,13 +19,15 @@ import {
   SkeletonList,
 } from '../../components/states';
 import { useToast } from '../../components/Toast';
-import { ApiError } from '../../lib/api';
+import { ApiError, isRestrictedError } from '../../lib/api';
 import { useOnline } from '../../lib/use-online';
 import { useOrgScope } from '../../lib/org-scope';
 import { useScopedNavigate } from '../../lib/scoped-nav';
 import { useCompanyAccess } from '../../lib/use-company-access';
 import { deviceTimeZone } from '../../lib/timezone';
-import { isRestrictedError, notesToPlaintext } from './api';
+import { RelatedSection } from '../relations/RelatedSection';
+import { useRelations } from '../relations/queries';
+import { notesToPlaintext } from './api';
 import { attentionTier } from './attention';
 import { recallListFilter } from './list-filter-memory';
 import {
@@ -38,10 +41,8 @@ import {
   useArchivePassword,
   usePasswordDetail,
   usePasswordFolders,
-  usePasswordRelations,
   useRestorePassword,
 } from './queries';
-import { RelatedSection } from './RelatedSection';
 import { RevealReasonSheet } from './RevealReasonSheet';
 import { StrengthMeter } from './StrengthMeter';
 import { useReveal } from './use-reveal';
@@ -67,7 +68,7 @@ export function PasswordDetailScreen({ passwordId }: { passwordId: string }) {
 
   const orgId = currentOrg?.id ?? null;
   const detailQuery = usePasswordDetail(orgId, passwordId);
-  const relationsQuery = usePasswordRelations(orgId, passwordId);
+  const relationsQuery = useRelations(orgId, 'password', passwordId);
   const foldersQuery = usePasswordFolders(orgId);
   const archiveMutation = useArchivePassword(orgId);
   const restoreMutation = useRestorePassword(orgId);
@@ -324,35 +325,5 @@ export function PasswordDetailScreen({ passwordId }: { passwordId: string }) {
         onClose={reveal.closeSheet}
       />
     </>
-  );
-}
-
-function MetaRow({
-  label,
-  value,
-  tone,
-}: {
-  label: string;
-  value: ReactNode;
-  tone?: 'danger' | 'warn';
-}) {
-  return (
-    <div className="flex items-center justify-between gap-3 py-3 first:pt-1 last:pb-1">
-      <span className="shrink-0 font-mono text-section uppercase tracking-[0.1em] text-muted">
-        {label}
-      </span>
-      <span
-        className={
-          'min-w-0 truncate text-right text-body ' +
-          (tone === 'danger'
-            ? 'font-medium text-danger'
-            : tone === 'warn'
-              ? 'font-medium text-warn'
-              : 'text-text')
-        }
-      >
-        {value}
-      </span>
-    </div>
   );
 }

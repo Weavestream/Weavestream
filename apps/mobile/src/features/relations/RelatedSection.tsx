@@ -9,12 +9,18 @@ const KIND_ICON: Record<RelatedItem['kind'], IconName> = {
   article: 'description',
 };
 
+/** Detail routes that exist today. Assets arrive in Phase 2c. */
+const KIND_ROUTE: Partial<Record<RelatedItem['kind'], string>> = {
+  password: '/passwords',
+  article: '/articles',
+};
+
 /**
- * The detail screen's Related block (1c). Password rows navigate;
- * asset and article rows are deliberately INERT in Phase 2a — their
- * screens arrive in 2b/2c, and a chevron that dead-ends teaches the
- * user not to trust chevrons. The affordance (chevron + press state)
- * exists only where a destination does.
+ * The detail screens' Related block (1c). Password and article rows
+ * navigate; asset rows are deliberately INERT until Phase 2c ships
+ * their screen — a chevron that dead-ends teaches the user not to
+ * trust chevrons. The affordance (chevron + press state) exists only
+ * where a destination does.
  */
 export function RelatedSection({ groups }: { groups: RelatedGroups }) {
   const navigate = useScopedNavigate();
@@ -26,7 +32,7 @@ export function RelatedSection({ groups }: { groups: RelatedGroups }) {
       <SectionLabel>Related</SectionLabel>
       <Card>
         {items.map((item, i) => {
-          const navigable = item.kind === 'password';
+          const route = KIND_ROUTE[item.kind];
           const inner = (
             <>
               <Icon
@@ -44,7 +50,7 @@ export function RelatedSection({ groups }: { groups: RelatedGroups }) {
                   </span>
                 )}
               </span>
-              {navigable && (
+              {route && (
                 <Icon name="chevron_right" size={22} className="shrink-0 text-faint" />
               )}
             </>
@@ -53,11 +59,11 @@ export function RelatedSection({ groups }: { groups: RelatedGroups }) {
             'flex w-full items-center gap-3 px-4 py-3.5 min-h-group-row' +
             (i > 0 ? ' border-t border-line' : '');
 
-          return navigable ? (
+          return route ? (
             <button
               key={item.relationId}
               type="button"
-              onClick={() => navigate({ to: `/passwords/${item.id}` })}
+              onClick={() => navigate({ to: `${route}/${item.id}` })}
               className={rowClass + ' active:bg-panel-2'}
             >
               {inner}

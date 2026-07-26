@@ -1,5 +1,4 @@
 import {
-  isStepUpProblem,
   tiptapToPlaintext,
   totpConfigSchema,
   type CreatePasswordInput,
@@ -10,7 +9,7 @@ import {
   type PasswordTotpResponse,
   type UpdatePasswordInput,
 } from '@weavestream/shared';
-import { ApiError, StepUpCancelledError, apiFetch } from '../../lib/api';
+import { ApiError, apiFetch } from '../../lib/api';
 
 /**
  * Fetchers + pure payload builders for the passwords feature.
@@ -59,40 +58,6 @@ export async function fetchPasswordFolders(
     `/companies/${companyId}/password-folders`,
   );
   return res.items;
-}
-
-/**
- * Minimal wire slice of the relations endpoint's `LinkedItem` — same
- * local-interface precedent as `CompanyRow` in org-scope. The server
- * also sends `href`, but that is a desktop path; mobile builds its own
- * navigation from `kind` + `id`.
- */
-export interface RelatedItem {
-  relationId: string;
-  kind: 'asset' | 'article' | 'password';
-  id: string;
-  title: string;
-  subtitle: string | null;
-}
-
-export interface RelatedGroups {
-  asset: RelatedItem[];
-  article: RelatedItem[];
-  password: RelatedItem[];
-}
-
-export async function fetchPasswordRelations(
-  companyId: string,
-  passwordId: string,
-): Promise<RelatedGroups> {
-  const res = await apiFetch<{ groups?: Partial<RelatedGroups> }>(
-    `/companies/${companyId}/relations?entityType=password&entityId=${passwordId}`,
-  );
-  return {
-    asset: res.groups?.asset ?? [],
-    article: res.groups?.article ?? [],
-    password: res.groups?.password ?? [],
-  };
 }
 
 export function createPassword(
@@ -184,17 +149,8 @@ export function isReasonRequired(err: unknown): boolean {
   );
 }
 
-/**
- * A `restrictedToUserIds` denial. The server sends a plain 403 with no
- * stable code, so this is "403 that is neither a step-up demand nor the
- * user declining one". (CLIENT_USERs get a 404 instead — deliberately
- * no existence oracle — which surfaces as the generic not-found state.)
- */
-export function isRestrictedError(err: unknown): boolean {
-  if (!(err instanceof ApiError) || err.status !== 403) return false;
-  if (err instanceof StepUpCancelledError) return false;
-  return !isStepUpProblem(err.problem);
-}
+// `isRestrictedError` moved to `lib/api.ts` in Phase 2b — articles
+// branch on it too, and features must not import from each other.
 
 // ─── Form model + payload builders ─────────────────────────────────
 

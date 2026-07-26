@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Delete,
@@ -44,8 +45,24 @@ export class ArticlesController {
     @Query('limit') rawLimit?: string,
     @Query('cursor') cursor?: string,
   ) {
+    // ParseUUIDPipe-equivalent for a query arg (relations.controller
+    // precedent). Without it, a malformed folderId reaches Prisma's uuid
+    // column and surfaces as a retryable 500 instead of a client error.
+    // 'root' is the documented magic value meaning "unfiled"; an empty
+    // string stays "not provided", as the service already treated it.
+    const folder = rawFolder || undefined;
+    if (
+      folder !== undefined &&
+      folder !== 'root' &&
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(folder)
+    ) {
+      throw new BadRequestException({
+        error: 'InvalidFolderId',
+        message: "folderId must be a UUID or 'root'.",
+      });
+    }
     return this.articles.list(actor, companyId, {
-      folderId: rawFolder === 'root' ? 'root' : rawFolder,
+      folderId: folder,
       q,
       includeArchived: includeArchived === 'true',
       limit: rawLimit ? parseInt(rawLimit, 10) : undefined,
