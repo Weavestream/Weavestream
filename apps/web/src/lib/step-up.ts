@@ -55,17 +55,6 @@ export function requestStepUp(factor: StepUpFactor): Promise<boolean> {
   return pending;
 }
 
-/** Narrows an RFC-7807 problem body to the step-up-required challenge. */
-export function isStepUpProblem(
-  problem: unknown,
-): problem is { code: 'step_up_required'; factor?: StepUpFactor } {
-  return (
-    typeof problem === 'object' &&
-    problem !== null &&
-    (problem as { code?: unknown }).code === 'step_up_required'
-  );
-}
-
 /**
  * Ensure a valid step-up window before a plain-navigation download
  * (which can't surface a 403 cleanly). Checks current status first to

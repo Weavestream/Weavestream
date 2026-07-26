@@ -16,7 +16,7 @@ import {
   UI_COOKIE_NAME,
   parseUiCookie,
   resolveSsrTheme,
-} from '../lib/ui-preferences';
+} from '@weavestream/shared';
 
 export const metadata: Metadata = {
   title: 'Weavestream',

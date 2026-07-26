@@ -1,0 +1,39 @@
+<!doctype html>
+<!--
+  `data-accent` carries a placeholder that the postbuild replaces, once
+  per accent, producing one shell variant per member of `uiAccentValues`.
+  The `/m` route handler then picks a variant by reading the user's
+  `ws_ui` cookie.
+
+  This is codegen from a compile-time enum, NOT per-request string
+  substitution into HTML — that would be constructing server-rendered
+  HTML from request-derived data, which CLAUDE.md §3 prohibits. It also
+  can't be done with an inline script: the `/m` CSP is `script-src 'self'`
+  with no 'unsafe-inline'. And it can't be done from the app bundle,
+  because module scripts are deferred and first paint would flash the
+  default accent.
+
+  `data-theme` is pinned light for v1. Because the app consumes the
+  shared color vars, adding dark later is close to free.
+-->
+<html lang="en" data-theme="light" data-accent="__WS_ACCENT__">
+  <head>
+    <meta charset="UTF-8" />
+    <!-- viewport-fit=cover is what makes env(safe-area-inset-*) resolve
+         to real values on a notched device; without it the tab bar and
+         bottom sheet sit under the home indicator. -->
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover"
+    />
+    <meta name="theme-color" content="#fafaf9" />
+    <meta name="robots" content="noindex, nofollow" />
+    <link rel="manifest" href="/m/manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="/brand/pwa-icon-180.png" />
+    <title>Weavestream</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

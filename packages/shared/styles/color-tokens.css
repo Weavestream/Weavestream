@@ -1,0 +1,230 @@
+/* Weavestream — semantic color tokens, shared by every app.
+ *
+ * This is the color layer only. Geometry is deliberately NOT here:
+ * `apps/web` keeps its own 3/5/8px radius scale and `apps/mobile` has a
+ * 9–30px one, and a single set of `--radius-*` vars cannot serve both
+ * without one of them looking wrong. Type scale and touch sizing split
+ * the same way. Color is the one axis where sharing costs nothing and
+ * forking would fork the brand.
+ *
+ * Dark is the default; `[data-theme="light"]` opts in. Five accent
+ * palettes via `data-accent="lime|amber|iris|coral|teal"`, both stamped
+ * from the user's `ws_ui` preference. `apps/mobile` pins
+ * `data-theme="light"` for v1 but consumes these same vars, which is
+ * what makes adding dark there later close to free.
+ *
+ * Consume the semantic names (`--accent`, `--accent-ink`, `--surface`,
+ * `--line`, …) rather than literal hexes: `--accent-ink` is already the
+ * tested foreground for `--accent`, so a palette change lands correctly
+ * everywhere at once.
+ *
+ * Shadows live here rather than with the geometry because they are rgba
+ * values that flip with the theme, and splitting them from the
+ * `[data-theme='light']` block would break the override ordering.
+ */
+
+:root {
+  /* Default = dark */
+  --bg: #0a0a0a;
+  --surface: #111;
+  --panel: #161616;
+  --panel-2: #1c1c1c;
+  --elev: #202020;
+  --line: #222;
+  --line-2: #2a2a2a;
+  --line-3: #333;
+
+  --text: #ededed;
+  --text-2: #c8c8c8;
+  --muted: #8a8a8a;
+  --dim: #5a5a5a;
+  --faint: #3a3a3a;
+
+  --accent: oklch(0.86 0.18 125);
+  --accent-ink: #0a0a0a;
+  --accent-soft: oklch(0.86 0.18 125 / 0.12);
+  --accent-line: oklch(0.86 0.18 125 / 0.35);
+
+  --warn: oklch(0.82 0.14 75);
+  --warn-soft: oklch(0.82 0.14 75 / 0.12);
+  --danger: oklch(0.7 0.2 25);
+  --danger-soft: oklch(0.7 0.2 25 / 0.12);
+  --ok: oklch(0.78 0.14 160);
+  --ok-soft: oklch(0.78 0.14 160 / 0.12);
+  --info: oklch(0.75 0.12 240);
+  --info-soft: oklch(0.75 0.12 240 / 0.12);
+  --layout-teal: oklch(0.76 0.13 195);
+  --layout-coral: oklch(0.74 0.18 25);
+  --layout-indigo: oklch(0.74 0.17 270);
+
+  --shadow-1: 0 1px 0 rgba(255, 255, 255, 0.03) inset,
+    0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-2: 0 1px 0 rgba(255, 255, 255, 0.04) inset,
+    0 8px 24px rgba(0, 0, 0, 0.4);
+}
+
+[data-theme='light'] {
+  --bg: #fafaf9;
+  --surface: #fff;
+  --panel: #fff;
+  --panel-2: #f6f6f4;
+  --elev: #fff;
+  --line: #ebe9e4;
+  --line-2: #e2e0d9;
+  --line-3: #d4d2cb;
+
+  --text: #0f0f0f;
+  --text-2: #2a2a2a;
+  --muted: #6a6a66;
+  --dim: #8f8f8a;
+  --faint: #c8c6bf;
+
+  --accent: oklch(0.68 0.18 135);
+  --accent-ink: #fafaf9;
+  --accent-soft: oklch(0.68 0.18 135 / 0.14);
+  --accent-line: oklch(0.68 0.18 135 / 0.4);
+
+  --warn: oklch(0.62 0.16 65);
+  --warn-soft: oklch(0.62 0.16 65 / 0.12);
+  --danger: oklch(0.55 0.22 25);
+  --danger-soft: oklch(0.55 0.22 25 / 0.1);
+  --ok: oklch(0.58 0.14 160);
+  --ok-soft: oklch(0.58 0.14 160 / 0.12);
+  --info: oklch(0.58 0.14 240);
+  --info-soft: oklch(0.58 0.14 240 / 0.1);
+  --layout-teal: oklch(0.56 0.12 195);
+  --layout-coral: oklch(0.58 0.2 25);
+  --layout-indigo: oklch(0.52 0.2 270);
+
+  --shadow-1: 0 1px 0 rgba(255, 255, 255, 0.6) inset,
+    0 1px 2px rgba(20, 20, 10, 0.06);
+  --shadow-2: 0 1px 0 rgba(255, 255, 255, 0.8) inset,
+    0 10px 30px rgba(20, 20, 10, 0.08);
+}
+
+[data-accent='lime'] {
+  --accent: oklch(0.86 0.18 125);
+  --accent-ink: #0a0a0a;
+  --accent-soft: oklch(0.86 0.18 125 / 0.12);
+  --accent-line: oklch(0.86 0.18 125 / 0.35);
+}
+[data-accent='amber'] {
+  --accent: oklch(0.82 0.16 75);
+  --accent-ink: #0a0a0a;
+  --accent-soft: oklch(0.82 0.16 75 / 0.14);
+  --accent-line: oklch(0.82 0.16 75 / 0.4);
+}
+[data-accent='iris'] {
+  --accent: oklch(0.74 0.17 270);
+  --accent-ink: #fff;
+  --accent-soft: oklch(0.74 0.17 270 / 0.14);
+  --accent-line: oklch(0.74 0.17 270 / 0.4);
+}
+[data-accent='coral'] {
+  --accent: oklch(0.74 0.18 25);
+  --accent-ink: #fff;
+  --accent-soft: oklch(0.74 0.18 25 / 0.14);
+  --accent-line: oklch(0.74 0.18 25 / 0.4);
+}
+[data-accent='teal'] {
+  --accent: oklch(0.76 0.13 195);
+  --accent-ink: #0a0a0a;
+  --accent-soft: oklch(0.76 0.13 195 / 0.14);
+  --accent-line: oklch(0.76 0.13 195 / 0.4);
+}
+
+[data-theme='light'][data-accent='lime'] {
+  --accent: oklch(0.62 0.19 135);
+  --accent-ink: #fff;
+}
+[data-theme='light'][data-accent='amber'] {
+  --accent: oklch(0.62 0.16 65);
+  --accent-ink: #fff;
+}
+[data-theme='light'][data-accent='iris'] {
+  --accent: oklch(0.52 0.2 270);
+  --accent-ink: #fff;
+}
+[data-theme='light'][data-accent='coral'] {
+  --accent: oklch(0.58 0.2 25);
+  --accent-ink: #fff;
+}
+[data-theme='light'][data-accent='teal'] {
+  --accent: oklch(0.56 0.12 195);
+  --accent-ink: #fff;
+}
+
+/* Phase 9b.1 — `theme=system` first-paint fallback.
+ *
+ * When the user picked "system" we set `data-theme-pref="system"` but
+ * can't know the OS color scheme during SSR, so `data-theme` is left at
+ * the dark SSR default. This media block applies the light palette
+ * purely in CSS whenever the OS actually prefers light, so the very
+ * first paint is correct without any inline script (no FOUC, no React
+ * 19 "scripts in components" warnings, no CSP nonce gymnastics).
+ *
+ * Specificity (0,2,1) beats the base `:root` (0,0,0) and the bare
+ * `[data-theme='light']` (0,1,0), so this block reliably wins when
+ * active and is inert otherwise. The `ThemePreferenceWatcher` client
+ * component keeps `data-theme` itself in sync post-hydration so any
+ * app code that reads `dataset.theme` agrees with what's painted. */
+@media (prefers-color-scheme: light) {
+  html[data-theme-pref='system'] {
+    --bg: #fafaf9;
+    --surface: #fff;
+    --panel: #fff;
+    --panel-2: #f6f6f4;
+    --elev: #fff;
+    --line: #ebe9e4;
+    --line-2: #e2e0d9;
+    --line-3: #d4d2cb;
+
+    --text: #0f0f0f;
+    --text-2: #2a2a2a;
+    --muted: #6a6a66;
+    --dim: #8f8f8a;
+    --faint: #c8c6bf;
+
+    --accent: oklch(0.68 0.18 135);
+    --accent-ink: #fafaf9;
+    --accent-soft: oklch(0.68 0.18 135 / 0.14);
+    --accent-line: oklch(0.68 0.18 135 / 0.4);
+
+    --warn: oklch(0.62 0.16 65);
+    --warn-soft: oklch(0.62 0.16 65 / 0.12);
+    --danger: oklch(0.55 0.22 25);
+    --danger-soft: oklch(0.55 0.22 25 / 0.1);
+    --ok: oklch(0.58 0.14 160);
+    --ok-soft: oklch(0.58 0.14 160 / 0.12);
+    --info: oklch(0.58 0.14 240);
+    --info-soft: oklch(0.58 0.14 240 / 0.1);
+    --layout-teal: oklch(0.56 0.12 195);
+    --layout-coral: oklch(0.58 0.2 25);
+    --layout-indigo: oklch(0.52 0.2 270);
+
+    --shadow-1: 0 1px 0 rgba(255, 255, 255, 0.6) inset,
+      0 1px 2px rgba(20, 20, 10, 0.06);
+    --shadow-2: 0 1px 0 rgba(255, 255, 255, 0.8) inset,
+      0 10px 30px rgba(20, 20, 10, 0.08);
+  }
+  html[data-theme-pref='system'][data-accent='lime'] {
+    --accent: oklch(0.62 0.19 135);
+    --accent-ink: #fff;
+  }
+  html[data-theme-pref='system'][data-accent='amber'] {
+    --accent: oklch(0.62 0.16 65);
+    --accent-ink: #fff;
+  }
+  html[data-theme-pref='system'][data-accent='iris'] {
+    --accent: oklch(0.52 0.2 270);
+    --accent-ink: #fff;
+  }
+  html[data-theme-pref='system'][data-accent='coral'] {
+    --accent: oklch(0.58 0.2 25);
+    --accent-ink: #fff;
+  }
+  html[data-theme-pref='system'][data-accent='teal'] {
+    --accent: oklch(0.56 0.12 195);
+    --accent-ink: #fff;
+  }
+}

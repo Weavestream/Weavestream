@@ -1,5 +1,5 @@
 import type { CookieOptions, Response } from 'express';
-import type { UiTheme, UiAccent } from '@weavestream/shared';
+import { encodeUiCookie, type UiTheme, type UiAccent } from '@weavestream/shared';
 import type { EnvService } from '../config/env.service.js';
 
 export interface CookieNames {
@@ -104,22 +104,16 @@ export function clearAuthCookies(res: Response, env: EnvService): void {
   });
 }
 
-/**
- * Encode the UI cookie. Format: `t=<theme>;a=<accent>` — compact, human
- * readable, trivial to parse from an Edge runtime. Values are always
- * lowercase so they drop straight into `data-theme` / `data-accent`.
- */
-export function encodeUiCookie(theme: UiTheme, accent: UiAccent): string {
-  return `t=${theme};a=${accent}`;
-}
-
 export function setUiCookie(
   res: Response,
   env: EnvService,
   theme: UiTheme,
   accent: UiAccent,
 ): void {
-  res.cookie(cookieNames(env).ui, encodeUiCookie(theme, accent), {
+  // Wire format (`t=<theme>;a=<accent>`) lives in `@weavestream/shared`
+  // so this writer, the accent-preserving reader in `ui.controller.ts`,
+  // the web app's SSR paint, and the mobile shell all agree on it.
+  res.cookie(cookieNames(env).ui, encodeUiCookie({ uiTheme: theme, uiAccent: accent }), {
     // Readable from the server *and* from the client so a same-page
     // accent preview can update the cookie without a round-trip.
     httpOnly: false,

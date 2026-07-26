@@ -1,0 +1,26 @@
+/* Self-hosted Geist Sans / Geist Mono, Latin subset only.
+ *
+ * Two independent reasons this cannot be a CDN link: the handoff asks
+ * for local fonts because field technicians are often on poor signal,
+ * and the `/m` CSP is `default-src 'self'` with no `font-src` escape —
+ * a Google Fonts request would simply be blocked.
+ *
+ * Only the weights the design actually uses are imported. The handoff's
+ * type table names 400 (body/meta), 500 (chips, list rows, tab labels),
+ * and 600 (titles, buttons); Fontsource ships 100–900, and importing the
+ * lot would triple the font payload for weights nothing renders.
+ *
+ * `latin-*` rather than the unscoped files: the unscoped ones pull every
+ * subset (Cyrillic, Greek, Vietnamese), which is a large payload for a
+ * bundle that has to work on a phone in a server closet.
+ */
+
+/* Sans — UI text. */
+@import '@fontsource/geist-sans/latin-400.css';
+@import '@fontsource/geist-sans/latin-500.css';
+@import '@fontsource/geist-sans/latin-600.css';
+
+/* Mono — usernames, IPs, one-time codes, section labels, query text.
+ * Only 400 (meta) and 500 (section labels) are specified. */
+@import '@fontsource/geist-mono/latin-400.css';
+@import '@fontsource/geist-mono/latin-500.css';

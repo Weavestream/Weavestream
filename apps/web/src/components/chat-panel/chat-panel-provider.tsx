@@ -33,7 +33,7 @@ import { streamChatMessage, type ChatStreamMeta } from '../../lib/chat-stream';
 import { tiptapDocToMarkdown } from '@weavestream/shared';
 import { assetToMarkdown } from '../../lib/asset-format';
 import { domainToMarkdown } from '../../lib/domain-format';
-import { randomClientId } from '../../lib/client-id';
+import { randomClientId } from '@weavestream/shared/browser';
 import type {
   ArticleDetail,
   AssetSummary,

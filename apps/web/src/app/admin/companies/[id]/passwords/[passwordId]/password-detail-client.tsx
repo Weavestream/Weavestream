@@ -11,7 +11,7 @@ import type {
   PasswordVersionRow,
 } from '../../../../../../lib/server-api';
 import { apiFetch } from '../../../../../../lib/api';
-import { copyToClipboard } from '../../../../../../lib/clipboard';
+import { copyToClipboard } from '@weavestream/shared/browser';
 import {
   FormattedCalendarDate,
   FormattedDate,

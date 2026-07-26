@@ -6,5 +6,8 @@
     "composite": true
   },
   "include": ["src/**/*.ts"],
-  "exclude": ["src/**/*.spec.ts"]
+  // `src/browser/**` is compiled by tsconfig.browser.json instead, which is
+  // the only project with the DOM libs. Leaving it in here would fail the
+  // build on `document` / `navigator` / `ClipboardItem`.
+  "exclude": ["src/**/*.spec.ts", "src/browser/**"]
 }

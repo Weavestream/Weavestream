@@ -11,11 +11,10 @@ import { Throttle } from '@nestjs/throttler';
 import type { Request, Response } from 'express';
 import {
   publicUiPreferencesSchema,
-  DEFAULT_UI_ACCENT,
+  parseUiCookie,
   type PublicUiPreferences,
   type UiAccent,
   type UiTheme,
-  uiAccentValues,
 } from '@weavestream/shared';
 import { Public, SkipCsrf } from '../common/public.decorator.js';
 import { ZodBody } from '../common/zod-validation.pipe.js';
@@ -46,19 +45,14 @@ export class PublicUiController {
     // cookie — unauthenticated users shouldn't be able to flip accent,
     // but we also don't want to clobber a logged-out session's existing
     // choice with the default on every dark↔light flip.
-    const accent = readAccentFromCookie(req, this.env) ?? DEFAULT_UI_ACCENT;
+    //
+    // `parseUiCookie` is the shared wire-format reader; it already falls
+    // back to DEFAULT_UI_ACCENT for a missing or garbled cookie, which is
+    // what the previous hand-rolled regex did the long way round.
+    // cookie-parser has already percent-decoded `req.cookies`.
+    const raw = req.cookies[cookieNames(this.env).ui] as string | undefined;
+    const accent = parseUiCookie(raw).uiAccent;
     setUiCookie(res, this.env, dto.uiTheme, accent);
     return { preferences: { uiTheme: dto.uiTheme, uiAccent: accent } };
   }
-}
-
-function readAccentFromCookie(req: Request, env: EnvService): UiAccent | null {
-  const raw = req.cookies[cookieNames(env).ui] as string | undefined;
-  if (!raw) return null;
-  const match = /a=([a-z]+)/.exec(raw);
-  const candidate = match?.[1];
-  if (!candidate) return null;
-  return (uiAccentValues as readonly string[]).includes(candidate)
-    ? (candidate as UiAccent)
-    : null;
 }

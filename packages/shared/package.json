@@ -12,12 +12,17 @@
     "./server": {
       "types": "./dist/server.d.ts",
       "default": "./dist/server.js"
-    }
+    },
+    "./browser": {
+      "types": "./dist/browser/index.d.ts",
+      "default": "./dist/browser/index.js"
+    },
+    "./styles/*": "./styles/*"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && tsc -p tsconfig.browser.json",
     "dev": "tsc -p tsconfig.json --watch",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.browser.json --noEmit",
     "lint": "echo 'no lint'",
     "test": "NODE_OPTIONS=--experimental-vm-modules jest --passWithNoTests"
   },

@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { apiFetch } from '../../../lib/api';
-import { copyToClipboard } from '../../../lib/clipboard';
+import { copyToClipboard } from '@weavestream/shared/browser';
 import {
   BackupCodeList,
   copyBackupCodesToClipboard,

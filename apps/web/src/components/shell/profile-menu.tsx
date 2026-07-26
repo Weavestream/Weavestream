@@ -142,6 +142,7 @@ export function ProfileMenu({ me }: { me: ShellScopeMe }) {
               label="Profile"
               onSelect={() => setOpen(false)}
             />
+            <MobileAppLink onSelect={() => setOpen(false)} />
             <AppearanceRow />
           </div>
           <div style={{ borderTop: '1px solid var(--line)', padding: 6 }}>
@@ -254,6 +255,38 @@ function MenuLink({
       <IconCmp size={14} stroke={1.5} style={{ color: 'var(--muted)' }} />
       <span style={{ flex: 1 }}>{label}</span>
     </Link>
+  );
+}
+
+/**
+ * Entry point into the mobile PWA.
+ *
+ * An explicit link, never a user-agent redirect: UA sniffing is fragile
+ * and would bounce desktop users who happen to have a narrow window.
+ * The choice is also not persisted — a one-way cookie that pins someone
+ * to `/m` can strand a desktop user who taps this once, and the
+ * installed PWA's `start_url` already covers genuine repeat use.
+ *
+ * A plain `<a>`, not next/link: `/m` is served by a route handler that
+ * returns a static SPA shell, not a Next page. A client-side soft
+ * navigation would try to fetch an RSC payload that does not exist.
+ */
+function MobileAppLink({ onSelect }: { onSelect: () => void }) {
+  return (
+    /* `/m` is a Route Handler serving a static SPA shell, not a Next
+       page. `<Link>` would soft-navigate and request an RSC payload
+       that does not exist, so the rule's premise is false here. */
+    // eslint-disable-next-line @next/next/no-html-link-for-pages
+    <a
+      href="/m"
+      role="menuitem"
+      onClick={onSelect}
+      className="sidebar-switcher-entry"
+      style={MENU_ROW_STYLE}
+    >
+      <Icon.ext size={14} stroke={1.5} style={{ color: 'var(--muted)' }} />
+      <span style={{ flex: 1 }}>Open mobile app</span>
+    </a>
   );
 }
 

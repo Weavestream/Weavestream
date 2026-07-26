@@ -1,0 +1,25 @@
+{
+  // Third compilation unit for `@weavestream/shared`, alongside the
+  // client-safe barrel (`tsconfig.json` → `.`) and the Node-only one
+  // (`server.ts` → `./server`).
+  //
+  // The other two compile under `lib: ["ES2022"], types: ["node"]`, which
+  // has no DOM declarations at all — so `document`, `navigator`,
+  // `ClipboardItem`, and friends do not typecheck there. This project adds
+  // the DOM libs and drops `@types/node`, so anything in `src/browser/` is
+  // statically prevented from reaching for a Node API and vice versa.
+  //
+  // Consumed only by bundlers (Vite, Next). Emit stays CommonJS to match
+  // the rest of the package — `packages/shared` has no `"type": "module"`,
+  // so emitting ESM here would misresolve if Node ever `require`d it.
+  "extends": "../config/tsconfig.node.json",
+  "compilerOptions": {
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "types": [],
+    "rootDir": "./src/browser",
+    "outDir": "./dist/browser",
+    "composite": true
+  },
+  "include": ["src/browser/**/*.ts"],
+  "exclude": ["src/browser/**/*.spec.ts"]
+}

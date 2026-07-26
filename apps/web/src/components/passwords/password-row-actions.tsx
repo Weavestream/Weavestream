@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { apiFetch } from '../../lib/api';
-import { copyToClipboard, copyWithPromise } from '../../lib/clipboard';
+import { copyToClipboard, copyWithPromise } from '@weavestream/shared/browser';
 import { Btn, Icon, useToast } from '../ui';
 
 export interface PasswordRowActionsProps {

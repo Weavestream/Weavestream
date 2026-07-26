@@ -1,0 +1,64 @@
+/* Order matters: @import must precede all other rules, and fonts +
+ * tokens must land before Tailwind's base layer so the resets below can
+ * reference the vars. */
+@import './fonts.css';
+@import './tokens.css';
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html,
+  body {
+    margin: 0;
+    height: 100%;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  /* Touch-only app: kill the 300ms tap highlight and the iOS callout on
+   * long-press, both of which read as jank on a card list. */
+  * {
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  body {
+    -webkit-touch-callout: none;
+    overscroll-behavior-y: none;
+  }
+
+  /* The handoff is explicit that every interactive element clears 44px.
+   * This is a floor, not a default — it does not stop a component asking
+   * for more. */
+  button,
+  a[role='button'],
+  [role='button'] {
+    min-height: var(--tap-min);
+    min-width: var(--tap-min);
+    font-family: inherit;
+    color: inherit;
+    background: none;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+  }
+
+  a {
+    color: inherit;
+    text-decoration: none;
+  }
+
+  input,
+  textarea,
+  select {
+    font-family: inherit;
+    color: inherit;
+    line-height: 1.4;
+    /* iOS zooms the viewport when a focused input is under 16px. */
+    font-size: max(16px, var(--fs-body));
+  }
+}

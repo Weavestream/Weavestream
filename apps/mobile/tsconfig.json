@@ -1,0 +1,29 @@
+{
+  // Extends the browser/bundler variant that `apps/web` uses (ESNext
+  // modules, Bundler resolution, DOM libs) but drops its `plugins:
+  // [{ name: 'next' }]` entry, which is Next-specific and meaningless here.
+  "extends": "../../packages/config/tsconfig.nextjs.json",
+  "compilerOptions": {
+    "jsx": "react-jsx",
+    "noEmit": true,
+    "types": ["vite/client"],
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["src/*"]
+    },
+    "plugins": []
+  },
+  "include": ["src", "vite.config.ts"],
+  // Specs are typechecked by tsconfig.spec.json instead, which is the
+  // only project that pulls in jest + node types. Keeping them out here
+  // means app code cannot accidentally reference a test global or a Node
+  // API and still compile.
+  "exclude": [
+    "dist",
+    "node_modules",
+    "src/**/*.spec.ts",
+    "src/**/*.spec.tsx",
+    "src/**/*.test.ts",
+    "src/**/*.test.tsx"
+  ]
+}

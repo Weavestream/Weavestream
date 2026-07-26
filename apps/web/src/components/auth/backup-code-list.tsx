@@ -1,7 +1,7 @@
 'use client';
 
 import { Tag } from '../ui';
-import { copyToClipboard } from '../../lib/clipboard';
+import { copyToClipboard } from '@weavestream/shared/browser';
 
 /**
  * The one-time recovery-code block, shared by first-time MFA enrollment
