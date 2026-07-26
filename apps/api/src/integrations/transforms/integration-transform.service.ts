@@ -294,7 +294,10 @@ function markdownTable(
 }
 
 function escapeMarkdownCell(value: string): string {
-  return value.replace(/\|/g, '\\|').replace(/[\r\n]+/g, ' ').trim();
+  // Backslash first, and only first: escaping `|` before `\` lets a source
+  // value of `\|` render as an escaped backslash plus a live pipe, breaking
+  // the cell and shifting every column after it.
+  return value.replace(/\\/g, '\\\\').replace(/\|/g, '\\|').replace(/[\r\n]+/g, ' ').trim();
 }
 
 function assertInputBounds(value: unknown): void {

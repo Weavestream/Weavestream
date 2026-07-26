@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import { sessionUsable } from '../lib/auth';
-import { Button, ErrorNote, Screen, Subtitle, Title } from '../components/ui';
+import { AuthScreen } from '../components/AuthScreen';
+import { Button, Subtitle, Title } from '../components/primitives';
+import { ErrorBanner } from '../components/states';
 
 /**
  * Hand-off for accounts that have never enrolled in MFA.
@@ -52,7 +54,7 @@ export function MfaSetupHandoffScreen({
   }, [recheck]);
 
   return (
-    <Screen>
+    <AuthScreen>
       <Title>Finish setup on desktop</Title>
       <Subtitle>
         Your account needs two-factor authentication before you can use
@@ -72,18 +74,15 @@ export function MfaSetupHandoffScreen({
           Open desktop setup
         </a>
 
-        <Button kind="ghost" onClick={() => void recheck()} disabled={checking}>
+        <Button kind="secondary" onClick={() => void recheck()} disabled={checking}>
           {checking ? 'Checking…' : 'I&rsquo;ve finished setting up'}
         </Button>
 
         {stalled && (
           <>
-            <ErrorNote>
-              Still not set up. Finish enrolment in the desktop tab, then try
-              again.
-            </ErrorNote>
+            <ErrorBanner title="Still not set up. Finish enrolment in the desktop tab, then try again." />
             <Button
-              kind="ghost"
+              kind="secondary"
               onClick={async () => {
                 setSignOutError(null);
                 const result = await onSignOut();
@@ -96,10 +95,10 @@ export function MfaSetupHandoffScreen({
             >
               Sign out
             </Button>
-            {signOutError && <ErrorNote>{signOutError}</ErrorNote>}
+            {signOutError && <ErrorBanner title={signOutError} />}
           </>
         )}
       </div>
-    </Screen>
+    </AuthScreen>
   );
 }

@@ -194,22 +194,14 @@ export function canAccessAdminShell(
 // ───────────────────────────────────────────────────────────────────
 // Display helpers
 // ───────────────────────────────────────────────────────────────────
-
-export function initialsFromName(name: string): string {
-  return (
-    name
-      .trim()
-      .split(/\s+/)
-      .slice(0, 2)
-      .map((w) => w[0] ?? '')
-      .join('')
-      .toUpperCase() || '?'
-  );
-}
-
-export function roleLabel(role: string): string {
-  return role.toLowerCase().replace(/_/g, ' ');
-}
+//
+// `initialsFromName` and `roleLabel` moved to `packages/shared` so
+// `apps/mobile` can use them — its eslint config hard-blocks importing
+// out of `apps/web`, and copying them would have been the wrong answer.
+// Re-exported here (not reimplemented) so the ~15 existing call sites
+// keep their `lib/roles` import path and there is still one
+// implementation.
+export { initialsFromName, roleLabel } from '@weavestream/shared';
 
 const MEMBERSHIP_ROLE_LABEL: Record<MembershipRole, string> = {
   FULL: 'Full access',

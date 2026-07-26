@@ -1,6 +1,8 @@
 import { useState, type FormEvent } from 'react';
 import { login } from '../lib/auth';
-import { Button, ErrorNote, Field, Input, Screen, Subtitle, Title } from '../components/ui';
+import { AuthScreen } from '../components/AuthScreen';
+import { Button, Field, Input, Subtitle, Title } from '../components/primitives';
+import { ErrorBanner } from '../components/states';
 
 /**
  * Login, in-scope at `/m/login`.
@@ -49,9 +51,11 @@ export function LoginScreen({
   }
 
   return (
-    <Screen>
-      <Title>Sign in</Title>
-      <Subtitle>Weavestream for field technicians</Subtitle>
+    <AuthScreen>
+      <div className="flex flex-col gap-1">
+        <Title>Sign in</Title>
+        <Subtitle>Weavestream for field technicians</Subtitle>
+      </div>
 
       <form onSubmit={onSubmit} className="flex flex-col gap-5">
         <Field label="Email" htmlFor="email">
@@ -78,12 +82,12 @@ export function LoginScreen({
           />
         </Field>
 
-        {error && <ErrorNote>{error}</ErrorNote>}
+        {error && <ErrorBanner title={error} />}
 
         <Button type="submit" disabled={pending}>
           {pending ? 'Signing in…' : 'Sign in'}
         </Button>
       </form>
-    </Screen>
+    </AuthScreen>
   );
 }

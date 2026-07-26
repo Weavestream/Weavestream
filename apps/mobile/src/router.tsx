@@ -2,18 +2,21 @@ import {
   createRootRoute,
   createRoute,
   createRouter,
+  Navigate,
   Outlet,
   useNavigate,
 } from '@tanstack/react-router';
-import { AppShell } from './screens/AppShell';
 import { LoginScreen } from './screens/LoginScreen';
 import { MfaChallengeScreen } from './screens/MfaChallengeScreen';
 import { MfaSetupHandoffScreen } from './screens/MfaSetupHandoffScreen';
-import { logout } from './lib/auth';
+import { MoreTab } from './screens/MoreTab';
+import { PlaceholderTab } from './screens/PlaceholderTab';
+import { TabShell } from './screens/TabShell';
+import { signOutAndReset } from './lib/sign-out';
 
 /**
- * Routes are mounted under `basepath: '/m'`, so `/app` here is `/m/app`
- * in the address bar.
+ * Routes are mounted under `basepath: '/m'`, so `/passwords` here is
+ * `/m/passwords` in the address bar.
  *
  * `/m/app` rather than `/m` as the landing route is not arbitrary: the
  * manifest scopes to `/m/` (so it does not bleed into `/me` and
@@ -22,21 +25,103 @@ import { logout } from './lib/auth';
  * `/m` is handled by a 308 in the route handler. See
  * apps/mobile/MANIFEST-NOTES.md — the scope, the start URL, and that
  * redirect are one decision.
+ *
+ * `/app` therefore keeps existing, as a redirect into the Passwords tab.
+ * Renaming it would break `start_url` and the prebuild guard that
+ * cross-checks it.
  */
 
 const rootRoute = createRootRoute({ component: () => <Outlet /> });
 
-const indexRoute = createRoute({
+/**
+ * Pathless layout route (`id`, not `path`) holding the tab shell.
+ *
+ * The tab bar, org sheet, toast queue and step-up host all live here, so
+ * they mount **once** and survive tab switches. Making each tab render
+ * its own chrome instead would reset an in-flight step-up prompt every
+ * time someone changed tab.
+ */
+const tabsLayoutRoute = createRoute({
   getParentRoute: () => rootRoute,
+  id: 'tabs',
+  component: TabShell,
+  /**
+   * Overlays are router state (`?sheet=org`) rather than component state,
+   * so the back button closes them instead of leaving the screen. Declared
+   * here because search params have to be validated to survive a
+   * navigation — an undeclared one gets dropped.
+   */
+  validateSearch: (search: Record<string, unknown>): { sheet?: 'org' | 'ask' } => {
+    const sheet = search.sheet;
+    return sheet === 'org' || sheet === 'ask' ? { sheet } : {};
+  },
+});
+
+const passwordsRoute = createRoute({
+  getParentRoute: () => tabsLayoutRoute,
+  path: '/passwords',
+  component: function PasswordsRoute() {
+    return (
+      <PlaceholderTab
+        title="Passwords"
+        note="Credentials for this organization arrive in the next release."
+      />
+    );
+  },
+});
+
+const articlesRoute = createRoute({
+  getParentRoute: () => tabsLayoutRoute,
+  path: '/articles',
+  component: function ArticlesRoute() {
+    return (
+      <PlaceholderTab
+        title="Articles"
+        note="Runbooks and documentation arrive in the next release."
+      />
+    );
+  },
+});
+
+const assetsRoute = createRoute({
+  getParentRoute: () => tabsLayoutRoute,
+  path: '/assets',
+  component: function AssetsRoute() {
+    return (
+      <PlaceholderTab
+        title="Assets"
+        note="Devices and their layouts arrive in the next release."
+      />
+    );
+  },
+});
+
+const moreRoute = createRoute({
+  getParentRoute: () => tabsLayoutRoute,
+  path: '/more',
+  component: MoreTab,
+});
+
+/** `/m` and `/m/app` both land on the first tab. */
+function ToPasswords() {
+  return <Navigate to="/passwords" replace />;
+}
+
+const indexRoute = createRoute({
+  getParentRoute: () => tabsLayoutRoute,
   path: '/',
-  component: AppShell,
+  component: ToPasswords,
 });
 
 const appRoute = createRoute({
-  getParentRoute: () => rootRoute,
+  getParentRoute: () => tabsLayoutRoute,
   path: '/app',
-  component: AppShell,
+  component: ToPasswords,
 });
+
+// ───────────────────────────────────────────────────────────────────
+// Auth routes — outside the tab layout: no tab bar, no org scope.
+// ───────────────────────────────────────────────────────────────────
 
 const loginRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -46,7 +131,7 @@ const loginRoute = createRoute({
     return (
       <LoginScreen
         onDone={(next) => {
-          if (next === 'app') void navigate({ to: '/app' });
+          if (next === 'app') void navigate({ to: '/passwords' });
           else if (next === 'mfa-challenge')
             void navigate({ to: '/mfa/challenge' });
           else void navigate({ to: '/mfa/setup' });
@@ -61,7 +146,9 @@ const mfaChallengeRoute = createRoute({
   path: '/mfa/challenge',
   component: function MfaChallengeRoute() {
     const navigate = useNavigate();
-    return <MfaChallengeScreen onDone={() => void navigate({ to: '/app' })} />;
+    return (
+      <MfaChallengeScreen onDone={() => void navigate({ to: '/passwords' })} />
+    );
   },
 });
 
@@ -69,26 +156,34 @@ const mfaSetupRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/mfa/setup',
   component: function MfaSetupRoute() {
-    const navigate = useNavigate();
     return (
       <MfaSetupHandoffScreen
-        onReady={() => void navigate({ to: '/app' })}
-        // Returns the failure rather than navigating on it: pretending
-        // to sign out while the HttpOnly session is still live is the
-        // one outcome worse than showing an error.
-        onSignOut={async () => {
-          const result = await logout();
-          if (result.ok) void navigate({ to: '/login' });
-          return result;
+        onReady={() => {
+          // Hard-navigate rather than a client route change: enrolment
+          // completed in another tab, so this client's `me` and scope
+          // queries were resolved against a session that could not reach
+          // protected routes. A reload is the cheapest way to start clean.
+          window.location.assign('/m/app');
         }}
+        // Returns the failure rather than navigating on it: pretending to
+        // sign out while the HttpOnly session is still live is the one
+        // outcome worse than showing an error. `signOutAndReset` also
+        // clears the persisted org and hard-navigates on success.
+        onSignOut={signOutAndReset}
       />
     );
   },
 });
 
 const routeTree = rootRoute.addChildren([
-  indexRoute,
-  appRoute,
+  tabsLayoutRoute.addChildren([
+    indexRoute,
+    appRoute,
+    passwordsRoute,
+    articlesRoute,
+    assetsRoute,
+    moreRoute,
+  ]),
   loginRoute,
   mfaChallengeRoute,
   mfaSetupRoute,
@@ -100,7 +195,7 @@ export const router = createRouter({
   // Any unmatched path under /m falls back to the shell rather than a
   // dead end — the route handler already serves the same HTML for
   // arbitrary deep links, so the client must agree.
-  defaultNotFoundComponent: AppShell,
+  defaultNotFoundComponent: ToPasswords,
 });
 
 declare module '@tanstack/react-router' {

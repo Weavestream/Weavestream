@@ -92,6 +92,9 @@ function makePrisma(companies: Record<string, CompanyRow> = {}) {
     membership: {
       findMany: jest.fn().mockResolvedValue([]),
     },
+    starredCompany: {
+      findMany: jest.fn().mockResolvedValue([]),
+    },
     upload: {
       findUnique: jest.fn().mockResolvedValue(null),
     },
@@ -108,6 +111,110 @@ function makeAudit() {
 function makeCache() {
   return { invalidateMany: jest.fn().mockResolvedValue(undefined) };
 }
+
+describe('CompaniesService list visibility', () => {
+  const MEMBER: AuthedUser = {
+    ...ACTOR,
+    role: 'CLIENT_USER',
+    globalAccess: null,
+  };
+
+  /** The `where` the service handed to `membership.findMany`. */
+  function membershipWhere(prisma: ReturnType<typeof makePrisma>) {
+    return prisma.membership.findMany.mock.calls[0]![0]!.where as {
+      userId: string;
+      revokedAt: null;
+      OR?: unknown[];
+    };
+  }
+
+  it('excludes expired memberships from the membership branch', async () => {
+    // The resolver (`resolveEffectiveAccess`) only counts a membership
+    // while `expiresAt` is null or in the future. If this query drifts
+    // back to `revokedAt`-only, an expired member sees companies that
+    // `company.read` would deny on the very next request.
+    const prisma = makePrisma();
+    const svc = new CompaniesService(
+      prisma as never,
+      makeAudit() as never,
+      makeCache() as never,
+    );
+
+    await svc.list(MEMBER);
+
+    const where = membershipWhere(prisma);
+    expect(where.userId).toBe(MEMBER.id);
+    expect(where.revokedAt).toBeNull();
+    // `null` expiry OR a future expiry — strict `gt`, mirroring the
+    // resolver's `expiresAt > now`.
+    expect(where.OR).toEqual([
+      { expiresAt: null },
+      { expiresAt: { gt: expect.any(Date) } },
+    ]);
+  });
+
+  it('returns nothing when every membership has lapsed', async () => {
+    const prisma = makePrisma();
+    // Prisma applies the predicate; the lapsed row simply isn't returned.
+    prisma.membership.findMany.mockResolvedValue([]);
+    const svc = new CompaniesService(
+      prisma as never,
+      makeAudit() as never,
+      makeCache() as never,
+    );
+
+    await expect(svc.list(MEMBER)).resolves.toEqual({
+      items: [],
+      nextCursor: null,
+    });
+    expect(prisma.company.findMany).not.toHaveBeenCalled();
+  });
+
+  it('still scopes to the surviving memberships', async () => {
+    const prisma = makePrisma();
+    prisma.membership.findMany.mockResolvedValue([{ companyId: 'c-live' }]);
+    const svc = new CompaniesService(
+      prisma as never,
+      makeAudit() as never,
+      makeCache() as never,
+    );
+
+    await svc.list(MEMBER);
+
+    const where = prisma.company.findMany.mock.calls[0]![0]!.where as {
+      id?: { in?: string[] };
+    };
+    expect(where.id?.in).toEqual(['c-live']);
+  });
+
+  it('never consults memberships for an operator with global access', async () => {
+    // WS-016: expiry reverts to `globalAccess`, so an operator with
+    // non-NONE global access must not be narrowed by this branch at all.
+    const prisma = makePrisma();
+    const svc = new CompaniesService(
+      prisma as never,
+      makeAudit() as never,
+      makeCache() as never,
+    );
+
+    await svc.list({ ...MEMBER, role: 'OPERATOR', globalAccess: 'READONLY' });
+
+    expect(prisma.membership.findMany).not.toHaveBeenCalled();
+  });
+
+  it('never consults memberships for a super admin', async () => {
+    const prisma = makePrisma();
+    const svc = new CompaniesService(
+      prisma as never,
+      makeAudit() as never,
+      makeCache() as never,
+    );
+
+    await svc.list(ACTOR);
+
+    expect(prisma.membership.findMany).not.toHaveBeenCalled();
+  });
+});
 
 describe('CompaniesService parent hierarchy', () => {
   it('rejects self-parent', async () => {

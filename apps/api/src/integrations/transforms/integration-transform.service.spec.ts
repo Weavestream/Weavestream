@@ -127,6 +127,14 @@ describe('IntegrationTransformService', () => {
         { steps: [{ op: 'markdown_table', columns: [{ header: 'Name', path: 'name' }, { header: 'Status', path: 'status' }] }] },
       ),
     ).toBe('| Name | Status |\n| --- | --- |\n| edge\\|01 | up healthy |');
+    // A source value of `\|` must not escape the escape: rendered as
+    // `\\|` the backslash is literal and the pipe still splits the cell.
+    expect(
+      service.execute(
+        [{ name: 'edge\\|01', status: 'C:\\svc' }],
+        { steps: [{ op: 'markdown_table', columns: [{ header: 'Name', path: 'name' }, { header: 'Status', path: 'status' }] }] },
+      ),
+    ).toBe('| Name | Status |\n| --- | --- |\n| edge\\\\\\|01 | C:\\\\svc |');
     expect(() =>
       service.execute(
         Array.from({ length: 1001 }, () => ({ name: 'x' })),

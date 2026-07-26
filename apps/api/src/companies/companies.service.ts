@@ -156,8 +156,19 @@ export class CompaniesService {
         actor.globalAccess !== null &&
         actor.globalAccess !== 'NONE';
       if (!seesEverything) {
+        // Expiry matters as much as revocation. `resolveEffectiveAccess`
+        // (rbac/permission.service.ts) only counts a membership while
+        // `expiresAt` is null or still in the future, so filtering on
+        // `revokedAt` alone would list companies that `company.read`
+        // would then deny — a listing/authz split that leaks company
+        // metadata to a principal the resolver rejects. Strict `gt`
+        // mirrors the resolver's `expiresAt > now`.
         const memberships = await this.prisma.membership.findMany({
-          where: { userId: actor.id, revokedAt: null },
+          where: {
+            userId: actor.id,
+            revokedAt: null,
+            OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }],
+          },
           select: { companyId: true },
         });
         const ids = memberships.map((m) => m.companyId);

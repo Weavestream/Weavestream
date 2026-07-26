@@ -528,7 +528,10 @@ function sourceManagedCapabilities(resourceKey: unknown, markdown: string): Set<
     }
   }
   if (resourceKey === 'automations') {
-    if (/## Ordered actions[^\n]*\n(?:\s*\n)*1\./i.test(markdown)) capabilities.add('ordered_rebuild_steps');
+    // `[^\S\n]` (horizontal whitespace), not `\s`: `\s` matches `\n` too, so
+    // `(?:\s*\n)*` gives a run of n blank lines 2^(n-1) parses and backtracks
+    // exponentially when `1.` is absent. Same language, one parse per run.
+    if (/## Ordered actions[^\n]*\n(?:[^\S\n]*\n)*1\./i.test(markdown)) capabilities.add('ordered_rebuild_steps');
     if (/## Script dependencies[^\n]*\n- [0-9a-f-]{36}/i.test(markdown)) capabilities.add('service_dependencies');
   }
   if (resourceKey === 'backup-configurations') {

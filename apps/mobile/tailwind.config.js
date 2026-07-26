@@ -29,10 +29,19 @@ export default {
         'accent-ink': 'var(--accent-ink)',
         'accent-soft': 'var(--accent-soft)',
         'accent-line': 'var(--accent-line)',
+        // Role-tuned accents — see src/styles/tokens.css for why the raw
+        // fill value can't serve text or on-tint roles.
+        'accent-pressed': 'var(--accent-pressed)',
+        'accent-text': 'var(--accent-text)',
+        'accent-deep': 'var(--accent-deep)',
         warn: 'var(--warn)',
+        'warn-soft': 'var(--warn-soft)',
         danger: 'var(--danger)',
+        'danger-soft': 'var(--danger-soft)',
         ok: 'var(--ok)',
+        'ok-soft': 'var(--ok-soft)',
         info: 'var(--info)',
+        'info-soft': 'var(--info-soft)',
       },
 
       // Mobile's own scale — NOT desktop's 3/5/8px.
@@ -66,8 +75,18 @@ export default {
       },
 
       spacing: {
-        // The handoff's scale. `tap` is the 44px floor that every
-        // interactive element must clear.
+        // The handoff's spacing scale is 3/4/6/7/8/10/12/13/14/16/18/22px.
+        // Tailwind's 4px-based scale covers all but these four, so they
+        // are added as the fractional steps that keep the idiom
+        // (`px-4.5` = 18px, the sheet's horizontal padding).
+        0.75: '3px',
+        1.75: '7px',
+        2.25: '9px',
+        3.25: '13px',
+        4.5: '18px',
+        5.5: '22px',
+
+        // `tap` is the 44px floor that every interactive element must clear.
         tap: 'var(--tap-min)',
         control: 'var(--control-h)',
         'card-min': 'var(--card-min-h)',
@@ -75,10 +94,15 @@ export default {
         'group-row': 'var(--group-row-h)',
         chip: 'var(--chip-h)',
         ask: 'var(--ask-size)',
+        'tab-icon': 'var(--tab-icon)',
         // Safe areas — required on anything anchored to a screen edge
         // (tab bar, bottom sheet, the Ask composer).
+        //
+        // Prefer `edge-b` over the raw `safe-b` at the bottom: the raw
+        // inset is 0 on non-notched devices. See tokens.css.
         'safe-t': 'env(safe-area-inset-top)',
         'safe-b': 'env(safe-area-inset-bottom)',
+        'edge-b': 'var(--pad-edge-b)',
         'safe-l': 'env(safe-area-inset-left)',
         'safe-r': 'env(safe-area-inset-right)',
       },
@@ -86,6 +110,13 @@ export default {
       boxShadow: {
         ask: 'var(--shadow-ask)',
         seg: 'var(--shadow-seg)',
+      },
+
+      zIndex: {
+        tabbar: 'var(--z-tabbar)',
+        sheet: 'var(--z-sheet)',
+        stepup: 'var(--z-stepup)',
+        toast: 'var(--z-toast)',
       },
     },
   },

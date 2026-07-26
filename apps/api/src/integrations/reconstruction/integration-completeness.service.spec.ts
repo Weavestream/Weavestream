@@ -365,6 +365,28 @@ describe('IntegrationCompletenessService', () => {
     expect(category(result, 'service_dependencies')).toBe('synchronized_current');
   });
 
+  it('scans a blank-line-padded ordered-actions heading in linear time', async () => {
+    // Article bodies are operator-editable and uncapped, and this scan runs
+    // inside the sync run's transaction on the API's own event loop. A run of
+    // blank lines under the heading with no `1.` must not backtrack: at 60
+    // newlines an exponential scan does not terminate.
+    const prisma = completenessPrisma({
+      activeAssetFields: [], manualAssetFields: [], staleAssetFields: [],
+      activeArticles: [{
+        resourceKey: 'automations',
+        text: `## Ordered actions\n${'\n'.repeat(60)}not a numbered list`,
+      }],
+      staleArticles: [], gaps: [],
+    });
+    const startedAt = process.hrtime.bigint();
+    const result = await new IntegrationCompletenessService(prisma as never)
+      .recalculate(prisma as never, scope());
+    const elapsedMs = Number(process.hrtime.bigint() - startedAt) / 1e6;
+
+    expect(category(result, 'ordered_rebuild_steps')).toBe('missing');
+    expect(elapsedMs).toBeLessThan(1_000);
+  });
+
   it('does not treat Task 7 restore capabilities as a procedure without notes and maps real gap sourceResource', async () => {
     const backupRecord = transformBreezeRecord('backup-configurations', {
       ...breezeBase('00000000-0000-4000-8000-000000000041'),

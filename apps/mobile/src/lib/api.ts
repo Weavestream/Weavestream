@@ -1,4 +1,6 @@
+import { isStepUpProblem } from '@weavestream/shared';
 import { ensureCsrf } from '@weavestream/shared/browser';
+import { hasStepUpOpener, requestStepUp } from './step-up';
 
 /**
  * Mobile's HTTP client.
@@ -30,11 +32,35 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * The user was asked to re-authenticate and declined (or navigated away).
+ *
+ * A distinct type because `apps/web`'s equivalent signal is a
+ * `stepUpCancelled` flag on its returned envelope, and this client throws
+ * instead of returning — so without a type of its own, "you chose not to
+ * do this" would be indistinguishable from "the server refused you", and
+ * every reveal button would show an error toast for a deliberate Cancel.
+ *
+ * Still a 403 `ApiError`, so anything that only looks at `status` (the
+ * retry predicate, the 401 handler) keeps behaving correctly.
+ */
+export class StepUpCancelledError extends ApiError {
+  constructor(problem: unknown) {
+    super(403, problem, 'Step-up authentication was cancelled');
+    this.name = 'StepUpCancelledError';
+  }
+}
+
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 
 export interface ApiFetchInit extends RequestInit {
   /** Skip CSRF acquisition. Only for the CSRF endpoint itself. */
   skipCsrf?: boolean;
+  /**
+   * Internal. Set on the single replay after a completed step-up so a
+   * server that answers `step_up_required` twice cannot loop.
+   */
+  stepUpRetried?: boolean;
 }
 
 export async function apiFetch<T>(
@@ -71,6 +97,30 @@ export async function apiFetch<T>(
   const isProblem = contentType.includes('problem+json');
   const isJson = isProblem || contentType.includes('json');
   const body = isJson ? await res.json().catch(() => null) : null;
+
+  // Step-up: the server is not refusing the caller, it is asking them to
+  // re-authenticate. Prompt, then replay the request once.
+  //
+  // Only a replayable body is retried. `undefined` and `string` can be
+  // sent twice; a `FormData`, `Blob` or stream has already been consumed
+  // by the first attempt, so replaying it would send an empty body — the
+  // 403 surfaces instead, which is the honest outcome.
+  if (
+    res.status === 403 &&
+    isStepUpProblem(body) &&
+    !init.stepUpRetried &&
+    (init.body === undefined || typeof init.body === 'string')
+  ) {
+    const prompted = hasStepUpOpener();
+    const completed = await requestStepUp(body.factor ?? 'password');
+    if (completed) {
+      return apiFetch<T>(path, { ...init, stepUpRetried: true });
+    }
+    // Distinguish "declined" from "there was no prompt to decline" — the
+    // latter is a broken step-up path and must not be reported as a user
+    // choice.
+    if (prompted) throw new StepUpCancelledError(body);
+  }
 
   if (!res.ok) throw new ApiError(res.status, body);
 

@@ -330,8 +330,18 @@ export class StarsService {
     ) {
       return null;
     }
+    // Expiry matters as much as revocation: `resolveEffectiveAccess`
+    // (rbac/permission.service.ts) only counts a membership while
+    // `expiresAt` is null or still in the future. Filtering on
+    // `revokedAt` alone would keep serving starred passwords, assets and
+    // articles — names, usernames, company names — to a member whose
+    // access has lapsed. Strict `gt` mirrors the resolver.
     const memberships = await this.prisma.membership.findMany({
-      where: { userId: actor.id, revokedAt: null },
+      where: {
+        userId: actor.id,
+        revokedAt: null,
+        OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }],
+      },
       select: { companyId: true },
     });
     return new Set(memberships.map((m) => m.companyId));

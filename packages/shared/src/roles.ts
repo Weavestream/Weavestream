@@ -68,3 +68,37 @@ export const MANAGER_PRESET: readonly PlatformCapability[] = [
   'IP_RULE_MANAGE',
   'TICKETS_READ',
 ] as const;
+
+// ───────────────────────────────────────────────────────────────────
+// Display helpers
+// ───────────────────────────────────────────────────────────────────
+//
+// Framework-free, so both apps import them from here rather than
+// keeping a copy each. `apps/mobile` needs them for the org-sheet
+// avatars and the More tab's profile card, and its eslint config hard-
+// blocks importing anything out of `apps/web` — which is the right
+// constraint, so the helpers moved instead of being duplicated.
+
+/**
+ * Up to two initials from a display name, uppercased.
+ *
+ * Falls back to `?` rather than an empty string: an empty avatar reads
+ * as a rendering bug, whereas `?` reads as missing data.
+ */
+export function initialsFromName(name: string): string {
+  return (
+    name
+      .trim()
+      .split(/\s+/)
+      .slice(0, 2)
+      .map((w) => w[0] ?? '')
+      .join('')
+      .toUpperCase() || '?'
+  );
+}
+
+/** `CLIENT_USER` → `client user`. Takes a string so callers can pass
+ *  either a `UserRole` or a raw value straight off the wire. */
+export function roleLabel(role: string): string {
+  return role.toLowerCase().replace(/_/g, ' ');
+}

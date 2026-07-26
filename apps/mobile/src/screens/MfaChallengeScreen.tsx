@@ -1,6 +1,8 @@
 import { useState, type FormEvent } from 'react';
 import { verifyMfa } from '../lib/auth';
-import { Button, ErrorNote, Field, Input, Screen, Subtitle, Title } from '../components/ui';
+import { AuthScreen } from '../components/AuthScreen';
+import { Button, Field, Input, Subtitle, Title } from '../components/primitives';
+import { ErrorBanner } from '../components/states';
 
 /**
  * MFA challenge — the re-authentication path, and the reason auth had to
@@ -31,7 +33,7 @@ export function MfaChallengeScreen({ onDone }: { onDone: () => void }) {
   }
 
   return (
-    <Screen>
+    <AuthScreen>
       <Title>Verify it&rsquo;s you</Title>
       <Subtitle>
         Enter the code from your authenticator app, or a backup code.
@@ -52,12 +54,12 @@ export function MfaChallengeScreen({ onDone }: { onDone: () => void }) {
           />
         </Field>
 
-        {error && <ErrorNote>{error}</ErrorNote>}
+        {error && <ErrorBanner title={error} />}
 
         <Button type="submit" disabled={pending}>
           {pending ? 'Verifying…' : 'Verify'}
         </Button>
       </form>
-    </Screen>
+    </AuthScreen>
   );
 }

@@ -73,4 +73,53 @@
    * baking in the handoff's teal. */
   --shadow-ask: 0 12px 26px -10px color-mix(in oklab, var(--accent) 80%, transparent);
   --shadow-seg: 0 1px 3px rgba(20, 20, 18, 0.1);
+
+  /* ---- Accent, re-tuned per role (mobile-local) ----
+   *
+   * The shared `--accent` is tuned as a *fill*: it pairs with
+   * `--accent-ink` on a button and reads correctly there. Two of the
+   * roles this app introduces are not fills, and reusing the raw fill
+   * value for them measurably fails WCAG AA on several palettes — so
+   * they get their own derived values rather than new debt.
+   *
+   * Deliberately mobile-local: nothing in packages/shared changes.
+   * Dark-theme re-derivation belongs with the dark-mode work; mobile
+   * pins light for v1.
+   *
+   *  --accent-pressed  pressed fills (handoff's ~4% darken)
+   *  --accent-text     accent as TEXT on --bg. The 11px active tab label
+   *                    is the case that forced this: raw --accent lands
+   *                    ~3.4:1 on the default palette, this lands ~5.8:1.
+   *                    The tab *icon* keeps --accent — a 25px glyph is a
+   *                    graphical object at the 3:1 threshold.
+   *  --accent-deep     icon/label sitting ON --accent-soft (the handoff's
+   *                    #0a635a on #e6f2f0 pairing).
+   */
+  --accent-pressed: color-mix(in oklab, var(--accent) 92%, black);
+  --accent-text: color-mix(in oklab, var(--accent) 78%, black);
+  --accent-deep: color-mix(in oklab, var(--accent) 70%, black);
+
+  /* Bottom inset for screen-edge-anchored UI, with a floor.
+   *
+   * `env(safe-area-inset-bottom)` is **0** on a non-notched phone (iPhone
+   * SE) and on most Android devices, so anything relying on it alone sits
+   * flush against the physical bottom edge there — tab labels touching the
+   * bezel, a sheet's last row with nothing under it. The floor gives those
+   * devices real clearance while a notched device still gets its full
+   * home-indicator inset.
+   *
+   * Use this on the tab bar, sheets, and full-bleed screens. Content that
+   * sits *above* the tab bar must NOT use it: the bar already owns the
+   * inset, and adding it again wastes a row of content on notched phones. */
+  --pad-edge-b: max(env(safe-area-inset-bottom), 12px);
+
+  /* ---- Stacking order ----
+   * These genuinely stack: the org sheet can be open with a toast over
+   * it, and step-up can arrive on top of both. Declared in one place so
+   * a new surface picks a level deliberately instead of guessing.
+   * (Desktop's equivalent ladder is Sheet 80 / Dialog 90 / Toast 100.) */
+  --z-tabbar: 10;
+  --z-sheet: 80;
+  --z-stepup: 90;
+  --z-toast: 100;
 }
