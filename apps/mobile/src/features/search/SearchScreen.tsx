@@ -107,7 +107,11 @@ export function SearchScreen({ query }: { query: string }) {
               onChange={(e) => setInput(e.target.value)}
               placeholder="Search"
               aria-label="Search"
-              // The sanctioned autofocus exception — see the docblock.
+              // The ONE sanctioned autofocus in the app (Phase 3 locked
+              // decision, scoped in Sheet.tsx's docblock): tapping the
+              // header's search icon IS the intent to type, and there is
+              // no content underneath yet for focus to steal from.
+              // eslint-disable-next-line jsx-a11y/no-autofocus
               autoFocus
               autoCapitalize="none"
               autoCorrect="off"

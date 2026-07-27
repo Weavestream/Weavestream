@@ -22,10 +22,11 @@ import { ApiError, apiFetch } from '../../lib/api';
  * off `asset.fields`; the list card projection and the edit form join
  * the layout in.
  *
- * The list endpoint has NO summary projection: every row carries the
- * full `fieldValues` map. That is why the list is cursor-paginated at
- * PAGE_LIMIT instead of fetch-all (accepted for 2c; the Phase 4
- * projection work bounds it properly).
+ * Since Phase 4 the list endpoint projects `fieldValues` to what list
+ * consumers render — `isPrimary || showInTable` (exactly this app's
+ * card contract in card-fields.ts) plus TAGS for the desktop table's
+ * tag filter. Detail (`GET /assets/:id`) still carries every value.
+ * Cursor pagination at PAGE_LIMIT stays.
  */
 
 export const PAGE_LIMIT = 50;

@@ -1,12 +1,17 @@
-import type { ArticleDetail, ArticleSummary, FolderNode } from '@weavestream/shared';
+import type { ArticleDetail, FolderNode } from '@weavestream/shared';
 
 /**
  * Full valid wire shapes (not partials) so a schema field added later
  * fails compilation here rather than silently narrowing the tests —
  * same discipline as the passwords fixtures.
+ *
+ * Built as the DETAIL shape (Phase 4 split `ArticleSummary` from
+ * `ArticleDetail`): detail is a strict superset, so list tests consume
+ * these rows structurally as summaries while reader tests keep the
+ * body fields.
  */
 
-export function makeArticle(over: Partial<ArticleSummary> = {}): ArticleSummary {
+export function makeArticle(over: Partial<ArticleDetail> = {}): ArticleDetail {
   return {
     id: 'a0000000-0000-4000-8000-0000000000a1',
     companyId: 'c0000000-0000-4000-8000-0000000000c1',

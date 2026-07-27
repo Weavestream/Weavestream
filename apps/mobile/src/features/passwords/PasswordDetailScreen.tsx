@@ -1,6 +1,7 @@
-import { useRef } from 'react';
+import { useRef, useState } from 'react';
 import { copyToClipboard } from '@weavestream/shared/browser';
 import { formatDate, formatShortDateTime } from '@weavestream/shared';
+import { ConfirmSheet } from '../../components/ConfirmSheet';
 import { DetailHeader } from '../../components/DetailHeader';
 import { MetaRow } from '../../components/MetaRow';
 import { ShowMore } from '../../components/ShowMore';
@@ -95,11 +96,18 @@ export function PasswordDetailScreen({ passwordId }: { passwordId: string }) {
   // 400s the second archive, flashing a failure toast right after the
   // success one. The ref flips synchronously in the tap handler.
   const archiveInFlight = useRef(false);
+  // Archive confirms via a sheet (Phase 4); restore stays immediate —
+  // it is the undo, and confirming the undo would punish recovery.
+  const [confirmingArchive, setConfirmingArchive] = useState(false);
   function onArchive() {
     if (archiveInFlight.current) return;
     archiveInFlight.current = true;
     archiveMutation.mutate(passwordId, {
-      onSuccess: () => toast.push('Password archived', 'ok'),
+      onSuccess: () => {
+        setConfirmingArchive(false);
+        toast.push('Password archived', 'ok');
+      },
+      // Sheet stays open on failure so retry is one tap.
       onError: () => toast.push('Couldn’t archive password.', 'danger'),
       onSettled: () => {
         archiveInFlight.current = false;
@@ -159,12 +167,13 @@ export function PasswordDetailScreen({ passwordId }: { passwordId: string }) {
                   navigate({ to: `/passwords/${passwordId}/edit`, upIsBack: true })
                 }
               />
-              {/* Immediate, no confirm — desktop parity; archiving is
-                  reversible (Restore lives on the archived banner). */}
+              {/* Opens the confirm sheet (Phase 4 — was one-tap
+                  "desktop parity" until desktop passwords gained the
+                  same confirmation). */}
               <IconButton
                 icon="archive"
                 label="Archive password"
-                onClick={onArchive}
+                onClick={() => setConfirmingArchive(true)}
                 disabled={archiveMutation.isPending}
               />
             </>
@@ -324,6 +333,19 @@ export function PasswordDetailScreen({ passwordId }: { passwordId: string }) {
         onSubmit={reveal.submitReason}
         onClose={reveal.closeSheet}
       />
+
+      <ConfirmSheet
+        open={confirmingArchive}
+        title="Archive password?"
+        confirmLabel="Archive"
+        busy={archiveMutation.isPending}
+        onConfirm={onArchive}
+        onClose={() => setConfirmingArchive(false)}
+      >
+        <span className="font-semibold text-text">{detail?.name}</span> will be
+        hidden from the default list. The credential and its links are
+        preserved and can be restored at any time.
+      </ConfirmSheet>
     </>
   );
 }

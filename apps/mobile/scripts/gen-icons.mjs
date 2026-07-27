@@ -89,6 +89,7 @@ const GLYPHS = {
   star: 'star',
   history: 'history',
   dashboard: 'dashboard',
+  palette: 'palette', // Appearance row + sheet (Phase 4)
   lan: 'lan',
   language: 'language',
   photo_library: 'photo_library',

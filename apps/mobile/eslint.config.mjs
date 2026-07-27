@@ -1,4 +1,5 @@
 // @ts-check
+import jsxA11y from 'eslint-plugin-jsx-a11y';
 import tseslint from 'typescript-eslint';
 
 /**
@@ -27,6 +28,15 @@ export default tseslint.config(
     ignores: ['dist/**', 'node_modules/**', '**/*.js', '**/*.mjs', '**/*.cjs'],
   },
   ...tseslint.configs.recommended,
+  {
+    // Phase 4 a11y guardrail. `recommended` covers the failure modes a
+    // touch-first app actually ships: icon-only controls without an
+    // accessible name, click handlers on non-interactive elements,
+    // missing alt text. Keep it ERROR-level — a11y regressions are
+    // bugs, not style.
+    files: ['src/**/*.tsx'],
+    ...jsxA11y.flatConfigs.recommended,
+  },
   {
     languageOptions: {
       parserOptions: {

@@ -378,7 +378,28 @@ export class AssetsService {
       ...(options.cursor ? { cursor: { id: options.cursor }, skip: 1 } : {}),
       include: {
         assetLayout: { include: { fields: { orderBy: { position: 'asc' } } } },
-        fieldValues: true,
+        // List projection (Phase 4): rows used to carry EVERY field
+        // value — the heaviest list in the app. List consumers need
+        // only what they render: desktop tables show showInTable
+        // columns + the primary name cell, mobile cards show
+        // `isPrimary || showInTable` (card-fields.ts), and the admin
+        // table's tag-filter chips walk TAGS values regardless of
+        // showInTable — the TAGS clause is load-bearing, dropping it
+        // silently breaks tag filtering. RICH_TEXT/FILE (the heavy
+        // types) drop automatically: `showInTable` is schema-banned
+        // for them. Detail (`getById`) still loads everything.
+        fieldValues: {
+          where: {
+            assetField: {
+              archivedAt: null,
+              OR: [
+                { isPrimary: true },
+                { showInTable: true },
+                { fieldType: 'TAGS' },
+              ],
+            },
+          },
+        },
       },
     });
     const hasMore = items.length > limit;

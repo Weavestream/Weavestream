@@ -13,6 +13,7 @@ import { ExportDataModule } from '../../api/src/exports/export-data.module.js';
 import { IntegrationsCoreModule } from '../../api/src/integrations/integrations-core.module.js';
 import { EmailModule } from '../../api/src/email/email.module.js';
 import { AlertsModule } from '../../api/src/alerts/alerts.module.js';
+import { AiModule } from '../../api/src/ai/ai.module.js';
 import { QueuesProducerModule } from '../../api/src/queues/queues-producer.module.js';
 import { DomainChecksWorker } from './domain-checks/domain-checks.processor.js';
 import { PwnedCheckWorker } from './pwned-check/pwned-check.processor.js';
@@ -23,6 +24,7 @@ import { CloudflareDriftSweepWorker } from './cloudflare/cloudflare-drift-sweep.
 import { AlertsWorker } from './alerts/alerts.processor.js';
 import { BackupWorker } from './backup/backup.processor.js';
 import { UploadReaperWorker } from './uploads/upload-reaper.processor.js';
+import { ArticleSummaryWorker } from './article-summary/article-summary.processor.js';
 
 /**
  * Worker-side composition root. Imports only the service-only shared
@@ -81,6 +83,14 @@ import { UploadReaperWorker } from './uploads/upload-reaper.processor.js';
     QueuesProducerModule,
     EmailModule,
     AlertsModule,
+    // Mobile Phase 4: the article-summary consumer reads the
+    // auto-summaries gate + resolved endpoint config
+    // (AiSettingsService) and runs one-shot completions
+    // (AiCompletionService). The module's AiSettingsController is
+    // inert here — the worker never creates an HTTP server (the
+    // AlertsModule precedent). CryptoModule above already provides
+    // the key decryptor.
+    AiModule,
   ],
   providers: [
     DomainChecksWorker,
@@ -92,6 +102,7 @@ import { UploadReaperWorker } from './uploads/upload-reaper.processor.js';
     AlertsWorker,
     BackupWorker,
     UploadReaperWorker,
+    ArticleSummaryWorker,
   ],
 })
 export class WorkerModule {}

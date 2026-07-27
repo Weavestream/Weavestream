@@ -79,6 +79,9 @@ export class AiSettingsService {
     if (input.allowPrivateNetwork !== undefined) {
       data.allowPrivateNetwork = input.allowPrivateNetwork;
     }
+    if (input.autoSummaries !== undefined) {
+      data.autoSummaries = input.autoSummaries;
+    }
 
     const after = await this.prisma.aiSetting.update({
       where: { id: SINGLETON_ID },
@@ -98,6 +101,32 @@ export class AiSettingsService {
 
     this.cache = null;
     return toDto(after);
+  }
+
+  /**
+   * The auto-summaries feature gate (Phase 4), evaluated in one place
+   * so producers and the worker cannot drift: AI enabled, endpoint +
+   * model configured, AND the separate `autoSummaries` opt-in. Cached
+   * via `loadOrSeed` (5s TTL) and NON-THROWING — article writes consult
+   * this on their hot path and a misconfigured AI must never fail a
+   * save.
+   */
+  async isAutoSummariesEnabled(): Promise<boolean> {
+    try {
+      const row = await this.loadOrSeed();
+      return (
+        row.enabled &&
+        Boolean(row.baseUrl) &&
+        Boolean(row.defaultModel) &&
+        row.autoSummaries
+      );
+    } catch {
+      // A settings-table read failing must degrade to "feature off",
+      // not to a failed article write. (§6: not swallowed silently in
+      // spirit — "off" is the documented failure mode, and the write
+      // path stamps the row settled so the sweep isn't left waiting.)
+      return false;
+    }
   }
 
   /**
@@ -231,6 +260,7 @@ type AiSettingRow = {
   maxOutputTokens: number | null;
   contextWindowTokens: number | null;
   allowPrivateNetwork: boolean;
+  autoSummaries: boolean;
   updatedAt: Date;
 };
 
@@ -243,6 +273,7 @@ function toDto(row: AiSettingRow): AiSettings {
     maxOutputTokens: row.maxOutputTokens,
     contextWindowTokens: row.contextWindowTokens,
     allowPrivateNetwork: row.allowPrivateNetwork,
+    autoSummaries: row.autoSummaries,
     updatedAt: row.updatedAt.toISOString(),
   };
 }
@@ -256,5 +287,6 @@ function stripForAudit(row: AiSettingRow) {
     maxOutputTokens: row.maxOutputTokens,
     contextWindowTokens: row.contextWindowTokens,
     allowPrivateNetwork: row.allowPrivateNetwork,
+    autoSummaries: row.autoSummaries,
   };
 }

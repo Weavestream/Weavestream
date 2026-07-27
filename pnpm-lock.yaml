@@ -245,6 +245,9 @@ importers:
       eslint:
         specifier: ^9.14.0
         version: 9.39.4(jiti@1.21.7)
+      eslint-plugin-jsx-a11y:
+        specifier: 6.10.2
+        version: 6.10.2(eslint@9.39.4(jiti@1.21.7))
       jest:
         specifier: ^30.0.0
         version: 30.3.0(@types/node@24.13.3)(ts-node@10.9.2(@types/node@24.13.3)(typescript@5.9.3))

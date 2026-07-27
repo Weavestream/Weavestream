@@ -261,3 +261,37 @@ describe('access gate', () => {
     );
   });
 });
+
+describe('name field visibility (Phase 4)', () => {
+  it('create hides the Name field entirely and omits name from the payload', async () => {
+    renderForm();
+    await screen.findByLabelText('Hostname *');
+    // The derived-name input used to render first and read as "the
+    // title field" — create now leaves naming to the server's
+    // primary-field derivation.
+    expect(screen.queryByLabelText('Name')).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText('Hostname *'), {
+      target: { value: 'edge-01' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() =>
+      expect(
+        apiFetch.mock.calls.some(([, init]) => init?.method === 'POST'),
+      ).toBe(true),
+    );
+    const [, init] = apiFetch.mock.calls.find(
+      ([, i]) => (i as { method?: string } | undefined)?.method === 'POST',
+    )!;
+    expect(
+      JSON.parse((init as { body: string }).body),
+    ).not.toHaveProperty('name');
+  });
+
+  it('edit keeps the Name field, seeded from the asset (clobber guard intact)', async () => {
+    renderForm({ mode: 'edit', assetId: ASSET_ID });
+    const nameInput = await screen.findByLabelText('Name');
+    expect(nameInput).toHaveValue('srv-pines-01');
+  });
+});

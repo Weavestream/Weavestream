@@ -2,9 +2,13 @@
 export default {
   content: ['./index.html', './src/**/*.{ts,tsx}'],
 
-  // Mobile pins light for v1 (see index.html). The selector is declared
-  // anyway so that consuming the shared color vars makes adding dark
-  // later close to free.
+  // Theme-aware since Phase 4: the shell arrives stamped with the
+  // resolved `data-theme` (see index.html + emit-to-web.mjs) and
+  // ui-prefs.ts keeps it in sync at runtime. NOTE the selector misses
+  // the system-pref/light-OS pre-hydration frame (`data-theme="dark"`
+  // + OS-light, corrected by CSS media blocks) — so `dark:` utilities
+  // are for JS-era styling only; anything that must be right on first
+  // paint uses the theme-tripled token vars instead.
   darkMode: ['selector', '[data-theme="dark"]'],
 
   theme: {

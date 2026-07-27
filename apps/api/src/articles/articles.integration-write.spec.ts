@@ -155,8 +155,7 @@ function setup(options: { bound?: unknown; collision?: unknown; binding?: unknow
     audit as never,
     {} as never,
     {} as never,
-    {} as never,
-  );
+    {} as never, { isAutoSummariesEnabled: async () => false } as never, { enqueueArticleSummary: async () => 'job-1' } as never);
   return { service, prisma, audit, tx, wasCommitted: () => committed, pendingFolder: () => createdFolder };
 }
 

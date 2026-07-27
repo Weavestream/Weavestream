@@ -1,22 +1,32 @@
 <!doctype html>
 <!--
-  `data-accent` carries a placeholder that the postbuild replaces, once
-  per accent, producing one shell variant per member of `uiAccentValues`.
-  The `/m` route handler then picks a variant by reading the user's
-  `ws_ui` cookie.
+  `data-accent`, `data-theme`, and `data-theme-pref` carry placeholders
+  that the postbuild replaces, once per (accent × theme-pref) pair,
+  producing one shell variant per member of `uiAccentValues` ×
+  `uiThemeValues`. The `/m` route handler then picks a variant by
+  reading the user's `ws_ui` cookie.
 
-  This is codegen from a compile-time enum, NOT per-request string
+  This is codegen from compile-time enums, NOT per-request string
   substitution into HTML — that would be constructing server-rendered
   HTML from request-derived data, which CLAUDE.md §3 prohibits. It also
   can't be done with an inline script: the `/m` CSP is `script-src 'self'`
   with no 'unsafe-inline'. And it can't be done from the app bundle,
   because module scripts are deferred and first paint would flash the
-  default accent.
+  default theme/accent.
 
-  `data-theme` is pinned light for v1. Because the app consumes the
-  shared color vars, adding dark later is close to free.
+  `data-theme` is the *resolved* theme (mirrors `resolveSsrTheme`:
+  system stamps dark); `data-theme-pref` is the raw preference. For
+  `system`, the `prefers-color-scheme` media blocks in the token
+  stylesheets correct the first paint on a light-OS device with zero JS
+  — including offline, where the pinned canonical shell may carry any
+  stamped pref.
 -->
-<html lang="en" data-theme="light" data-accent="__WS_ACCENT__">
+<html
+  lang="en"
+  data-theme="__WS_THEME__"
+  data-theme-pref="__WS_THEME_PREF__"
+  data-accent="__WS_ACCENT__"
+>
   <head>
     <meta charset="UTF-8" />
     <!-- viewport-fit=cover is what makes env(safe-area-inset-*) resolve
@@ -26,7 +36,21 @@
       name="viewport"
       content="width=device-width, initial-scale=1, viewport-fit=cover"
     />
-    <meta name="theme-color" content="#fafaf9" />
+    <!-- Status-bar color, themed at stamp time: an explicit pref stamps
+         the same value into both metas; `system` stamps light/dark so
+         the OS picks. Post-load, ui-prefs.ts collapses these to a
+         single meta tracking the live `--bg`. The hexes are the two
+         `--bg` values from packages/shared/styles/color-tokens.css. -->
+    <meta
+      name="theme-color"
+      media="(prefers-color-scheme: light)"
+      content="__WS_TC_LIGHT__"
+    />
+    <meta
+      name="theme-color"
+      media="(prefers-color-scheme: dark)"
+      content="__WS_TC_DARK__"
+    />
     <meta name="robots" content="noindex, nofollow" />
     <link rel="manifest" href="/m/manifest.webmanifest" />
     <link rel="apple-touch-icon" href="/brand/pwa-icon-180.png" />

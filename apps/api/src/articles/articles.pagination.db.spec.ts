@@ -52,8 +52,7 @@ describeIfDb('articles list cursor pagination (DB integration)', () => {
     {} as never,
     {} as never,
     {} as never,
-    {} as never,
-  );
+    {} as never, { isAutoSummariesEnabled: async () => false } as never, { enqueueArticleSummary: async () => 'job-1' } as never);
 
   const TITLES = ['Duplicate runbook', 'Duplicate runbook', 'Duplicate runbook', 'Duplicate runbook', 'Aardvark first'];
 
@@ -101,5 +100,17 @@ describeIfDb('articles list cursor pagination (DB integration)', () => {
     const all = await service.list(OPERATOR, COMPANY, { limit: 50 });
     const dupIds = all.items.filter((a) => a.title === 'Duplicate runbook').map((a) => a.id);
     expect(dupIds).toEqual([...dupIds].sort());
+  });
+
+  it('list rows are metadata-only against real Postgres (Phase 4 projection)', async () => {
+    const all = await service.list(OPERATOR, COMPANY, { limit: 50 });
+    expect(all.items.length).toBeGreaterThan(0);
+    for (const item of all.items) {
+      expect(item).not.toHaveProperty('content');
+      expect(item).not.toHaveProperty('markdownSource');
+      expect(item).not.toHaveProperty('contentPlaintext');
+      // The projected select still carries the served coalesce source.
+      expect(item).toHaveProperty('excerpt');
+    }
   });
 });

@@ -2,6 +2,7 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { Prisma, type Article, type ArticleVersion } from '@prisma/client';
@@ -22,8 +23,10 @@ import {
 } from '@weavestream/shared';
 import { requireTenantContext } from '@weavestream/shared/server';
 import { PrismaService } from '../prisma/prisma.service.js';
+import { AiSettingsService } from '../ai/ai-settings.service.js';
 import { AuditLogService } from '../audit/audit.service.js';
 import { AUDIT_ACTIONS } from '../audit/audit-actions.js';
+import { QueuesService } from '../queues/queues.service.js';
 import { StarsService } from '../stars/stars.service.js';
 import { UploadsService } from '../uploads/uploads.service.js';
 import { RelationsService } from '../relations/relations.service.js';
@@ -149,11 +152,67 @@ export interface SerializedArticle {
 }
 
 /**
+ * Metadata-only list row (Phase 4). List responses used to serialize
+ * through the same shape as detail, carrying the full body + plaintext
+ * on every row; the list query now `select`s exactly these columns so
+ * the body never leaves Postgres. `excerpt` is the serve-time coalesce
+ * `aiSummary ?? derivedExcerpt`. Mirrors `articleSummarySchema` in
+ * `@weavestream/shared` (which is what clients type against).
+ */
+export interface SerializedArticleSummary {
+  id: string;
+  companyId: string;
+  folderId: string | null;
+  title: string;
+  slug: string;
+  excerpt: string | null;
+  visibleToClients: boolean;
+  revision: number;
+  archivedAt: Date | null;
+  createdBy: string | null;
+  updatedBy: string | null;
+  createdByUser: ActorRef | null;
+  updatedByUser: ActorRef | null;
+  createdAt: Date;
+  updatedAt: Date;
+  /** Always false on list rows — cheap listing, see SerializedArticle. */
+  isStarred: boolean;
+  /** Always false on list rows — cheap listing, see SerializedArticle. */
+  hasDraft: boolean;
+}
+
+/** Exactly the columns the list projection reads. */
+const ARTICLE_SUMMARY_SELECT = {
+  id: true,
+  companyId: true,
+  folderId: true,
+  title: true,
+  slug: true,
+  aiSummary: true,
+  derivedExcerpt: true,
+  visibleToClients: true,
+  revision: true,
+  archivedAt: true,
+  createdBy: true,
+  updatedBy: true,
+  createdAt: true,
+  updatedAt: true,
+} satisfies Prisma.ArticleSelect;
+
+type ArticleSummaryRow = Prisma.ArticleGetPayload<{
+  select: typeof ARTICLE_SUMMARY_SELECT;
+}>;
+
+/**
  * Fields whose changes are tracked by version history. `companyId`,
  * `archivedAt`, audit columns, and computed mirrors (`contentPlaintext`,
- * `excerpt`) are deliberately excluded — they're either tenant scope
- * (not "content") or derived state that always rides along with the
- * primary fields.
+ * `excerpt`, `derivedExcerpt`) are deliberately excluded — they're
+ * either tenant scope (not "content") or derived state that always
+ * rides along with the primary fields. The AI columns (`aiSummary`,
+ * `aiSummaryModel`, `aiSummaryAt`) are excluded too: an asynchronously
+ * computed mirror of the published body, cleared by the same write
+ * that changes it — versioning it would record noise, and restore
+ * regenerates it naturally by flowing through `update()`.
  */
 const VERSIONED_FIELDS = [
   'title',
@@ -176,12 +235,16 @@ export interface ArticleListOptions {
 
 @Injectable()
 export class ArticlesService {
+  private readonly logger = new Logger(ArticlesService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditLogService,
     private readonly stars: StarsService,
     private readonly uploads: UploadsService,
     private readonly relations: RelationsService,
+    private readonly aiSettings: AiSettingsService,
+    private readonly queues: QueuesService,
   ) {}
 
   // ------------------------------------------------------------------
@@ -192,7 +255,7 @@ export class ArticlesService {
     actor: AuthedUser,
     companyId: string,
     options: ArticleListOptions = {},
-  ): Promise<{ items: SerializedArticle[]; nextCursor: string | null }> {
+  ): Promise<{ items: SerializedArticleSummary[]; nextCursor: string | null }> {
     const limit = Math.min(Math.max(options.limit ?? 50, 1), 200);
     const where: Prisma.ArticleWhereInput = { companyId };
     if (!options.includeArchived) where.archivedAt = null;
@@ -203,6 +266,10 @@ export class ArticlesService {
 
     const rows = await this.prisma.article.findMany({
       where,
+      // Metadata-only projection (Phase 4): the body columns never
+      // leave Postgres for a list — a 50-row page used to carry up to
+      // 50 full bodies + plaintext mirrors.
+      select: ARTICLE_SUMMARY_SELECT,
       // `id` is the unique tie-breaker Prisma cursor pagination needs:
       // without it, duplicate titles make the cursor row's position
       // ambiguous and pages skip or repeat rows. Accepted limitation:
@@ -216,7 +283,7 @@ export class ArticlesService {
     });
     const hasMore = rows.length > limit;
     const slice = hasMore ? rows.slice(0, limit) : rows;
-    const items = slice.map((r) => this.serialize(r, actor.role));
+    const items = slice.map((r) => this.serializeSummary(r));
     await this.hydrateActors(items);
     return {
       items,
@@ -322,6 +389,12 @@ export class ArticlesService {
     const slug = normalized.slug ?? this.slugifyTitle(normalized.title);
     await this.assertSlugFree(companyId, slug, null);
 
+    // Feature gate evaluated ONCE, before the transaction — the same
+    // decision stamps `aiSummaryAt` and (post-commit) drives the
+    // enqueue. Re-reading after commit would race an off→on settings
+    // flip and enqueue a row this write stamped settled.
+    const summaryPending = await this.aiSettings.isAutoSummariesEnabled();
+
     const body = this.projectArticleBody(normalized, normalized.excerpt);
     const data = {
       companyId,
@@ -332,6 +405,10 @@ export class ArticlesService {
       createdBy: actor.id,
       updatedBy: actor.id,
       ...body,
+      // NULL = "generation pending" — only ever created while the gate
+      // is on, so a disabled install accrues no backlog a later enable
+      // would silently process.
+      aiSummaryAt: summaryPending ? null : new Date(),
     };
 
     // Single transaction: insert the article and its first published
@@ -369,6 +446,11 @@ export class ArticlesService {
       before: null,
       after: this.auditFields(created),
     });
+    // Post-commit only, from the captured gate decision.
+    if (summaryPending) {
+      await this.maybeEnqueueSummary(created.id, companyId, created.revision);
+    }
+
     const out = this.serialize(created, actor.role);
     // No autosave path on create — the brand-new article cannot have
     // a draft row.
@@ -479,6 +561,35 @@ export class ArticlesService {
       input.excerpt !== undefined ||
       input.editorMode !== undefined;
     if (contentAffecting) data.revision = { increment: 1 };
+
+    // AI summary lifecycle (Phase 4). Trigger = presence of any prompt
+    // input — TITLE INCLUDED (it feeds the summary prompt and a
+    // title-only edit bumps `revision`, so skipping it would leave a
+    // permanently stale summary). Presence-based deliberately, like
+    // `contentAffecting`: the promote-draft-on-Save case diffs to zero
+    // changed fields yet publishes a body that differs from the last
+    // published version. NOT triggered by `excerpt` alone — the legacy
+    // column is unserved and the published body didn't change.
+    // Autosave drafts never touch the AI columns: the stored summary
+    // keeps matching the last *published* body, which is also exactly
+    // what `discardDraft` restores.
+    const summaryAffecting =
+      !isDraftWrite &&
+      (input.title !== undefined ||
+        input.content !== undefined ||
+        input.markdownSource !== undefined ||
+        input.editorMode !== undefined);
+    // Gate evaluated ONCE, before the transaction — the captured
+    // decision both stamps `aiSummaryAt` and drives the post-commit
+    // enqueue (re-reading after commit races an off→on flip).
+    const summaryPending = summaryAffecting
+      ? await this.aiSettings.isAutoSummariesEnabled()
+      : false;
+    if (summaryAffecting) {
+      data.aiSummary = null;
+      data.aiSummaryModel = null;
+      data.aiSummaryAt = summaryPending ? null : new Date();
+    }
 
     // Single transaction wraps the article row update + version row
     // write so a partial commit cannot leave the live article ahead
@@ -613,6 +724,15 @@ export class ArticlesService {
     });
 
     const { updated, versionKind } = txResult;
+
+    // Post-commit only, from the captured decision — placed BEFORE the
+    // no-op early return below, because that path still ran the UPDATE
+    // (revision bump + AI-column clear included) and its pending state
+    // must be drained. A Redis outage here never fails the save; the
+    // sweep heals the miss.
+    if (summaryPending) {
+      await this.maybeEnqueueSummary(id, companyId, updated.revision);
+    }
 
     // No-op silent return — preserves pre-versioning behavior.
     if (versionKind === null) {
@@ -888,6 +1008,17 @@ export class ArticlesService {
       }
     }
 
+    // AI summary gate (Phase 4), resolved ONCE before the write and used
+    // only to stamp `aiSummaryAt`. The integration path NEVER enqueues
+    // inline: it may be running inside the sync runner's long page
+    // transaction, where a delayed job could execute pre-commit, read
+    // the old revision, skip as superseded, and strand the summary —
+    // and a rollback would strand the job. Committed rows surface as
+    // pending (`aiSummaryAt IS NULL`) and the reconciliation sweep
+    // collects them at its paced rate, which is also the spend governor
+    // for bulk imports.
+    const summaryPending = await this.aiSettings.isAutoSummariesEnabled();
+
     // One transaction covers the managed-folder create and the article write.
     // Refusals are decided before anything is written: the binding
     // eligibility check precedes the folder create, so a blocked record
@@ -947,6 +1078,9 @@ export class ArticlesService {
             ...data,
             createdBy: input.auditActorId,
             updatedBy: input.auditActorId,
+            // Gate-aware settle/pending stamp; no inline enqueue (see
+            // the gate comment above the transaction).
+            aiSummaryAt: summaryPending ? null : new Date(),
           },
         });
         await tx.articleVersion.create({
@@ -998,6 +1132,17 @@ export class ArticlesService {
         data: {
           ...data,
           ...(restored ? { archivedAt: null } : {}),
+          // Clear + gate-stamp only when the published body/meta
+          // actually changed; a pure restore-from-archive keeps its
+          // still-accurate summary. No inline enqueue — pending rows
+          // are the sweep's job (see the gate comment above).
+          ...(changed
+            ? {
+                aiSummary: null,
+                aiSummaryModel: null,
+                aiSummaryAt: summaryPending ? null : new Date(),
+              }
+            : {}),
           revision: { increment: 1 },
           updatedBy: input.auditActorId,
         },
@@ -1692,6 +1837,13 @@ export class ArticlesService {
     markdownSource: string | null;
     contentPlaintext: string;
     excerpt: string;
+    /**
+     * Machine-derived, ALWAYS — never the caller's `excerptOverride`.
+     * This column is what read paths serve (behind `aiSummary`), and it
+     * being exclusively app-written is what makes the refinement script
+     * safe to overwrite it.
+     */
+    derivedExcerpt: string | null;
   } {
     if (input.editorMode === 'markdown') {
       const md = input.markdownSource;
@@ -1701,6 +1853,7 @@ export class ArticlesService {
         markdownSource: md,
         contentPlaintext: markdownToPlaintext(md),
         excerpt: excerptOverride ?? markdownExcerpt(md),
+        derivedExcerpt: markdownExcerpt(md) || null,
       };
     }
 
@@ -1716,7 +1869,36 @@ export class ArticlesService {
       markdownSource: null,
       contentPlaintext: tiptapToPlaintext(input.content),
       excerpt: excerptOverride ?? tiptapExcerpt(input.content),
+      derivedExcerpt: tiptapExcerpt(input.content) || null,
     };
+  }
+
+  /**
+   * Enqueue a summary generation for a row a just-committed write
+   * stamped PENDING. Never called in-transaction, never re-reads the
+   * feature gate (callers pass their captured decision by only calling
+   * this when it was on), and never fails the save — a Redis outage is
+   * logged and healed by the reconciliation sweep, which is what the
+   * `aiSummaryAt IS NULL` marker exists for.
+   */
+  private async maybeEnqueueSummary(
+    articleId: string,
+    companyId: string,
+    revision: number,
+  ): Promise<void> {
+    try {
+      await this.queues.enqueueArticleSummary({
+        kind: 'generate',
+        articleId,
+        companyId,
+        revision,
+      });
+    } catch (err) {
+      this.logger.warn(
+        `article-summary enqueue failed for ${articleId}@r${revision} — ` +
+          `sweep will reconcile (${err instanceof Error ? err.message : 'unknown'})`,
+      );
+    }
   }
 
   /**
@@ -1899,8 +2081,26 @@ export class ArticlesService {
       markdownSource: v.markdownSource,
       contentPlaintext: v.contentPlaintext,
       excerpt: v.excerpt,
+      // Recomputed, never left in place: the live row's value was
+      // maintained by `projectArticleBody` on every content write —
+      // autosave included — so at discard/archive time it may derive
+      // from the DRAFT body. Version rows don't store it (it is
+      // exclusively app-written and always recomputable), so reverting
+      // without recomputing kept serving discarded-draft text in lists
+      // whenever no AI summary masked it.
+      derivedExcerpt: this.versionDerivedExcerpt(v),
       updatedBy,
     };
+  }
+
+  /** `projectArticleBody`'s derived-excerpt rule, applied to a version row. */
+  private versionDerivedExcerpt(v: ArticleVersion): string | null {
+    if (v.editorMode === 'markdown') {
+      return typeof v.markdownSource === 'string' && v.markdownSource.length > 0
+        ? markdownExcerpt(v.markdownSource) || null
+        : null;
+    }
+    return v.content != null ? tiptapExcerpt(v.content) || null : null;
   }
 
   /** Public-facing version summary (metadata only; no body). */
@@ -1951,6 +2151,34 @@ export class ArticlesService {
     );
   }
 
+  /**
+   * Metadata-only list row (Phase 4). One serving rule with detail:
+   * `aiSummary ?? derivedExcerpt` — the stored legacy `excerpt` is
+   * never consulted (its provenance is unknowable; read paths have
+   * always ignored it).
+   */
+  private serializeSummary(row: ArticleSummaryRow): SerializedArticleSummary {
+    return {
+      id: row.id,
+      companyId: row.companyId,
+      folderId: row.folderId,
+      title: row.title,
+      slug: row.slug,
+      excerpt: row.aiSummary ?? row.derivedExcerpt,
+      visibleToClients: row.visibleToClients,
+      revision: row.revision,
+      archivedAt: row.archivedAt,
+      createdBy: row.createdBy,
+      updatedBy: row.updatedBy,
+      createdByUser: null,
+      updatedByUser: null,
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
+      isStarred: false,
+      hasDraft: false,
+    };
+  }
+
   private serialize(row: Article, role: UserRole): SerializedArticle {
     // Client users never see the raw authoring doc for hidden articles —
     // the list/get filters catch that before we get here. We still scrub
@@ -1966,12 +2194,12 @@ export class ArticlesService {
       content: row.content,
       markdownSource: row.markdownSource,
       contentPlaintext: row.contentPlaintext,
-      // Re-derive on read so legacy rows whose stored `excerpt` was
-      // generated from image alt text (e.g. `"image.jpg"`) render
-      // cleanly without a destructive backfill. New writes go through
-      // `projectArticleBody`, which already uses the image-aware
-      // excerpt helpers.
-      excerpt: this.deriveExcerpt(row),
+      // Serving rule (Phase 4): AI summary wins, then the maintained
+      // `derivedExcerpt`; the final body re-derive covers only rows the
+      // migration/refinement haven't touched (and preserves the old
+      // behavior for malformed rows). The stored legacy `excerpt` stays
+      // unserved — its provenance is unknowable.
+      excerpt: row.aiSummary ?? row.derivedExcerpt ?? this.deriveExcerpt(row),
       visibleToClients: row.visibleToClients,
       revision: row.revision,
       archivedAt: row.archivedAt,
@@ -1998,7 +2226,16 @@ export class ArticlesService {
    * rows so the sync `serialize()` path stays simple; one Prisma query
    * covers any number of articles in a list.
    */
-  private async hydrateActors(articles: SerializedArticle[]): Promise<void> {
+  private async hydrateActors(
+    // Structural: both SerializedArticle and SerializedArticleSummary
+    // pass through — the hydration touches only the four actor fields.
+    articles: Array<
+      Pick<
+        SerializedArticle,
+        'createdBy' | 'updatedBy' | 'createdByUser' | 'updatedByUser'
+      >
+    >,
+  ): Promise<void> {
     if (articles.length === 0) return;
     const ids = new Set<string>();
     for (const a of articles) {

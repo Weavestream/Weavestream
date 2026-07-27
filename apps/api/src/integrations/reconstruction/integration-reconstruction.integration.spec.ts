@@ -1931,8 +1931,7 @@ function buildRealWriterRegistry(prisma: PrismaClient, audit: AuditLogService) {
     audit,
     { isStarred: jest.fn().mockResolvedValue(false) } as never,
     {} as never,
-    relations,
-  );
+    relations, { isAutoSummariesEnabled: async () => false } as never, { enqueueArticleSummary: async () => 'job-1' } as never);
   const ipam = new IpamService(prisma as never, audit);
   const assetWriter = new AssetTargetWriter(assets);
   const subnetWriter = new SubnetTargetWriter(ipam);

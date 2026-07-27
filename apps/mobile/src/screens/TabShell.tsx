@@ -12,8 +12,10 @@ import type {
   MembershipRole,
   PlatformCapability,
   UserRole,
+  UserUiPreferences,
 } from '@weavestream/shared';
 import { ApiError, apiFetch } from '../lib/api';
+import { applyServerUiPrefs } from '../lib/ui-prefs';
 import { OrgProvider, useOrgScope, type Org } from '../lib/org-scope';
 import { useScopedNavigate, useStaleScopeGuard } from '../lib/scoped-nav';
 import { recoveryRouteFor } from '../lib/session-recovery';
@@ -66,6 +68,13 @@ export interface Me {
   globalAccess: GlobalAccess | null;
   platformCapabilities: PlatformCapability[];
   memberships: MeMembership[];
+  /**
+   * Account appearance preferences. The `ws_ui` cookie is per-browser
+   * and only written by the API on login/preference changes, so this is
+   * how a phone hears about a theme or accent changed on the desktop —
+   * `RequireSession` applies it on every boot (Phase 4).
+   */
+  preferences?: UserUiPreferences;
 }
 
 const MeContext = createContext<Me | null>(null);
@@ -108,6 +117,15 @@ function RequireSession({ children }: { children: ReactNode }) {
     queryKey: ['me'],
     queryFn: () => apiFetch<Me>('/auth/me'),
   });
+
+  // Cross-device preference sync: apply the account's theme/accent and
+  // (when the cookie disagreed) rewrite this browser's `ws_ui` + re-pin
+  // the offline shell. Runs on every boot's fresh `me` — the moment a
+  // stale phone actually learns about a desktop-side change.
+  const prefs = data?.preferences;
+  useEffect(() => {
+    if (prefs) applyServerUiPrefs(prefs);
+  }, [prefs]);
 
   if (isPending) {
     return (

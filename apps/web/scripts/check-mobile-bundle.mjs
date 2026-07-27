@@ -83,7 +83,12 @@ async function main() {
   // publish — failing it forces a republish rather than shipping a
   // build whose installed PWAs silently keep running the previous
   // worker (or none).
-  const SCHEMA = 2;
+  // 3: theme-variant shells (Phase 4). `shells` is keyed by
+  // `{accent}-{themePref}` and `themePrefs`/`fallbackTheme` exist. A
+  // schema-2 marker is an accent-only publish whose files the
+  // theme-aware route handler cannot find — every user would get the
+  // fallback-shell miss path. Fail until republished.
+  const SCHEMA = 3;
   if (marker.schema !== SCHEMA) {
     fail([
       `Build marker schema is ${JSON.stringify(marker.schema)}, expected ${SCHEMA}.`,
@@ -103,45 +108,67 @@ async function main() {
   ) {
     problems.push('marker records no shell variants');
   }
-  // The accent set is checked against `uiAccentValues` from
-  // `@weavestream/shared`, NOT against the marker's own list. Trusting
-  // `marker.accents` lets a truncated or hand-edited marker pass by
-  // simply declaring fewer accents than exist — the guard would then
-  // green-light a build whose users get a 500 (or the fallback accent)
-  // for any palette the publisher happened to skip. The shared enum is
-  // the same source the publisher iterates, so this compares the output
-  // against the requirement rather than against itself.
-  const { uiAccentValues, DEFAULT_UI_ACCENT } = await import(
-    '@weavestream/shared'
-  );
-  const expected = [...uiAccentValues].sort();
+  // The accent and theme-pref sets are checked against the enums from
+  // `@weavestream/shared`, NOT against the marker's own lists. Trusting
+  // `marker.accents`/`marker.themePrefs` lets a truncated or hand-edited
+  // marker pass by simply declaring fewer members than exist — the guard
+  // would then green-light a build whose users get the fallback variant
+  // (or a 503) for any pair the publisher happened to skip. The shared
+  // enums are the same source the publisher iterates, so this compares
+  // the output against the requirement rather than against itself.
+  const { uiAccentValues, uiThemeValues, DEFAULT_UI_ACCENT, DEFAULT_UI_THEME } =
+    await import('@weavestream/shared');
+  const expectedAccents = [...uiAccentValues].sort();
+  const expectedPrefs = [...uiThemeValues].sort();
 
   const declared = Array.isArray(marker.accents) ? [...marker.accents].sort() : [];
-  if (declared.join(',') !== expected.join(',')) {
+  if (declared.join(',') !== expectedAccents.join(',')) {
     problems.push(
       `marker declares accents [${declared.join(', ') || 'none'}] but this build ` +
-        `requires [${expected.join(', ')}]`,
+        `requires [${expectedAccents.join(', ')}]`,
+    );
+  }
+  const declaredPrefs = Array.isArray(marker.themePrefs)
+    ? [...marker.themePrefs].sort()
+    : [];
+  if (declaredPrefs.join(',') !== expectedPrefs.join(',')) {
+    problems.push(
+      `marker declares themePrefs [${declaredPrefs.join(', ') || 'none'}] but ` +
+        `this build requires [${expectedPrefs.join(', ')}]`,
     );
   }
 
+  // One shell per accent × theme-pref pair, keyed `{accent}-{pref}` —
+  // the exact keys `shellKeyFor` can produce.
+  const expectedKeys = uiAccentValues
+    .flatMap((a) => uiThemeValues.map((t) => `${a}-${t}`))
+    .sort();
   const shellKeys = marker.shells ? Object.keys(marker.shells).sort() : [];
-  if (shellKeys.join(',') !== expected.join(',')) {
-    const missing = expected.filter((a) => !shellKeys.includes(a));
-    const extra = shellKeys.filter((a) => !expected.includes(a));
+  if (shellKeys.join(',') !== expectedKeys.join(',')) {
+    const missing = expectedKeys.filter((k) => !shellKeys.includes(k));
+    const extra = shellKeys.filter((k) => !expectedKeys.includes(k));
     problems.push(
-      'shell variants do not cover every accent' +
+      'shell variants do not cover every accent × theme-pref pair' +
         (missing.length ? ` — missing: ${missing.join(', ')}` : '') +
         (extra.length ? ` — unexpected: ${extra.join(', ')}` : ''),
     );
   }
 
-  // The handler falls back to this accent when a cookie names one that
-  // no longer exists, so a bogus value would 503 those users.
-  if (!expected.includes(marker.fallbackAccent)) {
+  // The handler falls back to `{fallbackAccent}-{fallbackTheme}` when a
+  // cookie names a variant that no longer exists, so a bogus value here
+  // would 503 those users.
+  if (!expectedAccents.includes(marker.fallbackAccent)) {
     problems.push(
       `marker fallbackAccent ${JSON.stringify(marker.fallbackAccent)} is not a ` +
-        `known accent (expected one of ${expected.join(', ')}; ` +
+        `known accent (expected one of ${expectedAccents.join(', ')}; ` +
         `the app default is ${DEFAULT_UI_ACCENT})`,
+    );
+  }
+  if (!expectedPrefs.includes(marker.fallbackTheme)) {
+    problems.push(
+      `marker fallbackTheme ${JSON.stringify(marker.fallbackTheme)} is not a ` +
+        `known theme pref (expected one of ${expectedPrefs.join(', ')}; ` +
+        `the app default is ${DEFAULT_UI_THEME})`,
     );
   }
 
@@ -190,16 +217,16 @@ async function main() {
 
   // 2. Shell variants match their recorded hash. A mismatch means the
   //    shell and the assets came from different builds.
-  for (const [accent, expected] of Object.entries(marker.shells ?? {})) {
-    const p = join(SHELL_DIR, `${accent}.html`);
+  for (const [key, expectedHash] of Object.entries(marker.shells ?? {})) {
+    const p = join(SHELL_DIR, `${key}.html`);
     if (!existsSync(p)) {
-      problems.push(`missing shell variant: mobile-shell/${accent}.html`);
+      problems.push(`missing shell variant: mobile-shell/${key}.html`);
       continue;
     }
     const actual = sha256(await readFile(p, 'utf8'));
-    if (actual !== expected) {
+    if (actual !== expectedHash) {
       problems.push(
-        `stale shell variant: mobile-shell/${accent}.html does not match the ` +
+        `stale shell variant: mobile-shell/${key}.html does not match the ` +
           `hash recorded at publish time`,
       );
     }

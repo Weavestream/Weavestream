@@ -9,7 +9,8 @@
  *                            NOT `immutable`; see next.config.js for why
  *                            a pathname-keyed immutable header was
  *                            removed)
- *   apps/web/mobile-shell/   one HTML shell per accent, OUTSIDE public/
+ *   apps/web/mobile-shell/   one HTML shell per accent × theme-pref
+ *                            pair, OUTSIDE public/
  *
  * The shell must not live under `public/`. Next resolves public files by
  * exact set membership and static files win before dynamic routes, so a
@@ -43,6 +44,17 @@ const SHELL_DIR = join(WEB, 'mobile-shell');
 const MARKER = 'mobile-build.json';
 
 const ACCENT_PLACEHOLDER = '__WS_ACCENT__';
+const THEME_PLACEHOLDER = '__WS_THEME__';
+const THEME_PREF_PLACEHOLDER = '__WS_THEME_PREF__';
+const TC_LIGHT_PLACEHOLDER = '__WS_TC_LIGHT__';
+const TC_DARK_PLACEHOLDER = '__WS_TC_DARK__';
+
+/* The two `--bg` values from packages/shared/styles/color-tokens.css,
+ * stamped into the theme-color metas so the status bar is right on the
+ * first frame. An explicit pref stamps one value into both metas;
+ * `system` stamps the pair and lets the OS media query pick. */
+const BG_LIGHT = '#fafaf9';
+const BG_DARK = '#0a0a0a';
 
 /**
  * The compiled service worker (Phase 3). Emitted by vite-plugin-pwa
@@ -91,17 +103,28 @@ function assertNoHtmlPrecached(swSource) {
 }
 
 /**
- * Read the accent list from the shared package rather than hardcoding
- * it, so adding a sixth accent regenerates the variants automatically
- * instead of silently shipping five.
+ * Read the accent + theme-pref enums from the shared package rather
+ * than hardcoding them, so adding a sixth accent (or, however unlikely,
+ * a fourth theme pref) regenerates the variants automatically instead
+ * of silently shipping a subset.
  */
-async function accents() {
+async function uiEnums() {
   const shared = await import('@weavestream/shared');
-  const values = shared.uiAccentValues;
-  if (!Array.isArray(values) || values.length === 0) {
+  const accents = shared.uiAccentValues;
+  const themePrefs = shared.uiThemeValues;
+  if (!Array.isArray(accents) || accents.length === 0) {
     throw new Error('uiAccentValues missing from @weavestream/shared');
   }
-  return { values, fallback: shared.DEFAULT_UI_ACCENT };
+  if (!Array.isArray(themePrefs) || themePrefs.length === 0) {
+    throw new Error('uiThemeValues missing from @weavestream/shared');
+  }
+  return {
+    accents,
+    themePrefs,
+    fallbackAccent: shared.DEFAULT_UI_ACCENT,
+    fallbackTheme: shared.DEFAULT_UI_THEME,
+    resolveSsrTheme: shared.resolveSsrTheme,
+  };
 }
 
 const sha256 = (s) => createHash('sha256').update(s).digest('hex');
@@ -204,7 +227,13 @@ async function main() {
     sha256(swSource).slice(0, 16),
   );
 
-  const { values: ACCENTS, fallback } = await accents();
+  const {
+    accents: ACCENTS,
+    themePrefs: THEME_PREFS,
+    fallbackAccent,
+    fallbackTheme,
+    resolveSsrTheme,
+  } = await uiEnums();
 
   // Clear staging first: remnants of an interrupted build must never be
   // published or swept into a Docker context.
@@ -228,20 +257,51 @@ async function main() {
 
   // ---- shell variants --------------------------------------------------
   const template = await readFile(join(DIST, 'index.html'), 'utf8');
-  if (!template.includes(ACCENT_PLACEHOLDER)) {
-    throw new Error(
-      `index.html lost its ${ACCENT_PLACEHOLDER} placeholder — the route handler ` +
-        'would serve one accent to everyone',
-    );
+  for (const placeholder of [
+    ACCENT_PLACEHOLDER,
+    THEME_PLACEHOLDER,
+    THEME_PREF_PLACEHOLDER,
+    TC_LIGHT_PLACEHOLDER,
+    TC_DARK_PLACEHOLDER,
+  ]) {
+    if (!template.includes(placeholder)) {
+      throw new Error(
+        `index.html lost its ${placeholder} placeholder — the route handler ` +
+          'would serve one theme/accent to everyone',
+      );
+    }
+  }
+
+  /**
+   * Build-time codegen from compile-time enums. NOT per-request
+   * substitution of request data into HTML (CLAUDE.md §3).
+   *
+   * `data-theme` gets the *resolved* theme (system stamps dark,
+   * mirroring `resolveSsrTheme`); the token stylesheets' media blocks
+   * correct a system-pref/light-OS first paint in pure CSS. theme-color:
+   * an explicit pref stamps one value into both metas; system stamps
+   * the light/dark pair so the OS picks pre-hydration.
+   */
+  function stampShell(accent, pref) {
+    const resolved = resolveSsrTheme({ uiTheme: pref, uiAccent: accent });
+    const tcLight = pref === 'dark' ? BG_DARK : BG_LIGHT;
+    const tcDark = pref === 'light' ? BG_LIGHT : BG_DARK;
+    return template
+      .replaceAll(ACCENT_PLACEHOLDER, accent)
+      .replaceAll(THEME_PLACEHOLDER, resolved)
+      .replaceAll(THEME_PREF_PLACEHOLDER, pref)
+      .replaceAll(TC_LIGHT_PLACEHOLDER, tcLight)
+      .replaceAll(TC_DARK_PLACEHOLDER, tcDark);
   }
 
   const shells = {};
   for (const accent of ACCENTS) {
-    // Build-time codegen from a compile-time enum. NOT per-request
-    // substitution of request data into HTML (CLAUDE.md §3).
-    const html = template.replaceAll(ACCENT_PLACEHOLDER, accent);
-    await writeFile(join(stageShells, `${accent}.html`), html, 'utf8');
-    shells[accent] = sha256(html);
+    for (const pref of THEME_PREFS) {
+      const html = stampShell(accent, pref);
+      const key = `${accent}-${pref}`;
+      await writeFile(join(stageShells, `${key}.html`), html, 'utf8');
+      shells[key] = sha256(html);
+    }
   }
 
   // ---- marker ----------------------------------------------------------
@@ -266,17 +326,23 @@ async function main() {
     // Bumped by hand if the guard's expectations change.
     // 2: serviceWorker field added (Phase 3) — a schema-1 marker means
     // a pre-SW publish and must fail the guard until republished.
-    schema: 2,
-    fallbackAccent: fallback,
+    // 3: theme-variant shells (Phase 4) — `shells` is keyed by
+    // `{accent}-{themePref}` and `themePrefs`/`fallbackTheme` exist. A
+    // schema-2 marker means an accent-only publish whose variants the
+    // theme-aware route handler cannot find; fail until republished.
+    schema: 3,
+    fallbackAccent,
+    fallbackTheme,
     accents: ACCENTS,
+    themePrefs: THEME_PREFS,
     shells,
     assets,
     serviceWorker: SERVICE_WORKER,
     serviceWorkerSha256: sha256(stampedSw),
     // The shell's own view of what must exist, which is the thing that
-    // actually white-screens if it drifts.
-    referenced: referencedUrls(template.replaceAll(ACCENT_PLACEHOLDER, fallback))
-      .sort(),
+    // actually white-screens if it drifts. Referenced URLs are
+    // placeholder-independent, so any fully-stamped variant works.
+    referenced: referencedUrls(stampShell(fallbackAccent, fallbackTheme)).sort(),
   };
   await writeFile(
     join(stageShells, MARKER),
@@ -341,7 +407,7 @@ async function main() {
 
   console.log(
     `[mobile] published ${assets.length} assets → apps/web/public/m, ` +
-      `${ACCENTS.length} shell variants → apps/web/mobile-shell` +
+      `${Object.keys(shells).length} shell variants → apps/web/mobile-shell` +
       (pruned.length ? ` (pruned ${pruned.length} from an older build)` : ''),
   );
 }

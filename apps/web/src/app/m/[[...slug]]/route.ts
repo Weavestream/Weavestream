@@ -1,14 +1,12 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { NextRequest } from 'next/server';
-import {
-  DEFAULT_UI_ACCENT,
-  UI_COOKIE_NAME,
-  parseUiCookie,
-  uiAccentValues,
-  type UiAccent,
-} from '@weavestream/shared';
+import { UI_COOKIE_NAME, parseUiCookie } from '@weavestream/shared';
 import { looksLikeStaticAsset } from '../../../lib/mobile-shell-paths';
+import {
+  FALLBACK_SHELL_KEY,
+  shellKeyFor,
+} from '../../../lib/mobile-shell-key';
 
 /**
  * Serves the mobile PWA's HTML shell for every `/m` route.
@@ -46,26 +44,25 @@ const SHELL_DIR = join(process.cwd(), 'mobile-shell');
 /**
  * Cache variants in production; re-read every request in dev so a
  * rebuild is picked up without restarting the Next server.
+ *
+ * Keyed by shell key (`{accent}-{themePref}`) — `shellKeyFor` only ever
+ * produces members of the enum cross-product, so the cache is bounded.
  */
 const isProd = process.env.NODE_ENV === 'production';
-const cache = new Map<UiAccent, string>();
+const cache = new Map<string, string>();
 
-async function loadShell(accent: UiAccent): Promise<string | null> {
+async function loadShell(key: string): Promise<string | null> {
   if (isProd) {
-    const hit = cache.get(accent);
+    const hit = cache.get(key);
     if (hit) return hit;
   }
   try {
-    const html = await readFile(join(SHELL_DIR, `${accent}.html`), 'utf8');
-    if (isProd) cache.set(accent, html);
+    const html = await readFile(join(SHELL_DIR, `${key}.html`), 'utf8');
+    if (isProd) cache.set(key, html);
     return html;
   } catch {
     return null;
   }
-}
-
-function isAccent(value: string): value is UiAccent {
-  return (uiAccentValues as readonly string[]).includes(value);
 }
 
 
@@ -98,17 +95,17 @@ async function handler(req: NextRequest): Promise<Response> {
     });
   }
 
-  // Pick the accent-specific shell variant. The variants are generated
-  // at build time, one per member of `uiAccentValues`; selecting one is
-  // a lookup keyed by a closed set, NOT string substitution of
-  // request-derived data into HTML (CLAUDE.md §3).
+  // Pick the shell variant for this user's accent + theme preference.
+  // The variants are generated at build time, one per member of
+  // `uiAccentValues` × `uiThemeValues`; selecting one is a lookup keyed
+  // by a closed set, NOT string substitution of request-derived data
+  // into HTML (CLAUDE.md §3).
   //
   // `req.cookies` is already percent-decoded by Next.
   const raw = req.cookies.get(UI_COOKIE_NAME)?.value;
-  const preferred = parseUiCookie(raw).uiAccent;
-  const accent = isAccent(preferred) ? preferred : DEFAULT_UI_ACCENT;
+  const key = shellKeyFor(parseUiCookie(raw));
 
-  const html = (await loadShell(accent)) ?? (await loadShell(DEFAULT_UI_ACCENT));
+  const html = (await loadShell(key)) ?? (await loadShell(FALLBACK_SHELL_KEY));
 
   if (!html) {
     // The bundle has not been published into this container. Log the

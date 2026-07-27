@@ -196,9 +196,21 @@ describe('PasswordDetailScreen', () => {
     expect(screen.getByRole('button', { name: 'Reveal password' })).toBeInTheDocument();
   });
 
-  it('archive fires immediately (no confirm) and toasts — desktop parity', async () => {
+  it('archive asks for confirmation, then DELETEs and toasts (Phase 4)', async () => {
     renderDetail();
     fireEvent.click(await screen.findByRole('button', { name: 'Archive password' }));
+
+    // Nothing fires from the header tap — the sheet is the commit point.
+    expect(
+      apiFetch.mock.calls.filter(
+        ([, init]) => (init as { method?: string } | undefined)?.method === 'DELETE',
+      ),
+    ).toHaveLength(0);
+    expect(
+      screen.getByRole('dialog', { name: 'Archive password?' }),
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Archive' }));
     await waitFor(() =>
       expect(apiFetch).toHaveBeenCalledWith(
         expect.stringContaining(`/passwords/${PW}`),
@@ -206,16 +218,37 @@ describe('PasswordDetailScreen', () => {
       ),
     );
     expect(await screen.findByText('Password archived')).toBeInTheDocument();
+    // The sheet closes on success.
+    await waitFor(() =>
+      expect(
+        screen.queryByRole('dialog', { name: 'Archive password?' }),
+      ).not.toBeInTheDocument(),
+    );
   });
 
-  it('rapid archive taps issue exactly one DELETE', async () => {
+  it('cancelling the confirmation archives nothing', async () => {
+    renderDetail();
+    fireEvent.click(await screen.findByRole('button', { name: 'Archive password' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(
+      screen.queryByRole('dialog', { name: 'Archive password?' }),
+    ).not.toBeInTheDocument();
+    expect(
+      apiFetch.mock.calls.filter(
+        ([, init]) => (init as { method?: string } | undefined)?.method === 'DELETE',
+      ),
+    ).toHaveLength(0);
+  });
+
+  it('rapid confirm taps issue exactly one DELETE', async () => {
     // The server 400s a second archive of the same row, so an unguarded
     // double-tap would toast a failure right after the success.
     renderDetail();
-    const button = await screen.findByRole('button', { name: 'Archive password' });
-    fireEvent.click(button);
-    fireEvent.click(button);
-    fireEvent.click(button);
+    fireEvent.click(await screen.findByRole('button', { name: 'Archive password' }));
+    const confirm = screen.getByRole('button', { name: 'Archive' });
+    fireEvent.click(confirm);
+    fireEvent.click(confirm);
+    fireEvent.click(confirm);
 
     await screen.findByText('Password archived');
     const deletes = apiFetch.mock.calls.filter(

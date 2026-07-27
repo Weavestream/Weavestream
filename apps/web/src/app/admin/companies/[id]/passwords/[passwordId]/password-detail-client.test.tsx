@@ -1,8 +1,12 @@
 /** @jest-environment jsdom */
 import '@testing-library/jest-dom';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import type { PasswordGeneratorDefaults } from '@weavestream/shared';
 import type { PasswordDetail } from '../../../../../../lib/server-api';
-import { PasswordDetailClient } from './password-detail-client';
+import {
+  PasswordDetailClient,
+  PasswordHeaderActions,
+} from './password-detail-client';
 
 const apiFetch = jest.fn();
 const toast = { push: jest.fn() };
@@ -48,7 +52,23 @@ jest.mock('../../../../../../components/ui', () => ({
   }: React.ButtonHTMLAttributes<HTMLButtonElement> & Record<string, unknown>) => (
     <button {...props}>{children}</button>
   ),
-  Dialog: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
+  Dialog: ({
+    open = true,
+    title,
+    footer,
+    children,
+  }: {
+    open?: boolean;
+    title?: React.ReactNode;
+    footer?: React.ReactNode;
+    children?: React.ReactNode;
+  }) =>
+    open ? (
+      <div role="dialog" aria-label={typeof title === 'string' ? title : undefined}>
+        {children}
+        {footer}
+      </div>
+    ) : null,
   Field: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
   Icon: new Proxy({}, { get: () => IconStub }),
   Input: (props: React.InputHTMLAttributes<HTMLInputElement>) => (
@@ -203,5 +223,69 @@ describe('PasswordDetailClient URL row', () => {
     renderDetail('   ');
     expect(screen.queryByRole('link')).not.toBeInTheDocument();
     expect(screen.queryByTitle('Copy URL')).not.toBeInTheDocument();
+  });
+});
+
+describe('PasswordHeaderActions archive confirmation (Phase 4)', () => {
+  function renderHeader(archivedAt: string | null = null) {
+    return render(
+      <PasswordHeaderActions
+        companyId="co-1"
+        password={{ ...basePassword, archivedAt }}
+        folders={[]}
+        canManage
+        generatorDefaults={{} as PasswordGeneratorDefaults}
+      />,
+    );
+  }
+
+  it('archive opens the confirm dialog; nothing fires until confirmed', async () => {
+    apiFetch.mockResolvedValue({ ok: true });
+    renderHeader();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Archive' }));
+    expect(apiFetch).not.toHaveBeenCalled();
+    const dialog = screen.getByRole('dialog', { name: 'Archive password?' });
+    expect(dialog).toHaveTextContent('Core router will be hidden');
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Archive' }));
+    await waitFor(() =>
+      expect(apiFetch).toHaveBeenCalledWith(
+        '/companies/co-1/passwords/pw-1',
+        expect.objectContaining({ method: 'DELETE' }),
+      ),
+    );
+    expect(toast.push).toHaveBeenCalledWith('Password archived', 'ok');
+    await waitFor(() =>
+      expect(
+        screen.queryByRole('dialog', { name: 'Archive password?' }),
+      ).not.toBeInTheDocument(),
+    );
+  });
+
+  it('cancel archives nothing', () => {
+    renderHeader();
+    fireEvent.click(screen.getByRole('button', { name: 'Archive' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(apiFetch).not.toHaveBeenCalled();
+    expect(
+      screen.queryByRole('dialog', { name: 'Archive password?' }),
+    ).not.toBeInTheDocument();
+  });
+
+  it('restore stays one-click — it is the undo', async () => {
+    apiFetch.mockResolvedValue({ ok: true });
+    renderHeader('2026-07-01T00:00:00.000Z');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Restore' }));
+    expect(
+      screen.queryByRole('dialog'),
+    ).not.toBeInTheDocument();
+    await waitFor(() =>
+      expect(apiFetch).toHaveBeenCalledWith(
+        '/companies/co-1/passwords/pw-1/restore',
+        expect.objectContaining({ method: 'POST' }),
+      ),
+    );
   });
 });

@@ -176,30 +176,25 @@ export const articleActorRefSchema = z.object({
 });
 
 /**
- * Wire shape of `GET /companies/:id/articles` items AND
- * `GET /companies/:id/articles/:id` — the server serializes both through
- * the same path, so list rows carry the full body too (list responses
- * just hard-code `hasDraft: false` and `isStarred: false`).
+ * Wire shape of `GET /companies/:id/articles` list ITEMS — metadata
+ * only (Phase 4). List and detail used to share one shape, which meant
+ * every list row carried the full body + plaintext: 50 rows × up to
+ * 500k chars of Markdown approached tens of MB per page, and the
+ * mobile infinite query retains every loaded page. The server now
+ * projects list rows to this shape at the QUERY layer (the body
+ * columns never leave Postgres for a list).
  *
- * `content` stays `unknown`: it is Tiptap/ProseMirror JSON that readers
- * must feed through `normaliseTiptapDoc` anyway (legacy `{ v, plain }`
- * rows exist), so deep-typing it here would only invite direct access.
- *
- * `provenance` is deliberately omitted: the wire superset is fine under
- * structural typing, no mobile/web reader consumes it from this type,
- * and typing it would drag the integration-provenance vocabulary into
- * every client that imports the article shape.
+ * `excerpt` carries the serve-time coalesce `aiSummary ?? derivedExcerpt`
+ * — same wire name as before; clients don't care which source filled
+ * it. List rows hard-code `hasDraft: false` and `isStarred: false`
+ * (unchanged — cheap listing).
  */
-export const articleSchema = z.object({
+export const articleSummarySchema = z.object({
   id: z.string().uuid(),
   companyId: z.string().uuid(),
   folderId: z.string().uuid().nullable(),
   title: z.string(),
   slug: z.string(),
-  editorMode: articleEditorModeSchema,
-  content: z.unknown().nullable(),
-  markdownSource: z.string().nullable(),
-  contentPlaintext: z.string(),
   excerpt: z.string().nullable(),
   visibleToClients: z.boolean(),
   revision: z.number().int(),
@@ -214,7 +209,27 @@ export const articleSchema = z.object({
   hasDraft: z.boolean(),
 });
 
+/**
+ * `GET /companies/:id/articles/:id` — the summary plus the body (the
+ * `articleVersionSummarySchema`/`articleVersionDetailSchema` pattern
+ * above, applied to the article itself).
+ *
+ * `content` stays `unknown`: it is Tiptap/ProseMirror JSON that readers
+ * must feed through `normaliseTiptapDoc` anyway (legacy `{ v, plain }`
+ * rows exist), so deep-typing it here would only invite direct access.
+ *
+ * `provenance` is deliberately omitted: the wire superset is fine under
+ * structural typing, no mobile/web reader consumes it from this type,
+ * and typing it would drag the integration-provenance vocabulary into
+ * every client that imports the article shape.
+ */
+export const articleDetailSchema = articleSummarySchema.extend({
+  editorMode: articleEditorModeSchema,
+  content: z.unknown().nullable(),
+  markdownSource: z.string().nullable(),
+  contentPlaintext: z.string(),
+});
+
 export type ArticleActorRef = z.infer<typeof articleActorRefSchema>;
-export type ArticleSummary = z.infer<typeof articleSchema>;
-/** Same wire shape as the list rows; alias kept for call-site clarity. */
-export type ArticleDetail = ArticleSummary;
+export type ArticleSummary = z.infer<typeof articleSummarySchema>;
+export type ArticleDetail = z.infer<typeof articleDetailSchema>;

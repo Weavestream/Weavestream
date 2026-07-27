@@ -97,23 +97,48 @@ function isHtml(response: Response): boolean {
 }
 
 /**
- * Install: warm THIS version's canonical shell. `credentials:
- * 'include'` so the accent cookie picks the right variant. A failed
- * fetch or a non-HTML response REJECTS install — activation deletes
- * the previous version's caches, so proceeding with an empty canonical
- * would strip a working offline installation and claim clients with no
- * fallback. The browser retries install on a later update check.
+ * Fetch the canonical shell and pin it. `credentials: 'include'` so the
+ * `ws_ui` cookie picks the right theme + accent variant. Throws on a
+ * failed fetch or a non-HTML response — callers decide whether that is
+ * fatal (install) or a keep-the-old-copy no-op (message re-warm).
+ */
+async function warmCanonical(): Promise<void> {
+  const response = await fetch(CANONICAL_URL, { credentials: 'include' });
+  if (!response.ok || !isHtml(response)) {
+    throw new Error(`canonical shell warm failed (${response.status})`);
+  }
+  const cache = await caches.open(CANONICAL_CACHE);
+  await cache.put(CANONICAL_URL, response);
+}
+
+/**
+ * Install: warm THIS version's canonical shell. A failed warm REJECTS
+ * install — activation deletes the previous version's caches, so
+ * proceeding with an empty canonical would strip a working offline
+ * installation and claim clients with no fallback. The browser retries
+ * install on a later update check.
  */
 self.addEventListener('install', (event) => {
+  event.waitUntil(warmCanonical());
+});
+
+/**
+ * Re-warm on demand. The pinned copy otherwise refreshes only at
+ * install or on a successful HTML navigation — an in-app appearance
+ * change is neither, so without this an immediately-offline restart
+ * would boot the old-stamped theme until JS corrects it. ui-prefs.ts
+ * posts this after a successful preference apply. Failure (offline,
+ * storage pressure) keeps the previous copy — same degradation as the
+ * navigation-refresh path.
+ */
+self.addEventListener('message', (event) => {
+  if ((event.data as { type?: string } | null)?.type !== 'refresh-canonical') {
+    return;
+  }
   event.waitUntil(
-    (async () => {
-      const response = await fetch(CANONICAL_URL, { credentials: 'include' });
-      if (!response.ok || !isHtml(response)) {
-        throw new Error(`canonical shell warm failed (${response.status})`);
-      }
-      const cache = await caches.open(CANONICAL_CACHE);
-      await cache.put(CANONICAL_URL, response);
-    })(),
+    warmCanonical().catch(() => {
+      /* keep the previous pinned copy */
+    }),
   );
 });
 

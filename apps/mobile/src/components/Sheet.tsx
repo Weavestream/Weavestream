@@ -175,10 +175,10 @@ export function Sheet({
   return (
     <div
       className="ws-scrim-enter fixed inset-0 z-sheet flex flex-col justify-end"
-      // The scrim itself, at the handoff's ~35% over ink. `dvh` so it
-      // covers the *visible* viewport on iOS rather than extending
-      // behind the browser chrome.
-      style={{ background: 'rgb(23 24 26 / 0.35)', height: '100dvh' }}
+      // The scrim, themed via --scrim (light keeps the handoff's ~35%
+      // over ink; dark is heavier). `dvh` so it covers the *visible*
+      // viewport on iOS rather than extending behind the browser chrome.
+      style={{ background: 'var(--scrim)', height: '100dvh' }}
       onPointerDown={(e) => {
         scrimPressedRef.current = e.target === e.currentTarget;
       }}

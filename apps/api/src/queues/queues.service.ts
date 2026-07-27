@@ -6,10 +6,13 @@ import {
 } from '@nestjs/common';
 import { Queue, QueueEvents, type JobsOptions } from 'bullmq';
 import {
+  ArticleSummaryJobNames,
   CompanyExportJobNames,
   DomainCheckJobNames,
   PwnedCheckJobNames,
   QueueNames,
+  articleSummaryJobId,
+  type ArticleSummaryGenerateJob,
   type CompanyExportJob,
   type DomainCheckJob,
   type PwnedCheckJob,
@@ -189,6 +192,35 @@ export class QueuesService implements OnModuleInit, OnModuleDestroy {
       // buffer, then let Redis clean up automatically.
       removeOnComplete: { age: 5 * 60 * 60 },
       removeOnFail: { age: 24 * 60 * 60 },
+    });
+    return job.id ?? '';
+  }
+
+  /**
+   * Enqueue one AI summary generation for an (article, revision) pair
+   * (Mobile Phase 4). The deterministic colon-free jobId does double
+   * duty: it dedups the sweep against a direct post-commit enqueue for
+   * the same revision, and — because it is PER-REVISION — avoids the
+   * fixed-jobId trap where an add deduped against an *active* job whose
+   * write-back then fails its guard leaves the summary permanently
+   * stale. The 30s delay coalesces rapid edit bursts: intermediate
+   * revisions' jobs skip at the worker's revision guard before any
+   * egress, so a burst spends at most one completion.
+   *
+   * Callers own the gate decision (see ArticlesService.maybeEnqueue…):
+   * this method never reads settings.
+   */
+  async enqueueArticleSummary(
+    payload: ArticleSummaryGenerateJob,
+  ): Promise<string> {
+    const queue = this.get(QueueNames.articleSummary);
+    const job = await queue.add(ArticleSummaryJobNames.generate, payload, {
+      jobId: articleSummaryJobId(payload.articleId, payload.revision),
+      delay: 30_000,
+      attempts: 3,
+      backoff: { type: 'exponential', delay: 30_000 },
+      removeOnComplete: true,
+      removeOnFail: { age: 24 * 60 * 60, count: 500 },
     });
     return job.id ?? '';
   }

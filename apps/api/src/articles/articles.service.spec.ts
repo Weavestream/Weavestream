@@ -123,6 +123,12 @@ function makeStubs(initial: {
           markdownSource: (d.markdownSource as string | null) ?? null,
           contentPlaintext: d.contentPlaintext as string,
           excerpt: (d.excerpt as string | null) ?? null,
+          derivedExcerpt: (d.derivedExcerpt as string | null) ?? null,
+          aiSummary: null,
+          aiSummaryModel: null,
+          // Honors the service's gate-aware stamp: null = pending.
+          aiSummaryAt:
+            'aiSummaryAt' in d ? ((d.aiSummaryAt as Date | null) ?? null) : new Date(0),
           visibleToClients: (d.visibleToClients as boolean) ?? true,
           createdAt: new Date(),
           updatedAt: new Date(),
@@ -203,6 +209,13 @@ function makeStubs(initial: {
           if ('contentPlaintext' in d)
             row.contentPlaintext = d.contentPlaintext as string;
           if ('excerpt' in d) row.excerpt = (d.excerpt as string) ?? null;
+          if ('derivedExcerpt' in d)
+            row.derivedExcerpt = (d.derivedExcerpt as string) ?? null;
+          if ('aiSummary' in d) row.aiSummary = (d.aiSummary as string) ?? null;
+          if ('aiSummaryModel' in d)
+            row.aiSummaryModel = (d.aiSummaryModel as string) ?? null;
+          if ('aiSummaryAt' in d)
+            row.aiSummaryAt = (d.aiSummaryAt as Date) ?? null;
           if ('visibleToClients' in d)
             row.visibleToClients = d.visibleToClients as boolean;
           if ('revision' in d) {
@@ -570,7 +583,7 @@ describe('ArticlesService', () => {
     it('rejects non-doc content', async () => {
       const { prisma, audit, stars, uploads, relations } = makeStubs();
        
-      const svc = new ArticlesService(prisma as any, audit as any, stars as any, uploads as any, relations as any);
+      const svc = new ArticlesService(prisma as any, audit as any, stars as any, uploads as any, relations as any, { isAutoSummariesEnabled: async () => false } as never, { enqueueArticleSummary: async () => 'job-1' } as never);
       await expect(
         svc.create(
           actor(),
@@ -587,7 +600,7 @@ describe('ArticlesService', () => {
     it('slugifies the title when no slug is provided', async () => {
       const { prisma, audit, stars, uploads, relations } = makeStubs();
        
-      const svc = new ArticlesService(prisma as any, audit as any, stars as any, uploads as any, relations as any);
+      const svc = new ArticlesService(prisma as any, audit as any, stars as any, uploads as any, relations as any, { isAutoSummariesEnabled: async () => false } as never, { enqueueArticleSummary: async () => 'job-1' } as never);
       const created = await svc.create(
         actor(),
         'c-1',
@@ -610,6 +623,10 @@ describe('ArticlesService', () => {
         content: {} as Prisma.JsonValue,
         contentPlaintext: '',
         excerpt: null,
+        derivedExcerpt: null,
+        aiSummary: null,
+        aiSummaryModel: null,
+        aiSummaryAt: new Date(0),
         visibleToClients: true,
         createdAt: new Date(),
         updatedAt: new Date(),
@@ -620,7 +637,7 @@ describe('ArticlesService', () => {
       };
       const { prisma, audit, stars, uploads, relations } = makeStubs({ articles: [existing] });
        
-      const svc = new ArticlesService(prisma as any, audit as any, stars as any, uploads as any, relations as any);
+      const svc = new ArticlesService(prisma as any, audit as any, stars as any, uploads as any, relations as any, { isAutoSummariesEnabled: async () => false } as never, { enqueueArticleSummary: async () => 'job-1' } as never);
       await expect(
         svc.create(
           actor(),
@@ -643,6 +660,10 @@ describe('ArticlesService', () => {
         content: {} as Prisma.JsonValue,
         contentPlaintext: '',
         excerpt: null,
+        derivedExcerpt: null,
+        aiSummary: null,
+        aiSummaryModel: null,
+        aiSummaryAt: new Date(0),
         visibleToClients: true,
         createdAt: new Date(),
         updatedAt: new Date(),
@@ -653,7 +674,7 @@ describe('ArticlesService', () => {
       };
       const { prisma, audit, stars, uploads, relations } = makeStubs({ articles: [other] });
        
-      const svc = new ArticlesService(prisma as any, audit as any, stars as any, uploads as any, relations as any);
+      const svc = new ArticlesService(prisma as any, audit as any, stars as any, uploads as any, relations as any, { isAutoSummariesEnabled: async () => false } as never, { enqueueArticleSummary: async () => 'job-1' } as never);
       const created = await svc.create(
         actor(),
         'c-1',
@@ -680,7 +701,7 @@ describe('ArticlesService', () => {
       };
       const { prisma, audit, stars, uploads, relations } = makeStubs({ folders: [folder] });
        
-      const svc = new ArticlesService(prisma as any, audit as any, stars as any, uploads as any, relations as any);
+      const svc = new ArticlesService(prisma as any, audit as any, stars as any, uploads as any, relations as any, { isAutoSummariesEnabled: async () => false } as never, { enqueueArticleSummary: async () => 'job-1' } as never);
       await expect(
         svc.create(
           actor(),
@@ -694,7 +715,7 @@ describe('ArticlesService', () => {
     it('persists Markdown and derives search plaintext without Markdown syntax', async () => {
       const { prisma, audit, stars, uploads, relations } = makeStubs();
        
-      const svc = new ArticlesService(prisma as any, audit as any, stars as any, uploads as any, relations as any);
+      const svc = new ArticlesService(prisma as any, audit as any, stars as any, uploads as any, relations as any, { isAutoSummariesEnabled: async () => false } as never, { enqueueArticleSummary: async () => 'job-1' } as never);
       const created = await svc.create(
         actor(),
         'c-1',
@@ -726,6 +747,10 @@ describe('ArticlesService', () => {
         content: null,
         contentPlaintext: 'A',
         excerpt: 'A',
+        derivedExcerpt: null,
+        aiSummary: null,
+        aiSummaryModel: null,
+        aiSummaryAt: new Date(0),
         visibleToClients: true,
         createdAt: new Date(),
         updatedAt: new Date(),
@@ -736,7 +761,7 @@ describe('ArticlesService', () => {
       };
       const { prisma, audit, stars, uploads, relations } = makeStubs({ articles: [row] });
        
-      const svc = new ArticlesService(prisma as any, audit as any, stars as any, uploads as any, relations as any);
+      const svc = new ArticlesService(prisma as any, audit as any, stars as any, uploads as any, relations as any, { isAutoSummariesEnabled: async () => false } as never, { enqueueArticleSummary: async () => 'job-1' } as never);
       const updated = await svc.update(
         actor(),
         'c-1',
@@ -763,6 +788,10 @@ describe('ArticlesService', () => {
         content: null,
         contentPlaintext: 'x',
         excerpt: null,
+        derivedExcerpt: null,
+        aiSummary: null,
+        aiSummaryModel: null,
+        aiSummaryAt: new Date(0),
         visibleToClients: true,
         createdAt: new Date(),
         updatedAt: new Date(),
@@ -773,7 +802,7 @@ describe('ArticlesService', () => {
       };
       const { prisma, audit, stars, uploads, relations } = makeStubs({ articles: [row] });
        
-      const svc = new ArticlesService(prisma as any, audit as any, stars as any, uploads as any, relations as any);
+      const svc = new ArticlesService(prisma as any, audit as any, stars as any, uploads as any, relations as any, { isAutoSummariesEnabled: async () => false } as never, { enqueueArticleSummary: async () => 'job-1' } as never);
       await expect(
         svc.update(actor(), 'c-1', 'art-md', { content: doc('y') } as never, meta()),
       ).rejects.toBeInstanceOf(BadRequestException);
@@ -793,6 +822,10 @@ describe('ArticlesService', () => {
         content: null,
         contentPlaintext: 'A',
         excerpt: 'A',
+        derivedExcerpt: null,
+        aiSummary: null,
+        aiSummaryModel: null,
+        aiSummaryAt: new Date(0),
         visibleToClients: true,
         revision: 1,
         createdAt: new Date(),
@@ -816,8 +849,7 @@ describe('ArticlesService', () => {
          
         stubs.uploads as any,
          
-        stubs.relations as any,
-      );
+        stubs.relations as any, { isAutoSummariesEnabled: async () => false } as never, { enqueueArticleSummary: async () => 'job-1' } as never);
       return { svc, ...stubs };
     }
 
@@ -940,6 +972,10 @@ describe('ArticlesService', () => {
         content: {} as Prisma.JsonValue,
         contentPlaintext: '',
         excerpt: null,
+        derivedExcerpt: null,
+        aiSummary: null,
+        aiSummaryModel: null,
+        aiSummaryAt: new Date(0),
         visibleToClients: true,
         createdAt: new Date(),
         updatedAt: new Date(),
@@ -950,7 +986,7 @@ describe('ArticlesService', () => {
       };
       const { prisma, audit, stars, uploads, relations } = makeStubs({ articles: [row] });
        
-      const svc = new ArticlesService(prisma as any, audit as any, stars as any, uploads as any, relations as any);
+      const svc = new ArticlesService(prisma as any, audit as any, stars as any, uploads as any, relations as any, { isAutoSummariesEnabled: async () => false } as never, { enqueueArticleSummary: async () => 'job-1' } as never);
       await expect(svc.getById(actor(), 'c-1', 'art-1')).rejects.toBeInstanceOf(
         NotFoundException,
       );
@@ -968,6 +1004,10 @@ describe('ArticlesService', () => {
         content: {} as Prisma.JsonValue,
         contentPlaintext: '',
         excerpt: null,
+        derivedExcerpt: null,
+        aiSummary: null,
+        aiSummaryModel: null,
+        aiSummaryAt: new Date(0),
         visibleToClients: false,
         createdAt: new Date(),
         updatedAt: new Date(),
@@ -978,7 +1018,7 @@ describe('ArticlesService', () => {
       };
       const { prisma, audit, stars, uploads, relations } = makeStubs({ articles: [row] });
        
-      const svc = new ArticlesService(prisma as any, audit as any, stars as any, uploads as any, relations as any);
+      const svc = new ArticlesService(prisma as any, audit as any, stars as any, uploads as any, relations as any, { isAutoSummariesEnabled: async () => false } as never, { enqueueArticleSummary: async () => 'job-1' } as never);
       await expect(
         svc.getById(actor({ role: 'CLIENT_USER' }), 'c-1', 'art-1'),
       ).rejects.toBeInstanceOf(NotFoundException);
@@ -996,6 +1036,10 @@ describe('ArticlesService', () => {
         content: {} as Prisma.JsonValue,
         contentPlaintext: '',
         excerpt: null,
+        derivedExcerpt: null,
+        aiSummary: null,
+        aiSummaryModel: null,
+        aiSummaryAt: new Date(0),
         visibleToClients: false,
         createdAt: new Date(),
         updatedAt: new Date(),
@@ -1006,7 +1050,7 @@ describe('ArticlesService', () => {
       };
       const { prisma, audit, stars, uploads, relations } = makeStubs({ articles: [row] });
        
-      const svc = new ArticlesService(prisma as any, audit as any, stars as any, uploads as any, relations as any);
+      const svc = new ArticlesService(prisma as any, audit as any, stars as any, uploads as any, relations as any, { isAutoSummariesEnabled: async () => false } as never, { enqueueArticleSummary: async () => 'job-1' } as never);
       const got = await svc.getById(actor(), 'c-1', 'art-1');
       expect(got.id).toBe('art-1');
     });
@@ -1017,7 +1061,7 @@ describe('ArticlesService', () => {
       const { prisma, audit, stars, uploads, relations } = makeStubs();
       const findManySpy = jest.spyOn(prisma.article, 'findMany');
 
-      const svc = new ArticlesService(prisma as any, audit as any, stars as any, uploads as any, relations as any);
+      const svc = new ArticlesService(prisma as any, audit as any, stars as any, uploads as any, relations as any, { isAutoSummariesEnabled: async () => false } as never, { enqueueArticleSummary: async () => 'job-1' } as never);
 
       await svc.list(actor(), 'c-1');
 
@@ -1046,6 +1090,10 @@ describe('ArticlesService', () => {
         content: {} as Prisma.JsonValue,
         contentPlaintext: '',
         excerpt: null,
+        derivedExcerpt: null,
+        aiSummary: null,
+        aiSummaryModel: null,
+        aiSummaryAt: new Date(0),
         visibleToClients: true,
         createdAt: new Date(),
         updatedAt: new Date(),
@@ -1056,7 +1104,7 @@ describe('ArticlesService', () => {
       };
       const { prisma, audit, stars, uploads, relations } = makeStubs({ articles: [row] });
        
-      const svc = new ArticlesService(prisma as any, audit as any, stars as any, uploads as any, relations as any);
+      const svc = new ArticlesService(prisma as any, audit as any, stars as any, uploads as any, relations as any, { isAutoSummariesEnabled: async () => false } as never, { enqueueArticleSummary: async () => 'job-1' } as never);
       const archived = await svc.archive(actor(), 'c-1', 'art-1', meta());
       expect(archived.archivedAt).toBeInstanceOf(Date);
 
@@ -1082,6 +1130,10 @@ describe('ArticlesService', () => {
         content: {} as Prisma.JsonValue,
         contentPlaintext: '',
         excerpt: null,
+        derivedExcerpt: null,
+        aiSummary: null,
+        aiSummaryModel: null,
+        aiSummaryAt: new Date(0),
         visibleToClients: true,
         revision: 1,
         createdAt: new Date(),
@@ -1108,8 +1160,7 @@ describe('ArticlesService', () => {
          
         uploads as any,
          
-        relations as any,
-      );
+        relations as any, { isAutoSummariesEnabled: async () => false } as never, { enqueueArticleSummary: async () => 'job-1' } as never);
 
       await expect(svc.purge(actor(), 'c-1', 'art-1', meta())).rejects.toBeInstanceOf(
         BadRequestException,
@@ -1131,8 +1182,7 @@ describe('ArticlesService', () => {
          
         uploads as any,
          
-        relations as any,
-      );
+        relations as any, { isAutoSummariesEnabled: async () => false } as never, { enqueueArticleSummary: async () => 'job-1' } as never);
 
       await expect(svc.purge(actor(), 'c-1', 'art-1', meta())).rejects.toBeInstanceOf(
         NotFoundException,
@@ -1154,8 +1204,7 @@ describe('ArticlesService', () => {
          
         uploads as any,
          
-        relations as any,
-      );
+        relations as any, { isAutoSummariesEnabled: async () => false } as never, { enqueueArticleSummary: async () => 'job-1' } as never);
 
       const result = await svc.purge(actor(), 'c-1', 'art-1', meta());
 
@@ -1204,8 +1253,7 @@ describe('ArticlesService', () => {
          
         uploads as any,
          
-        relations as any,
-      );
+        relations as any, { isAutoSummariesEnabled: async () => false } as never, { enqueueArticleSummary: async () => 'job-1' } as never);
 
       await svc.purge(actor(), 'c-1', 'art-1', meta());
 
@@ -1277,8 +1325,7 @@ describe('ArticlesService', () => {
          
         uploads as any,
          
-        relations as any,
-      );
+        relations as any, { isAutoSummariesEnabled: async () => false } as never, { enqueueArticleSummary: async () => 'job-1' } as never);
 
       await svc.purge(actor(), 'c-1', 'art-1', meta());
 
@@ -1312,6 +1359,10 @@ describe('ArticlesService', () => {
         content: doc('original body') as unknown as Prisma.JsonValue,
         contentPlaintext: 'original body',
         excerpt: 'original body',
+        derivedExcerpt: null,
+        aiSummary: null,
+        aiSummaryModel: null,
+        aiSummaryAt: new Date(0),
         visibleToClients: true,
         createdAt: new Date('2024-01-01T00:00:00Z'),
         updatedAt: new Date('2024-01-01T00:00:00Z'),
@@ -1360,8 +1411,7 @@ describe('ArticlesService', () => {
          
         stubs.uploads as any,
          
-        stubs.relations as any,
-      );
+        stubs.relations as any, { isAutoSummariesEnabled: async () => false } as never, { enqueueArticleSummary: async () => 'job-1' } as never);
       return { svc, ...stubs };
     }
 
@@ -1541,7 +1591,14 @@ describe('ArticlesService', () => {
         title: 'Drafted',
         slug: 'drafted',
       });
-      const articleRow = publishedRow({ title: 'Drafted', slug: 'drafted' });
+      // Autosave maintained the live row's derived excerpt from the
+      // DRAFT body — the revert must recompute it from the published
+      // version, not carry the draft text forward into lists.
+      const articleRow = publishedRow({
+        title: 'Drafted',
+        slug: 'drafted',
+        derivedExcerpt: 'secret draft text',
+      });
       const { svc, versions, articles, audit } = mkSvc({
         articles: [articleRow],
         versions: [v1Row(), draft],
@@ -1549,6 +1606,7 @@ describe('ArticlesService', () => {
       const result = await svc.discardDraft(actor(), 'c-1', 'art-1', meta());
       expect(result.title).toBe('Original');
       expect(articles[0]!.title).toBe('Original');
+      expect(articles[0]!.derivedExcerpt).toBe('original body');
       expect(versions.find((v) => v.isDraft)).toBeUndefined();
       expect(audit.log).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -1586,15 +1644,19 @@ describe('ArticlesService', () => {
         title: 'Drafted',
       });
       const { svc, versions, audit, articles } = mkSvc({
-        articles: [publishedRow({ title: 'Drafted' })],
+        articles: [
+          publishedRow({ title: 'Drafted', derivedExcerpt: 'secret draft text' }),
+        ],
         versions: [v1Row(), draft],
       });
       const archived = await svc.archive(actor(), 'c-1', 'art-1', meta());
       expect(archived.archivedAt).toBeInstanceOf(Date);
-      // Draft gone, v1 still present, live article body reverted.
+      // Draft gone, v1 still present, live article body reverted — the
+      // derived excerpt included (same recompute as discardDraft).
       expect(versions.find((v) => v.isDraft)).toBeUndefined();
       expect(versions.find((v) => v.version === 1 && !v.isDraft)).toBeDefined();
       expect(articles[0]!.title).toBe('Original');
+      expect(articles[0]!.derivedExcerpt).toBe('original body');
       expect(audit.log).toHaveBeenCalledWith(
         expect.objectContaining({
           action: 'article.archive',
@@ -1799,5 +1861,303 @@ describe('ArticlesService', () => {
         expect(v1.visibleToClients).toBe(false);
       });
     });
+  });
+});
+
+describe('AI summary lifecycle (Phase 4)', () => {
+  function harness(gateOn: boolean) {
+    const stubs = makeStubs();
+    const gate = {
+      isAutoSummariesEnabled: jest.fn().mockResolvedValue(gateOn),
+    };
+    const queues = {
+      enqueueArticleSummary: jest.fn().mockResolvedValue('job-1'),
+    };
+    const svc = new ArticlesService(
+      stubs.prisma as never,
+      stubs.audit as never,
+      stubs.stars as never,
+      stubs.uploads as never,
+      stubs.relations as never,
+      gate as never,
+      queues as never,
+    );
+    return { ...stubs, gate, queues, svc };
+  }
+
+  function seedRow(articles: unknown[], over: Record<string, unknown> = {}) {
+    const row = {
+      id: 'art-1',
+      companyId: 'c-1',
+      folderId: null,
+      title: 'Runbook',
+      slug: 'runbook',
+      editorMode: 'markdown',
+      markdownSource: '# Runbook\n\nSteps here.',
+      content: null,
+      contentPlaintext: 'Runbook Steps here.',
+      excerpt: null,
+      derivedExcerpt: 'Runbook Steps here.',
+      aiSummary: 'Old summary',
+      aiSummaryModel: 'm-1',
+      aiSummaryAt: new Date('2026-07-01T00:00:00Z'),
+      visibleToClients: true,
+      createdAt: new Date('2026-06-01T00:00:00Z'),
+      updatedAt: new Date('2026-06-01T00:00:00Z'),
+      createdBy: 'u-1',
+      updatedBy: 'u-1',
+      revision: 3,
+      archivedAt: null,
+    };
+    Object.assign(row, over);
+    (articles as Record<string, unknown>[]).push(row);
+    return row;
+  }
+
+  it('gate ON: title-only edit clears the summary, stamps PENDING, and enqueues post-commit with the new revision', async () => {
+    const { svc, articles, gate, queues } = harness(true);
+    const row = seedRow(articles);
+
+    await svc.update(actor(), 'c-1', row.id, { title: 'Renamed' } as never, meta());
+
+    expect(row.aiSummary).toBeNull();
+    expect(row.aiSummaryModel).toBeNull();
+    expect(row.aiSummaryAt).toBeNull();
+    expect(row.revision).toBe(4);
+    expect(gate.isAutoSummariesEnabled).toHaveBeenCalledTimes(1);
+    expect(queues.enqueueArticleSummary).toHaveBeenCalledWith({
+      kind: 'generate',
+      articleId: row.id,
+      companyId: 'c-1',
+      revision: 4,
+    });
+  });
+
+  it('gate OFF: the edit stamps SETTLED (never pending) and enqueues nothing — no backlog accrues while disabled', async () => {
+    const { svc, articles, queues } = harness(false);
+    const row = seedRow(articles);
+
+    await svc.update(actor(), 'c-1', row.id, { title: 'Renamed' } as never, meta());
+
+    expect(row.aiSummary).toBeNull();
+    expect(row.aiSummaryAt).toBeInstanceOf(Date);
+    expect(queues.enqueueArticleSummary).not.toHaveBeenCalled();
+  });
+
+  it('enqueue uses only the captured in-transaction decision — a gate flip after the write cannot enqueue a settled row', async () => {
+    const { svc, articles, gate, queues } = harness(false);
+    const row = seedRow(articles);
+    // The write's single read sees OFF; every read after it sees ON. A
+    // post-commit re-read would then enqueue a row the write just
+    // stamped settled; the captured decision must not.
+    gate.isAutoSummariesEnabled
+      .mockReset()
+      .mockResolvedValueOnce(false)
+      .mockResolvedValue(true);
+
+    await svc.update(actor(), 'c-1', row.id, { title: 'Renamed' } as never, meta());
+
+    expect(gate.isAutoSummariesEnabled).toHaveBeenCalledTimes(1);
+    expect(row.aiSummaryAt).toBeInstanceOf(Date);
+    expect(queues.enqueueArticleSummary).not.toHaveBeenCalled();
+  });
+
+  it('autosave drafts touch no AI column and never consult the gate', async () => {
+    const { svc, articles, gate, queues } = harness(true);
+    const row = seedRow(articles);
+
+    await svc.update(
+      actor(),
+      'c-1',
+      row.id,
+      { editorMode: 'markdown', markdownSource: '# Draft body', draft: true } as never,
+      meta(),
+    );
+
+    expect(row.aiSummary).toBe('Old summary');
+    expect(row.aiSummaryAt).toEqual(new Date('2026-07-01T00:00:00Z'));
+    expect(gate.isAutoSummariesEnabled).not.toHaveBeenCalled();
+    expect(queues.enqueueArticleSummary).not.toHaveBeenCalled();
+  });
+
+  it('explicit-excerpt-only update touches no AI column (legacy column is unserved; body unchanged)', async () => {
+    const { svc, articles, queues } = harness(true);
+    const row = seedRow(articles);
+
+    await svc.update(actor(), 'c-1', row.id, { excerpt: 'Authored' } as never, meta());
+
+    expect(row.excerpt).toBe('Authored');
+    expect(row.aiSummary).toBe('Old summary');
+    expect(row.aiSummaryAt).toEqual(new Date('2026-07-01T00:00:00Z'));
+    expect(queues.enqueueArticleSummary).not.toHaveBeenCalled();
+  });
+
+  it('a throwing queue never fails the save (sweep reconciles)', async () => {
+    const { svc, articles, queues } = harness(true);
+    const row = seedRow(articles);
+    queues.enqueueArticleSummary.mockRejectedValue(new Error('redis down'));
+
+    const out = await svc.update(
+      actor(),
+      'c-1',
+      row.id,
+      { title: 'Renamed' } as never,
+      meta(),
+    );
+
+    expect(out.title).toBe('Renamed');
+    // Cleared + pending — exactly the state the sweep drains.
+    expect(row.aiSummaryAt).toBeNull();
+  });
+
+  it('create with gate ON stamps pending and enqueues revision 1; gate OFF stamps settled', async () => {
+    const on = harness(true);
+    const created = await on.svc.create(
+      actor(),
+      'c-1',
+      { title: 'New', editorMode: 'markdown', markdownSource: '# Body' } as never,
+      meta(),
+    );
+    const onRow = (on.articles as Array<Record<string, unknown>>).find(
+      (a) => a.id === created.id,
+    )!;
+    expect(onRow.aiSummaryAt).toBeNull();
+    expect(on.queues.enqueueArticleSummary).toHaveBeenCalledWith({
+      kind: 'generate',
+      articleId: created.id,
+      companyId: 'c-1',
+      revision: 1,
+    });
+
+    const off = harness(false);
+    const created2 = await off.svc.create(
+      actor(),
+      'c-1',
+      { title: 'New', editorMode: 'markdown', markdownSource: '# Body' } as never,
+      meta(),
+    );
+    const offRow = (off.articles as Array<Record<string, unknown>>).find(
+      (a) => a.id === created2.id,
+    )!;
+    expect(offRow.aiSummaryAt).toBeInstanceOf(Date);
+    expect(off.queues.enqueueArticleSummary).not.toHaveBeenCalled();
+  });
+
+  it('body writes maintain derivedExcerpt machine-only (the caller excerpt never leaks into it)', async () => {
+    const { svc, articles } = harness(false);
+    const row = seedRow(articles, { derivedExcerpt: 'stale' });
+
+    await svc.update(
+      actor(),
+      'c-1',
+      row.id,
+      {
+        editorMode: 'markdown',
+        markdownSource: '# Fresh body\n\nNew steps.',
+        excerpt: 'Authored override',
+      } as never,
+      meta(),
+    );
+
+    expect(row.excerpt).toBe('Authored override');
+    expect(row.derivedExcerpt).toContain('New steps');
+    expect(row.derivedExcerpt).not.toContain('Authored');
+  });
+
+  it('list serves aiSummary ?? derivedExcerpt and no body fields', async () => {
+    const { svc, articles } = harness(false);
+    seedRow(articles, { id: 'art-a', slug: 'a', title: 'A', aiSummary: 'AI wins' });
+    seedRow(articles, {
+      id: 'art-b',
+      slug: 'b',
+      title: 'B',
+      aiSummary: null,
+      derivedExcerpt: 'Derived fallback',
+    });
+
+    const { items } = await svc.list(actor(), 'c-1');
+    const a = items.find((i) => i.id === 'art-a')!;
+    const b = items.find((i) => i.id === 'art-b')!;
+    expect(a.excerpt).toBe('AI wins');
+    expect(b.excerpt).toBe('Derived fallback');
+    for (const item of items) {
+      expect(item).not.toHaveProperty('content');
+      expect(item).not.toHaveProperty('markdownSource');
+      expect(item).not.toHaveProperty('contentPlaintext');
+    }
+  });
+
+  it('detail serves the coalesce too — one rule on every read path', async () => {
+    const { svc, articles } = harness(false);
+    const row = seedRow(articles, { aiSummary: 'AI summary' });
+    const out = await svc.getById(actor(), 'c-1', row.id);
+    expect(out.excerpt).toBe('AI summary');
+  });
+});
+
+describe('AI summary lifecycle — integration writer (Phase 4)', () => {
+  // The integration path stamps gate-aware but NEVER enqueues inline —
+  // it can run inside the sync runner's long page transaction where a
+  // delayed job could execute pre-commit; pending rows belong to the
+  // sweep.
+  function harness(gateOn: boolean) {
+    const stubs = makeStubs();
+    // The integration write path uses the tx-scoped audit writer and
+    // the integration-actor assertion, which the shared stub omits.
+    Object.assign(stubs.audit as object, {
+      assertIntegrationActor: jest.fn().mockResolvedValue(undefined),
+      logWithClient: jest.fn().mockResolvedValue(undefined),
+    });
+    const gate = { isAutoSummariesEnabled: jest.fn().mockResolvedValue(gateOn) };
+    const queues = { enqueueArticleSummary: jest.fn().mockResolvedValue('job-1') };
+    const svc = new ArticlesService(
+      stubs.prisma as never,
+      stubs.audit as never,
+      stubs.stars as never,
+      stubs.uploads as never,
+      stubs.relations as never,
+      gate as never,
+      queues as never,
+    );
+    return { ...stubs, gate, queues, svc };
+  }
+
+  const writeInput = {
+    companyId: 'c-1',
+    integrationId: 'int-1',
+    integrationCompanyMappingId: 'map-1',
+    resourceId: 'res-1',
+    externalId: 'ext-1',
+    auditActorId: 'a0000000-0000-4000-8000-0000000000a9',
+    dryRun: false,
+    title: 'Synced doc',
+    slug: 'synced-doc',
+    folderId: null,
+    markdown: '# Synced\n\nBody.',
+    visibleToClients: true,
+  };
+
+  it('gate ON: created row is PENDING with zero inline enqueues', async () => {
+    const { svc, articles, queues } = harness(true);
+
+    const result = await svc.writeFromIntegration(writeInput as never);
+    expect(result.change).toBe('created');
+    const row = (articles as Array<Record<string, unknown>>).find(
+      (a) => a.id === result.targetId,
+    )!;
+    expect(row.aiSummaryAt).toBeNull();
+    expect(queues.enqueueArticleSummary).not.toHaveBeenCalled();
+  });
+
+  it('gate OFF: created row is SETTLED — a disabled install accrues no backlog from nightly syncs', async () => {
+    const { svc, articles, queues } = harness(false);
+
+    const result = await svc.writeFromIntegration(writeInput as never);
+    expect(result.change).toBe('created');
+    const row = (articles as Array<Record<string, unknown>>).find(
+      (a) => a.id === result.targetId,
+    )!;
+    expect(row.aiSummaryAt).toBeInstanceOf(Date);
+    expect(queues.enqueueArticleSummary).not.toHaveBeenCalled();
   });
 });

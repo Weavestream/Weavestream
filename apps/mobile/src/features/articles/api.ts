@@ -7,12 +7,12 @@ import { apiFetch } from '../../lib/api';
  * Responses are consumed via the shared TypeScript types, not runtime
  * Zod parses — same stance as passwords and the desktop client.
  *
- * The list endpoint has NO summary projection: every row carries the
- * full body (`content` / `markdownSource` / `contentPlaintext`). That is
- * why the list is cursor-paginated at PAGE_LIMIT instead of fetch-all —
- * an article-heavy org would otherwise pull megabytes onto a phone
- * radio just to draw cards. Folder filtering is therefore server-side
- * (`folderId`), never client-side over loaded pages.
+ * Since Phase 4 the list endpoint IS a metadata-only projection
+ * (`ArticleSummary` — no body fields; `excerpt` carries the server's
+ * `aiSummary ?? derivedExcerpt` coalesce), so a page is a few KB
+ * instead of potentially megabytes of bodies. Cursor pagination at
+ * PAGE_LIMIT and server-side folder filtering (`folderId`) stay — an
+ * article-heavy org is still not a fetch-all.
  */
 
 export const PAGE_LIMIT = 50;

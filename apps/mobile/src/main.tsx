@@ -2,13 +2,13 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import './styles/globals.css';
 import { App } from './App';
-import { syncAccentFromCookie, watchAccent } from './lib/accent';
+import { syncUiFromCookie, watchUiPrefs } from './lib/ui-prefs';
 
 // Runs before the first React render, but still after first paint —
 // the shell variant served by the `/m` route handler is what makes the
-// accent correct on paint. See lib/accent.ts.
-syncAccentFromCookie();
-watchAccent();
+// theme + accent correct on paint. See lib/ui-prefs.ts.
+syncUiFromCookie();
+watchUiPrefs();
 
 // Service worker registration (Phase 3): a bundled module, never an
 // inline script — the `/m` CSP is `script-src 'self'`. Prod-only so the

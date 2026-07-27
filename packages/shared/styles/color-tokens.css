@@ -9,9 +9,10 @@
  *
  * Dark is the default; `[data-theme="light"]` opts in. Five accent
  * palettes via `data-accent="lime|amber|iris|coral|teal"`, both stamped
- * from the user's `ws_ui` preference. `apps/mobile` pins
- * `data-theme="light"` for v1 but consumes these same vars, which is
- * what makes adding dark there later close to free.
+ * from the user's `ws_ui` preference. `apps/mobile` consumes these same
+ * vars and (since Phase 4) is fully theme-aware — its shell variants
+ * carry the same three attributes desktop SSR sets, including the
+ * `data-theme-pref="system"` media-block contract below.
  *
  * Consume the semantic names (`--accent`, `--accent-ink`, `--surface`,
  * `--line`, …) rather than literal hexes: `--accent-ink` is already the

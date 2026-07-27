@@ -208,13 +208,24 @@ describe('AssetDetailScreen content', () => {
 });
 
 describe('AssetDetailScreen archive/restore', () => {
-  it('archives once even under rapid taps, toasts, and invalidates passwords + relations', async () => {
+  it('archive confirms via the sheet, fires once under rapid confirm taps, toasts, and invalidates passwords + relations', async () => {
     const { client } = renderDetail();
     const spy = jest.spyOn(client, 'invalidateQueries');
-    const archiveButton = await screen.findByRole('button', { name: 'Archive asset' });
+    fireEvent.click(await screen.findByRole('button', { name: 'Archive asset' }));
 
-    fireEvent.click(archiveButton);
-    fireEvent.click(archiveButton);
+    // The header tap only opens the sheet; the sheet's Archive commits.
+    expect(
+      apiFetch.mock.calls.filter(
+        ([, init]) => (init as { method?: string } | undefined)?.method === 'DELETE',
+      ),
+    ).toHaveLength(0);
+    expect(
+      screen.getByRole('dialog', { name: 'Archive asset?' }),
+    ).toBeInTheDocument();
+
+    const confirm = screen.getByRole('button', { name: 'Archive' });
+    fireEvent.click(confirm);
+    fireEvent.click(confirm);
     await screen.findByText('Asset archived');
 
     const deletes = apiFetch.mock.calls.filter(
@@ -226,6 +237,20 @@ describe('AssetDetailScreen archive/restore', () => {
     expect(invalidated).toContain(JSON.stringify(['assets', ORG]));
     expect(invalidated).toContain(JSON.stringify(['relations', ORG]));
     expect(invalidated).toContain(JSON.stringify(['passwords', ORG]));
+  });
+
+  it('cancelling the confirmation archives nothing', async () => {
+    renderDetail();
+    fireEvent.click(await screen.findByRole('button', { name: 'Archive asset' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(
+      screen.queryByRole('dialog', { name: 'Archive asset?' }),
+    ).not.toBeInTheDocument();
+    expect(
+      apiFetch.mock.calls.filter(
+        ([, init]) => (init as { method?: string } | undefined)?.method === 'DELETE',
+      ),
+    ).toHaveLength(0);
   });
 
   it('archived assets render the banner with Restore (never an error), and restore invalidates too', async () => {

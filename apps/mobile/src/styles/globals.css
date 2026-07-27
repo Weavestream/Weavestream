@@ -126,6 +126,34 @@
   }
 }
 
+/* ── Theme-aware wordmark ───────────────────────────────────────────
+ * Both variants are rendered by `AppLogo` so the stamped shell picks
+ * the correct one purely via CSS — no hydration flash. Mirrors
+ * desktop's switch (apps/web globals.css) PLUS the system-pref media
+ * block desktop lacks: a `data-theme-pref="system"` shell stamps
+ * `data-theme="dark"`, so without the media rules a light-OS device
+ * would paint the dark wordmark on a light background until JS runs. */
+.m-logo--light {
+  display: none;
+}
+.m-logo--dark {
+  display: inline-block;
+}
+[data-theme='light'] .m-logo--light {
+  display: inline-block;
+}
+[data-theme='light'] .m-logo--dark {
+  display: none;
+}
+@media (prefers-color-scheme: light) {
+  html[data-theme-pref='system'] .m-logo--light {
+    display: inline-block;
+  }
+  html[data-theme-pref='system'] .m-logo--dark {
+    display: none;
+  }
+}
+
 /* ── Prose (article bodies, RICH_TEXT field values) ─────────────────
  * One typography block serving BOTH render paths — the Tiptap walker
  * (TiptapView) and react-markdown (MarkdownBody) — so the two formats

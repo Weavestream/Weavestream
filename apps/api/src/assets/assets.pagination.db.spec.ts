@@ -59,8 +59,10 @@ describeIfDb('assets list cursor pagination (DB integration)', () => {
     {} as never,
     {} as never,
     {} as never,
-    {} as never,
-    {} as never,
+    // stars + tags are reached by the Phase-4 projection test's
+    // `get()` call and by tag hydration; minimal read-only stubs.
+    { isStarred: async () => false } as never,
+    { getMany: async () => new Map() } as never,
   );
 
   const NAMES = ['Duplicate switch', 'Duplicate switch', 'Duplicate switch', 'Duplicate switch', 'Aardvark AP'];
@@ -87,6 +89,31 @@ describeIfDb('assets list cursor pagination (DB integration)', () => {
               position: 0,
               isPrimary: true,
             },
+            // Phase 4 projection fixtures: one table column, one field
+            // that only detail should carry, one TAGS field (always
+            // projected — the admin table's tag filter needs it).
+            {
+              id: '2ca00000-0000-4000-8000-00000000f002',
+              name: 'Rack',
+              slug: 'rack',
+              fieldType: 'TEXT',
+              position: 1,
+              showInTable: true,
+            },
+            {
+              id: '2ca00000-0000-4000-8000-00000000f003',
+              name: 'Serial notes',
+              slug: 'serial_notes',
+              fieldType: 'TEXTAREA',
+              position: 2,
+            },
+            {
+              id: '2ca00000-0000-4000-8000-00000000f004',
+              name: 'Labels',
+              slug: 'labels',
+              fieldType: 'TAGS',
+              position: 3,
+            },
           ],
         },
       },
@@ -98,6 +125,17 @@ describeIfDb('assets list cursor pagination (DB integration)', () => {
         assetLayoutId: LAYOUT,
         name,
       })),
+    });
+    await prisma.assetFieldValue.createMany({
+      data: [
+        { companyId: COMPANY, assetId: '2ca00000-0000-4000-8000-00000000b000', assetFieldId: '2ca00000-0000-4000-8000-00000000f001', value: 'host-a' },
+        { companyId: COMPANY, assetId: '2ca00000-0000-4000-8000-00000000b000', assetFieldId: '2ca00000-0000-4000-8000-00000000f002', value: 'R12' },
+        { companyId: COMPANY, assetId: '2ca00000-0000-4000-8000-00000000b000', assetFieldId: '2ca00000-0000-4000-8000-00000000f003', value: 'long detail-only notes' },
+        // Empty array: the include's TAGS clause must return the row,
+        // and empty short-circuits tag hydration (the harness stubs the
+        // tags collaborator).
+        { companyId: COMPANY, assetId: '2ca00000-0000-4000-8000-00000000b000', assetFieldId: '2ca00000-0000-4000-8000-00000000f004', value: [] },
+      ],
     });
   });
 
@@ -129,5 +167,28 @@ describeIfDb('assets list cursor pagination (DB integration)', () => {
     const all = await service.list(OPERATOR, COMPANY, { limit: 50 });
     const dupIds = all.items.filter((a) => a.name === 'Duplicate switch').map((a) => a.id);
     expect(dupIds).toEqual([...dupIds].sort());
+  });
+
+  it('projects list fieldValues to isPrimary || showInTable || TAGS (Phase 4)', async () => {
+    const all = await service.list(OPERATOR, COMPANY, { limit: 50 });
+    const seeded = all.items.find(
+      (a) => a.id === '2ca00000-0000-4000-8000-00000000b000',
+    )!;
+    // Primary + table column + TAGS survive the query-layer projection…
+    expect(seeded.fieldValues).toHaveProperty('hostname', 'host-a');
+    expect(seeded.fieldValues).toHaveProperty('rack', 'R12');
+    expect(seeded.fieldValues).toHaveProperty('labels');
+    // …and the detail-only field's value never leaves Postgres for a
+    // list row (the value still exists — getById carries it).
+    expect(seeded.fieldValues).not.toHaveProperty('serial_notes');
+    const detail = await service.get(
+      OPERATOR,
+      COMPANY,
+      '2ca00000-0000-4000-8000-00000000b000',
+    );
+    expect(detail.fieldValues).toHaveProperty(
+      'serial_notes',
+      'long detail-only notes',
+    );
   });
 });

@@ -506,6 +506,7 @@ export const DEFAULT_AI_SETTINGS: AiSettings = {
   maxOutputTokens: null,
   contextWindowTokens: null,
   allowPrivateNetwork: false,
+  autoSummaries: false,
   updatedAt: new Date(0).toISOString(),
 };
 

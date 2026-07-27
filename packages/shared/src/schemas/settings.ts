@@ -129,6 +129,14 @@ export const aiSettingsSchema = z.object({
    * are reachable — cloud-metadata and link-local stay blocked.
    */
   allowPrivateNetwork: z.boolean(),
+  /**
+   * "Use AI to create auto summaries" (Phase 4). Separate explicit
+   * opt-in from `enabled`, default false: when on, article titles and
+   * content are sent to the configured endpoint whenever articles are
+   * created or edited (a new data-class egress — the settings UI
+   * carries this disclosure verbatim).
+   */
+  autoSummaries: z.boolean(),
   updatedAt: z.string(),
 });
 
@@ -154,6 +162,7 @@ export const updateAiSettingsSchema = z
       .nullable()
       .optional(),
     allowPrivateNetwork: z.boolean().optional(),
+    autoSummaries: z.boolean().optional(),
   })
   .refine((v) => Object.keys(v).length > 0, 'At least one field must be provided')
   .refine((v) => !(v.apiKey && v.clearApiKey), {

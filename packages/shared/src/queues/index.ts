@@ -55,6 +55,11 @@ export const QueueNames = {
   // `companies.logo_upload_id` is `ON DELETE SET NULL`). Set
   // `UPLOAD_REAPER_CRON=off` to disable scheduled reaping.
   uploadReaper: 'upload-reaper',
+  // Mobile Phase 4 — AI article list summaries. `generate` produces one
+  // summary for one (article, revision); the repeatable `sweep` is the
+  // durability backstop + spend governor (drains `ai_summary_at IS
+  // NULL` in paced batches). Gated on AiSetting.enabled && autoSummaries.
+  articleSummary: 'article-summary',
 } as const;
 
 export type QueueName = (typeof QueueNames)[keyof typeof QueueNames];
@@ -473,3 +478,87 @@ export const UploadReaperJobNames = {
 } as const;
 export type UploadReaperJobName =
   (typeof UploadReaperJobNames)[keyof typeof UploadReaperJobNames];
+
+// ---------------------------------------------------------------------
+// article-summary queue (Mobile Phase 4 — AI article list summaries)
+// ---------------------------------------------------------------------
+//
+// Two job shapes routed by `kind`:
+//   - `generate` — produce one summary for one (article, revision).
+//                  Enqueued post-commit by direct article writes when
+//                  the feature gate (`AiSetting.enabled && autoSummaries
+//                  && baseUrl && defaultModel`) was ON inside the write
+//                  transaction, and by the sweep. The integration
+//                  writer NEVER enqueues inline — it runs inside the
+//                  sync runner's long page transaction, where a delayed
+//                  job could execute pre-commit, read the old revision,
+//                  skip as superseded, and strand the summary; its rows
+//                  surface as pending and the sweep collects them.
+//   - `sweep`    — repeatable reconciliation tick. Drains articles with
+//                  `ai_summary_at IS NULL` (the pending marker) in
+//                  paced batches, healing enqueue-time Redis failures,
+//                  pre-commit skips, rollback orphans, and crashed
+//                  jobs (a failed job with the same id is `retry()`ed
+//                  rather than re-added — BullMQ dedups adds against
+//                  retained failed jobs). The batch cap × interval is
+//                  also the spend governor for bulk integration
+//                  imports.
+//
+// Payload-generation doctrine (this is a NEW queue, so no legacy
+// generations exist by construction): the `kind` discriminator is the
+// extension point; any field added later must stay optional until every
+// older producer's jobs have drained from Redis.
+
+export const articleSummaryGenerateJobSchema = z.object({
+  kind: z.literal('generate'),
+  articleId: z.string().uuid(),
+  companyId: z.string().uuid(),
+  /**
+   * The article revision this job was enqueued FOR. The worker skips
+   * before any egress when the row's current revision differs, and the
+   * write-back predicate re-checks it — per-revision jobs mean a rapid
+   * edit burst spends at most one completion (the last revision's).
+   */
+  revision: z.number().int().min(1),
+  correlationId: z.string().uuid().optional(),
+});
+export type ArticleSummaryGenerateJob = z.infer<
+  typeof articleSummaryGenerateJobSchema
+>;
+
+export const articleSummarySweepJobSchema = z.object({
+  kind: z.literal('sweep'),
+});
+export type ArticleSummarySweepJob = z.infer<
+  typeof articleSummarySweepJobSchema
+>;
+
+export const articleSummaryJobSchema = z.discriminatedUnion('kind', [
+  articleSummaryGenerateJobSchema,
+  articleSummarySweepJobSchema,
+]);
+export type ArticleSummaryJob = z.infer<typeof articleSummaryJobSchema>;
+
+export const ArticleSummaryJobNames = {
+  generate: 'generate',
+  sweep: 'sweep',
+} as const;
+export type ArticleSummaryJobName =
+  (typeof ArticleSummaryJobNames)[keyof typeof ArticleSummaryJobNames];
+
+/**
+ * Deterministic custom job id for a `generate` job — shared so the API
+ * producer and the worker's sweep construct byte-identical ids (the id
+ * IS the dedup key between them). COLON-FREE deliberately: BullMQ
+ * reserves `:` in custom ids (currently a compatibility exception, slated
+ * to become a hard rejection).
+ */
+export function articleSummaryJobId(
+  articleId: string,
+  revision: number,
+): string {
+  return `article-summary-${articleId}-${revision}`;
+}
+
+/** Repeatable sweep tick's fixed id (one lane, idempotent registration). */
+export const ARTICLE_SUMMARY_SWEEP_JOB_ID = 'article-summary-sweep';

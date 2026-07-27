@@ -673,7 +673,32 @@ model Article {
   /// Raw Markdown; null when `editorMode` is `tiptap`.
   markdownSource   String?   @map("markdown_source")
   contentPlaintext String    @map("content_plaintext")
+  /// Legacy caller-suppliable excerpt (accepted by the write schema,
+  /// preserved on write) — but NEVER served: read paths re-derive or use
+  /// `derivedExcerpt`. Kept untouched because stored values may be
+  /// caller-authored and their provenance is unknowable (Phase 4).
   excerpt          String?
+  /// Machine-derived list excerpt (Phase 4). Exclusively app-written:
+  /// `projectArticleBody` maintains it on every content write, migration
+  /// 0067 seeded it, and the refinement script may recompute it — so
+  /// overwriting is always safe. Serving rule everywhere:
+  /// `aiSummary ?? derivedExcerpt`.
+  derivedExcerpt   String?   @map("derived_excerpt")
+  /// AI-generated list summary (Phase 4). Invariant: always matches the
+  /// last *published* title+body — cleared in the same UPDATE that
+  /// changes them. Generated asynchronously by the article-summary
+  /// worker, gated on AiSetting.enabled && autoSummaries.
+  aiSummary        String?   @map("ai_summary")
+  aiSummaryModel   String?   @map("ai_summary_model")
+  /// Generation state clock: NULL = "generation pending" (only ever
+  /// created while the feature gate is ON at write time — a disabled
+  /// install accrues no backlog); non-NULL = settled (with or without a
+  /// summary). The reconciliation sweep drains `ai_summary_at IS NULL`.
+  /// The DB default (0068) exists for writers that OMIT the column —
+  /// i.e. pre-0067 app instances during a rolling deploy, whose inserts
+  /// must land settled, not pending. Post-0067 code always writes the
+  /// column explicitly, so the default never decides for it.
+  aiSummaryAt      DateTime? @default(now()) @map("ai_summary_at")
   visibleToClients Boolean   @default(true) @map("visible_to_clients")
   /// Monotonic optimistic-concurrency token. Incremented by the app on
   /// every content-affecting write INCLUDING autosave drafts (which is
@@ -919,6 +944,13 @@ model AiSetting {
   // LM Studio). When true, AI egress allows curated private ranges only —
   // cloud-metadata and link-local stay blocked (WS-017).
   allowPrivateNetwork Boolean @default(false) @map("allow_private_network")
+  // "Use AI to create auto summaries" (Phase 4). Deliberately a SEPARATE
+  // explicit opt-in from `enabled`, default false: auto-summarization
+  // proactively sends article titles+content to the configured endpoint
+  // on every edit — a new data-class egress under CLAUDE.md §7 that an
+  // existing install upgrading with AI already on must never start
+  // silently. The settings UI carries the disclosure.
+  autoSummaries    Boolean  @default(false) @map("auto_summaries")
   updatedAt        DateTime @updatedAt @map("updated_at")
   updatedBy        String?  @map("updated_by") @db.Uuid
 

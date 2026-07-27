@@ -1,5 +1,6 @@
-import { useRef } from 'react';
+import { useRef, useState } from 'react';
 import { formatShortDateTime } from '@weavestream/shared';
+import { ConfirmSheet } from '../../components/ConfirmSheet';
 import { DetailHeader } from '../../components/DetailHeader';
 import { Icon } from '../../components/Icon';
 import { MetaRow } from '../../components/MetaRow';
@@ -95,11 +96,18 @@ function AssetDetailLoaded({ assetId }: { assetId: string }) {
   // status propagates on a microtask, so two taps in the same frame
   // would both read stale state and the server 400s the second archive.
   const archiveInFlight = useRef(false);
+  // Archive confirms via a sheet (Phase 4); restore stays immediate —
+  // it is the undo, and confirming the undo would punish recovery.
+  const [confirmingArchive, setConfirmingArchive] = useState(false);
   function onArchive() {
     if (archiveInFlight.current) return;
     archiveInFlight.current = true;
     archiveMutation.mutate(assetId, {
-      onSuccess: () => toast.push('Asset archived', 'ok'),
+      onSuccess: () => {
+        setConfirmingArchive(false);
+        toast.push('Asset archived', 'ok');
+      },
+      // Sheet stays open on failure so retry is one tap.
       onError: () => toast.push('Couldn’t archive asset.', 'danger'),
       onSettled: () => {
         archiveInFlight.current = false;
@@ -165,12 +173,13 @@ function AssetDetailLoaded({ assetId }: { assetId: string }) {
                   navigate({ to: `/assets/${assetId}/edit`, upIsBack: true })
                 }
               />
-              {/* Immediate, no confirm — reversible; Restore lives on
-                  the archived banner this screen keeps showing. */}
+              {/* Opens the confirm sheet (Phase 4). Restore stays
+                  immediate on the archived banner this screen keeps
+                  showing. */}
               <IconButton
                 icon="archive"
                 label="Archive asset"
-                onClick={onArchive}
+                onClick={() => setConfirmingArchive(true)}
                 disabled={archiveMutation.isPending}
               />
             </>
@@ -270,6 +279,19 @@ function AssetDetailLoaded({ assetId }: { assetId: string }) {
           </>
         )}
       </Screen>
+
+      <ConfirmSheet
+        open={confirmingArchive}
+        title="Archive asset?"
+        confirmLabel="Archive"
+        busy={archiveMutation.isPending}
+        onConfirm={onArchive}
+        onClose={() => setConfirmingArchive(false)}
+      >
+        <span className="font-semibold text-text">{detail?.name}</span> will be
+        hidden from the default list view. Field values and Relation links are
+        preserved and can be restored at any time.
+      </ConfirmSheet>
     </>
   );
 }

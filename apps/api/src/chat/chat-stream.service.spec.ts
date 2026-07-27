@@ -2,6 +2,7 @@ import { EventEmitter } from 'node:events';
 import type { Response } from 'express';
 import type { SendChatMessageInput } from '@weavestream/shared';
 import type { AuthedUser } from '../common/current-user.decorator.js';
+import { AiCompletionService } from '../ai/ai-completion.service.js';
 import { ChatStreamService } from './chat-stream.service.js';
 import { runToolLoop } from './chat-loop.js';
 
@@ -115,6 +116,10 @@ function makeHarness() {
     aiSettings as never,
     {} as never,
     {} as never,
+    // Real instance, mocked egress: the prelude-disconnect test below
+    // asserts the client abort reaches the upstream fetch signal
+    // through `complete()`'s own controller chain.
+    new AiCompletionService(),
   );
   return { prisma, service };
 }

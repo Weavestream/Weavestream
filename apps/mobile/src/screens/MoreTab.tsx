@@ -1,5 +1,6 @@
 import { initialsFromName, roleLabel } from '@weavestream/shared';
 import { useState, useSyncExternalStore } from 'react';
+import { AppearanceSheet } from '../components/AppearanceSheet';
 import { Icon } from '../components/Icon';
 import { Sheet } from '../components/Sheet';
 import {
@@ -65,6 +66,7 @@ export function MoreTab() {
   const [signOutError, setSignOutError] = useState<string | null>(null);
   const [signingOut, setSigningOut] = useState(false);
   const [installHelpOpen, setInstallHelpOpen] = useState(false);
+  const [appearanceOpen, setAppearanceOpen] = useState(false);
   // `beforeinstallprompt` often fires after mount — subscribe so the
   // row appears when the capture lands (and disappears on install).
   const installMode = useSyncExternalStore(
@@ -128,10 +130,16 @@ export function MoreTab() {
         </GroupedList>
       </section>
 
-      {installMode !== 'none' && (
-        <section className="flex flex-col gap-1.75">
-          <SectionLabel>App</SectionLabel>
-          <GroupedList>
+      <section className="flex flex-col gap-1.75">
+        <SectionLabel>App</SectionLabel>
+        <GroupedList>
+          <GroupedRow
+            icon="palette"
+            label="Appearance"
+            onClick={() => setAppearanceOpen(true)}
+            last={installMode === 'none'}
+          />
+          {installMode !== 'none' && (
             <GroupedRow
               icon="install_mobile"
               label="Install app"
@@ -142,9 +150,9 @@ export function MoreTab() {
               }
               last
             />
-          </GroupedList>
-        </section>
-      )}
+          )}
+        </GroupedList>
+      </section>
 
       <section className="flex flex-col gap-1.75">
         <SectionLabel>Room to grow · later</SectionLabel>
@@ -177,6 +185,11 @@ export function MoreTab() {
         <Icon name="logout" size={21} />
         {signingOut ? 'Signing out…' : 'Sign out'}
       </button>
+
+      <AppearanceSheet
+        open={appearanceOpen}
+        onClose={() => setAppearanceOpen(false)}
+      />
 
       {/* iOS Safari has no install prompt API — the Share sheet is the
           only path, so the row opens instructions instead. */}

@@ -24,6 +24,7 @@ export function AiSettingsForm({ initial }: { initial: AiSettings }) {
   const [allowPrivateNetwork, setAllowPrivateNetwork] = useState(
     initial.allowPrivateNetwork,
   );
+  const [autoSummaries, setAutoSummaries] = useState(initial.autoSummaries);
   const [models, setModels] = useState<string[] | null>(null);
   const [pending, setPending] = useState(false);
   const [testing, setTesting] = useState(false);
@@ -43,6 +44,7 @@ export function AiSettingsForm({ initial }: { initial: AiSettings }) {
     numOrNull(maxOutputTokens) !== baseline.current.maxOutputTokens ||
     numOrNull(contextWindowTokens) !== baseline.current.contextWindowTokens ||
     allowPrivateNetwork !== baseline.current.allowPrivateNetwork ||
+    autoSummaries !== baseline.current.autoSummaries ||
     apiKey.length > 0 ||
     clearApiKey;
 
@@ -56,6 +58,7 @@ export function AiSettingsForm({ initial }: { initial: AiSettings }) {
       maxOutputTokens: numOrNull(maxOutputTokens),
       contextWindowTokens: numOrNull(contextWindowTokens),
       allowPrivateNetwork,
+      autoSummaries,
     };
     if (apiKey) payload.apiKey = apiKey;
     if (clearApiKey) payload.clearApiKey = true;
@@ -117,6 +120,7 @@ export function AiSettingsForm({ initial }: { initial: AiSettings }) {
       b.contextWindowTokens != null ? String(b.contextWindowTokens) : '',
     );
     setAllowPrivateNetwork(b.allowPrivateNetwork);
+    setAutoSummaries(b.autoSummaries);
     setModels(null);
     setError(null);
   }
@@ -194,6 +198,34 @@ export function AiSettingsForm({ initial }: { initial: AiSettings }) {
             addresses remain blocked.
           </div>
         )}
+      </div>
+
+      {/* Separate explicit opt-in, default OFF (CLAUDE.md §7): enabling
+          AI chat must never silently start proactive article egress. */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        <label
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            fontSize: 13,
+            color: 'var(--text)',
+            cursor: 'pointer',
+          }}
+        >
+          <input
+            type="checkbox"
+            checked={autoSummaries}
+            onChange={(e) => setAutoSummaries(e.target.checked)}
+          />
+          Use AI to create auto summaries
+        </label>
+        <div style={{ fontSize: 12.5, lineHeight: 1.5, color: 'var(--muted)' }}>
+          Sends article titles and content to your configured AI endpoint
+          whenever articles are created or edited. Summaries appear in article
+          lists; articles without one show a plain excerpt. Existing articles
+          are not summarized until their next edit.
+        </div>
       </div>
 
       <Field

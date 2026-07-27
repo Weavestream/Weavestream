@@ -86,22 +86,33 @@ export function PasswordHeaderActions({
   const toast = useToast();
   const [, startTransition] = useTransition();
   const [editing, setEditing] = useState(false);
+  // Archive confirms (Phase 4 — passwords were the one record type
+  // whose archive fired on a bare click; assets and articles already
+  // confirm). Restore stays one-click: it is the undo.
+  const [confirmingArchive, setConfirmingArchive] = useState(false);
+  const [archivePending, setArchivePending] = useState(false);
 
   async function archive() {
-    const res = await apiFetch(
-      `/companies/${companyId}/passwords/${password.id}`,
-      { method: 'DELETE' },
-    );
-    if (!res.ok) {
-      toast.push(
-        (res.problem as { message?: string } | undefined)?.message ??
-          'Archive failed',
-        'danger',
+    setArchivePending(true);
+    try {
+      const res = await apiFetch(
+        `/companies/${companyId}/passwords/${password.id}`,
+        { method: 'DELETE' },
       );
-      return;
+      if (!res.ok) {
+        toast.push(
+          (res.problem as { message?: string } | undefined)?.message ??
+            'Archive failed',
+          'danger',
+        );
+        return;
+      }
+      setConfirmingArchive(false);
+      toast.push('Password archived', 'ok');
+      startTransition(() => router.refresh());
+    } finally {
+      setArchivePending(false);
     }
-    toast.push('Password archived', 'ok');
-    startTransition(() => router.refresh());
   }
 
   async function restore() {
@@ -154,13 +165,49 @@ export function PasswordHeaderActions({
               kind="outline"
               size="md"
               icon={Icon.archive}
-              onClick={() => void archive()}
+              onClick={() => setConfirmingArchive(true)}
             >
               Archive
             </Btn>
           )}
         </>
       )}
+
+      <Dialog
+        open={confirmingArchive}
+        onClose={() => !archivePending && setConfirmingArchive(false)}
+        title="Archive password?"
+        footer={
+          <>
+            <Btn
+              kind="ghost"
+              onClick={() => setConfirmingArchive(false)}
+              disabled={archivePending}
+            >
+              Cancel
+            </Btn>
+            <Btn
+              kind="danger"
+              loading={archivePending}
+              onClick={() => void archive()}
+            >
+              Archive
+            </Btn>
+          </>
+        }
+      >
+        <p
+          style={{
+            margin: 0,
+            fontSize: 13,
+            color: 'var(--text-2)',
+            lineHeight: 1.5,
+          }}
+        >
+          {password.name} will be hidden from the default list. The credential
+          and its links are preserved and can be restored at any time.
+        </p>
+      </Dialog>
 
       {editing && (
         <EditPasswordDialog

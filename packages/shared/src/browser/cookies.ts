@@ -1,3 +1,9 @@
+import {
+  encodeUiCookie,
+  UI_COOKIE_NAME,
+  type UiPreferences,
+} from '../ui-cookie.js';
+
 /**
  * Read a cookie from `document.cookie`, percent-decoded.
  *
@@ -37,4 +43,34 @@ export function readBrowserCookie(name: string): string | undefined {
   } catch {
     return match[1];
   }
+}
+
+/**
+ * Write the `ws_ui` preference cookie from the browser.
+ *
+ * The API's cookie helper documents `ws_ui` as deliberately
+ * non-HttpOnly "so a same-page accent preview can update the cookie
+ * without a round-trip" (apps/api/src/auth/cookies.ts) — this is that
+ * anticipated writer, shared so the attribute set cannot drift from
+ * the server's: host-only (no Domain), `Path=/`, `SameSite=Lax`,
+ * one-year `Max-Age`, `Secure` on HTTPS, value percent-encoded exactly
+ * like Express's `res.cookie` default (which `readBrowserCookie`
+ * decodes back).
+ *
+ * The mobile PWA uses it to persist preferences learned from
+ * `/auth/me`, so the next cold boot's server-side shell pick is
+ * already correct. No-op outside a browser.
+ */
+export function writeUiBrowserCookie(prefs: UiPreferences): void {
+  if (typeof document === 'undefined') return;
+  const value = encodeURIComponent(
+    encodeUiCookie({ uiTheme: prefs.uiTheme, uiAccent: prefs.uiAccent }),
+  );
+  const secure =
+    typeof location !== 'undefined' && location.protocol === 'https:'
+      ? '; Secure'
+      : '';
+  document.cookie =
+    `${UI_COOKIE_NAME}=${value}; Path=/; Max-Age=31536000; SameSite=Lax` +
+    secure;
 }

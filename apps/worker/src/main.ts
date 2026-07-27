@@ -7,6 +7,7 @@ import { Logger } from 'nestjs-pino';
 import { WorkerModule } from './worker.module.js';
 import { DomainChecksWorker } from './domain-checks/domain-checks.processor.js';
 import { PwnedCheckWorker } from './pwned-check/pwned-check.processor.js';
+import { ArticleSummaryWorker } from './article-summary/article-summary.processor.js';
 import { CompanyPdfExportWorker } from './company-pdf-export/company-pdf-export.processor.js';
 import { IntegrationSyncOrchestratorWorker } from './integration-sync/integration-sync-orchestrator.processor.js';
 import { IntegrationSyncMappingWorker } from './integration-sync/integration-sync-mapping.processor.js';
@@ -104,6 +105,9 @@ async function bootstrap(): Promise<void> {
 
   const uploadReaper = app.get(UploadReaperWorker);
   await uploadReaper.start();
+
+  const articleSummary = app.get(ArticleSummaryWorker);
+  await articleSummary.start();
 
   logger.log('Worker online — bullmq consumers started', 'WorkerBootstrap');
 

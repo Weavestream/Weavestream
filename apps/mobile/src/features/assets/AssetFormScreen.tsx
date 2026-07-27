@@ -260,24 +260,36 @@ function AssetFormFields({
     >
       {form.formError && <ErrorBanner title={form.formError} />}
 
-      <FieldBlock
-        label="Name"
-        htmlFor="af-asset-name"
-        hint={
-          primaryField
-            ? `Derived from ${primaryField.name} when left empty.`
-            : undefined
-        }
-      >
-        <Input
-          id="af-asset-name"
-          type="text"
-          value={name}
-          maxLength={200}
-          onChange={(e) => setName(e.target.value)}
-          placeholder={primaryField ? `(from ${primaryField.name})` : undefined}
-        />
-      </FieldBlock>
+      {/* Create hides the Name field entirely (Phase 4): `buildCreate`
+          omits an empty name and the server derives it from the primary
+          field (assets.service `derivePrimaryName`), so the input only
+          ever confused the "which field is the title?" question. Edit
+          keeps it — the clobber guard needs the seeded name re-sent, and
+          clearing it is the deliberate "reset to derived" gesture. The
+          accepted trade: a layout whose primary field is left empty
+          creates as "Untitled {layout}" until renamed via edit. */}
+      {isEdit && (
+        <FieldBlock
+          label="Name"
+          htmlFor="af-asset-name"
+          hint={
+            primaryField
+              ? `Derived from ${primaryField.name} when left empty.`
+              : undefined
+          }
+        >
+          <Input
+            id="af-asset-name"
+            type="text"
+            value={name}
+            maxLength={200}
+            onChange={(e) => setName(e.target.value)}
+            placeholder={
+              primaryField ? `(from ${primaryField.name})` : undefined
+            }
+          />
+        </FieldBlock>
+      )}
 
       <AssetFieldsFormFields
         form={form}
