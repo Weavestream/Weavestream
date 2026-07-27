@@ -45,6 +45,52 @@ const MARKER = 'mobile-build.json';
 const ACCENT_PLACEHOLDER = '__WS_ACCENT__';
 
 /**
+ * The compiled service worker (Phase 3). Emitted by vite-plugin-pwa
+ * into `dist/`, NOT listed in the Vite manifest — so it must be named
+ * in the keep-set explicitly or the prune below would delete it right
+ * after the copy carried it in.
+ */
+const SERVICE_WORKER = 'sw.js';
+
+/**
+ * Replaced in the staged copy of sw.js with a hash of the compiled
+ * worker, so its cache versions change whenever the WORKER changes —
+ * not only when the precache manifest does. Without it, an SW-code-only
+ * deploy would install into the active worker's same-named caches (see
+ * the BUILD_ID comment in src/sw.ts). `dist/` keeps the placeholder, so
+ * republishing an unchanged build stamps the identical value.
+ */
+const SW_BUILD_PLACEHOLDER = '__WS_SW_BUILD__';
+
+/**
+ * The precache manifest injected into the compiled worker must contain
+ * no HTML: `dist/index.html` carries the `__WS_ACCENT__` placeholder,
+ * and a precached copy would serve that broken shell to every offline
+ * boot. A plain `index.html` grep is NOT a valid check — Workbox's own
+ * bundled routing code contains the `directoryIndex: 'index.html'`
+ * default string — so this parses the `{url, revision}` entries out of
+ * the injected array instead.
+ */
+function assertNoHtmlPrecached(swSource) {
+  const urls = [...swSource.matchAll(/"url"\s*:\s*"([^"]+)"|url\s*:\s*"([^"]+)"/g)]
+    .map((m) => m[1] ?? m[2])
+    .filter(Boolean);
+  if (urls.length === 0) {
+    throw new Error(
+      'sw.js contains no precache manifest entries — the vite-plugin-pwa ' +
+        'injection failed or the glob matched nothing',
+    );
+  }
+  const html = urls.filter((u) => u.endsWith('.html'));
+  if (html.length > 0) {
+    throw new Error(
+      `sw.js precaches HTML (${html.join(', ')}) — the accent-placeholder ` +
+        'shell must never be precached; fix the injectManifest globPatterns',
+    );
+  }
+}
+
+/**
  * Read the accent list from the shared package rather than hardcoding
  * it, so adding a sixth accent regenerates the variants automatically
  * instead of silently shipping five.
@@ -132,6 +178,32 @@ async function main() {
     throw new Error(`vite build output missing at ${DIST} — run \`vite build\` first`);
   }
 
+  // Loud failure over a silent regression, like the __WS_ACCENT__ check
+  // below: a plugin misconfiguration that stops emitting the worker
+  // must fail the publish, not ship a bundle that quietly loses its
+  // offline capability (and leaves clients running the previous SW
+  // forever).
+  const swPath = join(DIST, SERVICE_WORKER);
+  if (!existsSync(swPath)) {
+    throw new Error(
+      `dist/${SERVICE_WORKER} missing — vite-plugin-pwa did not emit the ` +
+        'service worker; check the plugin config in vite.config.ts',
+    );
+  }
+  const swSource = await readFile(swPath, 'utf8');
+  assertNoHtmlPrecached(swSource);
+  if (!swSource.includes(SW_BUILD_PLACEHOLDER)) {
+    throw new Error(
+      `sw.js lost its ${SW_BUILD_PLACEHOLDER} placeholder — cache versions ` +
+        'would stop tracking worker changes and an installing worker could ' +
+        "mutate the active worker's caches; see src/sw.ts",
+    );
+  }
+  const stampedSw = swSource.replaceAll(
+    SW_BUILD_PLACEHOLDER,
+    sha256(swSource).slice(0, 16),
+  );
+
   const { values: ACCENTS, fallback } = await accents();
 
   // Clear staging first: remnants of an interrupted build must never be
@@ -150,6 +222,9 @@ async function main() {
       recursive: true,
     });
   }
+  // The published worker carries the stamped build id; dist/ keeps the
+  // placeholder so a republish of an unchanged build is byte-identical.
+  await writeFile(join(stageAssets, SERVICE_WORKER), stampedSw, 'utf8');
 
   // ---- shell variants --------------------------------------------------
   const template = await readFile(join(DIST, 'index.html'), 'utf8');
@@ -189,11 +264,15 @@ async function main() {
 
   const marker = {
     // Bumped by hand if the guard's expectations change.
-    schema: 1,
+    // 2: serviceWorker field added (Phase 3) — a schema-1 marker means
+    // a pre-SW publish and must fail the guard until republished.
+    schema: 2,
     fallbackAccent: fallback,
     accents: ACCENTS,
     shells,
     assets,
+    serviceWorker: SERVICE_WORKER,
+    serviceWorkerSha256: sha256(stampedSw),
     // The shell's own view of what must exist, which is the thing that
     // actually white-screens if it drifts.
     referenced: referencedUrls(template.replaceAll(ACCENT_PLACEHOLDER, fallback))
@@ -247,7 +326,15 @@ async function main() {
         .map((e) => e.name)
     : [];
 
-  const keep = new Set([...assets, ...previousAssets, ...passthrough]);
+  const keep = new Set([
+    ...assets,
+    ...previousAssets,
+    ...passthrough,
+    // Not in the Vite manifest (vite-plugin-pwa emits it directly), so
+    // without this line the prune would delete the worker the copy loop
+    // just published.
+    SERVICE_WORKER,
+  ]);
   const pruned = await pruneAssets(keep);
 
   await rm(STAGE, { recursive: true, force: true });

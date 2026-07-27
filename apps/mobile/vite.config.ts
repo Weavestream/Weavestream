@@ -1,5 +1,6 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
+import { VitePWA } from 'vite-plugin-pwa';
 
 /**
  * Weavestream Mobile — static bundle served at `/m` by the Next.js
@@ -10,7 +11,41 @@ import react from '@vitejs/plugin-react';
  * `generateStaticParams` for data-driven routes like `/m/passwords/:id`.
  */
 export default defineConfig({
-  plugins: [react()],
+  plugins: [
+    react(),
+    /**
+     * Phase 3 service worker. `injectManifest` compiles our hand-written
+     * `src/sw.ts` (versioned caches, install-warmed canonical shell,
+     * NetworkFirst navigations, NO /api route — see that file for the
+     * caching policy and its security invariant) and injects the
+     * precache manifest.
+     *
+     *  - `injectRegister: null` — the plugin must NEVER inject a
+     *    registration script into index.html: the `/m` CSP is
+     *    `script-src 'self'` with no inline allowance, and the shell
+     *    HTML must stay byte-identical for the accent pipeline
+     *    (`emit-to-web.mjs` stamps one variant per accent).
+     *    Registration lives in `main.tsx` via `virtual:pwa-register`.
+     *  - `manifest: false` — `public/manifest.webmanifest` is the
+     *    manifest (scope/start_url reasoning in MANIFEST-NOTES.md); do
+     *    not generate a second one.
+     *  - Precache globs exclude HTML: `dist/index.html` carries the
+     *    literal `__WS_ACCENT__` placeholder — precaching it would
+     *    serve a broken shell. The runtime canonical-shell cache in
+     *    sw.ts is what provides offline boot instead.
+     */
+    VitePWA({
+      strategies: 'injectManifest',
+      srcDir: 'src',
+      filename: 'sw.ts',
+      injectRegister: null,
+      manifest: false,
+      devOptions: { enabled: false },
+      injectManifest: {
+        globPatterns: ['**/*.{js,css,woff2}'],
+      },
+    }),
+  ],
 
   // Assets are served from `apps/web/public/m/assets/*`. Independent of
   // the HTML entry URL, which is `/m/app` — see the route handler.

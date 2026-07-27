@@ -30,6 +30,13 @@
     <meta name="robots" content="noindex, nofollow" />
     <link rel="manifest" href="/m/manifest.webmanifest" />
     <link rel="apple-touch-icon" href="/brand/pwa-icon-180.png" />
+    <!-- iOS home-screen name + status-bar treatment for the installed
+         app. Modern iOS reads display/standalone from the manifest;
+         these two fill the gaps it still takes from meta tags. No
+         apple-touch-startup-image matrix — a per-device splash set is
+         a deliberate Phase 3 skip (recorded in the build plan). -->
+    <meta name="apple-mobile-web-app-title" content="Weavestream" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <title>Weavestream</title>
   </head>
   <body>

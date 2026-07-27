@@ -68,6 +68,20 @@ describe('hideTabBarFor', () => {
     expect(hideTabBarFor('/articles/new')).toBe(false);
     expect(hideTabBarFor('/more')).toBe(false);
   });
+
+  it('hides the tab bar on the search takeover (Phase 3)', () => {
+    expect(hideTabBarFor('/search')).toBe(true);
+    expect(hideTabBarFor('/m/search')).toBe(true);
+    // Whole-segment match, like the tab predicate above.
+    expect(hideTabBarFor('/searchy')).toBe(false);
+  });
+});
+
+describe('tabIdForPath — search', () => {
+  it('belongs to no tab, so no tab highlights and nothing is remembered', () => {
+    expect(tabIdForPath('/search')).toBeNull();
+    expect(tabIdForPath('/m/search')).toBeNull();
+  });
 });
 
 describe('remembered locations', () => {

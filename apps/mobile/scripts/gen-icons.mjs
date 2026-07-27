@@ -70,6 +70,14 @@ const GLYPHS = {
   mic: 'mic',
   logout: 'logout',
   refresh: 'refresh',
+  // Ask anything (Phase 3)
+  arrow_upward: 'arrow_upward',
+  stop: 'stop',
+  // Install UI (Phase 3). `install_mobile` is absent from this package
+  // version; `add_home` (add-to-home-screen) is the closest current
+  // glyph — recorded here per the expand_more/auto_awesome convention.
+  install_mobile: 'add_home',
+  ios_share: 'ios_share',
   // Status
   check_circle: 'check_circle',
   error: 'error',

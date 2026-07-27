@@ -61,10 +61,13 @@ export function TabBar({
   activeTab,
   onSelectTab,
   onAsk,
+  showAsk = true,
 }: {
   activeTab: TabId | null;
   onSelectTab: (tab: TabId) => void;
   onAsk: () => void;
+  /** False for CLIENT_USER — desktop hides chat on portals; parity. */
+  showAsk?: boolean;
 }) {
   return (
     <nav
@@ -81,19 +84,23 @@ export function TabBar({
       ))}
 
       {/* Fixed 84px so the four real tabs stay evenly sized regardless of
-          the raised button, per the handoff's slot spec. */}
+          the raised button, per the handoff's slot spec. The slot keeps
+          its width even with Ask hidden, so the tabs don't shift between
+          roles. */}
       <div className="flex shrink-0 basis-[84px] justify-center">
-        <button
-          type="button"
-          onClick={onAsk}
-          aria-label="Ask anything"
-          className={
-            'mb-3.5 flex h-ask w-ask items-center justify-center rounded-ask ' +
-            'bg-accent text-accent-ink shadow-ask active:bg-accent-pressed'
-          }
-        >
-          <Icon name="auto_awesome" size={29} />
-        </button>
+        {showAsk && (
+          <button
+            type="button"
+            onClick={onAsk}
+            aria-label="Ask anything"
+            className={
+              'mb-3.5 flex h-ask w-ask items-center justify-center rounded-ask ' +
+              'bg-accent text-accent-ink shadow-ask active:bg-accent-pressed'
+            }
+          >
+            <Icon name="auto_awesome" size={29} />
+          </button>
+        )}
       </div>
 
       {RIGHT.map((tab) => (

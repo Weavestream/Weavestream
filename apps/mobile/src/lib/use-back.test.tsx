@@ -9,7 +9,7 @@
  * `upIsBack` stamp (pushed straight from its parent); anything else
  * navigates structurally to the fallback, filters included.
  */
-import { useBackOr } from './use-back';
+import { useBackLabel, useBackOr } from './use-back';
 
 const backMock = jest.fn();
 const navigateMock = jest.fn();
@@ -70,5 +70,38 @@ describe('useBackOr', () => {
       replace: true,
       search: undefined,
     });
+  });
+});
+
+describe('useBackLabel', () => {
+  it('shows the stamped label only when the chevron will really pop', () => {
+    // A search result stamped this entry: pop goes to Search, so the
+    // chevron must say so.
+    locationState = { upIsBack: true, backLabel: 'Search' };
+    const { result } = renderHook(() => useBackLabel('Passwords'));
+    expect(result.current).toBe('Search');
+  });
+
+  it('shows the structural label when the entry cannot pop', () => {
+    // Same stamp, but no history to pop — useBackOr would navigate
+    // structurally to the list, so "Search" would be a lie.
+    locationState = { upIsBack: true, backLabel: 'Search' };
+    canGoBack = false;
+    const { result } = renderHook(() => useBackLabel('Passwords'));
+    expect(result.current).toBe('Passwords');
+  });
+
+  it('shows the structural label on an unstamped entry (cold deep link)', () => {
+    locationState = {};
+    const { result } = renderHook(() => useBackLabel('Passwords'));
+    expect(result.current).toBe('Passwords');
+  });
+
+  it('ignores a label without the upIsBack stamp', () => {
+    // A backLabel that somehow survived without its positional partner
+    // must not relabel a structural navigation.
+    locationState = { backLabel: 'Search' };
+    const { result } = renderHook(() => useBackLabel('Passwords'));
+    expect(result.current).toBe('Passwords');
   });
 });

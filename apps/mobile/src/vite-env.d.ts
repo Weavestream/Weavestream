@@ -1,7 +1,9 @@
 /// <reference types="vite/client" />
+/// <reference types="vite-plugin-pwa/client" />
 
 // Pulls in Vite's ambient declarations for asset imports (`*.svg`,
-// `*.png`, `*.woff2`, …) and `import.meta.env`.
+// `*.png`, `*.woff2`, …) and `import.meta.env`, plus vite-plugin-pwa's
+// `virtual:pwa-register` module used by main.tsx.
 //
 // A triple-slash reference rather than relying on `types: ["vite/client"]`
 // in tsconfig: under `moduleResolution: "Bundler"` that entry does not

@@ -110,6 +110,18 @@ export class ChatStreamService {
   ): Promise<void> {
     initSse(res);
 
+    // Abort plumbing for the whole turn, installed BEFORE any check,
+    // write, or prompt work: the SSE headers are already flushed, so a
+    // client that disconnects during the ownership checks, the
+    // user-message persist, or prompt preparation (mobile's Stop, a
+    // dropped radio) must flag the turn immediately. This listener used
+    // to attach only after prompt preparation, and an early disconnect
+    // silently ran the full LLM loop into a closed socket.
+    const abort = new AbortController();
+    res.on('close', () => {
+      if (!res.writableEnded) abort.abort();
+    });
+
     // The conversation must exist and belong to the caller. We surface
     // these errors through the SSE channel (rather than a 404/403 JSON
     // body) because by the time the browser is reading the response
@@ -313,6 +325,15 @@ export class ChatStreamService {
       ...(input.intent ? { intent: input.intent } : {}),
     });
 
+    // First LLM entry point below. The client may have vanished during
+    // the checks and the user-message persist above; don't start
+    // upstream work for a departed caller. (The user turn stays
+    // persisted by design — history correctness.)
+    if (abort.signal.aborted) {
+      res.end();
+      return;
+    }
+
     const preludeKind = inferToolIntentPrelude({
       hasCompany: !!budgeted.context?.companyId,
       targetArticleRetained:
@@ -329,6 +350,9 @@ export class ChatStreamService {
           input.content,
           preludeKind,
           budgeted.context,
+          // A disconnect mid-generation must cancel the upstream call,
+          // not let it run out its 15s cap for nobody.
+          abort.signal,
         );
         if (toolIntentPrelude) {
           const preludeText = `${toolIntentPrelude}\n\n`;
@@ -351,16 +375,18 @@ export class ChatStreamService {
       });
     }
 
-    const abort = new AbortController();
+    // A disconnect can also land during the prelude generation above —
+    // re-check before arming the turn deadline and entering the loop.
+    if (abort.signal.aborted) {
+      res.end();
+      return;
+    }
+
     // One wall-clock deadline for the whole TURN (all rounds + tool
-    // executions), not per upstream call.
+    // executions), not per upstream call. The controller itself (and the
+    // client-disconnect listener that fires it) was created at initSse.
     const deadline = Date.now() + STREAM_TIMEOUT_MS;
     const timeout = setTimeout(() => abort.abort(), STREAM_TIMEOUT_MS);
-    // If the client disconnects, abort the upstream call so we don't
-    // keep streaming tokens into a closed socket.
-    res.on('close', () => {
-      if (!res.writableEnded) abort.abort();
-    });
 
     // Server-only execution context for read tools. The model
     // contributes nothing to it; turnContext is advisory scope only.
@@ -796,10 +822,17 @@ export class ChatStreamService {
     userMessage: string,
     kind: 'create' | 'edit',
     context?: ChatRequestContext,
+    clientSignal?: AbortSignal,
   ): Promise<string | null> {
     if (!config.defaultModel) return null;
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), TOOL_INTENT_TIMEOUT_MS);
+    // Chain the turn's client-disconnect signal into this call's own
+    // controller: without it, a departed client left the prelude
+    // generation running to the full timeout.
+    const onClientAbort = () => ctrl.abort();
+    if (clientSignal?.aborted) ctrl.abort();
+    else clientSignal?.addEventListener('abort', onClientAbort);
     try {
       const res = await safeFetch(`${stripTrailingSlash(config.baseUrl)}/chat/completions`, {
         method: 'POST',
@@ -870,10 +903,17 @@ export class ChatStreamService {
       }
       return cleaned;
     } catch (err) {
-      this.logger.warn(`Tool intent generation aborted: ${messageOf(err)}`);
+      // A client disconnect is expected teardown, not an anomaly worth
+      // a WARN per dropped radio.
+      if (clientSignal?.aborted) {
+        this.logger.debug(`Tool intent generation cancelled by disconnect`);
+      } else {
+        this.logger.warn(`Tool intent generation aborted: ${messageOf(err)}`);
+      }
       return null;
     } finally {
       clearTimeout(timer);
+      clientSignal?.removeEventListener('abort', onClientAbort);
     }
   }
 }

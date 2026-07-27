@@ -79,7 +79,11 @@ async function main() {
   // variants. That is the exact "looks fine, ships broken" outcome this
   // script exists to prevent, so the shape is validated before anything
   // is iterated.
-  const SCHEMA = 1;
+  // 2: serviceWorker field (Phase 3). A schema-1 marker is a pre-SW
+  // publish — failing it forces a republish rather than shipping a
+  // build whose installed PWAs silently keep running the previous
+  // worker (or none).
+  const SCHEMA = 2;
   if (marker.schema !== SCHEMA) {
     fail([
       `Build marker schema is ${JSON.stringify(marker.schema)}, expected ${SCHEMA}.`,
@@ -147,6 +151,41 @@ async function main() {
   for (const asset of marker.assets ?? []) {
     const p = join(PUBLIC_M, asset);
     if (!existsSync(p)) problems.push(`missing asset: public/m/${asset}`);
+  }
+
+  // 1b. The service worker (Phase 3). Emitted outside the Vite
+  //     manifest, so it gets its own presence + integrity check — the
+  //     mobile-shell route handler 404s any dotted `/m/*` path it does
+  //     not find as a real file, and a missing/stale `sw.js` strands
+  //     installed PWAs on the previous worker with no error anywhere.
+  if (typeof marker.serviceWorker !== 'string' || !marker.serviceWorker) {
+    problems.push('marker records no serviceWorker — the publisher must emit sw.js');
+  } else {
+    const p = join(PUBLIC_M, marker.serviceWorker);
+    if (!existsSync(p)) {
+      problems.push(`missing service worker: public/m/${marker.serviceWorker}`);
+    } else {
+      const source = await readFile(p, 'utf8');
+      if (source.length === 0) {
+        problems.push(`service worker public/m/${marker.serviceWorker} is empty`);
+      } else if (
+        typeof marker.serviceWorkerSha256 === 'string' &&
+        sha256(source) !== marker.serviceWorkerSha256
+      ) {
+        problems.push(
+          `stale service worker: public/m/${marker.serviceWorker} does not ` +
+            'match the hash recorded at publish time',
+        );
+      } else if (source.includes('__WS_SW_BUILD__')) {
+        // The publisher stamps this placeholder with a per-build id;
+        // an unstamped worker means cache versions stop tracking
+        // worker changes (see src/sw.ts BUILD_ID).
+        problems.push(
+          `service worker public/m/${marker.serviceWorker} still carries the ` +
+            'unstamped __WS_SW_BUILD__ placeholder — republish the bundle',
+        );
+      }
+    }
   }
 
   // 2. Shell variants match their recorded hash. A mismatch means the

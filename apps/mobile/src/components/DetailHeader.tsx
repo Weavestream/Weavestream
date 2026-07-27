@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { Icon } from './Icon';
-import { useBackOr } from '../lib/use-back';
+import { useBackLabel, useBackOr } from '../lib/use-back';
 
 /**
  * The back row for pushed screens (1c: chevron + parent label), with a
@@ -10,6 +10,11 @@ import { useBackOr } from '../lib/use-back';
  * Back prefers real history so the previous screen's filter/search
  * state survives; a cold deep link with no history entry falls back to
  * a replace-navigation to `backTo`.
+ *
+ * `backLabel` is the STRUCTURAL parent's name ("Passwords"). When the
+ * pushing screen stamped a different origin (a search result stamps
+ * "Search"), `useBackLabel` shows that instead — but only when the
+ * chevron will genuinely pop back there, so the label never lies.
  */
 export function DetailHeader({
   backLabel,
@@ -25,6 +30,7 @@ export function DetailHeader({
   actions?: ReactNode;
 }) {
   const onBack = useBackOr(backTo, backSearch);
+  const label = useBackLabel(backLabel);
 
   return (
     // Shared column pattern — see ScreenHeader / tokens.css.
@@ -38,7 +44,7 @@ export function DetailHeader({
         }
       >
         <Icon name="chevron_left" size={24} className="text-muted" />
-        <span className="truncate">{backLabel}</span>
+        <span className="truncate">{label}</span>
       </button>
       {actions && <div className="flex shrink-0 items-center gap-2">{actions}</div>}
     </header>

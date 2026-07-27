@@ -42,6 +42,7 @@ jest.mock('../../lib/scoped-nav', () => ({
 jest.mock('../../lib/use-online', () => ({ useOnline: () => true }));
 jest.mock('../../lib/use-back', () => ({
   useBackOr: () => jest.fn(),
+  useBackLabel: (label: string) => label,
 }));
 jest.mock('../../lib/api', () => {
   const actual = jest.requireActual('../../lib/api');

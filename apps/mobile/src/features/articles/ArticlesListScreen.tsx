@@ -79,6 +79,7 @@ export function ArticlesListScreen({ filter }: { filter: ArticleListFilter }) {
         org={currentOrg}
         onOpenOrgSheet={openOrgSheet}
         title="Articles"
+        onSearch={() => navigate({ to: '/search', upIsBack: true })}
         filters={
           scopeStatus === 'ready' && currentOrg && foldersQuery.data ? (
             <ArticleFilterChips

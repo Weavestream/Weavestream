@@ -1,5 +1,5 @@
 import { useCanGoBack, useLocation, useRouter } from '@tanstack/react-router';
-import { readUpIsBack, useScopedNavigate } from './scoped-nav';
+import { readBackLabel, readUpIsBack, useScopedNavigate } from './scoped-nav';
 
 /**
  * The labeled back affordance ("‹ Passwords", Cancel) — an **up**
@@ -33,4 +33,22 @@ export function useBackOr(
     if (upIsBack && canGoBack) router.history.back();
     else navigate({ to: fallbackTo, replace: true, search: fallbackSearch });
   };
+}
+
+/**
+ * The label for that affordance, honest about where it will actually go.
+ *
+ * A stamped `backLabel` (a search result stamps "Search") applies only
+ * when `useBackOr` would really pop history — the same
+ * `upIsBack && canGoBack` predicate. In every other case the chevron
+ * performs the structural navigation, so it shows the structural label
+ * ("Passwords"), including on cold deep links where no stamp exists.
+ */
+export function useBackLabel(structuralLabel: string): string {
+  const canGoBack = useCanGoBack();
+  const location = useLocation();
+  const upIsBack = readUpIsBack(location.state);
+  const stamped = readBackLabel(location.state);
+
+  return upIsBack && canGoBack && stamped ? stamped : structuralLabel;
 }

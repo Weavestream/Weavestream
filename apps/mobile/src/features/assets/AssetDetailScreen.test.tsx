@@ -35,6 +35,7 @@ jest.mock('../../lib/use-company-access', () => ({
 }));
 jest.mock('../../lib/use-back', () => ({
   useBackOr: () => jest.fn(),
+  useBackLabel: (label: string) => label,
 }));
 jest.mock('../../lib/api', () => {
   const actual = jest.requireActual('../../lib/api');

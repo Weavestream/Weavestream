@@ -1,6 +1,7 @@
 import { initialsFromName, roleLabel } from '@weavestream/shared';
-import { useState } from 'react';
+import { useState, useSyncExternalStore } from 'react';
 import { Icon } from '../components/Icon';
+import { Sheet } from '../components/Sheet';
 import {
   Avatar,
   Card,
@@ -10,6 +11,13 @@ import {
   Title,
 } from '../components/primitives';
 import { ErrorBanner } from '../components/states';
+import {
+  canPromptInstall,
+  isIosSafariInstallTarget,
+  isStandalone,
+  promptInstall,
+  subscribeInstallAvailability,
+} from '../lib/install-prompt';
 import { useOrgScope } from '../lib/org-scope';
 import { signOutAndReset } from '../lib/sign-out';
 import { useMe, useOpenOrgSheet } from './TabShell';
@@ -36,12 +44,33 @@ const FUTURE_MODULES = [
   { icon: 'photo_library', label: 'Photos' },
 ] as const;
 
+type InstallMode = 'prompt' | 'ios' | 'none';
+
+/**
+ * Which install affordance this browser gets: the captured Chromium
+ * prompt, the iOS Safari instructions, or nothing (already installed,
+ * or a browser with no install path).
+ */
+function installModeSnapshot(): InstallMode {
+  if (isStandalone()) return 'none';
+  if (canPromptInstall()) return 'prompt';
+  if (isIosSafariInstallTarget()) return 'ios';
+  return 'none';
+}
+
 export function MoreTab() {
   const me = useMe();
   const { currentOrg } = useOrgScope();
   const openOrgSheet = useOpenOrgSheet();
   const [signOutError, setSignOutError] = useState<string | null>(null);
   const [signingOut, setSigningOut] = useState(false);
+  const [installHelpOpen, setInstallHelpOpen] = useState(false);
+  // `beforeinstallprompt` often fires after mount — subscribe so the
+  // row appears when the capture lands (and disappears on install).
+  const installMode = useSyncExternalStore(
+    subscribeInstallAvailability,
+    installModeSnapshot,
+  );
 
   const name = me?.name?.trim() || me?.email || 'Signed in';
   const role = me?.role ? roleLabel(me.role) : null;
@@ -99,6 +128,24 @@ export function MoreTab() {
         </GroupedList>
       </section>
 
+      {installMode !== 'none' && (
+        <section className="flex flex-col gap-1.75">
+          <SectionLabel>App</SectionLabel>
+          <GroupedList>
+            <GroupedRow
+              icon="install_mobile"
+              label="Install app"
+              onClick={
+                installMode === 'prompt'
+                  ? () => void promptInstall()
+                  : () => setInstallHelpOpen(true)
+              }
+              last
+            />
+          </GroupedList>
+        </section>
+      )}
+
       <section className="flex flex-col gap-1.75">
         <SectionLabel>Room to grow · later</SectionLabel>
         <div className="flex flex-wrap gap-1.75">
@@ -130,6 +177,34 @@ export function MoreTab() {
         <Icon name="logout" size={21} />
         {signingOut ? 'Signing out…' : 'Sign out'}
       </button>
+
+      {/* iOS Safari has no install prompt API — the Share sheet is the
+          only path, so the row opens instructions instead. */}
+      <Sheet
+        open={installHelpOpen}
+        onClose={() => setInstallHelpOpen(false)}
+        title="Install Weavestream"
+      >
+        <ol className="flex flex-col gap-3.25 pb-2">
+          <li className="flex items-center gap-3.25">
+            <Icon name="ios_share" size={24} className="shrink-0 text-accent" />
+            <span className="text-body text-text">
+              Tap the <span className="font-semibold">Share</span> button in
+              Safari’s toolbar.
+            </span>
+          </li>
+          <li className="flex items-center gap-3.25">
+            <Icon
+              name="install_mobile"
+              size={24}
+              className="shrink-0 text-accent"
+            />
+            <span className="text-body text-text">
+              Choose <span className="font-semibold">Add to Home Screen</span>.
+            </span>
+          </li>
+        </ol>
+      </Sheet>
     </main>
   );
 }

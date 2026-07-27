@@ -52,7 +52,10 @@ export function Sheet({
    * a text input or textarea: on phones, focusing one raises the
    * on-screen keyboard over the sheet the moment it opens (the org
    * sheet's filter did exactly this). Auto-selecting fields is banned
-   * app-wide — the user taps a field when they want to type.
+   * in sheets and overlays — the user came to read or tap what the
+   * keyboard would bury. The one sanctioned exception is the dedicated
+   * search screen (SearchScreen), where tapping the header's search
+   * icon IS the intent to type and there is no content underneath yet.
    */
   initialFocusRef?: React.RefObject<HTMLElement | null>;
 }) {

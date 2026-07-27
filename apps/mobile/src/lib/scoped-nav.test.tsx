@@ -23,6 +23,7 @@ import {
 import { render, screen, waitFor } from '@testing-library/react';
 import type { Org } from './org-scope';
 import {
+  readBackLabel,
   readOrgStamp,
   readUpIsBack,
   useScopedNavigate,
@@ -181,6 +182,39 @@ describe('useScopedNavigate', () => {
     expect(readUpIsBack(null)).toBe(false);
     expect(readUpIsBack({ upIsBack: 'yes' })).toBe(false);
     expect(readUpIsBack({ upIsBack: true })).toBe(true);
+  });
+
+  it('stamps backLabel only when asked — a later push never inherits it', async () => {
+    const router = await mount('/passwords');
+
+    // A search result pushing a detail stamps where its chevron pops to.
+    scopedNavigate!({ to: '/passwords/abc', upIsBack: true, backLabel: 'Search' });
+    await waitFor(() =>
+      expect(router.state.location.pathname).toBe('/passwords/abc'),
+    );
+    expect(readBackLabel(router.state.location.state)).toBe('Search');
+
+    // A replace on top keeps it — same stack position, same parent behind.
+    scopedNavigate!({ to: '/passwords/def', replace: true });
+    await waitFor(() =>
+      expect(router.state.location.pathname).toBe('/passwords/def'),
+    );
+    expect(readBackLabel(router.state.location.state)).toBe('Search');
+
+    // A fresh push WITHOUT one must not carry it forward — otherwise
+    // "Search" leaks onto a later list-originated detail push and the
+    // chevron lies about where it goes.
+    scopedNavigate!({ to: '/assets', upIsBack: true });
+    await waitFor(() => expect(router.state.location.pathname).toBe('/assets'));
+    expect(readBackLabel(router.state.location.state)).toBeUndefined();
+  });
+
+  it('readBackLabel tolerates junk state', () => {
+    expect(readBackLabel(undefined)).toBeUndefined();
+    expect(readBackLabel(null)).toBeUndefined();
+    expect(readBackLabel({ backLabel: 42 })).toBeUndefined();
+    expect(readBackLabel({ backLabel: '' })).toBeUndefined();
+    expect(readBackLabel({ backLabel: 'Search' })).toBe('Search');
   });
 
   it('pushes by default and replaces when asked', async () => {

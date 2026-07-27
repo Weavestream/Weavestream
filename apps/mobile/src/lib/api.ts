@@ -80,7 +80,12 @@ export async function apiFetch<T>(
   }
 
   if (!SAFE_METHODS.has(method) && !init.skipCsrf) {
-    headers.set('X-CSRF-Token', await ensureCsrf());
+    // Threading the signal makes the acquisition abortable too — it
+    // runs BEFORE the request it protects, so without this a caller's
+    // abort (Ask's Stop during conversation-create) couldn't cancel a
+    // stalled CSRF fetch. The AbortError rethrows unchanged, per this
+    // client's contract.
+    headers.set('X-CSRF-Token', await ensureCsrf(init.signal ?? undefined));
   }
 
   const res = await fetch(`/api/v1${path}`, {

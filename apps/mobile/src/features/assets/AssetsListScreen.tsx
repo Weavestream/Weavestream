@@ -79,6 +79,7 @@ export function AssetsListScreen({ filter }: { filter: AssetListFilter }) {
         org={currentOrg}
         onOpenOrgSheet={openOrgSheet}
         title="Assets"
+        onSearch={() => navigate({ to: '/search', upIsBack: true })}
         action={
           scopeStatus === 'ready' && currentOrg && canManage ? (
             <button

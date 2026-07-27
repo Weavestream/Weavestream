@@ -26,7 +26,8 @@ import {
   type TabId,
 } from '../lib/tab-stacks';
 import { AppLogo } from '../components/AppLogo';
-import { AskSheet } from '../components/AskSheet';
+import { AskProvider } from '../components/ask/AskProvider';
+import { AskScreen } from '../components/ask/AskScreen';
 import { OrgSheet } from '../components/OrgSheet';
 import { StepUpHost } from '../components/StepUpHost';
 import { TabBar } from '../components/TabBar';
@@ -149,10 +150,15 @@ function Shell() {
   const location = useLocation();
   const navigate = useScopedNavigate();
   const { switchOrg } = useOrgScope();
+  const me = useMe();
   useStaleScopeGuard();
 
   const pathname = location.pathname;
   const activeTab = tabIdForPath(pathname);
+  // Desktop hides the chat toggle on client portals; mobile mirrors it.
+  // Cosmetic parity only — authorization stays server-side, and this
+  // also inerts a deep-linked `?sheet=ask`.
+  const askVisible = me?.role !== 'CLIENT_USER';
 
   // The sheet param rides alongside whatever search the current screen
   // owns (the passwords list's filter chips live in `?folder=`/`?view=`).
@@ -235,6 +241,7 @@ function Shell() {
             onSelectTab={onSelectTab}
             // Ask is presented over the current tab, not routed to.
             onAsk={() => showSheet('ask')}
+            showAsk={askVisible}
           />
         )}
 
@@ -243,7 +250,7 @@ function Shell() {
           onClose={closeSheet}
           onSelect={onSelectOrg}
         />
-        <AskSheet open={sheet === 'ask'} onClose={closeSheet} />
+        <AskScreen open={sheet === 'ask' && askVisible} onClose={closeSheet} />
         <StepUpHost />
       </div>
     </OpenOrgSheetContext.Provider>
@@ -255,7 +262,11 @@ export function TabShell() {
     <RequireSession>
       <OrgProvider>
         <ToastProvider>
-          <Shell />
+          {/* Above the Shell so the Ask transcript survives the
+              `?sheet=ask` overlay closing and reopening. */}
+          <AskProvider>
+            <Shell />
+          </AskProvider>
         </ToastProvider>
       </OrgProvider>
     </RequireSession>

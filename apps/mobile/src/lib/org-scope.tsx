@@ -319,3 +319,12 @@ export function useOrgScope(): OrgScopeValue {
   if (!ctx) throw new Error('useOrgScope must be used within an OrgProvider');
   return ctx;
 }
+
+/**
+ * Non-throwing read of the active org id, for components that render
+ * both inside and outside the provider (prose renderers in tests).
+ * `null` means "no scope here" — callers must degrade, never guess.
+ */
+export function useCurrentOrgIdOrNull(): string | null {
+  return useContext(OrgScopeContext)?.currentOrg?.id ?? null;
+}

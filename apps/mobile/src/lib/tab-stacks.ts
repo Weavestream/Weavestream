@@ -102,6 +102,9 @@ const FORM_ROUTE_TABS: ReadonlySet<string> = new Set(['passwords', 'assets']);
 export function hideTabBarFor(pathname: string): boolean {
   const segments = pathname.split('/').filter(Boolean);
   if (segments[0] === 'm') segments.shift();
+  // The search screen is 2b's full-screen takeover — field row where the
+  // header was, results below, no tab bar while searching.
+  if (segments[0] === 'search') return true;
   if (!FORM_ROUTE_TABS.has(segments[0] ?? '')) return false;
   if (segments.length === 2 && segments[1] === 'new') return true;
   return segments.length === 3 && segments[2] === 'edit';

@@ -58,6 +58,22 @@ export function readUpIsBack(state: unknown): boolean {
   return (state as Record<string, unknown>).upIsBack === true;
 }
 
+/**
+ * The label the pushed entry's back chevron should show when it pops —
+ * stamped alongside `upIsBack` by the screen that pushed it.
+ *
+ * Exists for pushes whose parent is NOT the structural one: a search
+ * result opens `/passwords/<id>`, so popping returns to Search, but the
+ * detail screen's structural label says "Passwords". Same positional
+ * semantics as `upIsBack`: meaningful only for the entry it was written
+ * on, so a push that doesn't supply it must not inherit it.
+ */
+export function readBackLabel(state: unknown): string | undefined {
+  if (typeof state !== 'object' || state === null) return undefined;
+  const value = (state as Record<string, unknown>).backLabel;
+  return typeof value === 'string' && value ? value : undefined;
+}
+
 export interface ScopedNavigateOptions {
   /**
    * Target path. Typed as `string` rather than the router's route-literal
@@ -86,6 +102,14 @@ export interface ScopedNavigateOptions {
    * updater spreads the previous entry's state.
    */
   upIsBack?: boolean;
+  /**
+   * Label for the pushed entry's back chevron when it pops — set when
+   * the pushing screen is not the target's structural parent (a search
+   * result pushing a detail sets `backLabel: 'Search'`). Positional
+   * like `upIsBack`: never inherited by a later push. See
+   * `readBackLabel`.
+   */
+  backLabel?: string;
 }
 
 export function useScopedNavigate() {
@@ -93,7 +117,7 @@ export function useScopedNavigate() {
   const { currentOrg } = useOrgScope();
 
   return useCallback(
-    ({ to, replace, search, orgId, upIsBack }: ScopedNavigateOptions) => {
+    ({ to, replace, search, orgId, upIsBack, backLabel }: ScopedNavigateOptions) => {
       const stampedOrgId = orgId !== undefined ? orgId : (currentOrg?.id ?? null);
       // One cast, for the `to: string` reason above. `state` uses the
       // updater form so the router's own internal keys survive.
@@ -111,6 +135,11 @@ export function useScopedNavigate() {
           // create form replacing itself with the new detail).
           if (upIsBack) next.upIsBack = true;
           else if (!replace) delete next.upIsBack;
+          // `backLabel` shares that positional contract: a push from the
+          // search screen stamps "Search"; a later list-originated push
+          // must not carry it forward or its chevron lies.
+          if (backLabel) next.backLabel = backLabel;
+          else if (!replace) delete next.backLabel;
           return next;
         },
       } as never);

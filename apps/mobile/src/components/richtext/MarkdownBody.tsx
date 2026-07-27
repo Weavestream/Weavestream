@@ -1,8 +1,8 @@
 import type { ComponentProps } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { ProseLink } from '../../components/richtext/ProseLink';
-import { ProseImg } from '../../components/richtext/ProseImg';
+import { ProseLink } from './ProseLink';
+import { ProseImg } from './ProseImg';
 
 /**
  * Reader for `editorMode: 'markdown'` articles — the same

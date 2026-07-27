@@ -26,7 +26,10 @@
     }
   },
   // Override the app config's spec exclusions — this project exists to
-  // typecheck exactly those files.
-  "exclude": ["dist", "node_modules"],
+  // typecheck exactly those files. `main.tsx` stays out: it is the
+  // bundler entry (`import.meta.env`, the `virtual:pwa-register`
+  // module), which cannot typecheck under CommonJS — the app project
+  // above still covers it, and no test imports it.
+  "exclude": ["dist", "node_modules", "src/main.tsx"],
   "include": ["src", "test"]
 }

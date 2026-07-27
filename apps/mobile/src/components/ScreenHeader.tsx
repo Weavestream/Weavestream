@@ -9,10 +9,8 @@ import type { Org } from '../lib/org-scope';
  *
  * 2b's defining trade is that **search lives in the header, not the
  * content** — which buys back a full row and is why the passwords list
- * shows a usable number of cards above the fold. Phase 1 does not render
- * that button: the screen it opens is Phase 3, and a control that opens
- * nothing is worse than an absent one. The slot is here, commented, so
- * the trade isn't quietly lost.
+ * shows a usable number of cards above the fold. The button renders only
+ * when `onSearch` is provided, keeping this component presentational.
  */
 export function ScreenHeader({
   org,
@@ -20,6 +18,7 @@ export function ScreenHeader({
   title,
   action,
   filters,
+  onSearch,
 }: {
   org: Org | null;
   onOpenOrgSheet: () => void;
@@ -28,6 +27,8 @@ export function ScreenHeader({
   action?: ReactNode;
   /** Filter-chip row. Scrolls horizontally when it overflows. */
   filters?: ReactNode;
+  /** Opens the search screen — 2b's header search button. */
+  onSearch?: () => void;
 }) {
   return (
     // `max-w-page` on the SAME element as the padding — the one shared
@@ -51,7 +52,22 @@ export function ScreenHeader({
           <Icon name="expand_more" size={20} className="text-muted" />
         </button>
 
-        {/* Phase 3 mounts the search button here. */}
+        {onSearch && (
+          // 40×40 visually per the handoff; the 44px tap floor from
+          // globals.css still applies, so the two numbers deliberately
+          // disagree (same trade as IconButton).
+          <button
+            type="button"
+            onClick={onSearch}
+            aria-label="Search"
+            className={
+              'flex h-10 w-10 shrink-0 items-center justify-center rounded-btn ' +
+              'border border-line bg-surface text-text-2 active:bg-panel-2'
+            }
+          >
+            <Icon name="search" size={22} />
+          </button>
+        )}
       </div>
 
       <div className="flex items-center justify-between gap-3">

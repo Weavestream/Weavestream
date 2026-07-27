@@ -19,12 +19,19 @@ import { readBrowserCookie } from './cookies.js';
 // the monorepo two importable constants for one cookie.
 const CSRF_COOKIE = 'ws_csrf';
 
-export async function ensureCsrf(): Promise<string> {
+/**
+ * `signal` aborts the acquisition fetch (rethrown as the platform
+ * `AbortError`). Without it a stalled CSRF request is uncancellable —
+ * it runs BEFORE the request it protects, so a caller aborting that
+ * request (mobile's Stop button) would still hang here.
+ */
+export async function ensureCsrf(signal?: AbortSignal): Promise<string> {
   const existing = readBrowserCookie(CSRF_COOKIE);
   if (existing) return existing;
   const res = await fetch('/api/v1/auth/csrf', {
     method: 'POST',
     credentials: 'include',
+    signal,
   });
   if (!res.ok) throw new Error('csrf-fetch-failed');
   const data = (await res.json()) as { csrfToken: string };

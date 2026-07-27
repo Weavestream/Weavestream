@@ -171,6 +171,7 @@ export function PasswordsListScreen({ filter }: { filter: PasswordListFilter }) 
         org={currentOrg}
         onOpenOrgSheet={openOrgSheet}
         title="Passwords"
+        onSearch={() => navigate({ to: '/search', upIsBack: true })}
         action={
           scopeStatus === 'ready' && currentOrg && canManage ? (
             <button

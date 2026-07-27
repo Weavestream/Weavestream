@@ -83,6 +83,25 @@ describe('TabBar', () => {
     expect(ask).not.toHaveAttribute('aria-current');
   });
 
+  it('hides Ask for CLIENT_USER while the four tabs keep their geometry', () => {
+    // Desktop hides chat on client portals; mobile mirrors it. The 84px
+    // center slot stays so the tabs don't shift between roles.
+    render(
+      <TabBar
+        activeTab="passwords"
+        onSelectTab={noop}
+        onAsk={noop}
+        showAsk={false}
+      />,
+    );
+
+    expect(
+      screen.queryByRole('button', { name: 'Ask anything' }),
+    ).not.toBeInTheDocument();
+    // The four tabs still render.
+    expect(screen.getAllByRole('button')).toHaveLength(4);
+  });
+
   it('every control clears the 44px tap floor', () => {
     // `globals.css` sets `min-height/min-width: var(--tap-min)` on every
     // button. The var is unresolvable in jsdom, so assert the rule is the

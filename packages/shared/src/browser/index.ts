@@ -11,6 +11,7 @@
  * Consumed by `apps/web` client components and by `apps/mobile`. Never
  * import this from a React Server Component or from `apps/api`.
  */
+export * from './chat-stream.js';
 export * from './client-id.js';
 export * from './clipboard.js';
 export * from './cookies.js';

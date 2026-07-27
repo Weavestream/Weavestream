@@ -20,6 +20,7 @@ import { AssetsListScreen } from './features/assets/AssetsListScreen';
 import { AssetDetailScreen } from './features/assets/AssetDetailScreen';
 import { AssetFormScreen } from './features/assets/AssetFormScreen';
 import { LayoutChooserScreen } from './features/assets/LayoutChooserScreen';
+import { SearchScreen } from './features/search/SearchScreen';
 import { signOutAndReset } from './lib/sign-out';
 import { UUID_RE } from './lib/uuid';
 
@@ -214,6 +215,30 @@ const moreRoute = createRoute({
   component: MoreTab,
 });
 
+// Full-screen search takeover (2b) — the tab bar hides for it
+// (`hideTabBarFor`), and the query rides `?q=` so back-from-detail
+// restores the exact search. Inside the tab layout so the `?sheet=ask`
+// overlay (the Ask handoff card) keeps working from here.
+const searchRoute = createRoute({
+  getParentRoute: () => tabsLayoutRoute,
+  path: '/search',
+  /**
+   * Trimmed and capped at the server's 200-char limit — a longer or
+   * blank deep link degrades to the empty search screen rather than a
+   * 400 from the API.
+   */
+  validateSearch: (search: Record<string, unknown>): { q?: string } => {
+    const q = search.q;
+    if (typeof q !== 'string') return {};
+    const trimmed = q.trim().slice(0, 200);
+    return trimmed ? { q: trimmed } : {};
+  },
+  component: function SearchRoute() {
+    const { q } = searchRoute.useSearch();
+    return <SearchScreen query={q ?? ''} />;
+  },
+});
+
 /** `/m` and `/m/app` both land on the first tab. */
 function ToPasswords() {
   return <Navigate to="/passwords" replace />;
@@ -302,6 +327,7 @@ const routeTree = rootRoute.addChildren([
     assetDetailRoute,
     assetEditRoute,
     moreRoute,
+    searchRoute,
   ]),
   loginRoute,
   mfaChallengeRoute,

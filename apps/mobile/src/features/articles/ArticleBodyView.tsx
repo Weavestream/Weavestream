@@ -1,6 +1,6 @@
 import type { ArticleDetail } from '@weavestream/shared';
 import { TiptapView } from '../../components/richtext/TiptapView';
-import { MarkdownBody } from './MarkdownBody';
+import { MarkdownBody } from '../../components/richtext/MarkdownBody';
 
 /**
  * The `editorMode` switch — mobile's mirror of desktop's
