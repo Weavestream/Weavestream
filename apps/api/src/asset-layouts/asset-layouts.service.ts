@@ -79,7 +79,28 @@ export class AssetLayoutsService {
   // Read
   // --------------------------------------------------------------------
 
-  async list(options: LayoutListOptions = {}): Promise<SerializedLayout[]> {
+  /**
+   * Phase 2c: CLIENT_USER actors receive only `visibleToClients` fields.
+   * `AssetsService` already role-filters field *values*; without the
+   * matching filter here the layout endpoints leak internal field
+   * metadata (names/slugs of operator-only fields) to client users.
+   * The filter is applied in the Prisma relation `WHERE` (CLAUDE.md §1 —
+   * authorization at the query layer); `serialize` repeats it as
+   * defense-in-depth only.
+   */
+  private fieldsInclude(role: AuthedUser['role']) {
+    return {
+      fields: {
+        ...(role === 'CLIENT_USER' ? { where: { visibleToClients: true } } : {}),
+        orderBy: { position: 'asc' as const },
+      },
+    };
+  }
+
+  async list(
+    actor: AuthedUser,
+    options: LayoutListOptions = {},
+  ): Promise<SerializedLayout[]> {
     const where: Prisma.AssetLayoutWhereInput = {};
     if (!options.includeArchived) where.archivedAt = null;
     if (options.q) {
@@ -98,18 +119,18 @@ export class AssetLayoutsService {
         { position: 'asc' },
         { name: 'asc' },
       ],
-      include: { fields: { orderBy: { position: 'asc' } } },
+      include: this.fieldsInclude(actor.role),
     });
-    return layouts.map((l) => this.serialize(l, l.fields));
+    return layouts.map((l) => this.serialize(l, l.fields, actor.role));
   }
 
-  async get(id: string): Promise<SerializedLayout> {
+  async get(actor: AuthedUser, id: string): Promise<SerializedLayout> {
     const layout = await this.prisma.assetLayout.findUnique({
       where: { id },
-      include: { fields: { orderBy: { position: 'asc' } } },
+      include: this.fieldsInclude(actor.role),
     });
     if (!layout) throw new NotFoundException();
-    return this.serialize(layout, layout.fields);
+    return this.serialize(layout, layout.fields, actor.role);
   }
 
   /**
@@ -315,7 +336,7 @@ export class AssetLayoutsService {
       after,
     });
 
-    return this.list();
+    return this.list(actor);
   }
 
   async archive(
@@ -711,6 +732,7 @@ export class AssetLayoutsService {
   private serialize(
     layout: AssetLayout,
     fields: AssetField[],
+    role?: AuthedUser['role'],
   ): SerializedLayout {
     return {
       id: layout.id,
@@ -727,6 +749,9 @@ export class AssetLayoutsService {
       updatedAt: layout.updatedAt,
       fields: fields
         .filter((f) => f.archivedAt === null)
+        // Defense-in-depth only — the authoritative CLIENT_USER filter is
+        // the relation `WHERE` in `fieldsInclude` (query layer, §1).
+        .filter((f) => role !== 'CLIENT_USER' || f.visibleToClients)
         .sort((a, b) => a.position - b.position)
         .map((f) => ({
           id: f.id,

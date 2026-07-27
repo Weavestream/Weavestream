@@ -84,6 +84,22 @@ const GLYPHS = {
   lan: 'lan',
   language: 'language',
   photo_library: 'photo_library',
+  photo_camera: 'photo_camera',
+  // Layout icons (Phase 2c) — AssetLayout.icon keys are the DESKTOP
+  // icon-set names (ICON_CHOICES in the layout builder); LayoutTile
+  // maps them onto these Material glyphs. `server`→dns, `network`→lan,
+  // `globe`→language, `doc`→description, `folder`/`home` are already
+  // above; the rest land here.
+  laptop_mac: 'laptop_mac',
+  package_2: 'package_2',
+  person: 'person',
+  apartment: 'apartment',
+  key: 'key',
+  shield: 'shield',
+  sell: 'sell',
+  schedule: 'schedule',
+  image: 'image',
+  settings: 'settings',
 };
 
 /** Material Symbols draws on a 960-unit grid with a raised baseline. */

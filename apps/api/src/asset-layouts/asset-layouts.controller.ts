@@ -36,9 +36,12 @@ import { requestMetaOf as meta } from '../common/request-meta.js';
 /**
  * Phase 3 global AssetLayout surface. Reads are `@AuthedOnly` (every
  * authenticated role can list/get layouts so forms and lists render);
- * mutations require `layout.manage.global` which is SUPER_ADMIN-only per
- * the permission matrix. Integration tests assert 403 for every other
- * role on every mutation route.
+ * CLIENT_USER actors receive only `visibleToClients` fields (Phase 2c —
+ * the filter lives in the service's Prisma relation query, matching the
+ * per-role field-value filtering in `AssetsService`). Mutations require
+ * `layout.manage.global` which is SUPER_ADMIN-only per the permission
+ * matrix. Integration tests assert 403 for every other role on every
+ * mutation route.
  *
  * `?stats=true` on the single-layout endpoint extends the response with
  * field / asset / company counts — the builder uses this to power the
@@ -51,11 +54,12 @@ export class AssetLayoutsController {
   @Get()
   @AuthedOnly()
   async list(
+    @CurrentUser() actor: AuthedUser,
     @Query('q') q?: string,
     @Query('includeArchived') includeArchived?: string,
   ) {
     return {
-      items: await this.layouts.list({
+      items: await this.layouts.list(actor, {
         q,
         includeArchived: includeArchived === 'true',
       }),
@@ -69,7 +73,7 @@ export class AssetLayoutsController {
     @Param('id', new ParseUUIDPipe()) id: string,
     @Query('stats') stats?: string,
   ) {
-    const layout = await this.layouts.get(id);
+    const layout = await this.layouts.get(actor, id);
     if (stats === 'true' && actor.role === 'SUPER_ADMIN') {
       return { layout, stats: await this.layouts.stats(id) };
     }

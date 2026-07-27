@@ -47,7 +47,13 @@ export function Sheet({
   title: string;
   children: ReactNode;
   footer?: ReactNode;
-  /** Focused on open. Defaults to the close button. */
+  /**
+   * Focused on open. Defaults to the close button. NEVER point this at
+   * a text input or textarea: on phones, focusing one raises the
+   * on-screen keyboard over the sheet the moment it opens (the org
+   * sheet's filter did exactly this). Auto-selecting fields is banned
+   * app-wide — the user taps a field when they want to type.
+   */
   initialFocusRef?: React.RefObject<HTMLElement | null>;
 }) {
   const titleId = useId();

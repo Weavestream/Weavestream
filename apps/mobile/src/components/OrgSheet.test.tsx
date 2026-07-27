@@ -106,6 +106,18 @@ describe('OrgSheet', () => {
     expect(dialog).toHaveAccessibleName('Organizations');
   });
 
+  it('never auto-focuses the filter input on open (the on-screen keyboard must not pop)', async () => {
+    route({});
+    renderSheet();
+
+    await screen.findByRole('dialog');
+    // Auto-selecting fields is banned app-wide: focusing the filter on
+    // open raised the phone keyboard over the sheet. The Sheet's focus
+    // containment lands on the close button instead.
+    expect(screen.getByLabelText('Filter organizations')).not.toHaveFocus();
+    expect(screen.getByRole('button', { name: 'Close Organizations' })).toHaveFocus();
+  });
+
   it('shows a starred org that the first page of the list never returns', async () => {
     // The bug: `/companies` computes `isStarred` only for the slice it
     // returns, so a star beyond page 1 would silently vanish from Pinned.

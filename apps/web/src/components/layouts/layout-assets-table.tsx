@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState, useTransition } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
+import { safeExternalHref } from '@weavestream/shared';
 import type {
   AssetSummary,
   FieldType,
@@ -630,9 +631,29 @@ function FieldCell({
     }
     case 'URL': {
       const s = String(value);
+      if (!s.trim()) return <Dim>—</Dim>;
+      const href = safeExternalHref(s);
+      if (!href) {
+        return (
+          <span
+            style={{
+              fontFamily: 'var(--font-mono)',
+              fontSize: 11.5,
+              color: 'var(--text-2)',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+              display: 'inline-block',
+              maxWidth: '100%',
+            }}
+          >
+            {stripProtocol(s)}
+          </span>
+        );
+      }
       return (
         <a
-          href={s}
+          href={href}
           target="_blank"
           rel="noopener noreferrer"
           onClick={(e) => e.stopPropagation()}

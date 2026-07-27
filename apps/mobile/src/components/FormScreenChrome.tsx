@@ -20,8 +20,13 @@ export function FormScreenChrome({
   title: string;
   onCancel: () => void;
   saveLabel?: string;
-  saveDisabled: boolean;
-  onSave: () => void;
+  /** Required whenever `onSave` is provided; ignored otherwise. */
+  saveDisabled?: boolean;
+  /**
+   * Omit for chrome-only screens with no save action (the asset layout
+   * chooser) — an invisible placeholder keeps the title centered.
+   */
+  onSave?: () => void;
   children: ReactNode;
 }) {
   return (
@@ -38,17 +43,26 @@ export function FormScreenChrome({
         <h1 className="min-w-0 truncate text-[17px] font-semibold text-text">
           {title}
         </h1>
-        <button
-          type="button"
-          onClick={onSave}
-          disabled={saveDisabled}
-          className={
-            'h-tap shrink-0 rounded-btn px-3 text-body font-semibold ' +
-            (saveDisabled ? 'text-dim' : 'text-accent-text active:bg-panel-2')
-          }
-        >
-          {saveLabel}
-        </button>
+        {onSave ? (
+          <button
+            type="button"
+            onClick={onSave}
+            disabled={saveDisabled}
+            className={
+              'h-tap shrink-0 rounded-btn px-3 text-body font-semibold ' +
+              (saveDisabled ? 'text-dim' : 'text-accent-text active:bg-panel-2')
+            }
+          >
+            {saveLabel}
+          </button>
+        ) : (
+          <span
+            aria-hidden
+            className="invisible h-tap shrink-0 px-3 text-body font-semibold"
+          >
+            {saveLabel}
+          </span>
+        )}
       </header>
 
       <main className="mx-auto flex min-h-0 w-full max-w-page flex-1 flex-col gap-4 overflow-y-auto px-4 pb-edge-b pt-1">

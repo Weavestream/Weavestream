@@ -10,13 +10,16 @@ import { LoginScreen } from './screens/LoginScreen';
 import { MfaChallengeScreen } from './screens/MfaChallengeScreen';
 import { MfaSetupHandoffScreen } from './screens/MfaSetupHandoffScreen';
 import { MoreTab } from './screens/MoreTab';
-import { PlaceholderTab } from './screens/PlaceholderTab';
 import { TabShell } from './screens/TabShell';
 import { PasswordsListScreen } from './features/passwords/PasswordsListScreen';
 import { PasswordDetailScreen } from './features/passwords/PasswordDetailScreen';
 import { PasswordFormScreen } from './features/passwords/PasswordFormScreen';
 import { ArticlesListScreen } from './features/articles/ArticlesListScreen';
 import { ArticleDetailScreen } from './features/articles/ArticleDetailScreen';
+import { AssetsListScreen } from './features/assets/AssetsListScreen';
+import { AssetDetailScreen } from './features/assets/AssetDetailScreen';
+import { AssetFormScreen } from './features/assets/AssetFormScreen';
+import { LayoutChooserScreen } from './features/assets/LayoutChooserScreen';
 import { signOutAndReset } from './lib/sign-out';
 import { UUID_RE } from './lib/uuid';
 
@@ -147,13 +150,61 @@ const articleDetailRoute = createRoute({
 const assetsRoute = createRoute({
   getParentRoute: () => tabsLayoutRoute,
   path: '/assets',
+  /**
+   * `layout` must be a UUID or it is dropped — the assets list endpoint
+   * treats a malformed `layout` as an empty result set, so a mangled
+   * deep link degrades to the unfiltered list instead of a blank one.
+   */
+  validateSearch: (search: Record<string, unknown>): { layout?: string } => {
+    const layout = search.layout;
+    return typeof layout === 'string' && UUID_RE.test(layout) ? { layout } : {};
+  },
   component: function AssetsRoute() {
-    return (
-      <PlaceholderTab
-        title="Assets"
-        note="Devices and their layouts arrive in the next release."
-      />
+    const filter = assetsRoute.useSearch();
+    return <AssetsListScreen filter={filter} />;
+  },
+});
+
+// Full-viewport form pages, mirroring the passwords pair: the static
+// `/assets/new` outranks `$assetId` in route scoring, and the Shell
+// hides the tab bar for both (`hideTabBarFor`). `/assets/new` without
+// a `?layout` renders the layout chooser; with one it renders the
+// create form — deep-linkable. The chooser REPLACES itself with the
+// form (see LayoutChooserScreen) so the create flow holds one stack
+// slot above the list, which is what keeps the created detail's
+// "‹ Assets" popping to the list rather than back into the chooser.
+const assetNewRoute = createRoute({
+  getParentRoute: () => tabsLayoutRoute,
+  path: '/assets/new',
+  validateSearch: (search: Record<string, unknown>): { layout?: string } => {
+    const layout = search.layout;
+    return typeof layout === 'string' && UUID_RE.test(layout) ? { layout } : {};
+  },
+  component: function AssetNewRoute() {
+    const { layout } = assetNewRoute.useSearch();
+    return layout ? (
+      <AssetFormScreen mode="create" layoutId={layout} />
+    ) : (
+      <LayoutChooserScreen />
     );
+  },
+});
+
+const assetDetailRoute = createRoute({
+  getParentRoute: () => tabsLayoutRoute,
+  path: '/assets/$assetId',
+  component: function AssetDetailRoute() {
+    const { assetId } = assetDetailRoute.useParams();
+    return <AssetDetailScreen assetId={assetId} />;
+  },
+});
+
+const assetEditRoute = createRoute({
+  getParentRoute: () => tabsLayoutRoute,
+  path: '/assets/$assetId/edit',
+  component: function AssetEditRoute() {
+    const { assetId } = assetEditRoute.useParams();
+    return <AssetFormScreen mode="edit" assetId={assetId} />;
   },
 });
 
@@ -247,6 +298,9 @@ const routeTree = rootRoute.addChildren([
     articlesRoute,
     articleDetailRoute,
     assetsRoute,
+    assetNewRoute,
+    assetDetailRoute,
+    assetEditRoute,
     moreRoute,
   ]),
   loginRoute,

@@ -21,6 +21,7 @@ import { LinkedItemsPanel } from '../../../../../../components/relations';
 import { AttachmentsPanel } from '../../../../../../components/upload/attachments-panel';
 import { CredentialsPanel } from '../../../../../../components/passwords/credentials-panel';
 import { vaultLinkLabel, vaultLinkUrl } from '../../../../../../lib/vault-link';
+import { ExternalUrlValue } from '../../../../../../components/assets/external-url-value';
 import { AssetChatContext } from '../../../../../../components/chat-panel/asset-chat-context';
 import { SidebarActive } from '../../../../../../components/shell/sidebar-active';
 import { AssetActions } from './asset-actions';
@@ -463,47 +464,14 @@ function renderValue(
       );
     }
     case 'URL':
+      return <ExternalUrlValue url={String(value)} />;
+    case 'VAULTWARDEN_LINK':
       return (
-        <a
-          href={String(value)}
-          target="_blank"
-          rel="noreferrer"
-          style={{
-            color: 'var(--accent)',
-            fontFamily: 'var(--font-mono)',
-            fontSize: 12.5,
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: 4,
-          }}
-        >
-          {String(value)}
-          <Icon.ext size={11} />
-        </a>
+        <ExternalUrlValue
+          url={vaultLinkUrl(value)}
+          label={vaultLinkLabel(value) || undefined}
+        />
       );
-    case 'VAULTWARDEN_LINK': {
-      const href = vaultLinkUrl(value);
-      const label = vaultLinkLabel(value);
-      if (!href) return <span style={{ color: 'var(--dim)' }}>—</span>;
-      return (
-        <a
-          href={href}
-          target="_blank"
-          rel="noreferrer"
-          style={{
-            color: 'var(--accent)',
-            fontFamily: 'var(--font-mono)',
-            fontSize: 12.5,
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: 4,
-          }}
-        >
-          {label}
-          <Icon.ext size={11} />
-        </a>
-      );
-    }
     case 'EMAIL':
       return (
         <a

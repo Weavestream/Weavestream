@@ -9,18 +9,23 @@ const KIND_ICON: Record<RelatedItem['kind'], IconName> = {
   article: 'description',
 };
 
-/** Detail routes that exist today. Assets arrive in Phase 2c. */
+/**
+ * Detail routes per kind — complete as of Phase 2c (assets shipped).
+ * Kept `Partial` with the inert-row fallback below on purpose: a future
+ * kind must degrade to a chevron-less static row, never a dead-end
+ * button — a chevron that dead-ends teaches the user not to trust
+ * chevrons.
+ */
 const KIND_ROUTE: Partial<Record<RelatedItem['kind'], string>> = {
   password: '/passwords',
   article: '/articles',
+  asset: '/assets',
 };
 
 /**
- * The detail screens' Related block (1c). Password and article rows
- * navigate; asset rows are deliberately INERT until Phase 2c ships
- * their screen — a chevron that dead-ends teaches the user not to
- * trust chevrons. The affordance (chevron + press state) exists only
- * where a destination does.
+ * The detail screens' Related block (1c). Every current kind navigates
+ * to its detail screen; the affordance (chevron + press state) exists
+ * only where a destination does.
  */
 export function RelatedSection({ groups }: { groups: RelatedGroups }) {
   const navigate = useScopedNavigate();

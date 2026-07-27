@@ -224,7 +224,7 @@ describe('PasswordDetailScreen', () => {
     expect(deletes).toHaveLength(1);
   });
 
-  it('related password and article rows navigate; asset rows are inert until 2c', async () => {
+  it('related password, asset, and article rows all navigate', async () => {
     route({
       relations: {
         password: [
@@ -240,7 +240,7 @@ describe('PasswordDetailScreen', () => {
           {
             relationId: 'r2',
             kind: 'asset',
-            id: 'x1',
+            id: 'b0000000-0000-4000-8000-0000000000d4',
             title: 'RTR-PINES-01',
             subtitle: '10.20.0.1',
           },
@@ -267,11 +267,11 @@ describe('PasswordDetailScreen', () => {
     expect(navigateMock).toHaveBeenCalledWith({
       to: '/articles/a0000000-0000-4000-8000-0000000000c3',
     });
-    // The asset row renders, but not as anything tappable.
-    expect(screen.getByText('RTR-PINES-01')).toBeInTheDocument();
-    expect(
-      screen.queryByRole('button', { name: /RTR-PINES-01/ }),
-    ).not.toBeInTheDocument();
+    // Asset rows became navigable in 2c, now that /assets/:id exists.
+    fireEvent.click(screen.getByRole('button', { name: /RTR-PINES-01/ }));
+    expect(navigateMock).toHaveBeenCalledWith({
+      to: '/assets/b0000000-0000-4000-8000-0000000000d4',
+    });
   });
 
   it('show-more carries the danger dot for an expired credential', async () => {

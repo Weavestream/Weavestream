@@ -48,6 +48,11 @@ describe('hideTabBarFor', () => {
     expect(hideTabBarFor('/passwords/abc-123/edit')).toBe(true);
     expect(hideTabBarFor('/m/passwords/new')).toBe(true);
     expect(hideTabBarFor('/m/passwords/abc-123/edit')).toBe(true);
+    // Phase 2c: asset forms are full-viewport pages too.
+    expect(hideTabBarFor('/assets/new')).toBe(true);
+    expect(hideTabBarFor('/assets/abc-123/edit')).toBe(true);
+    expect(hideTabBarFor('/m/assets/new')).toBe(true);
+    expect(hideTabBarFor('/m/assets/abc-123/edit')).toBe(true);
   });
 
   it('keeps the bar everywhere else, including lookalike segments', () => {
@@ -56,6 +61,10 @@ describe('hideTabBarFor', () => {
     // "edit"/"new" in the wrong position must not blank the bar.
     expect(hideTabBarFor('/passwords/new/edit/x')).toBe(false);
     expect(hideTabBarFor('/passwords/edit')).toBe(false);
+    expect(hideTabBarFor('/assets')).toBe(false);
+    expect(hideTabBarFor('/assets/abc-123')).toBe(false);
+    expect(hideTabBarFor('/assets/edit')).toBe(false);
+    expect(hideTabBarFor('/assets/new/edit/x')).toBe(false);
     expect(hideTabBarFor('/articles/new')).toBe(false);
     expect(hideTabBarFor('/more')).toBe(false);
   });

@@ -25,6 +25,7 @@ export * from './tiptap-markdown.js';
 export * from './markdown.js';
 export * from './article-patch.js';
 export * from './ip-match.js';
+export * from './tag-chips.js';
 export * from './internal-token.js';
 export * from './strip-nul.js';
 export * from './image-limits.js';

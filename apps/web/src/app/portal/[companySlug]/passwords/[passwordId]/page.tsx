@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
+import { safeExternalHref } from '@weavestream/shared';
 import {
   requireMe,
   getPasswordDetail,
@@ -33,6 +34,8 @@ export default async function PortalPasswordDetailPage({
 
   const password = await getPasswordDetail(company.id, passwordId);
   if (!password) notFound();
+
+  const safeUrl = password.url?.trim() ? safeExternalHref(password.url) : null;
 
   return (
     <>
@@ -96,15 +99,21 @@ export default async function PortalPasswordDetailPage({
 
               <Label>URL</Label>
               <div>
-                {password.url ? (
-                  <a
-                    href={password.url}
-                    target="_blank"
-                    rel="noreferrer"
-                    style={{ color: 'var(--accent)', wordBreak: 'break-all' }}
-                  >
-                    {password.url}
-                  </a>
+                {password.url?.trim() ? (
+                  safeUrl ? (
+                    <a
+                      href={safeUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      style={{ color: 'var(--accent)', wordBreak: 'break-all' }}
+                    >
+                      {password.url}
+                    </a>
+                  ) : (
+                    <span style={{ color: 'var(--text)', wordBreak: 'break-all' }}>
+                      {password.url}
+                    </span>
+                  )
                 ) : (
                   <span style={{ color: 'var(--muted)' }}>—</span>
                 )}

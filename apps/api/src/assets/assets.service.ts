@@ -365,7 +365,15 @@ export class AssetsService {
 
     const items = await this.prisma.asset.findMany({
       where,
-      orderBy: [{ archivedAt: 'asc' }, { name: 'asc' }],
+      // `id` is the unique tie-breaker Prisma cursor pagination needs:
+      // without it, duplicate names (integration-synced hardware,
+      // `Untitled <Layout>` rows) make the cursor row's position
+      // ambiguous and pages skip or repeat rows. Accepted limitation:
+      // `name` is mutable, so renaming the cursor row *between* pages can
+      // still skip/duplicate its neighbours — inherent to cursoring over a
+      // user-visible alphabetical order; a refresh self-heals. Do not
+      // claim (or test) stability under concurrent renames.
+      orderBy: [{ archivedAt: 'asc' }, { name: 'asc' }, { id: 'asc' }],
       take: limit + 1,
       ...(options.cursor ? { cursor: { id: options.cursor }, skip: 1 } : {}),
       include: {

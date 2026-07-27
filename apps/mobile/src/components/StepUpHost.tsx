@@ -27,7 +27,6 @@ export function StepUpHost() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const resolveRef = useRef<((ok: boolean) => void) | null>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
 
   /** Resolve the in-flight prompt exactly once and close. */
   const settle = useCallback((ok: boolean) => {
@@ -118,7 +117,6 @@ export function StepUpHost() {
       open={factor !== null}
       onClose={() => settle(false)}
       title="Confirm it’s you"
-      initialFocusRef={inputRef}
     >
       <form onSubmit={onSubmit} className="flex flex-col gap-5">
         <Field
@@ -126,7 +124,6 @@ export function StepUpHost() {
           htmlFor="step-up-code"
         >
           <Input
-            ref={inputRef}
             id="step-up-code"
             type={isMfa ? 'text' : 'password'}
             inputMode={isMfa ? 'numeric' : undefined}

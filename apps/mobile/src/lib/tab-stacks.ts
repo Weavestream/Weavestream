@@ -97,10 +97,12 @@ export function clearRememberedLocations(): void {
  * Segment-based like `tabIdForPath`, tolerating the `/m` basepath for the
  * same reason. New full-viewport routes are appended here deliberately.
  */
+const FORM_ROUTE_TABS: ReadonlySet<string> = new Set(['passwords', 'assets']);
+
 export function hideTabBarFor(pathname: string): boolean {
   const segments = pathname.split('/').filter(Boolean);
   if (segments[0] === 'm') segments.shift();
-  if (segments[0] !== 'passwords') return false;
+  if (!FORM_ROUTE_TABS.has(segments[0] ?? '')) return false;
   if (segments.length === 2 && segments[1] === 'new') return true;
   return segments.length === 3 && segments[2] === 'edit';
 }

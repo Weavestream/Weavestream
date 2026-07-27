@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Sheet } from '../../components/Sheet';
 import { Button } from '../../components/primitives';
 
@@ -37,7 +37,6 @@ export function RevealReasonSheet({
   onClose: () => void;
 }) {
   const [reason, setReason] = useState('');
-  const inputRef = useRef<HTMLTextAreaElement>(null);
 
   // Fresh prompt per opening — a reason describes one access, and
   // pre-filling the last one would invite rubber-stamped audit rows.
@@ -52,7 +51,6 @@ export function RevealReasonSheet({
       open={open}
       onClose={onClose}
       title="Reason required"
-      initialFocusRef={inputRef}
       footer={
         <Button
           kind="primary"
@@ -69,7 +67,6 @@ export function RevealReasonSheet({
           recorded in the audit log.
         </p>
         <textarea
-          ref={inputRef}
           value={reason}
           onChange={(e) => setReason(e.target.value)}
           maxLength={500}

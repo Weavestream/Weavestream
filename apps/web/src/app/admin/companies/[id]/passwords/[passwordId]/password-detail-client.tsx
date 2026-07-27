@@ -3,7 +3,10 @@
 import { useCallback, useEffect, useMemo, useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import type { PasswordGeneratorDefaults } from '@weavestream/shared';
+import {
+  safeExternalHref,
+  type PasswordGeneratorDefaults,
+} from '@weavestream/shared';
 import type {
   PasswordDetail,
   PasswordAccessUser,
@@ -222,6 +225,10 @@ export function PasswordDetailClient({
     () => formatCredentialUrl(password.url),
     [password.url],
   );
+  const safeUrl = useMemo(
+    () => (password.url?.trim() ? safeExternalHref(password.url) : null),
+    [password.url],
+  );
 
   return (
     <>
@@ -317,7 +324,7 @@ export function PasswordDetailClient({
 
               <Label>URL</Label>
               <div style={{ minWidth: 0 }}>
-                {password.url ? (
+                {password.url?.trim() ? (
                   <div
                     style={{
                       display: 'flex',
@@ -326,22 +333,38 @@ export function PasswordDetailClient({
                       minWidth: 0,
                     }}
                   >
-                    <a
-                      href={password.url}
-                      target="_blank"
-                      rel="noreferrer"
-                      title={password.url}
-                      style={{
-                        color: 'var(--accent)',
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        whiteSpace: 'nowrap',
-                        minWidth: 0,
-                        flex: 1,
-                      }}
-                    >
-                      {displayUrl}
-                    </a>
+                    {safeUrl ? (
+                      <a
+                        href={safeUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        title={password.url}
+                        style={{
+                          color: 'var(--accent)',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
+                          minWidth: 0,
+                          flex: 1,
+                        }}
+                      >
+                        {displayUrl}
+                      </a>
+                    ) : (
+                      <span
+                        title={password.url}
+                        style={{
+                          color: 'var(--text)',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
+                          minWidth: 0,
+                          flex: 1,
+                        }}
+                      >
+                        {password.url}
+                      </span>
+                    )}
                     <Btn
                       size="sm"
                       onClick={() => void copyUrl()}

@@ -1,5 +1,6 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useState } from 'react';
 import type { PasswordDetail } from '@weavestream/shared';
+import { FieldBlock, FieldError, Hint } from '../../components/FieldBlock';
 import { FormScreenChrome } from '../../components/FormScreenChrome';
 import { Icon } from '../../components/Icon';
 import { Card, Input } from '../../components/primitives';
@@ -256,7 +257,6 @@ function PasswordFormFields({
             value={name}
             onChange={(e) => setName(e.target.value)}
             maxLength={200}
-            autoFocus={!isEdit}
             placeholder="e.g. Router admin"
           />
         </FieldBlock>
@@ -418,39 +418,5 @@ function PasswordFormFields({
   );
 }
 
-function FieldBlock({
-  label,
-  htmlFor,
-  hint,
-  children,
-}: {
-  label: string;
-  htmlFor: string;
-  hint?: string;
-  children: ReactNode;
-}) {
-  return (
-    <div className="flex flex-col gap-1.75">
-      <label
-        htmlFor={htmlFor}
-        className="font-mono text-section uppercase tracking-[0.1em] text-muted"
-      >
-        {label}
-      </label>
-      {children}
-      {hint && <Hint>{hint}</Hint>}
-    </div>
-  );
-}
-
-function Hint({ children }: { children: ReactNode }) {
-  return <p className="text-[13px] leading-snug text-muted">{children}</p>;
-}
-
-function FieldError({ message }: { message: string }) {
-  return (
-    <p role="alert" className="text-[13px] leading-snug text-danger">
-      {message}
-    </p>
-  );
-}
+// FieldBlock/Hint/FieldError were promoted to `components/FieldBlock`
+// in Phase 2c so the asset field editors share them.

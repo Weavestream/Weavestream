@@ -1,5 +1,5 @@
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { apiFetch } from '../lib/api';
 import { toOrg, useOrgScope, type Org } from '../lib/org-scope';
 import { Icon } from './Icon';
@@ -76,7 +76,6 @@ export function OrgSheet({
   const { currentOrg } = useOrgScope();
   const [filter, setFilter] = useState('');
   const debouncedFilter = useDebounced(filter.trim(), FILTER_DEBOUNCE_MS);
-  const filterRef = useRef<HTMLInputElement>(null);
   const isFiltering = debouncedFilter.length > 0;
 
   // Reset the filter each time the sheet opens — a stale query from last
@@ -177,12 +176,10 @@ export function OrgSheet({
       open={open}
       onClose={onClose}
       title="Organizations"
-      initialFocusRef={filterRef}
     >
       <div className="flex h-[50px] shrink-0 items-center gap-2.5 rounded-field border border-line bg-surface px-3.5 focus-within:border-2 focus-within:border-accent">
         <Icon name="search" size={21} className="text-dim" />
         <input
-          ref={filterRef}
           type="search"
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
