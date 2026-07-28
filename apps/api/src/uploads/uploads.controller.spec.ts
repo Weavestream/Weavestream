@@ -55,6 +55,23 @@ describe('UploadsController.image disposition + cache policy', () => {
     expect(res.headers['x-content-type-options']).toBe('nosniff');
   });
 
+  it('serves a legacy row whose stored filename predates init sanitisation', async () => {
+    // Rows written before filenames were sanitised at init can still
+    // carry an emoji; the disposition fallback must stay ASCII-only
+    // (raw, this exact header made Node's setHeader throw → 500).
+    const camera = String.fromCodePoint(0x1f4f8);
+    setup(
+      streamOf({ contentType: 'image/png', filename: `invoice ${camera}.png` }),
+    );
+    const res = fakeRes();
+
+    await controller.image(actor, 'c1', 'u1', res, undefined, undefined);
+
+    expect(res.headers['content-disposition']).toBe(
+      `inline; filename="invoice _.png"; filename*=UTF-8''invoice%20%F0%9F%93%B8.png`,
+    );
+  });
+
   it('serves the thumbnail variant inline and disk-cacheable', async () => {
     setup(streamOf({ contentType: 'image/webp', filename: 'photo.png' }));
     const res = fakeRes();

@@ -69,6 +69,30 @@ const allowedDevOrigins = [
   ]),
 ];
 
+// Because `src/proxy.ts` exists, the Next router buffers every request
+// body so it can be replayed after the proxy runs — and silently
+// truncates it at 10MB by default. That killed file uploads between
+// 10MB and MAX_UPLOAD_MB: the forwarding fetch in `lib/api-proxy.ts`
+// then sent fewer bytes than the Content-Length header promised
+// (undici `UND_ERR_REQ_CONTENT_LENGTH_MISMATCH`), and the API only ever
+// saw "Client aborted upload." Size the buffer from the same env var
+// the API enforces (packages/shared/src/env.ts — default 25, bounds
+// 1–1024, MiB semantics), loaded by loadWorkspaceEnv() above; real
+// deployments that set MAX_UPLOAD_MB in the environment win because
+// dotenv runs with `override: false`.
+//
+// Exact alignment is deliberate: uploads are raw-body PUTs (body bytes
+// == file size, no multipart envelope) and Next's check is strictly
+// `bytesRead > limit`, so an at-limit body passes through untruncated
+// and the API stays the only layer that rejects oversize uploads, with
+// its proper 413 problem+json rather than a mid-stream abort.
+function maxUploadBodyBytes() {
+  const parsed = Number.parseInt(process.env.MAX_UPLOAD_MB ?? '', 10);
+  const mb =
+    Number.isInteger(parsed) && parsed >= 1 && parsed <= 1024 ? parsed : 25;
+  return mb * 1024 * 1024;
+}
+
 const nextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
@@ -98,6 +122,11 @@ const nextConfig = {
       '@dnd-kit/sortable',
       '@dnd-kit/utilities',
     ],
+    // See maxUploadBodyBytes() above. Number = bytes. This is the
+    // non-deprecated name in Next 16.2 (`middlewareClientMaxBodySize`,
+    // which the runtime warning still points at, is its legacy alias —
+    // setting both is a startup error).
+    proxyClientMaxBodySize: maxUploadBodyBytes(),
   },
   // Browser → API traffic now flows through the App Router proxy at
   // `src/app/api/[...path]/route.ts` (and the matching `/health`

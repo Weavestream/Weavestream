@@ -50,6 +50,7 @@ import type { AuthedUser } from '../common/current-user.decorator.js';
 import { extractEmbeddedUploadIds } from '../articles/article-uploads.js';
 import { mimesAreCompatible } from './mime-compat.js';
 import { startsWithTextBom } from './text-bom.js';
+import { sanitizeUploadFilename } from './filename-sanitize.js';
 import { canReadPassword } from '../passwords/password-access-policy.js';
 import { pendingKey, bodyKey } from './upload-session-keys.js';
 import { Semaphore } from '../common/semaphore.js';
@@ -203,6 +204,10 @@ export class UploadsService {
     expiresAt: Date;
   }> {
     const mime = input.mimeType.toLowerCase();
+    // Normalise the name once, at the only write path for
+    // `Upload.filename` — the storage key, pending session, DB row and
+    // audit entry below must all see the same header-safe string.
+    const filename = sanitizeUploadFilename(input.filename);
     if (!this.allowedMimes.has(mime)) {
       throw new UnsupportedMediaTypeException({
         error: 'MimeNotAllowed',
@@ -231,7 +236,7 @@ export class UploadsService {
     );
 
     const uploadId = randomUUID();
-    const storageKey = this.storage.uploadKey(companyId, uploadId, input.filename);
+    const storageKey = this.storage.uploadKey(companyId, uploadId, filename);
     // Make sure the bucket exists *before* we hand the client a relay URL,
     // so the upload PUT doesn't race against bucket creation.
     await this.storage.ensureBucket(companyId);
@@ -246,7 +251,7 @@ export class UploadsService {
 
     const pending = {
       companyId,
-      filename: input.filename,
+      filename,
       mimeType: mime,
       sizeBytes: input.sizeBytes,
       storageKey,

@@ -188,6 +188,23 @@ describe('UploadsService.init / relayPut', () => {
     );
   });
 
+  it('init sanitises the filename before it reaches the storage key and pending session', async () => {
+    // Emoji stripped, macOS NFD accent composed to latin-1 — built from
+    // code points so the sequences are unambiguous in the source bytes.
+    const raw = `Screenshot ${String.fromCodePoint(0x1f4f8)} cafe${String.fromCharCode(0x0301)}.png`;
+    const clean = `Screenshot caf${String.fromCharCode(0xe9)}.png`;
+    const res = await service.init(actor, 'c1', {
+      filename: raw,
+      mimeType: 'image/png',
+      sizeBytes: 100,
+    } as never);
+    expect(storage.uploadKey).toHaveBeenCalledWith('c1', res.uploadId, clean);
+    const pending = JSON.parse(
+      (redis.client.set.mock.calls[0] as unknown[])[1] as string,
+    ) as { filename: string };
+    expect(pending.filename).toBe(clean);
+  });
+
   it('relayPut streams the body to local storage when the pending session matches', async () => {
     redis.client.get.mockResolvedValue(
       JSON.stringify({

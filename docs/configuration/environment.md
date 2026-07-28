@@ -158,7 +158,7 @@ Every thumbnail, attachment, logo, and export PDF is streamed through the API on
 
 | Variable | Notes |
 |---|---|
-| `MAX_UPLOAD_MB` | Server-enforced upload size cap in megabytes. Default: `25`. |
+| `MAX_UPLOAD_MB` | Server-enforced upload size cap in megabytes. Default: `25`. Also sizes the web app's proxy request-body buffer (`apps/web/next.config.js`); the web container must be restarted to pick up a change. |
 | `NEXT_PUBLIC_MAX_UPLOAD_MB` | Client-side mirror. Keep in sync with `MAX_UPLOAD_MB`. |
 | `ALLOWED_UPLOAD_MIME` | Comma-separated MIME allowlist. The default includes images, PDFs, documents, archives, scripts, and data files. Add cautiously. Browser-active types (`text/html`, `application/xhtml+xml`, `image/svg+xml`, and any `image/*+xml`) are rejected at startup regardless of this setting — they can execute script when rendered inline. |
 

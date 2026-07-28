@@ -66,6 +66,12 @@ Each upload record stores:
 
 The maximum upload size is controlled by `MAX_UPLOAD_MB` in `.env` (default: 25 MB). The client-side mirror variable `NEXT_PUBLIC_MAX_UPLOAD_MB` should be kept in sync.
 
+The web app's request proxy sizes its body buffer from the same `MAX_UPLOAD_MB` value (`apps/web/next.config.js`), so no separate proxy tuning is needed — but the web container must be restarted for a changed value to take effect. If an external reverse proxy (nginx, Caddy, Traefik) sits in front, its own body-size limit must still be raised separately; see `docs/deployment/tls.md`.
+
+## Filenames
+
+Filenames are normalised when an upload is initiated: the name is NFC-composed (macOS delivers decomposed accents), then characters outside printable latin-1 — emoji, CJK, control characters — are stripped and whitespace runs collapsed. A name with nothing usable left gets a `file` stem (e.g. an emoji-only `📸.png` is stored as `file.png`). Accented European names (`café.pdf`) are preserved. This keeps every stored name valid HTTP header material for `Content-Disposition` when the file is served.
+
 ## Asset Field Attachments
 
 The `FILE` field type on Asset Layouts allows attaching documents directly to asset records. Files attached this way appear inline on the asset detail page.

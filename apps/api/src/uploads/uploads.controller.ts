@@ -31,6 +31,7 @@ import { CurrentUser, type AuthedUser } from '../common/current-user.decorator.j
 import { RequirePermission } from '../rbac/require-permission.decorator.js';
 import { ZodBody } from '../common/zod-validation.pipe.js';
 import { requestMetaOf as meta } from '../common/request-meta.js';
+import { contentDispositionFor } from '../common/content-disposition.js';
 
 /**
  * Company-scoped upload endpoints.
@@ -332,23 +333,6 @@ export class UploadsController {
   ) {
     return this.uploads.revealStoragePath(actor, companyId, id, meta(req));
   }
-}
-
-/**
- * Build a `Content-Disposition` header value for a streamed upload.
- * Sanitises the filename (newlines and quotes break the header) and
- * also emits an RFC 5987 `filename*` so non-ASCII names round-trip
- * correctly across browsers.
- */
-function contentDispositionFor(
-  filename: string,
-  mode: 'inline' | 'attachment',
-): string {
-  const fallback = filename.replace(/["\\]/g, '_').replace(/[\r\n]/g, '');
-  const encoded = encodeURIComponent(filename).replace(/['()*]/g, (c) =>
-    '%' + c.charCodeAt(0).toString(16).toUpperCase(),
-  );
-  return `${mode}; filename="${fallback}"; filename*=UTF-8''${encoded}`;
 }
 
 /**

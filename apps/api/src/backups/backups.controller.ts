@@ -28,6 +28,7 @@ import {
 } from '@weavestream/shared';
 import { BackupsService } from './backups.service.js';
 import { CurrentUser, type AuthedUser } from '../common/current-user.decorator.js';
+import { contentDispositionFor } from '../common/content-disposition.js';
 import { ZodBody } from '../common/zod-validation.pipe.js';
 import { RequirePermission } from '../rbac/require-permission.decorator.js';
 import { RequireStepUp } from '../auth/step-up/require-step-up.decorator.js';
@@ -161,7 +162,7 @@ export class BackupsController {
     res.setHeader('Content-Length', file.contentLength.toString());
     res.setHeader(
       'Content-Disposition',
-      `attachment; filename="${file.filename}"`,
+      contentDispositionFor(file.filename, 'attachment'),
     );
     await this.backups.noteDownload(actor, id, requestMetaOf(req));
     return new StreamableFile(file.body);
