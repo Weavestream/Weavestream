@@ -1,18 +1,21 @@
 /// <reference lib="webworker" />
-import { CacheableResponsePlugin } from 'workbox-cacheable-response';
-import { clientsClaim } from 'workbox-core';
-import { ExpirationPlugin } from 'workbox-expiration';
+import { clientsClaim, copyResponse } from 'workbox-core';
 import {
   cleanupOutdatedCaches,
   precacheAndRoute,
   type PrecacheEntry,
 } from 'workbox-precaching';
 import { registerRoute, setCatchHandler } from 'workbox-routing';
-import { NetworkFirst } from 'workbox-strategies';
+import {
+  createNavigationHandler,
+  createWarmCanonical,
+  type NavDeps,
+} from './lib/sw-nav';
 
 /**
- * The mobile PWA's service worker (Phase 3). Compiled by
- * vite-plugin-pwa's `injectManifest` into `/m/sw.js`, scope `/m/`.
+ * The mobile PWA's service worker (Phase 3; navigation path rebuilt in
+ * Phase 5a). Compiled by vite-plugin-pwa's `injectManifest` into
+ * `/m/sw.js`, scope `/m/`.
  *
  * ## What it caches — and the invariant that matters more
  *
@@ -20,12 +23,12 @@ import { NetworkFirst } from 'workbox-strategies';
  *    HTML — `dist/index.html` carries the `__WS_ACCENT__` placeholder;
  *    the real shell is accent-substituted per request by the Next
  *    route handler.
- *  - RUNTIME: `/m` navigation responses (the shell), NetworkFirst — so
+ *  - RUNTIME: `/m/*` navigation responses (the shell), network-first —
  *    online always gets the fresh `no-store` shell and offline serves
  *    the last one — plus one pinned canonical copy of `/m/app` in its
- *    own non-expiring cache, refreshed by every successful HTML
- *    navigation, which the catch handler serves so ANY deep link boots
- *    the SPA offline (the client router resolves the path).
+ *    own cache, refreshed by every successful HTML navigation, which
+ *    the fallback ladder serves so ANY deep link boots the SPA offline
+ *    (the client router resolves the path).
  *
  *  - **`/api/*` has NO route — deliberately.** A request matching no
  *    route and no precache entry is never intercepted by Workbox, so
@@ -34,15 +37,40 @@ import { NetworkFirst } from 'workbox-strategies';
  *    Reveal/detail responses must never touch disk (CLAUDE.md); do not
  *    add an /api route here, not even NetworkOnly.
  *
+ * ## Deadlines — the Phase 5a P0 fix
+ *
+ * WebKit offline fetches can STALL instead of rejecting, and a stalled
+ * navigation used to hang forever: Workbox's NetworkFirst only falls
+ * back on rejection, and it holds the fetch event's lifetime open until
+ * its network promise settles — which also blocks a waiting worker from
+ * activating (the deploy-update path). The navigation route is now a
+ * hand-rolled network-first handler (`lib/sw-nav.ts`) that ABORTS its
+ * fetch at a deadline and owns the complete fallback ladder (exact
+ * shell → canonical → network error). The install warm and the
+ * background cache writes carry their own deadlines, so **every
+ * event-lifetime promise this worker registers settles in bounded
+ * time** — deploy-update correctness depends on that invariant; keep it
+ * when touching anything here.
+ *
+ * Bare `/m` is NOT matched: registration scope is `/m/`, and `/m` (no
+ * slash) is outside it, so such a navigation never reaches this worker.
+ * Online it 308s to `/m/app`; offline it fails — an accepted limitation
+ * for pre-`start_url` bookmarks. Never widen the scope: `/m` is a
+ * string prefix that would also capture `/me` and `/mfa/*`.
+ *
  * ## Cache lifecycle
  *
  * Cache names are versioned by a fingerprint of the injected precache
  * manifest, so an INSTALLING worker never touches the ACTIVE worker's
  * caches: install populates only the new version's canonical cache
  * (and a failed warm rejects install, keeping the old worker fully in
- * service); activate deletes the previous version's caches. Rollback
- * story: publish once with vite-plugin-pwa's `selfDestroying: true`
- * to unregister fleet-wide.
+ * service); activate deletes the previous version's caches. The shell
+ * cache is FIFO-trimmed by entry count — the old 30-day age cap went
+ * with ExpirationPlugin (entries refresh on every successful
+ * navigation; offline, a month-old shell beats an error page; caches
+ * rotate wholesale per worker version anyway). Rollback story: publish
+ * once with vite-plugin-pwa's `selfDestroying: true` to unregister
+ * fleet-wide.
  */
 
 declare let self: ServiceWorkerGlobalScope & {
@@ -92,24 +120,36 @@ precacheAndRoute(manifest, {
 });
 cleanupOutdatedCaches();
 
-function isHtml(response: Response): boolean {
-  return (response.headers.get('content-type') ?? '').includes('text/html');
-}
+/**
+ * Real-global wiring for the deadline-bounded navigation/warm logic.
+ * `credentials: 'include'` on every shell fetch so the `ws_ui` cookie
+ * picks the right theme + accent variant. Failures log to the SW
+ * console — the page cannot observe a failed install through
+ * registration callbacks alone (main.tsx watches the `redundant`
+ * transition as its half of the signal).
+ */
+const navDeps: NavDeps = {
+  fetchFn: (url, init) => fetch(url, init),
+  openCache: (name) => caches.open(name),
+  copyResponse,
+  shellCacheName: SHELL_CACHE,
+  canonicalCacheName: CANONICAL_CACHE,
+  canonicalUrl: CANONICAL_URL,
+  expectedOrigin: self.location.origin,
+  log: (msg, err) =>
+    err === undefined
+      ? console.error(`[m-sw] ${msg}`)
+      : console.error(`[m-sw] ${msg}`, err),
+};
 
 /**
- * Fetch the canonical shell and pin it. `credentials: 'include'` so the
- * `ws_ui` cookie picks the right theme + accent variant. Throws on a
- * failed fetch or a non-HTML response — callers decide whether that is
- * fatal (install) or a keep-the-old-copy no-op (message re-warm).
+ * Deadline-bounded END TO END (fetch, validation, redirect
+ * normalization, cache.put) — a stalled warm used to wedge install
+ * forever, silently blocking every future worker update. Throws on any
+ * failure; callers decide whether that is fatal (install) or a
+ * keep-the-old-copy no-op (message re-warm).
  */
-async function warmCanonical(): Promise<void> {
-  const response = await fetch(CANONICAL_URL, { credentials: 'include' });
-  if (!response.ok || !isHtml(response)) {
-    throw new Error(`canonical shell warm failed (${response.status})`);
-  }
-  const cache = await caches.open(CANONICAL_CACHE);
-  await cache.put(CANONICAL_URL, response);
-}
+const warmCanonical = createWarmCanonical(navDeps);
 
 /**
  * Install: warm THIS version's canonical shell. A failed warm REJECTS
@@ -165,57 +205,23 @@ void self.skipWaiting();
 clientsClaim();
 
 /**
- * Every `/m` navigation returns the same accent-substituted shell
- * bytes, so any successful one can refresh the pinned canonical copy —
- * NetworkFirst alone would only update `/m/app`'s entry when `/m/app`
- * itself is navigated. Workbox requires `fetchDidSucceed` to return a
- * Response; the write is awaited (an unawaited write can be terminated
- * with the worker) and a write failure must never break the
- * navigation.
+ * Every `/m/*` navigation goes through the deadline-bounded
+ * network-first handler: online serves (and re-pins) the fresh shell;
+ * a rejected OR STALLED fetch falls back to the exact-URL shell entry,
+ * then the pinned canonical, then a network error — the handler owns
+ * that whole ladder and never throws. (Bare `/m` is deliberately not
+ * matched — it is outside the `/m/` registration scope and can never
+ * reach this worker; see the header doc.)
  */
-const canonicalRefreshPlugin = {
-  fetchDidSucceed: async ({
-    response,
-  }: {
-    response: Response;
-  }): Promise<Response> => {
-    if (response.ok && isHtml(response)) {
-      try {
-        const cache = await caches.open(CANONICAL_CACHE);
-        await cache.put(CANONICAL_URL, response.clone());
-      } catch {
-        // Storage pressure or shutdown — the navigation still succeeds.
-      }
-    }
-    return response;
-  },
-};
-
 registerRoute(
   ({ request, url }) =>
-    request.mode === 'navigate' &&
-    (url.pathname === '/m' || url.pathname.startsWith('/m/')),
-  new NetworkFirst({
-    cacheName: SHELL_CACHE,
-    plugins: [
-      new CacheableResponsePlugin({ statuses: [200] }),
-      new ExpirationPlugin({ maxEntries: 24, maxAgeSeconds: 30 * 24 * 60 * 60 }),
-      canonicalRefreshPlugin,
-    ],
-  }),
+    request.mode === 'navigate' && url.pathname.startsWith('/m/'),
+  createNavigationHandler(navDeps),
 );
 
 /**
- * A failed navigation with no exact-URL cache entry serves the pinned
- * canonical shell — from the NAMED cache, never global `caches.match()`
- * (which would search the precache and other versions). Non-navigation
- * failures surface as network errors, untouched.
+ * Backstop only. The navigation handler above never throws — it owns
+ * its complete fallback ladder — so this terminates nothing but a
+ * failed precache/asset route, exactly as a plain network error would.
  */
-setCatchHandler(async ({ request }) => {
-  if (request.mode === 'navigate') {
-    const cache = await caches.open(CANONICAL_CACHE);
-    const cached = await cache.match(CANONICAL_URL);
-    if (cached) return cached;
-  }
-  return Response.error();
-});
+setCatchHandler(async () => Response.error());
