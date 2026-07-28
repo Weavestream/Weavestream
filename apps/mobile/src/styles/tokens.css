@@ -5,6 +5,9 @@
  * Color comes from the shared file below, so the user's accent preference
  * carries over from desktop, `--accent-ink` stays the tested foreground
  * for `--accent`, and a future palette change lands on both apps at once.
+ * The sole neutral exception is `--muted`: mobile's 12–13px labels need
+ * more contrast in field conditions than desktop's larger secondary text,
+ * so the three theme blocks below raise it locally to a 6:1 minimum.
  *
  * Geometry cannot be shared and is defined here. The radius scale settles
  * it on its own: desktop is 3/5/8px, mobile is 9–30px. A 3px card and a
@@ -87,10 +90,12 @@
    * `--accent-ink` on a button and reads correctly there. Two of the
    * roles this app introduces are not fills, and reusing the raw fill
    * value for them measurably fails WCAG AA on several palettes — so
-   * they get their own derived values rather than new debt.
-   * Deliberately mobile-local: nothing in packages/shared changes.
+   * they get their own derived values rather than new debt. These
+   * derived role tokens stay deliberately mobile-local.
    *
-   *  --accent-pressed  pressed fills (~darken of the fill in both themes)
+   *  --accent-pressed  pressed fills. Dark can take a pronounced darken;
+   *                    light uses a smaller shift because teal's dark ink
+   *                    otherwise falls below 4.5:1 in the pressed state.
    *  --accent-text     accent as TEXT on --bg. The 11px active tab label
    *                    is the case that forced this. In light, raw
    *                    --accent lands ~3.4:1 on the default palette and
@@ -108,6 +113,7 @@
    *                    near-black sheet from a near-black page.
    */
   color-scheme: dark;
+  --muted: #9c9c9c;
   --accent-pressed: color-mix(in oklab, var(--accent) 90%, black);
   --accent-text: color-mix(in oklab, var(--accent) 92%, white);
   --accent-deep: color-mix(in oklab, var(--accent) 78%, white);
@@ -164,7 +170,8 @@
 /* Light opts in — values are the pre-dark-mode originals, moved. */
 [data-theme='light'] {
   color-scheme: light;
-  --accent-pressed: color-mix(in oklab, var(--accent) 92%, black);
+  --muted: #5a5a56;
+  --accent-pressed: color-mix(in oklab, var(--accent) 99%, black);
   --accent-text: color-mix(in oklab, var(--accent) 78%, black);
   --accent-deep: color-mix(in oklab, var(--accent) 70%, black);
   --scrim: rgb(23 24 26 / 0.35);
@@ -179,7 +186,8 @@
 @media (prefers-color-scheme: light) {
   html[data-theme-pref='system'] {
     color-scheme: light;
-    --accent-pressed: color-mix(in oklab, var(--accent) 92%, black);
+    --muted: #5a5a56;
+    --accent-pressed: color-mix(in oklab, var(--accent) 99%, black);
     --accent-text: color-mix(in oklab, var(--accent) 78%, black);
     --accent-deep: color-mix(in oklab, var(--accent) 70%, black);
     --scrim: rgb(23 24 26 / 0.35);

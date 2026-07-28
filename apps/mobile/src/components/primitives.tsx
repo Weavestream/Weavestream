@@ -97,8 +97,8 @@ export function Screen({
 type ButtonKind = 'primary' | 'secondary' | 'danger';
 
 const BUTTON_TONE: Record<ButtonKind, string> = {
-  // `active:` rather than `hover:` — this is a touch-only app, and the
-  // handoff's press feedback is a ~4% darken (or the platform highlight).
+  // `active:` rather than `hover:` — this is a touch-only app. The
+  // contrast-calibrated darken lives in `--accent-pressed`.
   primary:
     'bg-accent text-accent-ink active:bg-accent-pressed ' +
     'disabled:bg-line disabled:text-dim',

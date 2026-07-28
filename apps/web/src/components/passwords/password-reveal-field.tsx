@@ -318,7 +318,7 @@ export function PasswordRevealField(props: PasswordRevealFieldProps) {
         <div
           style={{
             fontSize: 11,
-            color: 'var(--muted, #6b7280)',
+            color: 'var(--muted, #8a8a8a)',
             display: 'flex',
             justifyContent: 'space-between',
           }}

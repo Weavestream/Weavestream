@@ -70,7 +70,7 @@ export default function AppError({
         </h1>
         <p
           style={{
-            color: 'var(--muted, #9a9aa2)',
+            color: 'var(--muted, #8a8a8a)',
             fontSize: 14,
             lineHeight: 1.5,
             margin: '0 0 20px',
@@ -183,7 +183,7 @@ function BackendUnavailablePanel() {
         </h1>
         <p
           style={{
-            color: 'var(--muted, #9a9aa2)',
+            color: 'var(--muted, #8a8a8a)',
             fontSize: 13.5,
             lineHeight: 1.55,
             margin: '0 0 20px',
@@ -198,7 +198,7 @@ function BackendUnavailablePanel() {
             style={{
               fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
               fontSize: 12,
-              color: 'var(--dim, #6a6a72)',
+              color: 'var(--dim, #858585)',
               marginTop: 8,
               display: 'inline-block',
             }}
@@ -285,7 +285,7 @@ function RateLimitedPanel({ seconds }: { seconds: number }) {
         </h1>
         <p
           style={{
-            color: 'var(--muted, #9a9aa2)',
+            color: 'var(--muted, #8a8a8a)',
             fontSize: 13.5,
             lineHeight: 1.55,
             margin: '0 0 20px',
@@ -299,7 +299,7 @@ function RateLimitedPanel({ seconds }: { seconds: number }) {
             style={{
               fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
               fontSize: 12,
-              color: 'var(--dim, #6a6a72)',
+              color: 'var(--dim, #858585)',
               marginTop: 8,
               display: 'inline-block',
             }}
@@ -316,7 +316,7 @@ function RateLimitedPanel({ seconds }: { seconds: number }) {
             background: ready
               ? 'var(--accent, #c6ff3f)'
               : 'var(--panel-2, #1a1a1f)',
-            color: ready ? '#0b0b0d' : 'var(--dim, #6a6a72)',
+            color: ready ? '#0b0b0d' : 'var(--dim, #858585)',
             // Same fix as the Reload button above. `--line-2` also stays
             // legible over the disabled fill; `--line` would vanish
             // against `--panel-2` in dark.

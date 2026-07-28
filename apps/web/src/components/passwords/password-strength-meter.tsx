@@ -65,7 +65,7 @@ export function PasswordStrengthMeter({
               // the dark theme too.
               background:
                 i <= s
-                  ? TONES[s] ?? 'var(--muted, #6b7280)'
+                  ? TONES[s] ?? 'var(--muted, #8a8a8a)'
                   : 'var(--line-3)',
               transition: 'background 120ms ease',
             }}
@@ -75,7 +75,7 @@ export function PasswordStrengthMeter({
       <div
         style={{
           fontSize: 11,
-          color: 'var(--muted, #6b7280)',
+          color: 'var(--muted, #8a8a8a)',
           textAlign: inline ? 'left' : 'right',
           whiteSpace: 'nowrap',
         }}
