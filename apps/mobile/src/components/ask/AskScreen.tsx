@@ -94,11 +94,11 @@ function AskScreenBody({ onClose }: { onClose: () => void }) {
         >
           Ask anything
         </h1>
-        {currentOrg && (
-          <span className="min-w-0 truncate rounded-md bg-panel-2 px-2 py-1 text-[12px] font-medium text-muted">
-            {currentOrg.name}
-          </span>
-        )}
+        {/* Scope is EXPLICIT, never implied (Phase 5b): a global,
+            org-free conversation says so rather than omitting the chip. */}
+        <span className="min-w-0 truncate rounded-md bg-panel-2 px-2 py-1 text-[12px] font-medium text-muted">
+          {currentOrg ? currentOrg.name : 'All organizations'}
+        </span>
         <div className="flex-1" />
         {state.messages.length > 0 && (
           <button

@@ -9,6 +9,7 @@ import {
   type ReactNode,
 } from 'react';
 import type { ChatConversationDetail } from '@weavestream/shared';
+import { isCreateRecoveryPendingProblem } from '@weavestream/shared';
 import { randomClientId, streamChatMessage } from '@weavestream/shared/browser';
 import { ApiError, apiFetch } from '../../lib/api';
 import { redirectToLogin } from '../../lib/navigate';
@@ -18,6 +19,13 @@ import {
   initialAskState,
   type AskState,
 } from './ask-reducer';
+import {
+  applyChatToolCall,
+  fetchConversation,
+  problemMessage,
+  rejectChatToolCall,
+  type CreateOverrides,
+} from './chat-actions';
 import { toolActivityLabel } from './tool-labels';
 
 /**
@@ -53,6 +61,20 @@ interface AskContextValue {
   send: () => void;
   stop: () => void;
   newChat: () => void;
+  /**
+   * Apply a pending proposal (Phase 5b). Globally single-flight: a
+   * no-op while any tool action is in flight. Lives on the provider —
+   * not the overlay — so a settle landing after the user closes Ask
+   * still reaches state. `opts.companyId` is sent ONLY by the create
+   * confirmation sheet.
+   */
+  applyToolCall: (
+    serverMessageId: string,
+    toolCallId: string,
+    opts?: { companyId: string; createOverrides: CreateOverrides },
+  ) => Promise<void>;
+  /** Reject a pending proposal. Same single-flight rule. */
+  rejectToolCall: (serverMessageId: string, toolCallId: string) => Promise<void>;
 }
 
 const AskContext = createContext<AskContextValue | null>(null);
@@ -86,6 +108,52 @@ export function AskProvider({ children }: { children: ReactNode }) {
     [],
   );
 
+  /**
+   * Post-meta transport recovery (Phase 5b): re-read the conversation
+   * and replace the failed bubble with the persisted truth. ONE
+   * delayed retry (~2.5 s) covers the server still being mid-commit
+   * after the disconnect abort; still absent after that, the retained
+   * error state stands (honest). Abort-safe: registered in the
+   * controller set, so reset/unmount cancels it and an AbortError
+   * dispatches nothing.
+   */
+  const recoverTurn = useCallback(
+    async (conversationId: string, serverMessageId: string) => {
+      const controller = new AbortController();
+      controllersRef.current.add(controller);
+      try {
+        for (let attempt = 0; attempt < 2; attempt++) {
+          if (attempt > 0) {
+            await new Promise<void>((resolve, reject) => {
+              const timer = setTimeout(resolve, 2500);
+              controller.signal.addEventListener('abort', () => {
+                clearTimeout(timer);
+                reject(new DOMException('recovery aborted', 'AbortError'));
+              });
+            });
+          }
+          const detail = await fetchConversation(conversationId, controller.signal);
+          const msg = detail.messages.find((m) => m.id === serverMessageId);
+          if (msg) {
+            dispatch({
+              type: 'turnRecovered',
+              serverMessageId,
+              text: msg.content,
+              toolCalls: msg.toolCalls ?? [],
+            });
+            return;
+          }
+        }
+      } catch {
+        // Recovery is best-effort on top of an already-surfaced error;
+        // the retained error state remains the honest answer.
+      } finally {
+        controllersRef.current.delete(controller);
+      }
+    },
+    [],
+  );
+
   const send = useCallback(() => {
     const snapshot = stateRef.current;
     const content = snapshot.draft.trim();
@@ -93,12 +161,18 @@ export function AskProvider({ children }: { children: ReactNode }) {
 
     const controller = new AbortController();
     controllersRef.current.add(controller);
+    // Captured ONCE per turn: the recorded scope must be exactly the
+    // context this send transmits (the create sheet's org-lock rule
+    // reads it back), and the org-switch reset aborts in-flight sends
+    // anyway, so a late re-read could only ever disagree.
+    const scopeCompanyId = orgIdRef.current;
     dispatch({
       type: 'sendStarted',
       userClientId: randomClientId(),
       assistantClientId: randomClientId(),
       content,
       creating: snapshot.conversationId === null,
+      scopeCompanyId,
     });
 
     void (async () => {
@@ -131,7 +205,12 @@ export function AskProvider({ children }: { children: ReactNode }) {
           dispatch({ type: 'conversationCreated', conversationId });
         }
 
-        const companyId = orgIdRef.current;
+        // Post-meta transport recovery bookkeeping (Phase 5b): the
+        // server persists the assistant row BEFORE emitting tool_call,
+        // so a connection dropped in that gap leaves us holding the id
+        // with no cards — re-readable truth.
+        let assistantMessageId: string | null = null;
+        const streamConversationId = conversationId;
         await streamChatMessage(
           conversationId,
           content,
@@ -140,8 +219,14 @@ export function AskProvider({ children }: { children: ReactNode }) {
             // Stop or CSRF failure provably sent nothing (preflight →
             // rollback); after it, the turn may be persisted.
             onRequestStarted: () => dispatch({ type: 'requestStarted' }),
-            onMeta: (meta) =>
-              dispatch({ type: 'meta', conversationId: meta.conversationId }),
+            onMeta: (meta) => {
+              assistantMessageId = meta.assistantMessageId;
+              dispatch({
+                type: 'meta',
+                conversationId: meta.conversationId,
+                assistantMessageId: meta.assistantMessageId,
+              });
+            },
             onDelta: (text) => dispatch({ type: 'delta', text }),
             onNotice: (message) => dispatch({ type: 'notice', message }),
             onToolActivity: (activity) =>
@@ -152,19 +237,24 @@ export function AskProvider({ children }: { children: ReactNode }) {
                     ? toolActivityLabel(activity.name)
                     : null,
               }),
-            onToolCalls: (_messageId, toolCalls) =>
-              dispatch({ type: 'toolCalls', toolCalls }),
+            onToolCalls: (messageId, toolCalls) =>
+              dispatch({ type: 'toolCalls', messageId, toolCalls }),
             onDone: () => {
               dispatch({ type: 'done' });
               // Mobile ignores the title tail; tear this send down now.
               controller.abort();
             },
-            onError: (message, origin) =>
-              dispatch({
-                type: 'streamFailed',
-                message,
-                provenance: origin ?? 'transport',
-              }),
+            onError: (message, origin) => {
+              const provenance = origin ?? 'transport';
+              dispatch({ type: 'streamFailed', message, provenance });
+              // Transport death AFTER meta = the turn is (or is about
+              // to be) persisted with content this client never fully
+              // received. Recover the persisted truth so proposal
+              // cards aren't silently lost (plan-review P1-5).
+              if (provenance === 'transport' && assistantMessageId) {
+                void recoverTurn(streamConversationId, assistantMessageId);
+              }
+            },
             onHttpError: (status, message) => {
               // Replaces onError for HTTP-level failures — EVERY status
               // must settle terminally or the composer sticks.
@@ -176,7 +266,7 @@ export function AskProvider({ children }: { children: ReactNode }) {
             },
           },
           controller.signal,
-          companyId ? { companyId } : undefined,
+          scopeCompanyId ? { companyId: scopeCompanyId } : undefined,
         );
       } finally {
         controllersRef.current.delete(controller);
@@ -194,15 +284,139 @@ export function AskProvider({ children }: { children: ReactNode }) {
     abortAll();
   }, [abortAll]);
 
-  // Org switch clears the transcript — scope-confusion safety, matching
-  // search's current-org-only rationale. Only a real switch (id → other
-  // id, or id → none) resets; the initial null → id resolution is not a
-  // switch. Reset BEFORE abort, per the discipline above.
+  /**
+   * Resync a message's tool calls from the persisted conversation —
+   * the already-settled 400 race (another device acted first; the
+   * claim guarantees exactly one winner) and the create-recovery code
+   * both resolve by reading what actually happened.
+   */
+  const resyncToolCalls = useCallback(
+    async (conversationId: string, serverMessageId: string, signal: AbortSignal) => {
+      const detail = await fetchConversation(conversationId, signal);
+      const msg = detail.messages.find((m) => m.id === serverMessageId);
+      if (!msg?.toolCalls) return false;
+      dispatch({
+        type: 'toolCallSettled',
+        serverMessageId,
+        toolCalls: msg.toolCalls,
+      });
+      return true;
+    },
+    [],
+  );
+
+  const runToolAction = useCallback(
+    async (
+      kind: 'apply' | 'reject',
+      serverMessageId: string,
+      toolCallId: string,
+      opts?: { companyId: string; createOverrides: CreateOverrides },
+    ) => {
+      const snapshot = stateRef.current;
+      // Single-flight, enforced HERE (not just disabled buttons): a
+      // second invocation while one is active is a no-op, so a late
+      // response can never wipe a newer action's indicator.
+      if (snapshot.toolAction || !snapshot.conversationId) return;
+      const conversationId = snapshot.conversationId;
+      dispatch({ type: 'toolActionStarted', toolCallId, kind });
+
+      const controller = new AbortController();
+      controllersRef.current.add(controller);
+      try {
+        const res =
+          kind === 'apply'
+            ? await applyChatToolCall(
+                {
+                  conversationId,
+                  messageId: serverMessageId,
+                  toolCallId,
+                  ...(opts ?? {}),
+                },
+                controller.signal,
+              )
+            : await rejectChatToolCall(
+                { conversationId, messageId: serverMessageId, toolCallId },
+                controller.signal,
+              );
+        // Server truth, whatever it says — a `failed` status renders as
+        // failure; success styling never comes from the request merely
+        // resolving.
+        dispatch({
+          type: 'toolCallSettled',
+          serverMessageId,
+          toolCalls: res.updatedToolCalls,
+        });
+      } catch (err) {
+        if (isAbortError(err)) return;
+        if (err instanceof ApiError && err.status === 401) {
+          redirectToLogin();
+          return;
+        }
+        if (err instanceof ApiError && err.status === 400) {
+          // Two 400s carry more than a message: the already-settled
+          // race (resync shows what the other device did) and the
+          // create-recovery rejection (resync brings the pendingCreate
+          // marker so the sheet locks to the original confirmation —
+          // branch on the CODE, never the text).
+          const recovery = isCreateRecoveryPendingProblem(err.problem);
+          const synced = await resyncToolCalls(
+            conversationId,
+            serverMessageId,
+            controller.signal,
+          ).catch(() => false);
+          if (synced && !recovery) return;
+          if (synced && recovery) {
+            dispatch({
+              type: 'toolActionFailed',
+              toolCallId,
+              message: problemMessage(err, 'Couldn’t apply the change.'),
+            });
+            return;
+          }
+        }
+        dispatch({
+          type: 'toolActionFailed',
+          toolCallId,
+          message: problemMessage(
+            err,
+            kind === 'apply' ? 'Couldn’t apply the change.' : 'Couldn’t reject the change.',
+          ),
+        });
+      } finally {
+        controllersRef.current.delete(controller);
+      }
+    },
+    [resyncToolCalls],
+  );
+
+  const applyToolCall = useCallback(
+    (
+      serverMessageId: string,
+      toolCallId: string,
+      opts?: { companyId: string; createOverrides: CreateOverrides },
+    ) => runToolAction('apply', serverMessageId, toolCallId, opts),
+    [runToolAction],
+  );
+
+  const rejectToolCall = useCallback(
+    (serverMessageId: string, toolCallId: string) =>
+      runToolAction('reject', serverMessageId, toolCallId),
+    [runToolAction],
+  );
+
+  // Any change of scope IDENTITY resets the transcript (Phase 5b D2):
+  // entering, leaving, or switching orgs — a transcript of global turns
+  // must not continue under an org chip, nor the reverse. Only the boot
+  // adoption (undefined → first value) is exempt. Cost accepted: an
+  // unactioned global proposal card disappears from the MOBILE view on
+  // entering an org (the server keeps it pending; cards are actionable
+  // in place before switching, so no flow requires the switch). Reset
+  // BEFORE abort, per the discipline above.
   const prevOrgIdRef = useRef<string | null | undefined>(undefined);
   useEffect(() => {
     const id = currentOrg?.id ?? null;
     const prev = prevOrgIdRef.current;
-    if (prev !== undefined && prev !== null && prev !== id) {
+    if (prev !== undefined && prev !== id) {
       dispatch({ type: 'reset' });
       abortAll();
     }
@@ -214,8 +428,8 @@ export function AskProvider({ children }: { children: ReactNode }) {
   useEffect(() => abortAll, [abortAll]);
 
   const value = useMemo(
-    () => ({ state, setDraft, send, stop, newChat }),
-    [state, setDraft, send, stop, newChat],
+    () => ({ state, setDraft, send, stop, newChat, applyToolCall, rejectToolCall }),
+    [state, setDraft, send, stop, newChat, applyToolCall, rejectToolCall],
   );
 
   return <AskContext.Provider value={value}>{children}</AskContext.Provider>;

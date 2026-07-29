@@ -1,15 +1,17 @@
 import { useEffect, useRef } from 'react';
 import { Icon } from '../Icon';
 import { MarkdownBody } from '../richtext/MarkdownBody';
+import { ProposalCard } from './ProposalCard';
 import type { AskMessage, AskState } from './ask-reducer';
-import { proposalCards } from './proposal-card';
+import { proposalViews } from './proposal-card';
 
 /**
  * The Ask transcript: the handoff's two bubble tones, assistant
  * markdown through the same renderer as articles (sanitization by
  * construction — react-markdown drops raw HTML; model output is
- * untrusted input like any other), read-only proposal cards, and the
- * transient tool-activity line.
+ * untrusted input like any other), actionable proposal cards (Phase 5b
+ * — preview/Apply/Reject via ProposalCard), and the transient
+ * tool-activity line.
  *
  * Auto-follow: the scroller sticks to the bottom while the user is
  * near it and stops the moment they scroll up to read — a delta must
@@ -83,7 +85,7 @@ function UserBubble({ message }: { message: AskMessage }) {
 }
 
 function AssistantTurn({ message }: { message: AskMessage }) {
-  const cards = proposalCards(message.toolCalls);
+  const views = proposalViews(message.toolCalls);
   return (
     <div className="flex max-w-[90%] flex-col gap-2.5 self-start">
       <div
@@ -112,23 +114,8 @@ function AssistantTurn({ message }: { message: AskMessage }) {
         </p>
       ))}
 
-      {cards.map((card) => (
-        <div
-          key={card.id}
-          className="flex flex-col gap-1 rounded-group border border-line bg-surface p-3.5"
-        >
-          <div className="flex items-center gap-2">
-            <Icon name="description" size={20} className="text-accent" />
-            <span className="text-body font-semibold text-text">
-              {card.headline}
-            </span>
-          </div>
-          {card.title && (
-            <p className="truncate text-body text-text-2">{card.title}</p>
-          )}
-          {/* Read-only by decision — no Apply/Reject on mobile v1. */}
-          <p className="text-[13px] text-muted">Review and apply on desktop.</p>
-        </div>
+      {views.map((view) => (
+        <ProposalCard key={view.call.id} view={view} message={message} />
       ))}
     </div>
   );

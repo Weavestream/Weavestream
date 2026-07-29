@@ -207,7 +207,7 @@ export function isRewriteTargetHallucinated(input: {
 export function proposalBaseFromArticle(article: {
   editorMode: string;
   markdownSource: string | null;
-  content: unknown;
+  content?: unknown;
   revision: number;
 }): { markdown: string; revision: number; isRichText: boolean } {
   return {

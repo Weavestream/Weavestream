@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { useOrgScope } from '../../lib/org-scope';
 import { Icon } from '../Icon';
 import { useAsk } from './AskProvider';
 
@@ -15,6 +16,8 @@ import { useAsk } from './AskProvider';
  */
 export function Composer() {
   const { state, setDraft, send, stop } = useAsk();
+  const { currentOrg } = useOrgScope();
+  const global = currentOrg === null;
   const active = state.status !== 'idle';
   const canSend = !active && state.draft.trim().length > 0;
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -47,8 +50,10 @@ export function Composer() {
             }
           }}
           disabled={active}
-          placeholder="Ask about this org…"
-          aria-label="Ask about this organization"
+          placeholder={global ? 'Ask across your organizations…' : 'Ask about this org…'}
+          aria-label={
+            global ? 'Ask across your organizations' : 'Ask about this organization'
+          }
           enterKeyHint="send"
           maxLength={8000}
           autoCapitalize="sentences"

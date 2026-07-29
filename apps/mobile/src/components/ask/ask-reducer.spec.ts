@@ -20,6 +20,7 @@ function run(actions: AskAction[], from: AskState = initialAskState): AskState {
 
 const SEND: AskAction = {
   type: 'sendStarted',
+  scopeCompanyId: null,
   userClientId: 'u1',
   assistantClientId: 'a1',
   content: 'reboot steps?',
@@ -67,7 +68,7 @@ describe('askReducer — happy path', () => {
       SEND,
       { type: 'conversationCreated', conversationId: 'c1' },
       { type: 'requestStarted' },
-      { type: 'meta', conversationId: 'c1' },
+      { type: 'meta', conversationId: 'c1', assistantMessageId: 'm1' },
       { type: 'delta', text: 'Power off, ' },
       { type: 'delta', text: 'then on.' },
     ]);
@@ -93,7 +94,7 @@ describe('askReducer — happy path', () => {
       [
         { type: 'toolActivity', label: null },
         { type: 'notice', message: 'Context was trimmed.' },
-        { type: 'toolCalls', toolCalls: calls },
+        { type: 'toolCalls', messageId: 'm1', toolCalls: calls },
       ],
       s,
     );
@@ -105,11 +106,12 @@ describe('askReducer — happy path', () => {
   it('a second turn appends after the first — transcript stays ordered', () => {
     const s = run([
       SEND,
-      { type: 'meta', conversationId: 'c1' },
+      { type: 'meta', conversationId: 'c1', assistantMessageId: 'm1' },
       { type: 'delta', text: 'one' },
       { type: 'done' },
       {
         type: 'sendStarted',
+        scopeCompanyId: null,
         userClientId: 'u2',
         assistantClientId: 'a2',
         content: 'and then?',
@@ -206,7 +208,7 @@ describe('askReducer — rollback policy', () => {
     const s = run([
       SEND_EXISTING,
       { type: 'requestStarted' },
-      { type: 'meta', conversationId: 'c1' },
+      { type: 'meta', conversationId: 'c1', assistantMessageId: 'm1' },
       { type: 'delta', text: 'partial' },
       { type: 'streamFailed', message: 'Model failed', provenance: 'frame' },
     ]);
@@ -240,7 +242,7 @@ describe('askReducer — Stop', () => {
     const s = run([
       SEND_EXISTING,
       { type: 'requestStarted' },
-      { type: 'meta', conversationId: 'c1' },
+      { type: 'meta', conversationId: 'c1', assistantMessageId: 'm1' },
       { type: 'delta', text: 'Power off' },
       { type: 'toolActivity', label: 'Searching…' },
       { type: 'stop' },
@@ -275,6 +277,136 @@ describe('askReducer — reset', () => {
       { type: 'delta', text: 'partial' },
       { type: 'reset' },
     ]);
+    expect(s).toEqual(initialAskState);
+  });
+});
+
+describe('Phase 5b — message ids, tool actions, recovery', () => {
+  const CALL = {
+    id: 'tc-1',
+    name: 'create_article',
+    arguments: { title: 'T', markdown: '# T\n\nBody' },
+    status: 'pending',
+  } as unknown as ChatToolCallDto;
+
+  function withTurn(scopeCompanyId: string | null = null): AskState {
+    let s = askReducer(initialAskState, {
+      type: 'sendStarted',
+      userClientId: 'u1',
+      assistantClientId: 'a1',
+      content: 'draft it',
+      creating: false,
+      scopeCompanyId,
+    });
+    s = askReducer(s, {
+      type: 'meta',
+      conversationId: 'c1',
+      assistantMessageId: 'm1',
+    });
+    return askReducer(s, { type: 'toolCalls', messageId: 'm1', toolCalls: [CALL] });
+  }
+
+  it('meta stamps serverMessageId on the optimistic assistant bubble', () => {
+    const s = withTurn();
+    const assistant = s.messages[1]!;
+    expect(assistant.role).toBe('assistant');
+    expect(assistant.serverMessageId).toBe('m1');
+  });
+
+  it('sendStarted records the turn scope on both bubbles', () => {
+    const s = withTurn('org-1');
+    expect(s.messages[0]!.scopeCompanyId).toBe('org-1');
+    expect(s.messages[1]!.scopeCompanyId).toBe('org-1');
+  });
+
+  it('toolCalls defensively stamps serverMessageId when meta was lost', () => {
+    let s = askReducer(initialAskState, {
+      type: 'sendStarted',
+      userClientId: 'u1',
+      assistantClientId: 'a1',
+      content: 'q',
+      creating: false,
+      scopeCompanyId: null,
+    });
+    s = askReducer(s, { type: 'toolCalls', messageId: 'm9', toolCalls: [CALL] });
+    expect(s.messages[1]!.serverMessageId).toBe('m9');
+  });
+
+  it('toolActionStarted is single-flight; a second start is ignored', () => {
+    let s = withTurn();
+    s = askReducer(s, { type: 'toolActionStarted', toolCallId: 'tc-1', kind: 'apply' });
+    s = askReducer(s, { type: 'toolActionStarted', toolCallId: 'tc-2', kind: 'reject' });
+    expect(s.toolAction).toEqual({ toolCallId: 'tc-1', kind: 'apply' });
+  });
+
+  it('toolCallSettled replaces the message array wholesale and clears the action', () => {
+    let s = withTurn();
+    s = askReducer(s, { type: 'toolActionStarted', toolCallId: 'tc-1', kind: 'apply' });
+    const settled = [{ ...CALL, status: 'applied', result: 'Created article "T".' }];
+    s = askReducer(s, {
+      type: 'toolCallSettled',
+      serverMessageId: 'm1',
+      toolCalls: settled as unknown as ChatToolCallDto[],
+    });
+    expect(s.messages[1]!.toolCalls).toEqual(settled);
+    expect(s.toolAction).toBeNull();
+    expect(s.toolActionError).toBeNull();
+  });
+
+  it('toolCallSettled falls back to the message holding the settled call ids', () => {
+    let s = withTurn();
+    // Simulate a lost meta: null out the id via a fresh turn without meta.
+    s = { ...s, messages: s.messages.map((m) => ({ ...m, serverMessageId: null })) };
+    const settled = [{ ...CALL, status: 'rejected' }];
+    s = askReducer(s, {
+      type: 'toolCallSettled',
+      serverMessageId: 'm1',
+      toolCalls: settled as unknown as ChatToolCallDto[],
+    });
+    expect(s.messages[1]!.toolCalls).toEqual(settled);
+  });
+
+  it('toolActionFailed keeps the card pending with a transient error line', () => {
+    let s = withTurn();
+    s = askReducer(s, { type: 'toolActionStarted', toolCallId: 'tc-1', kind: 'apply' });
+    s = askReducer(s, {
+      type: 'toolActionFailed',
+      toolCallId: 'tc-1',
+      message: 'Couldn’t apply the change.',
+    });
+    expect(s.toolAction).toBeNull();
+    expect(s.toolActionError).toEqual({
+      toolCallId: 'tc-1',
+      message: 'Couldn’t apply the change.',
+    });
+    expect(s.messages[1]!.toolCalls[0]!.status).toBe('pending');
+  });
+
+  it('turnRecovered replaces the failed bubble with the persisted truth', () => {
+    let s = withTurn();
+    s = askReducer(s, {
+      type: 'streamFailed',
+      message: 'Connection lost.',
+      provenance: 'transport',
+    });
+    expect(s.messages[1]!.state).toBe('error');
+    s = askReducer(s, {
+      type: 'turnRecovered',
+      serverMessageId: 'm1',
+      text: 'The full persisted answer.',
+      toolCalls: [CALL],
+    });
+    const assistant = s.messages[1]!;
+    expect(assistant.state).toBe('done');
+    expect(assistant.text).toBe('The full persisted answer.');
+    expect(assistant.error).toBeUndefined();
+    expect(assistant.toolCalls).toEqual([CALL]);
+  });
+
+  it('reset clears the tool action state too', () => {
+    let s = withTurn();
+    s = askReducer(s, { type: 'toolActionStarted', toolCallId: 'tc-1', kind: 'apply' });
+    s = askReducer(s, { type: 'reset' });
     expect(s).toEqual(initialAskState);
   });
 });

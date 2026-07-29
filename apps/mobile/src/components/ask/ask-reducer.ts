@@ -39,6 +39,22 @@ export interface AskMessage {
   error?: string;
   notices: string[];
   toolCalls: ChatToolCallDto[];
+  /**
+   * The persisted message id (assistant rows), stamped from `meta`'s
+   * pre-allocated `assistantMessageId` — the earliest frame carrying
+   * it, always pairing the optimistic bubble, and the exact `:msgId`
+   * the apply/reject endpoints address. Null until `meta` (and always
+   * on user rows).
+   */
+  serverMessageId: string | null;
+  /**
+   * The `context.companyId` the provider sent for THIS turn (null =
+   * a global, org-free turn). Drives the create sheet's org rule: a
+   * company-scoped turn's org is locked (the server applies the turn's
+   * scope regardless of the body), a global turn requires an explicit
+   * choice.
+   */
+  scopeCompanyId: string | null;
 }
 
 /**
@@ -60,6 +76,15 @@ export interface AskState {
   sendError: string | null;
   /** Whether `meta` arrived for the in-flight turn — persistence proof. */
   metaReceived: boolean;
+  /**
+   * The ONE proposal action in flight (Phase 5b): apply/reject are
+   * globally single-flight — the provider no-ops further invocations
+   * and every card disables its buttons while this is set. Lives here
+   * (not in the overlay) so closing/reopening Ask can't lose it.
+   */
+  toolAction: { toolCallId: string; kind: 'apply' | 'reject' } | null;
+  /** Transient per-card failure line; the call itself stays pending. */
+  toolActionError: { toolCallId: string; message: string } | null;
   messages: AskMessage[];
 }
 
@@ -70,6 +95,8 @@ export const initialAskState: AskState = {
   toolActivity: null,
   sendError: null,
   metaReceived: false,
+  toolAction: null,
+  toolActionError: null,
   messages: [],
 };
 
@@ -83,15 +110,29 @@ export type AskAction =
       assistantClientId: string;
       content: string;
       creating: boolean;
+      scopeCompanyId: string | null;
     }
   | { type: 'conversationCreated'; conversationId: string }
   | { type: 'requestStarted' }
-  | { type: 'meta'; conversationId: string }
+  | { type: 'meta'; conversationId: string; assistantMessageId: string }
   | { type: 'delta'; text: string }
   | { type: 'notice'; message: string }
   | { type: 'toolActivity'; label: string | null }
-  | { type: 'toolCalls'; toolCalls: ChatToolCallDto[] }
+  | { type: 'toolCalls'; messageId: string; toolCalls: ChatToolCallDto[] }
   | { type: 'done' }
+  | { type: 'toolActionStarted'; toolCallId: string; kind: 'apply' | 'reject' }
+  | { type: 'toolActionFailed'; toolCallId: string; message: string }
+  | {
+      type: 'toolCallSettled';
+      serverMessageId: string;
+      toolCalls: ChatToolCallDto[];
+    }
+  | {
+      type: 'turnRecovered';
+      serverMessageId: string;
+      text: string;
+      toolCalls: ChatToolCallDto[];
+    }
   | { type: 'createFailed'; message: string }
   | { type: 'streamFailed'; message: string; provenance: AskFailureProvenance }
   | { type: 'stop' }
@@ -163,6 +204,8 @@ export function askReducer(state: AskState, action: AskAction): AskState {
             state: 'done',
             notices: [],
             toolCalls: [],
+            serverMessageId: null,
+            scopeCompanyId: action.scopeCompanyId,
           },
           {
             clientId: action.assistantClientId,
@@ -171,6 +214,8 @@ export function askReducer(state: AskState, action: AskAction): AskState {
             state: 'streaming',
             notices: [],
             toolCalls: [],
+            serverMessageId: null,
+            scopeCompanyId: action.scopeCompanyId,
           },
         ],
       };
@@ -190,8 +235,15 @@ export function askReducer(state: AskState, action: AskAction): AskState {
         : state;
 
     case 'meta':
+      // `assistantMessageId` is pre-allocated server-side and becomes
+      // the persisted row's PK — stamping it here is what makes the
+      // proposal cards addressable (apply/reject `:msgId`) and the
+      // post-meta transport recovery possible.
       return {
-        ...state,
+        ...withLastAssistant(state, (m) => ({
+          ...m,
+          serverMessageId: action.assistantMessageId,
+        })),
         conversationId: action.conversationId,
         metaReceived: true,
       };
@@ -214,6 +266,9 @@ export function askReducer(state: AskState, action: AskAction): AskState {
       return withLastAssistant(state, (m) => ({
         ...m,
         toolCalls: [...m.toolCalls, ...action.toolCalls],
+        // Defensive: `meta` precedes `tool_call` on the same ordered
+        // stream, but a lost meta must not leave the cards unaddressable.
+        serverMessageId: m.serverMessageId ?? action.messageId,
       }));
 
     case 'done':
@@ -265,6 +320,63 @@ export function askReducer(state: AskState, action: AskAction): AskState {
       }
       return state;
     }
+
+    case 'toolActionStarted':
+      // Single-flight: the provider guards, the reducer re-guards.
+      if (state.toolAction) return state;
+      return {
+        ...state,
+        toolAction: { toolCallId: action.toolCallId, kind: action.kind },
+        toolActionError: null,
+      };
+
+    case 'toolActionFailed':
+      return {
+        ...state,
+        toolAction:
+          state.toolAction?.toolCallId === action.toolCallId ? null : state.toolAction,
+        toolActionError: { toolCallId: action.toolCallId, message: action.message },
+      };
+
+    case 'toolCallSettled': {
+      // Server truth: replace the message's whole array with the
+      // returned `updatedToolCalls` — richer than patching one call
+      // (sibling statuses and markers ride along) and self-healing.
+      const byId = state.messages.some(
+        (m) => m.serverMessageId === action.serverMessageId,
+      );
+      const settledIds = new Set(action.toolCalls.map((c) => c.id));
+      return {
+        ...state,
+        toolAction: null,
+        toolActionError: null,
+        messages: state.messages.map((m) => {
+          const matches = byId
+            ? m.serverMessageId === action.serverMessageId
+            : // Fallback: the message holding any of the settled calls
+              // (a lost meta left `serverMessageId` null).
+              m.role === 'assistant' && m.toolCalls.some((c) => settledIds.has(c.id));
+          return matches ? { ...m, toolCalls: action.toolCalls } : m;
+        }),
+      };
+    }
+
+    case 'turnRecovered':
+      // Post-meta transport recovery: the persisted truth replaces the
+      // half-streamed bubble — text, cards, and the error state.
+      return {
+        ...state,
+        messages: state.messages.map((m) => {
+          if (m.serverMessageId !== action.serverMessageId) return m;
+          const { error: _dropped, ...rest } = m;
+          return {
+            ...rest,
+            text: action.text,
+            toolCalls: action.toolCalls,
+            state: 'done',
+          };
+        }),
+      };
 
     case 'reset':
       return initialAskState;

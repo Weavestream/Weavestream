@@ -265,3 +265,304 @@ describe('AskProvider', () => {
     expect(screen.getByTestId('draft')).toHaveTextContent('reboot steps?');
   });
 });
+
+// ---------------------------------------------------------------------
+// Phase 5b — tool actions, transport recovery, scope matrix
+// ---------------------------------------------------------------------
+
+const PENDING_CALL = {
+  id: 'tc-1',
+  name: 'patch_article',
+  arguments: { article_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', edits: [] },
+  status: 'pending',
+  baseRevision: 3,
+} as const;
+
+function ActionsHarness() {
+  const { state, setDraft, send, applyToolCall, rejectToolCall } = useAsk();
+  const last = state.messages[state.messages.length - 1];
+  return (
+    <div>
+      <output data-testid="status">{state.status}</output>
+      <output data-testid="count">{state.messages.length}</output>
+      <output data-testid="last-text">{last?.text ?? ''}</output>
+      <output data-testid="msg-id">{last?.serverMessageId ?? 'none'}</output>
+      <output data-testid="call-status">
+        {last?.toolCalls[0]?.status ?? 'none'}
+      </output>
+      <output data-testid="action">
+        {state.toolAction ? `${state.toolAction.kind}:${state.toolAction.toolCallId}` : 'none'}
+      </output>
+      <output data-testid="action-error">
+        {state.toolActionError?.message ?? 'none'}
+      </output>
+      <button onClick={() => setDraft('draft it')}>seed</button>
+      <button onClick={send}>send</button>
+      <button onClick={() => void applyToolCall('m1', 'tc-1')}>apply</button>
+      <button
+        onClick={() =>
+          void applyToolCall('m1', 'tc-1', {
+            companyId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+            createOverrides: { title: 'T', folderId: null, visibleToClients: false },
+          })
+        }
+      >
+        apply-create
+      </button>
+      <button onClick={() => void applyToolCall('m1', 'tc-2')}>apply-sibling</button>
+      <button onClick={() => void rejectToolCall('m1', 'tc-1')}>reject</button>
+    </div>
+  );
+}
+
+function mountActions() {
+  return render(
+    <AskProvider>
+      <ActionsHarness />
+    </AskProvider>,
+  );
+}
+
+/** Drive one full turn that yields the pending proposal on message m1. */
+async function driveTurn() {
+  apiFetchMock.mockResolvedValueOnce({ id: 'c1' }); // POST /chat/conversations
+  act(() => {
+    screen.getByText('seed').click();
+  });
+  await act(async () => {
+    screen.getByText('send').click();
+  });
+  const stream = streamInvocations[streamInvocations.length - 1]!;
+  act(() => {
+    (stream.handlers.onMeta as (m: unknown) => void)({
+      conversationId: 'c1',
+      userMessageId: 'um1',
+      assistantMessageId: 'm1',
+      title: null,
+    });
+    (stream.handlers.onToolCalls as (id: string, c: unknown) => void)('m1', [PENDING_CALL]);
+    (stream.handlers.onDone as (r: unknown) => void)(null);
+  });
+}
+
+describe('AskProvider — tool actions (5b)', () => {
+  beforeEach(() => {
+    currentOrg = ORG_A;
+    streamInvocations.length = 0;
+    apiFetchMock.mockReset();
+    redirectToLoginMock.mockClear();
+  });
+
+  it('keeps the SSE messageId and applies through the real endpoint WITHOUT companyId', async () => {
+    mountActions();
+    await driveTurn();
+    expect(screen.getByTestId('msg-id')).toHaveTextContent('m1');
+
+    apiFetchMock.mockResolvedValueOnce({
+      toolCall: { ...PENDING_CALL, status: 'applied', result: 'Edited article "X".' },
+      updatedToolCalls: [{ ...PENDING_CALL, status: 'applied', result: 'Edited article "X".' }],
+    });
+    await act(async () => {
+      screen.getByText('apply').click();
+    });
+
+    const [path, init] = apiFetchMock.mock.calls[apiFetchMock.mock.calls.length - 1]!;
+    expect(path).toBe('/chat/conversations/c1/messages/m1/tool-calls/tc-1/apply');
+    // Patch/update: the persisted turn context is authoritative — the
+    // client must NOT volunteer the current org.
+    expect(JSON.parse((init as { body: string }).body)).toEqual({});
+    expect(screen.getByTestId('call-status')).toHaveTextContent('applied');
+    expect(screen.getByTestId('action')).toHaveTextContent('none');
+  });
+
+  it('the create sheet path DOES send companyId + full overrides', async () => {
+    mountActions();
+    await driveTurn();
+
+    apiFetchMock.mockResolvedValueOnce({
+      toolCall: { ...PENDING_CALL, status: 'applied', result: 'Created article "T".' },
+      updatedToolCalls: [{ ...PENDING_CALL, status: 'applied', result: 'Created article "T".' }],
+    });
+    await act(async () => {
+      screen.getByText('apply-create').click();
+    });
+
+    const [, init] = apiFetchMock.mock.calls[apiFetchMock.mock.calls.length - 1]!;
+    expect(JSON.parse((init as { body: string }).body)).toEqual({
+      companyId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+      createOverrides: { title: 'T', folderId: null, visibleToClients: false },
+    });
+  });
+
+  it('a server-side failed apply settles as failure — never success', async () => {
+    mountActions();
+    await driveTurn();
+
+    apiFetchMock.mockResolvedValueOnce({
+      toolCall: { ...PENDING_CALL, status: 'failed', error: 'Missing article.write permission.' },
+      updatedToolCalls: [
+        { ...PENDING_CALL, status: 'failed', error: 'Missing article.write permission.' },
+      ],
+    });
+    await act(async () => {
+      screen.getByText('apply').click();
+    });
+
+    expect(screen.getByTestId('call-status')).toHaveTextContent('failed');
+  });
+
+  it('the already-settled 400 race resyncs from the conversation without an error line', async () => {
+    const { ApiError } = jest.requireActual('../../lib/api') as {
+      ApiError: new (status: number, problem: unknown) => Error;
+    };
+    mountActions();
+    await driveTurn();
+
+    apiFetchMock
+      .mockRejectedValueOnce(new ApiError(400, { detail: 'Tool call is already applied' }))
+      .mockResolvedValueOnce({
+        id: 'c1',
+        messages: [
+          {
+            id: 'm1',
+            role: 'assistant',
+            content: 'done',
+            createdAt: 'now',
+            toolCalls: [{ ...PENDING_CALL, status: 'applied', result: 'Edited.' }],
+          },
+        ],
+      });
+    await act(async () => {
+      screen.getByText('apply').click();
+    });
+
+    expect(screen.getByTestId('call-status')).toHaveTextContent('applied');
+    expect(screen.getByTestId('action-error')).toHaveTextContent('none');
+  });
+
+  it('the create-recovery 400 resyncs the marker AND surfaces the message (code-driven)', async () => {
+    const { ApiError } = jest.requireActual('../../lib/api') as {
+      ApiError: new (status: number, problem: unknown) => Error;
+    };
+    mountActions();
+    await driveTurn();
+
+    const markerCall = {
+      ...PENDING_CALL,
+      pendingCreate: {
+        articleId: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+        companyId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+        title: 'Original',
+        folderId: null,
+        visibleToClients: true,
+      },
+    };
+    apiFetchMock
+      .mockRejectedValueOnce(
+        new ApiError(400, {
+          code: 'article_create_recovery_pending',
+          detail: 'A previous apply attempt is being completed; the original confirmation applies.',
+        }),
+      )
+      .mockResolvedValueOnce({
+        id: 'c1',
+        messages: [
+          { id: 'm1', role: 'assistant', content: 'x', createdAt: 'now', toolCalls: [markerCall] },
+        ],
+      });
+    await act(async () => {
+      screen.getByText('apply-create').click();
+    });
+
+    // Still pending (locked retry required), with the honest message.
+    expect(screen.getByTestId('call-status')).toHaveTextContent('pending');
+    expect(screen.getByTestId('action-error')).toHaveTextContent(
+      /original confirmation applies/,
+    );
+  });
+
+  it('rapid sibling actions: the second invocation no-ops while the first is in flight', async () => {
+    mountActions();
+    await driveTurn();
+
+    let resolveApply: (v: unknown) => void = () => {};
+    apiFetchMock.mockImplementationOnce(
+      () => new Promise((resolve) => (resolveApply = resolve)),
+    );
+    const applyCallsBefore = apiFetchMock.mock.calls.length;
+
+    await act(async () => {
+      screen.getByText('apply').click();
+    });
+    await act(async () => {
+      screen.getByText('apply-sibling').click();
+    });
+
+    // Only the FIRST action reached the network.
+    expect(apiFetchMock.mock.calls.length).toBe(applyCallsBefore + 1);
+    expect(screen.getByTestId('action')).toHaveTextContent('apply:tc-1');
+
+    await act(async () => {
+      resolveApply({
+        toolCall: { ...PENDING_CALL, status: 'applied', result: 'ok' },
+        updatedToolCalls: [{ ...PENDING_CALL, status: 'applied', result: 'ok' }],
+      });
+    });
+    expect(screen.getByTestId('action')).toHaveTextContent('none');
+  });
+
+  it('post-meta transport recovery replaces the errored bubble with the persisted turn', async () => {
+    mountActions();
+    apiFetchMock.mockResolvedValueOnce({ id: 'c1' });
+    act(() => {
+      screen.getByText('seed').click();
+    });
+    await act(async () => {
+      screen.getByText('send').click();
+    });
+    const stream = streamInvocations[streamInvocations.length - 1]!;
+
+    apiFetchMock.mockResolvedValueOnce({
+      id: 'c1',
+      messages: [
+        {
+          id: 'm1',
+          role: 'assistant',
+          content: 'The persisted answer.',
+          createdAt: 'now',
+          toolCalls: [PENDING_CALL],
+        },
+      ],
+    });
+    await act(async () => {
+      (stream.handlers.onMeta as (m: unknown) => void)({
+        conversationId: 'c1',
+        userMessageId: 'um1',
+        assistantMessageId: 'm1',
+        title: null,
+      });
+      (stream.handlers.onError as (m: string, o: string) => void)(
+        'Connection lost.',
+        'transport',
+      );
+    });
+
+    expect(screen.getByTestId('last-text')).toHaveTextContent('The persisted answer.');
+    expect(screen.getByTestId('call-status')).toHaveTextContent('pending');
+  });
+
+  it('scope matrix: null → id NOW resets; the boot adoption still does not', async () => {
+    currentOrg = null;
+    const view = mountActions();
+    await driveTurn();
+    expect(screen.getByTestId('count')).toHaveTextContent('2');
+
+    currentOrg = ORG_A;
+    view.rerender(
+      <AskProvider>
+        <ActionsHarness />
+      </AskProvider>,
+    );
+    expect(screen.getByTestId('count')).toHaveTextContent('0');
+  });
+});

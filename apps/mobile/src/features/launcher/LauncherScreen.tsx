@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useLocation } from '@tanstack/react-router';
 import { AppLogo } from '../../components/AppLogo';
 import { Icon } from '../../components/Icon';
 import { IconButton, SectionLabel } from '../../components/primitives';
@@ -6,6 +7,7 @@ import { EmptyState, ErrorBanner, SkeletonList } from '../../components/states';
 import { signOutAndReset } from '../../lib/sign-out';
 import { useEnterOrg } from '../../lib/use-enter-org';
 import { useScopedNavigate } from '../../lib/scoped-nav';
+import { useMe } from '../../screens/TabShell';
 import { OrgRow } from '../orgs/OrgRow';
 import { useOrgDirectory } from '../orgs/use-org-directory';
 
@@ -33,11 +35,24 @@ import { useOrgDirectory } from '../orgs/use-org-directory';
 export function LauncherScreen() {
   const navigate = useScopedNavigate();
   const enterOrg = useEnterOrg();
+  const location = useLocation();
+  const me = useMe();
   const [signOutError, setSignOutError] = useState<string | null>(null);
   const [signingOut, setSigningOut] = useState(false);
 
   const { pinned, rest, loading, nothingAtAll, companies, stars } =
     useOrgDirectory({ filter: '', enabled: true });
+
+  // Ask floats bottom-right on the launcher (org-free contract verified
+  // in W0/W5): the overlay is presented by the Shell via `?sheet=ask`,
+  // same as the center tab in-org. Hidden for CLIENT_USER — desktop
+  // portal parity, cosmetic only (authorization stays server-side).
+  const askVisible = me?.role !== 'CLIENT_USER';
+  const searchSansSheet = Object.fromEntries(
+    Object.entries((location.search ?? {}) as Record<string, unknown>).filter(
+      ([key]) => key !== 'sheet',
+    ),
+  );
 
   async function onSignOut() {
     setSignOutError(null);
@@ -142,6 +157,26 @@ export function LauncherScreen() {
             </button>
           )}
         </section>
+      )}
+
+      {askVisible && (
+        <button
+          type="button"
+          aria-label="Ask anything"
+          onClick={() =>
+            navigate({
+              to: '/app',
+              search: { ...searchSansSheet, sheet: 'ask' },
+            })
+          }
+          className={
+            'fixed bottom-edge-b right-4 z-tabbar flex h-ask w-ask items-center ' +
+            'justify-center rounded-ask bg-accent text-accent-ink shadow-ask ' +
+            'active:brightness-95'
+          }
+        >
+          <Icon name="auto_awesome" size={26} />
+        </button>
       )}
     </main>
   );

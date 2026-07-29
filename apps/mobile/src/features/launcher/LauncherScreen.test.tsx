@@ -41,6 +41,12 @@ jest.mock('../../lib/scoped-nav', () => ({
   useScopedNavigate: () => navigateMock,
 }));
 
+let meRole = 'TECHNICIAN';
+jest.mock('../../screens/TabShell', () => ({ useMe: () => ({ role: meRole }) }));
+jest.mock('@tanstack/react-router', () => ({
+  useLocation: () => ({ search: {}, pathname: '/app', state: { orgId: null } }),
+}));
+
 jest.mock('../../lib/sign-out', () => ({ signOutAndReset: jest.fn() }));
 const { signOutAndReset } = jest.requireMock('../../lib/sign-out') as {
   signOutAndReset: jest.Mock;
@@ -80,6 +86,7 @@ function renderLauncher() {
 
 beforeEach(() => {
   jest.clearAllMocks();
+  meRole = 'TECHNICIAN';
 });
 
 describe('LauncherScreen', () => {
@@ -154,6 +161,22 @@ describe('LauncherScreen', () => {
     );
     expect(screen.getByText('Search all organizations')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Sign out' })).toBeInTheDocument();
+  });
+
+  it('shows the Ask FAB, hidden for CLIENT_USER (portal parity, cosmetic)', () => {
+    route({});
+    renderLauncher();
+    expect(screen.getByRole('button', { name: 'Ask anything' })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Ask anything' }));
+    expect(navigateMock).toHaveBeenCalledWith({
+      to: '/app',
+      search: { sheet: 'ask' },
+    });
+
+    meRole = 'CLIENT_USER';
+    renderLauncher();
+    expect(screen.queryAllByRole('button', { name: 'Ask anything' })).toHaveLength(1);
   });
 
   it('a failed sign-out shows the error instead of pretending', async () => {

@@ -1,7 +1,9 @@
 /** @jest-environment jsdom */
 import '@testing-library/jest-dom';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ChatToolCallDto } from '@weavestream/shared';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render as rtlRender, screen } from '@testing-library/react';
+import type { ReactNode } from 'react';
 import type { Org } from '../../lib/org-scope';
 import { initialAskState, type AskState } from './ask-reducer';
 
@@ -13,14 +15,23 @@ const askValue = {
   send: jest.fn(),
   stop: jest.fn(),
   newChat: jest.fn(),
+  applyToolCall: jest.fn(),
+  rejectToolCall: jest.fn(),
 };
 
 jest.mock('./AskProvider', () => ({ useAsk: () => askValue }));
 jest.mock('../../lib/org-scope', () => ({
   useOrgScope: () => ({ currentOrg: ORG, scopeStatus: 'ready' }),
 }));
+jest.mock('../../lib/api', () => ({ apiFetch: jest.fn(() => new Promise(() => {})) }));
 
 import { AskScreen } from './AskScreen';
+
+/** ProposalCard pulls TanStack Query (base fetch + org chip). */
+function render(ui: ReactNode) {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return rtlRender(<QueryClientProvider client={client}>{ui}</QueryClientProvider>);
+}
 
 function state(partial: Partial<AskState>): AskState {
   return { ...initialAskState, ...partial };
@@ -35,6 +46,8 @@ function message(
     state: 'done',
     notices: [],
     toolCalls: [],
+    serverMessageId: null,
+    scopeCompanyId: null,
     ...partial,
   };
 }
@@ -149,7 +162,7 @@ describe('AskScreen', () => {
     expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled();
   });
 
-  it('renders proposal cards read-only — no Apply/Reject anywhere', () => {
+  it('renders actionable proposal cards; read tools never become cards (5b)', () => {
     askValue.state = state({
       messages: [
         message({ clientId: 'u1', role: 'user', text: 'draft it' }),
@@ -180,12 +193,11 @@ describe('AskScreen', () => {
 
     expect(screen.getByText('Drafted an article')).toBeInTheDocument();
     expect(screen.getByText('Reboot runbook')).toBeInTheDocument();
-    expect(
-      screen.getByText('Review and apply on desktop.'),
-    ).toBeInTheDocument();
+    // The Phase 3 desktop-handoff line is gone; the card is actionable.
+    expect(screen.queryByText('Review and apply on desktop.')).toBeNull();
     expect(screen.getAllByText(/Drafted an/)).toHaveLength(1);
-    expect(screen.queryByRole('button', { name: /apply/i })).toBeNull();
-    expect(screen.queryByRole('button', { name: /reject/i })).toBeNull();
+    expect(screen.getByRole('button', { name: /apply/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /reject/i })).toBeInTheDocument();
   });
 
   it('shows New chat only once a transcript exists, wired to the provider', () => {
