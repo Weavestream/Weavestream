@@ -17,7 +17,7 @@ Open your profile menu in the desktop header and choose **Mobile app**, or brows
 
 ## The launcher
 
-The app opens on the **launcher** — a starting point *before* any client is selected. It offers, in order: **search across all your organizations**, your **pinned** (starred) organizations, and the full list of organizations you can access. Selecting an organization enters it — the tab bar appearing is the signal that you're now inside a client — and the system Back gesture (or **More → Home**) returns to the launcher. Sign-out is available directly on the launcher, so an account with no organizations is never stranded.
+The app opens on the **launcher** — a starting point *before* any client is selected. It offers, in order: **search across all your organizations**, your **pinned** (starred) organizations, and the full list of organizations you can access. Selecting an organization enters it — the tab bar appearing is the signal that you're now inside a client — and the system Back gesture (or **More → Home**) returns to the launcher. The launcher's **More** button opens account chores (sign-out, appearance, install) without selecting a company, so an account with no organizations is never stranded.
 
 ## Installing it on a phone
 

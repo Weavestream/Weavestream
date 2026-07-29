@@ -215,10 +215,14 @@ describe('SearchScreen — global mode (null org stamp, Phase 5b)', () => {
 
     render(<SearchScreen query="fortinet" />);
 
-    // Org context prominently on the row.
+    // Org context prominently on the row, and the term highlighted IN
+    // the result's own text (no separate snippet line in global mode).
     expect(screen.getByText('Northwind MSP')).toBeInTheDocument();
+    const marked = document.querySelector('mark');
+    expect(marked).toHaveTextContent('Fortinet');
+    expect(screen.queryByText(/found/)).toBeNull(); // the snippet line is gone
 
-    fireEvent.click(screen.getByText('Fortinet firewall'));
+    fireEvent.click(screen.getByText('Northwind MSP'));
     expect(switchOrgMock).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'org-9', name: 'Northwind MSP' }),
     );

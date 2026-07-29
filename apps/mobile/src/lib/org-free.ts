@@ -38,13 +38,16 @@ export function isOrgFreePath(pathname: string): boolean {
 }
 
 /**
- * Whether a concrete history entry is org-free. `/search` is org-free
- * only when its entry carries an explicit `orgId: null` stamp (a push
- * from the launcher, or a reload of one — history state survives
- * reloads); an unstamped or org-stamped search entry is the ordinary
- * in-org search screen.
+ * Whether a concrete history entry is org-free. `/search` and `/more`
+ * are org-free only when their entry carries an explicit `orgId: null`
+ * stamp (a push from the launcher, or a reload of one — history state
+ * survives reloads); an unstamped or org-stamped entry is the ordinary
+ * in-org screen. Org-free More exists so account chores — sign-out,
+ * appearance, install — are reachable before any company is selected
+ * (and with zero companies at all).
  */
 export function isOrgFreeEntry(pathname: string, state: unknown): boolean {
   if (isOrgFreePath(pathname)) return true;
-  return leadingSegment(pathname) === 'search' && readOrgStamp(state) === null;
+  const seg = leadingSegment(pathname);
+  return (seg === 'search' || seg === 'more') && readOrgStamp(state) === null;
 }

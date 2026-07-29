@@ -8,9 +8,8 @@
  *    organizations with Show more.
  *  - Selecting an org is a PUSH with the org id stamped explicitly —
  *    the launcher stays in history so system Back returns to it.
- *  - Zero orgs is one honest empty state; search and sign-out survive.
- *  - Sign-out failure is told, not swallowed (the session is still
- *    live), matching MoreTab.
+ *  - Zero orgs is one honest empty state; search and the org-free More
+ *    entry (sign-out's home) survive.
  */
 import '@testing-library/jest-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -46,11 +45,6 @@ jest.mock('../../screens/TabShell', () => ({ useMe: () => ({ role: meRole }) }))
 jest.mock('@tanstack/react-router', () => ({
   useLocation: () => ({ search: {}, pathname: '/app', state: { orgId: null } }),
 }));
-
-jest.mock('../../lib/sign-out', () => ({ signOutAndReset: jest.fn() }));
-const { signOutAndReset } = jest.requireMock('../../lib/sign-out') as {
-  signOutAndReset: jest.Mock;
-};
 
 jest.mock('../../lib/api', () => ({ apiFetch: jest.fn() }));
 const { apiFetch } = jest.requireMock('../../lib/api') as { apiFetch: jest.Mock };
@@ -149,7 +143,7 @@ describe('LauncherScreen', () => {
     expect(navigateMock).toHaveBeenCalledWith({ to: '/search', upIsBack: true });
   });
 
-  it('zero orgs: one empty state, search and sign-out still available', async () => {
+  it('zero orgs: one empty state, search and the More entry still available', async () => {
     route({ companies: { items: [], nextCursor: null }, stars: { items: [] } });
 
     renderLauncher();
@@ -160,7 +154,17 @@ describe('LauncherScreen', () => {
       ).toBeInTheDocument(),
     );
     expect(screen.getByText('Search all organizations')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Sign out' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'More' })).toBeInTheDocument();
+  });
+
+  it('the More button pushes org-free More (account chores without an org)', () => {
+    route({});
+    renderLauncher();
+
+    fireEvent.click(screen.getByRole('button', { name: 'More' }));
+
+    // Plain push; the null org stamp comes from the (null) context.
+    expect(navigateMock).toHaveBeenCalledWith({ to: '/more' });
   });
 
   it('shows the Ask FAB, hidden for CLIENT_USER (portal parity, cosmetic)', () => {
@@ -179,15 +183,4 @@ describe('LauncherScreen', () => {
     expect(screen.queryAllByRole('button', { name: 'Ask anything' })).toHaveLength(1);
   });
 
-  it('a failed sign-out shows the error instead of pretending', async () => {
-    route({});
-    signOutAndReset.mockResolvedValueOnce({ ok: false, message: 'Couldn’t reach the server.' });
-
-    renderLauncher();
-    fireEvent.click(screen.getByRole('button', { name: 'Sign out' }));
-
-    await waitFor(() =>
-      expect(screen.getByText('Couldn’t reach the server.')).toBeInTheDocument(),
-    );
-  });
 });

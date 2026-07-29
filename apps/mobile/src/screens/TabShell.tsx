@@ -17,7 +17,7 @@ import type {
 import { ApiError, apiFetch } from '../lib/api';
 import { applyServerUiPrefs } from '../lib/ui-prefs';
 import { isOrgFreeEntry } from '../lib/org-free';
-import { OrgProvider, type Org } from '../lib/org-scope';
+import { OrgProvider, useOrgScope, type Org } from '../lib/org-scope';
 import { useScopedNavigate, useStaleScopeGuard } from '../lib/scoped-nav';
 import { useEnterOrg } from '../lib/use-enter-org';
 import { recoveryRouteFor } from '../lib/session-recovery';
@@ -170,6 +170,7 @@ function Shell() {
   const location = useLocation();
   const navigate = useScopedNavigate();
   const enterOrg = useEnterOrg();
+  const { currentOrg } = useOrgScope();
   const me = useMe();
   useStaleScopeGuard();
 
@@ -246,8 +247,12 @@ function Shell() {
       <div className="flex h-dvh flex-col overflow-hidden bg-bg">
         <Outlet />
 
-        {/* Create/edit forms own the whole viewport — see hideTabBarFor. */}
-        {!hideTabBarFor(pathname) && (
+        {/* Create/edit forms own the whole viewport (hideTabBarFor), and
+            the tab bar is the "inside a client" chrome — org-free
+            surfaces (launcher, global search, org-free More) never show
+            it. Tapping a tab with no org would only bounce back to the
+            launcher anyway. */}
+        {!hideTabBarFor(pathname) && currentOrg !== null && (
           <TabBar
             activeTab={activeTab}
             onSelectTab={onSelectTab}

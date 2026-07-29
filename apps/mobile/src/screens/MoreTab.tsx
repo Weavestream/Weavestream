@@ -19,7 +19,6 @@ import {
   promptInstall,
   subscribeInstallAvailability,
 } from '../lib/install-prompt';
-import { useOrgScope } from '../lib/org-scope';
 import { useScopedNavigate } from '../lib/scoped-nav';
 import { signOutAndReset } from '../lib/sign-out';
 import { useMe, useOpenOrgSheet } from './TabShell';
@@ -62,7 +61,6 @@ function installModeSnapshot(): InstallMode {
 
 export function MoreTab() {
   const me = useMe();
-  const { currentOrg } = useOrgScope();
   const navigate = useScopedNavigate();
   const openOrgSheet = useOpenOrgSheet();
   const [signOutError, setSignOutError] = useState<string | null>(null);
@@ -121,7 +119,11 @@ export function MoreTab() {
       </Card>
 
       <section className="flex flex-col gap-1.75">
-        <SectionLabel>{currentOrg?.name ?? 'Organization'}</SectionLabel>
+        {/* Generic on purpose: these are org-NAVIGATION rows (Home, the
+            switcher), not rows about the active company — and the
+            screen also renders org-free from the launcher, where an
+            active-company label would be a lie. */}
+        <SectionLabel>Organizations</SectionLabel>
         <GroupedList>
           {/* Exit to the launcher (Phase 5b D1). Navigation only — the
               guard's arrival-clear effect owns leaving org context, so

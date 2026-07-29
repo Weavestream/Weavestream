@@ -22,7 +22,7 @@ import { useAsk } from '../../components/ask/AskProvider';
 import { groupHits } from './grouping';
 import { routeForHit } from './hit-route';
 import { SEARCH_DEBOUNCE_MS, useSearchResults } from './queries';
-import { Snippet } from './Snippet';
+import { HighlightMatches, Snippet } from './Snippet';
 
 /**
  * The global search screen — 2b's full-screen takeover. The tab bar is
@@ -275,20 +275,26 @@ export function SearchScreen({ query }: { query: string }) {
                       return (
                         <ListRow
                           key={`${hit.kind}:${hit.id}`}
-                          title={hit.title}
+                          title={
+                            globalMode ? (
+                              // Global rows highlight the term IN the
+                              // result's own text instead of appending
+                              // the snippet as an extra line.
+                              <HighlightMatches text={hit.title} query={debounced} />
+                            ) : (
+                              hit.title
+                            )
+                          }
                           metaFont="sans"
                           meta={
                             globalMode ? (
                               // Org context PROMINENTLY on every global
                               // hit — the whole point of carrying scope:
-                              // the company line sits above the snippet,
-                              // accent-toned, so wrong-client mistakes
-                              // are visible before the tap.
-                              <span className="flex min-w-0 flex-col gap-0.5">
-                                <span className="truncate font-medium text-accent-text">
-                                  {hit.companyName}
-                                </span>
-                                {snippetOrLayout}
+                              // accent-toned company name, so
+                              // wrong-client mistakes are visible
+                              // before the tap.
+                              <span className="truncate font-medium text-accent-text">
+                                {hit.companyName}
                               </span>
                             ) : (
                               snippetOrLayout

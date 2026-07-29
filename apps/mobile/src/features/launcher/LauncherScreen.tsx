@@ -1,10 +1,8 @@
-import { useState } from 'react';
 import { useLocation } from '@tanstack/react-router';
 import { AppLogo } from '../../components/AppLogo';
 import { Icon } from '../../components/Icon';
 import { IconButton, SectionLabel } from '../../components/primitives';
 import { EmptyState, ErrorBanner, SkeletonList } from '../../components/states';
-import { signOutAndReset } from '../../lib/sign-out';
 import { useEnterOrg } from '../../lib/use-enter-org';
 import { useScopedNavigate } from '../../lib/scoped-nav';
 import { useMe } from '../../screens/TabShell';
@@ -21,10 +19,10 @@ import { useOrgDirectory } from '../orgs/use-org-directory';
  * organizations. Selecting an org **pushes** the org's root, so the
  * launcher stays in history and system Back returns here.
  *
- * Sign-out lives in the header because the More tab (its usual home) is
- * only reachable inside an org — a zero-org user must still be able to
- * leave. Same contract as MoreTab: on failure the session is still
- * live, so the user is told rather than quietly returned.
+ * The header links to **More** — which renders org-free from here
+ * (null-stamped push), so account chores (sign-out, appearance,
+ * install) are reachable before any company is selected, including
+ * with zero companies at all.
  *
  * The org list is the OrgSheet's directory (`useOrgDirectory`), pinned
  * = starred companies — with no current org by construction. The
@@ -37,8 +35,6 @@ export function LauncherScreen() {
   const enterOrg = useEnterOrg();
   const location = useLocation();
   const me = useMe();
-  const [signOutError, setSignOutError] = useState<string | null>(null);
-  const [signingOut, setSigningOut] = useState(false);
 
   const { pinned, rest, loading, nothingAtAll, companies, stars } =
     useOrgDirectory({ filter: '', enabled: true });
@@ -54,31 +50,18 @@ export function LauncherScreen() {
     ),
   );
 
-  async function onSignOut() {
-    setSignOutError(null);
-    setSigningOut(true);
-    const result = await signOutAndReset();
-    // On success the helper hard-navigates; on failure the session is
-    // still live and the user must be told.
-    if (!result.ok) {
-      setSigningOut(false);
-      setSignOutError(result.message ?? 'Couldn’t sign out. Try again.');
-    }
-  }
-
   return (
     <main className="mx-auto flex min-h-0 w-full max-w-page flex-1 flex-col gap-3.25 overflow-y-auto px-4.5 pb-5 pt-edge-t">
       <header className="flex h-11 shrink-0 items-center justify-between">
         <AppLogo height={24} />
+        {/* Org-free More: account chores (sign-out, appearance, install)
+            without selecting a company. Push, so Back returns here. */}
         <IconButton
-          icon="logout"
-          label={signingOut ? 'Signing out…' : 'Sign out'}
-          disabled={signingOut}
-          onClick={() => void onSignOut()}
+          icon="more_horiz"
+          label="More"
+          onClick={() => navigate({ to: '/more' })}
         />
       </header>
-
-      {signOutError && <ErrorBanner title={signOutError} />}
 
       {/* Cross-org search first. A button styled as the search field it
           opens; the push carries `upIsBack` so search's Done pops back
@@ -116,6 +99,7 @@ export function LauncherScreen() {
       {nothingAtAll && (
         <EmptyState message="No organizations available. Ask an administrator to give you access to a client." />
       )}
+
 
       {pinned.length > 0 && (
         <section className="flex flex-col gap-2.5">
