@@ -2,6 +2,7 @@ import { useRef, useState } from 'react';
 import { formatShortDateTime } from '@weavestream/shared';
 import { ConfirmSheet } from '../../components/ConfirmSheet';
 import { DetailHeader } from '../../components/DetailHeader';
+import { DeepLinkNotFound } from '../../components/DeepLinkNotFound';
 import { Icon } from '../../components/Icon';
 import { MetaRow } from '../../components/MetaRow';
 import { ShowMore } from '../../components/ShowMore';
@@ -66,7 +67,7 @@ export function AssetDetailScreen({ assetId }: { assetId: string }) {
       <>
         <DetailHeader backLabel="Assets" backTo="/assets" />
         <Screen>
-          <EmptyState message={NOT_FOUND_COPY} />
+          <DeepLinkNotFound message={NOT_FOUND_COPY} />
         </Screen>
       </>
     );
@@ -192,7 +193,7 @@ function AssetDetailLoaded({ assetId }: { assetId: string }) {
 
         {detailQuery.isPending && <SkeletonList rows={4} />}
 
-        {!detailQuery.isPending && notFound && <EmptyState message={NOT_FOUND_COPY} />}
+        {!detailQuery.isPending && notFound && <DeepLinkNotFound message={NOT_FOUND_COPY} />}
 
         {!detailQuery.isPending && restricted && (
           <ErrorBanner title="You don’t have access to this asset." />

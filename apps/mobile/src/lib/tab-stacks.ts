@@ -102,6 +102,11 @@ const FORM_ROUTE_TABS: ReadonlySet<string> = new Set(['passwords', 'assets']);
 export function hideTabBarFor(pathname: string): boolean {
   const segments = pathname.split('/').filter(Boolean);
   if (segments[0] === 'm') segments.shift();
+  // The launcher (and the index redirect that lands on it) is the
+  // org-free home — the tab bar IS the "inside a client" chrome, so it
+  // must not render there (Phase 5b). This also stops the redirect
+  // frame from flashing a tab bar.
+  if (segments.length === 0 || segments[0] === 'app') return true;
   // The search screen is 2b's full-screen takeover — field row where the
   // header was, results below, no tab bar while searching.
   if (segments[0] === 'search') return true;

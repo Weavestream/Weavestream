@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { Icon } from './Icon';
-import { useBackLabel, useBackOr } from '../lib/use-back';
+import { useBackLabel, useBackOr, useWillPop } from '../lib/use-back';
 
 /**
  * The back row for pushed screens (1c: chevron + parent label), with a
@@ -8,8 +8,12 @@ import { useBackLabel, useBackOr } from '../lib/use-back';
  * inset, like ScreenHeader does for tab roots.
  *
  * Back prefers real history so the previous screen's filter/search
- * state survives; a cold deep link with no history entry falls back to
- * a replace-navigation to `backTo`.
+ * state survives. When there is NO in-app history to pop (a cold deep
+ * link), the chevron goes to the launcher and says "Home" (Phase 5b):
+ * the deep link's record may belong to any org, so the org-free home is
+ * the only fallback that cannot land the technician in a wrong-org
+ * list. `backTo`/`backSearch` remain the structural target for the
+ * popping case's label semantics only.
  *
  * `backLabel` is the STRUCTURAL parent's name ("Passwords"). When the
  * pushing screen stamped a different origin (a search result stamps
@@ -23,14 +27,19 @@ export function DetailHeader({
   actions,
 }: {
   backLabel: string;
-  /** Structural destination when history can't be popped (use-back.ts). */
+  /** Structural destination when history pops (label semantics). */
   backTo: string;
   /** Search params for the structural path — e.g. the list's filters. */
   backSearch?: Record<string, unknown>;
   actions?: ReactNode;
 }) {
-  const onBack = useBackOr(backTo, backSearch);
-  const label = useBackLabel(backLabel);
+  const willPop = useWillPop();
+  const onBack = useBackOr(
+    willPop ? backTo : '/app',
+    willPop ? backSearch : undefined,
+  );
+  const stampedLabel = useBackLabel(backLabel);
+  const label = willPop ? stampedLabel : 'Home';
 
   return (
     // Shared column pattern — see ScreenHeader / tokens.css.

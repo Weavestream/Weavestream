@@ -3,6 +3,7 @@ import { copyToClipboard } from '@weavestream/shared/browser';
 import { formatDate, formatShortDateTime } from '@weavestream/shared';
 import { ConfirmSheet } from '../../components/ConfirmSheet';
 import { DetailHeader } from '../../components/DetailHeader';
+import { DeepLinkNotFound } from '../../components/DeepLinkNotFound';
 import { MetaRow } from '../../components/MetaRow';
 import { ShowMore } from '../../components/ShowMore';
 import { Icon } from '../../components/Icon';
@@ -14,7 +15,6 @@ import {
   Title,
 } from '../../components/primitives';
 import {
-  EmptyState,
   ErrorBanner,
   OfflineBanner,
   SkeletonList,
@@ -187,7 +187,7 @@ export function PasswordDetailScreen({ passwordId }: { passwordId: string }) {
         {detailQuery.isPending && <SkeletonList rows={4} />}
 
         {!detailQuery.isPending && notFound && (
-          <EmptyState message="This password wasn’t found. It may have been removed, or you may not have access to it." />
+          <DeepLinkNotFound message="This password wasn’t found. It may have been removed, or you may not have access to it." />
         )}
 
         {!detailQuery.isPending && restricted && (

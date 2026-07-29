@@ -36,17 +36,31 @@ const ORG_A = '11111111-1111-4111-8111-111111111111';
 const ORG_B = '22222222-2222-4222-8222-222222222222';
 
 function Probe() {
-  const { currentOrg, scopeStatus } = useOrgScope();
+  const { currentOrg, scopeStatus, switchOrg, clearOrg } = useOrgScope();
   return (
     <div>
       <span data-testid="status">{scopeStatus}</span>
       <span data-testid="org">{currentOrg ? currentOrg.name : 'none'}</span>
       <span data-testid="subtitle">{currentOrg?.subtitle ?? ''}</span>
+      <button
+        data-testid="clear"
+        onClick={() => clearOrg()}
+      >
+        clear
+      </button>
+      <button
+        data-testid="pick-b"
+        onClick={() =>
+          switchOrg({ id: ORG_B, name: 'Beta Clinic', initials: 'BC', subtitle: null })
+        }
+      >
+        pick
+      </button>
     </div>
   );
 }
 
-function renderScope(): { unmount: () => void } {
+function renderScope(opts?: { bootOrgFree?: boolean }): { unmount: () => void } {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
@@ -55,7 +69,7 @@ function renderScope(): { unmount: () => void } {
   );
   return render(
     <Wrapper>
-      <OrgProvider>
+      <OrgProvider bootOrgFree={opts?.bootOrgFree}>
         <Probe />
       </OrgProvider>
     </Wrapper>,
@@ -427,5 +441,46 @@ describe('clearPersistedOrg', () => {
     localStorage.setItem(STORAGE_KEY, ORG_A);
     clearPersistedOrg();
     expect(localStorage.getItem(STORAGE_KEY)).toBeNull();
+  });
+});
+
+describe('org-free boot (Phase 5b launcher)', () => {
+  it('makes ZERO scope requests, reports ready/none, and leaves localStorage alone', async () => {
+    localStorage.setItem(STORAGE_KEY, ORG_A);
+
+    renderScope({ bootOrgFree: true });
+
+    expect(screen.getByTestId('status')).toHaveTextContent('ready');
+    expect(screen.getByTestId('org')).toHaveTextContent('none');
+    // Give any stray fetch a tick to fire, then assert none did.
+    await new Promise((r) => setTimeout(r, 0));
+    expect(apiFetch).not.toHaveBeenCalled();
+    // The persisted preference survives for future scoped deep links.
+    expect(localStorage.getItem(STORAGE_KEY)).toBe(ORG_A);
+  });
+
+  it('clearOrg leaves org context in memory but keeps the persisted id', async () => {
+    localStorage.setItem(STORAGE_KEY, ORG_A);
+    apiFetch.mockResolvedValueOnce(company());
+
+    renderScope();
+    await waitFor(() =>
+      expect(screen.getByTestId('org')).toHaveTextContent('Pinebrook Dental'),
+    );
+
+    fireEvent.click(screen.getByTestId('clear'));
+
+    expect(screen.getByTestId('status')).toHaveTextContent('ready');
+    expect(screen.getByTestId('org')).toHaveTextContent('none');
+    expect(localStorage.getItem(STORAGE_KEY)).toBe(ORG_A);
+  });
+
+  it('switchOrg after an org-free boot enters the org and persists it', () => {
+    renderScope({ bootOrgFree: true });
+
+    fireEvent.click(screen.getByTestId('pick-b'));
+
+    expect(screen.getByTestId('org')).toHaveTextContent('Beta Clinic');
+    expect(localStorage.getItem(STORAGE_KEY)).toBe(ORG_B);
   });
 });

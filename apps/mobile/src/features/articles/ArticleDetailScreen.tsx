@@ -1,5 +1,6 @@
 import { formatShortDateTime } from '@weavestream/shared';
 import { DetailHeader } from '../../components/DetailHeader';
+import { DeepLinkNotFound } from '../../components/DeepLinkNotFound';
 import { Icon } from '../../components/Icon';
 import { MetaRow } from '../../components/MetaRow';
 import { ShowMore } from '../../components/ShowMore';
@@ -45,7 +46,7 @@ export function ArticleDetailScreen({ articleId }: { articleId: string }) {
       <>
         <DetailHeader backLabel="Articles" backTo="/articles" />
         <Screen>
-          <EmptyState message={NOT_FOUND_COPY} />
+          <DeepLinkNotFound message={NOT_FOUND_COPY} />
         </Screen>
       </>
     );
@@ -114,7 +115,7 @@ function ArticleDetailLoaded({ articleId }: { articleId: string }) {
 
         {detailQuery.isPending && <SkeletonList rows={4} />}
 
-        {!detailQuery.isPending && notFound && <EmptyState message={NOT_FOUND_COPY} />}
+        {!detailQuery.isPending && notFound && <DeepLinkNotFound message={NOT_FOUND_COPY} />}
 
         {!detailQuery.isPending && restricted && (
           <ErrorBanner title="You don’t have access to this article." />

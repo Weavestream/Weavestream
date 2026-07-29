@@ -24,15 +24,25 @@ export function useBackOr(
   fallbackSearch?: Record<string, unknown>,
 ): () => void {
   const router = useRouter();
-  const canGoBack = useCanGoBack();
+  const willPop = useWillPop();
   const navigate = useScopedNavigate();
-  const location = useLocation();
-  const upIsBack = readUpIsBack(location.state);
 
   return () => {
-    if (upIsBack && canGoBack) router.history.back();
+    if (willPop) router.history.back();
     else navigate({ to: fallbackTo, replace: true, search: fallbackSearch });
   };
+}
+
+/**
+ * Whether the back affordance will genuinely pop history — the shared
+ * `upIsBack && canGoBack` predicate. Exposed (Phase 5b) so DetailHeader
+ * can retarget the non-popping fallback at the launcher ("Home") while
+ * popping behavior stays byte-identical.
+ */
+export function useWillPop(): boolean {
+  const canGoBack = useCanGoBack();
+  const location = useLocation();
+  return readUpIsBack(location.state) && canGoBack;
 }
 
 /**
@@ -45,10 +55,9 @@ export function useBackOr(
  * ("Passwords"), including on cold deep links where no stamp exists.
  */
 export function useBackLabel(structuralLabel: string): string {
-  const canGoBack = useCanGoBack();
+  const willPop = useWillPop();
   const location = useLocation();
-  const upIsBack = readUpIsBack(location.state);
   const stamped = readBackLabel(location.state);
 
-  return upIsBack && canGoBack && stamped ? stamped : structuralLabel;
+  return willPop && stamped ? stamped : structuralLabel;
 }

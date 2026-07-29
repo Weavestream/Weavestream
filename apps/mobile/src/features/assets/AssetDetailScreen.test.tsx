@@ -36,6 +36,9 @@ jest.mock('../../lib/use-company-access', () => ({
 jest.mock('../../lib/use-back', () => ({
   useBackOr: () => jest.fn(),
   useBackLabel: (label: string) => label,
+  // Popping stance: DetailHeader keeps its structural label/target, so
+  // pre-5b expectations hold; the Home fallback has its own tests.
+  useWillPop: () => true,
 }));
 jest.mock('../../lib/api', () => {
   const actual = jest.requireActual('../../lib/api');

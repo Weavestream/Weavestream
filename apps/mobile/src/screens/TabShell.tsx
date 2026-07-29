@@ -16,6 +16,7 @@ import type {
 } from '@weavestream/shared';
 import { ApiError, apiFetch } from '../lib/api';
 import { applyServerUiPrefs } from '../lib/ui-prefs';
+import { isOrgFreeEntry } from '../lib/org-free';
 import { OrgProvider, useOrgScope, type Org } from '../lib/org-scope';
 import { useScopedNavigate, useStaleScopeGuard } from '../lib/scoped-nav';
 import { recoveryRouteFor } from '../lib/session-recovery';
@@ -276,9 +277,13 @@ function Shell() {
 }
 
 export function TabShell() {
+  // Read once for the provider's boot decision (an org-free entry —
+  // launcher or null-stamped global search — must not resolve an org).
+  // Later location changes are the guard's business, not this prop's.
+  const location = useLocation();
   return (
     <RequireSession>
-      <OrgProvider>
+      <OrgProvider bootOrgFree={isOrgFreeEntry(location.pathname, location.state)}>
         <ToastProvider>
           {/* Above the Shell so the Ask transcript survives the
               `?sheet=ask` overlay closing and reopening. */}

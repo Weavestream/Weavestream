@@ -5,6 +5,7 @@ import {
   type LinkProps,
 } from '@tanstack/react-router';
 import { useCallback, useEffect } from 'react';
+import { isOrgFreeEntry, readOrgStamp as readStamp } from './org-free';
 import { useOrgScope } from './org-scope';
 import { TAB_ROOTS, tabIdForPath } from './tab-stacks';
 
@@ -32,13 +33,10 @@ export interface OrgStamp {
   orgId: string | null;
 }
 
-/** Read the stamp off a history entry. `undefined` = unstamped entry. */
-export function readOrgStamp(state: unknown): string | null | undefined {
-  if (typeof state !== 'object' || state === null) return undefined;
-  const value = (state as Record<string, unknown>).orgId;
-  if (value === null) return null;
-  return typeof value === 'string' ? value : undefined;
-}
+// The stamp reader (and the org-free predicates built on it) live in
+// `org-free.ts` so `org-scope` can boot on them without an import
+// cycle; re-exported here because this file is the stamp's home API.
+export { readOrgStamp } from './org-free';
 
 /**
  * Whether this history entry was pushed **directly from its parent
@@ -189,20 +187,60 @@ export function ScopedLink(props: LinkProps & { className?: string }) {
  *    would exempt it permanently: after navigating on and switching org, a
  *    long press of back could reach that entry and render the old org's
  *    detail screen under the new org's header.
+ *
+ * Phase 5b adds the org-free surfaces (launcher, global search):
+ *
+ *  - Org-free entries are EXEMPT from the mismatch bounce — popping from
+ *    a cross-org hit's detail back to global search must not bounce to a
+ *    tab root — and instead drive the arrival-clear effect below.
+ *  - A scoped entry under a null context (zero orgs, or a stale org
+ *    entry popped from under the launcher) redirects to the launcher —
+ *    the app-level home for "no company in context".
  */
 export function useStaleScopeGuard(): void {
   const location = useLocation();
   const navigate = useNavigate();
-  const { currentOrg, scopeStatus } = useOrgScope();
+  const { currentOrg, scopeStatus, clearOrg } = useOrgScope();
 
   const state = location.state;
   const pathname = location.pathname;
   const search = location.search;
 
+  /**
+   * Arrival-clear: settling on an org-free entry leaves org context.
+   *
+   * Deliberately keyed ONLY on location identity (plus the stable
+   * `clearOrg` callback) and NEVER on `currentOrg` — on the commit where
+   * `switchOrg` has already set the new org but the router still shows
+   * `/app` (the launcher's select-org tick), this effect must NOT re-run
+   * and wipe the fresh selection. `clearOrg` on an already-null
+   * selection is an `Object.is` bail, so repeat runs are free.
+   */
+  useEffect(() => {
+    if (isOrgFreeEntry(pathname, state)) clearOrg();
+  }, [pathname, state, clearOrg]);
+
   useEffect(() => {
     if (scopeStatus !== 'ready') return;
-    const stamped = readOrgStamp(state);
+    // Org-free entries are never adopted or bounced; the arrival-clear
+    // effect above owns them.
+    if (isOrgFreeEntry(pathname, state)) return;
+
+    const stamped = readStamp(state);
     const currentId = currentOrg?.id ?? null;
+
+    if (currentId === null) {
+      // No company in context but a scoped path: herd to the launcher.
+      // Covers the zero-org boot (every scoped screen would dead-end)
+      // and stale org entries popped from under the launcher. `replace`
+      // consumes the entry.
+      void navigate({
+        to: '/app',
+        replace: true,
+        state: (prev: Record<string, unknown>) => ({ ...prev, orgId: null }),
+      } as never);
+      return;
+    }
 
     if (stamped === undefined) {
       // Adopt the entry: same location, now stamped. `replace` so no new

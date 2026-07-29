@@ -49,6 +49,13 @@ interface OrgScopeValue {
   scopeStatus: ScopeStatus;
   /** Coordinated switch — see `switchOrg` below for why it is one call. */
   switchOrg: (org: Org) => void;
+  /**
+   * Leave org context (arriving on the launcher / global search). Clears
+   * only the in-memory selection — `localStorage` keeps the last org so
+   * cold deep links into scoped routes still resolve (Phase 5b D4);
+   * sign-out remains the localStorage-clearing path.
+   */
+  clearOrg: () => void;
   retry: () => void;
 }
 
@@ -225,25 +232,35 @@ async function resolveScope(signal?: AbortSignal): Promise<Org | null> {
   return toOrg(first);
 }
 
-export function OrgProvider({ children }: { children: ReactNode }) {
+export function OrgProvider({
+  children,
+  bootOrgFree = false,
+}: {
+  children: ReactNode;
+  /**
+   * Whether the BOOT entry is an org-free surface (launcher, or a
+   * reloaded global search carrying the `orgId: null` stamp) — computed
+   * by the mounting shell via `isOrgFreeEntry`, because the provider
+   * itself deliberately has no router dependency. Read once, in the
+   * lazy initializer: later location changes go through `clearOrg` /
+   * `switchOrg`, never through this prop.
+   */
+  bootOrgFree?: boolean;
+}) {
   const queryClient = useQueryClient();
-
-  const { data, isPending, isError, refetch } = useQuery({
-    queryKey: SCOPE_QUERY_KEY,
-    // `signal` is threaded all the way into `apiFetch` so `switchOrg` can
-    // genuinely abort a resolution that is still in flight.
-    queryFn: ({ signal }) => resolveScope(signal),
-    // Resolution is a boot step, not a live view. Refetching it would
-    // fight `switchOrg`'s cache write.
-    staleTime: Infinity,
-  });
 
   /**
    * An explicit choice, which **outranks** the boot resolution.
    *
    * `undefined` means "nothing chosen this session, use the resolver".
-   * `null` is not used here but is a legal org value elsewhere, hence the
-   * three-state type.
+   * `null` means "deliberately no org" — the launcher / global-search
+   * state (Phase 5b).
+   *
+   * An org-free boot starts at `null`, which both renders org-free
+   * immediately and — via the `enabled` gate below — keeps the resolver
+   * from running at all, so a launcher boot makes zero scope requests
+   * and never writes a fallback org to `localStorage`. Scoped-route
+   * boots start `undefined` and resolve exactly as before.
    *
    * This is what makes the switch race-free rather than merely
    * cancellation-dependent. The switcher is reachable while the initial
@@ -255,7 +272,23 @@ export function OrgProvider({ children }: { children: ReactNode }) {
    * cancellation as a query error, so the provider reports `'error'` while
    * holding a perfectly good org. Precedence sidesteps both.
    */
-  const [selected, setSelected] = useState<Org | null | undefined>(undefined);
+  const [selected, setSelected] = useState<Org | null | undefined>(() =>
+    bootOrgFree ? null : undefined,
+  );
+
+  const { data, isPending, isError, refetch } = useQuery({
+    queryKey: SCOPE_QUERY_KEY,
+    // `signal` is threaded all the way into `apiFetch` so `switchOrg` can
+    // genuinely abort a resolution that is still in flight.
+    queryFn: ({ signal }) => resolveScope(signal),
+    // Resolution is a boot step, not a live view. Refetching it would
+    // fight `switchOrg`'s cache write.
+    staleTime: Infinity,
+    // Once anything is explicitly selected (an org, or the launcher's
+    // deliberate null) the resolver's answer could never be consumed —
+    // precedence ignores it — so don't spend the requests.
+    enabled: selected === undefined,
+  });
 
   /**
    * One coordinated operation, deliberately not a bare setter.
@@ -290,6 +323,20 @@ export function OrgProvider({ children }: { children: ReactNode }) {
     [queryClient],
   );
 
+  /**
+   * Leave org context — the arrival side of the launcher / global
+   * search. In-memory only (see the interface doc); deliberately does
+   * NOT invalidate org caches: `switchOrg` invalidates on the next
+   * entry, so re-entering the same org after a launcher visit is a
+   * refetch, not a stale view. Stable identity matters: the guard's
+   * arrival-clear effect depends on it and must not re-run on org
+   * changes (the select-org-on-launcher race).
+   */
+  const clearOrg = useCallback(() => {
+    setSelected(null);
+    void queryClient.cancelQueries({ queryKey: SCOPE_QUERY_KEY, exact: true });
+  }, [queryClient]);
+
   const value = useMemo<OrgScopeValue>(
     () => ({
       currentOrg: selected !== undefined ? selected : (data ?? null),
@@ -304,9 +351,10 @@ export function OrgProvider({ children }: { children: ReactNode }) {
               ? 'error'
               : 'ready',
       switchOrg,
+      clearOrg,
       retry: () => void refetch(),
     }),
-    [selected, data, isPending, isError, switchOrg, refetch],
+    [selected, data, isPending, isError, switchOrg, clearOrg, refetch],
   );
 
   return (

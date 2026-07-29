@@ -20,7 +20,7 @@ import {
   createRoute,
   createRouter,
 } from '@tanstack/react-router';
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import type { Org } from './org-scope';
 import {
   readBackLabel,
@@ -39,8 +39,16 @@ let scope: { currentOrg: Org | null; scopeStatus: string } = {
 };
 
 jest.mock('./org-scope', () => ({
-  useOrgScope: () => ({ ...scope, switchOrg: jest.fn(), retry: jest.fn() }),
+  useOrgScope: () => ({
+    ...scope,
+    switchOrg: jest.fn(),
+    clearOrg: clearOrgMock,
+    retry: jest.fn(),
+  }),
 }));
+
+/** Captured so the arrival-clear tests can assert on it. */
+const clearOrgMock = jest.fn();
 
 /** Captured from inside the router so tests can drive the real hook. */
 let scopedNavigate: ReturnType<typeof useScopedNavigate> | undefined;
@@ -73,6 +81,8 @@ function buildRouter(path: string, state?: Record<string, unknown>) {
     { path: '/passwords', name: 'passwords-root' },
     { path: '/passwords/$id', name: 'password-detail' },
     { path: '/assets', name: 'assets-root' },
+    { path: '/app', name: 'launcher' },
+    { path: '/search', name: 'search' },
   ].map(({ path: p, name }) =>
     createRoute({
       getParentRoute: () => layout,
@@ -97,6 +107,7 @@ async function mount(path: string, state?: Record<string, unknown>) {
 beforeEach(() => {
   scope = { currentOrg: ORG_A, scopeStatus: 'ready' };
   scopedNavigate = undefined;
+  clearOrgMock.mockClear();
 });
 
 describe('readOrgStamp', () => {
@@ -355,13 +366,16 @@ describe('useStaleScopeGuard', () => {
     expect(screen.getByTestId('screen')).toHaveTextContent('password-detail');
   });
 
-  it('redirects a stamped entry when the user now has no org at all', async () => {
+  it('redirects a stamped entry to the LAUNCHER when the user now has no org (5b)', async () => {
+    // Pre-5b this bounced to the passwords tab root, which under a null
+    // context is a dead end of empty states; the launcher is the home
+    // for "no company in context".
     scope = { currentOrg: null, scopeStatus: 'ready' };
 
     await mount('/passwords/abc', { orgId: ORG_A.id });
 
     await waitFor(() =>
-      expect(screen.getByTestId('screen')).toHaveTextContent('passwords-root'),
+      expect(screen.getByTestId('screen')).toHaveTextContent('launcher'),
     );
   });
 
@@ -375,5 +389,67 @@ describe('useStaleScopeGuard', () => {
     await waitFor(() =>
       expect(screen.getByTestId('screen')).toHaveTextContent('passwords-root'),
     );
+  });
+});
+
+describe('useStaleScopeGuard — org-free surfaces (5b)', () => {
+  it('exempts a null-stamped /search entry from the mismatch bounce and clears context', async () => {
+    // Popping from a cross-org hit's detail back to global search: the
+    // entry's stamp (null) differs from the now-selected org, but the
+    // surface is org-free — bouncing it would destroy the search→detail
+    // →Back story. Arrival clears the in-memory org instead.
+    scope = { currentOrg: ORG_A, scopeStatus: 'ready' };
+
+    await mount('/search', { orgId: null });
+
+    expect(screen.getByTestId('screen')).toHaveTextContent('search');
+    await waitFor(() => expect(clearOrgMock).toHaveBeenCalled());
+  });
+
+  it('never bounces the launcher, whatever stamp its entry carries', async () => {
+    scope = { currentOrg: ORG_A, scopeStatus: 'ready' };
+
+    await mount('/app', { orgId: ORG_B.id });
+
+    expect(screen.getByTestId('screen')).toHaveTextContent('launcher');
+    await waitFor(() => expect(clearOrgMock).toHaveBeenCalled());
+  });
+
+  it('an org-STAMPED /search entry stays an ordinary scoped screen', async () => {
+    // Only the explicit null stamp makes search global; in-org search is
+    // adopted/bounced exactly like any scoped screen.
+    scope = { currentOrg: ORG_A, scopeStatus: 'ready' };
+
+    await mount('/search', { orgId: ORG_B.id });
+
+    // Mismatched org stamp on a scoped surface → consumed to a tab root.
+    await waitFor(() =>
+      expect(screen.getByTestId('screen')).toHaveTextContent('passwords-root'),
+    );
+  });
+
+  it('RACE REGRESSION: selecting an org on the launcher is not wiped by the arrival-clear', async () => {
+    // The select-org tick: `switchOrg` has set the new org while the
+    // router still shows `/app`. The arrival-clear effect is keyed on
+    // location identity only — a re-render with a new `currentOrg` at
+    // the same location must NOT call clearOrg again and wipe the fresh
+    // selection.
+    scope = { currentOrg: null, scopeStatus: 'ready' };
+    const router = buildRouter('/app', { orgId: null });
+    const view = render(<RouterProvider router={router} />);
+    await waitFor(() => expect(screen.getByTestId('screen')).toHaveTextContent('launcher'));
+    const callsAfterArrival = clearOrgMock.mock.calls.length;
+
+    // switchOrg happened: context now holds the new org, location still /app.
+    scope = { currentOrg: ORG_A, scopeStatus: 'ready' };
+    view.rerender(<RouterProvider router={router} />);
+    expect(clearOrgMock.mock.calls.length).toBe(callsAfterArrival);
+
+    // The paired navigation lands in the org (explicit stamp, no bounce).
+    act(() => scopedNavigate!({ to: '/passwords', orgId: ORG_A.id }));
+    await waitFor(() =>
+      expect(screen.getByTestId('screen')).toHaveTextContent('passwords-root'),
+    );
+    expect(clearOrgMock.mock.calls.length).toBe(callsAfterArrival);
   });
 });

@@ -43,6 +43,13 @@ describe('tabIdForPath', () => {
 });
 
 describe('hideTabBarFor', () => {
+  it('hides for the launcher and the index redirect frame (5b)', () => {
+    expect(hideTabBarFor('/app')).toBe(true);
+    expect(hideTabBarFor('/m/app')).toBe(true);
+    expect(hideTabBarFor('/')).toBe(true);
+    expect(hideTabBarFor('/m')).toBe(true);
+  });
+
   it('hides the tab bar on the form routes', () => {
     expect(hideTabBarFor('/passwords/new')).toBe(true);
     expect(hideTabBarFor('/passwords/abc-123/edit')).toBe(true);
