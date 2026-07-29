@@ -50,4 +50,23 @@ describe('buildSystemPrompt app help guidance', () => {
     expect(prompt).not.toContain('- update_asset(');
     expect(prompt).not.toContain('- create_integration(');
   });
+
+  // An org-free chat is offered create_article (chat-turn.ts), so the
+  // prompt must describe it WITHOUT an active company — and must tell the
+  // model not to guess a folder it has no company tree for.
+  it('describes create_article without an active company, and suppresses folder_id', () => {
+    const global = buildSystemPrompt(actor);
+    expect(global).toContain('- create_article(title, markdown');
+    expect(global).toContain('This chat has no active company, so omit folder_id');
+    expect(global).toContain(
+      'the user chooses the destination organization and folder when they approve the proposal',
+    );
+    expect(global).not.toContain('propose a brand-new article in the active company');
+
+    const scoped = buildSystemPrompt(actor, {
+      companyId: '11111111-1111-1111-1111-111111111111',
+    });
+    expect(scoped).toContain('propose a brand-new article in the active company');
+    expect(scoped).not.toContain('This chat has no active company');
+  });
 });

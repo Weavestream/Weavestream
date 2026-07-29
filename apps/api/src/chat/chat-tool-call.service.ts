@@ -420,8 +420,12 @@ export class ChatToolCallService {
     requestCompanyId: string | undefined,
   ): Promise<string> {
     if (!requestCompanyId) {
+      // An org-free chat proposes creates too (chat-turn.ts), so the
+      // destination arrives only from the confirmation dialog/sheet.
+      // Both clients always send it; reaching here means none was
+      // chosen, not that the chat was opened from the wrong place.
       throw new BadRequestException(
-        'Cannot create an article without a company context. Open the chat from a company page first.',
+        'Cannot create an article without a destination organization. Choose one in the create form and apply again.',
       );
     }
     createArticleToolInputSchema.parse(stripNullArgs(toolCall.arguments));

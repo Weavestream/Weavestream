@@ -1347,8 +1347,13 @@ function appendToolSections(
   lines.push(
     '- update_article(article_id, title?, markdown, summary?): replace the complete article only for an explicit whole-document rewrite.',
   );
+  // The create tool is offered with or without an active company — the
+  // user picks the destination when they approve the card — but the
+  // model must not guess a `folder_id` it has no company tree for.
   lines.push(
-    '- create_article(title, markdown, folder_id?, visible_to_clients?, summary?): propose a brand-new article in the active company.',
+    context?.companyId
+      ? '- create_article(title, markdown, folder_id?, visible_to_clients?, summary?): propose a brand-new article in the active company.'
+      : '- create_article(title, markdown, folder_id?, visible_to_clients?, summary?): propose a brand-new article. This chat has no active company, so omit folder_id — the user chooses the destination organization and folder when they approve the proposal.',
   );
   lines.push(
     'You cannot create or modify assets or domains — attached assets and domains are read-only context. If the user asks to change one, describe the proposed change in prose rather than emitting a tool call.',

@@ -103,8 +103,11 @@ export function partitionToolCalls(calls: FinalizedToolCall[]): {
 /** Tool set for rounds after the first. Reads stay on the menu while
  *  the per-turn allowance lasts; article edit tools appear once ANY
  *  article basis has been captured this turn (attached with a
- *  confirmed revision claim, or read via `get_article`); create needs
- *  a company scope, exactly like apply time. */
+ *  confirmed revision claim, or read via `get_article`); create is
+ *  always on the menu — its destination org is chosen and authorized
+ *  at apply time, not derived from the turn (see `resolveTurnTools`),
+ *  so an org-free chat proposes creates too. `hasCompany` still gates
+ *  the read set (`get_company_summary` has no scope without it). */
 export function roundTools(input: {
   readBudget: number;
   hasCompany: boolean;
@@ -115,7 +118,7 @@ export function roundTools(input: {
   const tools: ToolDef[] = [
     ...(input.readBudget > 0 ? readToolDefs(input.hasCompany, input.appHelpAllowed ?? true) : []),
     ...(input.anyBasisCaptured ? toolDefsFor(['patch_article', 'update_article']) : []),
-    ...(input.hasCompany ? toolDefsFor(['create_article']) : []),
+    ...toolDefsFor(['create_article']),
   ];
   return { tools, toolChoice: 'auto' };
 }

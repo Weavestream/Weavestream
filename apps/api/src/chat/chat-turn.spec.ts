@@ -104,18 +104,59 @@ describe('synthesizeActionHistory', () => {
 
 describe('resolveTurnTools', () => {
   // WS-030: no-company turns get the read set (search self-scopes to
-  // the actor's allowedCompanyIds), but never write proposals and
-  // never get_company_summary (its scope comes from the turn company).
-  it('offers only company-independent read tools without a company', () => {
+  // the actor's allowedCompanyIds) and never get_company_summary (its
+  // scope comes from the turn company). `create_article` IS offered —
+  // its destination org is picked in the confirmation dialog/sheet and
+  // authorized there, so an org-free chat must be able to produce an
+  // approval card rather than an un-appliable markdown blob.
+  it('offers company-independent reads + create without a company', () => {
     const r = resolveTurnTools({ hasCompany: false, targetArticleRetained: true });
     expect(r.toolChoice).toBe('auto');
     expect(r.tools.map((t) => t.function.name).sort()).toEqual([
+      'create_article',
       'find_related_items',
       'get_app_help',
       'get_article',
       'get_related_items',
       'search',
     ]);
+  });
+
+  // Article EDIT proposals stay company-gated in the first round: their
+  // revision basis is captured from the turn's own company scope. The
+  // read loop earns them back via get_article (roundTools).
+  it('withholds article edit tools without a company even when a body was retained', () => {
+    const names = resolveTurnTools({
+      hasCompany: false,
+      targetArticleRetained: true,
+    }).tools.map((t) => t.function.name);
+    expect(names).not.toContain('patch_article');
+    expect(names).not.toContain('update_article');
+  });
+
+  it('forces create_article on an explicit create intent without a company', () => {
+    const r = resolveTurnTools({
+      hasCompany: false,
+      targetArticleRetained: false,
+      intent: 'create',
+    });
+    expect(r.toolChoice).toEqual({
+      type: 'function',
+      function: { name: 'create_article' },
+    });
+    expect(r.tools.map((t) => t.function.name)).toEqual(['create_article']);
+  });
+
+  it('degrades an edit intent without a company to the read set', () => {
+    const r = resolveTurnTools({
+      hasCompany: false,
+      targetArticleRetained: true,
+      intent: 'edit',
+    });
+    expect(r.toolChoice).toBe('auto');
+    const names = r.tools.map((t) => t.function.name);
+    expect(names).not.toContain('patch_article');
+    expect(names).toContain('get_article');
   });
 
   it('defaults to auto over reads + both proposal tools when ambiguous', () => {
@@ -285,20 +326,40 @@ describe('inferToolIntentPrelude', () => {
     ).toBeNull();
   });
 
-  it('does not emit a prelude without company scope or for question mode', () => {
-    expect(
-      inferToolIntentPrelude({
-        hasCompany: false,
-        targetArticleRetained: true,
-        userMessage: 'Draft a runbook article.',
-      }),
-    ).toBeNull();
+  it('never emits a prelude in question mode', () => {
     expect(
       inferToolIntentPrelude({
         hasCompany: true,
         targetArticleRetained: true,
         userMessage: 'Draft a runbook article.',
         intent: 'question',
+      }),
+    ).toBeNull();
+  });
+
+  // An org-free chat can propose a create, so it gets the same prelude.
+  // Edit preludes still need the retained body the proposal is based on.
+  it('emits a create prelude without a company but never an edit one', () => {
+    expect(
+      inferToolIntentPrelude({
+        hasCompany: false,
+        targetArticleRetained: false,
+        userMessage: 'Draft a runbook article.',
+      }),
+    ).toBe('create');
+    expect(
+      inferToolIntentPrelude({
+        hasCompany: false,
+        targetArticleRetained: true,
+        userMessage: 'Please rewrite this article so it is clearer.',
+      }),
+    ).toBeNull();
+    expect(
+      inferToolIntentPrelude({
+        hasCompany: false,
+        targetArticleRetained: true,
+        userMessage: 'Tighten up this page.',
+        intent: 'edit',
       }),
     ).toBeNull();
   });

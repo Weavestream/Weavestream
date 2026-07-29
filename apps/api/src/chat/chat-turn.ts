@@ -107,6 +107,22 @@ export type TurnIntent = 'question' | 'edit' | 'create';
  * be retained (`targetArticleRetained === false`), article edit tools are
  * never offered/forced — the model can't be asked to emit a full body it
  * can no longer see.
+ *
+ * ## Why `create_article` is NOT company-gated
+ *
+ * A create proposal carries no target org of its own: the destination
+ * is chosen by the user in the confirmation dialog (desktop's
+ * Save-as-article) or sheet (mobile's Create article) at APPLY time,
+ * and re-authorized there against the session — `article.write` on the
+ * company the user picked, never a value the model produced. So an
+ * org-free chat (mobile's global Ask, desktop's freeform tab) can
+ * propose a draft exactly like a company-scoped one; withholding the
+ * tool only produced an approval-less markdown blob in the transcript.
+ *
+ * Article EDIT tools stay company-gated here because their revision
+ * basis is captured from the turn's own company scope. The read loop
+ * earns them back for an org-free chat once `get_article` confirms a
+ * basis (`roundTools`).
  */
 export function resolveTurnTools(input: {
   hasCompany: boolean;
@@ -116,14 +132,16 @@ export function resolveTurnTools(input: {
   appHelpAllowed?: boolean;
 }): { tools: ToolDef[]; toolChoice: ToolChoice } {
   const { hasCompany, targetArticleRetained, intent, appHelpAllowed = true } = input;
-  const reads = readToolDefs(hasCompany, appHelpAllowed);
-
   // WS-030 widening (deliberate, called out in review): turns that
   // previously got NO tools — no-company chats and explicit questions —
-  // now get the read set with 'auto'. Search self-scopes to the actor's
+  // get the read set with 'auto'. Search self-scopes to the actor's
   // allowedCompanyIds at the query layer, so a freeform tab can look
-  // things up; write proposals stay company-gated as before.
-  if (!hasCompany) return { tools: reads, toolChoice: 'auto' };
+  // things up.
+  const reads = readToolDefs(hasCompany, appHelpAllowed);
+  // Stated, not inherited from the caller's coupling: an edit proposal
+  // needs both the body and the turn company its basis was captured
+  // under.
+  const canEdit = hasCompany && targetArticleRetained;
 
   switch (intent) {
     case 'question':
@@ -140,7 +158,7 @@ export function resolveTurnTools(input: {
       // revision check into `targetArticleRetained`). Otherwise offer
       // reads so the model can `get_article` and propose next round,
       // rather than inviting a proposal persist would block.
-      return targetArticleRetained
+      return canEdit
         ? {
             tools: toolDefsFor(['patch_article']),
             toolChoice: { type: 'function', function: { name: 'patch_article' } },
@@ -151,7 +169,7 @@ export function resolveTurnTools(input: {
       // article edit tools when the target body wasn't retained/confirmed
       // (2.3) so an ambiguous turn can't produce a bodyless update —
       // the read loop can still earn it back next round via get_article.
-      return targetArticleRetained
+      return canEdit
         ? {
             tools: [
               ...reads,
@@ -175,11 +193,15 @@ export function inferToolIntentPrelude(input: {
   userMessage: string;
   intent?: TurnIntent;
 }): 'create' | 'edit' | null {
-  if (!input.hasCompany) return null;
+  // Not company-gated, for the same reason `create_article` isn't: an
+  // org-free chat can propose a create, so it gets the same "here's
+  // what I'm about to do" line. Edit preludes still need the retained
+  // body its proposal would be based on.
+  const canEdit = input.hasCompany && input.targetArticleRetained;
   if (input.intent === 'question') return null;
   if (input.intent === 'create') return 'create';
   if (input.intent === 'edit') {
-    return input.targetArticleRetained ? 'edit' : null;
+    return canEdit ? 'edit' : null;
   }
 
   const text = input.userMessage.toLowerCase();
@@ -192,7 +214,7 @@ export function inferToolIntentPrelude(input: {
   if (createLikely) return 'create';
 
   const editLikely =
-    input.targetArticleRetained &&
+    canEdit &&
     /\b(edit|change|update|fix|rewrite|revise|expand|add\s+to|clean\s+up)\b/.test(text) &&
     /\b(article|page|doc|document|documentation|runbook|this)\b/.test(text);
   return editLikely ? 'edit' : null;

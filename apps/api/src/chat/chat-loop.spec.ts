@@ -70,7 +70,10 @@ describe('roundTools', () => {
     expect(names(r)).toContain('get_company_summary');
   });
 
-  it('never offers create or company summary without a company scope', () => {
+  // No company scope: get_company_summary has none to report on, but
+  // create_article stays on the menu — its destination org is chosen and
+  // authorized at apply time, not derived from the turn.
+  it('offers create but never company summary without a company scope', () => {
     const r = roundTools({ readBudget: 3, hasCompany: false, anyBasisCaptured: true });
     expect(names(r)).toEqual([
       'search',
@@ -80,6 +83,7 @@ describe('roundTools', () => {
       'get_app_help',
       'patch_article',
       'update_article',
+      'create_article',
     ]);
   });
 
