@@ -42,24 +42,57 @@ function decodeEntities(text: string): string {
  * highlighter cannot reproduce — body-only matches keep the server's
  * own highlighted snippet as the evidence (SearchScreen).
  */
-export function queryTokens(query: string): string[] {
-  const tokens: string[] = [];
-  const re = /"([^"]*)"|(\S+)/g;
+/**
+ * The query's OR-separated groups: `a b OR c` parses as `(a AND b) OR
+ * (c)`, mirroring `websearch_to_tsquery`'s precedence. Terms within a
+ * group are conjuncts; the groups are alternatives. Excluded terms
+ * (`-term`, `-"phrase"`) never appear — by definition they do not
+ * occur in results.
+ */
+export function queryGroups(query: string): string[][] {
+  const groups: string[][] = [];
+  let current: string[] = [];
+  // The optional `-` is INSIDE the quoted alternative: without it,
+  // `-"serial number"` falls through to the bare-token branch and
+  // splits on the space, excluding `-"serial` but resurrecting
+  // `number"` as a positive term — highlighting text that belongs to
+  // an excluded phrase.
+  const re = /(-?)"([^"]*)"|(\S+)/g;
   let match: RegExpExecArray | null;
   while ((match = re.exec(query))) {
-    if (match[1] !== undefined) {
-      const phrase = match[1].trim();
-      if (phrase.length >= 2) tokens.push(phrase);
+    if (match[2] !== undefined) {
+      if (match[1] === '-') continue; // excluded phrase
+      const phrase = match[2].trim();
+      if (phrase.length >= 2) current.push(phrase);
       continue;
     }
-    const raw = match[2]!;
-    if (/^or$/i.test(raw)) continue;
+    const raw = match[3]!;
+    if (/^or$/i.test(raw)) {
+      if (current.length > 0) groups.push(current);
+      current = [];
+      continue;
+    }
     if (raw.startsWith('-')) continue;
+    // An unbalanced quote (`"serial` with no closer) lands here; strip
+    // the stray quotes and treat it as an ordinary word, which is the
+    // lenient reading `websearch_to_tsquery` also takes.
     const word = raw.replace(/^"+|"+$/g, '');
-    if (word.length >= 2) tokens.push(word);
+    if (word.length >= 2) current.push(word);
   }
+  if (current.length > 0) groups.push(current);
+  return groups;
+}
+
+/**
+ * Every positive term, any group — the highlight set. All branches of
+ * an OR are highlight-worthy: any of them could be the one the row
+ * matched on.
+ */
+export function queryTokens(query: string): string[] {
   // Longest first, so a phrase wins over a word it contains.
-  return tokens.sort((a, b) => b.length - a.length);
+  return queryGroups(query)
+    .flat()
+    .sort((a, b) => b.length - a.length);
 }
 
 function tokenPattern(tokens: string[]): RegExp {
@@ -74,12 +107,28 @@ function tokenPattern(tokens: string[]): RegExp {
   );
 }
 
-/** Whether any query token occurs in `text` — drives the body-only
- *  snippet fallback on global rows. */
-export function hasQueryMatch(text: string, query: string): boolean {
-  const tokens = queryTokens(query);
-  if (tokens.length === 0) return false;
-  return tokenPattern(tokens).test(text);
+/**
+ * Whether the title alone accounts for the whole query — some OR group
+ * is fully present in it. Drives the body-only snippet fallback on
+ * global rows.
+ *
+ * Coverage is per-GROUP because the grammar is: `fortinet vpn` needs
+ * both (a title reading "Fortinet router" explains only half the match
+ * and still owes the body evidence for "vpn"), while `fortinet OR
+ * cisco` needs either — one satisfied branch fully explains the row.
+ *
+ * Two cases deliberately answer "no" (⇒ show the snippet), because a
+ * visible explanation beats a confident-looking bare row: a query with
+ * no positive terms at all (pure exclusions), and any match the server
+ * found by STEMMING ("configure" matching "configuration"), which a
+ * literal client matcher cannot reproduce.
+ */
+export function titleCoversQuery(title: string, query: string): boolean {
+  const groups = queryGroups(query);
+  if (groups.length === 0) return false;
+  return groups.some((group) =>
+    group.every((token) => tokenPattern([token]).test(title)),
+  );
 }
 
 /**

@@ -254,6 +254,24 @@ describe('SearchScreen — global mode (null org stamp, Phase 5b)', () => {
     expect(screen.getByText(/configure the/)).toBeInTheDocument();
   });
 
+  it('a PARTIALLY-matched title keeps the snippet: the other term matched the body', () => {
+    goGlobal();
+    const partial: SearchHit = {
+      ...hit('article', 'a8', 'Fortinet router'),
+      snippet: 'the <mark>vpn</mark> tunnel settings',
+      companyId: 'org-9',
+      companyName: 'Northwind MSP',
+    };
+    results = { data: { items: [partial] }, isPending: false, isError: false, refetch: jest.fn() };
+
+    render(<SearchScreen query="fortinet vpn" />);
+
+    // "fortinet" shows in the title, but "vpn" only matched the body —
+    // the row must still explain the WHOLE query.
+    expect(screen.getByText('vpn')).toBeInTheDocument();
+    expect(screen.getByText(/tunnel settings/)).toBeInTheDocument();
+  });
+
   it('org mode stays byte-identical: no company line, plain stamped push, /passwords fallback', () => {
     results = {
       data: { items: [hit('password', 'p1', 'Pines router')] },

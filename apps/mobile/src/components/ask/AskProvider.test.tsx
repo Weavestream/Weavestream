@@ -1,6 +1,8 @@
 /** @jest-environment jsdom */
 import '@testing-library/jest-dom';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, render, screen } from '@testing-library/react';
+import type { ReactNode } from 'react';
 import type { Org } from '../../lib/org-scope';
 
 /**
@@ -13,7 +15,10 @@ import type { Org } from '../../lib/org-scope';
  *  - the abort discipline (the stale-handler race): a `creating` send
  *    aborted by an org switch or New chat must NOT restore the old
  *    draft after the reset;
- *  - 401 routing on both the create POST and the stream.
+ *  - 401 routing on both the create POST and the stream;
+ *  - article-read invalidation on an APPLIED settle (the stale-list
+ *    bug: Ask floats above the mounted tab screen, so nothing
+ *    remounts to refetch a created/edited article on its own).
  */
 
 const ORG_A: Org = { id: 'org-a', name: 'Acme', initials: 'AC', subtitle: null };
@@ -90,12 +95,31 @@ function Harness() {
   );
 }
 
-function mount() {
-  return render(
-    <AskProvider>
-      <Harness />
-    </AskProvider>,
+/**
+ * The provider reaches for the query cache to invalidate article reads
+ * after an applied proposal, so every mount needs a real client. A
+ * fresh one per test keeps the `invalidateQueries` spy honest.
+ */
+let queryClient: QueryClient;
+let invalidateSpy: jest.SpyInstance;
+
+function withQuery(children: ReactNode) {
+  return (
+    <QueryClientProvider client={queryClient}>
+      <AskProvider>{children}</AskProvider>
+    </QueryClientProvider>
   );
+}
+
+/** The prefixes passed to `invalidateQueries`, in call order. */
+function invalidatedKeys(): unknown[][] {
+  return invalidateSpy.mock.calls.map(
+    (call) => (call[0] as { queryKey: unknown[] }).queryKey,
+  );
+}
+
+function mount() {
+  return render(withQuery(<Harness />));
 }
 
 async function flush() {
@@ -107,6 +131,10 @@ beforeEach(() => {
   streamInvocations.length = 0;
   currentOrg = ORG_A;
   apiFetchMock.mockResolvedValue({ id: 'conv-1' });
+  queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  invalidateSpy = jest.spyOn(queryClient, 'invalidateQueries');
 });
 
 async function seedAndSend() {
@@ -178,11 +206,7 @@ describe('AskProvider', () => {
     // Org switch: the provider resets FIRST, then aborts — the aborted
     // create's catch must dispatch nothing afterwards.
     currentOrg = ORG_B;
-    view.rerender(
-      <AskProvider>
-        <Harness />
-      </AskProvider>,
-    );
+    view.rerender(withQuery(<Harness />));
     await flush();
 
     expect(screen.getByTestId('status')).toHaveTextContent('idle');
@@ -316,11 +340,7 @@ function ActionsHarness() {
 }
 
 function mountActions() {
-  return render(
-    <AskProvider>
-      <ActionsHarness />
-    </AskProvider>,
-  );
+  return render(withQuery(<ActionsHarness />));
 }
 
 /** Drive one full turn that yields the pending proposal on message m1. */
@@ -373,6 +393,67 @@ describe('AskProvider — tool actions (5b)', () => {
     expect(JSON.parse((init as { body: string }).body)).toEqual({});
     expect(screen.getByTestId('call-status')).toHaveTextContent('applied');
     expect(screen.getByTestId('action')).toHaveTextContent('none');
+  });
+
+  // The stale-list bug: Ask is an overlay above the mounted tab screen,
+  // so an applied proposal has to evict the article reads itself.
+  it('an applied settle invalidates the article and search reads', async () => {
+    mountActions();
+    await driveTurn();
+
+    apiFetchMock.mockResolvedValueOnce({
+      toolCall: { ...PENDING_CALL, status: 'applied', result: 'Created article "T".' },
+      updatedToolCalls: [{ ...PENDING_CALL, status: 'applied', result: 'Created article "T".' }],
+    });
+    await act(async () => {
+      screen.getByText('apply-create').click();
+    });
+
+    // Whole prefixes, not one company's: a global turn creates in an org
+    // that need not be the current scope.
+    expect(invalidatedKeys()).toEqual([['articles'], ['search']]);
+  });
+
+  it('a failed apply and a plain reject invalidate nothing', async () => {
+    mountActions();
+    await driveTurn();
+
+    apiFetchMock.mockResolvedValueOnce({
+      toolCall: { ...PENDING_CALL, status: 'failed', error: 'stale' },
+      updatedToolCalls: [{ ...PENDING_CALL, status: 'failed', error: 'stale' }],
+    });
+    await act(async () => {
+      screen.getByText('apply').click();
+    });
+    expect(invalidatedKeys()).toEqual([]);
+
+    apiFetchMock.mockResolvedValueOnce({
+      toolCall: { ...PENDING_CALL, status: 'rejected' },
+      updatedToolCalls: [{ ...PENDING_CALL, status: 'rejected' }],
+    });
+    await act(async () => {
+      screen.getByText('reject').click();
+    });
+    expect(invalidatedKeys()).toEqual([]);
+  });
+
+  // Reject-recovery: the server reports `applied` because a crashed
+  // apply's article really exists. Keying on the settled status (not on
+  // the action) is what makes this land without a special case.
+  it('a reject that recovers a crashed create still invalidates', async () => {
+    mountActions();
+    await driveTurn();
+
+    apiFetchMock.mockResolvedValueOnce({
+      toolCall: { ...PENDING_CALL, status: 'applied', result: 'Created article "T".' },
+      updatedToolCalls: [{ ...PENDING_CALL, status: 'applied', result: 'Created article "T".' }],
+    });
+    await act(async () => {
+      screen.getByText('reject').click();
+    });
+
+    expect(screen.getByTestId('call-status')).toHaveTextContent('applied');
+    expect(invalidatedKeys()).toEqual([['articles'], ['search']]);
   });
 
   it('the create sheet path DOES send companyId + full overrides', async () => {
@@ -438,6 +519,9 @@ describe('AskProvider — tool actions (5b)', () => {
 
     expect(screen.getByTestId('call-status')).toHaveTextContent('applied');
     expect(screen.getByTestId('action-error')).toHaveTextContent('none');
+    // The other device's apply mutated an article just as surely as a
+    // local one would have.
+    expect(invalidatedKeys()).toEqual([['articles'], ['search']]);
   });
 
   it('the create-recovery 400 resyncs the marker AND surfaces the message (code-driven)', async () => {
@@ -585,11 +669,7 @@ describe('AskProvider — tool actions (5b)', () => {
     expect(screen.getByTestId('count')).toHaveTextContent('2');
 
     currentOrg = ORG_A;
-    view.rerender(
-      <AskProvider>
-        <ActionsHarness />
-      </AskProvider>,
-    );
+    view.rerender(withQuery(<ActionsHarness />));
     expect(screen.getByTestId('count')).toHaveTextContent('0');
   });
 });

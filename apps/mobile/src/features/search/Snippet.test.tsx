@@ -45,9 +45,12 @@ describe('Snippet', () => {
 
 
 describe('queryTokens / HighlightMatches — websearch operator surface (5b)', () => {
-  const { queryTokens, hasQueryMatch } = jest.requireActual('./Snippet') as {
+  const { queryTokens, queryGroups, titleCoversQuery } = jest.requireActual(
+    './Snippet',
+  ) as {
     queryTokens: (q: string) => string[];
-    hasQueryMatch: (t: string, q: string) => boolean;
+    queryGroups: (q: string) => string[][];
+    titleCoversQuery: (t: string, q: string) => boolean;
   };
 
   it('drops the OR operator instead of highlighting "or" inside words', () => {
@@ -72,9 +75,45 @@ describe('queryTokens / HighlightMatches — websearch operator surface (5b)', (
     expect(marks[0]).toHaveTextContent('router');
   });
 
-  it('hasQueryMatch drives the body-only snippet fallback', () => {
-    expect(hasQueryMatch('Fortinet firewall', 'fortinet OR cisco')).toBe(true);
-    expect(hasQueryMatch('Runbook', 'fortinet')).toBe(false);
-    expect(hasQueryMatch('anything', '-only -excluded')).toBe(false);
+  it('excludes a NEGATED PHRASE whole — never resurrecting its tail as a term', () => {
+    // `-"serial number"`: the tail must not come back as a positive
+    // `number` token, or the row highlights excluded text.
+    expect(queryTokens('-"serial number" rack')).toEqual(['rack']);
+    render(<HighlightMatches text="Rack serial number 42" query={'-"serial number" rack'} />);
+    const marks = document.querySelectorAll('mark');
+    expect(marks).toHaveLength(1);
+    expect(marks[0]).toHaveTextContent('Rack');
+  });
+
+  it('treats an unbalanced quote leniently, as an ordinary word', () => {
+    expect(queryTokens('"serial')).toEqual(['serial']);
+  });
+
+  it('parses OR precedence as groups: `a b OR c` = (a AND b) OR (c)', () => {
+    expect(queryGroups('fortinet vpn OR cisco')).toEqual([
+      ['fortinet', 'vpn'],
+      ['cisco'],
+    ]);
+    // A dangling operator produces no empty group.
+    expect(queryGroups('fortinet OR')).toEqual([['fortinet']]);
+  });
+
+  it('titleCoversQuery: ALL terms within a group, ANY group', () => {
+    // Every token present ⇒ the title explains the whole match.
+    expect(titleCoversQuery('Fortinet firewall', 'fortinet')).toBe(true);
+    expect(titleCoversQuery('Fortinet VPN guide', 'fortinet vpn')).toBe(true);
+    // Only half present ⇒ the body still owes an explanation for "vpn".
+    expect(titleCoversQuery('Fortinet router', 'fortinet vpn')).toBe(false);
+    expect(titleCoversQuery('Runbook', 'fortinet')).toBe(false);
+    // No positive tokens, or a stem-only server match: show the snippet.
+    expect(titleCoversQuery('anything', '-only -excluded')).toBe(false);
+    expect(titleCoversQuery('Configuration guide', 'configuring')).toBe(false);
+    // OR: one satisfied branch fully explains the row.
+    expect(titleCoversQuery('Fortinet firewall', 'fortinet OR cisco')).toBe(true);
+    expect(titleCoversQuery('Cisco switch', 'fortinet OR cisco')).toBe(true);
+    expect(titleCoversQuery('Juniper switch', 'fortinet OR cisco')).toBe(false);
+    // …but a multi-term branch still needs all of ITS terms.
+    expect(titleCoversQuery('Fortinet router', 'fortinet vpn OR cisco')).toBe(false);
+    expect(titleCoversQuery('Rack label', '-"serial number" rack')).toBe(true);
   });
 });

@@ -22,7 +22,7 @@ import { useAsk } from '../../components/ask/AskProvider';
 import { groupHits } from './grouping';
 import { routeForHit } from './hit-route';
 import { SEARCH_DEBOUNCE_MS, useSearchResults } from './queries';
-import { HighlightMatches, Snippet, hasQueryMatch } from './Snippet';
+import { HighlightMatches, Snippet, titleCoversQuery } from './Snippet';
 
 /**
  * The global search screen — 2b's full-screen takeover. The tab bar is
@@ -299,8 +299,11 @@ export function SearchScreen({ query }: { query: string }) {
                               // body must still show WHY it matched);
                               // a title-matched row keeps the single
                               // company line, per the no-extra-line
-                              // decision.
-                              hit.snippet && !hasQueryMatch(hit.title, debounced) ? (
+                              // decision. "Covers" is ALL tokens, not
+                              // any: `fortinet vpn` on a "Fortinet
+                              // router" title still owes the evidence
+                              // for "vpn".
+                              hit.snippet && !titleCoversQuery(hit.title, debounced) ? (
                                 <span className="flex min-w-0 flex-col gap-0.5">
                                   <span className="truncate font-medium text-accent-text">
                                     {hit.companyName}

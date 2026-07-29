@@ -8,7 +8,8 @@ import {
   useRef,
   type ReactNode,
 } from 'react';
-import type { ChatConversationDetail } from '@weavestream/shared';
+import { useQueryClient } from '@tanstack/react-query';
+import type { ChatConversationDetail, ChatToolCallDto } from '@weavestream/shared';
 import { randomClientId, streamChatMessage } from '@weavestream/shared/browser';
 import { ApiError, apiFetch } from '../../lib/api';
 import { redirectToLogin } from '../../lib/navigate';
@@ -91,6 +92,7 @@ function isAbortError(err: unknown): boolean {
 export function AskProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(askReducer, initialAskState);
   const { currentOrg } = useOrgScope();
+  const queryClient = useQueryClient();
 
   const stateRef = useRef(state);
   stateRef.current = state;
@@ -284,6 +286,35 @@ export function AskProvider({ children }: { children: ReactNode }) {
   }, [abortAll]);
 
   /**
+   * An APPLIED proposal mutated an article server-side, so every cached
+   * article read is stale. Ask is an overlay ABOVE the mounted tab
+   * screen, so nothing remounts to refetch on its own — without this a
+   * created article only appeared after navigating away from Articles
+   * and back, and a patched body kept rendering its pre-apply text.
+   *
+   * The whole `['articles']` / `['search']` prefixes, not one company's:
+   * a global turn creates in an org that need not be the current scope,
+   * and an edit proposal's target company comes from the proposal
+   * (`targetCompanyId`), not the shell. Refetching also re-bases any
+   * SIBLING pending edit card against the new revision, so the shared
+   * ladder reports "the article changed" before Apply instead of the
+   * server rejecting it after.
+   *
+   * Keyed on the SETTLED STATUS, not on the action: a reject settles
+   * nothing — except reject-recovery, which reports `applied` because a
+   * crashed apply's article really does exist. One rule covers both.
+   */
+  const invalidateArticleReads = useCallback(
+    (toolCalls: readonly ChatToolCallDto[], toolCallId: string) => {
+      const settled = toolCalls.find((c) => c.id === toolCallId);
+      if (settled?.status !== 'applied') return;
+      void queryClient.invalidateQueries({ queryKey: ['articles'] });
+      void queryClient.invalidateQueries({ queryKey: ['search'] });
+    },
+    [queryClient],
+  );
+
+  /**
    * Resync a message's tool calls from the persisted conversation —
    * the already-settled 400 race (another device acted first; the
    * claim guarantees exactly one winner) and the create-recovery code
@@ -309,10 +340,13 @@ export function AskProvider({ children }: { children: ReactNode }) {
         serverMessageId,
         toolCalls: msg.toolCalls,
       });
+      // The other device's apply (or our own recovered crash) mutated an
+      // article just as surely as a local apply would have.
+      invalidateArticleReads(msg.toolCalls, toolCallId);
       const target = msg.toolCalls.find((c) => c.id === toolCallId);
       return target && target.status !== 'pending' ? 'settled' : 'pending';
     },
-    [],
+    [invalidateArticleReads],
   );
 
   const runToolAction = useCallback(
@@ -356,6 +390,7 @@ export function AskProvider({ children }: { children: ReactNode }) {
           serverMessageId,
           toolCalls: res.updatedToolCalls,
         });
+        invalidateArticleReads(res.updatedToolCalls, toolCallId);
       } catch (err) {
         if (isAbortError(err)) return;
         if (err instanceof ApiError && err.status === 401) {
@@ -392,7 +427,7 @@ export function AskProvider({ children }: { children: ReactNode }) {
         controllersRef.current.delete(controller);
       }
     },
-    [resyncToolCalls],
+    [invalidateArticleReads, resyncToolCalls],
   );
 
   const applyToolCall = useCallback(
