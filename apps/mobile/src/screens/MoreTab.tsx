@@ -20,6 +20,7 @@ import {
   subscribeInstallAvailability,
 } from '../lib/install-prompt';
 import { useOrgScope } from '../lib/org-scope';
+import { useScopedNavigate } from '../lib/scoped-nav';
 import { signOutAndReset } from '../lib/sign-out';
 import { useMe, useOpenOrgSheet } from './TabShell';
 
@@ -62,6 +63,7 @@ function installModeSnapshot(): InstallMode {
 export function MoreTab() {
   const me = useMe();
   const { currentOrg } = useOrgScope();
+  const navigate = useScopedNavigate();
   const openOrgSheet = useOpenOrgSheet();
   const [signOutError, setSignOutError] = useState<string | null>(null);
   const [signingOut, setSigningOut] = useState(false);
@@ -121,6 +123,15 @@ export function MoreTab() {
       <section className="flex flex-col gap-1.75">
         <SectionLabel>{currentOrg?.name ?? 'Organization'}</SectionLabel>
         <GroupedList>
+          {/* Exit to the launcher (Phase 5b D1). Navigation only — the
+              guard's arrival-clear effect owns leaving org context, so
+              there is exactly one place that clears it. `replace`
+              because "Home" is an exit, not a step to back out of. */}
+          <GroupedRow
+            icon="apartment"
+            label="Home"
+            onClick={() => navigate({ to: '/app', replace: true, orgId: null })}
+          />
           <GroupedRow
             icon="dashboard"
             label="All organizations"

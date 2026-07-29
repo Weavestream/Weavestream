@@ -20,6 +20,7 @@ import { AssetsListScreen } from './features/assets/AssetsListScreen';
 import { AssetDetailScreen } from './features/assets/AssetDetailScreen';
 import { AssetFormScreen } from './features/assets/AssetFormScreen';
 import { LayoutChooserScreen } from './features/assets/LayoutChooserScreen';
+import { LauncherScreen } from './features/launcher/LauncherScreen';
 import { SearchScreen } from './features/search/SearchScreen';
 import { signOutAndReset } from './lib/sign-out';
 import { UUID_RE } from './lib/uuid';
@@ -36,9 +37,10 @@ import { UUID_RE } from './lib/uuid';
  * apps/mobile/MANIFEST-NOTES.md — the scope, the start URL, and that
  * redirect are one decision.
  *
- * `/app` therefore keeps existing, as a redirect into the Passwords tab.
- * Renaming it would break `start_url` and the prebuild guard that
- * cross-checks it.
+ * `/app` therefore keeps existing — since Phase 5b as the global
+ * launcher screen (org-free home). Renaming it would break `start_url`
+ * and the prebuild guard that cross-checks it; only the component
+ * behind the path may change.
  */
 
 const rootRoute = createRootRoute({ component: () => <Outlet /> });
@@ -239,21 +241,25 @@ const searchRoute = createRoute({
   },
 });
 
-/** `/m` and `/m/app` both land on the first tab. */
-function ToPasswords() {
-  return <Navigate to="/passwords" replace />;
+/**
+ * `/m` (and any unmatched path) lands on the launcher — the org-free
+ * home at `/m/app` (Phase 5b). Pre-5b both redirected to `/passwords`
+ * under a silently-adopted org.
+ */
+function ToLauncher() {
+  return <Navigate to="/app" replace />;
 }
 
 const indexRoute = createRoute({
   getParentRoute: () => tabsLayoutRoute,
   path: '/',
-  component: ToPasswords,
+  component: ToLauncher,
 });
 
 const appRoute = createRoute({
   getParentRoute: () => tabsLayoutRoute,
   path: '/app',
-  component: ToPasswords,
+  component: LauncherScreen,
 });
 
 // ───────────────────────────────────────────────────────────────────
@@ -268,7 +274,9 @@ const loginRoute = createRoute({
     return (
       <LoginScreen
         onDone={(next) => {
-          if (next === 'app') void navigate({ to: '/passwords' });
+          // Land on the launcher — "appears on app launch" includes the
+          // sign-in path (Phase 5b).
+          if (next === 'app') void navigate({ to: '/app' });
           else if (next === 'mfa-challenge')
             void navigate({ to: '/mfa/challenge' });
           else void navigate({ to: '/mfa/setup' });
@@ -284,7 +292,7 @@ const mfaChallengeRoute = createRoute({
   component: function MfaChallengeRoute() {
     const navigate = useNavigate();
     return (
-      <MfaChallengeScreen onDone={() => void navigate({ to: '/passwords' })} />
+      <MfaChallengeScreen onDone={() => void navigate({ to: '/app' })} />
     );
   },
 });
@@ -340,7 +348,7 @@ export const router = createRouter({
   // Any unmatched path under /m falls back to the shell rather than a
   // dead end — the route handler already serves the same HTML for
   // arbitrary deep links, so the client must agree.
-  defaultNotFoundComponent: ToPasswords,
+  defaultNotFoundComponent: ToLauncher,
 });
 
 declare module '@tanstack/react-router' {

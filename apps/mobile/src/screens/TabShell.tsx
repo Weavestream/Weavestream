@@ -17,8 +17,9 @@ import type {
 import { ApiError, apiFetch } from '../lib/api';
 import { applyServerUiPrefs } from '../lib/ui-prefs';
 import { isOrgFreeEntry } from '../lib/org-free';
-import { OrgProvider, useOrgScope, type Org } from '../lib/org-scope';
+import { OrgProvider, type Org } from '../lib/org-scope';
 import { useScopedNavigate, useStaleScopeGuard } from '../lib/scoped-nav';
+import { useEnterOrg } from '../lib/use-enter-org';
 import { recoveryRouteFor } from '../lib/session-recovery';
 import {
   TAB_ROOTS,
@@ -168,7 +169,7 @@ interface ShellSearch {
 function Shell() {
   const location = useLocation();
   const navigate = useScopedNavigate();
-  const { switchOrg } = useOrgScope();
+  const enterOrg = useEnterOrg();
   const me = useMe();
   useStaleScopeGuard();
 
@@ -223,24 +224,16 @@ function Shell() {
     navigate({ to: pathname, replace: true, search: searchSansSheet });
 
   /**
-   * Switching org is one coordinated step, owned here because it is the
-   * only place that knows both the scope and the current tab.
-   *
-   * The `orgId` is passed **explicitly from `org.id`**: `switchOrg` has
-   * just updated the scope, but this closure still holds the previous
-   * org, so a stamp taken from context would mark the very first
-   * post-switch entry stale and the guard would bounce the user straight
-   * back out.
-   *
-   * `replace` consumes the `?sheet=org` entry, and landing on the tab root
+   * Switching org is one coordinated step (`useEnterOrg`), owned here
+   * because only the shell knows which tab is showing. `replace`
+   * consumes the `?sheet=org` entry, and landing on the tab root
    * matches the handoff — selecting an org resets the visible stack.
+   * (The launcher shares the same helper but pushes.)
    */
   function onSelectOrg(org: Org) {
-    switchOrg(org);
-    navigate({
+    enterOrg(org, {
       to: TAB_ROOTS[activeTab ?? 'passwords'],
-      replace: true,
-      orgId: org.id,
+      history: 'replace',
     });
   }
 
