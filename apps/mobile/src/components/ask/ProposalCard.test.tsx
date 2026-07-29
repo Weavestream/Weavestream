@@ -224,6 +224,35 @@ describe('ProposalCard — pending update shapes', () => {
     expect(applyBtn()).toBeEnabled();
   });
 
+  it('a heading-promoted title change is PREVIEWED, never applied undisclosed', () => {
+    // No explicit `title` arg — the server promotes the leading
+    // `# Heading` to the article title on apply; the card must say so.
+    detailResult = READY_BASE; // base title: "Old title"
+    renderCard(
+      call({
+        name: 'update_article',
+        arguments: { article_id: ART, markdown: '# New title\n\nNew body' },
+        baseRevision: 3,
+        targetCompanyId: CO,
+      }),
+    );
+    expect(screen.getByText(/Title change:.*Old title.*New title/)).toBeInTheDocument();
+    expect(screen.getByText('New body')).toBeInTheDocument();
+  });
+
+  it('no title line when the heading matches the current title', () => {
+    detailResult = READY_BASE;
+    renderCard(
+      call({
+        name: 'update_article',
+        arguments: { article_id: ART, markdown: '# Old title\n\nNew body' },
+        baseRevision: 3,
+        targetCompanyId: CO,
+      }),
+    );
+    expect(screen.queryByText(/Title change:/)).toBeNull();
+  });
+
   it('TITLE-ONLY updates ride the same ladder: unfetchable → disabled (P1-3)', () => {
     renderCard(
       call({

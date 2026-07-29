@@ -9,7 +9,6 @@ import {
   type ReactNode,
 } from 'react';
 import type { ChatConversationDetail } from '@weavestream/shared';
-import { isCreateRecoveryPendingProblem } from '@weavestream/shared';
 import { randomClientId, streamChatMessage } from '@weavestream/shared/browser';
 import { ApiError, apiFetch } from '../../lib/api';
 import { redirectToLogin } from '../../lib/navigate';
@@ -289,18 +288,29 @@ export function AskProvider({ children }: { children: ReactNode }) {
    * the already-settled 400 race (another device acted first; the
    * claim guarantees exactly one winner) and the create-recovery code
    * both resolve by reading what actually happened.
+   *
+   * Reports whether the TARGET call actually settled: a generic 400
+   * (e.g. a validation rejection) leaves it pending, and treating that
+   * resync as success would swallow the error — the button would
+   * appear to do nothing. Only a genuine status change earns silence.
    */
   const resyncToolCalls = useCallback(
-    async (conversationId: string, serverMessageId: string, signal: AbortSignal) => {
+    async (
+      conversationId: string,
+      serverMessageId: string,
+      toolCallId: string,
+      signal: AbortSignal,
+    ): Promise<'settled' | 'pending' | 'missing'> => {
       const detail = await fetchConversation(conversationId, signal);
       const msg = detail.messages.find((m) => m.id === serverMessageId);
-      if (!msg?.toolCalls) return false;
+      if (!msg?.toolCalls) return 'missing';
       dispatch({
         type: 'toolCallSettled',
         serverMessageId,
         toolCalls: msg.toolCalls,
       });
-      return true;
+      const target = msg.toolCalls.find((c) => c.id === toolCallId);
+      return target && target.status !== 'pending' ? 'settled' : 'pending';
     },
     [],
   );
@@ -356,23 +366,19 @@ export function AskProvider({ children }: { children: ReactNode }) {
           // Two 400s carry more than a message: the already-settled
           // race (resync shows what the other device did) and the
           // create-recovery rejection (resync brings the pendingCreate
-          // marker so the sheet locks to the original confirmation —
-          // branch on the CODE, never the text).
-          const recovery = isCreateRecoveryPendingProblem(err.problem);
+          // marker so the sheet locks to the original confirmation).
+          // The resync RESULT decides what the user sees: a genuinely
+          // settled call earns silence — the card now tells the truth —
+          // while a still-pending call (recovery, or any validation
+          // 400) falls through to the error line below, so Apply never
+          // appears to do nothing.
           const synced = await resyncToolCalls(
             conversationId,
             serverMessageId,
+            toolCallId,
             controller.signal,
-          ).catch(() => false);
-          if (synced && !recovery) return;
-          if (synced && recovery) {
-            dispatch({
-              type: 'toolActionFailed',
-              toolCallId,
-              message: problemMessage(err, 'Couldn’t apply the change.'),
-            });
-            return;
-          }
+          ).catch(() => 'missing' as const);
+          if (synced === 'settled') return;
         }
         dispatch({
           type: 'toolActionFailed',

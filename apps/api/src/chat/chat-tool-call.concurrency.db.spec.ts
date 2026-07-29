@@ -294,6 +294,37 @@ describeIfDb('chat tool-call settle concurrency (DB integration)', () => {
     expect(calls[0]).toMatchObject({ status: 'applied' });
   });
 
+  it('reject after a crash-with-created-article settles the truth (applied), never hides the article', async () => {
+    await prisma.article.deleteMany({ where: { companyId: { in: [CO_A, CO_B] } } });
+    const msgId = await seedMessage([createCall('call_rj_1')]);
+
+    // Reproduce the crashed-apply state: article created, settle failed.
+    const realUpdate = chat.updateMessageToolCalls.bind(chat);
+    const spy = jest
+      .spyOn(chat, 'updateMessageToolCalls')
+      .mockImplementationOnce(realUpdate) // marker write
+      .mockImplementationOnce(async () => {
+        throw new Error('injected settle crash');
+      });
+    await expect(applyOn(msgId, 'call_rj_1', CO_A)).rejects.toThrow('injected settle crash');
+    spy.mockRestore();
+    expect(await prisma.article.count({ where: { companyId: CO_A } })).toBe(1);
+
+    // The user rejects instead of retrying: the settle must report what
+    // actually happened — the article exists, so the call is APPLIED.
+    const { toolCall } = await svc.reject(ACTOR, {
+      conversationId: CONV,
+      messageId: msgId,
+      toolCallId: 'call_rj_1',
+    });
+
+    expect(toolCall.status).toBe('applied');
+    expect(toolCall.result).toMatch(/^Created article/);
+    expect(await prisma.article.count({ where: { companyId: CO_A } })).toBe(1);
+    const calls = await loadCalls(msgId);
+    expect(calls[0]).toMatchObject({ status: 'applied' });
+  });
+
   it('a crash BEFORE the create (seeded marker, no article) still pins the intent for the retry', async () => {
     // A process death between the marker tx and the article insert
     // leaves exactly this state: pending call, durable marker, no row.

@@ -481,6 +481,33 @@ describe('AskProvider — tool actions (5b)', () => {
     );
   });
 
+  it('a validation 400 that leaves the call PENDING surfaces its message (never swallowed)', async () => {
+    const { ApiError } = jest.requireActual('../../lib/api') as {
+      ApiError: new (status: number, problem: unknown) => Error;
+    };
+    mountActions();
+    await driveTurn();
+
+    apiFetchMock
+      .mockRejectedValueOnce(new ApiError(400, { detail: 'title must be at most 200 characters' }))
+      // Resync: the call is STILL pending — nothing settled elsewhere.
+      .mockResolvedValueOnce({
+        id: 'c1',
+        messages: [
+          { id: 'm1', role: 'assistant', content: 'x', createdAt: 'now', toolCalls: [PENDING_CALL] },
+        ],
+      });
+    await act(async () => {
+      screen.getByText('apply').click();
+    });
+
+    expect(screen.getByTestId('call-status')).toHaveTextContent('pending');
+    expect(screen.getByTestId('action-error')).toHaveTextContent(
+      'title must be at most 200 characters',
+    );
+    expect(screen.getByTestId('action')).toHaveTextContent('none');
+  });
+
   it('rapid sibling actions: the second invocation no-ops while the first is in flight', async () => {
     mountActions();
     await driveTurn();

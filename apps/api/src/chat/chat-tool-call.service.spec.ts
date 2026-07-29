@@ -722,6 +722,52 @@ describe('ChatToolCallService — ownership-constrained settle claim (5b W0.4)',
     });
   });
 
+  it('reject on a marker whose article EXISTS settles the truth: applied, never hidden', async () => {
+    // The crash-recovery state: a prior apply created the article but
+    // died before settling. Rejecting must not report "rejected" while
+    // the created (possibly client-visible) article stands.
+    const { svc, prisma, chat } = makeService({
+      toolCall: createCall({ pendingCreate: MARKER }),
+      turnContext: { companyId: CO_UUID },
+      recoveredArticle: { id: MARKER.articleId, title: 'Chosen' },
+    });
+
+    const { toolCall } = await svc.reject(ACTOR, {
+      conversationId: 'conv-1',
+      messageId: 'msg-1',
+      toolCallId: 'tc-1',
+    });
+
+    expect(toolCall.status).toBe('applied');
+    expect(toolCall.result).toBe('Created article "Chosen".');
+    expect(prisma.article.findFirst).toHaveBeenCalledWith({
+      where: { id: MARKER.articleId, companyId: CO_UUID, createdBy: ACTOR.id },
+      select: { id: true, title: true },
+    });
+    expect(chat.updateMessageToolCalls).toHaveBeenCalledWith(
+      'msg-1',
+      expect.arrayContaining([expect.objectContaining({ status: 'applied' })]),
+      expect.anything(),
+    );
+  });
+
+  it('reject on a marker whose article does NOT exist rejects normally (pre-create crash)', async () => {
+    const { svc, articles } = makeService({
+      toolCall: createCall({ pendingCreate: MARKER }),
+      turnContext: { companyId: CO_UUID },
+      recoveredArticle: null,
+    });
+
+    const { toolCall } = await svc.reject(ACTOR, {
+      conversationId: 'conv-1',
+      messageId: 'msg-1',
+      toolCallId: 'tc-1',
+    });
+
+    expect(toolCall.status).toBe('rejected');
+    expect(articles.create).not.toHaveBeenCalled();
+  });
+
   it('the update create-promotion also runs through the marker path', async () => {
     const { svc, articles, chat } = makeService({
       toolCall: pendingCall({ baseRevision: null }),

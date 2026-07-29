@@ -199,12 +199,35 @@ export class ChatToolCallService {
       requestCompanyId: undefined,
       auditMeta: { ip: '0.0.0.0', userAgent: 'rejection' },
     });
-    return this.withClaimedPending(actor, params, async (claimed) => ({
-      ...claimed,
-      status: 'rejected',
-      result: null,
-      error: null,
-    }));
+    return this.withClaimedPending(actor, params, async (claimed) => {
+      // A `pendingCreate` marker means a prior apply may have crashed
+      // AFTER creating the article. Rejecting then would report
+      // "rejected" while the created (possibly client-visible) article
+      // stands, and — the call going terminal — would destroy the only
+      // recovery path. Check the marker's article first: if it exists,
+      // the truthful settle is the crashed apply's outcome, so finish
+      // ITS bookkeeping instead of pretending the create didn't happen.
+      // No marker, or no article (the crash was pre-create): the plain
+      // reject is safe — nothing was created, the marker is inert
+      // residue on a terminal call.
+      if (claimed.pendingCreate) {
+        const recovered = await this.findRecoveredArticle(actor, claimed.pendingCreate);
+        if (recovered) {
+          return {
+            ...claimed,
+            status: 'applied',
+            result: `Created article "${recovered.title}".`,
+            error: null,
+          };
+        }
+      }
+      return {
+        ...claimed,
+        status: 'rejected',
+        result: null,
+        error: null,
+      };
+    });
   }
 
   // ------------------------------------------------------------------

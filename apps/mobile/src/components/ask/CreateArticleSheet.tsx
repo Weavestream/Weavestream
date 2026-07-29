@@ -223,6 +223,7 @@ export function CreateArticleSheet({
           value={title}
           onChange={(e) => setTitle(e.target.value)}
           placeholder="Article title"
+          maxLength={200}
           disabled={busy || locked}
         />
       </Field>

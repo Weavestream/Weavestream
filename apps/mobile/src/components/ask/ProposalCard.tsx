@@ -178,9 +178,15 @@ export function ProposalCard({
   // ------------------------------------------------------------------
   const hasBody = view.markdown !== null;
   const hasTitle = view.title !== null;
-  const proposedBody = hasBody
-    ? splitMarkdownTitleAndBody(view.markdown ?? '').body
-    : null;
+  const parsedBody = hasBody ? splitMarkdownTitleAndBody(view.markdown ?? '') : null;
+  const proposedBody = parsedBody?.body ?? null;
+  // The EFFECTIVE title the server will persist: an explicit `title`
+  // argument wins, else a leading `# Heading` is PROMOTED to the title
+  // by `applyUpdate` — a change that must be previewed like any other,
+  // never applied undisclosed.
+  const effectiveTitle =
+    view.title ??
+    (!view.isPatch && parsedBody?.hadLeadingHeading ? parsedBody.title : null);
 
   const ladder: PatchPreview = view.isPatch
     ? buildPatchPreview(source, call.baseRevision, view.title ?? undefined, view.edits)
@@ -217,7 +223,16 @@ export function ProposalCard({
         <DiffView before={ladder.before} after={ladder.markdown} />
       )}
       {ready && !view.isPatch && proposedBody !== null && (
-        <DiffView before={ladder.before} after={proposedBody} />
+        <>
+          {/* Surface the title change — explicit OR heading-promoted —
+              whenever it differs from the fetched base's title. */}
+          {effectiveTitle !== null &&
+            source.status === 'ready' &&
+            effectiveTitle !== titleOf(baseQuery.data) && (
+              <TitleLine from={titleOf(baseQuery.data)} to={effectiveTitle} />
+            )}
+          <DiffView before={ladder.before} after={proposedBody} />
+        </>
       )}
       {ready && !view.isPatch && proposedBody === null && (
         <TitleOnlyChange
@@ -316,6 +331,14 @@ function ErrorLine({ message }: { message: string }) {
   return (
     <p className="text-[13px] text-danger" role="alert">
       {message}
+    </p>
+  );
+}
+
+function TitleLine({ from, to }: { from: string | null; to: string }) {
+  return (
+    <p className="rounded-field bg-panel-2 p-2 text-[13.5px] text-text">
+      Title change: {from !== null ? `“${from}” → ` : ''}“{to}”
     </p>
   );
 }
