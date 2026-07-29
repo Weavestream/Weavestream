@@ -35,10 +35,18 @@ import { SaveAsArticleDialog } from './save-as-article-dialog';
 export function ToolCallCard({
   tab,
   messageId,
+  scopeCompanyId,
   toolCall,
 }: {
   tab: ChatTab;
   messageId: string;
+  /**
+   * The company this turn was scoped to (null = global turn). Apply
+   * binds a create to this scope and refuses a differing confirmed
+   * destination, so the Save-as-article dialog locks its company
+   * picker to it rather than offering a choice the server would reject.
+   */
+  scopeCompanyId: string | null;
   toolCall: ChatToolCallDto;
 }) {
   const { state, applyToolCall, rejectToolCall, getPageDirty } = useChatPanel();
@@ -333,7 +341,9 @@ export function ToolCallCard({
 
   // Default the dialog company to the article snapshot when present;
   // otherwise fall back to the broadcast company scope so the dialog
-  // opens with a sensible pre-pick on home / asset pages too.
+  // opens with a sensible pre-pick on home / asset pages too. A
+  // company-scoped turn is not a default at all — it's the scope the
+  // server binds the create to, so it locks the picker instead.
   const dialogDefaultCompanyId =
     state.pageContext?.companyId ?? state.companyContext?.companyId ?? null;
   const proposedTitle =
@@ -474,6 +484,7 @@ export function ToolCallCard({
           markdown={typeof args.markdown === 'string' ? args.markdown : ''}
           {...(proposedTitle ? { defaultTitle: proposedTitle } : {})}
           pendingCreate={toolCall.pendingCreate}
+          lockedCompanyId={scopeCompanyId}
           defaultCompanyId={dialogDefaultCompanyId}
           defaultVisibleToClients={proposedVisibleToClients}
           dialogTitle="Create article from suggestion"

@@ -170,6 +170,17 @@ export const chatMessageSchema = z.object({
   content: z.string(),
   createdAt: z.string(),
   toolCalls: z.array(chatToolCallSchema).nullable().optional(),
+  /**
+   * The company this turn was scoped to, read back from the persisted
+   * `turnContext.companyId`. Surfaced so a client can render the
+   * SERVER's binding truthfully: apply resolves a create against this
+   * scope and REFUSES a confirmed destination that differs from it, so
+   * a create-confirmation UI must lock its organization picker here
+   * rather than offering a choice it cannot honour. Absent/null = a
+   * global (or legacy) turn, where the actor's confirmed destination
+   * IS the scope. Descriptive only — never an authorization source.
+   */
+  scopeCompanyId: z.string().uuid().nullable().optional(),
 });
 export type ChatMessageDto = z.infer<typeof chatMessageSchema>;
 

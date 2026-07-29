@@ -95,7 +95,10 @@ export class ChatController {
    * request body is the page the user was on when they clicked Apply;
    * the service uses it as a tenancy sanity-check against the row the
    * LLM picked. Permissions (`article.write`) are re-verified against
-   * the article's own company.
+   * the article's own company. When `createOverrides` is present the
+   * `companyId` is instead the destination the user CONFIRMED, and the
+   * service refuses it if the turn was scoped to a different company —
+   * the scope it would otherwise silently create in.
    */
   @Post('conversations/:convId/messages/:msgId/tool-calls/:toolCallId/apply')
   @HttpCode(HttpStatus.OK)

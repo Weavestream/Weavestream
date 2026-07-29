@@ -55,6 +55,7 @@ export function SaveAsArticleDialog({
   defaultTitle,
   defaultVisibleToClients,
   pendingCreate,
+  lockedCompanyId,
   applyToolCall,
   dialogTitle,
   submitLabel,
@@ -63,6 +64,14 @@ export function SaveAsArticleDialog({
   open: boolean;
   markdown: string;
   defaultCompanyId: string | null;
+  /**
+   * The chat turn's company scope, when the proposal came from a
+   * company-scoped conversation. Apply binds the create to this scope
+   * and REFUSES a confirmed destination that differs from it, so the
+   * company renders locked rather than as a picker that would lie.
+   * Null = a global turn (or the free-form save), where the user picks.
+   */
+  lockedCompanyId?: string | null;
   /**
    * Server-managed create-recovery marker (5b): a prior apply crashed
    * between creating the article and settling the tool call, so the
@@ -110,6 +119,10 @@ export function SaveAsArticleDialog({
   // Recovery lock: the marker's values are canonical — nothing else can
   // complete the crashed apply.
   const locked = pendingCreate !== undefined;
+  // Company lock, widest first: a recovery marker pins everything; a
+  // company-scoped turn pins only the destination (title / folder /
+  // visibility stay editable). Null = free pick.
+  const lockedId = pendingCreate?.companyId ?? lockedCompanyId ?? null;
   const initialTitle = pendingCreate?.title ?? (defaultTitle?.trim() || parsed.title);
   const [title, setTitle] = useState(initialTitle);
   const [company, setCompany] = useState<CompanyPickerValue | null>(null);
@@ -129,7 +142,7 @@ export function SaveAsArticleDialog({
     setSaving(false);
   }, [open, initialTitle, defaultVisibleToClients, pendingCreate]);
 
-  const effectiveDefaultCompanyId = pendingCreate?.companyId ?? defaultCompanyId;
+  const effectiveDefaultCompanyId = lockedId ?? defaultCompanyId;
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
@@ -156,7 +169,11 @@ export function SaveAsArticleDialog({
     };
   }, [open, effectiveDefaultCompanyId]);
 
-  const companyId = company?.id ?? null;
+  // The destination the submit actually uses. A locked scope is
+  // authoritative on its own — the `/companies/:id` lookup above only
+  // supplies the display name, so a failed name fetch must not disable
+  // an Apply the server would accept.
+  const companyId = lockedId ?? company?.id ?? null;
   useEffect(() => {
     if (!open || !companyId) {
       setFolderId((cur) => (cur === null ? cur : null));
@@ -181,10 +198,10 @@ export function SaveAsArticleDialog({
 
   const flatFolders = useMemo(() => flattenFolderTree(folders), [folders]);
 
-  const canSubmit = !!company && title.trim().length > 0 && !saving;
+  const canSubmit = !!companyId && title.trim().length > 0 && !saving;
 
   async function submit() {
-    if (!company) return;
+    if (!companyId) return;
     const t = title.trim();
     if (!t) {
       setError('Title is required.');
@@ -200,7 +217,7 @@ export function SaveAsArticleDialog({
 
     if (applyToolCall) {
       const result = await applyToolCall({
-        companyId: company.id,
+        companyId,
         title: t,
         folderId,
         visibleToClients,
@@ -218,7 +235,7 @@ export function SaveAsArticleDialog({
       // keeps any company-scoped listings in sync.
       if (result.articleId) {
         router.push(
-          `/admin/companies/${company.id}/articles/${result.articleId}`,
+          `/admin/companies/${companyId}/articles/${result.articleId}`,
         );
       }
       router.refresh();
@@ -226,7 +243,7 @@ export function SaveAsArticleDialog({
     }
 
     const res = await apiFetch<{ id: string }>(
-      `/companies/${company.id}/articles`,
+      `/companies/${companyId}/articles`,
       {
         method: 'POST',
         body: JSON.stringify({
@@ -246,7 +263,7 @@ export function SaveAsArticleDialog({
     toast.push('Article created', 'ok');
     const newId = res.data.id;
     onClose();
-    router.push(`/admin/companies/${company.id}/articles/${newId}`);
+    router.push(`/admin/companies/${companyId}/articles/${newId}`);
     router.refresh();
   }
 
@@ -300,7 +317,7 @@ export function SaveAsArticleDialog({
         </Field>
 
         <Field label="Company">
-          {locked ? (
+          {lockedId !== null ? (
             <Input value={company?.name ?? 'Loading…'} disabled readOnly />
           ) : (
             <CompanyPicker
@@ -311,7 +328,7 @@ export function SaveAsArticleDialog({
           )}
         </Field>
 
-        {company && (
+        {companyId && (
           <Field label="Folder">
             <Select
               value={folderId ?? ''}

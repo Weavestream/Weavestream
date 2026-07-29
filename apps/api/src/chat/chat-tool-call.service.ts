@@ -107,6 +107,26 @@ export class ChatToolCallService {
     // after persist, so deriving it here (outside the claim) is safe.
     const scopeCompanyId = turnContext?.companyId ?? params.requestCompanyId;
 
+    // `createOverrides` means the actor CONFIRMED a destination in the
+    // create dialog / sheet — an explicit pick, unlike the ambient page
+    // scope an edit apply happens to send. The turn scope still wins
+    // above, so a differing confirmation must FAIL here: silently
+    // redirecting it would create the article in an organization the
+    // actor did not choose (and a folder picked from theirs would fail
+    // downstream with an unrelated error). Clients lock the picker on a
+    // scoped turn; this is the guarantee that does not depend on them.
+    if (
+      params.createOverrides &&
+      params.requestCompanyId &&
+      turnContext?.companyId &&
+      params.requestCompanyId !== turnContext.companyId
+    ) {
+      throw new ForbiddenException(
+        'Refusing to create: this conversation is scoped to a different organization than the one selected. ' +
+          'Open a chat in that organization to create the article there.',
+      );
+    }
+
     // Creates need durable idempotency: classify BEFORE the claim and
     // commit the intent marker in its own transaction, so a crash
     // between article creation and settle can be recovered without a
@@ -215,17 +235,21 @@ export class ChatToolCallService {
         if (recovered) {
           // The settle outcome (the actor's OWN prior action, with their
           // own confirmed values) may be reported — but the article's
-          // CURRENT title is company data, and the lookup's `createdBy`
-          // is identity, not continuing authorization: an actor removed
-          // from the company since the crash must not learn a title
-          // renamed after their access was revoked. Disclose the live
-          // title only when `article.read` still passes; otherwise fall
+          // CURRENT title is company data, and the existence probe's
+          // `createdBy` is identity, not continuing authorization: an
+          // actor removed from the company since the crash must not
+          // learn a title renamed after their access was revoked. So the
+          // title comes from a SECOND, read-authorized query that also
+          // carries the row-level visibility predicate; a miss falls
           // back to the title the actor themselves confirmed (already on
           // their own DTO via the marker — zero new information).
           const read = await this.permissions.can(actor, 'article.read', {
             companyId: claimed.pendingCreate.companyId,
           });
-          const title = read.allowed ? recovered.title : claimed.pendingCreate.title;
+          const live = read.allowed
+            ? await this.findDisclosableTitle(actor, claimed.pendingCreate)
+            : null;
+          const title = live ?? claimed.pendingCreate.title;
           return {
             ...claimed,
             status: 'applied',
@@ -458,7 +482,7 @@ export class ChatToolCallService {
     await this.assertArticleWrite(actor, marker.companyId);
 
     const recovered = await this.findRecoveredArticle(actor, marker);
-    if (recovered) return `Created article "${recovered.title}".`;
+    if (recovered) return `Created article "${await this.recoveredTitle(actor, marker)}".`;
 
     const raw = stripNullArgs(toolCall.arguments);
     const markdown = typeof raw['markdown'] === 'string' ? raw['markdown'] : null;
@@ -488,25 +512,75 @@ export class ChatToolCallService {
       // metadata: if the marker's article now exists, a racer with the
       // same intent created it — recovered, not failed.
       const recoveredAfter = await this.findRecoveredArticle(actor, marker);
-      if (recoveredAfter) return `Created article "${recoveredAfter.title}".`;
+      if (recoveredAfter) {
+        return `Created article "${await this.recoveredTitle(actor, marker)}".`;
+      }
       throw err;
     }
   }
 
   /**
-   * Actor/company-scoped recovery lookup for a `pendingCreate` marker.
-   * Identity is PK + company + creator — deep-field equality is
+   * EXISTENCE probe for a `pendingCreate` marker's article, deciding
+   * whether a crashed apply already created it. Actor/company-scoped:
+   * identity is PK + company + creator — deep-field equality is
    * deliberately NOT required, because post-crash edits to the created
    * article are legitimate.
+   *
+   * Deliberately NOT visibility-filtered, and it selects no content: the
+   * question is only "does the actor's own create stand?", and the
+   * truthful settle depends on it. Filtering here would report
+   * `rejected` while a hidden article stood — the honesty bug the
+   * reject-recovery path exists to prevent. Disclosure of anything ABOUT
+   * the row goes through {@link findDisclosableTitle}.
    */
   private async findRecoveredArticle(
     actor: AuthedUser,
     marker: ChatPendingCreate,
-  ): Promise<{ id: string; title: string } | null> {
+  ): Promise<{ id: string } | null> {
     return this.prisma.article.findFirst({
       where: { id: marker.articleId, companyId: marker.companyId, createdBy: actor.id },
-      select: { id: true, title: true },
+      select: { id: true },
     });
+  }
+
+  /**
+   * The recovered article's CURRENT title, read through the row-level
+   * visibility predicate ordinary article reads apply — the filter is a
+   * WHERE clause, never a post-fetch check (CLAUDE.md §1), so a row this
+   * actor may not read is never fetched in the first place. Null when
+   * the row does not match, whereupon callers report the title the actor
+   * themselves confirmed.
+   */
+  private async findDisclosableTitle(
+    actor: AuthedUser,
+    marker: ChatPendingCreate,
+  ): Promise<string | null> {
+    const row = await this.prisma.article.findFirst({
+      where: {
+        id: marker.articleId,
+        companyId: marker.companyId,
+        createdBy: actor.id,
+        ...articleVisibilityWhere(actor),
+      },
+      select: { title: true },
+    });
+    return row?.title ?? null;
+  }
+
+  /**
+   * Title to REPORT for a recovered create on the APPLY path. Same rule
+   * as the reject path: the live title is company data that may have
+   * changed after the crash, so it is read only through the
+   * visibility-filtered query. Company-level `article.write` (asserted
+   * by the caller) does not carry the row-level client-visibility
+   * restriction. A miss reports the title the actor themselves
+   * confirmed.
+   */
+  private async recoveredTitle(
+    actor: AuthedUser,
+    marker: ChatPendingCreate,
+  ): Promise<string> {
+    return (await this.findDisclosableTitle(actor, marker)) ?? marker.title;
   }
 
   // ------------------------------------------------------------------
@@ -737,6 +811,20 @@ class ArticlePatchApplyError extends Error {
     super(`Article patch edit ${editIndex + 1} failed: ${code}.`);
     this.name = 'ArticlePatchApplyError';
   }
+}
+
+/**
+ * Row-level visibility predicate for article reads, mirroring the
+ * restriction `ArticlesService.getById` / `getBySlug` apply: a
+ * CLIENT_USER never sees a `visibleToClients: false` article, no matter
+ * what the company-scoped `article.read` / `article.write` decision
+ * says (both are grantable to a CLIENT_USER with an active membership).
+ * Spread into a WHERE clause — the point is that the database applies
+ * it, so an unreadable row is never returned to be filtered later.
+ * Never a substitute for the permission check.
+ */
+function articleVisibilityWhere(actor: AuthedUser): { visibleToClients?: true } {
+  return actor.role === 'CLIENT_USER' ? { visibleToClients: true } : {};
 }
 
 /**

@@ -156,6 +156,7 @@ type ConversationWithMessagesRow = ConversationRow & {
     content: string;
     createdAt: Date;
     toolCalls: Prisma.JsonValue | null;
+    turnContext: Prisma.JsonValue | null;
   }>;
 };
 
@@ -185,14 +186,22 @@ export function toMessageDto(msg: {
   content: string;
   createdAt: Date;
   toolCalls?: Prisma.JsonValue | null;
+  turnContext?: Prisma.JsonValue | null;
 }): ChatMessageDto {
   const toolCalls = parseToolCalls(msg.toolCalls ?? null);
+  // The turn's company scope is the one field of `turn_context` clients
+  // need back: it is what a create apply binds to, so a confirmation UI
+  // must lock to it instead of offering a destination the server would
+  // refuse. The rest of the context is the client's own request echo —
+  // no reason to ship it back.
+  const scopeCompanyId = parseTurnContext(msg.turnContext ?? null)?.companyId;
   return {
     id: msg.id,
     role: prismaRoleToDto(msg.role),
     content: msg.content,
     createdAt: msg.createdAt.toISOString(),
     ...(toolCalls ? { toolCalls } : {}),
+    ...(scopeCompanyId ? { scopeCompanyId } : {}),
   };
 }
 

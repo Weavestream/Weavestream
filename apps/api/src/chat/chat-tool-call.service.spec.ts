@@ -12,6 +12,8 @@ const ACTOR: AuthedUser = {
   mfaEnforcementCompletedAt: new Date(),
   mfaPending: false,
 };
+/** Same identity with the role that carries a row-level read restriction. */
+const CLIENT_ACTOR: AuthedUser = { ...ACTOR, role: 'CLIENT_USER' };
 const META = { ip: '127.0.0.1', userAgent: 'jest' };
 const CO = 'co-1';
 const CO_OTHER = 'co-2';
@@ -58,7 +60,12 @@ function makeService(opts: {
   /** Static claim re-read override — simulates a concurrent settle. */
   claimToolCalls?: unknown[];
   /** Row the pendingCreate recovery lookup finds. */
-  recoveredArticle?: { id: string; title: string } | null;
+  recoveredArticle?: {
+    id: string;
+    title: string;
+    /** Row-level client visibility; defaults to visible. */
+    visibleToClients?: boolean;
+  } | null;
 }) {
   // Mutable persisted state: `updateMessageToolCalls` writes land here so
   // the marker tx's write is visible to the subsequent claim, mirroring
@@ -123,7 +130,17 @@ function makeService(opts: {
   const prisma = {
     $transaction: jest.fn(async (fn: (tx: unknown) => Promise<unknown>) => fn(txClient)),
     article: {
-      findFirst: jest.fn(async () => opts.recoveredArticle ?? null),
+      // Honors the WHERE clause the way Postgres would: the recovery
+      // flow's title read carries `visibleToClients: true` for a
+      // CLIENT_USER, so a hidden row must not match THAT query — while
+      // the unfiltered existence probe still finds it.
+      findFirst: jest.fn(async (args: { where: Record<string, unknown> }) => {
+        const row = opts.recoveredArticle;
+        if (!row) return null;
+        const visible = row.visibleToClients ?? true;
+        if (args.where.visibleToClients === true && !visible) return null;
+        return { visibleToClients: visible, ...row };
+      }),
     },
   };
   const svc = new ChatToolCallService(
@@ -504,6 +521,7 @@ describe('ChatToolCallService — ownership-constrained settle claim (5b W0.4)',
   // tests need a REAL uuid company scope (unlike the legacy 'co-1'
   // shorthand above, which never crosses the parser).
   const CO_UUID = 'cccccccc-cccc-cccc-cccc-cccccccccccc';
+  const CO_OTHER_UUID = 'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee';
   const MARKER = {
     articleId: 'dddddddd-dddd-dddd-dddd-dddddddddddd',
     companyId: CO_UUID,
@@ -665,6 +683,55 @@ describe('ChatToolCallService — ownership-constrained settle claim (5b W0.4)',
     );
   });
 
+  it('refuses a confirmed destination that differs from the turn scope', async () => {
+    // The turn scope wins at apply time, so honouring this confirmation
+    // would create the article in an organization the actor did not
+    // pick. Refuse instead — silently redirecting is the bug.
+    const { svc, articles, chat } = makeService({
+      toolCall: createCall(),
+      turnContext: { companyId: CO_UUID },
+    });
+
+    const attempt = svc.apply(ACTOR, {
+      conversationId: 'conv-1',
+      messageId: 'msg-1',
+      toolCallId: 'tc-1',
+      requestCompanyId: CO_OTHER_UUID,
+      createOverrides: { title: 'Chosen', folderId: null, visibleToClients: false },
+      auditMeta: META,
+    });
+
+    await expect(attempt).rejects.toMatchObject({ status: 403 });
+    expect(articles.create).not.toHaveBeenCalled();
+    // Not even a marker: the call stays pending and retryable.
+    expect(chat.updateMessageToolCalls).not.toHaveBeenCalled();
+  });
+
+  it('a global turn creates in the confirmed destination — nothing to conflict with', async () => {
+    const { svc, articles } = makeService({
+      toolCall: createCall(),
+      turnContext: null,
+    });
+
+    const { toolCall } = await svc.apply(ACTOR, {
+      conversationId: 'conv-1',
+      messageId: 'msg-1',
+      toolCallId: 'tc-1',
+      requestCompanyId: CO_OTHER_UUID,
+      createOverrides: { title: 'Chosen', folderId: null, visibleToClients: false },
+      auditMeta: META,
+    });
+
+    expect(toolCall.status).toBe('applied');
+    expect(articles.create).toHaveBeenCalledWith(
+      ACTOR,
+      CO_OTHER_UUID,
+      expect.objectContaining({ title: 'Chosen' }),
+      META,
+      expect.anything(),
+    );
+  });
+
   it('rejects a mismatched retry with the stable recovery code and does no article work', async () => {
     const { svc, articles } = makeService({
       toolCall: createCall({ pendingCreate: MARKER }),
@@ -721,10 +788,17 @@ describe('ChatToolCallService — ownership-constrained settle claim (5b W0.4)',
     expect(toolCall.status).toBe('applied');
     expect(toolCall.result).toBe('Created article "Chosen".');
     expect(articles.create).not.toHaveBeenCalled();
-    // Lookup is actor/company-scoped — never a bare findUnique by id.
+    // Existence probe: actor/company-scoped (never a bare findUnique by
+    // id) and content-free — it decides the settle, discloses nothing.
     expect(prisma.article.findFirst).toHaveBeenCalledWith({
       where: { id: MARKER.articleId, companyId: CO_UUID, createdBy: ACTOR.id },
-      select: { id: true, title: true },
+      select: { id: true },
+    });
+    // The title is a separate, filtered read (no predicate for a
+    // non-client actor, but still its own query).
+    expect(prisma.article.findFirst).toHaveBeenCalledWith({
+      where: { id: MARKER.articleId, companyId: CO_UUID, createdBy: ACTOR.id },
+      select: { title: true },
     });
   });
 
@@ -748,7 +822,7 @@ describe('ChatToolCallService — ownership-constrained settle claim (5b W0.4)',
     expect(toolCall.result).toBe('Created article "Chosen".');
     expect(prisma.article.findFirst).toHaveBeenCalledWith({
       where: { id: MARKER.articleId, companyId: CO_UUID, createdBy: ACTOR.id },
-      select: { id: true, title: true },
+      select: { id: true },
     });
     expect(chat.updateMessageToolCalls).toHaveBeenCalledWith(
       'msg-1',
@@ -781,6 +855,118 @@ describe('ChatToolCallService — ownership-constrained settle claim (5b W0.4)',
     expect(permissions.can).toHaveBeenCalledWith(ACTOR, 'article.read', {
       companyId: CO_UUID,
     });
+  });
+
+  it('reject recovery withholds the live title of an article hidden from the client', async () => {
+    // `article.read` is company-scoped and grantable to a CLIENT_USER
+    // with an active membership — it does NOT carry the row-level
+    // `visibleToClients` restriction that ordinary article reads apply.
+    // A title renamed after the crash must not leak through it, and the
+    // restriction is a WHERE clause: the hidden row is never fetched.
+    const { svc, permissions, prisma } = makeService({
+      toolCall: createCall({ pendingCreate: MARKER }),
+      turnContext: { companyId: CO_UUID },
+      recoveredArticle: {
+        id: MARKER.articleId,
+        title: 'Renamed and hidden from clients',
+        visibleToClients: false,
+      },
+    });
+
+    const { toolCall } = await svc.reject(CLIENT_ACTOR, {
+      conversationId: 'conv-1',
+      messageId: 'msg-1',
+      toolCallId: 'tc-1',
+    });
+
+    // Still the truthful settle — with the title THEY confirmed.
+    expect(toolCall.status).toBe('applied');
+    expect(toolCall.result).toBe(`Created article "${MARKER.title}".`);
+    expect(toolCall.result).not.toContain('Renamed and hidden');
+    expect(permissions.can).toHaveBeenCalledWith(CLIENT_ACTOR, 'article.read', {
+      companyId: CO_UUID,
+    });
+    // The title read carries the visibility predicate in its WHERE
+    // clause; no query ever selects a title unfiltered for a client.
+    expect(prisma.article.findFirst).toHaveBeenCalledWith({
+      where: {
+        id: MARKER.articleId,
+        companyId: CO_UUID,
+        createdBy: CLIENT_ACTOR.id,
+        visibleToClients: true,
+      },
+      select: { title: true },
+    });
+    for (const call of prisma.article.findFirst.mock.calls) {
+      const args = call[0] as { where: Record<string, unknown>; select: object };
+      if ('title' in args.select) {
+        expect(args.where.visibleToClients).toBe(true);
+      }
+    }
+  });
+
+  it('apply recovery withholds the live title of an article hidden from the client', async () => {
+    // Same row-level rule on the apply side: company `article.write`
+    // (asserted just above the lookup) does not imply the actor may see
+    // a `visibleToClients: false` row.
+    const { svc, articles, prisma } = makeService({
+      toolCall: createCall({ pendingCreate: MARKER }),
+      turnContext: { companyId: CO_UUID },
+      recoveredArticle: {
+        id: MARKER.articleId,
+        title: 'Renamed and hidden from clients',
+        visibleToClients: false,
+      },
+    });
+
+    const { toolCall } = await svc.apply(CLIENT_ACTOR, {
+      conversationId: 'conv-1',
+      messageId: 'msg-1',
+      toolCallId: 'tc-1',
+      requestCompanyId: CO_UUID,
+      createOverrides: { title: MARKER.title, folderId: null, visibleToClients: true },
+      auditMeta: META,
+    });
+
+    expect(toolCall.status).toBe('applied');
+    expect(toolCall.result).toBe(`Created article "${MARKER.title}".`);
+    expect(articles.create).not.toHaveBeenCalled();
+    expect(prisma.article.findFirst).toHaveBeenCalledWith({
+      where: {
+        id: MARKER.articleId,
+        companyId: CO_UUID,
+        createdBy: CLIENT_ACTOR.id,
+        visibleToClients: true,
+      },
+      select: { title: true },
+    });
+    // The existence probe stays UNfiltered — hiding the row must not
+    // make the actor's own standing create look like it never happened
+    // (that would settle a lie and re-open the duplicate-create path).
+    expect(prisma.article.findFirst).toHaveBeenCalledWith({
+      where: { id: MARKER.articleId, companyId: CO_UUID, createdBy: CLIENT_ACTOR.id },
+      select: { id: true },
+    });
+  });
+
+  it('a client-visible recovered row still reports its live title to a CLIENT_USER', async () => {
+    const { svc } = makeService({
+      toolCall: createCall({ pendingCreate: MARKER }),
+      turnContext: { companyId: CO_UUID },
+      recoveredArticle: {
+        id: MARKER.articleId,
+        title: 'Renamed but still shared',
+        visibleToClients: true,
+      },
+    });
+
+    const { toolCall } = await svc.reject(CLIENT_ACTOR, {
+      conversationId: 'conv-1',
+      messageId: 'msg-1',
+      toolCallId: 'tc-1',
+    });
+
+    expect(toolCall.result).toBe('Created article "Renamed but still shared".');
   });
 
   it('reject on a marker whose article does NOT exist rejects normally (pre-create crash)', async () => {

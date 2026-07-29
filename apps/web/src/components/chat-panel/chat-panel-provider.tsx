@@ -56,6 +56,15 @@ export type ChatMessage = {
    * apply / reject the matching entry is replaced with the new status.
    */
   toolCalls?: ChatToolCallDto[];
+  /**
+   * The company scope this turn was sent with — captured once at send
+   * time (the context we actually transmitted) and read back from the
+   * server's persisted `turnContext` on reload. Apply binds a create to
+   * this scope and refuses a differing confirmed destination, so the
+   * Save-as-article dialog locks its company picker to it. Null /
+   * absent = a global turn, where the user picks freely.
+   */
+  scopeCompanyId?: string | null;
 };
 
 export type ChatTabKind = 'freeform' | 'context';
@@ -279,6 +288,8 @@ type Action =
       userMsgId: string;
       assistantMsgId: string;
       text: string;
+      /** Company scope transmitted with this turn (null = global). */
+      scopeCompanyId: string | null;
     }
   | {
       type: 'sendMeta';
@@ -615,6 +626,7 @@ function reducer(state: State, action: Action): State {
                     role: 'assistant',
                     text: '',
                     pending: true,
+                    scopeCompanyId: action.scopeCompanyId,
                   },
                 ],
               }
@@ -923,6 +935,7 @@ export function ChatPanelProvider({ children }: { children: ReactNode }) {
               ...(m.toolCalls && m.toolCalls.length > 0
                 ? { toolCalls: m.toolCalls }
                 : {}),
+              scopeCompanyId: m.scopeCompanyId ?? null,
             })),
             loading: false,
             streamingMessageId: null,
@@ -1017,6 +1030,11 @@ export function ChatPanelProvider({ children }: { children: ReactNode }) {
     } catch {
       requestContext = undefined;
     }
+    // Captured ONCE per turn, from the context this send actually
+    // transmits — the server persists exactly this as the turn's
+    // `companyId`, and the create dialog's org lock reads it back. A
+    // later re-sample of page context could only ever disagree.
+    const scopeCompanyId = requestContext?.companyId ?? null;
 
     let conversationId = tab.conversationId;
     if (!conversationId) {
@@ -1029,6 +1047,7 @@ export function ChatPanelProvider({ children }: { children: ReactNode }) {
           userMsgId: newId(),
           assistantMsgId: optimisticAssistantId,
           text: trimmed,
+          scopeCompanyId,
         });
         dispatch({
           type: 'sendError',
@@ -1049,6 +1068,7 @@ export function ChatPanelProvider({ children }: { children: ReactNode }) {
       userMsgId: optimisticUserId,
       assistantMsgId: optimisticAssistantId,
       text: trimmed,
+      scopeCompanyId,
     });
 
     // The message id may be rewritten by the `meta` frame from the
@@ -1163,6 +1183,7 @@ export function ChatPanelProvider({ children }: { children: ReactNode }) {
         ...(m.toolCalls && m.toolCalls.length > 0
           ? { toolCalls: m.toolCalls }
           : {}),
+        scopeCompanyId: m.scopeCompanyId ?? null,
       })),
       loading: false,
       streamingMessageId: null,

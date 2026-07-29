@@ -488,6 +488,7 @@ function MessageBubble({
               key={tc.id}
               tab={tab}
               messageId={message.id}
+              scopeCompanyId={message.scopeCompanyId ?? null}
               toolCall={tc}
             />
           ))}

@@ -1,6 +1,6 @@
 import type { Prisma } from '@prisma/client';
 import { chatToolCallSchema, type ChatToolCallDto } from '@weavestream/shared';
-import { parseToolCalls } from './chat.service.js';
+import { parseToolCalls, toMessageDto } from './chat.service.js';
 
 const ART = '4e8c7a52-88a1-4f5e-9b1e-1a2b3c4d5e6f';
 const COMPANY = 'cccccccc-cccc-cccc-cccc-cccccccccccc';
@@ -154,5 +154,30 @@ describe('parseToolCalls — corrupt-row tolerance', () => {
   it('nulls an errorCode outside the shared enum', () => {
     const out = parse([row({ errorCode: 'not_a_code' })]);
     expect(out![0]!.errorCode).toBeNull();
+  });
+});
+
+describe('toMessageDto — turn scope read-back', () => {
+  const base = {
+    id: '11111111-1111-4111-8111-111111111111',
+    role: 'ASSISTANT' as const,
+    content: 'drafted',
+    createdAt: new Date('2026-07-29T10:00:00.000Z'),
+    toolCalls: null,
+  };
+
+  it('surfaces the turn company so a create confirmation can lock to it', () => {
+    const dto = toMessageDto({
+      ...base,
+      turnContext: { companyId: COMPANY, currentArticleId: ART } as Prisma.JsonValue,
+    });
+    expect(dto.scopeCompanyId).toBe(COMPANY);
+  });
+
+  it('omits the scope for a global turn (and for legacy rows with no context)', () => {
+    expect(toMessageDto({ ...base, turnContext: null })).not.toHaveProperty(
+      'scopeCompanyId',
+    );
+    expect(toMessageDto(base)).not.toHaveProperty('scopeCompanyId');
   });
 });
