@@ -450,8 +450,9 @@ export function confirmedSnapshotBases(
 /**
  * baseRevision assignment for the FINAL round's article proposals:
  *   captured basis   → pending, guarded at apply on that revision.
- *                      patch proposals also carry `targetCompanyId` (a
- *                      preview hint) when the company resolves in scope.
+ *                      patch AND update proposals also carry
+ *                      `targetCompanyId` (a preview hint) when the
+ *                      company resolves in scope.
  *   uncaptured but the article resolves in the actor's scope
  *                    → BLOCKED (failed/no_base): the model proposed an
  *                      edit to content it never saw this turn
@@ -480,13 +481,15 @@ export async function assignProposalBases(
         : null;
     if (articleId && captured.has(articleId)) {
       const bound: ChatToolCallDto = { ...dto, baseRevision: captured.get(articleId)! };
-      // Attach the target company so the client patch card can fetch the
-      // diff base from a chat with no company shell (F2). Patch only —
-      // rewrites don't fetch by company. This resolves ONLY the company
+      // Attach the target company so the client card can fetch the diff
+      // base and name the target org from a chat with no company shell
+      // (F2; extended to update proposals in Phase 5b — mobile has no
+      // page context ever, so a rewrite card can only surface its org
+      // from the proposal itself). This resolves ONLY the company
       // (never the revision, which stays the captured basis, so the
       // TOCTOU guard is untouched) and is not an auth source: apply
       // re-derives the writable company from the article row.
-      if (proposal.name === 'patch_article' && UUID_RE.test(articleId)) {
+      if (UUID_RE.test(articleId)) {
         const companyId = await resolveArticleCompany(articleId);
         if (companyId) bound.targetCompanyId = companyId;
       }

@@ -107,17 +107,62 @@ export const chatToolCallSchema = z.object({
   baseRevision: z.number().int().positive().nullable().optional(),
   /**
    * PREVIEW HINT ONLY — the company the target article belongs to,
-   * server-resolved (membership-scoped) when a `patch_article` proposal
-   * is persisted with a captured basis. Lets the client patch card fetch
-   * the diff base even from a chat with no company shell (global-admin /
-   * freeform tabs), where page/company context is absent. NEVER an
+   * server-resolved (membership-scoped) when a `patch_article` or
+   * `update_article` proposal is persisted with a captured basis. Lets
+   * the client card fetch the diff base and name the target org even
+   * from a chat with no company shell (global-admin / freeform tabs,
+   * mobile global Ask), where page/company context is absent. NEVER an
    * authorization source: apply re-derives the writable company from the
    * article row and re-checks `article.write`; the client fetch it feeds
    * is itself re-authorized server-side.
    */
   targetCompanyId: z.string().uuid().nullable().optional(),
+  /**
+   * SERVER-MANAGED create-idempotency record. Stamped (and committed)
+   * by the apply path for `create_article` / update-promotion proposals
+   * BEFORE any article work, binding the canonical create intent —
+   * pre-generated article id plus the user-confirmed company / title /
+   * folder / visibility. A crash between article creation and tool-call
+   * settlement leaves this marker on the still-`pending` call; recovery
+   * completes exactly this intent (actor/company-scoped lookup, then
+   * create with the pre-generated id) and rejects mismatched retries
+   * with `ARTICLE_CREATE_RECOVERY_PENDING_CODE`. Clients treat its
+   * presence as "lock the confirmation UI to these values". Never
+   * client-writable; never an authorization source (`article.write` is
+   * still re-checked against `companyId` at apply time).
+   */
+  pendingCreate: z
+    .object({
+      articleId: z.string().uuid(),
+      companyId: z.string().uuid(),
+      title: z.string().min(1).max(200),
+      folderId: z.string().uuid().nullable(),
+      visibleToClients: z.boolean(),
+    })
+    .optional(),
 });
 export type ChatToolCallDto = z.infer<typeof chatToolCallSchema>;
+export type ChatPendingCreate = NonNullable<ChatToolCallDto['pendingCreate']>;
+
+/**
+ * RFC-7807 `code` returned (400) when a create-proposal apply arrives
+ * with a confirmation that differs from an existing `pendingCreate`
+ * marker — i.e. a prior apply attempt crashed between creating the
+ * article and settling the tool call, and the original confirmation is
+ * the only one that can complete. Clients MUST branch on this code (not
+ * message text): re-read the conversation, find the marker on the DTO,
+ * and re-submit locked to its values.
+ */
+export const ARTICLE_CREATE_RECOVERY_PENDING_CODE = 'article_create_recovery_pending';
+
+/** Narrows an RFC-7807 problem body to the create-recovery-pending rejection. */
+export function isCreateRecoveryPendingProblem(problem: unknown): boolean {
+  return (
+    typeof problem === 'object' &&
+    problem !== null &&
+    (problem as { code?: unknown }).code === ARTICLE_CREATE_RECOVERY_PENDING_CODE
+  );
+}
 
 export const chatMessageSchema = z.object({
   id: z.string().uuid(),

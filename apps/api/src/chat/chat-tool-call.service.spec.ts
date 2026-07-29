@@ -46,22 +46,40 @@ function pendingPatchCall(overrides: Partial<ChatToolCallDto> = {}): ChatToolCal
 }
 
 function makeService(opts: {
-  toolCall: ChatToolCallDto;
+  toolCall: ChatToolCallDto | ChatToolCallDto[];
   turnContext: ChatTurnContext | null;
   articleCompanyId?: string | null;
   canWrite?: boolean;
   article?: Record<string, unknown>;
+  /** Rows the ownership lock returns; [] simulates a guessed/foreign id. */
+  lockRows?: Array<{ id: string }>;
+  /** Static claim re-read override — simulates a concurrent settle. */
+  claimToolCalls?: unknown[];
+  /** Row the pendingCreate recovery lookup finds. */
+  recoveredArticle?: { id: string; title: string } | null;
 }) {
+  // Mutable persisted state: `updateMessageToolCalls` writes land here so
+  // the marker tx's write is visible to the subsequent claim, mirroring
+  // the real JSONB column.
+  const state = {
+    toolCalls: (Array.isArray(opts.toolCall)
+      ? opts.toolCall
+      : [opts.toolCall]) as unknown[],
+  };
   const chat = {
-    getMessageForActor: jest.fn().mockResolvedValue({
+    getMessageForActor: jest.fn().mockImplementation(async () => ({
       id: 'msg-1',
       conversationId: 'conv-1',
       role: 'ASSISTANT',
       content: '',
-      toolCalls: [opts.toolCall],
+      toolCalls: state.toolCalls,
       turnContext: opts.turnContext,
-    }),
-    updateMessageToolCalls: jest.fn().mockResolvedValue(undefined),
+    })),
+    updateMessageToolCalls: jest
+      .fn()
+      .mockImplementation(async (_id: string, calls: ChatToolCallDto[]) => {
+        state.toolCalls = calls;
+      }),
   };
   const articles = {
     findCompanyIdForArticle: jest
@@ -87,8 +105,28 @@ function makeService(opts: {
           : { allowed: true },
       ),
   };
-  const svc = new ChatToolCallService(articles as never, chat as never, permissions as never);
-  return { svc, chat, articles, permissions };
+  const txClient = {
+    $queryRaw: jest.fn(async () => opts.lockRows ?? [{ id: 'msg-1' }]),
+    chatMessage: {
+      findFirst: jest.fn(async () => ({
+        toolCalls: opts.claimToolCalls ?? state.toolCalls,
+      })),
+      update: jest.fn(),
+    },
+  };
+  const prisma = {
+    $transaction: jest.fn(async (fn: (tx: unknown) => Promise<unknown>) => fn(txClient)),
+    article: {
+      findFirst: jest.fn(async () => opts.recoveredArticle ?? null),
+    },
+  };
+  const svc = new ChatToolCallService(
+    articles as never,
+    chat as never,
+    permissions as never,
+    prisma as never,
+  );
+  return { svc, chat, articles, permissions, prisma, txClient, state };
 }
 
 function apply(svc: ChatToolCallService, requestCompanyId: string | undefined) {
@@ -316,6 +354,7 @@ describe('ChatToolCallService.apply — exact article patches', () => {
     expect(chat.updateMessageToolCalls).toHaveBeenCalledWith(
       'msg-1',
       expect.arrayContaining([expect.objectContaining({ errorCode })]),
+      expect.anything(), // settle writes go through the claim tx
     );
   });
 
@@ -384,6 +423,7 @@ describe('ChatToolCallService.apply — revision guard (WS-030)', () => {
     expect(chat.updateMessageToolCalls).toHaveBeenCalledWith(
       'msg-1',
       expect.arrayContaining([expect.objectContaining({ errorCode: 'stale' })]),
+      expect.anything(), // settle writes go through the claim tx
     );
   });
 
@@ -435,5 +475,279 @@ describe('ChatToolCallService.apply — revision guard (WS-030)', () => {
     expect(articles.update).toHaveBeenCalledWith(ACTOR, CO, ART, expect.anything(), META, {
       expectedRevision: undefined,
     });
+  });
+
+  it('a missing update target WITHOUT a confirmed create settles failed, never a silent create', async () => {
+    const { svc, articles } = makeService({
+      toolCall: pendingCall({ baseRevision: null }),
+      turnContext: { companyId: CO },
+      articleCompanyId: null, // hallucinated id — not found
+    });
+
+    const { toolCall } = await apply(svc, CO); // no createOverrides
+
+    expect(toolCall.status).toBe('failed');
+    expect(toolCall.error).toMatch(/not found/i);
+    expect(articles.create).not.toHaveBeenCalled();
+    expect(articles.update).not.toHaveBeenCalled();
+  });
+});
+
+describe('ChatToolCallService — ownership-constrained settle claim (5b W0.4)', () => {
+  // The marker round-trips through the zod-validated parser, so these
+  // tests need a REAL uuid company scope (unlike the legacy 'co-1'
+  // shorthand above, which never crosses the parser).
+  const CO_UUID = 'cccccccc-cccc-cccc-cccc-cccccccccccc';
+  const MARKER = {
+    articleId: 'dddddddd-dddd-dddd-dddd-dddddddddddd',
+    companyId: CO_UUID,
+    title: 'Chosen',
+    folderId: null,
+    visibleToClients: true,
+  };
+
+  function createCall(overrides: Partial<ChatToolCallDto> = {}): ChatToolCallDto {
+    return pendingCall({
+      name: 'create_article',
+      arguments: { title: 'Drafted title', markdown: '# Drafted title\n\nBody' },
+      ...overrides,
+    });
+  }
+
+  function applyCreate(
+    svc: ChatToolCallService,
+    overrides: { title: string; folderId: string | null; visibleToClients: boolean } | undefined,
+  ) {
+    return svc.apply(ACTOR, {
+      conversationId: 'conv-1',
+      messageId: 'msg-1',
+      toolCallId: 'tc-1',
+      requestCompanyId: CO_UUID,
+      ...(overrides ? { createOverrides: overrides } : {}),
+      auditMeta: META,
+    });
+  }
+
+  it('locks through one statement carrying message + conversation + owning user', async () => {
+    const { svc, txClient } = makeService({
+      toolCall: pendingCall(),
+      turnContext: { companyId: CO },
+    });
+
+    await apply(svc, CO);
+
+    const sqlArg = (txClient.$queryRaw.mock.calls[0] as unknown[])[0] as {
+      sql: string;
+      values: unknown[];
+    };
+    expect(sqlArg.sql).toContain('FOR UPDATE OF m');
+    expect(sqlArg.sql).toContain('c.user_id');
+    expect(sqlArg.sql).toContain('m.conversation_id');
+    expect(sqlArg.values).toEqual(expect.arrayContaining(['msg-1', 'conv-1', ACTOR.id]));
+  });
+
+  it('a zero-row lock (guessed/foreign id) 404s without doing any work', async () => {
+    const { svc, articles, chat } = makeService({
+      toolCall: pendingCall(),
+      turnContext: { companyId: CO },
+      lockRows: [],
+    });
+
+    await expect(apply(svc, CO)).rejects.toMatchObject({ status: 404 });
+    expect(articles.update).not.toHaveBeenCalled();
+    expect(chat.updateMessageToolCalls).not.toHaveBeenCalled();
+  });
+
+  it('the claim loser sees the committed settle and gets the already-settled 400', async () => {
+    const { svc, articles, chat } = makeService({
+      toolCall: pendingCall(),
+      turnContext: { companyId: CO },
+      // The pre-check read still sees pending; the locked re-read sees
+      // the concurrent winner's committed apply.
+      claimToolCalls: [pendingCall({ status: 'applied' })],
+    });
+
+    await expect(apply(svc, CO)).rejects.toMatchObject({ status: 400 });
+    expect(articles.update).not.toHaveBeenCalled();
+    expect(chat.updateMessageToolCalls).not.toHaveBeenCalled();
+  });
+
+  it('reject also claims: loser gets 400, winner persists rejected through the tx', async () => {
+    const { svc, chat, txClient } = makeService({
+      toolCall: pendingCall(),
+      turnContext: { companyId: CO },
+    });
+
+    const { toolCall } = await svc.reject(ACTOR, {
+      conversationId: 'conv-1',
+      messageId: 'msg-1',
+      toolCallId: 'tc-1',
+    });
+
+    expect(toolCall.status).toBe('rejected');
+    expect(chat.updateMessageToolCalls).toHaveBeenCalledWith(
+      'msg-1',
+      expect.arrayContaining([expect.objectContaining({ status: 'rejected' })]),
+      txClient,
+    );
+
+    const { svc: loser } = makeService({
+      toolCall: pendingCall(),
+      turnContext: { companyId: CO },
+      claimToolCalls: [pendingCall({ status: 'rejected' })],
+    });
+    await expect(
+      loser.reject(ACTOR, { conversationId: 'conv-1', messageId: 'msg-1', toolCallId: 'tc-1' }),
+    ).rejects.toMatchObject({ status: 400 });
+  });
+
+  it('apply/reject persist a targetCompanyId-bearing sibling without stripping it', async () => {
+    const sibling = pendingCall({
+      id: 'tc-2',
+      status: 'pending',
+      baseRevision: 4,
+      targetCompanyId: 'cccccccc-cccc-cccc-cccc-cccccccccccc',
+    });
+    const { svc, chat } = makeService({
+      toolCall: [pendingCall(), sibling],
+      turnContext: { companyId: CO },
+    });
+
+    await apply(svc, CO);
+
+    const written = chat.updateMessageToolCalls.mock.calls[0]![1] as ChatToolCallDto[];
+    const persistedSibling = written.find((c) => c.id === 'tc-2');
+    expect(persistedSibling).toMatchObject({
+      targetCompanyId: 'cccccccc-cccc-cccc-cccc-cccccccccccc',
+      baseRevision: 4,
+      status: 'pending',
+    });
+  });
+
+  it('stamps pendingCreate from the resolved intent BEFORE creating, then creates with its id', async () => {
+    const { svc, articles, chat } = makeService({
+      toolCall: createCall(),
+      turnContext: { companyId: CO_UUID },
+    });
+
+    const { toolCall } = await applyCreate(svc, {
+      title: 'Chosen',
+      folderId: null,
+      visibleToClients: false,
+    });
+
+    expect(toolCall.status).toBe('applied');
+    // First write = the marker tx, before any article work.
+    const markerWrite = chat.updateMessageToolCalls.mock.calls[0]![1] as ChatToolCallDto[];
+    const marker = markerWrite.find((c) => c.id === 'tc-1')?.pendingCreate;
+    expect(marker).toMatchObject({
+      companyId: CO_UUID,
+      title: 'Chosen',
+      folderId: null,
+      visibleToClients: false,
+    });
+    expect(articles.create).toHaveBeenCalledWith(
+      ACTOR,
+      CO_UUID,
+      expect.objectContaining({ title: 'Chosen', visibleToClients: false }),
+      META,
+      { id: marker!.articleId },
+    );
+    // The marker-tx write happened strictly before the create.
+    expect(chat.updateMessageToolCalls.mock.invocationCallOrder[0]!).toBeLessThan(
+      articles.create.mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it('rejects a mismatched retry with the stable recovery code and does no article work', async () => {
+    const { svc, articles } = makeService({
+      toolCall: createCall({ pendingCreate: MARKER }),
+      turnContext: { companyId: CO_UUID },
+    });
+
+    const attempt = applyCreate(svc, {
+      title: 'Different title',
+      folderId: null,
+      visibleToClients: true,
+    });
+    await expect(attempt).rejects.toMatchObject({
+      status: 400,
+      response: expect.objectContaining({ code: 'article_create_recovery_pending' }),
+    });
+    expect(articles.create).not.toHaveBeenCalled();
+  });
+
+  it('a matching retry reuses the existing marker id instead of minting a new one', async () => {
+    const { svc, articles } = makeService({
+      toolCall: createCall({ pendingCreate: MARKER }),
+      turnContext: { companyId: CO_UUID },
+    });
+
+    const { toolCall } = await applyCreate(svc, {
+      title: 'Chosen',
+      folderId: null,
+      visibleToClients: true,
+    });
+
+    expect(toolCall.status).toBe('applied');
+    expect(articles.create).toHaveBeenCalledWith(
+      ACTOR,
+      CO_UUID,
+      expect.anything(),
+      META,
+      { id: MARKER.articleId },
+    );
+  });
+
+  it('recovery: an already-created marker article settles applied without a second create', async () => {
+    const { svc, articles, prisma } = makeService({
+      toolCall: createCall({ pendingCreate: MARKER }),
+      turnContext: { companyId: CO_UUID },
+      recoveredArticle: { id: MARKER.articleId, title: 'Chosen' },
+    });
+
+    const { toolCall } = await applyCreate(svc, {
+      title: 'Chosen',
+      folderId: null,
+      visibleToClients: true,
+    });
+
+    expect(toolCall.status).toBe('applied');
+    expect(toolCall.result).toBe('Created article "Chosen".');
+    expect(articles.create).not.toHaveBeenCalled();
+    // Lookup is actor/company-scoped — never a bare findUnique by id.
+    expect(prisma.article.findFirst).toHaveBeenCalledWith({
+      where: { id: MARKER.articleId, companyId: CO_UUID, createdBy: ACTOR.id },
+      select: { id: true, title: true },
+    });
+  });
+
+  it('the update create-promotion also runs through the marker path', async () => {
+    const { svc, articles, chat } = makeService({
+      toolCall: pendingCall({ baseRevision: null }),
+      turnContext: { companyId: CO_UUID },
+      articleCompanyId: null, // hallucinated target
+    });
+
+    const { toolCall } = await svc.apply(ACTOR, {
+      conversationId: 'conv-1',
+      messageId: 'msg-1',
+      toolCallId: 'tc-1',
+      requestCompanyId: CO_UUID,
+      createOverrides: { title: 'Promoted', folderId: null, visibleToClients: true },
+      auditMeta: META,
+    });
+
+    expect(toolCall.status).toBe('applied');
+    const markerWrite = chat.updateMessageToolCalls.mock.calls[0]![1] as ChatToolCallDto[];
+    const marker = markerWrite.find((c) => c.id === 'tc-1')?.pendingCreate;
+    expect(marker).toMatchObject({ companyId: CO_UUID, title: 'Promoted' });
+    expect(articles.create).toHaveBeenCalledWith(
+      ACTOR,
+      CO_UUID,
+      expect.objectContaining({ title: 'Promoted' }),
+      META,
+      { id: marker!.articleId },
+    );
   });
 });

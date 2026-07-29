@@ -167,54 +167,57 @@ describe('SearchService helpers', () => {
  * behaviour is covered by the 0051 migration verification against a
  * live database.
  */
-describe('SearchService password allow-list filter', () => {
-  const COMPANY_ID = '33333333-3333-3333-3333-333333333333';
+const COMPANY_ID = '33333333-3333-3333-3333-333333333333';
 
-  function makeActor(role: AuthedUser['role']): AuthedUser {
-    return {
-      id: '44444444-4444-4444-4444-444444444444',
-      email: 'someone@example.com',
-      role,
-      globalAccess: role === 'OPERATOR' ? 'FULL' : null,
-      platformCapabilities: [],
-      sessionId: 'session-1',
-      mfaEnforcementCompletedAt: null,
-      mfaPending: false,
-    } as AuthedUser;
-  }
+function makeActor(role: AuthedUser['role']): AuthedUser {
+  return {
+    id: '44444444-4444-4444-4444-444444444444',
+    email: 'someone@example.com',
+    role,
+    globalAccess: role === 'OPERATOR' ? 'FULL' : null,
+    platformCapabilities: [],
+    sessionId: 'session-1',
+    mfaEnforcementCompletedAt: null,
+    mfaPending: false,
+  } as AuthedUser;
+}
 
-  function makeCtx(actor: AuthedUser): TenantContext {
-    return {
-      userId: actor.id,
-      role: actor.role,
-      email: actor.email,
-      allowedCompanyIds: [COMPANY_ID],
-      isSuperAdmin: actor.role === 'SUPER_ADMIN',
-      globalAccess: actor.globalAccess,
-      requestId: 'req-1',
-      ip: '127.0.0.1',
-      userAgent: 'jest',
-    };
-  }
+function makeCtx(
+  actor: AuthedUser,
+  allowedCompanyIds: string[] = [COMPANY_ID],
+): TenantContext {
+  return {
+    userId: actor.id,
+    role: actor.role,
+    email: actor.email,
+    allowedCompanyIds,
+    isSuperAdmin: actor.role === 'SUPER_ADMIN',
+    globalAccess: actor.globalAccess,
+    requestId: 'req-1',
+    ip: '127.0.0.1',
+    userAgent: 'jest',
+  };
+}
 
-  function makeService() {
-    const queryRaw = jest.fn(async () => []);
-    const prisma = { $queryRaw: queryRaw } as unknown as PrismaService;
-    return { svc: new SearchService(prisma), queryRaw };
-  }
+function makeService() {
+  const queryRaw = jest.fn(async () => []);
+  const prisma = { $queryRaw: queryRaw } as unknown as PrismaService;
+  return { svc: new SearchService(prisma), queryRaw };
+}
 
-  function capturedSql(queryRaw: jest.Mock): {
+function capturedSql(queryRaw: jest.Mock): {
+  sql: string;
+  values: unknown[];
+} {
+  expect(queryRaw).toHaveBeenCalledTimes(1);
+  const arg = queryRaw.mock.calls[0][0] as {
     sql: string;
     values: unknown[];
-  } {
-    expect(queryRaw).toHaveBeenCalledTimes(1);
-    const arg = queryRaw.mock.calls[0][0] as {
-      sql: string;
-      values: unknown[];
-    };
-    return { sql: arg.sql, values: arg.values };
-  }
+  };
+  return { sql: arg.sql, values: arg.values };
+}
 
+describe('SearchService password allow-list filter', () => {
   async function runSearch(actor: AuthedUser) {
     const { svc, queryRaw } = makeService();
     await runWithTenantContext(makeCtx(actor), () =>
@@ -260,5 +263,100 @@ describe('SearchService password allow-list filter', () => {
     const { sql, values } = capturedSql(queryRaw);
     expect(sql).toContain('restricted_to_user_ids');
     expect(values).toContain(actor.id);
+  });
+});
+
+/**
+ * Phase 5b "server contracts first" pins: cross-org scope is derived
+ * from the tenant context, NEVER from request input, and cross-org
+ * (unpinned) searches exclude hits living in archived companies. Same
+ * SQL-capture harness as the allow-list suite above.
+ */
+describe('SearchService cross-org scope', () => {
+  it('scopes an omitted companyId to the tenant allow-list for non-global actors', async () => {
+    // CONTRACTOR carries globalAccess null — the membership-scoped class.
+    const actor = makeActor('CONTRACTOR');
+    const { svc, queryRaw } = makeService();
+    await runWithTenantContext(makeCtx(actor), () => svc.search(actor, { q: 'gateway' }));
+    const { sql, values } = capturedSql(queryRaw);
+    expect(sql).toContain('si.company_id IN');
+    expect(values).toContain(COMPANY_ID);
+  });
+
+  it('returns empty without querying when the allowed set is empty', async () => {
+    const actor = makeActor('CONTRACTOR');
+    const { svc, queryRaw } = makeService();
+    const res = await runWithTenantContext(makeCtx(actor, []), () =>
+      svc.search(actor, { q: 'gateway' }),
+    );
+    expect(res.items).toEqual([]);
+    expect(queryRaw).not.toHaveBeenCalled();
+  });
+
+  it('returns empty without querying for an out-of-scope explicit companyId', async () => {
+    const actor = makeActor('CONTRACTOR');
+    const { svc, queryRaw } = makeService();
+    const res = await runWithTenantContext(makeCtx(actor), () =>
+      svc.search(actor, {
+        q: 'gateway',
+        companyId: '99999999-9999-9999-9999-999999999999',
+      }),
+    );
+    expect(res.items).toEqual([]);
+    expect(queryRaw).not.toHaveBeenCalled();
+  });
+
+  it('emits no company predicate for a global actor with companyId omitted', async () => {
+    const actor = makeActor('OPERATOR'); // globalAccess FULL
+    const { svc, queryRaw } = makeService();
+    await runWithTenantContext(makeCtx(actor), () => svc.search(actor, { q: 'gateway' }));
+    const { sql } = capturedSql(queryRaw);
+    expect(sql).not.toContain('si.company_id IN');
+  });
+});
+
+describe('SearchService archived-company exclusion (cross-org mode)', () => {
+  const ARCHIVED_PREDICATE = 'c.archived_at IS NOT NULL';
+
+  async function runSearch(actor: AuthedUser, companyId?: string) {
+    const { svc, queryRaw } = makeService();
+    await runWithTenantContext(makeCtx(actor), () =>
+      svc.search(actor, { q: 'gateway', ...(companyId ? { companyId } : {}) }),
+    );
+    return capturedSql(queryRaw);
+  }
+
+  it.each(['OPERATOR', 'SUPER_ADMIN', 'CONTRACTOR', 'CLIENT_USER'] as const)(
+    'applies the archived-company predicate for %s when companyId is omitted',
+    async (role) => {
+      const { sql } = await runSearch(makeActor(role));
+      expect(sql).toContain(ARCHIVED_PREDICATE);
+    },
+  );
+
+  it('omits the predicate when a company is explicitly pinned', async () => {
+    const { sql } = await runSearch(makeActor('OPERATOR'), COMPANY_ID);
+    expect(sql).not.toContain(ARCHIVED_PREDICATE);
+  });
+
+  it('stays independent of includeArchived (entity-level flag ≠ offboarded client)', async () => {
+    const actor = makeActor('OPERATOR');
+    const { svc, queryRaw } = makeService();
+    await runWithTenantContext(makeCtx(actor), () =>
+      svc.search(actor, { q: 'gateway', includeArchived: true }),
+    );
+    const { sql } = capturedSql(queryRaw);
+    expect(sql).toContain(ARCHIVED_PREDICATE);
+    expect(sql).not.toContain('si.archived_at IS NULL');
+  });
+
+  it('mentions() with a pinned company delegates without the predicate', async () => {
+    const actor = makeActor('OPERATOR');
+    const { svc, queryRaw } = makeService();
+    await runWithTenantContext(makeCtx(actor), () =>
+      svc.mentions(actor, 'gateway', { companyId: COMPANY_ID }),
+    );
+    const { sql } = capturedSql(queryRaw);
+    expect(sql).not.toContain(ARCHIVED_PREDICATE);
   });
 });

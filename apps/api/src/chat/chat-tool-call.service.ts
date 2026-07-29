@@ -5,8 +5,11 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
+import { randomUUID } from 'node:crypto';
+import { Prisma } from '@prisma/client';
 import { z } from 'zod';
 import type {
+  ChatPendingCreate,
   ChatToolCallDto,
   ChatTurnContext,
   CreateArticleInput,
@@ -14,6 +17,7 @@ import type {
 } from '@weavestream/shared';
 import {
   applyArticleTextEdits,
+  ARTICLE_CREATE_RECOVERY_PENDING_CODE,
   createArticleToolInputSchema,
   MAX_ARTICLE_PATCH_CHARS,
   MAX_MARKDOWN_SOURCE,
@@ -26,9 +30,22 @@ import {
 } from '@weavestream/shared';
 import { ArticlesService, StaleArticleError } from '../articles/articles.service.js';
 import { PermissionService } from '../rbac/permission.service.js';
+import { PrismaService } from '../prisma/prisma.service.js';
 import type { AuditMeta } from '../articles/articles.service.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
-import { ChatService } from './chat.service.js';
+import { ChatService, parseToolCalls } from './chat.service.js';
+
+/**
+ * Upper bound for the settle transaction. The claim holds the message
+ * row lock while the article mutation runs on its own connection, so
+ * the window includes one article write + audit + (for creates) the
+ * version row — generous headroom over Prisma's 5 s default without
+ * letting a wedged apply pin the row forever.
+ */
+const SETTLE_TX_TIMEOUT_MS = 30_000;
+
+/** Canonical create intent, minus the pre-generated article id. */
+type CreateIntent = Omit<ChatPendingCreate, 'articleId'>;
 
 /**
  * Executes the agentic write tools (`patch_article`, `update_article`,
@@ -55,6 +72,7 @@ export class ChatToolCallService {
     private readonly articles: ArticlesService,
     private readonly chat: ChatService,
     private readonly permissions: PermissionService,
+    private readonly prisma: PrismaService,
   ) {}
 
   /**
@@ -73,10 +91,11 @@ export class ChatToolCallService {
       auditMeta: AuditMeta;
     },
   ): Promise<{ toolCall: ChatToolCallDto; updatedToolCalls: ChatToolCallDto[] }> {
-    const { toolCall, updatedToolCalls, allToolCalls, turnContext } = await this.loadPending(
-      actor,
-      params,
-    );
+    // Pre-check OUTSIDE the claim: precise 404/403/400s plus the scope
+    // and classification inputs. This read alone is never the guard —
+    // the claim transaction below re-verifies `pending` under the
+    // ownership-constrained row lock (TOCTOU).
+    const { toolCall, turnContext } = await this.loadPending(actor, params);
 
     // Bind the apply to the scope that PRODUCED the proposal, not
     // whatever page the client is on now. The persisted `turnContext`
@@ -84,87 +103,86 @@ export class ChatToolCallService {
     // for rows saved before turn-binding. For article edit tools this is
     // only a reject-only cross-check — the writable company is still
     // derived from the article row. For `create_article` it is the
-    // scope, still gated by `article.write`.
+    // scope, still gated by `article.write`. Turn context is immutable
+    // after persist, so deriving it here (outside the claim) is safe.
     const scopeCompanyId = turnContext?.companyId ?? params.requestCompanyId;
 
-    let next: ChatToolCallDto;
-    try {
-      if (toolCall.name === 'patch_article') {
-        const result = await this.applyPatch(actor, toolCall, scopeCompanyId, params.auditMeta);
-        next = { ...toolCall, status: 'applied', result, error: null };
-      } else if (toolCall.name === 'update_article') {
-        const result = await this.applyUpdate(
-          actor,
-          toolCall,
-          scopeCompanyId,
-          params.createOverrides,
-          params.auditMeta,
-        );
-        next = { ...toolCall, status: 'applied', result, error: null };
-      } else if (toolCall.name === 'create_article') {
-        const result = await this.applyCreate(
-          actor,
-          toolCall,
-          scopeCompanyId,
-          params.createOverrides,
-          params.auditMeta,
-        );
-        next = { ...toolCall, status: 'applied', result, error: null };
-      } else {
-        // Read tools execute during streaming and are never persisted
-        // as `pending`; a stray apply on one is a client bug.
-        throw new BadRequestException('Only proposal tool calls can be applied.');
-      }
-    } catch (err) {
-      this.logger.warn(`Tool call ${toolCall.id} (${toolCall.name}) failed: ${messageOf(err)}`);
-      if (err instanceof StaleArticleError) {
-        // The WHERE-clause revision guard matched zero rows: someone
-        // edited (or archived) the article after the proposal's base
-        // revision was captured. The newer content wins, always.
-        next = {
-          ...toolCall,
-          status: 'failed',
-          result: null,
-          errorCode: 'stale',
-          error:
-            'This article was edited after the proposal was drafted, so it was not applied. ' +
-            'Ask the assistant to redo the change against the current version.',
-        };
-      } else if (err instanceof NoBaseRevisionError) {
-        next = {
-          ...toolCall,
-          status: 'failed',
-          result: null,
-          errorCode: 'no_base',
-          error:
-            'This proposal was not based on the article’s current content, so it was not applied. ' +
-            'Ask the assistant to read the article and propose the change again.',
-        };
-      } else if (err instanceof ArticlePatchApplyError) {
-        next = {
-          ...toolCall,
-          status: 'failed',
-          result: null,
-          errorCode: err.code === 'not_found' ? 'patch_missing' : 'patch_ambiguous',
-          error:
-            err.code === 'not_found'
-              ? 'The original passage could not be found in the current article, so no changes were applied. Ask the assistant to redo the edit against the current text.'
-              : 'The original passage appears more than once, so the edit could not be applied safely. Ask the assistant to retry with more surrounding text.',
-        };
-      } else {
-        next = {
-          ...toolCall,
-          status: 'failed',
-          result: null,
-          error: messageOf(err),
-        };
-      }
-    }
+    // Creates need durable idempotency: classify BEFORE the claim and
+    // commit the intent marker in its own transaction, so a crash
+    // between article creation and settle can be recovered without a
+    // duplicate (or silently relocated) article. Null intent = not a
+    // satisfiable create; the work path reproduces the precise error.
+    const intent = await this.resolveCreateIntent(toolCall, scopeCompanyId, params.createOverrides);
+    const marker = intent ? await this.ensureCreateMarker(actor, params, intent) : undefined;
 
-    const finalCalls = replaceCall(allToolCalls, next);
-    await this.chat.updateMessageToolCalls(params.messageId, finalCalls);
-    void updatedToolCalls;
-    return { toolCall: next, updatedToolCalls: finalCalls };
+    return this.withClaimedPending(actor, params, async (claimed) => {
+      let next: ChatToolCallDto;
+      try {
+        if (claimed.name === 'patch_article') {
+          const result = await this.applyPatch(actor, claimed, scopeCompanyId, params.auditMeta);
+          next = { ...claimed, status: 'applied', result, error: null };
+        } else if (claimed.name === 'update_article') {
+          const result = marker
+            ? await this.applyCreateWithMarker(actor, claimed, marker, params.auditMeta)
+            : await this.applyUpdate(actor, claimed, scopeCompanyId, params.auditMeta);
+          next = { ...claimed, status: 'applied', result, error: null };
+        } else if (claimed.name === 'create_article') {
+          const result = marker
+            ? await this.applyCreateWithMarker(actor, claimed, marker, params.auditMeta)
+            : await this.applyCreate(claimed, scopeCompanyId);
+          next = { ...claimed, status: 'applied', result, error: null };
+        } else {
+          // Read tools execute during streaming and are never persisted
+          // as `pending`; a stray apply on one is a client bug.
+          throw new BadRequestException('Only proposal tool calls can be applied.');
+        }
+      } catch (err) {
+        this.logger.warn(`Tool call ${claimed.id} (${claimed.name}) failed: ${messageOf(err)}`);
+        if (err instanceof StaleArticleError) {
+          // The WHERE-clause revision guard matched zero rows: someone
+          // edited (or archived) the article after the proposal's base
+          // revision was captured. The newer content wins, always.
+          next = {
+            ...claimed,
+            status: 'failed',
+            result: null,
+            errorCode: 'stale',
+            error:
+              'This article was edited after the proposal was drafted, so it was not applied. ' +
+              'Ask the assistant to redo the change against the current version.',
+          };
+        } else if (err instanceof NoBaseRevisionError) {
+          next = {
+            ...claimed,
+            status: 'failed',
+            result: null,
+            errorCode: 'no_base',
+            error:
+              'This proposal was not based on the article’s current content, so it was not applied. ' +
+              'Ask the assistant to read the article and propose the change again.',
+          };
+        } else if (err instanceof ArticlePatchApplyError) {
+          next = {
+            ...claimed,
+            status: 'failed',
+            result: null,
+            errorCode: err.code === 'not_found' ? 'patch_missing' : 'patch_ambiguous',
+            error:
+              err.code === 'not_found'
+                ? 'The original passage could not be found in the current article, so no changes were applied. Ask the assistant to redo the edit against the current text.'
+                : 'The original passage appears more than once, so the edit could not be applied safely. Ask the assistant to retry with more surrounding text.',
+          };
+        } else {
+          next = {
+            ...claimed,
+            status: 'failed',
+            result: null,
+            error: messageOf(err),
+          };
+        }
+      }
+      return next;
+    });
   }
 
   async reject(
@@ -175,20 +193,18 @@ export class ChatToolCallService {
       toolCallId: string;
     },
   ): Promise<{ toolCall: ChatToolCallDto; updatedToolCalls: ChatToolCallDto[] }> {
-    const { toolCall, allToolCalls } = await this.loadPending(actor, {
+    // Pre-check for the precise ownership errors; the claim re-verifies.
+    await this.loadPending(actor, {
       ...params,
       requestCompanyId: undefined,
       auditMeta: { ip: '0.0.0.0', userAgent: 'rejection' },
     });
-    const next: ChatToolCallDto = {
-      ...toolCall,
+    return this.withClaimedPending(actor, params, async (claimed) => ({
+      ...claimed,
       status: 'rejected',
       result: null,
       error: null,
-    };
-    const finalCalls = replaceCall(allToolCalls, next);
-    await this.chat.updateMessageToolCalls(params.messageId, finalCalls);
-    return { toolCall: next, updatedToolCalls: finalCalls };
+    }));
   }
 
   // ------------------------------------------------------------------
@@ -272,7 +288,6 @@ export class ChatToolCallService {
     actor: AuthedUser,
     toolCall: ChatToolCallDto,
     requestCompanyId: string | undefined,
-    overrides: CreateArticleOverrides | undefined,
     auditMeta: AuditMeta,
   ): Promise<string> {
     const args = updateArticleToolInputSchema.parse(stripNullArgs(toolCall.arguments));
@@ -284,16 +299,15 @@ export class ChatToolCallService {
     // via a hallucinated article id.
     const targetCompanyId = await this.articles.findCompanyIdForArticle(args.article_id);
     if (targetCompanyId === null) {
-      // The LLM referenced an article that doesn't exist. The chat UI
-      // flags this client-side (no matching page-context / mention)
-      // and the user confirms a target via the Save-as-article
-      // dialog, which posts `createOverrides`. Promote the proposal
-      // to a create so the user's intent isn't lost to a hallucinated
-      // article id — but only when we have an explicit company scope
-      // AND the LLM emitted a body to seed the new article.
-      if (overrides && requestCompanyId && args.markdown) {
-        return this.applyCreateFromUpdateArgs(actor, args, requestCompanyId, overrides, auditMeta);
-      }
+      // The LLM referenced an article that doesn't exist. When the
+      // user confirmed a create target (Save-as-article overrides +
+      // company scope + a body), the pre-claim classification stamped
+      // a durable `pendingCreate` marker and the apply took the marker
+      // path INSTEAD of this method — a create-promotion can never
+      // start here, where creation would run without idempotency.
+      // Reaching this branch therefore means a plain miss (or the
+      // article vanished between classification and the claim; the
+      // client retries and the next attempt classifies as a create).
       throw new NotFoundException('Article not found.');
     }
     if (requestCompanyId && requestCompanyId !== targetCompanyId) {
@@ -356,74 +370,103 @@ export class ChatToolCallService {
     return `Updated article "${updated.title}".`;
   }
 
+  /**
+   * No-marker fallback for `create_article`: reachable only when the
+   * pre-claim classification could NOT resolve a create intent (missing
+   * company scope, or arguments that fail the schema). Reproduces the
+   * original precise errors so those cases still settle as `failed`
+   * with the same messages. If both guards pass, classification and
+   * this method have drifted — fail loudly instead of creating without
+   * idempotency.
+   */
   private async applyCreate(
-    actor: AuthedUser,
     toolCall: ChatToolCallDto,
     requestCompanyId: string | undefined,
-    overrides: CreateArticleOverrides | undefined,
-    auditMeta: AuditMeta,
   ): Promise<string> {
     if (!requestCompanyId) {
       throw new BadRequestException(
         'Cannot create an article without a company context. Open the chat from a company page first.',
       );
     }
-    const args = createArticleToolInputSchema.parse(stripNullArgs(toolCall.arguments));
-    await this.assertArticleWrite(actor, requestCompanyId);
-
-    // Same dedupe as `applyUpdate`: if the LLM's body opens with the
-    // same heading it also passed as `title`, drop the heading line
-    // so the rendered article doesn't show the title twice.
-    const parsed = splitMarkdownTitleAndBody(args.markdown);
-    // Prefer the user-confirmed values from the Save-as-article
-    // dialog over the LLM-supplied `args.folder_id` /
-    // `args.visible_to_clients` / `args.title`. The dialog forces a
-    // pick from the live company tree, so a stray LLM hallucination
-    // can never reach the articles service.
-    const title = overrides?.title ?? args.title;
-    const folderId = overrides !== undefined ? overrides.folderId : (args.folder_id ?? null);
-    const visibleToClients =
-      overrides !== undefined ? overrides.visibleToClients : args.visible_to_clients;
-    const input: CreateArticleInput = {
-      editorMode: 'markdown',
-      title,
-      markdownSource: parsed.body,
-      ...(folderId ? { folderId } : {}),
-      ...(visibleToClients !== undefined ? { visibleToClients } : {}),
-    };
-
-    const created = await this.articles.create(actor, requestCompanyId, input, auditMeta);
-    return `Created article "${created.title}".`;
+    createArticleToolInputSchema.parse(stripNullArgs(toolCall.arguments));
+    throw new Error(
+      'create_article apply reached creation without an idempotency marker (classification drift).',
+    );
   }
 
   /**
-   * Promote an `update_article` proposal into a brand-new article when
-   * the LLM-supplied `article_id` doesn't exist. The Save-as-article
-   * dialog already collected an explicit company / folder / title /
-   * visibility from the user, so we use those as the canonical
-   * target and the LLM's body for the article content.
+   * Create an article from the durable `pendingCreate` intent — the
+   * single creation path for `create_article` applies AND update
+   * create-promotions. The marker (committed before any article work)
+   * pins the canonical company / title / folder / visibility and the
+   * pre-generated article id; the body always comes from the persisted
+   * tool-call arguments, which are immutable across retries.
+   *
+   * Recovery: if a prior attempt created the article but crashed before
+   * the settle committed, the actor/company-scoped lookup finds it and
+   * we settle without a second create. A P2002 on our own id (a racer
+   * between lookup and create — same marker, so same intent) is the
+   * only collision treated as recovery; anything else (e.g. the
+   * per-company slug unique) rethrows.
    */
-  private async applyCreateFromUpdateArgs(
+  private async applyCreateWithMarker(
     actor: AuthedUser,
-    args: { title?: string; markdown?: string },
-    requestCompanyId: string,
-    overrides: CreateArticleOverrides,
+    toolCall: ChatToolCallDto,
+    marker: ChatPendingCreate,
     auditMeta: AuditMeta,
   ): Promise<string> {
-    if (!args.markdown) {
+    await this.assertArticleWrite(actor, marker.companyId);
+
+    const recovered = await this.findRecoveredArticle(actor, marker);
+    if (recovered) return `Created article "${recovered.title}".`;
+
+    const raw = stripNullArgs(toolCall.arguments);
+    const markdown = typeof raw['markdown'] === 'string' ? raw['markdown'] : null;
+    if (!markdown) {
+      // Classification guarantees a body; defensive for corrupt rows.
       throw new BadRequestException('Tool call did not include a body to create an article from.');
     }
-    await this.assertArticleWrite(actor, requestCompanyId);
-    const parsed = splitMarkdownTitleAndBody(args.markdown);
+    // Same dedupe as `applyUpdate`: if the LLM's body opens with the
+    // same heading it also passed as `title`, drop the heading line so
+    // the rendered article doesn't show the title twice.
+    const parsed = splitMarkdownTitleAndBody(markdown);
     const input: CreateArticleInput = {
       editorMode: 'markdown',
-      title: overrides.title,
+      title: marker.title,
       markdownSource: parsed.body,
-      ...(overrides.folderId ? { folderId: overrides.folderId } : {}),
-      visibleToClients: overrides.visibleToClients,
+      ...(marker.folderId ? { folderId: marker.folderId } : {}),
+      visibleToClients: marker.visibleToClients,
     };
-    const created = await this.articles.create(actor, requestCompanyId, input, auditMeta);
-    return `Created article "${created.title}".`;
+
+    try {
+      const created = await this.articles.create(actor, marker.companyId, input, auditMeta, {
+        id: marker.articleId,
+      });
+      return `Created article "${created.title}".`;
+    } catch (err) {
+      // Discriminate by the existence of OUR row, not by constraint
+      // metadata: if the marker's article now exists, a racer with the
+      // same intent created it — recovered, not failed.
+      const recoveredAfter = await this.findRecoveredArticle(actor, marker);
+      if (recoveredAfter) return `Created article "${recoveredAfter.title}".`;
+      throw err;
+    }
+  }
+
+  /**
+   * Actor/company-scoped recovery lookup for a `pendingCreate` marker.
+   * Identity is PK + company + creator — deep-field equality is
+   * deliberately NOT required, because post-crash edits to the created
+   * article are legitimate.
+   */
+  private async findRecoveredArticle(
+    actor: AuthedUser,
+    marker: ChatPendingCreate,
+  ): Promise<{ id: string; title: string } | null> {
+    return this.prisma.article.findFirst({
+      where: { id: marker.articleId, companyId: marker.companyId, createdBy: actor.id },
+      select: { id: true, title: true },
+    });
   }
 
   // ------------------------------------------------------------------
@@ -441,8 +484,6 @@ export class ChatToolCallService {
     },
   ): Promise<{
     toolCall: ChatToolCallDto;
-    allToolCalls: ChatToolCallDto[];
-    updatedToolCalls: ChatToolCallDto[];
     turnContext: ChatTurnContext | null;
   }> {
     const msg = await this.chat.getMessageForActor(actor, params.conversationId, params.messageId);
@@ -457,12 +498,164 @@ export class ChatToolCallService {
         `Tool call is already ${toolCall.status}; only pending calls can be acted on.`,
       );
     }
-    return {
-      toolCall,
-      allToolCalls: calls,
-      updatedToolCalls: calls,
-      turnContext: msg.turnContext,
-    };
+    return { toolCall, turnContext: msg.turnContext };
+  }
+
+  /**
+   * Resolve the canonical create intent for this apply, or null when it
+   * is not a satisfiable create (then the ordinary work path reproduces
+   * the precise error). Never throws for unsatisfied inputs — those
+   * must keep settling as `failed` exactly as before.
+   */
+  private async resolveCreateIntent(
+    toolCall: ChatToolCallDto,
+    scopeCompanyId: string | undefined,
+    overrides: CreateArticleOverrides | undefined,
+  ): Promise<CreateIntent | null> {
+    if (!scopeCompanyId) return null;
+    const raw = stripNullArgs(toolCall.arguments);
+    if (toolCall.name === 'create_article') {
+      const parsed = createArticleToolInputSchema.safeParse(raw);
+      if (!parsed.success) return null;
+      // Prefer the user-confirmed values from the Save-as-article
+      // dialog over the LLM-supplied `args.folder_id` /
+      // `args.visible_to_clients` / `args.title`. The dialog forces a
+      // pick from the live company tree, so a stray LLM hallucination
+      // can never reach the articles service. `?? true` mirrors the
+      // articles service default so the marker records the EFFECTIVE
+      // visibility.
+      return {
+        companyId: scopeCompanyId,
+        title: overrides?.title ?? parsed.data.title,
+        folderId: overrides !== undefined ? overrides.folderId : (parsed.data.folder_id ?? null),
+        visibleToClients:
+          overrides !== undefined
+            ? overrides.visibleToClients
+            : (parsed.data.visible_to_clients ?? true),
+      };
+    }
+    if (toolCall.name === 'update_article') {
+      // The create-promotion: a hallucinated `article_id` with a user
+      // confirmation and a body becomes a create. Same conditions the
+      // promotion branch used to check inside `applyUpdate`.
+      if (!overrides) return null;
+      const parsed = updateArticleToolInputSchema.safeParse(raw);
+      if (!parsed.success || !parsed.data.markdown) return null;
+      const resolves = await this.articles.findCompanyIdForArticle(parsed.data.article_id);
+      if (resolves !== null) return null;
+      return {
+        companyId: scopeCompanyId,
+        title: overrides.title,
+        folderId: overrides.folderId,
+        visibleToClients: overrides.visibleToClients,
+      };
+    }
+    return null;
+  }
+
+  /**
+   * Commit the create-intent marker BEFORE any article work, in its own
+   * claim transaction. An existing marker is canonical: a matching
+   * retry reuses it (same pre-generated article id → recovery instead
+   * of a duplicate), a mismatched retry is rejected with the stable
+   * `ARTICLE_CREATE_RECOVERY_PENDING_CODE` so clients re-read and lock
+   * their confirmation UI to the original intent.
+   */
+  private async ensureCreateMarker(
+    actor: AuthedUser,
+    params: { conversationId: string; messageId: string; toolCallId: string },
+    intent: CreateIntent,
+  ): Promise<ChatPendingCreate> {
+    return this.prisma.$transaction(
+      async (tx) => {
+        const calls = await this.claimPendingCalls(tx, actor, params);
+        const call = calls.find((c) => c.id === params.toolCallId)!;
+        const existing = call.pendingCreate;
+        if (existing) {
+          const matches =
+            existing.companyId === intent.companyId &&
+            existing.title === intent.title &&
+            existing.folderId === intent.folderId &&
+            existing.visibleToClients === intent.visibleToClients;
+          if (!matches) {
+            throw new BadRequestException({
+              message:
+                'A previous apply attempt is being completed; the original confirmation applies.',
+              code: ARTICLE_CREATE_RECOVERY_PENDING_CODE,
+            });
+          }
+          return existing;
+        }
+        const marker: ChatPendingCreate = { articleId: randomUUID(), ...intent };
+        const finalCalls = replaceCall(calls, { ...call, pendingCreate: marker });
+        await this.chat.updateMessageToolCalls(params.messageId, finalCalls, tx);
+        return marker;
+      },
+      { timeout: SETTLE_TX_TIMEOUT_MS, maxWait: 5_000 },
+    );
+  }
+
+  /**
+   * Run `work` with the tool call claimed: the message row is locked
+   * `FOR UPDATE` through an ownership-constrained query, the call is
+   * re-verified `pending` under that lock, and the settle write goes
+   * through the same transaction. Concurrent settles fully serialize —
+   * the loser re-reads the committed array, sees non-pending, and gets
+   * the 400 — so no double-apply and no sibling-status clobber.
+   */
+  private async withClaimedPending(
+    actor: AuthedUser,
+    params: { conversationId: string; messageId: string; toolCallId: string },
+    work: (claimed: ChatToolCallDto) => Promise<ChatToolCallDto>,
+  ): Promise<{ toolCall: ChatToolCallDto; updatedToolCalls: ChatToolCallDto[] }> {
+    return this.prisma.$transaction(
+      async (tx) => {
+        const calls = await this.claimPendingCalls(tx, actor, params);
+        const claimed = calls.find((c) => c.id === params.toolCallId)!;
+        const next = await work(claimed);
+        const finalCalls = replaceCall(calls, next);
+        await this.chat.updateMessageToolCalls(params.messageId, finalCalls, tx);
+        return { toolCall: next, updatedToolCalls: finalCalls };
+      },
+      { timeout: SETTLE_TX_TIMEOUT_MS, maxWait: 5_000 },
+    );
+  }
+
+  /**
+   * Ownership-constrained claim: one statement carries the lock AND the
+   * query-layer authorization (message + conversation + owning user), so
+   * a caller who guesses a foreign message UUID matches zero rows and
+   * acquires nothing (CLAUDE.md §1 — never lock before authorizing).
+   * `FOR UPDATE OF m` locks only the message row; the conversation row
+   * stays unlocked so unrelated messages' settles don't serialize.
+   */
+  private async claimPendingCalls(
+    tx: Prisma.TransactionClient,
+    actor: AuthedUser,
+    params: { conversationId: string; messageId: string; toolCallId: string },
+  ): Promise<ChatToolCallDto[]> {
+    const locked = await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+      SELECT m.id FROM chat_messages m
+      JOIN chat_conversations c ON c.id = m.conversation_id
+      WHERE m.id = ${params.messageId}::uuid
+        AND m.conversation_id = ${params.conversationId}::uuid
+        AND c.user_id = ${actor.id}::uuid
+      FOR UPDATE OF m
+    `);
+    if (locked.length === 0) throw new NotFoundException('Message not found');
+    const row = await tx.chatMessage.findFirst({
+      where: { id: params.messageId },
+      select: { toolCalls: true },
+    });
+    const calls = parseToolCalls(row?.toolCalls ?? null) ?? [];
+    const call = calls.find((c) => c.id === params.toolCallId);
+    if (!call) throw new NotFoundException('Tool call not found on this message.');
+    if (call.status !== 'pending') {
+      throw new BadRequestException(
+        `Tool call is already ${call.status}; only pending calls can be acted on.`,
+      );
+    }
+    return calls;
   }
 
   private async assertArticleWrite(actor: AuthedUser, companyId: string): Promise<void> {

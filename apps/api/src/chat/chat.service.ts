@@ -15,11 +15,16 @@ import type {
 import {
   chatToolCallErrorCodeSchema,
   chatToolCallNameSchema,
+  chatToolCallSchema,
   chatToolCallStatusSchema,
 } from '@weavestream/shared';
+import { z } from 'zod';
 import { ChatRole as PrismaChatRole } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
+
+/** Local validator for the preview-hint uuid (kept out of the hot loop). */
+const uuidSchema = z.string().uuid();
 
 /**
  * Per-user chat conversation CRUD. Streaming-driven message creation
@@ -109,12 +114,17 @@ export class ChatService {
    * deliberately rewrite the whole array (one JSONB write) rather than
    * partial-patching the json — it's a single short array per row and
    * sidesteps Postgres `jsonb_set` typing in Prisma.
+   *
+   * `db` lets the tool-call settle path write inside its own claim
+   * transaction (the row is locked `FOR UPDATE` there); everything else
+   * uses the default client.
    */
   async updateMessageToolCalls(
     messageId: string,
     toolCalls: ChatToolCallDto[],
+    db: Pick<Prisma.TransactionClient, 'chatMessage'> = this.prisma,
   ): Promise<void> {
-    await this.prisma.chatMessage.update({
+    await db.chatMessage.update({
       where: { id: messageId },
       data: { toolCalls: toolCalls as unknown as Prisma.InputJsonValue },
     });
@@ -235,6 +245,24 @@ export function parseToolCalls(raw: Prisma.JsonValue | null): ChatToolCallDto[] 
         : obj.baseRevision === null
           ? { baseRevision: null }
           : {}),
+      // Preview hint for the proposal cards (write side attaches only
+      // truthy uuids, so absent-vs-null needs no trichotomy here).
+      // Dropping this on read-back was the "unavailable for preview
+      // after reload" bug: apply/reject then wrote the stripped array
+      // back, erasing the field from sibling calls permanently.
+      ...(uuidSchema.safeParse(obj.targetCompanyId).success
+        ? { targetCompanyId: obj.targetCompanyId as string }
+        : {}),
+      // Server-managed create-idempotency marker (see chatToolCallSchema
+      // doc). Must survive the round-trip or a sibling settle's
+      // whole-array write would strip an in-flight create's recovery
+      // record.
+      ...(() => {
+        const parsed = chatToolCallSchema.shape.pendingCreate.safeParse(obj.pendingCreate);
+        return parsed.success && parsed.data !== undefined
+          ? { pendingCreate: parsed.data }
+          : {};
+      })(),
     });
   }
   return out.length > 0 ? out : null;

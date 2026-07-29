@@ -371,6 +371,17 @@ export class ArticlesService {
     companyId: string,
     input: CreateArticleInput,
     meta: AuditMeta,
+    opts?: {
+      /**
+       * Explicit primary key for idempotent creation. Used by the chat
+       * tool-call apply path, whose durable `pendingCreate` marker
+       * pre-generates the id so a crash between creation and tool-call
+       * settlement can be recovered without a duplicate row. The rest
+       * of the lifecycle (version row, audit, summary enqueue) is
+       * unchanged.
+       */
+      id?: string;
+    },
   ): Promise<SerializedArticle> {
     // HTTP requests run through `createArticleSchema` (Zod) which
     // rewrites legacy bodies without `editorMode` to Tiptap. Direct
@@ -397,6 +408,7 @@ export class ArticlesService {
 
     const body = this.projectArticleBody(normalized, normalized.excerpt);
     const data = {
+      ...(opts?.id ? { id: opts.id } : {}),
       companyId,
       folderId: normalized.folderId ?? null,
       title: normalized.title,

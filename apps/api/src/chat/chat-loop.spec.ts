@@ -170,17 +170,34 @@ describe('confirmedSnapshotBases (capture point a)', () => {
 describe('assignProposalBases', () => {
   const COMPANY = 'cccccccc-cccc-cccc-cccc-cccccccccccc';
 
-  it('binds a captured basis onto a rewrite proposal without a fresh lookup', async () => {
+  it('binds a captured basis onto a rewrite proposal and attaches the target company (5b)', async () => {
     const resolver = jest.fn(async () => COMPANY);
     const out = await assignProposalBases(
       [call('update_article', { arguments: { article_id: ART } })],
       new Map([[ART, 7]]),
       resolver,
     );
-    expect(out).toEqual([expect.objectContaining({ status: 'pending', baseRevision: 7 })]);
-    // Rewrites don't fetch by company, so the captured basis stays
-    // lookup-free — the revision is never re-read.
-    expect(resolver).not.toHaveBeenCalled();
+    expect(out).toEqual([
+      expect.objectContaining({
+        status: 'pending',
+        baseRevision: 7,
+        targetCompanyId: COMPANY,
+      }),
+    ]);
+    // Company-only resolve for the preview hint (mobile global Ask has
+    // no page context to fall back on); the basis revision (7) still
+    // comes from the captured map, never a fresh read.
+    expect(resolver).toHaveBeenCalledTimes(1);
+    expect(resolver).toHaveBeenCalledWith(ART);
+  });
+
+  it('omits targetCompanyId on a captured rewrite whose company no longer resolves', async () => {
+    const out = await assignProposalBases(
+      [call('update_article', { arguments: { article_id: ART } })],
+      new Map([[ART, 7]]),
+      jest.fn(async () => null),
+    );
+    expect(out[0]).toEqual(expect.objectContaining({ status: 'pending', baseRevision: 7 }));
     expect(out[0]).not.toHaveProperty('targetCompanyId');
   });
 

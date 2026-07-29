@@ -186,6 +186,25 @@ export class SearchService {
       whereParts.push(Prisma.sql`si.archived_at IS NULL`);
     }
 
+    if (!req.companyId) {
+      // Cross-org mode (no explicit company pin): exclude hits that
+      // live in ARCHIVED companies. Company archive never touches
+      // `search_index` rows, and membership scope filters only
+      // revoked/expired rows — without this predicate an offboarded
+      // client's records keep surfacing in the global palette, AI
+      // mentions, and mobile's launcher search, where following a hit
+      // would switch a technician into an archived org. Independent of
+      // `includeArchived`, which governs entity-level archive state; an
+      // explicitly pinned company search stays unchanged so authorized
+      // desktop flows can still search inside an archived company.
+      whereParts.push(
+        Prisma.sql`NOT EXISTS (
+          SELECT 1 FROM companies c
+          WHERE c.id = si.company_id AND c.archived_at IS NOT NULL
+        )`,
+      );
+    }
+
     if (isClient) {
       // Defence in depth: even though `body_public` already omits
       // hidden field text on assets and is empty for hidden articles,
