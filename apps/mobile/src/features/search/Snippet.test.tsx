@@ -1,7 +1,7 @@
 /** @jest-environment jsdom */
 import '@testing-library/jest-dom';
 import { render } from '@testing-library/react';
-import { Snippet } from './Snippet';
+import { HighlightMatches, Snippet } from './Snippet';
 
 describe('Snippet', () => {
   it('renders <mark> sentinels as real mark elements', () => {
@@ -40,5 +40,41 @@ describe('Snippet', () => {
     const { container } = render(<Snippet snippet="no highlights here" />);
     expect(container.textContent).toBe('no highlights here');
     expect(container.querySelector('mark')).toBeNull();
+  });
+});
+
+
+describe('queryTokens / HighlightMatches — websearch operator surface (5b)', () => {
+  const { queryTokens, hasQueryMatch } = jest.requireActual('./Snippet') as {
+    queryTokens: (q: string) => string[];
+    hasQueryMatch: (t: string, q: string) => boolean;
+  };
+
+  it('drops the OR operator instead of highlighting "or" inside words', () => {
+    expect(queryTokens('fortinet OR cisco')).toEqual(['fortinet', 'cisco']);
+    render(<HighlightMatches text="Fortinet firewall" query="fortinet OR cisco" />);
+    const marks = document.querySelectorAll('mark');
+    expect(marks).toHaveLength(1);
+    expect(marks[0]).toHaveTextContent('Fortinet');
+  });
+
+  it('treats a quoted phrase as ONE token, quotes stripped', () => {
+    expect(queryTokens('"serial number" rack')).toEqual(['serial number', 'rack']);
+    render(<HighlightMatches text="The serial number label" query={'"serial number"'} />);
+    expect(document.querySelector('mark')).toHaveTextContent('serial number');
+  });
+
+  it('never highlights an excluded (-term) — it cannot occur in results', () => {
+    expect(queryTokens('router -fortinet')).toEqual(['router']);
+    render(<HighlightMatches text="Fortinet router" query="router -fortinet" />);
+    const marks = document.querySelectorAll('mark');
+    expect(marks).toHaveLength(1);
+    expect(marks[0]).toHaveTextContent('router');
+  });
+
+  it('hasQueryMatch drives the body-only snippet fallback', () => {
+    expect(hasQueryMatch('Fortinet firewall', 'fortinet OR cisco')).toBe(true);
+    expect(hasQueryMatch('Runbook', 'fortinet')).toBe(false);
+    expect(hasQueryMatch('anything', '-only -excluded')).toBe(false);
   });
 });

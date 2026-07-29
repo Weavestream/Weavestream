@@ -22,7 +22,7 @@ import { useAsk } from '../../components/ask/AskProvider';
 import { groupHits } from './grouping';
 import { routeForHit } from './hit-route';
 import { SEARCH_DEBOUNCE_MS, useSearchResults } from './queries';
-import { HighlightMatches, Snippet } from './Snippet';
+import { HighlightMatches, Snippet, hasQueryMatch } from './Snippet';
 
 /**
  * The global search screen — 2b's full-screen takeover. The tab bar is
@@ -292,10 +292,26 @@ export function SearchScreen({ query }: { query: string }) {
                               // hit — the whole point of carrying scope:
                               // accent-toned company name, so
                               // wrong-client mistakes are visible
-                              // before the tap.
-                              <span className="truncate font-medium text-accent-text">
-                                {hit.companyName}
-                              </span>
+                              // before the tap. The server snippet
+                              // appears ONLY when the title itself
+                              // shows no match (a body-only hit —
+                              // "Runbook" matching on "Fortinet" in its
+                              // body must still show WHY it matched);
+                              // a title-matched row keeps the single
+                              // company line, per the no-extra-line
+                              // decision.
+                              hit.snippet && !hasQueryMatch(hit.title, debounced) ? (
+                                <span className="flex min-w-0 flex-col gap-0.5">
+                                  <span className="truncate font-medium text-accent-text">
+                                    {hit.companyName}
+                                  </span>
+                                  <Snippet snippet={hit.snippet} />
+                                </span>
+                              ) : (
+                                <span className="truncate font-medium text-accent-text">
+                                  {hit.companyName}
+                                </span>
+                              )
                             ) : (
                               snippetOrLayout
                             )

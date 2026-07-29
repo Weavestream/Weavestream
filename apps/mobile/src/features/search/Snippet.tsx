@@ -26,25 +26,75 @@ function decodeEntities(text: string): string {
 }
 
 /**
- * Client-side highlighter for GLOBAL search rows (Phase 5b): wraps
- * case-insensitive occurrences of each query token (≥2 chars) in the
- * same mark styling the server snippet uses. Works on plain strings the
- * app already holds (titles) — no HTML parsing, no entities, every
- * node a React text node.
+ * Query tokenization for the client-side highlighter, mirroring the
+ * operator surface of the server's `websearch_to_tsquery`:
+ *
+ *  - `"quoted text"` is ONE phrase token (the server turns it into a
+ *    `<->` phrase match) — the quotes never reach the highlight;
+ *  - a standalone `or` (any case) is the OR operator, not a term —
+ *    without this, `fortinet OR cisco` would highlight the "or" inside
+ *    "Fortinet";
+ *  - a leading `-` marks an EXCLUDED term, which by definition does not
+ *    occur in the results — never highlighted.
+ *
+ * Deliberately best-effort beyond that: the server also stems
+ * ("configure" matches "configuration"), which a literal client
+ * highlighter cannot reproduce — body-only matches keep the server's
+ * own highlighted snippet as the evidence (SearchScreen).
  */
-export function HighlightMatches({ text, query }: { text: string; query: string }) {
-  const tokens = query
-    .split(/\s+/)
-    .map((t) => t.trim())
-    .filter((t) => t.length >= 2);
-  if (tokens.length === 0) return <>{text}</>;
-  const pattern = new RegExp(
-    `(${tokens.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})`,
+export function queryTokens(query: string): string[] {
+  const tokens: string[] = [];
+  const re = /"([^"]*)"|(\S+)/g;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(query))) {
+    if (match[1] !== undefined) {
+      const phrase = match[1].trim();
+      if (phrase.length >= 2) tokens.push(phrase);
+      continue;
+    }
+    const raw = match[2]!;
+    if (/^or$/i.test(raw)) continue;
+    if (raw.startsWith('-')) continue;
+    const word = raw.replace(/^"+|"+$/g, '');
+    if (word.length >= 2) tokens.push(word);
+  }
+  // Longest first, so a phrase wins over a word it contains.
+  return tokens.sort((a, b) => b.length - a.length);
+}
+
+function tokenPattern(tokens: string[]): RegExp {
+  return new RegExp(
+    `(${tokens
+      .map((t) =>
+        // Escape, then let phrase-internal whitespace match flexibly.
+        t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+'),
+      )
+      .join('|')})`,
     'gi',
   );
+}
+
+/** Whether any query token occurs in `text` — drives the body-only
+ *  snippet fallback on global rows. */
+export function hasQueryMatch(text: string, query: string): boolean {
+  const tokens = queryTokens(query);
+  if (tokens.length === 0) return false;
+  return tokenPattern(tokens).test(text);
+}
+
+/**
+ * Client-side highlighter for GLOBAL search rows (Phase 5b): wraps
+ * case-insensitive occurrences of each query token in the same mark
+ * styling the server snippet uses. Works on plain strings the app
+ * already holds (titles) — no HTML parsing, no entities, every node a
+ * React text node.
+ */
+export function HighlightMatches({ text, query }: { text: string; query: string }) {
+  const tokens = queryTokens(query);
+  if (tokens.length === 0) return <>{text}</>;
   // A single capturing group alternates [miss, match, miss, …]: odd
   // indices are matches, by construction.
-  const parts = text.split(pattern);
+  const parts = text.split(tokenPattern(tokens));
   return (
     <>
       {parts.map((part, i) =>

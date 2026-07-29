@@ -50,6 +50,8 @@ function makeService(opts: {
   turnContext: ChatTurnContext | null;
   articleCompanyId?: string | null;
   canWrite?: boolean;
+  /** Gate `article.read` (the recovery-title disclosure check). */
+  canRead?: boolean;
   article?: Record<string, unknown>;
   /** Rows the ownership lock returns; [] simulates a guessed/foreign id. */
   lockRows?: Array<{ id: string }>;
@@ -99,11 +101,15 @@ function makeService(opts: {
   const permissions = {
     can: jest
       .fn()
-      .mockResolvedValue(
-        opts.canWrite === false
-          ? { allowed: false, reason: 'Missing article.write permission.' }
-          : { allowed: true },
-      ),
+      .mockImplementation(async (_actor: unknown, action: string) => {
+        if (action === 'article.write' && opts.canWrite === false) {
+          return { allowed: false, reason: 'Missing article.write permission.' };
+        }
+        if (action === 'article.read' && opts.canRead === false) {
+          return { allowed: false, reason: 'Missing article.read permission.' };
+        }
+        return { allowed: true };
+      }),
   };
   const txClient = {
     $queryRaw: jest.fn(async () => opts.lockRows ?? [{ id: 'msg-1' }]),
@@ -749,6 +755,32 @@ describe('ChatToolCallService — ownership-constrained settle claim (5b W0.4)',
       expect.arrayContaining([expect.objectContaining({ status: 'applied' })]),
       expect.anything(),
     );
+  });
+
+  it('reject recovery discloses the LIVE title only while article.read still passes', async () => {
+    // The lookup's createdBy is identity, not continuing authorization:
+    // an actor removed from the company since the crash must not learn
+    // a title renamed after their access was revoked. They still get
+    // the truthful applied settle — with the title THEY confirmed.
+    const { svc, permissions } = makeService({
+      toolCall: createCall({ pendingCreate: MARKER }),
+      turnContext: { companyId: CO_UUID },
+      recoveredArticle: { id: MARKER.articleId, title: 'Renamed after revocation' },
+      canRead: false,
+    });
+
+    const { toolCall } = await svc.reject(ACTOR, {
+      conversationId: 'conv-1',
+      messageId: 'msg-1',
+      toolCallId: 'tc-1',
+    });
+
+    expect(toolCall.status).toBe('applied');
+    expect(toolCall.result).toBe(`Created article "${MARKER.title}".`);
+    expect(toolCall.result).not.toContain('Renamed after revocation');
+    expect(permissions.can).toHaveBeenCalledWith(ACTOR, 'article.read', {
+      companyId: CO_UUID,
+    });
   });
 
   it('reject on a marker whose article does NOT exist rejects normally (pre-create crash)', async () => {

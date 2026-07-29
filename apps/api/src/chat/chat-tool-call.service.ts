@@ -213,10 +213,23 @@ export class ChatToolCallService {
       if (claimed.pendingCreate) {
         const recovered = await this.findRecoveredArticle(actor, claimed.pendingCreate);
         if (recovered) {
+          // The settle outcome (the actor's OWN prior action, with their
+          // own confirmed values) may be reported — but the article's
+          // CURRENT title is company data, and the lookup's `createdBy`
+          // is identity, not continuing authorization: an actor removed
+          // from the company since the crash must not learn a title
+          // renamed after their access was revoked. Disclose the live
+          // title only when `article.read` still passes; otherwise fall
+          // back to the title the actor themselves confirmed (already on
+          // their own DTO via the marker — zero new information).
+          const read = await this.permissions.can(actor, 'article.read', {
+            companyId: claimed.pendingCreate.companyId,
+          });
+          const title = read.allowed ? recovered.title : claimed.pendingCreate.title;
           return {
             ...claimed,
             status: 'applied',
-            result: `Created article "${recovered.title}".`,
+            result: `Created article "${title}".`,
             error: null,
           };
         }

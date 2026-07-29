@@ -235,6 +235,25 @@ describe('SearchScreen — global mode (null org stamp, Phase 5b)', () => {
     });
   });
 
+  it('a BODY-ONLY global match keeps the server snippet as the evidence', () => {
+    goGlobal();
+    const bodyHit: SearchHit = {
+      ...hit('article', 'a7', 'Runbook'),
+      snippet: 'configure the <mark>fortinet</mark> appliance',
+      companyId: 'org-9',
+      companyName: 'Northwind MSP',
+    };
+    results = { data: { items: [bodyHit] }, isPending: false, isError: false, refetch: jest.fn() };
+
+    render(<SearchScreen query="fortinet" />);
+
+    // The title shows no occurrence, so the row must still show WHY it
+    // matched — the server-highlighted snippet under the company line.
+    expect(screen.getByText('Northwind MSP')).toBeInTheDocument();
+    expect(screen.getByText('fortinet')).toBeInTheDocument();
+    expect(screen.getByText(/configure the/)).toBeInTheDocument();
+  });
+
   it('org mode stays byte-identical: no company line, plain stamped push, /passwords fallback', () => {
     results = {
       data: { items: [hit('password', 'p1', 'Pines router')] },
