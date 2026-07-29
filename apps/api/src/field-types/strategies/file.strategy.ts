@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { Prisma } from '@prisma/client';
 import {
+  FILE_MULTI_CAP,
   fileFieldEntrySchema,
   fileOptionsSchema,
   tagsFieldInputSchema,
@@ -27,7 +28,7 @@ export class FileStrategy implements FieldTypeStrategy {
 
   valueSchema(options: Record<string, unknown>): z.ZodTypeAny {
     const multiple = (options as { multiple?: boolean }).multiple === true;
-    const arr = z.array(fileFieldEntrySchema).max(multiple ? 100 : 1);
+    const arr = z.array(fileFieldEntrySchema).max(multiple ? FILE_MULTI_CAP : 1);
     return z.union([z.null(), arr]);
   }
 

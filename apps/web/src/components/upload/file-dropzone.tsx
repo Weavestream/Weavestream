@@ -1,7 +1,9 @@
 'use client';
 
-import { useCallback, useMemo, useRef, useState } from 'react';
-import { Btn, Icon, Tag, useToast } from '../ui';
+import { useEffect, useRef, useState } from 'react';
+import { FILE_MULTI_CAP } from '@weavestream/shared';
+import { humanSize, matchesAccept } from '@weavestream/shared/browser';
+import { Icon, Tag } from '../ui';
 import {
   describeUploadError,
   preflightFile,
@@ -11,11 +13,17 @@ import {
 } from '../../lib/upload-client';
 
 /**
- * Dropzone used by `FILE` fields on assets and (eventually) articles.
- * Each successful upload is appended to the `value` array; the caller
- * owns persistence (i.e. writes the list back into the field value).
- * The dropzone itself does not know anything about field semantics —
- * it only speaks "upload N files, emit N `ConfirmUploadResponse`s".
+ * Dropzone used by `FILE` fields on assets. The caller owns persistence
+ * (i.e. writes the list back into the field value); this component owns
+ * the upload lifecycle, mirroring mobile's `FileFieldEditor` (the
+ * server-aligned 5a reference): absent `multiple` means SINGLE, a
+ * single-mode pick keeps the first file and supersedes (aborts) any
+ * still-running upload, commits go through a render-synced ref so
+ * overlapping confirms never clobber each other, and failures keep
+ * their row with Retry/Dismiss instead of toasting. Pick-time
+ * rejections (accept / size / the 100-file cap) surface in the inline
+ * alert list — `matchesAccept` runs on every file because the HTML
+ * `accept` attribute is only a picker hint and drops bypass it.
  */
 export type FileFieldEntry = {
   uploadId: string;
@@ -27,14 +35,25 @@ export type FileFieldEntry = {
   downloadUrl?: string | null;
 };
 
+interface PendingUpload {
+  key: string;
+  file: File;
+  percent: number;
+  controller: AbortController;
+  /** Non-null = failed (retry/dismiss); null = uploading. */
+  error: string | null;
+}
+
 export function FileDropzone({
   companyId,
   value,
   onChange,
   attachTo,
   disabled,
-  multiple = true,
+  multiple = false,
   accept,
+  maxSizeMb,
+  onPendingChange,
 }: {
   companyId: string;
   value: FileFieldEntry[];
@@ -42,73 +61,160 @@ export function FileDropzone({
   attachTo?: { type: UploadAttachmentType; id?: string };
   disabled?: boolean;
   multiple?: boolean;
-  accept?: string;
+  accept?: string[];
+  maxSizeMb?: number;
+  onPendingChange?: (inFlight: number) => void;
 }) {
-  const toast = useToast();
-  const [busy, setBusy] = useState<Record<string, number>>({});
+  const [pending, setPending] = useState<PendingUpload[]>([]);
+  const [errors, setErrors] = useState<string[]>([]);
   const inputRef = useRef<HTMLInputElement>(null);
   const [dragOver, setDragOver] = useState(false);
-  const [errors, setErrors] = useState<string[]>([]);
+  const counter = useRef(0);
 
-  // Read the public upload-size limit once. `NEXT_PUBLIC_*` envs are
-  // statically inlined by Next at build time, so this is safe to read
-  // unconditionally on the client.
-  const maxBytes = useMemo<number | null>(() => {
-    const raw = process.env.NEXT_PUBLIC_MAX_UPLOAD_MB;
-    if (!raw) return null;
-    const mb = Number.parseInt(raw, 10);
-    return Number.isFinite(mb) && mb > 0 ? mb * 1024 * 1024 : null;
-  }, []);
+  // The committed array lives in the parent's form state, which async
+  // confirms close over. This ref tracks the LATEST committed value:
+  // every internal mutation (confirm, removal) writes it synchronously
+  // before calling onChange — two confirms landing in the same tick
+  // each see the other's append instead of a stale snapshot (React
+  // hasn't re-rendered between their microtasks). The effect only
+  // reconciles EXTERNAL value changes back in.
+  const valueRef = useRef(value);
+  useEffect(() => {
+    valueRef.current = value;
+  }, [value]);
+  // Every in-flight upload's abort controller, so single-file mode can
+  // supersede older uploads the moment a new pick starts.
+  const inFlightControllers = useRef(new Set<AbortController>());
 
-  const handleFiles = useCallback(
-    async (files: FileList | null) => {
-      if (!files || files.length === 0) return;
-      const list = Array.from(files);
-      setErrors([]);
-      const next: FileFieldEntry[] = [...value];
-      const nextErrors: string[] = [];
+  // Identity guard: parents may pass an inline per-slug wrapper. The
+  // sync effect runs every commit (declared before the emit effect so a
+  // changed callback is current when the count fires); the emit/cleanup
+  // effects depend only on the count / mount, never on the callback
+  // identity, or every parent render would fire the cleanup and report
+  // a transient 0.
+  const onPendingChangeRef = useRef(onPendingChange);
+  useEffect(() => {
+    onPendingChangeRef.current = onPendingChange;
+  });
+  const inFlight = pending.filter((p) => p.error === null).length;
+  useEffect(() => {
+    onPendingChangeRef.current?.(inFlight);
+  }, [inFlight]);
+  // Unmount must release the parent's Save gate.
+  useEffect(() => () => onPendingChangeRef.current?.(0), []);
 
-      for (const file of list) {
-        // Cheap local validation first — reject unsupported types and
-        // oversize files before spinning the uploader. The server still
-        // has the final word.
-        const preflightMsg = preflightFile(file, { maxBytes });
-        if (preflightMsg) {
-          nextErrors.push(preflightMsg);
-          toast.push(preflightMsg, 'danger');
-          continue;
+  // Per-field cap ?? the shared schema default (25). The env-wide
+  // NEXT_PUBLIC_MAX_UPLOAD_MB is deliberately not consulted here —
+  // mobile reads only the field option, and the server still enforces
+  // its own limit at the relay.
+  const maxBytes = (maxSizeMb ?? 25) * 1024 * 1024;
+
+  function startUpload(file: File) {
+    // `disabled` also gates Retry: once Save is in flight the payload is
+    // captured, so a retried upload could confirm after navigation and
+    // become an unattached orphan that looks saved.
+    if (disabled) return;
+
+    // Single-file mode: a new pick SUPERSEDES anything still uploading.
+    // Without this, a slower earlier upload that finishes last would
+    // overwrite the newer selection (its confirm replaces the array).
+    // Aborting first means at most one upload can ever commit.
+    if (!multiple) {
+      for (const controller of inFlightControllers.current) controller.abort();
+    }
+
+    const key = `${file.name}:${file.size}:${counter.current++}`;
+    const controller = new AbortController();
+    inFlightControllers.current.add(controller);
+    setPending((prev) => [
+      ...prev,
+      { key, file, percent: 0, controller, error: null },
+    ]);
+
+    uploadFile({
+      companyId,
+      file,
+      attachTo,
+      signal: controller.signal,
+      onProgress: (p) =>
+        setPending((prev) =>
+          prev.map((entry) =>
+            entry.key === key ? { ...entry, percent: p.percent } : entry,
+          ),
+        ),
+    })
+      .then((resp) => {
+        // Commit through the synchronous ref, not the render-time prop.
+        const next = multiple
+          ? [...valueRef.current, toEntry(resp)]
+          : [toEntry(resp)];
+        valueRef.current = next;
+        onChange(next);
+        setPending((prev) => prev.filter((entry) => entry.key !== key));
+      })
+      .catch((err: unknown) => {
+        if (controller.signal.aborted) {
+          // Cancelled or superseded — remove silently.
+          setPending((prev) => prev.filter((entry) => entry.key !== key));
+          return;
         }
+        setPending((prev) =>
+          prev.map((entry) =>
+            entry.key === key
+              ? { ...entry, error: describeUploadError(err, file.name) }
+              : entry,
+          ),
+        );
+      })
+      .finally(() => {
+        inFlightControllers.current.delete(controller);
+      });
+  }
 
-        const key = `${file.name}:${file.size}:${Date.now()}`;
-        setBusy((b) => ({ ...b, [key]: 0 }));
-        try {
-          const resp = await uploadFile({
-            companyId,
-            file,
-            attachTo,
-            onProgress: (p) => setBusy((b) => ({ ...b, [key]: p.percent })),
-          });
-          next.push(toEntry(resp));
-          onChange([...next]);
-        } catch (err) {
-          const msg = describeUploadError(err, file.name);
-          nextErrors.push(msg);
-          toast.push(msg, 'danger');
-        } finally {
-          setBusy((b) => {
-            const copy = { ...b };
-            delete copy[key];
-            return copy;
-          });
-        }
+  function onFilesPicked(list: FileList | null) {
+    if (!list || list.length === 0) return;
+    setErrors([]);
+    const files = multiple ? Array.from(list) : [list[0]!];
+    const nextErrors: string[] = [];
+
+    if (multiple) {
+      const room = FILE_MULTI_CAP - valueRef.current.length - pending.length;
+      if (files.length > room) {
+        nextErrors.push(`This field holds at most ${FILE_MULTI_CAP} files.`);
+        files.length = Math.max(0, room);
       }
+    }
 
-      if (nextErrors.length > 0) setErrors(nextErrors);
-    },
-    [attachTo, companyId, maxBytes, onChange, toast, value],
-  );
+    for (const file of files) {
+      // The per-field accept gate first — HTML accept is only a hint.
+      if (!matchesAccept(file, accept)) {
+        nextErrors.push(`“${file.name}” isn’t an accepted type for this field.`);
+        continue;
+      }
+      const problem = preflightFile(file, { maxBytes });
+      if (problem !== null) {
+        nextErrors.push(problem);
+        continue;
+      }
+      startUpload(file);
+    }
 
-  const inFlight = Object.entries(busy);
+    if (nextErrors.length > 0) setErrors(nextErrors);
+  }
+
+  function retryUpload(key: string) {
+    if (disabled) return;
+    const entry = pending.find((p) => p.key === key);
+    if (!entry) return;
+    setPending((prev) => prev.filter((p) => p.key !== key));
+    startUpload(entry.file);
+  }
+
+  function removeCommitted(entry: FileFieldEntry) {
+    const next = valueRef.current.filter((e) => e !== entry);
+    valueRef.current = next;
+    onChange(next);
+  }
 
   return (
     <div
@@ -122,7 +228,7 @@ export function FileDropzone({
         e.preventDefault();
         setDragOver(false);
         if (disabled) return;
-        handleFiles(e.dataTransfer.files);
+        onFilesPicked(e.dataTransfer.files);
       }}
       style={{
         padding: 16,
@@ -227,17 +333,17 @@ export function FileDropzone({
         </div>
       )}
 
-      {inFlight.length > 0 && (
+      {pending.length > 0 && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-          {inFlight.map(([key, pct]) => (
+          {pending.map((entry) => (
             <div
-              key={key}
+              key={entry.key}
               style={{
                 display: 'flex',
                 alignItems: 'center',
                 gap: 8,
                 fontSize: 11,
-                color: 'var(--muted)',
+                color: entry.error === null ? 'var(--muted)' : 'var(--danger, #c54343)',
                 fontFamily: 'var(--font-mono)',
               }}
             >
@@ -249,9 +355,70 @@ export function FileDropzone({
                   whiteSpace: 'nowrap',
                 }}
               >
-                {key.split(':')[0]}
+                {entry.error === null ? (
+                  entry.file.name
+                ) : (
+                  <span role="alert">{entry.error}</span>
+                )}
               </span>
-              <span>{pct}%</span>
+              {entry.error === null ? (
+                <>
+                  <span>{entry.percent}%</span>
+                  <button
+                    type="button"
+                    onClick={() => entry.controller.abort()}
+                    aria-label={`Cancel upload of ${entry.file.name}`}
+                    style={{
+                      background: 'transparent',
+                      border: 'none',
+                      color: 'inherit',
+                      cursor: 'pointer',
+                      display: 'grid',
+                      placeItems: 'center',
+                      padding: 2,
+                    }}
+                  >
+                    <Icon.x size={11} />
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    disabled={disabled}
+                    onClick={() => retryUpload(entry.key)}
+                    style={{
+                      background: 'transparent',
+                      border: 'none',
+                      color: disabled ? 'var(--dim)' : 'var(--accent)',
+                      cursor: disabled ? 'not-allowed' : 'pointer',
+                      fontSize: 'inherit',
+                      padding: 0,
+                      textDecoration: 'underline',
+                    }}
+                  >
+                    Retry
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setPending((prev) => prev.filter((p) => p.key !== entry.key))
+                    }
+                    aria-label={`Dismiss failed upload of ${entry.file.name}`}
+                    style={{
+                      background: 'transparent',
+                      border: 'none',
+                      color: 'inherit',
+                      cursor: 'pointer',
+                      display: 'grid',
+                      placeItems: 'center',
+                      padding: 2,
+                    }}
+                  >
+                    <Icon.x size={11} />
+                  </button>
+                </>
+              )}
             </div>
           ))}
         </div>
@@ -269,11 +436,7 @@ export function FileDropzone({
             <FileTile
               key={`${entry.uploadId}-${idx}`}
               entry={entry}
-              onRemove={() => {
-                const next = value.slice();
-                next.splice(idx, 1);
-                onChange(next);
-              }}
+              onRemove={() => removeCommitted(entry)}
               disabled={disabled}
             />
           ))}
@@ -284,9 +447,9 @@ export function FileDropzone({
         ref={inputRef}
         type="file"
         multiple={multiple}
-        accept={accept}
+        accept={accept && accept.length > 0 ? accept.join(',') : undefined}
         onChange={(e) => {
-          handleFiles(e.target.files);
+          onFilesPicked(e.target.files);
           if (inputRef.current) inputRef.current.value = '';
         }}
         style={{ display: 'none' }}
@@ -403,12 +566,3 @@ function toEntry(resp: ConfirmUploadResponse): FileFieldEntry {
     downloadUrl: resp.downloadUrl,
   };
 }
-
-function humanSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-  return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
-}
-
-export { Btn };

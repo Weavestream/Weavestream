@@ -1,4 +1,4 @@
-import { FieldTypeValues } from '@weavestream/shared';
+import { FILE_MULTI_CAP, FieldTypeValues } from '@weavestream/shared';
 import { FieldTypesRegistry } from './field-types.registry.js';
 
 describe('FieldTypesRegistry (exhaustive)', () => {
@@ -243,6 +243,45 @@ describe('RichTextStrategy', () => {
         {},
       ),
     ).toBe('Hi');
+  });
+});
+
+describe('FileStrategy', () => {
+  const registry = new FieldTypesRegistry();
+
+  // Valid fileFieldEntrySchema entries — uploadId must be a real UUID.
+  const entry = (n: number) => ({
+    uploadId: `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`,
+    filename: `file-${n}.pdf`,
+    mimeType: 'application/pdf',
+    sizeBytes: 1,
+  });
+  const entries = (count: number) =>
+    Array.from({ length: count }, (_, i) => entry(i));
+
+  it('caps at 1 when multiple is absent — absent means single, the desktop-parity contract', () => {
+    const schema = registry.get('FILE').valueSchema({});
+    expect(schema.safeParse([entry(1)]).success).toBe(true);
+    expect(schema.safeParse([entry(1), entry(2)]).success).toBe(false);
+  });
+
+  it('caps at 1 when multiple=false', () => {
+    const schema = registry.get('FILE').valueSchema({ multiple: false });
+    expect(schema.safeParse([entry(1)]).success).toBe(true);
+    expect(schema.safeParse([entry(1), entry(2)]).success).toBe(false);
+  });
+
+  it('caps at FILE_MULTI_CAP when multiple=true', () => {
+    const schema = registry.get('FILE').valueSchema({ multiple: true });
+    expect(schema.safeParse(entries(FILE_MULTI_CAP)).success).toBe(true);
+    expect(schema.safeParse(entries(FILE_MULTI_CAP + 1)).success).toBe(false);
+  });
+
+  it('accepts null in both modes', () => {
+    expect(registry.get('FILE').valueSchema({}).safeParse(null).success).toBe(true);
+    expect(
+      registry.get('FILE').valueSchema({ multiple: true }).safeParse(null).success,
+    ).toBe(true);
   });
 });
 

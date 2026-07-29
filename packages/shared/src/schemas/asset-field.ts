@@ -71,6 +71,13 @@ export const assetReferenceOptionsSchema = z
   })
   .strict();
 
+/**
+ * Entry cap for a FILE field with `multiple: true`. Single source for
+ * the API strategy's `.max()`, mobile's room check, and web's — the
+ * three enforced the same `100` as independent literals before 5a.
+ */
+export const FILE_MULTI_CAP = 100;
+
 export const fileOptionsSchema = z
   .object({
     accept: z.array(z.string().max(40)).max(20).optional(),

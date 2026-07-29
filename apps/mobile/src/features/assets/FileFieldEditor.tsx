@@ -1,11 +1,16 @@
 import { useEffect, useRef, useState } from 'react';
-import { describeUploadError, preflightFile } from '@weavestream/shared/browser';
+import { FILE_MULTI_CAP } from '@weavestream/shared';
+import {
+  describeUploadError,
+  fieldAcceptsImages,
+  matchesAccept,
+  preflightFile,
+} from '@weavestream/shared/browser';
 import { Icon } from '../../components/Icon';
 import { Hint } from '../../components/FieldBlock';
 import { Button } from '../../components/primitives';
 import { uploadFile } from '../../lib/upload';
 import type { LayoutFieldRecord } from './api';
-import { fieldAcceptsImages, matchesAccept } from './accept-match';
 import { FileTile, FileTileGrid } from './FileTileGrid';
 import type { FieldEditorValue, FileEntryDraft } from './field-values';
 
@@ -35,8 +40,6 @@ import type { FieldEditorValue, FileEntryDraft } from './field-values';
  * asset-write transaction, so a cancelled form leaves no ghost
  * attachment. In-flight uploads gate Save via `onPendingChange`.
  */
-
-const MULTI_CAP = 100;
 
 interface PendingUpload {
   key: string;
@@ -104,7 +107,10 @@ export function FileFieldEditor({
   useEffect(() => () => onPendingChange(0), [onPendingChange]);
 
   function startUpload(file: File) {
-    if (companyId === null) return;
+    // `disabled` also gates Retry: once Save is in flight the payload is
+    // captured, so a retried upload could confirm after navigation and
+    // become an unattached orphan that looks saved.
+    if (disabled || companyId === null) return;
 
     // Single-file mode: a new pick SUPERSEDES anything still uploading.
     // Without this, a slower earlier upload that finishes last would
@@ -184,9 +190,9 @@ export function FileFieldEditor({
     const files = multiple ? Array.from(list) : [list[0]!];
 
     if (multiple) {
-      const room = MULTI_CAP - value.entries.length - pending.length;
+      const room = FILE_MULTI_CAP - value.entries.length - pending.length;
       if (files.length > room) {
-        setRejected(`This field holds at most ${MULTI_CAP} files.`);
+        setRejected(`This field holds at most ${FILE_MULTI_CAP} files.`);
         files.length = Math.max(0, room);
       }
     }
@@ -277,12 +283,17 @@ export function FileFieldEditor({
                     <span className="flex gap-2">
                       <button
                         type="button"
+                        disabled={disabled}
                         onClick={() => {
+                          if (disabled) return;
                           const file = entry.file;
                           setPending((prev) => prev.filter((p) => p.key !== entry.key));
                           startUpload(file);
                         }}
-                        className="text-[13px] font-medium text-accent-text"
+                        className={
+                          'text-[13px] font-medium ' +
+                          (disabled ? 'text-dim' : 'text-accent-text')
+                        }
                       >
                         Retry
                       </button>

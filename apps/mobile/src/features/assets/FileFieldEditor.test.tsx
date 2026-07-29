@@ -3,6 +3,7 @@
  */
 import '@testing-library/jest-dom';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { FILE_MULTI_CAP } from '@weavestream/shared';
 import { FileFieldEditor } from './FileFieldEditor';
 import { makeLayoutField } from './test-fixtures';
 import type { FieldEditorValue, FileEntryDraft } from './field-values';
@@ -65,6 +66,10 @@ function renderEditor(
 
 function pickFile(input: HTMLInputElement, file: File) {
   fireEvent.change(input, { target: { files: [file] } });
+}
+
+function pickFiles(input: HTMLInputElement, files: File[]) {
+  fireEvent.change(input, { target: { files } });
 }
 
 function hiddenInputs(): HTMLInputElement[] {
@@ -242,5 +247,147 @@ describe('upload lifecycle', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Remove old.jpg' }));
     expect(onChange).toHaveBeenCalledWith({ kind: 'file', entries: [] });
+  });
+});
+
+/**
+ * Phase 5a parity-matrix pins. These cases pin behavior that existed
+ * since 2c but had no direct coverage — the desktop editor now mirrors
+ * every one of them, so both suites assert the same contract.
+ */
+describe('multiplicity parity matrix (5a pins)', () => {
+  it('multiple === false follows the single path: no attr, Replace label, replace-not-append', async () => {
+    const { onChange } = renderEditor(
+      { kind: 'file', entries: [draft('u-old', 'old.jpg')] },
+      { multiple: false },
+    );
+    const inputs = hiddenInputs();
+    for (const input of inputs) expect(input).not.toHaveAttribute('multiple');
+    expect(screen.getByRole('button', { name: 'Replace file' })).toBeInTheDocument();
+
+    const [, chooser] = inputs;
+    await act(async () => {
+      pickFile(chooser!, new File([new Uint8Array(8)], 'rack.jpg', { type: 'image/jpeg' }));
+    });
+    await waitFor(() => expect(onChange).toHaveBeenCalled());
+    const next = onChange.mock.calls[0]![0] as { entries: FileEntryDraft[] };
+    expect(next.entries.map((d) => d.entry.uploadId)).toEqual(['u-new']);
+  });
+
+  it('multiple === true sets the input attribute and APPENDS to a seeded entry', async () => {
+    const { onChange } = renderEditor(
+      { kind: 'file', entries: [draft('u-old', 'old.jpg')] },
+      { multiple: true },
+    );
+    const inputs = hiddenInputs();
+    for (const input of inputs) expect(input).toHaveAttribute('multiple');
+    // Multi mode never flips to the replace affordance.
+    expect(screen.getByRole('button', { name: 'Choose file' })).toBeInTheDocument();
+
+    const [, chooser] = inputs;
+    await act(async () => {
+      pickFile(chooser!, new File([new Uint8Array(8)], 'rack.jpg', { type: 'image/jpeg' }));
+    });
+    await waitFor(() => expect(onChange).toHaveBeenCalled());
+    const next = onChange.mock.calls[0]![0] as { entries: FileEntryDraft[] };
+    expect(next.entries.map((d) => d.entry.uploadId)).toEqual(['u-old', 'u-new']);
+  });
+
+  it('single mode truncates a multi-file pick to the FIRST file — exactly one upload', async () => {
+    renderEditor(emptyValue(), {}); // absent ⇒ single
+    const [, chooser] = hiddenInputs();
+    await act(async () => {
+      pickFiles(chooser!, [
+        new File([new Uint8Array(8)], 'first.jpg', { type: 'image/jpeg' }),
+        new File([new Uint8Array(8)], 'second.jpg', { type: 'image/jpeg' }),
+      ]);
+    });
+    await waitFor(() => expect(uploadFile).toHaveBeenCalledTimes(1));
+    expect((uploadFile.mock.calls[0]![0] as { file: File }).file.name).toBe('first.jpg');
+  });
+
+  it('same-tick double confirm commits BOTH entries (committedRef, not the stale prop)', async () => {
+    const gates: Array<(v: unknown) => void> = [];
+    uploadFile.mockImplementation(() => new Promise((resolve) => gates.push(resolve)));
+    const { onChange } = renderEditor(emptyValue(), { multiple: true });
+    const [, chooser] = hiddenInputs();
+
+    await act(async () => {
+      pickFile(chooser!, new File([new Uint8Array(8)], 'a.jpg', { type: 'image/jpeg' }));
+    });
+    await act(async () => {
+      pickFile(chooser!, new File([new Uint8Array(8)], 'b.jpg', { type: 'image/jpeg' }));
+    });
+
+    // Both confirms land in one microtask batch — no re-render between
+    // them, so a stale-prop commit would drop the first entry.
+    await act(async () => {
+      gates[0]!(confirmResponse('u-a', 'a.jpg'));
+      gates[1]!(confirmResponse('u-b', 'b.jpg'));
+    });
+    await waitFor(() => expect(onChange).toHaveBeenCalledTimes(2));
+    const last = onChange.mock.calls.at(-1)![0] as { entries: FileEntryDraft[] };
+    expect(last.entries.map((d) => d.entry.uploadId)).toEqual(['u-a', 'u-b']);
+  });
+
+  it('room boundary: one slot left truncates the batch to it and shows the cap message', async () => {
+    const committed = Array.from({ length: FILE_MULTI_CAP - 1 }, (_, i) =>
+      draft(`u-${i}`, `f-${i}.jpg`),
+    );
+    renderEditor({ kind: 'file', entries: committed }, { multiple: true });
+    const [, chooser] = hiddenInputs();
+    await act(async () => {
+      pickFiles(chooser!, [
+        new File([new Uint8Array(8)], 'fits.jpg', { type: 'image/jpeg' }),
+        new File([new Uint8Array(8)], 'overflow.jpg', { type: 'image/jpeg' }),
+      ]);
+    });
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      `This field holds at most ${FILE_MULTI_CAP} files.`,
+    );
+    await waitFor(() => expect(uploadFile).toHaveBeenCalledTimes(1));
+    expect((uploadFile.mock.calls[0]![0] as { file: File }).file.name).toBe('fits.jpg');
+  });
+
+  it('room boundary: at the cap nothing uploads', async () => {
+    const committed = Array.from({ length: FILE_MULTI_CAP }, (_, i) =>
+      draft(`u-${i}`, `f-${i}.jpg`),
+    );
+    renderEditor({ kind: 'file', entries: committed }, { multiple: true });
+    const [, chooser] = hiddenInputs();
+    await act(async () => {
+      pickFile(chooser!, new File([new Uint8Array(8)], 'nope.jpg', { type: 'image/jpeg' }));
+    });
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      `This field holds at most ${FILE_MULTI_CAP} files.`,
+    );
+    expect(uploadFile).not.toHaveBeenCalled();
+  });
+
+  it('Retry is disabled and inert while the form is saving (disabled)', async () => {
+    // Once Save is in flight the payload is captured — a retried upload
+    // could confirm after navigation and become an unattached orphan
+    // that looks saved.
+    uploadFile.mockRejectedValueOnce(new Error('boom'));
+    const props = {
+      field: field({ multiple: true }),
+      id: 'af-photos',
+      companyId: COMPANY,
+      value: emptyValue(),
+      onChange: jest.fn(),
+      onPendingChange: jest.fn(),
+    };
+    const { rerender } = render(<FileFieldEditor {...props} />);
+    const [, chooser] = hiddenInputs();
+    await act(async () => {
+      pickFile(chooser!, new File([new Uint8Array(8)], 'rack.jpg', { type: 'image/jpeg' }));
+    });
+    expect(await screen.findByRole('button', { name: 'Retry' })).toBeEnabled();
+
+    rerender(<FileFieldEditor {...props} disabled />);
+    const retry = screen.getByRole('button', { name: 'Retry' });
+    expect(retry).toBeDisabled();
+    fireEvent.click(retry);
+    expect(uploadFile).toHaveBeenCalledTimes(1); // no new upload started
   });
 });

@@ -1,7 +1,9 @@
 'use client';
 
 import {
+  useCallback,
   useMemo,
+  useRef,
   useState,
   type CSSProperties,
 } from 'react';
@@ -117,6 +119,19 @@ export function AssetForm({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [issues, setIssues] = useState<Record<string, string>>({});
+
+  // In-flight FILE uploads gate Save (mobile's AssetFieldsForm pattern):
+  // per-slug counts summed to a total, so one field finishing never
+  // unblocks another field's pending upload.
+  const [pendingTotal, setPendingTotal] = useState(0);
+  const pendingBySlug = useRef(new Map<string, number>());
+  const setPendingCount = useCallback((slug: string, inFlight: number) => {
+    pendingBySlug.current.set(slug, inFlight);
+    let total = 0;
+    for (const n of pendingBySlug.current.values()) total += n;
+    setPendingTotal(total);
+  }, []);
+  const uploadsPending = pendingTotal > 0;
 
   function update(slug: string, v: unknown) {
     setValues((cur) => ({ ...cur, [slug]: v }));
@@ -255,6 +270,7 @@ export function AssetForm({
               kind="primary"
               icon={Icon.check}
               loading={saving}
+              disabled={saving || uploadsPending}
               onClick={submit}
             >
               {mode === 'create' ? 'Create asset' : 'Save asset'}
@@ -385,6 +401,7 @@ export function AssetForm({
                       disabled={saving}
                       companyId={companyId}
                       assetId={assetId}
+                      onPendingChange={(n) => setPendingCount(f.slug, n)}
                     />
                   </FormField>
                 </div>
@@ -531,6 +548,7 @@ function FieldInput({
   disabled,
   companyId,
   assetId,
+  onPendingChange,
 }: {
   field: LayoutSummary['fields'][number];
   meta: FieldTypeMeta;
@@ -539,6 +557,8 @@ function FieldInput({
   disabled?: boolean;
   companyId: string;
   assetId?: string;
+  /** FILE fields report their in-flight upload count for the Save gate. */
+  onPendingChange?: (inFlight: number) => void;
 }) {
   const mono = { fontFamily: 'var(--font-mono)' };
   switch (field.fieldType) {
@@ -768,18 +788,35 @@ function FieldInput({
       const entries: FileFieldEntry[] = Array.isArray(value)
         ? (value as FileFieldEntry[])
         : [];
-      const multiple = (field.options as { multiple?: boolean }).multiple ?? true;
+      const opts = field.options as {
+        multiple?: boolean;
+        accept?: unknown;
+        maxSizeMb?: unknown;
+      };
+      // Mirrors the SERVER (`options.multiple === true`) and mobile:
+      // the strategy caps at 1 unless the option is explicitly true.
+      const multiple = opts.multiple === true;
+      const accept = Array.isArray(opts.accept)
+        ? (opts.accept as unknown[]).filter(
+            (t): t is string => typeof t === 'string',
+          )
+        : undefined;
       return (
         <FileDropzone
           companyId={companyId}
           value={entries}
           multiple={multiple}
-          disabled={disabled}
-          attachTo={
-            assetId
-              ? { type: 'asset', id: assetId }
-              : { type: 'asset' }
+          accept={accept}
+          maxSizeMb={
+            typeof opts.maxSizeMb === 'number' ? opts.maxSizeMb : undefined
           }
+          disabled={disabled}
+          // Type only, never an id (create AND edit) — confirming with an
+          // asset id attaches durably at confirm time, so a cancelled form
+          // would leave a ghost attachment; linkFileFieldUploadsToAsset
+          // attaches inside the asset-write transaction instead.
+          attachTo={{ type: 'asset' }}
+          onPendingChange={onPendingChange}
           onChange={(next) =>
             onChange(multiple ? next : next.slice(-1))
           }

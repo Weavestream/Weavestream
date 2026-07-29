@@ -1,10 +1,14 @@
-import { inferMime } from '@weavestream/shared/browser';
+import { inferMime } from './upload-client.js';
 
 /**
- * One matcher for a FILE field's `options.accept` list, driving BOTH
- * the camera-button visibility and pre-upload validation — HTML
- * `accept` is only a chooser hint, so every selected file (from either
- * input) must be validated here before upload.
+ * One matcher for a FILE field's `options.accept` list — HTML `accept`
+ * is only a chooser hint, so every selected file must be validated
+ * here before upload. On mobile it also drives the camera-button
+ * visibility; on web it gates drops, which bypass the picker entirely.
+ *
+ * Promoted out of `apps/mobile/src/features/assets/` in Phase 5a
+ * (CLAUDE.md: shared logic lives here, never copied across app
+ * boundaries) so the web dropzone runs the identical matcher.
  *
  * Handles all three HTML accept token forms, normalized for case and
  * stray whitespace:

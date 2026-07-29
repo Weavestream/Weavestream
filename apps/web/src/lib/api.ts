@@ -27,12 +27,16 @@ export async function apiFetch<T>(
   headers.set('Accept', 'application/json');
   if (reqInit.body) headers.set('Content-Type', 'application/json');
 
-  if (method !== 'GET' && method !== 'HEAD' && method !== 'OPTIONS') {
-    const token = await ensureCsrf();
-    headers.set('X-CSRF-Token', token);
-  }
-
   try {
+    if (method !== 'GET' && method !== 'HEAD' && method !== 'OPTIONS') {
+      // Signal-aware and INSIDE the try: acquisition runs before the
+      // request it protects, so a caller's abort must both cancel a
+      // stalled CSRF fetch and classify into the aborted sentinel below
+      // rather than escaping as a raw AbortError.
+      const token = await ensureCsrf(reqInit.signal ?? undefined);
+      headers.set('X-CSRF-Token', token);
+    }
+
     const res = await fetch(`/api/v1${path}`, {
       ...reqInit,
       method,

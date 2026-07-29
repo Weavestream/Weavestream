@@ -54,6 +54,10 @@ export async function uploadFile(opts: {
     `/companies/${companyId}/uploads/init`,
     {
       method: 'POST',
+      // The signal covers ALL THREE steps, not just the relay PUT — a
+      // Cancel during init or confirm must actually stop the upload
+      // rather than silently committing it after the user dismissed it.
+      signal: opts.signal,
       body: JSON.stringify({
         filename: file.name,
         // Use the same extension-aware inference as `preflightFile` so the
@@ -71,20 +75,21 @@ export async function uploadFile(opts: {
     },
   );
   if (!initRes.ok || !initRes.data) {
-    throw new UploadError('init-failed', initRes.problem);
+    throw toUploadError(initRes.problem, 'init-failed');
   }
   const init = initRes.data;
 
   await putWithProgress(init.relayUrl, file, {
     onProgress: opts.onProgress,
     signal: opts.signal,
-    csrfToken: await ensureCsrfTokenForPut(),
+    csrfToken: await ensureCsrfTokenForPut(opts.signal),
   });
 
   const confirmRes = await apiFetch<ConfirmUploadResponse>(
     `/companies/${companyId}/uploads/confirm`,
     {
       method: 'POST',
+      signal: opts.signal,
       body: JSON.stringify({
         uploadId: init.uploadId,
         attachedToType: opts.attachTo?.type,
@@ -93,9 +98,27 @@ export async function uploadFile(opts: {
     },
   );
   if (!confirmRes.ok || !confirmRes.data) {
-    throw new UploadError('confirm-failed', confirmRes.problem);
+    throw toUploadError(confirmRes.problem, 'confirm-failed');
   }
   return confirmRes.data;
+}
+
+/**
+ * This app's `apiFetch` folds an aborted request into a
+ * `{ problem: { aborted: true } }` envelope instead of throwing (mobile's
+ * client rethrows the platform AbortError). Re-classify that envelope as
+ * `UploadError('aborted')` — the same kind `putWithProgress` produces —
+ * so a deliberate Cancel is never reported as `init-failed`/`confirm-failed`.
+ */
+function toUploadError(
+  problem: unknown,
+  code: 'init-failed' | 'confirm-failed',
+): UploadError {
+  const aborted =
+    typeof problem === 'object' &&
+    problem !== null &&
+    (problem as { aborted?: unknown }).aborted === true;
+  return aborted ? new UploadError('aborted') : new UploadError(code, problem);
 }
 
 /**
@@ -106,13 +129,16 @@ export async function uploadFile(opts: {
  * where this proceeds token-less — kept as-is deliberately; flagged as
  * a later cleanup, not changed in Phase 2c.)
  */
-async function ensureCsrfTokenForPut(): Promise<string | undefined> {
+async function ensureCsrfTokenForPut(
+  signal?: AbortSignal,
+): Promise<string | undefined> {
   if (typeof document === 'undefined') return undefined;
   const fromCookie = readCookie('ws_csrf');
   if (fromCookie) return fromCookie;
   const res = await fetch('/api/v1/auth/csrf', {
     method: 'POST',
     credentials: 'include',
+    signal,
   });
   if (!res.ok) return undefined;
   const data = (await res.json().catch(() => null)) as { csrfToken?: string } | null;

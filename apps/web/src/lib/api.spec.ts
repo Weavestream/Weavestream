@@ -2,9 +2,10 @@ import { apiFetch } from './api';
 
 const requestStepUp = jest.fn();
 const hasStepUpOpener = jest.fn();
+const ensureCsrf = jest.fn(async (..._a: unknown[]) => 'csrf-token');
 
 jest.mock('@weavestream/shared/browser', () => ({
-  ensureCsrf: async () => 'csrf-token',
+  ensureCsrf: (...a: unknown[]) => ensureCsrf(...a),
 }));
 // `isStepUpProblem` is deliberately NOT mocked — it now lives in
 // `@weavestream/shared`, which loads for real here, so these tests
@@ -113,5 +114,45 @@ describe('apiFetch step-up cancellation signal', () => {
     expect(res.stepUpCancelled).toBeUndefined();
     expect(res.status).toBe(500);
     expect(requestStepUp).not.toHaveBeenCalled();
+  });
+});
+
+describe('apiFetch CSRF acquisition (5a parity pin)', () => {
+  const fetchMock = jest.fn();
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    global.fetch = fetchMock as never;
+  });
+
+  it('threads the request signal into ensureCsrf and maps its abort to the sentinel', async () => {
+    // Web's contract is the inverse of mobile's: mobile rethrows the
+    // platform AbortError unchanged; this client folds every abort into
+    // `{problem:{aborted:true}}` so debounce/cancel callers never see a
+    // rejection. CSRF acquisition must honour the same contract.
+    const ctrl = new AbortController();
+    ensureCsrf.mockRejectedValueOnce(
+      new DOMException('The operation was aborted.', 'AbortError'),
+    );
+    ctrl.abort();
+
+    const res = await apiFetch('/companies/c1/uploads/init', {
+      method: 'POST',
+      body: '{}',
+      signal: ctrl.signal,
+    });
+
+    expect(res).toEqual({ ok: false, status: 0, data: null, problem: { aborted: true } });
+    expect(ensureCsrf).toHaveBeenCalledWith(ctrl.signal);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('still rethrows a non-abort CSRF failure', async () => {
+    ensureCsrf.mockRejectedValueOnce(new Error('csrf-fetch-failed'));
+
+    await expect(
+      apiFetch('/companies/c1/uploads/init', { method: 'POST', body: '{}' }),
+    ).rejects.toThrow('csrf-fetch-failed');
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });
