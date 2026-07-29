@@ -15,6 +15,7 @@ import type {
   ChatToolCallDto,
   ChatTurnIntent,
 } from '@weavestream/shared';
+import { ARTICLE_CREATE_RECOVERY_PENDING_CODE } from '@weavestream/shared';
 import {
   applyChatToolCall,
   createChatConversation,
@@ -1265,7 +1266,27 @@ export function ChatPanelProvider({ children }: { children: ReactNode }) {
           ? { createOverrides: options.createOverrides }
           : {}),
       });
-      if (!result.ok) return result.error;
+      if (!result.ok) {
+        // Create-recovery (5b): a prior apply crashed after creating the
+        // article; the ORIGINAL confirmation is the only one that can
+        // complete. Re-read the conversation so the tool call's
+        // `pendingCreate` marker reaches state — the Save-as-article
+        // dialog locks itself to it — then surface the message. Branch
+        // on the stable code, never the text.
+        if (result.code === ARTICLE_CREATE_RECOVERY_PENDING_CODE) {
+          const detail = await getChatConversation(tab.conversationId);
+          const msg = detail?.messages.find((m) => m.id === messageId);
+          if (msg?.toolCalls) {
+            dispatch({
+              type: 'setMessageToolCalls',
+              tabId,
+              messageId,
+              toolCalls: msg.toolCalls,
+            });
+          }
+        }
+        return result.error;
+      }
       dispatch({
         type: 'patchToolCall',
         tabId,

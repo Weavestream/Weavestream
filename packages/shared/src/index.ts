@@ -24,6 +24,7 @@ export * from './tiptap-doc.js';
 export * from './tiptap-markdown.js';
 export * from './markdown.js';
 export * from './article-patch.js';
+export * from './article-proposal.js';
 export * from './ip-match.js';
 export * from './tag-chips.js';
 export * from './internal-token.js';

@@ -2,7 +2,8 @@
 
 import { useRouter } from 'next/navigation';
 import { useEffect, useMemo, useState } from 'react';
-import { splitMarkdownTitleAndBody } from '@weavestream/shared';
+import { flattenFolderTree, splitMarkdownTitleAndBody } from '@weavestream/shared';
+import type { ChatPendingCreate } from '@weavestream/shared';
 import {
   Btn,
   CompanyPicker,
@@ -53,6 +54,7 @@ export function SaveAsArticleDialog({
   defaultCompanyId,
   defaultTitle,
   defaultVisibleToClients,
+  pendingCreate,
   applyToolCall,
   dialogTitle,
   submitLabel,
@@ -61,6 +63,15 @@ export function SaveAsArticleDialog({
   open: boolean;
   markdown: string;
   defaultCompanyId: string | null;
+  /**
+   * Server-managed create-recovery marker (5b): a prior apply crashed
+   * between creating the article and settling the tool call, so the
+   * ORIGINAL confirmation is the only one the server will complete —
+   * mismatched retries are rejected with
+   * `ARTICLE_CREATE_RECOVERY_PENDING_CODE`. When present, every field
+   * locks to the marker's values and submit sends them verbatim.
+   */
+  pendingCreate?: ChatPendingCreate;
   /**
    * Explicit title override. When set (e.g. the LLM-supplied
    * `args.title` on a `create_article` proposal), it wins over the
@@ -96,13 +107,16 @@ export function SaveAsArticleDialog({
   // with the server-side `update_article` / `create_article` apply
   // path so the two ingestion routes stay consistent.
   const parsed = useMemo(() => splitMarkdownTitleAndBody(markdown), [markdown]);
-  const initialTitle = defaultTitle?.trim() || parsed.title;
+  // Recovery lock: the marker's values are canonical — nothing else can
+  // complete the crashed apply.
+  const locked = pendingCreate !== undefined;
+  const initialTitle = pendingCreate?.title ?? (defaultTitle?.trim() || parsed.title);
   const [title, setTitle] = useState(initialTitle);
   const [company, setCompany] = useState<CompanyPickerValue | null>(null);
   const [folders, setFolders] = useState<FolderNode[]>([]);
-  const [folderId, setFolderId] = useState<string | null>(null);
+  const [folderId, setFolderId] = useState<string | null>(pendingCreate?.folderId ?? null);
   const [visibleToClients, setVisibleToClients] = useState(
-    defaultVisibleToClients ?? false,
+    pendingCreate?.visibleToClients ?? defaultVisibleToClients ?? false,
   );
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -110,21 +124,22 @@ export function SaveAsArticleDialog({
   useEffect(() => {
     if (!open) return;
     setTitle(initialTitle);
-    setVisibleToClients(defaultVisibleToClients ?? false);
+    setVisibleToClients(pendingCreate?.visibleToClients ?? defaultVisibleToClients ?? false);
     setError(null);
     setSaving(false);
-  }, [open, initialTitle, defaultVisibleToClients]);
+  }, [open, initialTitle, defaultVisibleToClients, pendingCreate]);
 
+  const effectiveDefaultCompanyId = pendingCreate?.companyId ?? defaultCompanyId;
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
-    if (!defaultCompanyId) {
+    if (!effectiveDefaultCompanyId) {
       setCompany((cur) => (cur === null ? cur : null));
       return;
     }
     void (async () => {
       const res = await apiFetch<CompanyDetail>(
-        `/companies/${defaultCompanyId}`,
+        `/companies/${effectiveDefaultCompanyId}`,
       );
       if (cancelled) return;
       if (res.ok && res.data) {
@@ -139,7 +154,7 @@ export function SaveAsArticleDialog({
     return () => {
       cancelled = true;
     };
-  }, [open, defaultCompanyId]);
+  }, [open, effectiveDefaultCompanyId]);
 
   const companyId = company?.id ?? null;
   useEffect(() => {
@@ -154,15 +169,17 @@ export function SaveAsArticleDialog({
         `/companies/${companyId}/folders/tree`,
       );
       if (cancelled) return;
-      setFolderId(null);
+      // Locked mode keeps the marker's folder; free mode resets on a
+      // company change as before.
+      setFolderId(pendingCreate ? pendingCreate.folderId : null);
       setFolders(res.ok && res.data ? res.data.items : []);
     })();
     return () => {
       cancelled = true;
     };
-  }, [open, companyId]);
+  }, [open, companyId, pendingCreate]);
 
-  const flatFolders = useMemo(() => flattenFolders(folders), [folders]);
+  const flatFolders = useMemo(() => flattenFolderTree(folders), [folders]);
 
   const canSubmit = !!company && title.trim().length > 0 && !saving;
 
@@ -258,22 +275,40 @@ export function SaveAsArticleDialog({
       }
     >
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        {locked && (
+          <div
+            style={{
+              padding: '8px 10px',
+              borderRadius: 5,
+              background: 'var(--accent-soft)',
+              color: 'var(--text)',
+              fontSize: 12.5,
+            }}
+          >
+            A previous apply didn’t finish — completing the original
+            confirmation.
+          </div>
+        )}
         <Field label="Title">
           <Input
             value={title}
             onChange={(e) => setTitle(e.target.value)}
             placeholder="Article title"
-            autoFocus
-            disabled={saving}
+            autoFocus={!locked}
+            disabled={saving || locked}
           />
         </Field>
 
         <Field label="Company">
-          <CompanyPicker
-            value={company}
-            onChange={(next) => setCompany(next)}
-            placeholder="Search for a company…"
-          />
+          {locked ? (
+            <Input value={company?.name ?? 'Loading…'} disabled readOnly />
+          ) : (
+            <CompanyPicker
+              value={company}
+              onChange={(next) => setCompany(next)}
+              placeholder="Search for a company…"
+            />
+          )}
         </Field>
 
         {company && (
@@ -281,7 +316,7 @@ export function SaveAsArticleDialog({
             <Select
               value={folderId ?? ''}
               onChange={(e) => setFolderId(e.target.value || null)}
-              disabled={saving}
+              disabled={saving || locked}
             >
               <option value="">— unfiled —</option>
               {flatFolders.map((f) => (
@@ -309,7 +344,7 @@ export function SaveAsArticleDialog({
             checked={visibleToClients}
             onChange={(e) => setVisibleToClients(e.target.checked)}
             style={{ accentColor: 'var(--accent)' }}
-            disabled={saving}
+            disabled={saving || locked}
           />
           Visible to clients
         </label>
@@ -331,19 +366,6 @@ export function SaveAsArticleDialog({
       </div>
     </Dialog>
   );
-}
-
-type FlatFolder = { id: string; name: string; depth: number };
-
-function flattenFolders(nodes: FolderNode[], depth = 0): FlatFolder[] {
-  const out: FlatFolder[] = [];
-  for (const n of nodes) {
-    out.push({ id: n.id, name: n.name, depth });
-    if (n.children.length > 0) {
-      out.push(...flattenFolders(n.children, depth + 1));
-    }
-  }
-  return out;
 }
 
 function extractErr(problem: unknown): string | null {

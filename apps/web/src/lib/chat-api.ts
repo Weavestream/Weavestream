@@ -52,7 +52,13 @@ export type ToolCallActionResponse = {
 
 export type ApplyChatToolCallResult =
   | { ok: true; data: ToolCallActionResponse }
-  | { ok: false; error: string };
+  | {
+      ok: false;
+      error: string;
+      /** Stable RFC-7807 `code` when the server sent one — clients
+       *  branch on codes (e.g. create-recovery), never message text. */
+      code?: string;
+    };
 
 /**
  * Apply a pending tool call. The server re-validates the LLM-supplied
@@ -88,9 +94,19 @@ export async function applyChatToolCall(args: {
     },
   );
   if (!res.ok || !res.data) {
-    return { ok: false, error: extractProblemMessage(res.problem) };
+    return {
+      ok: false,
+      error: extractProblemMessage(res.problem),
+      ...(extractProblemCode(res.problem) ? { code: extractProblemCode(res.problem) } : {}),
+    };
   }
   return { ok: true, data: res.data };
+}
+
+function extractProblemCode(problem: unknown): string | undefined {
+  if (!problem || typeof problem !== 'object') return undefined;
+  const code = (problem as { code?: unknown }).code;
+  return typeof code === 'string' && code ? code : undefined;
 }
 
 function extractProblemMessage(problem: unknown): string {

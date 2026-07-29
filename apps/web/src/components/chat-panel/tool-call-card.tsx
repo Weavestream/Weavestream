@@ -4,28 +4,21 @@ import { useRouter } from 'next/navigation';
 import { useEffect, useState, type CSSProperties } from 'react';
 import type { ChatToolCallDto } from '@weavestream/shared';
 import {
-  applyArticleTextEdits,
+  buildPatchPreview,
+  computeLineDiff,
+  isRewriteTargetHallucinated,
+  proposalBaseFromArticle,
   splitMarkdownTitleAndBody,
-  tiptapDocToMarkdown,
   type ArticleTextEdit,
+  type DiffOp,
+  type PatchPreview,
+  type PatchSource,
 } from '@weavestream/shared';
 import { apiFetch } from '../../lib/api';
 import type { ArticleDetail } from '../../lib/server-api';
 import { Icon } from '../ui';
 import { useChatPanel, type ChatPageContextSnapshot, type ChatTab } from './chat-panel-provider';
 import { SaveAsArticleDialog } from './save-as-article-dialog';
-import { isRewriteTargetHallucinated } from './tool-call-classify';
-
-type PatchSource =
-  | { status: 'idle' }
-  | { status: 'loading' }
-  | { status: 'ready'; markdown: string; revision: number; isRichText: boolean }
-  | { status: 'error'; message: string };
-
-type PatchPreview =
-  | { status: 'loading' }
-  | { status: 'error'; message: string }
-  | { status: 'ready'; before: string; markdown: string };
 
 /**
  * Apply / Reject card rendered inline inside an assistant message
@@ -112,21 +105,12 @@ export function ToolCallCard({
         });
         return;
       }
-      const article = res.data;
-      const markdown =
-        article.editorMode === 'markdown'
-          ? (article.markdownSource ?? '')
-          : tiptapDocToMarkdown(article.content);
+      // Shared with mobile's card: markdown from whichever column the
+      // editor mode populates, plus the rich-text flag that drives the
+      // convert-to-Markdown warning (F10).
       setLoadedPatchSource({
         key: patchPreviewKey,
-        source: {
-          status: 'ready',
-          markdown,
-          revision: article.revision,
-          // Applying edits to a rich-text article flips it to Markdown
-          // mode server-side (F10) — surfaced as a card warning below.
-          isRichText: article.editorMode !== 'markdown',
-        },
+        source: { status: 'ready', ...proposalBaseFromArticle(res.data) },
       });
     }).catch(() => {
       // apiFetch swallows AbortError (returns a sentinel) but RE-THROWS
@@ -489,6 +473,7 @@ export function ToolCallCard({
           open={saveDialogOpen}
           markdown={typeof args.markdown === 'string' ? args.markdown : ''}
           {...(proposedTitle ? { defaultTitle: proposedTitle } : {})}
+          pendingCreate={toolCall.pendingCreate}
           defaultCompanyId={dialogDefaultCompanyId}
           defaultVisibleToClients={proposedVisibleToClients}
           dialogTitle="Create article from suggestion"
@@ -511,73 +496,6 @@ export function ToolCallCard({
       )}
     </div>
   );
-}
-
-function buildPatchPreview(
-  source: PatchSource,
-  baseRevision: number | null | undefined,
-  proposedTitle: string | undefined,
-  rawEdits: ArticleTextEdit[] | undefined,
-): PatchPreview {
-  if (source.status === 'loading') return { status: 'loading' };
-  if (source.status === 'idle') {
-    return {
-      status: 'error',
-      message: 'The target article is unavailable for preview.',
-    };
-  }
-  if (source.status === 'error') return source;
-  if (typeof baseRevision !== 'number') {
-    return {
-      status: 'error',
-      message: 'This proposal was not based on a confirmed article revision.',
-    };
-  }
-  if (source.revision !== baseRevision) {
-    return {
-      status: 'error',
-      message:
-        'The article changed after this proposal was drafted. Ask the assistant to redo the edit.',
-    };
-  }
-  if (rawEdits === undefined) {
-    if (proposedTitle === undefined) {
-      return { status: 'error', message: 'The proposed edit does not contain any changes.' };
-    }
-    return {
-      status: 'ready',
-      before: source.markdown,
-      markdown: source.markdown,
-    };
-  }
-  if (
-    !Array.isArray(rawEdits) ||
-    rawEdits.length === 0 ||
-    rawEdits.some(
-      (edit) =>
-        !edit ||
-        typeof edit.old_text !== 'string' ||
-        !edit.old_text ||
-        typeof edit.new_text !== 'string',
-    )
-  ) {
-    return { status: 'error', message: 'The proposed edit is malformed.' };
-  }
-  const patched = applyArticleTextEdits(source.markdown, rawEdits);
-  if (!patched.ok) {
-    return {
-      status: 'error',
-      message:
-        patched.code === 'not_found'
-          ? `Edit ${patched.editIndex + 1} no longer matches the article text.`
-          : `Edit ${patched.editIndex + 1} matches more than one passage. Ask the assistant to include more surrounding text.`,
-    };
-  }
-  return {
-    status: 'ready',
-    before: source.markdown,
-    markdown: patched.markdown,
-  };
 }
 
 function PatchPreviewBlock({ preview }: { preview: PatchPreview }) {
@@ -816,7 +734,20 @@ function StatusRow({ toolCall }: { toolCall: ChatToolCallDto }) {
 function DiffBlock({ before, after }: { before: string; after: string }) {
   const a = before.split(/\r?\n/);
   const b = after.split(/\r?\n/);
+  // Bounded (5b): null = over the shared cell budget — a newline-heavy
+  // body would freeze the tab in the O(n·m) table. Fall back to the
+  // proposed content with an explicit note instead of hanging.
   const ops = computeLineDiff(a, b);
+  if (ops === null) {
+    return (
+      <div>
+        <div style={{ color: 'var(--muted)', marginBottom: 4 }}>
+          Change too large to diff — showing proposed content.
+        </div>
+        <PreviewBlock markdown={after} />
+      </div>
+    );
+  }
   return (
     <pre
       style={{
@@ -834,11 +765,6 @@ function DiffBlock({ before, after }: { before: string; after: string }) {
     </pre>
   );
 }
-
-type DiffOp =
-  | { kind: 'same'; text: string }
-  | { kind: 'add'; text: string }
-  | { kind: 'del'; text: string };
 
 function DiffLine({ op }: { op: DiffOp }) {
   const palette: Record<DiffOp['kind'], { bg: string; fg: string; mark: string }> = {
@@ -861,39 +787,6 @@ function DiffLine({ op }: { op: DiffOp }) {
       {op.text}
     </div>
   );
-}
-
-function computeLineDiff(a: string[], b: string[]): DiffOp[] {
-  const n = a.length;
-  const m = b.length;
-  // LCS table: (n+1) x (m+1). For very large inputs this is O(n*m);
-  // article bodies in this product cap at ~2 k lines so it's fine.
-  const dp: number[][] = Array.from({ length: n + 1 }, () => new Array<number>(m + 1).fill(0));
-  for (let i = n - 1; i >= 0; i--) {
-    for (let j = m - 1; j >= 0; j--) {
-      if (a[i] === b[j]) dp[i]![j] = (dp[i + 1]![j + 1] ?? 0) + 1;
-      else dp[i]![j] = Math.max(dp[i + 1]![j] ?? 0, dp[i]![j + 1] ?? 0);
-    }
-  }
-  const ops: DiffOp[] = [];
-  let i = 0;
-  let j = 0;
-  while (i < n && j < m) {
-    if (a[i] === b[j]) {
-      ops.push({ kind: 'same', text: a[i]! });
-      i++;
-      j++;
-    } else if ((dp[i + 1]?.[j] ?? 0) >= (dp[i]?.[j + 1] ?? 0)) {
-      ops.push({ kind: 'del', text: a[i]! });
-      i++;
-    } else {
-      ops.push({ kind: 'add', text: b[j]! });
-      j++;
-    }
-  }
-  while (i < n) ops.push({ kind: 'del', text: a[i++]! });
-  while (j < m) ops.push({ kind: 'add', text: b[j++]! });
-  return ops;
 }
 
 function PreviewBlock({ markdown }: { markdown: string }) {
