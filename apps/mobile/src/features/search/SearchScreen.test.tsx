@@ -20,23 +20,34 @@ let results: {
   refetch: () => void;
 } = { data: undefined, isPending: false, isError: false, refetch: jest.fn() };
 
-jest.mock('../../lib/org-scope', () => ({ useOrgScope: () => orgScope }));
+const switchOrgMock = jest.fn();
+jest.mock('../../lib/org-scope', () => ({
+  useOrgScope: () => ({ ...orgScope, switchOrg: switchOrgMock, clearOrg: jest.fn() }),
+}));
 jest.mock('../../screens/TabShell', () => ({ useMe: () => me }));
 jest.mock('../../lib/scoped-nav', () => ({
   useScopedNavigate: () => navigateMock,
 }));
-jest.mock('../../lib/use-back', () => ({ useBackOr: () => jest.fn() }));
+let backOrTarget: string | undefined;
+jest.mock('../../lib/use-back', () => ({
+  useBackOr: (to: string) => {
+    backOrTarget = to;
+    return jest.fn();
+  },
+}));
 jest.mock('../../lib/use-online', () => ({ useOnline: () => true }));
+const useSearchResultsMock = jest.fn((..._args: unknown[]) => results);
 jest.mock('./queries', () => ({
   SEARCH_DEBOUNCE_MS: 200,
-  useSearchResults: () => results,
+  useSearchResults: (...args: unknown[]) => useSearchResultsMock(...args),
 }));
 const setDraftMock = jest.fn();
 jest.mock('../../components/ask/AskProvider', () => ({
   useAsk: () => ({ setDraft: setDraftMock }),
 }));
+let locationState: Record<string, unknown> | undefined;
 jest.mock('@tanstack/react-router', () => ({
-  useLocation: () => ({ search: {} }),
+  useLocation: () => ({ search: {}, state: locationState, pathname: '/search' }),
 }));
 
 import { SearchScreen } from './SearchScreen';
@@ -62,6 +73,8 @@ beforeEach(() => {
   orgScope = { currentOrg: ORG, scopeStatus: 'ready', retry: jest.fn() };
   me = { role: 'TECHNICIAN' };
   results = { data: undefined, isPending: false, isError: false, refetch: jest.fn() };
+  locationState = undefined;
+  backOrTarget = undefined;
 });
 
 describe('SearchScreen', () => {
@@ -168,5 +181,76 @@ describe('SearchScreen', () => {
     expect(
       screen.getByText('Searches passwords, assets, and articles in Acme.'),
     ).toBeInTheDocument();
+  });
+});
+
+describe('SearchScreen — global mode (null org stamp, Phase 5b)', () => {
+  function goGlobal() {
+    locationState = { orgId: null };
+    orgScope = { currentOrg: null, scopeStatus: 'ready', retry: jest.fn() };
+  }
+
+  it('searches with NO companyId and its own idle copy; Done falls back to the launcher', () => {
+    goGlobal();
+    render(<SearchScreen query="" />);
+
+    expect(
+      screen.getByText(
+        'Searches passwords, assets, and articles across all your organizations.',
+      ),
+    ).toBeInTheDocument();
+    // First arg is companyId — null in global mode, so the param is omitted.
+    expect(useSearchResultsMock).toHaveBeenCalledWith(null, '', { ready: true });
+    expect(backOrTarget).toBe('/app');
+  });
+
+  it('names each hit’s organization and carries it into the destination on tap', () => {
+    goGlobal();
+    const cross: SearchHit = {
+      ...hit('password', 'p9', 'Fortinet firewall'),
+      companyId: 'org-9',
+      companyName: 'Northwind MSP',
+    };
+    results = { data: { items: [cross] }, isPending: false, isError: false, refetch: jest.fn() };
+
+    render(<SearchScreen query="fortinet" />);
+
+    // Org context prominently on the row.
+    expect(screen.getByText('Northwind MSP')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText('Fortinet firewall'));
+    expect(switchOrgMock).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'org-9', name: 'Northwind MSP' }),
+    );
+    expect(navigateMock).toHaveBeenCalledWith({
+      to: '/passwords/p9',
+      orgId: 'org-9',
+      replace: false,
+      upIsBack: true,
+      backLabel: 'Search',
+    });
+  });
+
+  it('org mode stays byte-identical: no company line, plain stamped push, /passwords fallback', () => {
+    results = {
+      data: { items: [hit('password', 'p1', 'Pines router')] },
+      isPending: false,
+      isError: false,
+      refetch: jest.fn(),
+    };
+
+    render(<SearchScreen query="pines" />);
+
+    expect(screen.queryByText(ORG.name)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByText('Pines router'));
+    expect(switchOrgMock).not.toHaveBeenCalled();
+    expect(navigateMock).toHaveBeenCalledWith({
+      to: '/passwords/p1',
+      upIsBack: true,
+      backLabel: 'Search',
+    });
+    expect(backOrTarget).toBe('/passwords');
+    // Org-mode requests still pin the company and gate on settled scope.
+    expect(useSearchResultsMock).toHaveBeenCalledWith('org-1', 'pines', { ready: true });
   });
 });

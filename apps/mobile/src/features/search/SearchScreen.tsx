@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useLocation } from '@tanstack/react-router';
+import { initialsFromName } from '@weavestream/shared';
+import type { SearchHit } from '@weavestream/shared';
 import { Icon } from '../../components/Icon';
 import { ListRow, SectionLabel } from '../../components/primitives';
 import {
@@ -9,10 +11,12 @@ import {
   SkeletonList,
 } from '../../components/states';
 import { useOnline } from '../../lib/use-online';
+import { readOrgStamp } from '../../lib/org-free';
 import { useOrgScope } from '../../lib/org-scope';
 import { useScopedNavigate } from '../../lib/scoped-nav';
 import { useBackOr } from '../../lib/use-back';
 import { useDebouncedValue } from '../../lib/use-debounced-value';
+import { useEnterOrg } from '../../lib/use-enter-org';
 import { useMe } from '../../screens/TabShell';
 import { useAsk } from '../../components/ask/AskProvider';
 import { groupHits } from './grouping';
@@ -25,9 +29,24 @@ import { Snippet } from './Snippet';
  * hidden (`hideTabBarFor`), the field row replaces the header, and the
  * grouped results replace the content.
  *
- * Current org ONLY: `companyId` is always sent and there is no scope
- * toggle — that cut removes a real onsite failure mode (copying a
- * credential out of the wrong client's record). See queries.ts.
+ * Two scopes, decided by the history entry's org stamp (Phase 5b):
+ *
+ *  - **In an org** (org-stamped entry): `companyId` is always sent and
+ *    there is no scope toggle — that cut removes a real onsite failure
+ *    mode (copying a credential out of the wrong client's record).
+ *  - **Global** (`orgId: null` stamp — a push from the launcher, or a
+ *    reload of one; history state survives reloads): `companyId` is
+ *    omitted and the server scopes to the actor's accessible orgs. Each
+ *    hit names its organization prominently, and opening one CARRIES
+ *    that organization into the destination (switch + stamped push), so
+ *    a technician cannot mistake one client's record for another's.
+ *
+ * The stamp — not `currentOrg` — is the mode signal: it is stable from
+ * the first frame, so popping back to global search never renders a
+ * transient org-scoped frame while the arrival-clear effect runs.
+ * Accepted limitation: a shared/typed `/m/search?q=x` URL boots
+ * UNSTAMPED and is therefore ordinary in-org search under the resolved
+ * org — exactly the pre-5b behavior.
  *
  * The field auto-focuses on open — the sanctioned exception to the
  * no-autofocus rule (Sheet.tsx): tapping the search icon IS the intent
@@ -40,8 +59,10 @@ export function SearchScreen({ query }: { query: string }) {
   const me = useMe();
   const online = useOnline();
   const navigate = useScopedNavigate();
-  const done = useBackOr('/passwords');
+  const enterOrg = useEnterOrg();
   const location = useLocation();
+  const globalMode = readOrgStamp(location.state) === null;
+  const done = useBackOr(globalMode ? '/app' : '/passwords');
 
   // Seeded once from the route: the screen unmounts on navigation away,
   // so a later back-to-search remounts with the restored `?q=`.
@@ -69,10 +90,38 @@ export function SearchScreen({ query }: { query: string }) {
     });
   }, [debounced, query, sheet, navigate]);
 
-  const orgId = currentOrg?.id ?? null;
-  const results = useSearchResults(orgId, debounced);
+  // Global mode searches with NO company id; org mode gates on settled
+  // scope so a still-resolving null never fires a global query from the
+  // in-org screen.
+  const searchOrgId = globalMode ? null : (currentOrg?.id ?? null);
+  const results = useSearchResults(searchOrgId, debounced, {
+    ready: globalMode || (scopeStatus === 'ready' && currentOrg !== null),
+  });
   const askVisible = me?.role !== 'CLIENT_USER';
   const { setDraft } = useAsk();
+
+  /**
+   * Open a hit. Global hits carry their organization into the
+   * destination: one coordinated switch + a push stamped with the hit's
+   * org — the detail then renders under that org's header with the tab
+   * bar (the "inside a client" chrome transition). `backLabel` keeps the
+   * chevron honest: it pops back HERE, so it must say "Search".
+   */
+  const openHit = (hit: SearchHit, to: string) => {
+    if (globalMode) {
+      enterOrg(
+        {
+          id: hit.companyId,
+          name: hit.companyName,
+          initials: initialsFromName(hit.companyName),
+          subtitle: null,
+        },
+        { to, history: 'push', upIsBack: true, backLabel: 'Search' },
+      );
+      return;
+    }
+    navigate({ to, upIsBack: true, backLabel: 'Search' });
+  };
 
   const openAsk = () => {
     // Prefill the composer with the query — the card's whole promise.
@@ -147,9 +196,13 @@ export function SearchScreen({ query }: { query: string }) {
       <main className="mx-auto flex min-h-0 w-full max-w-page flex-1 flex-col gap-4 overflow-y-auto px-4 pb-edge-b">
         {!online && <OfflineBanner />}
 
-        {scopeStatus === 'resolving' && <SkeletonList rows={5} variant="row" />}
+        {/* Scope-resolution states are an org-mode concern only: global
+            mode's scope is settled by construction (the null stamp). */}
+        {!globalMode && scopeStatus === 'resolving' && (
+          <SkeletonList rows={5} variant="row" />
+        )}
 
-        {scopeStatus === 'error' && (
+        {!globalMode && scopeStatus === 'error' && (
           <ErrorBanner
             title="Couldn’t load your organizations."
             detail="Check your connection and try again."
@@ -157,15 +210,19 @@ export function SearchScreen({ query }: { query: string }) {
           />
         )}
 
-        {scopeStatus === 'ready' && !currentOrg && (
+        {!globalMode && scopeStatus === 'ready' && !currentOrg && (
           <EmptyState message="No organizations available. Ask an administrator to give you access to a client." />
         )}
 
-        {scopeStatus === 'ready' && currentOrg && (
+        {(globalMode || (scopeStatus === 'ready' && currentOrg !== null)) && (
           <>
             {!debounced && (
               <EmptyState
-                message={`Searches passwords, assets, and articles in ${currentOrg.name}.`}
+                message={
+                  globalMode
+                    ? 'Searches passwords, assets, and articles across all your organizations.'
+                    : `Searches passwords, assets, and articles in ${currentOrg?.name ?? ''}.`
+                }
               />
             )}
 
@@ -183,7 +240,13 @@ export function SearchScreen({ query }: { query: string }) {
 
             {debounced !== '' && results.data && groups.length === 0 && (
               <>
-                <EmptyState message={`No matches in ${currentOrg.name}.`} />
+                <EmptyState
+                  message={
+                    globalMode
+                      ? 'No matches in your organizations.'
+                      : `No matches in ${currentOrg?.name ?? ''}.`
+                  }
+                />
                 {askVisible && (
                   <AskHandoffCard query={debounced} onOpen={openAsk} />
                 )}
@@ -204,16 +267,31 @@ export function SearchScreen({ query }: { query: string }) {
                     </div>
                     {group.hits.map((hit) => {
                       const to = routeForHit(hit.kind, hit.id);
+                      const snippetOrLayout = hit.snippet ? (
+                        <Snippet snippet={hit.snippet} />
+                      ) : (
+                        (hit.layoutName ?? undefined)
+                      );
                       return (
                         <ListRow
                           key={`${hit.kind}:${hit.id}`}
                           title={hit.title}
                           metaFont="sans"
                           meta={
-                            hit.snippet ? (
-                              <Snippet snippet={hit.snippet} />
+                            globalMode ? (
+                              // Org context PROMINENTLY on every global
+                              // hit — the whole point of carrying scope:
+                              // the company line sits above the snippet,
+                              // accent-toned, so wrong-client mistakes
+                              // are visible before the tap.
+                              <span className="flex min-w-0 flex-col gap-0.5">
+                                <span className="truncate font-medium text-accent-text">
+                                  {hit.companyName}
+                                </span>
+                                {snippetOrLayout}
+                              </span>
                             ) : (
-                              (hit.layoutName ?? undefined)
+                              snippetOrLayout
                             )
                           }
                           minHeight="row"
@@ -226,19 +304,7 @@ export function SearchScreen({ query }: { query: string }) {
                               />
                             ) : undefined
                           }
-                          onClick={
-                            to
-                              ? () =>
-                                  // `backLabel`: the detail's chevron pops
-                                  // back HERE, so it must say "Search",
-                                  // not the structural tab name.
-                                  navigate({
-                                    to,
-                                    upIsBack: true,
-                                    backLabel: 'Search',
-                                  })
-                              : undefined
-                          }
+                          onClick={to ? () => openHit(hit, to) : undefined}
                         />
                       );
                     })}

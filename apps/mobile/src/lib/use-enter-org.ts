@@ -23,12 +23,24 @@ export function useEnterOrg() {
   const navigate = useScopedNavigate();
 
   return useCallback(
-    (org: Org, opts: { to: string; history: 'push' | 'replace' }) => {
+    (
+      org: Org,
+      opts: {
+        to: string;
+        history: 'push' | 'replace';
+        /** Positional back stamps for pushes whose parent is the pushing
+         *  screen (a global-search hit stamps `upIsBack` + "Search"). */
+        upIsBack?: boolean;
+        backLabel?: string;
+      },
+    ) => {
       switchOrg(org);
       navigate({
         to: opts.to,
         orgId: org.id,
         replace: opts.history === 'replace',
+        upIsBack: opts.upIsBack,
+        backLabel: opts.backLabel,
       });
     },
     [switchOrg, navigate],
