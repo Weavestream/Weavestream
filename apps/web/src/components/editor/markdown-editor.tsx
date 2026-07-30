@@ -19,6 +19,8 @@ import './editor.css';
 export type MarkdownEditorProps = {
   value: string;
   onChange: (next: string) => void;
+  view: MarkdownViewMode;
+  onViewChange: (next: MarkdownViewMode) => void;
   autoFocus?: boolean;
   /**
    * Required when image insertion is enabled — the picker uploads via
@@ -34,17 +36,19 @@ export type MarkdownEditorProps = {
    * editor uses. Without it the toolbar renders inline above the body.
    */
   toolbarPortalTarget?: HTMLElement | null;
+  /** Optional control rendered at the far right of the Markdown toolbar. */
+  toolbarEnd?: React.ReactNode;
 };
 
-type ViewMode = 'edit' | 'split' | 'preview';
+export type MarkdownViewMode = 'edit' | 'split' | 'preview';
 
 /* Markdown syntax theme. Colors come from the design-token CSS variables so
  * the editor stays consistent with the rest of the app — and tracks the
  * dark/light theme switch automatically without a second config. */
 const markdownHighlightStyle = HighlightStyle.define([
-  { tag: t.heading1, color: 'var(--text)', fontWeight: '700', fontSize: '1.4em' },
-  { tag: t.heading2, color: 'var(--text)', fontWeight: '700', fontSize: '1.2em' },
-  { tag: t.heading3, color: 'var(--text)', fontWeight: '600', fontSize: '1.1em' },
+  { tag: t.heading1, color: 'var(--text)', fontWeight: '700' },
+  { tag: t.heading2, color: 'var(--text)', fontWeight: '700' },
+  { tag: t.heading3, color: 'var(--text)', fontWeight: '600' },
   { tag: [t.heading4, t.heading5, t.heading6], color: 'var(--text)', fontWeight: '600' },
   { tag: t.strong, color: 'var(--text)', fontWeight: '700' },
   { tag: t.emphasis, color: 'var(--text-2)', fontStyle: 'italic' },
@@ -67,11 +71,13 @@ const markdownHighlightStyle = HighlightStyle.define([
 export function MarkdownEditor({
   value,
   onChange,
+  view,
+  onViewChange,
   autoFocus = false,
   companyId,
   toolbarPortalTarget,
+  toolbarEnd,
 }: MarkdownEditorProps) {
-  const [view, setView] = useState<ViewMode>('edit');
   const previewScrollRef = useRef<HTMLDivElement | null>(null);
   const [editorScrollEl, setEditorScrollEl] = useState<HTMLElement | null>(null);
   const editorViewRef = useRef<EditorView | null>(null);
@@ -81,15 +87,11 @@ export function MarkdownEditor({
     const v = editorViewRef.current;
     if (!v) return;
     const { from, to } = v.state.selection.main;
-    const needsLeadingNewline =
-      from > 0 && v.state.doc.sliceString(from - 1, from) !== '\n';
+    const needsLeadingNewline = from > 0 && v.state.doc.sliceString(from - 1, from) !== '\n';
     const needsTrailingNewline =
-      to < v.state.doc.length &&
-      v.state.doc.sliceString(to, to + 1) !== '\n';
+      to < v.state.doc.length && v.state.doc.sliceString(to, to + 1) !== '\n';
     const finalInsert =
-      (needsLeadingNewline ? '\n' : '') +
-      insert +
-      (needsTrailingNewline ? '\n' : '');
+      (needsLeadingNewline ? '\n' : '') + insert + (needsTrailingNewline ? '\n' : '');
     v.dispatch({
       changes: { from, to, insert: finalInsert },
       selection: { anchor: from + finalInsert.length },
@@ -164,8 +166,7 @@ export function MarkdownEditor({
       const previewEl = previewScrollRef.current;
       if (!previewEl) return;
 
-      const editorMaxScroll =
-        editorScrollEl.scrollHeight - editorScrollEl.clientHeight;
+      const editorMaxScroll = editorScrollEl.scrollHeight - editorScrollEl.clientHeight;
       const previewMaxScroll = previewEl.scrollHeight - previewEl.clientHeight;
 
       if (editorMaxScroll <= 0 || previewMaxScroll <= 0) {
@@ -173,8 +174,7 @@ export function MarkdownEditor({
         return;
       }
 
-      previewEl.scrollTop =
-        (editorScrollEl.scrollTop / editorMaxScroll) * previewMaxScroll;
+      previewEl.scrollTop = (editorScrollEl.scrollTop / editorMaxScroll) * previewMaxScroll;
     };
 
     editorScrollEl.addEventListener('scroll', syncPreviewScroll, {
@@ -225,18 +225,12 @@ export function MarkdownEditor({
   );
 
   const previewPane = (
-    <div
-      ref={previewScrollRef}
-      className="sd-md-preview-wrap"
-      style={previewWrapStyle}
-    >
+    <div ref={previewScrollRef} className="sd-md-preview-wrap" style={previewWrapStyle}>
       <div
         className="sd-editor sd-editor-article sd-richtext-view sd-markdown-view sd-md-preview"
         style={previewSurfaceStyle}
       >
-        <ReactMarkdown remarkPlugins={[remarkGfm]}>
-          {previewMarkdown || ' '}
-        </ReactMarkdown>
+        <ReactMarkdown remarkPlugins={[remarkGfm]}>{previewMarkdown || ' '}</ReactMarkdown>
       </div>
     </div>
   );
@@ -244,19 +238,13 @@ export function MarkdownEditor({
   const toolbar = (
     <div className="sd-editor-toolbar">
       <div className="sd-editor-toolbar-group">
-        <ToolbarButton active={view === 'edit'} onClick={() => setView('edit')}>
+        <ToolbarButton active={view === 'edit'} onClick={() => onViewChange('edit')}>
           Edit
         </ToolbarButton>
-        <ToolbarButton
-          active={view === 'split'}
-          onClick={() => setView('split')}
-        >
+        <ToolbarButton active={view === 'split'} onClick={() => onViewChange('split')}>
           Split
         </ToolbarButton>
-        <ToolbarButton
-          active={view === 'preview'}
-          onClick={() => setView('preview')}
-        >
+        <ToolbarButton active={view === 'preview'} onClick={() => onViewChange('preview')}>
           Preview
         </ToolbarButton>
       </div>
@@ -273,18 +261,7 @@ export function MarkdownEditor({
         </ToolbarButton>
       </div>
       <div style={{ flex: 1 }} />
-      <span
-        style={{
-          fontFamily: 'var(--font-mono)',
-          fontSize: 10.5,
-          color: 'var(--dim)',
-          textTransform: 'uppercase',
-          letterSpacing: 0.4,
-          paddingRight: 8,
-        }}
-      >
-        markdown
-      </span>
+      {toolbarEnd}
     </div>
   );
 
@@ -303,7 +280,7 @@ export function MarkdownEditor({
         }}
       />
 
-      <div className="sd-md-shell" style={shellStyle}>
+      <div className="sd-md-shell" data-view={view} style={shellStyle}>
         {showEditor && showPreview ? (
           <SplitPanes editor={editorPane} preview={previewPane} />
         ) : showEditor ? (
@@ -320,13 +297,7 @@ export function MarkdownEditor({
   );
 }
 
-function SplitPanes({
-  editor,
-  preview,
-}: {
-  editor: React.ReactNode;
-  preview: React.ReactNode;
-}) {
+function SplitPanes({ editor, preview }: { editor: React.ReactNode; preview: React.ReactNode }) {
   const { defaultLayout, onLayoutChanged } = useDefaultLayout({
     id: 'markdown-editor-split',
     panelIds: ['editor', 'preview'],
@@ -334,33 +305,39 @@ function SplitPanes({
   });
 
   return (
-    <Group
-      orientation="horizontal"
-      className="sd-md-panels"
-      defaultLayout={defaultLayout}
-      onLayoutChanged={onLayoutChanged}
-      style={panelGroupStyle}
-    >
-      <Panel
-        id="editor"
-        defaultSize="50%"
-        minSize="20%"
-        className="sd-md-pane"
-        style={panelContentStyle}
+    <div className="sd-md-split-workspace">
+      <Group
+        orientation="horizontal"
+        className="sd-md-panels"
+        defaultLayout={defaultLayout}
+        onLayoutChanged={onLayoutChanged}
+        style={panelGroupStyle}
       >
-        {editor}
-      </Panel>
-      <Separator className="sd-md-resize-handle" style={separatorStyle} />
-      <Panel
-        id="preview"
-        defaultSize="50%"
-        minSize="20%"
-        className="sd-md-pane"
-        style={panelContentStyle}
-      >
-        {preview}
-      </Panel>
-    </Group>
+        <Panel
+          id="editor"
+          defaultSize="50%"
+          minSize="20%"
+          className="sd-md-pane"
+          style={panelContentStyle}
+        >
+          {editor}
+        </Panel>
+        <Separator className="sd-md-resize-handle" style={separatorStyle} />
+        <Panel
+          id="preview"
+          defaultSize="50%"
+          minSize="20%"
+          className="sd-md-pane"
+          style={panelContentStyle}
+        >
+          {preview}
+        </Panel>
+      </Group>
+      <div className="sd-md-preview-pill">
+        <Icon.eye size={11} />
+        <span>Preview</span>
+      </div>
+    </div>
   );
 }
 
@@ -383,7 +360,7 @@ const shellStyle: React.CSSProperties = {
   overflow: 'hidden',
   border: '1px solid var(--line-2)',
   borderRadius: 8,
-  background: 'var(--panel-2)',
+  background: 'var(--surface)',
 };
 
 const panelGroupStyle: React.CSSProperties = {
@@ -395,7 +372,7 @@ const panelGroupStyle: React.CSSProperties = {
 
 const soloPaneStyle: React.CSSProperties = {
   ...panelContentStyle,
-  background: 'var(--panel-2)',
+  background: 'var(--surface)',
 };
 
 const paneFillStyle: React.CSSProperties = {
@@ -415,7 +392,7 @@ const previewWrapStyle: React.CSSProperties = {
   ...paneFillStyle,
   overflow: 'auto',
   padding: '28px 34px',
-  background: 'var(--panel)',
+  background: 'var(--panel-2)',
 };
 
 const previewSurfaceStyle: React.CSSProperties = {
@@ -433,13 +410,10 @@ const previewSurfaceStyle: React.CSSProperties = {
 const separatorStyle: React.CSSProperties = {
   position: 'relative',
   alignSelf: 'stretch',
-  width: 10,
+  width: 8,
   margin: 0,
   borderRadius: 0,
-  background: 'var(--surface)',
   border: 0,
-  borderLeft: '1px solid var(--line)',
-  borderRight: '1px solid var(--line)',
   cursor: 'col-resize',
 };
 
@@ -453,7 +427,10 @@ function stripMarkdownFrontmatter(source: string): string {
   });
 
   if (closingIndex === -1) return source;
-  return lines.slice(closingIndex + 1).join('\n').replace(/^\n+/, '');
+  return lines
+    .slice(closingIndex + 1)
+    .join('\n')
+    .replace(/^\n+/, '');
 }
 
 function ToolbarButton({

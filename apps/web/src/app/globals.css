@@ -378,3 +378,147 @@ button.topbar-chip:hover {
 .dt-resize-handle:active::after {
   background: var(--accent);
 }
+
+/* Article editor chrome that lives OUTSIDE the editor components — the
+ * topbar save status and the properties block in the right rail. These
+ * were briefly in `components/editor/editor.css`, which `article-form`
+ * never imports; they only rendered styled because the Tiptap/Markdown
+ * editor happened to pull that sheet in. Here they're unconditional. */
+
+.article-editor-save-status {
+  padding-right: 2px;
+  color: var(--dim);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  white-space: nowrap;
+}
+
+.article-property-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.article-property-row {
+  min-height: 40px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+}
+
+/* Rule dividers, not a header underline — keyed off "has a row after
+ * me" so inserting a property doesn't move the line. */
+.article-property-row:not(:last-child) {
+  border-bottom: 1px solid var(--line);
+}
+
+.article-property-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+.article-property-folder-control {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  max-width: 170px;
+}
+
+/* No `text-overflow: ellipsis` — neither Chrome nor Safari honours it on
+ * a <select>. `overflow: hidden` is what actually clips a long folder
+ * name, and the full name stays in the open popup. */
+.article-property-folder-select {
+  appearance: none;
+  width: 100%;
+  height: 30px;
+  padding: 0 20px 0 6px;
+  overflow: hidden;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--text-2);
+  font-family: var(--font-sans);
+  font-size: 12.5px;
+  text-align: right;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.article-property-folder-select:hover {
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+.article-property-folder-select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.article-property-folder-chevron {
+  position: absolute;
+  right: 4px;
+  display: inline-flex;
+  color: var(--dim);
+  pointer-events: none;
+}
+
+.article-property-visibility-control {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  color: var(--text-2);
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.article-property-switch {
+  appearance: none;
+  position: relative;
+  width: 28px;
+  height: 16px;
+  margin: 0;
+  border: 1px solid var(--line-2);
+  border-radius: 999px;
+  background: var(--panel-2);
+  cursor: pointer;
+  transition:
+    background 120ms ease,
+    border-color 120ms ease;
+}
+
+.article-property-switch::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--muted);
+  transition:
+    background 120ms ease,
+    transform 120ms ease;
+}
+
+.article-property-switch:checked {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.article-property-switch:checked::after {
+  background: var(--accent);
+  transform: translateX(12px);
+}
+
+.article-property-switch:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}

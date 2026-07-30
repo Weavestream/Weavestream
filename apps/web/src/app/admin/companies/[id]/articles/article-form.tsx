@@ -14,24 +14,21 @@ import {
 } from '@weavestream/shared';
 import { apiFetch } from '../../../../../lib/api';
 import { useTimezone } from '../../../../../lib/timezone-context';
-import type {
-  ArticleDetail,
-  FolderNode,
-} from '../../../../../lib/server-api';
-import { Btn, Dialog, Icon, Sheet, Tag, useToast } from '../../../../../components/ui';
+import type { ArticleDetail, FolderNode } from '../../../../../lib/server-api';
+import { Btn, Dialog, Icon, Panel, Sheet, Tag, useToast } from '../../../../../components/ui';
 import { TopBar } from '../../../../../components/shell/top-bar';
 import { RichTextEditor } from '../../../../../components/editor/rich-text-editor';
-import { MarkdownEditor } from '../../../../../components/editor/markdown-editor';
+import {
+  MarkdownEditor,
+  type MarkdownViewMode,
+} from '../../../../../components/editor/markdown-editor';
 import { LinkedItemsPanel } from '../../../../../components/relations';
 import { AttachmentsPanel } from '../../../../../components/upload/attachments-panel';
 import { useChatPageContext } from '../../../../../components/chat-panel/use-chat-page-context';
 import { useTerm } from '../../../../../lib/term-context';
 import { companyCrumbs } from '../../../../../lib/company-crumbs';
 import { useIsMobile } from '../../../../../lib/hooks/use-is-mobile';
-import {
-  markdownToTiptapDoc,
-  tiptapDocToMarkdown,
-} from '../../../../../lib/article-format';
+import { markdownToTiptapDoc, tiptapDocToMarkdown } from '../../../../../lib/article-format';
 import { ArticleActions } from './article-actions';
 
 /**
@@ -86,20 +83,15 @@ export function ArticleForm({
   const [folderId, setFolderId] = useState<string | null>(
     article?.folderId ?? initialFolderId ?? null,
   );
-  const [visibleToClients, setVisibleToClients] = useState(
-    article?.visibleToClients ?? true,
-  );
+  const [visibleToClients, setVisibleToClients] = useState(article?.visibleToClients ?? true);
   const [editorMode, setEditorMode] = useState<ArticleEditorMode>(
     article?.editorMode ?? defaultEditorMode,
   );
+  const [markdownView, setMarkdownView] = useState<MarkdownViewMode>('edit');
   const [doc, setDoc] = useState<unknown>(
-    article?.editorMode === 'markdown'
-      ? emptyTiptap
-      : (article?.content ?? emptyTiptap),
+    article?.editorMode === 'markdown' ? emptyTiptap : (article?.content ?? emptyTiptap),
   );
-  const [markdownSource, setMarkdownSource] = useState(
-    article?.markdownSource ?? '',
-  );
+  const [markdownSource, setMarkdownSource] = useState(article?.markdownSource ?? '');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lastSavedAt, setLastSavedAt] = useState<Date | null>(
@@ -117,9 +109,7 @@ export function ArticleForm({
   // flipped by autosave success / publish / discard. Drives the
   // Cancel dialog (must call the discard endpoint when true) and the
   // "Discard draft" affordance in the topbar.
-  const [hasServerDraft, setHasServerDraft] = useState<boolean>(
-    article?.hasDraft ?? false,
-  );
+  const [hasServerDraft, setHasServerDraft] = useState<boolean>(article?.hasDraft ?? false);
   const [confirmDiscardOpen, setConfirmDiscardOpen] = useState(false);
   const [discarding, setDiscarding] = useState(false);
   // Format switches are deliberate, potentially-lossy operations: the
@@ -183,29 +173,26 @@ export function ArticleForm({
    * `router.refresh()` then picks up server-derived fields (slug,
    * plaintext, updatedBy, etc.).
    */
-  const onAfterAiApply = useCallback(
-    (changes: { markdown?: string; title?: string }) => {
-      if (typeof changes.title === 'string') setTitle(changes.title);
-      if (typeof changes.markdown === 'string') {
-        setEditorMode('markdown');
-        setMarkdownSource(changes.markdown);
-        setFormatSwitchPending(false);
-        setError(null);
-      }
-      setDirty(false);
-      // The AI apply endpoint saves explicitly (never `draft: true`),
-      // which promotes/clears any in-progress autosave draft on the
-      // server. Mirror that here so the editor's "draft" tag doesn't
-      // linger after an apply.
-      setHasServerDraft(false);
-      setLastSavedAt(new Date());
-      // The apply bumped the server-side revision and this form didn't
-      // see the response — the basis is unknowable until the page data
-      // refreshes, so stop claiming one.
-      revisionRef.current = null;
-    },
-    [],
-  );
+  const onAfterAiApply = useCallback((changes: { markdown?: string; title?: string }) => {
+    if (typeof changes.title === 'string') setTitle(changes.title);
+    if (typeof changes.markdown === 'string') {
+      setEditorMode('markdown');
+      setMarkdownSource(changes.markdown);
+      setFormatSwitchPending(false);
+      setError(null);
+    }
+    setDirty(false);
+    // The AI apply endpoint saves explicitly (never `draft: true`),
+    // which promotes/clears any in-progress autosave draft on the
+    // server. Mirror that here so the editor's "draft" tag doesn't
+    // linger after an apply.
+    setHasServerDraft(false);
+    setLastSavedAt(new Date());
+    // The apply bumped the server-side revision and this form didn't
+    // see the response — the basis is unknowable until the page data
+    // refreshes, so stop claiming one.
+    revisionRef.current = null;
+  }, []);
   useChatPageContext({
     companyId,
     articleId: article?.id ?? null,
@@ -327,13 +314,10 @@ export function ArticleForm({
         return;
       }
       setSaving(true);
-      const res = await apiFetch<{ id: string }>(
-        `/companies/${companyId}/articles`,
-        {
-          method: 'POST',
-          body: JSON.stringify(body),
-        },
-      );
+      const res = await apiFetch<{ id: string }>(`/companies/${companyId}/articles`, {
+        method: 'POST',
+        body: JSON.stringify(body),
+      });
       setSaving(false);
       if (!res.ok || !res.data) {
         setError(extractErr(res.problem) ?? 'Create failed');
@@ -356,8 +340,7 @@ export function ArticleForm({
     // Tell the API to coalesce into the rolling draft instead of
     // producing a new published version. Explicit Save omits the
     // flag so the server's `update(draft=false)` path runs.
-    const body =
-      kind === 'autosave' ? { ...payload, draft: true } : payload;
+    const body = kind === 'autosave' ? { ...payload, draft: true } : payload;
     if (kind === 'publish') setSaving(true);
     const res = await apiFetch<{ revision?: number }>(
       `/companies/${companyId}/articles/${article.id}`,
@@ -416,11 +399,7 @@ export function ArticleForm({
       if (next === 'markdown') {
         setMarkdownSource(tiptapDocToMarkdown(doc));
       } else {
-        setDoc(
-          markdownToTiptapDoc(
-            markdownSource.trim().length > 0 ? markdownSource : '\n',
-          ),
-        );
+        setDoc(markdownToTiptapDoc(markdownSource.trim().length > 0 ? markdownSource : '\n'));
       }
     } catch {
       setError(
@@ -453,6 +432,28 @@ export function ArticleForm({
     : autosaveEnabled && mode === 'edit'
       ? `auto-saved ${savedAgo}`
       : `saved ${savedAgo}`;
+  // One measure for the title and the body beneath it, so the two never
+  // drift apart. Prose stays at a readable 920; Markdown's single-pane
+  // views get the wider 1200 a monospace source column wants, and Split
+  // is uncapped because both panes have to share the full canvas.
+  const canvasMaxWidth = editorMode === 'tiptap' ? 920 : markdownView === 'split' ? 'none' : 1200;
+
+  const formatControl = (
+    <span className="sd-editor-format-control">
+      <select
+        aria-label="Editor format"
+        value={editorMode}
+        onChange={(e) => startModeSwitch(e.target.value as ArticleEditorMode)}
+        className="sd-editor-format-select"
+      >
+        <option value="tiptap">WYSIWYG</option>
+        <option value="markdown">Markdown</option>
+      </select>
+      <span className="sd-editor-format-chevron" aria-hidden="true">
+        <Icon.chevronD size={11} stroke={1.8} />
+      </span>
+    </span>
+  );
 
   function navigateAway() {
     if (mode === 'edit' && article) {
@@ -490,10 +491,9 @@ export function ArticleForm({
   async function performDiscard() {
     setDiscarding(true);
     if (mode === 'edit' && article && hasServerDraft) {
-      const res = await apiFetch(
-        `/companies/${companyId}/articles/${article.id}/draft`,
-        { method: 'DELETE' },
-      );
+      const res = await apiFetch(`/companies/${companyId}/articles/${article.id}/draft`, {
+        method: 'DELETE',
+      });
       if (!res.ok) {
         setDiscarding(false);
         setError(extractErr(res.problem) ?? 'Could not discard draft.');
@@ -551,12 +551,8 @@ export function ArticleForm({
                 justifyContent: 'flex-end',
               }}
             >
-              <Btn
-                kind="outline"
-                size="md"
-                disabled={saving}
-                onClick={handleCancelClick}
-              >
+              <span className="article-editor-save-status">{autosaveLabel}</span>
+              <Btn kind="outline" size="md" disabled={saving} onClick={handleCancelClick}>
                 {mode === 'create' ? 'Discard' : 'Cancel'}
               </Btn>
               {mode === 'edit' && article && (
@@ -623,184 +619,110 @@ export function ArticleForm({
           flex: 1,
           minHeight: 0,
           display: 'grid',
-          gridTemplateColumns:
-            mode === 'edit' && article && !isMobile
-              ? 'minmax(0, 1fr) 320px'
-              : 'minmax(0, 1fr)',
+          gridTemplateColumns: !isMobile ? 'minmax(0, 1fr) 320px' : 'minmax(0, 1fr)',
           gridTemplateRows: 'minmax(0, 1fr)',
         }}
       >
-      <div
-        ref={setScrollEl}
-        style={{
-          overflow: editorMode === 'markdown' ? 'hidden' : 'auto',
-          display: 'flex',
-          flexDirection: 'column',
-          minWidth: 0,
-          minHeight: 0,
-        }}
-      >
         <div
+          ref={setScrollEl}
           style={{
-            order: 2,
-            width: '100%',
+            overflow: editorMode === 'markdown' ? 'hidden' : 'auto',
             display: 'flex',
             flexDirection: 'column',
-            flex: editorMode === 'markdown' ? 1 : 'initial',
+            minWidth: 0,
             minHeight: 0,
           }}
         >
           <div
             style={{
-              maxWidth: 1000,
-              margin: '0 auto',
+              order: 2,
               width: '100%',
-              padding: '30px 40px 20px',
+              display: 'flex',
+              flexDirection: 'column',
+              flex: editorMode === 'markdown' ? 1 : 'initial',
+              minHeight: 0,
             }}
           >
-            <input
-              value={title}
-              onChange={(e) => {
-                setTitle(e.target.value);
-                markDirty();
-              }}
-              placeholder="Article title…"
-              style={{
-                width: '100%',
-                fontSize: 32,
-                fontWeight: 600,
-                letterSpacing: -0.7,
-                background: 'transparent',
-                border: 'none',
-                padding: 0,
-                color: 'var(--text)',
-                outline: 'none',
-                fontFamily: 'var(--font-display)',
-                marginBottom: 14,
-              }}
-            />
             <div
               style={{
-                display: 'flex',
-                gap: 10,
-                alignItems: 'center',
-                flexWrap: 'wrap',
-                marginBottom: 20,
-                fontSize: 12,
-                color: 'var(--muted)',
+                maxWidth: canvasMaxWidth,
+                margin: '0 auto',
+                width: 'calc(100% - 48px)',
+                padding: '30px 0 20px',
               }}
             >
-              <MonoLabel>format</MonoLabel>
-              <Btn
-                type="button"
-                kind={editorMode === 'tiptap' ? 'primary' : 'outline'}
-                onClick={() => startModeSwitch('tiptap')}
-              >
-                WYSIWYG
-              </Btn>
-              <Btn
-                type="button"
-                kind={editorMode === 'markdown' ? 'primary' : 'outline'}
-                onClick={() => startModeSwitch('markdown')}
-              >
-                Markdown
-              </Btn>
-
-              <MonoLabel>folder</MonoLabel>
-              <select
-                value={folderId ?? ''}
+              <input
+                value={title}
                 onChange={(e) => {
-                  setFolderId(e.target.value || null);
+                  setTitle(e.target.value);
                   markDirty();
                 }}
-                style={selectStyle}
-              >
-                <option value="">— unfiled —</option>
-                {flatFolders.map((f) => (
-                  <option key={f.id} value={f.id}>
-                    {'· '.repeat(f.depth)}
-                    {f.name}
-                  </option>
-                ))}
-              </select>
-
-              <MonoLabel>visibility</MonoLabel>
-              <label
+                placeholder="Article title…"
                 style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: 6,
-                  cursor: 'pointer',
+                  width: '100%',
+                  fontSize: 32,
+                  fontWeight: 600,
+                  letterSpacing: -0.7,
+                  background: 'transparent',
+                  border: 'none',
+                  padding: 0,
+                  color: 'var(--text)',
+                  outline: 'none',
+                  fontFamily: 'var(--font-display)',
+                  marginBottom: 0,
+                }}
+              />
+            </div>
+
+            {editorMode === 'tiptap' ? (
+              <div
+                style={{
+                  maxWidth: canvasMaxWidth,
+                  margin: '0 auto',
+                  width: 'calc(100% - 48px)',
+                  padding: '0 0 80px',
                 }}
               >
-                <input
-                  type="checkbox"
-                  checked={visibleToClients}
-                  onChange={(e) => {
-                    setVisibleToClients(e.target.checked);
-                    markDirty();
-                  }}
-                  style={{ accentColor: 'var(--accent)' }}
+                <RichTextEditor
+                  variant="article"
+                  value={doc}
+                  onChange={onDocChange}
+                  companyId={companyId}
+                  autoFocus={mode === 'create'}
+                  toolbarPortalTarget={scrollEl}
+                  toolbarEnd={formatControl}
                 />
-                visible to clients
-              </label>
-
-              <span style={{ flex: 1 }} />
-              <span
+              </div>
+            ) : (
+              <div
                 style={{
-                  fontFamily: 'var(--font-mono)',
-                  fontSize: 10.5,
-                  color: 'var(--dim)',
+                  width: 'calc(100% - 48px)',
+                  maxWidth: canvasMaxWidth,
+                  margin: '0 auto',
+                  padding: '0 0 16px',
+                  flex: 1,
+                  minHeight: 0,
+                  height: '100%',
+                  display: 'flex',
+                  flexDirection: 'column',
                 }}
               >
-                {autosaveLabel}
-              </span>
-            </div>
+                <MarkdownEditor
+                  value={markdownSource}
+                  onChange={onMarkdownChange}
+                  view={markdownView}
+                  onViewChange={setMarkdownView}
+                  autoFocus={mode === 'create'}
+                  companyId={companyId}
+                  toolbarPortalTarget={scrollEl}
+                  toolbarEnd={formatControl}
+                />
+              </div>
+            )}
           </div>
-
-          {editorMode === 'tiptap' ? (
-            <div
-              style={{
-                maxWidth: 1000,
-                margin: '0 auto',
-                width: '100%',
-                padding: '0 40px 80px',
-              }}
-            >
-              <RichTextEditor
-                variant="article"
-                value={doc}
-                onChange={onDocChange}
-                companyId={companyId}
-                autoFocus={mode === 'create'}
-                toolbarPortalTarget={scrollEl}
-              />
-            </div>
-          ) : (
-            <div
-              style={{
-                width: '100%',
-                padding: '0 16px 16px',
-                flex: 1,
-                minHeight: 0,
-                height: '100%',
-                display: 'flex',
-                flexDirection: 'column',
-              }}
-            >
-              <MarkdownEditor
-                value={markdownSource}
-                onChange={onMarkdownChange}
-                autoFocus={mode === 'create'}
-                companyId={companyId}
-                toolbarPortalTarget={scrollEl}
-              />
-            </div>
-          )}
         </div>
-      </div>
 
-        {mode === 'edit' && article && !isMobile && (
+        {!isMobile && (
           <aside
             className="scroll"
             style={{
@@ -813,18 +735,37 @@ export function ArticleForm({
               gap: 20,
             }}
           >
-            <LinkedItemsPanel
-              companyId={companyId}
-              entityType="article"
-              entityId={article.id}
-              editable={!article.archivedAt}
+            <ArticleProperties
+              folders={flatFolders}
+              folderId={folderId}
+              onFolderChange={(next) => {
+                setFolderId(next);
+                markDirty();
+              }}
+              visibleToClients={visibleToClients}
+              onVisibilityChange={(next) => {
+                setVisibleToClients(next);
+                markDirty();
+              }}
             />
-            <AttachmentsPanel
-              companyId={companyId}
-              entityType="article"
-              entityId={article.id}
-              editable={!article.archivedAt}
-            />
+            {mode === 'edit' && article ? (
+              <>
+                <LinkedItemsPanel
+                  companyId={companyId}
+                  entityType="article"
+                  entityId={article.id}
+                  editable={!article.archivedAt}
+                />
+                <AttachmentsPanel
+                  companyId={companyId}
+                  entityType="article"
+                  entityId={article.id}
+                  editable={!article.archivedAt}
+                />
+              </>
+            ) : (
+              <CreateModeSidebarPlaceholders />
+            )}
           </aside>
         )}
       </div>
@@ -932,9 +873,8 @@ export function ArticleForm({
         }
       >
         <p style={{ margin: 0, lineHeight: 1.5, color: 'var(--text)' }}>
-          Converting may change formatting. Mentions, custom image layout,
-          and complex tables can lose fidelity. You can still undo before
-          saving.
+          Converting may change formatting. Mentions, custom image layout, and complex tables can
+          lose fidelity. You can still undo before saving.
         </p>
       </Dialog>
 
@@ -946,21 +886,11 @@ export function ArticleForm({
         title={hasServerDraft ? 'Discard autosaved draft?' : 'Discard unsaved changes?'}
         width={460}
         footer={
-          <div
-            style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}
-          >
-            <Btn
-              kind="outline"
-              onClick={() => setConfirmDiscardOpen(false)}
-              disabled={discarding}
-            >
+          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+            <Btn kind="outline" onClick={() => setConfirmDiscardOpen(false)} disabled={discarding}>
               Keep editing
             </Btn>
-            <Btn
-              kind="danger"
-              onClick={performDiscard}
-              loading={discarding}
-            >
+            <Btn kind="danger" onClick={performDiscard} loading={discarding}>
               Discard
             </Btn>
           </div>
@@ -976,29 +906,105 @@ export function ArticleForm({
   );
 }
 
-const selectStyle: React.CSSProperties = {
-  background: 'var(--panel-2)',
-  border: '1px solid var(--line-2)',
-  borderRadius: 4,
-  padding: '4px 8px',
-  fontSize: 12,
-  color: 'var(--text)',
-  fontFamily: 'inherit',
-};
-
-function MonoLabel({ children }: { children: string }) {
+function ArticleProperties({
+  folders,
+  folderId,
+  onFolderChange,
+  visibleToClients,
+  onVisibilityChange,
+}: {
+  folders: Array<{ id: string; name: string; depth: number }>;
+  folderId: string | null;
+  onFolderChange: (next: string | null) => void;
+  visibleToClients: boolean;
+  onVisibilityChange: (next: boolean) => void;
+}) {
   return (
-    <span
-      style={{
-        fontFamily: 'var(--font-mono)',
-        fontSize: 10.5,
-        color: 'var(--dim)',
-        textTransform: 'uppercase',
-        letterSpacing: 0.4,
-      }}
-    >
-      {children}
-    </span>
+    <section aria-label="Article properties" className="article-property-list">
+      <div className="article-property-row">
+        <label htmlFor="article-folder" className="article-property-label">
+          <Icon.folder size={13} />
+          Folder
+        </label>
+        <span className="article-property-folder-control">
+          <select
+            id="article-folder"
+            aria-label="Folder"
+            value={folderId ?? ''}
+            onChange={(e) => onFolderChange(e.target.value || null)}
+            className="article-property-folder-select"
+          >
+            <option value="">Unfiled</option>
+            {folders.map((folder) => (
+              <option key={folder.id} value={folder.id}>
+                {'· '.repeat(folder.depth)}
+                {folder.name}
+              </option>
+            ))}
+          </select>
+          <span className="article-property-folder-chevron" aria-hidden="true">
+            <Icon.chevronD size={10} />
+          </span>
+        </span>
+      </div>
+      <div className="article-property-row">
+        <span className="article-property-label">
+          <Icon.eye size={13} />
+          Visibility
+        </span>
+        <label className="article-property-visibility-control">
+          <span>{visibleToClients ? 'Clients' : 'Internal'}</span>
+          <input
+            type="checkbox"
+            aria-label="Visible to clients"
+            checked={visibleToClients}
+            onChange={(e) => onVisibilityChange(e.target.checked)}
+            className="article-property-switch"
+          />
+        </label>
+      </div>
+    </section>
+  );
+}
+
+/**
+ * Create mode has no article id yet, so the relations and attachments
+ * endpoints have nothing to hang off. We still render both panels so
+ * the rail doesn't reflow on first save — the copy carries the "not
+ * yet" and no wrapper opacity does, because dimming the whole Panel
+ * takes the titles down with it (`--dim` at 0.72 over `--panel` lands
+ * near 3:1, under AA for 11.5px text).
+ */
+function CreateModeSidebarPlaceholders() {
+  const unavailable = (
+    <div style={{ color: 'var(--dim)', fontSize: 11.5, lineHeight: 1.5 }}>
+      Save the article first to add items here.
+    </div>
+  );
+
+  return (
+    <>
+      <Panel
+        title={
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+            <Icon.link size={12} style={{ color: 'var(--accent)' }} />
+            Linked items
+          </span>
+        }
+      >
+        {unavailable}
+      </Panel>
+      <Panel
+        title={
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+            <Icon.doc size={12} style={{ color: 'var(--accent)' }} />
+            Attachments
+          </span>
+        }
+      >
+        {unavailable}
+      </Panel>
+    </>
   );
 }
 

@@ -12,7 +12,7 @@ import { Table } from '@tiptap/extension-table';
 import TableRow from '@tiptap/extension-table-row';
 import TableHeader from '@tiptap/extension-table-header';
 import TableCell from '@tiptap/extension-table-cell';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { ResizableImage } from './image-extension';
 import { buildMentionExtension } from './mention-extension';
@@ -50,6 +50,8 @@ export type RichTextEditorProps = {
    * prose column stays centered at its narrower maxWidth.
    */
   toolbarPortalTarget?: HTMLElement | null;
+  /** Optional control rendered at the far right of the article toolbar. */
+  toolbarEnd?: ReactNode;
 };
 
 export function RichTextEditor({
@@ -63,6 +65,7 @@ export function RichTextEditor({
   portalSlugForCompany,
   autoFocus = false,
   toolbarPortalTarget,
+  toolbarEnd,
 }: RichTextEditorProps) {
   const [uploadingImage, setUploadingImage] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -199,14 +202,13 @@ export function RichTextEditor({
         editor={editor}
         onImage={onImageButton}
         uploading={uploadingImage}
+        toolbarEnd={toolbarEnd}
       />
     ) : null;
 
   return (
-    <div>
-      {toolbar && toolbarPortalTarget
-        ? createPortal(toolbar, toolbarPortalTarget)
-        : toolbar}
+    <div className={variant === 'article' ? 'sd-rich-editor-shell' : undefined}>
+      {toolbar && toolbarPortalTarget ? createPortal(toolbar, toolbarPortalTarget) : toolbar}
 
       {editable && (
         <BubbleMenu
@@ -282,10 +284,12 @@ function ArticleToolbar({
   editor,
   onImage,
   uploading,
+  toolbarEnd,
 }: {
   editor: Editor;
   onImage: () => void;
   uploading: boolean;
+  toolbarEnd?: ReactNode;
 }) {
   return (
     <div className="sd-editor-toolbar">
@@ -300,27 +304,21 @@ function ArticleToolbar({
         <ToolbarButton
           editor={editor}
           active={editor.isActive('heading', { level: 1 })}
-          onClick={() =>
-            editor.chain().focus().toggleHeading({ level: 1 }).run()
-          }
+          onClick={() => editor.chain().focus().toggleHeading({ level: 1 }).run()}
         >
           H1
         </ToolbarButton>
         <ToolbarButton
           editor={editor}
           active={editor.isActive('heading', { level: 2 })}
-          onClick={() =>
-            editor.chain().focus().toggleHeading({ level: 2 }).run()
-          }
+          onClick={() => editor.chain().focus().toggleHeading({ level: 2 }).run()}
         >
           H2
         </ToolbarButton>
         <ToolbarButton
           editor={editor}
           active={editor.isActive('heading', { level: 3 })}
-          onClick={() =>
-            editor.chain().focus().toggleHeading({ level: 3 }).run()
-          }
+          onClick={() => editor.chain().focus().toggleHeading({ level: 3 }).run()}
         >
           H3
         </ToolbarButton>
@@ -405,11 +403,7 @@ function ArticleToolbar({
         <ToolbarButton
           editor={editor}
           onClick={() =>
-            editor
-              .chain()
-              .focus()
-              .insertTable({ rows: 3, cols: 3, withHeaderRow: true })
-              .run()
+            editor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()
           }
           disabled={editor.isActive('table')}
           title="Insert table"
@@ -438,6 +432,7 @@ function ArticleToolbar({
           uploading image…
         </span>
       )}
+      {toolbarEnd}
     </div>
   );
 }
@@ -563,11 +558,5 @@ function promptLink(editor: Editor) {
   } catch {
     return;
   }
-  editor
-    .chain()
-    .focus()
-    .extendMarkRange('link')
-    .setLink({ href: url })
-    .run();
+  editor.chain().focus().extendMarkRange('link').setLink({ href: url }).run();
 }
-

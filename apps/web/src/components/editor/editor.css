@@ -16,6 +16,10 @@
   line-height: 1.8;
 }
 
+.sd-rich-editor-shell {
+  background: var(--surface);
+}
+
 /* NOTE on selectors:
  * Tiptap v3's `EditorContent` puts both `.sd-editor` (our class via
  * editorProps.attributes) and `.ProseMirror` on the same contenteditable
@@ -377,6 +381,48 @@
   z-index: 2;
 }
 
+.sd-editor-format-control {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  margin-left: 8px;
+}
+
+.sd-editor-format-select {
+  appearance: none;
+  height: 26px;
+  min-width: 92px;
+  margin: 0;
+  padding: 0 20px 0 4px;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--dim);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  cursor: pointer;
+}
+
+.sd-editor-format-select:hover {
+  color: var(--muted);
+}
+
+.sd-editor-format-select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.sd-editor-format-chevron {
+  position: absolute;
+  right: 3px;
+  display: inline-flex;
+  color: var(--dim);
+  opacity: 0.85;
+  pointer-events: none;
+}
+
 .sd-editor-toolbar-group {
   display: flex;
   align-items: center;
@@ -535,7 +581,15 @@
   overflow: hidden;
   border: 1px solid var(--line-2);
   border-radius: 8px;
-  background: var(--panel-2);
+  background: var(--surface);
+}
+
+.sd-md-shell[data-view='edit'],
+.sd-md-shell[data-view='preview'] {
+  width: 100%;
+  max-width: 1200px;
+  margin-right: auto;
+  margin-left: auto;
 }
 
 .sd-md-panels {
@@ -543,6 +597,13 @@
   min-height: 0;
   height: 100%;
   width: 100%;
+}
+
+.sd-md-split-workspace {
+  position: relative;
+  flex: 1 1 0;
+  min-height: 0;
+  height: 100%;
 }
 
 /* Single-pane (Edit-only / Preview-only). Mirrors what a Panel's inner
@@ -571,7 +632,7 @@
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  background: var(--panel-2);
+  background: var(--surface);
   height: 100%;
   width: 100%;
 }
@@ -582,7 +643,7 @@
   height: 100%;
   display: flex;
   flex-direction: column;
-  background: var(--panel-2);
+  background: var(--surface);
   color: var(--text);
 }
 
@@ -599,7 +660,7 @@
 }
 
 .sd-md-cm-wrap .cm-editor {
-  background: transparent;
+  background: var(--surface);
 }
 
 .sd-md-cm-wrap .cm-scroller {
@@ -614,23 +675,26 @@
 }
 
 .sd-md-cm-wrap .cm-gutters {
-  background: var(--panel);
+  background: var(--panel-2);
   border-right: 1px solid var(--line);
-  color: var(--dim);
-  padding-right: 4px;
+  color: var(--faint);
+  padding-right: 2px;
 }
 
 .sd-md-cm-wrap .cm-lineNumbers .cm-gutterElement {
-  padding: 0 8px;
-  min-width: 28px;
+  box-sizing: border-box;
+  display: block;
+  padding: 1px 7px 0;
+  min-width: 26px;
   text-align: right;
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: 10.5px;
+  line-height: 1.6;
 }
 
 .sd-md-cm-wrap .cm-activeLineGutter {
-  background: var(--accent-soft);
-  color: var(--accent);
+  background: transparent;
+  color: var(--muted);
 }
 
 .sd-md-preview-wrap {
@@ -638,7 +702,27 @@
   min-height: 0;
   overflow: auto;
   padding: 28px 34px;
-  background: var(--panel);
+  background: var(--panel-2);
+}
+
+.sd-md-preview-pill {
+  position: absolute;
+  top: 8px;
+  right: 12px;
+  z-index: 2;
+  height: 22px;
+  padding: 0 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.3px;
+  pointer-events: none;
 }
 
 .sd-md-preview {
@@ -659,12 +743,10 @@
 .sd-md-panels [data-separator],
 .sd-md-resize-handle {
   position: relative;
-  width: 10px;
+  width: 8px;
   margin: 0;
-  background: var(--surface);
+  background: transparent;
   border: 0;
-  border-left: 1px solid var(--line);
-  border-right: 1px solid var(--line);
   cursor: col-resize;
   transition: background 120ms ease;
 }
@@ -678,9 +760,11 @@
   left: 50%;
   transform: translateX(-50%);
   width: 1px;
-  background: transparent;
+  background: var(--line);
   border-radius: 999px;
-  transition: background 120ms ease, width 120ms ease;
+  transition:
+    background 120ms ease,
+    width 120ms ease;
 }
 
 .sd-md-panels [data-separator]::after,
@@ -690,12 +774,15 @@
   top: 50%;
   left: 50%;
   width: 2px;
-  height: 36px;
+  height: 32px;
   transform: translate(-50%, -50%);
   background: var(--line-2);
   border-radius: 999px;
-  opacity: 0.45;
-  transition: background 120ms ease, opacity 120ms ease, height 120ms ease;
+  opacity: 0.55;
+  transition:
+    background 120ms ease,
+    opacity 120ms ease,
+    height 120ms ease;
 }
 
 .sd-md-panels [data-separator]:hover,
