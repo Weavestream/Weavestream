@@ -43,10 +43,33 @@ pnpm --filter @weavestream/web mermaid:corpus
 ```
 
 That writes `*.svg` next to each `*.mmd` here. CI runs the same command
-and fails if the result differs from what is committed, so a Mermaid
-version bump cannot land on stale fixtures.
+with `--check`, so a Mermaid version bump cannot land on stale fixtures.
 
-When the diff is non-empty after an upgrade, read it before accepting it:
-a new element or attribute means the allowlist needs widening
-**deliberately**, and a disappearing one usually means a diagram feature
-changed shape.
+When the writer reports a vocabulary change, read it before committing:
+a new element, attribute or CSS function means the allowlist needs
+widening **deliberately**, and a disappearing one usually means a diagram
+feature changed shape.
+
+### What `--check` compares, and why it is not the bytes
+
+It compares the **vocabulary** — the element names, attribute names and
+CSS function names — not the rendered SVG byte for byte. The bytes are
+not reproducible, in two independent ways:
+
+- **Fonts.** Mermaid sizes every node by measuring its label, against
+  `"trebuchet ms", verdana, arial, sans-serif`. Those fonts are on macOS
+  and not on the CI runner, so widths, viewBoxes and path coordinates all
+  shift. Every fixture has text, so a dev-machine render failed CI on all
+  twelve at once — which reads like mass staleness rather than a font
+  difference.
+- **The clock.** `gantt` draws a `class="today"` rule at the current
+  date. `normalize()` in the writer pins it for this reason; before that
+  it drifted daily on every machine.
+
+Neither moves what these fixtures are for. `diagram-svg.spec.ts` reads
+names out of them and never reads a coordinate, so the geometry was never
+load-bearing — forcing a different font across the corpus changes the
+bytes of all twelve files and the vocabulary of none.
+
+The fixtures stay real Mermaid renders (the writer commits whatever came
+out, geometry included); it is only the *gate* that ignores geometry.

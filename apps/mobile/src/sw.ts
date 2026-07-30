@@ -172,6 +172,19 @@ self.addEventListener('install', (event) => {
  * navigation-refresh path.
  */
 self.addEventListener('message', (event) => {
+  // Origin gate. Unlike a window's `message` handler, a service worker
+  // is reachable ONLY from same-origin clients — `navigator.service
+  // Worker` is same-origin, so a cross-origin document can never get a
+  // handle to this registration — which makes `event.origin`
+  // structurally our own origin and this check unable to reject a real
+  // message. It is here as defence in depth and because CodeQL's
+  // js/missing-origin-check does not model ServiceWorkerGlobalScope
+  // (alert #33). An absent origin is tolerated rather than dropped: the
+  // failure mode is a silently stale offline theme, and the check
+  // guards nothing a same-origin-only channel had exposed anyway.
+  if (event.origin !== '' && event.origin !== self.location.origin) {
+    return;
+  }
   if ((event.data as { type?: string } | null)?.type !== 'refresh-canonical') {
     return;
   }

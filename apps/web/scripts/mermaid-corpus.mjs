@@ -31,6 +31,36 @@
  * accepting it: a new element or attribute means the allowlist in
  * `packages/shared/src/browser/diagram-svg.ts` needs widening
  * deliberately.
+ *
+ * ## Why `--check` compares VOCABULARY and not bytes
+ *
+ * It used to compare the rendered SVG byte for byte, which cannot work:
+ * the bytes are not reproducible across machines or even across days.
+ *
+ *  1. **Font metrics.** Mermaid's stylesheet asks for
+ *     `"trebuchet ms", verdana, arial, sans-serif` and sizes every node
+ *     by measuring its label with `getBBox`. Those fonts exist on macOS
+ *     and not on the `ubuntu-24.04` runner (`playwright install
+ *     --with-deps` brings Liberation/Noto, not Trebuchet), so the
+ *     fallback produces different widths, viewBoxes and path
+ *     coordinates. Every fixture contains text, so every fixture
+ *     differed — a dev-machine render failed CI 12/12, which reads like
+ *     mass staleness rather than a font difference.
+ *  2. **Wall clock.** `gantt-full` emits a `<line class="today">` whose
+ *     x-coordinate comes from the current date, so it drifted daily on
+ *     any machine, including the one that had just written it.
+ *
+ * Neither moves what the corpus is FOR. The fixtures exist so
+ * `diagram-svg.spec.ts` can assert that the sanitizer's allowlist keeps
+ * every element, attribute and CSS function real Mermaid emits — and
+ * that suite reads names, never coordinates. Forcing a different font
+ * across the whole corpus moves the bytes of all 12 fixtures and the
+ * vocabulary of none.
+ *
+ * So the gate compares the three name sets the sanitizer is built from.
+ * That is reproducible anywhere, and it still fails loudly on the event
+ * worth catching: a Mermaid upgrade emitting something the allowlist has
+ * never seen.
  */
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:http';
@@ -38,6 +68,10 @@ import { readdir, readFile, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+// The same parser `diagram-svg.ts` gates CSS with, so "which functions
+// does Mermaid emit" is answered here exactly as it is in production.
+import * as css from 'css-tree';
 
 const WEB = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const CORPUS = resolve(
@@ -261,7 +295,7 @@ async function launch(chromium) {
 }
 
 /**
- * Remove the one genuinely random thing Mermaid emits.
+ * Pin the things Mermaid emits that are not a function of its input.
  *
  * `gitGraph` mints an id for every commit that has no explicit `id:` —
  * and `merge`/`cherry-pick` commits cannot be given one — so those
@@ -269,12 +303,109 @@ async function launch(chromium) {
  * against output that had not changed. (Rough.js randomness is handled
  * properly, by seeding it; this cannot be.)
  *
- * Substituting an opaque id is safe for what the corpus is FOR: the
- * element and attribute vocabulary, and the shape of the CSS. It changes
- * neither.
+ * `gantt` draws a `class="today"` rule at the current date, so
+ * `gantt-full.svg` otherwise picks up a new x-coordinate every day and
+ * every regeneration carries a diff nobody wrote. The vocabulary gate
+ * ignores coordinates, so this is not what made CI fail — it is here so
+ * that running the writer twice a week apart produces the same file.
+ *
+ * Substituting an opaque id and a fixed abscissa is safe for what the
+ * corpus is FOR: the element and attribute vocabulary, and the shape of
+ * the CSS. It changes none of them.
  */
 function normalize(svg) {
-  return svg.replace(/\b\d+-[0-9a-f]{7}\b/g, 'commit-id');
+  return svg
+    .replace(/\b\d+-[0-9a-f]{7}\b/g, 'commit-id')
+    .replace(/<line\b[^>]*class="today"[^>]*>/g, (el) =>
+      // Matched on the whole element so attribute order does not matter,
+      // and left a real number so the fixture stays valid SVG.
+      el.replace(/\b(x1|x2)="[\d.-]+"/g, '$1="0"'),
+    );
+}
+
+/**
+ * The three name sets `diagram-svg.ts`'s allowlist is built from.
+ *
+ * These extractors are deliberately the same shape as the ones in
+ * `diagram-svg.spec.ts` — that suite asserts the committed fixtures
+ * survive the sanitizer, this gate asserts the committed fixtures still
+ * describe what Mermaid emits. They have to agree on what "vocabulary"
+ * means or the two checks can pass while contradicting each other, so
+ * keep the regexes in step.
+ */
+function vocabularyOf(svg) {
+  const tags = new Set(
+    [...svg.matchAll(/<([a-zA-Z][\w:-]*)/g)].map((m) => m[1].toLowerCase()),
+  );
+  const attrs = new Set(
+    [...svg.matchAll(/\s([a-zA-Z][\w:.-]*)=/g)].map((m) => m[1].toLowerCase()),
+  );
+
+  // Entities have to come back before css-tree sees the text: the
+  // stylesheet is serialised into the SVG, so `>` in a selector arrives
+  // as `&gt;` and would otherwise be a parse error that silently drops
+  // the whole block — and a silently empty function set is a gate that
+  // passes everything.
+  const decode = (s) =>
+    s
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&quot;/g, '"')
+      .replace(/&amp;/g, '&');
+
+  const fns = new Set();
+  const chunks = [
+    ...[...svg.matchAll(/<style>([\s\S]*?)<\/style>/g)].map((m) => [
+      'stylesheet',
+      m[1],
+    ]),
+    ...[...svg.matchAll(/\sstyle="([^"]*)"/g)].map((m) => [
+      'declarationList',
+      m[1],
+    ]),
+  ];
+  for (const [context, text] of chunks) {
+    let ast;
+    try {
+      ast = css.parse(decode(text), { context });
+    } catch {
+      // An unparseable chunk contributes no names. The sanitizer is
+      // fail-closed on the same input, so this cannot hide a function
+      // that would reach a customer.
+      continue;
+    }
+    css.walk(ast, (node) => {
+      if (node.type === 'Function') fns.add((node.name ?? '').toLowerCase());
+    });
+  }
+
+  return { tags, attrs, fns };
+}
+
+const AXES = [
+  ['element', 'tags'],
+  ['attribute', 'attrs'],
+  ['CSS function', 'fns'],
+];
+
+/**
+ * What `fresh` has that `committed` does not, and vice versa. Both
+ * directions matter: an addition means the allowlist may need widening,
+ * a disappearance usually means a diagram feature changed shape.
+ */
+function vocabularyDelta(committed, fresh) {
+  const before = vocabularyOf(committed);
+  const after = vocabularyOf(fresh);
+  const lines = [];
+  for (const [label, key] of AXES) {
+    const added = [...after[key]].filter((n) => !before[key].has(n)).sort();
+    const removed = [...before[key]].filter((n) => !after[key].has(n)).sort();
+    if (added.length > 0) lines.push(`new ${label}(s): ${added.join(', ')}`);
+    if (removed.length > 0) {
+      lines.push(`gone ${label}(s): ${removed.join(', ')}`);
+    }
+  }
+  return lines;
 }
 
 async function main() {
@@ -295,6 +426,7 @@ async function main() {
   const { child, cdp } = await launch(chromium);
 
   const drifted = [];
+  const changed = [];
   try {
     const { targetId } = await cdp.send('Target.createTarget', {
       url: 'about:blank',
@@ -357,12 +489,36 @@ async function main() {
       const existing = existsSync(target)
         ? await readFile(target, 'utf8')
         : null;
+      const name = file.replace(/\.mmd$/, '.svg');
+
+      if (existing === null) {
+        // A missing fixture is drift in --check (the spec would simply
+        // not run it) and a plain write otherwise.
+        if (CHECK) drifted.push({ name, lines: ['no committed fixture'] });
+        else {
+          await writeFile(target, svg, 'utf8');
+          console.log(`  created ${name}`);
+        }
+        continue;
+      }
+
+      const lines = vocabularyDelta(existing, svg);
 
       if (CHECK) {
-        if (existing !== svg) drifted.push(file);
-      } else if (existing !== svg) {
-        await writeFile(target, svg, 'utf8');
-        console.log(`  updated ${file.replace(/\.mmd$/, '.svg')}`);
+        if (lines.length > 0) drifted.push({ name, lines });
+      } else {
+        // Write real output, geometry and all — the fixtures are worth
+        // more as genuine Mermaid renders than as a curated subset. But
+        // report the vocabulary delta separately: on a machine whose
+        // fonts differ from the last writer's, all 12 files change and
+        // the handful of names that actually matter would otherwise be
+        // buried in coordinate noise, defeating the deliberate review
+        // this whole gate exists to prompt.
+        if (existing !== svg) {
+          await writeFile(target, svg, 'utf8');
+          console.log(`  updated ${name}`);
+        }
+        if (lines.length > 0) changed.push({ name, lines });
       }
     }
   } finally {
@@ -373,16 +529,34 @@ async function main() {
 
   if (CHECK && drifted.length > 0) {
     fail(
-      `${drifted.length} corpus fixture(s) are stale: ${drifted.join(', ')}\n` +
-        '  Run `pnpm --filter @weavestream/web mermaid:corpus` and review the diff.\n' +
+      `${drifted.length} corpus fixture(s) no longer describe what Mermaid emits:\n` +
+        drifted
+          .map(({ name, lines }) =>
+            lines.map((l) => `    ${name}: ${l}`).join('\n'),
+          )
+          .join('\n') +
+        '\n\n  Run `pnpm --filter @weavestream/web mermaid:corpus` and review the diff.\n' +
         '  A new element or attribute means the allowlist in\n' +
+        '  packages/shared/src/browser/diagram-svg.ts needs widening DELIBERATELY.\n' +
+        '  (Geometry is not compared — it is font- and date-dependent. See the\n' +
+        '  header of this script.)',
+    );
+  }
+
+  if (!CHECK && changed.length > 0) {
+    console.log('\n  Vocabulary changed — review before committing:');
+    for (const { name, lines } of changed) {
+      for (const line of lines) console.log(`    ${name}: ${line}`);
+    }
+    console.log(
+      '\n  A new element, attribute or CSS function means the allowlist in\n' +
         '  packages/shared/src/browser/diagram-svg.ts needs widening DELIBERATELY.',
     );
   }
 
   console.log(
     CHECK
-      ? `✓ ${sources.length} corpus fixtures match the installed Mermaid`
+      ? `✓ ${sources.length} corpus fixtures match the installed Mermaid's vocabulary`
       : `✓ rendered ${sources.length} corpus fixtures`,
   );
 }

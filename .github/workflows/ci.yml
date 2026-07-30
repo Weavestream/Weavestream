@@ -107,8 +107,14 @@ jobs:
       # allowlist is derived from, and `packages/shared` deliberately has
       # no Mermaid dependency — so a Mermaid upgrade cannot invalidate
       # them on its own and they would silently go stale. Re-render them
-      # against the installed version and fail on drift. Needs a browser:
-      # Mermaid measures text with getBBox, which jsdom does not have.
+      # against the installed version and fail if the element, attribute
+      # or CSS-function vocabulary drifted. Needs a browser: Mermaid
+      # measures text with getBBox, which jsdom does not have.
+      #
+      # Geometry is deliberately NOT compared. This runner has none of
+      # the fonts Mermaid asks for, so a byte comparison failed all
+      # twelve fixtures against a render made on a dev machine. See the
+      # header of scripts/mermaid-corpus.mjs.
       - name: Install Chromium for the diagram checks
         run: npx --yes playwright@1.62.1 install --with-deps chromium
       - run: pnpm --filter @weavestream/web mermaid:corpus:check
