@@ -486,10 +486,19 @@ async function main() {
       const svg = normalize(raw);
 
       const target = join(CORPUS, file.replace(/\.mmd$/, '.svg'));
-      const existing = existsSync(target)
-        ? await readFile(target, 'utf8')
-        : null;
       const name = file.replace(/\.mmd$/, '.svg');
+
+      // Read straight through instead of existsSync-then-read. The check
+      // bought nothing — ENOENT answers precisely what it was asking, in
+      // one syscall rather than two — while opening a window between the
+      // check and the write below (CodeQL js/file-system-race). Any error
+      // that is not "absent" is a real problem and is re-raised.
+      let existing = null;
+      try {
+        existing = await readFile(target, 'utf8');
+      } catch (err) {
+        if (err?.code !== 'ENOENT') throw err;
+      }
 
       if (existing === null) {
         // A missing fixture is drift in --check (the spec would simply

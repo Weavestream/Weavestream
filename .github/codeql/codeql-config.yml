@@ -22,3 +22,28 @@ query-filters:
       id: js/insufficient-password-hash
       paths:
         - apps/api/src/passwords/hibp-range-hash.ts
+
+  # `js/file-access-to-http` — CWE-200 — flags file contents reaching an
+  # outbound request, as a possible exfiltration backdoor. Both scripts
+  # read the checked-in Mermaid corpus and pass each diagram's source to
+  # a browser over the DevTools protocol, which is the only way to render
+  # it: Mermaid measures text with getBBox, so it cannot run under jest.
+  #
+  # The query's premise does not hold here. The "remote URL" is the
+  # DevTools endpoint of a Chromium *this script just spawned* with
+  # `--remote-debugging-port=0`, which binds loopback — verified to be
+  # `ws://127.0.0.1:<ephemeral>/devtools/browser/<uuid>`, never a
+  # configurable or attacker-influenced address. The "file data" is the
+  # corpus fixtures and Mermaid's own installed `dist/` bundle: repo test
+  # data, no secrets, no PII, no untrusted input anywhere in either
+  # script. Both are maintenance/CI tooling and ship in no bundle.
+  #
+  # Excluded rather than refactored because sending the diagram source to
+  # the browser IS the design — there is no variant of these scripts that
+  # renders Mermaid without it. Scoped to the two files by path, so the
+  # rule keeps its teeth everywhere else.
+  - exclude:
+      id: js/file-access-to-http
+      paths:
+        - apps/web/scripts/mermaid-corpus.mjs
+        - apps/web/scripts/check-diagram-csp.mjs
