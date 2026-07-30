@@ -63,7 +63,7 @@
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
     "@types/jest": "^30.0.0",
-    "@types/node": "^24.0.0",
+    "@types/node": "^26.1.2",
     "@types/react": "^19.0.1",
     "@types/react-dom": "^19.0.1",
     "@types/turndown": "^5.0.6",
