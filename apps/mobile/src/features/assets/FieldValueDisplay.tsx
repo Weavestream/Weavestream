@@ -4,6 +4,7 @@ import {
   formatDateTime,
   safeExternalHref,
 } from '@weavestream/shared';
+import { FileTile, FileTileGrid } from '../../components/FileTile';
 import { Icon } from '../../components/Icon';
 import { Card } from '../../components/primitives';
 import { TiptapView } from '../../components/richtext/TiptapView';
@@ -11,7 +12,6 @@ import { useScopedNavigate } from '../../lib/scoped-nav';
 import { deviceTimeZone } from '../../lib/timezone';
 import type { AssetFieldMeta, AssetRecord } from './api';
 import { choiceLabel } from './card-fields';
-import { FileTile, FileTileGrid } from './FileTileGrid';
 import { isKnownFieldType } from './field-values';
 
 /**

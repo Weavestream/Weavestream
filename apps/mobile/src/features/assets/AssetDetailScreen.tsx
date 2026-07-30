@@ -27,6 +27,7 @@ import { useScopedNavigate } from '../../lib/scoped-nav';
 import { useCompanyAccess } from '../../lib/use-company-access';
 import { UUID_RE } from '../../lib/uuid';
 import { deviceTimeZone } from '../../lib/timezone';
+import { AttachmentsSection } from '../attachments/AttachmentsSection';
 import { RelatedSection } from '../relations/RelatedSection';
 import { useRelations } from '../relations/queries';
 import { AssetFieldRows } from './FieldValueDisplay';
@@ -49,10 +50,12 @@ const NOT_FOUND_COPY =
  * tier framework never applies to customer-defined fields). Related
  * sits below the fields with the asset's linked credentials folded in
  * as ordinary password rows (locked 2c decision: no dedicated
- * Credentials card). Weavestream's own metadata (actors, timestamps,
- * sync provenance, external identity) is T2 behind ShowMore, whose
- * collapsed label carries the provenance attention dot so a blocked
- * sync is never silently buried.
+ * Credentials card), then Attachments — the files hung on the asset
+ * itself, which are distinct from any FILE field on its layout and
+ * were missing from mobile entirely until now. Weavestream's own
+ * metadata (actors, timestamps, sync provenance, external identity) is
+ * T2 behind ShowMore, whose collapsed label carries the provenance
+ * attention dot so a blocked sync is never silently buried.
  *
  * Archived assets render (banner + Restore), never error — the list
  * has no archived view, but direct URLs and stale history still land
@@ -238,6 +241,12 @@ function AssetDetailLoaded({ assetId }: { assetId: string }) {
             <AssetFieldRows asset={detail} />
 
             {relatedGroups && <RelatedSection groups={relatedGroups} />}
+
+            <AttachmentsSection
+              companyId={orgId}
+              entityType="asset"
+              entityId={assetId}
+            />
 
             <ShowMore dot={provenanceDot(detail.provenance)}>
               <Card className="flex flex-col divide-y divide-line px-4">

@@ -73,9 +73,15 @@ const EMPTY_RELATIONS = { groups: { asset: [], article: [], password: [] } };
 function route({
   detail = makeArticle({ id: ART }) as unknown,
   relations = EMPTY_RELATIONS as unknown,
-}: { detail?: unknown; relations?: unknown } = {}) {
+  attachments = { items: [], nextCursor: null } as unknown,
+}: { detail?: unknown; relations?: unknown; attachments?: unknown } = {}) {
   apiFetch.mockImplementation((path: string) => {
     if (path.includes('/folders')) return Promise.resolve({ items: FOLDERS });
+    if (path.includes('/uploads')) {
+      return attachments instanceof Error
+        ? Promise.reject(attachments)
+        : Promise.resolve(attachments);
+    }
     if (path.includes('/relations')) {
       return relations instanceof Error
         ? Promise.reject(relations)
@@ -141,6 +147,34 @@ describe('ArticleDetailScreen rendering', () => {
     await screen.findByText('Pines site reboot order');
     expect(screen.queryByText('Archived')).not.toBeInTheDocument();
     expect(screen.queryByText('Internal')).not.toBeInTheDocument();
+  });
+
+  it('renders the article’s attachments, scoped to this article', async () => {
+    route({
+      attachments: {
+        items: [
+          {
+            id: 'u1',
+            filename: 'reboot-checklist.pdf',
+            mimeType: 'application/pdf',
+            sizeBytes: 4096,
+            isImage: false,
+            thumbnailUrl: null,
+            downloadUrl: '/api/v1/companies/c1/uploads/u1/image',
+            createdAt: '2026-07-20T10:00:00.000Z',
+          },
+        ],
+        nextCursor: null,
+      },
+    });
+    renderDetail();
+
+    expect(await screen.findByText('reboot-checklist.pdf')).toBeInTheDocument();
+    const call = apiFetch.mock.calls.find((c) =>
+      (c[0] as string).includes('/uploads'),
+    );
+    expect(call![0]).toContain('attachedToType=article');
+    expect(call![0]).toContain(`attachedToId=${ART}`);
   });
 });
 

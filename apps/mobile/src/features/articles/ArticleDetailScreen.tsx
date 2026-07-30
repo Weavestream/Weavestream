@@ -16,6 +16,7 @@ import { useOnline } from '../../lib/use-online';
 import { useOrgScope } from '../../lib/org-scope';
 import { UUID_RE } from '../../lib/uuid';
 import { deviceTimeZone } from '../../lib/timezone';
+import { AttachmentsSection } from '../attachments/AttachmentsSection';
 import { RelatedSection } from '../relations/RelatedSection';
 import { useRelations } from '../relations/queries';
 import { ArticleBodyView } from './ArticleBodyView';
@@ -28,11 +29,13 @@ const NOT_FOUND_COPY =
 
 /**
  * Article reader — T1 is title, badges, and the body; the whole point
- * of opening a runbook onsite. Related sits below the body (linked
- * items are primary content, never inside a disclosure — ShowMore
- * doctrine), and the T2 metadata (folder, updated, created) collapses
- * behind ShowMore with no attention dot (articles have no attention
- * concept). Editing, drafts, and version history are desktop work.
+ * of opening a runbook onsite. Related and Attachments sit below the
+ * body (linked items and files are primary content, never inside a
+ * disclosure — ShowMore doctrine), and the T2 metadata (folder,
+ * updated, created) collapses behind ShowMore with no attention dot
+ * (articles have no attention concept). Editing, drafts, version
+ * history — and attaching or removing a file — are desktop work; the
+ * attachments here are read-only like the rest of the screen.
  *
  * Split into a validating wrapper + a hook-owning body: the wrapper
  * must render the not-found state for a malformed deep link WITHOUT
@@ -165,6 +168,12 @@ function ArticleDetailLoaded({ articleId }: { articleId: string }) {
             <ArticleBodyView article={detail} />
 
             {relationsQuery.data && <RelatedSection groups={relationsQuery.data} />}
+
+            <AttachmentsSection
+              companyId={orgId}
+              entityType="article"
+              entityId={articleId}
+            />
 
             <ShowMore dot={null}>
               <Card className="flex flex-col divide-y divide-line px-4">

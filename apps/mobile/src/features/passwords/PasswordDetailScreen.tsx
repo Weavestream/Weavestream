@@ -26,6 +26,7 @@ import { useOrgScope } from '../../lib/org-scope';
 import { useScopedNavigate } from '../../lib/scoped-nav';
 import { useCompanyAccess } from '../../lib/use-company-access';
 import { deviceTimeZone } from '../../lib/timezone';
+import { AttachmentsSection } from '../attachments/AttachmentsSection';
 import { RelatedSection } from '../relations/RelatedSection';
 import { useRelations } from '../relations/queries';
 import { notesToPlaintext } from './api';
@@ -52,10 +53,14 @@ import { useTotpCode } from './use-totp';
 /**
  * Password detail — 1c's content inside 2b's shell (tab bar intact).
  * The T1 budget and nothing else above the fold: title, strength row,
- * credential rows, Related. Everything T2 sits behind ShowMore, whose
- * collapsed label carries the attention dot so a hidden expiry is
- * never silently buried. Version history, color, and archived-list
- * management are desktop work.
+ * credential rows, Related, Attachments. Everything T2 sits behind
+ * ShowMore, whose collapsed label carries the attention dot so a
+ * hidden expiry is never silently buried. Version history, color, and
+ * archived-list management are desktop work.
+ *
+ * Attachments render on an archived password too, matching desktop:
+ * the credential rows are withheld once archived, but the licence PDF
+ * or contract scan filed against it is still the record's content.
  */
 export function PasswordDetailScreen({ passwordId }: { passwordId: string }) {
   const { currentOrg } = useOrgScope();
@@ -278,6 +283,12 @@ export function PasswordDetailScreen({ passwordId }: { passwordId: string }) {
             )}
 
             {relationsQuery.data && <RelatedSection groups={relationsQuery.data} />}
+
+            <AttachmentsSection
+              companyId={orgId}
+              entityType="password"
+              entityId={passwordId}
+            />
 
             <ShowMore dot={attentionTier(detail, now)}>
               <Card className="flex flex-col divide-y divide-line px-4">

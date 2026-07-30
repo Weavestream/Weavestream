@@ -54,11 +54,13 @@ function route({
   detail = makeAsset(),
   relations = { asset: [], article: [], password: [] },
   credentials = [] as unknown[],
+  attachments = { items: [], nextCursor: null } as unknown,
   detailError = null as ApiError | null,
 }: {
   detail?: ReturnType<typeof makeAsset>;
   relations?: Record<string, unknown[]>;
   credentials?: unknown[];
+  attachments?: unknown;
   detailError?: ApiError | null;
 } = {}) {
   apiFetch.mockImplementation((path: string, init?: { method?: string }) => {
@@ -66,6 +68,13 @@ function route({
       return Promise.resolve(makeAsset({ archivedAt: '2026-07-26T10:00:00.000Z' }));
     }
     if (path.endsWith('/restore')) return Promise.resolve(makeAsset());
+    // Before `/passwords`: the attachments URL carries the entity kind
+    // in a query param, so a laxer matcher below could swallow it.
+    if (path.includes('/uploads')) {
+      return attachments instanceof Error
+        ? Promise.reject(attachments)
+        : Promise.resolve(attachments);
+    }
     if (path.includes('/relations')) return Promise.resolve({ groups: relations });
     if (path.includes('/passwords')) return Promise.resolve({ items: credentials });
     if (path.includes('/assets/')) {
@@ -175,6 +184,66 @@ describe('AssetDetailScreen content', () => {
     expect(navigateMock).toHaveBeenCalledWith({
       to: '/passwords/e0000000-0000-4000-8000-0000000000e2',
     });
+  });
+
+  it('renders entity attachments alongside — not instead of — a layout FILE field', async () => {
+    route({
+      detail: makeAsset({
+        fields: [
+          {
+            id: 'f-warranty',
+            slug: 'warranty',
+            name: 'Warranty doc',
+            fieldType: 'FILE',
+            isPrimary: false,
+            visibleToClients: true,
+            options: {},
+          },
+        ],
+        fieldValues: {
+          warranty: [
+            {
+              uploadId: 'fu1',
+              filename: 'warranty.pdf',
+              mimeType: 'application/pdf',
+              sizeBytes: 1024,
+              isImage: false,
+              thumbnailUrl: null,
+              downloadUrl: '/api/v1/companies/c1/uploads/fu1/image',
+            },
+          ],
+        },
+      }),
+      attachments: {
+        items: [
+          {
+            id: 'u1',
+            filename: 'rack-photo.jpg',
+            mimeType: 'image/jpeg',
+            sizeBytes: 2048,
+            isImage: true,
+            thumbnailUrl: '/api/v1/companies/c1/uploads/u1/image?v=thumb',
+            downloadUrl: '/api/v1/companies/c1/uploads/u1/image',
+            createdAt: '2026-07-20T10:00:00.000Z',
+          },
+        ],
+        nextCursor: null,
+      },
+    });
+    renderDetail();
+
+    // The asset's own attachments are their own section…
+    expect(await screen.findByText('rack-photo.jpg')).toBeInTheDocument();
+    expect(screen.getByText('Attachments')).toBeInTheDocument();
+    // …and the layout FILE field still keeps its own label and tile.
+    expect(screen.getByText('Warranty doc')).toBeInTheDocument();
+    expect(screen.getByText('warranty.pdf')).toBeInTheDocument();
+
+    const call = apiFetch.mock.calls.find((c) =>
+      (c[0] as string).includes('/uploads'),
+    );
+    expect(call![0]).toContain('attachedToType=asset');
+    expect(call![0]).toContain(`attachedToId=${ASSET_ID}`);
   });
 
   it('shows T2 metadata behind Show more with sync rows and the provenance dot', async () => {

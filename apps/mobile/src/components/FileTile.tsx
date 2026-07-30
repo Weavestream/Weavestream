@@ -1,15 +1,21 @@
 import type { ReactNode } from 'react';
 import { humanSize } from '@weavestream/shared/browser';
-import { Icon } from '../../components/Icon';
+import { Icon } from './Icon';
 
 /**
- * The FILE-field tile vocabulary, shared by the read path (detail
- * screen) and the editor (which composes progress/error/add tiles into
- * the same grid). A tile with an `href` is an anchor — long-press
- * preview and "open in new tab" should behave like a link; a tile
- * without one (deleted upload: the server hydrates `null` URLs but
- * keeps the entry) renders dimmed and inert, keeping the filename
- * visible rather than silently dropping the row.
+ * The upload tile vocabulary, shared by every surface that renders
+ * stored files: asset FILE fields (read path *and* the editor, which
+ * composes progress/error tiles into the same grid) and the entity
+ * Attachments section on the asset/article/password detail screens.
+ * It lives in `components/` rather than a feature folder precisely
+ * because two features consume it and features must not import from
+ * each other.
+ *
+ * A tile with an `href` is an anchor — long-press preview and "open in
+ * new tab" should behave like a link; a tile without one (deleted
+ * upload: the server hydrates `null` URLs but keeps the entry) renders
+ * dimmed and inert, keeping the filename visible rather than silently
+ * dropping the row.
  */
 
 export function FileTileGrid({ children }: { children: ReactNode }) {

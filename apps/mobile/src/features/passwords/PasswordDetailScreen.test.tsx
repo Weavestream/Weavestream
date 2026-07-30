@@ -3,7 +3,7 @@
  */
 import '@testing-library/jest-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import type { Me } from '../../screens/TabShell';
 import { ToastProvider } from '../../components/Toast';
@@ -85,6 +85,7 @@ function operatorMe(over: Partial<Me> = {}): Me {
 function route({
   detail = makePasswordDetail({ id: PW }),
   relations = { asset: [], article: [], password: [] },
+  attachments = { items: [], nextCursor: null } as unknown,
   detailError,
 }: {
   detail?: PasswordDetail;
@@ -93,9 +94,15 @@ function route({
     article: unknown[];
     password: unknown[];
   };
+  attachments?: unknown;
   detailError?: unknown;
 } = {}) {
   apiFetch.mockImplementation((path: string, init?: { method?: string }) => {
+    if (path.includes('/uploads')) {
+      return attachments instanceof Error
+        ? Promise.reject(attachments)
+        : Promise.resolve(attachments);
+    }
     if (path.includes('/relations')) return Promise.resolve({ groups: relations });
     if (path.includes('/password-folders')) return Promise.resolve({ items: [] });
     if (path.includes('/reveal')) return Promise.resolve({ password: 'plain-text-pw' });
@@ -184,6 +191,43 @@ describe('PasswordDetailScreen', () => {
     expect(screen.queryByText('One-time code')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Edit password' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Archive password' })).not.toBeInTheDocument();
+  });
+
+  it('renders attachments, scoped to this password and surviving archive', async () => {
+    const attachments = {
+      items: [
+        {
+          id: 'u1',
+          filename: 'licence.pdf',
+          mimeType: 'application/pdf',
+          sizeBytes: 3072,
+          isImage: false,
+          thumbnailUrl: null,
+          downloadUrl: '/api/v1/companies/c1/uploads/u1/image',
+          createdAt: '2026-07-20T10:00:00.000Z',
+        },
+      ],
+      nextCursor: null,
+    };
+    route({ attachments });
+    renderDetail();
+
+    expect(await screen.findByText('licence.pdf')).toBeInTheDocument();
+    const call = apiFetch.mock.calls.find((c) =>
+      (c[0] as string).includes('/uploads'),
+    );
+    expect(call![0]).toContain('attachedToType=password');
+    expect(call![0]).toContain(`attachedToId=${PW}`);
+
+    // Archiving withholds the credential rows; the filed document is
+    // still the record's content and stays visible (desktop parity).
+    cleanup();
+    route({
+      detail: makePasswordDetail({ id: PW, archivedAt: '2026-06-01T00:00:00.000Z' }),
+      attachments,
+    });
+    renderDetail();
+    expect(await screen.findByText('licence.pdf')).toBeInTheDocument();
   });
 
   it('hides edit/archive for READONLY viewers', async () => {

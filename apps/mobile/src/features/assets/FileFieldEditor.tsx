@@ -8,10 +8,10 @@ import {
 } from '@weavestream/shared/browser';
 import { Icon } from '../../components/Icon';
 import { Hint } from '../../components/FieldBlock';
+import { FileTile, FileTileGrid } from '../../components/FileTile';
 import { Button } from '../../components/primitives';
 import { uploadFile } from '../../lib/upload';
 import type { LayoutFieldRecord } from './api';
-import { FileTile, FileTileGrid } from './FileTileGrid';
 import type { FieldEditorValue, FileEntryDraft } from './field-values';
 
 /**
