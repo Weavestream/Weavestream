@@ -1,0 +1,23 @@
+erDiagram
+  COMPANY ||--o{ ASSET : owns
+  COMPANY ||--o{ ARTICLE : owns
+  ASSET }o--|| ASSET_LAYOUT : "rendered by"
+  ASSET ||--o{ ASSET_FIELD_VALUE : has
+  ASSET_LAYOUT ||--o{ ASSET_FIELD : defines
+
+  COMPANY {
+    uuid id PK "tenant root"
+    string name
+    string slug UK
+  }
+  ASSET {
+    uuid id PK
+    uuid company_id FK "always filtered on"
+    string name
+    boolean archived
+  }
+  ASSET_FIELD {
+    uuid id PK
+    int position
+    boolean show_in_table "column density, not importance"
+  }

@@ -11,7 +11,10 @@ import { MarkdownBody } from '../../components/richtext/MarkdownBody';
  */
 export function ArticleBodyView({ article }: { article: ArticleDetail }) {
   if (article.editorMode === 'markdown') {
-    return <MarkdownBody source={article.markdownSource ?? ''} />;
+    // `diagrams` is opt-in and this is the only caller that opts in:
+    // MarkdownBody's other call site is the Ask transcript, where the
+    // source is a partially streamed answer.
+    return <MarkdownBody source={article.markdownSource ?? ''} diagrams />;
   }
   return <TiptapView doc={article.content} />;
 }

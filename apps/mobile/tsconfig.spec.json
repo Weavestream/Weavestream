@@ -31,5 +31,5 @@
   // module), which cannot typecheck under CommonJS — the app project
   // above still covers it, and no test imports it.
   "exclude": ["dist", "node_modules", "src/main.tsx"],
-  "include": ["src", "test"]
+  "include": ["src", "test", "types"]
 }

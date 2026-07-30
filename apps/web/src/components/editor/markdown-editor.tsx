@@ -2,8 +2,6 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
 import CodeMirror, { type Extension } from '@uiw/react-codemirror';
 import { markdown } from '@codemirror/lang-markdown';
 import { languages } from '@codemirror/language-data';
@@ -14,6 +12,7 @@ import { tags as t } from '@lezer/highlight';
 import { Group, Panel, Separator, useDefaultLayout } from 'react-resizable-panels';
 import { Icon } from '../ui';
 import { ImagePickerDialog } from './image-picker-dialog';
+import { MarkdownView } from './markdown-view';
 import './editor.css';
 
 export type MarkdownEditorProps = {
@@ -226,12 +225,17 @@ export function MarkdownEditor({
 
   const previewPane = (
     <div ref={previewScrollRef} className="sd-md-preview-wrap" style={previewWrapStyle}>
-      <div
-        className="sd-editor sd-editor-article sd-richtext-view sd-markdown-view sd-md-preview"
-        style={previewSurfaceStyle}
-      >
-        <ReactMarkdown remarkPlugins={[remarkGfm]}>{previewMarkdown || ' '}</ReactMarkdown>
-      </div>
+      {/* The same component the read view renders, so the preview
+          cannot drift from what a reader will see — this used to be a
+          duplicate <ReactMarkdown> that had to be kept in step by hand.
+          `showDiagramErrors` is the one deliberate difference: an author
+          can act on a Mermaid parse message, a portal reader cannot. */}
+      <MarkdownView
+        source={previewMarkdown || ' '}
+        bodyClassName="sd-md-preview"
+        bodyStyle={previewSurfaceStyle}
+        showDiagramErrors
+      />
     </div>
   );
 

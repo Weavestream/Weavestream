@@ -71,10 +71,7 @@ function renderBlock(node: TiptapNode): string {
         .map((line) => (line.length > 0 ? `> ${line}` : '>'))
         .join('\n');
     case 'codeBlock': {
-      const language =
-        typeof node.attrs?.['language'] === 'string'
-          ? (node.attrs['language'] as string)
-          : '';
+      const language = fenceInfoString(node.attrs?.['language']);
       // Raw text, no inline mark processing inside a code fence.
       const code = (node.content ?? [])
         .map((c) => (typeof c.text === 'string' ? c.text : ''))
@@ -93,6 +90,31 @@ function renderBlock(node: TiptapNode): string {
       return tiptapToPlaintext(node);
     }
   }
+}
+
+/**
+ * A code block's `language` attribute, reduced to something that cannot
+ * escape the fence line it is interpolated into.
+ *
+ * The attribute is author-controlled and was previously written through
+ * verbatim, so a language of `"js\n\n# Heading"` injected markdown into
+ * the projection — which the company PDF export then parsed as real
+ * headings. Backticks are stripped for the same reason in the other
+ * direction: CommonMark forbids them in a backtick fence's info string,
+ * so leaving one in produces a line that this walker calls a fence and
+ * every conformant parser calls a paragraph.
+ *
+ * Kept conservative rather than clever: a real language identifier is a
+ * short run of `[a-z0-9+#._-]`, and anything else is not worth
+ * round-tripping.
+ */
+function fenceInfoString(value: unknown): string {
+  if (typeof value !== 'string') return '';
+  const first = value.trim().split(/\s/, 1)[0] ?? '';
+  const cleaned = first.toLowerCase().replace(/[^a-z0-9+#._-]/g, '');
+  // Rejected rather than truncated: a 200-character "language" is not a
+  // language, and slicing one would invent a plausible-looking fake.
+  return cleaned.length > 0 && cleaned.length <= 24 ? cleaned : '';
 }
 
 /**

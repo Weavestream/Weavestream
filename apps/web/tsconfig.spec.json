@@ -7,8 +7,33 @@
     "moduleResolution": "Node",
     "incremental": false,
     "jsx": "react-jsx",
-    "types": ["node", "jest", "@testing-library/jest-dom"]
+    // ts-jest refuses to transform the .js of the ESM markdown cone
+    // (see jest.config.js ESM_MD_DEPS) without allowJs. Harmless to the
+    // typecheck: src/ contains no plain JS.
+    "allowJs": true,
+    "types": ["node", "jest", "@testing-library/jest-dom"],
+    // `moduleResolution: Node` (required for ts-jest's CommonJS emit)
+    // predates package `exports` maps, so it cannot follow
+    // `@weavestream/shared/browser` to its declarations — eight files
+    // were reporting TS2307 here before this was added, surviving only
+    // because every one of their specs `jest.mock()`s the module. Point
+    // at the declarations directly, the same workaround
+    // `apps/mobile/tsconfig.spec.json` and `apps/api/tsconfig.json` use.
+    // Jest's own resolver handles the exports map at runtime; this is
+    // purely to satisfy tsc.
+    "paths": {
+      "@/*": ["src/*"],
+      "@weavestream/shared": ["../../packages/shared/dist/index.d.ts"],
+      "@weavestream/shared/browser": [
+        "../../packages/shared/dist/browser/index.d.ts"
+      ],
+      // Same `exports`-map limitation, different package: `@tiptap/react`
+      // publishes `./menus` as a subpath. With these four entries the spec
+      // project typechecks clean (it reported 37 errors across 10 files
+      // before), so a future regression here is a real signal.
+      "@tiptap/react/menus": ["node_modules/@tiptap/react/dist/menus/index.d.ts"]
+    }
   },
-  "include": ["src/**/*.ts", "src/**/*.tsx"],
+  "include": ["src/**/*.ts", "src/**/*.tsx", "types/**/*.d.ts"],
   "exclude": ["node_modules"]
 }

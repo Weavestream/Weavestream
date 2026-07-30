@@ -1,0 +1,5 @@
+%%{init: {"flowchart": {"curve": "linear"}, "themeVariables": {"fontSize": "13px"}}}%%
+flowchart LR
+  A[Author sets a directive] --> B{Is it in `secure`?}
+  B -->|yes| C[Ignored]
+  B -->|no| D[Applied]

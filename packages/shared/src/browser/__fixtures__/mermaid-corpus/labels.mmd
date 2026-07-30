@@ -1,0 +1,14 @@
+flowchart LR
+  A["Line one
+Line two
+Line three"]
+  B["`**Bold** and _italic_ markdown label`"]
+  C["Unicode: café — naïve → ✓ ✗ ⚠"]
+  D["A deliberately long label that must wrap across several lines inside the node box rather than overflow it"]
+  E["Escaped chars: #quot; &amp; < >"]
+
+  A -->|"edge label
+with a break"| B
+  B --> C
+  C -->|"`_markdown_ edge`"| D
+  D --> E

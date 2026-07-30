@@ -2,8 +2,16 @@
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "composite": false,
+    // `exclude: []` below re-includes `src/browser/**`, which the parent
+    // config deliberately drops because it is "the only project with the
+    // DOM libs". Without repeating them here, every browser module in
+    // this package compiles against `lib: ["ES2022"]` alone — `document`,
+    // `Element` and `DocumentFragment` are all unresolved. Choosing the
+    // jsdom *runtime* environment in jest does not add TypeScript *types*.
+    // Kept identical to tsconfig.browser.json so the two agree.
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "types": ["node", "jest"]
   },
-  "include": ["src/**/*.ts"],
+  "include": ["src/**/*.ts", "types/**/*.d.ts"],
   "exclude": []
 }

@@ -165,6 +165,57 @@
   overflow-x: auto;
 }
 
+/* Mermaid diagrams (```mermaid fences). Framed exactly like `pre` above
+ * so a diagram sits in the prose the way a code block does.
+ *
+ * `contain: layout paint` on the scroll host is a SECURITY control, not
+ * a styling one: the host is a shadow host, and a shadow root contains
+ * selector matching but not layout — a `position: fixed` descendant
+ * would otherwise paint over the page. Paint containment clips
+ * descendants to this box and makes it a containing block for fixed
+ * positioning. Do not remove it to "fix" a clipped diagram; widen the
+ * box instead. */
+.sd-mermaid {
+  margin: 1em 0;
+  padding: 12px 14px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+}
+
+.sd-mermaid-scroll {
+  contain: layout paint;
+  overflow-x: auto;
+  /* Roughly a small flowchart, so the async render does not jump the
+   * page layout under the reader. */
+  min-height: 96px;
+}
+
+.sd-mermaid-note {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: var(--dim);
+}
+
+/* In the error state the source IS the fallback, so it drops its own
+ * frame rather than nesting one box inside another. */
+.sd-mermaid pre {
+  margin: 0;
+  background: transparent;
+  border: 0;
+  padding: 0;
+}
+
+/* Drop the loading reserve once the source block is carrying the height
+ * instead. Keyed on `data-rendered`, NOT on `:empty`: the SVG lives in a
+ * shadow root, and `:empty` only considers light-DOM children, so it
+ * keeps matching after a successful render. Harmless here (it only
+ * touches min-height), but the same mistake hid finished diagrams
+ * outright on mobile — don't reintroduce the idiom. */
+.sd-mermaid[data-rendered='false'][data-state='error'] .sd-mermaid-scroll {
+  min-height: 0;
+}
+
 .sd-editor pre code {
   background: transparent;
   border: none;

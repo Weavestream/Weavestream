@@ -1,0 +1,14 @@
+gitGraph
+  commit id: "init"
+  commit id: "tokens"
+  branch feature/diagrams
+  checkout feature/diagrams
+  commit id: "sanitizer"
+  commit id: "theme" tag: "wip"
+  checkout main
+  commit id: "hotfix"
+  merge feature/diagrams tag: "v1.9.2"
+  branch release
+  checkout release
+  cherry-pick id: "hotfix"
+  commit type: HIGHLIGHT id: "ship"

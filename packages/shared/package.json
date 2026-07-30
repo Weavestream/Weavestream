@@ -22,7 +22,7 @@
   "scripts": {
     "build": "tsc -b tsconfig.json tsconfig.browser.json",
     "dev": "tsc -b tsconfig.json tsconfig.browser.json --watch",
-    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.browser.json --noEmit",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.browser.json --noEmit && tsc -p tsconfig.spec.json --noEmit",
     "lint": "echo 'no lint'",
     "test": "NODE_OPTIONS=--experimental-vm-modules jest --passWithNoTests"
   },
@@ -32,7 +32,10 @@
   "devDependencies": {
     "@types/jest": "^30.0.0",
     "@types/node": "^24.0.0",
+    "css-tree": "3.2.1",
+    "dompurify": "3.4.12",
     "jest": "^30.0.0",
+    "jest-environment-jsdom": "^30.0.0",
     "ts-jest": "^29.4.9",
     "typescript": "^5.9.0"
   }

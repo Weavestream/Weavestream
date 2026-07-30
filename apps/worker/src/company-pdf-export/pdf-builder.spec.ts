@@ -1,11 +1,13 @@
 import {
   buildCompanyExportPdf,
+  codeCaption,
   formatAssetFieldValue,
   parseMarkdownBlocks,
   pdfEmbedSizeBlockReason,
   pdfSafeUserText,
   richTextToPlaintext,
 } from './pdf-builder.js';
+import { fenceInfoLanguage, isMermaidLanguage } from '@weavestream/shared';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import {
@@ -289,7 +291,7 @@ describe('parseMarkdownBlocks', () => {
     );
 
     expect(blocks).toEqual([
-      { kind: 'code', lines: ['pg_ctl promote -D /data'] },
+      { kind: 'code', lines: ['pg_ctl promote -D /data'], lang: 'bash' },
       {
         kind: 'quote',
         blocks: [{
@@ -298,6 +300,101 @@ describe('parseMarkdownBlocks', () => {
         }],
       },
     ]);
+  });
+
+  describe('fence info strings', () => {
+    const langOf = (opener: string) => {
+      const [block] = parseMarkdownBlocks(`${opener}\nbody\n\`\`\``);
+      return block?.kind === 'code' ? block.lang : 'NOT-A-CODE-BLOCK';
+    };
+
+    it('keeps the token verbatim rather than normalising it', () => {
+      // Normalising here is what made the export disagree with the app:
+      // folding `MerMaid` to `mermaid` captioned a block the renderers
+      // treat as ordinary code. Stored raw, compared with the shared
+      // rule.
+      expect(langOf('```MerMaid')).toBe('MerMaid');
+      expect(codeCaption(langOf('```MerMaid'))).toBeNull();
+    });
+
+    it('keeps only the first word — which is what remark does too', () => {
+      // ```` ```mermaid title="x" ```` yields class `language-mermaid`
+      // in react-markdown, so both surfaces agree this IS a diagram.
+      expect(langOf('```mermaid title="x"')).toBe('mermaid');
+      expect(codeCaption(langOf('```mermaid title="x"'))).toBe(
+        'Diagram — mermaid',
+      );
+    });
+
+    it('reads a tilde fence too', () => {
+      const [block] = parseMarkdownBlocks('~~~mermaid\nbody\n~~~');
+      expect(block).toEqual({ kind: 'code', lines: ['body'], lang: 'mermaid' });
+    });
+
+    it('omits the key entirely for a bare fence', () => {
+      expect(parseMarkdownBlocks('```\nbody\n```')).toEqual([
+        { kind: 'code', lines: ['body'] },
+      ]);
+    });
+
+    it('never captions a language that is not exactly mermaid', () => {
+      for (const opener of ['```' + 'a'.repeat(200), '```!!!', '```bash']) {
+        expect(codeCaption(langOf(opener))).toBeNull();
+      }
+    });
+
+    it('does not treat a backtick-bearing info string as a fence at all', () => {
+      // CommonMark: a backtick fence's info string may not contain a
+      // backtick, so react-markdown renders this line as a paragraph.
+      const blocks = parseMarkdownBlocks('```m`ermaid\nbody\n```');
+      expect(blocks.some((b) => b.kind === 'code' && b.lang === 'mermaid')).toBe(
+        false,
+      );
+    });
+
+    it('allows a backtick in a TILDE fence but still does not call it mermaid', () => {
+      // CommonMark permits it, so this IS a fence — but react-markdown
+      // gives it class `language-m\`ermaid`, which the app does not
+      // route. Stripping the backtick here would have INVENTED agreement
+      // that does not exist.
+      const [block] = parseMarkdownBlocks('~~~m`ermaid\nbody\n~~~');
+      expect(block).toEqual({ kind: 'code', lines: ['body'], lang: 'm`ermaid' });
+      expect(codeCaption('m`ermaid')).toBeNull();
+    });
+  });
+
+  describe('cross-surface agreement', () => {
+    // The property that matters: the PDF must caption a fence if and
+    // only if the React renderers would draw it. Both now read the same
+    // rule from @weavestream/shared, so this compares the PDF's decision
+    // against that rule applied to the class react-markdown builds.
+    const appWouldRender = (info: string) =>
+      isMermaidLanguage(`language-${fenceInfoLanguage(info)}`.slice('language-'.length));
+
+    it.each([
+      'mermaid',
+      'mermaid title="x"',
+      'MerMaid',
+      'Mermaid',
+      'mermaidjs',
+      'bash',
+      '',
+      '!!!',
+    ])('agrees with the app for info string %p', (info) => {
+      const pdfCaptions = codeCaption(fenceInfoLanguage(info) || undefined) !== null;
+      expect(pdfCaptions).toBe(appWouldRender(info));
+    });
+  });
+
+  describe('codeCaption', () => {
+    it('captions a diagram language', () => {
+      expect(codeCaption('mermaid')).toBe('Diagram — mermaid');
+    });
+
+    it('leaves ordinary code uncaptioned — bash announces itself', () => {
+      expect(codeCaption('bash')).toBeNull();
+      expect(codeCaption(undefined)).toBeNull();
+    });
   });
 });
 
@@ -523,6 +620,68 @@ describe('standalone reconstruction dossier PDF', () => {
     expect(text).toContain('→');
     expect(text).not.toContain('[U+2192]');
     expect(text).toContain('Escalate to on-call if replication stalls.');
+    // A bash fence gets NO caption: it announces itself, and a label on
+    // every code block would be chrome for zero information.
+    expect(text).not.toContain('Diagram —');
+  });
+
+  itWithPdfTools('captions a mermaid fence and keeps its source', async () => {
+    const base = companyPdfTestFixture();
+    const markdownSource = [
+      '# Failover',
+      '',
+      '```mermaid',
+      'flowchart TD',
+      '  P[Primary] --> R[Replica]',
+      '```',
+    ].join('\n');
+    const data = companyPdfTestFixture({
+      articles: [{ ...base.articles[0]!, markdownSource, contentPlaintext: null }],
+    });
+
+    const text = extractPdfText(await buildCompanyExportPdf(data));
+
+    // The export does not rasterize diagrams, so the caption is what
+    // tells a reader this block is a diagram rather than broken output.
+    expect(text).toContain('Diagram — mermaid');
+    // ...and the source is still there to be read.
+    expect(text).toContain('flowchart TD');
+    // Node brackets survive as `[[` — CR-020's reversible display
+    // encoding doubles `[` so the `[U+XXXX]` marker syntax stays
+    // unambiguous. That applies to every code block (a bash command with
+    // a `[` reads the same way) and is not specific to diagrams; assert
+    // the content rather than the punctuation.
+    expect(text).toContain('Primary');
+    expect(text).toContain('Replica');
+    expect(text).not.toContain('```');
+  });
+
+  itWithPdfTools('captions a mermaid fence authored in a Tiptap article', async () => {
+    // The Tiptap projection (`tiptapDocToMarkdown`) emits the fence
+    // language, so this path gets the caption for free — but only if the
+    // language survives that walker's own sanitisation.
+    const base = companyPdfTestFixture();
+    const data = companyPdfTestFixture({
+      articles: [{
+        ...base.articles[0]!,
+        editorMode: 'tiptap',
+        markdownSource: null,
+        contentPlaintext: null,
+        content: {
+          type: 'doc',
+          content: [{
+            type: 'codeBlock',
+            attrs: { language: 'mermaid' },
+            content: [{ type: 'text', text: 'flowchart TD\n  A --> B' }],
+          }],
+        },
+      }],
+    });
+
+    const text = extractPdfText(await buildCompanyExportPdf(data));
+
+    expect(text).toContain('Diagram — mermaid');
+    expect(text).toContain('flowchart TD');
   });
 
   itWithPdfTools('paginates long tables and wraps long safe messages with continuation context', async () => {

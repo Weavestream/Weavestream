@@ -8,8 +8,11 @@
     "build": "next build",
     "start": "next start -p 3000",
     "lint": "eslint .",
-    "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "jest --passWithNoTests"
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.spec.json",
+    "test": "jest --passWithNoTests",
+    "mermaid:corpus": "node scripts/mermaid-corpus.mjs",
+    "mermaid:corpus:check": "node scripts/mermaid-corpus.mjs --check",
+    "diagram:csp:check": "node scripts/check-diagram-csp.mjs"
   },
   "dependencies": {
     "@codemirror/commands": "^6.10.3",
@@ -41,8 +44,11 @@
     "@uiw/react-codemirror": "^4.25.9",
     "@weavestream/shared": "workspace:*",
     "cmdk": "^1.1.1",
+    "css-tree": "3.2.1",
+    "dompurify": "3.4.12",
     "lowlight": "^3.3.0",
     "marked": "^18.0.2",
+    "mermaid": "11.16.0",
     "next": "^16.2.11",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",

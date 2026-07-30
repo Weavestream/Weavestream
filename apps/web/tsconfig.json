@@ -11,6 +11,9 @@
     "src/**/*.ts",
     "src/**/*.tsx",
     "src/**/*.d.ts",
+    // Ambient declarations for dependencies that ship none — currently
+    // `css-tree`, which the diagram CSS gate imports.
+    "types/**/*.d.ts",
     ".next/types/**/*.ts"
   ],
   "exclude": ["node_modules"]

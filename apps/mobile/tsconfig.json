@@ -13,7 +13,9 @@
     },
     "plugins": []
   },
-  "include": ["src", "vite.config.ts"],
+  // `types/` holds the ambient `css-tree` declaration — that package
+  // ships none, and the diagram CSS gate imports it.
+  "include": ["src", "types", "vite.config.ts"],
   // Specs are typechecked by tsconfig.spec.json instead, which is the
   // only project that pulls in jest + node types. Keeping them out here
   // means app code cannot accidentally reference a test global or a Node

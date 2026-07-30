@@ -45,10 +45,18 @@ describe('normaliseTiptapDoc', () => {
     });
   });
 
-  it.each([['', 'blank string'], ['   ', 'whitespace'], [null, 'null'], [undefined, 'undefined'], [{}, 'empty object'], [{ type: 'paragraph' }, 'non-doc root'], [7, 'number']])(
-    'falls through to the empty doc for %p (%s)',
-    (value) => {
-      expect(normaliseTiptapDoc(value)).toEqual(EMPTY);
-    },
-  );
+  // Annotated as `[unknown, string]` because the cases are deliberately
+  // heterogeneous: without it TS infers a union of seven tuple types and
+  // the callback parameter has no single assignable signature.
+  it.each<[unknown, string]>([
+    ['', 'blank string'],
+    ['   ', 'whitespace'],
+    [null, 'null'],
+    [undefined, 'undefined'],
+    [{}, 'empty object'],
+    [{ type: 'paragraph' }, 'non-doc root'],
+    [7, 'number'],
+  ])('falls through to the empty doc for %p (%s)', (value) => {
+    expect(normaliseTiptapDoc(value)).toEqual(EMPTY);
+  });
 });

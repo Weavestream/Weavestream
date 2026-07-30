@@ -83,6 +83,12 @@ describe('buildCsp — /m (static PWA bundle)', () => {
     expect(directive(policy(p), 'img-src')).toBe("img-src 'self'");
   });
 
+  it.each(paths)('%s keeps style-src unsafe-inline (diagrams need it)', (p) => {
+    expect(directive(policy(p), 'style-src')).toBe(
+      "style-src 'self' 'unsafe-inline'",
+    );
+  });
+
   it('never permits unsafe-eval, even in dev', () => {
     expect(policy('/m/app', { isDev: true })).not.toContain("'unsafe-eval'");
   });
@@ -108,6 +114,17 @@ describe('buildCsp — desktop app', () => {
 
   it.each(paths)('%s keeps img-src free of blob: and data:', (p) => {
     expect(directive(policy(p), 'img-src')).toBe("img-src 'self'");
+  });
+
+  // Previously unasserted, and now load-bearing: Mermaid inserts a
+  // `<style>` element inside every rendered SVG and emits inline
+  // `style=` attributes throughout, with no nonce hook of any kind.
+  // Tightening this directive would silently render every diagram
+  // unstyled rather than failing anything.
+  it.each(paths)('%s keeps style-src unsafe-inline (diagrams need it)', (p) => {
+    expect(directive(policy(p), 'style-src')).toBe(
+      "style-src 'self' 'unsafe-inline'",
+    );
   });
 
   it('permits unsafe-eval in dev only (webpack HMR needs it)', () => {

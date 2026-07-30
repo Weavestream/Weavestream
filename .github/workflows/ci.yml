@@ -103,6 +103,22 @@ jobs:
       - name: Install PDF inspection tools (poppler-utils, libxml2-utils)
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends poppler-utils libxml2-utils
       - run: pnpm -r test
+      # The Mermaid corpus fixtures are what the diagram sanitizer's
+      # allowlist is derived from, and `packages/shared` deliberately has
+      # no Mermaid dependency — so a Mermaid upgrade cannot invalidate
+      # them on its own and they would silently go stale. Re-render them
+      # against the installed version and fail on drift. Needs a browser:
+      # Mermaid measures text with getBBox, which jsdom does not have.
+      - name: Install Chromium for the diagram checks
+        run: npx --yes playwright@1.62.1 install --with-deps chromium
+      - run: pnpm --filter @weavestream/web mermaid:corpus:check
+      # The desktop CSP permits 'unsafe-eval' in DEV ONLY, so a Mermaid
+      # version that reached eval would pass every local check and fail
+      # silently in production. This renders the corpus under the real
+      # production policy and fails on any violation. It also pins the
+      # canvas behaviour `toSrgbHex` depends on, which jsdom cannot
+      # express (it has no canvas and always takes the null fallback).
+      - run: pnpm --filter @weavestream/web diagram:csp:check
 
   prisma-migrate-dry-run:
     runs-on: ubuntu-latest

@@ -1,0 +1,16 @@
+gantt
+  title Mobile PWA rollout
+  dateFormat YYYY-MM-DD
+  axisFormat %b %d
+  excludes weekends
+
+  section Foundations
+    Auth and shell        :done,    f1, 2026-07-01, 10d
+    Theme pipeline        :done,    f2, after f1, 5d
+  section Records
+    Passwords             :active,  r1, 2026-07-20, 8d
+    Articles              :         r2, after r1, 6d
+    Assets                :         r3, after r2, 6d
+  section Hardening
+    Security review       :crit,    h1, after r3, 4d
+    Launch                :milestone, m1, after h1, 0d

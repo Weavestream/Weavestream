@@ -325,6 +325,44 @@
     margin: 0 -16px 0.9em;
     padding: 0 16px;
   }
+  /* Diagrams get the same answer to over-wide content as tables and
+   * runbook commands: scroll at natural size, bled to the screen edge.
+   * A flowchart scaled to fit a 390pt column is unreadable, and the
+   * platform already covers magnification — the viewport meta has no
+   * `user-scalable=no`, so OS pinch and double-tap work for free. That
+   * is why there is no custom zoom affordance here. */
+  .m-mermaid {
+    margin: 0 0 0.9em;
+  }
+  /* `contain: layout paint` is a SECURITY control, not styling: this is
+   * a shadow host, and a shadow root contains selector matching but NOT
+   * layout, so a `position: fixed` descendant of a hostile diagram would
+   * otherwise paint over the app. Paint containment clips descendants to
+   * this box and makes it a containing block for fixed positioning. Do
+   * not remove it to un-clip a diagram; widen the box instead. */
+  .m-mermaid-scroll {
+    contain: layout paint;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    margin: 0 -16px;
+    padding: 0 16px;
+  }
+  /* Collapse the host until a diagram is actually committed into it, so
+   * the source fallback does not sit under an empty box.
+   *
+   * Keyed on `data-rendered`, NOT on `:empty`. `:empty` considers only
+   * LIGHT-DOM children, and this element's content lives in a shadow
+   * root — so `.m-mermaid-scroll:empty` keeps matching after a
+   * successful render and hides the finished diagram. That failed in the
+   * worst way: the block also drops its `<pre>` fallback once something
+   * has rendered, so the article showed neither the diagram nor its
+   * source, with nothing in the console. */
+  .m-mermaid[data-rendered='false'] .m-mermaid-scroll {
+    display: none;
+  }
+  .m-mermaid figcaption {
+    margin-top: 6px;
+  }
   .m-prose table {
     border-collapse: collapse;
     font-size: 15px;

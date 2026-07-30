@@ -148,3 +148,46 @@ describe('MarkdownBody GFM', () => {
     expect(code.querySelector('strong')).toBeNull();
   });
 });
+
+describe('MarkdownBody mermaid fences', () => {
+  const DIAGRAM = 'flowchart TD\n  A[Start] -->|go| B{Check}';
+
+  it('does NOT render diagrams by default', () => {
+    // The default is what keeps the Ask transcript out of scope: its
+    // source is a partially streamed answer, so a half-typed fence would
+    // throw on nearly every SSE token. `ArticleBodyView` is the only
+    // caller that opts in.
+    const { container } = render(
+      <MarkdownBody source={'```mermaid\n' + DIAGRAM + '\n```'} />,
+    );
+    expect(container.querySelector('.m-mermaid')).toBeNull();
+    expect(container.querySelector('pre code')).toHaveTextContent('flowchart TD');
+  });
+
+  it('renders the source verbatim inside the block when opted in', () => {
+    const { container } = render(
+      <MarkdownBody source={'```mermaid\n' + DIAGRAM + '\n```'} diagrams />,
+    );
+    expect(container.querySelector('.m-mermaid')).not.toBeNull();
+    // Synchronously, before any async render: the fallback IS the source.
+    expect(container.querySelector('pre code')?.textContent).toBe(DIAGRAM);
+  });
+
+  it.each([
+    ['a plain fence', '```\nflowchart TD\n```'],
+    ['another language', '```bash\nflowchart TD\n```'],
+    ['a near-miss language', '```mermaidjs\nflowchart TD\n```'],
+    ['a differently-cased language', '```Mermaid\nflowchart TD\n```'],
+  ])('leaves %s alone even when opted in', (_label, source) => {
+    const { container } = render(<MarkdownBody source={source} diagrams />);
+    expect(container.querySelector('.m-mermaid')).toBeNull();
+    expect(container.querySelector('pre')).not.toBeNull();
+  });
+
+  it('never routes inline code', () => {
+    const { container } = render(
+      <MarkdownBody source="use `mermaid` here" diagrams />,
+    );
+    expect(container.querySelector('.m-mermaid')).toBeNull();
+  });
+});

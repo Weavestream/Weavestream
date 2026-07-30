@@ -3,7 +3,10 @@ import { create as parseFontCmap } from 'fontkit';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import {
+  fenceInfoLanguage,
+  isMermaidLanguage,
   MAX_IMAGE_DECODE_PIXELS,
+  MERMAID_LANGUAGE,
   tiptapDocToMarkdown,
   tiptapToPlaintext,
 } from '@weavestream/shared';
@@ -138,7 +141,7 @@ export type MarkdownBlock =
   | { kind: 'heading'; level: number; runs: MarkdownInlineRun[] }
   | { kind: 'paragraph'; runs: MarkdownInlineRun[] }
   | { kind: 'list'; items: MarkdownListItem[] }
-  | { kind: 'code'; lines: string[] }
+  | { kind: 'code'; lines: string[]; lang?: string }
   | { kind: 'quote'; blocks: MarkdownBlock[] }
   | { kind: 'table'; rows: string[][] }
   | { kind: 'rule' }
@@ -1709,7 +1712,7 @@ function renderMarkdownBlock(
       doc.moveDown(0.3);
       return;
     case 'code':
-      renderMarkdownCode(doc, block.lines, x, width, sectionTitle);
+      renderMarkdownCode(doc, block.lines, x, width, sectionTitle, block.lang);
       return;
     case 'quote':
       renderMarkdownQuote(doc, block, imagesById, x, width, sectionTitle);
@@ -1863,19 +1866,77 @@ function drawTaskCheckbox(
  * breaks need no box-height pre-measurement), preformatted text, no
  * whitespace collapsing.
  */
+/**
+ * The caption for a fenced block, or `null` for the vast majority that
+ * need none.
+ *
+ * **Only diagram languages get one, deliberately.** A `bash` fence
+ * announces itself — `pg_ctl promote -D /data` is self-evidently a
+ * command, and a label above every code block in every exported article
+ * would be a row of chrome for zero information. `renderMarkdownCode` is
+ * deliberately quiet (no border, no header, just background strips) and
+ * blanket captions would fight that. Mermaid is the opposite case:
+ * `graph TD\n A-->B` reads as broken output unless something says
+ * otherwise. Applied universally the caption becomes noise and stops
+ * distinguishing that case at all, which defeats the point.
+ *
+ * **The export prints the SOURCE on purpose — this is not a fallback
+ * awaiting a "real" implementation.** Rendering it would mean a browser
+ * in the worker image (Mermaid measures text with `getBBox`, so there is
+ * no headless-free path), and it would trade recoverable content for a
+ * dead end: source text can be copied out of the PDF and back into an
+ * article, where a rasterized diagram cannot. That is the better
+ * deliverable for a document a customer keeps. Considered and declined
+ * — don't "fix" this by adding Chromium.
+ *
+ * **Recognition uses the shared `isMermaidLanguage`, not this file's own
+ * normalisation.** `normalizeFenceInfo` lower-cases and strips
+ * punctuation to make the stored `lang` printable, and applying that to
+ * the caption decision made the export disagree with the product:
+ * ```` ```MerMaid ```` and ``` ~~~m`ermaid ``` were captioned
+ * "Diagram — mermaid" here while `apps/web` and `apps/mobile` rendered
+ * the same block as ordinary code. A caption asserting something the
+ * app does not do is worse than no caption, so the rule lives in
+ * `@weavestream/shared` and every surface reads it from there.
+ *
+ * CR-020: `pdfSafeUserText` is applied to the LANGUAGE, which is
+ * user-derived; the literal prefix is a compile-time constant and has no
+ * business going through a user-text encoder.
+ */
+export function codeCaption(lang: string | undefined): string | null {
+  if (!isMermaidLanguage(lang ?? null)) return null;
+  return `Diagram — ${pdfSafeUserText(MERMAID_LANGUAGE)}`;
+}
+
 function renderMarkdownCode(
   doc: PDFKit.PDFDocument,
   lines: string[],
   x: number,
   width: number,
   sectionTitle: string,
+  lang?: string,
 ): void {
   const content = lines.length > 0 ? lines : [''];
   const innerX = x + 8;
   const innerWidth = width - 16;
   const pad = 4;
+  const caption = codeCaption(lang);
   doc.moveDown(0.15);
-  ensureRoom(doc, 30, sectionTitle);
+  // ONE reserve covering caption + first strip, so a label can never
+  // orphan at the bottom of a page with its block on the next one.
+  ensureRoom(doc, caption === null ? 30 : 43, sectionTitle);
+  if (caption !== null) {
+    // Label-above-value, matching `drawLabeledValue`: a type label has
+    // to arrive before the reader tries to parse what follows. Not
+    // repeated on continuation pages — a second label would read as the
+    // start of a second block.
+    doc
+      .font(FONT_BOLD)
+      .fontSize(8)
+      .fillColor(C.ink3)
+      .text(caption, x, doc.y, { width, characterSpacing: 0.4 });
+    doc.moveDown(0.15);
+  }
   const paintPad = () => {
     doc.save();
     doc.rect(x, doc.y, width, pad).fill(C.cardBg);
@@ -2064,7 +2125,39 @@ function renderImageFallback(
 // Markdown block parsing (GFM subset, line-based, dependency-free)
 // ---------------------------------------------------------------------------
 
-const FENCE_OPEN_RE = /^ {0,3}(`{3,}|~{3,})/;
+/**
+ * Fence openers, split by marker because CommonMark treats them
+ * differently: a BACKTICK fence's info string may not contain a
+ * backtick, a tilde fence's may.
+ *
+ * That distinction is load-bearing rather than pedantic. With one
+ * permissive pattern, ```` ```m`ermaid ```` would open a fence here and
+ * `normalizeFenceInfo` would strip the backtick and *invent* the
+ * language `mermaid` — so the PDF would caption a diagram while
+ * react-markdown, correctly, rendered the same line as a paragraph. A
+ * divergence that manufactures meaning is worse than one that loses it.
+ */
+const FENCE_OPEN_BACKTICK_RE = /^ {0,3}(`{3,})[ \t]*([^`\r\n]*)$/;
+const FENCE_OPEN_TILDE_RE = /^ {0,3}(~{3,})[ \t]*([^\r\n]*)$/;
+
+/**
+ * The fence's language token, stored **verbatim** — no lower-casing, no
+ * punctuation stripping.
+ *
+ * An earlier version normalised it, and that normalisation was the bug:
+ * this field's only consumer is `codeCaption`, so folding `MerMaid` down
+ * to `mermaid` made the export caption blocks the app renders as
+ * ordinary code. `fenceInfoLanguage` is the same first-word split remark
+ * uses to build the `language-*` class the React renderers match on, so
+ * the two surfaces now compare the same token.
+ *
+ * Nothing user-derived is printed: when the token matches, the caption
+ * prints the constant, never the author's text.
+ */
+function fenceLanguage(raw: string): string | undefined {
+  const lang = fenceInfoLanguage(raw);
+  return lang.length > 0 ? lang : undefined;
+}
 const HEADING_RE = /^ {0,3}(#{1,6})\s+(.*?)\s*#*\s*$/;
 const QUOTE_RE = /^ {0,3}>\s?(.*)$/;
 const RULE_RE = /^ {0,3}(?:(?:-[ \t]*){3,}|(?:\*[ \t]*){3,}|(?:_[ \t]*){3,})$/;
@@ -2117,10 +2210,12 @@ function parseBlockLines(lines: string[], depth: number): MarkdownBlock[] {
       continue;
     }
 
-    const fence = FENCE_OPEN_RE.exec(line);
+    const fence =
+      FENCE_OPEN_BACKTICK_RE.exec(line) ?? FENCE_OPEN_TILDE_RE.exec(line);
     if (fence) {
       flushParagraph();
       const marker = fence[1]!;
+      const lang = fenceLanguage(fence[2] ?? '');
       const codeLines: string[] = [];
       index += 1;
       while (index < lines.length && !closesFence(lines[index]!, marker)) {
@@ -2128,7 +2223,14 @@ function parseBlockLines(lines: string[], depth: number): MarkdownBlock[] {
         index += 1;
       }
       index += 1; // closing fence (or EOF)
-      blocks.push({ kind: 'code', lines: codeLines });
+      // `lang` is OMITTED rather than set to null when absent: the specs
+      // assert `toEqual({ kind: 'code', lines })` on unlabelled fences,
+      // and `toEqual` ignores undefined-valued keys but not null ones.
+      blocks.push(
+        lang === undefined
+          ? { kind: 'code', lines: codeLines }
+          : { kind: 'code', lines: codeLines, lang },
+      );
       continue;
     }
 

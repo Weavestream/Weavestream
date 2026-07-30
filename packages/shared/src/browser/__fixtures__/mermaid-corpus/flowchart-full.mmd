@@ -1,0 +1,30 @@
+flowchart TD
+  subgraph edge["Edge tier"]
+    LB{{Load balancer}}
+    WAF[/WAF/]
+  end
+  subgraph app["Application tier"]
+    A[Web node A]
+    B[Web node B]
+  end
+  DB[(Primary database)]
+  R[(Replica)]
+  D{Healthy?}
+  C((Cache))
+
+  WAF --> LB
+  LB -->|round robin| A
+  LB -->|round robin| B
+  A --> D
+  B --> D
+  D -- yes --> DB
+  D -. no .-> R
+  DB ==> R
+  A <--> C
+
+  classDef critical fill:#3a1111,stroke:#7a2222,color:#f5d5d5;
+  classDef cache stroke-dasharray: 4 2;
+  class DB,R critical;
+  class C cache;
+  linkStyle 0 stroke-width:2px;
+  style LB stroke-width:3px;

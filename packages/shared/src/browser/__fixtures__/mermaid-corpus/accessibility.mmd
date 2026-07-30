@@ -1,0 +1,11 @@
+flowchart TD
+  accTitle: Database failover procedure
+  accDescr {
+    Primary promotes the replica when the health check fails twice in a
+    row, then the load balancer is repointed and the old primary is
+    fenced.
+  }
+  P[Primary] --> H{Health check}
+  H -->|fails twice| PR[Promote replica]
+  PR --> LB[Repoint load balancer]
+  LB --> F[Fence old primary]

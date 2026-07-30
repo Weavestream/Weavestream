@@ -45,12 +45,22 @@ function okResponse(body: ReadableStream<Uint8Array>): Response {
   return { ok: true, status: 200, body } as unknown as Response;
 }
 
-function handlers(): Required<
-  Pick<
-    ChatStreamHandlers,
-    'onMeta' | 'onDelta' | 'onDone' | 'onError' | 'onTitle' | 'onToolActivity'
-  >
-> {
+type StreamHandlerKey =
+  | 'onMeta'
+  | 'onDelta'
+  | 'onDone'
+  | 'onError'
+  | 'onTitle'
+  | 'onToolActivity';
+
+/**
+ * Returns `jest.Mock`s rather than the bare handler signatures so tests
+ * can read `.mock.calls`; the `satisfies` on the literal keeps the
+ * compile-time check that these are exactly the handlers
+ * `ChatStreamHandlers` declares, which the plain return annotation used
+ * to provide (at the cost of erasing the mock type).
+ */
+function handlers(): Record<StreamHandlerKey, jest.Mock> {
   return {
     onMeta: jest.fn(),
     onDelta: jest.fn(),
@@ -58,7 +68,7 @@ function handlers(): Required<
     onError: jest.fn(),
     onTitle: jest.fn(),
     onToolActivity: jest.fn(),
-  };
+  } satisfies Required<Pick<ChatStreamHandlers, StreamHandlerKey>>;
 }
 
 const META =

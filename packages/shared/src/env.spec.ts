@@ -36,7 +36,7 @@ describe('ALLOWED_UPLOAD_MIME', () => {
       const result = field.safeParse(`image/png,${mime},application/pdf`);
       expect(result.success).toBe(false);
       if (!result.success) {
-        expect(result.error.issues[0].message).toContain(mime);
+        expect(result.error.issues[0]?.message).toContain(mime);
       }
     },
   );

@@ -1,0 +1,38 @@
+sequenceDiagram
+  autonumber
+  actor Tech as Field technician
+  participant App as Mobile app
+  participant API
+  participant DB as Database
+
+  Note over Tech,App: Onsite at the customer
+  Tech->>App: Reveal password
+  activate App
+  App->>+API: POST /passwords/:id/reveal
+  API->>DB: SELECT secret
+  DB-->>API: ciphertext
+  API-->>-App: plaintext (in memory only)
+  deactivate App
+
+  loop every 30s
+    App->>API: heartbeat
+  end
+
+  alt session expired
+    API-->>App: 401
+    App->>Tech: route to login
+  else still valid
+    API-->>App: 200
+  end
+
+  par audit
+    API->>DB: INSERT audit_log
+  and metrics
+    API->>API: increment counter
+  end
+
+  Note right of DB: Never persisted to disk
+  rect rgb(30, 30, 30)
+    Tech->>App: background the app
+    App->>App: clear revealed secret
+  end

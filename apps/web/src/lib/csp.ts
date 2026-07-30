@@ -86,6 +86,14 @@ function desktopDirectives(nonce: string, isDev: boolean): string[] {
   // strict-dynamic, style injection alone is not an XSS vector (worst case is
   // exfiltration-via-CSS, which requires an HTML-injection primitive that the
   // script policy already contains). Revisit if Next.js ships nonce'd styles.
+  //
+  // It now has a second, named dependent: Mermaid diagrams insert a <style>
+  // element inside each rendered SVG and emit inline `style=` attributes
+  // throughout, with no nonce hook. Tightening this would render every
+  // diagram unstyled rather than failing loudly, so csp.spec.ts pins it.
+  // The diagram CSS itself is gated separately — see `sanitizeDiagramSvg`
+  // in `packages/shared`, which rejects @import, external url() and
+  // :host/:host-context before any of it reaches the DOM.
   return [
     "default-src 'self'",
     scriptSrc,

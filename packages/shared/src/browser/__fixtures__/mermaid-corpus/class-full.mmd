@@ -1,0 +1,27 @@
+classDiagram
+  direction LR
+  class Asset {
+    <<entity>>
+    +UUID id
+    +String name
+    +AssetLayout layout
+    +archive() void
+    #validate() bool
+    -String~T~ raw
+  }
+  class AssetLayout {
+    +List~AssetField~ fields
+  }
+  class AssetField {
+    +int position
+    +bool showInTable
+  }
+  class Credential {
+    <<interface>>
+    +reveal() String
+  }
+  Asset "1" *-- "1" AssetLayout : has
+  AssetLayout "1" o-- "many" AssetField : contains
+  Asset ..|> Credential : implements
+  Asset <|-- ManagedAsset
+  note for Asset "Tenant-scoped at the query layer"

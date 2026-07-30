@@ -125,6 +125,47 @@ describe('tiptapDocToMarkdown', () => {
     expect(md).toBe('```bash\necho "**not bold**"\n```');
   });
 
+  describe('code block language is untrusted author input', () => {
+    const withLanguage = (language: unknown) =>
+      tiptapDocToMarkdown(
+        doc({
+          type: 'codeBlock',
+          attrs: { language },
+          content: [text('body')],
+        }),
+      );
+
+    it('cannot inject markdown through a newline', () => {
+      // Written verbatim, this used to emit `” ```js\n\n# Owned ` — real
+      // headings by the time the PDF exporter's parser saw them.
+      expect(withLanguage('js\n\n# Owned')).toBe('```js\nbody\n```');
+    });
+
+    it('cannot smuggle a backtick into a backtick fence info string', () => {
+      // CommonMark says a backtick fence's info string may not contain a
+      // backtick, so leaving one in yields a line this walker calls a
+      // fence and every conformant parser calls a paragraph.
+      expect(withLanguage('m`ermaid')).toBe('```mermaid\nbody\n```');
+    });
+
+    it('keeps only the first word', () => {
+      expect(withLanguage('mermaid title="x"')).toBe('```mermaid\nbody\n```');
+    });
+
+    it('rejects rather than truncates an over-long language', () => {
+      expect(withLanguage('a'.repeat(200))).toBe('```\nbody\n```');
+    });
+
+    it('drops a language with nothing usable left', () => {
+      expect(withLanguage('!!!')).toBe('```\nbody\n```');
+      expect(withLanguage(42)).toBe('```\nbody\n```');
+    });
+
+    it('lower-cases, so downstream lookups need no normalisation', () => {
+      expect(withLanguage('MerMaid')).toBe('```mermaid\nbody\n```');
+    });
+  });
+
   it('renders blockquotes line-by-line', () => {
     const md = tiptapDocToMarkdown(
       doc({

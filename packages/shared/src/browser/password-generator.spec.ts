@@ -21,18 +21,31 @@ beforeEach(() => {
   cursor = 0;
   jest
     .spyOn(crypto, 'getRandomValues')
-    .mockImplementation(<T extends ArrayBufferView | null>(buf: T): T => {
-      if (!(buf instanceof Uint32Array)) return realGetRandomValues(buf);
-      if (cursor < sequence.length) {
-        buf[0] = sequence[cursor]!;
-        cursor += 1;
-      } else {
-        // Script exhausted — repeat the last value (keeps the read-preset
-        // give-up test terminating without scripting 8 attempts by hand).
-        buf[0] = sequence[sequence.length - 1] ?? 0;
-      }
-      return buf;
-    });
+    // The constraint mirrors lib.dom's own `getRandomValues` signature
+    // (`ArrayBufferView<ArrayBufferLike> | null`); a bare `ArrayBufferView`
+    // is a different type under the parameterised declaration and does not
+    // unify with the real implementation's return.
+    .mockImplementation(
+      <T extends ArrayBufferView<ArrayBufferLike> | null>(buf: T): T => {
+        // Anything that isn't the u32 buffer the generator asks for falls
+        // through to real entropy. `buf` is narrowed to non-null here only
+        // by the Uint32Array check below, so the null case goes through the
+        // same passthrough — the cast re-asserts the identity lib.dom
+        // declares but cannot prove through the branch.
+        if (!(buf instanceof Uint32Array)) {
+          return (buf === null ? buf : realGetRandomValues(buf)) as T;
+        }
+        if (cursor < sequence.length) {
+          buf[0] = sequence[cursor]!;
+          cursor += 1;
+        } else {
+          // Script exhausted — repeat the last value (keeps the read-preset
+          // give-up test terminating without scripting 8 attempts by hand).
+          buf[0] = sequence[sequence.length - 1] ?? 0;
+        }
+        return buf;
+      },
+    );
 });
 
 afterEach(() => jest.restoreAllMocks());

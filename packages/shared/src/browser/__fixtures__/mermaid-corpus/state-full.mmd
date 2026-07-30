@@ -1,0 +1,22 @@
+stateDiagram-v2
+  direction TB
+  [*] --> Queued
+  Queued --> Running : worker claims
+  state Running {
+    [*] --> Fetching
+    Fetching --> Transforming
+    Transforming --> Writing
+    Writing --> [*]
+  }
+  Running --> Succeeded
+  Running --> Failed : throws
+  state retry <<choice>>
+  Failed --> retry
+  retry --> Queued : attempts < 3
+  retry --> DeadLettered : attempts >= 3
+  Succeeded --> [*]
+  DeadLettered --> [*]
+  note right of DeadLettered
+    Surfaced in the integration
+    health panel.
+  end note

@@ -102,6 +102,110 @@ function assertNoHtmlPrecached(swSource) {
   }
 }
 
+/** The `{url}` entries Workbox injected, in the same shape as above. */
+function precacheUrls(swSource) {
+  return [...swSource.matchAll(/"url"\s*:\s*"([^"]+)"|url\s*:\s*"([^"]+)"/g)]
+    .map((m) => m[1] ?? m[2])
+    .filter(Boolean);
+}
+
+/**
+ * The diagram engine must stay lazily loaded AND out of the precache.
+ *
+ * A filename check is not enough and must not be what ships. It cannot
+ * see an automatically-factored d3/cytoscape/katex chunk that happened
+ * to get an ordinary name, and it cannot tell a dynamically-reached
+ * `mermaid-*` chunk from a statically-reached one — manual chunk naming
+ * will happily produce `mermaid-*` for something the entry imports
+ * eagerly. Both failure modes report green while the decision has
+ * silently reversed: someone converts `import('./mermaid-runtime')` to a
+ * static import and every technician's PWA install grows by the whole
+ * Mermaid engine, with no visible symptom.
+ *
+ * So walk the manifest graph instead.
+ *
+ * The subtraction is required, not tidiness: `@weavestream/shared`'s
+ * browser barrel is reachable BOTH statically (the palette hook renders
+ * eagerly) and dynamically (the runtime), and Vite's manifest models
+ * exactly that. A plain "no overlap" assertion would fail on a correct
+ * build — and the predictable response to a red build that is actually
+ * green is to weaken the assertion until it passes.
+ */
+function assertDiagramEngineIsLazy(manifest, swSource) {
+  const byFile = new Map(Object.values(manifest).map((c) => [c.file, c]));
+  const entry = Object.values(manifest).find((c) => c.isEntry);
+  if (!entry) throw new Error('vite manifest has no entry chunk');
+
+  /**
+   * `stopAt` is load-bearing. The Mermaid runtime chunk statically
+   * imports the ENTRY chunk back (they share application code), so a
+   * naive traversal walks into the entry and then out along *its*
+   * dynamic imports — reporting `virtual:pwa-register` and
+   * workbox-window as diagram chunks. Reaching an already-static node
+   * ends that branch: it is shared code, not part of the engine.
+   */
+  const walk = (start, edges, stopAt) => {
+    const seen = new Set();
+    const queue = [start];
+    while (queue.length > 0) {
+      const file = queue.pop();
+      if (file === undefined || seen.has(file)) continue;
+      if (stopAt?.has(file) && file !== start) continue;
+      seen.add(file);
+      const chunk = byFile.get(file);
+      if (!chunk) continue;
+      for (const key of edges) {
+        for (const f of chunk[key] ?? []) queue.push(manifest[f]?.file ?? f);
+      }
+    }
+    return seen;
+  };
+
+  const staticClosure = walk(entry.file, ['imports']);
+
+  const runtime = Object.entries(manifest).find(([id]) =>
+    id.endsWith('src/lib/mermaid-runtime.ts'),
+  )?.[1];
+  if (!runtime) {
+    throw new Error(
+      'no manifest entry for src/lib/mermaid-runtime.ts — the diagram ' +
+        'runtime was renamed or its dynamic import was removed; this guard ' +
+        'must never pass vacuously',
+    );
+  }
+  if (staticClosure.has(runtime.file)) {
+    throw new Error(
+      `${runtime.file} is reachable from the entry via STATIC imports — the ` +
+        'diagram engine would ship in the eager bundle and be precached. ' +
+        "Restore the dynamic `import('../../lib/mermaid-runtime')`.",
+    );
+  }
+
+  const networkOnly = [
+    ...walk(runtime.file, ['imports', 'dynamicImports'], staticClosure),
+  ].filter((f) => !staticClosure.has(f));
+
+  if (networkOnly.length === 0) {
+    throw new Error(
+      'the Mermaid closure is empty — it collapsed into the entry bundle; ' +
+        'check build.rolldownOptions.output.chunkFileNames in vite.config.ts',
+    );
+  }
+
+  const precached = new Set(precacheUrls(swSource));
+  const leaked = networkOnly.filter((f) => precached.has(f));
+  if (leaked.length > 0) {
+    throw new Error(
+      `sw.js precaches ${leaked.length} diagram chunk(s) (${leaked
+        .slice(0, 3)
+        .join(', ')}${leaked.length > 3 ? ', …' : ''}) — the engine must stay ` +
+        'network-only; check injectManifest.globIgnores in vite.config.ts',
+    );
+  }
+
+  return networkOnly.length;
+}
+
 /**
  * Read the accent + theme-pref enums from the shared package rather
  * than hardcoding them, so adding a sixth accent (or, however unlikely,
@@ -310,6 +414,7 @@ async function main() {
   const viteManifest = JSON.parse(
     await readFile(join(DIST, '.vite', 'manifest.json'), 'utf8'),
   );
+  const lazyDiagramChunks = assertDiagramEngineIsLazy(viteManifest, swSource);
   const assets = [
     ...new Set(
       Object.values(viteManifest).flatMap((c) => [
@@ -409,6 +514,11 @@ async function main() {
     `[mobile] published ${assets.length} assets → apps/web/public/m, ` +
       `${Object.keys(shells).length} shell variants → apps/web/mobile-shell` +
       (pruned.length ? ` (pruned ${pruned.length} from an older build)` : ''),
+  );
+  // Logged so the deferred cost stays visible in build output rather
+  // than growing unnoticed.
+  console.log(
+    `[mobile] ${lazyDiagramChunks} diagram chunks are network-only (not precached)`,
   );
 }
 
