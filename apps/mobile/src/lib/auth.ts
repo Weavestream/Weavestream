@@ -32,8 +32,15 @@ export type LoginOutcome =
  *
  * `rejected` is the caller's wording for that one case ("Invalid
  * credentials." vs "Invalid code."); everything else is shared.
+ *
+ * **A 401 is only unambiguous on a pre-session route.** `login` and
+ * `verifyMfa` are unauthenticated, so there is no session for a 401 to be
+ * about other than the credential just supplied. An *authenticated* caller
+ * (5c's change-password) has a second possible meaning — the session died —
+ * and must decide that BEFORE delegating here; see
+ * `CURRENT_PASSWORD_INVALID_CODE`.
  */
-function authError(err: unknown, rejected: string): string {
+export function authError(err: unknown, rejected: string): string {
   if (!(err instanceof ApiError)) {
     // Transport failure: no response at all.
     return 'Can’t reach Weavestream. Check your connection.';

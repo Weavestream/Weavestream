@@ -71,16 +71,22 @@ flag once clients have picked it up.
 - `apps/web/public/m/` — hashed assets, `manifest.webmanifest`,
   `sw.js` (served by Next's public folder at `max-age=0` + ETag —
   correct for SW update checks; deliberately never `immutable`).
-- `apps/web/mobile-shell/` — one HTML shell per accent (outside
-  `public/` so the `no-store` route handler is the only way to reach
-  it) plus the `mobile-build.json` marker (**schema 2**: asset list,
-  per-accent shell hashes, `serviceWorker` + its sha256).
+- `apps/web/mobile-shell/` — one HTML shell **per accent × theme-pref**
+  pair, named `{accent}-{pref}.html` (5 accents × `dark`/`light`/`system`
+  = 15 variants), outside `public/` so the `no-store` route handler is
+  the only way to reach it. Each is stamped with the accent, the raw
+  preference, and the *resolved* theme, so first paint is correct in
+  pure CSS with no inline script (§3 + the `/m` CSP). Plus the
+  `mobile-build.json` marker (**schema 3**: asset list, `accents`,
+  `themePrefs`, per-variant shell hashes keyed `{accent}-{pref}`,
+  `serviceWorker` + its sha256, and the `/m/...` URLs the shell links).
 
 Publication merges assets additively, swaps shells atomically, and
 keeps one previous generation so a reader mid-load across a deploy
 cannot 404. `apps/web`'s prebuild (`scripts/check-mobile-bundle.mjs`)
 refuses to build against a missing, stale, or half-copied bundle —
-including a missing or hash-mismatched `sw.js`.
+including a missing or hash-mismatched `sw.js`, a marker schema that
+isn't 3, or a `themePrefs` set that doesn't match the shared enum.
 
 ## Development notes
 

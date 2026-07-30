@@ -1,11 +1,8 @@
-import { initialsFromName, roleLabel } from '@weavestream/shared';
 import { useState, useSyncExternalStore } from 'react';
-import { AppearanceSheet } from '../components/AppearanceSheet';
 import { Icon } from '../components/Icon';
+import { IdentityCard } from '../components/IdentityCard';
 import { Sheet } from '../components/Sheet';
 import {
-  Avatar,
-  Card,
   GroupedList,
   GroupedRow,
   SectionLabel,
@@ -37,6 +34,14 @@ import { useMe, useOpenOrgSheet } from './TabShell';
  * The dashed IPAM / Domains / Photos chips stay: the handoff specifies
  * them as non-interactive roadmap signals, so rendering them as exactly
  * that is honest rather than a stub.
+ *
+ * **Phase 5c** gave the identity card a destination — it was captioned
+ * "profile" with nothing behind it — and moved Appearance to that profile
+ * screen, since accent/theme is account state that syncs across devices.
+ * The `App` group is now conditional as a direct consequence: `Install
+ * app` is the only row left in it and is itself conditional, and
+ * `installMode === 'none'` is precisely the installed PWA — so an
+ * unconditional group would show installed users a labelled empty box.
  */
 
 const FUTURE_MODULES = [
@@ -66,7 +71,6 @@ export function MoreTab() {
   const [signOutError, setSignOutError] = useState<string | null>(null);
   const [signingOut, setSigningOut] = useState(false);
   const [installHelpOpen, setInstallHelpOpen] = useState(false);
-  const [appearanceOpen, setAppearanceOpen] = useState(false);
   // `beforeinstallprompt` often fires after mount — subscribe so the
   // row appears when the capture lands (and disappears on install).
   const installMode = useSyncExternalStore(
@@ -75,7 +79,6 @@ export function MoreTab() {
   );
 
   const name = me?.name?.trim() || me?.email || 'Signed in';
-  const role = me?.role ? roleLabel(me.role) : null;
 
   async function onSignOut() {
     setSignOutError(null);
@@ -101,22 +104,16 @@ export function MoreTab() {
     <main className="mx-auto flex min-h-0 w-full max-w-page flex-1 flex-col gap-3.25 overflow-y-auto px-4.5 pb-5 pt-edge-t">
       <Title>More</Title>
 
-      <Card className="flex items-center gap-3.25 p-3.25">
-        <Avatar
-          initials={initialsFromName(name)}
-          size={46}
-          shape="circle"
-          tone="soft"
-        />
-        <div className="flex min-w-0 flex-1 flex-col gap-0.75">
-          <div className="truncate text-[18px] font-semibold tracking-[-0.015em] text-text">
-            {name}
-          </div>
-          <div className="truncate font-mono text-meta text-muted">
-            {role ? `${role} · profile` : 'profile'}
-          </div>
-        </div>
-      </Card>
+      {/* The way into the account surface. `upIsBack` so the profile's back
+          chevron pops here rather than navigating structurally. */}
+      <IdentityCard
+        name={name}
+        email={me?.email}
+        userRole={me?.role}
+        onClick={() =>
+          navigate({ to: '/profile', upIsBack: true, backLabel: 'More' })
+        }
+      />
 
       <section className="flex flex-col gap-1.75">
         {/* Generic on purpose: these are org-NAVIGATION rows (Home, the
@@ -143,16 +140,13 @@ export function MoreTab() {
         </GroupedList>
       </section>
 
-      <section className="flex flex-col gap-1.75">
-        <SectionLabel>App</SectionLabel>
-        <GroupedList>
-          <GroupedRow
-            icon="palette"
-            label="Appearance"
-            onClick={() => setAppearanceOpen(true)}
-            last={installMode === 'none'}
-          />
-          {installMode !== 'none' && (
+      {/* Whole group, not just the row: `Install app` is all that remains
+          in it, so keeping the label and an empty `GroupedList` would render
+          a bordered blank box for every installed user. */}
+      {installMode !== 'none' && (
+        <section className="flex flex-col gap-1.75">
+          <SectionLabel>App</SectionLabel>
+          <GroupedList>
             <GroupedRow
               icon="install_mobile"
               label="Install app"
@@ -163,9 +157,9 @@ export function MoreTab() {
               }
               last
             />
-          )}
-        </GroupedList>
-      </section>
+          </GroupedList>
+        </section>
+      )}
 
       <section className="flex flex-col gap-1.75">
         <SectionLabel>Room to grow · later</SectionLabel>
@@ -198,11 +192,6 @@ export function MoreTab() {
         <Icon name="logout" size={21} />
         {signingOut ? 'Signing out…' : 'Sign out'}
       </button>
-
-      <AppearanceSheet
-        open={appearanceOpen}
-        onClose={() => setAppearanceOpen(false)}
-      />
 
       {/* iOS Safari has no install prompt API — the Share sheet is the
           only path, so the row opens instructions instead. */}

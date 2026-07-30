@@ -1,3 +1,5 @@
+import { UnauthorizedException } from '@nestjs/common';
+import { CURRENT_PASSWORD_INVALID_CODE } from '@weavestream/shared';
 import { MeService } from './me.service.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
 
@@ -304,6 +306,47 @@ describe('MeService.changePassword', () => {
     expect(audit.log).toHaveBeenCalledWith(
       expect.objectContaining({ action: 'user.password.change.failed' }),
     );
+  });
+
+  /**
+   * This route can 401 for two unrelated reasons — wrong current password
+   * (here) and a dead session (`AuthGuard`, a bare `UnauthorizedException`).
+   * A client that cannot tell them apart either retypes a correct password
+   * forever or signs the user out over a typo, so the code is the contract.
+   * `detail` is pinned alongside it because existing consumers read it.
+   */
+  it('tags the wrong-current-password 401 with a stable code, keeping detail', async () => {
+    const prisma = makeChangePasswordPrisma();
+    const passwords = { verify: jest.fn().mockResolvedValue(false), hash: jest.fn() };
+    const lockout = {
+      isChangePasswordLocked: jest.fn().mockResolvedValue(false),
+      recordChangePasswordFailure: jest.fn().mockResolvedValue(undefined),
+      clearChangePasswordFailures: jest.fn().mockResolvedValue(undefined),
+    };
+    const svc = new MeService(
+      prisma as never,
+      passwords as never,
+      { replaceForUser: jest.fn() } as never,
+      lockout as never,
+      makeAudit() as never,
+    );
+
+    let thrown: unknown;
+    try {
+      await svc.changePassword(
+        ACTOR,
+        { currentPassword: 'wrong', newPassword: 'b' } as never,
+        META,
+      );
+    } catch (err) {
+      thrown = err;
+    }
+
+    expect(thrown).toBeInstanceOf(UnauthorizedException);
+    expect((thrown as UnauthorizedException).getResponse()).toEqual({
+      message: 'Current password is incorrect',
+      code: CURRENT_PASSWORD_INVALID_CODE,
+    });
   });
 
   it('clears failures on a successful change', async () => {

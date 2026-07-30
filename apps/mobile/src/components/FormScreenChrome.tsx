@@ -15,18 +15,35 @@ export function FormScreenChrome({
   saveLabel = 'Save',
   saveDisabled,
   onSave,
+  submitFor,
   children,
 }: {
   title: string;
   onCancel: () => void;
   saveLabel?: string;
-  /** Required whenever `onSave` is provided; ignored otherwise. */
+  /** Required whenever `onSave` or `submitFor` is provided; ignored otherwise. */
   saveDisabled?: boolean;
   /**
    * Omit for chrome-only screens with no save action (the asset layout
-   * chooser) — an invisible placeholder keeps the title centered.
+   * chooser) — an invisible placeholder keeps the title centered. Also omit
+   * when using `submitFor`, which submits natively instead.
    */
   onSave?: () => void;
+  /**
+   * `id` of a `<form>` in `children` that this Save should submit natively.
+   *
+   * Makes Save the form's **default button**, which is the only way to get
+   * Enter/Go from the keyboard: per the HTML implicit-submission algorithm a
+   * form with more than one field that blocks implicit submission (any text
+   * or password input) and *no* submit button silently does nothing on
+   * Enter. A `type="button"` calling `requestSubmit()` looks equivalent and
+   * is not — it fixes the click and leaves the keyboard dead.
+   *
+   * `disabled` then also gates the keyboard, since the algorithm skips a
+   * disabled default button. Use this instead of `onSave` when the screen's
+   * fields are a real form; the form's own `onSubmit` carries the logic.
+   */
+  submitFor?: string;
   children: ReactNode;
 }) {
   return (
@@ -43,9 +60,12 @@ export function FormScreenChrome({
         <h1 className="min-w-0 truncate text-[17px] font-semibold text-text">
           {title}
         </h1>
-        {onSave ? (
+        {onSave || submitFor ? (
           <button
-            type="button"
+            // `form` associates it across the DOM, so the button can live up
+            // here in the header and still be the form's default button.
+            type={submitFor ? 'submit' : 'button'}
+            form={submitFor}
             onClick={onSave}
             disabled={saveDisabled}
             className={

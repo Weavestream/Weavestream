@@ -11,7 +11,10 @@ import type {
   UpdateMeInput,
   UserUiPreferencesUpdate,
 } from '@weavestream/shared';
-import { userSearchDefaultsSchema } from '@weavestream/shared';
+import {
+  CURRENT_PASSWORD_INVALID_CODE,
+  userSearchDefaultsSchema,
+} from '@weavestream/shared';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { PasswordService } from '../auth/password.service.js';
@@ -255,7 +258,17 @@ export class MeService {
         // exactly the compromised cookie. See §2 note in CLAUDE.md.
         after: { sessionId: actor.sessionId },
       });
-      throw new UnauthorizedException('Current password is incorrect');
+      // The `code` is what lets a client tell THIS 401 apart from the
+      // AuthGuard's bare `UnauthorizedException` (dead session). Without it
+      // both arrive as an indistinguishable 401 and a client has to choose
+      // between retyping a correct password forever or signing the user out
+      // over a typo. `ProblemExceptionFilter` lifts `message` into `detail`
+      // (so existing consumers are unaffected) and spreads `code` as an
+      // RFC-7807 extension member. See `CURRENT_PASSWORD_INVALID_CODE`.
+      throw new UnauthorizedException({
+        message: 'Current password is incorrect',
+        code: CURRENT_PASSWORD_INVALID_CODE,
+      });
     }
 
     await this.lockout.clearChangePasswordFailures(actor.id);

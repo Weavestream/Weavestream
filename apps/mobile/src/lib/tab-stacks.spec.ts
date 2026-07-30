@@ -82,12 +82,27 @@ describe('hideTabBarFor', () => {
     // Whole-segment match, like the tab predicate above.
     expect(hideTabBarFor('/searchy')).toBe(false);
   });
+
+  it('hides the tab bar across the account surface (Phase 5c)', () => {
+    // Not cosmetic: `tabIdForPath('/profile')` is null, so without this
+    // `/profile` would be the only path in the app that renders the bar
+    // with no tab lit.
+    expect(hideTabBarFor('/profile')).toBe(true);
+    expect(hideTabBarFor('/profile/password')).toBe(true);
+    expect(hideTabBarFor('/m/profile')).toBe(true);
+    expect(hideTabBarFor('/m/profile/password')).toBe(true);
+    expect(hideTabBarFor('/profiles')).toBe(false);
+  });
 });
 
-describe('tabIdForPath — search', () => {
+describe('tabIdForPath — search and the account surface', () => {
   it('belongs to no tab, so no tab highlights and nothing is remembered', () => {
     expect(tabIdForPath('/search')).toBeNull();
     expect(tabIdForPath('/m/search')).toBeNull();
+    // The profile is account-level, so it deliberately does not become the
+    // More tab's remembered location — tapping More returns to More.
+    expect(tabIdForPath('/profile')).toBeNull();
+    expect(tabIdForPath('/m/profile/password')).toBeNull();
   });
 });
 

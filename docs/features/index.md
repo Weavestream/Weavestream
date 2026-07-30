@@ -27,7 +27,7 @@ Use this section as a module reference for Weavestream. Each page explains what 
 
 [!card title="Users & RBAC" text="Invite-only users, forced MFA, global roles, tenant memberships, default tenant access, and platform capabilities." icon="person" layout="compact"](/features/users/)
 [!card title="Client Portal" text="Read-only tenant portal for client users, with server-side field scoping and per-record visibility controls." icon="browser" layout="compact"](/features/client-portal/)
-[!card title="Mobile App" text="Installable field-technician app at /m — passwords, articles, assets, search, and Ask anything, with camera capture and no on-device data." icon="device-mobile" layout="compact"](/features/mobile/)
+[!card title="Mobile App" text="Installable field-technician app at /m — a cross-organization launcher, passwords, articles, assets, search, and Ask anything, with camera capture and no on-device data." icon="device-mobile" layout="compact"](/features/mobile/)
 [!card title="Audit & Compliance" text="Append-only audit history, before/after diffs, password reveal audit events, retention expectations, and compliance use cases." icon="shield-check" layout="compact"](/features/audit/)
 
 ## Navigation And Assistance

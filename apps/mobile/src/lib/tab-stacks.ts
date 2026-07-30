@@ -110,6 +110,11 @@ export function hideTabBarFor(pathname: string): boolean {
   // The search screen is 2b's full-screen takeover — field row where the
   // header was, results below, no tab bar while searching.
   if (segments[0] === 'search') return true;
+  // The account surface (5c) is not a company-scoped destination, so the
+  // tab bar has nothing to say there. Load-bearing rather than cosmetic:
+  // `tabIdForPath('/profile')` is null, so without this it would be the
+  // only path in the app that renders the bar with no tab lit.
+  if (segments[0] === 'profile') return true;
   if (!FORM_ROUTE_TABS.has(segments[0] ?? '')) return false;
   if (segments.length === 2 && segments[1] === 'new') return true;
   return segments.length === 3 && segments[2] === 'edit';

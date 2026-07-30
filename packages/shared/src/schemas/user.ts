@@ -140,6 +140,42 @@ export const changePasswordSchema = z.object({
   newPassword: passwordSchema,
 });
 
+/**
+ * The RFC-7807 `code` the API sets when `POST /me/change-password` rejects
+ * the supplied **current password**.
+ *
+ * `POST /me/change-password` is an authenticated route that can 401 for two
+ * unrelated reasons, and without this code they are indistinguishable to a
+ * machine: the current password was wrong (`MeService.changePassword`), or
+ * the session itself is gone (`AuthGuard`, after `silentRefresh` already
+ * failed, throws a bare `UnauthorizedException` with no message and no
+ * code). Collapsing them breaks both ways — treat every 401 as a wrong
+ * password and a signed-out technician retypes a correct one forever; treat
+ * every 401 as a dead session and a single typo signs them out mid-job.
+ *
+ * So: 401 **with** this code means the field was wrong (stay on the form);
+ * 401 **without** it means the session is gone (route to login). No probe
+ * request is needed to be sure of the second case — `silentRefresh` has
+ * already tried and failed by the time a 401 leaves the server.
+ *
+ * Lives here rather than in either app because both clients branch on the
+ * same string, and it is a code rather than a `detail` match for the reason
+ * recorded on `MFA_ENROLLMENT_REQUIRED_CODE`: rewording a server string
+ * must not silently change client behaviour.
+ */
+export const CURRENT_PASSWORD_INVALID_CODE = 'current_password_invalid';
+
+/** Narrows an RFC-7807 problem body to the rejected-current-password 401. */
+export function isCurrentPasswordInvalidProblem(
+  problem: unknown,
+): problem is { code: typeof CURRENT_PASSWORD_INVALID_CODE } {
+  return (
+    typeof problem === 'object' &&
+    problem !== null &&
+    (problem as { code?: unknown }).code === CURRENT_PASSWORD_INVALID_CODE
+  );
+}
+
 export type CreateUserInput = z.infer<typeof createUserSchema>;
 export type CreateUserMembershipInput = z.infer<typeof createUserMembershipSchema>;
 export type UpdateUserInput = z.infer<typeof updateUserSchema>;

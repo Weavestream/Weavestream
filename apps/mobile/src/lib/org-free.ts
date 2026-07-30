@@ -38,16 +38,26 @@ export function isOrgFreePath(pathname: string): boolean {
 }
 
 /**
- * Whether a concrete history entry is org-free. `/search` and `/more`
- * are org-free only when their entry carries an explicit `orgId: null`
- * stamp (a push from the launcher, or a reload of one — history state
- * survives reloads); an unstamped or org-stamped entry is the ordinary
- * in-org screen. Org-free More exists so account chores — sign-out,
- * appearance, install — are reachable before any company is selected
- * (and with zero companies at all).
+ * Whether a concrete history entry is org-free. `/search`, `/more` and
+ * `/profile` are org-free only when their entry carries an explicit
+ * `orgId: null` stamp (a push from the launcher, or a reload of one —
+ * history state survives reloads); an unstamped or org-stamped entry is
+ * the ordinary in-org screen. Org-free More exists so account chores —
+ * sign-out, install — are reachable before any company is selected (and
+ * with zero companies at all), and `/profile` joins it for the same
+ * reason: appearance and the account password are account-level, so they
+ * must work for an account with no companies. Matching on the leading
+ * segment means `/profile/password` is covered by the same entry.
+ *
+ * Stamp-gated rather than org-free by *path* on purpose: reaching the
+ * profile from inside a client must not drop that client from context,
+ * or Back would return to a scoped screen with nothing scoped.
  */
 export function isOrgFreeEntry(pathname: string, state: unknown): boolean {
   if (isOrgFreePath(pathname)) return true;
   const seg = leadingSegment(pathname);
-  return (seg === 'search' || seg === 'more') && readOrgStamp(state) === null;
+  return (
+    (seg === 'search' || seg === 'more' || seg === 'profile') &&
+    readOrgStamp(state) === null
+  );
 }

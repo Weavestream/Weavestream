@@ -21,6 +21,8 @@ import { AssetDetailScreen } from './features/assets/AssetDetailScreen';
 import { AssetFormScreen } from './features/assets/AssetFormScreen';
 import { LayoutChooserScreen } from './features/assets/LayoutChooserScreen';
 import { LauncherScreen } from './features/launcher/LauncherScreen';
+import { ChangePasswordScreen } from './features/profile/ChangePasswordScreen';
+import { ProfileScreen } from './features/profile/ProfileScreen';
 import { SearchScreen } from './features/search/SearchScreen';
 import { signOutAndReset } from './lib/sign-out';
 import { UUID_RE } from './lib/uuid';
@@ -217,6 +219,27 @@ const moreRoute = createRoute({
   component: MoreTab,
 });
 
+/**
+ * The account surface (Phase 5c). Pushed from More's identity card, and
+ * org-free by stamp like `/more` and `/search` are (`isOrgFreeEntry`) so it
+ * works for an account with no companies at all — while entering it from
+ * inside a client keeps that client in context.
+ *
+ * The tab bar hides for both paths (`hideTabBarFor`): the account is not a
+ * company-scoped destination, and `tabIdForPath` has no tab to light up.
+ */
+const profileRoute = createRoute({
+  getParentRoute: () => tabsLayoutRoute,
+  path: '/profile',
+  component: ProfileScreen,
+});
+
+const changePasswordRoute = createRoute({
+  getParentRoute: () => tabsLayoutRoute,
+  path: '/profile/password',
+  component: ChangePasswordScreen,
+});
+
 // Full-screen search takeover (2b) — the tab bar hides for it
 // (`hideTabBarFor`), and the query rides `?q=` so back-from-detail
 // restores the exact search. Inside the tab layout so the `?sheet=ask`
@@ -335,6 +358,8 @@ const routeTree = rootRoute.addChildren([
     assetDetailRoute,
     assetEditRoute,
     moreRoute,
+    profileRoute,
+    changePasswordRoute,
     searchRoute,
   ]),
   loginRoute,
