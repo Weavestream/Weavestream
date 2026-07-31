@@ -77,8 +77,29 @@ async function handler(req: NextRequest): Promise<Response> {
   //
   // No loop: Next's own trailing-slash normalization turns `/m/` into
   // `/m`, and `/m/app` needs no normalization, so the chain terminates.
+  //
+  // The `Location` is deliberately RELATIVE, not built from
+  // `req.nextUrl`. `nextUrl`'s origin is whatever host the container was
+  // reached on — behind a reverse proxy that is the *internal* address,
+  // and when the edge sends no usable `Host` at all Next falls back to
+  // its own listen origin (`http://localhost:3000`). Either way an
+  // absolute redirect sends the browser to an address that only resolves
+  // inside the host, and `/m` is unreachable from every other device. It
+  // is also a host-header open redirect wherever the edge forwards a
+  // client-supplied `Host` verbatim. A relative reference is resolved by
+  // the browser against the address bar, so it is correct on every
+  // topology without the app trusting a forwarded header at all
+  // (RFC 7231 §7.1.2 permits it, and `Response.redirect` does not — hence
+  // the hand-built response).
+  //
+  // `no-store` because a 308 is otherwise cached indefinitely: a client
+  // that saw one bad hop would keep following it out of its own cache
+  // long after the server stopped sending it.
   if (pathname === '/m') {
-    return Response.redirect(new URL('/m/app', req.nextUrl), 308);
+    return new Response(null, {
+      status: 308,
+      headers: { location: '/m/app', 'cache-control': 'no-store' },
+    });
   }
 
   // A missing static file must 404, not fall back to the shell — see

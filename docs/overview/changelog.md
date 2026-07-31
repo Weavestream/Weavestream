@@ -13,6 +13,16 @@ All notable changes to Weavestream are documented here. The format follows [Keep
 
 ## [Unreleased]
 
+## [1.9.3] - 2026-07-30
+
+### Fixed
+
+- **The mobile app was unreachable at `/m` behind a reverse proxy.** Opening `/m` redirected to the address the *server* was reached on rather than the one you typed, so on a typical proxied deployment it bounced the browser to an internal address (commonly `http://localhost:3000/m/app`) that only resolves on the host itself. The redirect is now relative, so it lands on whichever address you are already using. `/m/app` was never affected — if you hit this, that was the workaround. **Note:** browsers cache this kind of redirect indefinitely, so after upgrading, a device that already saw the bad one keeps following it until you clear that site's website data.
+
+### Security
+
+- **The `/m` redirect no longer trusts the request's `Host` header.** Because the redirect target was built from the incoming host, a deployment whose edge proxy forwards a client-supplied `Host` verbatim could be made to answer a request for `/m` with a redirect to an attacker-chosen address — a phishing stepping stone that borrows your domain's credibility. The redirect no longer references the host at all. Deployments whose proxy sets `Host` itself (the configuration in the [TLS guide](/deployment/tls/)) were not exposed to the redirect, only to the bug above.
+
 ## [1.9.2] - 2026-07-30
 
 ### Added
@@ -712,7 +722,8 @@ Initial public release.
 
 ---
 
-[Unreleased]: https://github.com/Weavestream/Weavestream/compare/v1.9.2...HEAD
+[Unreleased]: https://github.com/Weavestream/Weavestream/compare/v1.9.3...HEAD
+[1.9.3]: https://github.com/Weavestream/Weavestream/releases/tag/v1.9.3
 [1.9.2]: https://github.com/Weavestream/Weavestream/releases/tag/v1.9.2
 [1.9.1]: https://github.com/Weavestream/Weavestream/releases/tag/v1.9.1
 [1.9.0]: https://github.com/Weavestream/Weavestream/releases/tag/v1.9.0
