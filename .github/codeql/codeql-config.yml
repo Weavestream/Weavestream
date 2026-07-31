@@ -1,49 +1,59 @@
 name: WeaveStream CodeQL config
 
 # Use the security-extended pack so we keep the alerts default setup
-# would have given us (CWE-89, CWE-79, CWE-22, etc.) and only narrow
-# the specific false-positive below.
+# would have given us (CWE-89, CWE-79, CWE-22, etc.).
 queries:
   - uses: security-extended
 
-# Per-query path filtering for confirmed false positives.
+# ---------------------------------------------------------------------
+# Confirmed false positives are dismissed on the alert, NOT filtered here
+# ---------------------------------------------------------------------
 #
-# `js/insufficient-password-hash` — CWE-916 — flags any flow from a
-# password-shaped source into SHA-1/MD5/etc. The HIBP Pwned Passwords
-# *range* API is a public k-anonymity protocol that mandates uppercase
-# hex SHA-1 of the plaintext: only the first 5 hex chars (20 bits) are
-# sent off-host, and the digest is never persisted (stored credentials
-# use AES-GCM envelope encryption — see PasswordsService.encrypt). The
-# protocol cannot be satisfied with bcrypt/argon2/scrypt.
+# There is deliberately no `query-filters:` block. It cannot do the job
+# it looks like it can: `query-filters` select QUERIES by metadata (`id`,
+# `tags`, `problem.severity`), and have no notion of a file path. A
+# `paths:` key inside an exclude is silently accepted and then ignored —
+# `codeql database init` even echoes it back into the workflow log
+# verbatim, with no warning, so the filter reads as if it were working
+# while matching nothing.
 #
-# Reference: https://haveibeenpwned.com/API/v3#PwnedPasswords
-query-filters:
-  - exclude:
-      id: js/insufficient-password-hash
-      paths:
-        - apps/api/src/passwords/hibp-range-hash.ts
-
-  # `js/file-access-to-http` — CWE-200 — flags file contents reaching an
-  # outbound request, as a possible exfiltration backdoor. Both scripts
-  # read the checked-in Mermaid corpus and pass each diagram's source to
-  # a browser over the DevTools protocol, which is the only way to render
-  # it: Mermaid measures text with getBBox, so it cannot run under jest.
-  #
-  # The query's premise does not hold here. The "remote URL" is the
-  # DevTools endpoint of a Chromium *this script just spawned* with
-  # `--remote-debugging-port=0`, which binds loopback — verified to be
-  # `ws://127.0.0.1:<ephemeral>/devtools/browser/<uuid>`, never a
-  # configurable or attacker-influenced address. The "file data" is the
-  # corpus fixtures and Mermaid's own installed `dist/` bundle: repo test
-  # data, no secrets, no PII, no untrusted input anywhere in either
-  # script. Both are maintenance/CI tooling and ship in no bundle.
-  #
-  # Excluded rather than refactored because sending the diagram source to
-  # the browser IS the design — there is no variant of these scripts that
-  # renders Mermaid without it. Scoped to the two files by path, so the
-  # rule keeps its teeth everywhere else.
-  - exclude:
-      id: js/file-access-to-http
-      paths:
-        - apps/web/scripts/mermaid-corpus.mjs
-        - apps/web/scripts/check-diagram-csp.mjs
+# This repo had one such filter for months (js/insufficient-password-hash
+# on hibp-range-hash.ts). It never suppressed anything; alert #10 was
+# closed by dismissal in the security tab, which is what actually did the
+# work. A second one added for js/file-access-to-http behaved identically
+# — the alert survived the very next scan — which is how the first was
+# found to be inert.
+#
+# So: to suppress a confirmed false positive, dismiss the alert itself
+# ("false positive" / "won't fix", with a reason). That is precise to the
+# one finding, leaves the rule live everywhere including the file it was
+# raised on, and is reversible. The alternative that does work in config,
+# `paths-ignore`, is a much bigger hammer — it removes a file from ALL
+# queries — and is not appropriate for source files.
+#
+# Standing dismissal rationales, recorded here because the security tab's
+# note field is easy to miss and impossible to review in a diff:
+#
+# - `js/insufficient-password-hash` (CWE-916) on
+#   `apps/api/src/passwords/hibp-range-hash.ts` — flags any flow from a
+#   password-shaped source into SHA-1/MD5/etc. The HIBP Pwned Passwords
+#   *range* API is a public k-anonymity protocol that mandates uppercase
+#   hex SHA-1 of the plaintext: only the first 5 hex chars (20 bits) are
+#   sent off-host, and the digest is never persisted (stored credentials
+#   use AES-GCM envelope encryption — see PasswordsService.encrypt). The
+#   protocol cannot be satisfied with bcrypt/argon2/scrypt.
+#   Reference: https://haveibeenpwned.com/API/v3#PwnedPasswords
+#
+# - `js/file-access-to-http` (CWE-200) on
+#   `apps/web/scripts/check-diagram-csp.mjs` (and the identical flow in
+#   `mermaid-corpus.mjs`) — flags corpus file contents reaching `ws.send`
+#   as possible exfiltration. The premise does not hold: the socket is
+#   the DevTools endpoint of a Chromium the script itself spawns with
+#   `--remote-debugging-port=0`, verified to bind loopback
+#   (`ws://127.0.0.1:<ephemeral>/devtools/browser/<uuid>`), never a
+#   configurable or attacker-influenced address. The "file data" is the
+#   checked-in Mermaid corpus and Mermaid's own installed `dist/` bundle:
+#   test data, no secrets, no PII, no untrusted input in either script,
+#   and neither ships in a bundle. Not refactorable — passing the diagram
+#   source to a browser IS the design, since Mermaid measures text with
+#   `getBBox` and cannot render without one.

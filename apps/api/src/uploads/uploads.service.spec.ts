@@ -4,6 +4,7 @@ import {
   ForbiddenException,
   NotFoundException,
   PayloadTooLargeException,
+  UnsupportedMediaTypeException,
 } from '@nestjs/common';
 import { createHash } from 'node:crypto';
 import { promises as fs } from 'node:fs';
@@ -2198,5 +2199,171 @@ describe('UploadsService.restore / restoreInfo', () => {
       service.revealStoragePath(sa, 'c1', 'u1', meta),
     ).rejects.toBeInstanceOf(NotFoundException);
     expect(audit.log).not.toHaveBeenCalled();
+  });
+});
+
+describe('UploadsService.confirm — signature-less declared types (real file-type)', () => {
+  const operator = { id: 'user-1', role: 'OPERATOR' } as never;
+  const auditMeta = { ip: '127.0.0.1', userAgent: 'jest' };
+  const jsonBody = Buffer.from('{\n  "hostname": "dc-01",\n  "cores": 8\n}\n');
+  // A minimal real PNG — `file-type` reports image/png from its magic
+  // bytes, so it stands in for "declared JSON, bytes are something else".
+  const pngBuffer = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+    'base64',
+  );
+
+  function makeService(opts: {
+    mimeType: string;
+    body: Buffer;
+    allowed?: string;
+  }) {
+    const prisma = {
+      upload: {
+        create: jest
+          .fn()
+          .mockImplementation(
+            async ({ data }: { data: Record<string, unknown> }) => ({
+              ...data,
+              createdAt: new Date('2026-01-01T00:00:00Z'),
+            }),
+          ),
+      },
+      asset: { findFirst: jest.fn().mockResolvedValue(null) },
+      article: { findFirst: jest.fn().mockResolvedValue(null) },
+      assetField: { findFirst: jest.fn().mockResolvedValue(null) },
+      password: { findFirst: jest.fn().mockResolvedValue(null) },
+    };
+    const storage = {
+      headObject: jest.fn().mockResolvedValue({
+        ContentLength: opts.body.length,
+        LastModified: new Date('2026-01-01T00:00:00Z'),
+        ETag: '"e"',
+      }),
+      getObjectHead: jest.fn().mockResolvedValue(opts.body),
+      getObjectStream: jest
+        .fn()
+        .mockResolvedValue({ body: Readable.from(opts.body) }),
+      getObjectPath: jest.fn().mockReturnValue('/unused'),
+      deleteObject: jest.fn().mockResolvedValue(undefined),
+      putObject: jest.fn().mockResolvedValue(undefined),
+      thumbnailKey: jest.fn().mockReturnValue('c1/thumbs/u-1.webp'),
+    };
+    const redis = {
+      client: {
+        get: jest.fn().mockResolvedValue(
+          JSON.stringify({
+            companyId: 'c1',
+            filename: 'inventory.json',
+            mimeType: opts.mimeType,
+            sizeBytes: opts.body.length,
+            storageKey: 'c1/uploads/u-1/inventory.json',
+            uploaderId: 'user-1',
+            attachedToType: null,
+            attachedToId: null,
+          }),
+        ),
+        set: jest.fn().mockResolvedValue('OK'),
+        del: jest.fn().mockResolvedValue(undefined),
+      },
+    };
+    const service = new UploadsService(
+      prisma as never,
+      storage as never,
+      redis as never,
+      { log: jest.fn() } as never,
+      {
+        values: {
+          MAX_UPLOAD_MB: 25,
+          ALLOWED_UPLOAD_MIME:
+            opts.allowed ?? 'application/json,application/zip,image/png',
+        },
+      } as never,
+    );
+    return { service, prisma, storage };
+  }
+
+  it('accepts a .json upload that has no magic-byte signature', async () => {
+    const { service, prisma, storage } = makeService({
+      mimeType: 'application/json',
+      body: jsonBody,
+    });
+    const res = await service.confirm(
+      operator,
+      'c1',
+      { uploadId: 'u-1' } as never,
+      auditMeta,
+    );
+    expect(res.mimeType).toBe('application/json');
+    expect(storage.deleteObject).not.toHaveBeenCalled();
+    expect(prisma.upload.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          mimeType: 'application/json',
+          isImage: false,
+          sha256: createHash('sha256').update(jsonBody).digest('hex'),
+        }),
+      }),
+    );
+  });
+
+  it('accepts a UTF-16 LE .json (PowerShell Out-File default) that file-type calls audio/mpeg', async () => {
+    // `FF FE` satisfies the MPEG frame-sync pattern; the BOM fast path is
+    // what keeps this from failing as a MimeMismatch.
+    const utf16 = Buffer.concat([
+      Buffer.from([0xff, 0xfe]),
+      Buffer.from(jsonBody.toString('utf8'), 'utf16le'),
+    ]);
+    const { service, prisma, storage } = makeService({
+      mimeType: 'application/json',
+      body: utf16,
+    });
+    await service.confirm(
+      operator,
+      'c1',
+      { uploadId: 'u-1' } as never,
+      auditMeta,
+    );
+    expect(storage.deleteObject).not.toHaveBeenCalled();
+    expect(prisma.upload.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ mimeType: 'application/json' }),
+      }),
+    );
+  });
+
+  it('still rejects when a declared .json carries contradicting magic bytes', async () => {
+    const { service, storage } = makeService({
+      mimeType: 'application/json',
+      body: pngBuffer,
+    });
+    await expect(
+      service.confirm(operator, 'c1', { uploadId: 'u-1' } as never, auditMeta),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(storage.deleteObject).toHaveBeenCalled();
+    expect(storage.getObjectStream).not.toHaveBeenCalled();
+  });
+
+  it('still rejects a signature-less body declared as a type outside the waiver', async () => {
+    const { service, storage } = makeService({
+      mimeType: 'application/zip',
+      body: jsonBody,
+    });
+    await expect(
+      service.confirm(operator, 'c1', { uploadId: 'u-1' } as never, auditMeta),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(storage.deleteObject).toHaveBeenCalled();
+  });
+
+  it('does not widen the allowlist — .json is still rejected when the operator excludes it', async () => {
+    const { service, storage } = makeService({
+      mimeType: 'application/json',
+      body: jsonBody,
+      allowed: 'image/png,application/pdf',
+    });
+    await expect(
+      service.confirm(operator, 'c1', { uploadId: 'u-1' } as never, auditMeta),
+    ).rejects.toBeInstanceOf(UnsupportedMediaTypeException);
+    expect(storage.deleteObject).toHaveBeenCalled();
   });
 });

@@ -155,6 +155,27 @@ const PENDING_TTL_SECONDS = 15 * 60;
 const MAGIC_HEAD_BYTES = 64 * 1024;
 
 /**
+ * Declared MIME types outside the `text/*` family that legitimately
+ * carry no magic-byte signature, so `file-type` returns nothing for
+ * them and confirm must accept the declared type on its own rather
+ * than rejecting as `MimeUndetectable`:
+ *   - `message/rfc822` — .eml is plain ASCII headers + body.
+ *   - `application/json` — structured text with no signature. Browsers
+ *     stamp `.json` as `application/json`, not a `text/*` type, so it
+ *     cannot ride the `text/*` fallback.
+ *
+ * Membership here only waives the *signature* requirement. The
+ * `ALLOWED_UPLOAD_MIME` check still runs afterwards, so this never
+ * widens what an operator has allowed. Bytes for every non-`image/*`
+ * type are served `Content-Disposition: attachment` with `nosniff`, so
+ * a file mislabelled as one of these is downloaded, never rendered.
+ */
+const SIGNATURELESS_DECLARED_MIMES: ReadonlySet<string> = new Set([
+  'message/rfc822',
+  'application/json',
+]);
+
+/**
  * At most this many thumbnail decodes run concurrently (WS-027). Each
  * decode may hold up to ~MAX_IMAGE_DECODE_PIXELS × 4 bytes of native
  * raster memory in libvips; without a cap, parallel confirms multiply
@@ -496,22 +517,24 @@ export class UploadsService {
 
     const declaredMime = pending.mimeType.toLowerCase();
     const isTextDeclared = declaredMime.startsWith('text/');
-    // RFC822 email messages (.eml) are plain ASCII headers + body, so
-    // `file-type` returns nothing. Treat them like text/* for the
-    // "no magic bytes" fallback — the allowlist check below still
-    // gates whether the operator actually wants .eml uploads.
-    const isTextLikeDeclared = isTextDeclared || declaredMime === 'message/rfc822';
+    // Signature-less text formats (.eml, .json) are treated like text/*
+    // for the "no magic bytes" fallback — the allowlist check below
+    // still gates whether the operator actually wants them.
+    const isTextLikeDeclared =
+      isTextDeclared || SIGNATURELESS_DECLARED_MIMES.has(declaredMime);
 
     let finalMime = declaredMime;
 
-    // Fast path: a declared text/* upload that begins with a recognised
-    // Unicode BOM is authoritatively text. We skip `file-type` here to
-    // avoid known false positives — notably UTF-16 LE's `FF FE` prefix
-    // matching the MPEG audio frame-sync pattern, which made Windows-
-    // exported BitLocker Recovery Key `.txt` files fail as `audio/mpeg`.
-    // The allowlist check below still runs, so only declared text MIMEs
+    // Fast path: a declared text-like upload that begins with a
+    // recognised Unicode BOM is authoritatively text. We skip
+    // `file-type` here to avoid known false positives — notably UTF-16
+    // LE's `FF FE` prefix matching the MPEG audio frame-sync pattern,
+    // which made Windows-exported BitLocker Recovery Key `.txt` files
+    // fail as `audio/mpeg`. The same trap catches `.json` written by
+    // Windows PowerShell 5.1, whose `Out-File` default is UTF-16 LE.
+    // The allowlist check below still runs, so only declared MIMEs
     // already in `ALLOWED_UPLOAD_MIME` can take this path.
-    if (isTextDeclared && startsWithTextBom(headBytes)) {
+    if (isTextLikeDeclared && startsWithTextBom(headBytes)) {
       // finalMime already === declaredMime; fall through to allowlist.
     } else {
       const detected = await fileTypeFromBuffer(headBytes);
@@ -537,7 +560,8 @@ export class UploadsService {
           error: 'MimeUndetectable',
           declared: declaredMime,
           message:
-            'Could not detect a magic-bytes signature for this file. Only text/* and message/rfc822 uploads are allowed without a signature.',
+            'Could not detect a magic-bytes signature for this file. Only text/* and ' +
+            `${[...SIGNATURELESS_DECLARED_MIMES].join(', ')} uploads are allowed without a signature.`,
         });
       }
     }
