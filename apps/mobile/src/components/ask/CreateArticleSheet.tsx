@@ -242,7 +242,7 @@ export function CreateArticleSheet({
             aria-hidden
             className={
               'flex h-[30px] w-[52px] shrink-0 items-center rounded-pill p-[3px] transition-colors ' +
-              (visibleToClients ? 'justify-end bg-accent' : 'justify-start bg-line')
+              (visibleToClients ? 'justify-end bg-accent-fill' : 'justify-start bg-line')
             }
           >
             <span className="h-6 w-6 rounded-pill bg-surface shadow-sm" />

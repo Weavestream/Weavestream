@@ -185,9 +185,9 @@ function PageButton({
     fontSize: 12,
     fontFamily: 'var(--font-mono)',
     fontWeight: active ? 600 : 500,
-    background: active ? 'var(--accent)' : 'transparent',
+    background: active ? 'var(--accent-fill)' : 'transparent',
     color: active
-      ? 'var(--accent-ink)'
+      ? 'var(--accent-fill-ink)'
       : disabled
         ? 'var(--dim)'
         : 'var(--text-2)',

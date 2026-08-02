@@ -909,10 +909,10 @@ function Checkbox({
         width: 16,
         height: 16,
         borderRadius: 3,
-        border: `1px solid ${checked || indeterminate ? 'var(--accent)' : 'var(--line-2)'}`,
+        border: `1px solid ${checked || indeterminate ? 'var(--accent-fill)' : 'var(--line-2)'}`,
         background:
-          checked || indeterminate ? 'var(--accent)' : 'var(--panel-2)',
-        color: 'var(--accent-ink)',
+          checked || indeterminate ? 'var(--accent-fill)' : 'var(--panel-2)',
+        color: 'var(--accent-fill-ink)',
         cursor: 'pointer',
         transition: 'background-color 120ms ease, border-color 120ms ease',
       }}
@@ -922,7 +922,7 @@ function Checkbox({
           style={{
             width: 8,
             height: 2,
-            background: 'var(--accent-ink)',
+            background: 'var(--accent-fill-ink)',
             borderRadius: 1,
           }}
         />

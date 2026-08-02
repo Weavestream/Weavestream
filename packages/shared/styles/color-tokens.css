@@ -14,10 +14,11 @@
  * carry the same three attributes desktop SSR sets, including the
  * `data-theme-pref="system"` media-block contract below.
  *
- * Consume the semantic names (`--accent`, `--accent-ink`, `--surface`,
- * `--line`, …) rather than literal hexes: `--accent-ink` is already the
- * tested foreground for `--accent`, so a palette change lands correctly
- * everywhere at once.
+ * Consume the semantic names (`--accent`, `--accent-fill`, `--surface`,
+ * `--line`, …) rather than literal hexes. `--accent` is calibrated for
+ * links and focus indicators; `--accent-fill` is the brighter control-fill
+ * color shown by the Appearance swatches. `--accent-fill-ink` is its tested
+ * foreground, so a palette change lands correctly everywhere at once.
  *
  * Shadows live here rather than with the geometry because they are rgba
  * values that flip with the theme, and splitting them from the
@@ -43,6 +44,10 @@
 
   --accent: oklch(0.86 0.18 125);
   --accent-ink: #0a0a0a;
+  --accent-fill: oklch(0.86 0.18 125);
+  --accent-fill-ink: #0a0a0a;
+  --accent-fill-hover: color-mix(in oklab, var(--accent-fill) 94%, black);
+  --accent-fill-active: color-mix(in oklab, var(--accent-fill) 88%, black);
   --accent-soft: oklch(0.86 0.18 125 / 0.12);
   --accent-line: oklch(0.86 0.18 125 / 0.35);
 
@@ -82,6 +87,8 @@
 
   --accent: oklch(0.68 0.18 135);
   --accent-ink: #fafaf9;
+  --accent-fill: oklch(0.86 0.18 125);
+  --accent-fill-ink: #0a0a0a;
   --accent-soft: oklch(0.68 0.18 135 / 0.14);
   --accent-line: oklch(0.68 0.18 135 / 0.4);
 
@@ -106,30 +113,40 @@
 [data-accent='lime'] {
   --accent: oklch(0.86 0.18 125);
   --accent-ink: #0a0a0a;
+  --accent-fill: oklch(0.86 0.18 125);
+  --accent-fill-ink: #0a0a0a;
   --accent-soft: oklch(0.86 0.18 125 / 0.12);
   --accent-line: oklch(0.86 0.18 125 / 0.35);
 }
 [data-accent='amber'] {
   --accent: oklch(0.82 0.16 75);
   --accent-ink: #0a0a0a;
+  --accent-fill: oklch(0.82 0.16 75);
+  --accent-fill-ink: #0a0a0a;
   --accent-soft: oklch(0.82 0.16 75 / 0.14);
   --accent-line: oklch(0.82 0.16 75 / 0.4);
 }
 [data-accent='iris'] {
   --accent: oklch(0.74 0.17 270);
   --accent-ink: #0a0a0a;
+  --accent-fill: oklch(0.74 0.17 270);
+  --accent-fill-ink: #0a0a0a;
   --accent-soft: oklch(0.74 0.17 270 / 0.14);
   --accent-line: oklch(0.74 0.17 270 / 0.4);
 }
 [data-accent='coral'] {
   --accent: oklch(0.74 0.18 25);
   --accent-ink: #0a0a0a;
+  --accent-fill: oklch(0.74 0.18 25);
+  --accent-fill-ink: #0a0a0a;
   --accent-soft: oklch(0.74 0.18 25 / 0.14);
   --accent-line: oklch(0.74 0.18 25 / 0.4);
 }
 [data-accent='teal'] {
   --accent: oklch(0.76 0.13 195);
   --accent-ink: #0a0a0a;
+  --accent-fill: oklch(0.76 0.13 195);
+  --accent-fill-ink: #0a0a0a;
   --accent-soft: oklch(0.76 0.13 195 / 0.14);
   --accent-line: oklch(0.76 0.13 195 / 0.4);
 }
@@ -137,22 +154,32 @@
 [data-theme='light'][data-accent='lime'] {
   --accent: oklch(0.62 0.19 135);
   --accent-ink: #0a0a0a;
+  --accent-fill: oklch(0.86 0.18 125);
+  --accent-fill-ink: #0a0a0a;
 }
 [data-theme='light'][data-accent='amber'] {
   --accent: oklch(0.62 0.16 65);
   --accent-ink: #0a0a0a;
+  --accent-fill: oklch(0.82 0.16 75);
+  --accent-fill-ink: #0a0a0a;
 }
 [data-theme='light'][data-accent='iris'] {
   --accent: oklch(0.52 0.2 270);
   --accent-ink: #fff;
+  --accent-fill: oklch(0.74 0.17 270);
+  --accent-fill-ink: #0a0a0a;
 }
 [data-theme='light'][data-accent='coral'] {
   --accent: oklch(0.58 0.2 25);
   --accent-ink: #fff;
+  --accent-fill: oklch(0.74 0.18 25);
+  --accent-fill-ink: #0a0a0a;
 }
 [data-theme='light'][data-accent='teal'] {
   --accent: oklch(0.56 0.12 195);
   --accent-ink: #0a0a0a;
+  --accent-fill: oklch(0.76 0.13 195);
+  --accent-fill-ink: #0a0a0a;
 }
 
 /* Phase 9b.1 — `theme=system` first-paint fallback.
@@ -188,6 +215,8 @@
 
     --accent: oklch(0.68 0.18 135);
     --accent-ink: #fafaf9;
+    --accent-fill: oklch(0.86 0.18 125);
+    --accent-fill-ink: #0a0a0a;
     --accent-soft: oklch(0.68 0.18 135 / 0.14);
     --accent-line: oklch(0.68 0.18 135 / 0.4);
 
@@ -211,21 +240,31 @@
   html[data-theme-pref='system'][data-accent='lime'] {
     --accent: oklch(0.62 0.19 135);
     --accent-ink: #0a0a0a;
+    --accent-fill: oklch(0.86 0.18 125);
+    --accent-fill-ink: #0a0a0a;
   }
   html[data-theme-pref='system'][data-accent='amber'] {
     --accent: oklch(0.62 0.16 65);
     --accent-ink: #0a0a0a;
+    --accent-fill: oklch(0.82 0.16 75);
+    --accent-fill-ink: #0a0a0a;
   }
   html[data-theme-pref='system'][data-accent='iris'] {
     --accent: oklch(0.52 0.2 270);
     --accent-ink: #fff;
+    --accent-fill: oklch(0.74 0.17 270);
+    --accent-fill-ink: #0a0a0a;
   }
   html[data-theme-pref='system'][data-accent='coral'] {
     --accent: oklch(0.58 0.2 25);
     --accent-ink: #fff;
+    --accent-fill: oklch(0.74 0.18 25);
+    --accent-fill-ink: #0a0a0a;
   }
   html[data-theme-pref='system'][data-accent='teal'] {
     --accent: oklch(0.56 0.12 195);
     --accent-ink: #0a0a0a;
+    --accent-fill: oklch(0.76 0.13 195);
+    --accent-fill-ink: #0a0a0a;
   }
 }

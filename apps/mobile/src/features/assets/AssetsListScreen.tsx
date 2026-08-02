@@ -87,7 +87,7 @@ export function AssetsListScreen({ filter }: { filter: AssetListFilter }) {
               onClick={() => navigate({ to: '/assets/new', upIsBack: true })}
               className={
                 'flex h-[42px] shrink-0 items-center gap-1.75 rounded-pill ' +
-                'bg-accent px-[15px] text-[15px] font-semibold text-accent-ink ' +
+                'bg-accent-fill px-[15px] text-[15px] font-semibold text-accent-fill-ink ' +
                 'active:bg-accent-pressed'
               }
             >

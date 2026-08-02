@@ -299,7 +299,7 @@ function AccentSwatch({
         display: 'inline-flex',
         alignItems: 'center',
         justifyContent: 'center',
-        background: 'var(--accent)',
+        background: 'var(--accent-fill)',
         border: selected ? '2px solid var(--text)' : '2px solid var(--line-2)',
         boxShadow: selected
           ? '0 0 0 3px var(--bg), 0 0 0 4px var(--accent-line)'
@@ -310,9 +310,9 @@ function AccentSwatch({
       {selected ? (
         <Icon.check
           size={14}
-          // var(--accent-ink) is the palette's "on-accent" color so
+          // var(--accent-fill-ink) is the palette's fill foreground so
           // the check is legible on any swatch without a manual map.
-          style={{ color: 'var(--accent-ink)' }}
+          style={{ color: 'var(--accent-fill-ink)' }}
         />
       ) : null}
     </button>

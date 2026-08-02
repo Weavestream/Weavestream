@@ -1227,8 +1227,8 @@ function Composer({ tab, disabled }: { tab: ChatTab; disabled: boolean }) {
               placeItems: 'center',
               border: '1px solid var(--line)',
               borderRadius: 17,
-              background: canSend ? 'var(--accent)' : 'var(--panel)',
-              color: canSend ? 'var(--accent-ink)' : 'var(--dim)',
+              background: canSend ? 'var(--accent-fill)' : 'var(--panel)',
+              color: canSend ? 'var(--accent-fill-ink)' : 'var(--dim)',
               cursor: canSend ? 'pointer' : 'not-allowed',
               flexShrink: 0,
             }}

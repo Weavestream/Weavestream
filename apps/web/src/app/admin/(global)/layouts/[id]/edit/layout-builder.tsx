@@ -1562,7 +1562,7 @@ function ToggleRow({
             width: 28,
             height: 16,
             borderRadius: 9,
-            background: value ? 'var(--accent)' : 'var(--line-3)',
+            background: value ? 'var(--accent-fill)' : 'var(--line-3)',
             position: 'relative',
             border: 'none',
             cursor: disabled ? 'not-allowed' : 'pointer',
@@ -1578,7 +1578,7 @@ function ToggleRow({
               width: 14,
               height: 14,
               borderRadius: '50%',
-              background: value ? 'var(--accent-ink)' : 'var(--text-2)',
+              background: value ? 'var(--accent-fill-ink)' : 'var(--text-2)',
               transition: 'left 160ms ease',
             }}
           />

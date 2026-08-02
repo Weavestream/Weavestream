@@ -155,7 +155,7 @@ export function LauncherScreen() {
           }
           className={
             'fixed bottom-edge-b right-4 z-tabbar flex h-ask w-ask items-center ' +
-            'justify-center rounded-ask bg-accent text-accent-ink shadow-ask ' +
+            'justify-center rounded-ask bg-accent-fill text-accent-fill-ink shadow-ask ' +
             'active:brightness-95'
           }
         >

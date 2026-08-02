@@ -57,7 +57,7 @@ function RowButton({
       className={
         'flex h-tap w-11 items-center justify-center rounded-pill ' +
         (tone === 'accent'
-          ? 'bg-accent text-accent-ink active:bg-accent-pressed'
+          ? 'bg-accent-fill text-accent-fill-ink active:bg-accent-pressed'
           : 'bg-panel text-text-2 active:bg-panel-2') +
         (disabled ? ' opacity-50' : '')
       }

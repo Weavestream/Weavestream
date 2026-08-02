@@ -69,7 +69,7 @@ export function MfaSetupHandoffScreen({
           // makes that explicit rather than letting the browser decide.
           target="_blank"
           rel="noopener noreferrer"
-          className="flex h-control w-full items-center justify-center rounded-pill bg-accent text-body font-semibold text-accent-ink"
+          className="flex h-control w-full items-center justify-center rounded-pill bg-accent-fill text-body font-semibold text-accent-fill-ink"
         >
           Open desktop setup
         </a>

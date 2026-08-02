@@ -85,7 +85,7 @@ export function Composer() {
           aria-label="Send"
           className={
             'flex h-11 w-11 shrink-0 items-center justify-center rounded-pill ' +
-            'bg-accent text-accent-ink active:bg-accent-pressed ' +
+            'bg-accent-fill text-accent-fill-ink active:bg-accent-pressed ' +
             'disabled:bg-line disabled:text-dim'
           }
         >

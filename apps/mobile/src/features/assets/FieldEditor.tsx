@@ -226,7 +226,7 @@ function BooleanSwitch({
         aria-hidden
         className={
           'flex h-[30px] w-[52px] shrink-0 items-center rounded-pill p-[3px] transition-colors ' +
-          (on ? 'justify-end bg-accent' : 'justify-start bg-line')
+          (on ? 'justify-end bg-accent-fill' : 'justify-start bg-line')
         }
       >
         <span className="h-6 w-6 rounded-pill bg-surface shadow-sm" />

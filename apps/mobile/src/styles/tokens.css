@@ -3,8 +3,8 @@
  * Split by axis, deliberately: **inherit color, own the geometry.**
  *
  * Color comes from the shared file below, so the user's accent preference
- * carries over from desktop, `--accent-ink` stays the tested foreground
- * for `--accent`, and a future palette change lands on both apps at once.
+ * carries over from desktop, `--accent-fill-ink` stays the tested foreground
+ * for `--accent-fill`, and a future palette change lands on both apps at once.
  * The sole neutral exception is `--muted`: mobile's 12–13px labels need
  * more contrast in field conditions than desktop's larger secondary text,
  * so the three theme blocks below raise it locally to a 6:1 minimum.
@@ -86,16 +86,14 @@
    * this order — `:root` and `[data-theme='light']` tie on specificity,
    * so source order is what lets light win.
    *
-   * The shared `--accent` is tuned as a *fill*: it pairs with
-   * `--accent-ink` on a button and reads correctly there. Two of the
-   * roles this app introduces are not fills, and reusing the raw fill
-   * value for them measurably fails WCAG AA on several palettes — so
-   * they get their own derived values rather than new debt. These
-   * derived role tokens stay deliberately mobile-local.
+   * The shared `--accent-fill` / `--accent-fill-ink` pair owns filled
+   * controls. Two of the roles this app introduces are not fills, and
+   * reusing that bright value for them measurably fails WCAG AA on
+   * several palettes — so they get their own derived values rather than
+   * new debt. These derived role tokens stay deliberately mobile-local.
    *
-   *  --accent-pressed  pressed fills. Dark can take a pronounced darken;
-   *                    light uses a smaller shift because teal's dark ink
-   *                    otherwise falls below 4.5:1 in the pressed state.
+   *  --accent-pressed  shared active fill, kept as a mobile compatibility
+   *                    alias for existing Tailwind utilities.
    *  --accent-text     accent as TEXT on --bg. The 11px active tab label
    *                    is the case that forced this. In light, raw
    *                    --accent lands ~3.4:1 on the default palette and
@@ -114,7 +112,7 @@
    */
   color-scheme: dark;
   --muted: #9c9c9c;
-  --accent-pressed: color-mix(in oklab, var(--accent) 90%, black);
+  --accent-pressed: var(--accent-fill-active);
   --accent-text: color-mix(in oklab, var(--accent) 92%, white);
   --accent-deep: color-mix(in oklab, var(--accent) 78%, white);
   --scrim: rgb(0 0 0 / 0.6);
@@ -171,7 +169,7 @@
 [data-theme='light'] {
   color-scheme: light;
   --muted: #5a5a56;
-  --accent-pressed: color-mix(in oklab, var(--accent) 99%, black);
+  --accent-pressed: var(--accent-fill-active);
   --accent-text: color-mix(in oklab, var(--accent) 78%, black);
   --accent-deep: color-mix(in oklab, var(--accent) 70%, black);
   --scrim: rgb(23 24 26 / 0.35);
@@ -187,7 +185,7 @@
   html[data-theme-pref='system'] {
     color-scheme: light;
     --muted: #5a5a56;
-    --accent-pressed: color-mix(in oklab, var(--accent) 99%, black);
+    --accent-pressed: var(--accent-fill-active);
     --accent-text: color-mix(in oklab, var(--accent) 78%, black);
     --accent-deep: color-mix(in oklab, var(--accent) 70%, black);
     --scrim: rgb(23 24 26 / 0.35);

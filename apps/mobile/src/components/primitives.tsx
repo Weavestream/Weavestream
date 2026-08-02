@@ -100,7 +100,7 @@ const BUTTON_TONE: Record<ButtonKind, string> = {
   // `active:` rather than `hover:` — this is a touch-only app. The
   // contrast-calibrated darken lives in `--accent-pressed`.
   primary:
-    'bg-accent text-accent-ink active:bg-accent-pressed ' +
+    'bg-accent-fill text-accent-fill-ink active:bg-accent-pressed ' +
     'disabled:bg-line disabled:text-dim',
   secondary:
     'border border-line bg-surface text-text active:bg-panel-2 ' +
@@ -391,7 +391,7 @@ export function Avatar({
 }) {
   const tones = {
     neutral: 'bg-panel-2 text-text-2',
-    accent: 'bg-accent text-accent-ink',
+    accent: 'bg-accent-fill text-accent-fill-ink',
     soft: 'bg-accent-soft text-accent-deep',
   } as const;
   return (

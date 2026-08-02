@@ -32,6 +32,8 @@ export default {
         faint: 'var(--faint)',
         accent: 'var(--accent)',
         'accent-ink': 'var(--accent-ink)',
+        'accent-fill': 'var(--accent-fill)',
+        'accent-fill-ink': 'var(--accent-fill-ink)',
         'accent-soft': 'var(--accent-soft)',
         'accent-line': 'var(--accent-line)',
         // Role-tuned accents — see src/styles/tokens.css for why the raw

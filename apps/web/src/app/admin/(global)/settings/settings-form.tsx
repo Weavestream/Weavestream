@@ -753,10 +753,10 @@ function GeneratorEditor({
                     s === 'none' || s === 'space'
                       ? 'var(--font-sans)'
                       : 'var(--font-mono)',
-                  color: active ? 'var(--accent-ink)' : 'var(--muted)',
-                  background: active ? 'var(--accent)' : 'var(--panel-2)',
+                  color: active ? 'var(--accent-fill-ink)' : 'var(--muted)',
+                  background: active ? 'var(--accent-fill)' : 'var(--panel-2)',
                   border: '1px solid',
-                  borderColor: active ? 'var(--accent)' : 'var(--line-2)',
+                  borderColor: active ? 'var(--accent-fill)' : 'var(--line-2)',
                   cursor: 'pointer',
                   minWidth: 36,
                   textAlign: 'center',

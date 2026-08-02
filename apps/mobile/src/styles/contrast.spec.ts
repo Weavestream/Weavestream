@@ -246,9 +246,15 @@ describe('mobile color-token contrast', () => {
             });
           }
 
-          it('keeps accent fills readable at rest and while pressed', () => {
-            expectContrast(tokens, '--accent-ink', '--accent', 4.5, context);
-            expectContrast(tokens, '--accent-ink', '--accent-pressed', 4.5, context);
+          it('keeps accent fills readable in every interactive state', () => {
+            for (const background of [
+              '--accent-fill',
+              '--accent-fill-hover',
+              '--accent-fill-active',
+              '--accent-pressed',
+            ]) {
+              expectContrast(tokens, '--accent-fill-ink', background, 4.5, context);
+            }
           });
         });
       }

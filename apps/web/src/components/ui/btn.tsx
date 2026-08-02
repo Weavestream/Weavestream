@@ -23,10 +23,10 @@ export const btnKindMap: Record<
   { bg: string; fg: string; bd: string; hover: string }
 > = {
   primary: {
-    bg: 'var(--accent)',
-    fg: 'var(--accent-ink)',
-    bd: 'var(--accent)',
-    hover: 'color-mix(in oklch, var(--accent) 90%, black)',
+    bg: 'var(--accent-fill)',
+    fg: 'var(--accent-fill-ink)',
+    bd: 'var(--accent-fill)',
+    hover: 'var(--accent-fill-hover)',
   },
   solid: {
     bg: 'var(--panel-2)',

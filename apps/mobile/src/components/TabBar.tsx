@@ -95,7 +95,7 @@ export function TabBar({
             aria-label="Ask anything"
             className={
               'mb-3.5 flex h-ask w-ask items-center justify-center rounded-ask ' +
-              'bg-accent text-accent-ink shadow-ask active:bg-accent-pressed'
+              'bg-accent-fill text-accent-fill-ink shadow-ask active:bg-accent-pressed'
             }
           >
             <Icon name="auto_awesome" size={29} />
