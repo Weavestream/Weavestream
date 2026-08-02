@@ -66,8 +66,11 @@ export function LayoutAssetsTable({
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
-  const [draft, setDraft] = useState(q);
+  const [draftState, setDraftState] = useState(() => ({ source: q, value: q }));
   const [tagFilter, setTagFilter] = useState<string | null>(null);
+  // Ignore a stale local draft when Next reuses this client component
+  // with a different URL query during back/forward navigation.
+  const draft = draftState.source === q ? draftState.value : q;
 
   const columns = useMemo(() => {
     const primary = layout.fields.find((f) => f.isPrimary);
@@ -166,7 +169,16 @@ export function LayoutAssetsTable({
     pushParams({ q: draft.trim() || null });
   }
 
-  if (rows.length === 0) {
+  function clearAll() {
+    setDraftState({ source: q, value: '' });
+    setTagFilter(null);
+    if (!q && !includeArchived) return;
+    startTransition(() => {
+      router.push(`${basePath}/layouts/${layout.slug}`);
+    });
+  }
+
+  if (rows.length === 0 && !q && !includeArchived) {
     return (
       <div
         style={{
@@ -176,36 +188,32 @@ export function LayoutAssetsTable({
           fontSize: 13,
         }}
       >
-        {q || includeArchived || tagFilter ? (
-          <>No {layout.name} match the current filters.</>
-        ) : (
-          <div style={{ display: 'grid', placeItems: 'center', gap: 10 }}>
-            <LayoutSwatch icon={layout.icon} color={layout.color} size={42} />
-            <div style={{ fontSize: 13, color: 'var(--text-2)' }}>
-              No {layout.name} yet for this company.
-            </div>
-            {canManage && (
-              <Link
-                href={`${basePath}/assets/new?layout=${layout.id}`}
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: 6,
-                  height: 30,
-                  padding: '0 12px',
-                  background: 'var(--accent)',
-                  color: 'var(--accent-ink)',
-                  borderRadius: 5,
-                  fontSize: 12.5,
-                  fontWeight: 600,
-                }}
-              >
-                <Icon.plus size={13} />
-                New {layout.name}
-              </Link>
-            )}
+        <div style={{ display: 'grid', placeItems: 'center', gap: 10 }}>
+          <LayoutSwatch icon={layout.icon} color={layout.color} size={42} />
+          <div style={{ fontSize: 13, color: 'var(--text-2)' }}>
+            No {layout.name} yet for this company.
           </div>
-        )}
+          {canManage && (
+            <Link
+              href={`${basePath}/assets/new?layout=${layout.id}`}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 6,
+                height: 30,
+                padding: '0 12px',
+                background: 'var(--accent)',
+                color: 'var(--accent-ink)',
+                borderRadius: 5,
+                fontSize: 12.5,
+                fontWeight: 600,
+              }}
+            >
+              <Icon.plus size={13} />
+              New {layout.name}
+            </Link>
+          )}
+        </div>
       </div>
     );
   }
@@ -248,7 +256,7 @@ export function LayoutAssetsTable({
           <Icon.search size={12} style={{ color: 'var(--muted)' }} />
           <input
             value={draft}
-            onChange={(e) => setDraft(e.target.value)}
+            onChange={(e) => setDraftState({ source: q, value: e.target.value })}
             onKeyDown={(e) => {
               if (e.key === 'Enter') commitSearch();
             }}
@@ -311,6 +319,25 @@ export function LayoutAssetsTable({
           <Icon.archive size={12} />
           {includeArchived ? 'Hide archived' : 'Show archived'}
         </button>
+
+        {(q || includeArchived || tagFilter) && (
+          <button
+            type="button"
+            onClick={clearAll}
+            style={{
+              height: 28,
+              padding: '0 8px',
+              background: 'transparent',
+              border: 'none',
+              fontFamily: 'var(--font-mono)',
+              fontSize: 11,
+              color: 'var(--muted)',
+              cursor: 'pointer',
+            }}
+          >
+            Clear filters
+          </button>
+        )}
       </div>
 
       {/* Table / cards — `flex: 1; min-height: 0` so the DataTable's

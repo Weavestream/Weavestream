@@ -55,8 +55,11 @@ export function AssetsTable({
   const router = useRouter();
   const toast = useToast();
   const [_pending, startTransition] = useTransition();
-  const [draft, setDraft] = useState(q);
+  const [draftState, setDraftState] = useState(() => ({ source: q, value: q }));
   const [tagFilter, setTagFilter] = useState<string | null>(null);
+  // Ignore a stale local draft when Next reuses this client component
+  // with a different URL query during back/forward navigation.
+  const draft = draftState.source === q ? draftState.value : q;
 
   // Bulk selection. `selectionMode` toggles the checkbox column and bulk
   // action bar; `selectedIds` persists across filter changes so a user
@@ -388,7 +391,7 @@ export function AssetsTable({
           <Icon.search size={12} style={{ color: 'var(--muted)' }} />
           <input
             value={draft}
-            onChange={(e) => setDraft(e.target.value)}
+            onChange={(e) => setDraftState({ source: q, value: e.target.value })}
             onKeyDown={(e) => {
               if (e.key === 'Enter') commitSearch();
             }}

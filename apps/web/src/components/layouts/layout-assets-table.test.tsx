@@ -1,6 +1,6 @@
 /** @jest-environment jsdom */
 import '@testing-library/jest-dom';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import type {
   AssetSummary,
   LayoutFieldSummary,
@@ -94,15 +94,23 @@ function makeRow(id: string, name: string, url: string): AssetSummary {
   };
 }
 
-function renderTable(rows: AssetSummary[]) {
+function renderTable(
+  rows: AssetSummary[],
+  overrides: Partial<
+    Pick<
+      React.ComponentProps<typeof LayoutAssetsTable>,
+      'q' | 'includeArchived' | 'canManage'
+    >
+  > = {},
+) {
   return render(
     <LayoutAssetsTable
       basePath="/admin/companies/co-1"
       layout={layout}
       rows={rows}
-      q=""
-      includeArchived={false}
-      canManage={false}
+      q={overrides.q ?? ''}
+      includeArchived={overrides.includeArchived ?? false}
+      canManage={overrides.canManage ?? false}
     />,
   );
 }
@@ -130,5 +138,55 @@ describe('LayoutAssetsTable URL cell', () => {
   it('renders — for a whitespace-only value, with no anchor', () => {
     renderTable([makeRow('a-3', 'Gamma', '   ')]);
     expect(screen.getByText('—').closest('a')).toBeNull();
+  });
+});
+
+describe('LayoutAssetsTable filters', () => {
+  beforeEach(() => {
+    push.mockClear();
+  });
+
+  it('keeps filter controls available when a server-side filter has no matches', () => {
+    renderTable([], { q: 'missing', includeArchived: true });
+
+    expect(screen.getByPlaceholderText('Search Devices…')).toHaveValue('missing');
+    expect(screen.getByRole('button', { name: 'Hide archived' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Clear filters' })).toBeInTheDocument();
+    expect(screen.getByText('No Devices match the current filters.')).toBeInTheDocument();
+  });
+
+  it('clears all URL-backed filters without reloading', () => {
+    renderTable([], { q: 'missing', includeArchived: true });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Clear filters' }));
+
+    expect(push).toHaveBeenCalledWith('/admin/companies/co-1/layouts/devices');
+  });
+
+  it('synchronizes the search input when URL state changes', () => {
+    const { rerender } = renderTable([makeRow('a-4', 'Delta', 'example.com')], {
+      q: 'before',
+    });
+
+    rerender(
+      <LayoutAssetsTable
+        basePath="/admin/companies/co-1"
+        layout={layout}
+        rows={[makeRow('a-4', 'Delta', 'example.com')]}
+        q="after"
+        includeArchived={false}
+        canManage={false}
+      />,
+    );
+
+    expect(screen.getByPlaceholderText('Search Devices…')).toHaveValue('after');
+  });
+
+  it('retains the dedicated creation state for an unfiltered empty layout', () => {
+    renderTable([], { canManage: true });
+
+    expect(screen.getByText('No Devices yet for this company.')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'New Devices' })).toBeInTheDocument();
+    expect(screen.queryByPlaceholderText('Search Devices…')).not.toBeInTheDocument();
   });
 });
