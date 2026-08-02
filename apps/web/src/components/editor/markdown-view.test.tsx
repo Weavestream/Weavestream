@@ -1,7 +1,13 @@
 /** @jest-environment jsdom */
 import '@testing-library/jest-dom';
-import { render } from '@testing-library/react';
+import { fireEvent, render, waitFor } from '@testing-library/react';
 import { MarkdownView } from './markdown-view';
+
+const copyToClipboard = jest.fn();
+
+jest.mock('@weavestream/shared/browser', () => ({
+  copyToClipboard: (...args: unknown[]) => copyToClipboard(...args),
+}));
 
 // Routing is what this file tests. The block's own behaviour — shadow
 // root, staleness, last-good — is `mermaid-block.test.tsx`; stubbing it
@@ -62,9 +68,7 @@ describe('raw-HTML neutralization', () => {
 
 describe('GFM support', () => {
   it('renders tables', () => {
-    const container = view(
-      ['| Host | Role |', '| --- | --- |', '| db-1 | primary |'].join('\n'),
-    );
+    const container = view(['| Host | Role |', '| --- | --- |', '| db-1 | primary |'].join('\n'));
     expect(container.querySelector('table')).not.toBeNull();
     expect(container.textContent).toContain('primary');
   });
@@ -89,6 +93,32 @@ describe('code blocks', () => {
     expect(code?.textContent).toBe('pg_ctl promote -D /data\n');
   });
 
+  it('copies fenced code and reports success', async () => {
+    copyToClipboard.mockResolvedValueOnce(true);
+    const container = view('```bash\nprintf "ready\\n"\n```');
+    const button = container.querySelector<HTMLButtonElement>('button[aria-label="Copy code"]');
+
+    expect(button).not.toBeNull();
+    expect(button?.textContent).toBe('');
+    expect(button).toHaveAttribute('data-copy-state', 'idle');
+    fireEvent.click(button!);
+
+    await waitFor(() => expect(button).toHaveAttribute('aria-label', 'Code copied'));
+    expect(button).toHaveAttribute('data-copy-state', 'copied');
+    expect(copyToClipboard).toHaveBeenCalledWith('printf "ready\\n"');
+  });
+
+  it('reports a failed clipboard write', async () => {
+    copyToClipboard.mockResolvedValueOnce(false);
+    const container = view('```\nrestricted\n```');
+    const button = container.querySelector<HTMLButtonElement>('button[aria-label="Copy code"]');
+
+    fireEvent.click(button!);
+
+    await waitFor(() => expect(button).toHaveAttribute('aria-label', 'Copy failed'));
+    expect(button).toHaveAttribute('data-copy-state', 'failed');
+  });
+
   it('leaves markup inside a fence unprocessed', () => {
     const container = view('```\n**not bold**\n```');
     expect(container.querySelector('pre strong')).toBeNull();
@@ -100,13 +130,12 @@ describe('code blocks', () => {
     const code = container.querySelector('code');
     expect(code?.textContent).toBe('mermaid');
     expect(code?.className).toBe('');
+    expect(container.querySelector('button[aria-label="Copy code"]')).toBeNull();
   });
 });
 
 describe('mermaid fence routing', () => {
-  const DIAGRAM = ['flowchart TD', '  A[Start] -->|go| B{Check}', '  B --> C'].join(
-    '\n',
-  );
+  const DIAGRAM = ['flowchart TD', '  A[Start] -->|go| B{Check}', '  B --> C'].join('\n');
 
   it('routes a ```mermaid fence to MermaidBlock with the exact source', () => {
     const container = view('```mermaid\n' + DIAGRAM + '\n```');
@@ -116,6 +145,7 @@ describe('mermaid fence routing', () => {
     // The <pre> is replaced, not wrapped — flow content inside <pre> is
     // invalid HTML and would warn on hydration.
     expect(container.querySelector('pre')).toBeNull();
+    expect(container.querySelector('button[aria-label="Copy code"]')).toBeNull();
   });
 
   it.each([

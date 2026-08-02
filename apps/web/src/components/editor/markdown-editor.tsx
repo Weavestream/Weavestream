@@ -44,28 +44,40 @@ export type MarkdownViewMode = 'edit' | 'split' | 'preview';
 /* Markdown syntax theme. Colors come from the design-token CSS variables so
  * the editor stays consistent with the rest of the app — and tracks the
  * dark/light theme switch automatically without a second config. */
-const markdownHighlightStyle = HighlightStyle.define([
-  { tag: t.heading1, color: 'var(--text)', fontWeight: '700' },
-  { tag: t.heading2, color: 'var(--text)', fontWeight: '700' },
-  { tag: t.heading3, color: 'var(--text)', fontWeight: '600' },
-  { tag: [t.heading4, t.heading5, t.heading6], color: 'var(--text)', fontWeight: '600' },
-  { tag: t.strong, color: 'var(--text)', fontWeight: '700' },
-  { tag: t.emphasis, color: 'var(--text-2)', fontStyle: 'italic' },
-  { tag: t.strikethrough, color: 'var(--dim)', textDecoration: 'line-through' },
-  { tag: t.link, color: 'var(--accent)' },
-  { tag: t.url, color: 'var(--accent)', textDecoration: 'underline' },
-  { tag: t.monospace, color: 'var(--accent)', fontFamily: 'var(--font-mono)' },
-  { tag: [t.processingInstruction, t.string, t.inserted], color: 'var(--accent)' },
-  { tag: t.contentSeparator, color: 'var(--dim)' },
-  { tag: t.list, color: 'var(--accent)' },
-  { tag: t.quote, color: 'var(--text-2)', fontStyle: 'italic' },
-  { tag: [t.meta, t.comment], color: 'var(--dim)' },
-  { tag: t.atom, color: 'var(--accent)' },
-  { tag: t.keyword, color: 'var(--accent)', fontWeight: '600' },
-  { tag: t.tagName, color: 'var(--accent)' },
-  { tag: t.attributeName, color: 'var(--text-2)' },
-  { tag: t.number, color: 'var(--accent)' },
-]);
+export const markdownHighlightStyle = HighlightStyle.define(
+  [
+    { tag: t.heading1, color: 'var(--text)', fontWeight: '700' },
+    { tag: t.heading2, color: 'var(--text)', fontWeight: '700' },
+    { tag: t.heading3, color: 'var(--text)', fontWeight: '600' },
+    {
+      tag: [t.heading4, t.heading5, t.heading6],
+      color: 'var(--text)',
+      fontWeight: '600',
+    },
+    { tag: t.strong, color: 'var(--text)', fontWeight: '700' },
+    { tag: t.emphasis, color: 'var(--text-2)', fontStyle: 'italic' },
+    { tag: t.strikethrough, color: 'var(--dim)', textDecoration: 'line-through' },
+    { tag: t.link, color: 'var(--accent)' },
+    { tag: t.url, color: 'var(--accent)', textDecoration: 'underline' },
+    { tag: t.monospace, color: 'var(--accent)', fontFamily: 'var(--font-mono)' },
+    { tag: [t.processingInstruction, t.string, t.inserted], color: 'var(--accent)' },
+    { tag: t.contentSeparator, color: 'var(--dim)' },
+    { tag: t.quote, color: 'var(--text-2)', fontStyle: 'italic' },
+    { tag: [t.meta, t.comment], color: 'var(--dim)' },
+    { tag: t.atom, color: 'var(--accent)' },
+    { tag: t.keyword, color: 'var(--accent)', fontWeight: '600' },
+    { tag: t.tagName, color: 'var(--accent)' },
+    { tag: t.attributeName, color: 'var(--text-2)' },
+    { tag: t.number, color: 'var(--accent)' },
+  ],
+  {
+    // Give plain source text its own class instead of leaving it as an
+    // unstyled text node. CodeMirror can then restore the normal color
+    // immediately after a highlighted span, including after incremental
+    // edits that add or remove emphasis markers.
+    all: { color: 'var(--text-2)' },
+  },
+);
 
 export function MarkdownEditor({
   value,
