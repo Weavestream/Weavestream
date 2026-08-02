@@ -212,7 +212,7 @@ export function TopBar({
               borderStyle: 'solid',
               borderWidth: 1,
               borderColor: 'var(--line-2)',
-              borderRadius: 'var(--radius-3)',
+              borderRadius: 'var(--radius-card)',
               background: 'var(--panel-2)',
               color: 'var(--dim)',
               // Never grows. A search field that stretches to fill the
@@ -376,7 +376,7 @@ function ScopePill({
         borderStyle: 'solid',
         borderWidth: 1,
         borderColor: 'var(--line-2)',
-        borderRadius: 'var(--radius-3)',
+        borderRadius: 'var(--radius-card)',
         background: 'var(--panel-2)',
       }}
     >

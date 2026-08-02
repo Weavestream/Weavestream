@@ -119,4 +119,23 @@ You are working on a security-sensitive application. The rules below are not sug
 - If you're unsure whether something is safe, say so and ask. A pause is cheaper than a CVE.
 - `CHANGELOG-SECURITY.md` is intentionally excluded from git via `.gitignore`.
 
+### 9. Proportional Verification
+
+- Match verification effort to change risk.
+- For minor cosmetic-only changes—colors, radii, typography values, shadows, or other design-token substitutions—do not start a development server, use a browser, run a production build, or run the full test suite unless explicitly requested.
+- For those changes, limit verification to reviewing the diff, running `git diff --check`, and confirming all intended consumers use the shared token.
+- Treat responsive and theme verification for token-only changes as source-level verification unless the user explicitly requests visual browser QA.
+- Run browser tests only when the change affects interaction, responsive layout behavior, rendering structure, or when the user explicitly requests browser verification.
+
+### 10. Browser Authentication
+
+- Use http://localhost:3000 consistently for local browser testing; do not alternate between localhost and 127.0.0.1.
+- If navigation redirects to `/login`, stop after the first attempt.
+- Do not repeatedly retry protected routes.
+- Ask the user to sign in through the built-in browser and reuse that authenticated tab.
+- Never ask the user to provide credentials, MFA codes, or session cookies in chat.
+- Do not inspect or manipulate browser cookies, local storage, or authentication data.
+- Do not create authentication bypasses, temporary public preview routes, or test-only application changes unless the user explicitly approves them.
+- If no authenticated browser tab is available, report browser verification as blocked and continue with non-browser verification.
+
 ---

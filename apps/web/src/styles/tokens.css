@@ -15,6 +15,7 @@
   --radius-1: 3px;
   --radius-2: 5px;
   --radius-3: 8px;
+  --radius-card: 6px;
 
   /* next/font injects --font-sans-loaded / --font-mono-loaded; we keep
    * the design's original var names pointing at those with sensible

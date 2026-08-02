@@ -37,7 +37,7 @@ export function Panel({
       style={{
         background: flush ? 'transparent' : 'var(--panel)',
         border: flush ? 'none' : '1px solid var(--line)',
-        borderRadius: flush ? 0 : 6,
+        borderRadius: flush ? 0 : 'var(--radius-card)',
         ...(fillHeight
           ? {
               display: 'flex',
