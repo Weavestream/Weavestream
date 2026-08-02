@@ -1,5 +1,9 @@
 import { useCallback, useMemo, useRef, useState } from 'react';
-import type { CreateAssetInput, UpdateAssetInput } from '@weavestream/shared';
+import {
+  HTTP_URL_VALIDATION_MESSAGE,
+  type CreateAssetInput,
+  type UpdateAssetInput,
+} from '@weavestream/shared';
 import { FieldBlock } from '../../components/FieldBlock';
 import type { AssetFieldMeta, AssetRecord, LayoutFieldRecord } from './api';
 import { AssetFieldValue } from './FieldValueDisplay';
@@ -11,6 +15,7 @@ import {
   buildCreateAssetPayload,
   buildUpdateAssetPayload,
   invalidNumberSlugs,
+  invalidUrlSlugs,
   mapAssetWriteError,
   missingRequiredSlugs,
   seedAssetForm,
@@ -44,6 +49,7 @@ export interface AssetFieldsFormApi {
   /** Create-time pre-check; server stays authoritative. */
   missingRequired: () => string[];
   invalidNumbers: () => string[];
+  invalidUrls: () => string[];
   buildCreate: (assetLayoutId: string, name: string) => CreateAssetInput;
   buildUpdate: (originalName: string, name: string) => UpdateAssetInput | null;
 }
@@ -59,9 +65,7 @@ export function useAssetFieldsForm({
     () => layoutFields.filter((f) => f.archivedAt === null),
     [layoutFields],
   );
-  const [model, setModel] = useState<AssetFormModel>(() =>
-    seedAssetForm(layoutFields, asset),
-  );
+  const [model, setModel] = useState<AssetFormModel>(() => seedAssetForm(layoutFields, asset));
   const [fieldErrors, setFieldErrorsState] = useState<Record<string, string>>({});
   const [formError, setFormError] = useState<string | null>(null);
   const [pendingTotal, setPendingTotal] = useState(0);
@@ -84,9 +88,14 @@ export function useAssetFieldsForm({
     setPendingTotal(total);
   }, []);
 
-  const knownSlugs = useMemo(
-    () => new Set(activeFields.map((f) => f.slug)),
-    [activeFields],
+  const knownSlugs = useMemo(() => new Set(activeFields.map((f) => f.slug)), [activeFields]);
+
+  const clientUrlErrors = useMemo(
+    () =>
+      Object.fromEntries(
+        invalidUrlSlugs(layoutFields, model).map((slug) => [slug, HTTP_URL_VALIDATION_MESSAGE]),
+      ),
+    [layoutFields, model],
   );
 
   const applyServerError = useCallback(
@@ -102,7 +111,7 @@ export function useAssetFieldsForm({
     activeFields,
     model,
     setValue,
-    fieldErrors,
+    fieldErrors: { ...fieldErrors, ...clientUrlErrors },
     formError,
     uploadsPending: pendingTotal > 0,
     setPendingCount,
@@ -111,6 +120,7 @@ export function useAssetFieldsForm({
     clearFormError: () => setFormError(null),
     missingRequired: () => missingRequiredSlugs(layoutFields, model),
     invalidNumbers: () => invalidNumberSlugs(layoutFields, model),
+    invalidUrls: () => invalidUrlSlugs(layoutFields, model),
     buildCreate: (assetLayoutId, name) =>
       buildCreateAssetPayload(assetLayoutId, name, layoutFields, model),
     buildUpdate: (originalName, name) =>

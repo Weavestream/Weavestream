@@ -144,6 +144,26 @@ describe('PasswordFormScreen — create', () => {
     );
   });
 
+  it('keeps an unsafe URL available for correction and blocks the request', async () => {
+    renderForm('create');
+    fireEvent.change(await screen.findByLabelText('Name'), { target: { value: 'X' } });
+    fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'y' } });
+    const url = screen.getByLabelText('URL');
+
+    fireEvent.change(url, { target: { value: 'javascript:alert(1)' } });
+    expect(url).toHaveValue('javascript:alert(1)');
+    expect(screen.getByText(/starting with http:\/\//i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
+    expect(apiFetch).not.toHaveBeenCalledWith(
+      expect.stringMatching(/\/passwords$/),
+      expect.objectContaining({ method: 'POST' }),
+    );
+
+    fireEvent.change(url, { target: { value: 'https://router.example/admin' } });
+    expect(screen.queryByText(/starting with http:\/\//i)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled();
+  });
+
   it('shows the priming card with the org name', async () => {
     renderForm('create');
     expect(await screen.findByText(/Log it now/)).toBeInTheDocument();

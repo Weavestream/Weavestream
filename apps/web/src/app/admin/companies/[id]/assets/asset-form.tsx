@@ -1,17 +1,12 @@
 'use client';
 
-import {
-  useCallback,
-  useMemo,
-  useRef,
-  useState,
-  type CSSProperties,
-} from 'react';
+import { useCallback, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { useRouter } from 'next/navigation';
 import dynamic from 'next/dynamic';
 import {
   FIELD_TYPE_CATALOG,
   formatDateTime,
+  optionalHttpUrlError,
   type FieldType,
   type FieldTypeMeta,
 } from '@weavestream/shared';
@@ -23,10 +18,7 @@ import { TopBar } from '../../../../../components/shell/top-bar';
 import { useTerm } from '../../../../../lib/term-context';
 import { companyCrumbs } from '../../../../../lib/company-crumbs';
 import { vaultLinkUrl } from '../../../../../lib/vault-link';
-import {
-  FileDropzone,
-  type FileFieldEntry,
-} from '../../../../../components/upload/file-dropzone';
+import { FileDropzone, type FileFieldEntry } from '../../../../../components/upload/file-dropzone';
 import {
   TagsInput,
   coerceTagChips,
@@ -44,10 +36,7 @@ import { DropdownPicker } from './dropdown-picker';
 // ("preloaded but not used within a few seconds"). SSR is disabled
 // because the editor is client-only anyway.
 const RichTextEditor = dynamic(
-  () =>
-    import('../../../../../components/editor/rich-text-editor').then(
-      (m) => m.RichTextEditor,
-    ),
+  () => import('../../../../../components/editor/rich-text-editor').then((m) => m.RichTextEditor),
   { ssr: false },
 );
 
@@ -97,10 +86,7 @@ export function AssetForm({
   const toast = useToast();
   const term = useTerm();
   const activeFields = useMemo(
-    () =>
-      layout.fields
-        .filter((f) => !f.archivedAt)
-        .sort((a, b) => a.position - b.position),
+    () => layout.fields.filter((f) => !f.archivedAt).sort((a, b) => a.position - b.position),
     [layout.fields],
   );
   const primaryField = activeFields.find((f) => f.isPrimary) ?? activeFields[0];
@@ -119,6 +105,16 @@ export function AssetForm({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [issues, setIssues] = useState<Record<string, string>>({});
+  const urlIssues = useMemo(() => {
+    const next: Record<string, string> = {};
+    for (const field of activeFields) {
+      if (field.fieldType !== 'URL') continue;
+      const message = optionalHttpUrlError(String(values[field.slug] ?? ''));
+      if (message) next[field.slug] = message;
+    }
+    return next;
+  }, [activeFields, values]);
+  const hasInvalidUrl = Object.keys(urlIssues).length > 0;
 
   // In-flight FILE uploads gate Save (mobile's AssetFieldsForm pattern):
   // per-slug counts summed to a total, so one field finishing never
@@ -147,6 +143,12 @@ export function AssetForm({
     setError(null);
     setIssues({});
 
+    if (hasInvalidUrl) {
+      setIssues(urlIssues);
+      setError('Fix the highlighted fields and try again.');
+      return;
+    }
+
     // Drop empty values so the API normalises them to null uniformly.
     const payloadValues: Record<string, unknown> = {};
     for (const f of activeFields) {
@@ -173,10 +175,10 @@ export function AssetForm({
         name: name.trim() || undefined,
         fieldValues: payloadValues,
       };
-      const res = await apiFetch<{ id: string }>(
-        `/companies/${companyId}/assets`,
-        { method: 'POST', body: JSON.stringify(body) },
-      );
+      const res = await apiFetch<{ id: string }>(`/companies/${companyId}/assets`, {
+        method: 'POST',
+        body: JSON.stringify(body),
+      });
       setSaving(false);
       if (!res.ok || !res.data) {
         handleApiError(res.problem);
@@ -190,10 +192,10 @@ export function AssetForm({
         name: name.trim() || undefined,
         fieldValues: payloadValues,
       };
-      const res = await apiFetch(
-        `/companies/${companyId}/assets/${assetId!}`,
-        { method: 'PATCH', body: JSON.stringify(body) },
-      );
+      const res = await apiFetch(`/companies/${companyId}/assets/${assetId!}`, {
+        method: 'PATCH',
+        body: JSON.stringify(body),
+      });
       setSaving(false);
       if (!res.ok) {
         handleApiError(res.problem);
@@ -246,10 +248,7 @@ export function AssetForm({
           { label: 'Assets', href: `/admin/companies/${companyId}/assets` },
           ...(mode === 'create'
             ? ([{ label: 'New', mono: true }] as const)
-            : ([
-                { label: initialName ?? 'Asset' },
-                { label: 'edit', mono: true },
-              ] as const)),
+            : ([{ label: initialName ?? 'Asset' }, { label: 'edit', mono: true }] as const)),
         )}
         right={
           <>
@@ -270,7 +269,7 @@ export function AssetForm({
               kind="primary"
               icon={Icon.check}
               loading={saving}
-              disabled={saving || uploadsPending}
+              disabled={saving || uploadsPending || hasInvalidUrl}
               onClick={submit}
             >
               {mode === 'create' ? 'Create asset' : 'Save asset'}
@@ -334,8 +333,8 @@ export function AssetForm({
                   fontFamily: 'var(--font-mono)',
                 }}
               >
-                {activeFields.length} field{activeFields.length === 1 ? '' : 's'} ·
-                v{layout.version}
+                {activeFields.length} field{activeFields.length === 1 ? '' : 's'} · v
+                {layout.version}
               </div>
             </div>
             {onPickLayout && (
@@ -356,16 +355,11 @@ export function AssetForm({
             {mode === 'create' ? (
               <>
                 New {layout.name}{' '}
-                <span style={{ color: 'var(--muted)', fontWeight: 400 }}>
-                  · {companyLabel}
-                </span>
+                <span style={{ color: 'var(--muted)', fontWeight: 400 }}>· {companyLabel}</span>
               </>
             ) : (
               <>
-                Edit{' '}
-                <span style={{ fontFamily: 'var(--font-mono)' }}>
-                  {initialName}
-                </span>
+                Edit <span style={{ fontFamily: 'var(--font-mono)' }}>{initialName}</span>
               </>
             )}
           </h1>
@@ -380,8 +374,7 @@ export function AssetForm({
           >
             {activeFields.map((f) => {
               const meta = FIELD_TYPE_CATALOG.find((m) => m.kind === f.fieldType)!;
-              const colSpan: CSSProperties =
-                meta.width === 'full' ? { gridColumn: '1 / -1' } : {};
+              const colSpan: CSSProperties = meta.width === 'full' ? { gridColumn: '1 / -1' } : {};
               const isSynced = (syncedFieldIds ?? []).includes(f.id);
               return (
                 <div key={f.id} style={colSpan}>
@@ -389,9 +382,9 @@ export function AssetForm({
                     label={f.name}
                     required={f.isRequired}
                     visibleToClients={f.visibleToClients}
-                    error={issues[f.slug]}
-                    syncedFromSource={isSynced ? externalSource ?? null : null}
-                    lastSyncedAt={isSynced ? lastSyncedAt ?? null : null}
+                    error={urlIssues[f.slug] ?? issues[f.slug]}
+                    syncedFromSource={isSynced ? (externalSource ?? null) : null}
+                    lastSyncedAt={isSynced ? (lastSyncedAt ?? null) : null}
                   >
                     <FieldInput
                       field={f}
@@ -423,10 +416,8 @@ export function AssetForm({
               }}
             >
               Asset name auto-derives from{' '}
-              <span style={{ color: 'var(--text-2)' }}>
-                {primaryField.slug}
-              </span>
-              . Override it below if needed.
+              <span style={{ color: 'var(--text-2)' }}>{primaryField.slug}</span>. Override it below
+              if needed.
             </div>
           )}
 
@@ -501,9 +492,7 @@ function FormField({
         >
           {label}
         </span>
-        {required && (
-          <span style={{ color: 'var(--warn)', fontSize: 10 }}>required</span>
-        )}
+        {required && <span style={{ color: 'var(--warn)', fontSize: 10 }}>required</span>}
         {visibleToClients === false && <Tag tone="outline">internal</Tag>}
         {syncedFromSource && (
           <span
@@ -519,9 +508,7 @@ function FormField({
         )}
       </div>
       {children}
-      {error ? (
-        <div style={{ fontSize: 11, color: 'var(--danger)' }}>{error}</div>
-      ) : null}
+      {error ? <div style={{ fontSize: 11, color: 'var(--danger)' }}>{error}</div> : null}
     </div>
   );
 }
@@ -691,8 +678,7 @@ function FieldInput({
     case 'DROPDOWN': {
       const choices = ((field.options as { choices?: Array<{ slug: string; label: string }> })
         .choices ?? []) as Array<{ slug: string; label: string }>;
-      const allowOther =
-        (field.options as { allowOther?: boolean }).allowOther === true;
+      const allowOther = (field.options as { allowOther?: boolean }).allowOther === true;
       return (
         <DropdownPicker
           choices={choices}
@@ -727,11 +713,7 @@ function FieldInput({
                 type="button"
                 disabled={disabled}
                 onClick={() =>
-                  onChange(
-                    active
-                      ? current.filter((s) => s !== c.slug)
-                      : [...current, c.slug],
-                  )
+                  onChange(active ? current.filter((s) => s !== c.slug) : [...current, c.slug])
                 }
                 style={{
                   padding: '3px 8px',
@@ -785,9 +767,7 @@ function FieldInput({
       );
     }
     case 'FILE': {
-      const entries: FileFieldEntry[] = Array.isArray(value)
-        ? (value as FileFieldEntry[])
-        : [];
+      const entries: FileFieldEntry[] = Array.isArray(value) ? (value as FileFieldEntry[]) : [];
       const opts = field.options as {
         multiple?: boolean;
         accept?: unknown;
@@ -797,9 +777,7 @@ function FieldInput({
       // the strategy caps at 1 unless the option is explicitly true.
       const multiple = opts.multiple === true;
       const accept = Array.isArray(opts.accept)
-        ? (opts.accept as unknown[]).filter(
-            (t): t is string => typeof t === 'string',
-          )
+        ? (opts.accept as unknown[]).filter((t): t is string => typeof t === 'string')
         : undefined;
       return (
         <FileDropzone
@@ -807,9 +785,7 @@ function FieldInput({
           value={entries}
           multiple={multiple}
           accept={accept}
-          maxSizeMb={
-            typeof opts.maxSizeMb === 'number' ? opts.maxSizeMb : undefined
-          }
+          maxSizeMb={typeof opts.maxSizeMb === 'number' ? opts.maxSizeMb : undefined}
           disabled={disabled}
           // Type only, never an id (create AND edit) — confirming with an
           // asset id attaches durably at confirm time, so a cancelled form
@@ -817,9 +793,7 @@ function FieldInput({
           // attaches inside the asset-write transaction instead.
           attachTo={{ type: 'asset' }}
           onPendingChange={onPendingChange}
-          onChange={(next) =>
-            onChange(multiple ? next : next.slice(-1))
-          }
+          onChange={(next) => onChange(multiple ? next : next.slice(-1))}
         />
       );
     }
@@ -835,10 +809,7 @@ function FieldInput({
   }
 }
 
-function placeholderFor(
-  kind: FieldType,
-  options?: Record<string, unknown>,
-): string {
+function placeholderFor(kind: FieldType, options?: Record<string, unknown>): string {
   switch (kind) {
     case 'EMAIL':
       return 'name@domain.com';
@@ -849,10 +820,8 @@ function placeholderFor(
     case 'VAULTWARDEN_LINK':
       return 'https://vault.example.local/...';
     case 'IP_ADDRESS': {
-      const version = (options as { version?: 'v4' | 'v6' | 'any' } | undefined)
-        ?.version;
-      const allowCidr = !!(options as { allowCidr?: boolean } | undefined)
-        ?.allowCidr;
+      const version = (options as { version?: 'v4' | 'v6' | 'any' } | undefined)?.version;
+      const allowCidr = !!(options as { allowCidr?: boolean } | undefined)?.allowCidr;
       const v4 = allowCidr ? '10.0.0.0/24' : '10.0.0.5';
       const v6 = allowCidr ? '2001:db8::/48' : '2001:db8::1';
       if (version === 'v4') return v4;

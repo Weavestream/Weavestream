@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { HTTP_URL_VALIDATION_MESSAGE } from '@weavestream/shared';
 import { FieldBlock } from '../../components/FieldBlock';
 import { FormScreenChrome } from '../../components/FormScreenChrome';
 import { Input } from '../../components/primitives';
@@ -13,12 +14,7 @@ import type { AssetRecord, LayoutRecord } from './api';
 import { AssetFieldsFormFields, useAssetFieldsForm } from './AssetFieldsForm';
 import { unsatisfiableRequiredFields } from './field-values';
 import { recallListFilter } from './list-filter-memory';
-import {
-  useAssetDetail,
-  useCreateAsset,
-  useLayout,
-  useUpdateAsset,
-} from './queries';
+import { useAssetDetail, useCreateAsset, useLayout, useUpdateAsset } from './queries';
 
 /**
  * Create / edit form — a full-viewport routed page (the Shell hides
@@ -39,9 +35,7 @@ export function AssetFormScreen(
   const assetId = isEdit ? props.assetId : '';
   const orgId = currentOrg?.id ?? null;
   const detailQuery = useAssetDetail(isEdit ? orgId : null, assetId);
-  const layoutId = isEdit
-    ? (detailQuery.data?.assetLayoutId ?? null)
-    : props.layoutId;
+  const layoutId = isEdit ? (detailQuery.data?.assetLayoutId ?? null) : props.layoutId;
   const layoutQuery = useLayout(layoutId);
 
   // Deep-linked or role-changed viewers without write access bounce
@@ -196,15 +190,14 @@ function AssetFormFields({
   const updateMutation = useUpdateAsset(org.id, original?.id ?? '');
   const busy = createMutation.isPending || updateMutation.isPending;
 
-  const primaryField = layout.fields.find(
-    (f) => f.isPrimary && f.archivedAt === null,
-  );
+  const primaryField = layout.fields.find((f) => f.isPrimary && f.archivedAt === null);
 
   const updatePayload = isEdit ? form.buildUpdate(original.name, name) : null;
   const saveDisabled =
     busy ||
     form.uploadsPending ||
     form.invalidNumbers().length > 0 ||
+    form.invalidUrls().length > 0 ||
     (isEdit && updatePayload === null);
 
   function onSave() {
@@ -212,8 +205,14 @@ function AssetFormFields({
 
     const badNumbers = form.invalidNumbers();
     if (badNumbers.length > 0) {
+      form.setFieldErrors(Object.fromEntries(badNumbers.map((slug) => [slug, 'Enter a number.'])));
+      return;
+    }
+
+    const badUrls = form.invalidUrls();
+    if (badUrls.length > 0) {
       form.setFieldErrors(
-        Object.fromEntries(badNumbers.map((slug) => [slug, 'Enter a number.'])),
+        Object.fromEntries(badUrls.map((slug) => [slug, HTTP_URL_VALIDATION_MESSAGE])),
       );
       return;
     }
@@ -224,9 +223,7 @@ function AssetFormFields({
       // same fields if this misses anything.
       const missing = form.missingRequired();
       if (missing.length > 0) {
-        form.setFieldErrors(
-          Object.fromEntries(missing.map((slug) => [slug, 'Required.'])),
-        );
+        form.setFieldErrors(Object.fromEntries(missing.map((slug) => [slug, 'Required.'])));
         return;
       }
       createMutation.mutate(form.buildCreate(layout.id, name), {
@@ -272,11 +269,7 @@ function AssetFormFields({
         <FieldBlock
           label="Name"
           htmlFor="af-asset-name"
-          hint={
-            primaryField
-              ? `Derived from ${primaryField.name} when left empty.`
-              : undefined
-          }
+          hint={primaryField ? `Derived from ${primaryField.name} when left empty.` : undefined}
         >
           <Input
             id="af-asset-name"
@@ -284,19 +277,12 @@ function AssetFormFields({
             value={name}
             maxLength={200}
             onChange={(e) => setName(e.target.value)}
-            placeholder={
-              primaryField ? `(from ${primaryField.name})` : undefined
-            }
+            placeholder={primaryField ? `(from ${primaryField.name})` : undefined}
           />
         </FieldBlock>
       )}
 
-      <AssetFieldsFormFields
-        form={form}
-        companyId={org.id}
-        asset={original}
-        disabled={busy}
-      />
+      <AssetFieldsFormFields form={form} companyId={org.id} asset={original} disabled={busy} />
     </FormScreenChrome>
   );
 }

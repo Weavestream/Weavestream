@@ -2,8 +2,9 @@
  * Turn a user-stored URL field into an href that is safe to render, or
  * `null` when it is not.
  *
- * `password.url` (and URL-ish fields generally) are stored as arbitrary
- * strings — the schema caps length but does not validate shape. Three
+ * Legacy/imported URL-ish values can still contain arbitrary strings; current
+ * password and asset writes validate them, but this rendering boundary remains
+ * defense in depth for existing data. Three
  * failure modes make a raw `<a href={value}>` wrong (CLAUDE.md §3):
  *
  *  - A scheme-less value (`portal.example.com`) is resolved as a

@@ -94,4 +94,23 @@ describe('buildAssetZodSchema', () => {
     expect(schema.safeParse({ email: 'ok@example.com', count: 4 }).success).toBe(true);
     expect(schema.safeParse({ email: 'ok@example.com', count: 'x' }).success).toBe(false);
   });
+
+  it('accepts only well-formed HTTP(S) values for URL fields', () => {
+    const fields = [field({ slug: 'admin_url', fieldType: 'URL' })];
+    const schema = buildAssetZodSchema(fields, registry, { mode: 'write' });
+
+    expect(schema.safeParse({ admin_url: 'https://router.example/admin' }).success).toBe(true);
+    expect(schema.safeParse({ admin_url: 'http://10.0.0.1:8080' }).success).toBe(true);
+    expect(schema.safeParse({ admin_url: null }).success).toBe(true);
+
+    for (const admin_url of [
+      'router.example',
+      'https://',
+      'javascript:alert(1)',
+      'data:text/html,hello',
+      'file:///etc/passwd',
+    ]) {
+      expect(schema.safeParse({ admin_url }).success).toBe(false);
+    }
+  });
 });

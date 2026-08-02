@@ -1,6 +1,7 @@
 import {
   FieldTypeValues,
   coerceTagChips,
+  optionalHttpUrlError,
   toAssetWireTags,
   type CreateAssetInput,
   type FieldType,
@@ -142,10 +143,7 @@ export function seedAssetForm(
   return { values: { ...seeds }, seeds };
 }
 
-function seedValue(
-  field: LayoutFieldRecord,
-  asset: AssetRecord | null,
-): FieldEditorValue {
+function seedValue(field: LayoutFieldRecord, asset: AssetRecord | null): FieldEditorValue {
   if (!isMobileEditableFieldType(field.fieldType)) return { kind: 'readonly' };
   const value = asset ? asset.fieldValues[field.slug] : undefined;
 
@@ -173,9 +171,7 @@ function seedValue(
     case 'MULTISELECT':
       return {
         kind: 'multiselect',
-        slugs: Array.isArray(value)
-          ? value.filter((v): v is string => typeof v === 'string')
-          : [],
+        slugs: Array.isArray(value) ? value.filter((v): v is string => typeof v === 'string') : [],
       };
     case 'TAGS':
       return { kind: 'tags', chips: coerceTagChips(value) };
@@ -329,10 +325,7 @@ export function toWireValue(
  * toggle-off-then-on is not spuriously dirty; FILE compares the entry
  * sequence (order is user-visible tile order).
  */
-function wireNorm(
-  field: Pick<LayoutFieldRecord, 'fieldType'>,
-  value: FieldEditorValue,
-): string {
+function wireNorm(field: Pick<LayoutFieldRecord, 'fieldType'>, value: FieldEditorValue): string {
   const wire = toWireValue(field, value);
   if (wire === undefined) return '__unserialized__';
   if (Array.isArray(wire)) {
@@ -377,6 +370,21 @@ export function invalidNumberSlugs(
     if (!value || value.kind !== 'text') continue;
     if (value.text.trim() === '') continue;
     if (!Number.isFinite(Number(value.text))) out.push(field.slug);
+  }
+  return out;
+}
+
+/** URL fields whose current non-empty value is not an explicit HTTP(S) URL. */
+export function invalidUrlSlugs(
+  layoutFields: LayoutFieldRecord[],
+  model: AssetFormModel,
+): string[] {
+  const out: string[] = [];
+  for (const field of activeFields(layoutFields)) {
+    if (field.fieldType !== 'URL') continue;
+    const value = model.values[field.slug];
+    if (!value || value.kind !== 'text') continue;
+    if (optionalHttpUrlError(value.text)) out.push(field.slug);
   }
   return out;
 }

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import {
+  optionalHttpUrlError,
   safeExternalHref,
   type PasswordGeneratorDefaults,
 } from '@weavestream/shared';
@@ -95,14 +96,12 @@ export function PasswordHeaderActions({
   async function archive() {
     setArchivePending(true);
     try {
-      const res = await apiFetch(
-        `/companies/${companyId}/passwords/${password.id}`,
-        { method: 'DELETE' },
-      );
+      const res = await apiFetch(`/companies/${companyId}/passwords/${password.id}`, {
+        method: 'DELETE',
+      });
       if (!res.ok) {
         toast.push(
-          (res.problem as { message?: string } | undefined)?.message ??
-            'Archive failed',
+          (res.problem as { message?: string } | undefined)?.message ?? 'Archive failed',
           'danger',
         );
         return;
@@ -116,14 +115,12 @@ export function PasswordHeaderActions({
   }
 
   async function restore() {
-    const res = await apiFetch(
-      `/companies/${companyId}/passwords/${password.id}/restore`,
-      { method: 'POST' },
-    );
+    const res = await apiFetch(`/companies/${companyId}/passwords/${password.id}/restore`, {
+      method: 'POST',
+    });
     if (!res.ok) {
       toast.push(
-        (res.problem as { message?: string } | undefined)?.message ??
-          'Restore failed',
+        (res.problem as { message?: string } | undefined)?.message ?? 'Restore failed',
         'danger',
       );
       return;
@@ -143,21 +140,11 @@ export function PasswordHeaderActions({
       />
       {canManage && (
         <>
-          <Btn
-            kind="outline"
-            size="md"
-            icon={Icon.edit}
-            onClick={() => setEditing(true)}
-          >
+          <Btn kind="outline" size="md" icon={Icon.edit} onClick={() => setEditing(true)}>
             Edit
           </Btn>
           {password.archivedAt ? (
-            <Btn
-              kind="solid"
-              size="md"
-              icon={Icon.check}
-              onClick={() => void restore()}
-            >
+            <Btn kind="solid" size="md" icon={Icon.check} onClick={() => void restore()}>
               Restore
             </Btn>
           ) : (
@@ -179,18 +166,10 @@ export function PasswordHeaderActions({
         title="Archive password?"
         footer={
           <>
-            <Btn
-              kind="ghost"
-              onClick={() => setConfirmingArchive(false)}
-              disabled={archivePending}
-            >
+            <Btn kind="ghost" onClick={() => setConfirmingArchive(false)} disabled={archivePending}>
               Cancel
             </Btn>
-            <Btn
-              kind="danger"
-              loading={archivePending}
-              onClick={() => void archive()}
-            >
+            <Btn kind="danger" loading={archivePending} onClick={() => void archive()}>
               Archive
             </Btn>
           </>
@@ -204,8 +183,8 @@ export function PasswordHeaderActions({
             lineHeight: 1.5,
           }}
         >
-          {password.name} will be hidden from the default list. The credential
-          and its links are preserved and can be restored at any time.
+          {password.name} will be hidden from the default list. The credential and its links are
+          preserved and can be restored at any time.
         </p>
       </Dialog>
 
@@ -264,14 +243,8 @@ export function PasswordDetailClient({
     toast.push(ok ? 'URL copied' : 'Clipboard unavailable', ok ? 'ok' : 'danger');
   }
 
-  const notesHtml = useMemo(
-    () => renderNotes(password.notes ?? null),
-    [password.notes],
-  );
-  const displayUrl = useMemo(
-    () => formatCredentialUrl(password.url),
-    [password.url],
-  );
+  const notesHtml = useMemo(() => renderNotes(password.notes ?? null), [password.notes]);
+  const displayUrl = useMemo(() => formatCredentialUrl(password.url), [password.url]);
   const safeUrl = useMemo(
     () => (password.url?.trim() ? safeExternalHref(password.url) : null),
     [password.url],
@@ -349,11 +322,7 @@ export function PasswordDetailClient({
 
               <Label>Strength</Label>
               <div>
-                <PasswordStrengthMeter
-                  score={password.passwordStrength}
-                  width={220}
-                  inline
-                />
+                <PasswordStrengthMeter score={password.passwordStrength} width={220} inline />
               </div>
 
               {password.hasTotp && (
@@ -441,12 +410,9 @@ export function PasswordDetailClient({
                 {notesHtml}
               </div>
             ) : (
-              <div style={{ color: 'var(--muted)', fontSize: 13 }}>
-                No notes.
-              </div>
+              <div style={{ color: 'var(--muted)', fontSize: 13 }}>No notes.</div>
             )}
           </Panel>
-
         </div>
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
@@ -528,13 +494,17 @@ export function PasswordDetailClient({
                   {password.lastRotatedAt && (
                     <>
                       <dt style={dt}>Last rotated</dt>
-                      <dd style={dd}><FormattedDate value={password.lastRotatedAt} /></dd>
+                      <dd style={dd}>
+                        <FormattedDate value={password.lastRotatedAt} />
+                      </dd>
                     </>
                   )}
                   {password.expiresAt && (
                     <>
                       <dt style={dt}>Expires</dt>
-                      <dd style={dd}><FormattedCalendarDate value={password.expiresAt} /></dd>
+                      <dd style={dd}>
+                        <FormattedCalendarDate value={password.expiresAt} />
+                      </dd>
                     </>
                   )}
                   {password.rotationReminderDays != null && (
@@ -555,9 +525,13 @@ export function PasswordDetailClient({
                     </>
                   )}
                   <dt style={dt}>Created</dt>
-                  <dd style={dd}><FormattedDateTime value={password.createdAt} /></dd>
+                  <dd style={dd}>
+                    <FormattedDateTime value={password.createdAt} />
+                  </dd>
                   <dt style={dt}>Updated</dt>
-                  <dd style={dd}><FormattedDateTime value={password.updatedAt} /></dd>
+                  <dd style={dd}>
+                    <FormattedDateTime value={password.updatedAt} />
+                  </dd>
                 </>
               )}
             </dl>
@@ -689,9 +663,7 @@ function InternalAccessDialog({
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [users, setUsers] = useState<PasswordAccessUser[]>([]);
-  const [restricted, setRestricted] = useState(
-    password.restrictedToUserIds.length > 0,
-  );
+  const [restricted, setRestricted] = useState(password.restrictedToUserIds.length > 0);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(
     () => new Set(password.restrictedToUserIds),
   );
@@ -775,12 +747,7 @@ function InternalAccessDialog({
           <Btn size="sm" onClick={onClose}>
             Cancel
           </Btn>
-          <Btn
-            size="sm"
-            kind="primary"
-            onClick={() => void submit()}
-            disabled={busy || loading}
-          >
+          <Btn size="sm" kind="primary" onClick={() => void submit()} disabled={busy || loading}>
             Save
           </Btn>
         </div>
@@ -788,19 +755,11 @@ function InternalAccessDialog({
     >
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
         <label style={checkboxLabel}>
-          <input
-            type="radio"
-            checked={!restricted}
-            onChange={() => setRestricted(false)}
-          />
+          <input type="radio" checked={!restricted} onChange={() => setRestricted(false)} />
           All internal users with company access
         </label>
         <label style={checkboxLabel}>
-          <input
-            type="radio"
-            checked={restricted}
-            onChange={() => setRestricted(true)}
-          />
+          <input type="radio" checked={restricted} onChange={() => setRestricted(true)} />
           Restrict to selected internal users
         </label>
 
@@ -869,8 +828,7 @@ function InternalAccessDialog({
                         whiteSpace: 'nowrap',
                       }}
                     >
-                      {user.email} · {roleLabel(user.role)} ·{' '}
-                      {accessSourceLabel(user.accessSource)}
+                      {user.email} · {roleLabel(user.role)} · {accessSourceLabel(user.accessSource)}
                     </span>
                   </span>
                 </label>
@@ -890,8 +848,8 @@ function InternalAccessDialog({
             }}
           >
             {unavailableIds.length} existing user
-            {unavailableIds.length === 1 ? '' : 's'} can no longer be selected.
-            Clear the restriction or remove unavailable users before saving.
+            {unavailableIds.length === 1 ? '' : 's'} can no longer be selected. Clear the
+            restriction or remove unavailable users before saving.
             <div style={{ marginTop: 6 }}>
               <Btn
                 size="sm"
@@ -913,9 +871,7 @@ function InternalAccessDialog({
           </div>
         )}
 
-        {err && (
-          <div style={{ fontSize: 12, color: 'var(--danger)' }}>{err}</div>
-        )}
+        {err && <div style={{ fontSize: 12, color: 'var(--danger)' }}>{err}</div>}
       </div>
     </Dialog>
   );
@@ -975,8 +931,7 @@ function VersionHistoryPanel({
     setBusy(null);
     if (!res.ok) {
       toast.push(
-        (res.problem as { message?: string } | undefined)?.message ??
-          'Restore failed',
+        (res.problem as { message?: string } | undefined)?.message ?? 'Restore failed',
         'danger',
       );
       return;
@@ -985,10 +940,7 @@ function VersionHistoryPanel({
     startTransition(() => router.refresh());
   }
 
-  const sorted = useMemo(
-    () => [...versions].sort((a, b) => b.version - a.version),
-    [versions],
-  );
+  const sorted = useMemo(() => [...versions].sort((a, b) => b.version - a.version), [versions]);
   const visible = expanded ? sorted : sorted.slice(0, 1);
 
   return (
@@ -1015,9 +967,7 @@ function VersionHistoryPanel({
       }
     >
       {sorted.length === 0 ? (
-        <div style={{ color: 'var(--muted)', fontSize: 12.5 }}>
-          No versions yet.
-        </div>
+        <div style={{ color: 'var(--muted)', fontSize: 12.5 }}>No versions yet.</div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
           {visible.map((version) => (
@@ -1172,9 +1122,7 @@ function VersionHistoryItem({
             color: 'var(--muted)',
           }}
         >
-          {version.changedFields.length > 0
-            ? version.changedFields.join(', ')
-            : 'metadata'}
+          {version.changedFields.length > 0 ? version.changedFields.join(', ') : 'metadata'}
           {version.changeReason ? ` · ${version.changeReason}` : ''}
         </div>
         <div
@@ -1187,9 +1135,7 @@ function VersionHistoryItem({
         >
           <TextAction
             disabled={revealBusy}
-            onClick={() =>
-              plaintext ? setPlaintext(null) : void revealVersionPassword()
-            }
+            onClick={() => (plaintext ? setPlaintext(null) : void revealVersionPassword())}
           >
             {plaintext ? 'Hide' : revealBusy ? 'Revealing...' : 'Reveal'}
           </TextAction>
@@ -1226,7 +1172,11 @@ function VersionHistoryItem({
           >
             {plaintext}
           </code>
-          <Btn size="sm" onClick={() => void copyVersionPassword()} title="Copy historical password">
+          <Btn
+            size="sm"
+            onClick={() => void copyVersionPassword()}
+            title="Copy historical password"
+          >
             <Icon.copy size={14} />
           </Btn>
         </div>
@@ -1285,33 +1235,24 @@ function EditPasswordDialog({
   const [name, setName] = useState(password.name);
   const [username, setUsername] = useState(password.username ?? '');
   const [url, setUrl] = useState(password.url ?? '');
+  const urlError = optionalHttpUrlError(url);
   const [newPassword, setNewPassword] = useState('');
-  const [notes, setNotes] = useState(
-    typeof password.notes === 'string' ? password.notes : '',
-  );
+  const [notes, setNotes] = useState(typeof password.notes === 'string' ? password.notes : '');
   const [folderId, setFolderId] = useState<string | null>(password.folderId);
-  const [visibleToClients, setVisibleToClients] = useState(
-    password.visibleToClients,
-  );
-  const [requireReason, setRequireReason] = useState(
-    password.requireReasonToView,
-  );
+  const [visibleToClients, setVisibleToClients] = useState(password.visibleToClients);
+  const [requireReason, setRequireReason] = useState(password.requireReasonToView);
   const [reason, setReason] = useState('');
-  const [tags, setTags] = useState<TagChipDraft[]>(() =>
-    password.tags.map((t) => ({ name: t })),
-  );
+  const [tags, setTags] = useState<TagChipDraft[]>(() => password.tags.map((t) => ({ name: t })));
   const [expiresAt, setExpiresAt] = useState<string>(() =>
     password.expiresAt ? password.expiresAt.slice(0, 10) : '',
   );
-  const [rotationReminderDays, setRotationReminderDays] = useState<
-    number | null
-  >(password.rotationReminderDays);
+  const [rotationReminderDays, setRotationReminderDays] = useState<number | null>(
+    password.rotationReminderDays,
+  );
   const [renderedAt] = useState(() => Date.now());
   const daysSinceRotation =
     password.lastRotatedAt != null
-      ? Math.floor(
-          (renderedAt - new Date(password.lastRotatedAt).getTime()) / 86_400_000,
-        )
+      ? Math.floor((renderedAt - new Date(password.lastRotatedAt).getTime()) / 86_400_000)
       : null;
 
   // TOTP editor — `keep` leaves the existing secret untouched (omits
@@ -1322,6 +1263,7 @@ function EditPasswordDialog({
 
   const submit = useCallback(async () => {
     setErr(null);
+    if (urlError) return;
     const normalizedTotpSecret = totpSecret.replace(/\s+/g, '').toUpperCase();
     if (totpMode === 'set') {
       if (normalizedTotpSecret.length < 8) {
@@ -1348,9 +1290,7 @@ function EditPasswordDialog({
       // server zeroes the time component anyway; this keeps the
       // round-trip stable so the date displayed in the panel matches
       // what the operator selected regardless of their timezone.
-      expiresAt: expiresAt
-        ? new Date(`${expiresAt}T00:00:00.000Z`).toISOString()
-        : null,
+      expiresAt: expiresAt ? new Date(`${expiresAt}T00:00:00.000Z`).toISOString() : null,
       rotationReminderDays,
     };
     if (newPassword.length > 0) body.password = newPassword;
@@ -1366,16 +1306,13 @@ function EditPasswordDialog({
       body.totp = null;
     }
 
-    const res = await apiFetch(
-      `/companies/${companyId}/passwords/${password.id}`,
-      { method: 'PATCH', body: JSON.stringify(body) },
-    );
+    const res = await apiFetch(`/companies/${companyId}/passwords/${password.id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    });
     setBusy(false);
     if (!res.ok) {
-      setErr(
-        (res.problem as { message?: string } | undefined)?.message ??
-          'Update failed',
-      );
+      setErr((res.problem as { message?: string } | undefined)?.message ?? 'Update failed');
       return;
     }
     onSaved();
@@ -1401,6 +1338,7 @@ function EditPasswordDialog({
     password.totpDigits,
     password.totpPeriod,
     onSaved,
+    urlError,
   ]);
 
   const totpStatus =
@@ -1437,7 +1375,7 @@ function EditPasswordDialog({
             size="sm"
             kind="primary"
             onClick={() => void submit()}
-            disabled={busy || name.trim().length === 0}
+            disabled={busy || name.trim().length === 0 || urlError !== null}
           >
             Save
           </Btn>
@@ -1448,18 +1386,14 @@ function EditPasswordDialog({
         onKeyDown={(e) => {
           if (e.key === 'Enter') {
             e.preventDefault();
-            if (!busy && name.trim().length > 0) void submit();
+            if (!busy && name.trim().length > 0 && !urlError) void submit();
           }
         }}
         style={{ display: 'flex', flexDirection: 'column', gap: 16 }}
       >
         <PasswordFormSection title="Credential">
           <Field label="Name" labelVariant="plain">
-            <Input
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              autoFocus
-            />
+            <Input value={name} onChange={(e) => setName(e.target.value)} autoFocus />
           </Field>
           <PasswordFieldGrid>
             <Field label="Username" labelVariant="plain">
@@ -1483,8 +1417,20 @@ function EditPasswordDialog({
               />
             </Field>
           </PasswordFieldGrid>
-          <Field label="URL" labelVariant="plain">
-            <Input value={url} onChange={(e) => setUrl(e.target.value)} />
+          <Field
+            label="URL"
+            labelVariant="plain"
+            htmlFor="password-edit-url"
+            error={urlError ?? undefined}
+          >
+            <Input
+              id="password-edit-url"
+              type="url"
+              inputMode="url"
+              maxLength={2048}
+              value={url}
+              onChange={(e) => setUrl(e.target.value)}
+            />
           </Field>
         </PasswordFormSection>
 
@@ -1584,15 +1530,9 @@ function EditPasswordDialog({
                 }
               >
                 <Select
-                  value={
-                    rotationReminderDays == null
-                      ? ''
-                      : String(rotationReminderDays)
-                  }
+                  value={rotationReminderDays == null ? '' : String(rotationReminderDays)}
                   onChange={(e) =>
-                    setRotationReminderDays(
-                      e.target.value === '' ? null : Number(e.target.value),
-                    )
+                    setRotationReminderDays(e.target.value === '' ? null : Number(e.target.value))
                   }
                 >
                   <option value="">No reminder</option>
@@ -1629,16 +1569,14 @@ function EditPasswordDialog({
 
         <PasswordFormSection title="Audit">
           <Field label="Change reason (optional)" labelVariant="plain">
-          <Input
-            value={reason}
-            onChange={(e) => setReason(e.target.value)}
-            placeholder="e.g. Quarterly rotation"
-          />
+            <Input
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+              placeholder="e.g. Quarterly rotation"
+            />
           </Field>
         </PasswordFormSection>
-        {err && (
-          <div style={{ fontSize: 12, color: 'var(--danger)' }}>{err}</div>
-        )}
+        {err && <div style={{ fontSize: 12, color: 'var(--danger)' }}>{err}</div>}
       </div>
     </Dialog>
   );
@@ -1677,9 +1615,7 @@ function shortenPath(path: string): string {
     .filter((segment) => !isOpaqueUrlSegment(segment))
     .map((segment) => shortenUrlSegment(segment));
 
-  const collapsed = segments.filter(
-    (segment, index) => segment !== segments[index - 1],
-  );
+  const collapsed = segments.filter((segment, index) => segment !== segments[index - 1]);
   return collapsed.length > 0 ? `/${collapsed.join('/')}` : '/';
 }
 
@@ -1734,9 +1670,7 @@ function roleLabel(role: PasswordAccessUser['role']): string {
   }
 }
 
-function accessSourceLabel(
-  source: PasswordAccessUser['accessSource'],
-): string {
+function accessSourceLabel(source: PasswordAccessUser['accessSource']): string {
   switch (source) {
     case 'super_admin':
       return 'always included';
@@ -1765,10 +1699,7 @@ function renderNotes(value: unknown): string | null {
   return null;
 }
 
-function walk(
-  node: { content?: unknown[]; text?: string; type?: string },
-  out: string[],
-): void {
+function walk(node: { content?: unknown[]; text?: string; type?: string }, out: string[]): void {
   if (!node || typeof node !== 'object') return;
   if (typeof node.text === 'string') out.push(node.text);
   const content = node.content;

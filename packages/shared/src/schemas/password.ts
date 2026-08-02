@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { tiptapDocSchema } from './article.js';
+import { optionalHttpUrlSchema } from './http-url.js';
 
 /**
  * Phase 10 — Zod schemas for the password vault.
@@ -59,7 +60,7 @@ export const createPasswordSchema = z.object({
   folderId: z.string().uuid().nullable().optional(),
   assetId: z.string().uuid().nullable().optional(),
   username: z.string().max(200).nullable().optional(),
-  url: z.string().trim().max(2048).nullable().optional(),
+  url: optionalHttpUrlSchema.nullable().optional(),
   password: z.string().min(1).max(1024),
   notes: passwordNotesSchema.nullable().optional(),
   totp: totpConfigSchema.nullable().optional(),
@@ -83,7 +84,7 @@ export const updatePasswordSchema = z
     folderId: z.string().uuid().nullable().optional(),
     assetId: z.string().uuid().nullable().optional(),
     username: z.string().max(200).nullable().optional(),
-    url: z.string().trim().max(2048).nullable().optional(),
+    url: optionalHttpUrlSchema.nullable().optional(),
     password: z.string().min(1).max(1024).optional(),
     notes: passwordNotesSchema.nullable().optional(),
     totp: totpConfigSchema.nullable().optional(),

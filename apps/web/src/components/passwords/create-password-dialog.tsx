@@ -1,27 +1,15 @@
 'use client';
 
 import { useCallback, useId, useState } from 'react';
-import type { PasswordGeneratorDefaults } from '@weavestream/shared';
-import {
-  Btn,
-  Dialog,
-  Field,
-  Icon,
-  Input,
-  Select,
-  Textarea,
-} from '../ui';
+import { optionalHttpUrlError, type PasswordGeneratorDefaults } from '@weavestream/shared';
+import { Btn, Dialog, Field, Icon, Input, Select, Textarea } from '../ui';
 import { apiFetch } from '../../lib/api';
 import type { PasswordFolderRow } from '../../lib/server-api';
 import {
   buildPasswordFolderOptions,
   formatFolderOptionLabel,
 } from '../../lib/password-folder-tree';
-import {
-  TagsInput,
-  toPlainNameList,
-  type TagChipDraft,
-} from '../tags/tags-input';
+import { TagsInput, toPlainNameList, type TagChipDraft } from '../tags/tags-input';
 import { SecretInput } from './secret-input';
 import {
   PasswordAdvancedDisclosure,
@@ -89,16 +77,16 @@ export function CreatePasswordDialog({
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [tags, setTags] = useState<TagChipDraft[]>([]);
   const [expiresAt, setExpiresAt] = useState<string>('');
-  const [rotationReminderDays, setRotationReminderDays] = useState<
-    number | null
-  >(null);
+  const [rotationReminderDays, setRotationReminderDays] = useState<number | null>(null);
   const fieldSeed = useId().replace(/:/g, '');
   const accountFieldId = `ws-acct-${fieldSeed}`;
   const accountFieldName = `ws-acct-${fieldSeed}`;
   const secretFieldName = `ws-secret-${fieldSeed}`;
+  const urlError = optionalHttpUrlError(url);
 
   const submit = useCallback(async () => {
     setErr(null);
+    if (urlError) return;
     const normalizedTotpSecret = totpSecret.replace(/\s+/g, '').toUpperCase();
     if (totpEnabled) {
       if (normalizedTotpSecret.length < 8) {
@@ -126,9 +114,7 @@ export function CreatePasswordDialog({
       // `<input type="date">` emits a yyyy-mm-dd local-date string. The
       // API expects a full ISO timestamp; midnight UTC is the right
       // anchor since the field carries calendar-day semantics.
-      expiresAt: expiresAt
-        ? new Date(`${expiresAt}T00:00:00.000Z`).toISOString()
-        : null,
+      expiresAt: expiresAt ? new Date(`${expiresAt}T00:00:00.000Z`).toISOString() : null,
       rotationReminderDays,
     };
     if (totpEnabled) {
@@ -145,10 +131,7 @@ export function CreatePasswordDialog({
     });
     setBusy(false);
     if (!res.ok) {
-      setErr(
-        (res.problem as { message?: string } | undefined)?.message ??
-          'Create failed',
-      );
+      setErr((res.problem as { message?: string } | undefined)?.message ?? 'Create failed');
       return;
     }
     onCreatedAction();
@@ -169,9 +152,10 @@ export function CreatePasswordDialog({
     expiresAt,
     rotationReminderDays,
     onCreatedAction,
+    urlError,
   ]);
 
-  const valid = name.trim().length > 0 && password.length > 0;
+  const valid = name.trim().length > 0 && password.length > 0 && !urlError;
 
   return (
     <Dialog
@@ -183,12 +167,7 @@ export function CreatePasswordDialog({
           <Btn size="sm" onClick={onCloseAction}>
             Cancel
           </Btn>
-          <Btn
-            size="sm"
-            kind="primary"
-            onClick={() => void submit()}
-            disabled={!valid || busy}
-          >
+          <Btn size="sm" kind="primary" onClick={() => void submit()} disabled={!valid || busy}>
             Create
           </Btn>
         </div>
@@ -222,11 +201,7 @@ export function CreatePasswordDialog({
         )}
         <PasswordFormSection title="Credential">
           <Field label="Name" labelVariant="plain">
-            <Input
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              autoFocus
-            />
+            <Input value={name} onChange={(e) => setName(e.target.value)} autoFocus />
           </Field>
           <PasswordFieldGrid>
             <Field label="Username" labelVariant="plain">
@@ -251,18 +226,26 @@ export function CreatePasswordDialog({
               />
             </Field>
           </PasswordFieldGrid>
-          <Field label="URL" labelVariant="plain">
-            <Input value={url} onChange={(e) => setUrl(e.target.value)} />
+          <Field
+            label="URL"
+            labelVariant="plain"
+            htmlFor={`${fieldSeed}-url`}
+            error={urlError ?? undefined}
+          >
+            <Input
+              id={`${fieldSeed}-url`}
+              type="url"
+              inputMode="url"
+              maxLength={2048}
+              value={url}
+              onChange={(e) => setUrl(e.target.value)}
+            />
           </Field>
         </PasswordFormSection>
 
         <PasswordFormSection title="Two-Factor Authentication">
           <PasswordTotpCard
-            status={
-              totpEnabled
-                ? 'Authenticator setup'
-                : 'No authenticator configured'
-            }
+            status={totpEnabled ? 'Authenticator setup' : 'No authenticator configured'}
             description={
               totpEnabled
                 ? 'Paste the base32 secret from the authenticator setup flow.'
@@ -345,15 +328,9 @@ export function CreatePasswordDialog({
               </Field>
               <Field label="Rotation reminder" labelVariant="plain">
                 <Select
-                  value={
-                    rotationReminderDays == null
-                      ? ''
-                      : String(rotationReminderDays)
-                  }
+                  value={rotationReminderDays == null ? '' : String(rotationReminderDays)}
                   onChange={(e) =>
-                    setRotationReminderDays(
-                      e.target.value === '' ? null : Number(e.target.value),
-                    )
+                    setRotationReminderDays(e.target.value === '' ? null : Number(e.target.value))
                   }
                 >
                   <option value="">No reminder</option>
@@ -391,9 +368,8 @@ export function CreatePasswordDialog({
               >
                 <Icon.warn size={12} />
                 <span>
-                  Client portal users will be able to see and reveal this
-                  credential. Only enable this for credentials you intend to
-                  share.
+                  Client portal users will be able to see and reveal this credential. Only enable
+                  this for credentials you intend to share.
                 </span>
               </div>
             )}
@@ -409,9 +385,7 @@ export function CreatePasswordDialog({
             />
           </PasswordFormSection>
         </PasswordAdvancedDisclosure>
-        {err && (
-          <div style={{ fontSize: 12, color: 'var(--danger)' }}>{err}</div>
-        )}
+        {err && <div style={{ fontSize: 12, color: 'var(--danger)' }}>{err}</div>}
       </div>
     </Dialog>
   );

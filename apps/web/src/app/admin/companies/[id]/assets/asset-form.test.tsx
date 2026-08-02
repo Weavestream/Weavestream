@@ -52,6 +52,9 @@ jest.mock('../../../../../lib/upload-client', () => {
 jest.mock('../../../../../lib/api', () => ({
   apiFetch: jest.fn(() => new Promise(() => {})),
 }));
+const { apiFetch } = jest.requireMock('../../../../../lib/api') as {
+  apiFetch: jest.Mock;
+};
 const { uploadFile } = jest.requireMock('../../../../../lib/upload-client') as {
   uploadFile: jest.Mock;
 };
@@ -114,10 +117,7 @@ function confirmResponse(id: string, filename: string) {
   };
 }
 
-function renderForm(
-  options: Record<string, unknown>,
-  initialValues?: Record<string, unknown>,
-) {
+function renderForm(options: Record<string, unknown>, initialValues?: Record<string, unknown>) {
   return render(
     <ToastProvider>
       <AssetForm
@@ -342,9 +342,7 @@ describe('upload lifecycle', () => {
 
   it('gates Save while an upload is pending and releases it on confirm', async () => {
     let resolveUpload: (v: unknown) => void = () => {};
-    uploadFile.mockImplementation(
-      () => new Promise((resolve) => (resolveUpload = resolve)),
-    );
+    uploadFile.mockImplementation(() => new Promise((resolve) => (resolveUpload = resolve)));
     renderForm({});
     expect(saveButton()).toBeEnabled();
 
@@ -404,6 +402,43 @@ describe('upload lifecycle', () => {
     expect(retry).toBeDisabled();
     fireEvent.click(retry);
     expect(uploadFile).toHaveBeenCalledTimes(1); // no new upload started
+  });
+});
+
+describe('URL validation', () => {
+  it('keeps an unsafe URL visible and disables Save until it is corrected', () => {
+    const urlField: LayoutFieldSummary = {
+      ...fileField({}),
+      id: 'f-url',
+      name: 'Admin URL',
+      slug: 'admin_url',
+      fieldType: 'URL',
+      position: 0,
+    };
+    const layout = { ...layoutWith({}), fields: [urlField] };
+    render(
+      <ToastProvider>
+        <AssetForm
+          companyId="co-1"
+          companyLabel="Acme Corp"
+          layout={layout}
+          mode="edit"
+          assetId="a-1"
+          initialName="Router"
+        />
+      </ToastProvider>,
+    );
+
+    const url = screen.getByDisplayValue('') as HTMLInputElement;
+    fireEvent.change(url, { target: { value: 'file:///etc/passwd' } });
+    expect(url).toHaveValue('file:///etc/passwd');
+    expect(screen.getByText(/starting with http:\/\//i)).toBeInTheDocument();
+    expect(saveButton()).toBeDisabled();
+    expect(apiFetch).not.toHaveBeenCalled();
+
+    fireEvent.change(url, { target: { value: 'https://router.example/admin' } });
+    expect(screen.queryByText(/starting with http:\/\//i)).not.toBeInTheDocument();
+    expect(saveButton()).toBeEnabled();
   });
 });
 

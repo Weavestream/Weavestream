@@ -8,12 +8,7 @@ import type { ReactNode } from 'react';
 import { ToastProvider } from '../../components/Toast';
 import { ApiError } from '../../lib/api';
 import { AssetFormScreen } from './AssetFormScreen';
-import {
-  FIXTURE_LAYOUT_ID,
-  makeAsset,
-  makeLayout,
-  makeLayoutField,
-} from './test-fixtures';
+import { FIXTURE_LAYOUT_ID, makeAsset, makeLayout, makeLayoutField } from './test-fixtures';
 
 const navigateMock = jest.fn();
 const backMock = jest.fn();
@@ -49,8 +44,19 @@ const { apiFetch } = jest.requireMock('../../lib/api') as { apiFetch: jest.Mock 
 const ASSET_ID = 'b0000000-0000-4000-8000-0000000000b1';
 const LAYOUT = makeLayout({
   fields: [
-    makeLayoutField({ slug: 'hostname', name: 'Hostname', isPrimary: true, isRequired: true, position: 0 }),
-    makeLayoutField({ slug: 'mgmt_ip', name: 'Management IP', fieldType: 'IP_ADDRESS', position: 1 }),
+    makeLayoutField({
+      slug: 'hostname',
+      name: 'Hostname',
+      isPrimary: true,
+      isRequired: true,
+      position: 0,
+    }),
+    makeLayoutField({
+      slug: 'mgmt_ip',
+      name: 'Management IP',
+      fieldType: 'IP_ADDRESS',
+      position: 1,
+    }),
     makeLayoutField({ slug: 'runbook', name: 'Runbook', fieldType: 'RICH_TEXT', position: 2 }),
   ],
 });
@@ -79,9 +85,10 @@ function route({
 }
 
 function renderForm(
-  props:
-    | { mode: 'create'; layoutId: string }
-    | { mode: 'edit'; assetId: string } = { mode: 'create', layoutId: FIXTURE_LAYOUT_ID },
+  props: { mode: 'create'; layoutId: string } | { mode: 'edit'; assetId: string } = {
+    mode: 'create',
+    layoutId: FIXTURE_LAYOUT_ID,
+  },
 ) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const Wrapper = ({ children }: { children: ReactNode }) => (
@@ -137,6 +144,42 @@ describe('create', () => {
     ).toHaveLength(0);
   });
 
+  it('shows a field error and blocks saving an unsafe URL until corrected', async () => {
+    route({
+      layout: makeLayout({
+        fields: [
+          makeLayoutField({
+            slug: 'hostname',
+            name: 'Hostname',
+            isPrimary: true,
+            isRequired: true,
+            position: 0,
+          }),
+          makeLayoutField({
+            slug: 'admin_url',
+            name: 'Admin URL',
+            fieldType: 'URL',
+            position: 1,
+          }),
+        ],
+      }),
+    });
+    renderForm();
+    fireEvent.change(await screen.findByLabelText('Hostname *'), {
+      target: { value: 'router-1' },
+    });
+    const url = screen.getByLabelText('Admin URL');
+    fireEvent.change(url, { target: { value: 'data:text/html,hello' } });
+
+    expect(url).toHaveValue('data:text/html,hello');
+    expect(screen.getByText(/starting with http:\/\//i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
+
+    fireEvent.change(url, { target: { value: 'https://router.example/admin' } });
+    expect(screen.queryByText(/starting with http:\/\//i)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled();
+  });
+
   it('maps a 400 ValidationError onto the slug and a 409 onto the conflicting name', async () => {
     route({
       writeError: new ApiError(400, {
@@ -152,9 +195,7 @@ describe('create', () => {
       target: { value: 'not-an-ip' },
     });
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
-    expect(
-      await screen.findByText('Enter a valid IPv4 or IPv6 address.'),
-    ).toBeInTheDocument();
+    expect(await screen.findByText('Enter a valid IPv4 or IPv6 address.')).toBeInTheDocument();
     first.unmount();
 
     route({
@@ -169,9 +210,7 @@ describe('create', () => {
       target: { value: 'srv-pines-02' },
     });
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
-    expect(
-      await screen.findByText('Already used by “srv-pines-02”.'),
-    ).toBeInTheDocument();
+    expect(await screen.findByText('Already used by “srv-pines-02”.')).toBeInTheDocument();
   });
 
   it('blocks creation on a layout with a required desktop-only field', async () => {
@@ -277,16 +316,12 @@ describe('name field visibility (Phase 4)', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
 
     await waitFor(() =>
-      expect(
-        apiFetch.mock.calls.some(([, init]) => init?.method === 'POST'),
-      ).toBe(true),
+      expect(apiFetch.mock.calls.some(([, init]) => init?.method === 'POST')).toBe(true),
     );
     const [, init] = apiFetch.mock.calls.find(
       ([, i]) => (i as { method?: string } | undefined)?.method === 'POST',
     )!;
-    expect(
-      JSON.parse((init as { body: string }).body),
-    ).not.toHaveProperty('name');
+    expect(JSON.parse((init as { body: string }).body)).not.toHaveProperty('name');
   });
 
   it('edit keeps the Name field, seeded from the asset (clobber guard intact)', async () => {

@@ -3,6 +3,7 @@ export * from './user.js';
 export * from './membership.js';
 export * from './invite.js';
 export * from './field-types.js';
+export * from './http-url.js';
 export * from './asset-field.js';
 export * from './asset-layout.js';
 export * from './asset.js';

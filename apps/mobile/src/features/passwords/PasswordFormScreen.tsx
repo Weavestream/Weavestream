@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import type { PasswordDetail } from '@weavestream/shared';
+import { optionalHttpUrlError, type PasswordDetail } from '@weavestream/shared';
 import { FieldBlock, FieldError, Hint } from '../../components/FieldBlock';
 import { FormScreenChrome } from '../../components/FormScreenChrome';
 import { Icon } from '../../components/Icon';
@@ -21,11 +21,7 @@ import {
 } from './api';
 import { GeneratorSheet } from './GeneratorSheet';
 import { recallListFilter } from './list-filter-memory';
-import {
-  useCreatePassword,
-  usePasswordDetail,
-  useUpdatePassword,
-} from './queries';
+import { useCreatePassword, usePasswordDetail, useUpdatePassword } from './queries';
 
 /**
  * Create / edit form — a full-viewport routed page (the Shell hides
@@ -149,12 +145,12 @@ function PasswordFormFields({
 
   const secretInPlay = hadTotp ? totpChoice === 'replace' : totpSecret.trim().length > 0;
   const secretValid = !secretInPlay || validateTotpSecret(totpSecret).ok;
+  const urlError = optionalHttpUrlError(url);
 
   function totpState(): TotpFormState {
     if (hadTotp) {
       if (totpChoice === 'remove') return { kind: 'remove' };
-      if (totpChoice === 'replace' && totpSecret.trim())
-        return { kind: 'set', secret: totpSecret };
+      if (totpChoice === 'replace' && totpSecret.trim()) return { kind: 'set', secret: totpSecret };
       return { kind: 'keep' };
     }
     return totpSecret.trim() ? { kind: 'set', secret: totpSecret } : { kind: 'none' };
@@ -168,6 +164,7 @@ function PasswordFormFields({
   const saveDisabled =
     busy ||
     !secretValid ||
+    urlError !== null ||
     (hadTotp && totpChoice === 'replace' && !totpSecret.trim()) ||
     (isEdit
       ? Object.keys(updatePayload!).length === 0
@@ -310,7 +307,7 @@ function PasswordFormFields({
           </div>
         </FieldBlock>
 
-        <FieldBlock label="URL" htmlFor="pw-url">
+        <FieldBlock label="URL" htmlFor="pw-url" error={urlError}>
           <Input
             id="pw-url"
             value={url}

@@ -1,11 +1,11 @@
 import { z } from 'zod';
 import type { Prisma } from '@prisma/client';
+import { httpUrlSchema } from '@weavestream/shared';
 import type { FieldTypeStrategy } from '../field-type-strategy.js';
 
 const optionsSchema = z.object({}).strict();
 
 const EMAIL_RX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-const URL_RX = /^https?:\/\/\S+$/;
 
 function toE164(raw: string): string | null {
   const digits = raw.replace(/[^\d+]/g, '');
@@ -69,10 +69,7 @@ export class UrlStrategy implements FieldTypeStrategy {
   readonly optionsSchema = optionsSchema;
 
   valueSchema(): z.ZodTypeAny {
-    return z.union([
-      z.null(),
-      z.string().regex(URL_RX, 'Must be an http(s) URL').max(2000),
-    ]);
+    return z.union([z.null(), httpUrlSchema]);
   }
 
   normalize(input: unknown): Prisma.InputJsonValue {
@@ -95,11 +92,11 @@ export class VaultwardenLinkStrategy implements FieldTypeStrategy {
     return z.union([
       z.null(),
       z.object({
-        url: z.string().regex(URL_RX, 'Must be an http(s) URL').max(2000),
+        url: httpUrlSchema,
         label: z.string().max(200).optional(),
       }),
-      // Accept bare URL strings and widen them in `normalize`.
-      z.string().regex(URL_RX).max(2000),
+      // Accept the string form and widen it in `normalize`.
+      httpUrlSchema,
     ]);
   }
 
