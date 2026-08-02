@@ -358,6 +358,21 @@ export const Icon = {
       <path d="M11 8l0.6 1.8 1.8 0.6-1.8 0.6L11 12.8l-0.6-1.8-1.8-0.6 1.8-0.6L11 8z" />
     </IconBase>
   ),
+  /** Material Symbols Rounded `auto_awesome`, shared visually with mobile Ask. */
+  askAnything: ({ size = 14, style, className }: IconProps) => (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 -960 960 960"
+      fill="currentColor"
+      aria-hidden="true"
+      focusable="false"
+      className={className}
+      style={{ flexShrink: 0, ...style }}
+    >
+      <path d="m654-454-91 147q-8 13-22.5 10T522-314l-33-133-306 305q-9 9-21 9t-21-9q-9-9-9-21t9-21l305-305-133-33q-14-4-17-18.5t10-22.5l147-92-12-172q-1-15 12.5-22t24.5 3l132 111 160-64q14-5 24 5t5 24l-65 160 111 132q10 11 3.5 24.5T827-441l-173-13ZM131-721q-5-5-5-11t5-11l46-46q5-5 11-5t11 5l45 45q5 5 5 11t-5 11l-46 46q-5 5-11 5t-11-5l-45-45Zm428 307 63-102 120 9-78-92 45-111-111 45-92-78 9 120-102 64 117 29 29 116Zm163 283-46-46q-5-5-4.5-11t5.5-11l45-45q5-5 11-5t11 5l46 46q5 5 4.5 11t-5.5 11l-45 45q-5 5-11 5t-11-5ZM578-579Z" />
+    </svg>
+  ),
   refresh: (p: IconProps) => (
     <IconBase {...p}>
       <path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9" />

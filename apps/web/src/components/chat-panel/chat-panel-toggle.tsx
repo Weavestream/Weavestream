@@ -8,12 +8,15 @@ import { useChatPanel } from './chat-panel-provider';
  * blends visually with the rest of the icon strip in either container.
  */
 const VARIANT_DIMS = {
-  sidebar: { box: 26, glyph: 14, stroke: 1.5, radius: 5 },
-  topbar: { box: 30, glyph: 18, stroke: 1.75, radius: 6 },
+  // Material's glyph includes more internal view-box padding than the
+  // adjacent 16×16 stroke icons, so it needs a larger nominal size to
+  // occupy the same visual area without changing the button geometry.
+  sidebar: { box: 26, glyph: 18, radius: 5 },
+  topbar: { box: 30, glyph: 23, radius: 6 },
 } as const;
 
 /**
- * Sparkle button rendered alongside the rest of the shell toolbar.
+ * Ask button rendered alongside the rest of the shell toolbar.
  * Toggles the chat panel open/closed and lights up when the panel is
  * open (matches the `ToolbarIconButton` active treatment in
  * sidebar-toolbar.tsx). The `variant` prop selects sidebar (compact)
@@ -26,14 +29,13 @@ export function ChatPanelToggle({
 }) {
   const { state, toggle } = useChatPanel();
   const active = state.isOpen;
-  const ChatIcon = active ? Icon.chatFilled : Icon.chat;
   const dims = VARIANT_DIMS[variant];
   return (
     <button
       type="button"
       aria-pressed={active}
-      aria-label="AI chat"
-      title="AI chat"
+      aria-label="Ask anything"
+      title="Ask anything"
       onClick={toggle}
       className="sidebar-toolbar-icon"
       style={{
@@ -49,7 +51,7 @@ export function ChatPanelToggle({
         cursor: 'pointer',
       }}
     >
-      <ChatIcon size={dims.glyph} stroke={dims.stroke} />
+      <Icon.askAnything size={dims.glyph} />
     </button>
   );
 }
