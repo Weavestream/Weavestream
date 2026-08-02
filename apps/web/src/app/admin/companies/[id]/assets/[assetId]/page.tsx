@@ -79,7 +79,6 @@ export default async function AssetDetailPage({
         crumbs={companyCrumbs(
           term,
           company,
-          { label: 'Assets', href: `/admin/companies/${companyId}/assets` },
           {
             label: asset.layoutName,
             href: `/admin/companies/${companyId}/layouts/${asset.layoutSlug}`,

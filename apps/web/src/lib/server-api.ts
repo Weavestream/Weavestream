@@ -1103,15 +1103,21 @@ export async function getAssetCountsByLayout(
   return res.data ?? {};
 }
 
-export async function getAsset(
-  companyId: string,
-  id: string,
-): Promise<AssetSummary | null> {
-  const res = await serverApiFetch<AssetSummary>(
-    `/companies/${companyId}/assets/${id}`,
-  );
-  return unwrapApiResponse(res, `/companies/${companyId}/assets/${id}`);
-}
+/**
+ * `/companies/:companyId/assets/:id` — shared by an asset detail page and
+ * its separately streamed `generateMetadata` call. Request-scoped
+ * memoization is important here: two independent reads can consume two
+ * throttle slots and, if metadata alone is rate-limited, leave the page
+ * rendered with the parent company's fallback title until a later refresh.
+ * Primitive arguments keep React's identity-keyed cache deterministic.
+ */
+export const getAsset = cache(
+  async (companyId: string, id: string): Promise<AssetSummary | null> => {
+    const path = `/companies/${companyId}/assets/${id}`;
+    const res = await serverApiFetch<AssetSummary>(path);
+    return unwrapApiResponse(res, path);
+  },
+);
 
 // ───────────────────────────────────────────────────────────────────
 // Phase 4: folders, articles, uploads

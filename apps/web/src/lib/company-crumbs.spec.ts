@@ -39,6 +39,22 @@ describe('companyCrumbs', () => {
     expect(crumbs[0]?.section).toEqual({ label: 'Domains', href: undefined });
   });
 
+  it('keeps an asset detail page scoped to its selected layout', () => {
+    const crumbs = companyCrumbs(
+      term,
+      company,
+      {
+        label: 'Workstations',
+        href: '/admin/companies/c1/layouts/workstations',
+      },
+      { label: 'MacBook Pro' },
+    );
+    expect(crumbs[0]?.section).toEqual({
+      label: 'Workstations',
+      href: '/admin/companies/c1/layouts/workstations',
+    });
+  });
+
   it('builds the company section href', () => {
     expect(companyBaseHref(company)).toBe('/admin/companies/c1');
   });
