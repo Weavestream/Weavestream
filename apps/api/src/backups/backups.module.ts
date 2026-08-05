@@ -9,9 +9,11 @@ import { BackupQueueRegistrar } from './backup-queue.registrar.js';
  *
  * - `BackupsService`         — config CRUD + run history + dump download.
  * - `BackupsController`      — admin REST surface gated by `backup.manage`.
- * - `BackupQueueRegistrar`   — re-asserts BullMQ repeatables from the
- *                              `backup_config` table on every API boot
- *                              and after every CRUD mutation.
+ * - `BackupQueueRegistrar`   — owns the BullMQ Job Scheduler
+ *                              registrations for the `backup_config`
+ *                              table: boot-time sweep + re-register,
+ *                              and per-config reconcile after every
+ *                              CRUD mutation.
  *
  * `EmailModule` is imported here only for symmetry with the worker
  * notify path; the API itself does not send notification emails. The

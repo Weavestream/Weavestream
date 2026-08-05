@@ -166,6 +166,18 @@ export class BackupWorker implements OnModuleDestroy {
       return;
     }
 
+    // Safety net for scheduler ticks that were already in flight when
+    // the schedule got disabled (the API removes the Job Scheduler on
+    // disable, but a tick that left the delayed set survives that).
+    // Manual runs carry a `backupRunId` and deliberately still execute
+    // on a disabled config — "Run now" is an explicit admin action.
+    if (!payload.backupRunId && !cfg.enabled) {
+      this.logger.log(
+        `backup:run skipped — schedule ${cfg.id} is disabled`,
+      );
+      return;
+    }
+
     // Resolve or mint the BackupRun row. Manual runs come in with a
     // pre-allocated id (so the UI can poll status); cron-scheduled
     // runs let the worker create the row inline.

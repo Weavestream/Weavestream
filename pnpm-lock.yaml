@@ -124,8 +124,8 @@ importers:
         specifier: 0.35.3
         version: 0.35.3(@types/node@24.12.2)
       undici:
-        specifier: ^8.5.0
-        version: 8.5.0
+        specifier: ^8.10.0
+        version: 8.10.0
       zod:
         specifier: ^3.25.0
         version: 3.25.76
@@ -568,8 +568,8 @@ importers:
         specifier: 0.35.3
         version: 0.35.3(@types/node@24.12.2)
       undici:
-        specifier: ^8.5.0
-        version: 8.5.0
+        specifier: ^8.10.0
+        version: 8.10.0
       zod:
         specifier: ^3.25.0
         version: 3.25.76
@@ -7542,8 +7542,8 @@ packages:
   undici-types@7.18.2:
     resolution: {integrity: sha512-AsuCzffGHJybSaRrmr5eHr81mwJU3kjw6M+uprWvCXiNeN9SOGwQ3Jn8jb8m3Z6izVgknn1R0FTCEAP2QrLY/w==}
 
-  undici@8.5.0:
-    resolution: {integrity: sha512-xamtWoB1EshgjpmlXd7GGm2VfdDtw1+rD8uhry8pSNW3If6S8E0m2T2+orSKeZXEn/aPJMviCpDBA65WJt8zhg==}
+  undici@8.10.0:
+    resolution: {integrity: sha512-HvltHd7avK13QIw/oLe4qoOLyoVSoafqJ2jYOrtMRBkbYT31eiBQ8O0ehRKZiEZCMEyLFQNIADpgCWC5fALvYQ==}
     engines: {node: '>=22.19.0'}
 
   unicode-canonical-property-names-ecmascript@2.0.1:
@@ -16168,7 +16168,7 @@ snapshots:
 
   undici-types@7.18.2: {}
 
-  undici@8.5.0: {}
+  undici@8.10.0: {}
 
   unicode-canonical-property-names-ecmascript@2.0.1: {}
 

@@ -36,8 +36,9 @@ export const QueueNames = {
   alerts: 'alerts',
   // Scheduled Postgres exports (backup feature). Two job shapes:
   //   - `run`    — produce a dump + manifest for a BackupConfig /
-  //                BackupRun pair. Enqueued both by the repeatable
-  //                cron and by the "Run now" admin action.
+  //                BackupRun pair. Enqueued both by the per-config
+  //                BullMQ Job Scheduler and by the "Run now" admin
+  //                action.
   //   - `prune`  — GFS retention pass. Enqueued by the run processor
   //                itself on success so cleanup is part of the same
   //                lane and inherits the same advisory-lock guard.
@@ -403,8 +404,9 @@ export const backupRunJobSchema = z.object({
   /**
    * Pre-allocated `BackupRun` row id. The "Run now" admin action
    * mints a `MANUAL` row up-front and passes its id so the UI can
-   * poll status by run id. The repeatable cron-fired version omits
-   * this field; the consumer creates a `SCHEDULED` row inline.
+   * poll status by run id. Scheduler-fired ticks omit this field;
+   * the consumer creates a `SCHEDULED` row inline — its absence is
+   * also what lets the worker skip ticks for disabled configs.
    */
   backupRunId: z.string().uuid().optional(),
 });

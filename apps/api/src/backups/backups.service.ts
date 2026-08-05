@@ -14,6 +14,7 @@ import type {
 import { promises as fs } from 'node:fs';
 import { createReadStream, type ReadStream } from 'node:fs';
 import * as path from 'node:path';
+import { defaultRepeatStrategy } from 'bullmq';
 import {
   BackupJobNames,
   QueueNames,
@@ -92,6 +93,7 @@ export class BackupsService {
     meta: RequestMeta,
   ): Promise<BackupConfig> {
     const data = sanitiseConfig(input);
+    this.assertSchedulable(data.cron, data.timezone);
     const row = await this.prisma.backupConfig.create({
       data: {
         ...data,
@@ -135,6 +137,14 @@ export class BackupsService {
     });
 
     const data = sanitiseConfig(merged);
+    // Gate schedulability only when the resulting config stays
+    // enabled: a disabled result is never registered, and legacy rows
+    // can hold values that predate this validation — disabling such a
+    // row must always succeed. The gate re-applies the moment a PATCH
+    // would re-enable it.
+    if (merged.enabled) {
+      this.assertSchedulable(data.cron, data.timezone);
+    }
     const after = await this.prisma.backupConfig.update({
       where: { id },
       data,
@@ -176,6 +186,47 @@ export class BackupsService {
     });
     await this.registrar.reassert(id);
     return { ok: true };
+  }
+
+  /**
+   * Semantic validation on top of the shared zod schemas, which only
+   * check shape. A shape-valid but out-of-range cron (`99 99 * * *`)
+   * or unknown IANA timezone would otherwise commit to the database,
+   * and the registrar's `reassert` — which deliberately swallows
+   * Redis-side errors at the CRUD boundary — would then report a
+   * successful save while the enabled schedule stays unregistered.
+   *
+   * The cron runs through `defaultRepeatStrategy` — the exact function
+   * BullMQ's `upsertJobScheduler` uses to compute the next fire — so
+   * acceptance here is parity-by-construction with the scheduler, with
+   * no separate parser dependency to keep in lockstep. An `undefined`
+   * return is rejected too: that is the branch where BullMQ silently
+   * registers nothing. The timezone is probed via `Intl` first because
+   * the strategy's underlying parser accepts unknown zone names
+   * silently (its date library falls back instead of throwing).
+   */
+  private assertSchedulable(cron: string, timezone: string | null): void {
+    const tz = timezone ?? 'Etc/UTC';
+    try {
+      new Intl.DateTimeFormat('en-US', { timeZone: tz });
+    } catch {
+      throw new BadRequestException(`Unknown timezone "${tz}".`);
+    }
+    let next: number | undefined;
+    try {
+      next = defaultRepeatStrategy(Date.now(), { pattern: cron, tz });
+    } catch (err) {
+      throw new BadRequestException(
+        `Invalid cron pattern "${cron}": ${
+          err instanceof Error ? err.message : 'unparseable'
+        }`,
+      );
+    }
+    if (next === undefined) {
+      throw new BadRequestException(
+        `Invalid cron pattern "${cron}": it never fires.`,
+      );
+    }
   }
 
   // ------------------------------------------------------------------
@@ -391,7 +442,3 @@ function toRunDto(row: RunWithConfig): BackupRunDto {
     createdAt: row.createdAt.toISOString(),
   };
 }
-
-// Avoid TS unused-import warning when downstream callers ever drop
-// references to `BadRequestException`.
-void BadRequestException;
