@@ -13,6 +13,31 @@ All notable changes to Weavestream are documented here. The format follows [Keep
 
 ## [Unreleased]
 
+## [1.9.4] - 2026-08-05
+
+### Added
+
+- **Security alert email notifications.** Security alerts (account lockouts, rate-limiting throttle events, IP rule changes, step-up authentication failures) can now trigger real-time email notifications to administrators based on severity preferences configured under **Admin → Security Alerts**.
+- **Code block copy button in Markdown editor and viewer.** Rendered Markdown code fences across articles, preview modes, and asset fields now include a one-click copy button.
+- **BullMQ job scheduler lifecycle management.** BullMQ queue registration and recurring backup schedules are now managed via explicit lifecycle registrars in both API and worker services, ensuring consistent job queue initialization and graceful shutdown handling.
+
+### Changed
+
+- **HTTP/HTTPS URL schema validation.** Password URLs and asset URL fields across desktop and mobile now strictly enforce `http://` or `https://` protocols, rejecting invalid strings and non-web schemes (`javascript:`, `file:`, `data:`, `ssh:`) at schema validation.
+- **Unified AI assistant icon.** Desktop AI chat panel toggle now uses the `auto_awesome` wand icon matching the mobile app interface.
+- **Button green accent color tuning.** Green accent tokens in buttons, tabs, and status badges across shared styles, web app, and mobile app were updated for consistent visual hierarchy and improved contrast.
+- **Card and top-bar corner radius polish.** Introduced `--radius-card` token across search inputs, scope pills, and content panels for consistent rounded corners across the top-bar shell.
+
+### Fixed
+
+- **Filter controls hidden when no assets match.** Asset layout tables now keep filter and search controls accessible when query results return empty, allowing operators to adjust or clear filters directly without page reloads.
+- **Breadcrumb trail for newly created assets.** Fixed an asset cache resolution issue where navigating to a newly created asset displayed a fallback breadcrumb before the asset title resolved.
+- **Markdown syntax highlighting.** Resolved rendering glitches and text contrast issues in Markdown code block syntax highlighting.
+
+### Security
+
+- **Strict URL scheme enforcement on password and asset fields.** Introduced shared URL validation (`optionalHttpUrlSchema`) that filters out arbitrary URL schemes (`javascript:`, `file:`, `data:`, `ssh:`) to protect against stored cross-site scripting and unauthorized protocol handler triggers.
+
 ## [1.9.3] - 2026-07-30
 
 ### Fixed
