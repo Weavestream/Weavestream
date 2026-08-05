@@ -170,7 +170,7 @@ export class StepUpService {
     }
 
     if (!ok) {
-      await this.recordFailure(user.id);
+      const failureCount = await this.recordFailure(user.id);
       await this.audit.log({
         actorId: user.id,
         action: AUDIT_ACTIONS.security.stepUpFailed,
@@ -179,7 +179,11 @@ export class StepUpService {
         ip: meta.ip,
         userAgent: meta.userAgent,
         before: null,
-        after: { factor, sessionId: user.sessionId },
+        after: {
+          factor,
+          sessionId: user.sessionId,
+          failureCount: failureCount ?? null,
+        },
       });
       throw new UnauthorizedException('Invalid credentials');
     }
@@ -206,13 +210,63 @@ export class StepUpService {
     return parseInt(hits ?? '0', 10) >= this.env.values.LOCKOUT_MAX_FAILURES;
   }
 
-  private async recordFailure(userId: string): Promise<void> {
+  /**
+   * INCR + sliding EXPIRE, returning the post-increment count so the
+   * `security.stepup.failed` audit payload can carry it (the alert
+   * emitter fires "suspicious account behavior" when it reaches
+   * `LOCKOUT_MAX_FAILURES`).
+   *
+   * FAILS CLOSED (throws) on any transaction or reply failure — the
+   * counter write is lockout enforcement, so a failed attempt must not
+   * slide through uncounted, and a failed EXPIRE must not leave a
+   * TTL-less counter that would eventually lock the user out
+   * permanently (the fast-fail 429 branch runs before the on-success
+   * clearing path). On a bad reply the key is best-effort deleted
+   * first (self-heal), mirroring `LockoutService.settleCounter`.
+   */
+  private async recordFailure(userId: string): Promise<number> {
     const windowSec = this.env.values.LOCKOUT_WINDOW_MIN * 60;
     const k = this.failKey(userId);
     const multi = this.redis.client.multi();
     multi.incr(k);
     multi.expire(k, windowSec);
-    await multi.exec();
+    let res: [error: Error | null, result: unknown][] | null;
+    try {
+      res = await multi.exec();
+    } catch (err) {
+      this.log.warn(
+        `step-up failure MULTI failed — failing closed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      throw err;
+    }
+    if (!res) {
+      this.log.warn('step-up failure counter MULTI aborted — failing closed');
+      throw new Error('step-up failure counter transaction aborted');
+    }
+
+    const incrErr = res[0]?.[0];
+    const count = res[0]?.[1];
+    const expireErr = res[1]?.[0];
+    const expireReply = res[1]?.[1];
+    let problem: string | null = null;
+    if (incrErr || typeof count !== 'number') {
+      problem = `INCR failed: ${
+        incrErr instanceof Error ? incrErr.message : `unexpected reply ${String(count)}`
+      }`;
+    } else if (expireErr || expireReply !== 1) {
+      problem = `EXPIRE failed: ${
+        expireErr instanceof Error
+          ? expireErr.message
+          : `unexpected reply ${String(expireReply)}`
+      }`;
+    }
+    if (problem === null) return count as number;
+
+    this.log.warn(
+      `step-up failure counter ${k} ${problem} — deleting key and failing closed`,
+    );
+    await this.redis.client.del(k).catch(() => undefined);
+    throw new Error(`step-up failure counter ${k}: ${problem}`);
   }
 
   private async clearFailures(userId: string): Promise<void> {

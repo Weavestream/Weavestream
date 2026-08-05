@@ -1,8 +1,8 @@
 /**
- * Catalog of every audit action emitted by the API. The integration
- * coverage test iterates this list and asserts each action is produced
- * by the scripted flow. Adding a new action without wiring an emitter
- * will fail that test.
+ * Catalog of every audit action emitted by the API. Keep every action
+ * string here (never inline a new literal at an emission site without
+ * registering it) so `ALL_AUDIT_ACTIONS` stays a complete inventory
+ * for docs, tooling, and tests.
  */
 export const AUDIT_ACTIONS = {
   auth: {
@@ -220,6 +220,20 @@ export const AUDIT_ACTIONS = {
     // null; `after` carries `{ url, hostname, resolvedIps, reason,
     // matchedCidr }`.
     egressBlocked: 'security.egress.blocked',
+    // Security alerts — request-rejection events. Both are coalesced at
+    // the emission site (Redis SET NX EX, one row per subject per
+    // window) because they fire on hostile traffic shapes that would
+    // otherwise write a row per rejected request. `ip_rule.blocked`:
+    // `entityType: 'IpRule'`, `after: { cidr, priority, source, path }`
+    // where source ∈ api | web (web = the Next.js proxy reporting a
+    // page-load denial via POST /ip-rules/blocked-report).
+    // `ratelimit.blocked`: `entityType: 'RateLimit'`, `after: {
+    // limiter, limit, windowSec, route, method, retryAfterSec,
+    // attemptedEmail? }` — durations are SECONDS (converted from the
+    // throttler's millisecond internals), never the raw tracker or
+    // generated key.
+    ipRuleBlocked: 'security.ip_rule.blocked',
+    ratelimitBlocked: 'security.ratelimit.blocked',
   },
   // Upload lifecycle. `create`/`delete`/`restore` are per-row operator
   // actions on a single Upload row; `path_revealed` records a SUPER_ADMIN

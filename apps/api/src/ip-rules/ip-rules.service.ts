@@ -12,7 +12,23 @@ import { AuditLogService } from '../audit/audit.service.js';
 import { AUDIT_ACTIONS } from '../audit/audit-actions.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
 import type { RequestMeta } from '../common/request-meta.js';
+import { claimOnce } from '../common/claim-once.js';
+import { EnvService } from '../config/env.service.js';
+import { RedisService } from '../redis/redis.service.js';
 import { IpRuleCacheService } from './ip-rule-cache.service.js';
+
+/**
+ * One denied request, as observed by either enforcement layer:
+ * `IpRuleGuard` (`source: 'api'`) or the Next.js proxy via
+ * `POST /ip-rules/blocked-report` (`source: 'web'`).
+ */
+export interface BlockedRequestInput {
+  ip: string;
+  cidr: string;
+  priority?: number;
+  path?: string;
+  userAgent?: string;
+}
 
 /**
  * CRUD service for `IpRule` rows.
@@ -30,7 +46,60 @@ export class IpRulesService {
     private readonly prisma: PrismaService,
     private readonly audit: AuditLogService,
     private readonly cache: IpRuleCacheService,
+    private readonly redis: RedisService,
+    private readonly env: EnvService,
   ) {}
+
+  /**
+   * Record one DENY-rule rejection as a `security.ip_rule.blocked`
+   * audit row, coalesced to one row per (ip, cidr) per lockout window —
+   * a blocked client hammering at request rate must not write a row per
+   * 403. Both enforcement layers funnel through here so bounds and
+   * dedup are identical for API- and web-observed denials.
+   *
+   * Length clamps happen HERE (not at the callers): path and user agent
+   * are attacker-controlled, and this is the single boundary through
+   * which they enter audit rows and alert emails.
+   *
+   * The audit write is awaited — the method resolves only once the row
+   * is durable, so the internal report endpoint's 204 means what it
+   * says. `IpRuleGuard` stays zero-latency by detaching the whole call
+   * (`void ...recordBlockedRequest(...).catch(...)`) before throwing
+   * its 403.
+   */
+  async recordBlockedRequest(
+    input: BlockedRequestInput,
+    source: 'api' | 'web',
+  ): Promise<void> {
+    const ip = input.ip.slice(0, 64);
+    const cidr = input.cidr.slice(0, 64);
+    const windowSec = this.env.values.LOCKOUT_WINDOW_MIN * 60;
+    const claimed = await claimOnce(
+      this.redis.client,
+      `secalert:ipblock:${ip}:${cidr}`,
+      windowSec,
+    );
+    if (!claimed) return;
+
+    const path = input.path
+      ? (input.path.split('?')[0] ?? '').slice(0, 500) || null
+      : null;
+    await this.audit.log({
+      actorId: null,
+      action: AUDIT_ACTIONS.security.ipRuleBlocked,
+      entityType: 'IpRule',
+      entityId: null,
+      ip,
+      userAgent: input.userAgent ? input.userAgent.slice(0, 500) : null,
+      before: null,
+      after: {
+        cidr,
+        priority: input.priority ?? null,
+        source,
+        path,
+      },
+    });
+  }
 
   async list(): Promise<IpRule[]> {
     const rows = await this.prisma.ipRule.findMany({

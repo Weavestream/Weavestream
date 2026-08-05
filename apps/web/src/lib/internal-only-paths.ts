@@ -11,6 +11,7 @@
  */
 export const INTERNAL_ONLY_API_PATHS: readonly string[] = [
   '/api/v1/ip-rules/active',
+  '/api/v1/ip-rules/blocked-report',
 ];
 
 /**

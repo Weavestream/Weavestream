@@ -163,6 +163,14 @@ describe('searchAppHelpIndex', () => {
       'Register a Cloudflare Gateway IP list',
       'integrations/configure-cloudflare-zero-trust-lists',
     ],
+    [
+      'Email me about failed sign-ins',
+      'alerts-and-ai-chat/configure-security-alerts',
+    ],
+    [
+      'Get notified when an IP is blocked',
+      'alerts-and-ai-chat/configure-security-alerts',
+    ],
   ])('retrieves the expected guide for %s', (question, expectedId) => {
     const out = searchAppHelpIndex(index, question, 'test-version');
     expect(out.version).toBe('test-version');

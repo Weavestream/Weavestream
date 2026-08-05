@@ -3,6 +3,8 @@ import {
   Controller,
   Delete,
   Get,
+  HttpCode,
+  HttpStatus,
   Param,
   ParseUUIDPipe,
   Patch,
@@ -10,10 +12,13 @@ import {
   Req,
   UseGuards,
 } from '@nestjs/common';
+import { SkipThrottle } from '@nestjs/throttler';
 import type { Request } from 'express';
 import {
+  type IpRuleBlockedReport,
   type IpRuleInput,
   type IpRulePatch,
+  ipRuleBlockedReportSchema,
   ipRuleInputSchema,
   ipRulePatchSchema,
 } from '@weavestream/shared';
@@ -23,7 +28,7 @@ import { ZodBody } from '../common/zod-validation.pipe.js';
 import { RequirePermission } from '../rbac/require-permission.decorator.js';
 import { requestMetaOf } from '../common/request-meta.js';
 import { InternalOnlyGuard } from '../common/internal-only.guard.js';
-import { Public } from '../common/public.decorator.js';
+import { Public, SkipCsrf } from '../common/public.decorator.js';
 
 /**
  * Admin IP rules management.
@@ -59,6 +64,52 @@ export class IpRulesController {
   @UseGuards(InternalOnlyGuard)
   async active() {
     return { rules: await this.ipRules.getActiveRulesCached() };
+  }
+
+  /**
+   * Internal endpoint the Next.js `proxy.ts` calls when IT denies a
+   * page load under a DENY rule — those requests never reach the API,
+   * so without this report they would be invisible to the audit trail
+   * and to the "IP blocked or rate limited" security alert. Same
+   * internal-auth model as `/active` above (WS-028): private peer AND
+   * `x-ws-internal-token`, and the web proxy 404s the path for browser
+   * traffic.
+   *
+   * Three decorators are load-bearing:
+   *  - `@SkipCsrf()`: unlike `/active` this is a POST, and `@Public()`
+   *    does not exempt CSRF — without it every report 403s.
+   *  - `@SkipThrottle({ global: true })`: every report shares the web
+   *    container's peer identity, so a distributed scan would exhaust
+   *    one global bucket and emit a misleading `ratelimit.blocked` row
+   *    about this endpoint itself. `InternalOnlyGuard` remains the
+   *    boundary, and `recordBlockedRequest` is claimOnce-coalesced, so
+   *    the endpoint's work is bounded regardless.
+   *  - The blocked IP arrives in the BODY, never in `x-forwarded-for`:
+   *    `IpRuleGuard` runs first on every request and would 403 a
+   *    report presenting the denied IP as its own.
+   *
+   * 204 is returned only after the audit row is durable (the service
+   * awaits the write), so the proxy's `waitUntil` completes truthfully.
+   */
+  @Post('blocked-report')
+  @Public()
+  @SkipCsrf()
+  @SkipThrottle({ global: true })
+  @UseGuards(InternalOnlyGuard)
+  @HttpCode(HttpStatus.NO_CONTENT)
+  async blockedReport(
+    @Body(new ZodBody(ipRuleBlockedReportSchema)) dto: IpRuleBlockedReport,
+  ): Promise<void> {
+    await this.ipRules.recordBlockedRequest(
+      {
+        ip: dto.ip,
+        cidr: dto.cidr,
+        priority: dto.priority,
+        path: dto.path,
+        userAgent: dto.userAgent,
+      },
+      'web',
+    );
   }
 
   @Get(':id')

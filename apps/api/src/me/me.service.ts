@@ -243,7 +243,7 @@ export class MeService {
 
     const ok = await this.passwords.verify(user.passwordHash, input.currentPassword);
     if (!ok) {
-      await this.lockout.recordChangePasswordFailure(actor.id);
+      const failureCount = await this.lockout.recordChangePasswordFailure(actor.id);
       await this.audit.log({
         actorId: actor.id,
         action: 'user.password.change.failed',
@@ -256,7 +256,7 @@ export class MeService {
         // present a signed JWT / hashed refresh token, never this uuid)
         // pinpoints which session is grinding, so an admin can revoke
         // exactly the compromised cookie. See §2 note in CLAUDE.md.
-        after: { sessionId: actor.sessionId },
+        after: { sessionId: actor.sessionId, failureCount: failureCount ?? null },
       });
       // The `code` is what lets a client tell THIS 401 apart from the
       // AuthGuard's bare `UnauthorizedException` (dead session). Without it

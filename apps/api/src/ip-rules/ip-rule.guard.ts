@@ -12,7 +12,7 @@ import {
   IpRuleCacheService,
   type CachedRule,
 } from './ip-rule-cache.service.js';
-import { normalizeIp } from '../common/request-meta.js';
+import { normalizeIp, userAgentOf } from '../common/request-meta.js';
 
 /**
  * IP allow/deny guard.
@@ -72,6 +72,34 @@ export class IpRuleGuard implements CanActivate {
       this.log.warn(
         `IP ${clientIp} blocked by rule ${hit.cidr} (priority ${hit.priority})`,
       );
+      // Detached on purpose: the 403 must not wait on Redis or Postgres.
+      // The write is coalesced inside recordBlockedRequest (one audit
+      // row per ip+cidr per lockout window) and feeds the "IP blocked
+      // or rate limited" security alert. Observation must never change
+      // the outcome — any failure here (sync or async) is logged and
+      // the 403 below still throws.
+      try {
+        void this.ipRules
+          .recordBlockedRequest(
+            {
+              ip: clientIp,
+              cidr: hit.cidr,
+              priority: hit.priority,
+              path: req.originalUrl,
+              userAgent: userAgentOf(req),
+            },
+            'api',
+          )
+          .catch((err) =>
+            this.log.warn(
+              `blocked-request audit failed: ${err instanceof Error ? err.message : String(err)}`,
+            ),
+          );
+      } catch (err) {
+        this.log.warn(
+          `blocked-request observation failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
       throw new ForbiddenException('Access denied by IP rule');
     }
     return true;

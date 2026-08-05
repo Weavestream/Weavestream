@@ -1,6 +1,6 @@
 {
   "version": "4.6.0",
-  "created": "2026-07-24T23:23:57Z",
+  "created": "2026-08-05T00:18:47Z",
   "files": [
     {
       "path": ".nojekyll"
@@ -364,6 +364,12 @@
     },
     {
       "path": "features/ipam/index.html"
+    },
+    {
+      "path": "features/mobile.md"
+    },
+    {
+      "path": "features/mobile/index.html"
     },
     {
       "path": "features/passwords.md"

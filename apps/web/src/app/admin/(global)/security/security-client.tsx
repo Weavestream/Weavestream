@@ -418,10 +418,10 @@ const recentColumns: DataColumn<LoginActivity['recent'][number]>[] = [
   {
     id: 'when',
     header: 'When',
-    width: 170,
+    width: 200,
     mono: true,
     render: (r) => (
-      <span style={{ color: 'var(--dim)' }}>
+      <span style={{ color: 'var(--dim)', whiteSpace: 'nowrap' }}>
         <FormattedDateTime value={r.createdAt} />
       </span>
     ),

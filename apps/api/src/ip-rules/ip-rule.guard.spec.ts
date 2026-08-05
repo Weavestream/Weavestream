@@ -6,7 +6,11 @@ import type { IpRulesService } from './ip-rules.service.js';
 type Rule = { cidr: string; action: string; priority: number };
 
 function ctxFor(ip: string): ExecutionContext {
-  const req = { ip };
+  const req = {
+    ip,
+    headers: { 'user-agent': 'GuardSpec/1.0' },
+    originalUrl: '/api/v1/companies?page=2',
+  };
   return {
     switchToHttp: () => ({
       getRequest: () => req,
@@ -18,11 +22,12 @@ function ctxFor(ip: string): ExecutionContext {
 
 function makeGuard(loadEnabledRules: () => Promise<Rule[]>): {
   guard: IpRuleGuard;
-  service: { loadEnabledRules: jest.Mock };
+  service: { loadEnabledRules: jest.Mock; recordBlockedRequest: jest.Mock };
   cache: IpRuleCacheService;
 } {
   const service = {
     loadEnabledRules: jest.fn(loadEnabledRules),
+    recordBlockedRequest: jest.fn().mockResolvedValue(undefined),
   };
   const cache = new IpRuleCacheService();
   const guard = new IpRuleGuard(service as unknown as IpRulesService, cache);
@@ -137,5 +142,62 @@ describe('IpRuleGuard', () => {
       { cidr: '10.0.0.0/40', action: 'DENY', priority: 2 },
     ]);
     await expect(guard.canActivate(ctxFor('10.0.0.1'))).resolves.toBe(true);
+  });
+
+  // ── security.ip_rule.blocked reporting (detached, best-effort) ──────
+
+  it('reports a DENY to recordBlockedRequest (source api) and still throws 403', async () => {
+    const { guard, service } = makeGuard(async () => [
+      { cidr: '203.0.113.0/24', action: 'DENY', priority: 7 },
+    ]);
+    await expect(guard.canActivate(ctxFor('203.0.113.5'))).rejects.toThrow(
+      ForbiddenException,
+    );
+    expect(service.recordBlockedRequest).toHaveBeenCalledTimes(1);
+    expect(service.recordBlockedRequest).toHaveBeenCalledWith(
+      {
+        ip: '203.0.113.5',
+        cidr: '203.0.113.0/24',
+        priority: 7,
+        path: '/api/v1/companies?page=2',
+        userAgent: 'GuardSpec/1.0',
+      },
+      'api',
+    );
+  });
+
+  it('passes the normalized IP to the report (IPv4-mapped IPv6)', async () => {
+    const { guard, service } = makeGuard(async () => [
+      { cidr: '192.168.1.50/32', action: 'DENY', priority: 1 },
+    ]);
+    await expect(
+      guard.canActivate(ctxFor('::ffff:192.168.1.50')),
+    ).rejects.toThrow(ForbiddenException);
+    expect(service.recordBlockedRequest).toHaveBeenCalledWith(
+      expect.objectContaining({ ip: '192.168.1.50' }),
+      'api',
+    );
+  });
+
+  it('does not report ALLOW matches or non-matches', async () => {
+    const { guard, service } = makeGuard(async () => [
+      { cidr: '10.0.0.0/8', action: 'ALLOW', priority: 1 },
+    ]);
+    await guard.canActivate(ctxFor('10.1.2.3'));
+    await guard.canActivate(ctxFor('203.0.113.5'));
+    expect(service.recordBlockedRequest).not.toHaveBeenCalled();
+  });
+
+  it('a rejecting report never changes the 403 (detached best-effort)', async () => {
+    const { guard, service } = makeGuard(async () => [
+      { cidr: '203.0.113.0/24', action: 'DENY', priority: 1 },
+    ]);
+    service.recordBlockedRequest.mockRejectedValue(new Error('audit db down'));
+    await expect(guard.canActivate(ctxFor('203.0.113.5'))).rejects.toThrow(
+      ForbiddenException,
+    );
+    // Flush the detached promise chain so an unhandled rejection would
+    // surface here if the guard forgot its .catch.
+    await new Promise((resolve) => setImmediate(resolve));
   });
 });

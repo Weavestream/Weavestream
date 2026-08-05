@@ -85,7 +85,10 @@ export class AuthService {
     const ok = !!user && user.isActive && !!user.passwordHash && verified;
 
     if (!ok) {
-      await this.lockout.recordFailure(ip, email);
+      // The post-increment counts ride along in the audit payload so the
+      // alert emitter can fire "repeated failed sign-ins" exactly when a
+      // counter reaches LOCKOUT_MAX_FAILURES — no re-counting anywhere.
+      const failureCounts = await this.lockout.recordFailure(ip, email);
       await this.audit.log({
         actorId: user?.id ?? null,
         action: 'auth.login.failure',
@@ -94,7 +97,7 @@ export class AuthService {
         ip,
         userAgent,
         before: null,
-        after: { attemptedEmail: email },
+        after: { attemptedEmail: email, failureCounts: failureCounts ?? null },
       });
       throw new UnauthorizedException('Invalid credentials');
     }
@@ -259,7 +262,7 @@ export class AuthService {
       : false;
     const ok = totpOk || backupOk;
     if (!ok) {
-      await this.lockout.recordMfaFailure(user.id);
+      const failureCount = await this.lockout.recordMfaFailure(user.id);
       await this.audit.log({
         actorId: user.id,
         action: 'auth.mfa.verify.failure',
@@ -268,7 +271,7 @@ export class AuthService {
         ip,
         userAgent,
         before: null,
-        after: null,
+        after: { failureCount: failureCount ?? null },
       });
       throw new UnauthorizedException('Invalid MFA code');
     }

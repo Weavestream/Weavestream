@@ -41,7 +41,9 @@ export const expirationKindSchema = z.enum(expirationKindValues);
 export type AlertExpirationKind = z.infer<typeof expirationKindSchema>;
 
 // Entity types we surface for RECORD_EVENT alerts. `all` matches every
-// entity type the audit log emits a CRUD row for.
+// entity type the audit log emits a CRUD row for. This list is also the
+// UI picker — reserved security selectors (below) must never appear in
+// it, or they would render as checkboxes in the record-type CheckGroup.
 export const recordEntityTypeValues = [
   'asset',
   'article',
@@ -49,7 +51,43 @@ export const recordEntityTypeValues = [
   'domain',
   'all',
 ] as const;
-export const recordEntityTypeSchema = z.enum(recordEntityTypeValues);
+
+/**
+ * Reserved selectors for the three security alert kinds. `AlertType` is
+ * a Postgres enum, so a sixth type would need a migration; instead a
+ * security alert is stored as a `RECORD_EVENT` config whose
+ * `recordEntityTypes` holds exactly one of these values (with
+ * `recordActions: ['all']` and `companyId: null` — enforced by the
+ * `superRefine` branch below). The namespaced `security:` prefix can
+ * never collide with a real entity type, and `AlertEmitterService`
+ * matches these configs on a fully separate path, so existing
+ * `recordEntityTypes: ['all']` configs never auto-subscribe to
+ * security events.
+ */
+export const securityAlertSelectorValues = [
+  'security:sign-in-failures',
+  'security:ip-blocked',
+  'security:suspicious-activity',
+] as const;
+export type SecurityAlertSelector = (typeof securityAlertSelectorValues)[number];
+
+export function isSecurityAlertSelector(
+  value: unknown,
+): value is SecurityAlertSelector {
+  return (
+    typeof value === 'string' &&
+    (securityAlertSelectorValues as readonly string[]).includes(value)
+  );
+}
+
+// The schema (unlike the picker list) accepts both real entity types and
+// reserved selectors — it feeds the input, patch, and output schemas plus
+// the `AlertRecordEntityType` type used by the emitter cache.
+const allRecordEntityTypeValues = [
+  ...recordEntityTypeValues,
+  ...securityAlertSelectorValues,
+] as const;
+export const recordEntityTypeSchema = z.enum(allRecordEntityTypeValues);
 export type AlertRecordEntityType = z.infer<typeof recordEntityTypeSchema>;
 
 export const recordActionValues = [
@@ -269,6 +307,39 @@ export const alertConfigInputSchema = z
         });
       }
     }
+    // Reserved security selectors — deliberately NOT conditioned on
+    // `type`: a client flipping a security config to another type may
+    // still send the selector (the UI strips it, but old clients might
+    // not), and `sanitiseForPersist` clears the arrays for every
+    // non-RECORD_EVENT type, so enforcing the invariant whenever a
+    // selector is present keeps hybrid shapes out of the database
+    // regardless of the declared type.
+    const reservedSelectors = input.recordEntityTypes.filter(
+      isSecurityAlertSelector,
+    );
+    if (reservedSelectors.length > 0) {
+      if (input.recordEntityTypes.length !== 1) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['recordEntityTypes'],
+          message: 'Security alerts cannot be combined with record types',
+        });
+      }
+      if (input.companyId !== null) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['companyId'],
+          message: 'Security alerts are global and cannot be scoped to a company',
+        });
+      }
+      if (input.recordActions.length !== 1 || input.recordActions[0] !== 'all') {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['recordActions'],
+          message: 'Security alerts do not use record actions',
+        });
+      }
+    }
     if (input.type === 'PASSWORD_EVENT') {
       if (input.recordActions.length === 0) {
         ctx.addIssue({
@@ -352,3 +423,20 @@ export const ALERT_TYPE_DESCRIPTIONS: Record<AlertType, string> = {
   PASSWORD_EVENT:
     'Receive an alert when a password has been created or updated.',
 };
+
+/** Labels for the three security alert kinds (wizard cards, list, emails). */
+export const SECURITY_ALERT_LABELS: Record<SecurityAlertSelector, string> = {
+  'security:sign-in-failures': 'Repeated failed sign-ins',
+  'security:ip-blocked': 'IP blocked or rate limited',
+  'security:suspicious-activity': 'Suspicious account behavior',
+};
+
+export const SECURITY_ALERT_DESCRIPTIONS: Record<SecurityAlertSelector, string> =
+  {
+    'security:sign-in-failures':
+      'Receive an alert when failed sign-in attempts reach the lockout threshold.',
+    'security:ip-blocked':
+      'Receive an alert when a request is denied by an IP rule or rate limited.',
+    'security:suspicious-activity':
+      'Receive an alert on refresh-token reuse, step-up anomalies, and repeated MFA, step-up, or password-change failures.',
+  };

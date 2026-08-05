@@ -92,3 +92,26 @@ export const IP_RULE_ACTION_LABELS: Record<IpRuleAction, string> = {
   ALLOW: 'Allow',
   DENY: 'Deny',
 };
+
+/**
+ * Internal web→API report of a page load denied by a DENY rule at the
+ * Next.js proxy layer — the API never sees those requests, so the proxy
+ * reports them for the security audit trail and alerting. Sent by
+ * `apps/web/src/lib/ip-block-report.ts`, consumed by
+ * `POST /ip-rules/blocked-report` behind `InternalOnlyGuard`.
+ *
+ * The blocked IP travels in the body — deliberately never in
+ * `x-forwarded-for` — because `IpRuleGuard` evaluates the forwarded IP
+ * on every request and would 403 the report itself. `ip` stays a loose
+ * bounded string: the proxy's `'0.0.0.0'` unknown-client sentinel and
+ * IPv6 forms must both pass.
+ */
+export const ipRuleBlockedReportSchema = z.object({
+  ip: z.string().trim().min(1).max(64),
+  cidr: z.string().trim().min(1).max(64),
+  priority: z.number().int().min(0).max(9999).optional(),
+  path: z.string().max(500).optional(),
+  userAgent: z.string().max(500).optional(),
+});
+
+export type IpRuleBlockedReport = z.infer<typeof ipRuleBlockedReportSchema>;

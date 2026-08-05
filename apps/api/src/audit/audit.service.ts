@@ -29,6 +29,10 @@ export interface PersistedAuditEntry {
   entityType: string;
   entityId: string | null;
   companyId: string | null;
+  // Source metadata of the audited request — security alert emails
+  // render these (a blocked-IP notification without the IP is useless).
+  ip: string | null;
+  userAgent: string | null;
   createdAt: Date;
   before: unknown;
   after: unknown;
@@ -99,6 +103,8 @@ export class AuditLogService {
         entityType: true,
         entityId: true,
         companyId: true,
+        ip: true,
+        userAgent: true,
         createdAt: true,
         before: true,
         after: true,
@@ -113,6 +119,8 @@ export class AuditLogService {
       entityType: row.entityType,
       entityId: row.entityId,
       companyId: row.companyId,
+      ip: row.ip,
+      userAgent: row.userAgent,
       createdAt: row.createdAt,
       before: row.before,
       after: row.after,

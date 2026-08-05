@@ -12,6 +12,7 @@ import { FormattedDateTime } from '../../../../lib/timezone-context';
 import { downloadWithStepUp } from '../../../../lib/step-up';
 import {
   Btn,
+  Checkbox,
   DataTable,
   Dialog,
   Field,
@@ -805,14 +806,14 @@ function ScheduleDialog({
           />
         </Field>
 
-        <CheckboxRow
+        <Checkbox
           label="Email on success too"
           hint="Off by default — failures still email regardless of this toggle."
           checked={draft.notifyOnSuccess}
           onChange={(v) => update('notifyOnSuccess', v)}
         />
 
-        <CheckboxRow
+        <Checkbox
           label="Schedule enabled"
           hint="Disabled schedules stay configured but never fire."
           checked={draft.enabled}
@@ -873,45 +874,6 @@ function RetentionField({
         value={value}
         onChange={(e) => onChange(e.target.value)}
       />
-    </label>
-  );
-}
-
-function CheckboxRow({
-  label,
-  hint,
-  checked,
-  onChange,
-}: {
-  label: string;
-  hint?: string;
-  checked: boolean;
-  onChange: (next: boolean) => void;
-}) {
-  return (
-    <label
-      style={{
-        display: 'flex',
-        gap: 8,
-        alignItems: 'flex-start',
-        fontSize: 13,
-        cursor: 'pointer',
-      }}
-    >
-      <input
-        type="checkbox"
-        checked={checked}
-        onChange={(e) => onChange(e.target.checked)}
-        style={{ marginTop: 3 }}
-      />
-      <span style={{ flex: 1 }}>
-        {label}
-        {hint && (
-          <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 2 }}>
-            {hint}
-          </div>
-        )}
-      </span>
     </label>
   );
 }

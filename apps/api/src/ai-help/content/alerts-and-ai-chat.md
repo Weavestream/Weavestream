@@ -4,7 +4,7 @@
 <!-- aliases: new alert | alert configuration | expiration email | website down notification | record change alert | password alert -->
 <!-- requires: alert.manage -->
 
-Open **Admin → Alerts** and create an alert configuration. Each configuration has recipients, optional company scope, type-specific filters, and enabled/archived state. Outbound email and the background worker must be operational for delivery; use **Test** after changing a configuration or mail settings.
+Open **Admin → Alerts** and select **New alert**. Creation is two steps: first pick what the alert should watch for from the type cards, then fill in the name, recipients, and type-specific settings. Use **Change type** on the second step to go back. Each configuration has recipients, optional company scope, type-specific filters, and enabled/archived state. Outbound email and the background worker must be operational for delivery; use **Test** after changing a configuration or mail settings.
 
 Available alert types:
 
@@ -15,8 +15,25 @@ Available alert types:
 | **Website down** | A monitored domain enters a new HTTP-down episode. |
 | **Record created/updated/deleted** | A matching asset, article, password, or domain audit event occurs. |
 | **Password created/updated** | A password create or update occurs. |
+| **Repeated failed sign-ins** | Failed sign-in attempts for one IP or one account reach the sign-in lockout threshold. |
+| **IP blocked or rate limited** | A request is denied by a DENY IP rule, rejected by a rate limiter, or the sign-in lockout engages. |
+| **Suspicious account behavior** | Refresh-token reuse, a step-up anomaly, or repeated MFA/step-up/password-change verification failures. |
 
-Expiration sources can include domain registration/TLS expiry, password expiry, and asset Date/Date-time fields that have **Expiry tracking** enabled. Use company scope when only one company’s domains or records should notify. Alerts are deduplicated, so repeated scheduled scans do not repeatedly send the same logical event.
+Expiration sources can include domain registration/TLS expiry, password expiry, and asset Date/Date-time fields that have **Expiry tracking** enabled. Use company scope when only one company’s domains or records should notify; the three security types are always global, so no company scope is offered for them. Alerts are deduplicated, so repeated scheduled scans do not repeatedly send the same logical event.
+
+## Configure security alerts
+<!-- aliases: security alert | failed sign-in alert | brute force notification | blocked IP email | rate limit alert | suspicious activity alert | lockout email -->
+<!-- requires: alert.manage -->
+
+Open **Admin → Alerts**, select **New alert**, and pick one of the three security cards. Security alerts watch the platform itself, so they are always global — only a name, recipients, and the enabled state are configured.
+
+- **Repeated failed sign-ins** emails at the moment failed sign-in attempts for one IP or one account reach the sign-in lockout threshold — once per lockout episode, because further attempts are rejected while the lockout is active.
+- **IP blocked or rate limited** emails when a request is denied by a **DENY** rule from **Admin → Security → IP rules** (page-layer denials are included), when the global or sign-in rate limiter rejects requests, or when the sign-in lockout engages. Events are coalesced so a client hammering at request rate produces one notification per window, not one per request.
+- **Suspicious account behavior** emails immediately on refresh-token reuse (a possible stolen session) and on step-up anomalies (at most once per user per day), and at the lockout threshold for repeated MFA, step-up, or password-change verification failures.
+
+The email includes the event description, UTC timestamp, source IP, known account identity, user agent, matched rule or limiter details, failure counts, and the audit event id. It never contains credentials, codes, tokens, or request bodies. Treat the email as a pointer: investigate in **Admin → Security** and the audit log, which record every event whether or not an email was delivered. Notifications are best-effort — the underlying sign-in protections keep enforcing even if a notification is missed.
+
+The **Test** button sends a generic delivery-check email, not a sample of the real notification.
 
 ## Maintain an alert configuration
 <!-- aliases: disable alert | archive alert | test alert | alert recipients | alert scope | alert deduplication -->

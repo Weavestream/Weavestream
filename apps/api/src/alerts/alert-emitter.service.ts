@@ -7,15 +7,19 @@ import {
 import {
   AlertsJobNames,
   QueueNames,
+  SECURITY_ALERT_LABELS,
+  isSecurityAlertSelector,
   type AlertsSendJob,
   type AlertRecordEntityType,
   type AlertRecordAction,
+  type SecurityAlertSelector,
 } from '@weavestream/shared';
 import { PrismaService } from '../prisma/prisma.service.js';
 import {
   AuditLogService,
   type PersistedAuditEntry,
 } from '../audit/audit.service.js';
+import { EnvService } from '../config/env.service.js';
 import { QueuesService } from '../queues/queues.service.js';
 
 /**
@@ -53,6 +57,7 @@ export class AlertEmitterService
     private readonly prisma: PrismaService,
     private readonly audit: AuditLogService,
     private readonly queues: QueuesService,
+    private readonly env: EnvService,
   ) {}
 
   async onApplicationBootstrap(): Promise<void> {
@@ -93,11 +98,29 @@ export class AlertEmitterService
    */
   async maybeFire(entry: PersistedAuditEntry): Promise<void> {
     if (this.cache.length === 0) return;
+
+    // Security actions take a fully separate path. The two matchers are
+    // disjoint by construction — no security action parses as a CRUD
+    // action (parseAuditAction drops auth.*/security.*/user.*), and no
+    // CRUD action appears in SECURITY_ACTION_MAP — so an existing
+    // `recordEntityTypes: ['all']` config can never auto-subscribe to
+    // security events, and a security config never fires on CRUD.
+    const securityRule = SECURITY_ACTION_MAP[entry.action];
+    if (securityRule) {
+      await this.maybeFireSecurity(entry, securityRule);
+      return;
+    }
+
     const parsed = parseAuditAction(entry.action);
     if (!parsed) return;
 
-    const matches = this.cache.filter((c) =>
-      configMatches(c, parsed, entry.companyId),
+    const matches = this.cache.filter(
+      (c) =>
+        // Belt-and-suspenders: keep reserved-selector configs out of the
+        // CRUD path even though their selector could never equal a
+        // parsed entity anyway.
+        !c.recordEntityTypes.some(isSecurityAlertSelector) &&
+        configMatches(c, parsed, entry.companyId),
     );
     if (matches.length === 0) return;
 
@@ -112,32 +135,136 @@ export class AlertEmitterService
     }
   }
 
+  /**
+   * Security-event path. `rule.kinds` names which reserved-selector
+   * configs an action can fire; `shouldFireSecurity` applies the
+   * per-action firing semantics (immediate vs threshold-reach).
+   */
+  private async maybeFireSecurity(
+    entry: PersistedAuditEntry,
+    rule: SecurityActionRule,
+  ): Promise<void> {
+    if (!this.shouldFireSecurity(entry, rule)) return;
+
+    const matches = this.cache.filter((c) => {
+      const selector = securitySelectorOf(c);
+      return selector !== null && rule.kinds.includes(selector);
+    });
+    if (matches.length === 0) return;
+
+    const actor = await this.lookupActor(entry.actorId);
+    for (const config of matches) {
+      try {
+        await this.dispatchSecurity(config, entry, actor);
+      } catch (err) {
+        this.logger.warn(
+          `security alert dispatch failed for config ${config.id}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+  }
+
+  /**
+   * Firing semantics per action:
+   *
+   *  - `immediate` — every (already emission-coalesced or upstream-
+   *    guarded) event fires.
+   *  - `login-threshold` — fires exactly when either login counter
+   *    REACHES `LOCKOUT_MAX_FAILURES`. Strict equality is deliberate:
+   *    once locked, the 429 precedes `recordFailure`, so a counter
+   *    passes the threshold value at most once per window — and under
+   *    the isLocked race two concurrent failures get DISTINCT counts
+   *    (5, 6, …), so exactly one row carries the threshold. `>=` would
+   *    fire twice in that race.
+   *  - `count-threshold` — same, for the single per-user counters
+   *    (MFA / step-up / change-password).
+   *
+   * Absent or null counts (Redis degraded) simply never fire — a
+   * missed notification is the accepted failure mode; the event
+   * itself is durable in the audit log either way.
+   */
+  private shouldFireSecurity(
+    entry: PersistedAuditEntry,
+    rule: SecurityActionRule,
+  ): boolean {
+    const threshold = this.env.values.LOCKOUT_MAX_FAILURES;
+    switch (rule.mode) {
+      case 'immediate':
+        return true;
+      case 'login-threshold': {
+        const counts = loginFailureCounts(entry.after);
+        return counts.ip === threshold || counts.email === threshold;
+      }
+      case 'count-threshold':
+        return readNumberField(entry.after, 'failureCount') === threshold;
+    }
+  }
+
+  private async dispatchSecurity(
+    config: CachedConfig,
+    entry: PersistedAuditEntry,
+    actor: { name: string; email: string } | null,
+  ): Promise<void> {
+    // One email per audit event per config — except the step-up anomaly,
+    // a persistent-misconfiguration signal that would otherwise email on
+    // every retry of the same broken state: day-bucket it per user.
+    const triggerKey =
+      entry.action === 'security.stepup.anomaly' && entry.actorId
+        ? `sec:anomaly:${entry.actorId}:${entry.createdAt.toISOString().slice(0, 10)}`
+        : `audit:${entry.id}:${config.id}`;
+
+    const selector = securitySelectorOf(config);
+    const kindLabel = selector ? SECURITY_ALERT_LABELS[selector] : 'Security';
+    await this.createTriggerAndEnqueue(config, triggerKey, async () => ({
+      subject: `[Weavestream] Security — ${kindLabel} — ${config.name}`,
+      text: renderSecurityText(
+        config,
+        entry,
+        actor,
+        this.env.values.LOCKOUT_WINDOW_MIN,
+      ),
+    }));
+  }
+
   private async dispatch(
     config: CachedConfig,
     entry: PersistedAuditEntry,
     parsed: ParsedAction,
   ): Promise<void> {
     const triggerKey = `audit:${entry.id}:${config.id}`;
+    await this.createTriggerAndEnqueue(config, triggerKey, async () => {
+      // Resolve UUIDs to human labels so the email body shows e.g.
+      // "Asset: Acme Laptop" instead of the bare entity UUID. Lookups
+      // are best-effort: a hard-deleted row falls back to the audit
+      // payload's snapshot, then the UUID itself.
+      const resolved = await this.resolveLabels(entry, parsed);
+      return {
+        subject: renderRealtimeSubject(config, entry, parsed, resolved),
+        text: renderRealtimeText(config, entry, parsed, resolved),
+      };
+    });
+  }
 
-    // Pre-write the dedup row inside a `skipDuplicates` upsert so a
-    // worker retry can't double-send. We don't fail the dispatch if
-    // the row already exists — that just means a previous attempt
-    // queued the email and we should not enqueue again.
+  /**
+   * Shared dispatch tail for the CRUD and security paths: pre-write the
+   * dedup row inside a `skipDuplicates` upsert so a retry (or a second
+   * qualifying event mapping to the same key) can't double-send, then
+   * render and enqueue. Rendering happens via callback AFTER the claim
+   * so a duplicate costs one INSERT-noop and no lookup work — same
+   * order the pre-refactor code had.
+   */
+  private async createTriggerAndEnqueue(
+    config: CachedConfig,
+    triggerKey: string,
+    render: () => Promise<{ subject: string; text: string }>,
+  ): Promise<void> {
     const created = await this.prisma.alertTrigger.createMany({
       data: [{ alertConfigId: config.id, key: triggerKey }],
       skipDuplicates: true,
     });
     if (created.count === 0) return;
 
-    // Resolve UUIDs to human labels so the email body shows e.g.
-    // "Asset: Acme Laptop" instead of the bare entity UUID. Lookups
-    // are best-effort: a hard-deleted row falls back to the audit
-    // payload's snapshot, then the UUID itself.
-    const resolved = await this.resolveLabels(entry, parsed);
-
-    const subject = renderRealtimeSubject(config, entry, parsed, resolved);
-    const text = renderRealtimeText(config, entry, parsed, resolved);
-
+    const { subject, text } = await render();
     const payload: AlertsSendJob = {
       kind: 'send',
       alertConfigId: config.id,
@@ -503,4 +630,247 @@ function readStringField(payload: unknown, key: string): string | null {
   if (!payload || typeof payload !== 'object') return null;
   const value = (payload as Record<string, unknown>)[key];
   return typeof value === 'string' && value.length > 0 ? value : null;
+}
+
+// ------------------------------------------------------------------
+// Security alerts (reserved-selector RECORD_EVENT configs)
+// ------------------------------------------------------------------
+
+interface SecurityActionRule {
+  /** Which reserved-selector kinds this action can fire. */
+  kinds: readonly SecurityAlertSelector[];
+  /** Firing semantics — see `shouldFireSecurity`. */
+  mode: 'immediate' | 'login-threshold' | 'count-threshold';
+}
+
+/**
+ * Exact audit-action strings → firing rule. Keys must match the
+ * literals actually written at the emission sites (several are raw
+ * strings there, not `AUDIT_ACTIONS` constants — matched verbatim).
+ *
+ * `auth.login.failure` fans out to TWO kinds on the same threshold-
+ * crossing event: it is both "repeated failed sign-ins" and the moment
+ * the soft-lock engages ("IP blocked or rate limited") — no separate
+ * lockout audit event exists or is needed.
+ */
+const SECURITY_ACTION_MAP: Record<string, SecurityActionRule> = {
+  'auth.login.failure': {
+    kinds: ['security:sign-in-failures', 'security:ip-blocked'],
+    mode: 'login-threshold',
+  },
+  'security.ip_rule.blocked': {
+    kinds: ['security:ip-blocked'],
+    mode: 'immediate',
+  },
+  'security.ratelimit.blocked': {
+    kinds: ['security:ip-blocked'],
+    mode: 'immediate',
+  },
+  'auth.refresh.reused': {
+    kinds: ['security:suspicious-activity'],
+    mode: 'immediate',
+  },
+  'security.stepup.anomaly': {
+    kinds: ['security:suspicious-activity'],
+    mode: 'immediate',
+  },
+  'auth.mfa.verify.failure': {
+    kinds: ['security:suspicious-activity'],
+    mode: 'count-threshold',
+  },
+  'security.stepup.failed': {
+    kinds: ['security:suspicious-activity'],
+    mode: 'count-threshold',
+  },
+  'user.password.change.failed': {
+    kinds: ['security:suspicious-activity'],
+    mode: 'count-threshold',
+  },
+};
+
+/**
+ * The reserved selector of a security config, or null for ordinary
+ * configs. Strict shape (RECORD_EVENT + exactly one reserved element) —
+ * the same invariant `alertConfigInputSchema` enforces at write time.
+ */
+function securitySelectorOf(config: CachedConfig): SecurityAlertSelector | null {
+  if (config.type !== 'RECORD_EVENT') return null;
+  if (config.recordEntityTypes.length !== 1) return null;
+  const sole = config.recordEntityTypes[0];
+  return isSecurityAlertSelector(sole) ? sole : null;
+}
+
+function readNumberField(payload: unknown, key: string): number | null {
+  if (!payload || typeof payload !== 'object') return null;
+  const value = (payload as Record<string, unknown>)[key];
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function loginFailureCounts(after: unknown): {
+  ip: number | null;
+  email: number | null;
+} {
+  if (!after || typeof after !== 'object') return { ip: null, email: null };
+  const counts = (after as Record<string, unknown>).failureCounts;
+  return {
+    ip: readNumberField(counts, 'ip'),
+    email: readNumberField(counts, 'email'),
+  };
+}
+
+/** Bounded, single-line rendering of an attacker-influenced string. */
+function cleanLine(value: string | null, max = 300): string | null {
+  if (!value) return null;
+  const cleaned = value.replace(/[\r\n\t]+/g, ' ').trim().slice(0, max);
+  return cleaned.length > 0 ? cleaned : null;
+}
+
+/**
+ * Text body for a security alert email — a strict positive allowlist.
+ * Only fields named here are ever rendered; the audit payload is never
+ * serialized wholesale, so values like `tokenHashPrefix` (refresh
+ * reuse) or `sessionId` (step-up / password-change) can't leak into
+ * mail. Subjects carry no event data at all.
+ */
+function renderSecurityText(
+  config: CachedConfig,
+  entry: PersistedAuditEntry,
+  actor: { name: string; email: string } | null,
+  windowMinutes: number,
+): string {
+  const lines: string[] = [
+    `Alert:   ${config.name}`,
+    `Event:   ${securityEventDescription(entry.action)}`,
+    `When:    ${formatTimestamp(entry.createdAt)}`,
+  ];
+
+  const ip = cleanLine(entry.ip, 64);
+  if (ip) lines.push(`IP:      ${ip}`);
+
+  const actorLabel = formatActor({
+    entityName: null,
+    companyName: null,
+    actorName: actor?.name ?? null,
+    actorEmail: actor?.email ?? null,
+  });
+  if (actorLabel) lines.push(`Account: ${actorLabel}`);
+
+  lines.push(...securityDetailLines(entry, windowMinutes));
+
+  const userAgent = cleanLine(entry.userAgent, 300);
+  if (userAgent) lines.push(`Agent:   ${userAgent}`);
+
+  lines.push(
+    '',
+    `Audit event id: ${entry.id}`,
+    '',
+    'You are receiving this email because a security alert configuration matches this event.',
+    'Review the full event in the Weavestream admin under Security, and manage alert configurations under Alerts.',
+  );
+  return lines.join('\n');
+}
+
+function securityEventDescription(action: string): string {
+  switch (action) {
+    case 'auth.login.failure':
+      return 'Failed sign-in attempts reached the lockout threshold';
+    case 'security.ip_rule.blocked':
+      return 'Request denied by IP rule';
+    case 'security.ratelimit.blocked':
+      return 'Requests rate limited';
+    case 'auth.refresh.reused':
+      return 'Refresh token reuse detected (possible session theft)';
+    case 'security.stepup.anomaly':
+      return 'Step-up anomaly: MFA enabled without a stored secret';
+    case 'auth.mfa.verify.failure':
+      return 'MFA verification failures reached the lockout threshold';
+    case 'security.stepup.failed':
+      return 'Step-up verification failures reached the lockout threshold';
+    case 'user.password.change.failed':
+      return 'Password-change verification failures reached the lockout threshold';
+    default:
+      return action;
+  }
+}
+
+/** Per-action allowlisted detail lines from the audit `after` payload. */
+function securityDetailLines(
+  entry: PersistedAuditEntry,
+  windowMinutes: number,
+): string[] {
+  const lines: string[] = [];
+  const after = entry.after;
+
+  switch (entry.action) {
+    case 'auth.login.failure': {
+      const attempted = cleanLine(readStringField(after, 'attemptedEmail'), 255);
+      if (attempted) lines.push(`Attempted email: ${attempted}`);
+      const counts = loginFailureCounts(after);
+      if (counts.ip !== null) {
+        lines.push(`Failures from this IP: ${counts.ip} within ${windowMinutes} min`);
+      }
+      if (counts.email !== null) {
+        lines.push(`Failures for this email: ${counts.email} within ${windowMinutes} min`);
+      }
+      break;
+    }
+    case 'security.ip_rule.blocked': {
+      const cidr = cleanLine(readStringField(after, 'cidr'), 64);
+      if (cidr) lines.push(`Matched rule: ${cidr}`);
+      const priority = readNumberField(after, 'priority');
+      if (priority !== null) lines.push(`Rule priority: ${priority}`);
+      const source = readStringField(after, 'source');
+      lines.push(`Blocked at: ${source === 'web' ? 'web page layer' : 'API'}`);
+      const path = cleanLine(readStringField(after, 'path'), 300);
+      if (path) lines.push(`Path:    ${path}`);
+      break;
+    }
+    case 'security.ratelimit.blocked': {
+      const limiter = cleanLine(readStringField(after, 'limiter'), 32);
+      if (limiter) lines.push(`Limiter: ${limiter}`);
+      const limit = readNumberField(after, 'limit');
+      const windowSec = readNumberField(after, 'windowSec');
+      if (limit !== null && windowSec !== null) {
+        lines.push(`Limit:   ${limit} requests per ${windowSec}s`);
+      }
+      const method = cleanLine(readStringField(after, 'method'), 12);
+      const route = cleanLine(readStringField(after, 'route'), 300);
+      if (route) lines.push(`Route:   ${method ? `${method} ` : ''}${route}`);
+      const retry = readNumberField(after, 'retryAfterSec');
+      if (retry !== null) lines.push(`Retry allowed in: ${retry}s`);
+      const attempted = cleanLine(readStringField(after, 'attemptedEmail'), 255);
+      if (attempted) lines.push(`Attempted email: ${attempted}`);
+      break;
+    }
+    case 'auth.refresh.reused': {
+      const reason = cleanLine(readStringField(after, 'reason'), 64);
+      if (reason) lines.push(`Reason:  ${reason}`);
+      break;
+    }
+    case 'security.stepup.anomaly': {
+      const reason = cleanLine(readStringField(after, 'reason'), 64);
+      if (reason) lines.push(`Reason:  ${reason}`);
+      break;
+    }
+    case 'security.stepup.failed': {
+      const factor = cleanLine(readStringField(after, 'factor'), 16);
+      if (factor) lines.push(`Factor:  ${factor}`);
+      const count = readNumberField(after, 'failureCount');
+      if (count !== null) {
+        lines.push(`Failures: ${count} within ${windowMinutes} min`);
+      }
+      break;
+    }
+    case 'auth.mfa.verify.failure':
+    case 'user.password.change.failed': {
+      const count = readNumberField(after, 'failureCount');
+      if (count !== null) {
+        lines.push(`Failures: ${count} within ${windowMinutes} min`);
+      }
+      break;
+    }
+    default:
+      break;
+  }
+  return lines;
 }

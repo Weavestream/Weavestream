@@ -2,9 +2,6 @@
 
 import { useState } from 'react';
 import {
-  ALERT_TYPE_DESCRIPTIONS,
-  ALERT_TYPE_LABELS,
-  alertTypeValues,
   expirationKindValues,
   recordActionValues,
   recordEntityTypeValues,
@@ -12,24 +9,35 @@ import {
   type AlertExpirationKind,
   type AlertRecordAction,
   type AlertRecordEntityType,
-  type AlertType,
 } from '@weavestream/shared';
 import { apiFetch } from '../../../../lib/api';
 import {
   Btn,
+  Checkbox,
   CompanyPicker,
-  type CompanyPickerValue,
   DataTable,
   type DataColumn,
   Dialog,
+  ErrorBanner,
   Field,
   Icon,
   Input,
   MobileCardRow,
-  Select,
   Tag,
   useToast,
 } from '../../../../components/ui';
+import {
+  ALERT_CHOICE_CARDS,
+  activeChoiceCard,
+  alertKindLabel,
+  choiceKey,
+  emptyDraft,
+  payloadRecordActions,
+  securitySelectorOfConfig,
+  selectAlertChoice,
+  type AlertChoice,
+  type DraftState,
+} from './alert-choice';
 
 /**
  * Single client component owning the list + create/edit dialog.
@@ -141,7 +149,7 @@ export function AlertsAdminClient({
                 {summariseConfig(a)}
               </div>
               <MobileCardRow label="Type">
-                <Tag tone="default">{ALERT_TYPE_LABELS[a.type]}</Tag>
+                <Tag tone="default">{alertKindLabel(a)}</Tag>
               </MobileCardRow>
               <MobileCardRow label="Recipient">
                 {a.recipientEmails.length <= 1 ? (
@@ -232,20 +240,6 @@ export function AlertsAdminClient({
 // Dialog
 // ────────────────────────────────────────────────────────────────────
 
-interface DraftState {
-  name: string;
-  type: AlertType;
-  enabled: boolean;
-  /** Free-form text — split on commas/semicolons/newlines on save. */
-  recipientEmails: string;
-  company: CompanyPickerValue | null;
-  triggerDays: string;
-  stopAfterTrigger: boolean;
-  expirationKinds: AlertExpirationKind[];
-  recordEntityTypes: AlertRecordEntityType[];
-  recordActions: AlertRecordAction[];
-}
-
 type EditState =
   | { mode: 'create'; draft: DraftState; error: string | null }
   | {
@@ -267,9 +261,20 @@ function AlertDialog({
   const [draft, setDraft] = useState<DraftState>(state.draft);
   const [error, setError] = useState<string | null>(state.error);
   const [pending, setPending] = useState(false);
+  // Two-step wizard: create starts on the type picker, edit jumps
+  // straight to the form ("Change type" returns to the picker in both
+  // modes).
+  const [step, setStep] = useState<'pick' | 'form'>(
+    state.mode === 'create' ? 'pick' : 'form',
+  );
 
   function update<K extends keyof DraftState>(key: K, value: DraftState[K]) {
     setDraft((prev) => ({ ...prev, [key]: value }));
+  }
+
+  function choose(choice: AlertChoice) {
+    setDraft((prev) => selectAlertChoice(prev, choice));
+    setStep('form');
   }
 
   async function save() {
@@ -293,6 +298,67 @@ function AlertDialog({
 
   const expirationLike =
     draft.type === 'SINGLE_EXPIRATION' || draft.type === 'EXPIRATION_LIST';
+  const securitySelector = securitySelectorOfConfig(draft);
+  const activeCard = activeChoiceCard(draft);
+
+  if (step === 'pick') {
+    return (
+      <Dialog
+        open
+        onClose={onCancel}
+        width={680}
+        title={state.mode === 'create' ? 'New alert' : 'Edit alert'}
+        footer={
+          <Btn kind="ghost" onClick={onCancel} disabled={pending}>
+            Cancel
+          </Btn>
+        }
+      >
+        <div style={{ display: 'grid', gap: 12 }}>
+          <span style={{ fontSize: 13, color: 'var(--muted)' }}>
+            What should this alert watch for?
+          </span>
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+              gap: 10,
+            }}
+          >
+            {ALERT_CHOICE_CARDS.map((card) => {
+              const key = choiceKey(card.choice);
+              const selected = activeCard != null && choiceKey(activeCard.choice) === key;
+              return (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => choose(card.choice)}
+                  style={{
+                    textAlign: 'left',
+                    padding: '12px 14px',
+                    background: 'var(--surface)',
+                    border: `1px solid ${selected ? 'var(--accent)' : 'var(--line)'}`,
+                    borderRadius: 8,
+                    cursor: 'pointer',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 4,
+                  }}
+                >
+                  <span style={{ fontWeight: 600, fontSize: 13, color: 'var(--text)' }}>
+                    {card.label}
+                  </span>
+                  <span style={{ fontSize: 12, color: 'var(--muted)' }}>
+                    {card.description}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      </Dialog>
+    );
+  }
 
   return (
     <Dialog
@@ -312,29 +378,26 @@ function AlertDialog({
       }
     >
       <div style={{ display: 'grid', gap: 12 }}>
+        <Field label="Type" help={activeCard?.description}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <Tag tone="default">{activeCard?.label ?? draft.type}</Tag>
+            <Btn kind="ghost" onClick={() => setStep('pick')} disabled={pending}>
+              Change type
+            </Btn>
+          </div>
+        </Field>
+
         <Field label="Name">
           <Input
             value={draft.name}
             onChange={(e) => update('name', e.target.value)}
-            placeholder="e.g. Domain registrar expirations"
+            placeholder={
+              securitySelector
+                ? 'e.g. Security: failed sign-ins'
+                : 'e.g. Domain registrar expirations'
+            }
             autoFocus
           />
-        </Field>
-
-        <Field
-          label="Type"
-          help={ALERT_TYPE_DESCRIPTIONS[draft.type]}
-        >
-          <Select
-            value={draft.type}
-            onChange={(e) => update('type', e.target.value as AlertType)}
-          >
-            {alertTypeValues.map((t) => (
-              <option key={t} value={t}>
-                {ALERT_TYPE_LABELS[t]}
-              </option>
-            ))}
-          </Select>
         </Field>
 
         <Field
@@ -348,16 +411,18 @@ function AlertDialog({
           />
         </Field>
 
-        <Field
-          label="Company scope"
-          help="Leave empty to apply across every company."
-        >
-          <CompanyPicker
-            value={draft.company}
-            onChange={(next) => update('company', next)}
-            placeholder="All companies"
-          />
-        </Field>
+        {securitySelector === null && (
+          <Field
+            label="Company scope"
+            help="Leave empty to apply across every company."
+          >
+            <CompanyPicker
+              value={draft.company}
+              onChange={(next) => update('company', next)}
+              placeholder="All companies"
+            />
+          </Field>
+        )}
 
         {expirationLike && (
           <>
@@ -404,7 +469,7 @@ function AlertDialog({
           </>
         )}
 
-        {draft.type === 'RECORD_EVENT' && (
+        {draft.type === 'RECORD_EVENT' && securitySelector === null && (
           <>
             <Field label="Alert for record types">
               <CheckGroup
@@ -461,20 +526,7 @@ function AlertDialog({
           hint="Disabled alerts stay configured but never fire."
         />
 
-        {error && (
-          <div
-            style={{
-              padding: '8px 12px',
-              background: 'var(--danger-bg)',
-              color: 'var(--danger)',
-              border: '1px solid var(--danger-line)',
-              borderRadius: 6,
-              fontSize: 13,
-            }}
-          >
-            {error}
-          </div>
-        )}
+        {error && <ErrorBanner title={error} />}
       </div>
     </Dialog>
   );
@@ -515,45 +567,6 @@ function CheckGroup<T extends string>({
   );
 }
 
-function Checkbox({
-  label,
-  checked,
-  onChange,
-  hint,
-}: {
-  label: string;
-  checked: boolean;
-  onChange: (next: boolean) => void;
-  hint?: string;
-}) {
-  return (
-    <label
-      style={{
-        display: 'flex',
-        gap: 8,
-        alignItems: 'flex-start',
-        fontSize: 13,
-        cursor: 'pointer',
-      }}
-    >
-      <input
-        type="checkbox"
-        checked={checked}
-        onChange={(e) => onChange(e.target.checked)}
-        style={{ marginTop: 3 }}
-      />
-      <span style={{ flex: 1 }}>
-        {label}
-        {hint && (
-          <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 2 }}>
-            {hint}
-          </div>
-        )}
-      </span>
-    </label>
-  );
-}
-
 function alertColumns({
   busyId,
   toggleEnabled,
@@ -586,8 +599,8 @@ function alertColumns({
       id: 'type',
       header: 'Type',
       width: 180,
-      sortValue: (a) => ALERT_TYPE_LABELS[a.type],
-      render: (a) => <Tag tone="default">{ALERT_TYPE_LABELS[a.type]}</Tag>,
+      sortValue: (a) => alertKindLabel(a),
+      render: (a) => <Tag tone="default">{alertKindLabel(a)}</Tag>,
     },
     {
       id: 'recipient',
@@ -676,21 +689,6 @@ function alertColumns({
   ];
 }
 
-function emptyDraft(): DraftState {
-  return {
-    name: '',
-    type: 'SINGLE_EXPIRATION',
-    enabled: true,
-    recipientEmails: '',
-    company: null,
-    triggerDays: '30',
-    stopAfterTrigger: true,
-    expirationKinds: ['domain_registrar', 'domain_tls'],
-    recordEntityTypes: ['all'],
-    recordActions: ['all'],
-  };
-}
-
 function toDraft(a: AlertConfig): DraftState {
   return {
     name: a.name,
@@ -735,12 +733,15 @@ function toPayload(draft: DraftState) {
     stopAfterTrigger: draft.stopAfterTrigger,
     expirationKinds: draft.expirationKinds,
     recordEntityTypes: draft.recordEntityTypes,
-    recordActions: draft.recordActions,
+    recordActions: payloadRecordActions(draft),
   };
   return base;
 }
 
 function summariseConfig(a: AlertConfig): string {
+  // Security kinds carry no per-config settings beyond global scope;
+  // the type column already names the kind.
+  if (securitySelectorOfConfig(a)) return 'security events — all companies';
   switch (a.type) {
     case 'SINGLE_EXPIRATION':
     case 'EXPIRATION_LIST': {

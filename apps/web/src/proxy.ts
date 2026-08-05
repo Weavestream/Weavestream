@@ -1,4 +1,8 @@
-import { NextResponse, type NextRequest } from 'next/server';
+import {
+  NextResponse,
+  type NextFetchEvent,
+  type NextRequest,
+} from 'next/server';
 import { matchIpRule } from '@weavestream/shared';
 import {
   INBOUND_XFF_HEADER,
@@ -10,6 +14,7 @@ import {
 } from './lib/client-ip';
 import { buildCsp } from './lib/csp';
 import { getActiveIpRules } from './lib/ip-rules-cache';
+import { reportIpBlock } from './lib/ip-block-report';
 import {
   ACCESS_COOKIE_NAME,
   API_INTERNAL_URL,
@@ -25,7 +30,7 @@ import {
  * Runs at the edge-runtime proxy layer (Next.js 16+ renamed this convention
  * from `middleware.ts` to `proxy.ts` — same API, clearer name).
  */
-export async function proxy(req: NextRequest) {
+export async function proxy(req: NextRequest, event: NextFetchEvent) {
   const nonce = cryptoRandomNonce();
   // HSTS + upgrade-insecure-requests only make sense when the current request
   // was actually HTTPS. On plain http://localhost:3000 both would force the
@@ -84,6 +89,20 @@ export async function proxy(req: NextRequest) {
   const rules = await getActiveIpRules();
   const ipRuleHit = matchIpRule(resolvedClientIp, rules);
   if (ipRuleHit?.action === 'DENY') {
+    // Report the denial to the API's audit trail (the API never sees
+    // this request, so without the report it is invisible to the "IP
+    // blocked" security alert). `waitUntil` lets the work outlive the
+    // returned 403 in isolate-style runtimes; the report itself is
+    // best-effort, cooldown-gated, and swallows every failure.
+    event.waitUntil(
+      reportIpBlock({
+        ip: resolvedClientIp,
+        cidr: ipRuleHit.cidr,
+        priority: ipRuleHit.priority,
+        path: req.nextUrl.pathname.slice(0, 500),
+        userAgent: (req.headers.get('user-agent') ?? '').slice(0, 500) || undefined,
+      }),
+    );
     return new NextResponse('Access denied by IP rule', {
       status: 403,
       headers: { 'content-type': 'text/plain; charset=utf-8' },

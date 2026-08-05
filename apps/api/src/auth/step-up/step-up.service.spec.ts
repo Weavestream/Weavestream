@@ -37,7 +37,13 @@ function makeService(opts: {
   const multi = {
     incr: jest.fn().mockReturnThis(),
     expire: jest.fn().mockReturnThis(),
-    exec: jest.fn().mockResolvedValue([]),
+    // ioredis exec shape: [error, reply] per queued command. INCR → 1,
+    // EXPIRE → 1. recordFailure validates both and fails closed on
+    // anything else, so an empty array here would break the failure path.
+    exec: jest.fn().mockResolvedValue([
+      [null, 1],
+      [null, 1],
+    ]),
   };
   const redis = {
     client: {
@@ -176,6 +182,23 @@ describe('StepUpService.verify', () => {
     expect(multi.incr).toHaveBeenCalledWith('stepup:fail:u-1');
     expect(redis.client.set).not.toHaveBeenCalled();
     expect(actions(audit)).toContain('security.stepup.failed');
+  });
+
+  it('fails closed and deletes the counter key when its EXPIRE reply errored', async () => {
+    const { svc, redis, multi } = makeService({
+      userRow: { passwordHash: 'h', mfaEnabled: true, mfaSecretEncrypted: 'enc' },
+      mfaVerify: false,
+      backupConsume: false,
+    });
+    // INCR fine, EXPIRE errored: without a TTL the counter would build up
+    // forever and permanently lock the user once past the threshold (the
+    // fast-fail 429 branch runs before the on-success clearing path).
+    multi.exec.mockResolvedValue([
+      [null, 3],
+      [new Error('EXPIRE not permitted'), null],
+    ]);
+    await expect(svc.verify(USER, '000000', META)).rejects.toThrow(/EXPIRE failed/);
+    expect(redis.client.del).toHaveBeenCalledWith('stepup:fail:u-1');
   });
 
   it('accepts a valid password when MFA is disabled', async () => {

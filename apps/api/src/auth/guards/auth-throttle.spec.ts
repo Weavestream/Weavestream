@@ -7,11 +7,13 @@ import {
   type ExecutionContext,
   type INestApplication,
 } from '@nestjs/common';
-import { APP_GUARD } from '@nestjs/core';
-import { ThrottlerModule } from '@nestjs/throttler';
+import { APP_GUARD, Reflector } from '@nestjs/core';
+import { ThrottlerException, ThrottlerModule } from '@nestjs/throttler';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import { AuthThrottle } from '../../common/public.decorator.js';
+import { AuditLogService } from '../../audit/audit.service.js';
+import { RedisService } from '../../redis/redis.service.js';
 import {
   authThrottler,
   authThrottleSkipIf,
@@ -106,8 +108,15 @@ describe('auth throttler enforcement (integration)', () => {
   }
 
   // Fresh module + in-memory throttler storage per app so counter
-  // state can't bleed between limit cases.
-  async function makeApp(limit: number): Promise<INestApplication> {
+  // state can't bleed between limit cases. The guard's rejection-audit
+  // deps are mocked; `redisSet` gates the coalescing claim.
+  async function makeApp(
+    limit: number,
+    {
+      auditLog = jest.fn().mockResolvedValue(undefined),
+      redisSet = jest.fn().mockResolvedValue('OK'),
+    } = {},
+  ): Promise<{ app: INestApplication; auditLog: jest.Mock; redisSet: jest.Mock }> {
     const moduleRef = await Test.createTestingModule({
       imports: [
         ThrottlerModule.forRoot({
@@ -118,15 +127,19 @@ describe('auth throttler enforcement (integration)', () => {
         }),
       ],
       controllers: [FakeAuthController],
-      providers: [{ provide: APP_GUARD, useClass: UserThrottlerGuard }],
+      providers: [
+        { provide: APP_GUARD, useClass: UserThrottlerGuard },
+        { provide: AuditLogService, useValue: { log: auditLog } },
+        { provide: RedisService, useValue: { client: { set: redisSet } } },
+      ],
     }).compile();
     const app = moduleRef.createNestApplication();
     await app.init();
-    return app;
+    return { app, auditLog, redisSet };
   }
 
   it('throttles the login route per (ip, email) pair at the configured limit', async () => {
-    const app = await makeApp(2);
+    const { app } = await makeApp(2);
     try {
       const http = app.getHttpServer();
       // Case/whitespace variants of one address share the bucket.
@@ -151,7 +164,7 @@ describe('auth throttler enforcement (integration)', () => {
   });
 
   it('enforces whatever limit the throttler is constructed with', async () => {
-    const app = await makeApp(3);
+    const { app } = await makeApp(3);
     try {
       const http = app.getHttpServer();
       for (let i = 0; i < 3; i++) {
@@ -164,7 +177,7 @@ describe('auth throttler enforcement (integration)', () => {
   });
 
   it('throttles bodies without a usable email in a shared ip-only bucket', async () => {
-    const app = await makeApp(2);
+    const { app } = await makeApp(2);
     try {
       const http = app.getHttpServer();
       // Guards run before the ValidationPipe, so these unvalidated
@@ -178,5 +191,271 @@ describe('auth throttler enforcement (integration)', () => {
     } finally {
       await app.close();
     }
+  });
+
+  it('audits a rejection once per claimed window while repeated 429s stay coalesced', async () => {
+    // First claim wins, later claims report "already taken".
+    const redisSet = jest
+      .fn()
+      .mockResolvedValueOnce('OK')
+      .mockResolvedValue(null);
+    const { app, auditLog } = await makeApp(1, { redisSet });
+    try {
+      const http = app.getHttpServer();
+      await request(http).post('/login').send({ email: 'a@example.com' }).expect(200);
+      const blocked = await request(http)
+        .post('/login')
+        .send({ email: 'a@example.com' })
+        .expect(429);
+      // Wire behavior unchanged: stock 429 + Retry-After header.
+      expect(blocked.headers['retry-after-auth']).toBeDefined();
+      await request(http).post('/login').send({ email: 'a@example.com' }).expect(429);
+      await request(http).post('/login').send({ email: 'a@example.com' }).expect(429);
+
+      // Detached audit work — flush before asserting.
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(auditLog).toHaveBeenCalledTimes(1);
+      const entry = auditLog.mock.calls[0]?.[0] as {
+        action: string;
+        after: { limiter: string; attemptedEmail?: string };
+      };
+      expect(entry.action).toBe('security.ratelimit.blocked');
+      expect(entry.after.limiter).toBe('auth');
+      expect(entry.after.attemptedEmail).toBe('a@example.com');
+
+      // The coalescing key is the hashed generated key — never the raw
+      // tracker, which embeds the attempted email for the auth limiter.
+      const claimKey = redisSet.mock.calls[0]?.[0] as string;
+      expect(claimKey.startsWith('secalert:throttle:auth:')).toBe(true);
+      expect(claimKey).not.toContain('example.com');
+    } finally {
+      await app.close();
+    }
+  });
+});
+
+// Direct tests of the rejection-audit override: crafted ThrottlerLimitDetail
+// values prove the millisecond→second conversion against Redis-storage-shaped
+// inputs. (The in-memory storage used by the integration harness reports
+// SECONDS; the production RedisThrottlerStorage reports MILLISECONDS — a
+// unit bug here coalesces alerts for ~16 hours instead of 60s, so these
+// assertions pin the actual TTL/payload values, not just "it deduplicates".)
+describe('UserThrottlerGuard rejection audit (unit)', () => {
+  function makeGuard({
+    redisSet = jest.fn().mockResolvedValue('OK'),
+    auditLog = jest.fn().mockResolvedValue(undefined),
+  } = {}) {
+    const storage = { increment: jest.fn() };
+    const guard = new UserThrottlerGuard(
+      { throttlers: [] } as never,
+      storage as never,
+      new Reflector(),
+      { log: auditLog } as never,
+      { client: { set: redisSet } } as never,
+    );
+    return { guard, storage, redisSet, auditLog };
+  }
+
+  function requestPropsFor({
+    guard,
+    storage,
+    throttlerName = 'auth',
+    req,
+    detail,
+  }: {
+    guard: UserThrottlerGuard;
+    storage: { increment: jest.Mock };
+    throttlerName?: string;
+    req: Record<string, unknown>;
+    detail: Partial<{
+      totalHits: number;
+      timeToExpire: number;
+      isBlocked: boolean;
+      timeToBlockExpire: number;
+    }>;
+  }) {
+    const res = { header: jest.fn() };
+    const context = {
+      switchToHttp: () => ({ getRequest: () => req, getResponse: () => res }),
+    } as never;
+    storage.increment.mockResolvedValue({
+      totalHits: 6,
+      timeToExpire: 0,
+      isBlocked: true,
+      timeToBlockExpire: 60_000,
+      ...detail,
+    });
+    const requestProps = {
+      context,
+      limit: 5,
+      ttl: 60_000,
+      throttler: {
+        name: throttlerName,
+        ttl: 60_000,
+        limit: 5,
+        ignoreUserAgents: [],
+        setHeaders: true,
+      },
+      blockDuration: 60_000,
+      getTracker: async () => 'ip:203.0.113.9:email:v@example.com',
+      generateKey: () => 'HASHEDKEY123',
+    };
+    const handleRequest = (
+      guard as unknown as {
+        handleRequest: (p: unknown) => Promise<boolean>;
+      }
+    ).handleRequest.bind(guard);
+    return { requestProps, res, handleRequest };
+  }
+
+  const baseReq = () => ({
+    ip: '203.0.113.9',
+    method: 'POST',
+    path: '/api/v1/auth/login',
+    headers: { 'user-agent': 'UnitUA/1.0' },
+    body: { email: '  V@Example.COM ' },
+    socket: {},
+  });
+
+  async function flush() {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+
+  it('converts millisecond block windows to whole seconds for the claim TTL and payload', async () => {
+    const ctx = makeGuard();
+    const { requestProps, res, handleRequest } = requestPropsFor({
+      guard: ctx.guard,
+      storage: ctx.storage,
+      req: baseReq(),
+      detail: { timeToBlockExpire: 60_000, timeToExpire: 0 },
+    });
+
+    await expect(handleRequest(requestProps)).rejects.toThrow(ThrottlerException);
+    // Existing wire behavior: raw storage value on the header, name-suffixed.
+    expect(res.header).toHaveBeenCalledWith('Retry-After-auth', 60_000);
+
+    await flush();
+    expect(ctx.redisSet).toHaveBeenCalledWith(
+      'secalert:throttle:auth:HASHEDKEY123',
+      '1',
+      'EX',
+      60, // seconds — NOT 60_000
+      'NX',
+    );
+    expect(ctx.auditLog).toHaveBeenCalledTimes(1);
+    expect(ctx.auditLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'security.ratelimit.blocked',
+        actorId: null,
+        entityType: 'RateLimit',
+        ip: '203.0.113.9',
+        userAgent: 'UnitUA/1.0',
+        after: {
+          limiter: 'auth',
+          limit: 5,
+          windowSec: 60, // ttl 60_000ms → 60s
+          route: '/api/v1/auth/login',
+          method: 'POST',
+          retryAfterSec: 60,
+          attemptedEmail: 'v@example.com',
+        },
+      }),
+    );
+  });
+
+  it('falls back to timeToExpire when there is no block window', async () => {
+    const ctx = makeGuard();
+    const { requestProps, handleRequest } = requestPropsFor({
+      guard: ctx.guard,
+      storage: ctx.storage,
+      req: baseReq(),
+      detail: { timeToBlockExpire: 0, timeToExpire: 30_000 },
+    });
+    await expect(handleRequest(requestProps)).rejects.toThrow(ThrottlerException);
+    await flush();
+    expect(ctx.redisSet).toHaveBeenCalledWith(
+      expect.any(String),
+      '1',
+      'EX',
+      30,
+      'NX',
+    );
+    const entry = ctx.auditLog.mock.calls[0]?.[0] as {
+      after: { retryAfterSec: number };
+    };
+    expect(entry.after.retryAfterSec).toBe(30);
+  });
+
+  it('omits attemptedEmail for non-auth limiters and records the acting user', async () => {
+    const ctx = makeGuard();
+    const req = { ...baseReq(), user: { id: 'user-42' } };
+    const { requestProps, handleRequest } = requestPropsFor({
+      guard: ctx.guard,
+      storage: ctx.storage,
+      throttlerName: 'global',
+      req,
+      detail: {},
+    });
+    await expect(handleRequest(requestProps)).rejects.toThrow(ThrottlerException);
+    await flush();
+    const entry = ctx.auditLog.mock.calls[0]?.[0] as {
+      actorId: string | null;
+      after: Record<string, unknown>;
+    };
+    expect(entry.actorId).toBe('user-42');
+    expect(entry.after.limiter).toBe('global');
+    expect(entry.after).not.toHaveProperty('attemptedEmail');
+  });
+
+  it('bounds attacker-controlled route and user agent', async () => {
+    const ctx = makeGuard();
+    const req = {
+      ...baseReq(),
+      path: undefined,
+      url: `/${'r'.repeat(600)}?q=1`,
+      headers: { 'user-agent': 'u'.repeat(700) },
+    };
+    const { requestProps, handleRequest } = requestPropsFor({
+      guard: ctx.guard,
+      storage: ctx.storage,
+      req,
+      detail: {},
+    });
+    await expect(handleRequest(requestProps)).rejects.toThrow(ThrottlerException);
+    await flush();
+    const entry = ctx.auditLog.mock.calls[0]?.[0] as {
+      userAgent: string;
+      after: { route: string };
+    };
+    expect(entry.userAgent).toHaveLength(500);
+    expect(entry.after.route.length).toBeLessThanOrEqual(300);
+    expect(entry.after.route).not.toContain('?');
+  });
+
+  it('skips the audit when the window is already claimed, and never breaks the 429', async () => {
+    const ctx = makeGuard({ redisSet: jest.fn().mockResolvedValue(null) });
+    const { requestProps, handleRequest } = requestPropsFor({
+      guard: ctx.guard,
+      storage: ctx.storage,
+      req: baseReq(),
+      detail: {},
+    });
+    await expect(handleRequest(requestProps)).rejects.toThrow(ThrottlerException);
+    await flush();
+    expect(ctx.auditLog).not.toHaveBeenCalled();
+  });
+
+  it('a rejecting audit write never breaks the 429 (detached best-effort)', async () => {
+    const ctx = makeGuard({
+      auditLog: jest.fn().mockRejectedValue(new Error('db down')),
+    });
+    const { requestProps, handleRequest } = requestPropsFor({
+      guard: ctx.guard,
+      storage: ctx.storage,
+      req: baseReq(),
+      detail: {},
+    });
+    await expect(handleRequest(requestProps)).rejects.toThrow(ThrottlerException);
+    await flush();
   });
 });
