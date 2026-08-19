@@ -1,4 +1,5 @@
 import type { ChatConversationDetail, ChatToolCallDto } from '@weavestream/shared';
+import { problemMessage as sharedProblemMessage } from '@weavestream/shared';
 import { ApiError, apiFetch } from '../../lib/api';
 
 /**
@@ -84,16 +85,18 @@ export function fetchConversation(
 }
 
 /**
- * Human-readable message off an RFC-7807 problem, mirroring desktop's
- * `extractProblemMessage` precedence (detail → message → title).
+ * Human-readable message off a thrown error, for the toast/inline copy.
+ *
+ * The `detail → message → title` precedence itself lives in
+ * `@weavestream/shared` — desktop extracts identically, and duplicating it
+ * here is what CLAUDE.md forbids. This wrapper is the mobile-only part:
+ * unwrap `ApiError` to reach the problem body, and word the fallback.
+ *
+ * `err.problem` is what goes to the shared helper, NOT `err` — both are typed
+ * `unknown`, so passing the error itself would typecheck and then silently
+ * return `fallback` for every error. `chat-actions.spec.ts` pins that.
  */
 export function problemMessage(err: unknown, fallback: string): string {
-  if (err instanceof ApiError && err.problem && typeof err.problem === 'object') {
-    const p = err.problem as { detail?: unknown; message?: unknown; title?: unknown };
-    for (const key of ['detail', 'message', 'title'] as const) {
-      const v = p[key];
-      if (typeof v === 'string' && v.trim()) return v;
-    }
-  }
-  return fallback;
+  if (!(err instanceof ApiError)) return fallback;
+  return sharedProblemMessage(err.problem) ?? fallback;
 }

@@ -24,6 +24,7 @@ import {
   Tag,
 } from '../ui';
 import { TagFilterMenu } from './tag-filter-menu';
+import { compactRelative as relative } from '../../lib/relative-time';
 
 type ReferenceMap = AssetSummary['references'];
 
@@ -882,14 +883,4 @@ function stripProtocol(s: string): string {
 
 function truncate(s: string, n: number): string {
   return s.length <= n ? s : `${s.slice(0, n)}…`;
-}
-
-function relative(d: Date): string {
-  const diff = Date.now() - d.getTime();
-  const day = 86_400_000;
-  if (diff < day) return 'today';
-  if (diff < 7 * day) return `${Math.floor(diff / day)}d ago`;
-  if (diff < 30 * day) return `${Math.floor(diff / (7 * day))}w ago`;
-  if (diff < 365 * day) return `${Math.floor(diff / (30 * day))}mo ago`;
-  return `${Math.floor(diff / (365 * day))}y ago`;
 }

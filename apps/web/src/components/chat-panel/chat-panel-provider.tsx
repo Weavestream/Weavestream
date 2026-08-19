@@ -42,7 +42,7 @@ import type {
   MonitoredDomain,
 } from '../../lib/server-api';
 
-export type ChatRole = 'user' | 'assistant';
+type ChatRole = 'user' | 'assistant';
 
 export type ChatMessage = {
   id: string;
@@ -67,7 +67,7 @@ export type ChatMessage = {
   scopeCompanyId?: string | null;
 };
 
-export type ChatTabKind = 'freeform' | 'context';
+type ChatTabKind = 'freeform' | 'context';
 
 /**
  * Pinned per-tab @-mention. The "current page" entry is stored
@@ -155,7 +155,7 @@ export type ChatArticlePageContext = {
   onAfterAiApply?: (changes: { markdown?: string; title?: string }) => void;
 };
 
-export type ChatAssetPageContext = {
+type ChatAssetPageContext = {
   kind: 'asset';
   companyId: string;
   assetId: string;
@@ -171,7 +171,7 @@ export type ChatAssetPageContext = {
   getMarkdown: () => string;
 };
 
-export type ChatDomainPageContext = {
+type ChatDomainPageContext = {
   kind: 'domain';
   companyId: string;
   domainId: string;
@@ -198,7 +198,7 @@ export type ChatDomainPageContext = {
  * mapping — in that case the chat panel falls back to its existing
  * company picker on save (see `SaveAsArticleDialog`).
  */
-export type ChatTicketPageContext = {
+type ChatTicketPageContext = {
   kind: 'ticket';
   companyId: string | null;
   /**
@@ -322,9 +322,9 @@ type Action =
       next: ChatToolCallDto;
     };
 
-export const MIN_WIDTH = 220;
-export const MAX_WIDTH = 600;
-export const DEFAULT_WIDTH = 320;
+const MIN_WIDTH = 220;
+const MAX_WIDTH = 600;
+const DEFAULT_WIDTH = 320;
 const WIDTH_KEY = 'chatPanel.width';
 const OPEN_KEY = 'chatPanel.isOpen';
 // Tab list persistence. We only stash the minimal metadata needed to

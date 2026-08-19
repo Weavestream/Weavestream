@@ -27,16 +27,9 @@ import { apiFetch } from './api';
  * new code may import them from `@weavestream/shared/browser` directly.
  */
 
-export {
-  SUPPORTED_FILE_KINDS,
-  UploadError,
-  describeUploadError,
-  preflightFile,
-} from '@weavestream/shared/browser';
+export { describeUploadError, preflightFile } from '@weavestream/shared/browser';
 export type {
   ConfirmUploadResponse,
-  InitUploadResponse,
-  UploadPreflightLimits,
   UploadProgress,
 } from '@weavestream/shared/browser';
 export type { UploadAttachmentType } from '@weavestream/shared';

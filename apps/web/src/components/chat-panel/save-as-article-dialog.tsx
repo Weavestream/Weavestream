@@ -2,7 +2,11 @@
 
 import { useRouter } from 'next/navigation';
 import { useEffect, useMemo, useState } from 'react';
-import { flattenFolderTree, splitMarkdownTitleAndBody } from '@weavestream/shared';
+import {
+  flattenFolderTree,
+  problemMessage,
+  splitMarkdownTitleAndBody,
+} from '@weavestream/shared';
 import type { ChatPendingCreate } from '@weavestream/shared';
 import {
   Btn,
@@ -257,7 +261,7 @@ export function SaveAsArticleDialog({
     );
     setSaving(false);
     if (!res.ok || !res.data) {
-      setError(extractErr(res.problem) ?? 'Could not create the article.');
+      setError(problemMessage(res.problem) ?? 'Could not create the article.');
       return;
     }
     toast.push('Article created', 'ok');
@@ -383,14 +387,4 @@ export function SaveAsArticleDialog({
       </div>
     </Dialog>
   );
-}
-
-function extractErr(problem: unknown): string | null {
-  if (!problem || typeof problem !== 'object') return null;
-  const p = problem as { detail?: unknown; title?: unknown; message?: unknown };
-  for (const key of ['detail', 'message', 'title'] as const) {
-    const v = p[key];
-    if (typeof v === 'string' && v.trim()) return v;
-  }
-  return null;
 }

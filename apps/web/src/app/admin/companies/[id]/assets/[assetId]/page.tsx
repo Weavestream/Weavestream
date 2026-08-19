@@ -12,6 +12,7 @@ import {
   type AssetSummary,
 } from '../../../../../../lib/server-api';
 import { canWriteCompany } from '../../../../../../lib/roles';
+import { humanSize } from '@weavestream/shared';
 import { PageBody, PageHeader } from '../../../../../../components/shell/page-header';
 import { Icon, LayoutSwatch, Panel, ShowMore, Tag } from '../../../../../../components/ui';
 import { buildTerm } from '../../../../../../lib/term';
@@ -29,6 +30,7 @@ import {
   ProvenanceBadge,
   provenanceAttention,
 } from '../../../../../../components/integrations/provenance-badge';
+import { recentRelative as relative } from '../../../../../../lib/relative-time';
 
 export async function generateMetadata({
   params,
@@ -647,24 +649,6 @@ function FileTileRow({ entries }: { entries: FileFieldValue[] }) {
   );
 }
 
-function humanSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-  return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
-}
-
-function relative(d: Date): string {
-  const diff = Date.now() - d.getTime();
-  const minute = 60_000;
-  const hour = 60 * minute;
-  const day = 24 * hour;
-  if (diff < minute) return 'just now';
-  if (diff < hour) return `${Math.floor(diff / minute)}m ago`;
-  if (diff < day) return `${Math.floor(diff / hour)}h ago`;
-  if (diff < 7 * day) return `${Math.floor(diff / day)}d ago`;
-  return d.toLocaleDateString();
-}
 
 function formatDateField(
   raw: string,

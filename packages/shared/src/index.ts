@@ -30,5 +30,7 @@ export * from './ip-match.js';
 export * from './tag-chips.js';
 export * from './internal-token.js';
 export * from './strip-nul.js';
+export * from './problem.js';
+export * from './file-format.js';
 export * from './image-limits.js';
 export type { TenantContext } from './tenant-context.js';

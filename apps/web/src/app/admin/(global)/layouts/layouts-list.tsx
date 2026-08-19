@@ -17,6 +17,7 @@ import {
 } from '../../../../components/ui';
 import { LayoutSettingsDialog } from './layout-settings-dialog';
 import { LayoutArchiveDialog } from './layout-archive-dialog';
+import { compactRelative as relative } from '../../../../lib/relative-time';
 
 /**
  * Admin "Layouts" table rows. Presentation stays close to the original
@@ -472,14 +473,4 @@ export function LayoutsList({
       {dialogs}
     </>
   );
-}
-
-function relative(iso: string): string {
-  const diff = Date.now() - new Date(iso).getTime();
-  const day = 86_400_000;
-  if (diff < day) return 'today';
-  if (diff < 7 * day) return `${Math.floor(diff / day)}d ago`;
-  if (diff < 30 * day) return `${Math.floor(diff / (7 * day))}w ago`;
-  if (diff < 365 * day) return `${Math.floor(diff / (30 * day))}mo ago`;
-  return `${Math.floor(diff / (365 * day))}y ago`;
 }

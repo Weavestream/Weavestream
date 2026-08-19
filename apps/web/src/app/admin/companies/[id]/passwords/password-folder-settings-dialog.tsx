@@ -17,6 +17,7 @@ import {
   buildPasswordFolderOptions,
   formatFolderOptionLabel,
 } from '../../../../../lib/password-folder-tree';
+import { extractProblemMessagePreferMessage as problemMessage } from '../../../../../lib/api-errors';
 
 type Tab = 'rename' | 'move' | 'archive';
 
@@ -368,13 +369,4 @@ function footerFor(
       </Btn>
     </>
   );
-}
-
-function problemMessage(problem: unknown): string | null {
-  if (!problem || typeof problem !== 'object') return null;
-  const p = problem as { message?: unknown; detail?: unknown; title?: unknown };
-  for (const v of [p.message, p.detail, p.title]) {
-    if (typeof v === 'string' && v.length > 0) return v;
-  }
-  return null;
 }

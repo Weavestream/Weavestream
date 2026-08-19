@@ -10,7 +10,6 @@ import {
 } from '../../../../../../components/ui';
 import type {
   DomainCheck,
-  DomainCheckDetails,
   DomainScoreBreakdownItem,
   DomainScoreTier,
 } from '../../../../../../lib/server-api';
@@ -467,4 +466,3 @@ function ringColorForTone(tone: TagTone): string {
 
 // Suppress unused-export warnings for helpers consumed by the alerts
 // panel + history table.
-export type { DomainCheckDetails };

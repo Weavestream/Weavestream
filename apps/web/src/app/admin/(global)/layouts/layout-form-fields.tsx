@@ -10,7 +10,7 @@ import type { IconComponent, IconName } from '../../../../components/ui/icon';
  * rename flow doesn't feel like a second UI.
  */
 
-export const ICON_CHOICES = [
+const ICON_CHOICES = [
   'laptop',
   'server',
   'network',
@@ -29,7 +29,7 @@ export const ICON_CHOICES = [
   'home',
 ] as const;
 
-export const COLOR_CHOICES: ReadonlyArray<{ label: string; value: string }> = [
+const COLOR_CHOICES: ReadonlyArray<{ label: string; value: string }> = [
   { label: 'Blue', value: 'var(--info)' },
   { label: 'Amber', value: 'var(--warn)' },
   { label: 'Purple', value: '#c084fc' },
@@ -48,14 +48,7 @@ export const COLOR_CHOICES: ReadonlyArray<{ label: string; value: string }> = [
   { label: 'Indigo', value: 'var(--layout-indigo)' },
 ];
 
-export function slugify(s: string): string {
-  return s
-    .toLowerCase()
-    .replace(/[^a-z0-9\s_]/g, '')
-    .trim()
-    .replace(/\s+/g, '_')
-    .slice(0, 48);
-}
+export { slugifyLayoutSlug as slugify } from '../../../../lib/slugify';
 
 export type LayoutFormValues = {
   name: string;

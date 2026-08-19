@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Btn, Icon, Panel, useToast } from '../ui';
 import { FormattedRelative } from '../../lib/timezone-context';
 import { apiFetch } from '../../lib/api';
+import { humanSize } from '@weavestream/shared';
 import {
   describeUploadError,
   preflightFile,
@@ -508,13 +509,6 @@ function toAttachment(resp: ConfirmUploadResponse): Attachment {
     createdAt: resp.createdAt,
     uploaderId: null,
   };
-}
-
-function humanSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-  return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
 }
 
 const emptyStyle = {

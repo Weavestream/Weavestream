@@ -147,3 +147,64 @@ export function unwrapApiResponse<T>(
 export function unwrapMeResponse<T>(res: ServerApiResponse<T>): T | null {
   return unwrapApiResponse(res, '/me');
 }
+
+// ───────────────────────────────────────────────────────────────────
+// Problem-body message extraction
+// ───────────────────────────────────────────────────────────────────
+//
+// Three shapes, because three different precedence orders are actually
+// rendered across the app and each one's output is preserved exactly. They
+// are separate named functions rather than one call with a precedence
+// argument because the middle one skips blank strings and the other two do
+// not — a shared core would need a flag to express that, for no gain.
+//
+// All three take `unknown` (a problem body is parsed as `unknown` in `api.ts`,
+// so a non-string field is representable) and return `null` rather than a
+// fallback, so the caller words its own:
+// `extractProblemMessage(problem) ?? 'Something went wrong'`.
+//
+// A FOURTH order — `detail → message → title`, blank-skipping — lives in
+// `@weavestream/shared` as `problemMessage`, because `apps/mobile` extracts
+// identically there. Do not add a fifth without checking it renders
+// differently from all of these.
+
+/**
+ * `detail → title`. The specific explanation, else the generic category.
+ * Replaces the `problemText` helpers in the AI and email settings forms.
+ */
+export function extractProblemMessage(problem: unknown): string | null {
+  if (problem && typeof problem === 'object') {
+    const p = problem as { title?: unknown; detail?: unknown };
+    if (typeof p.detail === 'string') return p.detail;
+    if (typeof p.title === 'string') return p.title;
+  }
+  return null;
+}
+
+/**
+ * `message → detail → title`, skipping empty strings.
+ *
+ * The blank-skip is the difference from the other two: an API that answers
+ * `{ message: '' }` falls through to `detail` here instead of rendering an
+ * empty error. Used by the folder settings dialogs.
+ */
+export function extractProblemMessagePreferMessage(problem: unknown): string | null {
+  if (!problem || typeof problem !== 'object') return null;
+  const p = problem as { message?: unknown; detail?: unknown; title?: unknown };
+  for (const v of [p.message, p.detail, p.title]) {
+    if (typeof v === 'string' && v.length > 0) return v;
+  }
+  return null;
+}
+
+/**
+ * `detail → message`. No `title` bucket at all — used by the IPAM views,
+ * whose endpoints answer with one or the other.
+ */
+export function extractProblemDetailOrMessage(problem: unknown): string | null {
+  if (!problem || typeof problem !== 'object') return null;
+  const obj = problem as Record<string, unknown>;
+  if (typeof obj.detail === 'string') return obj.detail;
+  if (typeof obj.message === 'string') return obj.message;
+  return null;
+}

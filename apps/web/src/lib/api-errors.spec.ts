@@ -3,6 +3,9 @@ import {
   ApiUnavailableError,
   RATE_LIMIT_DIGEST_PREFIX,
   RateLimitedError,
+  extractProblemDetailOrMessage,
+  extractProblemMessage,
+  extractProblemMessagePreferMessage,
   isApiUnavailableDigest,
   parseRateLimitDigest,
   unwrapApiResponse,
@@ -141,5 +144,76 @@ describe('isApiUnavailableDigest', () => {
     expect(isApiUnavailableDigest('WS_API_UNAVAILABLE')).toBe(true);
     expect(isApiUnavailableDigest('WS_RATE_LIMITED:42')).toBe(false);
     expect(isApiUnavailableDigest(undefined)).toBe(false);
+  });
+});
+
+/**
+ * The three precedences are NOT interchangeable — each block asserts the case
+ * where it diverges from the other two, since that divergence is the only
+ * reason three exist. `?? fallback` equivalence to the `problemText` helpers
+ * these replaced is pinned explicitly.
+ */
+describe('extractProblemMessage', () => {
+  it('prefers detail over title', () => {
+    expect(extractProblemMessage({ detail: 'Port already in use', title: 'Conflict' })).toBe(
+      'Port already in use',
+    );
+  });
+
+  it('falls back to title, then to null', () => {
+    expect(extractProblemMessage({ title: 'Conflict' })).toBe('Conflict');
+    expect(extractProblemMessage({})).toBeNull();
+  });
+
+  it('ignores a message field entirely — that is the other two helpers', () => {
+    expect(extractProblemMessage({ message: 'msg' })).toBeNull();
+  });
+
+  it('returns non-string fields as null, and handles non-objects', () => {
+    expect(extractProblemMessage({ detail: 42, title: null })).toBeNull();
+    for (const v of [null, undefined, 'str', 7]) expect(extractProblemMessage(v)).toBeNull();
+  });
+
+  it('reproduces the replaced problemText via ?? fallback', () => {
+    const problemText = (problem: unknown, fallback: string) =>
+      extractProblemMessage(problem) ?? fallback;
+    expect(problemText({ detail: 'd' }, 'fb')).toBe('d');
+    expect(problemText({ title: 't' }, 'fb')).toBe('t');
+    expect(problemText({}, 'fb')).toBe('fb');
+    expect(problemText(null, 'fb')).toBe('fb');
+  });
+});
+
+describe('extractProblemMessagePreferMessage', () => {
+  it('puts message first, then detail, then title', () => {
+    const all = { message: 'm', detail: 'd', title: 't' };
+    expect(extractProblemMessagePreferMessage(all)).toBe('m');
+    expect(extractProblemMessagePreferMessage({ detail: 'd', title: 't' })).toBe('d');
+    expect(extractProblemMessagePreferMessage({ title: 't' })).toBe('t');
+    expect(extractProblemMessagePreferMessage({})).toBeNull();
+  });
+
+  it('skips empty strings — the difference from the other two', () => {
+    expect(extractProblemMessagePreferMessage({ message: '', detail: 'd' })).toBe('d');
+    expect(extractProblemMessage({ detail: '' })).toBe('');
+    expect(extractProblemDetailOrMessage({ detail: '' })).toBe('');
+  });
+
+  it('does NOT skip whitespace-only strings — only empty ones', () => {
+    // The shared `problemMessage` trims; this one checks length. Keeping the
+    // distinction is why they are separate helpers.
+    expect(extractProblemMessagePreferMessage({ message: '   ', detail: 'd' })).toBe('   ');
+  });
+});
+
+describe('extractProblemDetailOrMessage', () => {
+  it('prefers detail over message', () => {
+    expect(extractProblemDetailOrMessage({ detail: 'd', message: 'm' })).toBe('d');
+    expect(extractProblemDetailOrMessage({ message: 'm' })).toBe('m');
+    expect(extractProblemDetailOrMessage({})).toBeNull();
+  });
+
+  it('has no title bucket', () => {
+    expect(extractProblemDetailOrMessage({ title: 'Conflict' })).toBeNull();
   });
 });
