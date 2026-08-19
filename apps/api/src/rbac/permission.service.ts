@@ -260,3 +260,53 @@ function decideFromEffective(
     reason: `effective ${effective} not permitted for ${action}`,
   };
 }
+
+/**
+ * Which companies may `actor` see on list/feed surfaces? Returns
+ * `null` for "no filter — sees every company" (SUPER_ADMIN, and
+ * OPERATOR with non-NONE globalAccess: a membership only ever
+ * *upgrades* access, and WS-016 makes expiry revert to globalAccess,
+ * so this branch must never narrow such an operator). Otherwise the
+ * set of allowed company ids. The nullable-vs-Set distinction lets
+ * callers skip the `{ in: [...] }` Prisma clause entirely for
+ * unfiltered actors, avoiding the Postgres empty-`IN ()` edge case.
+ *
+ * This is the list-surface companion to `resolveEffectiveAccess`
+ * above, and the ONLY home of the membership predicate for list
+ * scoping — `CompaniesService.list`, `StarsService`, and
+ * `RecentCompaniesService` all consume it, so tenant filtering
+ * cannot drift per surface. Expiry matters as much as revocation:
+ * the resolver only counts a membership while `expiresAt` is null or
+ * still in the future, and filtering on `revokedAt` alone would keep
+ * serving metadata to a member whose access has lapsed. Strict `gt`
+ * mirrors the resolver's `expiresAt > now`.
+ *
+ * Deliberately queries Prisma directly rather than the Redis-cached
+ * `loadMemberships` above: list scoping reacts to a revocation
+ * immediately, while the per-action resolver tolerates the 60s
+ * membership cache. A free function (like `resolveEffectiveAccess`)
+ * rather than a service method so consumers pass the PrismaService
+ * they already hold and their constructors stay unchanged.
+ */
+export async function allowedCompanyIds(
+  prisma: PrismaService,
+  actor: Pick<PermissionInput, 'id' | 'role' | 'globalAccess'>,
+): Promise<Set<string> | null> {
+  if (actor.role === 'SUPER_ADMIN') return null;
+  if (
+    actor.role === 'OPERATOR' &&
+    actor.globalAccess !== null &&
+    actor.globalAccess !== 'NONE'
+  ) {
+    return null;
+  }
+  const memberships = await prisma.membership.findMany({
+    where: {
+      userId: actor.id,
+      revokedAt: null,
+      OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }],
+    },
+    select: { companyId: true },
+  });
+  return new Set(memberships.map((m) => m.companyId));
+}

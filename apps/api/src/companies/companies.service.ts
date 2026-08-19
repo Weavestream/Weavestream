@@ -11,6 +11,7 @@ import type {
 import { PrismaService } from '../prisma/prisma.service.js';
 import { AuditLogService } from '../audit/audit.service.js';
 import { MembershipCacheService } from '../cache/membership-cache.service.js';
+import { allowedCompanyIds } from '../rbac/permission.service.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
 
 export interface CompanyListOptions {
@@ -142,7 +143,10 @@ export class CompaniesService {
     if (options.excludeIds && options.excludeIds.length > 0) {
       where.id = { notIn: options.excludeIds };
     }
-    // RBAC v2 — visibility for the company list:
+    // RBAC v2 — visibility for the company list (predicate centralized
+    // in `allowedCompanyIds`, rbac/permission.service.ts — a listing
+    // that drifts from the resolver would leak company metadata to a
+    // principal `company.read` then denies):
     //   - SUPER_ADMIN              → every row
     //   - OPERATOR with FULL/READONLY globalAccess
     //                              → every row (per-company membership
@@ -150,35 +154,14 @@ export class CompaniesService {
     //                                fallback already grants READ)
     //   - OPERATOR with NONE       → only companies they're a member of
     //   - CONTRACTOR / CLIENT_USER → only companies they're a member of
-    if (actor.role !== 'SUPER_ADMIN') {
-      const seesEverything =
-        actor.role === 'OPERATOR' &&
-        actor.globalAccess !== null &&
-        actor.globalAccess !== 'NONE';
-      if (!seesEverything) {
-        // Expiry matters as much as revocation. `resolveEffectiveAccess`
-        // (rbac/permission.service.ts) only counts a membership while
-        // `expiresAt` is null or still in the future, so filtering on
-        // `revokedAt` alone would list companies that `company.read`
-        // would then deny — a listing/authz split that leaks company
-        // metadata to a principal the resolver rejects. Strict `gt`
-        // mirrors the resolver's `expiresAt > now`.
-        const memberships = await this.prisma.membership.findMany({
-          where: {
-            userId: actor.id,
-            revokedAt: null,
-            OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }],
-          },
-          select: { companyId: true },
-        });
-        const ids = memberships.map((m) => m.companyId);
-        if (ids.length === 0) return { items: [], nextCursor: null };
-        const allowed = options.excludeIds
-          ? ids.filter((id) => !options.excludeIds!.includes(id))
-          : ids;
-        if (allowed.length === 0) return { items: [], nextCursor: null };
-        where.id = { in: allowed };
-      }
+    const allowedIds = await allowedCompanyIds(this.prisma, actor);
+    if (allowedIds !== null) {
+      if (allowedIds.size === 0) return { items: [], nextCursor: null };
+      const allowed = options.excludeIds
+        ? [...allowedIds].filter((id) => !options.excludeIds!.includes(id))
+        : [...allowedIds];
+      if (allowed.length === 0) return { items: [], nextCursor: null };
+      where.id = { in: allowed };
     }
 
     // Phase 9b.3: sort by `updatedAt desc` when the caller asks — used

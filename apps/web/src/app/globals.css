@@ -235,6 +235,17 @@ button.topbar-chip:hover {
 .topbar-chip-seg:hover {
   background: var(--elev);
 }
+/* The company half of the pill is a <button> when it carries the
+ * recents menu. Strip the UA button skin here, in the class, so it
+ * renders exactly like the link segment it replaced — an inline
+ * `background` on the button would outrank the shared `:hover` above
+ * and freeze the hover. `.topbar-chip-seg:hover` (0,2,0) still beats
+ * this (0,1,1) rule. */
+button.topbar-chip-seg {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+}
 
 /* Sidebar header affordances. Where the mark and the title still have
  * separate destinations (the portal's tenant switcher), they hover

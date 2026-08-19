@@ -16,13 +16,13 @@ import type { Term } from './term';
  *                                                      -> [ Acme ⌄ | Assets ]
  *
  * The header renders exactly one object: the scope pill. Its left half
- * is the company, chevron and all, pointing at the picker
- * (`/admin/companies`); its right half is the section ("Assets",
- * "Domains", a layout name) in the accent colour. The old leading
- * "Companies" crumb is gone — it duplicated the pill's own
- * destination, and the row is better spent on the search box. `term`
- * survives as the pill's tooltip, the only place the plural still
- * earns its keep here.
+ * is the company, chevron and all, opening the recents menu (last
+ * visited companies plus an "All …" row into `/admin/companies`); its
+ * right half is the section ("Assets", "Domains", a layout name) in
+ * the accent colour. The old leading "Companies" crumb is gone — it
+ * duplicated the pill's own destination, and the row is better spent
+ * on the search box. `term` survives in the pill's tooltip and menu
+ * labels, via the `plural` carried on `company`.
  *
  * Crumbs past the section are accepted and deliberately NOT rendered.
  * On a detail page the trailing crumb was always the record's own name
@@ -50,6 +50,7 @@ export function companyCrumbs(
       href: '/admin/companies',
       variant: 'pill',
       title: `All ${term.other}`,
+      company: { id: company.id, name: company.name, plural: term.other },
       ...(section
         ? { section: { label: section.label, href: section.href } }
         : {}),

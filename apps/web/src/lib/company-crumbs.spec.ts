@@ -11,6 +11,10 @@ describe('companyCrumbs', () => {
       href: '/admin/companies',
       variant: 'pill',
       title: 'All Clients',
+      // Identity + term plural for the pill's recents menu: which
+      // company to record as visited / filter from the rows, and how
+      // to spell the "All …" row and menu label.
+      company: { id: 'c1', name: 'Enterprise Title', plural: 'Clients' },
     });
     // The old leading `Clients` crumb is gone — the pill is the only
     // route to the picker from the trail now.

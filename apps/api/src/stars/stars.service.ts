@@ -1,6 +1,7 @@
 import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { AuditLogService } from '../audit/audit.service.js';
+import { allowedCompanyIds } from '../rbac/permission.service.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
 
 /**
@@ -127,17 +128,17 @@ export class StarsService {
    * the membership filter.
    */
   async list(actor: AuthedUser): Promise<{ items: StarredItem[] }> {
-    const allowedCompanyIds = await this.getAllowedCompanyIds(actor);
+    const allowedIds = await allowedCompanyIds(this.prisma, actor);
 
     // Short-circuit: a non-super-admin with zero memberships has
     // nothing to see. Skip every query.
-    if (allowedCompanyIds !== null && allowedCompanyIds.size === 0) {
+    if (allowedIds !== null && allowedIds.size === 0) {
       return { items: [] };
     }
 
-    // Non-null `allowedCompanyIds` means "filter to these companies";
+    // Non-null `allowedIds` means "filter to these companies";
     // `null` means "no filter" (super-admin).
-    const companyIds = allowedCompanyIds === null ? null : [...allowedCompanyIds];
+    const companyIds = allowedIds === null ? null : [...allowedIds];
 
     // The Asset and Article Prisma models expose `companyId` as a
     // scalar only (no `company` back-relation), so we fetch rows with
@@ -209,9 +210,9 @@ export class StarsService {
     // Apply the access filter in memory — we did it server-side for
     // companies (where `companyId` is a Prisma column on the join
     // table), but for nested entities the model shape forces us to
-    // filter here. With `allowedCompanyIds` in a Set, this is O(n).
+    // filter here. With `allowedIds` in a Set, this is O(n).
     const accessible = (cid: string) =>
-      companyIds === null || allowedCompanyIds?.has(cid) === true;
+      companyIds === null || allowedIds?.has(cid) === true;
 
     const visiblePasswords = passwordRows.filter((r) => accessible(r.password.companyId));
     const visibleAssets = assetRows.filter((r) => accessible(r.asset.companyId));
@@ -311,40 +312,6 @@ export class StarsService {
     });
 
     return { items };
-  }
-
-  /**
-   * Returns the set of company IDs the actor may see starred items on,
-   * or `null` for SUPER_ADMIN (meaning "no filter — see everything").
-   * Keeping this distinction in a dedicated nullable lets us skip the
-   * `{ in: [...] }` Prisma clause entirely for super-admins, which is
-   * both faster and avoids the Postgres `IN ()` empty-list edge case.
-   */
-  private async getAllowedCompanyIds(actor: AuthedUser): Promise<Set<string> | null> {
-    if (actor.role === 'SUPER_ADMIN') return null;
-    // Operators with non-NONE globalAccess implicitly see every
-    // company, matching the tenant-scope guard in `prisma.service.ts`.
-    if (
-      actor.role === 'OPERATOR' &&
-      (actor.globalAccess === 'FULL' || actor.globalAccess === 'READONLY')
-    ) {
-      return null;
-    }
-    // Expiry matters as much as revocation: `resolveEffectiveAccess`
-    // (rbac/permission.service.ts) only counts a membership while
-    // `expiresAt` is null or still in the future. Filtering on
-    // `revokedAt` alone would keep serving starred passwords, assets and
-    // articles — names, usernames, company names — to a member whose
-    // access has lapsed. Strict `gt` mirrors the resolver.
-    const memberships = await this.prisma.membership.findMany({
-      where: {
-        userId: actor.id,
-        revokedAt: null,
-        OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }],
-      },
-      select: { companyId: true },
-    });
-    return new Set(memberships.map((m) => m.companyId));
   }
 
   // ------------------------------------------------------------------

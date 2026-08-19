@@ -20,6 +20,7 @@ import { UsersModule } from './users/users.module.js';
 import { MembershipsModule } from './memberships/memberships.module.js';
 import { MeModule } from './me/me.module.js';
 import { StarsModule } from './stars/stars.module.js';
+import { RecentCompaniesModule } from './recent-companies/recent-companies.module.js';
 import { ActivityModule } from './activity/activity.module.js';
 import { FieldTypesModule } from './field-types/field-types.module.js';
 import { AssetLayoutsModule } from './asset-layouts/asset-layouts.module.js';
@@ -145,6 +146,7 @@ const httpSerializers = {
     MembershipsModule,
     MeModule,
     StarsModule,
+    RecentCompaniesModule,
     ActivityModule,
     FieldTypesModule,
     AssetLayoutsModule,

@@ -2,8 +2,22 @@
 
 import Link from 'next/link';
 import type { ReactNode } from 'react';
-import { Fragment } from 'react';
-import { Icon, Kbd } from '../ui';
+import {
+  Fragment,
+  useCallback,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+} from 'react';
+import { CompanyMark, Icon, Kbd } from '../ui';
+import { apiFetch } from '../../lib/api';
+import { companyAccent } from '../../lib/company-format';
+import { lower } from '../../lib/term';
+import {
+  recordRecentCompany,
+  type RecentCompany,
+} from '../../lib/recent-companies';
 import { useSearchPalette } from '../search/search-palette-provider';
 import { CompanyStickyNote } from './company-sticky-note';
 import { useStickyNote } from './sticky-note-context';
@@ -37,6 +51,15 @@ export type Crumb = {
    * alone doesn't reveal ("Acme Corp" → the company picker).
    */
   title?: string;
+  /**
+   * The identity behind a pill's label, plus the tenant-term plural
+   * for the menu strings. When set, the company half of the pill
+   * becomes a button opening the recents menu (last visited
+   * companies + an "All …" row into `href`) instead of a bare link,
+   * and the visit is recorded for that menu. Ignored unless
+   * `variant: 'pill'`.
+   */
+  company?: { id: string; name: string; plural: string };
 };
 
 export function TopBar({
@@ -135,6 +158,7 @@ export function TopBar({
                   href={c.href}
                   title={c.title}
                   section={c.section}
+                  company={c.company}
                 >
                   {c.label}
                 </ScopePill>
@@ -280,36 +304,185 @@ export function TopBar({
   );
 }
 
+/** Visible recents in the pill menu, after the current company is filtered out. */
+const MENU_ROWS = 5;
+
+const menuRowStyle = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 9,
+  padding: '6px 8px',
+  borderRadius: 5,
+  textDecoration: 'none',
+  color: 'var(--text)',
+} as const;
+
+const menuRowNameStyle = {
+  flex: 1,
+  minWidth: 0,
+  fontSize: 12.5,
+  fontWeight: 500,
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+} as const;
+
+/** Non-interactive loading/error line above the "All …" row. */
+const menuNoteStyle = {
+  padding: '6px 8px',
+  fontSize: 12,
+  color: 'var(--muted)',
+} as const;
+
+const menuDividerStyle = {
+  height: 1,
+  background: 'var(--line)',
+  margin: '6px 2px',
+} as const;
+
 /**
  * The scope chip at the head of the trail: the company name with a
  * chevron, and — behind a hairline divider — the current section. The
- * company half navigates to the picker (`/admin/companies`), the same
- * contract the sidebar title block has always had, surfaced in the
- * header so the trail leads with *where you are* instead of a
- * "Companies" crumb that only ever pointed back at the list.
+ * company half is the tenant switcher, surfaced in the header so the
+ * trail leads with *where you are* instead of a "Companies" crumb
+ * that only ever pointed back at the list.
  *
- * The two halves are separate links rather than one chip-wide link,
+ * With `company` set (every `companyCrumbs` caller), that half is a
+ * button opening a small menu: the last visited companies — per-user
+ * and server-side, fetched from `/me/recent-companies` on open like
+ * the starred popover, see `lib/recent-companies.ts` — plus an
+ * "All …" row that keeps the old contract of leading to the picker
+ * (`href`, `/admin/companies`). Without it, the half stays a plain
+ * link to `href`, the pre-menu behaviour.
+ *
+ * The two halves are separate controls rather than one chip-wide one,
  * for the same reason the sidebar splits its logo from its title: a
- * single outer link would make "Passwords" navigate to the company
- * picker, which is not what a click there means.
+ * single outer control would make "Passwords" open the company menu,
+ * which is not what a click there means.
  *
- * Uses `next/link` (unlike the plain `<a>` crumbs around it) because
- * these are high-traffic controls and a full document reload is a
- * noticeably worse click. `prefetch={false}` matches the sidebar rule
- * — every prefetch of a dynamic `/admin/**` route costs a full SSR
- * render, and the shell is the omnipresent multiplier.
+ * Navigation uses `next/link` (unlike the plain `<a>` crumbs around
+ * it) because these are high-traffic controls and a full document
+ * reload is a noticeably worse click. `prefetch={false}` matches the
+ * sidebar rule — every prefetch of a dynamic `/admin/**` route costs
+ * a full SSR render, and the shell is the omnipresent multiplier.
+ *
+ * The menu popover is `position: fixed` like the starred one in
+ * `sidebar-toolbar.tsx` rather than absolute: the crumb row scrolls
+ * horizontally (`overflow-x: auto`), which would clip an absolutely
+ * positioned child.
  */
 function ScopePill({
   href,
   title,
   section,
+  company,
   children,
 }: {
   href?: string;
   title?: string;
   section?: { label: ReactNode; href?: string };
+  company?: { id: string; name: string; plural: string };
   children: ReactNode;
 }) {
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const popoverRef = useRef<HTMLDivElement>(null);
+  const popoverId = useId();
+  const [open, setOpen] = useState(false);
+  const [recents, setRecents] = useState<RecentCompany[] | null>(null);
+  const [recentsError, setRecentsError] = useState(false);
+  const [position, setPosition] = useState<{
+    left: number;
+    top: number;
+    width: number;
+  } | null>(null);
+
+  // Every mount of a company pill is a visit: record it server-side
+  // for the menu below (fire-and-forget; the server dedupes, see
+  // `recordRecentCompany` on why the client must not).
+  const companyId = company?.id;
+  useEffect(() => {
+    if (companyId) recordRecentCompany(companyId);
+  }, [companyId]);
+
+  // Fetch the recents on open, exactly like the starred popover: the
+  // list is per-user and access-scoped server-side, so nothing
+  // renders here that the account is not currently allowed to see.
+  // Previously fetched rows stay while a re-open refreshes, so only
+  // the first open shows the loading row.
+  useEffect(() => {
+    if (!open || !companyId) return;
+    const controller = new AbortController();
+
+    apiFetch<{ items: RecentCompany[] }>('/me/recent-companies', {
+      signal: controller.signal,
+    })
+      .then((res) => {
+        if (controller.signal.aborted) return;
+        if (!res.ok) {
+          setRecentsError(true);
+          return;
+        }
+        setRecentsError(false);
+        setRecents(res.data?.items ?? []);
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) setRecentsError(true);
+      });
+
+    return () => controller.abort();
+  }, [open, companyId]);
+
+  const updatePosition = useCallback(() => {
+    const rect = buttonRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const gap = 6;
+    const viewportPad = 12;
+    const width = Math.min(260, window.innerWidth - viewportPad * 2);
+    // Flush with the pill's left edge, clamped so it never runs off a
+    // narrow viewport.
+    const left = Math.max(
+      viewportPad,
+      Math.min(rect.left, window.innerWidth - width - viewportPad),
+    );
+    setPosition({ left, top: rect.bottom + gap, width });
+  }, []);
+
+  // Same lifecycle as the starred popover in `sidebar-toolbar.tsx`:
+  // close on outside press or Escape, track the anchor through
+  // resizes and (capturing) scrolls.
+  useEffect(() => {
+    if (!open) return;
+    updatePosition();
+
+    const onPointerDown = (e: MouseEvent) => {
+      const target = e.target as Node;
+      if (
+        buttonRef.current?.contains(target) ||
+        popoverRef.current?.contains(target)
+      ) {
+        return;
+      }
+      setOpen(false);
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    window.addEventListener('resize', updatePosition);
+    window.addEventListener('scroll', updatePosition, true);
+    document.addEventListener('mousedown', onPointerDown);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      window.removeEventListener('resize', updatePosition);
+      window.removeEventListener('scroll', updatePosition, true);
+      document.removeEventListener('mousedown', onPointerDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [open, updatePosition]);
+
+  const menuRows = company
+    ? (recents ?? []).filter((r) => r.id !== company.id).slice(0, MENU_ROWS)
+    : [];
+
   const scopeBody = (
     <>
       <span
@@ -363,7 +536,7 @@ function ScopePill({
     maxWidth: 180,
   } as const;
 
-  return (
+  const chip = (
     <span
       className="topbar-chip"
       style={{
@@ -380,7 +553,32 @@ function ScopePill({
         background: 'var(--panel-2)',
       }}
     >
-      {href ? (
+      {company ? (
+        <button
+          ref={buttonRef}
+          type="button"
+          title={`Switch from ${company.name}`}
+          aria-haspopup="menu"
+          aria-expanded={open}
+          aria-controls={popoverId}
+          // Resting background/border/cursor come from the
+          // `button.topbar-chip-seg` reset in `globals.css` — an
+          // inline `background` here would outrank the segment's
+          // shared `:hover` rule and freeze the hover.
+          className="topbar-chip-seg"
+          style={{ ...scopeStyle, fontFamily: 'inherit' }}
+          onClick={() => {
+            // Clear a previous failure here rather than inside the
+            // fetch effect (lint: no setState directly in an effect);
+            // the reopen triggers the retry.
+            setRecentsError(false);
+            updatePosition();
+            setOpen((v) => !v);
+          }}
+        >
+          {scopeBody}
+        </button>
+      ) : href ? (
         <Link
           href={href}
           title={title}
@@ -419,5 +617,122 @@ function ScopePill({
         </>
       )}
     </span>
+  );
+
+  return (
+    <>
+      {chip}
+      {company && open && (
+        <div
+          ref={popoverRef}
+          id={popoverId}
+          role="menu"
+          aria-label={`Recent ${lower(company.plural)}`}
+          style={{
+            position: 'fixed',
+            left: position?.left ?? 12,
+            top: position?.top ?? 50,
+            width: position?.width ?? 260,
+            maxWidth: 'calc(100vw - 24px)',
+            maxHeight: 'min(60vh, 420px)',
+            overflow: 'auto',
+            zIndex: 70,
+            background: 'var(--panel)',
+            border: '1px solid var(--line)',
+            borderRadius: 8,
+            boxShadow: 'var(--shadow-2)',
+            padding: 6,
+          }}
+        >
+          {recentsError ? (
+            <>
+              <div style={menuNoteStyle}>
+                Could not load recent {lower(company.plural)}.
+              </div>
+              <div aria-hidden style={menuDividerStyle} />
+            </>
+          ) : recents === null ? (
+            <>
+              <div style={menuNoteStyle}>Loading…</div>
+              <div aria-hidden style={menuDividerStyle} />
+            </>
+          ) : menuRows.length > 0 ? (
+            <>
+              <div
+                style={{
+                  fontFamily: 'var(--font-mono)',
+                  fontSize: 10,
+                  color: 'var(--dim)',
+                  textTransform: 'uppercase',
+                  letterSpacing: 0.6,
+                  padding: '4px 8px 6px',
+                }}
+              >
+                Recent
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                {menuRows.map((entry) => (
+                  <RecentCompanyRow
+                    key={entry.id}
+                    entry={entry}
+                    onNavigate={() => setOpen(false)}
+                  />
+                ))}
+              </div>
+              <div aria-hidden style={menuDividerStyle} />
+            </>
+          ) : null}
+          <Link
+            href={href ?? '/admin/companies'}
+            role="menuitem"
+            prefetch={false}
+            onClick={() => setOpen(false)}
+            className="sidebar-switcher-entry"
+            style={menuRowStyle}
+          >
+            <span
+              aria-hidden
+              style={{
+                width: 22,
+                height: 22,
+                display: 'grid',
+                placeItems: 'center',
+                color: 'var(--dim)',
+                flexShrink: 0,
+              }}
+            >
+              <Icon.building size={14} />
+            </span>
+            <span style={menuRowNameStyle}>All {company.plural}</span>
+          </Link>
+        </div>
+      )}
+    </>
+  );
+}
+
+function RecentCompanyRow({
+  entry,
+  onNavigate,
+}: {
+  entry: RecentCompany;
+  onNavigate: () => void;
+}) {
+  return (
+    <Link
+      href={`/admin/companies/${entry.id}`}
+      role="menuitem"
+      prefetch={false}
+      onClick={onNavigate}
+      className="sidebar-switcher-entry"
+      style={menuRowStyle}
+    >
+      <CompanyMark
+        name={entry.name}
+        color={companyAccent(entry.id)}
+        size={22}
+      />
+      <span style={menuRowNameStyle}>{entry.name}</span>
+    </Link>
   );
 }
