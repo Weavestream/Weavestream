@@ -13,7 +13,11 @@ import {
 } from '../../../../../../lib/server-api';
 import { canWriteCompany } from '../../../../../../lib/roles';
 import { humanSize } from '@weavestream/shared';
-import { PageBody, PageHeader } from '../../../../../../components/shell/page-header';
+import {
+  DetailTitle,
+  PageBody,
+} from '../../../../../../components/shell/page-header';
+import { TopBar } from '../../../../../../components/shell/top-bar';
 import { Icon, LayoutSwatch, Panel, ShowMore, Tag } from '../../../../../../components/ui';
 import { buildTerm } from '../../../../../../lib/term';
 import { companyCrumbs } from '../../../../../../lib/company-crumbs';
@@ -25,7 +29,7 @@ import { vaultLinkLabel, vaultLinkUrl } from '../../../../../../lib/vault-link';
 import { ExternalUrlValue } from '../../../../../../components/assets/external-url-value';
 import { AssetChatContext } from '../../../../../../components/chat-panel/asset-chat-context';
 import { SidebarActive } from '../../../../../../components/shell/sidebar-active';
-import { AssetActions } from './asset-actions';
+import { AssetHeaderActions } from './asset-header-actions';
 import {
   ProvenanceBadge,
   provenanceAttention,
@@ -77,7 +81,7 @@ export default async function AssetDetailPage({
     <>
       <AssetChatContext asset={asset} />
       <SidebarActive id={`layout:${asset.assetLayoutId}`} />
-      <PageHeader
+      <TopBar
         crumbs={companyCrumbs(
           term,
           company,
@@ -88,27 +92,37 @@ export default async function AssetDetailPage({
           },
           { label: asset.name },
         )}
-        leading={
-          <LayoutSwatch
-            icon={asset.layoutIcon}
-            color={asset.layoutColor}
-            size={48}
+        // One row, not two. The asset's own actions ride in the
+        // breadcrumb row beside the global cluster, and the identity
+        // block that used to share the old sub-row now heads the body.
+        right={
+          <AssetHeaderActions
+            companyId={companyId}
+            asset={{
+              id: asset.id,
+              name: asset.name,
+              archivedAt: asset.archivedAt,
+              assetLayoutId: asset.assetLayoutId,
+              externalSource: asset.externalSource,
+              isStarred: asset.isStarred,
+            }}
+            manage={manage}
           />
-        }
-        title={
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 10 }}>
-            {asset.name}
-            {asset.archivedAt && <Tag tone="warn">archived</Tag>}
-          </span>
-        }
-        description={`${asset.layoutName} · updated ${relative(new Date(asset.updatedAt))}${updatedBy ? ` by ${updatedBy.name}` : ''}`}
-        actions={
-          manage ? (
-            <AssetActions asset={asset} />
-          ) : null
         }
       />
       <PageBody>
+        <DetailTitle
+          leading={
+            <LayoutSwatch
+              icon={asset.layoutIcon}
+              color={asset.layoutColor}
+              size={48}
+            />
+          }
+          name={asset.name}
+          tags={asset.archivedAt ? <Tag tone="warn">archived</Tag> : null}
+          meta={`${asset.layoutName} · updated ${relative(new Date(asset.updatedAt))}${updatedBy ? ` by ${updatedBy.name}` : ''}`}
+        />
         <div
           className="detail-grid-main-aside"
           style={{

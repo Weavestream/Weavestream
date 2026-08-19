@@ -15,6 +15,16 @@ overrides:
   # cannot drift onto a release too new to have cleared pnpm's
   # minimum-release-age supply-chain gate.
   postcss: 8.5.19
+  # postcss 8.5.19 depends on nanoid ^3.3.12 and the lockfile settled on
+  # 3.3.16, which carries GHSA-2v37-7h3g-55p8 (a custom `size: 0` generator
+  # loops forever). The range does admit the fix, so this is not a pin the
+  # resolver needs — it is a scope limiter: `pnpm update nanoid -r` reaches
+  # the same nanoid but also bumps 16 unrelated packages (@babel/*,
+  # @codemirror/*, browserslist chain, acorn, ws), which is a far wider
+  # supply-chain delta than one advisory warrants. The override moves
+  # nanoid and nothing else. Drop this entry once postcss's own floor
+  # reaches >=3.3.18. Pinned exactly, for the same reason as above.
+  nanoid: 3.3.18
   # next carries its own optional sharp (^0.34.5) for next/image
   # optimization, which this app does not use — every image is a plain
   # <img> served through the API. That copy still trips the libvips

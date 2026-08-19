@@ -13,9 +13,10 @@ import {
 } from '../../../../../../lib/server-api';
 import { canWriteCompany, hasCapability } from '../../../../../../lib/roles';
 import {
+  DetailTitle,
   PageBody,
-  PageHeader,
 } from '../../../../../../components/shell/page-header';
+import { TopBar } from '../../../../../../components/shell/top-bar';
 import { ErrorBanner, LayoutSwatch, Tag } from '../../../../../../components/ui';
 import { buildTerm } from '../../../../../../lib/term';
 import { companyCrumbs } from '../../../../../../lib/company-crumbs';
@@ -60,7 +61,7 @@ export default async function PasswordDetailPage({
   if (passwordResult.status === 403) {
     return (
       <>
-        <PageHeader
+        <TopBar
           crumbs={companyCrumbs(
             term,
             company,
@@ -70,10 +71,12 @@ export default async function PasswordDetailPage({
             },
             { label: 'Restricted' },
           )}
-          leading={<LayoutSwatch icon="lock" color="var(--muted)" size={48} />}
-          title="Restricted credential"
         />
         <PageBody>
+          <DetailTitle
+            leading={<LayoutSwatch icon="lock" color="var(--muted)" size={48} />}
+            name="Restricted credential"
+          />
           <ErrorBanner
             tone="warn"
             title="You don't have access to this credential"
@@ -109,50 +112,17 @@ export default async function PasswordDetailPage({
 
   return (
     <>
-      <PageHeader
+      <TopBar
         crumbs={companyCrumbs(
           term,
           company,
           { label: 'Passwords', href: `/admin/companies/${companyId}/passwords` },
           { label: password.name },
         )}
-        leading={
-          <LayoutSwatch
-            icon="lock"
-            color={password.color ?? 'var(--accent)'}
-            size={48}
-          />
-        }
-        title={password.name}
-        description={
-          <span style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-            {password.visibleToClients ? (
-              <Tag tone="accent">client-visible</Tag>
-            ) : (
-              <Tag tone="outline">internal</Tag>
-            )}
-            {password.requireReasonToView && (
-              <Tag tone="warn">reason required</Tag>
-            )}
-            {password.archivedAt && <Tag tone="default">archived</Tag>}
-            {password.assetId && (
-              <Tag tone="accent">
-                embedded on
-                <Link
-                  href={`/admin/companies/${companyId}/assets/${password.assetId}`}
-                  style={{
-                    color: 'inherit',
-                    textDecoration: 'underline',
-                    marginLeft: 4,
-                  }}
-                >
-                  asset
-                </Link>
-              </Tag>
-            )}
-          </span>
-        }
-        actions={
+        // One row, not two. The credential's own actions ride in the
+        // breadcrumb row beside the global cluster, and the identity
+        // block that used to share the old sub-row now heads the body.
+        right={
           <PasswordHeaderActions
             companyId={companyId}
             password={password}
@@ -163,6 +133,48 @@ export default async function PasswordDetailPage({
         }
       />
       <PageBody>
+        <DetailTitle
+          leading={
+            <LayoutSwatch
+              icon="lock"
+              color={password.color ?? 'var(--accent)'}
+              size={48}
+            />
+          }
+          name={password.name}
+          // These describe the credential — who can see it, whether a
+          // reason is required, where it is embedded — so they sit with
+          // its name now that the row they shared with the buttons is
+          // gone.
+          tags={
+            <>
+              {password.visibleToClients ? (
+                <Tag tone="accent">client-visible</Tag>
+              ) : (
+                <Tag tone="outline">internal</Tag>
+              )}
+              {password.requireReasonToView && (
+                <Tag tone="warn">reason required</Tag>
+              )}
+              {password.archivedAt && <Tag tone="default">archived</Tag>}
+              {password.assetId && (
+                <Tag tone="accent">
+                  embedded on
+                  <Link
+                    href={`/admin/companies/${companyId}/assets/${password.assetId}`}
+                    style={{
+                      color: 'inherit',
+                      textDecoration: 'underline',
+                      marginLeft: 4,
+                    }}
+                  >
+                    asset
+                  </Link>
+                </Tag>
+              )}
+            </>
+          }
+        />
         <PasswordDetailClient
           companyId={companyId}
           password={password}

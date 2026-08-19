@@ -3,16 +3,34 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { apiFetch } from '../../../../../../lib/api';
-import {
-  Btn,
-  Dialog,
-  Icon,
-  StarButton,
-  useToast,
-} from '../../../../../../components/ui';
-import type { AssetSummary } from '../../../../../../lib/server-api';
+import { Btn, Dialog, useToast } from '../../../../../../components/ui';
 
-export function AssetActions({ asset }: { asset: AssetSummary }) {
+/**
+ * Archive / restore / purge for a single asset: the mutations plus both
+ * confirm dialogs, without any triggers.
+ *
+ * The caller supplies the triggers. `AssetHeaderActions` renders
+ * Restore as its primary button and Archive / Delete forever as rows in
+ * the overflow menu, so the five-button shelf this file used to export
+ * has no consumer left.
+ *
+ * Mirrors `useArticleArchive` in
+ * `apps/web/src/app/admin/companies/[id]/articles/article-actions.tsx`.
+ * The purge endpoint requires the asset to be archived first — the UI
+ * gates that here so the destructive action only appears on an archived
+ * asset, and only fires after a type-the-name confirmation.
+ */
+type AssetLite = {
+  id: string;
+  companyId: string;
+  name: string;
+  archivedAt: string | null;
+  assetLayoutId: string;
+  /** Integration that owns this asset, if any. Warns on the purge confirm. */
+  externalSource: string | null;
+};
+
+export function useAssetArchive({ asset }: { asset: AssetLite }) {
   const router = useRouter();
   const toast = useToast();
   const [confirming, setConfirming] = useState(false);
@@ -20,20 +38,20 @@ export function AssetActions({ asset }: { asset: AssetSummary }) {
   const [pending, setPending] = useState(false);
   const [purgeText, setPurgeText] = useState('');
 
+  const archived = !!asset.archivedAt;
+
   async function toggleArchive() {
     setPending(true);
-    const path = asset.archivedAt
+    const path = archived
       ? `/companies/${asset.companyId}/assets/${asset.id}/restore`
       : `/companies/${asset.companyId}/assets/${asset.id}`;
-    const res = await apiFetch(path, {
-      method: asset.archivedAt ? 'POST' : 'DELETE',
-    });
+    const res = await apiFetch(path, { method: archived ? 'POST' : 'DELETE' });
     setPending(false);
     if (!res.ok) {
       toast.push('Operation failed.', 'danger');
       return;
     }
-    toast.push(asset.archivedAt ? 'Asset restored.' : 'Asset archived.', 'ok');
+    toast.push(archived ? 'Asset restored.' : 'Asset archived.', 'ok');
     setConfirming(false);
     router.refresh();
   }
@@ -63,66 +81,12 @@ export function AssetActions({ asset }: { asset: AssetSummary }) {
 
   const purgeConfirmReady = purgeText.trim() === asset.name.trim();
 
-  return (
+  const dialogs = (
     <>
-      <StarButton
-        entityType="asset"
-        entityId={asset.id}
-        initialStarred={asset.isStarred}
-        showLabel
-        iconSize={14}
-      />
-      {!asset.archivedAt && (
-        <Btn
-          kind="outline"
-          size="md"
-          icon={Icon.edit}
-          onClick={() =>
-            router.push(
-              `/admin/companies/${asset.companyId}/assets/${asset.id}/edit`,
-            )
-          }
-        >
-          Edit
-        </Btn>
-      )}
-      <Btn
-        kind={asset.archivedAt ? 'solid' : 'outline'}
-        size="md"
-        icon={asset.archivedAt ? Icon.check : Icon.archive}
-        onClick={() => setConfirming(true)}
-      >
-        {asset.archivedAt ? 'Restore' : 'Archive'}
-      </Btn>
-      {asset.archivedAt && (
-        <Btn
-          kind="danger"
-          size="md"
-          icon={Icon.trash}
-          onClick={() => {
-            setPurgeText('');
-            setPurging(true);
-          }}
-        >
-          Delete forever
-        </Btn>
-      )}
-      <Btn
-        kind="primary"
-        size="md"
-        icon={Icon.plus}
-        onClick={() =>
-          router.push(
-            `/admin/companies/${asset.companyId}/assets/new?layout=${asset.assetLayoutId}`,
-          )
-        }
-      >
-        New
-      </Btn>
       <Dialog
         open={confirming}
         onClose={() => !pending && setConfirming(false)}
-        title={asset.archivedAt ? 'Restore asset?' : 'Archive asset?'}
+        title={archived ? 'Restore asset?' : 'Archive asset?'}
         footer={
           <>
             <Btn
@@ -133,11 +97,11 @@ export function AssetActions({ asset }: { asset: AssetSummary }) {
               Cancel
             </Btn>
             <Btn
-              kind={asset.archivedAt ? 'primary' : 'danger'}
+              kind={archived ? 'primary' : 'danger'}
               loading={pending}
               onClick={toggleArchive}
             >
-              {asset.archivedAt ? 'Restore' : 'Archive'}
+              {archived ? 'Restore' : 'Archive'}
             </Btn>
           </>
         }
@@ -150,7 +114,7 @@ export function AssetActions({ asset }: { asset: AssetSummary }) {
             lineHeight: 1.5,
           }}
         >
-          {asset.archivedAt
+          {archived
             ? `${asset.name} will reappear in the asset list and become editable again.`
             : `${asset.name} will be hidden from the default list view. Field values and Relation links are preserved and can be restored at any time.`}
         </p>
@@ -245,4 +209,17 @@ export function AssetActions({ asset }: { asset: AssetSummary }) {
       </Dialog>
     </>
   );
+
+  return {
+    archived,
+    /** Opens the archive-or-restore confirm, whichever applies. */
+    requestArchiveToggle: () => setConfirming(true),
+    /** Opens the type-the-name permanent-delete confirm. */
+    requestPurge: () => {
+      setPurgeText('');
+      setPurging(true);
+    },
+    /** Render once, anywhere in the caller's tree. */
+    dialogs,
+  };
 }

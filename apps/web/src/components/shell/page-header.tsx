@@ -134,3 +134,80 @@ export function PageBody({ children }: { children: ReactNode }) {
     </div>
   );
 }
+
+/**
+ * The record's identity block — swatch, name, status tags, meta line —
+ * at the head of a detail page's body.
+ *
+ * `PageHeader` above carries this in a second header row, next to a
+ * shelf of action buttons. Detail pages that have moved to the one-row
+ * header render `TopBar` themselves, put one primary action plus an
+ * overflow menu in its `right` slot, and render this as the first child
+ * of `PageBody` instead. The chrome is one row again, and the record's
+ * own identity scrolls with the content it names.
+ *
+ * Status tags sit beside the name rather than under it: they describe
+ * the record, and the row they used to share is gone.
+ */
+export function DetailTitle({
+  leading,
+  name,
+  tags,
+  meta,
+}: {
+  // Left-side decoration spanning the block — a layout swatch, a lock.
+  leading?: ReactNode;
+  name: ReactNode;
+  // Status tags, inline with the name.
+  tags?: ReactNode;
+  // One line under the name — record type, timestamp, author.
+  meta?: ReactNode;
+}) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 14, minWidth: 0 }}>
+      {leading && (
+        <div style={{ display: 'flex', alignItems: 'center', flexShrink: 0 }}>
+          {leading}
+        </div>
+      )}
+      <div style={{ minWidth: 0 }}>
+        <h1
+          style={{
+            margin: 0,
+            display: 'flex',
+            alignItems: 'center',
+            flexWrap: 'wrap',
+            gap: 10,
+            fontFamily: 'var(--font-display)',
+            fontSize: 26,
+            lineHeight: 1.15,
+            fontWeight: 600,
+            letterSpacing: -0.5,
+            color: 'var(--text)',
+          }}
+        >
+          {/*
+            `anywhere` rather than `break-word`: asset names are often
+            one unbroken token (ACM-DB01.acme.internal) and a 26px
+            unbreakable string overflows the column at 390px.
+          */}
+          <span style={{ minWidth: 0, overflowWrap: 'anywhere' }}>{name}</span>
+          {tags}
+        </h1>
+        {meta && (
+          <div
+            style={{
+              marginTop: 4,
+              fontFamily: 'var(--font-mono)',
+              fontSize: 11.5,
+              lineHeight: 1.4,
+              color: 'var(--muted)',
+            }}
+          >
+            {meta}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
