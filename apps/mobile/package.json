@@ -10,7 +10,7 @@
     "preview": "vite preview",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.spec.json",
-    "test": "jest --passWithNoTests"
+    "test": "node --no-sparkplug ./node_modules/jest/bin/jest.js --passWithNoTests"
   },
   "dependencies": {
     "@fontsource/geist-mono": "^5.3.0",

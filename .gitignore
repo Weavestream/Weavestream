@@ -50,6 +50,7 @@ docs/permissions.md
 .cursor/rules/
 .zed
 .zed/rules/
+.design
 
 # Mobile PWA build output, published into apps/web by
 # apps/mobile/scripts/emit-to-web.mjs. All three are generated:

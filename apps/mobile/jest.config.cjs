@@ -1,3 +1,32 @@
+/** The `test` script in package.json starts Jest with
+ *  `node --no-sparkplug` instead of the `jest` bin. Do not simplify it
+ *  back to `jest`.
+ *
+ *  Node 24.18.0 (V8 13.6.233.17) segfaults a worker in roughly 1 run in
+ *  12. A Sparkplug prologue stack check finalizes incremental marking,
+ *  and the mark phase then walks the not-yet-initialized baseline frame
+ *  as if every slot held a tagged pointer:
+ *  `ClearStaleLeftTrimmedPointerVisitor` reads a garbage word and
+ *  dereferences it (SIGSEGV at 0x6 / 0xe). All 27 crashes seen carried
+ *  that identical stack. The suite that dies is whichever one the doomed
+ *  worker held, which is why every one of them passes in isolation.
+ *
+ *  `--no-sparkplug` removes that frame type from the crash stack: 0
+ *  crashes in 60 runs, and 0 in 24 runs under
+ *  `--stress-incremental-marking`, a flag that lifts the unmitigated rate
+ *  to 58%. It costs nothing measurable (~2.1s either way) — Sparkplug
+ *  does not repay its own tier-up inside a 2-second process. jest-worker
+ *  forwards the parent's execArgv to each worker, so the flag must sit on
+ *  the `node` command line; NODE_OPTIONS refuses it.
+ *
+ *  Pinning `maxWorkers` does NOT fix this (4 workers: 6/12, 2 workers:
+ *  3/12), and neither does moving the jsdom specs into their own project
+ *  — the 53 jsdom specs crash 7/12 on their own. apps/web holds the same
+ *  latent bug (2/12 when amplified) and only stays quiet because 29 jsdom
+ *  specs sit below the threshold. Revisit when Node ships a V8 later than
+ *  13.6.233.17.
+ */
+
 /** Mirrors apps/web's setup: Jest 30 + ts-jest, no vitest anywhere in
  *  this monorepo. Default environment is node; component/auth specs opt
  *  into jsdom with a `@jest-environment jsdom` docblock, the same pattern
