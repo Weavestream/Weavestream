@@ -13,6 +13,24 @@ All notable changes to Weavestream are documented here. The format follows [Keep
 
 ## [Unreleased]
 
+## [1.9.5] - 2026-08-19
+
+### Added
+
+- **Recent companies navigation menu.** Added a recent companies selector to the top navigation bar scope chip, backed by a dedicated `/companies/recents` API endpoint, enabling operators to quickly navigate between recently visited organizations.
+- **Unified action overflow menus.** Introduced a shared `OverflowMenu` component and standardized `PageHeader` layouts across article, asset, and password detail pages, consolidating header actions into clean dropdown menus.
+- **Responsive layout breakpoints system.** Added responsive breakpoint utilities (`lib/breakpoints.ts`) and unified sidebar toolbar icon styling using `data-*` attribute states (`data-active`, `data-starred`).
+
+### Changed
+
+- **Password management interface and strength meter.** Refactored password detail views and browser layouts with an enhanced password strength meter, refreshed primary button styling (`.btn-primary`), updated folder action dialogs, and clearer action label text.
+- **Standardized integration write actors.** Unified `IntegrationWriteActor` usage across native asset, article, IPAM subnet, and export data writers to ensure consistent audit attribution and missing-actor fallback handling during integration syncs.
+- **Web utility consolidation and dead code cleanup.** Consolidated duplicated web helpers (`problemMessage`, `humanSize`, `relativeTime`, `slugify`) into shared packages, removed obsolete exports, and added Knip tooling (`pnpm deadcode`) for workspace maintenance.
+
+### Fixed
+
+- **Node.js test runner segmentation fault.** Updated the test script to pass `--no-sparkplug` to Node.js, resolving a V8 incremental marking crash (SIGSEGV) in Node 24.18 under Jest worker test execution.
+
 ## [1.9.4] - 2026-08-05
 
 ### Added
@@ -747,7 +765,9 @@ Initial public release.
 
 ---
 
-[Unreleased]: https://github.com/Weavestream/Weavestream/compare/v1.9.3...HEAD
+[Unreleased]: https://github.com/Weavestream/Weavestream/compare/v1.9.5...HEAD
+[1.9.5]: https://github.com/Weavestream/Weavestream/releases/tag/v1.9.5
+[1.9.4]: https://github.com/Weavestream/Weavestream/releases/tag/v1.9.4
 [1.9.3]: https://github.com/Weavestream/Weavestream/releases/tag/v1.9.3
 [1.9.2]: https://github.com/Weavestream/Weavestream/releases/tag/v1.9.2
 [1.9.1]: https://github.com/Weavestream/Weavestream/releases/tag/v1.9.1
