@@ -17,6 +17,7 @@ import {
   useToast,
   type DataColumn,
 } from '../../../../../../components/ui';
+import { weekCappedRelative as relative } from '../../../../../../lib/relative-time';
 
 /**
  * Lists tab for a Cloudflare integration. Mirrors the asset-import
@@ -345,14 +346,4 @@ function DriftStatusTag({
       unknown
     </Tag>
   );
-}
-
-function relative(iso: string): string {
-  const diff = Date.now() - new Date(iso).getTime();
-  const day = 86_400_000;
-  if (diff < 60_000) return 'just now';
-  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
-  if (diff < day) return `${Math.floor(diff / 3_600_000)}h ago`;
-  if (diff < 7 * day) return `${Math.floor(diff / day)}d ago`;
-  return `${Math.floor(diff / (7 * day))}w ago`;
 }

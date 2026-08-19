@@ -13,6 +13,7 @@
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",
     "audit": "pnpm audit --prod --audit-level=high",
+    "deadcode": "knip --workspace apps/web",
     "keygen": "node scripts/keygen.mjs",
     "prisma:generate": "pnpm --filter @weavestream/db prisma:generate",
     "prisma:migrate": "pnpm --filter @weavestream/db prisma:migrate",
@@ -20,6 +21,7 @@
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
+    "knip": "^6.32.2",
     "prettier": "^3.3.3",
     "typescript": "^5.9.0"
   }

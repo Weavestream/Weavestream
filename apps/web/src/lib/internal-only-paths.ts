@@ -9,7 +9,7 @@
  * `/api/v1/ip-rules` CRUD surface (managed through the same proxy) is
  * untouched; only `/api/v1/ip-rules/active` is denied.
  */
-export const INTERNAL_ONLY_API_PATHS: readonly string[] = [
+const INTERNAL_ONLY_API_PATHS: readonly string[] = [
   '/api/v1/ip-rules/active',
   '/api/v1/ip-rules/blocked-report',
 ];

@@ -24,6 +24,7 @@ import { apiFetch } from '../../../../../lib/api';
 import { vaultLinkLabel } from '../../../../../lib/vault-link';
 import { LayoutFilterMenu } from '../../../../../components/layouts/layout-filter-menu';
 import { TagFilterMenu } from '../../../../../components/layouts/tag-filter-menu';
+import { compactRelative as relative } from '../../../../../lib/relative-time';
 
 /**
  * Interactive asset list. URL is the source of truth; every filter
@@ -1486,14 +1487,4 @@ function renderScalar(
   if (Array.isArray(value)) return value.map((v) => String(v)).join(', ');
   if (typeof value === 'object') return JSON.stringify(value);
   return String(value);
-}
-
-function relative(d: Date): string {
-  const diff = Date.now() - d.getTime();
-  const day = 86_400_000;
-  if (diff < day) return 'today';
-  if (diff < 7 * day) return `${Math.floor(diff / day)}d ago`;
-  if (diff < 30 * day) return `${Math.floor(diff / (7 * day))}w ago`;
-  if (diff < 365 * day) return `${Math.floor(diff / (30 * day))}mo ago`;
-  return `${Math.floor(diff / (365 * day))}y ago`;
 }

@@ -8,6 +8,7 @@ import {
   type TagTone,
 } from '../../../../components/ui';
 import type { MonitoredDomain } from '../../../../lib/server-api';
+import { spacedRelativePast as fmtRelativePast } from '../../../../lib/relative-time';
 
 /**
  * Portal-side domains list. Read-only — the API already filters out
@@ -163,16 +164,4 @@ function fmtRelativeFuture(iso: string | null): string | undefined {
   if (days < 30) return `in ${days} days`;
   if (days < 365) return `in ${Math.round(days / 30)} months`;
   return `in ${Math.round(days / 365)} years`;
-}
-
-function fmtRelativePast(iso: string | null): string | null {
-  if (!iso) return null;
-  const diff = Date.now() - new Date(iso).getTime();
-  const mins = Math.round(diff / 60_000);
-  if (mins < 1) return 'just now';
-  if (mins < 60) return `${mins} min ago`;
-  const hrs = Math.round(mins / 60);
-  if (hrs < 24) return `${hrs} h ago`;
-  const days = Math.round(hrs / 24);
-  return `${days} d ago`;
 }

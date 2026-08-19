@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { AiSettings } from '@weavestream/shared';
 import { apiFetch } from '../../../../lib/api';
 import { Btn, Field, Input, Select, Tag, useToast } from '../../../../components/ui';
+import { extractProblemMessage } from '../../../../lib/api-errors';
 
 export function AiSettingsForm({ initial }: { initial: AiSettings }) {
   const toast = useToast();
@@ -69,7 +70,7 @@ export function AiSettingsForm({ initial }: { initial: AiSettings }) {
     });
     setPending(false);
     if (!res.ok || !res.data) {
-      setError(problemText(res.problem, 'Could not save AI settings.'));
+      setError(extractProblemMessage(res.problem) ?? 'Could not save AI settings.');
       return;
     }
     baseline.current = res.data;
@@ -98,7 +99,7 @@ export function AiSettingsForm({ initial }: { initial: AiSettings }) {
     setTesting(false);
     if (!res.ok || !res.data) {
       setModels(null);
-      setError(problemText(res.problem, 'Could not reach the LLM endpoint.'));
+      setError(extractProblemMessage(res.problem) ?? 'Could not reach the LLM endpoint.');
       return;
     }
     setModels(res.data.models);
@@ -434,13 +435,4 @@ function numOrNull(value: string): number | null {
   if (!trimmed) return null;
   const n = Number(trimmed);
   return Number.isFinite(n) ? Math.trunc(n) : null;
-}
-
-function problemText(problem: unknown, fallback: string): string {
-  if (problem && typeof problem === 'object') {
-    const p = problem as { title?: unknown; detail?: unknown };
-    if (typeof p.detail === 'string') return p.detail;
-    if (typeof p.title === 'string') return p.title;
-  }
-  return fallback;
 }

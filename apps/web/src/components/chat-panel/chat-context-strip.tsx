@@ -2,10 +2,7 @@
 
 import type { CSSProperties } from 'react';
 import { Icon } from '../ui';
-import {
-  useChatPanel,
-  type ChatTab,
-} from './chat-panel-provider';
+import { useChatPanel } from './chat-panel-provider';
 
 /**
  * Current "page" context the LLM will see on the next turn. Locked
@@ -13,40 +10,6 @@ import {
  * registered it. Explicit @-mentions are NOT shown here; they live
  * inline in the message text as `@[Title]` reference tokens.
  */
-// Kept for any older strip-style call sites; the composer now uses the
-// pill directly so context can sit beside the mode control.
-export function ChatContextStrip(_props: { tab: ChatTab }) {
-  const { state } = useChatPanel();
-  if (!state.pageContext) return null;
-  return (
-    <div
-      style={{
-        display: 'flex',
-        flexWrap: 'wrap',
-        gap: 6,
-        alignItems: 'center',
-        padding: '8px 10px',
-        borderTop: '1px solid var(--line)',
-        background: 'var(--panel-2)',
-      }}
-    >
-      <span
-        style={{
-          fontFamily: 'var(--font-mono)',
-          fontSize: 10,
-          color: 'var(--dim)',
-          textTransform: 'uppercase',
-          letterSpacing: 0.4,
-          marginRight: 2,
-        }}
-      >
-        Context
-      </span>
-      <ChatContextPill />
-    </div>
-  );
-}
-
 export function ChatContextPill() {
   const { state } = useChatPanel();
   const pageContext = state.pageContext;
@@ -92,14 +55,12 @@ function Pill({
   icon,
   label,
   subtitle,
-  onRemove,
   locked,
   title,
 }: {
   icon: React.ReactNode;
   label: string;
   subtitle?: string | null;
-  onRemove?: () => void;
   locked?: boolean;
   title?: string;
 }) {
@@ -145,27 +106,6 @@ function Pill({
           {subtitle}
         </span>
       ) : null}
-      {onRemove && (
-        <button
-          type="button"
-          onClick={onRemove}
-          aria-label={`Remove ${label}`}
-          style={{
-            width: 16,
-            height: 16,
-            display: 'grid',
-            placeItems: 'center',
-            border: 'none',
-            background: 'transparent',
-            color: 'var(--dim)',
-            borderRadius: 4,
-            cursor: 'pointer',
-            flexShrink: 0,
-          }}
-        >
-          <Icon.x size={9} />
-        </button>
-      )}
     </span>
   );
 }

@@ -4,6 +4,7 @@ import { useRef, useState } from 'react';
 import type { EmailSettings, SmtpSecurityMode } from '@weavestream/shared';
 import { apiFetch } from '../../../../lib/api';
 import { Btn, Field, Input, Select, Tag, useToast } from '../../../../components/ui';
+import { extractProblemMessage } from '../../../../lib/api-errors';
 
 export function EmailSettingsForm({
   initial,
@@ -65,7 +66,7 @@ export function EmailSettingsForm({
     });
     setPending(false);
     if (!res.ok || !res.data) {
-      setError(problemText(res.problem, 'Could not save email settings.'));
+      setError(extractProblemMessage(res.problem) ?? 'Could not save email settings.');
       return;
     }
     baseline.current = res.data;
@@ -83,7 +84,7 @@ export function EmailSettingsForm({
     });
     setTesting(false);
     if (!res.ok) {
-      setError(problemText(res.problem, 'Could not send test email.'));
+      setError(extractProblemMessage(res.problem) ?? 'Could not send test email.');
       return;
     }
     toast.push('Test email sent.', 'ok');
@@ -326,13 +327,4 @@ function portValue(value: string): number | null {
   if (!trimmed) return null;
   const n = Number(trimmed);
   return Number.isFinite(n) ? n : null;
-}
-
-function problemText(problem: unknown, fallback: string): string {
-  if (problem && typeof problem === 'object') {
-    const p = problem as { title?: unknown; detail?: unknown };
-    if (typeof p.detail === 'string') return p.detail;
-    if (typeof p.title === 'string') return p.title;
-  }
-  return fallback;
 }

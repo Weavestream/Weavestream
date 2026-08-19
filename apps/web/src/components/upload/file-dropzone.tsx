@@ -2,7 +2,8 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { FILE_MULTI_CAP } from '@weavestream/shared';
-import { humanSize, matchesAccept } from '@weavestream/shared/browser';
+import { matchesAccept } from '@weavestream/shared/browser';
+import { humanSize } from '@weavestream/shared';
 import { Icon, Tag } from '../ui';
 import {
   describeUploadError,

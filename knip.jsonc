@@ -1,0 +1,51 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema-jsonc.json",
+
+  // Dead-code checker for the web app. `pnpm deadcode` runs
+  // `knip --workspace apps/web`.
+  //
+  // `--workspace` is NOT web-only on its own: Knip evaluates the named
+  // workspace together with its ancestors AND its dependencies, and
+  // `apps/web` depends on both `@weavestream/shared` and
+  // `@weavestream/mobile`. `ignoreWorkspaces` below is what actually scopes
+  // this to web + the repo root. Broadening to api / worker / packages, and
+  // wiring a CI job, is deliberately not done yet — each needs its own
+  // triage pass first.
+  "ignoreWorkspaces": ["apps/mobile", "packages/shared"],
+
+  "workspaces": {
+    ".": {
+      "entry": ["scripts/*.mjs"],
+      "project": ["scripts/**/*.mjs"]
+    },
+
+    "apps/web": {
+      // Only the two internal component-library barrels are listed. The
+      // Next.js and Jest plugins auto-enable (both packages are declared
+      // here) and contribute the rest — App Router special files, the
+      // metadata routes, `src/proxy.ts`, and BOTH test conventions
+      // (`*.spec.ts` and `*.test.tsx`). Hand-writing those globs is how they
+      // silently go stale: an earlier draft of this file listed only
+      // `*.spec.ts` and would have reported all 28 `.test.tsx` suites as
+      // dead code.
+      "entry": ["src/components/ui/index.ts", "src/components/relations/index.ts"],
+      // `.css` is in `project` so Knip follows stylesheet imports rather
+      // than reporting them as an unresolvable compiled extension.
+      "project": ["src/**/*.{ts,tsx,css}"],
+
+      "ignoreDependencies": [
+        // Backs the `BubbleMenu` imported from `@tiptap/react/menus`; no
+        // direct import of the package itself.
+        "@tiptap/extension-bubble-menu",
+        // No source import by design. It exists so pnpm serialises the
+        // mobile build before web's — see the header of
+        // `apps/web/scripts/check-mobile-bundle.mjs`. Dropping it brings back
+        // the nondeterministic stale-PWA-bundle race.
+        "@weavestream/mobile"
+      ]
+    }
+  }
+
+  // Deliberately NOT set: `ignoreExportsUsedInFile`. It suppresses exactly
+  // the redundant-internal-export class this checker was added to find.
+}

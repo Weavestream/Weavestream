@@ -10,6 +10,7 @@ import {
   type AssetSummary,
 } from '../../../../../lib/server-api';
 import { resolvePortalCompany } from '../../../../../lib/portal-company';
+import { humanSize } from '@weavestream/shared';
 import {
   PageBody,
   PageHeader,
@@ -21,6 +22,7 @@ import { CredentialsPanel } from '../../../../../components/passwords/credential
 import { vaultLinkLabel, vaultLinkUrl } from '../../../../../lib/vault-link';
 import { ExternalUrlValue } from '../../../../../components/assets/external-url-value';
 import { SidebarActive } from '../../../../../components/shell/sidebar-active';
+import { recentRelative as relative } from '../../../../../lib/relative-time';
 
 /**
  * Portal asset detail (read-only mirror of the admin page).
@@ -491,24 +493,6 @@ function FileTileRow({ entries }: { entries: FileFieldValue[] }) {
   );
 }
 
-function humanSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-  return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
-}
-
-function relative(d: Date): string {
-  const diff = Date.now() - d.getTime();
-  const minute = 60_000;
-  const hour = 60 * minute;
-  const day = 24 * hour;
-  if (diff < minute) return 'just now';
-  if (diff < hour) return `${Math.floor(diff / minute)}m ago`;
-  if (diff < day) return `${Math.floor(diff / hour)}h ago`;
-  if (diff < 7 * day) return `${Math.floor(diff / day)}d ago`;
-  return d.toLocaleDateString();
-}
 
 function formatDateField(
   raw: string,

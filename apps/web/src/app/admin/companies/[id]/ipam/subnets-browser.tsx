@@ -16,6 +16,7 @@ import {
   Textarea,
   type DataColumn,
 } from '../../../../../components/ui';
+import { extractProblemDetailOrMessage as problemMsg } from '../../../../../lib/api-errors';
 
 export function SubnetsBrowser({
   companyId,
@@ -584,14 +585,6 @@ function SubnetDialog({
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-function problemMsg(p: unknown): string | null {
-  if (!p || typeof p !== 'object') return null;
-  const obj = p as Record<string, unknown>;
-  if (typeof obj.detail === 'string') return obj.detail;
-  if (typeof obj.message === 'string') return obj.message;
-  return null;
-}
 
 function isValidIpv4(ip: string): boolean {
   const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(ip);

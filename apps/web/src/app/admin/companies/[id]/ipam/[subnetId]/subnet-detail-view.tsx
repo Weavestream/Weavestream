@@ -29,6 +29,7 @@ import {
   ProvenanceBadge,
   provenanceAttention,
 } from '../../../../../../components/integrations/provenance-badge';
+import { extractProblemDetailOrMessage as problemMsg } from '../../../../../../lib/api-errors';
 
 type Tab = 'occupants' | 'reservations' | 'grid';
 
@@ -893,14 +894,6 @@ function MetaItem({
       </span>
     </div>
   );
-}
-
-function problemMsg(p: unknown): string | null {
-  if (!p || typeof p !== 'object') return null;
-  const obj = p as Record<string, unknown>;
-  if (typeof obj.detail === 'string') return obj.detail;
-  if (typeof obj.message === 'string') return obj.message;
-  return null;
 }
 
 function isValidIpv4(ip: string): boolean {

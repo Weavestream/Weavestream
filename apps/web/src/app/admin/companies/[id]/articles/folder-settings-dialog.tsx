@@ -6,6 +6,7 @@ import { folderNameSchema } from '@weavestream/shared';
 import { apiFetch } from '../../../../../lib/api';
 import { Btn, Dialog, Field, Input, Select, useToast } from '../../../../../components/ui';
 import type { FolderNode } from '../../../../../lib/server-api';
+import { extractProblemMessagePreferMessage as problemMessage } from '../../../../../lib/api-errors';
 
 type Cascade = 'unassign' | 'archive';
 type Tab = 'rename' | 'move' | 'archive';
@@ -425,13 +426,4 @@ function buildMoveOptions(
   };
   walk(tree, 0, false);
   return out;
-}
-
-function problemMessage(problem: unknown): string | null {
-  if (!problem || typeof problem !== 'object') return null;
-  const p = problem as { message?: unknown; detail?: unknown; title?: unknown };
-  for (const v of [p.message, p.detail, p.title]) {
-    if (typeof v === 'string' && v.length > 0) return v;
-  }
-  return null;
 }

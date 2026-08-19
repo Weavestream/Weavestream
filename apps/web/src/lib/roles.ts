@@ -8,55 +8,30 @@ import type {
 import { activeMemberships } from '@weavestream/shared';
 import type { Me, Membership } from './server-api';
 
-export type { GlobalAccess, MembershipRole, PlatformCapability, UserRole };
-
-export const OPERATOR_ROLES: UserRole[] = ['SUPER_ADMIN', 'OPERATOR'];
+const OPERATOR_ROLES: UserRole[] = ['SUPER_ADMIN', 'OPERATOR'];
 
 // The access-resolution helpers moved to `packages/shared` (same reason
 // as `initialsFromName` below: `apps/mobile` gates its write UI on them
-// and cannot import out of `apps/web`). Re-exported so the existing
-// call sites keep their `lib/roles` import path and there is exactly
-// one implementation. `ViewerLike` is structural over there — `Me`
+// and cannot import out of `apps/web`). Only the ones web actually
+// imports through `lib/roles` are re-exported here — `activeMembershipFor`,
+// `effectiveCompanyAccess`, `canReadCompany`, `hasAnyCapability`,
+// `CompanyAccess` and `MembershipLike` had no importer on this path and
+// are reached from `@weavestream/shared` directly, which is how mobile
+// already consumes them. `ViewerLike` is structural over there — `Me`
 // still satisfies it, so callers are unaffected.
 export {
   activeMemberships,
-  activeMembershipFor,
-  effectiveCompanyAccess,
-  canReadCompany,
   canWriteCompany,
   hasCapability,
-  hasAnyCapability,
 } from '@weavestream/shared';
-export type {
-  CompanyAccess,
-  MembershipLike,
-  ViewerLike,
-} from '@weavestream/shared';
+export type { ViewerLike } from '@weavestream/shared';
 
 // ───────────────────────────────────────────────────────────────────
 // Role predicates
 // ───────────────────────────────────────────────────────────────────
 
-export function isSuperAdmin(
-  me: Pick<Me, 'role'> | null | undefined,
-): boolean {
-  return !!me && me.role === 'SUPER_ADMIN';
-}
-
 export function isOperator(role: UserRole | string | undefined | null): boolean {
   return !!role && OPERATOR_ROLES.includes(role as UserRole);
-}
-
-export function isContractor(
-  me: Pick<Me, 'role'> | null | undefined,
-): boolean {
-  return !!me && me.role === 'CONTRACTOR';
-}
-
-export function isClientUser(
-  me: Pick<Me, 'role'> | null | undefined,
-): boolean {
-  return !!me && me.role === 'CLIENT_USER';
 }
 
 // ───────────────────────────────────────────────────────────────────

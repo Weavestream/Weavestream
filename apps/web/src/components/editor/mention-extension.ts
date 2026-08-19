@@ -1,5 +1,4 @@
 import Mention, { type MentionNodeAttrs } from '@tiptap/extension-mention';
-import type { Editor, Range } from '@tiptap/react';
 import { ReactRenderer } from '@tiptap/react';
 import { Plugin } from '@tiptap/pm/state';
 import tippy, { type Instance as TippyInstance } from 'tippy.js';
@@ -228,5 +227,3 @@ export function mentionHref(
     return `/portal/${companySlug}/articles/${encodeURIComponent(attrs.slug)}`;
   return `/portal/${companySlug}/articles/by-id/${attrs.id}`;
 }
-
-export type { Editor, Range };

@@ -48,6 +48,7 @@ import { PageHeader } from '../../../../../../components/shell/page-header';
 import { useIsMobile } from '../../../../../../lib/hooks/use-is-mobile';
 import { LayoutSettingsDialog } from '../../layout-settings-dialog';
 import { LayoutArchiveDialog } from '../../layout-archive-dialog';
+import { slugifyFieldSlug as slugify } from '../../../../../../lib/slugify';
 
 type BuilderField = {
   /** Persisted id, or undefined for unsaved rows. */
@@ -87,15 +88,6 @@ function toBuilder(f: LayoutFieldSummary): BuilderField {
     showInTable: f.showInTable,
     options: f.options ?? {},
   };
-}
-
-function slugify(s: string): string {
-  return s
-    .toLowerCase()
-    .replace(/[^a-z0-9\s_]/g, '')
-    .trim()
-    .replace(/\s+/g, '_')
-    .slice(0, 60);
 }
 
 function defaultOptionsFor(kind: FieldType): Record<string, unknown> {

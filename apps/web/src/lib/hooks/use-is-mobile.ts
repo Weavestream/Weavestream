@@ -7,7 +7,7 @@ import { useSyncExternalStore } from 'react';
  * phone-style viewport — the sidebar collapses into a drawer, wide
  * tables become cards, and multi-column forms stack to a single column.
  */
-export const MOBILE_BREAKPOINT_PX = 768;
+const MOBILE_BREAKPOINT_PX = 768;
 
 /**
  * SSR-safe media-query hook. Built on `useSyncExternalStore` so the

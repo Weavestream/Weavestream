@@ -5,6 +5,7 @@ import type {
   ChatConversationSummary,
   ChatToolCallDto,
 } from '@weavestream/shared';
+import { problemMessage } from '@weavestream/shared';
 import { apiFetch } from './api';
 
 /**
@@ -109,14 +110,13 @@ function extractProblemCode(problem: unknown): string | undefined {
   return typeof code === 'string' && code ? code : undefined;
 }
 
+/**
+ * The `detail → message → title` precedence lives in `@weavestream/shared`
+ * because `apps/mobile` needs the identical extraction; only the fallback
+ * wording is web's.
+ */
 function extractProblemMessage(problem: unknown): string {
-  if (!problem || typeof problem !== 'object') return 'Apply failed.';
-  const p = problem as { detail?: unknown; title?: unknown; message?: unknown };
-  for (const key of ['detail', 'message', 'title'] as const) {
-    const v = p[key];
-    if (typeof v === 'string' && v.trim()) return v;
-  }
-  return 'Apply failed.';
+  return problemMessage(problem) ?? 'Apply failed.';
 }
 
 export async function rejectChatToolCall(args: {

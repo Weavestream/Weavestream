@@ -11,6 +11,8 @@
  * `XMLHttpRequest`) but framework-free, hence the `browser/` barrel.
  */
 
+import { humanSize } from '../file-format.js';
+
 export type InitUploadResponse = {
   uploadId: string;
   storageKey: string;
@@ -367,12 +369,4 @@ export function describeUploadError(
     return `Upload of ${who} failed — ${err.message}.`;
   }
   return `Upload of ${who} failed. Please try again.`;
-}
-
-/** `1234` → `"1.2 KB"`. Exported for file tiles (size captions). */
-export function humanSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-  return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
 }

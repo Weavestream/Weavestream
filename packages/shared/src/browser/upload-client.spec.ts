@@ -1,7 +1,6 @@
 import {
   UploadError,
   describeUploadError,
-  humanSize,
   inferMime,
   preflightFile,
 } from './upload-client';
@@ -129,16 +128,5 @@ describe('describeUploadError', () => {
   it('handles plain errors and unknown values safely', () => {
     expect(describeUploadError(new Error('boom'), 'x.pdf')).toContain('boom');
     expect(describeUploadError(undefined, 'x.pdf')).toContain('failed');
-  });
-});
-
-describe('humanSize', () => {
-  it.each([
-    [512, '512 B'],
-    [2048, '2.0 KB'],
-    [3 * 1024 * 1024, '3.0 MB'],
-    [2 * 1024 * 1024 * 1024, '2.00 GB'],
-  ])('%d → %s', (bytes, expected) => {
-    expect(humanSize(bytes as number)).toBe(expected);
   });
 });

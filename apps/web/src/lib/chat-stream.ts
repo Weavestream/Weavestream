@@ -7,10 +7,4 @@
  * import path alive). New code should import from
  * `@weavestream/shared/browser` directly.
  */
-export {
-  streamChatMessage,
-  type ChatStreamErrorOrigin,
-  type ChatStreamHandlers,
-  type ChatStreamMeta,
-  type ChatToolActivity,
-} from '@weavestream/shared/browser';
+export { streamChatMessage, type ChatStreamMeta } from '@weavestream/shared/browser';

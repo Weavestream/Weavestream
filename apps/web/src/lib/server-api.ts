@@ -54,12 +54,7 @@ import {
   unwrapApiResponse,
   unwrapMeResponse,
 } from './api-errors';
-export {
-  API_UNAVAILABLE_DIGEST,
-  ApiUnavailableError,
-  RATE_LIMIT_DIGEST_PREFIX,
-  RateLimitedError,
-} from './api-errors';
+export { ApiUnavailableError, RateLimitedError } from './api-errors';
 
 /**
  * Recognizes the handful of Node `fetch` / undici errors that indicate the
@@ -453,7 +448,7 @@ export type Settings = {
  * unauthenticated /login page). Must match the migration seed defaults
  * in packages/db/prisma/migrations/0006_phase5_system_settings.
  */
-export const DEFAULT_SETTINGS: Settings = {
+const DEFAULT_SETTINGS: Settings = {
   workspaceName: 'My Company',
   workspaceSubtitle: 'workspace',
   tenantTermSingular: 'Company',
@@ -479,7 +474,7 @@ export const getSettings = cache(async (): Promise<Settings> => {
   return res.data;
 });
 
-export const DEFAULT_EMAIL_SETTINGS: EmailSettings = {
+const DEFAULT_EMAIL_SETTINGS: EmailSettings = {
   enabled: false,
   host: null,
   port: null,
@@ -498,7 +493,7 @@ export const getEmailSettings = cache(async (): Promise<EmailSettings> => {
   return res.data;
 });
 
-export const DEFAULT_AI_SETTINGS: AiSettings = {
+const DEFAULT_AI_SETTINGS: AiSettings = {
   enabled: false,
   baseUrl: null,
   defaultModel: null,
@@ -619,7 +614,7 @@ export type CompanyType =
   | 'PARTNER'
   | 'OTHER';
 
-export type CompanyLogo = {
+type CompanyLogo = {
   uploadId: string;
   url: string | null;
   thumbnailUrl: string | null;
@@ -724,19 +719,6 @@ export type UserDetail = UserListItem & {
   }>;
 };
 
-export type MembershipListItem = {
-  id: string;
-  userId: string;
-  companyId: string;
-  role: MembershipRole;
-  expiresAt: string | null;
-  revokedAt: string | null;
-  createdAt: string;
-  updatedAt: string;
-  user: { id: string; name: string; email: string; role: UserRole };
-  company: { id: string; name: string; slug: string; archivedAt: string | null };
-};
-
 export type AuditEntry = {
   id: string;
   createdAt: string;
@@ -771,14 +753,14 @@ export type AuditPage = {
 // to `user.manage`.
 // ───────────────────────────────────────────────────────────────────
 
-export type LoginActivityBucket = {
+type LoginActivityBucket = {
   identifier: string;
   success: number;
   failure: number;
   lastSeen: string;
 };
 
-export type LoginActivityRow = {
+type LoginActivityRow = {
   id: string;
   action: string;
   ip: string | null;
@@ -798,7 +780,7 @@ export type LoginActivity = {
   recent: LoginActivityRow[];
 };
 
-export type LockoutEntry = {
+type LockoutEntry = {
   identifier: string;
   failures: number;
   ttlSeconds: number | null;
@@ -978,7 +960,7 @@ export async function getLayout(
   return res.data;
 }
 
-export type ActorRef = { id: string; name: string };
+type ActorRef = { id: string; name: string };
 
 export type AssetSummary = {
   id: string;
@@ -1262,63 +1244,8 @@ export type ArticleVersionDetail = ArticleVersionSummary & {
   excerpt: string | null;
 };
 
-export async function listArticleVersions(
-  companyId: string,
-  id: string,
-): Promise<ArticleVersionSummary[]> {
-  const res = await serverApiFetch<ArticleVersionSummary[]>(
-    `/companies/${companyId}/articles/${id}/versions`,
-  );
-  if (!res.ok || !res.data) return [];
-  return res.data;
-}
 
-export async function getArticleVersion(
-  companyId: string,
-  id: string,
-  version: number,
-): Promise<ArticleVersionDetail | null> {
-  const res = await serverApiFetch<ArticleVersionDetail>(
-    `/companies/${companyId}/articles/${id}/versions/${version}`,
-  );
-  if (!res.ok || !res.data) return null;
-  return res.data;
-}
-
-export type CompanyMembership = {
-  id: string;
-  role: MembershipRole;
-  expiresAt: string | null;
-  createdAt: string;
-  updatedAt: string;
-  user: {
-    id: string;
-    email: string;
-    name: string;
-    role: UserRole;
-    isActive: boolean;
-    mfaEnabled: boolean;
-  };
-};
-
-/**
- * List active memberships for a company. The endpoint requires the
- * `membership.manage` permission — callers that don't hold it (e.g. a
- * TECH-role user reading an article) will get a 403 back, in which case
- * we return an empty array so the page can fall back to rendering raw
- * user IDs or skipping the authors card entirely.
- */
-export async function listCompanyMemberships(
-  companyId: string,
-): Promise<CompanyMembership[]> {
-  const res = await serverApiFetch<CompanyMembership[]>(
-    `/companies/${companyId}/memberships`,
-  );
-  if (!res.ok || !res.data) return [];
-  return res.data;
-}
-
-export type ArticleLinkState = 'live' | 'versioned' | 'archived' | 'orphan';
+type ArticleLinkState = 'live' | 'versioned' | 'archived' | 'orphan';
 
 export type UploadSummary = {
   id: string;
@@ -1359,7 +1286,7 @@ export type UploadSummary = {
 // Phase 8: monitored domains
 // ---------------------------------------------------------------------
 
-export type DomainStatus = 'OK' | 'EXPIRING' | 'EXPIRED' | 'FAIL' | 'UNKNOWN';
+type DomainStatus = 'OK' | 'EXPIRING' | 'EXPIRED' | 'FAIL' | 'UNKNOWN';
 
 export type MonitoredDomain = {
   id: string;
@@ -1590,7 +1517,7 @@ export async function listDomainAlerts(
 // globalAccess; for any other viewer it 403s and we return `null` so
 // the dashboard can degrade gracefully.
 // ---------------------------------------------------------------------
-export type AdminStats = {
+type AdminStats = {
   companies: number;
   users: number;
   assets: number;
@@ -1609,9 +1536,9 @@ export async function getAdminStats(): Promise<AdminStats | null> {
 // domain (registrar/TLS) expiries. Read-only; no mutating endpoints.
 // ---------------------------------------------------------------------
 
-export type ExpirationStatus = 'EXPIRED' | 'WARNING';
+type ExpirationStatus = 'EXPIRED' | 'WARNING';
 
-export type AssetFieldExpiration = {
+type AssetFieldExpiration = {
   kind: 'asset-field';
   companyId: string;
   companyName: string;
@@ -1632,7 +1559,7 @@ export type AssetFieldExpiration = {
   warnWithinDays: number;
 };
 
-export type DomainExpiration = {
+type DomainExpiration = {
   kind: 'domain';
   companyId: string;
   companyName: string;
@@ -1645,7 +1572,7 @@ export type DomainExpiration = {
   status: ExpirationStatus;
 };
 
-export type PasswordExpiration = {
+type PasswordExpiration = {
   kind: 'password';
   companyId: string;
   companyName: string;
@@ -1927,7 +1854,7 @@ export type SubnetOccupant = {
   fieldName: string;
 };
 
-export type SubnetUtilization = {
+type SubnetUtilization = {
   totalUsable: number;
   claimed: number;
   free: number;
@@ -2082,7 +2009,7 @@ export async function listBackupRuns(): Promise<BackupRunDto[]> {
 export type TicketListItem = import('@weavestream/shared').TicketListDto;
 export type TicketDetail = import('@weavestream/shared').TicketDetailDto;
 export type TicketActivity = import('@weavestream/shared').TicketActivityDto;
-export type TicketListPage = import('@weavestream/shared').TicketListResponse;
+type TicketListPage = import('@weavestream/shared').TicketListResponse;
 export type TicketListFilters =
   import('@weavestream/shared').TicketListFilter;
 
