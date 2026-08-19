@@ -109,7 +109,18 @@ export function AlertsAdminClient({
   }
 
   return (
-    <div>
+    // `flex: 1; min-height: 0` so the DataTable's own fillHeight scroll
+    // region claims the leftover viewport instead of the whole page
+    // scrolling under it — the chain is PageBody -> Panel fillHeight ->
+    // here -> DataTable fillHeight.
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        flex: 1,
+        minHeight: 0,
+      }}
+    >
       <div
         style={{
           padding: '12px 16px',
@@ -140,6 +151,7 @@ export function AlertsAdminClient({
         </div>
       ) : (
         <DataTable
+          fillHeight
           columns={alertColumns({ busyId, toggleEnabled, sendTest, archive, setEditing })}
           rows={alerts}
           renderMobileCard={(a) => (

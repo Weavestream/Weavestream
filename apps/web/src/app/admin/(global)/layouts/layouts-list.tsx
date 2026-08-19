@@ -331,8 +331,22 @@ export function LayoutsList({
 
   return (
     <>
-      <div style={{ opacity: pending ? 0.6 : 1, transition: 'opacity 120ms ease' }}>
+      {/* `flex: 1; min-height: 0` so the DataTable's own fillHeight
+          scroll region can claim the leftover viewport rather than the
+          whole page scrolling under it. Without this the reorder-pending
+          dimmer would be an ordinary block and swallow the chain. */}
+      <div
+        style={{
+          flex: 1,
+          minHeight: 0,
+          display: 'flex',
+          flexDirection: 'column',
+          opacity: pending ? 0.6 : 1,
+          transition: 'opacity 120ms ease',
+        }}
+      >
         <DataTable
+          fillHeight
           columns={columns}
           rows={orderedRows}
           disableSort

@@ -18,6 +18,7 @@ import { spacedRelativePast as fmtRelativePast } from '../../../../lib/relative-
 export function DomainList({ items }: { items: MonitoredDomain[] }) {
   return (
     <DataTable
+      fillHeight
       columns={domainColumns()}
       rows={items}
       renderMobileCard={(d) => (

@@ -75,6 +75,7 @@ export default async function CompanyDomainsPage({
             </span>
           }
           noPad
+          fillHeight
         >
           <DomainsBrowser
             companyId={companyId}

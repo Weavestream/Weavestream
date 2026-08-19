@@ -45,6 +45,7 @@ export default async function PortalDomainsPage({
             </span>
           }
           noPad
+          fillHeight
         >
           {page.items.length === 0 ? <EmptyState /> : <DomainList items={page.items} />}
         </Panel>

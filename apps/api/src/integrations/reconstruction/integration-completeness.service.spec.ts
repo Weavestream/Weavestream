@@ -351,7 +351,7 @@ describe('IntegrationCompletenessService', () => {
       throw new Error('Expected Task 7 article projections.');
     }
     const prisma = completenessPrisma({
-      activeAssetFields: ['address-line-1'], manualAssetFields: [], staleAssetFields: [],
+      activeAssetFields: ['address_line_1'], manualAssetFields: [], staleAssetFields: [],
       activeArticles: [
         { resourceKey: 'scripts', text: script.markdown, exact: true },
         { resourceKey: 'automations', text: automation.markdown, exact: true },

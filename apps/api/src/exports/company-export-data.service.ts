@@ -939,7 +939,7 @@ export class CompanyExportDataService {
         where: {
           companyId,
           asset: { companyId },
-          assetField: { slug: { in: ['interfaces', 'network-addresses'] } },
+          assetField: { slug: { in: [...NETWORK_ADDRESS_SLUGS, 'interfaces'] } },
         },
         select: {
           id: true,
@@ -1024,7 +1024,7 @@ export class CompanyExportDataService {
         current.interfaces.push(...parseBreezeProjection(row.value)
           .map((item) => item['Name']?.trim() ?? '')
           .filter(Boolean));
-      } else if (row.assetField.slug === 'network-addresses') {
+      } else if (NETWORK_ADDRESS_SLUGS.includes(row.assetField.slug)) {
         current.addresses.push(...parseBreezeProjection(row.value));
       }
       projectionsByAsset.set(row.assetId, current);
@@ -1694,14 +1694,24 @@ function endpointKind(type: string): IntegrationTargetKind {
   return 'relation';
 }
 
-const RAW_SOURCE_FIELD_SLUGS = new Set([
-  'breeze-id',
-  'upstream-external-id',
-  'source-revision',
-  'source-fingerprint',
-  'site-id',
-  'host-device-id',
-]);
+// Both spellings of the Breeze network-address projection field, for the
+// same pre-fix-install reason as RAW_SOURCE_FIELD_SLUGS below.
+const NETWORK_ADDRESS_SLUGS = ['network_addresses', 'network-addresses'];
+
+// The Breeze driver minted these slugs kebab-case until the snake_case
+// fix; layouts created before it keep the old spelling until an operator
+// renames them. Both spellings stay reserved so a pre-fix install never
+// starts exporting raw source identifiers to client users.
+const RAW_SOURCE_FIELD_SLUGS = new Set(
+  [
+    'breeze_id',
+    'upstream_external_id',
+    'source_revision',
+    'source_fingerprint',
+    'site_id',
+    'host_device_id',
+  ].flatMap((slug) => [slug, slug.replace(/_/g, '-')]),
+);
 const RAW_SOURCE_FIELD_NAMES = /^(?:breeze id|upstream external id|source revision|source fingerprint|site id|host device id)$/i;
 // Versions 1-8: upstream RMMs increasingly mint UUIDv7 record ids, and
 // RFC 9562 keeps the 10xx variant nibble for v6-v8, so [89ab] still holds.
@@ -1726,7 +1736,7 @@ function safeSynchronizedAssetField(
   // synchronized assets export verbatim.
   if (!integrationAuthored) return { include: true, value };
   if (typeof value !== 'string') return { include: true, value };
-  if (slug === 'interfaces' || slug === 'network-addresses' || value.includes(' | ')) {
+  if (slug === 'interfaces' || NETWORK_ADDRESS_SLUGS.includes(slug) || value.includes(' | ')) {
     const lines = parseBreezeProjection(value).map((row) =>
       Object.entries(row)
         .filter(([key]) => !STRUCTURED_IDENTIFIER_KEY_RE.test(key))

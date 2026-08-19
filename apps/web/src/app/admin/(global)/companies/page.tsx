@@ -54,6 +54,7 @@ export default async function CompaniesPage({
             </span>
           }
           noPad
+          fillHeight
         >
           <CompaniesTable
             rows={items}

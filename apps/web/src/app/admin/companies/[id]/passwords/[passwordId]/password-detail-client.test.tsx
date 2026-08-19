@@ -2,7 +2,10 @@
 import '@testing-library/jest-dom';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { PasswordGeneratorDefaults } from '@weavestream/shared';
-import type { PasswordDetail } from '../../../../../../lib/server-api';
+import type {
+  PasswordDetail,
+  PasswordVersionRow,
+} from '../../../../../../lib/server-api';
 import {
   PasswordDetailClient,
   PasswordHeaderActions,
@@ -110,6 +113,9 @@ jest.mock('../../../../../../components/ui', () => {
     Select: (props: React.SelectHTMLAttributes<HTMLSelectElement>) => (
       <select {...props} />
     ),
+    // Real component, not a stub: it starts collapsed, and the point of
+    // these tests is what a reader sees before opening anything.
+    ShowMore: actual.ShowMore,
     Tag: ({ children }: { children?: React.ReactNode }) => <span>{children}</span>,
     Textarea: (props: React.TextareaHTMLAttributes<HTMLTextAreaElement>) => (
       <textarea {...props} />
@@ -241,6 +247,98 @@ describe('PasswordDetailClient URL row', () => {
     renderDetail('   ');
     expect(screen.queryByRole('link')).not.toBeInTheDocument();
     expect(screen.queryByTitle('Copy URL')).not.toBeInTheDocument();
+  });
+});
+
+function renderWith(
+  overrides: Partial<PasswordDetail>,
+  versions: PasswordVersionRow[] = [],
+) {
+  return render(
+    <PasswordDetailClient
+      companyId="co-1"
+      password={{ ...basePassword, ...overrides }}
+      versions={versions}
+      canManage={false}
+      canManageInternalAccess={false}
+      folderName={null}
+      assetName={null}
+      me={{ id: 'u-1', role: 'OPERATOR' }}
+    />,
+  );
+}
+
+describe('PasswordDetailClient metadata disclosure', () => {
+  it('hides details, internal access, and version history until the reader opens them', () => {
+    renderWith({});
+    // Credentials stays outside the disclosure — it is the record itself.
+    expect(screen.getByText('Credentials')).toBeInTheDocument();
+    for (const title of ['Details', 'Internal access', 'Version history']) {
+      expect(screen.queryByText(title)).not.toBeInTheDocument();
+    }
+
+    fireEvent.click(screen.getByText('show more'));
+
+    for (const title of ['Details', 'Internal access', 'Version history']) {
+      expect(screen.getByText(title)).toBeInTheDocument();
+    }
+  });
+
+  it('shows the breach count without opening anything', () => {
+    // The breach pill rides with the strength meter, not inside the
+    // disclosure: a leaked credential must never need a click to see.
+    renderWith({ pwnedCount: 4 });
+    expect(screen.getByText('pwned ×4')).toBeInTheDocument();
+    expect(screen.queryByText('Details')).not.toBeInTheDocument();
+  });
+
+  it('shows no breach pill when the credential is not in a breach corpus', () => {
+    renderWith({ pwnedCount: null });
+    expect(screen.queryByText(/^pwned ×/)).not.toBeInTheDocument();
+  });
+
+  it('never prints a raw user id when a version author cannot be resolved', () => {
+    // `changedByName` is null only when the user row is gone, which the
+    // app never causes — the old fallback rendered `changedBy`, a bare
+    // uuid, and it read like a name.
+    const orphan: PasswordVersionRow = {
+      version: 2,
+      changedFields: ['password'],
+      changedBy: '8f14e45f-ceea-467a-9f8b-1a2b3c4d5e6f',
+      changedByName: null,
+      changeReason: null,
+      createdAt: '2026-07-02T00:00:00.000Z',
+    };
+    renderWith({}, [orphan, { ...orphan, version: 1, changedByName: 'Real Person' }]);
+    fireEvent.click(screen.getByText('show more'));
+
+    expect(screen.queryByText(orphan.changedBy)).not.toBeInTheDocument();
+    expect(screen.getByText('v2')).toBeInTheDocument();
+
+    // The panel shows only the newest version until asked for the rest.
+    fireEvent.click(screen.getByText('View full history'));
+    expect(screen.queryByText(orphan.changedBy)).not.toBeInTheDocument();
+    // A resolvable author is still named.
+    expect(screen.getByText('Real Person')).toBeInTheDocument();
+  });
+
+  it('opens Details fully — there is no second toggle nested inside the disclosure', () => {
+    // Details used to carry its own "Show more" action. With the whole
+    // panel behind the disclosure, that made one "show more" open
+    // another. The disclosure is now the only control.
+    renderWith({
+      lastRotatedAt: '2026-07-01T00:00:00.000Z',
+      rotationReminderDays: 90,
+    });
+    fireEvent.click(screen.getByText('show more'));
+
+    expect(screen.getByText('Last rotated')).toBeInTheDocument();
+    expect(screen.getByText('Rotation reminder')).toBeInTheDocument();
+    expect(screen.getByText('Created')).toBeInTheDocument();
+    expect(screen.getByText('Updated')).toBeInTheDocument();
+    // 'show less' is the disclosure's own label; nothing else offers one.
+    expect(screen.queryByText('Show more')).not.toBeInTheDocument();
+    expect(screen.queryByText('Show less')).not.toBeInTheDocument();
   });
 });
 

@@ -33,6 +33,7 @@ import {
   OverflowMenu,
   Panel,
   Select,
+  ShowMore,
   StarGlyph,
   Tag,
   Textarea,
@@ -268,7 +269,6 @@ export function PasswordDetailClient({
   const toast = useToast();
   const [, startTransition] = useTransition();
   const [editingInternalAccess, setEditingInternalAccess] = useState(false);
-  const [detailsExpanded, setDetailsExpanded] = useState(false);
   const [versionsExpanded, setVersionsExpanded] = useState(false);
 
   async function copyUsername() {
@@ -361,8 +361,25 @@ export function PasswordDetailClient({
               </div>
 
               <Label>Strength</Label>
-              <div>
+              {/*
+                The breach count sits with the strength meter because both
+                answer the same question — is this secret safe to keep —
+                and both must be readable without opening anything. Same
+                wording and tone as the passwords table, so a row and its
+                detail page agree.
+              */}
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  flexWrap: 'wrap',
+                }}
+              >
                 <PasswordStrengthMeter score={password.passwordStrength} width={220} inline />
+                {(password.pwnedCount ?? 0) > 0 && (
+                  <Tag tone="danger">pwned ×{password.pwnedCount}</Tag>
+                )}
               </div>
 
               {password.hasTotp && (
@@ -470,129 +487,104 @@ export function PasswordDetailClient({
             editable={canManage && !password.archivedAt}
           />
 
-          <Panel
-            title="Details"
-            actions={
-              <button
-                type="button"
-                onClick={() => setDetailsExpanded((v) => !v)}
+          {/*
+            Details, internal access, and version history are system
+            metadata, not the credential itself — the same class the
+            asset and subnet pages already put behind a disclosure.
+            Credentials, notes, linked items, and attachments stay
+            outside it, per the ShowMore contract.
+          */}
+          <ShowMore>
+            <Panel title="Details">
+              <dl
                 style={{
-                  border: 0,
-                  background: 'transparent',
-                  color: 'var(--accent)',
-                  fontSize: 11,
-                  cursor: 'pointer',
-                  padding: 0,
-                  whiteSpace: 'nowrap',
+                  display: 'grid',
+                  gridTemplateColumns: '100px 1fr',
+                  rowGap: 8,
+                  columnGap: 10,
+                  fontSize: 12.5,
+                  margin: 0,
                 }}
               >
-                {detailsExpanded ? 'Show less' : 'Show more'}
-              </button>
-            }
-          >
-            <dl
-              style={{
-                display: 'grid',
-                gridTemplateColumns: '100px 1fr',
-                rowGap: 8,
-                columnGap: 10,
-                fontSize: 12.5,
-                margin: 0,
-              }}
-            >
-              {password.assetId && (
-                <>
-                  <dt style={dt}>Asset</dt>
-                  <dd style={dd}>
-                    <Link
-                      href={`/admin/companies/${companyId}/assets/${password.assetId}`}
-                      style={{ color: 'var(--accent)' }}
-                    >
-                      {assetName ?? 'View asset'}
-                    </Link>
-                  </dd>
-                </>
-              )}
-              <dt style={dt}>Folder</dt>
-              <dd style={dd}>{folderName ?? 'Unfiled'}</dd>
-              {password.tags.length > 0 && (
-                <>
-                  <dt style={dt}>Tags</dt>
-                  <dd style={dd}>
-                    <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-                      {password.tags.map((t) => (
-                        <Tag key={t} tone="outline">
-                          {t}
-                        </Tag>
-                      ))}
-                    </div>
-                  </dd>
-                </>
-              )}
-              {detailsExpanded && (
-                <>
-                  {password.lastRotatedAt && (
-                    <>
-                      <dt style={dt}>Last rotated</dt>
-                      <dd style={dd}>
-                        <FormattedDate value={password.lastRotatedAt} />
-                      </dd>
-                    </>
-                  )}
-                  {password.expiresAt && (
-                    <>
-                      <dt style={dt}>Expires</dt>
-                      <dd style={dd}>
-                        <FormattedCalendarDate value={password.expiresAt} />
-                      </dd>
-                    </>
-                  )}
-                  {password.rotationReminderDays != null && (
-                    <>
-                      <dt style={dt}>Rotation reminder</dt>
-                      <dd style={dd}>{password.rotationReminderDays} days</dd>
-                    </>
-                  )}
-                  {(password.pwnedCount ?? 0) > 0 && (
-                    <>
-                      <dt style={dt}>HIBP</dt>
-                      <dd style={dd}>
-                        <Tag tone="danger">
-                          {/* eslint-disable-next-line no-restricted-syntax -- locale digit grouping on a number, not a date */}
-                          seen in {password.pwnedCount?.toLocaleString()} breaches
-                        </Tag>
-                      </dd>
-                    </>
-                  )}
-                  <dt style={dt}>Created</dt>
-                  <dd style={dd}>
-                    <FormattedDateTime value={password.createdAt} />
-                  </dd>
-                  <dt style={dt}>Updated</dt>
-                  <dd style={dd}>
-                    <FormattedDateTime value={password.updatedAt} />
-                  </dd>
-                </>
-              )}
-            </dl>
-          </Panel>
+                {password.assetId && (
+                  <>
+                    <dt style={dt}>Asset</dt>
+                    <dd style={dd}>
+                      <Link
+                        href={`/admin/companies/${companyId}/assets/${password.assetId}`}
+                        style={{ color: 'var(--accent)' }}
+                      >
+                        {assetName ?? 'View asset'}
+                      </Link>
+                    </dd>
+                  </>
+                )}
+                <dt style={dt}>Folder</dt>
+                <dd style={dd}>{folderName ?? 'Unfiled'}</dd>
+                {password.tags.length > 0 && (
+                  <>
+                    <dt style={dt}>Tags</dt>
+                    <dd style={dd}>
+                      <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                        {password.tags.map((t) => (
+                          <Tag key={t} tone="outline">
+                            {t}
+                          </Tag>
+                        ))}
+                      </div>
+                    </dd>
+                  </>
+                )}
+                {password.lastRotatedAt && (
+                  <>
+                    <dt style={dt}>Last rotated</dt>
+                    <dd style={dd}>
+                      <FormattedDate value={password.lastRotatedAt} />
+                    </dd>
+                  </>
+                )}
+                {password.expiresAt && (
+                  <>
+                    <dt style={dt}>Expires</dt>
+                    <dd style={dd}>
+                      <FormattedCalendarDate value={password.expiresAt} />
+                    </dd>
+                  </>
+                )}
+                {password.rotationReminderDays != null && (
+                  <>
+                    <dt style={dt}>Rotation reminder</dt>
+                    <dd style={dd}>{password.rotationReminderDays} days</dd>
+                  </>
+                )}
+                <dt style={dt}>Created</dt>
+                <dd style={dd}>
+                  <FormattedDateTime value={password.createdAt} />
+                </dd>
+                <dt style={dt}>Updated</dt>
+                <dd style={dd}>
+                  <FormattedDateTime value={password.updatedAt} />
+                </dd>
+              </dl>
+            </Panel>
 
-          <InternalAccessPanel
-            password={password}
-            canManage={canManageInternalAccess && !password.archivedAt}
-            currentUserId={me.id}
-            onEdit={() => setEditingInternalAccess(true)}
-          />
+            <InternalAccessPanel
+              password={password}
+              canManage={canManageInternalAccess && !password.archivedAt}
+              currentUserId={me.id}
+              onEdit={() => setEditingInternalAccess(true)}
+            />
 
-          <VersionHistoryPanel
-            companyId={companyId}
-            passwordId={password.id}
-            versions={versions}
-            canManage={canManage}
-            requiresReason={password.requireReasonToView}
-            expanded={versionsExpanded}
-            onToggleExpanded={() => setVersionsExpanded((v) => !v)}
-          />
+            <VersionHistoryPanel
+              companyId={companyId}
+              passwordId={password.id}
+              versions={versions}
+              canManage={canManage}
+              requiresReason={password.requireReasonToView}
+              expanded={versionsExpanded}
+              onToggleExpanded={() => setVersionsExpanded((v) => !v)}
+            />
+          </ShowMore>
         </div>
       </div>
 
@@ -1119,18 +1111,29 @@ function VersionHistoryItem({
           >
             v{version.version}
           </span>
-          <span
-            title={version.changedByName ?? version.changedBy}
-            style={{
-              fontSize: 12,
-              color: 'var(--muted)',
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-            }}
-          >
-            {version.changedByName ?? version.changedBy}
-          </span>
+          {/*
+            No name, no author line. The old fallback printed
+            `changedBy` — a raw user id — whenever the name would not
+            resolve, which is a defensive branch: the app never
+            hard-deletes a user, and the lookup does not filter
+            deactivated ones. An id on screen tells the reader nothing
+            and reads like a name. The version number and timestamp
+            carry the row on their own.
+          */}
+          {version.changedByName && (
+            <span
+              title={version.changedByName}
+              style={{
+                fontSize: 12,
+                color: 'var(--muted)',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {version.changedByName}
+            </span>
+          )}
         </div>
         <span
           style={{

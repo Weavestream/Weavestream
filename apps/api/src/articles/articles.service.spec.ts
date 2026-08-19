@@ -1748,6 +1748,33 @@ describe('ArticlesService', () => {
       expect(list.every((v) => !v.isDraft)).toBe(true);
     });
 
+    it('serves a sync-written version with no author and a plain sync reason', async () => {
+      // `ArticleVersion.changedBy` is NOT NULL, so the actor id stays in
+      // the row. What must not leave the server is the human name — a
+      // scheduled sync credited the integration's creator — or the raw
+      // `integration:<uuid>`, which would put an internal id on screen.
+      const { svc } = mkSvc({
+        articles: [publishedRow()],
+        versions: [
+          v1Row(),
+          v1Row({ id: 'av-2', version: 2, changeReason: 'integration:int-9' }),
+        ],
+      });
+      const list = await svc.listVersions(actor(), 'c-1', 'art-1');
+      const synced = list.find((v) => v.version === 2)!;
+      const human = list.find((v) => v.version === 1)!;
+
+      // The actor id stays in the row — the column is NOT NULL — but no
+      // name is served for it.
+      expect(synced.changedBy).toBe('u-1');
+      expect(synced.changedByName).toBeNull();
+      expect(synced.changeReason).toBe('sync');
+      expect(synced.changeReason).not.toContain('int-9');
+      // A human version keeps its own reason; the suppression is scoped
+      // to the integration prefix, not applied to every row.
+      expect(human.changeReason).toBe('initial version');
+    });
+
     it('listVersions returns NotFound for CLIENT_USER on a hidden article', async () => {
       const { svc } = mkSvc({
         articles: [publishedRow({ visibleToClients: false })],

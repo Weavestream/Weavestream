@@ -36,6 +36,7 @@ export default async function PortalIpamPage({
             </span>
           }
           noPad
+          fillHeight
         >
           {subnets.length === 0 ? (
             <div

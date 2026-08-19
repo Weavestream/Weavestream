@@ -481,6 +481,41 @@ describe('AssetsService integration system writes', () => {
     }));
   });
 
+  it('leaves the actor columns null on create and on update, and still audits the resolved actor', async () => {
+    // `auditActorId` resolves to `run.triggeredBy ?? run.integration.createdBy`,
+    // so a scheduled run resolves it to whoever created the integration.
+    // Stamping that id here made every sync read as "updated by <that
+    // person>" on surfaces that render an actor. The audit row still
+    // carries them, so the write stays attributable.
+    const onCreate = setup();
+    await expect(onCreate.service.writeFromIntegration(input)).resolves.toMatchObject({
+      change: 'created',
+    });
+    expect(onCreate.tx.asset.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ createdBy: null, updatedBy: null }),
+    }));
+    expect(onCreate.audit.logWithClient).toHaveBeenCalledWith(
+      onCreate.tx,
+      expect.objectContaining({ actorId: ids.actor }),
+    );
+
+    const onUpdate = setup({
+      target: asset({ name: 'Old Edge' }),
+      binding: binding({ state: 'blocked', provenance: fullProvenance('blocked') }),
+    });
+    await expect(onUpdate.service.writeFromIntegration({
+      ...input,
+      existingTargetId: ids.asset,
+    })).resolves.toMatchObject({ change: 'updated' });
+    expect(onUpdate.tx.asset.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ updatedBy: null }),
+    }));
+    expect(onUpdate.audit.logWithClient).toHaveBeenCalledWith(
+      onUpdate.tx,
+      expect.objectContaining({ actorId: ids.actor }),
+    );
+  });
+
   it('re-reads and re-merges when an operator edit lands between read and write', async () => {
     const checksum = (value: unknown) =>
       createHash('sha256').update(JSON.stringify(value ?? null)).digest('hex');

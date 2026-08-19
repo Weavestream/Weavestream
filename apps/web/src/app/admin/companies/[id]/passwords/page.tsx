@@ -82,6 +82,7 @@ export default async function CompanyPasswordsPage({
             </span>
           }
           noPad
+          fillHeight
         >
           <PasswordsBrowser
             companyId={companyId}

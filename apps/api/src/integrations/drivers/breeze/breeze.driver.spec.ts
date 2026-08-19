@@ -1,5 +1,6 @@
 import type { FetchRecordsContext, IntegrationContext } from '../integration-driver.js';
-import { driverDescriptorSchema } from '@weavestream/shared';
+import { driverDescriptorSchema, fieldSlugSchema, layoutSlugSchema } from '@weavestream/shared';
+import { assertRecommendedDestinations } from '../driver-utils.js';
 import { BreezeDriver } from './breeze.driver.js';
 import {
   BreezeBoundedDefinitionError,
@@ -354,24 +355,24 @@ describe('BreezeDriver descriptor', () => {
 
   it('recommends deterministic site/device destinations without status or last-seen fields', () => {
     const recommendations = new BreezeDriver().recommendedDestinations;
-    expect(recommendations?.sites?.layout.slug).toBe('breeze-sites');
-    expect(recommendations?.devices?.layout.slug).toBe('breeze-devices');
-    expect(recommendations?.['device-inventory']?.layout.slug).toBe('breeze-devices');
+    expect(recommendations?.sites?.layout.slug).toBe('breeze_sites');
+    expect(recommendations?.devices?.layout.slug).toBe('breeze_devices');
+    expect(recommendations?.['device-inventory']?.layout.slug).toBe('breeze_devices');
     const serialized = JSON.stringify(recommendations).toLowerCase();
     expect(serialized).not.toMatch(
       /live.?status|last.?seen|heartbeat|uptime|alert|vulnerab|patch|metric|session|command/,
     );
     expect(recommendations?.devices?.fields).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ slug: 'breeze-id' }),
+        expect.objectContaining({ slug: 'breeze_id' }),
         expect.objectContaining({ slug: 'hostname' }),
-        expect.objectContaining({ slug: 'warranty-ends-on', options: { isExpiry: true } }),
-        expect.objectContaining({ slug: 'installed-software' }),
+        expect.objectContaining({ slug: 'warranty_ends_on', options: { isExpiry: true } }),
+        expect.objectContaining({ slug: 'installed_software' }),
       ]),
     );
     expect(recommendations?.['device-inventory']?.fields).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ slug: 'warranty-subscription', fieldType: 'BOOLEAN' }),
+        expect.objectContaining({ slug: 'warranty_subscription', fieldType: 'BOOLEAN' }),
       ]),
     );
     expect(recommendations?.['network-equipment']?.fields).toEqual(
@@ -385,10 +386,62 @@ describe('BreezeDriver descriptor', () => {
     );
     expect(recommendations?.['virtual-machines']?.fields).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ slug: 'rct-enabled', fieldType: 'BOOLEAN' }),
-        expect.objectContaining({ slug: 'passthrough-disks', fieldType: 'BOOLEAN' }),
+        expect.objectContaining({ slug: 'rct_enabled', fieldType: 'BOOLEAN' }),
+        expect.objectContaining({ slug: 'passthrough_disks', fieldType: 'BOOLEAN' }),
       ]),
     );
+  });
+
+  // The driver used to mint kebab-case slugs. `ensureResourceDestination`
+  // writes layouts and fields straight through Prisma, so nothing on that
+  // path re-validates them and every activation created rows the layout
+  // builder and the `field.<slug>=` filter DSL both reject.
+  it('recommends only snake_case layout and field slugs', () => {
+    const recommendations = new BreezeDriver().recommendedDestinations ?? {};
+    for (const [resourceKey, destination] of Object.entries(recommendations)) {
+      expect({ resourceKey, slug: destination.layout.slug }).toEqual({
+        resourceKey,
+        slug: expect.stringMatching(/^[a-z][a-z0-9]*(_[a-z0-9]+)*$/),
+      });
+      expect(layoutSlugSchema.safeParse(destination.layout.slug).success).toBe(true);
+      for (const field of destination.fields) {
+        expect({ resourceKey, slug: field.slug }).toEqual({
+          resourceKey,
+          slug: expect.stringMatching(/^[a-z][a-z0-9]*(_[a-z0-9]+)*$/),
+        });
+        expect(fieldSlugSchema.safeParse(field.slug).success).toBe(true);
+      }
+    }
+  });
+
+  it('rejects a driver whose recommendation reintroduces a kebab-case slug', () => {
+    expect(() =>
+      assertRecommendedDestinations('breeze', {
+        devices: {
+          layout: { name: 'Breeze Devices', slug: 'breeze-devices', icon: 'monitor', color: 'iris' },
+          fields: [],
+        },
+      }),
+    ).toThrow(/layout slug "breeze-devices" is invalid/);
+    expect(() =>
+      assertRecommendedDestinations('breeze', {
+        devices: {
+          layout: { name: 'Breeze Devices', slug: 'breeze_devices', icon: 'monitor', color: 'iris' },
+          fields: [
+            {
+              sourceField: 'breezeId',
+              name: 'Breeze ID',
+              slug: 'breeze-id',
+              fieldType: 'TEXT',
+              syncDirection: 'source_wins',
+              isPrimary: false,
+              showInTable: false,
+              options: {},
+            },
+          ],
+        },
+      }),
+    ).toThrow(/field slug "breeze-id" is invalid/);
   });
 });
 

@@ -66,10 +66,10 @@ describe('CompanyExportDataService reconstruction export', () => {
         id: 'field-value-addresses',
         companyId: ids.company,
         assetId: ids.assetA,
-        assetFieldId: 'field-network-addresses',
+        assetFieldId: 'field-network_addresses',
         value: addressesValue,
         asset: { id: ids.assetA, companyId: ids.company, name: 'APP-01' },
-        assetField: { name: 'Network Address History', slug: 'network-addresses', fieldType: 'TEXTAREA' },
+        assetField: { name: 'Network Address History', slug: 'network_addresses', fieldType: 'TEXTAREA' },
       },
     ]);
     prisma.relation.findMany.mockResolvedValueOnce([
@@ -108,7 +108,7 @@ describe('CompanyExportDataService reconstruction export', () => {
         targetName: 'APP-01',
         fieldChecksums: {
           'field-interfaces': assetFieldChecksum(interfacesValue),
-          'field-network-addresses': assetFieldChecksum(addressesValue),
+          'field-network_addresses': assetFieldChecksum(addressesValue),
         },
       }),
     ]);
@@ -184,7 +184,7 @@ describe('CompanyExportDataService reconstruction export', () => {
     expect(prisma.assetFieldValue.findMany).toHaveBeenCalledWith(expect.objectContaining({
       where: expect.objectContaining({
         companyId: ids.company,
-        assetField: { slug: { in: ['interfaces', 'network-addresses'] } },
+        assetField: { slug: { in: ['network_addresses', 'network-addresses', 'interfaces'] } },
       }),
     }));
     expect(prisma.relation.findMany).toHaveBeenCalledWith(expect.objectContaining({

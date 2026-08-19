@@ -207,7 +207,18 @@ export function SubnetsBrowser({
   }
 
   return (
-    <div>
+    // `flex: 1; min-height: 0` so the DataTable's own fillHeight scroll
+    // region claims the leftover viewport instead of the whole page
+    // scrolling under it — the chain is PageBody -> Panel fillHeight ->
+    // here -> DataTable fillHeight.
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        flex: 1,
+        minHeight: 0,
+      }}
+    >
       {error && (
         <div role="alert" style={{ padding: '8px 16px', color: 'var(--danger)', fontSize: 13 }}>
           {error}
@@ -215,6 +226,7 @@ export function SubnetsBrowser({
       )}
 
       <DataTable
+        fillHeight
         columns={columns}
         rows={rows}
         empty="No subnets yet. Add one to start tracking IP address space."

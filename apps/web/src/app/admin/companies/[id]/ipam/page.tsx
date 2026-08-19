@@ -64,6 +64,7 @@ export default async function CompanyIpamPage({
             </span>
           }
           noPad
+          fillHeight
         >
           <SubnetsBrowser
             companyId={companyId}

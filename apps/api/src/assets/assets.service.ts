@@ -35,6 +35,7 @@ import { StarsService } from '../stars/stars.service.js';
 import { TagsService } from '../tags/tags.service.js';
 import { buildAssetZodSchema } from './build-asset-schema.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
+import { INTEGRATION_WRITE_ACTOR } from '../common/integration-write-actor.js';
 import { expandMatchValueVariants } from '../integrations/match-resolver.service.js';
 import { hasEligibleNativeBinding } from '../integrations/reconstruction/native-binding-ownership.js';
 
@@ -958,8 +959,8 @@ export class AssetsService {
               name: input.name,
               externalId: input.externalId,
               externalSource: input.externalSource ?? null,
-              createdBy: input.auditActorId,
-              updatedBy: input.auditActorId,
+              createdBy: INTEGRATION_WRITE_ACTOR,
+              updatedBy: INTEGRATION_WRITE_ACTOR,
             },
           });
         } catch (error) {
@@ -1052,7 +1053,7 @@ export class AssetsService {
                       externalSource: input.externalSource ?? null,
                     }
                   : {}),
-                updatedBy: input.auditActorId,
+                updatedBy: INTEGRATION_WRITE_ACTOR,
               },
             });
           } catch (error) {

@@ -30,7 +30,7 @@ export default async function AlertsPage() {
         description="Configure email alerts for expirations, website availability, and record-lifecycle events. Real-time alerts fire from the audit log; expiration and uptime alerts run on a scheduled scan."
       />
       <PageBody>
-        <Panel noPad>
+        <Panel noPad fillHeight>
           <AlertsAdminClient initialAlerts={alerts} />
         </Panel>
       </PageBody>

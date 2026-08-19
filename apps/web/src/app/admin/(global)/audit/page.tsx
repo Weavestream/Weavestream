@@ -70,7 +70,7 @@ export default async function AuditPage({
         }
       />
       <PageBody>
-        <Panel title={`${total.toLocaleString()} event${total === 1 ? '' : 's'}`} noPad>
+        <Panel title={`${total.toLocaleString()} event${total === 1 ? '' : 's'}`} noPad fillHeight>
           <AuditTable
             rows={rows}
             filters={sp}

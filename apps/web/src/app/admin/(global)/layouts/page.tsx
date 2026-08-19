@@ -85,6 +85,12 @@ export default async function LayoutsPage({
             </Link>
           }
           noPad
+          // Completes the chain the table standard needs: `PageBody` →
+          // `Panel fillHeight` → `DataTable fillHeight`. Without it the
+          // roster grows the whole page, so the sticky `<thead>` has no
+          // scroll container of its own to stick inside and the panel
+          // header scrolls away with it.
+          fillHeight
         >
           <LayoutsList layouts={layouts} canEdit={canEdit} />
         </Panel>

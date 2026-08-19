@@ -33,6 +33,7 @@ import { RelationsService } from '../relations/relations.service.js';
 import { scopedCompanyLookupWhere } from '../ai-tools/entity-scope.js';
 import { diffRemovedUploadIds, extractEmbeddedUploadIds } from './article-uploads.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
+import { INTEGRATION_WRITE_ACTOR } from '../common/integration-write-actor.js';
 import { hasEligibleNativeBinding } from '../integrations/reconstruction/native-binding-ownership.js';
 import { readTargetProvenance } from '../integrations/reconstruction/integration-provenance.service.js';
 
@@ -76,6 +77,31 @@ const INTEGRATION_AUDIT_META: AuditMeta = {
   ip: '0.0.0.0',
   userAgent: 'weavestream-worker/integration-reconstruction',
 };
+
+/**
+ * Reason string stamped on version rows written by reconstruction, and
+ * the only reason no human path can produce — interactive writes use
+ * `initial version`, `autosave draft`, or null, and `changeReason` is
+ * never client-supplied.
+ *
+ * `ArticleVersion.changedBy` is NOT NULL, so unlike `Article.updatedBy`
+ * the actor id cannot be cleared without a migration. It stays in the
+ * row, where it matches the actor the audit trail records. What changes
+ * is what leaves the server: a version written by a sync is served with
+ * no author name, so the history panel stops crediting a person who did
+ * nothing, and with a plain `sync` reason rather than the raw
+ * `integration:<uuid>`, which would put an internal id on screen.
+ */
+const INTEGRATION_CHANGE_REASON_PREFIX = 'integration:';
+const INTEGRATION_CHANGE_REASON_LABEL = 'sync';
+
+function integrationVersionReason(integrationId: string): string {
+  return `${INTEGRATION_CHANGE_REASON_PREFIX}${integrationId}`;
+}
+
+function isIntegrationVersion(changeReason: string | null): boolean {
+  return changeReason?.startsWith(INTEGRATION_CHANGE_REASON_PREFIX) ?? false;
+}
 
 /**
  * Guarded-attempt budget for `writeFromIntegration` when a concurrent
@@ -1088,8 +1114,8 @@ export class ArticlesService {
           data: {
             companyId: input.companyId,
             ...data,
-            createdBy: input.auditActorId,
-            updatedBy: input.auditActorId,
+            createdBy: INTEGRATION_WRITE_ACTOR,
+            updatedBy: INTEGRATION_WRITE_ACTOR,
             // Gate-aware settle/pending stamp; no inline enqueue (see
             // the gate comment above the transaction).
             aiSummaryAt: summaryPending ? null : new Date(),
@@ -1104,7 +1130,7 @@ export class ArticlesService {
             ...this.versionRowBodyFromArticle(row),
             changedFields: [...VERSIONED_FIELDS],
             changedBy: input.auditActorId,
-            changeReason: `integration:${input.integrationId}`,
+            changeReason: integrationVersionReason(input.integrationId),
           },
         });
         await this.audit.logWithClient(tx, {
@@ -1156,7 +1182,7 @@ export class ArticlesService {
               }
             : {}),
           revision: { increment: 1 },
-          updatedBy: input.auditActorId,
+          updatedBy: INTEGRATION_WRITE_ACTOR,
         },
       });
       if (guarded.count === 0) {
@@ -1186,7 +1212,7 @@ export class ArticlesService {
             ...this.versionRowBodyFromArticle(updated),
             changedFields: this.computeChangedFields(bound, updated),
             changedBy: input.auditActorId,
-            changeReason: `integration:${input.integrationId}`,
+            changeReason: integrationVersionReason(input.integrationId),
           },
         });
       }
@@ -2120,6 +2146,7 @@ export class ArticlesService {
     v: ArticleVersion,
     nameById: Map<string, string>,
   ): ArticleVersionSummary {
+    const fromIntegration = isIntegrationVersion(v.changeReason);
     return {
       version: v.version,
       isDraft: v.isDraft,
@@ -2128,8 +2155,10 @@ export class ArticlesService {
       editorMode: v.editorMode as 'tiptap' | 'markdown',
       changedFields: v.changedFields,
       changedBy: v.changedBy,
-      changedByName: nameById.get(v.changedBy) ?? null,
-      changeReason: v.changeReason,
+      changedByName: fromIntegration ? null : nameById.get(v.changedBy) ?? null,
+      changeReason: fromIntegration
+        ? INTEGRATION_CHANGE_REASON_LABEL
+        : v.changeReason,
       createdAt: v.createdAt.toISOString(),
       updatedAt: v.updatedAt.toISOString(),
     };

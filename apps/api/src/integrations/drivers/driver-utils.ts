@@ -1,5 +1,7 @@
 import type { SourceFieldDto } from '@weavestream/shared';
+import { fieldSlugSchema, layoutSlugSchema } from '@weavestream/shared';
 import { DriverRateLimitError } from './integration-driver.js';
+import type { RecommendedDestination } from './integration-driver.js';
 import { safeFetch } from '../../common/egress/safe-fetch.js';
 
 export interface FetchWithRetryOpts {
@@ -136,4 +138,39 @@ function isIsoDateTime(value: string): boolean {
   return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})?$/.test(
     value.trim(),
   );
+}
+
+/**
+ * Validate a driver's recommended destinations against the same slug
+ * contract the layout API enforces.
+ *
+ * `ensureResourceDestination` writes layouts and fields straight through
+ * Prisma, so `layoutSlugSchema` / `fieldSlugSchema` never run on this
+ * path. A driver that ships kebab-case slugs therefore mints rows the
+ * layout builder and the `field.<slug>=` filter DSL both reject. Drivers
+ * call this at module load so a bad constant fails at boot, not after an
+ * operator activates the integration.
+ */
+export function assertRecommendedDestinations<T extends Readonly<Record<string, RecommendedDestination>>>(
+  driverKey: string,
+  destinations: T,
+): T {
+  for (const [resourceKey, destination] of Object.entries(destinations)) {
+    const where = `${driverKey} "${resourceKey}"`;
+    const layout = layoutSlugSchema.safeParse(destination.layout.slug);
+    if (!layout.success) {
+      throw new Error(
+        `${where} layout slug "${destination.layout.slug}" is invalid: ${layout.error.issues[0]!.message}`,
+      );
+    }
+    for (const field of destination.fields) {
+      const parsed = fieldSlugSchema.safeParse(field.slug);
+      if (!parsed.success) {
+        throw new Error(
+          `${where} field slug "${field.slug}" is invalid: ${parsed.error.issues[0]!.message}`,
+        );
+      }
+    }
+  }
+  return destinations;
 }

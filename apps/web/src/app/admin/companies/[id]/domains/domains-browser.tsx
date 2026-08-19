@@ -134,7 +134,18 @@ export function DomainsBrowser({
   }
 
   return (
-    <div>
+    // `flex: 1; min-height: 0` so the DataTable's own fillHeight scroll
+    // region claims the leftover viewport instead of the whole page
+    // scrolling under it — the chain is PageBody -> Panel fillHeight ->
+    // here -> DataTable fillHeight.
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        flex: 1,
+        minHeight: 0,
+      }}
+    >
       {error && (
         <div
           style={{
@@ -161,6 +172,7 @@ export function DomainsBrowser({
         </div>
       ) : (
         <DataTable
+        fillHeight
           columns={domainColumns({
             companyId,
             canManage,

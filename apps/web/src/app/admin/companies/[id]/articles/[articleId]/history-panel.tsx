@@ -215,7 +215,12 @@ export function HistoryPanel({
                         marginBottom: 6,
                       }}
                     >
-                      {v.changedByName ?? 'Unknown'} ·{' '}
+                      {/*
+                        No name rather than "Unknown": a version written
+                        by a sync has no human author, and naming one —
+                        or guessing — is the thing this panel got wrong.
+                      */}
+                      {v.changedByName && <>{v.changedByName} ·{' '}</>}
                       <FormattedDateTime value={v.updatedAt} />
                     </div>
                     {v.changedFields.length > 0 && (
@@ -297,7 +302,7 @@ export function HistoryPanel({
           </h2>
           {preview && (
             <span style={{ color: 'var(--muted)', fontSize: 12 }}>
-              {preview.changedByName ?? 'Unknown'} ·{' '}
+              {preview.changedByName && <>{preview.changedByName} ·{' '}</>}
               <FormattedDateTime value={preview.updatedAt} />
             </span>
           )}

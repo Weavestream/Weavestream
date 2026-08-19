@@ -41,10 +41,14 @@ import {
   Btn,
   Icon,
   LayoutSwatch,
+  MenuDivider,
+  MenuItem,
+  OverflowMenu,
   Tag,
   useToast,
 } from '../../../../../../components/ui';
 import { PageHeader } from '../../../../../../components/shell/page-header';
+import { TopBar } from '../../../../../../components/shell/top-bar';
 import { useIsMobile } from '../../../../../../lib/hooks/use-is-mobile';
 import { LayoutSettingsDialog } from '../../layout-settings-dialog';
 import { LayoutArchiveDialog } from '../../layout-archive-dialog';
@@ -620,24 +624,38 @@ export function LayoutBuilder({
     </>
   );
 
-  const titleNode = (
-    <span
-      style={{
-        display: 'inline-flex',
-        alignItems: 'center',
-        gap: 10,
-        flexWrap: 'wrap',
-        minWidth: 0,
-      }}
-    >
-      <span style={{ minWidth: 0 }}>{layout.name}</span>
+  /**
+   * The editor's controls, rendered into `TopBar`'s `right` slot.
+   *
+   * Same shape as the article editor (`article-form.tsx`): Cancel and
+   * the primary stay visible — Cancel is the escape hatch and must
+   * never hide in a menu — while Settings and Archive move into the
+   * overflow. The four-button shelf and the 50px row it sat in are
+   * gone, which is height the field canvas gets back.
+   *
+   * A reader gets the `read only` tag and nothing else. No overflow
+   * trigger: every row it could hold is a mutation behind `canEdit`,
+   * and an empty menu is worse than no menu.
+   */
+  const headerActions = canEdit ? (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+      {/* The layout's blast radius — version, field count, how many
+          assets ride on it. Least load-bearing thing in the row, so it
+          is what gives up its seat first (see `.hide-on-narrow`). */}
+      <span
+        className="hide-on-narrow"
+        style={{
+          paddingRight: 2,
+          color: 'var(--dim)',
+          fontFamily: 'var(--font-mono)',
+          fontSize: 10.5,
+          whiteSpace: 'nowrap',
+        }}
+      >
+        {headerDescription}
+      </span>
       {isArchived && <Tag tone="warn">archived</Tag>}
       {!isArchived && dirty && <Tag tone="warn">unsaved</Tag>}
-    </span>
-  );
-
-  const headerActions = canEdit ? (
-    <>
       <Btn
         kind="outline"
         size="md"
@@ -646,26 +664,20 @@ export function LayoutBuilder({
       >
         Cancel
       </Btn>
-      <Btn
-        kind="outline"
-        size="md"
-        icon={Icon.edit}
-        onClick={() => setSettingsOpen(true)}
-        disabled={saving}
-        title="Rename layout or change icon/color"
-      >
-        Settings
-      </Btn>
-      <Btn
-        kind="outline"
-        size="md"
-        icon={isArchived ? Icon.check : Icon.archive}
-        onClick={() => setArchiveOpen(true)}
-        disabled={saving}
-      >
-        {isArchived ? 'Restore' : 'Archive'}
-      </Btn>
-      {!isArchived && (
+      {isArchived ? (
+        // Fields can't be saved while archived, so the primary slot
+        // carries the action that makes them editable again rather
+        // than sitting empty.
+        <Btn
+          kind="solid"
+          size="md"
+          icon={Icon.check}
+          onClick={() => setArchiveOpen(true)}
+          disabled={saving}
+        >
+          Restore
+        </Btn>
+      ) : (
         <Btn
           kind="primary"
           size="md"
@@ -677,25 +689,53 @@ export function LayoutBuilder({
           Save layout
         </Btn>
       )}
-    </>
+      <OverflowMenu>
+        {(close) => (
+          <>
+            <MenuItem
+              icon={Icon.edit}
+              disabled={saving}
+              onClick={() => {
+                setSettingsOpen(true);
+                close();
+              }}
+            >
+              Settings
+            </MenuItem>
+            {!isArchived && <MenuDivider />}
+            {!isArchived && (
+              <MenuItem
+                icon={Icon.archive}
+                disabled={saving}
+                onClick={() => {
+                  setArchiveOpen(true);
+                  close();
+                }}
+              >
+                Archive
+              </MenuItem>
+            )}
+          </>
+        )}
+      </OverflowMenu>
+    </div>
   ) : (
     <Tag tone="outline">read only</Tag>
   );
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-      <PageHeader
+      <TopBar
         crumbs={[
           { label: 'Layouts', href: '/admin/layouts' },
           { label: layout.name },
           { label: 'edit', mono: true },
         ]}
-        leading={
-          <LayoutSwatch icon={layout.icon} color={layout.color} size={48} />
-        }
-        title={titleNode}
-        description={headerDescription}
-        actions={headerActions}
+        // One row, not two. The trail already names the layout, and an
+        // editing surface spends its height on the canvas rather than
+        // on restating the record above it — same call the article
+        // editor makes.
+        right={headerActions}
       />
 
       {error && (

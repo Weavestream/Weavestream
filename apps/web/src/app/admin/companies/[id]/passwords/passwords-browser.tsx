@@ -340,7 +340,17 @@ export function PasswordsBrowser({
         width: isMobile ? '100%' : 220,
         borderRight: isMobile ? 'none' : '1px solid var(--line)',
         padding: '10px 0',
-        flexShrink: 0,
+        // A deep folder tree scrolls in its own pane rather than setting
+        // the height of its container and pushing the credential list's
+        // scroll region off the bottom of a panel that clips overflow.
+        overflowY: 'auto',
+        // This pane is a column child on mobile (under the tab bar) and
+        // a row child on desktop (the 220px rail). On mobile it has to
+        // give up height to the bounded container and scroll what is
+        // left; on desktop it must never give up width — hence the
+        // axis-dependent flex rather than a single `flexShrink: 0`,
+        // which on mobile is what left the lower folders unreachable.
+        ...(isMobile ? { flex: 1, minHeight: 0 } : { flexShrink: 0 }),
       }}
     >
       <FolderRow
@@ -488,7 +498,15 @@ export function PasswordsBrowser({
   );
 
   const passwordsPane = (
-    <div style={{ flex: 1, minWidth: 0 }}>
+    <div
+      style={{
+        flex: 1,
+        minWidth: 0,
+        display: 'flex',
+        flexDirection: 'column',
+        minHeight: 0,
+      }}
+    >
       {err && (
         <div
           style={{
@@ -513,6 +531,7 @@ export function PasswordsBrowser({
         </div>
       ) : (
         <DataTable
+          fillHeight
           columns={passwordColumns({ companyId, columnPrefs })}
           rows={filtered}
           renderMobileCard={(p) => (
@@ -528,10 +547,33 @@ export function PasswordsBrowser({
   );
 
   return (
-    <div>
+    // `flex: 1; min-height: 0` so the DataTable's own fillHeight scroll
+    // region claims the leftover viewport instead of the whole page
+    // scrolling under it — the chain is PageBody -> Panel fillHeight ->
+    // here -> the two-pane row -> DataTable fillHeight.
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        flex: 1,
+        minHeight: 0,
+      }}
+    >
       {toolbar}
       {isMobile ? (
-        <div style={{ display: 'flex', flexDirection: 'column' }}>
+        // `flex: 1; min-height: 0` for the same reason the desktop row
+        // has it: the panel is height-constrained and clips its
+        // overflow, so a content-height container here would push the
+        // active pane's scroll region past the bottom edge and leave
+        // the lower half of a long list with no way to reach it.
+        <div
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            flex: 1,
+            minHeight: 0,
+          }}
+        >
           <div
             role="tablist"
             aria-label="Passwords view"
@@ -580,7 +622,9 @@ export function PasswordsBrowser({
           {mobileTab === 'folders' ? foldersPane : passwordsPane}
         </div>
       ) : (
-        <div style={{ display: 'flex', minHeight: 360 }}>
+        // Was `min-height: 360` and free to grow; now it takes exactly
+        // the height the toolbar leaves, and each pane scrolls inside it.
+        <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
           {foldersPane}
           {passwordsPane}
         </div>

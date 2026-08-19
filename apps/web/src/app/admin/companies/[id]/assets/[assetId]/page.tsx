@@ -121,7 +121,6 @@ export default async function AssetDetailPage({
           }
           name={asset.name}
           tags={asset.archivedAt ? <Tag tone="warn">archived</Tag> : null}
-          meta={`${asset.layoutName} · updated ${relative(new Date(asset.updatedAt))}${updatedBy ? ` by ${updatedBy.name}` : ''}`}
         />
         <div
           className="detail-grid-main-aside"

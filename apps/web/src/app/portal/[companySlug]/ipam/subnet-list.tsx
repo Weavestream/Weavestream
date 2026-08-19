@@ -23,6 +23,7 @@ export function SubnetList({
 }) {
   return (
     <DataTable
+      fillHeight
       columns={subnetColumns({ companySlug })}
       rows={items}
       renderMobileCard={(r) => (

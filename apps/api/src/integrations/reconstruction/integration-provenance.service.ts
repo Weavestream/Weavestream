@@ -12,6 +12,7 @@ import {
 } from '@weavestream/shared';
 import { AuditLogService, type AuditEntry } from '../../audit/audit.service.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
+import { INTEGRATION_WRITE_ACTOR } from '../../common/integration-write-actor.js';
 import { scanSensitiveMaterial } from '../sensitive-material.js';
 import {
   integrationTargetAuditAction,
@@ -759,7 +760,7 @@ async function archiveTargetGroup(
     const batch = ids.slice(offset, offset + TARGET_MUTATION_BATCH);
     const result = await delegate.updateMany({
       where: { id: { in: batch }, companyId: input.companyId, archivedAt: null },
-      data: { archivedAt: input.snapshotAt, updatedBy: input.auditActorId },
+      data: { archivedAt: input.snapshotAt, updatedBy: INTEGRATION_WRITE_ACTOR },
     });
     const batchArchived = result?.count ?? batch.length;
     archivedCount += batchArchived;

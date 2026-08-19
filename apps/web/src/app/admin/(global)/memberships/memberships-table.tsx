@@ -126,7 +126,18 @@ export function MembershipsTable({
   }
 
   return (
-    <div>
+    // `flex: 1; min-height: 0` so the DataTable's own fillHeight scroll
+    // region claims the leftover viewport instead of the whole page
+    // scrolling under it — the chain is PageBody -> Panel fillHeight ->
+    // here -> DataTable fillHeight.
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        flex: 1,
+        minHeight: 0,
+      }}
+    >
       <div
         style={{
           display: 'flex',
@@ -203,6 +214,7 @@ export function MembershipsTable({
         </Select>
       </div>
       <DataTable
+        fillHeight
         columns={columns}
         rows={rows}
         rowHref={(r) => `/admin/companies/${r.company.id}`}

@@ -652,7 +652,19 @@ export function DataTable<T extends { id: string }>({
                     ...headCellBase,
                     ...widthStyle,
                     textAlign: c.align ?? 'left',
-                    position: isSticky ? 'sticky' : 'relative',
+                    // No `position` override here. `headCellBase` already
+                    // pins every header cell vertically (`sticky; top: 0`),
+                    // and `stickyStyle` adds `left` + a higher z-index for
+                    // the pinned ones — so a pinned header sticks on both
+                    // axes and the rest stick on the vertical only. An
+                    // earlier `position: isSticky ? 'sticky' : 'relative'`
+                    // was copied down from the `<td>` branch, where
+                    // `relative` is right; here it clobbered the base rule
+                    // and left every unpinned column label scrolling away
+                    // under the body, so a `fillHeight` table kept only
+                    // its pinned headers. Nothing depends on `relative`:
+                    // the one absolutely-positioned child (the resize
+                    // handle) renders only in a pinned cell.
                     ...stickyStyle,
                   }}
                 >

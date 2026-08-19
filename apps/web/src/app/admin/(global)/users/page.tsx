@@ -32,7 +32,7 @@ export default async function UsersPage({
         actions={hasCapability(me, 'USER_MANAGE') ? <CreateUserButton /> : null}
       />
       <PageBody>
-        <Panel title={`${rows.length} ${rows.length === 1 ? 'user' : 'users'}`} noPad>
+        <Panel title={`${rows.length} ${rows.length === 1 ? 'user' : 'users'}`} noPad fillHeight>
           <UsersTable rows={rows} filters={sp} canManage={hasCapability(me, 'USER_MANAGE')} />
         </Panel>
       </PageBody>

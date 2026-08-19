@@ -81,6 +81,7 @@ export default async function MembershipsPage({
             </span>
           }
           noPad
+          fillHeight
         >
           <MembershipsTable rows={rows} filters={sp} />
         </Panel>

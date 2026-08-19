@@ -28,6 +28,7 @@ import {
 } from '../integrations/reconstruction/native-binding-ownership.js';
 import { AUDIT_ACTIONS } from '../audit/audit-actions.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
+import { INTEGRATION_WRITE_ACTOR } from '../common/integration-write-actor.js';
 import { isUniqueConstraintError } from '../prisma/prisma-errors.js';
 
 export interface AuditMeta {
@@ -568,7 +569,7 @@ export class IpamService {
             archivedAt: existing.archivedAt,
             ...canonicalWritePremise(existing, SUBNET_CANONICAL_FIELDS),
           },
-          data: { ...data, ...(restored ? { archivedAt: null } : {}), updatedBy: input.auditActorId },
+          data: { ...data, ...(restored ? { archivedAt: null } : {}), updatedBy: INTEGRATION_WRITE_ACTOR },
         });
         if (applied.count === 0) {
           return ipamBlocked(input.companyId, 'synchronization_error', 'The canonical subnet changed during reconciliation; the write was not applied.', 'canonical_write_race', existing.id);
@@ -591,7 +592,7 @@ export class IpamService {
     }
     return runTransaction(async (tx) => {
       const row = await tx.subnet.create({
-        data: { companyId: input.companyId, ...data, createdBy: input.auditActorId, updatedBy: input.auditActorId },
+        data: { companyId: input.companyId, ...data, createdBy: INTEGRATION_WRITE_ACTOR, updatedBy: INTEGRATION_WRITE_ACTOR },
       });
       await this.audit.logWithClient(tx, {
         actorId: input.auditActorId,
@@ -909,7 +910,7 @@ export class IpamService {
             subnetId: existing.subnetId,
             ...canonicalWritePremise(existing, RESERVATION_CANONICAL_FIELDS),
           },
-          data: { ...data, updatedBy: input.auditActorId },
+          data: { ...data, updatedBy: INTEGRATION_WRITE_ACTOR },
         });
         if (applied.count === 0) {
           return ipamBlocked(input.companyId, 'synchronization_error', 'The canonical reservation changed during reconciliation; the write was not applied.', 'canonical_write_race', existing.id);
@@ -936,8 +937,8 @@ export class IpamService {
           companyId: input.companyId,
           subnetId: input.subnetId,
           ...data,
-          createdBy: input.auditActorId,
-          updatedBy: input.auditActorId,
+          createdBy: INTEGRATION_WRITE_ACTOR,
+          updatedBy: INTEGRATION_WRITE_ACTOR,
         },
       });
       await this.audit.logWithClient(tx, {

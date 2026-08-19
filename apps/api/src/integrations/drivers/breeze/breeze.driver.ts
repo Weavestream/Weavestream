@@ -10,6 +10,7 @@ import type {
   IntegrationDriver,
   RecommendedDestination,
 } from '../integration-driver.js';
+import { assertRecommendedDestinations } from '../driver-utils.js';
 import {
   BreezePartnerApiClient,
   validateBreezeConfiguration,
@@ -39,114 +40,114 @@ interface BreezeClientPort {
 }
 
 const siteFields = [
-  field('breezeId', 'Breeze ID', 'breeze-id', 'TEXT', 'source_wins'),
+  field('breezeId', 'Breeze ID', 'breeze_id', 'TEXT', 'source_wins'),
   field('name', 'Name', 'name', 'TEXT', 'preserve_manual', true, true),
   field('timezone', 'Timezone', 'timezone', 'TEXT'),
-  field('addressLine1', 'Address Line 1', 'address-line-1', 'TEXT'),
-  field('addressLine2', 'Address Line 2', 'address-line-2', 'TEXT'),
+  field('addressLine1', 'Address Line 1', 'address_line_1', 'TEXT'),
+  field('addressLine2', 'Address Line 2', 'address_line_2', 'TEXT'),
   field('city', 'City', 'city', 'TEXT'),
   field('region', 'Region', 'region', 'TEXT'),
-  field('postalCode', 'Postal Code', 'postal-code', 'TEXT'),
+  field('postalCode', 'Postal Code', 'postal_code', 'TEXT'),
   field('country', 'Country', 'country', 'TEXT'),
-  field('contactName', 'Contact Name', 'contact-name', 'TEXT'),
-  field('contactEmail', 'Contact Email', 'contact-email', 'EMAIL'),
-  field('contactPhone', 'Contact Phone', 'contact-phone', 'PHONE'),
-  field('sourceRevision', 'Source Revision', 'source-revision', 'TEXT'),
-  field('sourceFingerprint', 'Source Fingerprint', 'source-fingerprint', 'TEXT'),
+  field('contactName', 'Contact Name', 'contact_name', 'TEXT'),
+  field('contactEmail', 'Contact Email', 'contact_email', 'EMAIL'),
+  field('contactPhone', 'Contact Phone', 'contact_phone', 'PHONE'),
+  field('sourceRevision', 'Source Revision', 'source_revision', 'TEXT'),
+  field('sourceFingerprint', 'Source Fingerprint', 'source_fingerprint', 'TEXT'),
 ] as const;
 
 const deviceIdentityFields = [
-  field('breezeId', 'Breeze ID', 'breeze-id', 'TEXT', 'source_wins'),
+  field('breezeId', 'Breeze ID', 'breeze_id', 'TEXT', 'source_wins'),
   field('hostname', 'Hostname', 'hostname', 'TEXT', 'preserve_manual', true, true),
-  field('displayName', 'Display Name', 'display-name', 'TEXT', 'preserve_manual'),
-  field('deviceType', 'Type', 'device-type', 'TEXT'),
-  field('deviceRole', 'Role', 'device-role', 'TEXT'),
+  field('displayName', 'Display Name', 'display_name', 'TEXT', 'preserve_manual'),
+  field('deviceType', 'Type', 'device_type', 'TEXT'),
+  field('deviceRole', 'Role', 'device_role', 'TEXT'),
   field('siteId', 'Site', 'site', 'TEXT'),
   field('vendor', 'Vendor', 'vendor', 'TEXT'),
   field('model', 'Model', 'model', 'TEXT'),
-  field('serialNumber', 'Serial Number', 'serial-number', 'TEXT'),
-  field('osEdition', 'OS Edition', 'os-edition', 'TEXT'),
-  field('osBuild', 'OS Build', 'os-build', 'TEXT'),
-  field('osArchitecture', 'OS Architecture', 'os-architecture', 'TEXT'),
-  field('enrolledAt', 'Installed / Enrolled At', 'enrolled-at', 'DATETIME'),
-  field('assetTag', 'Asset Tag', 'asset-tag', 'TEXT'),
-  field('inventoryId', 'Inventory ID', 'inventory-id', 'TEXT'),
-  field('upstreamExternalId', 'Upstream External ID', 'upstream-external-id', 'TEXT'),
-  field('virtualizationRole', 'Virtualization Role', 'virtualization-role', 'TEXT'),
+  field('serialNumber', 'Serial Number', 'serial_number', 'TEXT'),
+  field('osEdition', 'OS Edition', 'os_edition', 'TEXT'),
+  field('osBuild', 'OS Build', 'os_build', 'TEXT'),
+  field('osArchitecture', 'OS Architecture', 'os_architecture', 'TEXT'),
+  field('enrolledAt', 'Installed / Enrolled At', 'enrolled_at', 'DATETIME'),
+  field('assetTag', 'Asset Tag', 'asset_tag', 'TEXT'),
+  field('inventoryId', 'Inventory ID', 'inventory_id', 'TEXT'),
+  field('upstreamExternalId', 'Upstream External ID', 'upstream_external_id', 'TEXT'),
+  field('virtualizationRole', 'Virtualization Role', 'virtualization_role', 'TEXT'),
   field('tags', 'Tags', 'tags', 'TAGS'),
-  field('sourceRevision', 'Source Revision', 'source-revision', 'TEXT'),
-  field('sourceFingerprint', 'Source Fingerprint', 'source-fingerprint', 'TEXT'),
+  field('sourceRevision', 'Source Revision', 'source_revision', 'TEXT'),
+  field('sourceFingerprint', 'Source Fingerprint', 'source_fingerprint', 'TEXT'),
 ] as const;
 
 const inventoryFields = [
-  field('breezeId', 'Breeze ID', 'breeze-id', 'TEXT', 'source_wins'),
+  field('breezeId', 'Breeze ID', 'breeze_id', 'TEXT', 'source_wins'),
   field('processor', 'Processor', 'processor', 'TEXTAREA'),
-  field('processorCores', 'Processor Cores', 'processor-cores', 'NUMBER'),
-  field('processorThreads', 'Processor Threads', 'processor-threads', 'NUMBER'),
-  field('memoryMb', 'Memory (MB)', 'memory-mb', 'NUMBER'),
+  field('processorCores', 'Processor Cores', 'processor_cores', 'NUMBER'),
+  field('processorThreads', 'Processor Threads', 'processor_threads', 'NUMBER'),
+  field('memoryMb', 'Memory (MB)', 'memory_mb', 'NUMBER'),
   field('graphics', 'Graphics', 'graphics', 'TEXT'),
   field('motherboard', 'Motherboard', 'motherboard', 'TEXTAREA'),
-  field('biosVersion', 'BIOS Version', 'bios-version', 'TEXT'),
+  field('biosVersion', 'BIOS Version', 'bios_version', 'TEXT'),
   field('disks', 'Disks', 'disks', 'TEXTAREA'),
   field('interfaces', 'Interfaces', 'interfaces', 'TEXTAREA'),
-  field('networkAddresses', 'Network Address History', 'network-addresses', 'TEXTAREA'),
+  field('networkAddresses', 'Network Address History', 'network_addresses', 'TEXTAREA'),
   field('gateways', 'Gateways', 'gateways', 'TEXT'),
-  field('dnsServers', 'DNS Servers', 'dns-servers', 'TEXT'),
-  field('warrantyStatus', 'Warranty Status', 'warranty-status', 'TEXT'),
-  field('warrantyStartsOn', 'Warranty Starts', 'warranty-starts-on', 'DATE'),
-  field('warrantyEndsOn', 'Warranty Ends', 'warranty-ends-on', 'DATE', 'source_wins', false, true, {
+  field('dnsServers', 'DNS Servers', 'dns_servers', 'TEXT'),
+  field('warrantyStatus', 'Warranty Status', 'warranty_status', 'TEXT'),
+  field('warrantyStartsOn', 'Warranty Starts', 'warranty_starts_on', 'DATE'),
+  field('warrantyEndsOn', 'Warranty Ends', 'warranty_ends_on', 'DATE', 'source_wins', false, true, {
     isExpiry: true,
   }),
-  field('warrantySubscription', 'Warranty Subscription', 'warranty-subscription', 'BOOLEAN'),
-  field('virtualMachines', 'Virtual Machines', 'virtual-machines', 'TEXTAREA'),
-  field('inventoryCompleteness', 'Inventory Completeness', 'inventory-completeness', 'TEXTAREA'),
-  field('sourceRevision', 'Source Revision', 'source-revision', 'TEXT'),
-  field('sourceFingerprint', 'Source Fingerprint', 'source-fingerprint', 'TEXT'),
+  field('warrantySubscription', 'Warranty Subscription', 'warranty_subscription', 'BOOLEAN'),
+  field('virtualMachines', 'Virtual Machines', 'virtual_machines', 'TEXTAREA'),
+  field('inventoryCompleteness', 'Inventory Completeness', 'inventory_completeness', 'TEXTAREA'),
+  field('sourceRevision', 'Source Revision', 'source_revision', 'TEXT'),
+  field('sourceFingerprint', 'Source Fingerprint', 'source_fingerprint', 'TEXT'),
 ] as const;
 
 const softwareFields = [
-  field('breezeId', 'Breeze ID', 'breeze-id', 'TEXT', 'source_wins'),
-  field('installedSoftware', 'Installed Software', 'installed-software', 'TEXTAREA'),
-  field('softwareCompleteness', 'Software Completeness', 'software-completeness', 'TEXT'),
-  field('sourceRevision', 'Source Revision', 'source-revision', 'TEXT'),
-  field('sourceFingerprint', 'Source Fingerprint', 'source-fingerprint', 'TEXT'),
+  field('breezeId', 'Breeze ID', 'breeze_id', 'TEXT', 'source_wins'),
+  field('installedSoftware', 'Installed Software', 'installed_software', 'TEXTAREA'),
+  field('softwareCompleteness', 'Software Completeness', 'software_completeness', 'TEXT'),
+  field('sourceRevision', 'Source Revision', 'source_revision', 'TEXT'),
+  field('sourceFingerprint', 'Source Fingerprint', 'source_fingerprint', 'TEXT'),
 ] as const;
 
 const siteInventoryFields = [
-  field('breezeId', 'Breeze ID', 'breeze-id', 'TEXT', 'source_wins'),
-  field('networkEquipment', 'Network Equipment', 'network-equipment', 'TEXTAREA'),
-  field('networkSegments', 'Network Segments', 'network-segments', 'TEXTAREA'),
-  field('inventoryCompleteness', 'Inventory Completeness', 'inventory-completeness', 'TEXTAREA'),
-  field('sourceRevision', 'Source Revision', 'source-revision', 'TEXT'),
-  field('sourceFingerprint', 'Source Fingerprint', 'source-fingerprint', 'TEXT'),
+  field('breezeId', 'Breeze ID', 'breeze_id', 'TEXT', 'source_wins'),
+  field('networkEquipment', 'Network Equipment', 'network_equipment', 'TEXTAREA'),
+  field('networkSegments', 'Network Segments', 'network_segments', 'TEXTAREA'),
+  field('inventoryCompleteness', 'Inventory Completeness', 'inventory_completeness', 'TEXTAREA'),
+  field('sourceRevision', 'Source Revision', 'source_revision', 'TEXT'),
+  field('sourceFingerprint', 'Source Fingerprint', 'source_fingerprint', 'TEXT'),
 ] as const;
 
 const equipmentFields = [
-  field('breezeId', 'Breeze ID', 'breeze-id', 'TEXT', 'source_wins'),
-  field('siteId', 'Site ID', 'site-id', 'TEXT'),
-  field('equipmentType', 'Equipment Type', 'equipment-type', 'TEXT'),
+  field('breezeId', 'Breeze ID', 'breeze_id', 'TEXT', 'source_wins'),
+  field('siteId', 'Site ID', 'site_id', 'TEXT'),
+  field('equipmentType', 'Equipment Type', 'equipment_type', 'TEXT'),
   field('address', 'Address', 'address', 'IP_ADDRESS', 'source_wins', false, false, {
     version: 'any',
     allowCidr: false,
   }),
-  field('macAddress', 'MAC Address', 'mac-address', 'TEXT'),
+  field('macAddress', 'MAC Address', 'mac_address', 'TEXT'),
   field('manufacturer', 'Manufacturer', 'manufacturer', 'TEXT'),
   field('model', 'Model', 'model', 'TEXT'),
-  field('sourceRevision', 'Source Revision', 'source-revision', 'TEXT'),
-  field('sourceFingerprint', 'Source Fingerprint', 'source-fingerprint', 'TEXT'),
+  field('sourceRevision', 'Source Revision', 'source_revision', 'TEXT'),
+  field('sourceFingerprint', 'Source Fingerprint', 'source_fingerprint', 'TEXT'),
 ] as const;
 
 const virtualMachineFields = [
-  field('breezeId', 'Breeze ID', 'breeze-id', 'TEXT', 'source_wins'),
-  field('hostDeviceId', 'Host Device ID', 'host-device-id', 'TEXT'),
-  field('upstreamExternalId', 'Upstream External ID', 'upstream-external-id', 'TEXT'),
+  field('breezeId', 'Breeze ID', 'breeze_id', 'TEXT', 'source_wins'),
+  field('hostDeviceId', 'Host Device ID', 'host_device_id', 'TEXT'),
+  field('upstreamExternalId', 'Upstream External ID', 'upstream_external_id', 'TEXT'),
   field('generation', 'Generation', 'generation', 'NUMBER'),
-  field('memoryMb', 'Memory (MB)', 'memory-mb', 'NUMBER'),
-  field('processorCount', 'Processor Count', 'processor-count', 'NUMBER'),
-  field('rctEnabled', 'RCT Enabled', 'rct-enabled', 'BOOLEAN'),
-  field('passthroughDisks', 'Passthrough Disks', 'passthrough-disks', 'BOOLEAN'),
-  field('sourceRevision', 'Source Revision', 'source-revision', 'TEXT'),
-  field('sourceFingerprint', 'Source Fingerprint', 'source-fingerprint', 'TEXT'),
+  field('memoryMb', 'Memory (MB)', 'memory_mb', 'NUMBER'),
+  field('processorCount', 'Processor Count', 'processor_count', 'NUMBER'),
+  field('rctEnabled', 'RCT Enabled', 'rct_enabled', 'BOOLEAN'),
+  field('passthroughDisks', 'Passthrough Disks', 'passthrough_disks', 'BOOLEAN'),
+  field('sourceRevision', 'Source Revision', 'source_revision', 'TEXT'),
+  field('sourceFingerprint', 'Source Fingerprint', 'source_fingerprint', 'TEXT'),
 ] as const;
 
 const deviceDestinationFields = uniqueFields([
@@ -160,17 +161,17 @@ const siteDestinationFields = uniqueFields([
 ]);
 
 const siteDestination: RecommendedDestination = {
-  layout: { name: 'Breeze Sites', slug: 'breeze-sites', icon: 'map-pin', color: 'teal' },
+  layout: { name: 'Breeze Sites', slug: 'breeze_sites', icon: 'map-pin', color: 'teal' },
   fields: siteDestinationFields,
 };
 const deviceLayout = {
   name: 'Breeze Devices',
-  slug: 'breeze-devices',
+  slug: 'breeze_devices',
   icon: 'monitor',
   color: 'iris',
 };
 
-export const BREEZE_RECOMMENDED_DESTINATIONS: Readonly<Record<string, RecommendedDestination>> = {
+export const BREEZE_RECOMMENDED_DESTINATIONS: Readonly<Record<string, RecommendedDestination>> = assertRecommendedDestinations('breeze', {
   sites: siteDestination,
   devices: { layout: deviceLayout, fields: deviceDestinationFields },
   'site-inventory': { layout: siteDestination.layout, fields: siteInventoryFields },
@@ -179,7 +180,7 @@ export const BREEZE_RECOMMENDED_DESTINATIONS: Readonly<Record<string, Recommende
   'network-equipment': {
     layout: {
       name: 'Breeze Network Equipment',
-      slug: 'breeze-network-equipment',
+      slug: 'breeze_network_equipment',
       icon: 'network',
       color: 'amber',
     },
@@ -188,7 +189,7 @@ export const BREEZE_RECOMMENDED_DESTINATIONS: Readonly<Record<string, Recommende
   'virtual-machines': {
     layout: {
       name: 'Breeze Virtual Machines',
-      slug: 'breeze-virtual-machines',
+      slug: 'breeze_virtual_machines',
       icon: 'server',
       color: 'violet',
     },
@@ -198,7 +199,7 @@ export const BREEZE_RECOMMENDED_DESTINATIONS: Readonly<Record<string, Recommende
     layout: deviceLayout,
     fields: [],
   },
-};
+});
 
 export class BreezeDriver implements IntegrationDriver {
   readonly key = 'breeze';

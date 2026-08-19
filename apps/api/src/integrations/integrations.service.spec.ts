@@ -142,12 +142,12 @@ it('rejects persisted resource target-kind drift before applying a patch', () =>
 
 describe('ensureResourceDestination', () => {
   const recommendation: RecommendedDestination = {
-    layout: { name: 'Breeze Devices', slug: 'breeze-devices', icon: 'monitor', color: 'iris' },
+    layout: { name: 'Breeze Devices', slug: 'breeze_devices', icon: 'monitor', color: 'iris' },
     fields: [
       {
         sourceField: 'breezeId',
         name: 'Breeze ID',
-        slug: 'breeze-id',
+        slug: 'breeze_id',
         fieldType: 'TEXT',
         syncDirection: 'source_wins',
         isPrimary: false,
@@ -168,7 +168,7 @@ describe('ensureResourceDestination', () => {
   };
 
   function fakePrisma(overrides: Record<string, unknown> = {}) {
-    const layout = { id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', slug: 'breeze-devices' };
+    const layout = { id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', slug: 'breeze_devices' };
     const fields = recommendation.fields.map((field, index) => ({
       id: `${index + 1}`.padStart(8, '0') + '-0000-4000-8000-000000000000',
       slug: field.slug,
@@ -210,7 +210,7 @@ describe('ensureResourceDestination', () => {
     await ensureResourceDestination(prisma, 'integration-1', 'devices', recommendation);
     expect(prisma.assetLayout.create).toHaveBeenCalledWith(
       expect.objectContaining({
-        data: expect.objectContaining({ slug: 'breeze-devices' }),
+        data: expect.objectContaining({ slug: 'breeze_devices' }),
       }),
     );
     expect(prisma.assetField.createMany).toHaveBeenCalledTimes(1);
@@ -326,7 +326,7 @@ describe('ensureResourceDestination', () => {
     expect(resources.get('sites')).toMatchObject({ assetLayoutId: layoutId });
     expect(resources.get('site-inventory')).toMatchObject({ assetLayoutId: layoutId });
     expect(fields.map((field) => field.slug)).toEqual(
-      expect.arrayContaining(['name', 'network-equipment', 'network-segments']),
+      expect.arrayContaining(['name', 'network_equipment', 'network_segments']),
     );
     expect(resources.get('sites')!.mappings).toContain('name');
     expect(resources.get('sites')!.mappings).not.toContain('networkEquipment');
@@ -355,13 +355,13 @@ describe('ensureResourceDestination', () => {
     {
       name: 'partial',
       fields: [
-        { id: '00000001-0000-4000-8000-000000000000', slug: 'breeze-id', fieldType: 'TEXT' },
+        { id: '00000001-0000-4000-8000-000000000000', slug: 'breeze_id', fieldType: 'TEXT' },
       ],
     },
     {
       name: 'incompatible',
       fields: [
-        { id: '00000001-0000-4000-8000-000000000000', slug: 'breeze-id', fieldType: 'NUMBER' },
+        { id: '00000001-0000-4000-8000-000000000000', slug: 'breeze_id', fieldType: 'NUMBER' },
         { id: '00000002-0000-4000-8000-000000000000', slug: 'hostname', fieldType: 'TEXT' },
       ],
     },
@@ -369,7 +369,7 @@ describe('ensureResourceDestination', () => {
     const prisma = fakePrisma();
     prisma.assetLayout.findFirst.mockResolvedValue({
       id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
-      slug: 'breeze-devices',
+      slug: 'breeze_devices',
     });
     prisma.assetField.findMany.mockReset().mockResolvedValue(fields);
     await ensureResourceDestination(prisma, 'integration-1', 'devices', recommendation);
@@ -383,7 +383,7 @@ describe('ensureResourceDestination', () => {
     const prisma = fakePrisma();
     prisma.$transaction = jest.fn(async (callback: (tx: typeof prisma) => Promise<void>) =>
       callback(prisma));
-    const winner = { id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', slug: 'breeze-devices' };
+    const winner = { id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', slug: 'breeze_devices' };
     prisma.assetLayout.findFirst.mockResolvedValueOnce(null).mockResolvedValue(winner);
     prisma.assetLayout.create.mockRejectedValue(
       Object.assign(new Error('unique'), { code: 'P2002' }),
@@ -406,7 +406,7 @@ describe('ensureResourceDestination', () => {
     const prisma = fakePrisma();
     prisma.assetLayout.findFirst.mockResolvedValue({
       id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
-      slug: 'breeze-devices',
+      slug: 'breeze_devices',
       isActive: false,
     });
     prisma.assetField.findMany.mockReset().mockResolvedValue(
@@ -437,7 +437,7 @@ describe('ensureResourceDestination', () => {
         findFirst: jest.fn(async () => state.layout),
         create: jest.fn(async () => {
           state.layout = {
-            id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', slug: 'breeze-devices',
+            id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', slug: 'breeze_devices',
           };
           return state.layout;
         }),
@@ -445,7 +445,7 @@ describe('ensureResourceDestination', () => {
       assetField: {
         findMany: jest.fn(async () => state.fields),
         createMany: jest.fn(async () => {
-          state.fields = [{ slug: 'breeze-id' }];
+          state.fields = [{ slug: 'breeze_id' }];
           return { count: 1 };
         }),
       },
