@@ -12,7 +12,15 @@ jest.mock('next/navigation', () => ({
 }));
 
 jest.mock('../../../../../components/shell/top-bar', () => ({
-  TopBar: ({ sub }: { sub: React.ReactNode }) => <header>{sub}</header>,
+  // The editor's controls moved from the `sub` row into the breadcrumb
+  // row's `right` slot; render both so the stub stays honest if either
+  // is used again.
+  TopBar: ({ right, sub }: { right: React.ReactNode; sub: React.ReactNode }) => (
+    <header>
+      {right}
+      {sub}
+    </header>
+  ),
 }));
 
 jest.mock('../../../../../components/editor/rich-text-editor', () => ({
@@ -62,8 +70,28 @@ jest.mock('../../../../../lib/article-format', () => ({
   }),
 }));
 
+// The header's archive controls talk to the API, the router and the
+// toast provider. The form only needs the hook's shape: the overflow
+// menu reads `archived` to choose between Archive and Delete forever.
 jest.mock('./article-actions', () => ({
-  ArticleActions: () => <button type="button">Archive</button>,
+  useArticleArchive: () => ({
+    archived: false,
+    requestArchiveToggle: jest.fn(),
+    requestPurge: jest.fn(),
+    dialogs: null,
+  }),
+}));
+
+// `useIsMobile(768)` and `useIsMobile(1240)` are two different
+// questions; the form branches on both. `narrowOnly` is a 768–1239px
+// laptop: rails collapsed, phone affordances absent.
+let viewport: 'desktop' | 'narrowOnly' | 'phone' = 'desktop';
+jest.mock('../../../../../lib/hooks/use-is-mobile', () => ({
+  useIsMobile: (breakpoint = 768) => {
+    if (viewport === 'phone') return true;
+    if (viewport === 'narrowOnly') return breakpoint > 768;
+    return false;
+  },
 }));
 
 jest.mock('../../../../../components/ui', () => {
@@ -104,6 +132,7 @@ const article = {
 
 beforeEach(() => {
   jest.clearAllMocks();
+  viewport = 'desktop';
 });
 
 describe('ArticleForm editor layout', () => {
@@ -176,5 +205,50 @@ describe('ArticleForm editor layout', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Switch' }));
     expect(screen.getByTestId('markdown-editor')).toBeInTheDocument();
+  });
+
+  it('keeps folder and visibility reachable while creating on a laptop', () => {
+    // Regression: below 1240 the properties rail is gone and the phone's
+    // floating trigger has not appeared yet, so the header menu is the
+    // only route to it. Gating that menu on edit mode stranded every
+    // new article between 768 and 1239px.
+    viewport = 'narrowOnly';
+    render(
+      <ArticleForm
+        companyId="company-1"
+        companyLabel="Acme"
+        mode="create"
+        folders={folders}
+        autosaveEnabled={false}
+        defaultEditorMode="tiptap"
+      />,
+    );
+
+    expect(screen.queryByLabelText('Folder')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
+
+    // Create mode has nothing to preview or archive yet, so Details is
+    // the whole menu.
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Details' }));
+    expect(screen.queryByRole('menuitem', { name: 'Preview' })).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Folder')).toBeInTheDocument();
+    expect(screen.getByLabelText('Visible to clients')).toBeInTheDocument();
+  });
+
+  it('keeps the properties rail inline on a full-width desktop', () => {
+    render(
+      <ArticleForm
+        companyId="company-1"
+        companyLabel="Acme"
+        mode="create"
+        folders={folders}
+        autosaveEnabled={false}
+        defaultEditorMode="tiptap"
+      />,
+    );
+    expect(screen.getByLabelText('Folder')).toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'More actions' }),
+    ).not.toBeInTheDocument();
   });
 });

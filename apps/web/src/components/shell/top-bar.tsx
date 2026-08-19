@@ -10,7 +10,7 @@ import {
   useRef,
   useState,
 } from 'react';
-import { CompanyMark, Icon, Kbd } from '../ui';
+import { CompanyMark, Icon } from '../ui';
 import { apiFetch } from '../../lib/api';
 import { companyAccent } from '../../lib/company-format';
 import { lower } from '../../lib/term';
@@ -18,7 +18,6 @@ import {
   recordRecentCompany,
   type RecentCompany,
 } from '../../lib/recent-companies';
-import { useSearchPalette } from '../search/search-palette-provider';
 import { CompanyStickyNote } from './company-sticky-note';
 import { useStickyNote } from './sticky-note-context';
 import { useShellScope } from './shell-scope-context';
@@ -90,14 +89,6 @@ export function TopBar({
   // authenticated shell — in that case `TopBarActions` itself short-
   // circuits to `null` so the right slot stays empty (login, setup).
   const shellScope = useShellScope();
-  // Search trigger mirrors the sidebar button — same palette, same
-  // ⌘K hint — but sits in the header where the breadcrumb trail leaves
-  // a wide dead zone. Gated on `shellScope` rather than on the palette
-  // hook: `useSearchPalette()` deliberately returns a no-op context
-  // outside a provider, so it can't tell us whether a palette actually
-  // exists, and an inert search box on /login would be a lie.
-  const palette = useSearchPalette();
-  const showSearch = !!shellScope;
   return (
     <div
       style={{
@@ -129,11 +120,10 @@ export function TopBar({
             display: 'flex',
             alignItems: 'center',
             gap: 6,
-            // Without a search box the trail owns the row, as before.
-            // With one, the trail takes only what it needs — neither it
-            // nor the search grows, and the slack goes to the auto
-            // margin that pins the action cluster right.
-            flex: showSearch ? '0 1 auto' : 1,
+            // The trail owns the row again. The action cluster's own
+            // `margin-left: auto` still pins it right, and the chip
+            // inside stays at its natural width until the row runs out.
+            flex: 1,
             minWidth: 0,
             // Long breadcrumb trails scroll horizontally on phones
             // instead of wrapping into a second row and pushing the
@@ -214,57 +204,6 @@ export function TopBar({
             );
           })}
         </div>
-        {showSearch && (
-          <button
-            type="button"
-            onClick={palette.open}
-            aria-label="Open search"
-            className="topbar-chip hide-on-mobile"
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 8,
-              height: 28,
-              padding: '0 9px',
-              // Resting skin is inline, not in `.topbar-chip` — see the
-              // note on that class in `globals.css`. Longhand
-              // `borderStyle`/`Width`/`Color` rather than the `border`
-              // shorthand: a shorthand carrying a `var()` collapses
-              // *entirely* to its initial values if the token ever
-              // fails to resolve, and `border-style: none` means the
-              // rule vanishes rather than merely losing its colour.
-              borderStyle: 'solid',
-              borderWidth: 1,
-              borderColor: 'var(--line-2)',
-              borderRadius: 'var(--radius-card)',
-              background: 'var(--panel-2)',
-              color: 'var(--dim)',
-              // Never grows. A search field that stretches to fill the
-              // row reads as the row's main subject; this one is a
-              // shortcut sitting beside the trail, and the leftover
-              // width belongs to the action cluster's right edge.
-              flex: '0 1 220px',
-              minWidth: 0,
-              cursor: 'pointer',
-            }}
-          >
-            <Icon.search size={12} />
-            <span
-              style={{
-                flex: 1,
-                minWidth: 0,
-                fontSize: 12,
-                textAlign: 'left',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-              }}
-            >
-              Search everything
-            </span>
-            <Kbd>⌘K</Kbd>
-          </button>
-        )}
         {(right || shellScope) && (
           <div
             style={{
@@ -276,6 +215,11 @@ export function TopBar({
               // icons would trail the search box mid-row and drift with
               // the length of the company name.
               marginLeft: 'auto',
+              // Never gives ground. Page actions render here now
+              // (article Edit + overflow), and a shrinking cluster
+              // clips the avatar off the end of the row before the
+              // chip has truncated a single character.
+              flexShrink: 0,
             }}
           >
             {right}
@@ -493,6 +437,14 @@ function ScopePill({
           // A long tenant name truncates rather than pushing the
           // section and the search box off the row.
           maxWidth: 200,
+          // …and `min-width: 0` is what lets it truncate at all. A flex
+          // item defaults to `min-width: auto`, so without this the
+          // label holds its full content width, the chip can't shrink
+          // below it, and the trail's `overflow-x` clips the chip
+          // mid-segment instead — the section label losing its right
+          // border. The section half already carries this via
+          // `segment`; the tenant half sits one level deeper.
+          minWidth: 0,
         }}
       >
         {children}

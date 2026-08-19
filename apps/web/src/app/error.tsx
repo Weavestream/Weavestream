@@ -190,7 +190,7 @@ function BackendUnavailablePanel() {
           }}
         >
           The web app couldn&rsquo;t reach the Weavestream API. You have
-          not been signed out — this is a server availability issue, not
+          not been signed out. This is a server availability issue, not
           a login problem. If it persists, ask your administrator to
           check that the API service is running.
           <br />

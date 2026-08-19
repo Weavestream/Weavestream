@@ -16,6 +16,7 @@ import { companyAccent } from '../../lib/company-format';
 import type { StarredItem } from '../../lib/server-api';
 import { CompanyAvatar, Icon, LayoutSwatch, type IconName } from '../ui';
 import { ChatPanelToggle } from '../chat-panel/chat-panel-toggle';
+import { useSearchPalette } from '../search/search-palette-provider';
 
 export type ToolbarVariant = 'sidebar' | 'topbar';
 
@@ -51,6 +52,7 @@ export function SidebarToolbar({
   showStarred = true,
   showExpirations = true,
   showChat = true,
+  showSearch = true,
   variant = 'sidebar',
 }: {
   /**
@@ -75,6 +77,12 @@ export function SidebarToolbar({
    * so the panel can be opened via other affordances.
    */
   showChat?: boolean;
+  /**
+   * Hide the search trigger. On by default: search is available in
+   * every authenticated shell, admin and portal alike, because both
+   * mount `SearchPaletteProvider`.
+   */
+  showSearch?: boolean;
   /** Geometry preset — see `VARIANT_DIMS`. */
   variant?: ToolbarVariant;
 }) {
@@ -91,8 +99,32 @@ export function SidebarToolbar({
         />
       )}
       {showStarred && <StarredQuickAccessTrigger variant={variant} />}
+      {/* Between Starred and the AI toggle. Search used to sit in the
+          breadcrumb row as a 220px box with a placeholder and a ⌘K hint
+          — chrome shaped like an input that never accepted a keystroke,
+          since clicking it only opens the palette. One icon says the
+          same thing and gives the row its width back. */}
+      {showSearch && <SearchTrigger variant={variant} />}
       {showChat && <ChatPanelToggle variant={variant} />}
     </>
+  );
+}
+
+/**
+ * Opens the command palette. Uses the same `ToolbarIconButton` as its
+ * neighbours so the cluster stays one row of identical targets, and
+ * reads `active` from the palette so the icon lights while it is open.
+ */
+function SearchTrigger({ variant = 'sidebar' }: { variant?: ToolbarVariant }) {
+  const palette = useSearchPalette();
+  return (
+    <ToolbarIconButton
+      icon="search"
+      label="Search everything"
+      active={palette.isOpen}
+      onClick={palette.open}
+      variant={variant}
+    />
   );
 }
 
@@ -292,8 +324,6 @@ function StarredQuickPanel({
             borderRadius: 6,
             display: 'grid',
             placeItems: 'center',
-            color: 'var(--muted)',
-            background: 'transparent',
             cursor: 'pointer',
           }}
         >
@@ -515,8 +545,6 @@ function ToolbarIconLink({
     display: 'grid',
     placeItems: 'center',
     borderRadius: dims.radius,
-    color: active ? 'var(--text)' : 'var(--muted)',
-    background: active ? 'var(--panel-2)' : 'transparent',
     position: 'relative',
     cursor: 'pointer',
   };
@@ -527,6 +555,7 @@ function ToolbarIconLink({
       aria-label={label}
       title={label}
       className="sidebar-toolbar-icon"
+      data-active={active ? 'true' : undefined}
       style={style}
       prefetch={false}
     >
@@ -537,12 +566,12 @@ function ToolbarIconLink({
 }
 
 /**
- * Icon-only toolbar button. Exported so other members of the shell
- * chrome — the mobile search trigger in `MobileShellChrome` — sit on
- * exactly the same geometry and hover treatment as the shortcuts they
- * share a cluster with, instead of re-deriving the sizes inline.
+ * Icon-only toolbar button. Local again: the mobile chrome used to
+ * import it for its own search trigger, but search is now a member of
+ * this cluster like every other shortcut, so nothing outside this file
+ * needs the geometry.
  */
-export function ToolbarIconButton({
+function ToolbarIconButton({
   buttonRef,
   icon,
   label,
@@ -569,6 +598,7 @@ export function ToolbarIconButton({
       title={label}
       onClick={onClick}
       className="sidebar-toolbar-icon"
+      data-active={active ? 'true' : undefined}
       style={{
         width: dims.box,
         height: dims.box,
@@ -576,8 +606,6 @@ export function ToolbarIconButton({
         display: 'grid',
         placeItems: 'center',
         borderRadius: dims.radius,
-        color: active ? 'var(--text)' : 'var(--muted)',
-        background: active ? 'var(--panel-2)' : 'transparent',
         position: 'relative',
         cursor: 'pointer',
       }}

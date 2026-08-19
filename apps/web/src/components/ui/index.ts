@@ -33,7 +33,8 @@ export {
 export { Pagination, type PaginationProps } from './pagination';
 export { Dialog } from './dialog';
 export { Sheet, type SheetSide } from './sheet';
-export { StarButton } from './star-button';
+export { StarButton, StarGlyph, useStarToggle } from './star-button';
+export { OverflowMenu, MenuItem, MenuDivider } from './overflow-menu';
 export { UserPicker, type UserPickerValue } from './user-picker';
 export { CompanyPicker, type CompanyPickerValue } from './company-picker';
 export { ErrorBanner } from './error-banner';

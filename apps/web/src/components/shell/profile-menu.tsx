@@ -94,15 +94,12 @@ export function ProfileMenu({ me }: { me: ShellScopeMe }) {
           updatePosition();
           setOpen((v) => !v);
         }}
-        className="sidebar-toolbar-icon"
+        className="profile-avatar-button"
+        data-open={open ? 'true' : undefined}
         style={{
           width: 30,
           height: 30,
           borderRadius: '50%',
-          border: open ? '1px solid var(--line-2)' : '1px solid var(--line)',
-          background:
-            'linear-gradient(135deg, var(--line-3), var(--panel-2))',
-          color: 'var(--text-2)',
           fontSize: 11,
           fontWeight: 600,
           display: 'grid',

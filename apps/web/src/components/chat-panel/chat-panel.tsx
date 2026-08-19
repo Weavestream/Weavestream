@@ -192,6 +192,20 @@ function TabButton({
   onSelect: () => void;
   onClose: () => void;
 }) {
+  const ref = useRef<HTMLDivElement>(null);
+  // The strip is a horizontal scroller and new tabs are appended at
+  // the right edge, so an activated tab can sit past the visible
+  // width — the panel would then show a conversation whose tab the
+  // operator cannot see, on a strip where every other tab looks
+  // equally unselected. Pull the active tab into view on every
+  // activation, which includes the mount of a freshly added one.
+  // `nearest` on both axes scrolls the minimum distance and leaves
+  // the page's own vertical scroll alone.
+  useLayoutEffect(() => {
+    if (!active) return;
+    ref.current?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }, [active]);
+
   const IconCmp = tab.icon === 'doc' ? Icon.doc : Icon.chat;
   const style: CSSProperties = {
     display: 'inline-flex',
@@ -212,6 +226,7 @@ function TabButton({
   };
   return (
     <div
+      ref={ref}
       role="tab"
       aria-selected={active}
       tabIndex={active ? 0 : -1}
@@ -1546,8 +1561,6 @@ function IconButton({ icon, label, onClick, rotate, ref }: IconButtonProps) {
         display: 'grid',
         placeItems: 'center',
         borderRadius: 5,
-        color: 'var(--muted)',
-        background: 'transparent',
         cursor: 'pointer',
       }}
     >

@@ -15,7 +15,18 @@ import {
 import { apiFetch } from '../../../../../lib/api';
 import { useTimezone } from '../../../../../lib/timezone-context';
 import type { ArticleDetail, FolderNode } from '../../../../../lib/server-api';
-import { Btn, Dialog, Icon, Panel, Sheet, Tag, useToast } from '../../../../../components/ui';
+import {
+  Btn,
+  Dialog,
+  Icon,
+  MenuDivider,
+  MenuItem,
+  OverflowMenu,
+  Panel,
+  Sheet,
+  Tag,
+  useToast,
+} from '../../../../../components/ui';
 import { TopBar } from '../../../../../components/shell/top-bar';
 import { RichTextEditor } from '../../../../../components/editor/rich-text-editor';
 import {
@@ -28,8 +39,9 @@ import { useChatPageContext } from '../../../../../components/chat-panel/use-cha
 import { useTerm } from '../../../../../lib/term-context';
 import { companyCrumbs } from '../../../../../lib/company-crumbs';
 import { useIsMobile } from '../../../../../lib/hooks/use-is-mobile';
+import { NARROW_DESKTOP_PX } from '../../../../../lib/breakpoints';
 import { markdownToTiptapDoc, tiptapDocToMarkdown } from '../../../../../lib/article-format';
-import { ArticleActions } from './article-actions';
+import { useArticleArchive } from './article-actions';
 
 /**
  * Shared create + edit form. A single client component handles both
@@ -121,7 +133,13 @@ export function ArticleForm({
   const [formatSwitchPending, setFormatSwitchPending] = useState(false);
   const [scrollEl, setScrollEl] = useState<HTMLDivElement | null>(null);
   const isMobile = useIsMobile();
-  const [linksOpen, setLinksOpen] = useState(false);
+  // The read view's rails collapse at 1240 (see the narrow-desktop stage
+  // in `globals.css`); the editor has to agree or the same article gains
+  // a 320px rail the moment you click Edit. Below this the properties
+  // rail moves into the bottom sheet and the canvas claims the width.
+  // `isMobile` still governs the phone-only affordances beneath it.
+  const isNarrow = useIsMobile(NARROW_DESKTOP_PX);
+  const [detailsOpen, setDetailsOpen] = useState(false);
   const [switchOpen, setSwitchOpen] = useState(false);
   const [pendingMode, setPendingMode] = useState<ArticleEditorMode | null>(null);
 
@@ -432,6 +450,67 @@ export function ArticleForm({
     : autosaveEnabled && mode === 'edit'
       ? `auto-saved ${savedAgo}`
       : `saved ${savedAgo}`;
+
+  // Archive / restore / permanent-delete, shared with the read view and
+  // the list rows. The hook is unconditional (rules of hooks); the menu
+  // rows and dialogs that drive it only render in edit mode, where an
+  // article actually exists to archive.
+  const {
+    archived,
+    requestArchiveToggle,
+    requestPurge,
+    dialogs: archiveDialogsNode,
+  } = useArticleArchive({
+    article: {
+      id: article?.id ?? '',
+      companyId,
+      title: article?.title ?? '',
+      archivedAt: article?.archivedAt ?? null,
+    },
+    dirty,
+  });
+  const archiveDialogs = mode === 'edit' && article ? archiveDialogsNode : null;
+
+  // One definition, two placements: the right rail above the
+  // narrow-desktop threshold, the bottom sheet below it. Folder and
+  // visibility travel with the panels — on a narrow viewport they were
+  // previously unreachable from the editor at all, because the old
+  // sheet carried only links and attachments.
+  const sidebarContent = (
+    <>
+      <ArticleProperties
+        folders={flatFolders}
+        folderId={folderId}
+        onFolderChange={(next) => {
+          setFolderId(next);
+          markDirty();
+        }}
+        visibleToClients={visibleToClients}
+        onVisibilityChange={(next) => {
+          setVisibleToClients(next);
+          markDirty();
+        }}
+      />
+      {mode === 'edit' && article ? (
+        <>
+          <LinkedItemsPanel
+            companyId={companyId}
+            entityType="article"
+            entityId={article.id}
+            editable={!article.archivedAt}
+          />
+          <AttachmentsPanel
+            companyId={companyId}
+            entityType="article"
+            entityId={article.id}
+            editable={!article.archivedAt}
+          />
+        </>
+      ) : (
+        <CreateModeSidebarPlaceholders />
+      )}
+    </>
+  );
   // One measure for the title and the body beneath it, so the two never
   // drift apart. Prose stays at a readable 920; Markdown's single-pane
   // views get the wider 1200 a monospace source column wants, and Split
@@ -527,76 +606,96 @@ export function ArticleForm({
                 { label: 'editing', mono: true },
               ] as const)),
         )}
-        sub={
-          <>
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 6,
-                flexWrap: 'wrap',
-                minWidth: 0,
-              }}
+        // Same shape as the read view: the editor's own controls sit in
+        // the breadcrumb row rather than in a second 50px row below it.
+        // Cancel and Save stay visible — Cancel is the escape hatch and
+        // must never hide in a menu — while Preview and Archive move
+        // into the overflow.
+        right={
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span className="article-editor-save-status hide-on-narrow">
+              {autosaveLabel}
+            </span>
+            {dirty && <Tag tone="warn">unsaved</Tag>}
+            {hasServerDraft && !dirty && <Tag tone="warn">draft</Tag>}
+            <Btn kind="outline" size="md" disabled={saving} onClick={handleCancelClick}>
+              {mode === 'create' ? 'Discard' : 'Cancel'}
+            </Btn>
+            <Btn
+              kind="primary"
+              size="md"
+              icon={Icon.check}
+              loading={saving}
+              onClick={() => submit('publish')}
             >
-              {dirty && <Tag tone="warn">unsaved</Tag>}
-              {hasServerDraft && !dirty && <Tag tone="warn">draft</Tag>}
-            </div>
-            <div
-              className="page-header-actions"
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 8,
-                flexWrap: 'wrap',
-                justifyContent: 'flex-end',
-              }}
-            >
-              <span className="article-editor-save-status">{autosaveLabel}</span>
-              <Btn kind="outline" size="md" disabled={saving} onClick={handleCancelClick}>
-                {mode === 'create' ? 'Discard' : 'Cancel'}
-              </Btn>
-              {mode === 'edit' && article && (
-                <Btn
-                  kind="outline"
-                  size="md"
-                  icon={Icon.ext}
-                  onClick={() => {
-                    window.open(
-                      `/admin/companies/${companyId}/articles/${article.id}`,
-                      '_blank',
-                      'noopener,noreferrer',
-                    );
-                  }}
-                  title="Open the read view in a new tab"
-                >
-                  Preview
-                </Btn>
-              )}
-              {mode === 'edit' && article && (
-                <ArticleActions
-                  article={{
-                    id: article.id,
-                    companyId,
-                    title: article.title,
-                    archivedAt: article.archivedAt,
-                  }}
-                  layout="topbar"
-                  dirty={dirty}
-                />
-              )}
-              <Btn
-                kind="primary"
-                size="md"
-                icon={Icon.check}
-                loading={saving}
-                onClick={() => submit('publish')}
-              >
-                {mode === 'create' ? 'Publish' : 'Save'}
-              </Btn>
-            </div>
-          </>
+              {mode === 'create' ? 'Publish' : 'Save'}
+            </Btn>
+            {/* The menu is the only route to the properties rail below
+                1240, so it cannot be gated on edit mode: a *new* article
+                is exactly when Folder and Visibility matter, and on a
+                laptop the phone's floating trigger never appears. */}
+            {(isNarrow || (mode === 'edit' && article)) && (
+              <OverflowMenu>
+                {(close) => (
+                  <>
+                    {isNarrow && (
+                      <MenuItem
+                        icon={Icon.sliders}
+                        onClick={() => {
+                          setDetailsOpen(true);
+                          close();
+                        }}
+                      >
+                        Details
+                      </MenuItem>
+                    )}
+                    {mode === 'edit' && article && (
+                      <>
+                        <MenuItem
+                          icon={Icon.ext}
+                          onClick={() => {
+                            window.open(
+                              `/admin/companies/${companyId}/articles/${article.id}`,
+                              '_blank',
+                              'noopener,noreferrer',
+                            );
+                            close();
+                          }}
+                        >
+                          Preview
+                        </MenuItem>
+                        <MenuDivider />
+                        {archived ? (
+                          <MenuItem
+                            icon={Icon.trash}
+                            tone="danger"
+                            onClick={() => {
+                              requestPurge();
+                              close();
+                            }}
+                          >
+                            Delete forever
+                          </MenuItem>
+                        ) : (
+                          <MenuItem
+                            icon={Icon.archive}
+                            onClick={() => {
+                              requestArchiveToggle();
+                              close();
+                            }}
+                          >
+                            Archive
+                          </MenuItem>
+                        )}
+                      </>
+                    )}
+                  </>
+                )}
+              </OverflowMenu>
+            )}
+            {archiveDialogs}
+          </div>
         }
-        subClassName="page-header-sub"
       />
 
       {error && (
@@ -619,7 +718,7 @@ export function ArticleForm({
           flex: 1,
           minHeight: 0,
           display: 'grid',
-          gridTemplateColumns: !isMobile ? 'minmax(0, 1fr) 320px' : 'minmax(0, 1fr)',
+          gridTemplateColumns: !isNarrow ? 'minmax(0, 1fr) 320px' : 'minmax(0, 1fr)',
           gridTemplateRows: 'minmax(0, 1fr)',
         }}
       >
@@ -722,7 +821,7 @@ export function ArticleForm({
           </div>
         </div>
 
-        {!isMobile && (
+        {!isNarrow && (
           <aside
             className="scroll"
             style={{
@@ -735,74 +834,49 @@ export function ArticleForm({
               gap: 20,
             }}
           >
-            <ArticleProperties
-              folders={flatFolders}
-              folderId={folderId}
-              onFolderChange={(next) => {
-                setFolderId(next);
-                markDirty();
-              }}
-              visibleToClients={visibleToClients}
-              onVisibilityChange={(next) => {
-                setVisibleToClients(next);
-                markDirty();
-              }}
-            />
-            {mode === 'edit' && article ? (
-              <>
-                <LinkedItemsPanel
-                  companyId={companyId}
-                  entityType="article"
-                  entityId={article.id}
-                  editable={!article.archivedAt}
-                />
-                <AttachmentsPanel
-                  companyId={companyId}
-                  entityType="article"
-                  entityId={article.id}
-                  editable={!article.archivedAt}
-                />
-              </>
-            ) : (
-              <CreateModeSidebarPlaceholders />
-            )}
+            {sidebarContent}
           </aside>
         )}
       </div>
 
-      {mode === 'edit' && article && isMobile && (
+      {isNarrow && (
         <>
-          <button
-            type="button"
-            onClick={() => setLinksOpen(true)}
-            aria-label="Open linked items"
-            style={{
-              position: 'fixed',
-              bottom: 16,
-              right: 16,
-              zIndex: 60,
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: 6,
-              height: 42,
-              padding: '0 14px',
-              borderRadius: 999,
-              border: '1px solid var(--line)',
-              background: 'var(--accent-fill)',
-              color: 'var(--accent-fill-ink)',
-              fontSize: 13,
-              fontWeight: 600,
-              boxShadow: '0 6px 18px rgba(0,0,0,0.2)',
-              cursor: 'pointer',
-            }}
-          >
-            <Icon.link size={14} /> Links
-          </button>
+          {/* Thumb-reach shortcut, phones only. Above 768 the same sheet
+              opens from the header's overflow menu, where a floating pill
+              over a laptop-sized canvas would just be in the way. */}
+          {isMobile && (
+            <button
+              type="button"
+              onClick={() => setDetailsOpen(true)}
+              aria-label="Open article details"
+              style={{
+                position: 'fixed',
+                bottom: 16,
+                right: 16,
+                zIndex: 60,
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 6,
+                height: 42,
+                padding: '0 14px',
+                borderRadius: 999,
+                border: '1px solid var(--line)',
+                background: 'var(--accent-fill)',
+                color: 'var(--accent-fill-ink)',
+                fontSize: 13,
+                fontWeight: 600,
+                boxShadow: '0 6px 18px rgba(0,0,0,0.2)',
+                cursor: 'pointer',
+              }}
+            >
+              <Icon.sliders size={14} /> Details
+            </button>
+          )}
           <Sheet
-            open={linksOpen}
-            onClose={() => setLinksOpen(false)}
+            open={detailsOpen}
+            onClose={() => setDetailsOpen(false)}
             side="bottom"
-            ariaLabel="Linked items"
+            ariaLabel="Article details"
             height="min(80vh, 640px)"
           >
             <div
@@ -815,18 +889,7 @@ export function ArticleForm({
                 gap: 20,
               }}
             >
-              <LinkedItemsPanel
-                companyId={companyId}
-                entityType="article"
-                entityId={article.id}
-                editable={!article.archivedAt}
-              />
-              <AttachmentsPanel
-                companyId={companyId}
-                entityType="article"
-                entityId={article.id}
-                editable={!article.archivedAt}
-              />
+              {sidebarContent}
             </div>
           </Sheet>
         </>

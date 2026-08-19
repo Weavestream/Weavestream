@@ -11,7 +11,7 @@ import {
 } from '../../../../../../lib/server-api';
 import { canWriteCompany } from '../../../../../../lib/roles';
 import { TopBar } from '../../../../../../components/shell/top-bar';
-import { Icon, LinkBtn, Panel, ShowMore, StarButton, Tag } from '../../../../../../components/ui';
+import { Panel, ShowMore, Tag } from '../../../../../../components/ui';
 import { buildTerm } from '../../../../../../lib/term';
 import { companyCrumbs } from '../../../../../../lib/company-crumbs';
 import { ArticleBody } from '../../../../../../components/editor/article-body';
@@ -20,8 +20,7 @@ import { ArticleSideNavColumn } from '../../../../../../components/editor/articl
 import { ArticleToc } from '../../../../../../components/editor/article-toc';
 import { LinkedItemsPanel } from '../../../../../../components/relations';
 import { AttachmentsPanel } from '../../../../../../components/upload/attachments-panel';
-import { ArticleActions } from '../article-actions';
-import { HistoryTrigger } from './history-trigger';
+import { ArticleHeaderActions } from './article-header-actions';
 import {
   ProvenanceBadge,
   provenanceAttention,
@@ -74,82 +73,24 @@ export default async function ArticleReadPage({
           { label: 'Articles', href: `/admin/companies/${companyId}/articles` },
           { label: article.title },
         )}
-        sub={
-          <>
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 6,
-                flexWrap: 'wrap',
-                minWidth: 0,
-              }}
-            >
-              {!article.visibleToClients && <Tag tone="outline">internal</Tag>}
-              {article.archivedAt && <Tag tone="warn">archived</Tag>}
-            </div>
-            <div
-              className="page-header-actions"
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 8,
-                flexWrap: 'wrap',
-                justifyContent: 'flex-end',
-              }}
-            >
-              <StarButton
-                entityType="article"
-                entityId={article.id}
-                initialStarred={article.isStarred}
-                showLabel
-                iconSize={14}
-              />
-              <HistoryTrigger
-                companyId={companyId}
-                articleId={article.id}
-                hasDraft={article.hasDraft}
-                // Restore is only meaningful when the article is
-                // editable. Archived articles still expose the
-                // history list (compliance reads), but the restore
-                // action is locked behind unarchive.
-                canRestore={manage && !article.archivedAt}
-              />
-              {manage && (
-                <>
-                  {!article.archivedAt && (
-                    <LinkBtn
-                      href={`/admin/companies/${companyId}/articles/${article.id}/edit`}
-                      kind="outline"
-                      size="md"
-                      icon={<Icon.edit size={13} />}
-                    >
-                      Edit
-                    </LinkBtn>
-                  )}
-                  <ArticleActions
-                    article={{
-                      id: article.id,
-                      companyId,
-                      title: article.title,
-                      archivedAt: article.archivedAt,
-                    }}
-                    layout="topbar"
-                  />
-                  <LinkBtn
-                    href={`/admin/companies/${companyId}/articles/new${article.folderId ? `?folderId=${article.folderId}` : ''}`}
-                    kind="primary"
-                    size="md"
-                    icon={<Icon.plus size={13} />}
-                  >
-                    New article
-                  </LinkBtn>
-                </>
-              )}
-            </div>
-          </>
+        // One row, not two. The article's own actions ride in the
+        // breadcrumb row beside the global cluster; the status tags
+        // that used to share the old sub-row now sit with the title,
+        // where they describe the article rather than the chrome.
+        right={
+          <ArticleHeaderActions
+            companyId={companyId}
+            article={{
+              id: article.id,
+              title: article.title,
+              archivedAt: article.archivedAt,
+              folderId: article.folderId,
+              isStarred: article.isStarred,
+              hasDraft: article.hasDraft,
+            }}
+            manage={manage}
+          />
         }
-        subClassName="page-header-sub"
       />
 
       <div
@@ -177,6 +118,20 @@ export default async function ArticleReadPage({
               padding: '40px 40px 80px',
             }}
           >
+            {(!article.visibleToClients || article.archivedAt) && (
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  flexWrap: 'wrap',
+                  margin: '0 0 10px',
+                }}
+              >
+                {!article.visibleToClients && <Tag tone="outline">internal</Tag>}
+                {article.archivedAt && <Tag tone="warn">archived</Tag>}
+              </div>
+            )}
             <h1
               style={{
                 fontFamily: 'var(--font-display)',

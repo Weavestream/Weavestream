@@ -54,25 +54,32 @@ const ENTITY_TYPE_TO_LABEL: Record<EntityType, string> = {
   article: 'article',
 };
 
-export function StarButton({
+/**
+ * The toggle itself, without any chrome. Split out so a caller that
+ * renders the star somewhere other than a button — the article
+ * header's overflow menu renders it as a menu row — reuses this
+ * optimistic flip and its error handling rather than re-issuing the
+ * same PUT/DELETE against `/me/stars`.
+ */
+export function useStarToggle({
   entityType,
   entityId,
   initialStarred,
-  showLabel = false,
-  iconSize = 14,
   onToggled,
-  className,
-}: StarButtonProps) {
+}: Pick<
+  StarButtonProps,
+  'entityType' | 'entityId' | 'initialStarred' | 'onToggled'
+>) {
   const router = useRouter();
   const toast = useToast();
   const [starred, setStarred] = useState(initialStarred);
   const [pending, setPending] = useState(false);
 
-  async function toggle(e: React.MouseEvent<HTMLButtonElement>) {
+  async function toggle(e?: React.MouseEvent<HTMLElement>) {
     // Crucial when the button sits inside a clickable table row — we
     // don't want starring to navigate away from the list.
-    e.preventDefault();
-    e.stopPropagation();
+    e?.preventDefault();
+    e?.stopPropagation();
     if (pending) return;
     const next = !starred;
     setStarred(next);
@@ -99,7 +106,30 @@ export function StarButton({
     router.refresh();
   }
 
-  const entityLabel = ENTITY_TYPE_TO_LABEL[entityType];
+  return {
+    starred,
+    pending,
+    toggle,
+    entityLabel: ENTITY_TYPE_TO_LABEL[entityType],
+  };
+}
+
+export function StarButton({
+  entityType,
+  entityId,
+  initialStarred,
+  showLabel = false,
+  iconSize = 14,
+  onToggled,
+  className,
+}: StarButtonProps) {
+  const { starred, pending, toggle, entityLabel } = useStarToggle({
+    entityType,
+    entityId,
+    initialStarred,
+    onToggled,
+  });
+
   const ariaLabel = starred ? `Unstar ${entityLabel}` : `Star ${entityLabel}`;
 
   return (
@@ -149,9 +179,10 @@ export function StarButton({
 /**
  * Inline SVG rather than `Icon.star` so we can vary `fill` between
  * the two states cheaply. The d is copied from `Icon.star` so the
- * outline matches the rest of the iconography.
+ * outline matches the rest of the iconography. Exported for callers
+ * that render the star outside this button (the article header menu).
  */
-function StarGlyph({ filled, size }: { filled: boolean; size: number }) {
+export function StarGlyph({ filled, size }: { filled: boolean; size: number }) {
   return (
     <svg
       width={size}

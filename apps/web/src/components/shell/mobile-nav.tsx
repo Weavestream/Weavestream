@@ -2,9 +2,7 @@
 
 import { useState, type ReactNode } from 'react';
 import { AppLogo, Icon, Sheet } from '../ui';
-import { useSearchPalette } from '../search/search-palette-provider';
 import { useShellScope } from './shell-scope-context';
-import { ToolbarIconButton } from './sidebar-toolbar';
 import { TopBarActions } from './top-bar-actions';
 
 /**
@@ -36,11 +34,6 @@ export function MobileShellChrome({
   sidebar: ReactNode;
 }) {
   const [open, setOpen] = useState(false);
-  // Gated on the shell scope rather than on the palette hook, matching
-  // `TopBar`: `useSearchPalette()` returns a no-op context outside a
-  // provider, so it can't tell us whether a palette actually exists.
-  // Both shells that mount this chrome provide the two together.
-  const palette = useSearchPalette();
   const shellScope = useShellScope();
 
   return (
@@ -115,13 +108,9 @@ export function MobileShellChrome({
               flexShrink: 0,
             }}
           >
-            <ToolbarIconButton
-              icon="search"
-              label="Open search"
-              active={palette.isOpen}
-              onClick={palette.open}
-              variant="topbar"
-            />
+            {/* Search rides inside `TopBarActions` now, between Starred
+                and the AI toggle, so the phone bar and the desktop row
+                order their shortcuts identically. */}
             <TopBarActions variant="mobile" />
           </div>
         )}

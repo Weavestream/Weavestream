@@ -264,7 +264,14 @@ type Action =
   | { type: 'toggle' }
   | { type: 'toggleMinimized' }
   | { type: 'setWidth'; width: number }
-  | { type: 'addFreeformTab' }
+  | {
+      /**
+       * "New chat". Idempotent: when a pristine freeform tab already
+       * exists the action focuses it instead of stacking a second
+       * identical empty tab — see `pristineFreeformTab`.
+       */
+      type: 'addFreeformTab';
+    }
   | { type: 'addLoadedTab'; tab: ChatTab }
   | {
       /**
@@ -437,6 +444,33 @@ function newFreeformTab(): ChatTab {
   };
 }
 
+/**
+ * The first tab that is still exactly what `newFreeformTab()`
+ * produced — no server conversation, no messages, no attached
+ * mentions — or undefined when every open tab holds something.
+ *
+ * A tab with mentions is deliberately NOT pristine: the operator
+ * attached that context on purpose, and dropping them into it as if
+ * it were a blank chat would hand them a conversation pre-loaded with
+ * context they didn't ask for on this click.
+ *
+ * The composer draft is not part of the test either, but for a
+ * different reason: it lives in the composer's own state (keyed on
+ * tab id), so the reducer cannot see it. Reuse therefore keeps
+ * whatever was typed in that tab rather than discarding it, which is
+ * the safe direction — the alternative would be silently destroying
+ * text the operator wrote.
+ */
+function pristineFreeformTab(tabs: ChatTab[]): ChatTab | undefined {
+  return tabs.find(
+    (t) =>
+      t.kind === 'freeform' &&
+      t.conversationId === null &&
+      t.messages.length === 0 &&
+      t.mentions.length === 0,
+  );
+}
+
 function reducer(state: State, action: Action): State {
   switch (action.type) {
     case 'open':
@@ -463,6 +497,22 @@ function reducer(state: State, action: Action): State {
     case 'setWidth':
       return { ...state, width: clampWidth(action.width) };
     case 'addFreeformTab': {
+      // An untouched "New chat" tab already IS a new chat, so a
+      // second click focuses it rather than stacking another empty
+      // one the operator then has to close by hand. Restoring a
+      // persisted strip can surface more than one (they predate this
+      // rule); the leftmost wins, which keeps repeated clicks landing
+      // on the same tab instead of walking the strip.
+      const existing = pristineFreeformTab(state.tabs);
+      if (existing) {
+        // Already showing it and not minimized: nothing to change.
+        // Returning `state` itself keeps this a no-op render and
+        // skips a pointless persistence write.
+        if (state.activeTabId === existing.id && !state.isMinimized) {
+          return state;
+        }
+        return { ...state, activeTabId: existing.id, isMinimized: false };
+      }
       const t = newFreeformTab();
       return {
         ...state,

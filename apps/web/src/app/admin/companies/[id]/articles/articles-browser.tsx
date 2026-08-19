@@ -287,7 +287,6 @@ export function ArticlesBrowser({
                         title: a.title,
                         archivedAt: a.archivedAt,
                       }}
-                      layout="row"
                     />
                   </div>
                 )}

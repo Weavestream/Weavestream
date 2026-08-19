@@ -76,6 +76,95 @@
     display: none !important;
   }
 }
+/* Narrow desktop — the content rails go before the shell does.
+ *
+ * Every content column in this app is sized against the viewport
+ * *minus the 248px sidebar*, so a 1000px window is really a 752px
+ * page. The rails were collapsing at the phone breakpoint (768),
+ * which meant a 900px laptop window rendered the article read view
+ * as 248 + 240 + 320 of chrome around a 92px column — a word per
+ * line — and asset detail with a ~150px value column that broke a
+ * URL one character at a time.
+ *
+ * The number is arithmetic, not taste. The article read view spends
+ * 248 + 240 + 320 = 808px on chrome at every width, and the body adds
+ * 80px of its own padding, so the reading measure is `viewport - 888`.
+ * A 45-character minimum is about 340px of text, which needs 1228px of
+ * viewport; 1240 is the first round width that clears it. At 1160 the
+ * measure is 272px — roughly 36 characters — which is why it reads as
+ * cramped well before anything visibly overflows.
+ *
+ * Asset and password detail (`1fr 320px`, no folder rail) could hold
+ * out nearer 1050, but they share the number: one narrow-desktop shape
+ * is worth more than a per-page threshold, and stacking their rail
+ * early costs nothing.
+ *
+ * The shell itself — sidebar, search chip, global cluster — stays put
+ * until 768. A 1100px laptop should not be handed the phone chrome to
+ * fix a reading-width problem.
+ *
+ * Both blocks intentionally use the same `!important` as the phone
+ * block below: every element here carries inline grid geometry. */
+@media (max-width: 1239.98px) {
+  /* Detail pages that put a sticky right-rail aside next to main
+   * content (admin asset detail = `1fr 320px`) stack into a single
+   * column so the aside stops squeezing the field values. */
+  .detail-grid-main-aside {
+    grid-template-columns: 1fr !important;
+  }
+  /* Article read view: hide the folder nav and the TOC, let the body
+   * claim the width, and drop the linked-items / attachments rail
+   * inline below the article so it stays reachable without an
+   * edit-mode round-trip. */
+  .article-read-grid {
+    grid-template-columns: 1fr !important;
+    flex: 0 0 auto !important;
+    min-height: 0 !important;
+  }
+  .article-read-grid > .article-read-sidenav {
+    display: none !important;
+  }
+  .article-read-grid .article-read-toc {
+    display: none !important;
+  }
+  .article-read-grid > .article-read-main {
+    overflow: visible !important;
+    min-height: 0 !important;
+  }
+  .article-read-grid > .article-read-aside {
+    border-left: none !important;
+    border-top: 1px solid var(--line) !important;
+    padding: 24px 32px 32px !important;
+    overflow: visible !important;
+    min-height: 0 !important;
+  }
+  /* Losing the rails must not swap one unreadable measure for another:
+   * ungoverned, the body would run the full 912px of a 1160px window,
+   * about 120 characters a line. 620px outer keeps the same ~79
+   * characters the 3-column desktop view gives, so the reading
+   * experience is continuous across the breakpoint rather than jumping
+   * from cramped to sprawling. The aside is capped and centred on the
+   * same 620 so its rule and its panels line up under the article
+   * instead of spanning past it. */
+  .article-read-grid .article-read-body {
+    max-width: 620px !important;
+    padding: 32px 32px 48px !important;
+  }
+  .article-read-grid > .article-read-aside {
+    max-width: 620px;
+    margin: 0 auto;
+    width: 100%;
+  }
+  /* Supplementary chrome that loses its seat first. The editor's
+   * autosave stamp is the clearest case: it is the least-load-bearing
+   * thing in a row that also has to hold Cancel, Save, the overflow and
+   * the global cluster, and dropping it is what keeps the scope chip
+   * from being crushed to a single letter. */
+  .hide-on-narrow {
+    display: none !important;
+  }
+}
+
 @media (max-width: 767.98px) {
   .hide-on-mobile {
     display: none !important;
@@ -102,42 +191,11 @@
   .form-grid-2col {
     grid-template-columns: 1fr !important;
   }
-  /* Detail pages that put a sticky right-rail aside next to main
-   * content (admin asset detail = `1fr 320px`) stack into a single
-   * column on phones so the 320 px aside doesn't overlap the main
-   * panel. */
-  .detail-grid-main-aside {
-    grid-template-columns: 1fr !important;
-  }
-  /* Admin article read view uses a 3-column layout (nav + content +
-   * aside). On phones we collapse it to a single column: hide the
-   * folder nav and the TOC, let the article body claim the viewport,
-   * and drop the LinkedItemsPanel inline below the article so it's
-   * still reachable without an edit-mode round-trip. */
-  .article-read-grid {
-    grid-template-columns: 1fr !important;
-    flex: 0 0 auto !important;
-    min-height: 0 !important;
-  }
-  .article-read-grid > .article-read-sidenav {
-    display: none !important;
-  }
-  .article-read-grid .article-read-toc {
-    display: none !important;
-  }
-  .article-read-grid > .article-read-main {
-    overflow: visible !important;
-    min-height: 0 !important;
-  }
-  .article-read-grid > .article-read-aside {
-    border-left: none !important;
-    border-top: 1px solid var(--line) !important;
-    padding: 20px 16px 20px !important;
-    overflow: visible !important;
-    min-height: 0 !important;
-  }
   .article-read-grid .article-read-body {
     padding: 24px 16px 32px !important;
+  }
+  .article-read-grid > .article-read-aside {
+    padding: 20px 16px 20px !important;
   }
   /* Portal knowledge-base browser (folder tree + article list) stacks
    * the folder nav above the article list on phones instead of locking
@@ -275,16 +333,70 @@ button.topbar-chip-seg {
 .sidebar-switcher-entry:hover {
   background: var(--panel-2);
 }
-/* Thin icon-strip tray pinned above the user block. Each shortcut is
- * a 26px tappable target, so hover needs a clear-but-quiet state that
- * doesn't flash when skimming across the row. Active state comes from
- * the component itself (`var(--panel-2)` background), so hover must
- * be a touch lighter than that to read as a distinct affordance. */
+/* Thin icon-strip tray pinned above the user block, and the same
+ * buttons in the top bar and the chat panel. Each shortcut is a
+ * 26-30px tappable target, so hover needs a clear-but-quiet state
+ * that doesn't flash when skimming across the row.
+ *
+ * Resting, hover, and active colors ALL live here. They used to be
+ * set inline per call site, which silently killed every rule below:
+ * an inline `background`/`color` outranks any class selector, so the
+ * hover state never painted on a single one of these buttons. Call
+ * sites now set geometry only, and mark state with `data-active`:
+ *   (absent)   idle
+ *   'true'     neutral active — the current route, or an open popover
+ *   'accent'   accent active — a panel this button is holding open
+ *
+ * Hover is a translucent overlay rather than an opaque token because
+ * these buttons sit on three different hosts (`--bg` in the top bar,
+ * `--panel` in the sidebar, `--panel-2` in the chat tab strip). Any
+ * single opaque value disappears against one of them; an overlay
+ * lifts in dark and deepens in light on all three. */
 .sidebar-toolbar-icon {
-  transition: background 120ms ease, color 120ms ease;
+  color: var(--muted);
+  background: transparent;
+  transition: background 120ms ease, color 120ms ease, box-shadow 120ms ease;
 }
 .sidebar-toolbar-icon:hover {
+  background: color-mix(in oklab, var(--text) 8%, transparent);
+  color: var(--text);
+}
+.sidebar-toolbar-icon[data-active='true'] {
   background: var(--panel-2);
+  color: var(--text);
+}
+.sidebar-toolbar-icon[data-active='true']:hover {
+  background: color-mix(in oklab, var(--text) 14%, transparent);
+}
+/* Accent active — see `ChatPanelToggle`. The ring is an inset shadow,
+ * not a border, so the glyph never shifts by a pixel on toggle. */
+.sidebar-toolbar-icon[data-active='accent'] {
+  background: var(--accent-soft);
+  color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent-line);
+}
+.sidebar-toolbar-icon[data-active='accent']:hover {
+  background: color-mix(in oklab, var(--accent) 22%, transparent);
+  color: var(--accent);
+}
+
+/* Account avatar, last item in the same cluster. It carries its own
+ * gradient fill, so the translucent hover overlay above would be
+ * invisible under it — this one brightens the ring and the initials
+ * instead. Colors live here for the same reason as the tray above:
+ * inline values outrank the hover rule. `data-open` marks the menu. */
+.profile-avatar-button {
+  background: linear-gradient(135deg, var(--line-3), var(--panel-2));
+  border: 1px solid var(--line);
+  color: var(--text-2);
+  transition: border-color 120ms ease, color 120ms ease;
+}
+.profile-avatar-button:hover {
+  border-color: var(--line-3);
+  color: var(--text);
+}
+.profile-avatar-button[data-open='true'] {
+  border-color: var(--line-2);
   color: var(--text);
 }
 

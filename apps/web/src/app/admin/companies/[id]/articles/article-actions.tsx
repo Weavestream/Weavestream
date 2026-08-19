@@ -6,10 +6,14 @@ import { apiFetch } from '../../../../../lib/api';
 import { Btn, Dialog, Icon, useToast } from '../../../../../components/ui';
 
 /**
- * Shared archive / restore / purge controls for a single article. Used in
- * three layouts:
- *   - `topbar`  : full-label buttons on the article read and edit headers.
- *   - `row`     : compact icon-only buttons appended to a list row.
+ * Shared archive / restore / purge controls for a single article.
+ *
+ * Two consumers, one implementation:
+ *   - `useArticleArchive` — the mutations plus both confirm dialogs, for
+ *     callers that supply their own triggers. The article header renders
+ *     Restore as its primary button and Archive / Delete forever as rows
+ *     in the overflow menu, so it cannot use the buttons below.
+ *   - `ArticleActions` — the compact icon-only pair appended to a list row.
  *
  * Mirrors the asset-actions pattern in
  * `apps/web/src/app/admin/companies/[id]/assets/[assetId]/asset-actions.tsx`.
@@ -24,14 +28,12 @@ type ArticleLite = {
   archivedAt: string | null;
 };
 
-export function ArticleActions({
+export function useArticleArchive({
   article,
-  layout,
   onAfter,
   dirty,
 }: {
   article: ArticleLite;
-  layout: 'topbar' | 'row';
   onAfter?: (event: 'archived' | 'restored' | 'purged') => void;
   /**
    * When the parent owns unsaved editor state (the Edit page), pass `true`
@@ -93,40 +95,8 @@ export function ArticleActions({
 
   const purgeConfirmReady = purgeText.trim() === article.title.trim();
 
-  const isRow = layout === 'row';
-  const btnSize = isRow ? 'sm' : 'md';
-
-  return (
+  const dialogs = (
     <>
-      <Btn
-        kind={archived ? 'solid' : 'outline'}
-        size={btnSize}
-        icon={archived ? Icon.check : Icon.archive}
-        iconOnly={isRow}
-        onClick={(e) => {
-          e.stopPropagation();
-          setConfirming(true);
-        }}
-        title={archived ? 'Restore article' : 'Archive article'}
-      >
-        {isRow ? undefined : archived ? 'Restore' : 'Archive'}
-      </Btn>
-      {archived && (
-        <Btn
-          kind="danger"
-          size={btnSize}
-          icon={Icon.trash}
-          iconOnly={isRow}
-          onClick={(e) => {
-            e.stopPropagation();
-            setPurgeText('');
-            setPurging(true);
-          }}
-          title="Permanently delete archived article"
-        >
-          {isRow ? undefined : 'Delete forever'}
-        </Btn>
-      )}
       <Dialog
         open={confirming}
         onClose={() => !pending && setConfirming(false)}
@@ -242,6 +212,64 @@ export function ArticleActions({
           </label>
         </div>
       </Dialog>
+    </>
+  );
+
+  return {
+    archived,
+    /** Opens the archive-or-restore confirm, whichever applies. */
+    requestArchiveToggle: () => setConfirming(true),
+    /** Opens the type-the-title permanent-delete confirm. */
+    requestPurge: () => {
+      setPurgeText('');
+      setPurging(true);
+    },
+    /** Render once, anywhere in the caller's tree. */
+    dialogs,
+  };
+}
+
+/**
+ * Compact icon-only pair for a list row. Detail headers use
+ * `useArticleArchive` directly and render their own triggers.
+ */
+export function ArticleActions({
+  article,
+  onAfter,
+}: {
+  article: ArticleLite;
+  onAfter?: (event: 'archived' | 'restored' | 'purged') => void;
+}) {
+  const { archived, requestArchiveToggle, requestPurge, dialogs } =
+    useArticleArchive({ article, onAfter });
+
+  return (
+    <>
+      <Btn
+        kind={archived ? 'solid' : 'outline'}
+        size="sm"
+        icon={archived ? Icon.check : Icon.archive}
+        iconOnly
+        onClick={(e) => {
+          e.stopPropagation();
+          requestArchiveToggle();
+        }}
+        title={archived ? 'Restore article' : 'Archive article'}
+      />
+      {archived && (
+        <Btn
+          kind="danger"
+          size="sm"
+          icon={Icon.trash}
+          iconOnly
+          onClick={(e) => {
+            e.stopPropagation();
+            requestPurge();
+          }}
+          title="Permanently delete archived article"
+        />
+      )}
+      {dialogs}
     </>
   );
 }

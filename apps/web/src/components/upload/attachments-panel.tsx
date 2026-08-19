@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Btn, Icon, Panel, useToast } from '../ui';
-import { FormattedRelative } from '../../lib/timezone-context';
 import { apiFetch } from '../../lib/api';
 import { humanSize } from '@weavestream/shared';
 import {
@@ -448,21 +447,17 @@ function AttachmentRow({
         >
           {attachment.filename}
         </span>
+        {/* Size only. The upload date was the longer half of this line
+            and the half nobody acts on — a filename that already
+            truncates should not be sharing its row with a timestamp. */}
         <span
           style={{
             fontSize: 10.5,
             color: 'var(--muted)',
             fontFamily: 'var(--font-mono)',
-            display: 'flex',
-            alignItems: 'center',
-            gap: 6,
           }}
         >
-          <span>{humanSize(attachment.sizeBytes)}</span>
-          <span style={{ color: 'var(--dim)' }}>·</span>
-          <span>
-            <FormattedRelative value={attachment.createdAt} />
-          </span>
+          {humanSize(attachment.sizeBytes)}
         </span>
       </a>
       {editable && (

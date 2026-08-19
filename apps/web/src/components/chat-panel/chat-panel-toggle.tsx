@@ -17,10 +17,16 @@ const VARIANT_DIMS = {
 
 /**
  * Ask button rendered alongside the rest of the shell toolbar.
- * Toggles the chat panel open/closed and lights up when the panel is
- * open (matches the `ToolbarIconButton` active treatment in
- * sidebar-toolbar.tsx). The `variant` prop selects sidebar (compact)
- * or topbar (slightly larger / thicker) geometry.
+ * Toggles the chat panel open/closed. The `variant` prop selects
+ * sidebar (compact) or topbar (slightly larger / thicker) geometry.
+ *
+ * The open state deliberately departs from the neutral
+ * `ToolbarIconButton` active treatment (`data-active='true'`) and
+ * takes the accent tint instead (`data-active='accent'`, painted in
+ * globals.css). This button is the panel's *only* close control, so
+ * "the panel is open, click here to close it" has to read at a
+ * glance; a one-notch background shift next to an already-muted
+ * glyph does not.
  */
 export function ChatPanelToggle({
   variant = 'sidebar',
@@ -34,10 +40,11 @@ export function ChatPanelToggle({
     <button
       type="button"
       aria-pressed={active}
-      aria-label="Ask anything"
-      title="Ask anything"
+      aria-label={active ? 'Close Ask anything' : 'Ask anything'}
+      title={active ? 'Close Ask anything' : 'Ask anything'}
       onClick={toggle}
       className="sidebar-toolbar-icon"
+      data-active={active ? 'accent' : undefined}
       style={{
         width: dims.box,
         height: dims.box,
@@ -45,8 +52,6 @@ export function ChatPanelToggle({
         display: 'grid',
         placeItems: 'center',
         borderRadius: dims.radius,
-        color: active ? 'var(--text)' : 'var(--muted)',
-        background: 'transparent',
         position: 'relative',
         cursor: 'pointer',
       }}

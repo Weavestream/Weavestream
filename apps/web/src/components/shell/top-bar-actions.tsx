@@ -41,8 +41,9 @@ export function TopBarActions({
   // client portal shells where Expirations/Starred/Chat are all
   // hidden) — a vertical rule floating next to a lone avatar reads as
   // a visual glitch.
-  const hasToolbarShortcuts =
-    scope.showExpirations || scope.showStarred || showChat;
+  // Search is unconditional inside an authenticated shell, so the
+  // divider before the avatar always has something to separate from.
+  const hasToolbarShortcuts = true;
 
   return (
     <div
