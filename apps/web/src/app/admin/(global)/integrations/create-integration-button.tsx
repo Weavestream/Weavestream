@@ -152,7 +152,7 @@ export function CreateIntegrationButton({
               loading={pending}
               disabled={!requiredOk}
             >
-              Create
+              Create integration
             </Btn>
           </>
         }

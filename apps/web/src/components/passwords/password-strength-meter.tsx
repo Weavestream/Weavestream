@@ -1,6 +1,6 @@
 'use client';
 
-import type { CSSProperties } from 'react';
+import type { CSSProperties, ReactNode } from 'react';
 import {
   PASSWORD_STRENGTH_LABELS,
   PASSWORD_STRENGTH_TONES,
@@ -31,14 +31,28 @@ export function PasswordStrengthMeter({
   score,
   width = '100%',
   inline = false,
+  trailing,
   style,
 }: {
   score: number | null;
   width?: string | number;
   inline?: boolean;
+  /**
+   * Rendered beside the verdict label. The passwords table passes the
+   * breach chip here so "very weak" and "seen in 1.6M breaches" read as
+   * one judgement rather than two columns.
+   *
+   * Passing it also left-aligns the stacked label, which is only right
+   * for a label that has something to sit next to — every other call
+   * site keeps the trailing alignment it has today.
+   */
+  trailing?: ReactNode;
   style?: CSSProperties;
 }) {
   const s = score ?? -1;
+  // A scored password colours its own verdict. `--muted` stays for the
+  // unscored em dash, where there is no tone to carry.
+  const labelColor = TONES[s] ?? 'var(--muted, #8a8a8a)';
   return (
     <div
       style={{
@@ -74,13 +88,18 @@ export function PasswordStrengthMeter({
       </div>
       <div
         style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 6,
           fontSize: 11,
-          color: 'var(--muted, #8a8a8a)',
-          textAlign: inline ? 'left' : 'right',
+          color: labelColor,
+          justifyContent:
+            inline || trailing ? 'flex-start' : 'flex-end',
           whiteSpace: 'nowrap',
         }}
       >
-        {score === null ? '—' : LABELS[s]}
+        <span>{score === null ? '—' : LABELS[s]}</span>
+        {trailing}
       </div>
     </div>
   );

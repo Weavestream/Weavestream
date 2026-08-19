@@ -36,8 +36,8 @@ export default async function CompanyIpamPage({
   const openNew = sp.new === '1';
   const subnets = includeArchived
     ? await import('../../../../../lib/server-api').then((m) =>
-        m.listSubnets(companyId, { includeArchived: true }),
-      )
+      m.listSubnets(companyId, { includeArchived: true }),
+    )
     : await getCompanySubnetsBasic(companyId);
 
   const manage = canWriteCompany(me, company.id);
@@ -48,7 +48,7 @@ export default async function CompanyIpamPage({
         crumbs={companyCrumbs(term, company, { label: 'IPAM' })}
         leading={<LayoutSwatch icon="network" color="var(--accent)" size={48} />}
         title="IPAM"
-        description={`IPv4 subnet management for this ${lower(term.one)}. Subnets auto-discover assets by their IP address fields.`}
+        // description={`IPv4 subnet management for this ${lower(term.one)}. Subnets auto-discover assets by their IP address fields.`}
         actions={manage ? <NewSubnetAction /> : null}
       />
       <PageBody>

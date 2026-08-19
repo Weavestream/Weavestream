@@ -22,11 +22,17 @@ export const btnKindMap: Record<
   BtnKind,
   { bg: string; fg: string; bd: string; hover: string }
 > = {
+  // The commit action of a page, form or dialog — create, save, update,
+  // publish. Deliberately a tint rather than a solid fill: it is the
+  // action you want when you want one, not the loudest thing on screen,
+  // and a screenful of solid accent spends the palette's only strong
+  // colour on chrome. Built like `danger` — soft fill, the tone as ink, a
+  // same-tone border, and a hover a notch above the resting tint.
   primary: {
-    bg: 'var(--accent-fill)',
-    fg: 'var(--accent-fill-ink)',
-    bd: 'var(--accent-fill)',
-    hover: 'var(--accent-fill-hover)',
+    bg: 'var(--accent-soft)',
+    fg: 'var(--accent)',
+    bd: 'var(--accent-line)',
+    hover: 'color-mix(in oklch, var(--accent) 22%, transparent)',
   },
   solid: {
     bg: 'var(--panel-2)',

@@ -154,7 +154,10 @@ export function PasswordFolderSettingsDialog({
       onClose={() => {
         if (!pending) onClose();
       }}
-      title="Folder settings"
+      // A string rather than a composed node so the dialog keeps its
+      // accessible name (`aria-label` falls back to undefined for a
+      // ReactNode title). The `h2` wraps, so a long folder name is safe.
+      title={`Folder settings · ${folder.name}`}
       width={460}
       footer={footerFor(tab, {
         pending,
@@ -262,8 +265,12 @@ export function PasswordFolderSettingsDialog({
               lineHeight: 1.5,
             }}
           >
-            Archiving the folder moves its credentials to Unfiled. The folder
-            itself can be restored later — nothing is permanently deleted.
+            Archiving{' '}
+            <strong style={{ color: 'var(--text)', fontWeight: 600 }}>
+              {folder.name}
+            </strong>{' '}
+            moves its credentials to Unfiled. The folder itself can be restored
+            later — nothing is permanently deleted.
           </p>
 
           {hasSubfolders ? (

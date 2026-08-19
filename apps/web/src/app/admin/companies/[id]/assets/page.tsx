@@ -1,5 +1,4 @@
 import type { Metadata } from 'next';
-import Link from 'next/link';
 
 export const metadata: Metadata = { title: 'Assets' };
 import {
@@ -13,7 +12,7 @@ import {
 } from '../../../../../lib/server-api';
 import { canWriteCompany } from '../../../../../lib/roles';
 import { PageBody, PageHeader } from '../../../../../components/shell/page-header';
-import { Icon, LayoutSwatch, Panel, Tag } from '../../../../../components/ui';
+import { Icon, LayoutSwatch, LinkBtn, Panel, Tag } from '../../../../../components/ui';
 import { buildTerm, lower } from '../../../../../lib/term';
 import { companyCrumbs } from '../../../../../lib/company-crumbs';
 import { AssetsTable } from './assets-table';
@@ -74,32 +73,21 @@ export default async function CompanyAssetsPage({
         crumbs={companyCrumbs(term, company, { label: 'Assets' })}
         leading={<LayoutSwatch icon="box" color="var(--accent)" size={48} />}
         title="Assets"
-        description={
-          activeLayout
-            ? `Filtered to ${activeLayout.name}.`
-            : `Every asset tracked for this ${lower(term.one)}, across all layouts.`
-        }
+        // description={
+        //   activeLayout
+        //     ? `Filtered to ${activeLayout.name}.`
+        //     : `Every asset tracked for this ${lower(term.one)}, across all layouts.`
+        // }
         actions={
           manage ? (
-            <Link
+            <LinkBtn
+              kind="primary"
+              size="md"
+              icon={<Icon.plus size={13} />}
               href={`/admin/companies/${companyId}/assets/new${layoutId ? `?layout=${layoutId}` : ''}`}
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 6,
-                height: 30,
-                padding: '0 11px',
-                background: 'var(--accent-fill)',
-                color: 'var(--accent-fill-ink)',
-                borderRadius: 5,
-                fontSize: 12.5,
-                fontWeight: 600,
-                letterSpacing: -0.1,
-              }}
             >
-              <Icon.plus size={13} />
               New asset
-            </Link>
+            </LinkBtn>
           ) : null
         }
       />

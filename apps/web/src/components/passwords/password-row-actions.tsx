@@ -11,6 +11,16 @@ export interface PasswordRowActionsProps {
   username: string | null;
   url: string | null;
   requiresReason?: boolean;
+  /**
+   * Opt-in table treatment: the icons rest at `--faint` and lift as the
+   * pointer enters the row, so three glyphs per row stop competing with
+   * the data they sit beside.
+   *
+   * Off everywhere by default. The detail sidebar has no row to hover,
+   * so it must keep the strength it has today — which is exactly why
+   * this is a prop rather than a change to how the component paints.
+   */
+  recessive?: boolean;
 }
 
 /**
@@ -39,6 +49,7 @@ export function PasswordRowActions({
   username,
   url,
   requiresReason,
+  recessive,
 }: PasswordRowActionsProps) {
   const toast = useToast();
   const [busy, setBusy] = useState(false);
@@ -151,8 +162,18 @@ export function PasswordRowActions({
     );
   }
 
+  // `Btn` writes `color` into the inline style, which no stylesheet rule
+  // can outrank without `!important`. So the buttons resolve their ink
+  // from a custom property instead and `.pw-row-actions` in globals.css
+  // moves that property per state — the one hook a parent row's `:hover`
+  // can actually reach.
+  const ink = recessive
+    ? { color: 'var(--pw-action-ink, var(--text-2))' }
+    : undefined;
+
   return (
     <div
+      className={recessive ? 'pw-row-actions' : undefined}
       style={{
         display: 'inline-flex',
         alignItems: 'center',
@@ -165,6 +186,7 @@ export function PasswordRowActions({
         disabled={busy || !url}
         onClick={() => void copyUrl()}
         title={url ? 'Copy URL' : 'No URL'}
+        style={ink}
         iconOnly
       >
         <Icon.link size={12} />
@@ -174,6 +196,7 @@ export function PasswordRowActions({
         disabled={busy || !username}
         onClick={() => void copyUsername()}
         title={username ? 'Copy username' : 'No username'}
+        style={ink}
         iconOnly
       >
         <Icon.person size={12} />
@@ -183,6 +206,7 @@ export function PasswordRowActions({
         disabled={busy}
         onClick={handleCopyPassword}
         title="Copy password"
+        style={ink}
         iconOnly
       >
         <Icon.copy size={12} />

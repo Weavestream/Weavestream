@@ -850,7 +850,7 @@ function ReservationDialog({
             Cancel
           </Btn>
           <Btn kind="primary" type="submit" disabled={submitDisabled}>
-            {saving ? 'Saving…' : initial ? 'Save' : 'Create'}
+            {saving ? 'Saving…' : initial ? 'Save' : 'Create reservation'}
           </Btn>
         </div>
       </form>

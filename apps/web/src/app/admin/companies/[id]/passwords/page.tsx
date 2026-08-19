@@ -63,9 +63,9 @@ export default async function CompanyPasswordsPage({
         crumbs={companyCrumbs(term, company, { label: 'Passwords' })}
         leading={<LayoutSwatch icon="lock" color="var(--accent)" size={48} />}
         title="Passwords"
-        description={`Access and manage shared passwords and logins for this ${lower(
-          term.one,
-        )}.`}
+        //description={`Access and manage shared passwords and logins for this ${lower(
+        //  term.one,
+        //)}.`}
         actions={manage ? <NewPasswordAction /> : null}
       />
       <PageBody>
@@ -92,6 +92,7 @@ export default async function CompanyPasswordsPage({
             openNew={openNew}
             prefillAssetId={prefillAssetId}
             generatorDefaults={settings.passwordGeneratorDefaults}
+            showCounts={me.preferences.showItemCounts}
           />
         </Panel>
       </PageBody>

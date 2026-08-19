@@ -56,9 +56,9 @@ export default async function CompanyDomainsPage({
         crumbs={companyCrumbs(term, company, { label: 'Domains' })}
         leading={<LayoutSwatch icon="globe" color="var(--accent)" size={48} />}
         title="Domains"
-        description={`WHOIS expiry, SSL/TLS certificate health, and DNS records for this ${lower(
-          term.one,
-        )}.`}
+        // description={`WHOIS expiry, SSL/TLS certificate health, and DNS records for this ${lower(
+        //   term.one,
+        // )}.`}
         actions={manage ? <NewDomainAction /> : null}
       />
       <PageBody>

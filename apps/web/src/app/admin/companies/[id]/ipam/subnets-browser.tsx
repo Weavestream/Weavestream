@@ -586,7 +586,7 @@ function SubnetDialog({
             Cancel
           </Btn>
           <Btn kind="primary" type="submit" disabled={submitDisabled}>
-            {saving ? 'Saving…' : initial ? 'Save' : 'Create'}
+            {saving ? 'Saving…' : initial ? 'Save' : 'Create subnet'}
           </Btn>
         </div>
       </form>

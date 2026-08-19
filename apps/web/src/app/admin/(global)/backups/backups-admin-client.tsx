@@ -705,7 +705,11 @@ function ScheduleDialog({
             Cancel
           </Btn>
           <Btn kind="primary" onClick={save} disabled={pending}>
-            {pending ? 'Saving…' : 'Save'}
+            {pending
+              ? 'Saving…'
+              : state.mode === 'create'
+                ? 'Create backup schedule'
+                : 'Save'}
           </Btn>
         </>
       }

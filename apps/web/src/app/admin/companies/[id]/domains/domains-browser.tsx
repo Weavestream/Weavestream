@@ -438,7 +438,7 @@ function DomainDialog({
             disabled={submitting || form.hostname.trim().length === 0}
             style={primaryBtn}
           >
-            {submitting ? 'Saving…' : initial ? 'Save changes' : 'Add'}
+            {submitting ? 'Saving…' : initial ? 'Save changes' : 'Create domain'}
           </button>
         </div>
       </form>
@@ -739,13 +739,17 @@ const hintStyle: React.CSSProperties = {
   color: 'var(--dim)',
 };
 
+// Same recipe as `Btn kind="primary"`; kept as a local style object
+// because these are raw buttons with their own padding. The 1px border
+// is not decoration — it is what finally makes this box the same height
+// as `secondaryBtn` beside it, which has carried one all along.
 const primaryBtn: React.CSSProperties = {
   padding: '7px 14px',
   fontSize: 12.5,
   fontWeight: 600,
-  background: 'var(--accent-fill)',
-  color: 'var(--accent-fill-ink)',
-  border: 'none',
+  background: 'var(--accent-soft)',
+  color: 'var(--accent)',
+  border: '1px solid var(--accent-line)',
   borderRadius: 5,
   cursor: 'pointer',
 };

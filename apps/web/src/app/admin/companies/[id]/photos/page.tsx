@@ -59,9 +59,9 @@ export default async function CompanyPhotosPage({
         crumbs={companyCrumbs(term, company, { label: 'Photos' })}
         leading={<LayoutSwatch icon="image" color="var(--accent)" size={48} />}
         title="Photos"
-        description={`Every image uploaded to this ${lower(
-          term.one,
-        )} — attachments, article images, and asset-field captures.`}
+      // description={`Every image uploaded to this ${lower(
+      //   term.one,
+      // )} — attachments, article images, and asset-field captures.`}
       />
       <PageBody>
         <Panel noPad>
@@ -474,15 +474,15 @@ function ActionChip({
   const styles =
     tone === 'accent'
       ? {
-          color: 'var(--accent)',
-          background: 'var(--accent-soft)',
-          border: '1px solid var(--accent-line)',
-        }
+        color: 'var(--accent)',
+        background: 'var(--accent-soft)',
+        border: '1px solid var(--accent-line)',
+      }
       : {
-          color: 'var(--muted)',
-          background: 'var(--panel)',
-          border: '1px solid var(--line)',
-        };
+        color: 'var(--muted)',
+        background: 'var(--panel)',
+        border: '1px solid var(--line)',
+      };
   return (
     <Link
       href={href}

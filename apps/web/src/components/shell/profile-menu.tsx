@@ -140,7 +140,7 @@ export function ProfileMenu({ me }: { me: ShellScopeMe }) {
               onSelect={() => setOpen(false)}
             />
             <MobileAppLink onSelect={() => setOpen(false)} />
-            <AppearanceRow />
+            <AppearanceRow onSelect={() => setOpen(false)} />
           </div>
           <div style={{ borderTop: '1px solid var(--line)', padding: 6 }}>
             <SignOutRow onSignedOut={() => setOpen(false)} />
@@ -302,13 +302,19 @@ function MobileAppLink({ onSelect }: { onSelect: () => void }) {
  * opened would go stale the moment the other instance — or the `/me`
  * appearance form, or an OS light/dark flip — changed the theme.
  */
-function AppearanceRow() {
+function AppearanceRow({ onSelect }: { onSelect: () => void }) {
   const theme = useDomTheme();
   const mounted = useThemeHydrated();
 
   async function flip() {
     const next: UiTheme = theme === 'dark' ? 'light' : 'dark';
     applyDomTheme(next);
+    // Close on the optimistic flip, not after the round-trip: every
+    // other row in this menu dismisses it, and the whole app repainting
+    // behind the popover is louder feedback than the value badge. The
+    // rest of `flip` touches no local state, so unmounting mid-request
+    // is safe.
+    onSelect();
     const res = await apiFetch('/me/preferences', {
       method: 'PATCH',
       body: JSON.stringify({ uiTheme: next }),
@@ -335,7 +341,7 @@ function AppearanceRow() {
       suppressHydrationWarning
     >
       <Glyph size={14} stroke={1.5} style={{ color: 'var(--muted)' }} />
-      <span style={{ flex: 1 }}>Appearance</span>
+      <span style={{ flex: 1 }}>Theme</span>
       <span
         style={{
           fontFamily: 'var(--font-mono)',

@@ -1,5 +1,4 @@
 import type { Metadata } from 'next';
-import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import {
   forMetadata,
@@ -15,7 +14,7 @@ import {
   PageBody,
   PageHeader,
 } from '../../../../../../components/shell/page-header';
-import { Icon, LayoutSwatch, Panel, Tag } from '../../../../../../components/ui';
+import { Icon, LayoutSwatch, LinkBtn, Panel, Tag } from '../../../../../../components/ui';
 import { buildTerm } from '../../../../../../lib/term';
 import { companyCrumbs } from '../../../../../../lib/company-crumbs';
 import { LayoutAssetsTable } from '../../../../../../components/layouts/layout-assets-table';
@@ -101,27 +100,17 @@ export default async function LayoutAssetsPage({
           <LayoutSwatch icon={layout.icon} color={layout.color} size={48} />
         }
         title={layout.name}
-        description={`Every ${layout.name} record tracked for ${company.name}.`}
+        // description={`Every ${layout.name} record tracked for ${company.name}.`}
         actions={
           manage ? (
-            <Link
+            <LinkBtn
+              kind="primary"
+              size="md"
+              icon={<Icon.plus size={13} />}
               href={`/admin/companies/${companyId}/assets/new?layout=${layout.id}`}
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 6,
-                height: 30,
-                padding: '0 11px',
-                background: 'var(--accent-fill)',
-                color: 'var(--accent-fill-ink)',
-                borderRadius: 5,
-                fontSize: 12.5,
-                fontWeight: 600,
-              }}
             >
-              <Icon.plus size={13} />
               New {layout.name}
-            </Link>
+            </LinkBtn>
           ) : null
         }
       />

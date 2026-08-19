@@ -30,11 +30,11 @@ describe('CreatePasswordDialog URL validation', () => {
 
     expect(url).toHaveValue('javascript:alert(1)');
     expect(screen.getByRole('alert')).toHaveTextContent(/starting with http:\/\//i);
-    expect(screen.getByRole('button', { name: 'Create' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Create password' })).toBeDisabled();
     expect(apiFetch).not.toHaveBeenCalled();
 
     fireEvent.change(url, { target: { value: 'https://router.example/admin' } });
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Create' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Create password' })).toBeEnabled();
   });
 });

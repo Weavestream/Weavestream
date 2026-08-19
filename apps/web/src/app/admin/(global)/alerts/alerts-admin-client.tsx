@@ -384,7 +384,11 @@ function AlertDialog({
             Cancel
           </Btn>
           <Btn kind="primary" onClick={save} disabled={pending}>
-            {pending ? 'Saving…' : 'Save'}
+            {pending
+              ? 'Saving…'
+              : state.mode === 'create'
+                ? 'Create alert'
+                : 'Save'}
           </Btn>
         </>
       }

@@ -210,7 +210,8 @@ model User {
   // the correct theme on the very first byte without calling /auth/me.
   uiTheme                   UiTheme              @default(SYSTEM) @map("ui_theme")
   uiAccent                  UiAccent             @default(LIME) @map("ui_accent")
-  // Sidebar item counts (assets per layout, domains, passwords, subnets).
+  // Sidebar item counts (assets per layout, domains, passwords, subnets)
+  // and the folder/tag totals in the passwords vault rail.
   // Off by default and for every existing row: the counts are ambient
   // density rather than something a user navigates by, so they are opt-in.
   // Warning badges are NOT covered by this — an anomaly must stay visible

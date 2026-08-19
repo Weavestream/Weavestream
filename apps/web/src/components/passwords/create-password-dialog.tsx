@@ -168,7 +168,7 @@ export function CreatePasswordDialog({
             Cancel
           </Btn>
           <Btn size="sm" kind="primary" onClick={() => void submit()} disabled={!valid || busy}>
-            Create
+            Create password
           </Btn>
         </div>
       }

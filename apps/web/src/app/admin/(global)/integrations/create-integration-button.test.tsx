@@ -50,7 +50,7 @@ describe('CreateIntegrationButton', () => {
     fireEvent.change(screen.getByLabelText('Display name'), { target: { value: 'Breeze production' } });
     fireEvent.change(screen.getByLabelText('Breeze URL *'), { target: { value: 'https://breeze.example' } });
     fireEvent.change(screen.getByLabelText('Partner API key *'), { target: { value: 'secret-key' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Create integration' }));
 
     await waitFor(() => expect(apiFetch).toHaveBeenCalledWith('/admin/integrations', expect.objectContaining({
       method: 'POST',
@@ -82,7 +82,7 @@ describe('CreateIntegrationButton', () => {
     fireEvent.change(screen.getByLabelText('Partner API key *'), { target: { value: 'secret-key' } });
     fireEvent.change(screen.getByLabelText('Sync schedule'), { target: { value: '0 */6 * * *' } });
     expect(screen.getByRole('option', { name: 'Every 6 hours' })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Create integration' }));
 
     await waitFor(() => expect(apiFetch).toHaveBeenCalledWith('/admin/integrations', expect.objectContaining({
       method: 'POST',
@@ -104,7 +104,7 @@ describe('CreateIntegrationButton', () => {
     fireEvent.change(screen.getByLabelText('Display name'), { target: { value: 'Breeze production' } });
     fireEvent.change(screen.getByLabelText('Breeze URL *'), { target: { value: 'https://breeze.example' } });
     fireEvent.change(screen.getByLabelText('Partner API key *'), { target: { value: 'secret-key' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Create integration' }));
 
     await waitFor(() => expect(toast.push).toHaveBeenCalledWith('Could not create integration.', 'danger'));
     expect(JSON.stringify(toast.push.mock.calls)).not.toContain('secret-key');

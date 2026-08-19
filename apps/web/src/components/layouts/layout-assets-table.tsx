@@ -20,6 +20,7 @@ import {
   type DataColumn,
   Icon,
   LayoutSwatch,
+  LinkBtn,
   MobileCardRow,
   Tag,
 } from '../ui';
@@ -195,24 +196,14 @@ export function LayoutAssetsTable({
             No {layout.name} yet for this company.
           </div>
           {canManage && (
-            <Link
+            <LinkBtn
+              kind="primary"
+              size="md"
+              icon={<Icon.plus size={13} />}
               href={`${basePath}/assets/new?layout=${layout.id}`}
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 6,
-                height: 30,
-                padding: '0 12px',
-                background: 'var(--accent-fill)',
-                color: 'var(--accent-fill-ink)',
-                borderRadius: 5,
-                fontSize: 12.5,
-                fontWeight: 600,
-              }}
             >
-              <Icon.plus size={13} />
               New {layout.name}
-            </Link>
+            </LinkBtn>
           )}
         </div>
       </div>
