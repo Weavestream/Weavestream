@@ -1,23 +1,20 @@
 import Link from 'next/link';
 import type { ReactNode } from 'react';
-import type { MembershipRole } from '@weavestream/shared';
 import {
   getCompanyDetail,
   getCompanyDomainsBasic,
   requireMe,
   getSettings,
   listAssets,
-  serverApiFetch,
   throwUnlessFound,
   type CompanyDetail,
   type MonitoredDomain,
 } from '../../../../lib/server-api';
-import { canWriteCompany, hasCapability } from '../../../../lib/roles';
+import { canWriteCompany } from '../../../../lib/roles';
 import { DetailTitle, PageBody } from '../../../../components/shell/page-header';
 import { TopBar } from '../../../../components/shell/top-bar';
 import {
   CompanyAvatar,
-  ErrorBanner,
   Icon,
   LayoutSwatch,
   Panel,
@@ -33,60 +30,39 @@ import {
   formatAddressLines,
 } from '../../../../lib/company-format';
 import { CompanyActions } from './company-actions';
-import { CompanyMemberships } from './company-memberships';
-
-type MembershipListing = {
-  id: string;
-  role: MembershipRole;
-  expiresAt: string | null;
-  createdAt: string;
-  updatedAt: string;
-  user: {
-    id: string;
-    email: string;
-    name: string;
-    role: string;
-    isActive: boolean;
-    mfaEnabled: boolean;
-  };
-};
 
 /**
  * Company "home" / glance overview. Phase 9a layout:
  *
  *   Contact / Address / Classification panels
  *   → Domain alert banner (only when something is actually failing)
- *   → Recent assets + Memberships
+ *   → Recent assets
  *
  * Editing all the expanded fields happens on the dedicated
- * `/admin/companies/:id/settings` page — keeps this one scannable.
+ * `/admin/companies/:id/settings` page, and the roster on
+ * `/admin/companies/:id/members` — keeps this one scannable.
  */
 export default async function CompanyDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const me = await requireMe();
   const term = buildTerm(await getSettings());
 
-  const [companyRes, membershipsRes, assetsPage, domainPage] = await Promise.all([
+  const [companyRes, assetsPage, domainPage] = await Promise.all([
     // Deduped against the parent layout's `getCompanyDetail(id)` by
     // React's per-request `cache()`. Same for `getCompanyDomainsBasic`
     // below. See `lib/server-api.ts` for the full list of
     // layout-shared cached reads.
     getCompanyDetail(id),
-    serverApiFetch<MembershipListing[]>(`/companies/${id}/memberships`),
     listAssets(id, { limit: 5 }),
     getCompanyDomainsBasic(id),
   ]);
   const company = throwUnlessFound(companyRes, `/companies/${id}`);
-  const memberships = membershipsRes.data ?? [];
-  const membershipsError = !membershipsRes.ok ? membershipsRes : null;
   const recentAssets = assetsPage.items;
   const domains = domainPage.items;
   // RBAC v2 — editing the company itself (archive, settings) is a
-  // per-company write, gated by `canWriteCompany`. Membership writes
-  // are platform-admin (`MEMBERSHIP_MANAGE`); we still surface the
-  // panel as read-only for anyone who can read the company.
+  // per-company write, gated by `canWriteCompany`. The roster carries
+  // its own platform-admin gates and now lives on `/members`.
   const manage = canWriteCompany(me, company.id);
-  const manageMemberships = hasCapability(me, 'MEMBERSHIP_MANAGE');
   const accent = companyAccent(company.id);
   const logoUrl = company.logo?.url ?? company.logo?.thumbnailUrl ?? null;
 
@@ -228,27 +204,6 @@ export default async function CompanyDetailPage({ params }: { params: Promise<{ 
             </ul>
           )}
         </Panel>
-        <div id="memberships" style={{ scrollMarginTop: 80 }}>
-          {membershipsError ? (
-            <ErrorBanner
-              title="Couldn't load memberships."
-              detail={
-                (membershipsError.problem as { detail?: string } | undefined)?.detail ??
-                `The memberships endpoint returned HTTP ${membershipsError.status}.`
-              }
-            />
-          ) : null}
-          <Panel title="Memberships" noPad>
-            <CompanyMemberships
-              companyId={company.id}
-              companyName={company.name}
-              companySlug={company.slug}
-              companyArchivedAt={company.archivedAt}
-              initial={memberships}
-              canManage={manageMemberships}
-            />
-          </Panel>
-        </div>
       </PageBody>
     </>
   );
@@ -457,7 +412,17 @@ function ClassificationPanel({ company, manage }: { company: CompanyDetail; mana
             }
           />
         )}
-        <Row label="Active members" value={<span>{company.memberCount}</span>} />
+        <Row
+          label="Active members"
+          value={
+            <Link
+              href={`/admin/companies/${company.id}/members`}
+              style={{ color: 'var(--accent)', textDecoration: 'none' }}
+            >
+              {company.memberCount}
+            </Link>
+          }
+        />
         <Row
           label="Created"
           value={

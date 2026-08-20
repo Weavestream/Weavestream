@@ -606,6 +606,40 @@ export const getCompanyPasswordFolders = cache(
     listPasswordFolders(companyId),
 );
 
+/**
+ * One row of `/companies/:id/memberships`. Declared here so the Members
+ * page and the client table it renders share a single definition —
+ * previously the same shape was mirrored in both files.
+ */
+export type CompanyMembership = {
+  id: string;
+  role: MembershipRole;
+  expiresAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+  user: {
+    id: string;
+    email: string;
+    name: string;
+    role: string;
+    isActive: boolean;
+    mfaEnabled: boolean;
+  };
+};
+
+/**
+ * `/companies/:id/memberships` — the active roster for one company.
+ * Returns the raw `ServerApiResponse` (as `getCompanyDetail` does)
+ * because the Members page renders an `ErrorBanner` on a failed read
+ * rather than degrading to an empty table.
+ */
+export const getCompanyMemberships = cache(
+  async (
+    companyId: string,
+  ): Promise<ServerApiResponse<CompanyMembership[]>> =>
+    serverApiFetch<CompanyMembership[]>(`/companies/${companyId}/memberships`),
+);
+
 export type CompanyType =
   | 'CLIENT'
   | 'PROSPECT'

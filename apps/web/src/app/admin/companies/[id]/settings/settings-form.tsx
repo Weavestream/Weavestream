@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { apiFetch } from '../../../../../lib/api';
 import {
   Btn,
+  Dialog,
   Field,
   Icon,
   Input,
@@ -108,6 +109,7 @@ export function CompanySettingsForm({
   const [error, setError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [slugTouched, setSlugTouched] = useState(false);
+  const [confirmLeave, setConfirmLeave] = useState(false);
 
   function set<K extends keyof Draft>(key: K, value: Draft[K]) {
     setDraft((prev) => ({ ...prev, [key]: value }));
@@ -195,6 +197,25 @@ export function CompanySettingsForm({
     setSlugTouched(false);
     setError(null);
     setFieldErrors({});
+  }
+
+  function leave() {
+    router.push(`/admin/companies/${company.id}`);
+  }
+
+  /**
+   * Cancel goes back to the company without saving. Clean forms leave
+   * straight away; a dirty one confirms first, because Cancel sits next
+   * to Revert and the save bar has just told the operator how many
+   * changes they are holding. Discarding those silently on a misclick
+   * is the one failure this button can cause.
+   */
+  function onCancel() {
+    if (!hasChanges) {
+      leave();
+      return;
+    }
+    setConfirmLeave(true);
   }
 
   return (
@@ -522,6 +543,7 @@ export function CompanySettingsForm({
           padding: '10px 14px',
           display: 'flex',
           alignItems: 'center',
+          flexWrap: 'wrap',
           gap: 10,
           boxShadow: 'var(--shadow-1)',
         }}
@@ -532,6 +554,7 @@ export function CompanySettingsForm({
             color: error ? 'var(--danger)' : 'var(--muted)',
             fontFamily: 'var(--font-mono)',
             flex: 1,
+            minWidth: 150,
           }}
         >
           {hasChanges
@@ -542,6 +565,9 @@ export function CompanySettingsForm({
                 }`
             : 'All changes saved'}
         </span>
+        <Btn kind="ghost" type="button" onClick={onCancel} disabled={pending}>
+          Cancel
+        </Btn>
         <Btn
           kind="ghost"
           type="button"
@@ -561,6 +587,32 @@ export function CompanySettingsForm({
           Save changes
         </Btn>
       </div>
+
+      <Dialog
+        open={confirmLeave}
+        onClose={() => setConfirmLeave(false)}
+        title="Discard unsaved changes?"
+        footer={
+          <>
+            <Btn
+              kind="ghost"
+              type="button"
+              onClick={() => setConfirmLeave(false)}
+            >
+              Keep editing
+            </Btn>
+            <Btn kind="danger" type="button" onClick={leave}>
+              Discard changes
+            </Btn>
+          </>
+        }
+      >
+        <p style={{ margin: 0, fontSize: 13, color: 'var(--text-2)', lineHeight: 1.5 }}>
+          {Object.keys(dirty).length} unsaved change
+          {Object.keys(dirty).length === 1 ? '' : 's'} will be lost. This
+          doesn't touch anything already saved.
+        </p>
+      </Dialog>
     </form>
   );
 }

@@ -66,6 +66,7 @@ export function CompanyShell({
   subnetCount,
   subnetConflictBadge,
   portalHasSubnets = true,
+  memberCount,
   stickyNote,
 }: {
   me: Me;
@@ -122,6 +123,11 @@ export function CompanyShell({
   subnetConflictBadge?: number;
   /** Hide IPAM entry on the portal when the tenant has no subnets. */
   portalHasSubnets?: boolean;
+  /**
+   * Active memberships for this company. Dim count on the Members
+   * entry, matching Domains / IPAM / Passwords. Admin mode only.
+   */
+  memberCount?: number;
   /**
    * Optional per-company banner shown above the breadcrumbs on every
    * page. Populated from the company settings — admin layout passes
@@ -250,16 +256,30 @@ export function CompanyShell({
     });
   }
 
-  // The Admin-console jump is gated by `canAccessAdminShell` — it
-  // holds for SUPER_ADMINs and any OPERATOR with non-NONE
-  // `globalAccess` or a granted platform capability. Surfaced from
-  // both modes so an operator viewing a client portal still has a
+  // Operator-only surfaces, gated by `canAccessAdminShell` — it holds
+  // for SUPER_ADMINs and any OPERATOR with non-NONE `globalAccess` or a
+  // granted platform capability.
+  //
+  // Members is admin-mode only. The portal has no `/members` route, so
+  // an operator browsing a client portal would otherwise be handed a
+  // dead link. The Admin-console jump stays in both modes — that's the
   // one-click escape back to admin.
   const adminAccess = canAccessAdminShell(me);
   if (adminAccess) {
     sections.push({
       title: 'Operator',
       items: [
+        ...(isAdmin
+          ? [
+              {
+                id: 'members',
+                label: 'Members',
+                icon: 'users' as const,
+                href: `${base}/members`,
+                count: memberCount,
+              },
+            ]
+          : []),
         {
           id: 'admin-console',
           label: 'Admin console',

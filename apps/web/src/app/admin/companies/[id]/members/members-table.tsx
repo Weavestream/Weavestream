@@ -3,7 +3,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import type { MembershipRole, UserRole } from '@weavestream/shared';
-import { apiFetch } from '../../../../lib/api';
+import type { CompanyMembership as Row } from '../../../../../lib/server-api';
+import { apiFetch } from '../../../../../lib/api';
 import {
   Btn,
   DataTable,
@@ -18,25 +19,9 @@ import {
   useToast,
   type DataColumn,
   type UserPickerValue,
-} from '../../../../components/ui';
-import { membershipRoleLabel, roleLabel } from '../../../../lib/roles';
-import { CreateUserButton } from '../../(global)/users/create-user-button';
-
-type Row = {
-  id: string;
-  role: MembershipRole;
-  expiresAt: string | null;
-  createdAt: string;
-  updatedAt: string;
-  user: {
-    id: string;
-    email: string;
-    name: string;
-    role: string;
-    isActive: boolean;
-    mfaEnabled: boolean;
-  };
-};
+} from '../../../../../components/ui';
+import { membershipRoleLabel, roleLabel } from '../../../../../lib/roles';
+import { CreateUserButton } from '../../../(global)/users/create-user-button';
 
 // RBAC v2: CLIENT_USER memberships are pinned to READONLY at the API
 // tier; every other global role can pick either. The picker here
@@ -48,13 +33,26 @@ function membershipRolesFor(userRole: UserRole | string | undefined): Membership
   return userRole === 'CLIENT_USER' ? ['READONLY'] : MEMBERSHIP_ROLES;
 }
 
-export function CompanyMemberships({
+/**
+ * The company roster. Lives on `/admin/companies/:id/members`; it used
+ * to be a panel on company home, which made a quick overview carry a
+ * full management surface.
+ *
+ * Two gates, because the toolbar and the row actions need different
+ * capabilities. `canManage` is MEMBERSHIP_MANAGE and covers edit and
+ * revoke. `canInvite` additionally requires USER_MANAGE, which both
+ * toolbar buttons need: the picker reads `GET /users` and the invite
+ * flow posts `POST /users`, and both routes carry
+ * `@RequirePermission('user.manage')`.
+ */
+export function MembersTable({
   companyId,
   companyName,
   companySlug,
   companyArchivedAt,
   initial,
   canManage,
+  canInvite,
 }: {
   companyId: string;
   companyName: string;
@@ -62,6 +60,7 @@ export function CompanyMemberships({
   companyArchivedAt: string | null;
   initial: Row[];
   canManage: boolean;
+  canInvite: boolean;
 }) {
   const router = useRouter();
   const toast = useToast();
@@ -140,6 +139,10 @@ export function CompanyMemberships({
     {
       id: 'user',
       header: 'Member',
+      // Pinned column, so `DataTable` needs a real number here — it
+      // otherwise warns and falls back to 220px, which crops the
+      // longer addresses in the stacked name/email cell.
+      width: 280,
       sortValue: (r) => r.user.name.toLowerCase(),
       render: (r) => (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
@@ -206,8 +209,15 @@ export function CompanyMemberships({
   }
 
   return (
-    <div>
-      {canManage && (
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        flex: 1,
+        minHeight: 0,
+      }}
+    >
+      {canInvite && (
         <div
           style={{
             display: 'flex',
@@ -234,81 +244,91 @@ export function CompanyMemberships({
           </Btn>
         </div>
       )}
-      <DataTable
-        columns={columns}
-        rows={rows}
-        empty="Nobody here yet. Add your first member to give them access."
-        renderMobileCard={(r) => (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            <div>
-              <div
-                style={{ color: 'var(--text)', fontWeight: 600, fontSize: 14 }}
-              >
-                {r.user.name}
+      <div
+        style={{
+          flex: 1,
+          minHeight: 0,
+          display: 'flex',
+          flexDirection: 'column',
+        }}
+      >
+        <DataTable
+          fillHeight
+          columns={columns}
+          rows={rows}
+          empty="Nobody here yet. Add your first member to give them access."
+          renderMobileCard={(r) => (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <div>
+                <div
+                  style={{ color: 'var(--text)', fontWeight: 600, fontSize: 14 }}
+                >
+                  {r.user.name}
+                </div>
+                <div
+                  style={{
+                    fontFamily: 'var(--font-mono)',
+                    fontSize: 11.5,
+                    color: 'var(--dim)',
+                    wordBreak: 'break-all',
+                  }}
+                >
+                  {r.user.email}
+                </div>
               </div>
-              <div
-                style={{
-                  fontFamily: 'var(--font-mono)',
-                  fontSize: 11.5,
-                  color: 'var(--dim)',
-                  wordBreak: 'break-all',
-                }}
-              >
-                {r.user.email}
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                <Tag tone="accent">{membershipRoleLabel(r.role)}</Tag>
+                <span
+                  style={{
+                    fontFamily: 'var(--font-mono)',
+                    fontSize: 11,
+                    color: 'var(--muted)',
+                    padding: '3px 6px',
+                    border: '1px solid var(--line)',
+                    borderRadius: 999,
+                  }}
+                >
+                  global: {roleLabel(r.user.role)}
+                </span>
               </div>
-            </div>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-              <Tag tone="accent">{membershipRoleLabel(r.role)}</Tag>
-              <span
-                style={{
-                  fontFamily: 'var(--font-mono)',
-                  fontSize: 11,
-                  color: 'var(--muted)',
-                  padding: '3px 6px',
-                  border: '1px solid var(--line)',
-                  borderRadius: 999,
-                }}
-              >
-                global: {roleLabel(r.user.role)}
-              </span>
-            </div>
-            <MobileCardRow label="Expires" mono>
-              {r.expiresAt ? (
-                <ExpirationTag date={r.expiresAt} />
-              ) : (
-                <span style={{ color: 'var(--dim)' }}>—</span>
+              <MobileCardRow label="Expires" mono>
+                {r.expiresAt ? (
+                  <ExpirationTag date={r.expiresAt} />
+                ) : (
+                  <span style={{ color: 'var(--dim)' }}>—</span>
+                )}
+              </MobileCardRow>
+              {canManage && (
+                <div
+                  style={{
+                    display: 'flex',
+                    gap: 6,
+                    flexWrap: 'wrap',
+                    paddingTop: 4,
+                  }}
+                >
+                  <Btn
+                    kind="outline"
+                    size="sm"
+                    icon={Icon.edit}
+                    onClick={() => setEditing(r)}
+                  >
+                    Edit
+                  </Btn>
+                  <Btn
+                    kind="ghost"
+                    size="sm"
+                    icon={Icon.trash}
+                    onClick={() => setRevoking(r)}
+                  >
+                    Revoke
+                  </Btn>
+                </div>
               )}
-            </MobileCardRow>
-            {canManage && (
-              <div
-                style={{
-                  display: 'flex',
-                  gap: 6,
-                  flexWrap: 'wrap',
-                  paddingTop: 4,
-                }}
-              >
-                <Btn
-                  kind="outline"
-                  size="sm"
-                  icon={Icon.edit}
-                  onClick={() => setEditing(r)}
-                >
-                  Edit
-                </Btn>
-                <Btn
-                  kind="ghost"
-                  size="sm"
-                  icon={Icon.trash}
-                  onClick={() => setRevoking(r)}
-                >
-                  Revoke
-                </Btn>
-              </div>
-            )}
-          </div>
-        )}
-      />
+            </div>
+          )}
+        />
+      </div>
 
       <AddDialog
         open={addOpen}

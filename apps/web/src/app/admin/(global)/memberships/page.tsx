@@ -31,7 +31,7 @@ export default async function MembershipsPage({
   const me = await requireMe();
   if (!hasCapability(me, 'MEMBERSHIP_MANAGE')) {
     // Operators without MEMBERSHIP_MANAGE still see scoped memberships
-    // through each company's Users tab; the global view is gated.
+    // through each company's Members page; the global view is gated.
     redirect('/admin/companies');
   }
   const sp = await searchParams;

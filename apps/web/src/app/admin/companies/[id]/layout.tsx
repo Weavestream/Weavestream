@@ -131,6 +131,7 @@ export default async function CompanyScopedLayout({
       passwordStaleBadge={passwordStaleBadge}
       subnetCount={subnetCount}
       subnetConflictBadge={subnetConflictBadge}
+      memberCount={company.memberCount}
       stickyNote={stickyNote}
     >
       {children}

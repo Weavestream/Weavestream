@@ -47,7 +47,7 @@ After setup is complete, the user can log in immediately.
 
 For `OPERATOR` and `CONTRACTOR` users, you also need to grant them access to specific tenants via **Memberships**.
 
-Navigate to **Admin → Memberships** (or the tenant's settings page) and assign:
+Navigate to **Admin → Memberships** (or the tenant's **Members** page) and assign:
 
 | Role | Access level |
 |---|---|
@@ -84,4 +84,4 @@ From **Admin → Memberships** you can:
 - Add or remove memberships for any user
 - Set or update contractor expiry dates
 
-You can also manage memberships from an individual tenant's settings page, which shows only that tenant's members.
+You can also manage memberships from an individual tenant's **Members** page, which shows only that tenant's members.

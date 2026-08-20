@@ -79,7 +79,7 @@ Changing a user from `OPERATOR` to `CLIENT_USER` revokes all their operator memb
 
 ## Granting Tenant Access
 
-1. Navigate to **Admin → Memberships** or the tenant's **Members** tab
+1. Navigate to **Admin → Memberships** or the tenant's **Members** page
 2. Click **Add Member**
 3. Search for the user by name or email
 4. Select `FULL` or `READONLY`
@@ -89,7 +89,7 @@ The user gains access immediately.
 
 ## Removing Tenant Access
 
-1. Open the membership from **Admin → Memberships** or the tenant's **Members** tab
+1. Open the membership from **Admin → Memberships** or the tenant's **Members** page
 2. Click **Remove**
 
 Access is revoked on the next API request. There is no grace period.

@@ -90,7 +90,8 @@ export interface CreateUserButtonProps {
    * When provided the dialog opens in "invite into this company" mode:
    * the attach panel is expanded by default, the company field is
    * pre-filled, and the default global role flips to CLIENT_USER.
-   * Used by the company → Users tab for the one-step onboarding flow.
+   * Used by the company → Members page for the one-step onboarding
+   * flow.
    */
   defaultCompany?: CompanyPickerValue | null;
   /**
