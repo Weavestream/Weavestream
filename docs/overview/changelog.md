@@ -13,6 +13,13 @@ All notable changes to Weavestream are documented here. The format follows [Keep
 
 ## [Unreleased]
 
+## [1.9.6] - 2026-08-20
+
+### Changed
+
+- **UI refinement and article browser updates.** Transitioned article listings to client-side filtering, unified row action menu styling across tables, and updated folder rail navigation.
+- **Company members view and settings forms.** Added a dedicated company members table view and implemented unsaved changes confirmation prompts in settings forms.
+
 ## [1.9.5] - 2026-08-19
 
 ### Added
@@ -765,7 +772,8 @@ Initial public release.
 
 ---
 
-[Unreleased]: https://github.com/Weavestream/Weavestream/compare/v1.9.5...HEAD
+[Unreleased]: https://github.com/Weavestream/Weavestream/compare/v1.9.6...HEAD
+[1.9.6]: https://github.com/Weavestream/Weavestream/releases/tag/v1.9.6
 [1.9.5]: https://github.com/Weavestream/Weavestream/releases/tag/v1.9.5
 [1.9.4]: https://github.com/Weavestream/Weavestream/releases/tag/v1.9.4
 [1.9.3]: https://github.com/Weavestream/Weavestream/releases/tag/v1.9.3
