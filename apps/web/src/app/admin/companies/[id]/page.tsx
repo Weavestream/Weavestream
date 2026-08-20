@@ -13,7 +13,8 @@ import {
   type MonitoredDomain,
 } from '../../../../lib/server-api';
 import { canWriteCompany, hasCapability } from '../../../../lib/roles';
-import { PageBody, PageHeader } from '../../../../components/shell/page-header';
+import { DetailTitle, PageBody } from '../../../../components/shell/page-header';
+import { TopBar } from '../../../../components/shell/top-bar';
 import {
   CompanyAvatar,
   ErrorBanner,
@@ -91,25 +92,29 @@ export default async function CompanyDetailPage({ params }: { params: Promise<{ 
 
   return (
     <>
-      <PageHeader
+      <TopBar
         crumbs={companyCrumbs(term, company)}
-        title={
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 12 }}>
+        // One row, not two. The company's own actions ride in the
+        // breadcrumb row beside the global cluster, and the identity
+        // block that used to share the old sub-row now heads the body.
+        right={<CompanyActions company={company} manage={manage} />}
+      />
+      <PageBody>
+        <DetailTitle
+          leading={
             <CompanyAvatar
               name={company.name}
               color={accent}
-              size={64}
-              logoMaxWidth={180}
+              size={48}
+              logoMaxWidth={140}
               logoFrame={false}
               logoUrl={logoUrl}
             />
-            <span>{company.name}</span>
-          </span>
-        }
-        description={<HeaderMeta company={company} />}
-        actions={manage ? <CompanyActions company={company} /> : null}
-      />
-      <PageBody>
+          }
+          name={company.name}
+          tags={<HeaderTags company={company} />}
+          meta={company.parent ? <HeaderParent company={company} /> : null}
+        />
         <div
           style={{
             display: 'grid',
@@ -253,41 +258,47 @@ export default async function CompanyDetailPage({ params }: { params: Promise<{ 
 // Header composition
 // ───────────────────────────────────────────────────────────────────
 
-function HeaderMeta({ company }: { company: CompanyDetail }) {
+/**
+ * Status tags, inline with the name in `DetailTitle`. These describe
+ * the company, so they ride with it rather than with the chrome — the
+ * sub-row they used to share with the action buttons is gone.
+ */
+function HeaderTags({ company }: { company: CompanyDetail }) {
   return (
-    <div
-      style={{
-        display: 'flex',
-        flexWrap: 'wrap',
-        alignItems: 'center',
-        gap: 8,
-        marginTop: 4,
-      }}
-    >
+    <>
       <Tag tone={companyTypeTone(company.type)}>{companyTypeLabel(company.type)}</Tag>
       {company.archivedAt ? <Tag tone="warn">archived</Tag> : <Tag tone="ok">active</Tag>}
-      {company.parent && (
-        <Link
-          href={`/admin/companies/${company.parent.id}`}
-          style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: 6,
-            fontSize: 11.5,
-            color: 'var(--muted)',
-            textDecoration: 'none',
-          }}
-        >
-          <Icon.chevron size={10} style={{ transform: 'rotate(180deg)' }} />
-          {company.parent.name}
-        </Link>
-      )}
       {company.childrenCount > 0 && (
         <Tag tone="outline">
           {company.childrenCount} child{company.childrenCount === 1 ? '' : 'ren'}
         </Tag>
       )}
-    </div>
+    </>
+  );
+}
+
+/**
+ * The one non-tag item from the old header meta row — the parent
+ * company link — as `DetailTitle`'s meta line. Rendered only when a
+ * parent exists; the caller passes `null` otherwise so an empty line
+ * does not pad the title block.
+ */
+function HeaderParent({ company }: { company: CompanyDetail }) {
+  if (!company.parent) return null;
+  return (
+    <Link
+      href={`/admin/companies/${company.parent.id}`}
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 6,
+        color: 'var(--muted)',
+        textDecoration: 'none',
+      }}
+    >
+      <Icon.chevron size={10} style={{ transform: 'rotate(180deg)' }} />
+      {company.parent.name}
+    </Link>
   );
 }
 

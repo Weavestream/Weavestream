@@ -252,6 +252,7 @@ export function DataTable<T extends { id: string }>({
   defaultSort,
   disableSort = false,
   stickyColumns = 1,
+  layout = 'auto',
   fillHeight = false,
 }: {
   columns: DataColumn<T>[];
@@ -306,6 +307,22 @@ export function DataTable<T extends { id: string }>({
    * properly-sized flex column with `min-height: 0`.
    */
   fillHeight?: boolean;
+  /**
+   * Column sizing algorithm.
+   *
+   * `auto` (default, and what every existing table uses) sizes columns
+   * by their content: a `width` becomes a *minimum* for an unpinned
+   * column, and any leftover space is shared out between them. That is
+   * right for tables of short, comparable values.
+   *
+   * `fixed` sizes columns by their declared `width` and hands the whole
+   * remainder to the columns that declare none. Reach for it when one
+   * column holds prose that should absorb the slack while the others
+   * stay at their natural size — under `auto` that column can only be
+   * pinned to an exact pixel width, which is wrong at every window size
+   * but one. Cell content must be able to truncate.
+   */
+  layout?: 'auto' | 'fixed';
 }) {
   const isMobile = useIsMobile();
   const router = useRouter();
@@ -590,7 +607,7 @@ export function DataTable<T extends { id: string }>({
         style={{
           width: '100%',
           borderCollapse: 'collapse',
-          tableLayout: 'auto',
+          tableLayout: layout,
         }}
       >
         <thead>
@@ -637,7 +654,13 @@ export function DataTable<T extends { id: string }>({
                     maxWidth: effectiveWidth,
                   }
                 : c.width !== undefined
-                  ? { minWidth: c.width }
+                  ? // `fixed` sizes by the declared `width` and ignores a
+                    // bare `minWidth`, so under it the width has to be
+                    // real or every column falls back to an equal share.
+                    // `auto` keeps taking it as a floor, unchanged.
+                    layout === 'fixed'
+                    ? { width: c.width, minWidth: c.width }
+                    : { minWidth: c.width }
                   : {};
               return (
                 <th
@@ -765,7 +788,9 @@ export function DataTable<T extends { id: string }>({
                         maxWidth: effectiveWidth,
                       }
                     : c.width !== undefined
-                      ? { minWidth: c.width }
+                      ? layout === 'fixed'
+                        ? { width: c.width, minWidth: c.width }
+                        : { minWidth: c.width }
                       : {};
                   return (
                     <td

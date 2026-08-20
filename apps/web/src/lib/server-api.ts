@@ -1199,6 +1199,48 @@ export async function listArticles(
   return res.data ?? { items: [], nextCursor: null };
 }
 
+/**
+ * Every article in a scope, by following the API's cursor until it runs
+ * out.
+ *
+ * The admin browser filters titles as you type and counts its folder
+ * rail off the same rows, which is only honest if it holds the whole
+ * list — a page-at-a-time list would filter whichever page you happened
+ * to land on. A page is cheap here: the article list projection is
+ * metadata-only, so no bodies cross the wire.
+ *
+ * The ceiling is set high enough that reaching it is not a realistic
+ * knowledge base, because the failure past it is quiet: the cut runs by
+ * `(archivedAt, title, id)` across the whole company, so a folder whose
+ * articles all sort past it reads 0 and looks empty rather than short.
+ * Its cost is paid only by the companies that need the pages — a
+ * 300-article company still makes two requests. `truncated` reports that
+ * the ceiling stopped us rather than the data running out, so the caller
+ * can say so instead of presenting a slice as the total.
+ */
+export async function listAllArticles(
+  companyId: string,
+  params: { folderId?: string | null; includeArchived?: boolean } = {},
+): Promise<{ items: ArticleSummary[]; truncated: boolean }> {
+  /** The API's own per-request ceiling; asking for more is clamped. */
+  const PAGE_SIZE = 200;
+  /** 50 x 200 = 10,000 articles in one company, then `truncated`. */
+  const MAX_PAGES = 50;
+  const items: ArticleSummary[] = [];
+  let cursor: string | undefined;
+  for (let page = 0; page < MAX_PAGES; page += 1) {
+    const res = await listArticles(companyId, {
+      ...params,
+      limit: PAGE_SIZE,
+      cursor,
+    });
+    items.push(...res.items);
+    if (!res.nextCursor) return { items, truncated: false };
+    cursor = res.nextCursor;
+  }
+  return { items, truncated: true };
+}
+
 export async function getArticle(
   companyId: string,
   id: string,

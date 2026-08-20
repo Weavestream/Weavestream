@@ -7,7 +7,11 @@ import {
   Btn,
   Dialog,
   Icon,
-  StarButton,
+  MenuDivider,
+  MenuItem,
+  OverflowMenu,
+  StarGlyph,
+  useStarToggle,
   useToast,
 } from '../../../../components/ui';
 import type { CompanyDetail } from '../../../../lib/server-api';
@@ -15,18 +19,45 @@ import { capitalize, lower } from '../../../../lib/term';
 import { useTerm } from '../../../../lib/term-context';
 
 /**
- * Toolbar for the company home page. After Phase 9a the "Edit" button
- * navigates to the dedicated Settings route instead of opening an
- * in-place dialog — editing the full set of Phase 9a fields is too
- * much for a modal. Archive / restore stays inline because it's a
- * single toggle.
+ * The company home page's whole action cluster, rendered into
+ * `TopBar`'s `right` slot.
+ *
+ * This replaces the sub-row that used to carry four equal-weight
+ * buttons (Star, Preview portal, Edit, Archive). Unlike assets,
+ * articles, and passwords, nothing here is promoted to a primary
+ * control: Edit only hands off to the Settings route, and none of the
+ * four is the action an operator opened the page for — they came to
+ * read the overview. So the row is the overflow menu alone.
+ *
+ * Edit stays available while archived, which is why the archived state
+ * does not promote Restore into the row the way it does on the other
+ * detail pages — there is no empty primary slot to fill.
+ *
+ * No attention dot: the one thing worth reviewing here is the archived
+ * state, and that is a `Tag` beside the name in `DetailTitle`, still
+ * visible with the menu closed.
+ *
+ * Copies `ArticleHeaderActions` in
+ * `apps/web/src/app/admin/companies/[id]/articles/[articleId]/article-header-actions.tsx`.
  */
-export function CompanyActions({ company }: { company: CompanyDetail }) {
+export function CompanyActions({
+  company,
+  manage,
+}: {
+  company: CompanyDetail;
+  /** Write access to this company, derived server-side. */
+  manage: boolean;
+}) {
   const router = useRouter();
   const toast = useToast();
   const term = useTerm();
   const [archiveOpen, setArchiveOpen] = useState(false);
   const [pending, setPending] = useState(false);
+  const { starred, toggle } = useStarToggle({
+    entityType: 'company',
+    entityId: company.id,
+    initialStarred: company.isStarred,
+  });
 
   async function toggleArchive() {
     setPending(true);
@@ -52,40 +83,58 @@ export function CompanyActions({ company }: { company: CompanyDetail }) {
   }
 
   return (
-    <>
-      <StarButton
-        entityType="company"
-        entityId={company.id}
-        initialStarred={company.isStarred}
-        showLabel
-        iconSize={14}
-      />
-      <Btn
-        kind="outline"
-        size="md"
-        icon={Icon.ext}
-        onClick={() =>
-          window.open(`/portal/${company.slug}`, '_blank', 'noopener,noreferrer')
-        }
-      >
-        Preview portal
-      </Btn>
-      <Btn
-        kind="outline"
-        size="md"
-        icon={Icon.edit}
-        onClick={() => router.push(`/admin/companies/${company.id}/settings`)}
-      >
-        Edit
-      </Btn>
-      <Btn
-        kind={company.archivedAt ? 'solid' : 'outline'}
-        size="md"
-        icon={company.archivedAt ? Icon.check : Icon.archive}
-        onClick={() => setArchiveOpen(true)}
-      >
-        {company.archivedAt ? 'Restore' : 'Archive'}
-      </Btn>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+      <OverflowMenu>
+        {(close) => (
+          <>
+            <MenuItem
+              glyph={<StarGlyph filled={starred} size={14} />}
+              onClick={() => {
+                void toggle();
+              }}
+            >
+              {starred ? 'Starred' : 'Star'}
+            </MenuItem>
+            <MenuItem
+              icon={Icon.ext}
+              onClick={() => {
+                // A `MenuItem` href renders an in-app `Link`; the portal
+                // is a separate surface and has always opened in its own
+                // tab, so this stays a button.
+                window.open(
+                  `/portal/${company.slug}`,
+                  '_blank',
+                  'noopener,noreferrer',
+                );
+                close();
+              }}
+            >
+              Preview portal
+            </MenuItem>
+            {manage && (
+              <MenuItem
+                icon={Icon.edit}
+                href={`/admin/companies/${company.id}/settings`}
+                onClick={close}
+              >
+                Edit
+              </MenuItem>
+            )}
+            {manage && <MenuDivider />}
+            {manage && (
+              <MenuItem
+                icon={company.archivedAt ? Icon.check : Icon.archive}
+                onClick={() => {
+                  setArchiveOpen(true);
+                  close();
+                }}
+              >
+                {company.archivedAt ? 'Restore' : 'Archive'}
+              </MenuItem>
+            )}
+          </>
+        )}
+      </OverflowMenu>
 
       <Dialog
         open={archiveOpen}
@@ -116,6 +165,6 @@ export function CompanyActions({ company }: { company: CompanyDetail }) {
             : `${company.name} will be hidden from portals and new invites. Data, memberships, and audit logs are preserved and can be restored later.`}
         </p>
       </Dialog>
-    </>
+    </div>
   );
 }

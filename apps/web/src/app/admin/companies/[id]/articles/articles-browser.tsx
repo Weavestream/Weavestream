@@ -9,10 +9,31 @@ import type {
 } from '../../../../../lib/server-api';
 import { apiFetch } from '../../../../../lib/api';
 import { FormattedDate } from '../../../../../lib/timezone-context';
-import { Btn, Icon, Tag, useToast } from '../../../../../components/ui';
+import {
+  Btn,
+  DataTable,
+  type DataColumn,
+  Icon,
+  MobileCardRow,
+  RAIL_WIDTH,
+  RailDisclosure,
+  RailDivider,
+  RailEditButton,
+  RailRow,
+  RailSection,
+  Tag,
+  useToast,
+} from '../../../../../components/ui';
 import { useIsMobile } from '../../../../../lib/hooks/use-is-mobile';
+import { useRailCollapse } from '../../../../../lib/hooks/use-rail-collapse';
 import { FolderSettingsDialog } from './folder-settings-dialog';
 import { ArticleActions } from './article-actions';
+import { articleCounts, scopeArticles } from './article-scope';
+
+type ArticleCounts = ReturnType<typeof articleCounts>;
+
+/** Remembers a deliberate open/close of this rail; see `useRailCollapse`. */
+const ARTICLES_RAIL_PREF_KEY = 'weavestream.articles.rail.v1';
 
 /**
  * Two-column article browser:
@@ -20,8 +41,11 @@ import { ArticleActions } from './article-actions';
  *     `+` at the root or on a folder opens the inline create form.
  *   - Right: article list with a search box and an `archived` toggle.
  *
- * Server provides the current slice; client handles nav/filter changes
- * by pushing to `?q=…&folderId=…`.
+ * Server provides the whole company scope for the current `archived`
+ * setting. Folder clicks push `?folderId=…` so a view stays linkable,
+ * but the narrowing itself — folder, then title — happens here, over the
+ * rows already in hand. The rail counts the same array, so a number
+ * never describes a scope the list does not show.
  */
 export function ArticlesBrowser({
   companyId,
@@ -31,18 +55,27 @@ export function ArticlesBrowser({
   folderId,
   includeArchived,
   canManage,
+  showCounts,
 }: {
   companyId: string;
   folders: FolderNode[];
   articles: ArticleSummary[];
+  /** Seeds the search box from a shared link. Not a server filter. */
   q: string;
   folderId: string;
   includeArchived: boolean;
   canManage: boolean;
+  /**
+   * The account's "Show item counts in the sidebar" preference, same
+   * switch the passwords rail reads. Off by default.
+   */
+  showCounts: boolean;
 }) {
   const router = useRouter();
   const params = useSearchParams();
   const isMobile = useIsMobile();
+  const { collapsed: railCollapsed, setCollapsed: setRailCollapsed } =
+    useRailCollapse(ARTICLES_RAIL_PREF_KEY);
   const [mobileTab, setMobileTab] = useState<'folders' | 'articles'>('articles');
   const [query, setQuery] = useState(q);
   const [openFolders, setOpenFolders] = useState<Record<string, boolean>>(
@@ -61,6 +94,10 @@ export function ArticlesBrowser({
 
   function nav(next: Record<string, string | null>) {
     const sp = new URLSearchParams(params.toString());
+    // `q` is client state now. It only ever arrives as a seed, so
+    // carrying it into the next URL would resurrect, on the next reload,
+    // a search the user has already typed past.
+    sp.delete('q');
     for (const [k, v] of Object.entries(next)) {
       if (v === null || v === '') sp.delete(k);
       else sp.set(k, v);
@@ -69,6 +106,31 @@ export function ArticlesBrowser({
   }
 
   const activeFolderId = folderId || 'all';
+
+  /** Everything the selected rail row holds, before the search box. */
+  const folderScope = useMemo(
+    () => scopeArticles(articles, folders, activeFolderId),
+    [articles, folders, activeFolderId],
+  );
+
+  /** Every number the rail shows, off the array the list renders. */
+  const counts = useMemo(
+    () => articleCounts(articles, folders),
+    [articles, folders],
+  );
+
+  /**
+   * Same match the server's `q` ran — title `contains`, case-insensitive
+   * — so moving it here changes when it runs, not what it finds.
+   */
+  const needle = query.trim().toLowerCase();
+  const filtered = useMemo(
+    () =>
+      needle
+        ? folderScope.filter((a) => a.title.toLowerCase().includes(needle))
+        : folderScope,
+    [folderScope, needle],
+  );
   const [editingFolder, setEditingFolder] = useState(false);
   const selectedFolder = useMemo(
     () =>
@@ -81,10 +143,14 @@ export function ArticlesBrowser({
   const foldersPane = (
     <aside
       style={{
+        width: isMobile ? '100%' : RAIL_WIDTH,
         borderRight: isMobile ? 'none' : '1px solid var(--line)',
-        background: 'var(--surface)',
-        padding: '12px 6px',
-        minHeight: isMobile ? 0 : 400,
+        padding: 8,
+        // A deep tree scrolls in its own pane rather than setting the
+        // height of its container and pushing the list's scroll region
+        // off the bottom of a panel that clips overflow.
+        overflowY: 'auto',
+        ...(isMobile ? { flex: 1, minHeight: 0 } : { flexShrink: 0 }),
       }}
     >
       <FolderTreeNav
@@ -96,204 +162,188 @@ export function ArticlesBrowser({
           nav({ folderId: id });
           if (isMobile) setMobileTab('articles');
         }}
+        counts={counts}
         companyId={companyId}
         canManage={canManage}
+        showCounts={showCounts}
+        onEditFolder={() => setEditingFolder(true)}
       />
     </aside>
   );
 
-  const articlesPane = (
-    <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
-        <div
+  const toolbar = (
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 10,
+        padding: '10px 14px',
+        borderBottom: '1px solid var(--line)',
+        background: 'var(--panel)',
+        flexWrap: 'wrap',
+      }}
+    >
+      {!isMobile && (
+        <button
+          type="button"
+          onClick={() => setRailCollapsed(!railCollapsed)}
+          title={railCollapsed ? 'Show folders' : 'Hide folders'}
+          aria-label={railCollapsed ? 'Show folders' : 'Hide folders'}
+          aria-expanded={!railCollapsed}
           style={{
-            display: 'flex',
+            display: 'inline-flex',
             alignItems: 'center',
-            gap: 10,
-            padding: '10px 14px',
-            borderBottom: '1px solid var(--line)',
-            background: 'var(--panel)',
+            justifyContent: 'center',
+            width: 28,
+            height: 28,
+            flexShrink: 0,
+            background: railCollapsed ? 'var(--panel-2)' : 'transparent',
+            border: '1px solid',
+            borderColor: railCollapsed ? 'var(--line-3)' : 'var(--line-2)',
+            borderRadius: 5,
+            color: railCollapsed ? 'var(--text)' : 'var(--text-2)',
+            cursor: 'pointer',
           }}
         >
-          <div
+          <Icon.panelRight size={13} />
+        </button>
+      )}
+      {/* Folded away, the rail can no longer say what you are looking
+          at — so the toolbar says it instead. */}
+      {railCollapsed && selectedFolder && (
+        <button
+          type="button"
+          onClick={() => setRailCollapsed(false)}
+          title="Show folders"
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 5,
+            height: 28,
+            padding: '0 8px',
+            flexShrink: 0,
+            background: 'var(--panel-2)',
+            border: '1px solid var(--line-2)',
+            borderRadius: 5,
+            fontSize: 12,
+            color: 'var(--text-2)',
+            cursor: 'pointer',
+          }}
+        >
+          <Icon.folder size={11} style={{ color: 'var(--dim)' }} />
+          {selectedFolder.name}
+        </button>
+      )}
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          flex: 1,
+          minWidth: 180,
+          background: 'var(--panel-2)',
+          border: '1px solid var(--line)',
+          borderRadius: 5,
+          height: 28,
+          padding: '0 10px',
+        }}
+      >
+        <Icon.search size={12} style={{ color: 'var(--muted)' }} />
+        <input
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search titles…"
+          style={{
+            flex: 1,
+            background: 'transparent',
+            border: 'none',
+            outline: 'none',
+            fontSize: 12.5,
+            color: 'var(--text)',
+          }}
+        />
+        {query && (
+          <button
+            type="button"
+            onClick={() => setQuery('')}
+            title="Clear search"
+            aria-label="Clear search"
             style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 6,
-              flex: 1,
-              maxWidth: 360,
-              background: 'var(--panel-2)',
-              border: '1px solid var(--line)',
-              borderRadius: 5,
-              height: 28,
-              padding: '0 9px',
-            }}
-          >
-            <Icon.search size={11} style={{ color: 'var(--dim)' }} />
-            <input
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') nav({ q: query || null });
-              }}
-              placeholder="Filter by title…"
-              style={{
-                flex: 1,
-                background: 'transparent',
-                border: 'none',
-                outline: 'none',
-                fontSize: 12,
-                color: 'var(--text)',
-              }}
-            />
-            {query && (
-              <button
-                type="button"
-                onClick={() => {
-                  setQuery('');
-                  nav({ q: null });
-                }}
-                style={{
-                  background: 'transparent',
-                  border: 'none',
-                  color: 'var(--dim)',
-                  cursor: 'pointer',
-                  padding: 0,
-                  display: 'grid',
-                  placeItems: 'center',
-                }}
-              >
-                <Icon.x size={10} />
-              </button>
-            )}
-          </div>
-          <label
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: 6,
-              fontSize: 11.5,
-              color: 'var(--muted)',
+              background: 'transparent',
+              border: 'none',
+              color: 'var(--dim)',
               cursor: 'pointer',
+              padding: 0,
+              display: 'grid',
+              placeItems: 'center',
             }}
           >
-            <input
-              type="checkbox"
-              checked={includeArchived}
-              onChange={(e) =>
-                nav({ archived: e.target.checked ? '1' : null })
-              }
-              style={{ accentColor: 'var(--accent)' }}
-            />
-            Show archived
-          </label>
-          {canManage && selectedFolder && (
-            <Btn
-              kind="outline"
-              size="sm"
-              icon={Icon.edit}
-              onClick={() => setEditingFolder(true)}
-              title={`Edit folder “${selectedFolder.name}”`}
-              style={{ marginLeft: 'auto' }}
-            >
-              Edit Folder
-            </Btn>
-          )}
-        </div>
-
-        {articles.length === 0 ? (
-          <div
-            style={{
-              padding: 40,
-              textAlign: 'center',
-              color: 'var(--muted)',
-              fontSize: 12.5,
-            }}
-          >
-            {q
-              ? `No articles match "${q}".`
-              : 'No articles in this view yet.'}
-          </div>
-        ) : (
-          <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
-            {articles.map((a, i) => (
-              <li
-                key={a.id}
-                style={{
-                  padding: '10px 14px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 10,
-                  borderBottom:
-                    i === articles.length - 1
-                      ? 'none'
-                      : '1px solid var(--line)',
-                }}
-              >
-                <Icon.doc size={13} style={{ color: 'var(--dim)' }} />
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <Link
-                    href={`/admin/companies/${companyId}/articles/${a.id}`}
-                    style={{
-                      fontSize: 13,
-                      fontWeight: 500,
-                      color: 'inherit',
-                      display: 'block',
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                      whiteSpace: 'nowrap',
-                    }}
-                  >
-                    {a.title}
-                  </Link>
-                  {a.excerpt && (
-                    <div
-                      style={{
-                        fontSize: 11.5,
-                        color: 'var(--muted)',
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        whiteSpace: 'nowrap',
-                        marginTop: 2,
-                      }}
-                    >
-                      {a.excerpt}
-                    </div>
-                  )}
-                </div>
-                {!a.visibleToClients && <Tag tone="outline">internal</Tag>}
-                {a.archivedAt && <Tag tone="warn">archived</Tag>}
-                <span
-                  style={{
-                    fontFamily: 'var(--font-mono)',
-                    fontSize: 10.5,
-                    color: 'var(--dim)',
-                  }}
-                >
-                  <FormattedDate value={a.updatedAt} />
-                </span>
-                {canManage && (
-                  <div
-                    style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: 4,
-                      marginLeft: 4,
-                    }}
-                  >
-                    <ArticleActions
-                      article={{
-                        id: a.id,
-                        companyId,
-                        title: a.title,
-                        archivedAt: a.archivedAt,
-                      }}
-                    />
-                  </div>
-                )}
-              </li>
-            ))}
-          </ul>
+            <Icon.x size={10} />
+          </button>
         )}
+      </div>
+      <button
+        type="button"
+        onClick={() => nav({ archived: includeArchived ? null : '1' })}
+        style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 6,
+          height: 28,
+          padding: '0 10px',
+          background: includeArchived ? 'var(--panel-2)' : 'transparent',
+          border: '1px solid var(--line-2)',
+          borderRadius: 5,
+          fontSize: 12,
+          color: 'var(--text-2)',
+          cursor: 'pointer',
+        }}
+      >
+        <Icon.archive size={12} />
+        {includeArchived ? 'Hide archived' : 'Show archived'}
+      </button>
+    </div>
+  );
+
+  const articlesPane = (
+    <div
+      style={{
+        flex: 1,
+        minWidth: 0,
+        display: 'flex',
+        flexDirection: 'column',
+        minHeight: 0,
+      }}
+    >
+      {filtered.length === 0 ? (
+        <div
+          style={{
+            padding: '40px 14px',
+            textAlign: 'center',
+            color: 'var(--muted)',
+            fontSize: 12.5,
+          }}
+        >
+          {needle
+            ? `No articles match "${query.trim()}".`
+            : 'No articles in this view yet.'}
+        </div>
+      ) : (
+        <DataTable
+          fillHeight
+          // Fixed layout, and no pinned column: Title declares no width,
+          // so it takes whatever is left after the two tight columns on
+          // the right — at every window size, rather than at the one a
+          // pixel value would have been correct for.
+          layout="fixed"
+          stickyColumns={0}
+          columns={articleColumns({ companyId, canManage })}
+          rows={filtered}
+          renderMobileCard={(a) => (
+            <ArticleMobileBody row={a} companyId={companyId} canManage={canManage} />
+          )}
+        />
+      )}
     </div>
   );
 
@@ -310,7 +360,15 @@ export function ArticlesBrowser({
 
   if (isMobile) {
     return (
-      <div style={{ display: 'flex', flexDirection: 'column' }}>
+      <div
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          flex: 1,
+          minHeight: 0,
+        }}
+      >
+        {toolbar}
         <div
           role="tablist"
           aria-label="Articles view"
@@ -356,10 +414,250 @@ export function ArticlesBrowser({
   }
 
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: '240px 1fr' }}>
-      {foldersPane}
-      {articlesPane}
+    // `flex: 1; min-height: 0` so the DataTable's own fillHeight scroll
+    // region claims the leftover viewport instead of the whole page
+    // scrolling under it — the chain is PageBody -> Panel fillHeight ->
+    // here -> the two-pane row -> DataTable fillHeight.
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        flex: 1,
+        minHeight: 0,
+      }}
+    >
+      {toolbar}
+      <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
+        {!railCollapsed && foldersPane}
+        {articlesPane}
+      </div>
       {folderDialog}
+    </div>
+  );
+}
+
+function articleColumns({
+  companyId,
+  canManage,
+}: {
+  companyId: string;
+  canManage: boolean;
+}): DataColumn<ArticleSummary>[] {
+  const columns: DataColumn<ArticleSummary>[] = [
+    {
+      id: 'title',
+      // No width on purpose: under `layout="fixed"` the columns that
+      // declare none share the remainder, and this is the only one.
+      header: 'Title',
+      sortValue: (a) => a.title.toLowerCase(),
+      render: (a) => (
+        <div
+          style={{
+            opacity: a.archivedAt ? 0.55 : 1,
+            minWidth: 0,
+            display: 'flex',
+            flexDirection: 'column',
+            // An article with no excerpt centres its title rather than
+            // shrinking, so row height holds whatever the data carries.
+            justifyContent: 'center',
+            gap: 2,
+            minHeight: 38,
+          }}
+        >
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6,
+              minWidth: 0,
+            }}
+          >
+            <Icon.doc size={12} style={{ color: 'var(--dim)', flexShrink: 0 }} />
+            <Link
+              href={`/admin/companies/${companyId}/articles/${a.id}`}
+              style={{
+                color: 'inherit',
+                textDecoration: 'none',
+                fontWeight: 500,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {a.title}
+            </Link>
+            {!a.visibleToClients && (
+              <Tag tone="outline" style={{ fontSize: 10, flexShrink: 0 }}>
+                internal
+              </Tag>
+            )}
+            {a.archivedAt && (
+              <Tag tone="default" style={{ fontSize: 10, flexShrink: 0 }}>
+                archived
+              </Tag>
+            )}
+          </div>
+          {a.excerpt && (
+            <div
+              title={a.excerpt}
+              style={{
+                marginLeft: 18,
+                fontSize: 11,
+                color: 'var(--muted)',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+                maxWidth: '100%',
+              }}
+            >
+              {a.excerpt}
+            </div>
+          )}
+        </div>
+      ),
+    },
+    {
+      id: 'updated',
+      header: 'Updated',
+      width: 110,
+      sortValue: (a) => a.updatedAt,
+      render: (a) => (
+        <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11 }}>
+          <FormattedDate value={a.updatedAt} />
+        </span>
+      ),
+    },
+  ];
+
+  if (canManage) {
+    columns.push({
+      id: 'actions',
+      header: 'Actions',
+      width: 96,
+      align: 'right',
+      sortable: false,
+      render: (a) => (
+        <ArticleActions
+          article={{
+            id: a.id,
+            companyId,
+            title: a.title,
+            archivedAt: a.archivedAt,
+          }}
+          recessive
+        />
+      ),
+    });
+  }
+
+  return columns;
+}
+
+function ArticleMobileBody({
+  row,
+  companyId,
+  canManage,
+}: {
+  row: ArticleSummary;
+  companyId: string;
+  canManage: boolean;
+}) {
+  return (
+    <div
+      style={{
+        opacity: row.archivedAt ? 0.7 : 1,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 8,
+      }}
+    >
+      <Link
+        href={`/admin/companies/${companyId}/articles/${row.id}`}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 10,
+          color: 'inherit',
+          textDecoration: 'none',
+          minWidth: 0,
+        }}
+      >
+        <div
+          aria-hidden
+          style={{
+            width: 28,
+            height: 28,
+            borderRadius: 6,
+            background: 'var(--panel-2)',
+            border: '1px solid var(--line)',
+            display: 'grid',
+            placeItems: 'center',
+            color: 'var(--dim)',
+            flexShrink: 0,
+          }}
+        >
+          <Icon.doc size={14} />
+        </div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div
+            style={{
+              color: 'var(--text)',
+              fontWeight: 600,
+              fontSize: 14,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {row.title}
+          </div>
+          {row.excerpt && (
+            <div
+              style={{
+                fontSize: 11.5,
+                color: 'var(--muted)',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {row.excerpt}
+            </div>
+          )}
+        </div>
+        <Icon.chevron size={12} style={{ color: 'var(--dim)' }} />
+      </Link>
+
+      {(!row.visibleToClients || row.archivedAt) && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+          {!row.visibleToClients && <Tag tone="outline">internal</Tag>}
+          {row.archivedAt && <Tag tone="default">archived</Tag>}
+        </div>
+      )}
+
+      <MobileCardRow label="Updated">
+        <FormattedDate value={row.updatedAt} />
+      </MobileCardRow>
+
+      {canManage && (
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'flex-end',
+            paddingTop: 4,
+            borderTop: '1px dashed var(--line)',
+          }}
+        >
+          <ArticleActions
+            article={{
+              id: row.id,
+              companyId,
+              title: row.title,
+              archivedAt: row.archivedAt,
+            }}
+          />
+        </div>
+      )}
     </div>
   );
 }
@@ -379,47 +677,72 @@ function FolderTreeNav({
   setOpen,
   activeId,
   onSelect,
+  counts,
   companyId,
   canManage,
+  showCounts,
+  onEditFolder,
 }: {
   folders: FolderNode[];
   open: Record<string, boolean>;
   setOpen: (next: Record<string, boolean>) => void;
   activeId: string;
   onSelect: (id: string) => void;
+  counts: ArticleCounts;
   companyId: string;
   canManage: boolean;
+  showCounts: boolean;
+  onEditFolder: () => void;
 }) {
   const [creating, setCreating] = useState<string | 'root' | null>(null);
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-      <FolderRow
-        icon={<Icon.grid size={11} style={{ color: 'var(--dim)' }} />}
-        label="All articles"
-        active={activeId === 'all'}
-        onClick={() => onSelect('')}
-      />
-      <FolderRow
-        icon={<Icon.folder size={11} style={{ color: 'var(--dim)' }} />}
-        label="Unfiled"
-        active={activeId === 'root'}
-        onClick={() => onSelect('root')}
-        right={
-          canManage && (
+    <div style={{ display: 'flex', flexDirection: 'column' }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+        <RailRow
+          icon={<Icon.grid size={12} />}
+          label="All articles"
+          active={activeId === 'all'}
+          onClick={() => onSelect('')}
+          count={counts.all}
+          showCount={showCounts}
+        />
+        <RailRow
+          icon={<Icon.folder size={12} />}
+          label="Unfiled"
+          active={activeId === 'root'}
+          onClick={() => onSelect('root')}
+          count={counts.unfiled}
+          showCount={showCounts}
+        />
+      </div>
+
+      <RailDivider />
+
+      <RailSection
+        label="Folders"
+        action={
+          canManage && creating === null ? (
+            // One plus for the whole tree, as in the passwords rail. The
+            // inline form it opens takes the parent from the selection,
+            // so per-row buttons bought nothing but noise.
             <button
               type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                setCreating('root');
-              }}
+              onClick={() =>
+                setCreating(
+                  activeId && activeId !== 'all' && activeId !== 'root'
+                    ? activeId
+                    : 'root',
+                )
+              }
+              title="New folder — nests under the selected folder"
+              aria-label="New folder"
               className="sd-editor-btn"
-              style={{ padding: 0, height: 18, width: 18 }}
-              title="New folder at root"
+              style={{ padding: 0, height: 18, width: 18, minWidth: 18 }}
             >
               <Icon.plus size={10} />
             </button>
-          )
+          ) : undefined
         }
       />
 
@@ -433,22 +756,25 @@ function FolderTreeNav({
 
       <div
         style={{
-          marginTop: 8,
-          paddingTop: 8,
-          borderTop: '1px solid var(--line)',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 1,
+          marginTop: 2,
         }}
       >
         <FolderSubtree
           nodes={folders}
-          depth={0}
           open={open}
           setOpen={setOpen}
           activeId={activeId}
           onSelect={onSelect}
           creating={creating}
           setCreating={setCreating}
+          counts={counts}
           companyId={companyId}
           canManage={canManage}
+          showCounts={showCounts}
+          onEditFolder={onEditFolder}
         />
       </div>
     </div>
@@ -457,182 +783,103 @@ function FolderTreeNav({
 
 function FolderSubtree({
   nodes,
-  depth,
   open,
   setOpen,
   activeId,
   onSelect,
   creating,
   setCreating,
+  counts,
   companyId,
   canManage,
+  showCounts,
+  onEditFolder,
 }: {
   nodes: FolderNode[];
-  depth: number;
   open: Record<string, boolean>;
   setOpen: (next: Record<string, boolean>) => void;
   activeId: string;
   onSelect: (id: string) => void;
   creating: string | 'root' | null;
   setCreating: (v: string | 'root' | null) => void;
+  counts: ArticleCounts;
   companyId: string;
   canManage: boolean;
+  showCounts: boolean;
+  onEditFolder: () => void;
 }) {
   return (
     <>
       {nodes.map((f) => {
         const isOpen = !!open[f.id];
         const hasChildren = f.children.length > 0;
+        const isActive = activeId === f.id;
         return (
-          <div key={f.id} style={{ marginLeft: depth * 10 }}>
-            <FolderRow
-              icon={
-                hasChildren ? (
-                  <Icon.chevronD
-                    size={10}
-                    style={{
-                      transform: isOpen ? 'none' : 'rotate(-90deg)',
-                      color: 'var(--dim)',
-                    }}
-                  />
-                ) : (
-                  <Icon.folder size={11} style={{ color: 'var(--dim)' }} />
-                )
-              }
+          <div key={f.id}>
+            <RailRow
+              icon={<Icon.folder size={12} />}
               label={f.name}
-              active={activeId === f.id}
-              onClick={() => {
-                if (hasChildren) setOpen({ ...open, [f.id]: !isOpen });
-                onSelect(f.id);
-              }}
-              right={
-                canManage && (
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setCreating(f.id);
-                    }}
-                    className="sd-editor-btn"
-                    style={{ padding: 0, height: 18, width: 18 }}
-                    title="New subfolder"
-                  >
-                    <Icon.plus size={10} />
-                  </button>
-                )
+              active={isActive}
+              onClick={() => onSelect(f.id)}
+              count={counts.byFolder.get(f.id) ?? 0}
+              showCount={showCounts}
+              disclosure={
+                hasChildren ? (
+                  <RailDisclosure
+                    open={isOpen}
+                    label={f.name}
+                    onToggle={() => setOpen({ ...open, [f.id]: !isOpen })}
+                  />
+                ) : undefined
+              }
+              action={
+                isActive && canManage ? (
+                  <RailEditButton label={f.name} onClick={onEditFolder} />
+                ) : undefined
               }
             />
 
             {creating === f.id && (
-              <div style={{ paddingLeft: (depth + 1) * 10 }}>
-                <NewFolderInline
-                  companyId={companyId}
-                  parentId={f.id}
-                  onDone={() => setCreating(null)}
-                />
-              </div>
+              <NewFolderInline
+                companyId={companyId}
+                parentId={f.id}
+                onDone={() => setCreating(null)}
+              />
             )}
 
             {isOpen && hasChildren && (
-              <FolderSubtree
-                nodes={f.children}
-                depth={depth + 1}
-                open={open}
-                setOpen={setOpen}
-                activeId={activeId}
-                onSelect={onSelect}
-                creating={creating}
-                setCreating={setCreating}
-                companyId={companyId}
-                canManage={canManage}
-              />
+              <div
+                style={{
+                  // Guide line under the parent's chevron, so a deep tree
+                  // stays readable without indenting labels off the rail.
+                  marginLeft: 13,
+                  paddingLeft: 8,
+                  borderLeft: '1px solid var(--line)',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 1,
+                }}
+              >
+                <FolderSubtree
+                  nodes={f.children}
+                  open={open}
+                  setOpen={setOpen}
+                  activeId={activeId}
+                  onSelect={onSelect}
+                  creating={creating}
+                  setCreating={setCreating}
+                  counts={counts}
+                  companyId={companyId}
+                  canManage={canManage}
+                  showCounts={showCounts}
+                  onEditFolder={onEditFolder}
+                />
+              </div>
             )}
           </div>
         );
       })}
     </>
-  );
-}
-
-function FolderRow({
-  icon,
-  label,
-  active,
-  onClick,
-  right,
-}: {
-  icon: React.ReactNode;
-  label: string;
-  active: boolean;
-  onClick: () => void;
-  right?: React.ReactNode;
-}) {
-  const [hovered, setHovered] = useState(false);
-  const showRight = hovered || active;
-  return (
-    <div
-      onClick={onClick}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
-      onFocus={() => setHovered(true)}
-      onBlur={() => setHovered(false)}
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: 6,
-        padding: '5px 8px',
-        fontSize: 12,
-        color: active ? 'var(--text)' : 'var(--text-2)',
-        background: active
-          ? 'var(--panel-2)'
-          : hovered
-            ? 'var(--panel-2)'
-            : 'transparent',
-        borderRadius: 4,
-        cursor: 'pointer',
-        position: 'relative',
-      }}
-    >
-      {active && (
-        <span
-          style={{
-            position: 'absolute',
-            left: 2,
-            top: 6,
-            bottom: 6,
-            width: 2,
-            background: 'var(--accent)',
-            borderRadius: 2,
-          }}
-        />
-      )}
-      <span style={{ width: 12, display: 'grid', placeItems: 'center' }}>
-        {icon}
-      </span>
-      <span
-        style={{
-          flex: 1,
-          overflow: 'hidden',
-          textOverflow: 'ellipsis',
-          whiteSpace: 'nowrap',
-        }}
-      >
-        {label}
-      </span>
-      {right && (
-        <span
-          style={{
-            opacity: showRight ? 1 : 0,
-            visibility: showRight ? 'visible' : 'hidden',
-            transition: 'opacity 120ms ease',
-            display: 'inline-flex',
-            alignItems: 'center',
-          }}
-        >
-          {right}
-        </span>
-      )}
-    </div>
   );
 }
 

@@ -10,6 +10,15 @@ export {
   type BtnSize,
 } from './btn';
 export { LinkBtn, type LinkBtnProps } from './link-btn';
+export {
+  RAIL_WIDTH,
+  RailDisclosure,
+  RailDivider,
+  RailEditButton,
+  RailRow,
+  RailSection,
+  RailTagRow,
+} from './folder-rail';
 export { Tag, type TagTone } from './tag';
 export { Toggle } from './toggle';
 export { Checkbox } from './checkbox';

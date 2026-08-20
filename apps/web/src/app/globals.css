@@ -469,48 +469,48 @@ button.topbar-chip-seg {
     1px 0 0 var(--line),
     6px 0 12px -6px rgba(0, 0, 0, 0.35);
 }
-/* Passwords table row actions — the `recessive` treatment on
- * `PasswordRowActions`. `Btn` writes `color` into its inline style, which
+/* Table row actions — the shared `recessive` treatment used by the
+ * passwords and articles tables. `Btn` writes `color` into its inline style, which
  * no stylesheet rule can outrank without `!important`, so the buttons
- * resolve their ink from `--pw-action-ink` and this block moves that
+ * resolve their ink from `--row-action-ink` and this block moves that
  * property per state instead.
  *
- * The row itself never changes colour on hover. The passwords table has
- * no row highlight and no row selection by design, so only the icons
- * lift — enough to find them, not enough to redraw the row. */
-.pw-row-actions {
-  --pw-action-ink: var(--faint);
+ * The row itself never changes colour on hover. Neither table has a row
+ * highlight or row selection by design, so only the icons lift — enough to find them, not enough to redraw the row. */
+.row-actions {
+  --row-action-ink: var(--faint);
 }
-tr:hover .pw-row-actions,
-.pw-row-actions:focus-within {
-  --pw-action-ink: var(--dim);
+tr:hover .row-actions,
+.row-actions:focus-within {
+  --row-action-ink: var(--dim);
 }
-.pw-row-actions button:hover:not([disabled]) {
-  --pw-action-ink: var(--text);
+.row-actions button:hover:not([disabled]) {
+  --row-action-ink: var(--text);
 }
 /* Touch has no hover to wait for, so the icons simply stay legible. */
 @media (hover: none) {
-  .pw-row-actions {
-    --pw-action-ink: var(--dim);
+  .row-actions {
+    --row-action-ink: var(--dim);
   }
 }
 
-/* Folder and tag rows in the passwords rail. The background is left off
- * the inline style when a row is inactive so this rule can win; an
- * inline `transparent` would outrank it. */
-.pw-rail-row {
+/* Folder and tag rows in the shared folder rail (`components/ui/folder-rail`),
+ * used by the passwords and articles browsers. The background is left off
+ * the inline style when a row is inactive so this rule can win; an inline
+ * `transparent` would outrank it. */
+.rail-row {
   border-radius: 5px;
 }
-.pw-rail-row:hover {
+.rail-row:hover {
   background: var(--panel-2);
 }
-.pw-rail-row:focus-visible,
-.pw-rail-row button:focus-visible {
+.rail-row:focus-visible,
+.rail-row button:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: -2px;
   border-radius: 3px;
 }
-.pw-rail-disclosure:hover {
+.rail-disclosure:hover {
   background: var(--line);
 }
 

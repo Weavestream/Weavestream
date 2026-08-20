@@ -136,7 +136,10 @@ export function FolderSettingsDialog({
       onClose={() => {
         if (!pending) onClose();
       }}
-      title="Folder settings"
+      // Name the folder, as the passwords dialog does: the title is
+      // the only thing anchoring all three tabs to a subject. A string
+      // rather than a node so `Dialog` keeps its accessible name.
+      title={`Folder settings · ${folder.name}`}
       width={460}
       footer={footerFor(tab, {
         pending,
@@ -246,8 +249,12 @@ export function FolderSettingsDialog({
               lineHeight: 1.5,
             }}
           >
-            Archiving hides the folder. It can be restored later — nothing is
-            permanently deleted.
+            Archiving{' '}
+            <strong style={{ color: 'var(--text)', fontWeight: 600 }}>
+              {folder.name}
+            </strong>{' '}
+            hides it. It can be restored later — nothing is permanently
+            deleted.
           </p>
 
           {hasSubfolders ? (

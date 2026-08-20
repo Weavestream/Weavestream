@@ -6,7 +6,7 @@ import {
   getCompanyFolderTree,
   requireMe,
   getSettings,
-  listArticles,
+  listAllArticles,
   throwUnlessFound,
 } from '../../../../../lib/server-api';
 import { canWriteCompany } from '../../../../../lib/roles';
@@ -15,11 +15,15 @@ import { Icon, LayoutSwatch, LinkBtn, Panel, Tag } from '../../../../../componen
 import { buildTerm, lower } from '../../../../../lib/term';
 import { companyCrumbs } from '../../../../../lib/company-crumbs';
 import { ArticlesBrowser } from './articles-browser';
+import { scopeArticles } from './article-scope';
 
 /**
  * Admin articles index — left pane is the nested folder tree, main pane
- * is a paginated list of articles in the selected folder. The
- * `folderId` URL param narrows the list; `q` narrows by title. Archived
+ * is the list of articles in the selected folder. The `folderId` URL
+ * param and `q` both select rather than fetch: the server sends the
+ * whole company scope for the current `archived` setting, and the
+ * browser narrows it by folder and by title as you type. That is what
+ * lets the rail's counts and the list read the same array. Archived
  * articles are opt-in via `?archived=1`. Folder create/rename/archive
  * are executed through `ArticlesBrowser` (client component) so we can
  * reuse the server-rendered tree for initial paint.
@@ -46,15 +50,18 @@ export default async function CompanyArticlesPage({
   const q = typeof sp.q === 'string' ? sp.q : undefined;
   const includeArchived = sp.archived === '1';
 
+  // Unscoped by folder, and complete rather than a first page: the
+  // browser filters by folder and by title on the client, and counts the
+  // rail off this same array. A slice, or a per-folder fetch, would put
+  // the counts and the rows on different footing again.
   const [folders, page] = await Promise.all([
     getCompanyFolderTree(companyId),
-    listArticles(companyId, {
-      folderId: folderId === 'root' ? null : folderId,
-      q,
-      includeArchived,
-      limit: 100,
-    }),
+    listAllArticles(companyId, { includeArchived }),
   ]);
+
+  // The header names the selection, not the payload — the rail's own
+  // counts come from `articleCounts` over the same rows.
+  const inScope = scopeArticles(page.items, folders, folderId ?? 'all');
 
   const manage = canWriteCompany(me, company.id);
 
@@ -84,15 +91,23 @@ export default async function CompanyArticlesPage({
         <Panel
           title={
             <span>
-              {page.items.length} article{page.items.length === 1 ? '' : 's'}
+              {inScope.length}
+              {page.truncated ? '+' : ''} article
+              {inScope.length === 1 ? '' : 's'}
               {includeArchived && (
                 <Tag tone="outline" style={{ marginLeft: 10 }}>
                   incl. archived
                 </Tag>
               )}
+              {page.truncated && (
+                <Tag tone="warn" style={{ marginLeft: 10 }}>
+                  search covers the first {page.items.length}
+                </Tag>
+              )}
             </span>
           }
           noPad
+          fillHeight
         >
           <ArticlesBrowser
             companyId={companyId}
@@ -102,6 +117,7 @@ export default async function CompanyArticlesPage({
             folderId={folderId ?? ''}
             includeArchived={includeArchived}
             canManage={manage}
+            showCounts={me.preferences.showItemCounts}
           />
         </Panel>
       </PageBody>

@@ -8,7 +8,6 @@ import {
   useRef,
   useState,
   useTransition,
-  type ReactNode,
 } from 'react';
 import type {
   PasswordFolderRow,
@@ -22,9 +21,17 @@ import {
   type DataColumn,
   Icon,
   MobileCardRow,
+  RAIL_WIDTH,
+  RailDisclosure,
+  RailDivider,
+  RailEditButton,
+  RailRow,
+  RailSection,
+  RailTagRow,
   Tag,
 } from '../../../../../components/ui';
 import { useIsMobile } from '../../../../../lib/hooks/use-is-mobile';
+import { useRailCollapse } from '../../../../../lib/hooks/use-rail-collapse';
 import { PasswordStrengthMeter } from '../../../../../components/passwords/password-strength-meter';
 import { CreatePasswordDialog } from '../../../../../components/passwords/create-password-dialog';
 import { PasswordRowActions } from '../../../../../components/passwords/password-row-actions';
@@ -76,13 +83,6 @@ const DEFAULT_COLUMN_PREFS: PasswordColumnPrefs = {
  */
 const RAIL_PREF_KEY = 'weavestream.passwords.rail.v1';
 
-/**
- * Below this the rail starts folded. Sidebar 248 + page padding 40 +
- * rail 221 leaves 850px of columns nothing to sit in much under here,
- * and the rail is the only one of the three we can hand back.
- */
-const RAIL_COLLAPSE_PX = 1360;
-
 /** How many tags the rail lists before the rest go behind "+N more". */
 const TAG_PREVIEW_COUNT = 5;
 
@@ -111,9 +111,8 @@ export function PasswordsBrowser({
   const router = useRouter();
   const searchParams = useSearchParams();
   const isMobile = useIsMobile();
-  // Same media-query hook, a desktop threshold: true once the window is
-  // too narrow to carry the rail and the full column set at once.
-  const isNarrow = useIsMobile(RAIL_COLLAPSE_PX);
+  const { collapsed: railCollapsed, setCollapsed: setRailCollapsed } =
+    useRailCollapse(RAIL_PREF_KEY);
   const [isPending, startTransition] = useTransition();
   const [dialog, setDialog] = useState<DialogState>(
     openNew && canManage ? { kind: 'add', prefillAssetId } : null,
@@ -122,9 +121,6 @@ export function PasswordsBrowser({
   const [query, setQuery] = useState('');
   const [pickedTags, setPickedTags] = useState<string[]>([]);
   const [tagsExpanded, setTagsExpanded] = useState(false);
-  // `null` = follow the viewport; a boolean is a deliberate choice and
-  // wins at every width until the user changes it back.
-  const [railChoice, setRailChoice] = useState<boolean | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [creatingFolder, setCreatingFolder] = useState(false);
   const [newFolderName, setNewFolderName] = useState('');
@@ -199,16 +195,6 @@ export function PasswordsBrowser({
     } finally {
       setColumnPrefsLoaded(true);
     }
-    // Same trip, same reason it cannot be a lazy `useState` initialiser:
-    // there is no `localStorage` during the server render, so reading it
-    // before mount would hydrate against a value the server never saw.
-    try {
-      const raw = window.localStorage.getItem(RAIL_PREF_KEY);
-      if (raw === 'open') setRailChoice(false);
-      else if (raw === 'closed') setRailChoice(true);
-    } catch {
-      // Blocked storage just means the rail follows the viewport.
-    }
   }, []);
 
   useEffect(() => {
@@ -222,20 +208,6 @@ export function PasswordsBrowser({
       // Column preferences are nice-to-have; the table still works without storage.
     }
   }, [columnPrefs, columnPrefsLoaded]);
-
-  function setRailCollapsed(next: boolean) {
-    setRailChoice(next);
-    try {
-      window.localStorage.setItem(RAIL_PREF_KEY, next ? 'closed' : 'open');
-    } catch {
-      // Non-fatal: the choice still holds for this page view.
-    }
-  }
-
-  // The rail follows the viewport until the user says otherwise, and
-  // their choice then holds at every width. On phones neither applies —
-  // folders are a tab there, not a column.
-  const railCollapsed = !isMobile && (railChoice ?? isNarrow);
 
   /**
    * Everything the selected folder holds, before the search box and the
@@ -498,6 +470,25 @@ export function PasswordsBrowser({
               color: 'var(--text)',
             }}
           />
+          {query && (
+            <button
+              type="button"
+              onClick={() => setQuery('')}
+              title="Clear search"
+              aria-label="Clear search"
+              style={{
+                background: 'transparent',
+                border: 'none',
+                color: 'var(--dim)',
+                cursor: 'pointer',
+                padding: 0,
+                display: 'grid',
+                placeItems: 'center',
+              }}
+            >
+              <Icon.x size={10} />
+            </button>
+          )}
         </div>
         <button
           type="button"
@@ -582,7 +573,7 @@ export function PasswordsBrowser({
   const foldersPane = (
     <aside
       style={{
-        width: isMobile ? '100%' : 220,
+        width: isMobile ? '100%' : RAIL_WIDTH,
         borderRight: isMobile ? 'none' : '1px solid var(--line)',
         padding: 8,
         // A deep folder tree scrolls in its own pane rather than setting
@@ -599,7 +590,7 @@ export function PasswordsBrowser({
       }}
     >
       <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-        <FolderRow
+        <RailRow
           active={folderId === 'ALL'}
           onClick={() => {
             setFolderId('ALL');
@@ -610,7 +601,7 @@ export function PasswordsBrowser({
           count={rows.length}
           showCount={showCounts}
         />
-        <FolderRow
+        <RailRow
           active={folderId === null}
           onClick={() => {
             setFolderId(null);
@@ -772,7 +763,7 @@ export function PasswordsBrowser({
             }}
           >
             {visibleTags.map((t) => (
-              <TagRow
+              <RailTagRow
                 key={t.name}
                 name={t.name}
                 count={t.count}
@@ -1501,50 +1492,6 @@ function ColumnMenuItem({
   );
 }
 
-/** Hairline between the rail's groups. */
-function RailDivider() {
-  return (
-    <div
-      aria-hidden
-      style={{ height: 1, background: 'var(--line)', margin: '8px 2px' }}
-    />
-  );
-}
-
-/**
- * Group heading in the rail. Deliberately the same mono uppercase scale
- * the panel header and the table's column headers already use — before
- * this it was the one label in the page on a scale of its own.
- */
-function RailSection({
-  label,
-  action,
-}: {
-  label: string;
-  action?: ReactNode;
-}) {
-  return (
-    <div
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        gap: 6,
-        height: 22,
-        padding: '0 8px',
-        fontFamily: 'var(--font-mono)',
-        fontSize: 10.5,
-        textTransform: 'uppercase',
-        letterSpacing: 0.6,
-        color: 'var(--dim)',
-      }}
-    >
-      <span>{label}</span>
-      {action}
-    </div>
-  );
-}
-
 function FolderSubtree({
   folder,
   all,
@@ -1575,63 +1522,21 @@ function FolderSubtree({
   const count = rows.filter((r) => r.folderId === folder.id).length;
   return (
     <>
-      <FolderRow
+      <RailRow
         active={isActive}
         onClick={() => setActive(folder.id)}
         action={
-          // Selected row only. One control in the whole rail, sitting on
-          // the folder it edits — the toolbar button it replaces was the
-          // width of the table away from the thing it acted on.
           isActive && canEdit ? (
-            <button
-              type="button"
-              onClick={onEdit}
-              title={`Edit "${folder.name}"`}
-              aria-label={`Edit folder ${folder.name}`}
-              className="pw-rail-disclosure"
-              style={{
-                width: 18,
-                height: 18,
-                display: 'inline-grid',
-                placeItems: 'center',
-                borderRadius: 3,
-                color: 'var(--muted)',
-                flexShrink: 0,
-              }}
-            >
-              <Icon.edit size={11} />
-            </button>
+            <RailEditButton label={folder.name} onClick={onEdit} />
           ) : undefined
         }
         disclosure={
           hasChildren ? (
-            // Its own control, sibling to the row's label button. Before
-            // this the chevron and the row were one target, so opening a
-            // parent to look inside also changed which folder you viewed.
-            <button
-              type="button"
-              onClick={() => setOpen({ ...open, [folder.id]: !isOpen })}
-              title={isOpen ? 'Collapse' : 'Expand'}
-              aria-label={isOpen ? `Collapse ${folder.name}` : `Expand ${folder.name}`}
-              aria-expanded={isOpen}
-              className="pw-rail-disclosure"
-              style={{
-                width: 14,
-                height: 18,
-                display: 'inline-grid',
-                placeItems: 'center',
-                borderRadius: 3,
-                color: 'var(--dim)',
-              }}
-            >
-              <Icon.chevronD
-                size={10}
-                style={{
-                  transform: isOpen ? 'none' : 'rotate(-90deg)',
-                  transition: 'transform 120ms ease',
-                }}
-              />
-            </button>
+            <RailDisclosure
+              open={isOpen}
+              label={folder.name}
+              onToggle={() => setOpen({ ...open, [folder.id]: !isOpen })}
+            />
           ) : undefined
         }
         icon={
@@ -1676,219 +1581,5 @@ function FolderSubtree({
         </div>
       )}
     </>
-  );
-}
-
-function FolderRow({
-  active,
-  onClick,
-  icon,
-  label,
-  count,
-  showCount,
-  disclosure,
-  action,
-}: {
-  active: boolean;
-  onClick: () => void;
-  icon: ReactNode;
-  label: string;
-  count: number;
-  showCount: boolean;
-  disclosure?: ReactNode;
-  /**
-   * Row-level control, rendered between the label and the count. Inside
-   * the count rather than outside it on purpose: the count is a stable
-   * right edge, and a control that came and went to the right of it
-   * would shift the number every time the selection moved.
-   */
-  action?: ReactNode;
-}) {
-  return (
-    // The row is a plain container, not a `role="button"`. It used to be
-    // one, with the disclosure and edit controls nested inside it — which
-    // is invalid (a button must not contain focusable descendants) and
-    // broke them for the keyboard: their Enter/Space bubbled to the row's
-    // handler, which called `preventDefault()` and cancelled the native
-    // activation, so the row selected instead of expanding or editing.
-    // Stopping click propagation never covered that, because the key
-    // event is what carries the activation. Siblings fix the class of bug
-    // rather than the instance, and each control is now its own tab stop.
-    <div
-      className="pw-rail-row"
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: 8,
-        height: 28,
-        padding: '0 8px',
-        // Left unset when inactive so the stylesheet's `:hover` can win —
-        // an inline `transparent` would outrank it.
-        background: active ? 'var(--panel-2)' : undefined,
-        color: active ? 'var(--text)' : 'var(--text-2)',
-        fontWeight: active ? 600 : 400,
-        fontSize: 13,
-        textAlign: 'left',
-      }}
-    >
-      <span
-        style={{
-          width: 14,
-          height: 18,
-          display: 'inline-grid',
-          placeItems: 'center',
-          flexShrink: 0,
-        }}
-      >
-        {disclosure}
-      </span>
-      <button
-        type="button"
-        onClick={onClick}
-        aria-current={active ? 'true' : undefined}
-        style={{
-          flex: 1,
-          minWidth: 0,
-          display: 'flex',
-          alignItems: 'center',
-          gap: 8,
-          height: '100%',
-          font: 'inherit',
-          color: 'inherit',
-          textAlign: 'left',
-          cursor: 'pointer',
-        }}
-      >
-        <span
-          aria-hidden
-          style={{
-            width: 12,
-            height: 12,
-            display: 'inline-grid',
-            placeItems: 'center',
-            flexShrink: 0,
-            color: active ? 'var(--text-2)' : 'var(--dim)',
-          }}
-        >
-          {icon}
-        </span>
-        <span
-          style={{
-            flex: 1,
-            minWidth: 0,
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            whiteSpace: 'nowrap',
-          }}
-        >
-          {label}
-        </span>
-      </button>
-      {action}
-      {showCount && (
-        <span
-          style={{
-            fontFamily: 'var(--font-mono)',
-            fontSize: 10.5,
-            fontWeight: 400,
-            color: active ? 'var(--text-2)' : 'var(--muted)',
-            fontVariantNumeric: 'tabular-nums',
-            flexShrink: 0,
-          }}
-        >
-          {count}
-        </span>
-      )}
-    </div>
-  );
-}
-
-/**
- * A tag in the rail. Folders are a place and pick one at a time; tags
- * narrow what is in that place and stack, so they read as ticks rather
- * than as a second selection.
- */
-function TagRow({
-  name,
-  count,
-  showCount,
-  checked,
-  onToggle,
-}: {
-  name: string;
-  count: number;
-  showCount: boolean;
-  checked: boolean;
-  onToggle: () => void;
-}) {
-  return (
-    <div
-      role="checkbox"
-      aria-checked={checked}
-      tabIndex={0}
-      onClick={onToggle}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter' || e.key === ' ') {
-          e.preventDefault();
-          onToggle();
-        }
-      }}
-      className="pw-rail-row"
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: 8,
-        height: 28,
-        padding: '0 8px',
-        background: checked ? 'var(--panel-2)' : undefined,
-        color: checked ? 'var(--text)' : 'var(--text-2)',
-        fontWeight: checked ? 600 : 400,
-        cursor: 'pointer',
-        fontSize: 13,
-        textAlign: 'left',
-      }}
-    >
-      <span
-        aria-hidden
-        style={{
-          width: 12,
-          height: 12,
-          display: 'inline-grid',
-          placeItems: 'center',
-          flexShrink: 0,
-          border: `1px solid ${checked ? 'var(--line-3)' : 'var(--line-2)'}`,
-          borderRadius: 3,
-          background: checked ? 'var(--text-2)' : 'var(--panel-2)',
-          color: checked ? 'var(--panel)' : 'transparent',
-        }}
-      >
-        <Icon.check size={8} />
-      </span>
-      <span
-        style={{
-          flex: 1,
-          minWidth: 0,
-          overflow: 'hidden',
-          textOverflow: 'ellipsis',
-          whiteSpace: 'nowrap',
-        }}
-      >
-        {name}
-      </span>
-      {showCount && (
-        <span
-          style={{
-            fontFamily: 'var(--font-mono)',
-            fontSize: 10.5,
-            fontWeight: 400,
-            color: count === 0 ? 'var(--faint)' : 'var(--muted)',
-            fontVariantNumeric: 'tabular-nums',
-            flexShrink: 0,
-          }}
-        >
-          {count}
-        </span>
-      )}
-    </div>
   );
 }

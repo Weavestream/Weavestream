@@ -164,16 +164,16 @@ export function PasswordRowActions({
 
   // `Btn` writes `color` into the inline style, which no stylesheet rule
   // can outrank without `!important`. So the buttons resolve their ink
-  // from a custom property instead and `.pw-row-actions` in globals.css
+  // from a custom property instead and `.row-actions` in globals.css
   // moves that property per state — the one hook a parent row's `:hover`
   // can actually reach.
   const ink = recessive
-    ? { color: 'var(--pw-action-ink, var(--text-2))' }
+    ? { color: 'var(--row-action-ink, var(--text-2))' }
     : undefined;
 
   return (
     <div
-      className={recessive ? 'pw-row-actions' : undefined}
+      className={recessive ? 'row-actions' : undefined}
       style={{
         display: 'inline-flex',
         alignItems: 'center',

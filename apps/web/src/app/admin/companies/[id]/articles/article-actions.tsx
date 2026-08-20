@@ -236,17 +236,30 @@ export function useArticleArchive({
 export function ArticleActions({
   article,
   onAfter,
+  recessive,
 }: {
   article: ArticleLite;
   onAfter?: (event: 'archived' | 'restored' | 'purged') => void;
+  /**
+   * Table treatment, matching `PasswordRowActions`: the archive toggle
+   * drops its border and rests at `--faint`, lifting as the pointer
+   * enters the row. The purge button is deliberately excluded — a
+   * destructive action is the one thing in the row that should not fade.
+   *
+   * Off elsewhere, so the detail header keeps the strength it has now.
+   */
+  recessive?: boolean;
 }) {
   const { archived, requestArchiveToggle, requestPurge, dialogs } =
     useArticleArchive({ article, onAfter });
 
-  return (
+  // `Btn` writes `color` into its inline style, which no stylesheet rule
+  // can outrank without `!important` — so the button resolves its ink
+  // from a custom property that `.row-actions` moves per state.
+  const body = (
     <>
       <Btn
-        kind={archived ? 'solid' : 'outline'}
+        kind={recessive ? 'ghost' : archived ? 'solid' : 'outline'}
         size="sm"
         icon={archived ? Icon.check : Icon.archive}
         iconOnly
@@ -254,6 +267,11 @@ export function ArticleActions({
           e.stopPropagation();
           requestArchiveToggle();
         }}
+        style={
+          recessive
+            ? { color: 'var(--row-action-ink, var(--text-2))' }
+            : undefined
+        }
         title={archived ? 'Restore article' : 'Archive article'}
       />
       {archived && (
@@ -271,5 +289,15 @@ export function ArticleActions({
       )}
       {dialogs}
     </>
+  );
+
+  if (!recessive) return body;
+  return (
+    <span
+      className="row-actions"
+      style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}
+    >
+      {body}
+    </span>
   );
 }

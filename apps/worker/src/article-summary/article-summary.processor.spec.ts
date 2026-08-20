@@ -276,6 +276,19 @@ describe('ArticleSummaryWorker.generate', () => {
     expect(row.aiSummaryAt).toBeInstanceOf(Date);
   });
 
+  it('carries the word cap in BOTH turns (list rows clamp to one line)', async () => {
+    // The excerpt cell is single-line with an ellipsis, so an over-long
+    // summary is cut off on screen. The model overshot a system-turn-
+    // only cap, so the count is repeated in the user turn.
+    const row = makeRow();
+    const ctx = makeWorker({ rows: [row] });
+    await ctx.worker.generate(payloadFor(row));
+    const { system, user } = ctx.complete.mock.calls[0]![1];
+    expect(system).toContain('at most 35 words');
+    expect(system).toContain('1 sentence');
+    expect(user).toContain('at most 35 words');
+  });
+
   it('the prompt never names an output language (gpt-5-mini language-lottery regression)', async () => {
     // Any language-choice clause ("in the article's own language", "in
     // the same language as the text") made gpt-5.4-mini answer English
