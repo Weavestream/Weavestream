@@ -10,7 +10,10 @@ import {
 } from '@weavestream/shared';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { QueuesService } from '../queues/queues.service.js';
-import { removeRepeatables } from '../queues/repeatable-registration.js';
+import {
+  removeJobSchedulers,
+  removeRepeatables,
+} from '../queues/repeatable-registration.js';
 
 /**
  * Scheduler ids are colon-free and prefixed so the boot sweep can tell
@@ -67,17 +70,12 @@ export class BackupQueueRegistrar implements OnApplicationBootstrap {
     // as readily as a legacy entry.
     try {
       // 1. Our own Job Schedulers — stale ids from configs deleted or
-      //    disabled while the API was down. BullMQ 5.76 lists them
-      //    under `key`, not `id`.
-      const schedulers = await queue.getJobSchedulers();
-      for (const s of schedulers) {
-        const id =
-          (s as { id?: string; key?: string }).id ??
-          (s as { key?: string }).key;
-        if (typeof id === 'string' && id.startsWith(SCHEDULER_ID_PREFIX)) {
-          await queue.removeJobScheduler(id);
-        }
-      }
+      //    disabled while the API was down. `removeJobSchedulers` owns
+      //    the BullMQ 5.76 quirk that lists them under `key`, not `id`.
+      await removeJobSchedulers(queue, {
+        onError: 'throw',
+        match: (id) => id.startsWith(SCHEDULER_ID_PREFIX),
+      });
       // 2. Legacy `add({ repeat })` entries. Their id is reliably
       //    undefined in BullMQ 5.76, so no filter is possible — but
       //    the backup queue only ever held our own registrations, so

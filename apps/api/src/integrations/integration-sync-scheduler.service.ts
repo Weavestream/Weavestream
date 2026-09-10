@@ -8,7 +8,10 @@ import type { Queue } from 'bullmq';
 import { EnvService } from '../config/env.service.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { QueuesService } from '../queues/queues.service.js';
-import { removeRepeatables } from '../queues/repeatable-registration.js';
+import {
+  removeJobSchedulers,
+  removeRepeatables,
+} from '../queues/repeatable-registration.js';
 import { IntegrationDriverRegistry } from './drivers/integration-driver.registry.js';
 
 /**
@@ -97,20 +100,23 @@ export class IntegrationSyncSchedulerService {
 
     for (const queue of [orchQueue, cfQueue]) {
       // 1. Remove every Job Scheduler whose id matches our prefix.
-      const schedulers = await queue.getJobSchedulers();
-      for (const s of schedulers) {
-        const id = (s as { id?: string; key?: string }).id ?? (s as { key?: string }).key;
-        if (typeof id === 'string' && (id.startsWith('scheduled-') || id.startsWith('scheduled:'))) {
-          await queue.removeJobScheduler(id).catch(() => undefined);
-        }
-      }
+      //    `removeJobSchedulers` owns the BullMQ 5.76 quirk that lists
+      //    them under `key` rather than `id`.
+      await removeJobSchedulers(queue, {
+        onError: 'skip',
+        onSkipped: (id, err) => this.warnSweepFailure('scheduler', id, err),
+        match: (id) => id.startsWith('scheduled-') || id.startsWith('scheduled:'),
+      });
       // 2. Sweep up legacy `add({ repeat })` entries, which are stored
       //    under hashed keys and not visible as Job Schedulers. The id
       //    field on these is reliably undefined in BullMQ 5.76 (a known
       //    quirk in `getRepeatableData`), so we can't filter — but these
       //    integration queues only ever held our `scheduled-*` entries,
       //    so removing every legacy entry is safe.
-      await removeRepeatables(queue, { onError: 'skip' });
+      await removeRepeatables(queue, {
+        onError: 'skip',
+        onSkipped: (key, err) => this.warnSweepFailure('legacy repeatable', key, err),
+      });
     }
 
     const defaultCron = this.resolveDefaultCron();
@@ -177,6 +183,19 @@ export class IntegrationSyncSchedulerService {
         },
       );
     }
+  }
+
+  /**
+   * A sweep entry we could not remove keeps firing beside whatever
+   * `refreshAll` registers next, until the next API restart. The pass
+   * still continues — 1 stuck key must not cost every other schedule —
+   * but the failure is reported rather than discarded.
+   */
+  private warnSweepFailure(kind: string, id: string, err: unknown): void {
+    this.logger.warn(
+      { err: err instanceof Error ? err.message : String(err), key: id },
+      `failed to remove a stale ${kind}; it may double-fire until the next API restart`,
+    );
   }
 
   private schedulerIdFor(integrationId: string): string {
