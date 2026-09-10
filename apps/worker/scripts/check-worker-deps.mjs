@@ -55,11 +55,9 @@
  *   1. The walk actually walked: `dist/` exists, the entry named by `main`
  *      exists, the emit is still CommonJS, and the walk reached more than the
  *      entry and at least one package. See "check 0".
- *   1b. The entry inspected is the entry the container runs. `main` must
- *      resolve inside `dist/`, and must equal both the `start` script and the
- *      runner `CMD` in `docker/worker.Dockerfile`. Three unlinked copies of
- *      that path exist; if they drift, this guard audits a graph production
- *      never loads and passes while the image is broken.
+ *   1b. `main` resolves inside `dist/`. A `startsWith('dist/')` test is not
+ *      that proof — `dist/../outside.js` passes it and lands outside the only
+ *      tree the runner image copies.
  *   2. Every relative `require()` on the reachable graph resolves to a real
  *      file inside `dist/` — the only tree the runner image copies. An edge
  *      leading nowhere means the walk is blind to part of the graph, and every
@@ -84,9 +82,21 @@
  * There is deliberately no environment-variable escape hatch: one that can be
  * left set in CI defeats the entire point.
  *
- * Run `--self-test` to exercise the failure branches against throwaway
- * fixtures. `apps/worker`'s `test` script does this, because a guard whose
- * failure paths never run is not known to work.
+ * ## Modes
+ *
+ *   (default)     the dependency walk above. Chained onto `nest build`, so it
+ *                 runs locally, in CI, and inside the Docker build. It reads
+ *                 only `apps/worker`, which is all that build stage copies.
+ *   `--wiring`    the repo-level entry-path agreement check. Needs `docker/`,
+ *                 which the Docker build context excludes, so it runs from
+ *                 `pnpm test` rather than from `build`. See `wiringCheck`.
+ *   `--self-test` exercises the failure branches against throwaway fixtures,
+ *                 because a guard whose failure paths never run is not known
+ *                 to work. Also `pnpm test`.
+ *
+ * Keep the default mode's inputs inside `apps/worker`. Reaching outside it
+ * once cost a red `docker-build`: the guard read `docker/worker.Dockerfile`,
+ * which is not in the build context, and ENOENT took the image with it.
  */
 import {
   existsSync,
@@ -365,21 +375,6 @@ function main() {
   const resolved = resolveEntry({ workerDir: WORKER, distDir: DIST, main: pkg.main });
   if (resolved.error) fail(resolved.error, WIRING_HINT);
 
-  // Before trusting `main`, prove the container runs the same file. Otherwise
-  // everything below audits a graph production never loads.
-  let dockerfile;
-  try {
-    dockerfile = readFileSync(DOCKERFILE, 'utf8');
-  } catch (err) {
-    fail([`Could not read docker/worker.Dockerfile: ${err.message}`], WIRING_HINT);
-  }
-  const disagreements = entryPointsAgree({
-    main: pkg.main,
-    dockerfile,
-    startScript: pkg.scripts?.start,
-  });
-  if (disagreements.length > 0) fail(disagreements, WIRING_HINT);
-
   const deps = pkg.dependencies;
   if (!deps || typeof deps !== 'object' || Object.keys(deps).length === 0) {
     fail(
@@ -470,6 +465,50 @@ function main() {
   console.log(
     `✓ worker deps OK — all ${result.packages.size} packages required across those ` +
       `${result.reached.size} reachable files are declared in apps/worker/package.json "dependencies"`,
+  );
+}
+
+/**
+ * Repo-level check: the three copies of the entry path agree.
+ *
+ * Deliberately NOT part of `main()`. `main()` runs inside
+ * `docker/worker.Dockerfile`'s build stage, whose context is
+ * `packages` + `apps/api` + `apps/worker` and does **not** include `docker/`
+ * — so reading the Dockerfile there fails with ENOENT and takes the whole
+ * image build with it. It did, once.
+ *
+ * The separation is not a workaround, it is the right shape. `main()` asks
+ * "does this build load a package it cannot resolve?", which needs only
+ * `apps/worker`. This asks "do the repo's three hardcoded entry paths still
+ * match?", which needs the repo. Running it inside the container adds nothing:
+ * drift fails CI here, on every push, long before an image is built.
+ */
+function wiringCheck() {
+  let pkg;
+  let dockerfile;
+  try {
+    pkg = JSON.parse(readFileSync(PKG, 'utf8'));
+  } catch (err) {
+    fail([`apps/worker/package.json is not valid JSON: ${err.message}`], WIRING_HINT);
+  }
+  try {
+    dockerfile = readFileSync(DOCKERFILE, 'utf8');
+  } catch (err) {
+    // A hard failure, not a skip. This mode exists to read that file; if it is
+    // gone, the check is not "inapplicable", it is broken.
+    fail([`Could not read docker/worker.Dockerfile: ${err.message}`], WIRING_HINT);
+  }
+
+  const disagreements = entryPointsAgree({
+    main: pkg.main,
+    dockerfile,
+    startScript: pkg.scripts?.start,
+  });
+  if (disagreements.length > 0) fail(disagreements, WIRING_HINT);
+
+  console.log(
+    `✓ worker entry wiring — package.json "main", the start script, and the ` +
+      `Dockerfile CMD all name ${pkg.main}`,
   );
 }
 
@@ -616,4 +655,5 @@ function selfTest() {
 }
 
 if (process.argv.includes('--self-test')) selfTest();
+else if (process.argv.includes('--wiring')) wiringCheck();
 else main();

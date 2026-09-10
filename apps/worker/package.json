@@ -10,7 +10,7 @@
     "lint": "eslint 'src/**/*.ts'",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "deps:check": "node scripts/check-worker-deps.mjs",
-    "test": "jest --passWithNoTests && node scripts/check-worker-deps.mjs --self-test"
+    "test": "jest --passWithNoTests && node scripts/check-worker-deps.mjs --self-test && node scripts/check-worker-deps.mjs --wiring"
   },
   "dependencies": {
     "@nestjs/common": "^11.1.19",
