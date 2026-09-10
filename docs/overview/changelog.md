@@ -13,6 +13,24 @@ All notable changes to Weavestream are documented here. The format follows [Keep
 
 ## [Unreleased]
 
+## [1.9.7] - 2026-09-10
+
+### Changed
+
+- **Prisma schema alignment and zero-drift database validation.** Reconciled `schema.prisma` against historical database migrations, declaring 22 explicit audit and company relations with corresponding deletion behaviors (`Cascade`, `SetNull`, `Restrict`), mapping custom index and constraint names, and standardizing UUID columns to database-native `gen_random_uuid()` defaults. Enabled a strict `prisma migrate diff` gate in CI to prevent database schema drift.
+- **BullMQ worker lifecycle management and scheduler sweeps.** Standardized background queue worker registration and lifecycle teardown with a unified `createManagedWorker` utility across worker processors. Centralized BullMQ Job Scheduler sweeps with explicit error reporting and callbacks for skipped or unmanaged schedules, eliminating silent failure swallowing.
+- **GitHub Actions workflow modernization.** Upgraded CI, CodeQL, and release workflow steps across the pipeline to their Node 24 runtime versions (including Docker buildx v4, build-push v7, login v4, metadata v6, artifact upload/download actions, and CodeQL v4).
+
+### Fixed
+
+- **Worker container dependency validation and entrypoint verification.** Added a build-time dependency analysis guard (`check-worker-deps.mjs`) that inspects the compiled dependency graph of the worker entrypoint to prevent runtime missing-module crashes from undeclared shared packages. Added Dockerfile entrypoint wiring assertions and pruned test files from worker builds, reducing compiled artifact size by over 30%.
+- **Next.js type declaration references.** Updated ambient route type reference paths in `next-env.d.ts` following the Next.js 16.3 upgrade.
+
+### Security
+
+- **Inline SVG rendering for MFA enrollment QR codes.** Switched MFA setup QR code generation from base64 data URLs to inline SVG (`<svg role="img">`). This prevents Content Security Policy (CSP) blocking on `data:` image schemes without weakening policy directives, while ensuring crisp rendering and high contrast in both dark and light modes.
+- **Dependency vulnerability remediation.** Resolved 2 critical and 6 high security advisories reported during production dependency audits. Upgraded `next` (to 16.3.4), `@tiptap/*` (to 3.31.3), `nodemailer` (to 9.1.1), and `sharp` (to 0.35.4 with `@img/sharp-libvips-*` 1.3.3), and applied workspace overrides for `multer` (to 2.3.0) addressing multipart field DoS and file descriptor leak vulnerabilities.
+
 ## [1.9.6] - 2026-08-20
 
 ### Changed
@@ -772,7 +790,8 @@ Initial public release.
 
 ---
 
-[Unreleased]: https://github.com/Weavestream/Weavestream/compare/v1.9.6...HEAD
+[Unreleased]: https://github.com/Weavestream/Weavestream/compare/v1.9.7...HEAD
+[1.9.7]: https://github.com/Weavestream/Weavestream/releases/tag/v1.9.7
 [1.9.6]: https://github.com/Weavestream/Weavestream/releases/tag/v1.9.6
 [1.9.5]: https://github.com/Weavestream/Weavestream/releases/tag/v1.9.5
 [1.9.4]: https://github.com/Weavestream/Weavestream/releases/tag/v1.9.4
