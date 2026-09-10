@@ -233,6 +233,21 @@ model User {
   starredArticles   StarredArticle[]
   chatConversations ChatConversation[]
 
+  createdArticles         Article[]         @relation("ArticleCreator")
+  updatedArticles         Article[]         @relation("ArticleUpdater")
+  createdAssetLayouts     AssetLayout[]     @relation("AssetLayoutCreator")
+  createdAssets           Asset[]           @relation("AssetCreator")
+  updatedAssets           Asset[]           @relation("AssetUpdater")
+  createdCompanies        Company[]         @relation("CompanyCreator")
+  createdFolders          Folder[]          @relation("FolderCreator")
+  createdMemberships      Membership[]      @relation("MembershipCreator")
+  createdPasswordFolders  PasswordFolder[]  @relation("PasswordFolderCreator")
+  changedPasswordVersions PasswordVersion[] @relation("PasswordVersionChanger")
+  createdPasswords        Password[]        @relation("PasswordCreator")
+  updatedPasswords        Password[]        @relation("PasswordUpdater")
+  createdRelations        Relation[]        @relation("RelationCreator")
+  uploads                 Upload[]          @relation("UploadUploader")
+
   @@map("users")
 }
 
@@ -289,18 +304,28 @@ model Company {
   stickyNoteText     String?             @map("sticky_note_text")
   stickyNoteSeverity StickyNoteSeverity? @map("sticky_note_severity")
 
-  memberships         Membership[]
-  starredBy           StarredCompany[]
-  passwords           Password[]
-  passwordFolders     PasswordFolder[]
+  memberships                        Membership[]
+  starredBy                          StarredCompany[]
+  passwords                          Password[]
+  passwordFolders                    PasswordFolder[]
   // Phase 11: per-tenant org-to-company mappings owned by a global
   // integration (Action1 organisation → Weavestream company).
   // Cascade delete clears mappings if a company is hard-deleted, but
   // we never archive assets in that path — see `IntegrationCompanyMapping`.
-  integrationMappings IntegrationCompanyMapping[]
+  integrationMappings                IntegrationCompanyMapping[]
   integrationSyncCheckpoints         IntegrationSyncCheckpoint[]
   integrationReconstructionSummaries IntegrationReconstructionSummary[]
   integrationReconstructionGaps      IntegrationReconstructionGap[]
+
+  articles         Article[]
+  assetFieldValues AssetFieldValue[]
+  assets           Asset[]
+  creator          User?             @relation("CompanyCreator", fields: [createdBy], references: [id], onDelete: SetNull)
+  folders          Folder[]
+  monitoredDomains MonitoredDomain[]
+  relations        Relation[]
+  searchIndex      SearchIndex[]
+  uploads          Upload[]          @relation("UploadCompany")
 
   @@index([type])
   @@index([parentCompanyId])
@@ -315,7 +340,7 @@ model Membership {
   expiresAt DateTime?      @map("expires_at")
   createdBy String?        @map("created_by") @db.Uuid
   createdAt DateTime       @default(now()) @map("created_at")
-  updatedAt DateTime       @updatedAt @map("updated_at")
+  updatedAt DateTime       @default(now()) @updatedAt @map("updated_at")
   revokedAt DateTime?      @map("revoked_at")
 
   user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -325,6 +350,9 @@ model Membership {
   // (user_id, company_id) WHERE revoked_at IS NULL, added in the
   // phase2_companies_users_memberships migration. Historical revoked
   // rows are allowed so revocation never blocks re-adding a user.
+
+  creator User? @relation("MembershipCreator", fields: [createdBy], references: [id], onDelete: SetNull)
+
   @@index([userId])
   @@index([companyId])
   @@map("memberships")
@@ -336,7 +364,7 @@ model Membership {
 // role (useful when monitoring an account without being on the hook
 // to edit it). Cascade-on-delete so removing either side cleans up.
 model StarredCompany {
-  id        String   @id @default(uuid()) @db.Uuid
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   userId    String   @map("user_id") @db.Uuid
   companyId String   @map("company_id") @db.Uuid
   createdAt DateTime @default(now()) @map("created_at")
@@ -350,7 +378,7 @@ model StarredCompany {
 }
 
 model StarredPassword {
-  id         String   @id @default(uuid()) @db.Uuid
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   userId     String   @map("user_id") @db.Uuid
   passwordId String   @map("password_id") @db.Uuid
   createdAt  DateTime @default(now()) @map("created_at")
@@ -364,7 +392,7 @@ model StarredPassword {
 }
 
 model StarredAsset {
-  id        String   @id @default(uuid()) @db.Uuid
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   userId    String   @map("user_id") @db.Uuid
   assetId   String   @map("asset_id") @db.Uuid
   createdAt DateTime @default(now()) @map("created_at")
@@ -378,7 +406,7 @@ model StarredAsset {
 }
 
 model StarredArticle {
-  id        String   @id @default(uuid()) @db.Uuid
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   userId    String   @map("user_id") @db.Uuid
   articleId String   @map("article_id") @db.Uuid
   createdAt DateTime @default(now()) @map("created_at")
@@ -392,21 +420,21 @@ model StarredArticle {
 }
 
 model Session {
-  id               String    @id @default(uuid()) @db.Uuid
-  userId           String    @map("user_id") @db.Uuid
-  refreshTokenHash String    @unique @map("refresh_token_hash")
+  id                       String    @id @default(uuid()) @db.Uuid
+  userId                   String    @map("user_id") @db.Uuid
+  refreshTokenHash         String    @unique @map("refresh_token_hash")
   // Single-generation refresh-token rotation: the hash of the
   // immediately-prior refresh token (null until first rotation) and when
   // that rotation happened. Re-presenting the previous token within a
   // short grace window is a benign concurrent refresh; later it is reuse.
   previousRefreshTokenHash String?   @unique @map("previous_refresh_token_hash")
   rotatedAt                DateTime? @map("rotated_at")
-  mfaPending       Boolean   @default(false) @map("mfa_pending")
-  ip               String
-  userAgent        String    @map("user_agent")
-  createdAt        DateTime  @default(now()) @map("created_at")
-  expiresAt        DateTime  @map("expires_at")
-  revokedAt        DateTime? @map("revoked_at")
+  mfaPending               Boolean   @default(false) @map("mfa_pending")
+  ip                       String
+  userAgent                String    @map("user_agent")
+  createdAt                DateTime  @default(now()) @map("created_at")
+  expiresAt                DateTime  @map("expires_at")
+  revokedAt                DateTime? @map("revoked_at")
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -415,7 +443,7 @@ model Session {
 }
 
 model UserMfaBackupCode {
-  id         String    @id @default(uuid()) @db.Uuid
+  id         String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   userId     String    @map("user_id") @db.Uuid
   codeHash   String    @map("code_hash")
   consumedAt DateTime? @map("consumed_at")
@@ -503,6 +531,9 @@ model AssetLayout {
 
   // Active-slug uniqueness enforced by a partial unique index on
   // (slug) WHERE archived_at IS NULL, added in the Phase 3 migration.
+
+  creator User? @relation("AssetLayoutCreator", fields: [createdBy], references: [id], onDelete: SetNull)
+
   @@index([isActive, archivedAt, position])
   @@map("asset_layouts")
 }
@@ -594,9 +625,9 @@ model Asset {
   // from the same `(mapping, resource)` pair.
   integrationSyncRecords IntegrationSyncRecord[]
 
-  @@index([companyId, assetLayoutId, archivedAt])
-  @@index([companyId, name])
-  @@index([companyId, updatedAt])
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  creator User?   @relation("AssetCreator", fields: [createdBy], references: [id], onDelete: SetNull)
+  updater User?   @relation("AssetUpdater", fields: [updatedBy], references: [id], onDelete: SetNull)
   // Phase 11: lookup index (0020) so the resolver can claim a row by
   // (companyId, externalSource, externalId) without scanning. External
   // identity is additionally UNIQUE via two partial indexes in
@@ -604,7 +635,14 @@ model Asset {
   // NULL-source rows) — Prisma cannot express partial uniques, so only
   // the plain lookup index appears here. Manual assets (NULL
   // externalId) sit outside both unique indexes.
-  @@index([companyId, externalSource, externalId])
+
+  // (company_id, external_source, external_id) is a PARTIAL index
+  // (`WHERE external_id IS NOT NULL`, migration 0020) and the matching
+  // partial unique keys live in migration 0062. Prisma cannot express
+  // partial indexes, so they are deliberately not declared here.
+  @@index([companyId, assetLayoutId, archivedAt])
+  @@index([companyId, name])
+  @@index([companyId, updatedAt])
   @@map("assets")
 }
 
@@ -626,9 +664,11 @@ model AssetFieldValue {
   asset      Asset      @relation(fields: [assetId], references: [id], onDelete: Cascade)
   assetField AssetField @relation(fields: [assetFieldId], references: [id], onDelete: Cascade)
 
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
   @@unique([assetId, assetFieldId])
   @@index([assetFieldId])
-  @@index([companyId, assetFieldId])
+  @@index([companyId, assetFieldId], map: "asset_field_values_company_field_idx")
   @@map("asset_field_values")
 }
 
@@ -655,7 +695,11 @@ model Folder {
 
   // Active-slug uniqueness per parent enforced by a partial unique index
   // (company_id, COALESCE(parent_id, '00000000-...'), slug) WHERE archived_at IS NULL.
-  @@index([companyId, parentId, position])
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  creator User?   @relation("FolderCreator", fields: [createdBy], references: [id], onDelete: SetNull)
+
+  @@index([companyId, parentId, position], map: "folders_company_parent_position_idx")
   @@map("folders")
 }
 
@@ -713,15 +757,20 @@ model Article {
   createdAt        DateTime  @default(now()) @map("created_at")
   updatedAt        DateTime  @updatedAt @map("updated_at")
 
-  folder    Folder?          @relation(fields: [folderId], references: [id], onDelete: SetNull)
-  starredBy StarredArticle[]
-  versions  ArticleVersion[]
+  folder                 Folder?                 @relation(fields: [folderId], references: [id], onDelete: SetNull)
+  starredBy              StarredArticle[]
+  versions               ArticleVersion[]
   integrationSyncRecords IntegrationSyncRecord[]
 
   // Active-slug uniqueness per company enforced by a partial unique index
   // (company_id, slug) WHERE archived_at IS NULL.
-  @@index([companyId, folderId])
-  @@index([companyId, updatedAt])
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  creator User?   @relation("ArticleCreator", fields: [createdBy], references: [id], onDelete: SetNull)
+  updater User?   @relation("ArticleUpdater", fields: [updatedBy], references: [id], onDelete: SetNull)
+
+  @@index([companyId, folderId], map: "articles_company_folder_idx")
+  @@index([companyId, updatedAt], map: "articles_company_updated_at_idx")
   @@map("articles")
 }
 
@@ -740,7 +789,7 @@ model Article {
 // `ON DELETE CASCADE` on the Article relation guarantees `purge()`
 // removes every history row alongside the article — no orphans.
 model ArticleVersion {
-  id               String   @id @default(uuid()) @db.Uuid
+  id               String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   articleId        String   @map("article_id") @db.Uuid
   companyId        String   @map("company_id") @db.Uuid
   version          Int
@@ -760,13 +809,13 @@ model ArticleVersion {
   changedBy        String   @map("changed_by") @db.Uuid
   changeReason     String?  @map("change_reason")
   createdAt        DateTime @default(now()) @map("created_at")
-  updatedAt        DateTime @updatedAt @map("updated_at")
+  updatedAt        DateTime @default(now()) @updatedAt @map("updated_at")
 
   article Article @relation(fields: [articleId], references: [id], onDelete: Cascade)
 
-  @@unique([articleId, version])
-  @@index([articleId, isDraft, createdAt])
-  @@index([companyId, createdAt])
+  @@unique([articleId, version], map: "article_versions_article_version_uniq")
+  @@index([articleId, isDraft, createdAt], map: "article_versions_article_draft_created_idx")
+  @@index([companyId, createdAt], map: "article_versions_company_created_idx")
   @@map("article_versions")
 }
 
@@ -796,9 +845,12 @@ model Upload {
   // upload as a company logo; otherwise null.
   companyLogo Company? @relation("CompanyLogo")
 
-  @@index([companyId, isImage, createdAt])
-  @@index([attachedToType, attachedToId])
-  @@index([companyId, deletedAt])
+  company  Company @relation("UploadCompany", fields: [companyId], references: [id], onDelete: Cascade)
+  uploader User?   @relation("UploadUploader", fields: [uploaderId], references: [id], onDelete: SetNull)
+
+  @@index([attachedToType, attachedToId], map: "uploads_attached_idx")
+  @@index([companyId, deletedAt], map: "uploads_company_deleted_idx")
+  @@index([companyId, isImage, createdAt], map: "uploads_company_image_created_idx")
   @@map("uploads")
 }
 
@@ -818,9 +870,12 @@ model Relation {
 
   integrationSyncRecords IntegrationSyncRecord[]
 
-  @@unique([sourceType, sourceId, targetType, targetId, relationType])
-  @@index([companyId, sourceType, sourceId])
-  @@index([companyId, targetType, targetId])
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  creator User?   @relation("RelationCreator", fields: [createdBy], references: [id], onDelete: SetNull)
+
+  @@unique([sourceType, sourceId, targetType, targetId, relationType], map: "relations_source_target_type_uniq")
+  @@index([companyId, sourceType, sourceId], map: "relations_company_source_idx")
+  @@index([companyId, targetType, targetId], map: "relations_company_target_idx")
   @@map("relations")
 }
 
@@ -842,26 +897,30 @@ model Relation {
 // by the API's SearchIndexService because per-field visibility and the
 // FieldTypeStrategy.toPlaintext logic live in TypeScript.
 model SearchIndex {
-  entityType       String    @map("entity_type")
-  entityId         String    @map("entity_id") @db.Uuid
-  companyId        String    @map("company_id") @db.Uuid
-  title            String
-  bodyPublic       String    @map("body_public")
-  bodyInternal     String    @map("body_internal")
-  visibleToClients Boolean   @default(true) @map("visible_to_clients")
+  entityType          String    @map("entity_type")
+  entityId            String    @map("entity_id") @db.Uuid
+  companyId           String    @map("company_id") @db.Uuid
+  title               String    @default("")
+  bodyPublic          String    @default("") @map("body_public")
+  bodyInternal        String    @default("") @map("body_internal")
+  visibleToClients    Boolean   @default(true) @map("visible_to_clients")
   // Copy of Password.restrictedToUserIds ('{}' = unrestricted; always
   // '{}' for non-password rows). Maintained by the password triggers.
-  restrictedToUserIds String[] @default([]) @map("restricted_to_user_ids") @db.Uuid
-  layoutId         String?   @map("layout_id") @db.Uuid
-  archivedAt       DateTime? @map("archived_at")
-  updatedAt        DateTime  @map("updated_at")
+  restrictedToUserIds String[]  @default([]) @map("restricted_to_user_ids") @db.Uuid
+  layoutId            String?   @map("layout_id") @db.Uuid
+  archivedAt          DateTime? @map("archived_at")
+  updatedAt           DateTime  @map("updated_at")
 
-  bodyPublicTsv   Unsupported("tsvector") @map("body_public_tsv")
-  bodyInternalTsv Unsupported("tsvector") @map("body_internal_tsv")
+  bodyPublicTsv   Unsupported("tsvector")? @default(dbgenerated("(setweight(to_tsvector('english'::regconfig, COALESCE(title, ''::text)), 'A'::\"char\") || setweight(to_tsvector('english'::regconfig, COALESCE(body_public, ''::text)), 'B'::\"char\"))")) @map("body_public_tsv")
+  bodyInternalTsv Unsupported("tsvector")? @default(dbgenerated("(setweight(to_tsvector('english'::regconfig, COALESCE(title, ''::text)), 'A'::\"char\") || setweight(to_tsvector('english'::regconfig, COALESCE(body_internal, ''::text)), 'B'::\"char\"))")) @map("body_internal_tsv")
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
 
   @@id([entityType, entityId])
-  @@index([companyId, updatedAt(sort: Desc)])
-  @@index([companyId, entityType, archivedAt])
+  @@index([bodyInternalTsv], type: Gin)
+  @@index([bodyPublicTsv], type: Gin)
+  @@index([companyId, entityType, archivedAt], map: "search_index_company_entity_archived_idx")
+  @@index([companyId, updatedAt(sort: Desc)], map: "search_index_company_updated_at_idx")
   @@map("search_index")
 }
 
@@ -917,7 +976,7 @@ model EmailSetting {
   fromName           String?          @map("from_name")
   fromEmail          String?          @map("from_email")
   replyTo            String?          @map("reply_to")
-  updatedAt          DateTime         @updatedAt @map("updated_at")
+  updatedAt          DateTime         @default(now()) @updatedAt @map("updated_at")
   updatedBy          String?          @map("updated_by") @db.Uuid
 
   @@map("email_settings")
@@ -930,30 +989,30 @@ model EmailSetting {
 // since an LLM endpoint is conceptually one more integration; rotation
 // piggybacks on the integrations key.
 model AiSetting {
-  id               String   @id @default("singleton")
-  enabled          Boolean  @default(false)
-  baseUrl          String?  @map("base_url")
-  apiKeyCiphertext String?  @map("api_key_ciphertext")
-  defaultModel     String?  @map("default_model")
+  id                  String   @id @default("singleton")
+  enabled             Boolean  @default(false)
+  baseUrl             String?  @map("base_url")
+  apiKeyCiphertext    String?  @map("api_key_ciphertext")
+  defaultModel        String?  @map("default_model")
   // Output-token ceiling for chat completions / reserved reply budget.
   // Null → conservative server default.
-  maxOutputTokens     Int?  @map("max_output_tokens")
+  maxOutputTokens     Int?     @map("max_output_tokens")
   // Total model context window, used to size the prompt budget. Null →
   // conservative server default.
-  contextWindowTokens Int?  @map("context_window_tokens")
+  contextWindowTokens Int?     @map("context_window_tokens")
   // Opt-in for AI endpoints on private/LAN addresses (local Ollama,
   // LM Studio). When true, AI egress allows curated private ranges only —
   // cloud-metadata and link-local stay blocked (WS-017).
-  allowPrivateNetwork Boolean @default(false) @map("allow_private_network")
+  allowPrivateNetwork Boolean  @default(false) @map("allow_private_network")
   // "Use AI to create auto summaries" (Phase 4). Deliberately a SEPARATE
   // explicit opt-in from `enabled`, default false: auto-summarization
   // proactively sends article titles+content to the configured endpoint
   // on every edit — a new data-class egress under CLAUDE.md §7 that an
   // existing install upgrading with AI already on must never start
   // silently. The settings UI carries the disclosure.
-  autoSummaries    Boolean  @default(false) @map("auto_summaries")
-  updatedAt        DateTime @updatedAt @map("updated_at")
-  updatedBy        String?  @map("updated_by") @db.Uuid
+  autoSummaries       Boolean  @default(false) @map("auto_summaries")
+  updatedAt           DateTime @default(now()) @updatedAt @map("updated_at")
+  updatedBy           String?  @map("updated_by") @db.Uuid
 
   @@map("ai_settings")
 }
@@ -972,45 +1031,47 @@ model AiSetting {
 // so an archived row doesn't block re-adding a hostname, mirroring the
 // article/folder pattern.
 model MonitoredDomain {
-  id                 String       @id @default(uuid()) @db.Uuid
-  companyId          String       @map("company_id") @db.Uuid
-  hostname           String
-  checkWhois         Boolean      @default(true) @map("check_whois")
-  checkDns           Boolean      @default(true) @map("check_dns")
-  checkTls           Boolean      @default(true) @map("check_tls")
-  alertThresholdDays Int          @default(30) @map("alert_threshold_days")
+  id                   String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  companyId            String       @map("company_id") @db.Uuid
+  hostname             String
+  checkWhois           Boolean      @default(true) @map("check_whois")
+  checkDns             Boolean      @default(true) @map("check_dns")
+  checkTls             Boolean      @default(true) @map("check_tls")
+  alertThresholdDays   Int          @default(30) @map("alert_threshold_days")
   // D-020: per-domain client visibility. Default false → MSP-internal.
-  visibleToClients   Boolean      @default(false) @map("visible_to_clients")
+  visibleToClients     Boolean      @default(false) @map("visible_to_clients")
   // Denormalised latest-run summary, updated by DomainChecksProcessor.
-  lastCheckedAt      DateTime?    @map("last_checked_at")
-  whoisExpiresAt     DateTime?    @map("whois_expires_at")
-  tlsExpiresAt       DateTime?    @map("tls_expires_at")
-  latestStatus       DomainStatus @default(UNKNOWN) @map("latest_status")
+  lastCheckedAt        DateTime?    @map("last_checked_at")
+  whoisExpiresAt       DateTime?    @map("whois_expires_at")
+  tlsExpiresAt         DateTime?    @map("tls_expires_at")
+  latestStatus         DomainStatus @default(UNKNOWN) @map("latest_status")
   // HTTP availability sub-check (alerts feature). When enabled the worker
   // performs a HEAD/GET reachability probe and persists the latest HTTP
   // status code + the timestamp the host has been continuously down
   // since. `httpDownSince` is NULL whenever the host is reachable and is
   // the read surface the alerts runner uses to fire `WEBSITE_DOWN`.
-  httpCheckEnabled   Boolean      @default(true) @map("http_check_enabled")
-  latestHttpStatus   Int?         @map("latest_http_status")
-  httpDownSince      DateTime?    @map("http_down_since")
+  httpCheckEnabled     Boolean      @default(true) @map("http_check_enabled")
+  latestHttpStatus     Int?         @map("latest_http_status")
+  httpDownSince        DateTime?    @map("http_down_since")
   // v2 — latest hygiene score (percentage 0-100). NULL until the first
   // v2 check runs. Denormalised so list/alert views don't have to join
   // the history table.
-  latestScore        Int?         @map("latest_score")
+  latestScore          Int?         @map("latest_score")
   // v2 — DKIM selector override. Comma-separated list of selectors the
   // engine probes in addition to its MX-keyed defaults. NULL = use
   // defaults only.
-  dkimSelectorOverride String?    @map("dkim_selector_override")
-  archivedAt         DateTime?    @map("archived_at")
-  createdBy          String?      @map("created_by") @db.Uuid
-  createdAt          DateTime     @default(now()) @map("created_at")
-  updatedAt          DateTime     @updatedAt @map("updated_at")
+  dkimSelectorOverride String?      @map("dkim_selector_override")
+  archivedAt           DateTime?    @map("archived_at")
+  createdBy            String?      @map("created_by") @db.Uuid
+  createdAt            DateTime     @default(now()) @map("created_at")
+  updatedAt            DateTime     @updatedAt @map("updated_at")
 
   checks DomainCheck[]
 
-  @@index([companyId, archivedAt])
-  @@index([companyId, latestStatus])
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, archivedAt], map: "monitored_domains_company_archived_idx")
+  @@index([companyId, latestStatus], map: "monitored_domains_company_status_idx")
   @@map("monitored_domains")
 }
 
@@ -1019,7 +1080,7 @@ model MonitoredDomain {
 // the full trail. `details` holds the structured payload (see
 // `packages/shared/src/schemas/domain.ts#domainCheckDetailsSchema`).
 model DomainCheck {
-  id                String       @id @default(uuid()) @db.Uuid
+  id                String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   monitoredDomainId String       @map("monitored_domain_id") @db.Uuid
   companyId         String       @map("company_id") @db.Uuid
   checkedAt         DateTime     @default(now()) @map("checked_at")
@@ -1042,8 +1103,8 @@ model DomainCheck {
 
   domain MonitoredDomain @relation(fields: [monitoredDomainId], references: [id], onDelete: Cascade)
 
-  @@index([monitoredDomainId, checkedAt(sort: Desc)])
-  @@index([companyId, checkedAt(sort: Desc)])
+  @@index([companyId, checkedAt(sort: Desc)], map: "domain_checks_company_recent_idx")
+  @@index([monitoredDomainId, checkedAt(sort: Desc)], map: "domain_checks_domain_recent_idx")
   @@map("domain_checks")
 }
 
@@ -1061,7 +1122,7 @@ model DomainCheck {
 // the explicit, audited, rate-limited POST /passwords/:id/reveal
 // endpoint.
 model Password {
-  id                   String    @id @default(uuid()) @db.Uuid
+  id                   String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   companyId            String    @map("company_id") @db.Uuid
   folderId             String?   @map("folder_id") @db.Uuid
   assetId              String?   @map("asset_id") @db.Uuid
@@ -1097,10 +1158,13 @@ model Password {
   versions  PasswordVersion[]
   starredBy StarredPassword[]
 
-  @@index([companyId, archivedAt])
-  @@index([companyId, folderId])
-  @@index([companyId, assetId])
-  @@index([assetId])
+  creator User @relation("PasswordCreator", fields: [createdBy], references: [id], onDelete: Restrict)
+  updater User @relation("PasswordUpdater", fields: [updatedBy], references: [id], onDelete: Restrict)
+
+  @@index([assetId], map: "passwords_asset_idx")
+  @@index([companyId, archivedAt], map: "passwords_company_archived_idx")
+  @@index([companyId, assetId], map: "passwords_company_asset_idx")
+  @@index([companyId, folderId], map: "passwords_company_folder_idx")
   @@map("passwords")
 }
 
@@ -1113,7 +1177,7 @@ model Password {
 // colour, restrictedToUserIds, reminder days, expiry) is NOT
 // versioned — it flows through AuditLog only.
 model PasswordVersion {
-  id                   String   @id @default(uuid()) @db.Uuid
+  id                   String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   passwordId           String   @map("password_id") @db.Uuid
   companyId            String   @map("company_id") @db.Uuid
   version              Int
@@ -1133,9 +1197,11 @@ model PasswordVersion {
 
   password Password @relation(fields: [passwordId], references: [id], onDelete: Cascade)
 
-  @@unique([passwordId, version])
-  @@index([passwordId, createdAt])
-  @@index([companyId, createdAt])
+  changer User @relation("PasswordVersionChanger", fields: [changedBy], references: [id], onDelete: Restrict)
+
+  @@unique([passwordId, version], map: "password_versions_password_version_uniq")
+  @@index([companyId, createdAt], map: "password_versions_company_created_idx")
+  @@index([passwordId, createdAt], map: "password_versions_password_created_idx")
   @@map("password_versions")
 }
 
@@ -1143,7 +1209,7 @@ model PasswordVersion {
 // Article `Folder` model — different permission surface and keeps the
 // archive-cascade logic independent from docs.
 model PasswordFolder {
-  id         String    @id @default(uuid()) @db.Uuid
+  id         String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   companyId  String    @map("company_id") @db.Uuid
   parentId   String?   @map("parent_id") @db.Uuid
   name       String
@@ -1160,8 +1226,10 @@ model PasswordFolder {
   children  PasswordFolder[] @relation("PasswordFolderTree")
   passwords Password[]
 
-  @@index([companyId, archivedAt])
-  @@index([companyId, parentId, position])
+  creator User? @relation("PasswordFolderCreator", fields: [createdBy], references: [id], onDelete: SetNull)
+
+  @@index([companyId, archivedAt], map: "password_folders_company_archived_idx")
+  @@index([companyId, parentId, position], map: "password_folders_company_parent_position_idx")
   @@map("password_folders")
 }
 
@@ -1213,7 +1281,7 @@ enum ReconstructionGapKind {
 }
 
 model Integration {
-  id            String            @id @default(uuid()) @db.Uuid
+  id            String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   driver        String
   name          String
   status        IntegrationStatus @default(PAUSED)
@@ -1252,35 +1320,35 @@ model Integration {
 /// `resourceKey` is validated by the driver descriptor's `resources`
 /// array; the API rejects writes for unknown keys.
 model IntegrationResource {
-  id               String   @id @default(uuid()) @db.Uuid
-  integrationId    String   @map("integration_id") @db.Uuid
+  id                    String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  integrationId         String                @map("integration_id") @db.Uuid
   /// Driver-validated short key (e.g. 'devices', 'clients', 'records').
-  resourceKey      String   @map("resource_key")
-  enabled          Boolean  @default(true)
+  resourceKey           String                @map("resource_key")
+  enabled               Boolean               @default(true)
   targetKind            IntegrationTargetKind @default(asset) @map("target_kind")
   targetConfig          Json                  @default("{}") @map("target_config")
   dependsOnResourceKeys String[]              @default([]) @map("depends_on_resource_keys")
   /// Target layout for this resource. NULL while the operator is still
   /// configuring it — runs short-circuit with a "missing layout" error
   /// in that state.
-  assetLayoutId    String?  @map("asset_layout_id") @db.Uuid
+  assetLayoutId         String?               @map("asset_layout_id") @db.Uuid
   /// Match-key AssetField ids (must belong to `assetLayoutId`). Empty
   /// array means "always create on miss".
-  matchKeyFieldIds String[] @default([]) @map("match_key_field_ids") @db.Uuid
-  createdAt        DateTime @default(now()) @map("created_at")
-  updatedAt        DateTime @updatedAt @map("updated_at")
+  matchKeyFieldIds      String[]              @default([]) @map("match_key_field_ids") @db.Uuid
+  createdAt             DateTime              @default(now()) @map("created_at")
+  updatedAt             DateTime              @updatedAt @map("updated_at")
 
-  integration   Integration               @relation(fields: [integrationId], references: [id], onDelete: Cascade)
-  assetLayout   AssetLayout?              @relation(fields: [assetLayoutId], references: [id], onDelete: Restrict)
-  fieldMappings IntegrationFieldMapping[]
-  syncRecords   IntegrationSyncRecord[]
+  integration             Integration                        @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+  assetLayout             AssetLayout?                       @relation(fields: [assetLayoutId], references: [id], onDelete: Restrict)
+  fieldMappings           IntegrationFieldMapping[]
+  syncRecords             IntegrationSyncRecord[]
   syncCheckpoints         IntegrationSyncCheckpoint[]
   reconstructionSummaries IntegrationReconstructionSummary[]
   reconstructionGaps      IntegrationReconstructionGap[]
 
-  @@unique([integrationId, resourceKey])
   @@unique([id, targetKind])
-  @@index([assetLayoutId])
+  @@unique([integrationId, resourceKey], map: "integration_resources_integration_resource_key")
+  @@index([assetLayoutId], map: "integration_resources_layout_idx")
   @@map("integration_resources")
 }
 
@@ -1289,7 +1357,7 @@ model IntegrationResource {
 // service. Decryption requires the active `INTEGRATION_SECRET_KEY`;
 // rotation follows the same `kid`-tagged scheme as the password vault.
 model IntegrationSecret {
-  id            String   @id @default(uuid()) @db.Uuid
+  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   integrationId String   @unique @map("integration_id") @db.Uuid
   /// Base64 AES-256-GCM blob with embedded `kid`. Decrypts to a JSON
   /// string the driver parses against its `secretSchema`.
@@ -1311,7 +1379,7 @@ model IntegrationSecret {
 // Listed in `tenant-scoped-models.ts` so the tenant middleware blocks
 // out-of-scope reads/writes for non-SUPER_ADMIN callers.
 model IntegrationCompanyMapping {
-  id              String   @id @default(uuid()) @db.Uuid
+  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   integrationId   String   @map("integration_id") @db.Uuid
   companyId       String   @map("company_id") @db.Uuid
   /// External (driver-side) organisation id this mapping pulls from.
@@ -1327,16 +1395,16 @@ model IntegrationCompanyMapping {
   createdAt       DateTime @default(now()) @map("created_at")
   updatedAt       DateTime @updatedAt @map("updated_at")
 
-  integration Integration                       @relation(fields: [integrationId], references: [id], onDelete: Cascade)
-  company     Company                           @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  syncRecords IntegrationSyncRecord[]
-  runResults  IntegrationSyncRunCompanyResult[]
+  integration             Integration                        @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+  company                 Company                            @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  syncRecords             IntegrationSyncRecord[]
+  runResults              IntegrationSyncRunCompanyResult[]
   syncCheckpoints         IntegrationSyncCheckpoint[]
   reconstructionSummaries IntegrationReconstructionSummary[]
   reconstructionGaps      IntegrationReconstructionGap[]
 
-  @@unique([integrationId, externalOrgId])
-  @@index([companyId, integrationId])
+  @@unique([integrationId, externalOrgId], map: "integration_company_mappings_integration_external_org_key")
+  @@index([companyId, integrationId], map: "integration_company_mappings_company_integration_idx")
   @@map("integration_company_mappings")
 }
 
@@ -1358,7 +1426,7 @@ enum IntegrationSyncDirection {
 }
 
 model IntegrationFieldMapping {
-  id            String                   @id @default(uuid()) @db.Uuid
+  id            String                   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   /// Phase 11.1 — field mappings live on a per-resource container, so
   /// devices vs clients (under the same UniFi integration) can map onto
   /// different layouts with different source-field projections.
@@ -1373,12 +1441,12 @@ model IntegrationFieldMapping {
   createdAt     DateTime                 @default(now()) @map("created_at")
   updatedAt     DateTime                 @updatedAt @map("updated_at")
 
-  resource    IntegrationResource @relation(fields: [resourceId, targetKind], references: [id, targetKind], onDelete: Cascade)
+  resource    IntegrationResource @relation(fields: [resourceId, targetKind], references: [id, targetKind], onDelete: Cascade, map: "integration_field_mappings_resource_target_fkey")
   targetField AssetField?         @relation(fields: [targetFieldId], references: [id], onDelete: Cascade)
 
-  @@unique([resourceId, sourceField])
-  @@index([targetFieldId])
-  @@index([resourceId, targetKind])
+  @@unique([resourceId, sourceField], map: "integration_field_mappings_resource_source_key")
+  @@index([resourceId, targetKind], map: "integration_field_mappings_resource_target_idx")
+  @@index([targetFieldId], map: "integration_field_mappings_target_field_idx")
   @@map("integration_field_mappings")
 }
 
@@ -1400,10 +1468,10 @@ enum IntegrationRunStatus {
 }
 
 model IntegrationSyncRun {
-  id            String               @id @default(uuid()) @db.Uuid
+  id            String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   integrationId String               @map("integration_id") @db.Uuid
   kind          IntegrationRunKind
-  mode          IntegrationSyncMode @default(incremental)
+  mode          IntegrationSyncMode  @default(incremental)
   deliveryKey   String?              @unique @map("delivery_key") @db.VarChar(512)
   status        IntegrationRunStatus @default(queued)
   dryRun        Boolean              @default(false) @map("dry_run")
@@ -1421,7 +1489,7 @@ model IntegrationSyncRun {
   companyResults IntegrationSyncRunCompanyResult[]
   syncRecords    IntegrationSyncRecord[]
 
-  @@index([integrationId, createdAt])
+  @@index([integrationId, createdAt(sort: Desc)], map: "integration_sync_runs_integration_recent_idx")
   @@map("integration_sync_runs")
 }
 
@@ -1429,7 +1497,7 @@ model IntegrationSyncRun {
 // processor. Tenant-scoped via `companyId` so operators can read
 // their tenant's runs without exposing other companies' counters.
 model IntegrationSyncRunCompanyResult {
-  id                          String               @id @default(uuid()) @db.Uuid
+  id                          String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   syncRunId                   String               @map("sync_run_id") @db.Uuid
   integrationCompanyMappingId String               @map("integration_company_mapping_id") @db.Uuid
   companyId                   String               @map("company_id") @db.Uuid
@@ -1446,11 +1514,11 @@ model IntegrationSyncRunCompanyResult {
   error                       String?
   createdAt                   DateTime             @default(now()) @map("created_at")
 
-  syncRun        IntegrationSyncRun        @relation(fields: [syncRunId], references: [id], onDelete: Cascade)
-  companyMapping IntegrationCompanyMapping @relation(fields: [integrationCompanyMappingId], references: [id], onDelete: Cascade)
+  syncRun        IntegrationSyncRun        @relation(fields: [syncRunId], references: [id], onDelete: Cascade, map: "integration_sync_run_company_results_run_id_fkey")
+  companyMapping IntegrationCompanyMapping @relation(fields: [integrationCompanyMappingId], references: [id], onDelete: Cascade, map: "integration_sync_run_company_results_mapping_id_fkey")
 
-  @@unique([syncRunId, integrationCompanyMappingId])
-  @@index([companyId, createdAt])
+  @@unique([syncRunId, integrationCompanyMappingId], map: "integration_sync_run_company_results_run_mapping_key")
+  @@index([companyId, createdAt(sort: Desc)], map: "integration_sync_run_company_results_company_recent_idx")
   @@map("integration_sync_run_company_results")
 }
 
@@ -1463,23 +1531,23 @@ model IntegrationSyncRunCompanyResult {
 // `companyId` is denormalised so the tenant middleware can enforce
 // scope without a relational filter (mirrors AssetFieldValue).
 model IntegrationSyncRecord {
-  id                          String   @id @default(uuid()) @db.Uuid
-  integrationCompanyMappingId String   @map("integration_company_mapping_id") @db.Uuid
+  id                          String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  integrationCompanyMappingId String                @map("integration_company_mapping_id") @db.Uuid
   /// Phase 11.1 — scopes the binding to a single resource. A device
   /// with the same external id as a client (rare, but possible across
   /// resource namespaces) gets two distinct sync-records pointing at
   /// two distinct assets in two distinct layouts.
-  resourceId                  String   @map("resource_id") @db.Uuid
-  syncRunId                   String?  @map("sync_run_id") @db.Uuid
-  companyId                   String   @map("company_id") @db.Uuid
+  resourceId                  String                @map("resource_id") @db.Uuid
+  syncRunId                   String?               @map("sync_run_id") @db.Uuid
+  companyId                   String                @map("company_id") @db.Uuid
   targetKind                  IntegrationTargetKind @default(asset) @map("target_kind")
   assetId                     String?               @map("asset_id") @db.Uuid
   subnetId                    String?               @map("subnet_id") @db.Uuid
   ipReservationId             String?               @map("ip_reservation_id") @db.Uuid
   articleId                   String?               @map("article_id") @db.Uuid
   relationId                  String?               @map("relation_id") @db.Uuid
-  externalId                  String   @map("external_id")
-  lastSyncedAt                DateTime @map("last_synced_at")
+  externalId                  String                @map("external_id")
+  lastSyncedAt                DateTime              @map("last_synced_at")
   state                       IntegrationSyncState  @default(active)
   lastSeenAt                  DateTime              @map("last_seen_at")
   staleSince                  DateTime?             @map("stale_since")
@@ -1491,60 +1559,62 @@ model IntegrationSyncRecord {
   checksum                    String
   /// Per-field SHA-256 checksums — keyed by `AssetField.id`. Drives
   /// `preserve_manual` conflict detection.
-  lastSyncedFieldChecksums    Json     @default("{}") @map("last_synced_field_checksums")
-  createdAt                   DateTime @default(now()) @map("created_at")
-  updatedAt                   DateTime @updatedAt @map("updated_at")
+  lastSyncedFieldChecksums    Json                  @default("{}") @map("last_synced_field_checksums")
+  createdAt                   DateTime              @default(now()) @map("created_at")
+  updatedAt                   DateTime              @updatedAt @map("updated_at")
 
-  companyMapping IntegrationCompanyMapping @relation(fields: [integrationCompanyMappingId], references: [id], onDelete: Cascade)
-  resource           IntegrationResource            @relation(fields: [resourceId, targetKind], references: [id, targetKind], onDelete: Cascade)
+  companyMapping     IntegrationCompanyMapping      @relation(fields: [integrationCompanyMappingId], references: [id], onDelete: Cascade, map: "integration_sync_records_mapping_id_fkey")
+  resource           IntegrationResource            @relation(fields: [resourceId, targetKind], references: [id, targetKind], onDelete: Cascade, map: "integration_sync_records_resource_target_fkey")
   asset              Asset?                         @relation(fields: [assetId], references: [id], onDelete: Cascade)
   subnet             Subnet?                        @relation(fields: [subnetId], references: [id], onDelete: Cascade)
   ipReservation      IpReservation?                 @relation(fields: [ipReservationId], references: [id], onDelete: Cascade)
   article            Article?                       @relation(fields: [articleId], references: [id], onDelete: Cascade)
   relation           Relation?                      @relation(fields: [relationId], references: [id], onDelete: Cascade)
-  syncRun        IntegrationSyncRun?       @relation(fields: [syncRunId], references: [id], onDelete: SetNull)
+  syncRun            IntegrationSyncRun?            @relation(fields: [syncRunId], references: [id], onDelete: SetNull, map: "integration_sync_records_run_id_fkey")
   reconstructionGaps IntegrationReconstructionGap[]
 
-  @@unique([integrationCompanyMappingId, resourceId, externalId])
+  @@unique([integrationCompanyMappingId, resourceId, externalId], map: "integration_sync_records_mapping_resource_external_key")
   @@index([assetId])
   @@index([subnetId])
   @@index([ipReservationId])
   @@index([articleId])
   @@index([relationId])
-  @@index([companyId, integrationCompanyMappingId])
-  @@index([resourceId, targetKind])
+  @@index([companyId, resourceId, state, lastSeenAt], map: "integration_sync_records_active_evaluation_idx")
+  @@index([companyId, integrationCompanyMappingId], map: "integration_sync_records_company_mapping_idx")
+  @@index([resourceId], map: "integration_sync_records_resource_idx")
+  @@index([resourceId, targetKind], map: "integration_sync_records_resource_target_idx")
   @@map("integration_sync_records")
 }
 
 model IntegrationSyncCheckpoint {
-  id                          String    @id @default(uuid()) @db.Uuid
-  companyId                   String    @map("company_id") @db.Uuid
-  integrationCompanyMappingId String    @map("integration_company_mapping_id") @db.Uuid
-  resourceId                  String    @map("resource_id") @db.Uuid
+  id                          String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  companyId                   String              @map("company_id") @db.Uuid
+  integrationCompanyMappingId String              @map("integration_company_mapping_id") @db.Uuid
+  resourceId                  String              @map("resource_id") @db.Uuid
   mode                        IntegrationSyncMode @default(incremental)
-  authoritative               Boolean   @default(true)
-  cursor                      String?   @db.VarChar(4096)
-  schemaVersion               String?   @map("schema_version") @db.VarChar(32)
-  snapshotAt                  DateTime? @map("snapshot_at")
-  highWaterAt                 DateTime? @map("high_water_at")
-  lastCompletedAt             DateTime? @map("last_completed_at")
-  lastFullCompletedAt         DateTime? @map("last_full_completed_at")
-  createdAt                   DateTime  @default(now()) @map("created_at")
-  updatedAt                   DateTime  @updatedAt @map("updated_at")
+  authoritative               Boolean             @default(true)
+  cursor                      String?             @db.VarChar(4096)
+  schemaVersion               String?             @map("schema_version") @db.VarChar(32)
+  snapshotAt                  DateTime?           @map("snapshot_at")
+  highWaterAt                 DateTime?           @map("high_water_at")
+  lastCompletedAt             DateTime?           @map("last_completed_at")
+  lastFullCompletedAt         DateTime?           @map("last_full_completed_at")
+  createdAt                   DateTime            @default(now()) @map("created_at")
+  updatedAt                   DateTime            @updatedAt @map("updated_at")
 
   company        Company                   @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  companyMapping IntegrationCompanyMapping @relation(fields: [integrationCompanyMappingId], references: [id], onDelete: Cascade)
+  companyMapping IntegrationCompanyMapping @relation(fields: [integrationCompanyMappingId], references: [id], onDelete: Cascade, map: "integration_sync_checkpoints_mapping_id_fkey")
   resource       IntegrationResource       @relation(fields: [resourceId], references: [id], onDelete: Cascade)
 
-  @@unique([integrationCompanyMappingId, resourceId, mode])
-  @@index([companyId, integrationCompanyMappingId])
-  @@index([resourceId, lastCompletedAt])
-  @@index([resourceId, mode, lastCompletedAt])
+  @@unique([integrationCompanyMappingId, resourceId, mode], map: "integration_sync_checkpoints_integration_company_mapping_id_res")
+  @@index([companyId, integrationCompanyMappingId], map: "integration_sync_checkpoints_company_mapping_idx")
+  @@index([resourceId, lastCompletedAt], map: "integration_sync_checkpoints_resource_completed_idx")
+  @@index([resourceId, mode, lastCompletedAt], map: "integration_sync_checkpoints_resource_id_mode_last_completed_at")
   @@map("integration_sync_checkpoints")
 }
 
 model IntegrationReconstructionSummary {
-  id                          String    @id @default(uuid()) @db.Uuid
+  id                          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   companyId                   String    @map("company_id") @db.Uuid
   integrationCompanyMappingId String    @map("integration_company_mapping_id") @db.Uuid
   resourceId                  String?   @map("resource_id") @db.Uuid
@@ -1561,17 +1631,17 @@ model IntegrationReconstructionSummary {
   updatedAt                   DateTime  @updatedAt @map("updated_at")
 
   company        Company                   @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  companyMapping IntegrationCompanyMapping @relation(fields: [integrationCompanyMappingId], references: [id], onDelete: Cascade)
+  companyMapping IntegrationCompanyMapping @relation(fields: [integrationCompanyMappingId], references: [id], onDelete: Cascade, map: "integration_reconstruction_summaries_mapping_id_fkey")
   resource       IntegrationResource?      @relation(fields: [resourceId], references: [id], onDelete: Cascade)
 
-  @@unique([integrationCompanyMappingId, summaryKey])
-  @@index([companyId, evaluatedAt])
-  @@index([resourceId, evaluatedAt])
+  @@unique([integrationCompanyMappingId, summaryKey], map: "integration_reconstruction_summaries_mapping_key_key")
+  @@index([companyId, evaluatedAt], map: "integration_reconstruction_summaries_company_evaluated_idx")
+  @@index([resourceId, evaluatedAt], map: "integration_reconstruction_summaries_resource_evaluated_idx")
   @@map("integration_reconstruction_summaries")
 }
 
 model IntegrationReconstructionGap {
-  id                          String                @id @default(uuid()) @db.Uuid
+  id                          String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   companyId                   String                @map("company_id") @db.Uuid
   integrationCompanyMappingId String                @map("integration_company_mapping_id") @db.Uuid
   resourceId                  String                @map("resource_id") @db.Uuid
@@ -1587,14 +1657,16 @@ model IntegrationReconstructionGap {
   updatedAt                   DateTime              @updatedAt @map("updated_at")
 
   company        Company                   @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  companyMapping IntegrationCompanyMapping @relation(fields: [integrationCompanyMappingId], references: [id], onDelete: Cascade)
+  companyMapping IntegrationCompanyMapping @relation(fields: [integrationCompanyMappingId], references: [id], onDelete: Cascade, map: "integration_reconstruction_gaps_mapping_id_fkey")
   resource       IntegrationResource       @relation(fields: [resourceId], references: [id], onDelete: Cascade)
   syncRecord     IntegrationSyncRecord?    @relation(fields: [syncRecordId], references: [id], onDelete: SetNull)
 
-  @@unique([integrationCompanyMappingId, resourceId, dedupeKey])
-  @@index([companyId, resolvedAt, lastSeenAt])
-  @@index([resourceId, resolvedAt, kind])
-  @@index([syncRecordId])
+  // The (company_id, last_seen_at) and (resource_id, kind, last_seen_at)
+  // lookups are PARTIAL indexes (`WHERE resolved_at IS NULL`, migration
+  // 0055). Prisma cannot express partial indexes, so they are
+  // deliberately not declared here.
+  @@unique([integrationCompanyMappingId, resourceId, dedupeKey], map: "integration_reconstruction_gaps_mapping_resource_dedupe_key")
+  @@index([syncRecordId], map: "integration_reconstruction_gaps_sync_record_idx")
   @@map("integration_reconstruction_gaps")
 }
 
@@ -1620,7 +1692,7 @@ enum CloudflareDriftStatus {
 }
 
 model CloudflareIpList {
-  id                String                @id @default(uuid()) @db.Uuid
+  id                String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   integrationId     String                @map("integration_id") @db.Uuid
   externalAccountId String                @map("external_account_id")
   externalListId    String                @map("external_list_id")
@@ -1640,8 +1712,8 @@ model CloudflareIpList {
 
   integration Integration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
 
-  @@unique([integrationId, externalListId])
-  @@index([integrationId])
+  @@unique([integrationId, externalListId], map: "cloudflare_ip_lists_integration_external_key")
+  @@index([integrationId], map: "cloudflare_ip_lists_integration_idx")
   @@map("cloudflare_ip_lists")
 }
 
@@ -1676,7 +1748,7 @@ enum AlertType {
 }
 
 model AlertConfig {
-  id              String    @id @default(uuid()) @db.Uuid
+  id              String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   name            String
   type            AlertType
   enabled         Boolean   @default(true)
@@ -1712,7 +1784,7 @@ model AlertConfig {
 }
 
 model AlertTrigger {
-  id            String   @id @default(uuid()) @db.Uuid
+  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   alertConfigId String   @map("alert_config_id") @db.Uuid
   // Stable identifier for the underlying thing that fired. Format is
   // owned by the runner — see `AlertsRunnerService` and
@@ -1737,7 +1809,7 @@ enum IpRuleAction {
 }
 
 model IpRule {
-  id        String       @id @default(uuid()) @db.Uuid
+  id        String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   // CIDR notation or single IP: "192.168.1.1" or "10.0.0.0/8"
   cidr      String
   action    IpRuleAction
@@ -1760,35 +1832,39 @@ model IpRule {
 // `AssetFieldValue` rows whose `IP_ADDRESS` value falls within the
 // range (via PostgreSQL `inet` containment). No active scanning.
 model Subnet {
-  id          String    @id @default(uuid()) @db.Uuid
-  companyId   String    @map("company_id") @db.Uuid
-  name        String
-  cidr        String
+  id             String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  companyId      String    @map("company_id") @db.Uuid
+  name           String
+  cidr           String
   // Database-derived network identity used by the partial unique index
   // `subnets_company_canonical_cidr_active`. PostgreSQL's `network(inet)`
   // collapses equivalent host-bit representations to one CIDR key.
-  // Unsupported: Prisma binds inet parameters via bare-IP parsing (CIDR
+  // @ignore: Prisma binds inet parameters via bare-IP parsing (CIDR
   // strings throw AddrParseError) and strips the mask on readback, so the
-  // client must never filter on or return this column. Query the `cidr`
-  // text column instead — `subnets_cidr_canonical_check` pins it to
-  // `canonical_cidr::text`, so text equality IS canonical equality.
-  canonicalCidr Unsupported("inet") @default(dbgenerated()) @map("canonical_cidr")
-  prefix      Int
-  vlanId      Int?      @map("vlan_id")
+  // client must never filter on or return this column. `@ignore` keeps it
+  // out of the generated client entirely (it is still part of the
+  // datamodel, which is what lets `prisma migrate diff` see the real
+  // `inet` column type — `Unsupported("inet")` reads as a type change).
+  // Query the `cidr` text column instead — `subnets_cidr_canonical_check`
+  // pins it to `canonical_cidr::text`, so text equality IS canonical
+  // equality.
+  canonicalCidr  String?   @default(dbgenerated("network((cidr)::inet)")) @map("canonical_cidr") @ignore @db.Inet
+  prefix         Int
+  vlanId         Int?      @map("vlan_id")
   // gateway and the DHCP bounds are pinned to canonical dotted-decimal
   // IPv4 by check constraints (migration 0065), so text equality on them
   // is host-identity equality.
-  gateway     String?
-  dhcpRangeStart String? @map("dhcp_range_start")
-  dhcpRangeEnd   String? @map("dhcp_range_end")
-  description String?
-  archivedAt  DateTime? @map("archived_at")
-  createdBy   String?   @map("created_by") @db.Uuid
-  updatedBy   String?   @map("updated_by") @db.Uuid
-  createdAt   DateTime  @default(now()) @map("created_at")
-  updatedAt   DateTime  @updatedAt @map("updated_at")
+  gateway        String?
+  dhcpRangeStart String?   @map("dhcp_range_start")
+  dhcpRangeEnd   String?   @map("dhcp_range_end")
+  description    String?
+  archivedAt     DateTime? @map("archived_at") @db.Timestamptz(6)
+  createdBy      String?   @map("created_by") @db.Uuid
+  updatedBy      String?   @map("updated_by") @db.Uuid
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  reservations IpReservation[]
+  reservations           IpReservation[]
   integrationSyncRecords IntegrationSyncRecord[]
 
   @@index([companyId, archivedAt])
@@ -1799,7 +1875,7 @@ model Subnet {
 // label to an IP slot without needing a full asset record, filling gaps
 // in the address-grid view.
 model IpReservation {
-  id        String   @id @default(uuid()) @db.Uuid
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   companyId String   @map("company_id") @db.Uuid
   subnetId  String   @map("subnet_id") @db.Uuid
   // Pinned to canonical dotted-decimal IPv4 by a check constraint
@@ -1810,10 +1886,10 @@ model IpReservation {
   notes     String?
   createdBy String?  @map("created_by") @db.Uuid
   updatedBy String?  @map("updated_by") @db.Uuid
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  subnet Subnet @relation(fields: [subnetId], references: [id], onDelete: Cascade)
+  subnet                 Subnet                  @relation(fields: [subnetId], references: [id], onDelete: Cascade)
   integrationSyncRecords IntegrationSyncRecord[]
 
   @@unique([subnetId, ipAddress])
@@ -1830,7 +1906,7 @@ model IpReservation {
 // both `${DATA_DIR}/backup` and `${DATA_DIR}/files` in their external
 // backup routine — the runbook makes this explicit.
 model BackupConfig {
-  id              String    @id @default(uuid()) @db.Uuid
+  id              String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   name            String
   enabled         Boolean   @default(true)
   // Standard 5-field cron pattern (minute hour dom month dow). The
@@ -1872,7 +1948,7 @@ enum BackupRunStatus {
 // operator-driven ad-hoc run (no saved schedule) can still reuse the
 // same table.
 model BackupRun {
-  id           String          @id @default(uuid()) @db.Uuid
+  id           String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   configId     String?         @map("config_id") @db.Uuid
   kind         BackupRunKind
   status       BackupRunStatus @default(queued)
@@ -1902,7 +1978,7 @@ model BackupRun {
 // LLM model produced the assistant replies so future model swaps in
 // `AiSetting.defaultModel` don't retroactively change history.
 model ChatConversation {
-  id        String   @id @default(uuid()) @db.Uuid
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   userId    String   @map("user_id") @db.Uuid
   title     String   @default("New chat")
   model     String?
@@ -1917,7 +1993,7 @@ model ChatConversation {
 }
 
 model ChatMessage {
-  id             String   @id @default(uuid()) @db.Uuid
+  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   conversationId String   @map("conversation_id") @db.Uuid
   role           ChatRole
   content        String
