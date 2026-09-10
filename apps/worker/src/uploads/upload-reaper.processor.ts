@@ -1,5 +1,5 @@
 import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
-import { Worker, type Job } from 'bullmq';
+import type { Job } from 'bullmq';
 import {
   QueueNames,
   UploadReaperJobNames,
@@ -12,6 +12,10 @@ import { AuditLogService } from '../../../api/src/audit/audit.service.js';
 import { AUDIT_ACTIONS } from '../../../api/src/audit/audit-actions.js';
 import { LocalStorageService } from '../../../api/src/storage/local-storage.service.js';
 import { pendingKey } from '../../../api/src/uploads/upload-session-keys.js';
+import {
+  createManagedWorker,
+  type ManagedWorker,
+} from '../common/managed-worker.js';
 
 /**
  * Postgres `pg_try_advisory_lock` arguments. Same shape as the backup
@@ -73,7 +77,9 @@ interface ReaperOutcome {
 @Injectable()
 export class UploadReaperWorker implements OnModuleDestroy {
   private readonly logger = new Logger(UploadReaperWorker.name);
-  private worker: Worker | null = null;
+  // Assigned in `start()`, never in a field initializer: class fields run
+  // before the constructor body assigns `this.redis`.
+  private managed: ManagedWorker | null = null;
 
   constructor(
     private readonly env: EnvService,
@@ -84,35 +90,25 @@ export class UploadReaperWorker implements OnModuleDestroy {
   ) {}
 
   async start(): Promise<void> {
-    if (this.worker) return;
-    this.worker = new Worker(
-      QueueNames.uploadReaper,
-      async (job) => this.handle(job),
-      {
+    if (this.managed) return;
+    this.managed = createManagedWorker({
+      queue: QueueNames.uploadReaper,
+      logger: this.logger,
+      handler: async (job) => this.handle(job),
+      options: {
         connection: this.redis.bullmqConnection(),
         // Single concurrency on top of the advisory lock. Two ticks
         // back-to-back can only run if the first releases the lock,
         // so concurrency > 1 would just burn round trips.
         concurrency: 1,
       },
-    );
-    this.worker.on('ready', () => {
-      this.logger.log('Worker ready — upload-reaper consumer started');
     });
-    this.worker.on('failed', (job, err) => {
-      this.logger.error(
-        `[${job?.id ?? '<unknown>'}] upload-reaper job failed: ${
-          err?.message ?? err
-        }`,
-      );
-    });
-    await this.worker.waitUntilReady();
+    await this.managed.ready();
   }
 
   async onModuleDestroy(): Promise<void> {
-    if (!this.worker) return;
-    await this.worker.close();
-    this.worker = null;
+    await this.managed?.close();
+    this.managed = null;
   }
 
   // ----------------------------------------------------------------

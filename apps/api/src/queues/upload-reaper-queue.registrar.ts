@@ -6,6 +6,7 @@ import {
 import { QueueNames, UploadReaperJobNames } from '@weavestream/shared';
 import { EnvService } from '../config/env.service.js';
 import { QueuesService } from './queues.service.js';
+import { registerRepeatableCron } from './repeatable-registration.js';
 
 /**
  * Phase 7 — registers the repeatable `upload-reaper:scheduled` job on
@@ -37,28 +38,16 @@ export class UploadReaperQueueRegistrar implements OnApplicationBootstrap {
     const cron = this.env.values.UPLOAD_REAPER_CRON;
     const jobId = 'upload-reaper:scheduled';
 
-    const repeatables = await queue.getRepeatableJobs();
-    for (const r of repeatables) {
-      if (r.id === jobId || r.name === UploadReaperJobNames.scheduled) {
-        await queue.removeRepeatableByKey(r.key).catch(() => undefined);
-      }
-    }
-
-    if (cron === 'off') {
-      this.logger.warn(
+    await registerRepeatableCron({
+      queue,
+      logger: this.logger,
+      jobId,
+      jobName: UploadReaperJobNames.scheduled,
+      cron,
+      data: { kind: 'scheduled' },
+      label: 'upload-reaper',
+      disabledMessage:
         'UPLOAD_REAPER_CRON=off — scheduled upload reaper disabled. Soft-deleted bytes will accumulate on disk.',
-      );
-      return;
-    }
-
-    await queue.add(
-      UploadReaperJobNames.scheduled,
-      { kind: 'scheduled' },
-      {
-        repeat: { pattern: cron },
-        jobId,
-      },
-    );
-    this.logger.log(`Registered scheduled upload-reaper job with cron "${cron}"`);
+    });
   }
 }

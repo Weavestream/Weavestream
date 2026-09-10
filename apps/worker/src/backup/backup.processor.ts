@@ -1,5 +1,5 @@
 import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
-import { Worker, Queue, type Job } from 'bullmq';
+import { Queue, type Job } from 'bullmq';
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { promises as fs, createWriteStream } from 'node:fs';
@@ -17,6 +17,10 @@ import { AuditLogService } from '../../../api/src/audit/audit.service.js';
 import { AUDIT_ACTIONS } from '../../../api/src/audit/audit-actions.js';
 import { EmailService } from '../../../api/src/email/email.service.js';
 import { EnvService } from '../../../api/src/config/env.service.js';
+import {
+  createManagedWorker,
+  type ManagedWorker,
+} from '../common/managed-worker.js';
 
 /**
  * Postgres `pg_try_advisory_lock` argument used to guarantee at most
@@ -51,7 +55,9 @@ interface ManifestPayload {
 @Injectable()
 export class BackupWorker implements OnModuleDestroy {
   private readonly logger = new Logger(BackupWorker.name);
-  private worker: Worker | null = null;
+  // Assigned in `start()`, never in a field initializer: class fields run
+  // before the constructor body assigns `this.redis`.
+  private managed: ManagedWorker | null = null;
   private pruneProducer: Queue | null = null;
 
   /**
@@ -75,7 +81,7 @@ export class BackupWorker implements OnModuleDestroy {
   }
 
   async start(): Promise<void> {
-    if (this.worker) return;
+    if (this.managed) return;
 
     this.pruneProducer = new Queue(QueueNames.backup, {
       connection: this.redis.bullmqConnection(),
@@ -92,10 +98,11 @@ export class BackupWorker implements OnModuleDestroy {
       this.env.values.BACKUP_JOB_LOCK_MINUTES * 60_000;
     const lockRenewMs = Math.max(60_000, Math.floor(lockDurationMs / 6));
 
-    this.worker = new Worker(
-      QueueNames.backup,
-      async (job: Job) => this.dispatch(job),
-      {
+    this.managed = createManagedWorker({
+      queue: QueueNames.backup,
+      logger: this.logger,
+      handler: async (job: Job) => this.dispatch(job),
+      options: {
         connection: this.redis.bullmqConnection(),
         // Single concurrency on top of the advisory lock — even if
         // BullMQ were to schedule two ticks back-to-back, only one
@@ -106,29 +113,17 @@ export class BackupWorker implements OnModuleDestroy {
         lockRenewTime: lockRenewMs,
         stalledInterval: Math.min(60_000, lockRenewMs),
       },
-    );
-
-    this.worker.on('completed', (job) =>
-      this.logger.log(`[${job.id}] backup job completed`),
-    );
-    this.worker.on('failed', (job, err) =>
-      this.logger.error(
-        `[${job?.id ?? '<unknown>'}] backup job failed: ${err?.message ?? err}`,
-      ),
-    );
-    this.worker.on('stalled', (jobId) =>
-      this.logger.warn(`[${jobId}] backup job stalled; waiting for recovery`),
-    );
-    await this.worker.waitUntilReady();
-    this.logger.log(
-      `Worker ready — backup queue consumer started (dir=${this.backupDir}, lock=${Math.round(lockDurationMs / 60_000)}min)`,
-    );
+      logCompleted: true,
+      logStalled: true,
+      producers: [this.pruneProducer],
+      readyDetail: `dir=${this.backupDir}, lock=${Math.round(lockDurationMs / 60_000)}min`,
+    });
+    await this.managed.ready();
   }
 
   async onModuleDestroy(): Promise<void> {
-    await this.worker?.close().catch(() => undefined);
-    await this.pruneProducer?.close().catch(() => undefined);
-    this.worker = null;
+    await this.managed?.close();
+    this.managed = null;
     this.pruneProducer = null;
   }
 

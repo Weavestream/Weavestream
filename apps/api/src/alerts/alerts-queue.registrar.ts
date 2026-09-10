@@ -6,6 +6,7 @@ import {
 import { AlertsJobNames, QueueNames } from '@weavestream/shared';
 import { EnvService } from '../config/env.service.js';
 import { QueuesService } from '../queues/queues.service.js';
+import { registerRepeatableCron } from '../queues/repeatable-registration.js';
 
 /**
  * Registers the repeatable `alerts:scan` BullMQ job on API boot.
@@ -35,28 +36,16 @@ export class AlertsQueueRegistrar implements OnApplicationBootstrap {
     const cron = this.env.values.ALERTS_SCAN_CRON;
     const jobId = 'alerts:scan';
 
-    const repeatables = await queue.getRepeatableJobs();
-    for (const r of repeatables) {
-      if (r.id === jobId || r.name === AlertsJobNames.scan) {
-        await queue.removeRepeatableByKey(r.key).catch(() => undefined);
-      }
-    }
-
-    if (cron === 'off') {
-      this.logger.warn(
+    await registerRepeatableCron({
+      queue,
+      logger: this.logger,
+      jobId,
+      jobName: AlertsJobNames.scan,
+      cron,
+      data: { kind: 'scan' },
+      label: 'alerts:scan',
+      disabledMessage:
         'ALERTS_SCAN_CRON=off — scheduled alert scans disabled. Real-time alerts still fire.',
-      );
-      return;
-    }
-
-    await queue.add(
-      AlertsJobNames.scan,
-      { kind: 'scan' },
-      {
-        repeat: { pattern: cron },
-        jobId,
-      },
-    );
-    this.logger.log(`Registered scheduled alerts:scan job with cron "${cron}"`);
+    });
   }
 }

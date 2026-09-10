@@ -1,5 +1,5 @@
 import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
-import { Worker, type Job } from 'bullmq';
+import type { Job } from 'bullmq';
 import {
   DomainCheckJobNames,
   QueueNames,
@@ -20,6 +20,10 @@ import {
   runDomainCheck,
 } from '../../../api/src/domains/engine/index.js';
 import { runHttpCheck } from '../../../api/src/domains/engine/http-check.js';
+import {
+  createManagedWorker,
+  type ManagedWorker,
+} from '../common/managed-worker.js';
 
 const SYSTEM_META: AuditMeta = {
   ip: '127.0.0.1',
@@ -48,7 +52,9 @@ const SYSTEM_META: AuditMeta = {
 @Injectable()
 export class DomainChecksWorker implements OnModuleDestroy {
   private readonly logger = new Logger(DomainChecksWorker.name);
-  private worker: Worker | null = null;
+  // Assigned in `start()`, never in a field initializer: class fields run
+  // before the constructor body assigns `this.redis`.
+  private managed: ManagedWorker | null = null;
   private readonly ports = createDefaultPorts();
 
   constructor(
@@ -59,32 +65,22 @@ export class DomainChecksWorker implements OnModuleDestroy {
   ) {}
 
   async start(): Promise<void> {
-    if (this.worker) return;
-    this.worker = new Worker(
-      QueueNames.domainChecks,
-      async (job) => this.handle(job),
-      {
+    if (this.managed) return;
+    this.managed = createManagedWorker({
+      queue: QueueNames.domainChecks,
+      logger: this.logger,
+      handler: async (job) => this.handle(job),
+      options: {
         connection: this.redis.bullmqConnection(),
         concurrency: this.env.values.DOMAIN_CHECK_CONCURRENCY,
       },
-    );
-    this.worker.on('ready', () => {
-      this.logger.log(
-        `Worker ready — concurrency=${this.env.values.DOMAIN_CHECK_CONCURRENCY}`,
-      );
     });
-    this.worker.on('failed', (job, err) => {
-      this.logger.error(
-        `Job ${job?.id ?? '<unknown>'} failed: ${err?.message ?? err}`,
-      );
-    });
-    await this.worker.waitUntilReady();
+    await this.managed.ready();
   }
 
   async onModuleDestroy(): Promise<void> {
-    if (!this.worker) return;
-    await this.worker.close();
-    this.worker = null;
+    await this.managed?.close();
+    this.managed = null;
   }
 
   private async handle(job: Job<unknown, unknown, string>): Promise<unknown> {

@@ -10,6 +10,7 @@ import {
 } from '@weavestream/shared';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { QueuesService } from '../queues/queues.service.js';
+import { removeRepeatables } from '../queues/repeatable-registration.js';
 
 /**
  * Scheduler ids are colon-free and prefixed so the boot sweep can tell
@@ -81,10 +82,7 @@ export class BackupQueueRegistrar implements OnApplicationBootstrap {
       //    undefined in BullMQ 5.76, so no filter is possible — but
       //    the backup queue only ever held our own registrations, so
       //    removing every remaining entry is safe.
-      const repeatables = await queue.getRepeatableJobs();
-      for (const r of repeatables) {
-        await queue.removeRepeatableByKey(r.key);
-      }
+      await removeRepeatables(queue, { onError: 'throw' });
     } catch (err) {
       this.logger.error(
         `Backup schedule sweep failed — skipping registration until the next API restart so a leftover legacy repeatable cannot double-fire: ${

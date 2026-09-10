@@ -6,6 +6,7 @@ import {
 import { DomainCheckJobNames, QueueNames } from '@weavestream/shared';
 import { EnvService } from '../config/env.service.js';
 import { QueuesService } from './queues.service.js';
+import { registerRepeatableCron } from './repeatable-registration.js';
 
 /**
  * Registers the repeatable `domain-checks:scheduled` job on API boot.
@@ -41,28 +42,16 @@ export class DomainChecksQueueRegistrar implements OnApplicationBootstrap {
 
     // Always clear stale repeatable registrations for this jobId — we
     // treat the API's boot as the authoritative configuration moment.
-    const repeatables = await queue.getRepeatableJobs();
-    for (const r of repeatables) {
-      if (r.id === jobId || r.name === DomainCheckJobNames.scheduled) {
-        await queue.removeRepeatableByKey(r.key).catch(() => undefined);
-      }
-    }
-
-    if (cron === 'off') {
-      this.logger.warn(
+    await registerRepeatableCron({
+      queue,
+      logger: this.logger,
+      jobId,
+      jobName: DomainCheckJobNames.scheduled,
+      cron,
+      data: { kind: 'scheduled' },
+      label: 'domain-checks',
+      disabledMessage:
         'DOMAIN_CHECK_CRON=off — scheduled domain checks disabled. Manual enqueue still works.',
-      );
-      return;
-    }
-
-    await queue.add(
-      DomainCheckJobNames.scheduled,
-      { kind: 'scheduled' },
-      {
-        repeat: { pattern: cron },
-        jobId,
-      },
-    );
-    this.logger.log(`Registered scheduled domain-checks job with cron "${cron}"`);
+    });
   }
 }

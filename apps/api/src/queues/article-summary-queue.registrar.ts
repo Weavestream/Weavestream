@@ -9,6 +9,7 @@ import {
   QueueNames,
 } from '@weavestream/shared';
 import { QueuesService } from './queues.service.js';
+import { registerRepeatableCron } from './repeatable-registration.js';
 
 /**
  * Registers the repeatable article-summary `sweep` tick on API boot
@@ -37,26 +38,19 @@ export class ArticleSummaryQueueRegistrar implements OnApplicationBootstrap {
   async onApplicationBootstrap(): Promise<void> {
     const queue = this.queues.get(QueueNames.articleSummary);
 
-    const repeatables = await queue.getRepeatableJobs();
-    for (const r of repeatables) {
-      if (
-        r.id === ARTICLE_SUMMARY_SWEEP_JOB_ID ||
-        r.name === ArticleSummaryJobNames.sweep
-      ) {
-        await queue.removeRepeatableByKey(r.key).catch(() => undefined);
-      }
-    }
-
-    await queue.add(
-      ArticleSummaryJobNames.sweep,
-      { kind: 'sweep' },
-      {
-        repeat: { pattern: SWEEP_CRON },
-        jobId: ARTICLE_SUMMARY_SWEEP_JOB_ID,
-      },
-    );
-    this.logger.log(
-      `Registered article-summary sweep with cron "${SWEEP_CRON}"`,
-    );
+    await registerRepeatableCron({
+      queue,
+      logger: this.logger,
+      jobId: ARTICLE_SUMMARY_SWEEP_JOB_ID,
+      jobName: ArticleSummaryJobNames.sweep,
+      cron: SWEEP_CRON,
+      data: { kind: 'sweep' },
+      label: 'article-summary sweep',
+      // Unreachable: `SWEEP_CRON` is a module constant, so this lane has no
+      // `off` state. The message exists because the helper requires one, which
+      // is what keeps a real env-driven lane from silently losing its guard.
+      disabledMessage:
+        'Article-summary sweep disabled. Existing summaries are unaffected.',
+    });
   }
 }

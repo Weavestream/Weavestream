@@ -1,5 +1,5 @@
 import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
-import { Worker, type Job } from 'bullmq';
+import type { Job } from 'bullmq';
 import {
   QueueNames,
   articleSummaryJobId,
@@ -21,6 +21,10 @@ import {
   type AiResolvedConfig,
 } from '../../../api/src/ai/ai-settings.service.js';
 import { QueuesService } from '../../../api/src/queues/queues.service.js';
+import {
+  createManagedWorker,
+  type ManagedWorker,
+} from '../common/managed-worker.js';
 
 /**
  * Mobile Phase 4 — ArticleSummaryWorker.
@@ -107,7 +111,9 @@ type GenerateOutcome =
 @Injectable()
 export class ArticleSummaryWorker implements OnModuleDestroy {
   private readonly logger = new Logger(ArticleSummaryWorker.name);
-  private worker: Worker | null = null;
+  // Assigned in `start()`, never in a field initializer: class fields run
+  // before the constructor body assigns `this.redis`.
+  private managed: ManagedWorker | null = null;
 
   constructor(
     private readonly redis: RedisService,
@@ -118,49 +124,43 @@ export class ArticleSummaryWorker implements OnModuleDestroy {
   ) {}
 
   async start(): Promise<void> {
-    if (this.worker) return;
-    this.worker = new Worker(
-      QueueNames.articleSummary,
-      async (job) => this.handle(job),
-      {
+    if (this.managed) return;
+    this.managed = createManagedWorker({
+      queue: QueueNames.articleSummary,
+      logger: this.logger,
+      handler: async (job) => this.handle(job),
+      options: {
         connection: this.redis.bullmqConnection(),
         // Serial on purpose: a 500-article import drains one completion
         // at a time — exactly the protection a local Ollama needs.
         concurrency: 1,
       },
-    );
-    this.worker.on('ready', () => {
-      this.logger.log('ArticleSummary worker ready');
-    });
-    this.worker.on('failed', (job, err) => {
       // §6: the provider's error body is arbitrary upstream text — it
       // can echo the prompt (and therefore article content) or a
       // credential, so it never reaches a log line. The classification
       // keeps 4xx failures diagnosable: it names the rejected
       // parameter when the provider does, and fingerprints anything
       // unrecognized for provider-side correlation.
-      const detail =
+      describeFailure: (err) =>
         err instanceof AiCompletionHttpError
           ? ` — ${describeCompletionHttpError(err)}`
-          : '';
-      this.logger.error(
-        `article-summary job ${job?.id ?? '<unknown>'} failed: ${err?.message ?? err}${detail}`,
-      );
+          : '',
       // Final-attempt exhaustion stamps the row settled so the sweep
       // doesn't re-burn a persistently failing endpoint every cycle;
       // the next edit reopens pending. Best-effort — a crash before
       // this runs is recovered by the sweep's failed-job retry().
-      if (job && job.attemptsMade >= (job.opts.attempts ?? 1)) {
-        void this.stampTerminalFailure(job).catch(() => undefined);
-      }
+      onFailed: (job) => {
+        if (job && job.attemptsMade >= (job.opts.attempts ?? 1)) {
+          void this.stampTerminalFailure(job).catch(() => undefined);
+        }
+      },
     });
-    await this.worker.waitUntilReady();
+    await this.managed.ready();
   }
 
   async onModuleDestroy(): Promise<void> {
-    if (!this.worker) return;
-    await this.worker.close();
-    this.worker = null;
+    await this.managed?.close();
+    this.managed = null;
   }
 
   private async handle(job: Job<unknown, unknown, string>): Promise<unknown> {

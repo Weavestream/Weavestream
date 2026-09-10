@@ -1,5 +1,5 @@
 import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
-import { Worker, type Job } from 'bullmq';
+import type { Job } from 'bullmq';
 import {
   QueueNames,
   integrationSyncMappingJobSchema,
@@ -17,6 +17,10 @@ import {
 import { AUDIT_ACTIONS } from '../../../api/src/audit/audit-actions.js';
 import { AuditLogService } from '../../../api/src/audit/audit.service.js';
 import { IntegrationProvenanceService } from '../../../api/src/integrations/reconstruction/integration-provenance.service.js';
+import {
+  createManagedWorker,
+  type ManagedWorker,
+} from '../common/managed-worker.js';
 
 const SYSTEM_AUDIT_USER_AGENT = 'weavestream-worker/integration-sync';
 
@@ -35,7 +39,9 @@ const SYSTEM_AUDIT_USER_AGENT = 'weavestream-worker/integration-sync';
 @Injectable()
 export class IntegrationSyncMappingWorker implements OnModuleDestroy {
   private readonly logger = new Logger(IntegrationSyncMappingWorker.name);
-  private worker: Worker | null = null;
+  // Assigned in `start()`, never in a field initializer: class fields run
+  // before the constructor body assigns `this.redis`.
+  private managed: ManagedWorker | null = null;
 
   constructor(
     private readonly env: EnvService,
@@ -48,32 +54,22 @@ export class IntegrationSyncMappingWorker implements OnModuleDestroy {
   ) {}
 
   async start(): Promise<void> {
-    if (this.worker) return;
-    this.worker = new Worker(
-      QueueNames.integrationSyncMapping,
-      async (job) => this.handle(job),
-      {
+    if (this.managed) return;
+    this.managed = createManagedWorker({
+      queue: QueueNames.integrationSyncMapping,
+      logger: this.logger,
+      handler: async (job) => this.handle(job),
+      options: {
         connection: this.redis.bullmqConnection(),
         concurrency: this.env.values.INTEGRATION_SYNC_MAPPING_CONCURRENCY,
       },
-    );
-    this.worker.on('ready', () => {
-      this.logger.log(
-        `Mapping worker ready — concurrency=${this.env.values.INTEGRATION_SYNC_MAPPING_CONCURRENCY}`,
-      );
     });
-    this.worker.on('failed', (job, err) => {
-      this.logger.error(
-        `Mapping job ${job?.id ?? '<unknown>'} failed: ${err?.message ?? err}`,
-      );
-    });
-    await this.worker.waitUntilReady();
+    await this.managed.ready();
   }
 
   async onModuleDestroy(): Promise<void> {
-    if (!this.worker) return;
-    await this.worker.close();
-    this.worker = null;
+    await this.managed?.close();
+    this.managed = null;
   }
 
   private async handle(job: Job<unknown, unknown, string>): Promise<unknown> {

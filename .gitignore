@@ -8,6 +8,7 @@ coverage/
 *.tsbuildinfo
 CHANGELOG-SECURITY.md
 CHANGELOG-SECURITY-OLD.md
+apps/web/.next.stale-backup/
 
 .env
 .env.local

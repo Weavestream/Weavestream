@@ -1,5 +1,5 @@
 import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
-import { Worker, type Job } from 'bullmq';
+import type { Job } from 'bullmq';
 import {
   QueueNames,
   integrationSyncOrchestratorJobSchema,
@@ -9,6 +9,10 @@ import { EnvService } from '../../../api/src/config/env.service.js';
 import { RedisService } from '../../../api/src/redis/redis.service.js';
 import { PrismaService } from '../../../api/src/prisma/prisma.service.js';
 import { IntegrationSyncService } from '../../../api/src/integrations/integration-sync.service.js';
+import {
+  createManagedWorker,
+  type ManagedWorker,
+} from '../common/managed-worker.js';
 
 /**
  * Phase 11 — orchestrator processor.
@@ -28,7 +32,9 @@ import { IntegrationSyncService } from '../../../api/src/integrations/integratio
 @Injectable()
 export class IntegrationSyncOrchestratorWorker implements OnModuleDestroy {
   private readonly logger = new Logger(IntegrationSyncOrchestratorWorker.name);
-  private worker: Worker | null = null;
+  // Assigned in `start()`, never in a field initializer: class fields run
+  // before the constructor body assigns `this.redis`.
+  private managed: ManagedWorker | null = null;
 
   constructor(
     private readonly env: EnvService,
@@ -38,33 +44,23 @@ export class IntegrationSyncOrchestratorWorker implements OnModuleDestroy {
   ) {}
 
   async start(): Promise<void> {
-    if (this.worker) return;
-    this.worker = new Worker(
-      QueueNames.integrationSyncOrchestrator,
-      async (job) => this.handle(job),
-      {
+    if (this.managed) return;
+    this.managed = createManagedWorker({
+      queue: QueueNames.integrationSyncOrchestrator,
+      logger: this.logger,
+      handler: async (job) => this.handle(job),
+      options: {
         connection: this.redis.bullmqConnection(),
         concurrency:
           this.env.values.INTEGRATION_SYNC_ORCHESTRATOR_CONCURRENCY,
       },
-    );
-    this.worker.on('ready', () => {
-      this.logger.log(
-        `Orchestrator ready — concurrency=${this.env.values.INTEGRATION_SYNC_ORCHESTRATOR_CONCURRENCY}`,
-      );
     });
-    this.worker.on('failed', (job, err) => {
-      this.logger.error(
-        `Orchestrator job ${job?.id ?? '<unknown>'} failed: ${err?.message ?? err}`,
-      );
-    });
-    await this.worker.waitUntilReady();
+    await this.managed.ready();
   }
 
   async onModuleDestroy(): Promise<void> {
-    if (!this.worker) return;
-    await this.worker.close();
-    this.worker = null;
+    await this.managed?.close();
+    this.managed = null;
   }
 
   private async handle(job: Job<unknown, unknown, string>): Promise<unknown> {

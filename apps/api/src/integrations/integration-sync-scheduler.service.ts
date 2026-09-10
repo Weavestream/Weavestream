@@ -8,6 +8,7 @@ import type { Queue } from 'bullmq';
 import { EnvService } from '../config/env.service.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { QueuesService } from '../queues/queues.service.js';
+import { removeRepeatables } from '../queues/repeatable-registration.js';
 import { IntegrationDriverRegistry } from './drivers/integration-driver.registry.js';
 
 /**
@@ -109,10 +110,7 @@ export class IntegrationSyncSchedulerService {
       //    quirk in `getRepeatableData`), so we can't filter — but these
       //    integration queues only ever held our `scheduled-*` entries,
       //    so removing every legacy entry is safe.
-      const repeatables = await queue.getRepeatableJobs();
-      for (const r of repeatables) {
-        await queue.removeRepeatableByKey(r.key).catch(() => undefined);
-      }
+      await removeRepeatables(queue, { onError: 'skip' });
     }
 
     const defaultCron = this.resolveDefaultCron();

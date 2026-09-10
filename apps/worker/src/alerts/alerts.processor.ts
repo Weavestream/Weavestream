@@ -1,5 +1,5 @@
 import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
-import { Worker, type Job } from 'bullmq';
+import type { Job } from 'bullmq';
 import {
   AlertsJobNames,
   QueueNames,
@@ -14,6 +14,10 @@ import { AuditLogService } from '../../../api/src/audit/audit.service.js';
 import { AUDIT_ACTIONS } from '../../../api/src/audit/audit-actions.js';
 import { EmailService } from '../../../api/src/email/email.service.js';
 import { AlertsRunnerService } from '../../../api/src/alerts/alerts-runner.service.js';
+import {
+  createManagedWorker,
+  type ManagedWorker,
+} from '../common/managed-worker.js';
 
 const SYSTEM_META = {
   ip: '127.0.0.1',
@@ -39,7 +43,9 @@ const SYSTEM_META = {
 @Injectable()
 export class AlertsWorker implements OnModuleDestroy {
   private readonly logger = new Logger(AlertsWorker.name);
-  private worker: Worker | null = null;
+  // Assigned in `start()`, never in a field initializer: class fields run
+  // before the constructor body assigns `this.redis`.
+  private managed: ManagedWorker | null = null;
 
   constructor(
     private readonly env: EnvService,
@@ -51,28 +57,22 @@ export class AlertsWorker implements OnModuleDestroy {
   ) {}
 
   async start(): Promise<void> {
-    if (this.worker) return;
-    this.worker = new Worker(
-      QueueNames.alerts,
-      async (job) => this.handle(job),
-      {
+    if (this.managed) return;
+    this.managed = createManagedWorker({
+      queue: QueueNames.alerts,
+      logger: this.logger,
+      handler: async (job) => this.handle(job),
+      options: {
         connection: this.redis.bullmqConnection(),
         concurrency: 2,
       },
-    );
-    this.worker.on('failed', (job, err) => {
-      this.logger.error(
-        `alerts job ${job?.id ?? '<unknown>'} failed: ${err?.message ?? err}`,
-      );
     });
-    await this.worker.waitUntilReady();
-    this.logger.log('Worker ready — alerts queue consumer started');
+    await this.managed.ready();
   }
 
   async onModuleDestroy(): Promise<void> {
-    if (!this.worker) return;
-    await this.worker.close();
-    this.worker = null;
+    await this.managed?.close();
+    this.managed = null;
   }
 
   private async handle(job: Job<unknown, unknown, string>): Promise<unknown> {

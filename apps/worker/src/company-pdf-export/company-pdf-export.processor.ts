@@ -1,5 +1,5 @@
 import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
-import { Worker, Queue, type Job } from 'bullmq';
+import { Queue, type Job } from 'bullmq';
 import {
   CompanyExportJobNames,
   QueueNames,
@@ -20,6 +20,10 @@ import {
   type CompanyExportData,
 } from '../../../api/src/exports/company-export-data.service.js';
 import { buildCompanyExportPdf, pdfEmbedSizeBlockReason } from './pdf-builder.js';
+import {
+  createManagedWorker,
+  type ManagedWorker,
+} from '../common/managed-worker.js';
 
 /** 4 hours in milliseconds — how long before the cleanup job fires. */
 const CLEANUP_DELAY_MS = 4 * 60 * 60 * 1000;
@@ -27,7 +31,9 @@ const CLEANUP_DELAY_MS = 4 * 60 * 60 * 1000;
 @Injectable()
 export class CompanyPdfExportWorker implements OnModuleDestroy {
   private readonly logger = new Logger(CompanyPdfExportWorker.name);
-  private worker: Worker | null = null;
+  // Assigned in `start()`, never in a field initializer: class fields run
+  // before the constructor body assigns `this.redis`.
+  private managed: ManagedWorker | null = null;
 
   /**
    * Long-lived producer used to schedule the delayed cleanup job after
@@ -46,35 +52,29 @@ export class CompanyPdfExportWorker implements OnModuleDestroy {
   ) {}
 
   async start(): Promise<void> {
-    if (this.worker) return;
+    if (this.managed) return;
 
     this.cleanupProducer = new Queue(QueueNames.companyExport, {
       connection: this.redis.bullmqConnection(),
     });
 
-    this.worker = new Worker(
-      QueueNames.companyExport,
-      async (job: Job) => this.dispatch(job),
-      {
+    this.managed = createManagedWorker({
+      queue: QueueNames.companyExport,
+      logger: this.logger,
+      handler: async (job: Job) => this.dispatch(job),
+      options: {
         connection: this.redis.bullmqConnection(),
         concurrency: 2,
       },
-    );
-
-    this.worker.on('completed', (job) =>
-      this.logger.log(`[${job.id}] company-export job completed`),
-    );
-    this.worker.on('failed', (job, err) =>
-      this.logger.error(`[${job?.id}] company-export job failed: ${err.message}`),
-    );
-
-    this.logger.log('CompanyPdfExportWorker started');
+      logCompleted: true,
+      producers: [this.cleanupProducer],
+    });
+    await this.managed.ready();
   }
 
   async onModuleDestroy(): Promise<void> {
-    await this.worker?.close();
-    await this.cleanupProducer?.close();
-    this.worker = null;
+    await this.managed?.close();
+    this.managed = null;
     this.cleanupProducer = null;
   }
 
