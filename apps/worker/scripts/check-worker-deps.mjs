@@ -55,6 +55,11 @@
  *   1. The walk actually walked: `dist/` exists, the entry named by `main`
  *      exists, the emit is still CommonJS, and the walk reached more than the
  *      entry and at least one package. See "check 0".
+ *   1b. The entry inspected is the entry the container runs. `main` must
+ *      resolve inside `dist/`, and must equal both the `start` script and the
+ *      runner `CMD` in `docker/worker.Dockerfile`. Three unlinked copies of
+ *      that path exist; if they drift, this guard audits a graph production
+ *      never loads and passes while the image is broken.
  *   2. Every relative `require()` on the reachable graph resolves to a real
  *      file inside `dist/` — the only tree the runner image copies. An edge
  *      leading nowhere means the walk is blind to part of the graph, and every
@@ -95,12 +100,13 @@ import {
 } from 'node:fs';
 import { builtinModules } from 'node:module';
 import { tmpdir } from 'node:os';
-import { dirname, join, relative, resolve } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const WORKER = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const DIST = join(WORKER, 'dist');
 const PKG = join(WORKER, 'package.json');
+const DOCKERFILE = resolve(WORKER, '..', '..', 'docker', 'worker.Dockerfile');
 
 /**
  * Workspace packages that `apps/worker` declares but the runner image does not
@@ -175,6 +181,85 @@ function resolveRelative(fromFile, specifier) {
  * maps. Synchronous on purpose: it makes `--self-test` trivial, and the cost
  * is a few hundred small reads.
  */
+/**
+ * Resolves `package.json#main` to a real path and proves it lands inside
+ * `dist/`.
+ *
+ * `startsWith('dist/')` is not that proof: `dist/../outside.js` satisfies it
+ * and resolves out of the tree the runner image copies. Containment is
+ * therefore checked after resolution, not on the raw string. Everything this
+ * guard concludes is scoped to the graph reachable from this one file, so an
+ * entry outside `dist/` would have it auditing something the image does not
+ * ship.
+ */
+export function resolveEntry({ workerDir, distDir, main }) {
+  if (typeof main !== 'string' || main.length === 0) {
+    return { error: [`package.json "main" is ${JSON.stringify(main)}, not a path.`] };
+  }
+  const entryFile = resolve(workerDir, main);
+  const within = relative(distDir, entryFile);
+  if (within.startsWith('..') || isAbsolute(within) || within.length === 0) {
+    return {
+      error: [
+        `package.json "main" is ${JSON.stringify(main)}, which resolves to`,
+        `${entryFile} — outside dist/, the only tree the runner image copies.`,
+      ],
+    };
+  }
+  return { entryFile };
+}
+
+/**
+ * The entry path is written down in three places that nothing keeps in step:
+ * `package.json#main`, the `start` script, and the runner `CMD` in
+ * `docker/worker.Dockerfile`. This guard reads the first. If the container
+ * executes a different one, the guard audits a dependency graph production
+ * never loads and passes while the image is broken — the precise failure it
+ * exists to prevent, reintroduced one level up.
+ *
+ * So the three are asserted equal rather than assumed equal. A parse that
+ * finds nothing is a failure, not a silent skip: a Dockerfile whose CMD moved
+ * to shell form would otherwise disable this check without a word.
+ *
+ * The duplication itself is the real defect. `CMD ["node", "."]` would let
+ * Node follow `main` and delete two of the three copies — deliberately not
+ * done here, because it changes how the container starts and the image
+ * cannot be built on this machine to prove it.
+ */
+export function entryPointsAgree({ main, dockerfile, startScript }) {
+  const problems = [];
+
+  // Anchored at line start so the indented shell-form HEALTHCHECK `CMD` above
+  // it cannot match.
+  const cmd = /^CMD\s*\[\s*"node"\s*,\s*"([^"]+)"\s*\]/m.exec(dockerfile);
+  if (cmd === null) {
+    problems.push(
+      'Could not find `CMD ["node", "<entry>"]` in docker/worker.Dockerfile.',
+      'This guard can no longer prove it inspects the file the container runs.',
+    );
+  } else if (cmd[1] !== main) {
+    problems.push(
+      `docker/worker.Dockerfile runs ${JSON.stringify(cmd[1])} but package.json`,
+      `"main" is ${JSON.stringify(main)} — this guard would audit the wrong graph.`,
+    );
+  }
+
+  const start = /^node\s+(\S+)\s*$/.exec(startScript ?? '');
+  if (start === null) {
+    problems.push(
+      `package.json "start" is ${JSON.stringify(startScript)}, which is not`,
+      '`node <entry>` — it can no longer be compared with "main".',
+    );
+  } else if (start[1] !== main) {
+    problems.push(
+      `package.json "start" runs ${JSON.stringify(start[1])} but "main" is`,
+      `${JSON.stringify(main)}.`,
+    );
+  }
+
+  return problems;
+}
+
 export function analyse({ distDir, entryFile, deps, devDeps = {}, optionalDeps = {} }) {
   const shipped = readdirSync(distDir, { recursive: true }).filter((p) =>
     String(p).endsWith('.js'),
@@ -277,15 +362,24 @@ function main() {
     fail([`apps/worker/package.json is not valid JSON: ${err.message}`], WIRING_HINT);
   }
 
-  if (typeof pkg.main !== 'string' || !pkg.main.startsWith('dist/')) {
-    fail(
-      [
-        `package.json "main" is ${JSON.stringify(pkg.main)}, which does not name a file`,
-        'under dist/ — this guard cannot find the entry the image actually runs.',
-      ],
-      WIRING_HINT,
-    );
+  const resolved = resolveEntry({ workerDir: WORKER, distDir: DIST, main: pkg.main });
+  if (resolved.error) fail(resolved.error, WIRING_HINT);
+
+  // Before trusting `main`, prove the container runs the same file. Otherwise
+  // everything below audits a graph production never loads.
+  let dockerfile;
+  try {
+    dockerfile = readFileSync(DOCKERFILE, 'utf8');
+  } catch (err) {
+    fail([`Could not read docker/worker.Dockerfile: ${err.message}`], WIRING_HINT);
   }
+  const disagreements = entryPointsAgree({
+    main: pkg.main,
+    dockerfile,
+    startScript: pkg.scripts?.start,
+  });
+  if (disagreements.length > 0) fail(disagreements, WIRING_HINT);
+
   const deps = pkg.dependencies;
   if (!deps || typeof deps !== 'object' || Object.keys(deps).length === 0) {
     fail(
@@ -294,7 +388,7 @@ function main() {
     );
   }
 
-  const entryFile = join(WORKER, pkg.main);
+  const { entryFile } = resolved;
   if (!existsSync(entryFile)) {
     fail([`Entry ${pkg.main} is missing — the build did not finish.`], BUILD_HINT);
   }
@@ -456,6 +550,53 @@ function selfTest() {
       r5.undeclared.length === 2 &&
         r5.undeclared.find((u) => u.name === 'supertest').note.includes('devDependencies') &&
         r5.undeclared.find((u) => u.name === 'fsevents').note.includes('optionalDependencies'),
+    );
+    // 6. `main` must resolve INSIDE dist/, which a string prefix does not prove.
+    const entryCases = [
+      ['dist/worker/src/main.js', false],
+      // Satisfies startsWith('dist/') and lands outside the tree the image copies.
+      ['dist/../outside.js', true],
+      ['../elsewhere/main.js', true],
+      [undefined, true],
+    ];
+    check(
+      'rejects a `main` that resolves outside dist/, prefix notwithstanding',
+      entryCases.every(
+        ([main, shouldFail]) =>
+          Boolean(resolveEntry({ workerDir: '/w', distDir: '/w/dist', main }).error) === shouldFail,
+      ),
+    );
+
+    // 7. The three copies of the entry path must agree.
+    const good = {
+      main: 'dist/worker/src/main.js',
+      dockerfile: 'ENTRYPOINT ["/x.sh"]\nCMD ["node", "dist/worker/src/main.js"]\n',
+      startScript: 'node dist/worker/src/main.js',
+    };
+    check('accepts three entry paths that agree', entryPointsAgree(good).length === 0);
+    check(
+      'catches a Dockerfile CMD that drifted from main',
+      entryPointsAgree({
+        ...good,
+        dockerfile: 'CMD ["node", "dist/main.js"]\n',
+      }).length > 0,
+    );
+    check(
+      'catches a start script that drifted from main',
+      entryPointsAgree({ ...good, startScript: 'node dist/main.js' }).length > 0,
+    );
+    check(
+      'fails rather than skips when the CMD cannot be parsed',
+      entryPointsAgree({ ...good, dockerfile: 'CMD node dist/worker/src/main.js\n' }).length > 0,
+    );
+    check(
+      'ignores the indented shell-form HEALTHCHECK CMD above the real one',
+      entryPointsAgree({
+        ...good,
+        dockerfile:
+          'HEALTHCHECK --interval=30s \\\n  CMD node -e "process.exit(0)" || exit 1\n' +
+          'CMD ["node", "dist/worker/src/main.js"]\n',
+      }).length === 0,
     );
   } finally {
     rmSync(root, { recursive: true, force: true });
