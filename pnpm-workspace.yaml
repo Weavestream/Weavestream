@@ -5,34 +5,46 @@ packages:
 confirmModulesPurge: false
 
 overrides:
-  multer: 2.2.0
-  # `next` pins postcss to an exact 8.4.31, which carries
-  # GHSA-6g55-p6wh-862q (arbitrary file read) and GHSA-r28c-9q8g-f849
-  # (path traversal), both via sourceMappingURL auto-loading in CSS
-  # comments. The pin means no lockfile refresh can move it — an
-  # override is the only lever. Drop this entry once next's own pin
-  # reaches >=8.5.18. Pinned exactly, like multer above, so the resolver
+  # @nestjs/platform-express pins multer to an exact 2.2.0, which carries
+  # GHSA-wc9g-mqfw-jrwm and GHSA-535w-7cp7-47q4 (DoS via crafted multipart
+  # field names / oversized array index) plus GHSA-qfvm-cv95-jqjf, an
+  # advisory filed against 2.2.0 alone with no listed patched version. The
+  # exact pin means no lockfile refresh can move it — an override is the
+  # only lever. 2.3.0 clears all three. Pinned exactly so the resolver
   # cannot drift onto a release too new to have cleared pnpm's
   # minimum-release-age supply-chain gate.
-  postcss: 8.5.19
-  # postcss 8.5.19 depends on nanoid ^3.3.12 and the lockfile settled on
-  # 3.3.16, which carries GHSA-2v37-7h3g-55p8 (a custom `size: 0` generator
-  # loops forever). The range does admit the fix, so this is not a pin the
-  # resolver needs — it is a scope limiter: `pnpm update nanoid -r` reaches
-  # the same nanoid but also bumps 16 unrelated packages (@babel/*,
-  # @codemirror/*, browserslist chain, acorn, ws), which is a far wider
-  # supply-chain delta than one advisory warrants. The override moves
-  # nanoid and nothing else. Drop this entry once postcss's own floor
-  # reaches >=3.3.18. Pinned exactly, for the same reason as above.
+  multer: 2.3.0
+  # next pins postcss to an exact version, so no lockfile refresh can
+  # move it — an override is the only lever. The original reason was
+  # GHSA-6g55-p6wh-862q (arbitrary file read) and GHSA-r28c-9q8g-f849
+  # (path traversal) in next's old 8.4.31 pin; next 16.3.4 pins 8.5.23,
+  # which clears both, so the entry is no longer a security force. It
+  # stays as a dedupe pin, set to next's own 8.5.23: without it, apps/web
+  # keeps a stale 8.5.19 for autoprefixer while apps/mobile and tailwind
+  # resolve 8.5.28, and the workspace carries three copies of postcss.
+  # Pinned exactly, and to what next declares, so the resolver cannot
+  # drift onto a release too new to have cleared pnpm's
+  # minimum-release-age supply-chain gate.
+  postcss: 8.5.23
+  # postcss 8.5.23 declares nanoid ^3.3.16, and the resolver settles on
+  # 3.3.16, which carries GHSA-2v37-7h3g-55p8 (a custom `size: 0`
+  # generator loops forever). The range does admit the fix, so this is
+  # not a pin the resolver needs — it is a scope limiter: `pnpm update
+  # nanoid -r` reaches the same nanoid but also bumps 16 unrelated
+  # packages (@babel/*, @codemirror/*, browserslist chain, acorn, ws),
+  # which is a far wider supply-chain delta than one advisory warrants.
+  # The override moves nanoid and nothing else. Drop this entry once the
+  # postcss pinned above floors nanoid at >=3.3.18 (postcss 8.5.28 does).
+  # Pinned exactly, for the same reason as multer above.
   nanoid: 3.3.18
-  # next carries its own optional sharp (^0.34.5) for next/image
-  # optimization, which this app does not use — every image is a plain
-  # <img> served through the API. That copy still trips the libvips
-  # advisories (CVE-2026-33327/33328/35590/35591), so it is forced onto
-  # the same 0.35.x the API depends on. Deliberately outside next's
-  # declared range: it dedupes two full sharp+libvips binary sets down
-  # to one, and the next/image path that would exercise it is unused.
-  sharp: 0.35.3
+  # next carries its own optional sharp for next/image optimization,
+  # which this app does not use — every image is a plain <img> served
+  # through the API. sharp <0.35.4 trips the libheif advisories bundled
+  # as GHSA-rgj7-g3m4-5g8c, so every copy is forced onto the 0.35.4 the
+  # API and worker depend on. next 16.3.4 declares ^0.35.4 itself, so
+  # this is now a dedupe pin rather than an out-of-range force: it
+  # collapses two full sharp+libvips binary sets down to one.
+  sharp: 0.35.4
   # Two React apps (`apps/web` on Next, `apps/mobile` on Vite) declaring
   # independent ranges let pnpm resolve two copies of the React types.
   # TypeScript treats those as *unrelated* nominal types, so a `Ref`
