@@ -224,11 +224,14 @@ export class AuthService {
     }
 
     const otpauthUrl = this.mfa.otpauthUrl(user.email, secret);
-    const qrDataUrl = await this.mfa.qrDataUrl(otpauthUrl);
+    // `qr` is an SVG path, not a `data:` PNG — see `MfaService.qrMatrix`.
+    // The web client inlines it as `<svg>`, which the `img-src 'self'` CSP
+    // does not govern. Do not "simplify" this back to a data URL.
+    const qr = this.mfa.qrMatrix(otpauthUrl);
     return {
       secret,
       otpauthUrl,
-      qrDataUrl,
+      qr,
     };
   }
 

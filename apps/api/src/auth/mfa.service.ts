@@ -20,13 +20,51 @@ export class MfaService {
     return authenticator.keyuri(email, 'Weavestream', secret);
   }
 
-  async qrDataUrl(otpauthUrl: string): Promise<string> {
-    return QRCode.toDataURL(otpauthUrl, {
-      errorCorrectionLevel: 'M',
-      margin: 1,
-      width: 256,
-      color: { dark: '#000000', light: '#ffffff' },
-    });
+  /**
+   * The enrolment QR as an SVG `path` in module units — deliberately not a
+   * `data:` PNG.
+   *
+   * The desktop CSP grants `img-src 'self'` and nothing else, so
+   * `<img src="data:image/png;base64,...">` is refused by the browser with a
+   * console violation and no other symptom. That is exactly how the setup
+   * page shipped: an empty QR frame and a working manual-entry fallback
+   * nobody looks at. The alternative to widening `img-src` for one image is
+   * an inline `<svg><path d="..."/></svg>`, which is not an image fetch and so
+   * is governed by no directive at all.
+   *
+   * The honest cost: this path runs ~6 KB against the ~3.7 KB base64 PNG it
+   * replaces, on a route each account hits once. In exchange the CSP keeps a
+   * directive it would otherwise have spent app-wide, and the symbol is
+   * resolution-independent instead of a fixed 256 px raster.
+   *
+   * `size` counts modules *including* the quiet-zone margin, so the caller
+   * renders it straight into `viewBox="0 0 size size"`. Error correction and
+   * margin match the PNG this replaces, so the symbol itself is unchanged.
+   */
+  qrMatrix(otpauthUrl: string): { size: number; path: string } {
+    const margin = 1;
+    const { modules } = QRCode.create(otpauthUrl, { errorCorrectionLevel: 'M' });
+    const { size, data } = modules;
+
+    // One filled subpath per horizontal run of dark modules. Runs never
+    // overlap, so the default nonzero fill rule needs no thought, and the
+    // integer coordinates keep every module edge on a device pixel.
+    let path = '';
+    for (let row = 0; row < size; row++) {
+      let col = 0;
+      while (col < size) {
+        if (!data[row * size + col]) {
+          col++;
+          continue;
+        }
+        const start = col;
+        while (col < size && data[row * size + col]) col++;
+        const run = col - start;
+        path += `M${start + margin} ${row + margin}h${run}v1h-${run}z`;
+      }
+    }
+
+    return { size: size + margin * 2, path };
   }
 
   verify(token: string, plaintextSecret: string): boolean {

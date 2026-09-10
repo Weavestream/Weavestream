@@ -78,6 +78,13 @@ function desktopDirectives(nonce: string, isDev: boolean): string[] {
   // rejects pasted data: images, and the data: URLs in icon.tsx/apple-icon.tsx
   // are consumed server-side by Satori. Re-add a scheme here only when a
   // feature actually needs it.
+  //
+  // The MFA enrolment QR is the one feature that asked. It did not get a
+  // scheme: `/auth/mfa/enroll` returns an SVG path and `mfa-setup-client.tsx`
+  // inlines it as `<svg>`, which is not an image fetch and so is not governed
+  // by this directive at all. That is the pattern to copy — a blocked `<img
+  // src="data:…">` fails silently, with an empty frame and one console
+  // violation, so it is a bad thing to trade a directive for.
   const imgSrc = ['img-src', "'self'"].join(' ');
 
   // style-src keeps 'unsafe-inline': Next.js streams inline <style> tags for

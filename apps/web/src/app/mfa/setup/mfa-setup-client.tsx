@@ -10,10 +10,18 @@ import {
 } from '../../../components/auth/backup-code-list';
 import { Btn, Field, Input, useToast } from '../../../components/ui';
 
+/**
+ * `qr` is an SVG path in module units, not a `data:` PNG.
+ *
+ * The app's CSP grants `img-src 'self'` and nothing else, so a data-URL
+ * `<img>` is blocked outright — the QR frame renders empty and the only
+ * trace is a console violation. An inline `<svg>` is not an image fetch,
+ * so no directive governs it. See `MfaService.qrMatrix` in the API.
+ */
 interface EnrollResponse {
   secret: string;
   otpauthUrl: string;
-  qrDataUrl: string;
+  qr: { size: number; path: string };
 }
 
 interface VerifyResponse {
@@ -26,7 +34,7 @@ export default function MfaSetupClient() {
   const toast = useToast();
   const [secret, setSecret] = useState<string | null>(null);
   const [otpauthUrl, setOtpauthUrl] = useState<string | null>(null);
-  const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
+  const [qr, setQr] = useState<EnrollResponse['qr'] | null>(null);
   const [showManual, setShowManual] = useState(false);
   const [copied, setCopied] = useState(false);
   const [copiedCodes, setCopiedCodes] = useState(false);
@@ -42,7 +50,7 @@ export default function MfaSetupClient() {
       if (res.ok && res.data) {
         setSecret(res.data.secret);
         setOtpauthUrl(res.data.otpauthUrl);
-        setQrDataUrl(res.data.qrDataUrl);
+        setQr(res.data.qr);
       } else {
         setError('Could not start MFA enrollment.');
       }
@@ -97,7 +105,7 @@ export default function MfaSetupClient() {
     toast.push('Clipboard unavailable — copy them manually.', 'warn');
   }
 
-  const ready = Boolean(qrDataUrl && secret);
+  const ready = Boolean(qr && secret);
 
   if (backupCodes) {
     return (
@@ -155,7 +163,7 @@ export default function MfaSetupClient() {
           borderRadius: 8,
         }}
       >
-        {ready ? (
+        {ready && qr ? (
           <div
             style={{
               background: '#ffffff',
@@ -165,14 +173,23 @@ export default function MfaSetupClient() {
               boxShadow: '0 1px 2px rgba(0,0,0,0.25)',
             }}
           >
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src={qrDataUrl ?? ''}
-              alt="Two-factor authentication QR code"
+            {/* Inline SVG, never <img src="data:...">: see `EnrollResponse`.
+                The white <rect> is the symbol's own quiet-zone background, so
+                the code still scans if the SVG is copied out of this box. The
+                two colours stay literal — a QR needs maximum contrast in both
+                themes, so they must not follow the theme tokens. */}
+            <svg
+              role="img"
+              aria-label="Two-factor authentication QR code"
+              viewBox={`0 0 ${qr.size} ${qr.size}`}
               width={208}
               height={208}
+              shapeRendering="crispEdges"
               style={{ display: 'block', width: 208, height: 208 }}
-            />
+            >
+              <rect width={qr.size} height={qr.size} fill="#ffffff" />
+              <path d={qr.path} fill="#000000" />
+            </svg>
           </div>
         ) : (
           <div

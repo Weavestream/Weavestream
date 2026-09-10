@@ -49,7 +49,7 @@ jest.mock('../../../components/ui', () => ({
 const ENROLL = {
   secret: 'JBSWY3DPEHPK3PXP',
   otpauthUrl: 'otpauth://totp/Weavestream:a@b.c?secret=JBSWY3DPEHPK3PXP',
-  qrDataUrl: 'data:image/png;base64,abc',
+  qr: { size: 31, path: 'M1 1h7v1h-7zM24 1h7v1h-7z' },
 };
 // `as const` so indexing stays a literal under `noUncheckedIndexedAccess`.
 const CODES = ['AAAAA-BBBBB', 'CCCCC-DDDDD'] as const;
@@ -77,6 +77,28 @@ describe('MfaSetupClient', () => {
     });
     await waitFor(() => expect(screen.getByText(CODES[0])).toBeInTheDocument());
   }
+
+  // The CSP grants `img-src 'self'` and nothing else, so a `data:` PNG in an
+  // `<img>` is refused by the browser: an empty QR frame, one console
+  // violation, and no failing test. This pins the inline-SVG render that
+  // replaced it — if someone reintroduces an image element here, the page is
+  // broken again in production and green in CI.
+  it('renders the QR as inline SVG, never an image element', async () => {
+    const { container } = render(<MfaSetupClient />);
+    // Wait on a control that enrolment actually gates. The 6-digit input is
+    // never disabled, so waiting on it passes before the fetch resolves.
+    await waitFor(() =>
+      expect(
+        screen.getByRole('button', { name: "Can't scan? Enter the secret manually" }),
+      ).toBeEnabled(),
+    );
+
+    const svg = screen.getByRole('img', { name: 'Two-factor authentication QR code' });
+    expect(svg.tagName.toLowerCase()).toBe('svg');
+    expect(svg).toHaveAttribute('viewBox', `0 0 ${ENROLL.qr.size} ${ENROLL.qr.size}`);
+    expect(container.querySelector('path')).toHaveAttribute('d', ENROLL.qr.path);
+    expect(container.querySelector('img')).toBeNull();
+  });
 
   it('shows the codes with a shown-once warning', async () => {
     await reachCodeScreen();
