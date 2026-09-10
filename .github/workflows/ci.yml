@@ -41,6 +41,17 @@ jobs:
       - run: pnpm --filter @weavestream/shared build
       - run: pnpm --filter @weavestream/db build
       - run: pnpm -r typecheck
+      # apps/worker compiles ../api/src into its own dist, but the runner
+      # image never copies apps/api/node_modules — so a package only apps/api
+      # declares is unresolvable at worker runtime however cleanly it built.
+      # Most of that compiled API code is unreachable, which is what makes the
+      # failure quiet: it appears the moment one import pulls a file across
+      # that line, and only in the pruned production image. Typecheck and
+      # `pnpm -r test` never look at resolution, and docker-build builds the
+      # worker image without running it. The build below chains
+      # scripts/check-worker-deps.mjs, which walks the compiled graph and
+      # fails on any reachable package apps/worker/package.json omits.
+      - run: pnpm --filter @weavestream/worker build
 
   test:
     runs-on: ubuntu-latest

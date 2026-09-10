@@ -16,6 +16,7 @@
     "dist",
     "node_modules",
     "**/*.spec.ts",
+    "../api/**/*.spec.ts",
     "../api/src/main.ts",
     "../api/src/cli.ts",
     "../api/dist",

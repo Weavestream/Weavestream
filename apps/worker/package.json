@@ -4,12 +4,13 @@
   "private": true,
   "main": "dist/worker/src/main.js",
   "scripts": {
-    "build": "nest build",
+    "build": "nest build && node scripts/check-worker-deps.mjs",
     "start": "node dist/worker/src/main.js",
     "dev": "nest start --watch",
     "lint": "eslint 'src/**/*.ts'",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "jest --passWithNoTests"
+    "deps:check": "node scripts/check-worker-deps.mjs",
+    "test": "jest --passWithNoTests && node scripts/check-worker-deps.mjs --self-test"
   },
   "dependencies": {
     "@nestjs/common": "^11.1.19",
