@@ -71,7 +71,7 @@ Only an exact Breeze-owned binding for the same integration, organization mappin
 ## Run modes and scheduling
 
 - **Dry run** fetches, validates, transforms, and reports outcomes but rolls back native targets, bindings, audits, gaps, and checkpoints.
-- **Incremental** starts from the last committed high-water checkpoint and applies changed source records.
+- **Incremental** starts from the last committed high-water checkpoint and applies changed source records. The first incremental run after a full or empty traversal has no high-water checkpoint yet; it sends no `updatedSince`, accepts the resulting UUID-ordered Breeze pages, and commits the traversal `snapshotAt` as the high-water mark so the next run is incremental.
 - **Full** traverses the complete source snapshot. Only a terminal, authoritative full traversal may mark unseen exact Breeze-owned bindings stale.
 
 A blank integration schedule inherits `INTEGRATION_SYNC_DEFAULT_CRON`, which defaults to `*/15 * * * *` (every 15 minutes). Pick an explicit interval preset in the integration's schedule dropdown for a different cadence (stored as a five-field UTC cron), or set the global default to `off` for manual-only inherited schedules. Manual runs can select incremental or full mode.

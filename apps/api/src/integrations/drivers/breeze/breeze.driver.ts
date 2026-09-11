@@ -133,6 +133,8 @@ const equipmentFields = [
   field('macAddress', 'MAC Address', 'mac_address', 'TEXT'),
   field('manufacturer', 'Manufacturer', 'manufacturer', 'TEXT'),
   field('model', 'Model', 'model', 'TEXT'),
+  field('url', 'URL', 'url', 'URL'),
+  field('source', 'Source', 'source', 'TEXT'),
   field('sourceRevision', 'Source Revision', 'source_revision', 'TEXT'),
   field('sourceFingerprint', 'Source Fingerprint', 'source_fingerprint', 'TEXT'),
 ] as const;
@@ -399,6 +401,14 @@ export class BreezeDriver implements IntegrationDriver {
     if (ctx.snapshotAt && page.snapshotAt !== ctx.snapshotAt) {
       throw new Error('Breeze partner API snapshot changed during traversal.');
     }
+    // Breeze derives its traversal mode from the presence of `updatedSince`
+    // alone. An incremental run whose checkpoint has no high-water mark yet
+    // (first run after a full traversal, or after an empty one) sends none,
+    // so Breeze serves a full-mode page ordered by UUID, not by timestamp.
+    // Treat that page as a bootstrap: validate it with full-mode rules and
+    // emit the page snapshot as the high water so the next run is truly
+    // incremental (Breeze documents `snapshotAt` as the consumer checkpoint).
+    const bootstrap = ctx.mode === 'incremental' && ctx.updatedSince === null;
     validatePageOrdering(page.data, page.snapshotAt, ctx.mode, ctx.updatedSince);
     for (const blocked of page.blocked ?? []) {
       if (
@@ -434,7 +444,12 @@ export class BreezeDriver implements IntegrationDriver {
       }
     }
     const records = deduplicateDriverRecords(transformed);
-    const highWater = ctx.mode === 'incremental' ? maxSourceUpdatedAt(page.data) : null;
+    const highWater =
+      ctx.mode === 'incremental'
+        ? bootstrap
+          ? page.snapshotAt
+          : maxSourceUpdatedAt(page.data)
+        : null;
 
     return {
       records,
@@ -626,6 +641,9 @@ function validatePageOrdering(
 ): void {
   const snapshotMillis = Date.parse(snapshotAt);
   const updatedSinceMillis = updatedSince === null ? null : Date.parse(updatedSince);
+  // The strict incremental checks only hold when `updatedSince` was actually
+  // sent; without it Breeze answers in full-mode (UUID) order.
+  const incremental = mode === 'incremental' && updatedSinceMillis !== null;
   let previousMillis: number | null = null;
   for (const raw of records) {
     const sourceUpdatedAt = (raw as { sourceUpdatedAt?: unknown }).sourceUpdatedAt;
@@ -634,14 +652,10 @@ function validatePageOrdering(
     if (!Number.isFinite(sourceMillis) || sourceMillis > snapshotMillis) {
       throw new Error('Breeze sourceUpdatedAt must not exceed the traversal snapshot.');
     }
-    if (
-      mode === 'incremental' &&
-      updatedSinceMillis !== null &&
-      sourceMillis <= updatedSinceMillis
-    ) {
+    if (incremental && sourceMillis <= updatedSinceMillis!) {
       throw new Error('Breeze incremental records must be newer than updatedSince.');
     }
-    if (mode === 'incremental' && previousMillis !== null && sourceMillis < previousMillis) {
+    if (incremental && previousMillis !== null && sourceMillis < previousMillis) {
       throw new Error('Breeze sourceUpdatedAt values must be ordered within each page.');
     }
     previousMillis = sourceMillis;

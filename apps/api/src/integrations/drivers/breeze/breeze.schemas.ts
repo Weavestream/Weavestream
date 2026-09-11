@@ -331,12 +331,27 @@ const breezeSiteInventoryRecordSchema = record({
       z
         .object({
           id: z.string().uuid(),
-          type: z.enum(['printer', 'router', 'switch', 'firewall', 'access_point', 'nas']),
+          // Breeze v0.111 added the IP-less 'website' and 'service' asset
+          // types together with `url` and `source`, and made `address`
+          // nullable. The new keys stay optional so exports from older Breeze
+          // releases (which omit them) still parse.
+          type: z.enum([
+            'printer',
+            'router',
+            'switch',
+            'firewall',
+            'access_point',
+            'nas',
+            'website',
+            'service',
+          ]),
           name: nullableText(255),
-          address: requiredText(45),
+          address: nullableText(45),
           macAddress: nullableText(17),
           manufacturer: nullableText(255),
           model: nullableText(255),
+          url: nullableText(2_048).optional(),
+          source: z.string().max(64).optional(),
         })
         .strict(),
     )

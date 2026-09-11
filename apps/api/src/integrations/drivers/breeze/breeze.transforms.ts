@@ -247,10 +247,12 @@ export function transformBreezeRecord(
             breezeId: equipment.id,
             siteId: record.siteSubjectId,
             equipmentType: equipment.type,
-            address: equipment.address,
+            address: equipment.address ?? null,
             macAddress: equipment.macAddress,
             manufacturer: equipment.manufacturer,
             model: equipment.model,
+            url: equipment.url ?? null,
+            source: equipment.source ?? null,
             sourceRevision: record.revision,
             sourceFingerprint: record.revision,
           },
@@ -980,10 +982,11 @@ function formatEquipmentProjection(rows: Array<Record<string, unknown>>): Struct
         inline(row.name),
         inline(row.type).replaceAll('_', ' '),
         inline(row.address),
+        row.url ? inline(row.url) : '',
         row.macAddress ? `MAC ${inline(row.macAddress)}` : '',
         [inline(row.manufacturer), inline(row.model)].filter(Boolean).join(' '),
       ]),
-    (row) => `${inline(row.name)}:${inline(row.address)}`,
+    (row) => `${inline(row.name)}:${inline(row.address)}:${inline(row.url)}`,
   );
 }
 

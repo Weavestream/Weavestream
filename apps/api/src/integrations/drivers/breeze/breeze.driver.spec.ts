@@ -1149,6 +1149,53 @@ describe('Breeze transforms', () => {
     ).toThrow();
   });
 
+  it('accepts Breeze v0.111 website/service equipment with a URL and no address', () => {
+    const website = {
+      id: '88888888-8888-4888-8888-888888888888',
+      type: 'website' as const,
+      name: 'Customer Portal',
+      address: null,
+      macAddress: null,
+      manufacturer: null,
+      model: null,
+      url: 'https://portal.example.test',
+      source: 'manual',
+    };
+    const inventory = {
+      ...siteInventory,
+      networkEquipment: [siteInventory.networkEquipment[0], website],
+      collections: {
+        ...siteInventory.collections,
+        networkEquipment: { total: 2, included: 2, complete: true, reason: null },
+      },
+    };
+    const [site] = transformBreezeRecord('site-inventory', inventory);
+    expect(site).toMatchObject({
+      fields: expect.objectContaining({
+        networkEquipment: expect.stringContaining(
+          'Customer Portal · website · https://portal.example.test',
+        ),
+      }),
+    });
+    const equipment = transformBreezeRecord('network-equipment', inventory);
+    expect(equipment).toHaveLength(2);
+    expect(equipment[1]).toMatchObject({
+      externalId: website.id,
+      displayName: 'Customer Portal',
+      fields: expect.objectContaining({
+        equipmentType: 'website',
+        address: null,
+        url: 'https://portal.example.test',
+        source: 'manual',
+      }),
+    });
+    // Exports from older Breeze releases omit `url` and `source` entirely.
+    const [legacyEquipment] = transformBreezeRecord('network-equipment', siteInventory);
+    expect(legacyEquipment).toMatchObject({
+      fields: expect.objectContaining({ url: null, source: null }),
+    });
+  });
+
   it('maps only exported stable relationship edges to exact durable resource bindings', () => {
     const relationships = {
       ...base,
@@ -1968,6 +2015,46 @@ describe('BreezeDriver transport delegation', () => {
     const page = await new BreezeDriver(client).fetchRecords({ ...ctx(), mode: 'full' }, null);
     expect(page).toMatchObject({ sourceHighWater: null });
     expect(page.records).toHaveLength(2);
+  });
+
+  it('bootstraps an incremental run without updatedSince from a UUID-ordered page', async () => {
+    // Breeze picks its traversal mode from the presence of `updatedSince`
+    // alone, so the first incremental run after a full traversal receives a
+    // full-mode (UUID-ordered) page. It must be accepted and must seed the
+    // high water from the snapshot so the next run is truly incremental.
+    const snapshotAt = '2026-07-14T12:00:00.000Z';
+    const client = {
+      testConnection: jest.fn(),
+      listOrganizations: jest.fn(),
+      fetchPage: jest.fn().mockResolvedValue({
+        schemaVersion: '1',
+        snapshotAt,
+        data: [
+          {
+            ...device,
+            id: '00000000-0000-4000-8000-000000000001',
+            sourceUpdatedAt: '2026-07-14T11:30:00.000Z',
+          },
+          {
+            ...device,
+            id: '00000000-0000-4000-8000-000000000002',
+            sourceUpdatedAt: '2026-07-14T11:00:00.000Z',
+          },
+        ],
+        nextCursor: null,
+        hasMore: false,
+      }),
+    };
+    const page = await new BreezeDriver(client).fetchRecords(
+      { ...ctx(), mode: 'incremental', updatedSince: null },
+      null,
+    );
+    expect(client.fetchPage).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ updatedSince: null }),
+    );
+    expect(page.records).toHaveLength(2);
+    expect(page).toMatchObject({ sourceHighWater: snapshotAt, terminal: true });
   });
 
   it('emits per-page incremental high-water without retaining failed traversal state', async () => {
