@@ -13,6 +13,12 @@ All notable changes to Weavestream are documented here. The format follows [Keep
 
 ## [Unreleased]
 
+## [1.9.8] - 2026-09-10
+
+### Fixed
+
+- **Breeze integration sync bootstrapping and v0.111 equipment compatibility.** Resolved an ordering validation failure during incremental sync runs that lack an existing high-water checkpoint (such as the first run following a full or empty traversal), where Breeze returns UUID-ordered records instead of timestamp-ordered records. The driver now validates bootstrap pages using full-mode ordering rules and records `snapshotAt` as the checkpoint high-water mark so subsequent runs proceed incrementally. Added support for Breeze v0.111's IP-less `website` and `service` equipment types, optional `url` and `source` attributes, and nullable equipment addresses while preserving backward compatibility with older Breeze schemas.
+
 ## [1.9.7] - 2026-09-10
 
 ### Changed
@@ -790,7 +796,8 @@ Initial public release.
 
 ---
 
-[Unreleased]: https://github.com/Weavestream/Weavestream/compare/v1.9.7...HEAD
+[Unreleased]: https://github.com/Weavestream/Weavestream/compare/v1.9.8...HEAD
+[1.9.8]: https://github.com/Weavestream/Weavestream/releases/tag/v1.9.8
 [1.9.7]: https://github.com/Weavestream/Weavestream/releases/tag/v1.9.7
 [1.9.6]: https://github.com/Weavestream/Weavestream/releases/tag/v1.9.6
 [1.9.5]: https://github.com/Weavestream/Weavestream/releases/tag/v1.9.5
