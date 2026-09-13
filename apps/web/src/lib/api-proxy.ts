@@ -8,15 +8,17 @@ import {
   INBOUND_XFF_HEADER,
   RESOLVED_CLIENT_IP_HEADER,
   UNKNOWN_CLIENT_IP,
+  WEB_TRUST_PROXY_HOPS_HEADER,
   getResolvedClientIp,
+  trustProxyHops,
 } from './client-ip';
 import { isInternalOnlyUpstreamUrl } from './internal-only-paths';
 
-// The one endpoint allowed to receive the display-only raw inbound XFF
-// header. Every other `/api/*` call strips it (see HOP_BY_HOP_HEADERS)
-// so an untrusted, client-influenced value never reaches a handler that
-// might act on it.
-const INBOUND_XFF_DIAGNOSTIC_PATH = '/api/v1/security/whoami';
+// The one endpoint allowed to receive the display-only diagnostic
+// headers: the raw inbound XFF and the web tier's hop count. Every other
+// `/api/*` call strips both (see HOP_BY_HOP_HEADERS) so an untrusted,
+// client-influenced value never reaches a handler that might act on it.
+const CONNECTION_DIAGNOSTICS_PATH = '/api/v1/security/whoami';
 
 // Reverse-proxy an inbound browser request through to the API,
 // rewriting client-IP-bearing headers to a single sanitized entry so
@@ -50,6 +52,10 @@ const HOP_BY_HOP_HEADERS = new Set([
   // default and re-add it (below) only for the whoami endpoint, so its
   // untrusted value can't reach any other handler.
   INBOUND_XFF_HEADER,
+  // The web tier's hop count is display-only too. A browser-supplied value
+  // is dropped here on every path; the whoami branch below sets the real
+  // value from this process's own configuration.
+  WEB_TRUST_PROXY_HOPS_HEADER,
   // The internal-API token is a web→API credential minted server-side by
   // the ip-rules poller. A browser-supplied value must NEVER transit the
   // proxy, or a client could smuggle it toward a peer-gated internal
@@ -107,12 +113,18 @@ export async function proxyToApi(
     req.nextUrl.protocol.replace(':', '') || 'http',
   );
 
-  // Only the admin whoami diagnostic receives the raw inbound XFF (set by
-  // `proxy.ts`, already length-bounded). It is echoed back for the "what
-  // you presented vs. what we resolved" comparison and never used for
-  // attribution. Every other endpoint had it stripped above.
-  if (upstreamPath === INBOUND_XFF_DIAGNOSTIC_PATH) {
+  // Only the admin whoami diagnostic receives the display-only headers.
+  // The raw inbound XFF (set by `proxy.ts`, already length-bounded) is
+  // echoed back for the "what web received vs. what we resolved"
+  // comparison. The hop count is `trustProxyHops()` — the read the
+  // resolver uses, in this same process (Next 16 runs `proxy.ts` on the
+  // Node.js runtime) — never the inbound header, so the diagnostic shows
+  // the value that resolved this request rather than the API container's
+  // copy of the setting. Neither is used for attribution. Every other
+  // endpoint had both stripped above.
+  if (upstreamPath === CONNECTION_DIAGNOSTICS_PATH) {
     outgoing.set(INBOUND_XFF_HEADER, req.headers.get(INBOUND_XFF_HEADER) ?? '');
+    outgoing.set(WEB_TRUST_PROXY_HOPS_HEADER, String(trustProxyHops()));
   }
 
   const method = req.method.toUpperCase();

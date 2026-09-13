@@ -3,9 +3,16 @@
 import { useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
+  describeCatchAllFamilyGap,
+  findCatchAllFamilyGap,
+  ipRuleCidrSchema,
+  problemMessage,
+} from '@weavestream/shared';
+import {
   Btn,
   DataTable,
   Dialog,
+  ErrorBanner,
   Icon,
   Input,
   Select,
@@ -29,6 +36,15 @@ export function IpRulesTable({ initialRules }: { initialRules: IpRule[] }) {
   const [showCreate, setShowCreate] = useState(false);
   const [editing, setEditing] = useState<IpRule | null>(null);
 
+  // Catch-alls are per address family, so `DENY 0.0.0.0/0` alone still
+  // admits every IPv6 visitor. Judged on the enabled rules in priority
+  // order — the set the guard enforces — and recomputed after every
+  // create, edit, and delete.
+  const catchAllGap = useMemo(
+    () => findCatchAllFamilyGap(rules.filter((r) => r.enabled)),
+    [rules],
+  );
+
   const columns = useMemo<DataColumn<IpRule>[]>(
     () => [
       {
@@ -41,7 +57,7 @@ export function IpRulesTable({ initialRules }: { initialRules: IpRule[] }) {
       {
         id: 'cidr',
         header: 'IP / CIDR',
-        width: 180,
+        width: 260,
         mono: true,
         render: (r) => (
           <span style={{ color: 'var(--text-2)', fontWeight: 500 }}>{r.cidr}</span>
@@ -116,7 +132,8 @@ export function IpRulesTable({ initialRules }: { initialRules: IpRule[] }) {
                   toast.push('Rule deleted', 'ok');
                   setRules((prev) => prev.filter((x) => x.id !== r.id));
                 } else {
-                  toast.push('Failed to delete rule', 'danger');
+                  // The API explains refusals, e.g. the self-block guard.
+                  toast.push(problemMessage(res.problem) ?? 'Failed to delete rule', 'danger');
                 }
               }}
               title="Delete"
@@ -132,6 +149,19 @@ export function IpRulesTable({ initialRules }: { initialRules: IpRule[] }) {
 
   return (
     <div>
+      {catchAllGap && (
+        <div style={{ marginBottom: 12 }}>
+          <ErrorBanner
+            tone="warn"
+            title={`The catch-all DENY rule does not apply to ${catchAllGap.uncoveredFamily} visitors`}
+          >
+            <span style={{ color: 'var(--muted)', fontSize: 12.5, lineHeight: 1.5 }}>
+              {describeCatchAllFamilyGap(catchAllGap)}
+            </span>
+          </ErrorBanner>
+        </div>
+      )}
+
       <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 12 }}>
         <Btn kind="primary" onClick={() => setShowCreate(true)} icon={Icon.plus}>
           Add rule
@@ -145,8 +175,8 @@ export function IpRulesTable({ initialRules }: { initialRules: IpRule[] }) {
         empty="No IP rules. Create one to start enforcing IP-based access control."
         renderMobileCard={(r) => (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <strong>{r.cidr}</strong>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <strong style={{ wordBreak: 'break-all' }}>{r.cidr}</strong>
               <Tag tone={r.action === 'ALLOW' ? 'ok' : 'danger'}>
                 {IP_RULE_ACTION_LABELS[r.action]}
               </Tag>
@@ -185,7 +215,7 @@ export function IpRulesTable({ initialRules }: { initialRules: IpRule[] }) {
               setRules((prev) => [...prev, res.data!].sort((a, b) => a.priority - b.priority));
               setShowCreate(false);
             } else {
-              toast.push('Failed to create rule', 'danger');
+              toast.push(problemMessage(res.problem) ?? 'Failed to create rule', 'danger');
             }
           }}
         />
@@ -210,7 +240,7 @@ export function IpRulesTable({ initialRules }: { initialRules: IpRule[] }) {
               );
               setEditing(null);
             } else {
-              toast.push('Failed to update rule', 'danger');
+              toast.push(problemMessage(res.problem) ?? 'Failed to update rule', 'danger');
             }
           }}
         />
@@ -243,6 +273,12 @@ function RuleDialog({
   const [enabled, setEnabled] = useState(initial?.enabled ?? true);
   const [busy, setBusy] = useState(false);
 
+  // The API's own schema, so the message here is the one a submit would
+  // get back. An empty field only keeps Save disabled.
+  const cidrCheck = useMemo(() => ipRuleCidrSchema.safeParse(cidr), [cidr]);
+  const cidrError =
+    cidr.trim() && !cidrCheck.success ? (cidrCheck.error.issues[0]?.message ?? null) : null;
+
   return (
     <Dialog open onClose={onClose} title={title}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12, minWidth: 320 }}>
@@ -251,9 +287,16 @@ function RuleDialog({
           <Input
             value={cidr}
             onChange={(e) => setCidr(e.target.value)}
-            placeholder="192.168.1.1 or 10.0.0.0/8"
+            placeholder="192.168.1.1, 10.0.0.0/8, 2001:db8::1, or 2001:db8::/32"
+            aria-invalid={cidrError ? true : undefined}
+            aria-describedby={cidrError ? 'ip-rule-cidr-error' : undefined}
             autoFocus
           />
+          {cidrError && (
+            <span id="ip-rule-cidr-error" style={{ fontSize: 11.5, color: 'var(--danger)' }}>
+              {cidrError}
+            </span>
+          )}
         </label>
 
         <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
@@ -302,7 +345,7 @@ function RuleDialog({
           </Btn>
           <Btn
             kind="primary"
-            disabled={busy || !cidr.trim()}
+            disabled={busy || !cidrCheck.success}
             onClick={async () => {
               setBusy(true);
               await onSave({

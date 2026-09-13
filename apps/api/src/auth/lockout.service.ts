@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { ipLimitKey } from '@weavestream/shared';
 import { EnvService } from '../config/env.service.js';
 import { RedisService } from '../redis/redis.service.js';
 
@@ -25,8 +26,12 @@ export class LockoutService {
     private readonly redis: RedisService,
   ) {}
 
+  // The IP counter keys on `ipLimitKey`: the exact address for IPv4, the
+  // /64 prefix for IPv6. One IPv6 client can rotate through its whole
+  // /64, so a per-address counter would never reach the threshold.
   private key(kind: 'ip' | 'email', value: string): string {
-    return `login:fail:${kind}:${value.toLowerCase()}`;
+    const id = kind === 'ip' ? ipLimitKey(value) : value;
+    return `login:fail:${kind}:${id.toLowerCase()}`;
   }
 
   /**

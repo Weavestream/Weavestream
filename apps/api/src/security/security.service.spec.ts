@@ -6,17 +6,19 @@ import type { AuthedUser } from '../common/current-user.decorator.js';
 /**
  * Minimal Express-request stub with the surface `connectionDiagnostics`
  * touches: `ip` (already-resolved by Express `trust proxy`), the socket
- * peer, and the two forwarding headers.
+ * peer, the two forwarding headers, and the web tier's hop count.
  */
 function makeReq(args: {
   ip: string;
   peer?: string;
   xff?: string;
   inboundXff?: string;
+  webHops?: string | string[];
 }): Request {
-  const headers: Record<string, string> = {};
+  const headers: Record<string, string | string[]> = {};
   if (args.xff !== undefined) headers['x-forwarded-for'] = args.xff;
   if (args.inboundXff !== undefined) headers['x-ws-inbound-xff'] = args.inboundXff;
+  if (args.webHops !== undefined) headers['x-ws-web-trust-proxy-hops'] = args.webHops;
   return {
     ip: args.ip,
     socket: { remoteAddress: args.peer ?? args.ip },
@@ -377,6 +379,7 @@ describe('SecurityService.connectionDiagnostics', () => {
         peer: '172.18.0.5', // the web container on the docker bridge
         xff: '203.0.113.9', // single sanitized entry the web tier emits
         inboundXff: '203.0.113.9',
+        webHops: '1', // the hop count the web tier applied
       }),
     );
 
@@ -385,12 +388,12 @@ describe('SecurityService.connectionDiagnostics', () => {
     expect(out.peerTrusted).toBe(true);
     expect(out.forwardedForReceived).toBe('203.0.113.9');
     expect(out.trustProxyHops).toBe(1);
+    expect(out.webTrustProxyHops).toBe(1);
     // Always-present, non-overclaiming note.
     expect(out.interpretation[0]).toMatch(/Only the single sanitized resolvedIp/);
-    // No "untrusted peer" note when the peer is on the bridge.
-    expect(out.interpretation.some((n) => /not on the private/i.test(n))).toBe(
-      false,
-    );
+    // A healthy single-proxy request earns no other note: no untrusted
+    // peer, no hop-count mismatch, no short chain, no private address.
+    expect(out.interpretation).toHaveLength(1);
   });
 
   it('flags an untrusted peer when the request did not arrive via the bridge', () => {
@@ -460,6 +463,201 @@ describe('SecurityService.connectionDiagnostics', () => {
     // topologyWarnings flags plain HTTP on a public host.
     expect(out.interpretation.some((n) => /plain HTTP on a public host/.test(n))).toBe(
       true,
+    );
+  });
+
+  it('reports the hop count the web tier applied and flags a mismatch with the API value', () => {
+    // web was recreated after TRUST_PROXY_HOPS changed to 2; api was not.
+    const { service } = makeService({ envValues: { TRUST_PROXY_HOPS: 1 } });
+    const out = service.connectionDiagnostics(
+      makeReq({
+        ip: '198.51.100.7',
+        peer: '172.18.0.5',
+        xff: '198.51.100.7',
+        inboundXff: '198.51.100.7, 172.18.0.4',
+        webHops: '2',
+      }),
+    );
+
+    expect(out.trustProxyHops).toBe(1);
+    expect(out.webTrustProxyHops).toBe(2);
+    expect(
+      out.interpretation.some((n) =>
+        /web tier applied TRUST_PROXY_HOPS=2 to this request, but the API container has TRUST_PROXY_HOPS=1/.test(
+          n,
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  it('notes a trusted peer that did not report the web hop count', () => {
+    const { service } = makeService({});
+    const out = service.connectionDiagnostics(
+      makeReq({ ip: '203.0.113.9', peer: '172.18.0.5', xff: '203.0.113.9' }),
+    );
+
+    expect(out.webTrustProxyHops).toBeNull();
+    expect(
+      out.interpretation.some((n) => /did not report the TRUST_PROXY_HOPS value/.test(n)),
+    ).toBe(true);
+  });
+
+  it('ignores a hop count from a peer that cannot be the web tier', () => {
+    const { service } = makeService({});
+    const out = service.connectionDiagnostics(
+      makeReq({ ip: '8.8.8.8', peer: '8.8.8.8', inboundXff: '1.2.3.4', webHops: '2' }),
+    );
+
+    expect(out.webTrustProxyHops).toBeNull();
+    // The untrusted-peer note explains this request; no hop-count note is
+    // derived from a value the client could have written.
+    expect(
+      out.interpretation.some((n) =>
+        /web tier (applied|did not report)|inbound chain has/.test(n),
+      ),
+    ).toBe(false);
+  });
+
+  const malformedHops: Array<[string | string[]]> = [
+    ['11'],
+    ['-1'],
+    ['2.0'],
+    [' 2'],
+    ['02'],
+    ['0x2'],
+    ['two'],
+    [''],
+    [['1', '2']],
+  ];
+  it.each(malformedHops)('rejects the malformed web hop count %j', (webHops) => {
+    const { service } = makeService({});
+    const out = service.connectionDiagnostics(
+      makeReq({ ip: '203.0.113.9', peer: '172.18.0.5', xff: '203.0.113.9', webHops }),
+    );
+
+    expect(out.webTrustProxyHops).toBeNull();
+  });
+
+  it('flags a chain shorter than the hop count and a Docker-bridge resolvedIp', () => {
+    // The reported incident: TRUST_PROXY_HOPS=2 behind Cloudflare, but the
+    // proxy in front of web replaced X-Forwarded-For with its own peer (the
+    // cloudflared container), so the one-entry chain made the web resolver
+    // fall back to that bridge address.
+    const { service } = makeService({ envValues: { TRUST_PROXY_HOPS: 2 } });
+    const out = service.connectionDiagnostics(
+      makeReq({
+        ip: '172.18.0.3',
+        peer: '172.18.0.5',
+        xff: '172.18.0.3',
+        inboundXff: '172.18.0.3',
+        webHops: '2',
+      }),
+    );
+
+    expect(
+      out.interpretation.some((n) =>
+        /inbound chain has 1 entry, fewer than the 2 hops/.test(n),
+      ),
+    ).toBe(true);
+    expect(
+      out.interpretation.some((n) =>
+        /resolvedIp 172\.18\.0\.3 is a private, loopback, or link-local address/.test(n),
+      ),
+    ).toBe(true);
+  });
+
+  it('does not judge the chain length when the chain covers the hop count', () => {
+    const { service } = makeService({ envValues: { TRUST_PROXY_HOPS: 2 } });
+    const out = service.connectionDiagnostics(
+      makeReq({
+        ip: '198.51.100.7',
+        peer: '172.18.0.5',
+        xff: '198.51.100.7',
+        inboundXff: '198.51.100.7, 172.18.0.4',
+        webHops: '2',
+      }),
+    );
+
+    expect(out.interpretation).toHaveLength(1);
+  });
+
+  it('does not judge the length of a chain truncated at the echo cap', () => {
+    const { service } = makeService({ envValues: { TRUST_PROXY_HOPS: 3 } });
+    const out = service.connectionDiagnostics(
+      makeReq({
+        ip: '203.0.113.9',
+        peer: '172.18.0.5',
+        xff: '203.0.113.9',
+        // Cut at 500 chars to one partial entry, though the web tier saw two.
+        inboundXff: `${'x'.repeat(600)}, 203.0.113.9`,
+        webHops: '3',
+      }),
+    );
+
+    expect(out.inboundForwardedFor).toHaveLength(500);
+    expect(out.interpretation.some((n) => /inbound chain has/.test(n))).toBe(false);
+  });
+
+  const privateIps: Array<[string]> = [
+    ['10.1.2.3'],
+    ['172.18.0.3'],
+    ['192.168.1.20'],
+    ['127.0.0.1'],
+    ['169.254.10.1'],
+    ['::1'],
+    ['fe80::1'],
+    ['fd00:1234::5'],
+  ];
+  it.each(privateIps)('flags the private or bridge resolvedIp %s', (ip) => {
+    const { service } = makeService({});
+    const out = service.connectionDiagnostics(
+      makeReq({ ip, peer: '172.18.0.5', xff: ip, inboundXff: ip, webHops: '1' }),
+    );
+
+    expect(
+      out.interpretation.some((n) =>
+        /is a private, loopback, or link-local address/.test(n),
+      ),
+    ).toBe(true);
+  });
+
+  const publicIps: Array<[string]> = [['203.0.113.9'], ['2001:db8::1'], ['0.0.0.0']];
+  it.each(publicIps)('does not flag %s as a private address', (ip) => {
+    const { service } = makeService({});
+    const out = service.connectionDiagnostics(
+      makeReq({ ip, peer: '172.18.0.5', xff: ip, inboundXff: ip, webHops: '1' }),
+    );
+
+    expect(
+      out.interpretation.some((n) =>
+        /is a private, loopback, or link-local address/.test(n),
+      ),
+    ).toBe(false);
+  });
+
+  it('judges TRUST_PROXY_HOPS=0 by the value the web tier applied', () => {
+    const webZero = makeService({
+      envValues: { TRUST_PROXY_HOPS: 1 },
+    }).service.connectionDiagnostics(
+      makeReq({ ip: '0.0.0.0', peer: '172.18.0.5', webHops: '0' }),
+    );
+    expect(webZero.interpretation.some((n) => /^TRUST_PROXY_HOPS=0:/.test(n))).toBe(
+      true,
+    );
+
+    const apiZero = makeService({
+      envValues: { TRUST_PROXY_HOPS: 0 },
+    }).service.connectionDiagnostics(
+      makeReq({
+        ip: '203.0.113.9',
+        peer: '172.18.0.5',
+        xff: '203.0.113.9',
+        inboundXff: '203.0.113.9',
+        webHops: '1',
+      }),
+    );
+    expect(apiZero.interpretation.some((n) => /^TRUST_PROXY_HOPS=0:/.test(n))).toBe(
+      false,
     );
   });
 });

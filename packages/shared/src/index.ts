@@ -27,6 +27,7 @@ export * from './markdown.js';
 export * from './article-patch.js';
 export * from './article-proposal.js';
 export * from './ip-match.js';
+export * from './ipv6.js';
 export * from './tag-chips.js';
 export * from './internal-token.js';
 export * from './strip-nul.js';

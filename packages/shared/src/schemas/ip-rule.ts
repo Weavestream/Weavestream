@@ -1,11 +1,19 @@
 import { z } from 'zod';
+import { parseIpv6Cidr, type Ipv6CidrRejection } from '../ip-match.js';
 
 /**
  * IP allow/deny rules schema.
  *
- * CIDR validation uses a regex that accepts:
+ * CIDR validation accepts:
  *   - Single IPv4: "192.168.1.1"
  *   - IPv4 CIDR: "10.0.0.0/8", "192.168.0.0/16"
+ *   - Single IPv6: "2001:db8::1" (compressed or full, any letter case)
+ *   - IPv6 CIDR: "2001:db8::/32", "::/0"
+ *
+ * IPv4 input validates and is stored exactly as before. IPv6 input is
+ * stored in canonical RFC 5952 form, so one address never appears under
+ * two spellings. Families never cross when rules are matched:
+ * `0.0.0.0/0` does not cover IPv6 clients — see `ip-match.ts`.
  *
  * The IpRuleGuard reads enabled rules ordered by priority and returns
  * the first match. If no rules match, access is allowed (default-allow).
@@ -16,19 +24,69 @@ export const ipRuleActionSchema = z.enum(ipRuleActionValues);
 export type IpRuleAction = z.infer<typeof ipRuleActionSchema>;
 
 // IPv4 CIDR regex: matches 1-3 digits . 1-3 digits . 1-3 digits . 1-3 digits
-// optionally followed by / and 1-2 digits (0-32)
+// optionally followed by / and 1-2 digits (0-32). Unchanged by IPv6
+// support, so every IPv4 rule that validated before still does.
 const ipv4CidrRegex =
   /^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)(?:\/(?:3[0-2]|[1-2][0-9]|[0-9]))?$/;
+// The same address without a prefix, to tell a bad prefix apart from a
+// bad address in the error message.
+const ipv4AddressRegex =
+  /^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/;
 
-const cidrSchema = z
+// The longest valid input: a full-form IPv6 address with an IPv4 tail
+// (45 characters) plus `/128`.
+const MAX_CIDR_LENGTH = 49;
+
+const CIDR_FORMAT_MESSAGE =
+  'Enter an IPv4 or IPv6 address or CIDR range, for example 192.0.2.1, 10.0.0.0/8, 2001:db8::1, or 2001:db8::/32';
+
+const IPV6_REJECTION_MESSAGES: Record<Ipv6CidrRejection, string> = {
+  'not-ipv6': CIDR_FORMAT_MESSAGE,
+  'zone-id': 'Remove the zone ID (the % suffix): IP rules match addresses, not network interfaces',
+  'brackets-or-port': 'Enter the IPv6 address without brackets or a port',
+  prefix: 'An IPv6 prefix length must be a whole number from 0 to 128',
+  'ipv4-mapped':
+    'Use the plain IPv4 form (for example 192.0.2.1): IPv4-mapped IPv6 clients already match IPv4 rules',
+};
+
+/**
+ * One rule's IP or CIDR. Exported so the IP rules dialog can show the
+ * message the API would return before the form is submitted.
+ */
+export const ipRuleCidrSchema = z
   .string()
   .trim()
-  .min(1, 'CIDR is required')
-  .max(18, 'CIDR too long')
-  .refine(
-    (v) => ipv4CidrRegex.test(v),
-    'Must be a valid IPv4 address or CIDR (e.g., 192.168.1.1 or 10.0.0.0/8)',
-  );
+  .min(1, 'Enter an IP address or CIDR range')
+  .max(MAX_CIDR_LENGTH, 'Too long for an IP address or CIDR range')
+  .superRefine((value, ctx) => {
+    // Empty and oversized values already carry their own message.
+    if (value.length === 0 || value.length > MAX_CIDR_LENGTH) return;
+    if (ipv4CidrRegex.test(value)) return;
+    if (!value.includes(':')) {
+      const [address, prefix] = value.split('/');
+      const badPrefixOnly =
+        prefix !== undefined && address !== undefined && ipv4AddressRegex.test(address);
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: badPrefixOnly
+          ? 'An IPv4 prefix length must be a whole number from 0 to 32'
+          : CIDR_FORMAT_MESSAGE,
+      });
+      return;
+    }
+    const parsed = parseIpv6Cidr(value);
+    if (!parsed.ok) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: IPV6_REJECTION_MESSAGES[parsed.reason],
+      });
+    }
+  })
+  .transform((value) => {
+    if (ipv4CidrRegex.test(value)) return value;
+    const parsed = parseIpv6Cidr(value);
+    return parsed.ok ? parsed.canonical : value;
+  });
 
 const prioritySchema = z.number().int().min(0).max(9999);
 
@@ -50,7 +108,7 @@ export type IpRule = z.infer<typeof ipRuleSchema>;
  * (admin decides which rule wins via priority).
  */
 export const ipRuleInputSchema = z.object({
-  cidr: cidrSchema,
+  cidr: ipRuleCidrSchema,
   action: ipRuleActionSchema,
   note: z
     .string()
@@ -70,7 +128,7 @@ export type IpRuleInput = z.infer<typeof ipRuleInputSchema>;
  */
 export const ipRulePatchSchema = z
   .object({
-    cidr: cidrSchema.optional(),
+    cidr: ipRuleCidrSchema.optional(),
     action: ipRuleActionSchema.optional(),
     note: z
       .string()

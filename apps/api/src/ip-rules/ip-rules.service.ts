@@ -1,10 +1,13 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import type { IpRule as IpRuleRow } from '@prisma/client';
 import {
+  type CatchAllFamilyGap,
   type IpRule,
   type IpRuleInput,
   type IpRulePatch,
   type IpRuleLike,
+  findCatchAllFamilyGap,
+  ipLimitKey,
   matchIpRule,
 } from '@weavestream/shared';
 import { PrismaService } from '../prisma/prisma.service.js';
@@ -52,10 +55,11 @@ export class IpRulesService {
 
   /**
    * Record one DENY-rule rejection as a `security.ip_rule.blocked`
-   * audit row, coalesced to one row per (ip, cidr) per lockout window —
-   * a blocked client hammering at request rate must not write a row per
-   * 403. Both enforcement layers funnel through here so bounds and
-   * dedup are identical for API- and web-observed denials.
+   * audit row, coalesced to one row per (client, cidr) per lockout
+   * window, an IPv6 client counting as its /64 — a blocked client
+   * hammering at request rate must not write a row per 403. Both
+   * enforcement layers funnel through here so bounds and dedup are
+   * identical for API- and web-observed denials.
    *
    * Length clamps happen HERE (not at the callers): path and user agent
    * are attacker-controlled, and this is the single boundary through
@@ -74,9 +78,12 @@ export class IpRulesService {
     const ip = input.ip.slice(0, 64);
     const cidr = input.cidr.slice(0, 64);
     const windowSec = this.env.values.LOCKOUT_WINDOW_MIN * 60;
+    // Coalesce per `ipLimitKey` (exact IPv4, or an IPv6 client's /64), so
+    // rotating addresses inside one /64 cannot turn every 403 into a new
+    // audit row. The row itself still records the exact IP.
     const claimed = await claimOnce(
       this.redis.client,
-      `secalert:ipblock:${ip}:${cidr}`,
+      `secalert:ipblock:${ipLimitKey(ip)}:${cidr}`,
       windowSec,
     );
     if (!claimed) return;
@@ -99,6 +106,16 @@ export class IpRulesService {
         path,
       },
     });
+  }
+
+  /**
+   * The catch-all family gap in the enabled rules, if any — see
+   * `findCatchAllFamilyGap`. Reads the same cached ruleset `IpRuleGuard`
+   * enforces, so the warning describes the rules actually in force.
+   */
+  async catchAllFamilyGap(): Promise<CatchAllFamilyGap | null> {
+    const rules = await this.getActiveRulesCached();
+    return findCatchAllFamilyGap(rules as IpRuleLike[]);
   }
 
   async list(): Promise<IpRule[]> {

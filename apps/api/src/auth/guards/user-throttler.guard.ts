@@ -11,6 +11,7 @@ import {
   type ThrottlerStorage,
 } from '@nestjs/throttler';
 import type { Request } from 'express';
+import { ipLimitKey } from '@weavestream/shared';
 import type { AuthedUser } from '../../common/current-user.decorator.js';
 import { AuditLogService } from '../../audit/audit.service.js';
 import { AUDIT_ACTIONS } from '../../audit/audit-actions.js';
@@ -84,7 +85,10 @@ export class UserThrottlerGuard extends ThrottlerGuard {
       expressReq.ip ??
       (expressReq.socket?.remoteAddress as string | undefined) ??
       'unknown';
-    return `ip:${ip}`;
+    // Anonymous traffic counts per `ipLimitKey`: the exact IPv4 address,
+    // or the /64 of an IPv6 client, which could otherwise rotate through
+    // its /64 for a fresh bucket on every request.
+    return `ip:${ipLimitKey(ip)}`;
   }
 
   protected override async handleRequest(

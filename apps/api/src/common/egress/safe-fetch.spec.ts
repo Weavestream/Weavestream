@@ -468,6 +468,31 @@ describe('parseCidr / ipMatchesAny', () => {
     expect(ipMatchesAny('2001:db8::1', cidrs)).toBeNull();
   });
 
+  it('still matches a zone-scoped link-local address against fe80::/10', () => {
+    // The shared IPv6 parser rejects zone IDs. The egress wrapper drops
+    // the zone instead; otherwise a scoped DNS result would match no
+    // blocklist entry and slip past the guard.
+    const cidrs = parseCidrList('fe80::/10');
+    expect(ipMatchesAny('fe80::1%eth0', cidrs)).not.toBeNull();
+    expect(ipMatchesAny('fe80::1', cidrs)).not.toBeNull();
+  });
+
+  describe('IPv6 arithmetic (shared parser behind the egress wrapper)', () => {
+    const { ipv6ToBigInt, ipv6Mask } = __testing;
+    it('drops a zone ID before parsing', () => {
+      expect(ipv6ToBigInt('fe80::1%eth0')).toBe(ipv6ToBigInt('fe80::1'));
+      expect(ipv6ToBigInt('fe80::1')).not.toBeNull();
+    });
+    it('rejects garbage', () => {
+      expect(ipv6ToBigInt('not-an-ip')).toBeNull();
+      expect(ipv6ToBigInt('[::1]')).toBeNull();
+    });
+    it('builds the correct mask', () => {
+      expect(ipv6Mask(0)).toBe(0n);
+      expect(ipv6Mask(128)).toBe((1n << 128n) - 1n);
+    });
+  });
+
   it('parseCidrList tolerates whitespace + trailing commas', () => {
     expect(
       parseCidrList(' 10.0.0.0/8 , 192.168.0.0/16 ,').map((c) => c.raw),

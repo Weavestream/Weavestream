@@ -9,6 +9,7 @@ import type {
   ArticleEditorMode,
   BackupConfig,
   BackupRunDto,
+  CatchAllFamilyGap,
   FieldType,
   GlobalAccess,
   EmailSettings,
@@ -847,6 +848,7 @@ export type ConnectionDiagnostics = {
   forwardedForReceived: string | null;
   inboundForwardedFor: string;
   trustProxyHops: number;
+  webTrustProxyHops: number | null;
   interpretation: string[];
 };
 
@@ -879,6 +881,16 @@ export async function getSecurityLoginActivity(
 
 export async function getSecurityLockouts(): Promise<LockoutsResponse | null> {
   const res = await serverApiFetch<LockoutsResponse>('/security/lockouts');
+  return res.ok ? res.data : null;
+}
+
+// Whether the enabled IP rules deny one address family entirely but leave
+// the other to default-allow — see `GET /security/ip-rule-coverage` and
+// `findCatchAllFamilyGap` in `@weavestream/shared`.
+export type IpRuleCoverage = { gap: CatchAllFamilyGap | null };
+
+export async function getSecurityIpRuleCoverage(): Promise<IpRuleCoverage | null> {
+  const res = await serverApiFetch<IpRuleCoverage>('/security/ip-rule-coverage');
   return res.ok ? res.data : null;
 }
 

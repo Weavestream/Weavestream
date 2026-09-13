@@ -16,6 +16,11 @@ import type { AuthedUser } from '../common/current-user.decorator.js';
 // 500-char User-Agent cap in `request-meta.ts`.
 const INBOUND_XFF_HEADER = 'x-ws-inbound-xff';
 const MAX_INBOUND_XFF_LEN = 500;
+// Same contract and scope: `api-proxy.ts` sends the `TRUST_PROXY_HOPS`
+// value the web tier applies. The web tier is where that setting takes
+// effect, so this — not this container's own copy of the env — is the
+// value that resolved the client IP. Display-only.
+const WEB_TRUST_PROXY_HOPS_HEADER = 'x-ws-web-trust-proxy-hops';
 
 /** Collapse an Express header value (string | string[] | undefined) to
  * a single string, or null when absent. */
@@ -29,6 +34,27 @@ function headerToString(
 /** Length-bound an echoed header value; preserves null. */
 function boundHeader(value: string | null): string | null {
   return value == null ? null : value.slice(0, MAX_INBOUND_XFF_LEN);
+}
+
+/** Parse the web tier's reported hop count. Accepts only what the web
+ * tier sends — an integer from 0 to 10, the range of the shared
+ * `TRUST_PROXY_HOPS` schema — and returns null for anything else,
+ * including a repeated header. */
+function parseWebTrustProxyHops(
+  value: string | string[] | undefined,
+): number | null {
+  if (typeof value !== 'string' || !/^(?:[0-9]|10)$/.test(value)) return null;
+  return Number(value);
+}
+
+/** Split an `X-Forwarded-For` chain into entries exactly as the web
+ * tier's resolver does (`resolveClientIpFromXff` in
+ * apps/web/src/lib/client-ip.ts), so entry counts here match its view. */
+function forwardedForEntries(chain: string): string[] {
+  return chain
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
 }
 
 /**
@@ -438,13 +464,15 @@ export class SecurityService {
    * Reports how this exact request was attributed: the resolved client
    * IP (the value every per-IP control uses), the raw TCP peer, whether
    * that peer was trusted, the forwarded chain the API received, the
-   * raw chain the client presented (display-only, forwarded by the web
-   * tier solely for this endpoint), and plain-English interpretation.
+   * raw chain the web tier received and the `TRUST_PROXY_HOPS` value it
+   * applied (both display-only, sent by the web tier solely for this
+   * endpoint), and plain-English interpretation.
    *
    * Reuses `ipOf`/`normalizeIp`/`isPrivatePeer` — the same helpers the
    * lockout / throttle / IP-rule / audit paths use — so this never
    * drifts from real attribution. `inboundForwardedFor` is untrusted
-   * client data: it is only ever reflected back in this response, never
+   * client data and `webTrustProxyHops` is display-only: both are only
+   * ever reflected back in this response (and read by its notes), never
    * used in a query, counter key, or rule match.
    */
   connectionDiagnostics(req: Request): ConnectionDiagnostics {
@@ -460,6 +488,15 @@ export class SecurityService {
     const inboundForwardedFor =
       boundHeader(headerToString(req.headers[INBOUND_XFF_HEADER])) ?? '';
     const trustProxyHops = this.env.values.TRUST_PROXY_HOPS;
+    // Only a private-bridge peer can be the web tier. From any other peer
+    // the header can only be client-supplied, so it is ignored.
+    const webTrustProxyHops = peerTrusted
+      ? parseWebTrustProxyHops(req.headers[WEB_TRUST_PROXY_HOPS_HEADER])
+      : null;
+    // TRUST_PROXY_HOPS takes effect in the web tier, so judge this request
+    // by the value web applied. This container's copy is only a fallback
+    // for a web tier that did not report one.
+    const appliedHops = webTrustProxyHops ?? trustProxyHops;
 
     const interpretation: string[] = [
       'Only the single sanitized resolvedIp is used downstream for ' +
@@ -476,17 +513,79 @@ export class SecurityService {
           'does not prove `web` itself sits behind a trusted edge proxy.',
       );
     }
-    if (trustProxyHops === 0) {
+    if (peerTrusted && webTrustProxyHops === null) {
+      interpretation.push(
+        'The web tier did not report the TRUST_PROXY_HOPS value it applied: ' +
+          'the web container may run an older Weavestream version than the ' +
+          'API, or this request did not pass through `web`. trustProxyHops ' +
+          'comes from the API container, which does not apply it, so the web ' +
+          'tier may use a different value.',
+      );
+    }
+    if (webTrustProxyHops !== null && webTrustProxyHops !== trustProxyHops) {
+      interpretation.push(
+        `The web tier applied TRUST_PROXY_HOPS=${webTrustProxyHops} to this ` +
+          'request, but the API container has ' +
+          `TRUST_PROXY_HOPS=${trustProxyHops}. Attribution uses the web value. ` +
+          'Both containers normally read the same .env file, so one of them ' +
+          'was probably not recreated after the value changed. Recreate both, ' +
+          'for example with `docker compose up -d --force-recreate web api`.',
+      );
+    }
+    if (appliedHops === 0) {
       interpretation.push(
         'TRUST_PROXY_HOPS=0: the web tier resolves no client IP, so every ' +
           'request is attributed to the 0.0.0.0 sentinel and per-IP controls ' +
           '(lockout, rate-limit, IP-rules, audit attribution) are disabled.',
       );
     }
+    // The web resolver takes entries[max(0, length - hops)], so a chain
+    // shorter than the hop count silently falls back to its leftmost
+    // entry. A chain at the echo cap may be truncated, so its entry count
+    // proves nothing and is not judged.
+    const inboundEntries = forwardedForEntries(inboundForwardedFor);
+    if (
+      webTrustProxyHops !== null &&
+      inboundEntries.length > 0 &&
+      inboundEntries.length < webTrustProxyHops &&
+      inboundForwardedFor.length < MAX_INBOUND_XFF_LEN
+    ) {
+      interpretation.push(
+        `The inbound chain has ${inboundEntries.length} ` +
+          `${inboundEntries.length === 1 ? 'entry' : 'entries'}, fewer than ` +
+          `the ${webTrustProxyHops} hops the web tier trusts, so the web tier ` +
+          'used the leftmost entry. That entry is usually a proxy address, ' +
+          'not the client. Either a proxy in front of `web` replaced ' +
+          'X-Forwarded-For instead of appending to it, or TRUST_PROXY_HOPS is ' +
+          'higher than the number of proxies in front of `web`. See ' +
+          'docs/deployment/tls.',
+      );
+    }
     if (resolvedIp === '0.0.0.0') {
       interpretation.push(
         'resolvedIp is the 0.0.0.0 sentinel: no usable client IP was ' +
           'resolved for this request.',
+      );
+    }
+    // `isPrivatePeer` matches exactly the families that point at a proxy
+    // or container rather than an internet client: IPv4 loopback,
+    // link-local, and RFC1918, plus IPv6 loopback, link-local, and ULA.
+    if (resolvedIp !== '0.0.0.0' && isPrivatePeer(resolvedIp)) {
+      interpretation.push(
+        `resolvedIp ${resolvedIp} is a private, loopback, or link-local ` +
+          'address, such as a Docker bridge address. Per-IP controls ' +
+          '(lockout, rate-limit, IP-rules, audit attribution) treat every ' +
+          'client that resolves to it as one client. That is expected only ' +
+          'for a connection from inside that private network. Otherwise the ' +
+          'client entry was lost before the chain reached `web`: a proxy ' +
+          'replaced X-Forwarded-For with the address of the hop in front of ' +
+          'it (for example Caddy with `header_up X-Forwarded-For ' +
+          '{remote_host}`, or a proxy that does not trust cloudflared or the ' +
+          'CDN in front of it), or no proxy sent X-Forwarded-For and `web` ' +
+          'recorded the proxy itself. Find your public IP in the inbound ' +
+          'chain: the correct TRUST_PROXY_HOPS is that entry plus every entry ' +
+          'to its right. If your IP is not there, fix the proxy first. See ' +
+          'docs/deployment/tls.',
       );
     }
     // Config-derived topology hints — the same shapes flagged at boot in
@@ -505,6 +604,7 @@ export class SecurityService {
       forwardedForReceived,
       inboundForwardedFor,
       trustProxyHops,
+      webTrustProxyHops,
       interpretation,
     };
   }
@@ -657,11 +757,18 @@ export type ConnectionDiagnostics = {
   /** `X-Forwarded-For` as the API received it (the single sanitized
    * entry the web tier emits), or null. */
   forwardedForReceived: string | null;
-  /** The raw inbound chain the client presented, forwarded display-only
-   * by the web tier for this endpoint. Never used for attribution. */
+  /** The raw inbound chain the web tier received from its immediate
+   * upstream, forwarded display-only by the web tier for this endpoint.
+   * Never used for attribution. */
   inboundForwardedFor: string;
-  /** Configured `TRUST_PROXY_HOPS`. */
+  /** `TRUST_PROXY_HOPS` from this API container's environment. The API
+   * does not apply it; see `webTrustProxyHops` for the value in effect. */
   trustProxyHops: number;
+  /** The `TRUST_PROXY_HOPS` value the web tier applied when it resolved
+   * this request's client IP, sent display-only for this endpoint. Null
+   * when no valid value arrived from a private-bridge peer: an older web
+   * container, a request that bypassed `web`, or an untrusted peer. */
+  webTrustProxyHops: number | null;
   /** Plain-English, non-overclaiming notes about this request's
    * attribution and (config-derived) deployment topology. */
   interpretation: string[];

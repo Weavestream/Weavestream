@@ -1,5 +1,6 @@
 import { INTERNAL_TOKEN_HEADER } from '@weavestream/shared';
 import { proxyToApi } from './api-proxy';
+import { INBOUND_XFF_HEADER, WEB_TRUST_PROXY_HOPS_HEADER } from './client-ip';
 
 // Integration coverage for proxyToApi itself (the deny happens on the
 // final constructed upstream URL, before any fetch). A NextRequest is
@@ -89,5 +90,69 @@ describe('proxyToApi — internal-only deny', () => {
     const init = fetchSpy.mock.calls[0][1] as RequestInit;
     const outgoing = init.headers as Headers;
     expect(outgoing.get(INTERNAL_TOKEN_HEADER)).toBeNull();
+  });
+});
+
+describe('proxyToApi — connection diagnostics headers', () => {
+  const WHOAMI = '/api/v1/security/whoami';
+  const savedHops = process.env.TRUST_PROXY_HOPS;
+  let fetchSpy: jest.SpyInstance;
+
+  beforeEach(() => {
+    fetchSpy = jest
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(new Response('{}', { status: 200 }));
+  });
+
+  afterEach(() => {
+    fetchSpy.mockRestore();
+    if (savedHops === undefined) delete process.env.TRUST_PROXY_HOPS;
+    else process.env.TRUST_PROXY_HOPS = savedHops;
+  });
+
+  function forwardedHeaders(): Headers {
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    const init = fetchSpy.mock.calls[0][1] as RequestInit;
+    return init.headers as Headers;
+  }
+
+  it("sends whoami the web tier's own hop count, never the browser's", async () => {
+    process.env.TRUST_PROXY_HOPS = '2';
+    await proxyToApi(
+      makeReq({
+        pathname: WHOAMI,
+        headers: {
+          [WEB_TRUST_PROXY_HOPS_HEADER]: '9', // browser-supplied: must not win
+          [INBOUND_XFF_HEADER]: '198.51.100.7, 172.18.0.4', // stashed by proxy.ts
+        },
+      }),
+      WHOAMI,
+    );
+    const outgoing = forwardedHeaders();
+    expect(outgoing.get(WEB_TRUST_PROXY_HOPS_HEADER)).toBe('2');
+    expect(outgoing.get(INBOUND_XFF_HEADER)).toBe('198.51.100.7, 172.18.0.4');
+  });
+
+  it('reports the default of 1 when TRUST_PROXY_HOPS is unset', async () => {
+    delete process.env.TRUST_PROXY_HOPS;
+    await proxyToApi(makeReq({ pathname: WHOAMI }), WHOAMI);
+    expect(forwardedHeaders().get(WEB_TRUST_PROXY_HOPS_HEADER)).toBe('1');
+  });
+
+  it('strips both display-only headers from every other endpoint', async () => {
+    process.env.TRUST_PROXY_HOPS = '2';
+    await proxyToApi(
+      makeReq({
+        pathname: '/api/v1/assets',
+        headers: {
+          [WEB_TRUST_PROXY_HOPS_HEADER]: '9',
+          [INBOUND_XFF_HEADER]: '1.2.3.4',
+        },
+      }),
+      '/api/v1/assets',
+    );
+    const outgoing = forwardedHeaders();
+    expect(outgoing.get(WEB_TRUST_PROXY_HOPS_HEADER)).toBeNull();
+    expect(outgoing.get(INBOUND_XFF_HEADER)).toBeNull();
   });
 });

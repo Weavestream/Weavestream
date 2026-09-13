@@ -18,6 +18,8 @@ Most of Weavestream's security hardening is on by default. This page documents t
 | `LOCKOUT_MAX_FAILURES` | `5` | Failed logins before account soft-lock. |
 | `LOCKOUT_WINDOW_MIN` | `15` | Minutes a locked account remains inaccessible. |
 
+Per-IP limits — the login lockout counter, the anonymous `GLOBAL_RATE_LIMIT_PER_MIN` bucket, and the per-(IP, email) `AUTH_RATE_LIMIT_PER_MIN` bucket — count an IPv4 client by its exact address and an IPv6 client by its **/64 prefix**. One IPv6 subscriber normally holds a whole /64 and can switch addresses inside it at will, so counting single IPv6 addresses would let one client escape every per-IP limit. An IPv4-mapped client (`::ffff:192.0.2.1`) counts as its IPv4 address. The Security Center shows an IPv6 counter as its prefix, for example `2001:db8:1:2::/64`; audit rows still record the full address.
+
 !!!warning Don't raise auth rate limits in production
 The auth rate limits protect against credential stuffing and brute-force attacks. Raising them significantly reduces their protective value.
 !!!
@@ -46,15 +48,21 @@ The auth rate limits protect against credential stuffing and brute-force attacks
 
 The web tier reads `TRUST_PROXY_HOPS` to resolve the real client IP from the inbound `X-Forwarded-For` chain — which is the only chain an attacker can influence — and then forwards a single sanitized entry to the API. The API does not use this knob: it honors `X-Forwarded-For` only when the TCP peer is on the private docker bridge (loopback / link-local / unique-local), which only the `web` container is. An attacker who somehow reaches `api:4000` directly has their `X-Forwarded-For` ignored and falls back to the socket peer.
 
+Only `X-Forwarded-For` is read; `X-Real-IP` is ignored. Next.js fills a missing `X-Forwarded-For` with the address of the connecting proxy before Weavestream sees the request, so a proxy that sets only `X-Real-IP` would be recorded as its own address. Configure the edge proxy to set `X-Forwarded-For`.
+
 Count proxies **in front of `web`** when setting this value:
 
 | Topology | `TRUST_PROXY_HOPS` |
 |---|---|
 | Edge proxy (Caddy, Traefik, Nginx, …) → `web` → `api` | `1` (default) |
-| CDN (Cloudflare, …) → edge proxy → `web` → `api` | `2` |
+| CDN (Cloudflare, …) → edge proxy → `web` → `api` | `2`, only if the edge proxy trusts the CDN's addresses and appends to `X-Forwarded-For` |
+| Cloudflare Tunnel: `cloudflared` → `web` → `api` | `1` |
+| Cloudflare Tunnel: `cloudflared` → edge proxy → `web` → `api` | `2`, only if the edge proxy trusts the `cloudflared` address and appends to `X-Forwarded-For` |
 | `web` is directly internet-facing (no edge) | `0` — see warning below. |
 
-Setting this too high lets a malicious upstream forge the client IP; setting it too low collapses every request behind your edge into a single throttler bucket. Every trusted edge proxy must set `X-Forwarded-Proto` and either overwrite or append to `X-Forwarded-For`.
+The table gives the expected value; your real chain decides. Open **Security Center → Connection** from outside your network and find your public IP in the **Inbound chain** row. Behind Cloudflare, the `ip=` line of `https://your-domain.com/cdn-cgi/trace` shows that IP. The correct `TRUST_PROXY_HOPS` is that entry plus every entry to its right. See [Find the correct `TRUST_PROXY_HOPS`](/deployment/tls/#find-the-correct-trust_proxy_hops) for worked examples.
+
+Setting this too high lets a client choose its own IP. Cloudflare, for example, keeps an `X-Forwarded-For` header that the client sent and appends the real address after it, so one hop too many selects the entry the client wrote. Setting it too low collapses every request behind your edge into a single throttler bucket. Every trusted edge proxy must set `X-Forwarded-Proto`. The proxy that faces the internet may replace or append to `X-Forwarded-For`; every proxy behind another proxy must append to it, or the client entry is lost.
 
 :::warning Direct-web deployments
 If `web` is reachable directly from the internet with no reverse proxy in front, `TRUST_PROXY_HOPS=0` is the only safe value — anything higher lets a client choose their own `X-Forwarded-For` and bypass IP-based controls. With `0`, every request is attributed to the `0.0.0.0` sentinel, which means:
@@ -112,13 +120,14 @@ Detailed diagnostics moved to authenticated endpoints:
 
 - **Security Center (`/admin/security`)** provides visibility into login events, active lockouts, rate-limit blocks, active sessions, and egress blocks.
 - Access requires `SECURITY_READ` capability (or `SUPER_ADMIN`).
-- **Connection diagnostics** (`/admin/security?tab=diagnostics`, or `GET /api/v1/security/whoami`, same `SECURITY_READ` gate) report how the current request was attributed — resolved client IP, socket peer, whether forwarding was trusted, and topology interpretation. Use it to verify client-IP attribution behind your real proxy; see [Verify forged `X-Forwarded-For` is ignored](/deployment/tls/#verify-forged-x-forwarded-for-is-ignored).
-- **IP rules (`/admin/ip-rules`)** allow global ALLOW/DENY rules for IPv4/CIDR with priority ordering.
+- **Connection diagnostics** (`/admin/security?tab=diagnostics`, or `GET /api/v1/security/whoami`, same `SECURITY_READ` gate) report how the current request was attributed — resolved client IP, socket peer, whether forwarding was trusted, the inbound `X-Forwarded-For` chain, the `TRUST_PROXY_HOPS` value the web tier applied next to the API container's value, and interpretation notes (for example a hop-count mismatch between `web` and `api`, a chain shorter than the hop count, or a private resolved IP). Use it to verify client-IP attribution behind your real proxy; see [Find the correct `TRUST_PROXY_HOPS`](/deployment/tls/#find-the-correct-trust_proxy_hops) and [Verify forged `X-Forwarded-For` is ignored](/deployment/tls/#verify-forged-x-forwarded-for-is-ignored).
+- **IP rules (`/admin/ip-rules`)** allow global ALLOW/DENY rules for IPv4 and IPv6 addresses and CIDR ranges (for example `192.0.2.1`, `10.0.0.0/8`, `2001:db8::1`, `2001:db8::/32`) with priority ordering. IPv6 values are stored in canonical lower-case, compressed form. Zone IDs (`fe80::1%eth0`), brackets, ports, and IPv4-mapped forms (`::ffff:192.0.2.1`) are rejected; an IPv4-mapped client already matches IPv4 rules.
+- **Catch-all rules are per address family.** `0.0.0.0/0` matches every IPv4 client and never an IPv6 client; `::/0` matches every IPv6 client and never an IPv4 client. To deny everyone you have not allowed, add both — for example ALLOW `203.0.113.0/24`, then DENY `0.0.0.0/0` and DENY `::/0`. Many visitors connect over IPv6 (Cloudflare, including Cloudflare Tunnel, forwards visitors' IPv6 addresses), so a rule set with only `DENY 0.0.0.0/0` still lets them in. The IP rules page and the Security Center show a warning when one family has a DENY catch-all and the other family has no catch-all.
 - Managing IP rules requires `IP_RULE_MANAGE` capability.
 - Changes are audited (`security.ip_rule.create`, `security.ip_rule.update`, `security.ip_rule.delete`).
 - Rules are enforced at **both** layers: the API rejects every API call from a denied IP with `403`, and the Next.js proxy rejects HTML page renders with `403` (so a blocked IP doesn't see a login form). The page-layer enforcement polls the API every 30 seconds, so admin changes propagate to page renders within that window; API enforcement is immediate. If the API is unreachable the page layer fails open (last-known ruleset, or no rules on cold start) — matching the API's own fail-open posture so a broken backend can't lock everyone out.
 - Static asset paths under `/_next/*` are excluded from the page-layer block (they bypass the Next.js proxy by design). A blocked IP can still pull anonymous JS/CSS bundles but cannot reach any HTML page or API endpoint. The internal poll endpoint (`GET /api/v1/ip-rules/active`) is internal-only, enforced by **two** layers: the web proxy returns `404` for it (so it is never reachable from a browser through `/api/*`), and the API requires **both** a private TCP peer (loopback, link-local, RFC1918, IPv6 ULA) **and** a token derived from `COOKIE_SIGNING_KEY` that the web tier presents. Because `web` and `api` share the same `.env`, this works out of the box on standard compose deployments with nothing to configure. **Custom (non-compose) deployments must give the `web` container the same `COOKIE_SIGNING_KEY` as `api`**, or the page-layer poll is rejected and page-render IP enforcement fails open (API-side enforcement is unaffected) — the web logs a `WARN` when this happens. Routing `web → api` over the public internet is still not supported.
-- **Self-block guard:** create / update / delete refuses any change that would leave the requesting admin's own IP under a DENY rule. The 400 error names the offending CIDR. To deliberately block your own range, add a higher-priority ALLOW for your specific IP first.
+- **Self-block guard:** create / update / delete refuses any change that would leave the requesting admin's own IP under a DENY rule. The 400 error names the offending CIDR. To deliberately block your own range, add a higher-priority ALLOW for your specific IP first. The guard checks IPv6 admins the same way and follows the per-family catch-all rule above: from an IPv6 address, `DENY ::/0` is refused, while `DENY 0.0.0.0/0` is accepted and shows the missing-counterpart warning.
 
 ### Recovering from a self-imposed IP block
 

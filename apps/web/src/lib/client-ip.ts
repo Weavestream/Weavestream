@@ -42,12 +42,25 @@ export function boundInboundXff(xff: string | null | undefined): string {
   return xff.slice(0, MAX_INBOUND_XFF_LEN);
 }
 
+// Display-only diagnostic header carrying the `TRUST_PROXY_HOPS` value
+// this web tier applies, so the admin whoami diagnostic can show it next
+// to the API container's own copy of the setting — the two drift apart
+// when only one container is recreated after an `.env` change.
+// `api-proxy.ts` strips any inbound value on every path and sets this
+// header only on the upstream whoami request, from `trustProxyHops()`
+// below. It is never read from a client and never used for attribution.
+export const WEB_TRUST_PROXY_HOPS_HEADER = 'x-ws-web-trust-proxy-hops';
+
 // Sentinel used when the edge tier doesn't provide an XFF chain (or
 // `TRUST_PROXY_HOPS=0`). Mirrors the API's `normalizeIp(undefined)`
 // fallback so audit rows and throttler buckets stay consistent.
 export const UNKNOWN_CLIENT_IP = '0.0.0.0';
 
-function trustProxyHops(): number {
+// The web tier's hop count: `TRUST_PROXY_HOPS` from this process's
+// environment, read on every call (default 1, capped at 10). The resolver
+// below defaults to it and `api-proxy.ts` reports it to the whoami
+// diagnostic, so the diagnostic shows the value that resolved the request.
+export function trustProxyHops(): number {
   const raw = process.env.TRUST_PROXY_HOPS;
   if (raw == null || raw === '') return 1;
   const n = Number.parseInt(raw, 10);
@@ -85,10 +98,12 @@ export function normalizeClientIp(ip: string | null | undefined): string {
 
 // Pull the resolved client IP that `proxy.ts` stashed on the inbound
 // request headers, falling back to a fresh resolve (in case the
-// caller is reached via a code path that bypasses `proxy.ts`).
+// caller is reached via a code path that bypasses `proxy.ts`). Reads
+// `X-Forwarded-For` only, like `proxy.ts` — see the note there on why
+// `X-Real-IP` is never consulted.
 export function getResolvedClientIp(headers: Headers): string {
   const stashed = headers.get(RESOLVED_CLIENT_IP_HEADER);
   if (stashed) return normalizeClientIp(stashed);
-  const xff = headers.get('x-forwarded-for') ?? headers.get('x-real-ip');
+  const xff = headers.get('x-forwarded-for');
   return normalizeClientIp(resolveClientIpFromXff(xff));
 }

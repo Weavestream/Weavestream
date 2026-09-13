@@ -10,6 +10,8 @@
  * by `configureEgressGuard`.
  */
 
+import { ipv6Mask, ipv6ToBigInt as parseIpv6 } from '@weavestream/shared';
+
 export type Cidr = {
   readonly raw: string;
   readonly family: 4 | 6;
@@ -155,48 +157,14 @@ function ipv4Mask(prefix: number): number {
   return (0xffffffff << (32 - prefix)) >>> 0;
 }
 
+// The IPv6 parser and mask live in `@weavestream/shared` (`ipv6.ts`),
+// shared with the IP allow/deny matcher. That parser rejects zone IDs
+// outright — right for IP rules, wrong here: DNS can hand back a scoped
+// link-local result (`fe80::1%eth0`), and an address that failed to
+// parse would match no blocklist entry and slip past the guard. Drop the
+// zone instead (we don't route on zones), so it still hits `fe80::/10`.
 function ipv6ToBigInt(ip: string): bigint | null {
-  // Strip optional zone (e.g. fe80::1%eth0); we don't route on zones.
-  const stripped = ip.split('%')[0] ?? ip;
-  // Reject anything that isn't a valid v6 form. We use Node's URL parser
-  // for canonicalisation by feeding it `[ip]:80` — non-standard chars
-  // throw and we return null.
-  let canonical: string;
-  try {
-    const u = new URL(`http://[${stripped}]/`);
-    // hostname comes back lowercased, with leading [
-    canonical = u.hostname.replace(/^\[/, '').replace(/\]$/, '');
-  } catch {
-    return null;
-  }
-
-  // Expand `::` shorthand.
-  let head: string[] = [];
-  let tail: string[] = [];
-  if (canonical.includes('::')) {
-    const [hRaw = '', tRaw = ''] = canonical.split('::');
-    head = hRaw.length > 0 ? hRaw.split(':') : [];
-    tail = tRaw.length > 0 ? tRaw.split(':') : [];
-    const fillCount = 8 - head.length - tail.length;
-    if (fillCount < 0) return null;
-    head = [...head, ...Array<string>(fillCount).fill('0'), ...tail];
-  } else {
-    head = canonical.split(':');
-  }
-  if (head.length !== 8) return null;
-
-  let acc = 0n;
-  for (const group of head) {
-    if (!/^[0-9a-f]{1,4}$/i.test(group)) return null;
-    acc = (acc << 16n) | BigInt(Number.parseInt(group, 16));
-  }
-  return acc;
-}
-
-function ipv6Mask(prefix: number): bigint {
-  if (prefix === 0) return 0n;
-  const ones = (1n << BigInt(prefix)) - 1n;
-  return ones << BigInt(128 - prefix);
+  return parseIpv6(ip.split('%')[0] ?? ip);
 }
 
 // Test-only export so the spec can verify CIDR arithmetic without

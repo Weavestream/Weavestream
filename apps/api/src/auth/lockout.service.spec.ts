@@ -221,3 +221,39 @@ describe('LockoutService change-password counter', () => {
     expect(keys.some((k) => k.startsWith('login:fail:ip:'))).toBe(false);
   });
 });
+
+describe('LockoutService per-IP login counter keys', () => {
+  it('keys an IPv4 client by its exact address', async () => {
+    const { svc, store } = makeLockout(5);
+    await svc.recordFailure('192.0.2.10', 'a@example.com');
+    await svc.recordFailure('192.0.2.11', 'b@example.com');
+    expect(store.get('login:fail:ip:192.0.2.10')).toBe('1');
+    expect(store.get('login:fail:ip:192.0.2.11')).toBe('1');
+  });
+
+  it('keys an IPv4-mapped client by its IPv4 address', async () => {
+    const { svc, store } = makeLockout(5);
+    await svc.recordFailure('::ffff:192.0.2.10', 'a@example.com');
+    expect(store.get('login:fail:ip:192.0.2.10')).toBe('1');
+  });
+
+  it('groups an IPv6 client by /64, so rotating addresses still locks it out', async () => {
+    const { svc, store } = makeLockout(5);
+    // Five failures from five addresses in one /64, each with a different
+    // email, so only the IP counter can reach the threshold.
+    for (let i = 1; i <= 5; i++) {
+      await svc.recordFailure(`2001:db8:1:2::${i}`, `user${i}@example.com`);
+    }
+    expect(store.get('login:fail:ip:2001:db8:1:2::/64')).toBe('5');
+    expect(await svc.isLocked('2001:DB8:1:2:ffff::1', 'other@example.com')).toBe(true);
+    // The neighbouring /64 is a different client.
+    expect(await svc.isLocked('2001:db8:1:3::1', 'other@example.com')).toBe(false);
+  });
+
+  it('clears the /64 counter from any address inside it', async () => {
+    const { svc, store } = makeLockout(5);
+    await svc.recordFailure('2001:db8:1:2::1', 'a@example.com');
+    await svc.clear('2001:db8:1:2::99', 'a@example.com');
+    expect(store.has('login:fail:ip:2001:db8:1:2::/64')).toBe(false);
+  });
+});

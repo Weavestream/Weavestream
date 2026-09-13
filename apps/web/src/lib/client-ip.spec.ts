@@ -1,14 +1,28 @@
 import {
   INBOUND_XFF_HEADER,
   MAX_INBOUND_XFF_LEN,
+  RESOLVED_CLIENT_IP_HEADER,
+  UNKNOWN_CLIENT_IP,
+  WEB_TRUST_PROXY_HOPS_HEADER,
   boundInboundXff,
+  getResolvedClientIp,
   resolveClientIpFromXff,
+  trustProxyHops,
 } from './client-ip';
 
-// Pure-lib coverage only. The proxy.ts / api-proxy.ts wiring that sets
-// and scopes `x-ws-inbound-xff` pulls in Next.js server modules and is
-// out of scope for this node/ts-jest setup (see jest.config.cjs); it is
-// exercised via typecheck, `next build`, and manual verification.
+// Pure-lib coverage only. The proxy.ts wiring that sets
+// `x-ws-inbound-xff` pulls in Next.js server modules and is out of scope
+// for this node/ts-jest setup (see jest.config.js); it is exercised via
+// typecheck, `next build`, and manual verification. How api-proxy.ts
+// scopes the display-only headers to whoami is covered in
+// api-proxy.spec.ts.
+
+const savedHops = process.env.TRUST_PROXY_HOPS;
+
+function restoreHops() {
+  if (savedHops === undefined) delete process.env.TRUST_PROXY_HOPS;
+  else process.env.TRUST_PROXY_HOPS = savedHops;
+}
 
 describe('boundInboundXff', () => {
   it('returns an empty string for missing/empty input', () => {
@@ -46,5 +60,71 @@ describe('resolveClientIpFromXff (attribution unaffected by the diagnostic)', ()
     expect(resolveClientIpFromXff('1.2.3.4', 0)).toBeNull();
     expect(resolveClientIpFromXff(null, 1)).toBeNull();
     expect(resolveClientIpFromXff('', 1)).toBeNull();
+  });
+
+  it('falls back to the leftmost entry when the chain is shorter than the hops', () => {
+    // The case the whoami diagnostic flags: nothing signals the fallback
+    // here, so the API compares the chain length with the hop count.
+    expect(resolveClientIpFromXff('172.18.0.3', 2)).toBe('172.18.0.3');
+  });
+});
+
+describe('trustProxyHops (the one read the resolver and the diagnostic share)', () => {
+  afterEach(restoreHops);
+
+  const cases: Array<[string | undefined, number]> = [
+    [undefined, 1],
+    ['', 1],
+    ['0', 0],
+    ['2', 2],
+    ['10', 10],
+    ['15', 10],
+    ['-1', 1],
+    ['abc', 1],
+  ];
+
+  it.each(cases)('reads TRUST_PROXY_HOPS=%p as %p', (raw, expected) => {
+    if (raw === undefined) delete process.env.TRUST_PROXY_HOPS;
+    else process.env.TRUST_PROXY_HOPS = raw;
+    expect(trustProxyHops()).toBe(expected);
+  });
+
+  it('is the value the resolver applies when no hop count is passed', () => {
+    process.env.TRUST_PROXY_HOPS = '2';
+    expect(resolveClientIpFromXff('198.51.100.7, 172.18.0.4')).toBe('198.51.100.7');
+    process.env.TRUST_PROXY_HOPS = '1';
+    expect(resolveClientIpFromXff('198.51.100.7, 172.18.0.4')).toBe('172.18.0.4');
+  });
+
+  it('uses the header name the API reads back', () => {
+    expect(WEB_TRUST_PROXY_HOPS_HEADER).toBe('x-ws-web-trust-proxy-hops');
+  });
+});
+
+describe('getResolvedClientIp', () => {
+  afterEach(restoreHops);
+
+  it('prefers the IP that proxy.ts stashed', () => {
+    const headers = new Headers({
+      [RESOLVED_CLIENT_IP_HEADER]: '::ffff:198.51.100.7',
+      'x-forwarded-for': '1.2.3.4',
+    });
+    expect(getResolvedClientIp(headers)).toBe('198.51.100.7');
+  });
+
+  it('resolves X-Forwarded-For when nothing was stashed', () => {
+    process.env.TRUST_PROXY_HOPS = '1';
+    const headers = new Headers({ 'x-forwarded-for': '1.2.3.4, 198.51.100.7' });
+    expect(getResolvedClientIp(headers)).toBe('198.51.100.7');
+  });
+
+  it('never reads X-Real-IP', () => {
+    // Next.js fills a missing X-Forwarded-For with the TCP peer before
+    // proxy.ts runs, so an X-Real-IP fallback never applied in
+    // production; here it would only trust a client-controlled header in
+    // the one path where that fill-in did not happen.
+    process.env.TRUST_PROXY_HOPS = '1';
+    const headers = new Headers({ 'x-real-ip': '1.2.3.4' });
+    expect(getResolvedClientIp(headers)).toBe(UNKNOWN_CLIENT_IP);
   });
 });

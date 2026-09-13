@@ -132,4 +132,121 @@ describe('IpRulesService.recordBlockedRequest', () => {
     await pending;
     expect(settled).toBe(true);
   });
+
+  it('coalesces one IPv6 /64 into one claim while auditing the exact address', async () => {
+    const { svc, set, auditLog } = makeService();
+    await svc.recordBlockedRequest({ ip: '2001:db8:1:2::5', cidr: '::/0' }, 'api');
+
+    expect(set).toHaveBeenCalledWith(
+      'secalert:ipblock:2001:db8:1:2::/64:::/0',
+      '1',
+      'EX',
+      15 * 60,
+      'NX',
+    );
+    expect(auditLog).toHaveBeenCalledWith(expect.objectContaining({ ip: '2001:db8:1:2::5' }));
+  });
+});
+
+type RuleRow = { cidr: string; action: string; priority: number };
+
+/**
+ * `create` checks the post-change ruleset against the admin's own IP
+ * before it writes anything, so these specs need only the enabled-rule
+ * read and a `create` stub that the self-block guard must not reach.
+ */
+function makeRuleService(existing: RuleRow[]) {
+  const create = jest.fn(async ({ data }: { data: Record<string, unknown> }) => ({
+    id: 'rule-new',
+    note: null,
+    createdBy: null,
+    createdAt: new Date(0),
+    updatedAt: new Date(0),
+    ...data,
+  }));
+  const svc = new IpRulesService(
+    { ipRule: { findMany: jest.fn().mockResolvedValue(existing), create } } as never,
+    { log: jest.fn().mockResolvedValue(undefined) } as never,
+    { get: () => null, set: jest.fn(), invalidate: jest.fn() } as never,
+    { client: { set: jest.fn().mockResolvedValue('OK') } } as never,
+    { values: { LOCKOUT_MAX_FAILURES: 5, LOCKOUT_WINDOW_MIN: 15 } } as never,
+  );
+  return { svc, create };
+}
+
+const ADMIN = { id: 'admin-1' } as never;
+
+function deny(cidr: string, priority = 10) {
+  return { cidr, action: 'DENY' as const, priority, note: null, enabled: true };
+}
+
+function from(ip: string) {
+  return { ip, userAgent: 'SpecUA/1.0' };
+}
+
+describe('IpRulesService self-block guard (IPv6 admins)', () => {
+  it('refuses a DENY whose IPv6 CIDR covers the admin', async () => {
+    const { svc, create } = makeRuleService([]);
+    await expect(svc.create(ADMIN, deny('2001:db8::/32'), from('2001:db8:1:2::5'))).rejects.toThrow(
+      /would block your current IP \(2001:db8:1:2::5\)/,
+    );
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('refuses DENY ::/0 from an IPv6 admin', async () => {
+    const { svc, create } = makeRuleService([]);
+    await expect(svc.create(ADMIN, deny('::/0'), from('2606:4700::1'))).rejects.toThrow(
+      /would block your current IP/,
+    );
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('allows the DENY once a higher-priority ALLOW covers the admin', async () => {
+    const { svc, create } = makeRuleService([
+      { cidr: '2001:db8:1:2::5', action: 'ALLOW', priority: 1 },
+    ]);
+    await expect(svc.create(ADMIN, deny('::/0'), from('2001:db8:1:2::5'))).resolves.toMatchObject({
+      cidr: '::/0',
+      action: 'DENY',
+    });
+    expect(create).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not count an IPv4 catch-all as blocking an IPv6 admin', async () => {
+    const { svc, create } = makeRuleService([]);
+    await expect(svc.create(ADMIN, deny('0.0.0.0/0'), from('2001:db8::5'))).resolves.toMatchObject({
+      cidr: '0.0.0.0/0',
+    });
+    expect(create).toHaveBeenCalledTimes(1);
+  });
+
+  it('still refuses an IPv4 DENY that covers an IPv4-mapped admin', async () => {
+    const { svc, create } = makeRuleService([]);
+    await expect(svc.create(ADMIN, deny('192.0.2.0/24'), from('::ffff:192.0.2.7'))).rejects.toThrow(
+      /would block your current IP/,
+    );
+    expect(create).not.toHaveBeenCalled();
+  });
+});
+
+describe('IpRulesService.catchAllFamilyGap', () => {
+  it('reports an IPv4 DENY catch-all with no IPv6 counterpart', async () => {
+    const { svc } = makeRuleService([
+      { cidr: '203.0.113.0/24', action: 'ALLOW', priority: 1 },
+      { cidr: '0.0.0.0/0', action: 'DENY', priority: 10 },
+    ]);
+    await expect(svc.catchAllFamilyGap()).resolves.toEqual({
+      family: 'IPv4',
+      uncoveredFamily: 'IPv6',
+      cidr: '0.0.0.0/0',
+    });
+  });
+
+  it('reports nothing once ::/0 is also denied', async () => {
+    const { svc } = makeRuleService([
+      { cidr: '0.0.0.0/0', action: 'DENY', priority: 10 },
+      { cidr: '::/0', action: 'DENY', priority: 11 },
+    ]);
+    await expect(svc.catchAllFamilyGap()).resolves.toBeNull();
+  });
 });

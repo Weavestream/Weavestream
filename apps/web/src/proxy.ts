@@ -64,8 +64,15 @@ export async function proxy(req: NextRequest, event: NextFetchEvent) {
   // flow through. We also overwrite `x-forwarded-for` / `x-real-ip`
   // on the propagated request headers so any downstream code that
   // forgets to use the resolved header can't be tricked.
-  const inboundXff =
-    req.headers.get('x-forwarded-for') ?? req.headers.get('x-real-ip');
+  //
+  // `X-Real-IP` is deliberately never read. Next.js fills a missing
+  // `x-forwarded-for` with the TCP peer before this proxy runs (the
+  // router invokes the proxy through `base-server.js`
+  // `handleRequestImpl`, which sets the header first), so an `X-Real-IP`
+  // fallback could never trigger: a proxy that sends only `X-Real-IP` is
+  // attributed to its own address. The edge proxy must set
+  // `X-Forwarded-For` — see docs/deployment/tls.
+  const inboundXff = req.headers.get('x-forwarded-for');
   const resolvedClientIp = normalizeClientIp(
     resolveClientIpFromXff(inboundXff) ?? UNKNOWN_CLIENT_IP,
   );

@@ -26,7 +26,7 @@ export default async function IpRulesPage() {
           { label: 'IP Rules' },
         ]}
         title="IP allow/deny rules"
-        description="Define global IP allow/deny rules enforced before authentication. Rules are evaluated in priority order; the first match wins. If no rules match, access is allowed."
+        description="Define global IPv4 and IPv6 allow/deny rules enforced before authentication. Rules are evaluated in priority order; the first match wins. If no rules match, access is allowed."
       />
       <PageBody>
         <Panel title={`${rules.length} rule${rules.length === 1 ? '' : 's'}`}>
@@ -81,7 +81,16 @@ export default async function IpRulesPage() {
             <li>Rules are evaluated in priority order (lower number = first).</li>
             <li>The first matching rule wins: ALLOW proceeds to login, DENY blocks immediately.</li>
             <li>If no rules match, access is allowed (default-allow policy).</li>
-            <li>Supports single IPs (192.168.1.1) or CIDR ranges (10.0.0.0/8).</li>
+            <li>
+              Supports single IPv4 or IPv6 addresses (192.168.1.1, 2001:db8::1) and CIDR
+              ranges (10.0.0.0/8, 2001:db8::/32).
+            </li>
+            <li>
+              IPv4 rules never match IPv6 visitors, and IPv6 rules never match IPv4
+              visitors. 0.0.0.0/0 covers all of IPv4 and ::/0 covers all of IPv6, so
+              denying everyone else takes both.
+            </li>
+            <li>An IPv4-mapped address such as ::ffff:192.0.2.1 is matched as IPv4.</li>
           </ul>
         </div>
       </PageBody>

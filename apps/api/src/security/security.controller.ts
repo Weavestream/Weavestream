@@ -14,6 +14,7 @@ import { CurrentUser, type AuthedUser } from '../common/current-user.decorator.j
 import { RequirePermission } from '../rbac/require-permission.decorator.js';
 import { RequireStepUp } from '../auth/step-up/require-step-up.decorator.js';
 import { ipOf, userAgentOf as uaOf } from '../common/request-meta.js';
+import { IpRulesService } from '../ip-rules/ip-rules.service.js';
 import { SecurityService } from './security.service.js';
 
 /**
@@ -28,7 +29,24 @@ import { SecurityService } from './security.service.js';
  */
 @Controller({ path: 'security', version: '1' })
 export class SecurityController {
-  constructor(private readonly security: SecurityService) {}
+  constructor(
+    private readonly security: SecurityService,
+    private readonly ipRules: IpRulesService,
+  ) {}
+
+  /**
+   * Whether the enabled IP rules deny every client of one address family
+   * but leave the other to default-allow — typically `DENY 0.0.0.0/0`
+   * with no `::/0`, which lets every IPv6 visitor through. Returns only
+   * that gap (the two families and the catch-all's CIDR), never the rule
+   * list, so a `security.read` holder without `ip_rule.manage` learns
+   * nothing else about the rules.
+   */
+  @Get('ip-rule-coverage')
+  @RequirePermission('security.read')
+  async ipRuleCoverage() {
+    return { gap: await this.ipRules.catchAllFamilyGap() };
+  }
 
   @Get('login-activity')
   @RequirePermission('security.read')

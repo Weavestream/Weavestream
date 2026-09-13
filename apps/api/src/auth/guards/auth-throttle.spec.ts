@@ -65,6 +65,55 @@ describe('authThrottleTracker', () => {
     ).toBe('ip:5.6.7.8');
     expect(authThrottleTracker({ body: {} })).toBe('ip:unknown');
   });
+
+  it('keys an IPv6 client by its /64, so address rotation shares one bucket', () => {
+    const body = { email: 'user@example.com' };
+    expect(authThrottleTracker({ ip: '2001:db8:1:2::1', body })).toBe(
+      'ip:2001:db8:1:2::/64:email:user@example.com',
+    );
+    expect(authThrottleTracker({ ip: '2001:db8:1:2:ffff::9', body })).toBe(
+      'ip:2001:db8:1:2::/64:email:user@example.com',
+    );
+  });
+
+  it('keys an IPv4-mapped client by its IPv4 address', () => {
+    expect(authThrottleTracker({ ip: '::ffff:1.2.3.4', body: {} })).toBe('ip:1.2.3.4');
+  });
+});
+
+describe('UserThrottlerGuard anonymous tracker', () => {
+  const guard = new UserThrottlerGuard(
+    { throttlers: [] } as never,
+    { increment: jest.fn() } as never,
+    new Reflector(),
+    { log: jest.fn() } as never,
+    { client: {} } as never,
+  );
+  const trackerOf = (req: Record<string, unknown>) =>
+    (
+      guard as unknown as {
+        getTracker: (r: Record<string, unknown>) => Promise<string>;
+      }
+    ).getTracker(req);
+
+  it('keys signed-in traffic by user id', async () => {
+    await expect(trackerOf({ ip: '2001:db8::1', user: { id: 'u-1' } })).resolves.toBe(
+      'user:u-1',
+    );
+  });
+
+  it('keeps anonymous IPv4 traffic on the exact address', async () => {
+    await expect(trackerOf({ ip: '203.0.113.9' })).resolves.toBe('ip:203.0.113.9');
+  });
+
+  it('groups anonymous IPv6 traffic by /64', async () => {
+    await expect(trackerOf({ ip: '2001:db8:1:2::1' })).resolves.toBe(
+      'ip:2001:db8:1:2::/64',
+    );
+    await expect(trackerOf({ ip: '2001:db8:1:2:abcd::7' })).resolves.toBe(
+      'ip:2001:db8:1:2::/64',
+    );
+  });
 });
 
 describe('authThrottleSkipIf', () => {

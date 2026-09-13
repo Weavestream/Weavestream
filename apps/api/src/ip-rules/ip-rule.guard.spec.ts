@@ -200,4 +200,40 @@ describe('IpRuleGuard', () => {
     // surface here if the guard forgot its .catch.
     await new Promise((resolve) => setImmediate(resolve));
   });
+
+  // ── IPv6 ──────────────────────────────────────────────────────────────
+
+  it('denies an IPv6 client matched by an IPv6 CIDR rule', async () => {
+    const { guard } = makeGuard(async () => [
+      { cidr: '2001:db8::/32', action: 'DENY', priority: 1 },
+    ]);
+    await expect(guard.canActivate(ctxFor('2001:db8:1:2::5'))).rejects.toThrow(
+      ForbiddenException,
+    );
+    await expect(guard.canActivate(ctxFor('2001:db9::5'))).resolves.toBe(true);
+  });
+
+  it('does not block IPv6 clients with an IPv4-only catch-all', async () => {
+    // The allowlist mistake the IP rules page warns about.
+    const { guard } = makeGuard(async () => [
+      { cidr: '203.0.113.0/24', action: 'ALLOW', priority: 1 },
+      { cidr: '0.0.0.0/0', action: 'DENY', priority: 10 },
+    ]);
+    await expect(guard.canActivate(ctxFor('198.51.100.7'))).rejects.toThrow(
+      ForbiddenException,
+    );
+    await expect(guard.canActivate(ctxFor('2001:db8::5'))).resolves.toBe(true);
+  });
+
+  it('blocks other IPv6 clients once ::/0 is denied, and keeps allowed ones in', async () => {
+    const { guard } = makeGuard(async () => [
+      { cidr: '2001:db8:1:2::/64', action: 'ALLOW', priority: 1 },
+      { cidr: '0.0.0.0/0', action: 'DENY', priority: 10 },
+      { cidr: '::/0', action: 'DENY', priority: 11 },
+    ]);
+    await expect(guard.canActivate(ctxFor('2001:db8:1:2::5'))).resolves.toBe(true);
+    await expect(guard.canActivate(ctxFor('2606:4700::1'))).rejects.toThrow(
+      ForbiddenException,
+    );
+  });
 });

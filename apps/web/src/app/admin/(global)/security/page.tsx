@@ -1,7 +1,10 @@
+import Link from 'next/link';
 import { redirect } from 'next/navigation';
+import { describeCatchAllFamilyGap } from '@weavestream/shared';
 import {
   requireMe,
   getSecurityEgressBlocks,
+  getSecurityIpRuleCoverage,
   getSecurityLockouts,
   getSecurityLoginActivity,
   getSecuritySessions,
@@ -9,13 +12,13 @@ import {
 } from '../../../../lib/server-api';
 import { hasCapability } from '../../../../lib/roles';
 import { PageBody, PageHeader } from '../../../../components/shell/page-header';
-import { Panel, Stat } from '../../../../components/ui';
+import { ErrorBanner, Panel, Stat } from '../../../../components/ui';
 import { SecurityCenterClient } from './security-client';
 
 /**
  * Admin Security Center.
  *
- * Server-rendered first paint stitches together four read endpoints
+ * Server-rendered first paint stitches together the read endpoints
  * in parallel, then hands every slice to a client component for
  * interactive tabs and the (optional) session-revoke action. The
  * server does not pre-filter what the client can revoke — that's
@@ -33,13 +36,15 @@ export default async function SecurityCenterPage({
   const sp = await searchParams;
   const requestedWindow = parseWindow(sp.window);
 
-  const [activity, lockouts, blocks, sessions, egress] = await Promise.all([
-    getSecurityLoginActivity(requestedWindow),
-    getSecurityLockouts(),
-    getSecurityThrottleBlocks(),
-    getSecuritySessions(),
-    getSecurityEgressBlocks(168),
-  ]);
+  const [activity, lockouts, blocks, sessions, egress, ipRuleCoverage] =
+    await Promise.all([
+      getSecurityLoginActivity(requestedWindow),
+      getSecurityLockouts(),
+      getSecurityThrottleBlocks(),
+      getSecuritySessions(),
+      getSecurityEgressBlocks(168),
+      getSecurityIpRuleCoverage(),
+    ]);
 
   const lockedIp = (lockouts?.ip ?? []).filter((r) => r.locked).length;
   const lockedEmail = (lockouts?.email ?? []).filter((r) => r.locked).length;
@@ -50,6 +55,10 @@ export default async function SecurityCenterPage({
     (activity?.counts.failure ?? 0) + (activity?.counts.mfaFailure ?? 0);
 
   const canRevoke = hasCapability(me, 'USER_MANAGE');
+  // The coverage read returns only the gap, so any SECURITY_READ holder
+  // sees the warning; the link is offered only to those who can act on it.
+  const canManageIpRules = hasCapability(me, 'IP_RULE_MANAGE');
+  const catchAllGap = ipRuleCoverage?.gap ?? null;
 
   return (
     <>
@@ -59,6 +68,38 @@ export default async function SecurityCenterPage({
         description="Live view of authentication failures, account lockouts, rate-limit blocks, and active sessions."
       />
       <PageBody>
+        {catchAllGap && (
+          <ErrorBanner
+            tone="warn"
+            title={`The catch-all DENY rule does not apply to ${catchAllGap.uncoveredFamily} visitors`}
+          >
+            <div
+              style={{
+                display: 'grid',
+                gap: 6,
+                color: 'var(--muted)',
+                fontSize: 12.5,
+                lineHeight: 1.5,
+              }}
+            >
+              <span>{describeCatchAllFamilyGap(catchAllGap)}</span>
+              {canManageIpRules && (
+                <Link
+                  href="/admin/ip-rules"
+                  style={{
+                    color: 'var(--accent)',
+                    fontWeight: 600,
+                    textDecoration: 'none',
+                    width: 'fit-content',
+                  }}
+                >
+                  Open IP rules
+                </Link>
+              )}
+            </div>
+          </ErrorBanner>
+        )}
+
         <Panel
           title={`Last ${activity?.windowHours ?? requestedWindow}h overview`}
         >

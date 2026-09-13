@@ -282,8 +282,9 @@ function DiagnosticsPane() {
             <DiagRow label="Socket peer" value={d.socketPeer} mono />
             <DiagRow
               label="TRUST_PROXY_HOPS"
-              value={String(d.trustProxyHops)}
-              mono
+              value={
+                <HopCounts web={d.webTrustProxyHops} api={d.trustProxyHops} />
+              }
             />
             <DiagRow
               label="X-Forwarded-For (as received)"
@@ -291,7 +292,7 @@ function DiagnosticsPane() {
               mono
             />
             <DiagRow
-              label="Inbound chain (as you presented it)"
+              label="Inbound chain (as received by web)"
               value={d.inboundForwardedFor || '—'}
               mono
             />
@@ -366,6 +367,39 @@ function DiagRow({
       >
         {value}
       </div>
+    </div>
+  );
+}
+
+// The hop count the web tier applied to this request — the one that
+// resolved the client IP — next to the API container's copy of the
+// setting. They differ when only one container was recreated after an
+// `.env` change; the interpretation notes say what to do.
+function HopCounts({ web, api }: { web: number | null; api: number }) {
+  const mono = { fontFamily: 'var(--mono, monospace)' };
+  const muted = { color: 'var(--muted)' };
+  return (
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 12,
+        flexWrap: 'wrap',
+      }}
+    >
+      <span>
+        <span style={muted}>web (applied)</span>{' '}
+        <span style={mono}>{web ?? '—'}</span>
+      </span>
+      <span>
+        <span style={muted}>API (config)</span>{' '}
+        <span style={mono}>{api}</span>
+      </span>
+      {web !== null && web !== api && (
+        <Tag tone="warn" mono={false}>
+          mismatch
+        </Tag>
+      )}
     </div>
   );
 }
@@ -577,7 +611,9 @@ function LockoutsPane({ lockouts }: { lockouts: LockoutsResponse | null }) {
       >
         Threshold: <strong>{lockouts.threshold}</strong> failures within{' '}
         <strong>{lockouts.windowMinutes} minutes</strong>. Counters at or above
-        the threshold are locked; lower counters are warming.
+        the threshold are locked; lower counters are warming. IPv6 clients are
+        counted per /64 prefix (for example <code>2001:db8:1:2::/64</code>),
+        because one IPv6 subscriber usually controls a whole /64.
       </div>
       <LockoutTable kind="ip" rows={lockouts.ip} threshold={lockouts.threshold} />
       <LockoutTable
@@ -611,7 +647,7 @@ function LockoutTable({
         columns={[
           {
             id: 'identifier',
-            header: kind === 'ip' ? 'IP' : 'Email',
+            header: kind === 'ip' ? 'IP or IPv6 /64' : 'Email',
             mono: true,
             render: (r) => (
               <span style={{ color: 'var(--text-2)' }}>{r.identifier}</span>

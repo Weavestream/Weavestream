@@ -2,6 +2,7 @@
 import type { ExecutionContext } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import type { ThrottlerOptions } from '@nestjs/throttler';
+import { ipLimitKey } from '@weavestream/shared';
 import { AUTH_THROTTLE_KEY } from '../../common/public.decorator.js';
 
 // Stateless metadata reader; safe to share across requests.
@@ -27,9 +28,13 @@ const MAX_EMAIL_LENGTH = 320;
  * single-IP password spraying across many emails is still stopped by
  * LockoutService's per-IP failure counter and the `global` per-IP
  * throttler.
+ *
+ * The IP part is `ipLimitKey`, like those two limiters: the exact IPv4
+ * address, or the /64 of an IPv6 client, so rotating addresses inside
+ * one /64 cannot mint a fresh (IP, email) bucket per attempt.
  */
 export function authThrottleTracker(req: Record<string, any>): string {
-  const ip = req.ip ?? req.socket?.remoteAddress ?? 'unknown';
+  const ip = ipLimitKey(req.ip ?? req.socket?.remoteAddress ?? 'unknown');
   const rawEmail: unknown = req.body?.email;
   const email =
     typeof rawEmail === 'string'

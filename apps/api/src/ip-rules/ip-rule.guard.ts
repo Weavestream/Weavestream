@@ -26,6 +26,10 @@ import { normalizeIp, userAgentOf } from '../common/request-meta.js';
  * If no rules match, access is allowed (default-allow policy). This
  * ensures a fresh install without any rules continues to work, and
  * operators must explicitly create DENY rules to block traffic.
+ * Catch-alls are per address family: `0.0.0.0/0` never matches an IPv6
+ * client, so denying everyone takes both `0.0.0.0/0` and `::/0`. The IP
+ * rules page and the Security Center warn when one is missing (see
+ * `findCatchAllFamilyGap` in `@weavestream/shared`).
  *
  * Fail-safe: any error loading rules (table missing, DB down, etc.)
  * defaults to allow. Blocking every request because the rules table
