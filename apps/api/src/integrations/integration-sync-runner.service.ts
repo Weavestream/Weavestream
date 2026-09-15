@@ -1045,7 +1045,7 @@ export class IntegrationSyncRunnerService {
       if (gap.kind === 'secret_blocked') totals.secretBlocked += 1;
       if (gap.kind === 'missing_dependency') totals.missingDependency += 1;
       conflicts.push({
-        kind: gap.kind === 'synchronization_error' ? 'driver_error' : 'validation_error',
+        kind: conflictKindForGap(gap.kind),
         externalId,
         message: gap.message.slice(0, 500),
       });
@@ -1061,7 +1061,7 @@ export class IntegrationSyncRunnerService {
     if (blocked.kind === 'secret_blocked') totals.secretBlocked += 1;
     if (blocked.kind === 'missing_dependency') totals.missingDependency += 1;
     conflicts.push({
-      kind: blocked.kind === 'synchronization_error' ? 'driver_error' : 'validation_error',
+      kind: conflictKindForGap(blocked.kind),
       externalId: blocked.externalId ?? '',
       message: blocked.message.slice(0, 500),
     });
@@ -1166,6 +1166,17 @@ function deriveLegacyHighWater(records: DriverRecord[]): string | null {
     if (!highest || canonical > highest) highest = canonical;
   }
   return highest;
+}
+
+/**
+ * Run-viewer label for a gap. A withheld secret is neither a validation
+ * failure nor a driver fault, so it keeps its own label instead of being
+ * folded into `validation_error`, which read as a sync defect to operators.
+ */
+function conflictKindForGap(kind: DriverBlockedInput['kind']): SyncRunConflict['kind'] {
+  if (kind === 'synchronization_error') return 'driver_error';
+  if (kind === 'secret_blocked') return 'secret_blocked';
+  return 'validation_error';
 }
 
 function isNonAuthoritativeGap(kind: DriverBlockedInput['kind']): boolean {

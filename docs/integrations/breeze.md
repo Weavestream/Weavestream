@@ -107,10 +107,27 @@ The reconstruction view reports six separate states:
 |---|---|
 | Synchronized current | Current Breeze-owned native evidence exists. |
 | Manually documented | Required local evidence is supplied and manually owned. Protect it during mapping changes. |
-| Secret blocked | Breeze withheld a definition or Weavestream rejected it because secret-like material was detected. Document the fact safely; never paste the rejected value into a gap. |
+| Secret blocked | Breeze withheld a definition, or Weavestream rejected it because secret-like material was detected. The gap message names the side that withheld the record. Document the fact safely; never paste the rejected value into a gap. |
 | Missing | A required fact or dependency is absent. Restore the source endpoint/mapping or document it manually. |
 | Stale | A complete full traversal no longer saw the binding. Confirm the source deletion; last-known native/manual history is retained. |
 | Synchronization error | A transport, schema, validation, or write failure prevented current evidence. Correct the failure and rerun. |
+
+The checklist is evaluated for every Breeze resource of every mapped company. Each capability without evidence produces one gap that starts with "Reconstruction checklist:". These gaps are documentation items, not missing Breeze data. A resource such as Device software cannot supply evidence for most capabilities, so a tenant with many resources and companies shows hundreds of checklist gaps until an operator documents each fact in a form the evaluator recognizes. Each gap message lists that form. The evaluator matches an asset field by its **slug**, never by its value, so backup instructions typed into a generic Notes field do not clear a gap. A linked article is an article related to an item this resource synced; its manually authored text must contain the listed phrase.
+
+| Capability | Recognized evidence |
+|---|---|
+| Administrative credential | A credential entry on a linked asset; a field slug containing `administrative_credential` or `credential_reference`; article text "administrative credential" or "credential reference". |
+| Installation source | A field slug containing `installation_source`, `install_source`, `install_media`, or `download_source`; article text "installation source", "install media", or "download source". |
+| License activation | A field slug containing `license`, `activation`, or `product_key`; article text "license", "activation", or "product key". |
+| Physical location | A field slug containing `physical_location`, `rack`, `room`, `site_location`, `address_line`, or `postal_code`; article text "physical location", "rack", "room", or "site location". |
+| IP firewall | A field slug containing `firewall_rules` or `ip_firewall`; article text "firewall rules" or "IP firewall". |
+| Backup restore | A field slug or article text containing both "backup" and "restore". |
+| Service dependencies | A relation between a linked item and another item; a field slug containing `service_dependencies`, `data_dependencies`, or `depends_on`; article text "service dependencies" or "depends on". |
+| Ordered rebuild steps | A field slug containing `ordered_rebuild` or `rebuild_steps`; article text "ordered rebuild", "rebuild steps", or "rebuild procedure". |
+| Post restoration validation | A field slug containing `post_restoration_validation` or `validation_steps`; article text "post-restoration validation" or "validation steps". |
+| Vendor escalation contact | A field slug containing `vendor_contact`, `escalation_contact`, or `support_contact`; article text "vendor contact", "escalation contact", or "support contact". |
+
+The Secret-blocked counter in this view counts capabilities, not gaps: a withheld record only moves the counter when its source resource maps to a capability (sites, scripts, automations, backup configurations, relations, subnets, and IP reservations). The per-run "secret blocked" total on the Runs tab counts every withheld record.
 
 Staling preserves target IDs, provenance dates, checksums, manual content, and history. Assets, articles, and subnets owned only by stale Breeze bindings are soft-archived; reservations and relations are retained. A returned source record reuses and restores its original target, clears `staleSince`, and becomes active. Repeated successful runs are idempotent.
 
@@ -150,3 +167,5 @@ Honor `Retry-After`, reduce schedule/concurrency pressure if needed, and wait fo
 ### Missing dependency or blocked definition
 
 Check that every prerequisite resource is enabled and stage-ordered, both relation endpoints are mapped to the same company, and the service principal has the exact read scope. A missing dependency creates a safe gap instead of a dangling or cross-company relation. A secret-blocked item must be rewritten at its source to contain only durable non-secret reconstruction facts, then rerun; Weavestream does not offer a bypass that stores the rejected value.
+
+Two messages report a withheld record. "Breeze withheld a … record" means the Breeze partner API redacted the record before it left Breeze; its gap details carry the field paths Breeze reported. "Weavestream withheld a … record" means the record arrived in full and Weavestream's own inspection quarantined it because a value looked like a credential (a forbidden key name such as `password` or `token`, credential syntax in script content, or an encoded token). Weavestream withholds the complete record, so one flagged value hides every fact in that policy, script, automation, backup configuration, custom field, or custom-field value. Plain names, hostnames, package names, and URLs are not treated as credentials when they sit in a top-level schema label field: a record's name, description, category, or filter fields, a dropdown, number, boolean, or date custom field, or a free-text custom field whose name is itself a descriptor ("Hostname", "Asset tag", "Rack"). Anything inside free-form JSON — a policy feature's settings, a script's parameters, an automation's trigger, conditions, or actions, a backup configuration's notes — is inspected strictly whatever its keys are called, and so is a free-text custom field with any other name. A long hyphenated value in those positions is still withheld even when it reads like words, because a word-list passphrase and a hyphenated name cannot be told apart. Name such a field for what it holds, or shorten the value. A custom field whose name contains "passphrase" is withheld outright, like "password" or "token". The Runs tab labels both cases "secret blocked".

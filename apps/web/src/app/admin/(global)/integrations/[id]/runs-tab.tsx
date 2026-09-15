@@ -317,6 +317,8 @@ function conflictTone(
       return 'warn';
     case 'manual_skip':
       return 'info';
+    case 'secret_blocked':
+      return 'warn';
     default:
       return 'danger';
   }

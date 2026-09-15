@@ -13,6 +13,10 @@ All notable changes to Weavestream are documented here. The format follows [Keep
 
 ## [Unreleased]
 
+### Fixed
+
+- **Breeze integration withheld ordinary configuration records as secrets.** The secret-material inspection that guards Breeze policies, scripts, automations, backup configurations, and custom-field values treated any 32-character run of letters, digits, and separators as an encoded credential, so policy names such as `Windows-Defender-Realtime-Protection-Policy`, hostnames, package names, and download URLs caused the whole record to be withheld. Runs that read as words (separator-delimited or camelCase pieces with English letter patterns) are now recognised as text in a record's own name, description, category, and filter fields, in non-text custom fields, and in free-text custom fields named as descriptors. Everything inside policy settings, script parameters, automation definitions, and other free-text custom fields keeps the strict rule whatever its keys are called, so a word-list passphrase there is still withheld. Encoded tokens, random letter groups, base64 material, and credential syntax are quarantined everywhere, and a custom field named "passphrase" is now treated like one named "password". Withheld records now say which side withheld them ("Breeze withheld …" or "Weavestream withheld …") and name the resource, and the Runs tab labels them "secret blocked" instead of "validation error". Reconstruction checklist gaps now say that they are documentation items rather than missing Breeze data, and list the asset field slugs, article phrases, credential entries, or relations that clear each one.
+
 ## [1.9.8] - 2026-09-10
 
 ### Fixed

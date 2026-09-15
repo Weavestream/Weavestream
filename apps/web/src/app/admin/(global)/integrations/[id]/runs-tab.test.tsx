@@ -43,6 +43,29 @@ it('does not render raw external identities in conflict details', async () => {
   expect(screen.queryByText(/raw-upstream-id/)).not.toBeInTheDocument();
 });
 
+it('labels a withheld secret as secret blocked rather than a validation error', async () => {
+  const run = {
+    id: 'run-secret', mode: 'full', kind: 'manual', status: 'succeeded', dryRun: false,
+    createdAt: '2026-07-14T00:00:00.000Z', startedAt: null, totals: null,
+  };
+  apiFetch.mockResolvedValueOnce({ ok: true, data: {
+    run,
+    companyResults: [{
+      id: 'result-1', integrationCompanyMappingId: 'mapping-1', companyId: 'company-1',
+      companyName: 'Acme', status: 'succeeded', totals: null, error: null,
+      conflicts: [{
+        kind: 'secret_blocked', externalId: 'raw-upstream-id',
+        message: 'Weavestream withheld a scripts record because its definition contains secret-like material.',
+      }],
+    }],
+  }});
+  render(<RunsTab integration={{ id: 'integration-1', resources: [] } as never} mappings={[]} runs={[run] as never} />);
+  fireEvent.click(screen.getByRole('button'));
+  expect(await screen.findByText(/Weavestream withheld a scripts record/)).toBeInTheDocument();
+  expect(screen.getByText('secret blocked')).toBeInTheDocument();
+  expect(screen.queryByText('validation error')).not.toBeInTheDocument();
+});
+
 it('renders per-resource activity when only reconstruction counters are nonzero', async () => {
   const zeroes = {
     fetched: 0, created: 0, updated: 0, unchanged: 0, claimed: 0, archived: 0,

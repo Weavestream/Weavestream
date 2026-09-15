@@ -1,6 +1,8 @@
+import { scanSensitiveMaterial } from '../sensitive-material.js';
 import {
   COMPLETENESS_CAPABILITIES,
   IntegrationCompletenessService,
+  checklistGapMessage,
 } from './integration-completeness.service.js';
 import { transformBreezeRecord } from '../drivers/breeze/breeze.transforms.js';
 
@@ -441,6 +443,19 @@ describe('IntegrationCompletenessService', () => {
       .not.toMatch(/password|token|secret-value/i);
     expect(JSON.stringify(prisma.integrationReconstructionGap.updateMany.mock.calls))
       .not.toMatch(/password|token|secret-value/i);
+  });
+
+  it('tells the operator which evidence clears each checklist gap, within the safe message bounds', () => {
+    for (const capability of COMPLETENESS_CAPABILITIES) {
+      const message = checklistGapMessage(capability);
+      expect(message.length).toBeLessThanOrEqual(512);
+      expect(scanSensitiveMaterial(message)).toBe('safe');
+      expect(message).toContain('Recognized evidence:');
+      expect(message).toMatch(/slug contains|credential entry|relation between/);
+      expect(message).not.toMatch(/password|token|secret-value/i);
+    }
+    expect(checklistGapMessage('installation_source')).toContain('"installation_source"');
+    expect(checklistGapMessage('backup_restore')).toContain('both "backup" and "restore"');
   });
 
   it('skips every gap write when a strictly newer evaluation already holds the scorecard', async () => {

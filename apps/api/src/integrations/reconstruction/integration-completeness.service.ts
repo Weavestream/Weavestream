@@ -101,7 +101,7 @@ export class IntegrationCompletenessService {
         dedupeKey,
         syncRecordId: null,
         kind: 'unsupported',
-        message: `Document the missing ${displayCapability(item.capability)} requirement.`,
+        message: checklistGapMessage(item.capability),
         details: { unsupportedCapability: item.capability },
         seenAt: scope.evaluatedAt,
       });
@@ -172,7 +172,7 @@ export class IntegrationCompletenessService {
    * is false) must not carry capability scorecards: asset-projection
    * drivers like NinjaOne or Action1 never claimed to provide dossier
    * documentation, so scoring them reports permanently-"missing"
-   * capabilities and manufactures unresolvable "Document the missing …"
+   * capabilities and manufactures unresolvable "Reconstruction checklist …"
    * gaps. Resolves any previously persisted completeness gaps and
    * tombstones the summary row (`clearedAt` set, counts emptied) so
    * affected resources self-heal on their next successful sync. The
@@ -636,4 +636,39 @@ function dedupeRows<T extends { id: string }>(rows: T[], name: string): T[] {
 
 function displayCapability(capability: CompletenessCapability): string {
   return capability.replaceAll('_', ' ');
+}
+
+/**
+ * Evidence the evaluator actually recognizes, per capability, so the gap
+ * tells the operator what clears it. The evaluator matches an asset field
+ * by its *slug* (see `CAPABILITY_PATTERNS`), never by its value, and a
+ * linked article by phrases in its manually authored text. Every hint must
+ * stay scan-safe (`safeGapMessage` rejects secret-like text) and keep the
+ * whole message within the 512-character gap column.
+ */
+const CHECKLIST_EVIDENCE_HINTS: Record<CompletenessCapability, string> = {
+  administrative_credential:
+    'a credential entry on a linked asset, a linked asset field whose slug contains "administrative_credential" or "credential_reference", or a linked article that mentions "administrative credential" or "credential reference"',
+  installation_source:
+    'a linked asset field whose slug contains "installation_source", "install_source", "install_media", or "download_source", or a linked article that mentions "installation source", "install media", or "download source"',
+  license_activation:
+    'a linked asset field whose slug contains "license", "activation", or "product_key", or a linked article that mentions "license", "activation", or "product key"',
+  physical_location:
+    'a linked asset field whose slug contains "physical_location", "rack", "room", "site_location", "address_line", or "postal_code", or a linked article that mentions "physical location", "rack", "room", or "site location"',
+  ip_firewall:
+    'a linked asset field whose slug contains "firewall_rules" or "ip_firewall", or a linked article that mentions "firewall rules" or "IP firewall"',
+  backup_restore:
+    'a linked asset field whose slug contains both "backup" and "restore", or a linked article that mentions both "backup" and "restore"',
+  service_dependencies:
+    'a relation between a linked item and another item, a linked asset field whose slug contains "service_dependencies", "data_dependencies", or "depends_on", or a linked article that mentions "service dependencies" or "depends on"',
+  ordered_rebuild_steps:
+    'a linked asset field whose slug contains "ordered_rebuild" or "rebuild_steps", or a linked article that mentions "ordered rebuild", "rebuild steps", or "rebuild procedure"',
+  post_restoration_validation:
+    'a linked asset field whose slug contains "post_restoration_validation" or "validation_steps", or a linked article that mentions "post-restoration validation" or "validation steps"',
+  vendor_escalation_contact:
+    'a linked asset field whose slug contains "vendor_contact", "escalation_contact", or "support_contact", or a linked article that mentions "vendor contact", "escalation contact", or "support contact"',
+};
+
+export function checklistGapMessage(capability: CompletenessCapability): string {
+  return `Reconstruction checklist: no ${displayCapability(capability)} evidence is documented for this resource. This is a documentation item, not missing Breeze data. Recognized evidence: ${CHECKLIST_EVIDENCE_HINTS[capability]}. A generic notes field does not count.`;
 }

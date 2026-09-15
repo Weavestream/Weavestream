@@ -1023,7 +1023,11 @@ describe('IntegrationSyncRunnerService writer dispatch', () => {
     await expect(service.runMapping({
       syncRunId: 'secret-run', integrationCompanyMappingId: 'mapping', resourceId: 'resource',
       dryRun: false, actorId: 'actor', mode: 'full',
-    })).resolves.toMatchObject({ status: 'succeeded', totals: { secretBlocked: 1 } });
+    })).resolves.toMatchObject({
+      status: 'succeeded',
+      totals: { secretBlocked: 1 },
+      conflicts: [expect.objectContaining({ kind: 'secret_blocked' })],
+    });
     expect(tx.integrationSyncRecord.update).toHaveBeenCalledWith({
       where: { id: 'binding-id' },
       data: expect.objectContaining({

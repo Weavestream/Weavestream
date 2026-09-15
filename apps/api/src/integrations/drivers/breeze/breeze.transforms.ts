@@ -17,14 +17,15 @@ import {
   sanitizeBreezeText,
   type BreezeRecordBase,
   type BreezeResourceKey,
+  type BreezeSourceEndpoint,
 } from './breeze.schemas.js';
 
 const MANAGED_START = '<!-- weavestream:breeze:managed:start -->';
 const MANAGED_END = '<!-- weavestream:breeze:managed:end -->';
 const FORBIDDEN_CONFIGURATION_KEYS = new Set([
   'authorization', 'credential', 'credentials', 'encryptionkey', 'apikey', 'accesstoken',
-  'refreshtoken', 'privatekey', 'providerconfig', 'password', 'passwd', 'pwd', 'secret', 'token',
-  'recoverykey', 'bitlockerrecoverykey',
+  'refreshtoken', 'privatekey', 'providerconfig', 'password', 'passwd', 'passphrase', 'pwd', 'secret',
+  'token', 'recoverykey', 'bitlockerrecoverykey',
 ]);
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
@@ -64,7 +65,7 @@ export function transformBreezeRecord(
   const record = schema.parse(sanitizeBreezeText(validated)) as BreezeRecordBase &
     Record<string, any>;
   if (isDesiredConfigurationResource(resource.data)) {
-    const inspection = inspectDesiredConfiguration(record);
+    const inspection = inspectDesiredConfiguration(record, labelValueKeysFor(endpoint, record));
     if (inspection === 'sensitive') {
       throw new BreezeSensitiveDefinitionError(record.id, record.orgId);
     }
@@ -458,28 +459,99 @@ function isDesiredConfigurationResource(resource: BreezeResourceKey): boolean {
   ].includes(resource);
 }
 
-function inspectDesiredConfiguration(root: unknown): 'safe' | 'sensitive' | 'bounds_exceeded' {
-  const pending: Array<{ value: unknown; depth: number; trustedRevision?: boolean }> = [{ value: root, depth: 0 }];
+// Top-level record fields whose values are labels by schema contract: the
+// bounded name, description, category, and filter fields that
+// `breeze.schemas.ts` types as text. Only a string directly under one of
+// these fields (or a string element of such an array, e.g. `osTypes`) may
+// use the word-shape exemption from the entropy test. Nothing nested inside
+// free-form JSON qualifies — `features[].settings`, script `parameters`,
+// automation `trigger`/`conditions`/`actions`, backup `notes` — whatever its
+// key is called, so a passphrase under `settings.description` is quarantined
+// exactly as before.
+const SCHEMA_LABEL_FIELDS: ReadonlySet<string> = new Set([
+  'name', 'policyname', 'description', 'category', 'ostypes', 'rolefilter', 'osfilter',
+  'devicetypes', 'fieldkey',
+]);
+// Words in an operator-chosen custom-field name that declare the field a
+// descriptor rather than a free-text container.
+const CUSTOM_FIELD_DESCRIPTOR_TOKENS: ReadonlySet<string> = new Set([
+  'hostname', 'host', 'name', 'label', 'title', 'tag', 'assettag', 'model', 'serial',
+  'serialnumber', 'location', 'rack', 'site', 'room', 'vendor', 'publisher', 'version',
+  'package', 'product', 'path', 'url', 'owner', 'department', 'timezone',
+]);
+const CUSTOM_FIELD_CONTENT_FIELDS: readonly string[] = ['value', 'defaultvalue', 'options'];
+
+/**
+ * Record-specific top-level fields whose values are labels. A custom field's
+ * content (`value`, `defaultValue`, `options`) is a label when the field is
+ * not free text (dropdown choices, numbers, booleans, dates) or when the
+ * operator named the field as a descriptor ("Hostname", "Asset tag",
+ * "Rack"). A free-text field with any other name is a secret-capable
+ * position.
+ */
+function labelValueKeysFor(
+  endpoint: BreezeSourceEndpoint,
+  record: Record<string, unknown>,
+): ReadonlySet<string> {
+  if (endpoint !== 'custom-fields' && endpoint !== 'custom-field-values') return new Set();
+  const descriptorField = [record['fieldKey'], record['name']]
+    .filter((candidate): candidate is string => typeof candidate === 'string')
+    .some((candidate) => splitConfigurationFieldName(candidate)
+      .some((token) => CUSTOM_FIELD_DESCRIPTOR_TOKENS.has(token)));
+  return record['type'] !== 'text' || descriptorField ? new Set(CUSTOM_FIELD_CONTENT_FIELDS) : new Set();
+}
+
+function isSchemaLabelField(key: string, extraLabelFields: ReadonlySet<string>): boolean {
+  const joined = splitConfigurationFieldName(key).at(-1) ?? '';
+  return SCHEMA_LABEL_FIELDS.has(joined) || extraLabelFields.has(joined);
+}
+
+function inspectDesiredConfiguration(
+  root: unknown,
+  extraLabelFields: ReadonlySet<string> = new Set(),
+): 'safe' | 'sensitive' | 'bounds_exceeded' {
+  const pending: Array<{
+    value: unknown;
+    depth: number;
+    trustedRevision?: boolean;
+    labelValue: boolean;
+  }> = [{ value: root, depth: 0, labelValue: false }];
   let visited = 0;
   while (pending.length > 0) {
-    const { value, depth, trustedRevision } = pending.pop()!;
+    const { value, depth, trustedRevision, labelValue } = pending.pop()!;
     visited += 1;
     if (visited > 10_000 || depth > 32) return 'bounds_exceeded';
     if (typeof value === 'string') {
       if (value.length > 12_288) return 'bounds_exceeded';
-      if (!(trustedRevision && SHA256_PATTERN.test(value)) && isSecretLikeConfigurationValue(value)) {
+      if (
+        !(trustedRevision && SHA256_PATTERN.test(value)) &&
+        isSecretLikeConfigurationValue(value, { allowWordShaped: labelValue })
+      ) {
         return 'sensitive';
       }
       continue;
     }
     if (!value || typeof value !== 'object') continue;
     if (Array.isArray(value)) {
-      for (const child of value) pending.push({ value: child, depth: depth + 1 });
+      // Only the string elements of a top-level label array (`osTypes:
+      // ['windows']`, dropdown options) keep the label role; any object
+      // inside an array is free-form JSON and is inspected strictly.
+      for (const child of value) {
+        pending.push({ value: child, depth: depth + 1, labelValue: labelValue && typeof child === 'string' });
+      }
       continue;
     }
     for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
       if (isForbiddenConfigurationKey(key)) return 'sensitive';
-      pending.push({ value: child, depth: depth + 1, trustedRevision: depth === 0 && key === 'revision' });
+      pending.push({
+        value: child,
+        depth: depth + 1,
+        trustedRevision: depth === 0 && key === 'revision',
+        // The label role exists only for the record's own top-level fields
+        // (depth 0 is the record object). A key inside nested JSON never
+        // grants it, whatever it is named.
+        labelValue: depth === 0 && isSchemaLabelField(key, extraLabelFields),
+      });
     }
   }
   return 'safe';
@@ -516,8 +588,107 @@ function boundedWindows(value: string, windowSize: number): string[] {
   return [...new Set(offsets)].map((offset) => value.slice(offset, offset + windowSize));
 }
 
-function candidateLooksHighEntropy(candidate: string): boolean {
+// Word-shaped runs are policy names, hostnames, package names, and URL paths:
+// separator-delimited segments that are each a plain word of at most 24
+// letters, a plain number, a word with a short numeric affix ("x64", "30d",
+// "01"), or a camelCase chain of such words ("ThisIsAnOrdinaryDescription").
+// Structure alone is not enough — two random 20-letter groups joined by a
+// hyphen have the same shape — so every alphabetic piece of five or more
+// letters must also read like a word (`isWordLikePiece`), and the run as a
+// whole may carry only a bounded number of letter pairs that English words
+// almost never contain. Encoded credentials fail one of these tests and
+// still reach the entropy check below. Word-likeness cannot tell a
+// hyphenated passphrase from a hyphenated policy name, so the exemption is
+// granted only for the record's top-level schema label fields
+// (`SCHEMA_LABEL_FIELDS`); see `inspectDesiredConfiguration`.
+const WORD_SEGMENT_PATTERN =
+  /^(?:[A-Za-z]{1,24}|[0-9]{1,8}|[A-Za-z]{1,24}[0-9]{1,4}|[0-9]{1,4}[A-Za-z]{1,24})$/u;
+const CAMEL_CASE_PATTERN = /^[a-z]{0,24}(?:[A-Z][a-z]{1,23})+$/u;
+// A camelCase chain counts as words only when its pieces average at least
+// 4 letters: prose ("ThisIsAnOrdinaryDescription") does, while a random
+// alternating-case token ("kJhGfDsAqWeRt…") averages 2.
+const MIN_AVERAGE_CAMEL_PIECE_LENGTH = 4;
+// Letter pairs found in fewer than 0.04% of the 235,976 entries of the BSD
+// `web2` dictionary, minus five that English compounds join across a
+// morpheme boundary ("update", "lockdown", "speedtest", "offboarding").
+// Measured against 300,000 random letter groups per shape, the combined
+// word-likeness test admits at most 0.16% of them (four 8-letter groups)
+// and usually fewer than 0.06%, while 265 of 272 common IT product and
+// command names still read as words.
+const RARE_LETTER_BIGRAMS: ReadonlySet<string> = new Set((
+  'bf bg bk bn bq bv bw bx bz cb cd cf cg cj cm cp cv cw cx cz dk dp dq dx ' +
+  'dz fc fd fg fh fj fk fm fn fp fq fs fv fw fx fz gc gd gf gj gk gp gq gv ' +
+  'gx gz hc hd hg hh hj hk hq hv hx hz ij iw iy jb jc jd jf jg jh jj jk jl ' +
+  'jm jn jp jq jr js jt jv jw jx jy jz kc kg kj kk kp kq kv kx kz lj lq lx ' +
+  'lz mc md mg mh mj mk mq mr mt mv mw mx mz nx pc pg pj pk pq pv px pz qa ' +
+  'qb qc qd qe qf qg qh qi qj qk ql qm qn qo qp qq qr qs qt qv qw qx qy qz ' +
+  'rq rx rz sj sv sx sz tj tk tq tv tx uh uj uq uu uw uy vb vc vd vf vg vh ' +
+  'vj vk vl vm vn vp vq vr vs vt vv vw vx vy vz wc wf wg wj wm wp wq wt wu ' +
+  'wv ww wx wz xb xd xf xg xj xk xl xm xn xq xr xs xv xw xx xz yj yk yq yv ' +
+  'yy zb zc zd zf zg zh zj zk zm zn zp zq zr zs zt zu zv zw zx '
+).trim().split(' '));
+const VOWEL_PATTERN = /[aeiouy]/gu;
+const CONSONANT_CLUSTER_PATTERN = /[^aeiouy]{6,}/u;
+const MIN_VOWEL_RATIO = 0.1;
+// Word-likeness is judged on pieces of five or more letters; shorter pieces
+// are abbreviations ("srv", "HKLM", "msi") that carry no signal either way.
+const MIN_JUDGED_PIECE_LENGTH = 5;
+// A piece of six or more letters may contain one rare pair (English does:
+// "Bitlocker" has "tl"); a five-letter piece may contain none.
+const MIN_PIECE_LENGTH_FOR_ONE_RARE_PAIR = 6;
+// Across the whole run, allow one rare pair plus one more per 24 letters.
+const RARE_PAIR_RUN_ALLOWANCE_PER_LETTERS = 24;
+
+function rareLetterPairCount(lowerPiece: string): number {
+  let count = 0;
+  for (let index = 0; index < lowerPiece.length - 1; index += 1) {
+    if (RARE_LETTER_BIGRAMS.has(lowerPiece.slice(index, index + 2))) count += 1;
+  }
+  return count;
+}
+function isWordLikePiece(piece: string): boolean {
+  if (piece.length < MIN_JUDGED_PIECE_LENGTH) return true;
+  const lower = piece.toLowerCase();
+  const vowels = lower.match(VOWEL_PATTERN)?.length ?? 0;
+  if (vowels / lower.length < MIN_VOWEL_RATIO) return false;
+  if (CONSONANT_CLUSTER_PATTERN.test(lower)) return false;
+  const allowedRarePairs = lower.length >= MIN_PIECE_LENGTH_FOR_ONE_RARE_PAIR ? 1 : 0;
+  return rareLetterPairCount(lower) <= allowedRarePairs;
+}
+/** Alphabetic pieces of a segment, or null when the segment is not word-shaped. */
+function wordPieces(segment: string): string[] | null {
+  let pieces: string[];
+  if (WORD_SEGMENT_PATTERN.test(segment)) {
+    pieces = [segment.replace(/[0-9]/gu, '')];
+  } else if (CAMEL_CASE_PATTERN.test(segment)) {
+    pieces = segment.split(/(?=[A-Z])/u).filter(Boolean);
+    if (segment.length / pieces.length < MIN_AVERAGE_CAMEL_PIECE_LENGTH) return null;
+  } else {
+    return null;
+  }
+  return pieces.filter(Boolean);
+}
+function isWordShapedRun(candidate: string): boolean {
+  const segments = candidate.split(/[-_/]+/u).filter(Boolean);
+  if (segments.length === 0) return false;
+  const pieces: string[] = [];
+  for (const segment of segments) {
+    const segmentPieces = wordPieces(segment);
+    if (segmentPieces === null) return false;
+    pieces.push(...segmentPieces);
+  }
+  if (!pieces.every(isWordLikePiece)) return false;
+  let letters = 0;
+  let rarePairs = 0;
+  for (const piece of pieces) {
+    letters += piece.length;
+    rarePairs += rareLetterPairCount(piece.toLowerCase());
+  }
+  return rarePairs <= 1 + Math.floor(letters / RARE_PAIR_RUN_ALLOWANCE_PER_LETTERS);
+}
+function candidateLooksHighEntropy(candidate: string, allowWordShaped: boolean): boolean {
   if (candidate.length < 32 || UUID_PATTERN.test(candidate)) return false;
+  if (allowWordShaped && isWordShapedRun(candidate)) return false;
   const sampleSize = Math.min(64, candidate.length);
   return boundedWindows(candidate, sampleSize).some((sample) => shannonEntropy(sample) >= 3.2);
 }
@@ -549,13 +720,16 @@ function containsCredentialAssignment(value: string): boolean {
   return false;
 }
 
-function isSecretLikeConfigurationValue(value: string): boolean {
+function isSecretLikeConfigurationValue(
+  value: string,
+  { allowWordShaped }: { allowWordShaped: boolean },
+): boolean {
   const highEntropyCandidates = value.match(/[A-Za-z0-9+/_=-]{32,}/gu) ?? [];
   return SECRET_VALUE_PATTERNS.some((pattern) => pattern.test(value))
     || containsCredentialAssignment(value)
     || (/^[A-Za-z0-9_.-]{1,128}$/u.test(value)
       && splitConfigurationFieldName(value).some((token) => FORBIDDEN_CONFIGURATION_KEYS.has(token)))
-    || highEntropyCandidates.some(candidateLooksHighEntropy);
+    || highEntropyCandidates.some((candidate) => candidateLooksHighEntropy(candidate, allowWordShaped));
 }
 
 function isSensitiveScriptContent(content: string): boolean {

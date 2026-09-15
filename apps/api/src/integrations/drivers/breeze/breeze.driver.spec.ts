@@ -591,6 +591,111 @@ describe('Breeze transforms', () => {
       .toThrow(/blocked|secret|sensitive/i);
   });
 
+  it.each([
+    'Windows-Defender-Realtime-Protection-Policy',
+    'Veeam-Agent-Backup-Job-Daily-Full-Retain-14-Days',
+    'Install-WindowsUpdate-AcceptAll-AutoReboot',
+    'ThisIsAnOrdinaryDescriptionWithoutSpaces',
+    'srv-fileserver-primary-datacenter-01',
+    'https://downloads.example.com/agent/windows/x64/latest/agent-installer.exe',
+    'Windows-Update-Policy-For-All-Workstations',
+    'Bitdefender-Speedtest-Update-Lockdown',
+    'WindowsDefenderRealtimeProtectionPolicyForAllManagedWorkstations',
+  ])('does not quarantine word-shaped text in top-level schema label fields: %s', (text) => {
+    const policy = {
+      ...base, siteId: null, sourceScope: 'organization', name: text, description: text,
+      status: 'active',
+      features: [{ id: SEGMENT, type: 'settings', policyId: null, settings: null }],
+    };
+    expect(() => transformBreezeRecord('configuration-policies', policy)).not.toThrow();
+    expect(() => transformBreezeRecord('scripts', {
+      ...base, siteId: null, sourceScope: 'organization', name: text, description: text,
+      category: text.slice(0, 100), osTypes: [text.slice(0, 50)], language: 'bash', content: 'true',
+      parameters: null, timeoutSeconds: 30, runAs: 'system', version: 1, exitCodeSeverityMapping: null,
+    })).not.toThrow();
+    const descriptorField = {
+      ...base, deviceId: DEVICE, definitionId: SEGMENT, target: { type: 'device', id: DEVICE },
+      name: 'Asset tag', fieldKey: 'asset_tag', type: 'text', value: text,
+    };
+    expect(() => transformBreezeRecord('custom-field-values', descriptorField)).not.toThrow();
+    const dropdown = { ...descriptorField, name: 'Tier', fieldKey: 'tier', type: 'dropdown' };
+    expect(() => transformBreezeRecord('custom-field-values', dropdown)).not.toThrow();
+  });
+
+  it.each([
+    'correct-horse-battery-staple-marble-hamlet',
+    'Windows-Defender-Realtime-Protection-Policy',
+  ])('keeps the entropy rule for word-shaped text outside top-level schema label fields: %s', (text) => {
+    const policy = (settings: Record<string, unknown>) => ({
+      ...base, siteId: null, sourceScope: 'organization', name: 'Safe policy', description: null,
+      status: 'active', features: [{ id: SEGMENT, type: 'settings', policyId: null, settings }],
+    });
+    expect(() => transformBreezeRecord('configuration-policies', policy({ value: text })))
+      .toThrow(/blocked|secret|sensitive/i);
+    expect(() => transformBreezeRecord('configuration-policies', policy({ registry: { data: text } })))
+      .toThrow(/blocked|secret|sensitive/i);
+    // A nested key named like a label grants nothing: only the record's own
+    // top-level schema fields carry the label role.
+    expect(() => transformBreezeRecord('configuration-policies', policy({ description: text })))
+      .toThrow(/blocked|secret|sensitive/i);
+    expect(() => transformBreezeRecord('configuration-policies', policy({ name: text, displayName: text })))
+      .toThrow(/blocked|secret|sensitive/i);
+    expect(() => transformBreezeRecord('automations', {
+      ...base, siteId: null, sourceScope: 'organization', name: 'Safe automation', description: null,
+      enabled: true, trigger: { type: 'schedule' }, conditions: null,
+      actions: [{ type: 'script', description: text }], onFailure: 'stop', notificationTargets: null,
+      dependencies: [],
+    })).toThrow(/blocked|secret|sensitive/i);
+    expect(() => transformBreezeRecord('scripts', {
+      ...base, siteId: null, sourceScope: 'organization', name: 'Safe', description: null,
+      category: null, osTypes: ['linux'], language: 'bash', content: 'true',
+      parameters: { description: text }, timeoutSeconds: 30, runAs: 'system', version: 1,
+      exitCodeSeverityMapping: null,
+    })).toThrow(/blocked|secret|sensitive/i);
+    expect(() => transformBreezeRecord('custom-fields', {
+      ...base, siteId: null, sourceScope: 'partner', name: 'Tier', fieldKey: 'tier', type: 'dropdown',
+      options: [{ label: 'Gold', description: text }], required: false, defaultValue: null, deviceTypes: null,
+    })).toThrow(/blocked|secret|sensitive/i);
+    const freeText = {
+      ...base, deviceId: DEVICE, definitionId: SEGMENT, target: { type: 'device', id: DEVICE },
+      name: 'WiFi notes', fieldKey: 'wifi_notes', type: 'text', value: text,
+    };
+    expect(() => transformBreezeRecord('custom-field-values', freeText)).toThrow(/blocked|secret|sensitive/i);
+    expect(() => transformBreezeRecord('scripts', {
+      ...base, siteId: null, sourceScope: 'organization', name: 'Safe', description: null,
+      category: null, osTypes: ['linux'], language: 'bash', content: 'true', parameters: { seed: text },
+      timeoutSeconds: 30, runAs: 'system', version: 1, exitCodeSeverityMapping: null,
+    })).toThrow(/blocked|secret|sensitive/i);
+  });
+
+  it('treats a custom field named as a passphrase as a forbidden key regardless of its value', () => {
+    expect(() => transformBreezeRecord('custom-field-values', {
+      ...base, deviceId: DEVICE, definitionId: SEGMENT, target: { type: 'device', id: DEVICE },
+      name: 'WiFi passphrase', fieldKey: 'wifi_passphrase', type: 'text', value: 'short',
+    })).toThrow(/blocked|secret|sensitive/i);
+  });
+
+  it.each([
+    'JBSWY3DPEHPK3PXP'.repeat(3),
+    'kJhGfDsAqWeRtYuIoPlKjHgFdSaZxCvBnMqAzWsXe',
+    'zqvxkwjfhdgtnbrmplycsoeuiazqvxkwjfhdgtnb',
+    'QZVXKWJFHDGTNBRMPLYCSOEUIAQZVXKWJFHDGTNB',
+    'zqvxkwjfhdgtnbrmplycs-oeuiazqvxkwjfhdgtnb',
+    'QZVXKWJFHDGTNBRMPLYC-SOEUIAQZVXKWJFHDGTNB',
+    'kJhGf-DsAqWeRtYuIoPl-KjHgFdSaZxCvBnM',
+    'xkwqzjvfhbgtpdmcnslr-ytwkxjqzvfhgbpdmcn',
+    'gwqxzt_vjkpfhb_dmnrls_ytwqxz_jvkpfh_gbdmnc',
+    'AIzaSyD-9tSrke72PouQMnMX-a7eZSW0jkFMBxY',
+    '47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=',
+    'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c',
+  ])('still quarantines encoded credential material: %s', (text) => {
+    const policy = {
+      ...base, siteId: null, sourceScope: 'organization', name: 'Safe policy', description: null,
+      status: 'active', features: [{ id: SEGMENT, type: 'settings', policyId: null, settings: { value: text } }],
+    };
+    expect(() => transformBreezeRecord('configuration-policies', policy)).toThrow(/blocked|secret|sensitive/i);
+  });
+
   it('preserves a benign desired-configuration inspection bound as a bounded error', () => {
     const oversizedPolicy = {
       ...base, siteId: null, sourceScope: 'organization', name: 'Large benign policy',
@@ -1488,7 +1593,8 @@ describe('BreezeDriver transport delegation', () => {
     expect(page.records).toHaveLength(1);
     expect(page.blockedInputs).toEqual([expect.objectContaining({
       kind: 'secret_blocked', externalId: `${ORG}:scripts:${DEVICE}`,
-      details: expect.objectContaining({ reasonCode: 'secret_detected', sourceId: DEVICE }),
+      message: expect.stringMatching(/^Weavestream withheld a scripts record/),
+      details: expect.objectContaining({ reasonCode: 'secret_like_material', sourceId: DEVICE }),
     })]);
     const serialized = JSON.stringify(page);
     expect(serialized).not.toContain(content);
@@ -1632,7 +1738,7 @@ describe('BreezeDriver transport delegation', () => {
     expect(page.records).toHaveLength(1);
     expect(page.blockedInputs).toEqual([expect.objectContaining({
       kind: 'secret_blocked', externalId: `${ORG}:scripts:${DEVICE}`,
-      details: expect.objectContaining({ reasonCode: 'secret_detected', sourceId: DEVICE }),
+      details: expect.objectContaining({ reasonCode: 'secret_like_material', sourceId: DEVICE }),
     })]);
     const serialized = JSON.stringify(page);
     expect(serialized).not.toContain(secret);
@@ -1904,7 +2010,7 @@ describe('BreezeDriver transport delegation', () => {
         {
           kind: 'secret_blocked',
           externalId: `${ORG}:devices:${DEVICE}`,
-          message: 'Breeze withheld a record because secret material was detected.',
+          message: expect.stringMatching(/^Breeze withheld a devices record/),
           details: {
             reasonCode: 'secret_detected',
             fieldPaths: ['hardwareIdentity.serialNumber'],

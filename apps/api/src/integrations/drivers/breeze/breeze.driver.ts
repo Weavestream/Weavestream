@@ -461,7 +461,7 @@ export class BreezeDriver implements IntegrationDriver {
         ...(page.blocked ?? []).map((blocked) => ({
         kind: 'secret_blocked' as const,
         externalId: `${blocked.orgId}:${resource.data}:${blocked.id}`,
-        message: 'Breeze withheld a record because secret material was detected.',
+        message: `Breeze withheld a ${resource.data} record because it detected secret material in it. Remove the secret from the record in Breeze and rerun the sync.`,
         details: {
           reasonCode: blocked.reason,
           fieldPaths: blocked.fieldPaths,
@@ -470,12 +470,16 @@ export class BreezeDriver implements IntegrationDriver {
           sourceId: blocked.id,
         },
         })),
+        // Weavestream's own inspection, not Breeze's: the record arrived in
+        // full and the transform quarantined it. Name the side that withheld
+        // it so an operator knows where to correct the definition, and keep a
+        // distinct reason code from Breeze's `secret_detected`.
         ...inlineBlocked.map((blocked) => ({
           kind: 'secret_blocked' as const,
           externalId: `${blocked.orgId}:${resource.data}:${blocked.id}`,
-          message: 'Breeze withheld a record because secret material was detected.',
+          message: `Weavestream withheld a ${resource.data} record because its definition contains secret-like material. Remove the credential-like value from the record in Breeze and rerun the sync.`,
           details: {
-            reasonCode: 'secret_detected',
+            reasonCode: 'secret_like_material',
             fieldPaths: [],
             sourceResource: resource.data,
             sourceOrgId: blocked.orgId,
@@ -485,7 +489,7 @@ export class BreezeDriver implements IntegrationDriver {
         ...boundedBlocked.map((blocked) => ({
           kind: 'validation' as const,
           externalId: `${blocked.orgId}:${resource.data}:${blocked.id}`,
-          message: 'Breeze withheld a record because it exceeds a native field bound.',
+          message: `Weavestream withheld a ${resource.data} record because it exceeds a native field bound.`,
           details: {
             reasonCode: 'bounded_input',
             sourceResource: resource.data,

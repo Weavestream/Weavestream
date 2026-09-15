@@ -310,7 +310,7 @@ export const driverDescriptorSchema = z
      * its synced records are a disaster-recovery dossier, so the framework
      * evaluates the ten documentation capabilities (credentials, backup /
      * restore, rebuild steps, …) after every authoritative sync and
-     * surfaces "Document the missing …" gaps for absent ones. Default
+     * surfaces "Reconstruction checklist: …" gaps for absent ones. Default
      * false: asset-projection drivers (NinjaOne, Action1, UniFi, …) only
      * mirror inventory fields — scoring them against dossier requirements
      * would report permanently-missing capabilities they never claimed to
@@ -820,7 +820,7 @@ export const syncRunTotalsSchema = z.object({
 export type SyncRunTotals = z.infer<typeof syncRunTotalsSchema>;
 
 export const syncRunConflictSchema = z.object({
-  kind: z.enum(['ambiguous_match', 'manual_skip', 'validation_error', 'driver_error']),
+  kind: z.enum(['ambiguous_match', 'manual_skip', 'validation_error', 'driver_error', 'secret_blocked']),
   externalId: z.string(),
   /** Free-form summary line for the run viewer. */
   message: z.string(),
