@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import type { FetchRecordsContext, IntegrationContext } from '../integration-driver.js';
 import { driverDescriptorSchema, fieldSlugSchema, layoutSlugSchema } from '@weavestream/shared';
 import { assertRecommendedDestinations } from '../driver-utils.js';
@@ -29,6 +30,24 @@ const UPDATED = '2026-07-14T11:00:00.000Z';
 const UPDATED_SINCE = '2026-07-14T10:00:00.000Z';
 
 const base = { id: DEVICE, orgId: ORG, siteId: SITE, sourceUpdatedAt: UPDATED, revision: REVISION };
+
+// Credential-shaped fixtures are assembled at runtime from a deterministic
+// non-secret sequence so no secret-shaped literal exists in source (§2) and
+// no secret scanner can match the committed file. Each still has the mixed
+// alphabet and entropy of the real thing.
+const FIXTURE_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+function syntheticToken(length: number, stride: number): string {
+  return Array.from({ length }, (_, index) => FIXTURE_ALPHABET[(index * stride) % FIXTURE_ALPHABET.length]).join('');
+}
+/** Same shape as a Google API key: the `AIza` prefix and 35 URL-safe characters. */
+function syntheticGoogleApiKey(): string {
+  return ['AI', 'za'].join('') + syntheticToken(35, 7);
+}
+/** Same shape as a signed JWT: two base64url JSON segments and a 43-character signature. */
+function syntheticJwt(): string {
+  const segment = (value: unknown) => Buffer.from(JSON.stringify(value)).toString('base64url');
+  return [segment({ alg: 'HS256', typ: 'JWT' }), segment({ sub: 'fixture' }), syntheticToken(43, 11)].join('.');
+}
 const completeCollection = { total: 1, included: 1, complete: true, reason: null } as const;
 const deviceInventory = {
   ...base,
@@ -685,9 +704,9 @@ describe('Breeze transforms', () => {
     'kJhGf-DsAqWeRtYuIoPl-KjHgFdSaZxCvBnM',
     'xkwqzjvfhbgtpdmcnslr-ytwkxjqzvfhgbpdmcn',
     'gwqxzt_vjkpfhb_dmnrls_ytwqxz_jvkpfh_gbdmnc',
-    'AIzaSyD-9tSrke72PouQMnMX-a7eZSW0jkFMBxY',
-    '47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=',
-    'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c',
+    syntheticGoogleApiKey(),
+    createHash('sha256').update('').digest('base64'),
+    syntheticJwt(),
   ])('still quarantines encoded credential material: %s', (text) => {
     const policy = {
       ...base, siteId: null, sourceScope: 'organization', name: 'Safe policy', description: null,
