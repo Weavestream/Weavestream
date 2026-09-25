@@ -7,7 +7,7 @@
 # network, and shares a host-bind-mounted file storage directory with
 # the api container.
 # ───────────────────────────────────────────────────────────────────────
-FROM node:24-alpine AS base
+FROM node:26-alpine AS base
 RUN apk add --no-cache libc6-compat openssl tini
 ENV PNPM_HOME="/pnpm" \
     PATH="/pnpm:$PATH" \
@@ -44,7 +44,7 @@ RUN --mount=type=cache,id=pnpm,target=/pnpm/store \
     CI=true pnpm install --frozen-lockfile --prod
 
 # ───── runner ─────
-FROM node:24-alpine AS runner
+FROM node:26-alpine AS runner
 # `postgresql16-client` ships `pg_dump` for the scheduled Postgres
 # export feature. Pinned to the same major as the `postgres:16-alpine`
 # image used by the database service in compose.yml so the dump format
