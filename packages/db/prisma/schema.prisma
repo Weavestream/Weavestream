@@ -1030,6 +1030,14 @@ model AiSetting {
 // unique index in raw SQL — see migration 0011_phase8_domain_monitor —
 // so an archived row doesn't block re-adding a hostname, mirroring the
 // article/folder pattern.
+/// Where a monitored domain came from. MANUAL rows are operator-entered and
+/// fully editable. CLOUDFLARE rows are created and refreshed by registrar sync;
+/// their hostname and registrar fields are owned by Cloudflare.
+enum DomainSource {
+  MANUAL
+  CLOUDFLARE
+}
+
 model MonitoredDomain {
   id                   String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   companyId            String       @map("company_id") @db.Uuid
@@ -1061,6 +1069,25 @@ model MonitoredDomain {
   // engine probes in addition to its MX-keyed defaults. NULL = use
   // defaults only.
   dkimSelectorOverride String?      @map("dkim_selector_override")
+  // Registrar sync. Populated only for CLOUDFLARE-sourced rows; MANUAL rows
+  // leave these null. Registrar data is authoritative where WHOIS is not —
+  // notably `registrarAutoRenew`, which no WHOIS response exposes and which is
+  // the field that distinguishes "renews itself" from "lapses silently".
+  source                DomainSource @default(MANUAL)
+  integrationId         String?      @map("integration_id") @db.Uuid
+  cloudflareAccountId   String?      @map("cloudflare_account_id")
+  registrar             String?
+  registrarAutoRenew    Boolean?     @map("registrar_auto_renew")
+  registrarLocked       Boolean?     @map("registrar_locked")
+  registrarRegisteredAt DateTime?    @map("registrar_registered_at")
+  registrarExpiresAt    DateTime?    @map("registrar_expires_at")
+  registrarStatuses     String[]     @default([]) @map("registrar_statuses")
+  nameservers           String[]     @default([])
+  registrarSyncedAt     DateTime?    @map("registrar_synced_at")
+  /// Set when a previously-synced domain stops appearing in Cloudflare (moved
+  /// account, transferred out, expired). Never auto-deleted: the operator
+  /// decides whether it is gone or merely relocated.
+  registrarMissingSince DateTime?    @map("registrar_missing_since")
   archivedAt           DateTime?    @map("archived_at")
   createdBy            String?      @map("created_by") @db.Uuid
   createdAt            DateTime     @default(now()) @map("created_at")
@@ -1068,9 +1095,11 @@ model MonitoredDomain {
 
   checks DomainCheck[]
 
-  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  company     Company      @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  integration Integration? @relation(fields: [integrationId], references: [id], onDelete: SetNull)
 
   @@index([companyId, archivedAt], map: "monitored_domains_company_archived_idx")
+  @@index([integrationId], map: "monitored_domains_integration_idx")
   @@index([companyId, latestStatus], map: "monitored_domains_company_status_idx")
   @@map("monitored_domains")
 }
@@ -1302,6 +1331,7 @@ model Integration {
   resources         IntegrationResource[]
   syncRuns          IntegrationSyncRun[]
   cloudflareIpLists CloudflareIpList[]
+  monitoredDomains  MonitoredDomain[]
 
   @@unique([driver, name])
   @@index([driver])

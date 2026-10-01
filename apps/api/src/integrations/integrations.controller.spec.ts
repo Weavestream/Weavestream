@@ -52,6 +52,8 @@ describe('IntegrationsController security contract', () => {
       { get: jest.fn().mockReturnValue({ listSourceOrgs: jest.fn().mockResolvedValue(orgs) }) } as never,
       { values: { INTEGRATION_HTTP_TIMEOUT_MS: 1, INTEGRATION_HTTP_MAX_RETRIES: 0, INTEGRATION_HTTP_BACKOFF_MS: 1 } } as never,
       {} as never,
+      {} as never,
+      {} as never,
     );
 
     await expect(controller.listSourceOrgs('00000000-0000-4000-8000-000000000001')).resolves.toEqual({ orgs });
@@ -63,6 +65,8 @@ describe('IntegrationsController security contract', () => {
       {} as never,
       {} as never,
       { triggerManual } as never,
+      {} as never,
+      {} as never,
       {} as never,
       {} as never,
       {} as never,
@@ -93,6 +97,8 @@ describe('IntegrationsController security contract', () => {
     };
     const controller = new IntegrationsController(
       integrations as never, {} as never, {} as never, {} as never, {} as never, {} as never,
+      {} as never,
+      {} as never,
     );
     const query = {
       mappingId: '00000000-0000-4000-8000-000000000002',
@@ -300,5 +306,137 @@ describe('IntegrationsService resource seeding', () => {
       ['devices', true],
       ['device-relationships', false],
     ]);
+  });
+});
+
+describe('IntegrationsController Cloudflare domains company binding', () => {
+  const ACTOR = { id: 'u-1', role: 'OPERATOR' } as never;
+  const COMPANY = { id: '00000000-0000-4000-8000-0000000000c1', archivedAt: null };
+
+  function make(allowed: boolean) {
+    const create = jest.fn(async (_u: unknown, dto: { config: unknown }) => dto);
+    const can = jest.fn().mockResolvedValue({ allowed });
+    const controller = new IntegrationsController(
+      { create } as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      { company: { findUnique: jest.fn().mockResolvedValue(COMPANY) } } as never,
+      { can } as never,
+    );
+    return { controller, create, can };
+  }
+  const req = { headers: {}, ip: '198.51.100.7' } as never;
+
+  it('stores the resolved company id once the saver may manage domains there', async () => {
+    const { controller, create, can } = make(true);
+    await controller.create(
+      ACTOR,
+      { driver: 'cloudflare', name: 'cf', config: { accountId: 'a', domainsCompanySlug: ' client ' } } as never,
+      req,
+    );
+    expect(can).toHaveBeenCalledWith(ACTOR, 'domain.manage', { companyId: COMPANY.id });
+    expect(create.mock.calls[0]![1].config).toEqual({
+      accountId: 'a',
+      domainsCompanySlug: 'client',
+      domainsCompanyId: COMPANY.id,
+    });
+  });
+
+  it('refuses a company the saver cannot manage domains in', async () => {
+    const { controller, create } = make(false);
+    await expect(
+      controller.create(
+        ACTOR,
+        { driver: 'cloudflare', name: 'cf', config: { accountId: 'a', domainsCompanySlug: 'other' } } as never,
+        req,
+      ),
+    ).rejects.toThrow(/cannot manage domains/);
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('keeps the bound id without re-checking when the slug is unchanged', async () => {
+    // Re-resolving would 403 an editor without access to that company and,
+    // after a slug rename, could silently point the sync at another company.
+    const update = jest.fn(async (_u: unknown, _id: string, dto: { config: unknown }) => dto);
+    const can = jest.fn();
+    const findUnique = jest.fn();
+    const controller = new IntegrationsController(
+      {
+        update,
+        get: jest.fn().mockResolvedValue({
+          driver: 'cloudflare',
+          config: { accountId: 'a', domainsCompanySlug: 'client', domainsCompanyId: COMPANY.id },
+        }),
+      } as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      { company: { findUnique } } as never,
+      { can } as never,
+    );
+    await controller.update(
+      ACTOR,
+      '00000000-0000-4000-8000-000000000001',
+      { config: { accountId: 'a', domainsCompanySlug: 'client', note: 'x' } } as never,
+      req,
+    );
+    expect(can).not.toHaveBeenCalled();
+    expect(findUnique).not.toHaveBeenCalled();
+    expect(update.mock.calls[0]![2].config).toEqual({
+      note: 'x',
+      accountId: 'a',
+      domainsCompanySlug: 'client',
+      domainsCompanyId: COMPANY.id,
+    });
+  });
+
+  it('re-checks when the Cloudflare account changes, even with the same slug', async () => {
+    // Otherwise someone with integration.manage could point an authorised
+    // binding at their own account and write into a company they can't manage.
+    const can = jest.fn().mockResolvedValue({ allowed: false });
+    const controller = new IntegrationsController(
+      {
+        update: jest.fn(),
+        get: jest.fn().mockResolvedValue({
+          driver: 'cloudflare',
+          config: { accountId: 'a', domainsCompanySlug: 'client', domainsCompanyId: COMPANY.id },
+        }),
+      } as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      { company: { findUnique: jest.fn().mockResolvedValue(COMPANY) } } as never,
+      { can } as never,
+    );
+    await expect(
+      controller.update(
+        ACTOR,
+        '00000000-0000-4000-8000-000000000001',
+        { config: { accountId: 'attacker', domainsCompanySlug: 'client' } } as never,
+        req,
+      ),
+    ).rejects.toThrow(/cannot manage domains/);
+    expect(can).toHaveBeenCalled();
+  });
+
+  it('discards a client-supplied company id', async () => {
+    const { controller, create } = make(true);
+    await controller.create(
+      ACTOR,
+      {
+        driver: 'cloudflare',
+        name: 'cf',
+        config: { accountId: 'a', domainsCompanyId: '00000000-0000-4000-8000-0000000000ff' },
+      } as never,
+      req,
+    );
+    expect(create.mock.calls[0]![1].config).toEqual({ accountId: 'a' });
   });
 });

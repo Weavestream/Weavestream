@@ -6,10 +6,27 @@ import {
   type CloudflareCallContext,
   type CloudflareList,
   type CloudflareListItem,
+  type CloudflareRegistrarDomain,
 } from './cloudflare-api.client.js';
 
 export const cloudflareConfigSchema = z.object({
   accountId: z.string().min(1, 'Cloudflare account id is required'),
+  /**
+   * Company that newly discovered domains are filed under. Empty = registrar
+   * sync off, so existing Zero Trust-only integrations are unaffected.
+   */
+  domainsCompanySlug: z
+    .string()
+    .trim()
+    .optional()
+    .transform((v) => (v ? v : undefined)),
+  /**
+   * Resolved from `domainsCompanySlug` by the integrations controller when the
+   * config is saved, after checking the saver may manage domains there. The
+   * sync uses this id, never the slug: slugs are editable, and a client
+   * cannot supply it (the controller always overwrites or strips it).
+   */
+  domainsCompanyId: z.string().uuid().optional(),
 });
 export type CloudflareConfig = z.infer<typeof cloudflareConfigSchema>;
 
@@ -52,6 +69,14 @@ export class CloudflareDriver {
         required: true,
         description:
           'Found on the Cloudflare dashboard overview page. All Gateway lists managed by this integration must live under this account.',
+      },
+      {
+        key: 'domainsCompanySlug',
+        label: 'Sync domains into company (slug)',
+        kind: 'text',
+        required: false,
+        description:
+          'Optional. When set, every domain on this Cloudflare account (registrar and zones) is synced into Domains on each sweep, with registration, expiry, auto-renew and nameservers. New domains are filed under this company; a domain you move to another company stays there. The token then also needs Account » Registrar: Domains » Read and Zone » Zone » Read. Leave empty to disable.',
       },
     ],
     secretFields: [
@@ -148,6 +173,29 @@ export class CloudflareDriver {
     const ctx = { apiToken, http, correlationId };
     const cfCurrent = await this.api.listListItems(accountId, listId, ctx);
     return this.api.syncListItems(accountId, listId, desired, cfCurrent, ctx);
+  }
+
+  /**
+   * Every domain the account holds, each with its authoritative registrar
+   * record. Sequential on purpose: ~one request per domain, and a sweep is a
+   * background job where Cloudflare's rate limit matters more than latency.
+   */
+  async listRegistrarDomains(
+    config: Record<string, unknown>,
+    secret: Record<string, unknown>,
+    http: { timeoutMs: number; maxRetries: number; backoffMs: number },
+    correlationId: string,
+  ): Promise<CloudflareRegistrarDomain[]> {
+    const { accountId } = cloudflareConfigSchema.parse(config);
+    const { apiToken } = cloudflareSecretSchema.parse(secret);
+    const ctx = { apiToken, http, correlationId };
+    const candidates = await this.api.listRegistrarCandidates(accountId, ctx);
+    const out: CloudflareRegistrarDomain[] = [];
+    for (const [name, hint] of candidates) {
+      const d = await this.api.getRegistrarDomain(accountId, name, hint, ctx);
+      if (d) out.push(d);
+    }
+    return out;
   }
 
   parseAccountId(config: Record<string, unknown>): string {

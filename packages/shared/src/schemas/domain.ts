@@ -400,6 +400,17 @@ export const monitoredDomainSchema = z.object({
   latestScore: z.number().int().min(0).max(100).nullable(),
   /** v2 — comma-separated DKIM selectors to probe in addition to defaults. */
   dkimSelectorOverride: z.string().nullable(),
+  /** MANUAL = typed in; CLOUDFLARE = owned by the registrar sync. */
+  source: z.enum(['MANUAL', 'CLOUDFLARE']),
+  registrar: z.string().nullable(),
+  registrarAutoRenew: z.boolean().nullable(),
+  registrarLocked: z.boolean().nullable(),
+  registrarRegisteredAt: z.string().nullable(),
+  registrarExpiresAt: z.string().nullable(),
+  registrarStatuses: z.array(z.string()),
+  nameservers: z.array(z.string()),
+  registrarSyncedAt: z.string().nullable(),
+  registrarMissingSince: z.string().nullable(),
   archivedAt: z.string().nullable(),
   createdBy: z.string().uuid().nullable(),
   createdAt: z.string(),

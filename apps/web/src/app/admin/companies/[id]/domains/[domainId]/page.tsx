@@ -71,6 +71,7 @@ export default async function DomainDetailPage({
             ) : (
               <Tag tone="outline">internal</Tag>
             )}
+            {domain.source === 'CLOUDFLARE' && <Tag tone="cloudflare">Cloudflare</Tag>}
             {domain.archivedAt && <Tag tone="warn">archived</Tag>}
           </span>
         }
@@ -135,6 +136,55 @@ export default async function DomainDetailPage({
             />
           </div>
         </Panel>
+
+        {domain.source === 'CLOUDFLARE' && (
+          <Panel title="Registrar (synced from Cloudflare)">
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))',
+                gap: 16,
+              }}
+            >
+              <Stat
+                label="Expires"
+                value={fmtDate(domain.registrarExpiresAt)}
+                sub={fmtRelativeFuture(domain.registrarExpiresAt)}
+              />
+              <Stat
+                label="Auto-renew"
+                value={
+                  domain.registrarAutoRenew === null ? '—' : domain.registrarAutoRenew ? 'On' : 'Off'
+                }
+              />
+              <Stat label="Registrar" value={domain.registrar ?? '—'} />
+              <Stat label="Registered" value={fmtDate(domain.registrarRegisteredAt)} />
+              <Stat
+                label="Transfer lock"
+                value={
+                  domain.registrarLocked === null ? '—' : domain.registrarLocked ? 'Locked' : 'Unlocked'
+                }
+              />
+              <Stat
+                label="Last synced"
+                value={fmtRelativePast(domain.registrarSyncedAt) ?? 'never'}
+                sub={
+                  domain.registrarMissingSince
+                    ? `Not on the Cloudflare account since ${fmtDate(domain.registrarMissingSince)}`
+                    : undefined
+                }
+              />
+              <Stat
+                label="Nameservers"
+                value={domain.nameservers.length ? domain.nameservers.join(', ') : '—'}
+              />
+              <Stat
+                label="Registry status"
+                value={domain.registrarStatuses.length ? domain.registrarStatuses.join(', ') : '—'}
+              />
+            </div>
+          </Panel>
+        )}
 
         <Panel title="Check history" noPad>
           {checks.length === 0 ? (

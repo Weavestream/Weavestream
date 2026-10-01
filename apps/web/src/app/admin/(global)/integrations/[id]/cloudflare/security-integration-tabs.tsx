@@ -9,8 +9,9 @@ import type {
 } from '@weavestream/shared';
 import { CredentialsTab } from '../credentials-tab';
 import { RegisteredListsTab } from './registered-lists-tab';
+import { DomainsSyncTab } from './domains-sync-tab';
 
-type TabId = 'creds' | 'lists';
+type TabId = 'creds' | 'lists' | 'domains';
 
 const TABS: { id: TabId; label: string; help: string }[] = [
   {
@@ -22,6 +23,11 @@ const TABS: { id: TabId; label: string; help: string }[] = [
     id: 'lists',
     label: 'Lists',
     help: 'Register Cloudflare IP lists and edit their entries.',
+  },
+  {
+    id: 'domains',
+    label: 'Domains',
+    help: 'Sync registrar data for every domain on the account into Domains.',
   },
 ];
 
@@ -108,6 +114,7 @@ export function SecurityIntegrationTabs({
             initialLists={cloudflareLists}
           />
         )}
+        {tab === 'domains' && <DomainsSyncTab integration={integration} />}
       </div>
     </div>
   );

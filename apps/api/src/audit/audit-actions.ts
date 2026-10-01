@@ -174,6 +174,9 @@ export const AUDIT_ACTIONS = {
     cloudflareOverwrite: 'integration.cloudflare.overwrite',
     cloudflareDriftCheck: 'integration.cloudflare.drift_check',
     cloudflareDriftSelfHealed: 'integration.cloudflare.drift_self_healed',
+    // Registrar → MonitoredDomain sync. One summary row per run (counts and
+    // hostnames), entityType 'Integration'.
+    cloudflareRegistrarSync: 'integration.cloudflare.registrar_sync',
   },
   subnet: {
     create: 'subnet.create',

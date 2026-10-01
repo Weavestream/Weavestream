@@ -66,6 +66,19 @@ export interface SerializedMonitoredDomain {
   latestScore: number | null;
   /** v2 — operator-supplied extra DKIM selectors to probe. */
   dkimSelectorOverride: string | null;
+  /** Where the row came from. CLOUDFLARE rows are owned by the registrar sync. */
+  source: 'MANUAL' | 'CLOUDFLARE';
+  /** Registrar facts as last seen by the sync. All null on MANUAL rows. */
+  registrar: string | null;
+  registrarAutoRenew: boolean | null;
+  registrarLocked: boolean | null;
+  registrarRegisteredAt: Date | null;
+  registrarExpiresAt: Date | null;
+  registrarStatuses: string[];
+  nameservers: string[];
+  registrarSyncedAt: Date | null;
+  /** Set when a sync stopped finding the domain on the account. */
+  registrarMissingSince: Date | null;
   archivedAt: Date | null;
   createdBy: string | null;
   createdAt: Date;
@@ -330,6 +343,13 @@ export class DomainsService {
     const data: Prisma.MonitoredDomainUncheckedUpdateManyInput = {};
     if (input.hostname !== undefined) {
       const normalised = domainHostnameSchema.parse(input.hostname);
+      if (normalised !== existing.hostname && existing.source === 'CLOUDFLARE') {
+        // The sync matches on hostname; a rename would orphan this row and
+        // the next sweep would recreate the original beside it.
+        throw new BadRequestException(
+          'This domain is synced from Cloudflare; its hostname cannot be changed here.',
+        );
+      }
       if (normalised !== existing.hostname) {
         await this.assertHostnameFree(companyId, normalised, id);
       }
@@ -615,6 +635,16 @@ export class DomainsService {
       latestStatus: row.latestStatus,
       latestScore: row.latestScore,
       dkimSelectorOverride: row.dkimSelectorOverride,
+      source: row.source,
+      registrar: row.registrar,
+      registrarAutoRenew: row.registrarAutoRenew,
+      registrarLocked: row.registrarLocked,
+      registrarRegisteredAt: row.registrarRegisteredAt,
+      registrarExpiresAt: row.registrarExpiresAt,
+      registrarStatuses: row.registrarStatuses,
+      nameservers: row.nameservers,
+      registrarSyncedAt: row.registrarSyncedAt,
+      registrarMissingSince: row.registrarMissingSince,
       archivedAt: row.archivedAt,
       createdBy: row.createdBy,
       createdAt: row.createdAt,
