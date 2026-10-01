@@ -21,6 +21,7 @@ import { CurrentUser, type AuthedUser } from '../common/current-user.decorator.j
 import { RequirePermission } from '../rbac/require-permission.decorator.js';
 import { ZodBody } from '../common/zod-validation.pipe.js';
 import { ipOf, userAgentOf as uaOf } from '../common/request-meta.js';
+import { InteractiveOnly } from '../auth/interactive-only.decorator.js';
 
 /**
  * Company-scoped membership endpoints. companyId is in the URL path so
@@ -40,6 +41,7 @@ export class MembershipsCompanyController {
   }
 
   @Post()
+  @InteractiveOnly()
   @RequirePermission('membership.manage', { companyIdFrom: 'params.id' })
   async create(
     @CurrentUser() user: AuthedUser,
@@ -54,6 +56,7 @@ export class MembershipsCompanyController {
   }
 
   @Post('bulk')
+  @InteractiveOnly()
   @HttpCode(HttpStatus.OK)
   @RequirePermission('user.manage')
   async bulk(

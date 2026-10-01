@@ -15,6 +15,12 @@ export interface TenantContext {
    */
   globalAccess: GlobalAccess | null;
   requestId: string;
+  /**
+   * The API key behind this request, when it is not an interactive session.
+   * AuditLogService stamps it on every row written in this context, so a
+   * key's actions are never indistinguishable from its owner's.
+   */
+  apiKeyId?: string;
   ip: string;
   userAgent: string;
 }

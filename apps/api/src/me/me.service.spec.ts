@@ -46,6 +46,9 @@ function makeAudit() {
   return { log: jest.fn().mockResolvedValue(undefined) };
 }
 
+/** Stub: key revocation is asserted separately; here it just must exist. */
+const apiKeys = { revokeAllForUser: jest.fn().mockResolvedValue(0) };
+
 function makeService(
   prisma: unknown,
   audit: unknown,
@@ -58,6 +61,7 @@ function makeService(
     { replaceForUser: jest.fn() } as never,
     makeLockout() as never,
     audit as never,
+    apiKeys as never,
   );
 }
 
@@ -263,6 +267,7 @@ describe('MeService.changePassword', () => {
       { replaceForUser: jest.fn() } as never,
       lockout as never,
       audit as never,
+      apiKeys as never,
     );
 
     await expect(
@@ -292,6 +297,7 @@ describe('MeService.changePassword', () => {
       { replaceForUser: jest.fn() } as never,
       lockout as never,
       audit as never,
+      apiKeys as never,
     );
 
     await expect(
@@ -323,12 +329,12 @@ describe('MeService.changePassword', () => {
       recordChangePasswordFailure: jest.fn().mockResolvedValue(undefined),
       clearChangePasswordFailures: jest.fn().mockResolvedValue(undefined),
     };
-    const svc = new MeService(
-      prisma as never,
+    const svc = new MeService(prisma as never,
       passwords as never,
       { replaceForUser: jest.fn() } as never,
       lockout as never,
       makeAudit() as never,
+      apiKeys as never,
     );
 
     let thrown: unknown;
@@ -367,6 +373,7 @@ describe('MeService.changePassword', () => {
       { replaceForUser: jest.fn() } as never,
       lockout as never,
       audit as never,
+      apiKeys as never,
     );
 
     const out = await svc.changePassword(
@@ -375,7 +382,9 @@ describe('MeService.changePassword', () => {
       META,
     );
 
-    expect(out).toEqual({ ok: true });
+    // Reports how many API keys the change revoked, so the caller can tell the
+    // user their integrations just died rather than discovering it later.
+    expect(out).toEqual({ ok: true, apiKeysRevoked: 0 });
     expect(lockout.clearChangePasswordFailures).toHaveBeenCalledWith(ACTOR.id);
     expect(lockout.recordChangePasswordFailure).not.toHaveBeenCalled();
     expect(audit.log).toHaveBeenCalledWith(
@@ -398,12 +407,12 @@ describe('MeService.regenerateMfaBackupCodes', () => {
       replaceForUser: jest.fn().mockResolvedValue(['AAAAA-BBBBB']),
     };
     const audit = makeAudit();
-    const svc = new MeService(
-      prisma as never,
+    const svc = new MeService(prisma as never,
       { verify: jest.fn(), hash: jest.fn() } as never,
       backupCodes as never,
       makeLockout() as never,
       audit as never,
+      apiKeys as never,
     );
 
     const out = await svc.regenerateMfaBackupCodes(ACTOR, META);

@@ -249,6 +249,7 @@ model User {
   uploads                 Upload[]          @relation("UploadUploader")
 
   @@map("users")
+  apiKeys ApiKey[]
 }
 
 model Company {
@@ -442,6 +443,53 @@ model Session {
   @@map("sessions")
 }
 
+/// A long-lived, user-scoped credential for programmatic access (CLI, MCP,
+/// CI). An API key authenticates **as its creating user** and can only ever
+/// narrow that user's authority, never widen it: the permission engine runs
+/// unchanged against `userId`, so a key is at most as powerful as the human
+/// who minted it and dies with them (`onDelete: Cascade`).
+///
+/// Storage: `tokenHash` is a SHA-256 of the 32-byte random secret, not an
+/// Argon2 hash. That is deliberate and is *not* a violation of the
+/// password-hashing rule in CLAUDE.md §2 — a password is low-entropy and
+/// needs a slow KDF to survive offline cracking, whereas this secret is
+/// 256 bits of CSPRNG output with no guessable structure, so a fast digest
+/// is preimage-safe. It also has to be verified on *every* request, where
+/// an Argon2 verify would add ~100ms of CPU per call. `keyId` is a public,
+/// indexed lookup handle so verification reads exactly one row and then
+/// does a constant-time compare, rather than scanning every key.
+model ApiKey {
+  id         String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId     String    @map("user_id") @db.Uuid
+  /// Public half of the presented token (`ws_<keyId>_<secret>`). Indexed so
+  /// the secret half is never used to look a row up, only to verify one.
+  keyId      String    @unique @map("key_id")
+  /// SHA-256 of the secret half, hex encoded. The secret itself is shown
+  /// once at creation and is unrecoverable thereafter.
+  tokenHash  String    @map("token_hash")
+  /// Operator-facing label, e.g. "MCP server" or "nightly export".
+  name       String
+  /// Optional narrowing of the creating user's authority. Empty = inherit
+  /// the user's permissions unchanged. Never widens.
+  scopes     String[]  @default([])
+  /// Opt-in, default denied. Credential reveal is the single most dangerous
+  /// thing a key could do in a product whose job is holding client secrets, so
+  /// it is off unless the operator deliberately turns it on for this key.
+  allowPasswordReveal Boolean @default(false) @map("allow_password_reveal")
+  lastUsedAt DateTime? @map("last_used_at")
+  /// Null = no expiry. Set by default at creation; see ApiKeyService.
+  expiresAt  DateTime? @map("expires_at")
+  revokedAt  DateTime? @map("revoked_at")
+  createdBy  String?   @map("created_by") @db.Uuid
+  createdAt  DateTime  @default(now()) @map("created_at")
+  updatedAt  DateTime  @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, revokedAt], map: "api_keys_user_revoked_idx")
+  @@map("api_keys")
+}
+
 model UserMfaBackupCode {
   id         String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   userId     String    @map("user_id") @db.Uuid
@@ -488,6 +536,9 @@ model AuditLog {
   userAgent  String?  @map("user_agent")
   before     Json?
   after      Json?
+  /// API key that performed the action, when it was not an interactive session.
+  /// No FK: the audit row must outlive the key.
+  apiKeyId   String?  @map("api_key_id") @db.Uuid
   createdAt  DateTime @default(now()) @map("created_at")
 
   actor User? @relation("AuditActor", fields: [actorId], references: [id], onDelete: SetNull)

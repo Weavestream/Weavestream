@@ -64,6 +64,7 @@ import { AdminModule } from './admin/admin.module.js';
 import { AuthGuard } from './auth/guards/auth.guard.js';
 import { MfaEnrollmentGuard } from './auth/guards/mfa-enrollment.guard.js';
 import { CsrfGuard } from './auth/guards/csrf.guard.js';
+import { ApiKeySurfaceGuard } from './auth/guards/api-key-surface.guard.js';
 import { UserThrottlerGuard } from './auth/guards/user-throttler.guard.js';
 import { authThrottler } from './auth/guards/auth-throttle.js';
 import { PermissionGuard } from './rbac/permission.guard.js';
@@ -200,6 +201,9 @@ const httpSerializers = {
     { provide: APP_GUARD, useClass: AuthGuard },
     { provide: APP_GUARD, useClass: UserThrottlerGuard },
     { provide: APP_GUARD, useClass: MfaEnrollmentGuard },
+    // 4b. Runs once a principal exists: confines API keys to business routes
+    //     so a leaked key cannot reach password/MFA/session management.
+    { provide: APP_GUARD, useClass: ApiKeySurfaceGuard },
     { provide: APP_GUARD, useClass: CsrfGuard },
     { provide: APP_GUARD, useClass: PermissionGuard },
     // 7. `StepUpGuard` runs after the permission check so step-up is a

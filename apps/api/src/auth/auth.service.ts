@@ -21,6 +21,7 @@ import { AUDIT_ACTIONS } from '../audit/audit-actions.js';
 import { SetupTokenService } from '../users/setup-token.service.js';
 import { themeFromDb, accentFromDb } from './ui-preferences.mapping.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
+import { revokeApiKeysForUser } from './revoke-api-keys.js';
 
 /**
  * A refresh token that was just rotated away is remembered for one
@@ -413,6 +414,10 @@ export class AuthService {
         },
       });
       await tx.userMfaBackupCode.deleteMany({ where: { userId: user.id } });
+      // Same invariant as changePassword and resetMfa: keys die with the
+      // password. reissueInvite already revoked keys when the link was issued;
+      // this catches any minted between issue and acceptance.
+      await revokeApiKeysForUser(tx, user.id);
     });
 
     // Mint session immediately so the user bounces into /mfa/setup.

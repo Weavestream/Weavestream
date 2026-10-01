@@ -14,6 +14,7 @@ import {
   SecretEncryptionService,
   passwordVaultAad,
 } from './crypto/secret-encryption.service.js';
+import { revokeApiKeysForUser } from './auth/revoke-api-keys.js';
 
 async function bootstrap() {
   const app = await NestFactory.createApplicationContext(AppModule, { bufferLogs: true });
@@ -195,13 +196,21 @@ async function resetPassword(
     process.exit(1);
   }
   const hash = await passwords.hash(answers.password);
-  await prisma.user.update({
-    where: { id: user.id },
-    data: { passwordHash: hash },
-  });
-  await prisma.session.updateMany({
-    where: { userId: user.id, revokedAt: null },
-    data: { revokedAt: new Date() },
+  // One unit, as on the HTTP paths: a dropped connection must not leave the
+  // password rotated with the attacker's sessions or keys still live.
+  const { sessionsRevoked, apiKeysRevoked } = await prisma.$transaction(async (tx) => {
+    await tx.user.update({
+      where: { id: user.id },
+      data: { passwordHash: hash },
+    });
+    const sessions = await tx.session.updateMany({
+      where: { userId: user.id, revokedAt: null },
+      data: { revokedAt: new Date() },
+    });
+    // Keys die with sessions on every break-glass path, same invariant the
+    // HTTP handlers hold.
+    const keys = await revokeApiKeysForUser(tx, user.id);
+    return { sessionsRevoked: sessions.count, apiKeysRevoked: keys };
   });
   await audit.log({
     actorId: null,
@@ -211,10 +220,12 @@ async function resetPassword(
     ip: 'cli',
     userAgent: 'cli',
     before: null,
-    after: null,
+    after: { sessionsRevoked, apiKeysRevoked },
   });
   // eslint-disable-next-line no-console
-  console.log(`Password reset for ${user.email}. All sessions revoked.`);
+  console.log(
+    `Password reset for ${user.email}. Revoked ${sessionsRevoked} sessions and ${apiKeysRevoked} API keys.`,
+  );
 }
 
 async function resetMfa(
@@ -232,7 +243,7 @@ async function resetMfa(
     process.exit(1);
   }
 
-  await prisma.$transaction(async (tx) => {
+  const apiKeysRevoked = await prisma.$transaction(async (tx) => {
     await tx.user.update({
       where: { id: user.id },
       data: {
@@ -246,6 +257,9 @@ async function resetMfa(
       where: { userId: user.id, revokedAt: null },
       data: { revokedAt: new Date() },
     });
+    // Keys die with sessions on every break-glass path, same invariant the
+    // HTTP handlers hold.
+    return revokeApiKeysForUser(tx, user.id);
   });
 
   await audit.log({
@@ -259,9 +273,11 @@ async function resetMfa(
       mfaEnabled: user.mfaEnabled,
       mfaEnforcementCompletedAt: user.mfaEnforcementCompletedAt,
     },
-    after: { mfaEnabled: false, mfaEnforcementCompletedAt: null },
+    after: { mfaEnabled: false, mfaEnforcementCompletedAt: null, apiKeysRevoked },
   });
-  console.log(`MFA reset for ${user.email}. Backup codes removed and sessions revoked.`);
+  console.log(
+    `MFA reset for ${user.email}. Backup codes removed, sessions and ${apiKeysRevoked} API keys revoked.`,
+  );
 }
 
 async function listUsers(prisma: PrismaService): Promise<void> {
@@ -282,10 +298,19 @@ async function listUsers(prisma: PrismaService): Promise<void> {
 }
 
 async function rotateSessions(prisma: PrismaService, audit: AuditLogService): Promise<void> {
-  const res = await prisma.session.updateMany({
-    where: { revokedAt: null },
-    data: { revokedAt: new Date() },
-  });
+  // This command signs *everyone* out, so it revokes every key in the system
+  // too. A key that outlived it would be the one credential the operator's
+  // blast-radius reset did not reach. Both in one transaction.
+  const [res, keys] = await prisma.$transaction([
+    prisma.session.updateMany({
+      where: { revokedAt: null },
+      data: { revokedAt: new Date() },
+    }),
+    prisma.apiKey.updateMany({
+      where: { revokedAt: null },
+      data: { revokedAt: new Date() },
+    }),
+  ]);
   await audit.log({
     actorId: null,
     action: 'admin.rotate-sessions',
@@ -294,10 +319,10 @@ async function rotateSessions(prisma: PrismaService, audit: AuditLogService): Pr
     ip: 'cli',
     userAgent: 'cli',
     before: null,
-    after: { revokedCount: res.count },
+    after: { revokedCount: res.count, apiKeysRevoked: keys.count },
   });
   // eslint-disable-next-line no-console
-  console.log(`Revoked ${res.count} sessions.`);
+  console.log(`Revoked ${res.count} sessions and ${keys.count} API keys (all users).`);
 }
 
 async function reindexSearch(

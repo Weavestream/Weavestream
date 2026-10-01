@@ -8,6 +8,7 @@ import { Reflector } from '@nestjs/core';
 import type { Request, Response } from 'express';
 import { IS_PUBLIC_KEY } from '../../common/public.decorator.js';
 import { TokenService } from '../token.service.js';
+import { ApiKeyService } from '../api-key.service.js';
 import { AuthService } from '../auth.service.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { EnvService } from '../../config/env.service.js';
@@ -23,6 +24,7 @@ export class AuthGuard implements CanActivate {
     private readonly auth: AuthService,
     private readonly prisma: PrismaService,
     private readonly env: EnvService,
+    private readonly apiKeys: ApiKeyService,
   ) {}
 
   async canActivate(ctx: ExecutionContext): Promise<boolean> {
@@ -34,6 +36,16 @@ export class AuthGuard implements CanActivate {
 
     const req = ctx.switchToHttp().getRequest<Request & { user?: AuthedUser }>();
     const res = ctx.switchToHttp().getResponse<Response>();
+
+    // Programmatic callers present `Authorization: Bearer ws_<keyId>_<secret>`
+    // instead of the cookie pair. Checked before the cookie path so a browser
+    // session is never silently refreshed on an API-key request. A dead or
+    // malformed `ws_` token fails closed rather than falling through to
+    // cookies. A Bearer that is not ours (an SSO proxy's JWT in front of the
+    // app) is ignored entirely, so it cannot log every browser out.
+    const bearer = this.bearerOf(req);
+    if (bearer) return this.authenticateApiKey(req, bearer);
+
     const names = cookieNames(this.env);
     // Only trust the signed read. cookie-parser returns the verified value
     // here when the signature checks out, `false` when the cookie was sent
@@ -75,6 +87,74 @@ export class AuthGuard implements CanActivate {
       mfaEnforcementCompletedAt: user.mfaEnforcementCompletedAt,
       mfaPending: session.mfaPending,
     };
+    return true;
+  }
+
+  /** Extract a bearer credential, or undefined when the header is absent. */
+  private bearerOf(req: Request): string | undefined {
+    const header = req.headers.authorization;
+    if (typeof header !== 'string') return undefined;
+    const [scheme, ...rest] = header.split(' ');
+    if (scheme?.toLowerCase() !== 'bearer') return undefined;
+    const value = rest.join(' ').trim();
+    return value.startsWith('ws_') ? value : undefined;
+  }
+
+  /**
+   * Authenticate an API-key principal.
+   *
+   * The resulting {@link AuthedUser} is deliberately the *same shape* a cookie
+   * session produces, so every downstream guard, the permission engine, tenant
+   * scoping, and the audit interceptor keep working untouched — they all key
+   * off `req.user` and must not learn about a second principal kind.
+   *
+   * Two fields carry the difference:
+   *  - `apiKeyId` marks the principal as programmatic. `ApiKeySurfaceGuard`
+   *    uses it to keep tokens out of session/MFA/password surfaces, and
+   *    `CsrfGuard` uses it to skip a check that only defends cookie auth.
+   *  - `sessionId` is set to the key's id. It is an opaque correlation handle
+   *    (see the CLAUDE.md §2 clarification — a Session row id is not a
+   *    credential), so audit rows stay attributable. Nothing ever writes a
+   *    step-up marker under it, so `StepUpGuard` refuses every
+   *    `@RequireStepUp()` route to a token. Password reveal is NOT one of
+   *    those routes: it is gated by `@VaultReveal()` + the key's
+   *    `allowPasswordReveal` flag in `ApiKeySurfaceGuard`, and nothing else.
+   */
+  private async authenticateApiKey(
+    req: Request & { user?: AuthedUser },
+    presented: string,
+  ): Promise<boolean> {
+    const key = await this.apiKeys.verify(presented);
+    if (!key) throw new UnauthorizedException();
+
+    const user = await this.prisma.user.findUnique({
+      where: { id: key.userId },
+    });
+    if (!user || !user.isActive) throw new UnauthorizedException();
+
+    req.user = {
+      id: user.id,
+      email: user.email,
+      role: user.role,
+      globalAccess: user.globalAccess ?? null,
+      platformCapabilities: user.platformCapabilities ?? [],
+      sessionId: key.id,
+      mfaEnforcementCompletedAt: user.mfaEnforcementCompletedAt,
+      // A key is itself the second factor: it is high-entropy, revocable, and
+      // was minted by an already-MFA-enrolled human. Leaving this true would
+      // deadlock every token behind an interactive TOTP prompt.
+      mfaPending: false,
+      apiKeyId: key.id,
+      apiKeyAllowPasswordReveal: key.allowPasswordReveal,
+    };
+
+    // Bookkeeping only — a failed write must not fail an authenticated
+    // request, so this is intentionally not awaited and swallows its own
+    // rejection (CLAUDE.md §6: the empty catch is explained, not silent).
+    void this.apiKeys.touch(key).catch(() => {
+      /* lastUsedAt is advisory; losing one update is not worth a 500. */
+    });
+
     return true;
   }
 
