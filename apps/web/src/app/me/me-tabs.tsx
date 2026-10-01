@@ -9,10 +9,12 @@ import type { Me } from '../../lib/server-api/auth';
 import { ProfileForm } from './profile-form';
 import { PasswordForm } from './password-form';
 import { SessionsList } from './sessions-list';
+import { ApiKeysList } from './api-keys-list';
+import type { ApiKeySummary } from '@weavestream/shared';
 import { AppearanceForm } from './appearance-form';
 import { MfaBackupCodes } from './mfa-backup-codes';
 
-type TabId = 'profile' | 'memberships' | 'appearance' | 'security' | 'sessions';
+type TabId = 'profile' | 'memberships' | 'appearance' | 'security' | 'sessions' | 'api-keys';
 
 type Session = {
   id: string;
@@ -49,15 +51,24 @@ const TABS: Array<{ id: TabId; label: string; help: string }> = [
     label: 'Sessions',
     help: 'Active sessions on your account.',
   },
+  {
+    id: 'api-keys',
+    label: 'API keys',
+    help: 'Keys for scripts and AI agents that act as you.',
+  },
 ];
 
 export function MeTabs({
   initialTab,
   me,
   sessions,
+  apiKeys,
+  apiKeysLoadFailed,
 }: {
   initialTab: TabId;
   me: Me;
+  apiKeys: ApiKeySummary[];
+  apiKeysLoadFailed: boolean;
   sessions: Session[];
 }) {
   const router = useRouter();
@@ -282,6 +293,12 @@ export function MeTabs({
         {tab === 'sessions' && (
           <Panel title={`Active sessions (${sessions.length})`} flush noPad>
             <SessionsList sessions={sessions} />
+          </Panel>
+        )}
+
+        {tab === 'api-keys' && (
+          <Panel title={apiKeysLoadFailed ? 'API keys' : `API keys (${apiKeys.length})`} flush noPad>
+            <ApiKeysList keys={apiKeys} loadFailed={apiKeysLoadFailed} />
           </Panel>
         )}
       </div>
