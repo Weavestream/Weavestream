@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState, useTransition } from 'react';
 import Link from 'next/link';
+import { CopyAssetsDialog } from './copy-assets-dialog';
 import { useRouter } from 'next/navigation';
 import type {
   AssetSummary,
@@ -72,6 +73,7 @@ export function AssetsTable({
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkPending, setBulkPending] = useState(false);
   const [purgeOpen, setPurgeOpen] = useState(false);
+  const [copyOpen, setCopyOpen] = useState(false);
   const [purgeText, setPurgeText] = useState('');
 
   const activeLayout = useMemo(
@@ -481,11 +483,23 @@ export function AssetsTable({
           pending={bulkPending}
           onArchive={() => runBulk('archive')}
           onRestore={() => runBulk('restore')}
+          onCopy={() => setCopyOpen(true)}
           onPurge={() => {
             setPurgeText('');
             setPurgeOpen(true);
           }}
           onClear={clearSelection}
+        />
+      )}
+      {copyOpen && (
+        <CopyAssetsDialog
+          open
+          onClose={() => setCopyOpen(false)}
+          companyId={companyId}
+          assetIds={Array.from(selectedIds)}
+          onDone={(failedIds) =>
+            failedIds.length ? setSelectedIds(new Set(failedIds)) : clearSelection()
+          }
         />
       )}
 
@@ -735,6 +749,7 @@ function BulkActionBar({
   pending,
   onArchive,
   onRestore,
+  onCopy,
   onPurge,
   onClear,
 }: {
@@ -745,6 +760,7 @@ function BulkActionBar({
   pending: boolean;
   onArchive: () => void;
   onRestore: () => void;
+  onCopy: () => void;
   onPurge: () => void;
   onClear: () => void;
 }) {
@@ -796,6 +812,17 @@ function BulkActionBar({
         </span>
       )}
       <span style={{ flex: 1 }} />
+      <Btn
+        kind="outline"
+        size="sm"
+        icon={Icon.copy}
+        // Archived assets cannot be copied; selections hidden by a filter
+        // may still be active, so let the server report per-item results.
+        disabled={(activeSelected === 0 && unknownSelected === 0) || pending}
+        onClick={onCopy}
+      >
+        Copy to…
+      </Btn>
       <Btn
         kind="outline"
         size="sm"

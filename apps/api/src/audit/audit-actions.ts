@@ -116,6 +116,8 @@ export const AUDIT_ACTIONS = {
     update: 'asset.update',
     archive: 'asset.archive',
     restore: 'asset.restore',
+    // Copy into a company (entityId = the copy; after.sourceAssetId).
+    clone: 'asset.clone',
   },
   article: {
     create: 'article.create',
@@ -248,6 +250,9 @@ export const AUDIT_ACTIONS = {
     restore: 'upload.restore',
     revealPath: 'upload.path_revealed',
     reap: 'upload.reap',
+    // A blob duplicated into another (or the same) company by an asset
+    // clone. entityId = the new upload; `after.sourceUploadId` the original.
+    copy: 'upload.copy',
   },
   // WS-030 — AI chat read tools. One row per executor invocation,
   // regardless of exit path: `entityType: 'AiTool'`, `entityId` = the

@@ -10,7 +10,9 @@ import {
   StarGlyph,
   useStarToggle,
 } from '../../../../../../components/ui';
+import { useState } from 'react';
 import { useAssetArchive } from './asset-actions';
+import { CopyAssetsDialog } from '../copy-assets-dialog';
 
 /**
  * The asset read view's whole action cluster, rendered into `TopBar`'s
@@ -68,6 +70,7 @@ export function AssetHeaderActions({
     });
 
   const base = `/admin/companies/${companyId}/assets`;
+  const [copyOpen, setCopyOpen] = useState(false);
 
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -115,6 +118,17 @@ export function AssetHeaderActions({
                 New asset
               </MenuItem>
             )}
+            {!archived && (
+              <MenuItem
+                icon={Icon.copy}
+                onClick={() => {
+                  setCopyOpen(true);
+                  close();
+                }}
+              >
+                Copy to company…
+              </MenuItem>
+            )}
             {manage && <MenuDivider />}
             {manage && !archived && (
               <MenuItem
@@ -144,6 +158,14 @@ export function AssetHeaderActions({
       </OverflowMenu>
 
       {dialogs}
+      {copyOpen && (
+        <CopyAssetsDialog
+          open
+          onClose={() => setCopyOpen(false)}
+          companyId={companyId}
+          assetIds={[asset.id]}
+        />
+      )}
     </div>
   );
 }

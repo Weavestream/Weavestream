@@ -74,6 +74,24 @@ Each **Asset** is a single instance of a layout within a tenant. Assets support:
 - **Embedded passwords** — link credentials directly to an asset; they archive when the asset is archived
 - **Cross-references** — `ASSET_REFERENCE` fields create navigable links between assets
 
+## Copying and Moving Assets
+
+Copy an asset into another company (or duplicate it in the same one) from the asset's **⋯ → Copy to company…** menu, or select several in the asset table and use **Copy to…**. Tick **Move** to archive the originals after copying: they are archived, not deleted, so they can be restored.
+
+Asset layouts are global, so a copy keeps its layout and every field value you can see, handled as follows:
+
+| What | In the copy |
+|---|---|
+| **Files** (fields and the attachments panel) | Copied into the target company's storage as new files; a deleted file is skipped |
+| **Linked assets** | Dropped when the company changes; they point at the source company's records. Same-company copies keep links whose target still exists and omit dead ones. A *required* link field blocks a cross-company copy |
+| **Linked passwords** | Not copied; they stay with the original |
+| **Hidden fields** you cannot see | Not copied |
+| Integration identity (external id) | Not copied; the copy is a hand-managed asset |
+
+**Move** is refused, with the reason, when it would lose or undo something: the asset is kept in sync by an integration (the next sync would restore the original), it has linked passwords (they would be archived with it), or some of its fields are hidden from you. Copy it instead in those cases.
+
+Copying needs read access to the source company and write access to the target; moving also needs archive access to the source. A field marked *unique per company* that is already taken in the target makes that copy fail with a clear message; the other copies in a bulk run still go through. Each copy is audited (`asset.clone`, plus `upload.copy` per file).
+
 ## Expiration Tracking
 
 `DATE` and `DATETIME` fields with expiry tracking enabled appear in the global **Expirations** dashboard (`/admin/expirations`). Cells are colour-coded:
