@@ -36,6 +36,7 @@ const ALLOWED_STATUSES: DomainStatusValue[] = [
   'EXPIRING',
   'EXPIRED',
   'FAIL',
+  'NO_SITE',
   'UNKNOWN',
 ];
 

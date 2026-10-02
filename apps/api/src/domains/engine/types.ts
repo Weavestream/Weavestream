@@ -283,6 +283,8 @@ export interface DomainCheckResult {
   details: DomainCheckDetails;
   /** Aggregated error string surfaced at the row level. `null` if fully OK. */
   aggregateError: string | null;
+  /** DNS answered but the name has no A/AAAA record: a parked domain. */
+  noSite: boolean;
   /**
    * v2 — Denormalised percent score (0-100). NULL means the engine
    * could not score the run (every sub-check FAIL'd / SKIP'd). Mirrors

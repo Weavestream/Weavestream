@@ -60,7 +60,8 @@ function domainColumns(): DataColumn<MonitoredDomainDto>[] {
     EXPIRING: 1,
     EXPIRED: 2,
     FAIL: 3,
-    UNKNOWN: 4,
+    NO_SITE: 4,
+    UNKNOWN: 5,
   };
   return [
     {
@@ -146,6 +147,8 @@ function StatusTag({ status }: { status: MonitoredDomainDto['latestStatus'] }) {
       return <Tag tone="danger">Expired</Tag>;
     case 'FAIL':
       return <Tag tone="danger">Needs attention</Tag>;
+    case 'NO_SITE':
+      return <Tag>No site</Tag>;
     case 'UNKNOWN':
     default:
       return <Tag tone="outline">Pending</Tag>;

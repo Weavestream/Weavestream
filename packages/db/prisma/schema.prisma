@@ -97,6 +97,8 @@ enum DomainStatus {
   EXPIRING
   EXPIRED
   FAIL
+  /// Registration fine, but the name has no A/AAAA record (parked).
+  NO_SITE
   UNKNOWN
 }
 

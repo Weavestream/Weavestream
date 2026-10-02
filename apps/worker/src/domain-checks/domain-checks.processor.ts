@@ -187,7 +187,20 @@ export class DomainChecksWorker implements OnModuleDestroy {
     // `runDomainCheck` so the registrar/whois/tls history stays
     // unchanged when the operator disables HTTP probing — and so an
     // origin that refuses HTTP doesn't taint the WHOIS/DNS/TLS verdict.
-    if (domain.httpCheckEnabled) {
+    if (domain.httpCheckEnabled && result.noSite) {
+      // A parked name serves nothing by design: no probe, and no
+      // "website down" alert for a site that is not supposed to exist.
+      await this.prisma.monitoredDomain
+        .update({
+          where: { id: domain.id },
+          data: { latestHttpStatus: null, httpDownSince: null },
+        })
+        .catch((err: unknown) =>
+          this.logger.warn(
+            `[domain-checks] could not clear HTTP state for parked ${domain.id}: ${err instanceof Error ? err.message : String(err)}`,
+          ),
+        );
+    } else if (domain.httpCheckEnabled) {
       try {
         const http = await runHttpCheck(domain.hostname, {
           timeoutMs: this.env.values.HTTP_CHECK_TIMEOUT_MS,

@@ -308,7 +308,7 @@ export async function runDomainCheck(
   // DNS's MX answer before we can dispatch the email check (auto-skip
   // depends on it), and we need WHOIS's `secureDns` before the
   // DNSSEC fallback knows whether RDAP gave us authoritative data.
-  const [whois, dns, tls] = await Promise.all([
+  const [whois, dns, tlsRaw] = await Promise.all([
     opts.checkWhois
       ? runWhoisWithFallback(ports, opts.hostname, opts.timeoutMs, rdapCacheMs)
       : Promise.resolve(SKIP_WHOIS),
@@ -322,6 +322,20 @@ export async function runDomainCheck(
         })
       : Promise.resolve(SKIP_TLS),
   ]);
+
+  // A parked domain: DNS answered, but the name has no web address. The
+  // TLS/HTTP probes have nothing to talk to, so their failures are not
+  // findings. Report them as skipped and let the status say "no site".
+  const noSite =
+    isNoSite(opts.checkDns, dns) &&
+    // A probe that reached a server proves there is a site, whatever a
+    // (possibly flaky) A lookup said. Never discard a real certificate.
+    tlsRaw.status !== 'OK' &&
+    tlsRaw.status !== 'WARN' &&
+    // "No website" means no www either: a bare domain with a working www
+    // has a site.
+    (await wwwAddress(ports.dns, `www.${opts.hostname}`, Math.min(opts.timeoutMs, 8_000))) === 'none';
+  const tls: SubCheckResult<TlsSubResult> = noSite ? SKIP_TLS : tlsRaw;
 
   // Phase 2: the v2 sub-checks. Each is wrapped in a per-call timeout
   // so a slow TXT lookup can't drag the whole fan-out down.
@@ -364,7 +378,7 @@ export async function runDomainCheck(
         error: null,
       });
 
-  const httpPromise: Promise<SubCheckResult<HttpEngineSubResult>> = opts.checkTls
+  const httpPromise: Promise<SubCheckResult<HttpEngineSubResult>> = opts.checkTls && !noSite
     ? withTimeout(
         () => runEngineHttpCheck(opts.hostname, { timeoutMs: subTimeout }),
         subTimeout,
@@ -410,7 +424,7 @@ export async function runDomainCheck(
     },
   };
   const details = buildDetails(buildInput);
-  const score = computeScore(details, checkedAt);
+  const score = computeScore(details, checkedAt, { noSite });
   if (score) {
     details.score = score;
   }
@@ -427,7 +441,61 @@ export async function runDomainCheck(
     details,
     aggregateError: aggregateError(buildInput),
     score: score?.percent ?? null,
+    noSite,
   };
+}
+
+/**
+ * True when the zone is delegated and answering but the name itself has no
+ * A/AAAA record (CNAMEs are followed by the resolver, so a CNAME to a host
+ * counts as an address). A DNS failure is not "no site": that is a real
+ * problem. Neither is an empty answer with no nameservers: NXDOMAIN and
+ * REFUSED come back as empty arrays, and a domain that does not resolve
+ * at all must stay red.
+ */
+export function isNoSite(checkDns: boolean, dns: SubCheckResult<DnsSubResult>): boolean {
+  if (!checkDns || dns.status === 'FAIL' || dns.status === 'SKIP' || !dns.data) return false;
+  if (dns.data.ns.length === 0) return false;
+  return dns.data.a.length === 0 && dns.data.aaaa.length === 0;
+}
+
+/** DNS answers that confirm a name has no record (as opposed to an error). */
+const NO_RECORD_CODES = new Set(['ENODATA', 'ENOTFOUND', 'NXDOMAIN', 'NODATA']);
+
+/**
+ * Whether `name` has an address: 'some', a confirmed 'none', or 'unknown'
+ * (resolver error or timeout). Only a confirmed 'none' may mark a domain
+ * as having no site; anything uncertain keeps the normal checks.
+ */
+async function wwwAddress(
+  dnsPort: EnginePorts['dns'],
+  name: string,
+  timeoutMs: number,
+): Promise<'some' | 'none' | 'unknown'> {
+  const lookup = async (fn: (n: string) => Promise<string[]>): Promise<string[] | 'unknown'> => {
+    try {
+      return await fn(name);
+    } catch (err) {
+      const code = (err as { code?: unknown }).code;
+      return typeof code === 'string' && NO_RECORD_CODES.has(code) ? [] : 'unknown';
+    }
+  };
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<'unknown'>((resolve) => {
+    timer = setTimeout(() => resolve('unknown'), timeoutMs);
+  });
+  try {
+    const answer = await Promise.race([
+      Promise.all([lookup((n) => dnsPort.resolve4(n)), lookup((n) => dnsPort.resolve6(n))]),
+      timeout,
+    ]);
+    if (answer === 'unknown') return 'unknown';
+    const [a, aaaa] = answer;
+    if ((Array.isArray(a) && a.length > 0) || (Array.isArray(aaaa) && aaaa.length > 0)) return 'some';
+    return a === 'unknown' || aaaa === 'unknown' ? 'unknown' : 'none';
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /**
@@ -438,7 +506,7 @@ export async function runDomainCheck(
 export function deriveDomainStatus(
   result: DomainCheckResult,
   alertThresholdDays: number,
-): 'OK' | 'EXPIRING' | 'EXPIRED' | 'FAIL' | 'UNKNOWN' {
+): 'OK' | 'EXPIRING' | 'EXPIRED' | 'FAIL' | 'NO_SITE' | 'UNKNOWN' {
   const now = result.checkedAt.getTime();
   const thresholdMs = alertThresholdDays * 24 * 60 * 60 * 1000;
 
@@ -464,6 +532,10 @@ export function deriveDomainStatus(
     result.dns.status === 'FAIL' ||
     result.tls.status === 'FAIL';
   if (anyFail) return 'FAIL';
+
+  // Registration is fine (not expired/expiring/failing) but nothing is
+  // served on the name: grey "no site" rather than green OK or red FAIL.
+  if (result.noSite) return 'NO_SITE';
 
   const anyOk =
     result.whois.status === 'OK' ||

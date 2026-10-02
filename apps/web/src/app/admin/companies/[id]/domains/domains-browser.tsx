@@ -510,7 +510,8 @@ function domainColumns({
     EXPIRING: 1,
     EXPIRED: 2,
     FAIL: 3,
-    UNKNOWN: 4,
+    NO_SITE: 4,
+    UNKNOWN: 5,
   };
   const cols: DataColumn<MonitoredDomainDto>[] = [
     {
@@ -677,12 +678,14 @@ function ScoreChip({ score }: { score: number | null }) {
 
 const STATUS_TONE: Record<
   MonitoredDomainDto['latestStatus'],
-  { label: string; tone: 'ok' | 'warn' | 'danger' | 'accent' | 'outline' }
+  { label: string; tone: 'ok' | 'warn' | 'danger' | 'accent' | 'outline' | 'default' }
 > = {
   OK: { label: 'OK', tone: 'ok' },
   EXPIRING: { label: 'Expiring', tone: 'warn' },
   EXPIRED: { label: 'Expired', tone: 'danger' },
   FAIL: { label: 'Fail', tone: 'danger' },
+  // Grey: registered and healthy, just nothing served on the name.
+  NO_SITE: { label: 'No site', tone: 'default' },
   UNKNOWN: { label: 'Unknown', tone: 'outline' },
 };
 

@@ -637,6 +637,25 @@ function scoreSanity(inputs: SanityInputs): {
   return { items, total, max };
 }
 
+/** Score items that only mean something when a site is served on the name. */
+const WEB_ONLY_ITEMS = new Set(['tls_validity', 'tls_crypto', 'tls_authorized', 'http_redirect', 'hsts', 'addr']);
+
+/** Turn the matching items into skips and drop them from total and max. */
+function notApplicable<B extends { items: BreakdownItem[]; total: number; max: number }>(
+  block: B,
+  matches: (item: BreakdownItem) => boolean,
+): B {
+  let total = block.total;
+  let max = block.max;
+  const items = block.items.map((item) => {
+    if (!matches(item)) return item;
+    total -= item.points;
+    max -= item.max;
+    return { ...item, points: 0, status: 'skip' as const, evidence: 'no site on this name' };
+  });
+  return { ...block, items, total, max };
+}
+
 // ---------------------------------------------------------------------
 // Top-level scorer
 // ---------------------------------------------------------------------
@@ -644,6 +663,7 @@ function scoreSanity(inputs: SanityInputs): {
 export function computeScore(
   details: DomainCheckDetails,
   now: Date = new Date(),
+  opts: { noSite?: boolean } = {},
 ): DomainScore | null {
   // Defensive: if the engine bailed out before producing any sub-check
   // data we have nothing to score. The caller writes NULL.
@@ -655,21 +675,31 @@ export function computeScore(
     dmarc: details.email?.dmarc,
     dkim: details.email?.dkim,
   });
-  const transport = scoreTransport({
-    tls: details.tls,
-    http: details.http,
-    dns: details.dns,
-  });
+  // A parked name (no A/AAAA) serves nothing, so TLS/HTTP do not apply:
+  // skip them out of both the points and the denominator, like email on a
+  // domain with no MX.
+  const transport = notApplicable(
+    scoreTransport({
+      tls: details.tls,
+      http: details.http,
+      dns: details.dns,
+    }),
+    // CAA and MX are DNS hygiene and still apply to a parked name.
+    (item) => !!opts.noSite && WEB_ONLY_ITEMS.has(item.id),
+  );
   const registration = scoreRegistration({
     whois: details.whois,
     dns: details.dns,
     now,
   });
-  const sanity = scoreSanity({
-    dns: details.dns,
-    tls: details.tls,
-    whois: details.whois,
-  });
+  const sanity = notApplicable(
+    scoreSanity({
+      dns: details.dns,
+      tls: details.tls,
+      whois: details.whois,
+    }),
+    (item) => !!opts.noSite && WEB_ONLY_ITEMS.has(item.id),
+  );
 
   const items = [
     ...email.items,
