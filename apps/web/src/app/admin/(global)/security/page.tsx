@@ -1,15 +1,15 @@
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { describeCatchAllFamilyGap } from '@weavestream/shared';
+import { requireMe } from '../../../../lib/server-api';
 import {
-  requireMe,
   getSecurityEgressBlocks,
   getSecurityIpRuleCoverage,
   getSecurityLockouts,
   getSecurityLoginActivity,
   getSecuritySessions,
   getSecurityThrottleBlocks,
-} from '../../../../lib/server-api';
+} from '../../../../lib/server-api/security';
 import { hasCapability } from '../../../../lib/roles';
 import { PageBody, PageHeader } from '../../../../components/shell/page-header';
 import { ErrorBanner, Panel, Stat } from '../../../../components/ui';

@@ -1,4 +1,4 @@
-import type { PasswordFolderRow } from './server-api';
+import type { PasswordFolderRow } from './server-api/passwords';
 
 export type PasswordFolderOption = {
   id: string;

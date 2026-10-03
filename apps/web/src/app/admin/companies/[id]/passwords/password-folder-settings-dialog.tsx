@@ -12,7 +12,9 @@ import {
   Select,
   useToast,
 } from '../../../../../components/ui';
-import type { PasswordFolderRow } from '../../../../../lib/server-api';
+import type {
+  PasswordFolderRow,
+} from '../../../../../lib/server-api/passwords';
 import {
   buildPasswordFolderOptions,
   formatFolderOptionLabel,

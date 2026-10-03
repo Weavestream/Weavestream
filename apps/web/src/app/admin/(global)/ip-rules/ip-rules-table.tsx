@@ -21,7 +21,7 @@ import {
   type DataColumn,
 } from '../../../../components/ui';
 import { apiFetch } from '../../../../lib/api';
-import type { IpRule, IpRuleAction } from '../../../../lib/server-api';
+import type { IpRule, IpRuleAction } from '@weavestream/shared';
 
 const IP_RULE_ACTION_LABELS: Record<IpRuleAction, string> = {
   ALLOW: 'Allow',

@@ -4,11 +4,14 @@ export const metadata: Metadata = { title: 'IPAM' };
 
 import {
   getCompanyDetail,
-  getCompanySubnetsBasic,
   requireMe,
   getSettings,
   throwUnlessFound,
 } from '../../../../../lib/server-api';
+import {
+  getCompanySubnetsBasic,
+  listSubnets,
+} from '../../../../../lib/server-api/ipam';
 import { canWriteCompany } from '../../../../../lib/roles';
 import { PageBody, PageHeader } from '../../../../../components/shell/page-header';
 import { LayoutSwatch, Panel, Tag } from '../../../../../components/ui';
@@ -35,9 +38,7 @@ export default async function CompanyIpamPage({
   const includeArchived = sp.archived === '1';
   const openNew = sp.new === '1';
   const subnets = includeArchived
-    ? await import('../../../../../lib/server-api').then((m) =>
-      m.listSubnets(companyId, { includeArchived: true }),
-    )
+    ? await listSubnets(companyId, { includeArchived: true })
     : await getCompanySubnetsBasic(companyId);
 
   const manage = canWriteCompany(me, company.id);

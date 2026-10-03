@@ -5,7 +5,7 @@ import Link from 'next/link';
 import type {
   SubnetOccupant,
   IpReservationRow,
-} from '../../../../../lib/server-api';
+} from '../../../../../lib/server-api/ipam';
 import {
   Btn,
   DataTable,

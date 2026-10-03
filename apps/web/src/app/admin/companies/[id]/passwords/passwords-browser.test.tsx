@@ -1,8 +1,13 @@
 /** @jest-environment jsdom */
 import '@testing-library/jest-dom';
 import { fireEvent, render, screen } from '@testing-library/react';
-import type { PasswordGeneratorDefaults } from '@weavestream/shared';
-import type { PasswordFolderRow, PasswordSummary } from '../../../../../lib/server-api';
+import type {
+  PasswordGeneratorDefaults,
+  PasswordSummary,
+} from '@weavestream/shared';
+import type {
+  PasswordFolderRow,
+} from '../../../../../lib/server-api/passwords';
 import { PasswordsBrowser } from './passwords-browser';
 
 jest.mock('next/navigation', () => ({

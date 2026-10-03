@@ -13,7 +13,7 @@ import type {
   PasswordAccessUser,
   PasswordFolderRow,
   PasswordVersionRow,
-} from '../../../../../../lib/server-api';
+} from '../../../../../../lib/server-api/passwords';
 import { apiFetch } from '../../../../../../lib/api';
 import { copyToClipboard } from '@weavestream/shared/browser';
 import {

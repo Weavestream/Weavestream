@@ -4,14 +4,16 @@ import type { ReactNode } from 'react';
 import { CompanyShell } from '../../../../components/shell/company-shell';
 import {
   getActiveLayouts,
-  getCompanyActivePasswords,
   getCompanyAssetCounts,
   getCompanyDetail,
-  getCompanySubnetsBasic,
   getMe,
   getSettings,
   throwUnlessFound,
 } from '../../../../lib/server-api';
+import { getCompanySubnetsBasic } from '../../../../lib/server-api/ipam';
+import {
+  getCompanyActivePasswords,
+} from '../../../../lib/server-api/passwords';
 import { getCompanyDomainsBasic } from '../../../../lib/server-api/domains';
 
 /**

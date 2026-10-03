@@ -1,7 +1,9 @@
 /** @jest-environment jsdom */
 import '@testing-library/jest-dom';
 import { render, screen } from '@testing-library/react';
-import type { ConnectionDiagnostics } from '../../../../lib/server-api';
+import type {
+  ConnectionDiagnostics,
+} from '../../../../lib/server-api/security';
 import { SecurityCenterClient } from './security-client';
 
 const apiFetch = jest.fn();

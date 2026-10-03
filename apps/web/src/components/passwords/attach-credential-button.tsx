@@ -3,7 +3,7 @@
 import { useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import type { PasswordGeneratorDefaults } from '@weavestream/shared';
-import type { PasswordFolderRow } from '../../lib/server-api';
+import type { PasswordFolderRow } from '../../lib/server-api/passwords';
 import { Btn, Icon } from '../ui';
 import { CreatePasswordDialog } from './create-password-dialog';
 

@@ -5,7 +5,7 @@ import type { PasswordGeneratorDefaults } from '@weavestream/shared';
 import type {
   PasswordDetail,
   PasswordVersionRow,
-} from '../../../../../../lib/server-api';
+} from '../../../../../../lib/server-api/passwords';
 import {
   PasswordDetailClient,
   PasswordHeaderActions,

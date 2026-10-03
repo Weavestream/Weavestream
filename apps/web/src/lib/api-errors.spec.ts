@@ -11,7 +11,7 @@ import {
   unwrapApiResponse,
   unwrapMeResponse,
 } from './api-errors';
-import type { ServerApiResponse } from './server-api';
+import type { ServerApiResponse } from './server-api/core';
 
 function res<T>(partial: Partial<ServerApiResponse<T>>): ServerApiResponse<T> {
   return { ok: false, status: 0, data: null, ...partial };

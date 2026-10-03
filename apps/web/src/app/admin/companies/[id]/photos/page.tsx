@@ -7,10 +7,12 @@ import {
   getCompanyDetail,
   getMe,
   getSettings,
-  listPhotos,
   throwUnlessFound,
-  type UploadSummary,
 } from '../../../../../lib/server-api';
+import {
+  listPhotos,
+  type UploadSummary,
+} from '../../../../../lib/server-api/uploads';
 import { PageBody, PageHeader } from '../../../../../components/shell/page-header';
 import { Icon, LayoutSwatch, Panel, Tag } from '../../../../../components/ui';
 import { buildTerm, lower } from '../../../../../lib/term';

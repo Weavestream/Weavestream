@@ -23,7 +23,7 @@ import type {
   LoginActivity,
   SecuritySessionRow,
   ThrottleBlockEntry,
-} from '../../../../lib/server-api';
+} from '../../../../lib/server-api/security';
 
 type TabId =
   | 'logins'

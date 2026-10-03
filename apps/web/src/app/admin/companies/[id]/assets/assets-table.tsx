@@ -3,11 +3,10 @@
 import { useEffect, useMemo, useState, useTransition } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import type { BulkAssetResult } from '@weavestream/shared';
+import type { BulkAssetResult, PasswordSummary } from '@weavestream/shared';
 import type {
   AssetSummary,
   LayoutSummary,
-  PasswordSummary,
 } from '../../../../../lib/server-api';
 import {
   Btn,

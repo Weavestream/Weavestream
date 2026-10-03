@@ -3,13 +3,15 @@ import type { Metadata } from 'next';
 export const metadata: Metadata = { title: 'Assets' };
 import {
   getActiveLayouts,
-  getCompanyActivePasswords,
   getCompanyDetail,
   requireMe,
   getSettings,
   listAssets,
   throwUnlessFound,
 } from '../../../../../lib/server-api';
+import {
+  getCompanyActivePasswords,
+} from '../../../../../lib/server-api/passwords';
 import { canWriteCompany } from '../../../../../lib/roles';
 import { PageBody, PageHeader } from '../../../../../components/shell/page-header';
 import { Icon, LayoutSwatch, LinkBtn, Panel, Tag } from '../../../../../components/ui';

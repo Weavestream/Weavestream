@@ -1,11 +1,11 @@
 import Link from 'next/link';
+import type { PasswordSummary } from '@weavestream/shared';
+import { getSettings } from '../../lib/server-api';
 import {
-  getSettings,
   listPasswordFolders,
   listPasswords,
   type PasswordFolderRow,
-  type PasswordSummary,
-} from '../../lib/server-api';
+} from '../../lib/server-api/passwords';
 import { Icon, Panel, Tag } from '../ui';
 import { AttachCredentialButton } from './attach-credential-button';
 import { PasswordInlineActions } from './password-inline-actions';

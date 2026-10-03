@@ -1,4 +1,4 @@
-import type { ServerApiResponse } from './server-api';
+import type { ServerApiResponse } from './server-api/core';
 
 /**
  * Client-safe error taxonomy for server-side API fetches.

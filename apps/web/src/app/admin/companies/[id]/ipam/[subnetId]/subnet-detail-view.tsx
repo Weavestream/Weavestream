@@ -7,7 +7,7 @@ import type {
   SubnetDetail,
   SubnetOccupant,
   IpReservationRow,
-} from '../../../../../../lib/server-api';
+} from '../../../../../../lib/server-api/ipam';
 import { apiFetch } from '../../../../../../lib/api';
 import {
   Btn,

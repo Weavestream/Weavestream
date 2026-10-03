@@ -9,20 +9,14 @@ import type {
   ArticleSummary,
   ArticleVersionDetail,
   ArticleVersionSummary,
-  BackupConfig,
-  BackupRunDto,
-  CatchAllFamilyGap,
   CompanyType,
   FieldType,
   FolderNode,
   GlobalAccess,
   EmailSettings,
   IntegrationTargetProvenance,
-  IpRule,
-  IpRuleAction,
   MembershipRole,
   PasswordGeneratorDefaults,
-  PasswordSummary,
   PlatformCapability,
   UserRole,
   UserSearchDefaults,
@@ -33,26 +27,13 @@ import { DEFAULT_PASSWORD_GENERATOR_DEFAULTS } from '@weavestream/shared';
 export type {
   AiSettings,
   AlertConfig,
-  ArticleEditorMode,
   ArticleSummary,
   ArticleVersionDetail,
   ArticleVersionSummary,
-  BackupConfig,
-  BackupRunDto,
   CompanyType,
   FieldType,
   FolderNode,
-  GlobalAccess,
   EmailSettings,
-  IpRule,
-  IpRuleAction,
-  MembershipRole,
-  PasswordGeneratorDefaults,
-  PasswordSummary,
-  PlatformCapability,
-  UserRole,
-  UserSearchDefaults,
-  UserUiPreferences,
 };
 
 // Re-exported from the proxy/edge-safe `api-config` module (which `proxy.ts`
@@ -276,8 +257,11 @@ export const getAlerts = cache(async (): Promise<AlertConfig[]> => {
 // caused the 429-as-404 bug in Docker (see apps/api/src/auth/
 // user-throttler.guard.ts for the server-side half of the fix).
 //
-// `getCompanyDomainsBasic` follows the same pattern from
-// `server-api/domains.ts`.
+// The same pattern continues in the domain modules:
+// `getCompanyDomainsBasic` (`server-api/domains.ts`),
+// `getCompanyActivePasswords` and `getCompanyPasswordFolders`
+// (`server-api/passwords.ts`), and `getCompanySubnetsBasic`
+// (`server-api/ipam.ts`).
 //
 // Each helper below mirrors the un-cached list/fetch function it
 // wraps but normalises arguments into primitives so React's
@@ -313,26 +297,9 @@ export const getCompanyAssetCounts = cache(
     getAssetCountsByLayout(companyId),
 );
 
-/**
- * `/companies/:id/passwords` — active only, no filters. The layout
- * uses the full row set for count + stale-badge math and the
- * passwords index page uses the same shape when it's showing the
- * default "active" view. Callers that need archived rows keep
- * `listPasswords(..., { archived: true })`.
- */
-export const getCompanyActivePasswords = cache(
-  async (companyId: string): Promise<PasswordSummary[]> =>
-    listPasswords(companyId),
-);
-
 export const getCompanyFolderTree = cache(
   async (companyId: string): Promise<FolderNode[]> =>
     listFolderTree(companyId),
-);
-
-export const getCompanyPasswordFolders = cache(
-  async (companyId: string): Promise<PasswordFolderRow[]> =>
-    listPasswordFolders(companyId),
 );
 
 /**
@@ -498,166 +465,6 @@ export type AuditPage = {
   pageSize: number;
   nextCursor: string | null;
 };
-
-// ───────────────────────────────────────────────────────────────────
-// Security Center (Phase 12 — read-only first)
-//
-// All four reads are gated server-side by the `security.read` action,
-// which maps to the `SECURITY_READ` platform capability. Session
-// revocation lives at `DELETE /security/sessions/:id` and escalates
-// to `user.manage`.
-// ───────────────────────────────────────────────────────────────────
-
-type LoginActivityBucket = {
-  identifier: string;
-  success: number;
-  failure: number;
-  lastSeen: string;
-};
-
-type LoginActivityRow = {
-  id: string;
-  action: string;
-  ip: string | null;
-  userAgent: string | null;
-  createdAt: string;
-  actorId: string | null;
-  actor: { id: string; name: string; email: string } | null;
-  attemptedEmail: string | null;
-};
-
-export type LoginActivity = {
-  windowHours: number;
-  since: string;
-  counts: { success: number; failure: number; mfaFailure: number };
-  byIp: LoginActivityBucket[];
-  byEmail: LoginActivityBucket[];
-  recent: LoginActivityRow[];
-};
-
-type LockoutEntry = {
-  identifier: string;
-  failures: number;
-  ttlSeconds: number | null;
-  locked: boolean;
-};
-
-export type LockoutsResponse = {
-  threshold: number;
-  windowMinutes: number;
-  ip: LockoutEntry[];
-  email: LockoutEntry[];
-};
-
-export type ThrottleBlockEntry = {
-  throttler: string;
-  tracker: string;
-  blockedUntil: string | null;
-  remainingMs: number;
-};
-
-// WS-024 connection diagnostics — mirrors `ConnectionDiagnostics` in
-// `apps/api/src/security/security.service.ts`. Fetched client-side (via
-// `apiFetch`, not `serverApiFetch`) so the request travels the real
-// browser → proxy → API path being diagnosed; see the Security Center
-// client component. No server fetch helper here by design.
-export type ConnectionDiagnostics = {
-  resolvedIp: string;
-  socketPeer: string;
-  peerTrusted: boolean;
-  forwardedForReceived: string | null;
-  inboundForwardedFor: string;
-  trustProxyHops: number;
-  webTrustProxyHops: number | null;
-  interpretation: string[];
-};
-
-export type SecuritySessionRow = {
-  id: string;
-  ip: string;
-  userAgent: string;
-  mfaPending: boolean;
-  createdAt: string;
-  expiresAt: string;
-  user: {
-    id: string;
-    name: string;
-    email: string;
-    role: UserRole;
-    mfaEnabled: boolean;
-    mfaEnrolled: boolean;
-    isActive: boolean;
-  };
-};
-
-export async function getSecurityLoginActivity(
-  windowHours = 24,
-): Promise<LoginActivity | null> {
-  const res = await serverApiFetch<LoginActivity>(
-    `/security/login-activity?windowHours=${windowHours}`,
-  );
-  return res.ok ? res.data : null;
-}
-
-export async function getSecurityLockouts(): Promise<LockoutsResponse | null> {
-  const res = await serverApiFetch<LockoutsResponse>('/security/lockouts');
-  return res.ok ? res.data : null;
-}
-
-// Whether the enabled IP rules deny one address family entirely but leave
-// the other to default-allow — see `GET /security/ip-rule-coverage` and
-// `findCatchAllFamilyGap` in `@weavestream/shared`.
-export type IpRuleCoverage = { gap: CatchAllFamilyGap | null };
-
-export async function getSecurityIpRuleCoverage(): Promise<IpRuleCoverage | null> {
-  const res = await serverApiFetch<IpRuleCoverage>('/security/ip-rule-coverage');
-  return res.ok ? res.data : null;
-}
-
-export async function getSecurityThrottleBlocks(): Promise<
-  ThrottleBlockEntry[] | null
-> {
-  const res = await serverApiFetch<ThrottleBlockEntry[]>(
-    '/security/throttle-blocks',
-  );
-  return res.ok ? res.data : null;
-}
-
-export async function getSecuritySessions(): Promise<
-  SecuritySessionRow[] | null
-> {
-  const res = await serverApiFetch<{ items: SecuritySessionRow[] }>(
-    '/security/sessions?limit=200',
-  );
-  return res.ok ? (res.data?.items ?? []) : null;
-}
-
-export type EgressBlockRow = {
-  id: string;
-  createdAt: string;
-  userAgent: string | null;
-  url: string | null;
-  hostname: string | null;
-  resolvedIps: string[];
-  reason: string | null;
-  matchedCidr: string | null;
-};
-
-export type EgressBlocksResponse = {
-  windowHours: number;
-  since: string;
-  total: number;
-  recent: EgressBlockRow[];
-};
-
-export async function getSecurityEgressBlocks(
-  windowHours = 168,
-): Promise<EgressBlocksResponse | null> {
-  const res = await serverApiFetch<EgressBlocksResponse>(
-    `/security/egress-blocks?windowHours=${windowHours}`,
-  );
-  return res.ok ? res.data : null;
-}
 
 // ───────────────────────────────────────────────────────────────────
 // Phase 3: asset layouts + assets
@@ -978,43 +785,6 @@ export async function getArticleBySlug(
 }
 
 
-type ArticleLinkState = 'live' | 'versioned' | 'archived' | 'orphan';
-
-export type UploadSummary = {
-  id: string;
-  companyId: string;
-  uploaderId: string | null;
-  filename: string;
-  mimeType: string;
-  sizeBytes: number;
-  isImage: boolean;
-  width: number | null;
-  height: number | null;
-  attachedToType: string | null;
-  attachedToId: string | null;
-  createdAt: string;
-  thumbnailUrl: string | null;
-  downloadUrl: string | null;
-  /**
-   * Article that embeds this upload, resolved server-side by scanning
-   * article bodies. Populated only for `attachedToType === 'article'`
-   * uploads — those rows store no `attachedToId` so the photos gallery
-   * needs this to build a "back to article" link. Non-null for `live`,
-   * `versioned`, and `archived` link states (archived still carries an
-   * id+slug+title so the UI can deep-link to the archived detail page).
-   */
-  sourceArticle: { id: string; slug: string; title: string } | null;
-  /**
-   * Link state for article-attached uploads:
-   *   live      — in the live body of a non-archived article
-   *   versioned — only in a non-draft `ArticleVersion` of a live article
-   *   archived  — only reachable through an archived article
-   *   orphan    — not referenced anywhere
-   * `null` for non-article uploads.
-   */
-  articleLinkState: ArticleLinkState | null;
-};
-
 // ---------------------------------------------------------------------
 // Admin stats — totals shown on the global dashboard's "At a glance"
 // panel. Endpoint is gated to SUPER_ADMIN + OPERATOR with non-NONE
@@ -1193,270 +963,4 @@ export async function listRecentActivity(
     `/activity/recent?limit=${limit}`,
   );
   return res.data?.items ?? [];
-}
-
-// ---------------------------------------------------------------------
-// Passwords (Phase 10 — vault)
-// ---------------------------------------------------------------------
-
-export type PasswordDetail = PasswordSummary & {
-  notes: unknown | null;
-  totpAlgorithm: 'SHA1' | 'SHA256' | 'SHA512';
-  totpDigits: number;
-  totpPeriod: number;
-  /**
-   * True if the signed-in user has starred this password.
-   */
-  isStarred: boolean;
-};
-
-export type PasswordFolderRow = {
-  id: string;
-  companyId: string;
-  parentId: string | null;
-  name: string;
-  icon: string | null;
-  color: string | null;
-  position: number;
-  archivedAt: string | null;
-  createdAt: string;
-  updatedAt: string;
-};
-
-export type PasswordVersionRow = {
-  version: number;
-  changedFields: string[];
-  changedBy: string;
-  changedByName: string | null;
-  changeReason: string | null;
-  createdAt: string;
-};
-
-export type PasswordAccessUser = {
-  id: string;
-  name: string;
-  email: string;
-  role: 'SUPER_ADMIN' | 'OPERATOR' | 'CONTRACTOR';
-  accessSource: 'super_admin' | 'membership' | 'global';
-  alwaysIncluded: boolean;
-};
-
-export async function listPasswords(
-  companyId: string,
-  params: {
-    q?: string;
-    folderId?: string;
-    assetId?: string;
-    tag?: string;
-    archived?: boolean;
-    stale?: boolean;
-  } = {},
-): Promise<PasswordSummary[]> {
-  const q = new URLSearchParams();
-  if (params.q) q.set('q', params.q);
-  if (params.folderId) q.set('folderId', params.folderId);
-  if (params.assetId) q.set('assetId', params.assetId);
-  if (params.tag) q.set('tag', params.tag);
-  if (params.archived) q.set('archived', 'true');
-  if (params.stale) q.set('stale', 'true');
-  const res = await serverApiFetch<{ items: PasswordSummary[] }>(
-    `/companies/${companyId}/passwords${q.toString() ? `?${q.toString()}` : ''}`,
-  );
-  return res.data?.items ?? [];
-}
-
-/**
- * Status-aware password-detail fetch. `getPasswordDetail` collapses
- * every failure to `null`, which forces a page into `notFound()` even
- * when the API said 403 ("restricted to specific internal users"). The
- * admin detail page needs to tell 403 apart from a genuine 404 so it can
- * render a "you don't have access" state instead of a bare not-found.
- *
- * Only the HTTP status is surfaced here — callers should branch **only**
- * on `403`. Every other non-OK status (404, 429, 503, network failure)
- * yields `data: null`, matching `getPasswordDetail`'s existing fallback
- * so 429/503 keep rendering as the 404 page rather than a misleading
- * "no access" screen. (Intentionally not routed through
- * `throwUnlessFound`, which has bespoke 429/network semantics.)
- */
-export async function getPasswordDetailResult(
-  companyId: string,
-  id: string,
-): Promise<{ status: number; data: PasswordDetail | null }> {
-  const res = await serverApiFetch<PasswordDetail>(
-    `/companies/${companyId}/passwords/${id}`,
-  );
-  return { status: res.status, data: res.ok ? res.data : null };
-}
-
-export async function getPasswordDetail(
-  companyId: string,
-  id: string,
-): Promise<PasswordDetail | null> {
-  const { data } = await getPasswordDetailResult(companyId, id);
-  return data;
-}
-
-export async function listPasswordFolders(
-  companyId: string,
-): Promise<PasswordFolderRow[]> {
-  const res = await serverApiFetch<{ items: PasswordFolderRow[] }>(
-    `/companies/${companyId}/password-folders`,
-  );
-  return res.data?.items ?? [];
-}
-
-export async function listPasswordVersions(
-  companyId: string,
-  id: string,
-): Promise<PasswordVersionRow[]> {
-  const res = await serverApiFetch<{ items: PasswordVersionRow[] }>(
-    `/companies/${companyId}/passwords/${id}/versions`,
-  );
-  return res.data?.items ?? [];
-}
-
-// ---------------------------------------------------------------------
-// IPAM — company-scoped subnet registry + reservations
-// ---------------------------------------------------------------------
-
-export type SubnetOccupant = {
-  ip: string;
-  assetId: string;
-  assetName: string;
-  assetLayoutId: string;
-  assetLayoutName: string;
-  assetLayoutColor: string;
-  assetLayoutIcon: string;
-  assetFieldId: string;
-  fieldName: string;
-};
-
-type SubnetUtilization = {
-  totalUsable: number;
-  claimed: number;
-  free: number;
-  conflictCount: number;
-};
-
-export type SubnetRow = {
-  id: string;
-  companyId: string;
-  name: string;
-  cidr: string;
-  prefix: number;
-  vlanId: number | null;
-  gateway: string | null;
-  dhcpRangeStart: string | null;
-  dhcpRangeEnd: string | null;
-  description: string | null;
-  archivedAt: string | null;
-  createdBy: string | null;
-  updatedBy: string | null;
-  createdAt: string;
-  updatedAt: string;
-  utilization: SubnetUtilization;
-  conflictCount: number;
-};
-
-export type IpReservationRow = {
-  id: string;
-  companyId: string;
-  subnetId: string;
-  ipAddress: string;
-  label: string;
-  notes: string | null;
-  createdBy: string | null;
-  updatedBy: string | null;
-  createdAt: string;
-  updatedAt: string;
-};
-
-export type SubnetDetail = {
-  subnet: SubnetRow;
-  utilization: SubnetUtilization;
-  occupants: SubnetOccupant[];
-  reservations: IpReservationRow[];
-  conflicts: Array<{ ip: string; entries: SubnetOccupant[] }>;
-  provenance: IntegrationTargetProvenance[];
-};
-
-export async function listSubnets(
-  companyId: string,
-  params: { q?: string; includeArchived?: boolean } = {},
-): Promise<SubnetRow[]> {
-  const q = new URLSearchParams();
-  if (params.q) q.set('q', params.q);
-  if (params.includeArchived) q.set('includeArchived', 'true');
-  const res = await serverApiFetch<SubnetRow[]>(
-    `/companies/${companyId}/ipam/subnets${q.toString() ? `?${q.toString()}` : ''}`,
-  );
-  return res.data ?? [];
-}
-
-export const getCompanySubnetsBasic = cache(
-  async (companyId: string): Promise<SubnetRow[]> =>
-    listSubnets(companyId),
-);
-
-export async function getSubnetDetail(
-  companyId: string,
-  id: string,
-): Promise<SubnetDetail | null> {
-  const res = await serverApiFetch<SubnetDetail>(
-    `/companies/${companyId}/ipam/subnets/${id}`,
-  );
-  return unwrapApiResponse(res, `/companies/${companyId}/ipam/subnets/${id}`);
-}
-
-export async function listPhotos(
-  companyId: string,
-  params: {
-    attachedToType?: string;
-    attachedToId?: string;
-    limit?: number;
-    cursor?: string;
-    includeNonLatest?: boolean;
-  } = {},
-): Promise<{ items: UploadSummary[]; nextCursor: string | null }> {
-  const q = new URLSearchParams();
-  if (params.attachedToType) q.set('attachedToType', params.attachedToType);
-  if (params.attachedToId) q.set('attachedToId', params.attachedToId);
-  if (params.limit) q.set('limit', String(params.limit));
-  if (params.cursor) q.set('cursor', params.cursor);
-  if (params.includeNonLatest) q.set('includeNonLatest', '1');
-  const res = await serverApiFetch<{
-    items: UploadSummary[];
-    nextCursor: string | null;
-  }>(`/companies/${companyId}/photos${q.toString() ? `?${q.toString()}` : ''}`);
-  return res.data ?? { items: [], nextCursor: null };
-}
-
-// ---------------------------------------------------------------------
-// Phase 5: IP allow/deny rules (global, enforced before auth)
-// ---------------------------------------------------------------------
-
-export async function listIpRules(): Promise<IpRule[]> {
-  const res = await serverApiFetch<{ items: IpRule[] }>('/ip-rules');
-  return res.data?.items ?? [];
-}
-
-// ───────────────────────────────────────────────────────────────────
-// Backups admin (`/admin/backups`)
-//
-// Server-rendered first paint loads schedules and recent runs. The
-// client component then refreshes via `apiFetch` after mutations and
-// while polling a "Run now" attempt to terminal status.
-// ───────────────────────────────────────────────────────────────────
-
-export async function listBackupConfigs(): Promise<BackupConfig[]> {
-  const res = await serverApiFetch<BackupConfig[]>('/backups/configs');
-  if (!res.ok || !res.data) return [];
-  return res.data;
-}
-
-export async function listBackupRuns(): Promise<BackupRunDto[]> {
-  const res = await serverApiFetch<BackupRunDto[]>('/backups/runs?limit=50');
-  if (!res.ok || !res.data) return [];
-  return res.data;
 }

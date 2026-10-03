@@ -4,8 +4,8 @@ import {
   forMetadata,
   getMeForMetadata,
   requireMe,
-  getSubnetDetail,
 } from '../../../../../lib/server-api';
+import { getSubnetDetail } from '../../../../../lib/server-api/ipam';
 import { resolvePortalCompany } from '../../../../../lib/portal-company';
 import { PageBody, PageHeader } from '../../../../../components/shell/page-header';
 import { Tag } from '../../../../../components/ui';

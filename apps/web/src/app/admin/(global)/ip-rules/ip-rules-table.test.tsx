@@ -1,7 +1,7 @@
 /** @jest-environment jsdom */
 import '@testing-library/jest-dom';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import type { IpRule } from '../../../../lib/server-api';
+import type { IpRule } from '@weavestream/shared';
 import { IpRulesTable } from './ip-rules-table';
 
 const apiFetch = jest.fn();

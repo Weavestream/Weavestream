@@ -8,9 +8,9 @@ import {
   getMe,
   getMeForMetadata,
   listLayouts,
-  listPasswords,
-  listSubnets,
 } from '../../../lib/server-api';
+import { listSubnets } from '../../../lib/server-api/ipam';
+import { listPasswords } from '../../../lib/server-api/passwords';
 import { listDomains } from '../../../lib/server-api/domains';
 import { resolvePortalCompany } from '../../../lib/portal-company';
 

@@ -4,13 +4,15 @@ import Link from 'next/link';
 import {
   getAsset,
   getCompanyDetail,
-  getCompanyPasswordFolders,
   requireMe,
-  getPasswordDetailResult,
   getSettings,
-  listPasswordVersions,
   throwUnlessFound,
 } from '../../../../../../lib/server-api';
+import {
+  getCompanyPasswordFolders,
+  getPasswordDetailResult,
+  listPasswordVersions,
+} from '../../../../../../lib/server-api/passwords';
 import { canWriteCompany, hasCapability } from '../../../../../../lib/roles';
 import {
   DetailTitle,

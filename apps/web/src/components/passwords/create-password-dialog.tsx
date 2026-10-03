@@ -4,7 +4,7 @@ import { useCallback, useId, useState } from 'react';
 import { optionalHttpUrlError, type PasswordGeneratorDefaults } from '@weavestream/shared';
 import { Btn, Dialog, Field, Icon, Input, Select, Textarea } from '../ui';
 import { apiFetch } from '../../lib/api';
-import type { PasswordFolderRow } from '../../lib/server-api';
+import type { PasswordFolderRow } from '../../lib/server-api/passwords';
 import {
   buildPasswordFolderOptions,
   formatFolderOptionLabel,

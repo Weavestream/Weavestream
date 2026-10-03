@@ -11,9 +11,11 @@ import {
 } from 'react';
 import type {
   PasswordFolderRow,
+} from '../../../../../lib/server-api/passwords';
+import type {
+  PasswordGeneratorDefaults,
   PasswordSummary,
-} from '../../../../../lib/server-api';
-import type { PasswordGeneratorDefaults } from '@weavestream/shared';
+} from '@weavestream/shared';
 import { apiFetch } from '../../../../../lib/api';
 import {
   Btn,

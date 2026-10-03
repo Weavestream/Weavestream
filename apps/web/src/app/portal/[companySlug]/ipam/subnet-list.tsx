@@ -7,7 +7,7 @@ import {
   MobileCardRow,
   Tag,
 } from '../../../../components/ui';
-import type { SubnetRow } from '../../../../lib/server-api';
+import type { SubnetRow } from '../../../../lib/server-api/ipam';
 
 /**
  * Portal-side subnet list. Read-only mirror of the admin browser's

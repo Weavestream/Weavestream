@@ -1,12 +1,14 @@
 import type { Metadata } from 'next';
 import {
-  getCompanyActivePasswords,
   getCompanyDetail,
-  getCompanyPasswordFolders,
   requireMe,
-  listPasswords,
   throwUnlessFound,
 } from '../../../../../lib/server-api';
+import {
+  getCompanyActivePasswords,
+  getCompanyPasswordFolders,
+  listPasswords,
+} from '../../../../../lib/server-api/passwords';
 import { canWriteCompany } from '../../../../../lib/roles';
 import { PageBody, PageHeader } from '../../../../../components/shell/page-header';
 import { LayoutSwatch, Panel, Tag } from '../../../../../components/ui';

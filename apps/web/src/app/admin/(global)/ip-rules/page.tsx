@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
-import { requireMe, listIpRules } from '../../../../lib/server-api';
+import { requireMe } from '../../../../lib/server-api';
+import { listIpRules } from '../../../../lib/server-api/security';
 import { hasCapability } from '../../../../lib/roles';
 import { PageBody, PageHeader } from '../../../../components/shell/page-header';
 import { Icon, Panel } from '../../../../components/ui';

@@ -4,7 +4,7 @@ import { useState, useTransition, type ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
 import { Btn, Dialog, Icon, useToast } from '../../../../../components/ui';
 import { apiFetch } from '../../../../../lib/api';
-import type { UploadSummary } from '../../../../../lib/server-api';
+import type { UploadSummary } from '../../../../../lib/server-api/uploads';
 
 /**
  * Photos-page delete chip. Renders an inline trash button on tiles

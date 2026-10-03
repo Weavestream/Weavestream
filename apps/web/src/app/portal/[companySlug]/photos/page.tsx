@@ -1,10 +1,10 @@
 import type { ReactNode } from 'react';
 import Link from 'next/link';
+import { requireMe } from '../../../../lib/server-api';
 import {
-  requireMe,
   listPhotos,
   type UploadSummary,
-} from '../../../../lib/server-api';
+} from '../../../../lib/server-api/uploads';
 import { resolvePortalCompany } from '../../../../lib/portal-company';
 import { PageBody, PageHeader } from '../../../../components/shell/page-header';
 import { Icon, LayoutSwatch, Panel, Tag } from '../../../../components/ui';
