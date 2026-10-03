@@ -1,88 +1,11 @@
 import { cache } from 'react';
-import type {
-  FieldType,
-  IntegrationTargetProvenance,
-} from '@weavestream/shared';
+import type { AssetPage, AssetSummary } from '@weavestream/shared';
 import { unwrapApiResponse } from '../api-errors';
 import { serverApiFetch } from './core';
 
-type ActorRef = { id: string; name: string };
-
-export type AssetSummary = {
-  id: string;
-  companyId: string;
-  assetLayoutId: string;
-  layoutName: string;
-  layoutSlug: string;
-  layoutIcon: string;
-  layoutColor: string;
-  name: string;
-  externalId: string | null;
-  externalSource: string | null;
-  /**
-   * Phase 11 — last time an integration successfully wrote to this
-   * asset. Null for manually-created or untouched assets. Populated by
-   * the API's `hydrateSyncMetadata` helper based on the matching
-   * `IntegrationSyncRecord` row.
-   */
-  lastSyncedAt: string | null;
-  /**
-   * Layout-field ids that were last touched by the integration sync.
-   * Used by the edit form to render a subtle "synced" indicator next
-   * to fields the operator may want to leave alone (or knowingly
-   * override). Empty for manual assets.
-   */
-  syncedFieldIds: string[];
-  /**
-   * Phase 11.2 — every IntegrationSyncRecord linked to this asset.
-   * One asset can be claimed by several integrations at once (e.g.
-   * Action1 endpoint + UniFi client representing the same machine);
-   * the UI surfaces all of them rather than just the "primary" one
-   * stored on `externalSource`. Empty array for manual assets.
-   */
-  syncSources: Array<{
-    integrationId: string;
-    integrationName: string;
-    driver: string;
-    resourceKey: string;
-    lastSyncedAt: string;
-  }>;
-  provenance: IntegrationTargetProvenance[];
-  archivedAt: string | null;
-  createdBy: string | null;
-  updatedBy: string | null;
-  createdByUser: ActorRef | null;
-  updatedByUser: ActorRef | null;
-  createdAt: string;
-  updatedAt: string;
-  fieldValues: Record<string, unknown>;
-  fields: Array<{
-    id: string;
-    slug: string;
-    name: string;
-    fieldType: FieldType;
-    isPrimary: boolean;
-    visibleToClients: boolean;
-    options: Record<string, unknown>;
-  }>;
-  /**
-   * Server-resolved labels for ASSET_REFERENCE values, keyed by the
-   * referenced asset id. The list + detail endpoints populate this with
-   * a single batched lookup so tables and detail views can render the
-   * target asset's name instead of a bare uuid. Missing entries = the
-   * referent was hard-deleted or is out of scope.
-   */
-  references: Record<
-    string,
-    { id: string; name: string; archivedAt: string | null }
-  >;
-  /**
-   * True if the signed-in user has starred this asset (detail only).
-   */
-  isStarred: boolean;
-};
-
-export type AssetPage = { items: AssetSummary[]; nextCursor: string | null };
+// ───────────────────────────────────────────────────────────────────
+// Phase 3: assets
+// ───────────────────────────────────────────────────────────────────
 
 export async function listAssets(
   companyId: string,

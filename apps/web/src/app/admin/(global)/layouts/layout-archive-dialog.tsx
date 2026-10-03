@@ -4,10 +4,7 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { apiFetch } from '../../../../lib/api';
 import { Btn, Dialog, useToast } from '../../../../components/ui';
-import type {
-  LayoutSummary,
-  LayoutStats,
-} from '../../../../lib/server-api/layouts';
+import type { LayoutStats, LayoutSummary } from '@weavestream/shared';
 
 /**
  * Archive / restore confirmation modal used from both the builder and

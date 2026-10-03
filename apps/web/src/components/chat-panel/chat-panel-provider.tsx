@@ -11,6 +11,7 @@ import {
   type ReactNode,
 } from 'react';
 import type {
+  AssetSummary,
   ChatRequestContext,
   ChatToolCallDto,
   ChatTurnIntent,
@@ -35,7 +36,6 @@ import { tiptapDocToMarkdown } from '@weavestream/shared';
 import { assetToMarkdown } from '../../lib/asset-format';
 import { domainToMarkdown } from '../../lib/domain-format';
 import { randomClientId } from '@weavestream/shared/browser';
-import type { AssetSummary } from '../../lib/server-api/assets';
 import type { ArticleDetail } from '../../lib/server-api/articles';
 import type {
   DomainCheck,

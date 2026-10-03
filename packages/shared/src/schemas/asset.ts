@@ -1,4 +1,7 @@
 import { z } from 'zod';
+import { FieldTypeValues } from './field-types.js';
+import { integrationTargetProvenanceSchema } from './integration.js';
+import { actorRefSchema } from './user.js';
 
 /**
  * Dynamic Asset DTOs. The *exact* per-field value shape is not known at
@@ -89,3 +92,105 @@ export const bulkAssetResultSchema = z.object({
 });
 
 export type BulkAssetResult = z.infer<typeof bulkAssetResultSchema>;
+
+// ---------------------------------------------------------------------
+// Response contracts — the wire shape `GET /companies/:id/assets` (list
+// rows) and `GET /companies/:id/assets/:assetId` (detail) both return.
+// Dates are ISO strings. The API keeps its own `Date`-typed
+// `SerializedAsset`; a contract test there checks that its JSON form
+// matches these.
+// ---------------------------------------------------------------------
+
+/** One layout field as embedded on an asset, for rendering its values. */
+export const assetFieldMetaSchema = z.object({
+  id: z.string().uuid(),
+  slug: z.string(),
+  name: z.string(),
+  fieldType: z.enum(FieldTypeValues),
+  isPrimary: z.boolean(),
+  visibleToClients: z.boolean(),
+  options: z.record(z.unknown()),
+});
+
+/**
+ * Phase 11.2 — one `IntegrationSyncRecord` linked to an asset. One asset
+ * can be claimed by several integrations at once (e.g. an Action1
+ * endpoint and a UniFi client for the same machine), so clients show all
+ * of them rather than only the "primary" one on `externalSource`.
+ */
+export const assetSyncSourceSchema = z.object({
+  integrationId: z.string().uuid(),
+  integrationName: z.string(),
+  driver: z.string(),
+  resourceKey: z.string(),
+  lastSyncedAt: z.string(),
+});
+
+/** Server-resolved label for one ASSET_REFERENCE target. */
+export const assetReferenceEntrySchema = z.object({
+  id: z.string().uuid(),
+  name: z.string(),
+  archivedAt: z.string().nullable(),
+});
+
+export const assetSummarySchema = z.object({
+  id: z.string().uuid(),
+  companyId: z.string().uuid(),
+  assetLayoutId: z.string().uuid(),
+  layoutName: z.string(),
+  layoutSlug: z.string(),
+  layoutIcon: z.string(),
+  layoutColor: z.string(),
+  name: z.string(),
+  externalId: z.string().nullable(),
+  externalSource: z.string().nullable(),
+  /**
+   * Phase 11 — last time an integration successfully wrote to this
+   * asset. Null for manually-created or untouched assets. Populated by
+   * the API's `hydrateSyncMetadata` helper based on the matching
+   * `IntegrationSyncRecord` row.
+   */
+  lastSyncedAt: z.string().nullable(),
+  /**
+   * Layout-field ids that were last touched by the integration sync.
+   * Used by the edit form to render a subtle "synced" indicator next
+   * to fields the operator may want to leave alone (or knowingly
+   * override). Empty for manual assets.
+   */
+  syncedFieldIds: z.array(z.string()),
+  /** Empty array for manual assets. */
+  syncSources: z.array(assetSyncSourceSchema),
+  /** Always `[]` on list rows; populated on detail. */
+  provenance: z.array(integrationTargetProvenanceSchema),
+  archivedAt: z.string().nullable(),
+  createdBy: z.string().uuid().nullable(),
+  updatedBy: z.string().uuid().nullable(),
+  createdByUser: actorRefSchema.nullable(),
+  updatedByUser: actorRefSchema.nullable(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  /** Keyed by field slug; visibility-filtered per role server-side. */
+  fieldValues: z.record(z.unknown()),
+  fields: z.array(assetFieldMetaSchema),
+  /**
+   * Server-resolved labels for ASSET_REFERENCE values, keyed by the
+   * referenced asset id. The list + detail endpoints populate this with
+   * a single batched lookup so tables and detail views can render the
+   * target asset's name instead of a bare uuid. Missing entries = the
+   * referent was hard-deleted or is out of scope.
+   */
+  references: z.record(assetReferenceEntrySchema),
+  /** True if the signed-in user has starred this asset (detail only). */
+  isStarred: z.boolean(),
+});
+
+export const assetPageSchema = z.object({
+  items: z.array(assetSummarySchema),
+  nextCursor: z.string().nullable(),
+});
+
+export type AssetFieldMeta = z.infer<typeof assetFieldMetaSchema>;
+export type AssetSyncSource = z.infer<typeof assetSyncSourceSchema>;
+export type AssetReferenceEntry = z.infer<typeof assetReferenceEntrySchema>;
+export type AssetSummary = z.infer<typeof assetSummarySchema>;
+export type AssetPage = z.infer<typeof assetPageSchema>;

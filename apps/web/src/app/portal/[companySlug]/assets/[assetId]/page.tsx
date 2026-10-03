@@ -6,10 +6,8 @@ import {
   getMeForMetadata,
   requireMe,
 } from '../../../../../lib/server-api/auth';
-import {
-  getAsset,
-  type AssetSummary,
-} from '../../../../../lib/server-api/assets';
+import type { AssetSummary } from '@weavestream/shared';
+import { getAsset } from '../../../../../lib/server-api/assets';
 import { forMetadata } from '../../../../../lib/server-api/core';
 import { resolvePortalCompany } from '../../../../../lib/portal-company';
 import { humanSize } from '@weavestream/shared';

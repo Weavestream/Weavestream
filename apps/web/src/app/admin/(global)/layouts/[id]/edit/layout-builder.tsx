@@ -36,10 +36,10 @@ import {
   saveAssetFieldsSchema,
 } from '@weavestream/shared';
 import type {
+  LayoutFieldSummary,
   LayoutStats,
   LayoutSummary,
-  LayoutFieldSummary,
-} from '../../../../../../lib/server-api/layouts';
+} from '@weavestream/shared';
 import { apiFetch } from '../../../../../../lib/api';
 import {
   Btn,

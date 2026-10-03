@@ -1,5 +1,5 @@
 import { tiptapDocToMarkdown } from './article-format';
-import type { AssetSummary } from './server-api/assets';
+import type { AssetSummary } from '@weavestream/shared';
 
 /**
  * Project an `AssetSummary` (as returned by `GET

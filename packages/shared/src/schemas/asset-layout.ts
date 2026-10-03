@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { FieldTypeValues } from './field-types.js';
 
 export const layoutSlugSchema = z
   .string()
@@ -78,3 +79,52 @@ export const reorderAssetLayoutsSchema = z.object({
 export type CreateAssetLayoutInput = z.infer<typeof createAssetLayoutSchema>;
 export type UpdateAssetLayoutInput = z.infer<typeof updateAssetLayoutSchema>;
 export type ReorderAssetLayoutsInput = z.infer<typeof reorderAssetLayoutsSchema>;
+
+// ---------------------------------------------------------------------
+// Response contracts — the wire shapes `GET /layouts` and
+// `GET /layouts/:id` return. Dates are ISO strings. The API keeps its own
+// `Date`-typed serializer interfaces; a contract test there checks that
+// their JSON form matches these.
+// ---------------------------------------------------------------------
+
+export const layoutFieldSummarySchema = z.object({
+  id: z.string().uuid(),
+  name: z.string(),
+  slug: z.string(),
+  fieldType: z.enum(FieldTypeValues),
+  position: z.number().int(),
+  isRequired: z.boolean(),
+  isUniquePerCompany: z.boolean(),
+  visibleToClients: z.boolean(),
+  isPrimary: z.boolean(),
+  showInTable: z.boolean(),
+  options: z.record(z.unknown()),
+  archivedAt: z.string().nullable(),
+});
+
+export const layoutSummarySchema = z.object({
+  id: z.string().uuid(),
+  name: z.string(),
+  slug: z.string(),
+  icon: z.string(),
+  color: z.string(),
+  isActive: z.boolean(),
+  version: z.number().int(),
+  position: z.number().int(),
+  archivedAt: z.string().nullable(),
+  createdBy: z.string().uuid().nullable(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  fields: z.array(layoutFieldSummarySchema),
+});
+
+/** `stats` block of `GET /layouts/:id?stats=true`. */
+export const layoutStatsSchema = z.object({
+  fieldCount: z.number().int(),
+  assetCount: z.number().int(),
+  companyCount: z.number().int(),
+});
+
+export type LayoutFieldSummary = z.infer<typeof layoutFieldSummarySchema>;
+export type LayoutSummary = z.infer<typeof layoutSummarySchema>;
+export type LayoutStats = z.infer<typeof layoutStatsSchema>;

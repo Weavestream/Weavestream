@@ -1,48 +1,11 @@
 import { cache } from 'react';
-import type { FieldType } from '@weavestream/shared';
+import type { LayoutStats, LayoutSummary } from '@weavestream/shared';
 import { unwrapApiResponse } from '../api-errors';
 import { serverApiFetch } from './core';
 
 // ───────────────────────────────────────────────────────────────────
 // Phase 3: asset layouts
 // ───────────────────────────────────────────────────────────────────
-
-export type LayoutFieldSummary = {
-  id: string;
-  name: string;
-  slug: string;
-  fieldType: FieldType;
-  position: number;
-  isRequired: boolean;
-  isUniquePerCompany: boolean;
-  visibleToClients: boolean;
-  isPrimary: boolean;
-  showInTable: boolean;
-  options: Record<string, unknown>;
-  archivedAt: string | null;
-};
-
-export type LayoutSummary = {
-  id: string;
-  name: string;
-  slug: string;
-  icon: string;
-  color: string;
-  isActive: boolean;
-  version: number;
-  position: number;
-  archivedAt: string | null;
-  createdBy: string | null;
-  createdAt: string;
-  updatedAt: string;
-  fields: LayoutFieldSummary[];
-};
-
-export type LayoutStats = {
-  fieldCount: number;
-  assetCount: number;
-  companyCount: number;
-};
 
 export async function listLayouts(params?: {
   q?: string;

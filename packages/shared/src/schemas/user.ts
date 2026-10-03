@@ -8,6 +8,17 @@ import {
 import { userSearchDefaultsSchema } from './search.js';
 
 /**
+ * `{ id, name }` stub the API hydrates for a record's `createdBy` /
+ * `updatedBy` user (articles, assets). The field is `null` on the wire
+ * when that user no longer resolves.
+ */
+export const actorRefSchema = z.object({
+  id: z.string().uuid(),
+  name: z.string(),
+});
+export type ActorRef = z.infer<typeof actorRefSchema>;
+
+/**
  * Password policy: 12+ chars, at least 3 of {lower, upper, digit, symbol}.
  * Matches the CLI policy so CLI-created admins and UI-created users share
  * the same bar.

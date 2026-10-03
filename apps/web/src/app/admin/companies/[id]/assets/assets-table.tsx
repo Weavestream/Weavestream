@@ -3,9 +3,12 @@
 import { useEffect, useMemo, useState, useTransition } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import type { BulkAssetResult, PasswordSummary } from '@weavestream/shared';
-import type { LayoutSummary } from '../../../../../lib/server-api/layouts';
-import type { AssetSummary } from '../../../../../lib/server-api/assets';
+import type {
+  AssetSummary,
+  BulkAssetResult,
+  LayoutSummary,
+  PasswordSummary,
+} from '@weavestream/shared';
 import {
   Btn,
   DataTable,

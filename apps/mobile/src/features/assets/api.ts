@@ -1,6 +1,10 @@
 import type {
+  AssetFieldMeta as SharedAssetFieldMeta,
+  AssetSummary,
   CreateAssetInput,
-  IntegrationTargetProvenance,
+  FieldType,
+  LayoutFieldSummary,
+  LayoutSummary,
   PasswordSummary,
   UpdateAssetInput,
 } from '@weavestream/shared';
@@ -11,10 +15,9 @@ import { ApiError, apiFetch } from '../../lib/api';
  * (Phase 2c).
  *
  * Responses are consumed via TypeScript types, not runtime Zod parses —
- * same stance as passwords/articles. `SerializedAsset` and
- * `SerializedLayout` exist only inside the API services, so the shapes
- * are mirrored here with string dates (the `CompanyRow`/`RelatedItem`
- * local-slice precedent).
+ * same stance as passwords/articles. The shapes come from the shared
+ * `AssetSummary` / `LayoutSummary` contracts (see the widening note
+ * below).
  *
  * Two-source join, by design: the asset response embeds `fields[]`
  * (position-sorted) but WITHOUT `position`/`showInTable`/`isRequired` —
@@ -31,95 +34,29 @@ import { ApiError, apiFetch } from '../../lib/api';
 
 export const PAGE_LIMIT = 50;
 
-/** `SerializedAsset.fields[]` entry — thinner than the layout's field. */
-export interface AssetFieldMeta {
-  id: string;
-  slug: string;
-  name: string;
-  /** `string`, not `FieldType` — the enum grows; unknown must not crash. */
-  fieldType: string;
-  isPrimary: boolean;
-  visibleToClients: boolean;
-  options: Record<string, unknown>;
-}
+/**
+ * The asset and layout wire contracts live in `@weavestream/shared`. This
+ * app widens one field: `fieldType` is `string`, not `FieldType`. The enum
+ * grows, and a PWA cached on a phone can meet a newer API, so an unknown
+ * field type must render as a fallback instead of crashing.
+ */
+type WithLooseFieldType<T extends { fieldType: FieldType }> = Omit<
+  T,
+  'fieldType'
+> & { fieldType: string };
 
-export interface AssetSyncSource {
-  integrationId: string;
-  integrationName: string;
-  driver: string;
-  resourceKey: string;
-  lastSyncedAt: string;
-}
+/** `AssetSummary.fields[]` entry — thinner than the layout's field. */
+export type AssetFieldMeta = WithLooseFieldType<SharedAssetFieldMeta>;
 
-export interface AssetReferenceEntry {
-  id: string;
-  name: string;
-  archivedAt: string | null;
-}
-
-/** Mirror of the API's `SerializedAsset` (dates as ISO strings). */
-export interface AssetRecord {
-  id: string;
-  companyId: string;
-  assetLayoutId: string;
-  layoutName: string;
-  layoutSlug: string;
-  layoutIcon: string;
-  layoutColor: string;
-  name: string;
-  externalId: string | null;
-  externalSource: string | null;
-  archivedAt: string | null;
-  createdBy: string | null;
-  updatedBy: string | null;
-  createdByUser: { id: string; name: string } | null;
-  updatedByUser: { id: string; name: string } | null;
-  createdAt: string;
-  updatedAt: string;
-  lastSyncedAt: string | null;
-  syncedFieldIds: string[];
-  syncSources: AssetSyncSource[];
-  /** Always `[]` on list rows; populated on detail. */
-  provenance: IntegrationTargetProvenance[];
-  /** Keyed by field slug; visibility-filtered per role server-side. */
-  fieldValues: Record<string, unknown>;
+export type AssetRecord = Omit<AssetSummary, 'fields'> & {
   fields: AssetFieldMeta[];
-  /** ASSET_REFERENCE name sidecar, keyed by referenced asset id. */
-  references: Record<string, AssetReferenceEntry>;
-  isStarred: boolean;
-}
+};
 
-/** Mirror of the API's `SerializedLayoutField` (has the join-only bits). */
-export interface LayoutFieldRecord {
-  id: string;
-  name: string;
-  slug: string;
-  fieldType: string;
-  position: number;
-  isRequired: boolean;
-  isUniquePerCompany: boolean;
-  visibleToClients: boolean;
-  isPrimary: boolean;
-  showInTable: boolean;
-  options: Record<string, unknown>;
-  archivedAt: string | null;
-}
+export type LayoutFieldRecord = WithLooseFieldType<LayoutFieldSummary>;
 
-export interface LayoutRecord {
-  id: string;
-  name: string;
-  slug: string;
-  icon: string;
-  color: string;
-  isActive: boolean;
-  version: number;
-  position: number;
-  archivedAt: string | null;
-  createdBy: string | null;
-  createdAt: string;
-  updatedAt: string;
+export type LayoutRecord = Omit<LayoutSummary, 'fields'> & {
   fields: LayoutFieldRecord[];
-}
+};
 
 export interface AssetsPage {
   items: AssetRecord[];

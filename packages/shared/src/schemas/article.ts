@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { MAX_MARKDOWN_SOURCE } from '../markdown.js';
+import { actorRefSchema } from './user.js';
 
 /**
  * Article slug: lowercase kebab-case, 1–80 chars. Uniqueness is enforced
@@ -170,10 +171,7 @@ export type ArticleVersionSummary = z.infer<typeof articleVersionSummarySchema>;
 export type ArticleVersionDetail = z.infer<typeof articleVersionDetailSchema>;
 
 /** `{ id, name }` stub the API hydrates for createdBy/updatedBy. */
-export const articleActorRefSchema = z.object({
-  id: z.string().uuid(),
-  name: z.string(),
-});
+export const articleActorRefSchema = actorRefSchema;
 
 /**
  * Wire shape of `GET /companies/:id/articles` list ITEMS — metadata

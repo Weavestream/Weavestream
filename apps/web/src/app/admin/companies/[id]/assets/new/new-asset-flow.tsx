@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import type { LayoutSummary } from '../../../../../../lib/server-api/layouts';
+import type { LayoutSummary } from '@weavestream/shared';
 import {
   Btn,
   Icon,

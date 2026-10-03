@@ -11,6 +11,8 @@ import type {
   IntegrationResourceDto,
   IntegrationSyncDirectionValue,
   IntegrationTransform,
+  LayoutFieldSummary,
+  LayoutSummary,
   SourceFieldDto,
 } from '@weavestream/shared';
 import { apiFetch } from '../../../../../lib/api';
@@ -23,10 +25,6 @@ import {
   Tag,
   useToast,
 } from '../../../../../components/ui';
-import type {
-  LayoutFieldSummary,
-  LayoutSummary,
-} from '../../../../../lib/server-api/layouts';
 
 const DIRECTIONS: Array<{
   value: IntegrationSyncDirectionValue;
