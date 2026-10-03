@@ -1,4 +1,4 @@
-import type { Me } from './server-api';
+import type { Me } from './server-api/auth';
 import { normalizeTimeZone } from '@weavestream/shared';
 
 /**

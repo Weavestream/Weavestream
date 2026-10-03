@@ -11,7 +11,7 @@ import {
 } from 'react';
 import { createPortal } from 'react-dom';
 import { apiFetch } from '../../../../../lib/api';
-import type { AssetSummary } from '../../../../../lib/server-api';
+import type { AssetSummary } from '../../../../../lib/server-api/assets';
 import { Icon } from '../../../../../components/ui';
 
 /**

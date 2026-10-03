@@ -6,7 +6,7 @@ import type {
   ViewerLike,
 } from '@weavestream/shared';
 import { activeMemberships } from '@weavestream/shared';
-import type { Me, Membership } from './server-api';
+import type { Me, Membership } from './server-api/auth';
 
 const OPERATOR_ROLES: UserRole[] = ['SUPER_ADMIN', 'OPERATOR'];
 

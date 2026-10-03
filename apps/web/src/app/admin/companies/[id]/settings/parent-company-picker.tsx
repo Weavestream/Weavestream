@@ -16,7 +16,7 @@ import {
 import type {
   CompanyListItem,
   CompanyParentRef,
-} from '../../../../../lib/server-api';
+} from '../../../../../lib/server-api/companies';
 
 interface ParentCompanyPickerProps {
   currentCompanyId: string;

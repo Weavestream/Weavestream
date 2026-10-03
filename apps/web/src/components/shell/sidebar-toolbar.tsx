@@ -13,7 +13,7 @@ import {
 } from 'react';
 import { apiFetch } from '../../lib/api';
 import { companyAccent } from '../../lib/company-format';
-import type { StarredItem } from '../../lib/server-api';
+import type { StarredItem } from '../../lib/server-api/admin';
 import { CompanyAvatar, Icon, LayoutSwatch, type IconName } from '../ui';
 import { ChatPanelToggle } from '../chat-panel/chat-panel-toggle';
 import { useSearchPalette } from '../search/search-palette-provider';

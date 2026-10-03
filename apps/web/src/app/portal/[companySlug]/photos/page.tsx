@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import Link from 'next/link';
-import { requireMe } from '../../../../lib/server-api';
+import { requireMe } from '../../../../lib/server-api/auth';
 import {
   listPhotos,
   type UploadSummary,

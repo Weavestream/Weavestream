@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState, useTransition } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { apiFetch } from '../../../../lib/api';
-import type { LayoutSummary } from '../../../../lib/server-api';
+import type { LayoutSummary } from '../../../../lib/server-api/layouts';
 import {
   Btn,
   DataTable,

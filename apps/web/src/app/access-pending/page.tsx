@@ -1,6 +1,7 @@
 import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
-import { getMe, getSettings } from '../../lib/server-api';
+import { getMe } from '../../lib/server-api/auth';
+import { getSettings } from '../../lib/server-api/settings';
 import { activeMemberships, canAccessAdminShell } from '../../lib/roles';
 import { AuthShell } from '../../components/shell/auth-shell';
 import { LogoutButton } from '../../components/shell/logout-button';

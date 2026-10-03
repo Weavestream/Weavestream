@@ -6,7 +6,7 @@ import { apiFetch } from '../../../../../lib/api';
 import { uploadFile } from '../../../../../lib/upload-client';
 import { Btn, CompanyAvatar, Icon, useToast } from '../../../../../components/ui';
 import { companyAccent } from '../../../../../lib/company-format';
-import type { CompanyDetail } from '../../../../../lib/server-api';
+import type { CompanyDetail } from '../../../../../lib/server-api/companies';
 
 /**
  * Logo uploader built on top of the same-origin upload flow:

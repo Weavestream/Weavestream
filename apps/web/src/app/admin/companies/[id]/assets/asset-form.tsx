@@ -10,7 +10,7 @@ import {
   type FieldType,
   type FieldTypeMeta,
 } from '@weavestream/shared';
-import type { LayoutSummary } from '../../../../../lib/server-api';
+import type { LayoutSummary } from '../../../../../lib/server-api/layouts';
 import { apiFetch } from '../../../../../lib/api';
 import { useTimezone } from '../../../../../lib/timezone-context';
 import { Btn, Icon, LayoutSwatch, Tag, useToast } from '../../../../../components/ui';

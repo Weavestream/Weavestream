@@ -2,7 +2,10 @@
 import '@testing-library/jest-dom';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { FILE_MULTI_CAP } from '@weavestream/shared';
-import type { LayoutFieldSummary, LayoutSummary } from '../../../../../lib/server-api';
+import type {
+  LayoutFieldSummary,
+  LayoutSummary,
+} from '../../../../../lib/server-api/layouts';
 import { ToastProvider } from '../../../../../components/ui';
 import { AssetForm } from './asset-form';
 

@@ -18,7 +18,7 @@ import {
 } from '../../../../components/ui';
 import { apiFetch } from '../../../../lib/api';
 import { FormattedDateTime } from '../../../../lib/timezone-context';
-import type { AuditEntry } from '../../../../lib/server-api';
+import type { AuditEntry } from '../../../../lib/server-api/admin';
 import { lower } from '../../../../lib/term';
 import { useTerm } from '../../../../lib/term-context';
 

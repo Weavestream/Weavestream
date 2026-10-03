@@ -1,10 +1,8 @@
 import type { Metadata } from 'next';
-import {
-  getCompanyDetail,
-  getSettings,
-  listExpirations,
-  throwUnlessFound,
-} from '../../../../../lib/server-api';
+import { getSettings } from '../../../../../lib/server-api/settings';
+import { getCompanyDetail } from '../../../../../lib/server-api/companies';
+import { listExpirations } from '../../../../../lib/server-api/admin';
+import { throwUnlessFound } from '../../../../../lib/server-api/core';
 import { PageBody, PageHeader } from '../../../../../components/shell/page-header';
 import { Panel, Tag } from '../../../../../components/ui';
 import { buildTerm, lower } from '../../../../../lib/term';

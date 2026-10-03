@@ -35,7 +35,8 @@ import { tiptapDocToMarkdown } from '@weavestream/shared';
 import { assetToMarkdown } from '../../lib/asset-format';
 import { domainToMarkdown } from '../../lib/domain-format';
 import { randomClientId } from '@weavestream/shared/browser';
-import type { ArticleDetail, AssetSummary } from '../../lib/server-api';
+import type { AssetSummary } from '../../lib/server-api/assets';
+import type { ArticleDetail } from '../../lib/server-api/articles';
 import type {
   DomainCheck,
   MonitoredDomain,

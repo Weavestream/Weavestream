@@ -1,5 +1,5 @@
 import { companyShellNav } from './company-shell-nav';
-import type { Me } from './server-api';
+import type { Me } from './server-api/auth';
 
 type Tenant = { id: string; name: string; slug: string };
 

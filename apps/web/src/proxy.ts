@@ -59,7 +59,7 @@ export async function proxy(req: NextRequest, event: NextFetchEvent) {
   // `TRUST_PROXY_HOPS` (number of edge proxies in front of this web
   // container) and stash it on the request headers so downstream
   // handlers — the `/api/[...path]` route handler proxy and any SSR
-  // fetch through `server-api.ts` — can forward a single sanitized
+  // fetch through `server-api/core.ts` — can forward a single sanitized
   // entry to the API instead of letting an attacker-controlled chain
   // flow through. We also overwrite `x-forwarded-for` / `x-real-ip`
   // on the propagated request headers so any downstream code that
@@ -219,7 +219,7 @@ async function refreshAccessCookieForProtectedPage(
 
 /**
  * Which page routes get an access-cookie preflight refresh before they
- * render. This allowlist is COUPLED to `server-api.ts`, which strips the
+ * render. This allowlist is COUPLED to `server-api/core.ts`, which strips the
  * long-lived refresh cookie from every SSR read: once the short-lived
  * access cookie expires, an authenticated route that is NOT listed here
  * gets no fresh access cookie and no refresh-cookie fallback, so its SSR

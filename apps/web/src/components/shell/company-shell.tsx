@@ -1,9 +1,7 @@
 import type { ReactNode } from 'react';
-import type {
-  CompanyListItem,
-  LayoutSummary,
-  Me,
-} from '../../lib/server-api';
+import type { Me } from '../../lib/server-api/auth';
+import type { CompanyListItem } from '../../lib/server-api/companies';
+import type { LayoutSummary } from '../../lib/server-api/layouts';
 import { canAccessAdminShell, initialsFromName } from '../../lib/roles';
 import { companyShellNav } from '../../lib/company-shell-nav';
 import { LayoutSwatch } from '../ui';

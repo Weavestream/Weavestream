@@ -1,14 +1,14 @@
 import type { Metadata } from 'next';
 
 export const metadata: Metadata = { title: 'Articles' };
+import { requireMe } from '../../../../../lib/server-api/auth';
+import { getSettings } from '../../../../../lib/server-api/settings';
+import { getCompanyDetail } from '../../../../../lib/server-api/companies';
 import {
-  getCompanyDetail,
   getCompanyFolderTree,
-  requireMe,
-  getSettings,
   listAllArticles,
-  throwUnlessFound,
-} from '../../../../../lib/server-api';
+} from '../../../../../lib/server-api/articles';
+import { throwUnlessFound } from '../../../../../lib/server-api/core';
 import { canWriteCompany } from '../../../../../lib/roles';
 import { PageBody, PageHeader } from '../../../../../components/shell/page-header';
 import { Icon, LayoutSwatch, LinkBtn, Panel, Tag } from '../../../../../components/ui';

@@ -13,7 +13,7 @@ import {
   Tag,
   type DataColumn,
 } from '../../../../components/ui';
-import type { CompanyListItem } from '../../../../lib/server-api';
+import type { CompanyListItem } from '../../../../lib/server-api/companies';
 import {
   companyAccent,
   companyTypeLabel,

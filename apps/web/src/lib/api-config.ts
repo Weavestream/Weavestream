@@ -2,7 +2,7 @@
  * Proxy/edge-safe config shared by the Next.js `proxy.ts` layer and the
  * server-side API helpers. This module MUST NOT import `next/headers` or any
  * request-scoped API, so it can be pulled into `proxy.ts` (which runs in the
- * proxy layer and cannot import `server-api.ts`).
+ * proxy layer and cannot import `server-api/core.ts`).
  */
 
 /**

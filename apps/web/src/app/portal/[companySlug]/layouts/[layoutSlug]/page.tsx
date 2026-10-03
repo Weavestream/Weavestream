@@ -1,13 +1,13 @@
 import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
+import { getMe } from '../../../../../lib/server-api/auth';
+import { listLayouts } from '../../../../../lib/server-api/layouts';
+import { listAssets } from '../../../../../lib/server-api/assets';
+import { forMetadata } from '../../../../../lib/server-api/core';
 import {
   ApiUnavailableError,
   RateLimitedError,
-  forMetadata,
-  getMe,
-  listAssets,
-  listLayouts,
-} from '../../../../../lib/server-api';
+} from '../../../../../lib/api-errors';
 import { resolvePortalCompany } from '../../../../../lib/portal-company';
 import {
   PageBody,

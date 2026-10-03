@@ -22,7 +22,9 @@ jest.mock('next/headers', () => ({
   headers: jest.fn(async () => new Headers()),
 }));
 
-import { RateLimitedError, forMetadata, getAsset } from './server-api';
+import { RateLimitedError } from '../api-errors';
+import { getAsset } from './assets';
+import { forMetadata } from './core';
 
 function resetRequestCache() {
   for (const cache of mockRequestCaches) cache.clear();

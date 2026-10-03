@@ -1,7 +1,7 @@
 import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
 import type { ReactNode } from 'react';
-import { getMe } from '../../lib/server-api';
+import { getMe } from '../../lib/server-api/auth';
 import { canAccessAdminShell, isOperator } from '../../lib/roles';
 
 /**

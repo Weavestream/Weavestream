@@ -6,11 +6,11 @@ import type {
   IntegrationDto,
   IntegrationSyncRunDto,
 } from '@weavestream/shared';
+import { requireMe } from '../../../../../lib/server-api/auth';
 import {
-  requireMe,
   serverApiFetch,
   throwUnlessFound,
-} from '../../../../../lib/server-api';
+} from '../../../../../lib/server-api/core';
 import { hasCapability } from '../../../../../lib/roles';
 import { PageBody, PageHeader } from '../../../../../components/shell/page-header';
 import { Panel } from '../../../../../components/ui';

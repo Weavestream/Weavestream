@@ -3,12 +3,9 @@ import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
 import type { ReactNode } from 'react';
 import { CompanyShell } from '../../../components/shell/company-shell';
-import {
-  getAssetCountsByLayout,
-  getMe,
-  getMeForMetadata,
-  listLayouts,
-} from '../../../lib/server-api';
+import { getMe, getMeForMetadata } from '../../../lib/server-api/auth';
+import { listLayouts } from '../../../lib/server-api/layouts';
+import { getAssetCountsByLayout } from '../../../lib/server-api/assets';
 import { listSubnets } from '../../../lib/server-api/ipam';
 import { listPasswords } from '../../../lib/server-api/passwords';
 import { listDomains } from '../../../lib/server-api/domains';

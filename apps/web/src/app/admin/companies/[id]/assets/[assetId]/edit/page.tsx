@@ -1,10 +1,10 @@
 import { notFound } from 'next/navigation';
 import {
-  getAsset,
   getCompanyDetail,
-  getLayout,
-  throwUnlessFound,
-} from '../../../../../../../lib/server-api';
+} from '../../../../../../../lib/server-api/companies';
+import { getLayout } from '../../../../../../../lib/server-api/layouts';
+import { getAsset } from '../../../../../../../lib/server-api/assets';
+import { throwUnlessFound } from '../../../../../../../lib/server-api/core';
 import { AssetForm } from '../../asset-form';
 
 export default async function EditAssetPage({

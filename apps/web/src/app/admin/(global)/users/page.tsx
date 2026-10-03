@@ -1,4 +1,6 @@
-import { requireMe, serverApiFetch, type UserPage } from '../../../../lib/server-api';
+import { requireMe } from '../../../../lib/server-api/auth';
+import { type UserPage } from '../../../../lib/server-api/admin';
+import { serverApiFetch } from '../../../../lib/server-api/core';
 import { hasCapability } from '../../../../lib/roles';
 import { PageBody, PageHeader } from '../../../../components/shell/page-header';
 import { Panel } from '../../../../components/ui';

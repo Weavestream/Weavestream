@@ -26,7 +26,7 @@ import {
 import type {
   LayoutFieldSummary,
   LayoutSummary,
-} from '../../../../../lib/server-api';
+} from '../../../../../lib/server-api/layouts';
 
 const DIRECTIONS: Array<{
   value: IntegrationSyncDirectionValue;

@@ -3,11 +3,11 @@ import type {
   CloudflareIpListDto,
   IntegrationDto,
 } from '@weavestream/shared';
+import { requireMe } from '../../../../../../../lib/server-api/auth';
 import {
-  requireMe,
   serverApiFetch,
   throwUnlessFound,
-} from '../../../../../../../lib/server-api';
+} from '../../../../../../../lib/server-api/core';
 import { hasCapability } from '../../../../../../../lib/roles';
 import {
   PageBody,

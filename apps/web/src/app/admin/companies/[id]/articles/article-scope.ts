@@ -1,4 +1,4 @@
-import type { ArticleSummary, FolderNode } from '../../../../../lib/server-api';
+import type { ArticleSummary, FolderNode } from '@weavestream/shared';
 
 /**
  * What the folder rail has selected, in the same vocabulary `?folderId=`

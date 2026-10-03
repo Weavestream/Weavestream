@@ -1,4 +1,4 @@
-import type { CompanyType } from './server-api';
+import type { CompanyType } from '@weavestream/shared';
 import type { TagTone } from '../components/ui';
 
 // Stable per-id brand accent. Kept as a plain function so every caller

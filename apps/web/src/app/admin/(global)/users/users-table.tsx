@@ -12,7 +12,7 @@ import {
   type DataColumn,
 } from '../../../../components/ui';
 import { globalAccessLabel, roleLabel } from '../../../../lib/roles';
-import type { UserListItem } from '../../../../lib/server-api';
+import type { UserListItem } from '../../../../lib/server-api/admin';
 import { shortRelative as relative } from '../../../../lib/relative-time';
 
 const ROLE_FILTERS: Array<{ value: string; label: string }> = [

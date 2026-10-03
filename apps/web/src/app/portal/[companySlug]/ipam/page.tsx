@@ -2,7 +2,7 @@ import type { Metadata } from 'next';
 
 export const metadata: Metadata = { title: 'IPAM' };
 
-import { requireMe } from '../../../../lib/server-api';
+import { requireMe } from '../../../../lib/server-api/auth';
 import { listSubnets } from '../../../../lib/server-api/ipam';
 import { resolvePortalCompany } from '../../../../lib/portal-company';
 import { PageBody, PageHeader } from '../../../../components/shell/page-header';

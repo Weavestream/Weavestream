@@ -1,9 +1,7 @@
 import { notFound } from 'next/navigation';
-import {
-  requireMe,
-  serverApiFetch,
-  type UserDetail,
-} from '../../../../../lib/server-api';
+import { requireMe } from '../../../../../lib/server-api/auth';
+import { type UserDetail } from '../../../../../lib/server-api/admin';
+import { serverApiFetch } from '../../../../../lib/server-api/core';
 import {
   capabilityLabel,
   globalAccessLabel,

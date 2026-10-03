@@ -15,7 +15,7 @@ import {
   type PatchSource,
 } from '@weavestream/shared';
 import { apiFetch } from '../../lib/api';
-import type { ArticleDetail } from '../../lib/server-api';
+import type { ArticleDetail } from '../../lib/server-api/articles';
 import { Icon } from '../ui';
 import { useChatPanel, type ChatPageContextSnapshot, type ChatTab } from './chat-panel-provider';
 import { SaveAsArticleDialog } from './save-as-article-dialog';

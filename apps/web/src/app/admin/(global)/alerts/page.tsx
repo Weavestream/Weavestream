@@ -1,5 +1,6 @@
 import { redirect } from 'next/navigation';
-import { getAlerts, requireMe } from '../../../../lib/server-api';
+import { requireMe } from '../../../../lib/server-api/auth';
+import { getAlerts } from '../../../../lib/server-api/settings';
 import { hasCapability } from '../../../../lib/roles';
 import { PageBody, PageHeader } from '../../../../components/shell/page-header';
 import { Panel } from '../../../../components/ui';

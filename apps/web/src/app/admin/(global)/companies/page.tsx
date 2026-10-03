@@ -1,9 +1,7 @@
-import {
-  requireMe,
-  getSettings,
-  serverApiFetch,
-  type CompanyPage,
-} from '../../../../lib/server-api';
+import { requireMe } from '../../../../lib/server-api/auth';
+import { getSettings } from '../../../../lib/server-api/settings';
+import { type CompanyPage } from '../../../../lib/server-api/companies';
+import { serverApiFetch } from '../../../../lib/server-api/core';
 import { hasCapability } from '../../../../lib/roles';
 import { PageBody, PageHeader } from '../../../../components/shell/page-header';
 import { Panel, Tag } from '../../../../components/ui';

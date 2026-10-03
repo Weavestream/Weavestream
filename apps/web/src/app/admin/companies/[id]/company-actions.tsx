@@ -14,7 +14,7 @@ import {
   useStarToggle,
   useToast,
 } from '../../../../components/ui';
-import type { CompanyDetail } from '../../../../lib/server-api';
+import type { CompanyDetail } from '../../../../lib/server-api/companies';
 import { capitalize, lower } from '../../../../lib/term';
 import { useTerm } from '../../../../lib/term-context';
 

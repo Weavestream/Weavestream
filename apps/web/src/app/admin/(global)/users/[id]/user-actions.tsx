@@ -25,7 +25,7 @@ import {
   globalAccessLabel,
   roleLabel,
 } from '../../../../../lib/roles';
-import type { UserDetail } from '../../../../../lib/server-api';
+import type { UserDetail } from '../../../../../lib/server-api/admin';
 
 const ROLES: UserRole[] = [
   'SUPER_ADMIN',

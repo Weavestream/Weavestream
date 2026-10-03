@@ -1,7 +1,7 @@
 /** @jest-environment jsdom */
 import '@testing-library/jest-dom';
 import { fireEvent, render, screen, within } from '@testing-library/react';
-import type { LayoutSummary } from '../../../../../../lib/server-api';
+import type { LayoutSummary } from '../../../../../../lib/server-api/layouts';
 import { LayoutBuilder } from './layout-builder';
 
 const push = jest.fn();

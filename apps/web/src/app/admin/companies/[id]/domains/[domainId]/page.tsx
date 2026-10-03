@@ -3,12 +3,10 @@ import { notFound } from 'next/navigation';
 
 export const metadata: Metadata = { title: 'Domain' };
 
-import {
-  getCompanyDetail,
-  requireMe,
-  getSettings,
-  throwUnlessFound,
-} from '../../../../../../lib/server-api';
+import { requireMe } from '../../../../../../lib/server-api/auth';
+import { getSettings } from '../../../../../../lib/server-api/settings';
+import { getCompanyDetail } from '../../../../../../lib/server-api/companies';
+import { throwUnlessFound } from '../../../../../../lib/server-api/core';
 import {
   getDomain,
   listDomainChecks,

@@ -1,9 +1,9 @@
+import { getCompanyDetail } from '../../../../../../lib/server-api/companies';
 import {
   getActiveLayouts,
-  getCompanyDetail,
   getLayout,
-  throwUnlessFound,
-} from '../../../../../../lib/server-api';
+} from '../../../../../../lib/server-api/layouts';
+import { throwUnlessFound } from '../../../../../../lib/server-api/core';
 import { NewAssetFlow } from './new-asset-flow';
 
 /**

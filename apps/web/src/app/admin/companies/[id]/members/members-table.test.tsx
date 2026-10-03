@@ -1,7 +1,9 @@
 /** @jest-environment jsdom */
 import '@testing-library/jest-dom';
 import { render, screen } from '@testing-library/react';
-import type { CompanyMembership } from '../../../../../lib/server-api';
+import type {
+  CompanyMembership,
+} from '../../../../../lib/server-api/companies';
 import { MembersTable } from './members-table';
 
 const apiFetch = jest.fn();

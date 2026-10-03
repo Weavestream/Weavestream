@@ -2,14 +2,12 @@ import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
 import type { ReactNode } from 'react';
 import { CompanyShell } from '../../../../components/shell/company-shell';
-import {
-  getActiveLayouts,
-  getCompanyAssetCounts,
-  getCompanyDetail,
-  getMe,
-  getSettings,
-  throwUnlessFound,
-} from '../../../../lib/server-api';
+import { getMe } from '../../../../lib/server-api/auth';
+import { getSettings } from '../../../../lib/server-api/settings';
+import { getCompanyDetail } from '../../../../lib/server-api/companies';
+import { getActiveLayouts } from '../../../../lib/server-api/layouts';
+import { getCompanyAssetCounts } from '../../../../lib/server-api/assets';
+import { throwUnlessFound } from '../../../../lib/server-api/core';
 import { getCompanySubnetsBasic } from '../../../../lib/server-api/ipam';
 import {
   getCompanyActivePasswords,

@@ -1,4 +1,4 @@
-import { API_INTERNAL_URL } from '../../../lib/server-api';
+import { API_INTERNAL_URL } from '../../../lib/api-config';
 import { AuthShell } from '../../../components/shell/auth-shell';
 import SetupForm from './setup-form';
 

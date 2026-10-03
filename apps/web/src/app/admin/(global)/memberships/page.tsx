@@ -1,6 +1,7 @@
 import { redirect } from 'next/navigation';
 import type { MembershipRole } from '@weavestream/shared';
-import { requireMe, serverApiFetch } from '../../../../lib/server-api';
+import { requireMe } from '../../../../lib/server-api/auth';
+import { serverApiFetch } from '../../../../lib/server-api/core';
 import { hasCapability } from '../../../../lib/roles';
 import { PageBody, PageHeader } from '../../../../components/shell/page-header';
 import { Panel, Tag } from '../../../../components/ui';

@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import { redirect } from 'next/navigation';
-import { requireMe, listExpirations } from '../../../../lib/server-api';
+import { requireMe } from '../../../../lib/server-api/auth';
+import { listExpirations } from '../../../../lib/server-api/admin';
 import { PageBody, PageHeader } from '../../../../components/shell/page-header';
 import { Panel, Tag } from '../../../../components/ui';
 import { ExpirationsTable } from '../../../../components/expirations/expirations-table';

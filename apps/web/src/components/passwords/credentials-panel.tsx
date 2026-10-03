@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import type { PasswordSummary } from '@weavestream/shared';
-import { getSettings } from '../../lib/server-api';
+import { getSettings } from '../../lib/server-api/settings';
 import {
   listPasswordFolders,
   listPasswords,

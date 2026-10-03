@@ -1,7 +1,9 @@
 import { notFound } from 'next/navigation';
 import { unwrapApiResponse } from './api-errors';
 import { canAccessAdminShell } from './roles';
-import { serverApiFetch, type CompanyPage, type Me } from './server-api';
+import { type Me } from './server-api/auth';
+import { type CompanyPage } from './server-api/companies';
+import { serverApiFetch } from './server-api/core';
 
 /**
  * Resolves the portal company for a given slug. Membership rows are

@@ -4,12 +4,12 @@ import { useEffect, useMemo, useState, useTransition } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { safeExternalHref } from '@weavestream/shared';
+import type { FieldType } from '@weavestream/shared';
 import type {
-  AssetSummary,
-  FieldType,
   LayoutFieldSummary,
   LayoutSummary,
-} from '../../lib/server-api';
+} from '../../lib/server-api/layouts';
+import type { AssetSummary } from '../../lib/server-api/assets';
 import { vaultLinkLabel } from '../../lib/vault-link';
 import {
   FormattedCalendarDate,

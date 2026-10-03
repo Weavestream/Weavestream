@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import { AdminShell } from '../../../components/shell/admin-shell';
-import { getSettings, requireMe } from '../../../lib/server-api';
+import { requireMe } from '../../../lib/server-api/auth';
+import { getSettings } from '../../../lib/server-api/settings';
 import { buildTerm } from '../../../lib/term';
 
 /**

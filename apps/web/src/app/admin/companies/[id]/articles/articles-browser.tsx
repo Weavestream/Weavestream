@@ -3,10 +3,7 @@
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useMemo, useState } from 'react';
-import type {
-  ArticleSummary,
-  FolderNode,
-} from '../../../../../lib/server-api';
+import type { ArticleSummary, FolderNode } from '@weavestream/shared';
 import { apiFetch } from '../../../../../lib/api';
 import { FormattedDate } from '../../../../../lib/timezone-context';
 import {

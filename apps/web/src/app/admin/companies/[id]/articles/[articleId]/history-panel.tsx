@@ -16,7 +16,7 @@ import { ArticleBody } from '../../../../../../components/editor/article-body';
 import type {
   ArticleVersionDetail,
   ArticleVersionSummary,
-} from '../../../../../../lib/server-api';
+} from '@weavestream/shared';
 
 /**
  * Right-side drawer surfacing the article's published version

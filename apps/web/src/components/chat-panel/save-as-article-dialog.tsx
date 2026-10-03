@@ -7,7 +7,7 @@ import {
   problemMessage,
   splitMarkdownTitleAndBody,
 } from '@weavestream/shared';
-import type { ChatPendingCreate } from '@weavestream/shared';
+import type { ChatPendingCreate, FolderNode } from '@weavestream/shared';
 import {
   Btn,
   CompanyPicker,
@@ -19,7 +19,7 @@ import {
   type CompanyPickerValue,
 } from '../ui';
 import { apiFetch } from '../../lib/api';
-import type { CompanyDetail, FolderNode } from '../../lib/server-api';
+import type { CompanyDetail } from '../../lib/server-api/companies';
 
 /**
  * Modal that turns a chat assistant response into a new article.

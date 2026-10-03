@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import type { ArticleSummary, FolderNode } from '../../lib/server-api';
+import type { ArticleSummary, FolderNode } from '@weavestream/shared';
 import { Icon } from '../ui';
 import { ArticleSideNav } from './article-side-nav';
 

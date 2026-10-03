@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { describeCatchAllFamilyGap } from '@weavestream/shared';
-import { requireMe } from '../../../../lib/server-api';
+import { requireMe } from '../../../../lib/server-api/auth';
 import {
   getSecurityEgressBlocks,
   getSecurityIpRuleCoverage,

@@ -1,13 +1,13 @@
 import Link from 'next/link';
 import type { ReactNode } from 'react';
+import { requireMe } from '../../../../lib/server-api/auth';
+import { getSettings } from '../../../../lib/server-api/settings';
 import {
   getCompanyDetail,
-  requireMe,
-  getSettings,
-  listAssets,
-  throwUnlessFound,
   type CompanyDetail,
-} from '../../../../lib/server-api';
+} from '../../../../lib/server-api/companies';
+import { listAssets } from '../../../../lib/server-api/assets';
+import { throwUnlessFound } from '../../../../lib/server-api/core';
 import {
   getCompanyDomainsBasic,
   type MonitoredDomain,
@@ -52,7 +52,7 @@ export default async function CompanyDetailPage({ params }: { params: Promise<{ 
   const [companyRes, assetsPage, domainPage] = await Promise.all([
     // Deduped against the parent layout's `getCompanyDetail(id)` by
     // React's per-request `cache()`. Same for `getCompanyDomainsBasic`
-    // below. See `lib/server-api.ts` for the full list of
+    // below. See `lib/server-api/companies.ts` for the full list of
     // layout-shared cached reads.
     getCompanyDetail(id),
     listAssets(id, { limit: 5 }),

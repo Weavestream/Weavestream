@@ -1,4 +1,5 @@
-import { requireMe, serverApiFetch } from '../../lib/server-api';
+import { requireMe } from '../../lib/server-api/auth';
+import { serverApiFetch } from '../../lib/server-api/core';
 import { PageBody, PageHeader } from '../../components/shell/page-header';
 import { Panel } from '../../components/ui';
 import { MeTabs } from './me-tabs';

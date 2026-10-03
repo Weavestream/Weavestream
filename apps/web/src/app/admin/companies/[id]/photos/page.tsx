@@ -3,12 +3,10 @@ import type { ReactNode } from 'react';
 import Link from 'next/link';
 
 export const metadata: Metadata = { title: 'Photos' };
-import {
-  getCompanyDetail,
-  getMe,
-  getSettings,
-  throwUnlessFound,
-} from '../../../../../lib/server-api';
+import { getMe } from '../../../../../lib/server-api/auth';
+import { getSettings } from '../../../../../lib/server-api/settings';
+import { getCompanyDetail } from '../../../../../lib/server-api/companies';
+import { throwUnlessFound } from '../../../../../lib/server-api/core';
 import {
   listPhotos,
   type UploadSummary,

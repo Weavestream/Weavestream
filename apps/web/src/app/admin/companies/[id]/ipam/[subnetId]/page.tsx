@@ -1,12 +1,12 @@
 import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
+import { requireMe } from '../../../../../../lib/server-api/auth';
+import { getSettings } from '../../../../../../lib/server-api/settings';
+import { getCompanyDetail } from '../../../../../../lib/server-api/companies';
 import {
   forMetadata,
-  getCompanyDetail,
-  requireMe,
-  getSettings,
   throwUnlessFound,
-} from '../../../../../../lib/server-api';
+} from '../../../../../../lib/server-api/core';
 import { getSubnetDetail } from '../../../../../../lib/server-api/ipam';
 import { canWriteCompany } from '../../../../../../lib/roles';
 import { PageBody, PageHeader } from '../../../../../../components/shell/page-header';

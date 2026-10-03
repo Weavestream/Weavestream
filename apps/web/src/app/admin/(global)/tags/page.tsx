@@ -1,5 +1,5 @@
 import { redirect } from 'next/navigation';
-import { requireMe } from '../../../../lib/server-api';
+import { requireMe } from '../../../../lib/server-api/auth';
 import { hasCapability } from '../../../../lib/roles';
 import { PageBody, PageHeader } from '../../../../components/shell/page-header';
 import { Panel } from '../../../../components/ui';

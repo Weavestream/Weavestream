@@ -3,12 +3,14 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { Fragment } from 'react';
 import {
-  getAsset,
-  forMetadata,
   getMeForMetadata,
   requireMe,
+} from '../../../../../lib/server-api/auth';
+import {
+  getAsset,
   type AssetSummary,
-} from '../../../../../lib/server-api';
+} from '../../../../../lib/server-api/assets';
+import { forMetadata } from '../../../../../lib/server-api/core';
 import { resolvePortalCompany } from '../../../../../lib/portal-company';
 import { humanSize } from '@weavestream/shared';
 import {

@@ -1,13 +1,11 @@
 import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
 import Link from 'next/link';
-import {
-  getAsset,
-  getCompanyDetail,
-  requireMe,
-  getSettings,
-  throwUnlessFound,
-} from '../../../../../../lib/server-api';
+import { requireMe } from '../../../../../../lib/server-api/auth';
+import { getSettings } from '../../../../../../lib/server-api/settings';
+import { getCompanyDetail } from '../../../../../../lib/server-api/companies';
+import { getAsset } from '../../../../../../lib/server-api/assets';
+import { throwUnlessFound } from '../../../../../../lib/server-api/core';
 import {
   getCompanyPasswordFolders,
   getPasswordDetailResult,

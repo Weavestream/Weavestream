@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import { updateAssetLayoutSchema } from '@weavestream/shared';
 import { apiFetch } from '../../../../lib/api';
 import { Btn, Dialog, useToast } from '../../../../components/ui';
-import type { LayoutSummary } from '../../../../lib/server-api';
+import type { LayoutSummary } from '../../../../lib/server-api/layouts';
 import {
   LayoutFormFields,
   slugify,

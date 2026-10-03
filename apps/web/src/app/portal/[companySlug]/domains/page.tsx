@@ -2,7 +2,7 @@ import type { Metadata } from 'next';
 
 export const metadata: Metadata = { title: 'Domains' };
 
-import { requireMe } from '../../../../lib/server-api';
+import { requireMe } from '../../../../lib/server-api/auth';
 import { listDomains } from '../../../../lib/server-api/domains';
 import { resolvePortalCompany } from '../../../../lib/portal-company';
 import { PageBody, PageHeader } from '../../../../components/shell/page-header';

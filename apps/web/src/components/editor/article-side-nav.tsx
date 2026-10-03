@@ -2,10 +2,7 @@
 
 import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import type {
-  ArticleSummary,
-  FolderNode,
-} from '../../lib/server-api';
+import type { ArticleSummary, FolderNode } from '@weavestream/shared';
 import { Icon } from '../ui';
 
 const STORAGE_KEY_PREFIX = 'weavestream.articleSideNav.openFolders';

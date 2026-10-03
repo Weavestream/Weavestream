@@ -2,15 +2,17 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import React, { Fragment } from 'react';
+import { requireMe } from '../../../../../../lib/server-api/auth';
+import { getSettings } from '../../../../../../lib/server-api/settings';
+import { getCompanyDetail } from '../../../../../../lib/server-api/companies';
+import {
+  getAsset,
+  type AssetSummary,
+} from '../../../../../../lib/server-api/assets';
 import {
   forMetadata,
-  getAsset,
-  getCompanyDetail,
-  requireMe,
-  getSettings,
   throwUnlessFound,
-  type AssetSummary,
-} from '../../../../../../lib/server-api';
+} from '../../../../../../lib/server-api/core';
 import { canWriteCompany } from '../../../../../../lib/roles';
 import { humanSize } from '@weavestream/shared';
 import {

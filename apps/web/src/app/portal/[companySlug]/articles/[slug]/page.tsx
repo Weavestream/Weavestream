@@ -1,5 +1,6 @@
 import { notFound } from 'next/navigation';
-import { getArticleBySlug, requireMe } from '../../../../../lib/server-api';
+import { requireMe } from '../../../../../lib/server-api/auth';
+import { getArticleBySlug } from '../../../../../lib/server-api/articles';
 import { resolvePortalCompany } from '../../../../../lib/portal-company';
 import { TopBar } from '../../../../../components/shell/top-bar';
 import { Tag } from '../../../../../components/ui';

@@ -1,10 +1,8 @@
-import {
-  requireMe,
-  getSettings,
-  serverApiFetch,
-  type AuditPage,
-  type CompanyPage,
-} from '../../../../lib/server-api';
+import { requireMe } from '../../../../lib/server-api/auth';
+import { getSettings } from '../../../../lib/server-api/settings';
+import { type CompanyPage } from '../../../../lib/server-api/companies';
+import { type AuditPage } from '../../../../lib/server-api/admin';
+import { serverApiFetch } from '../../../../lib/server-api/core';
 import { PageBody, PageHeader } from '../../../../components/shell/page-header';
 import { Panel } from '../../../../components/ui';
 import { buildTerm, lower } from '../../../../lib/term';

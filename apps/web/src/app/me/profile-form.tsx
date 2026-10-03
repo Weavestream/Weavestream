@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import { apiFetch } from '../../lib/api';
 import { Btn, Field, Input, Toggle, useToast } from '../../components/ui';
 import { isOperator } from '../../lib/roles';
-import type { Me } from '../../lib/server-api';
+import type { Me } from '../../lib/server-api/auth';
 import { TimezonePicker } from './timezone-picker';
 
 export function ProfileForm({ me }: { me: Me }) {

@@ -9,7 +9,8 @@ import {
   type RefObject,
 } from 'react';
 import { apiFetch } from '../../lib/api';
-import type { ArticlePage, AssetPage } from '../../lib/server-api';
+import type { AssetPage } from '../../lib/server-api/assets';
+import type { ArticlePage } from '../../lib/server-api/articles';
 import type { MonitoredDomain } from '../../lib/server-api/domains';
 import { Icon } from '../ui';
 

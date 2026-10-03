@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import type { AiSettings, EmailSettings } from '@weavestream/shared';
-import type { Settings } from '../../../../lib/server-api';
+import type { Settings } from '../../../../lib/server-api/settings';
 import {
   ArticleSettingsForm,
   GeneralSettingsForm,

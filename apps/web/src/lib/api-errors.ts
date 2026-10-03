@@ -3,15 +3,15 @@ import type { ServerApiResponse } from './server-api/core';
 /**
  * Client-safe error taxonomy for server-side API fetches.
  *
- * Lives outside `server-api.ts` because that module imports
- * `next/headers` and can therefore never be pulled into a client
- * component — but `app/error.tsx` (a client boundary) needs the digest
+ * Lives outside `server-api/` because those modules import
+ * `next/headers` (through `core.ts`) and can therefore never be pulled
+ * into a client component — but `app/error.tsx` (a client boundary) needs the digest
  * constants and parsers below to recognize these errors in production.
  * Keeping both sides on one module replaces the old "keep the prefix
  * in sync with error.tsx" comment-contract with a real import.
  *
- * Nothing here may import server-only modules; the `server-api` import
- * above is type-only and erased at compile time.
+ * Nothing here may import server-only modules; the `server-api/core`
+ * import above is type-only and erased at compile time.
  */
 
 /**
@@ -112,7 +112,7 @@ export function isApiUnavailableDigest(digest: string | undefined): boolean {
 
 /**
  * Pure classification shared by the null-returning read helpers in
- * `server-api.ts` (`getMe`, `getAsset`, `getSubnetDetail`,
+ * the `server-api/` domain modules (`getMe`, `getAsset`, `getSubnetDetail`,
  * `listLayouts`, …):
  *
  *   - 2xx with a body → the payload;

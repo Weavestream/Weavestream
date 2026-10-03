@@ -17,7 +17,7 @@ import {
 import { lower } from '../../../../lib/term';
 import { useTerm } from '../../../../lib/term-context';
 import { companyTypeOptions, slugify } from '../../../../lib/company-format';
-import type { CompanyType } from '../../../../lib/server-api';
+import type { CompanyType } from '@weavestream/shared';
 
 /**
  * Create dialog for companies. Kept deliberately lean: name, slug,

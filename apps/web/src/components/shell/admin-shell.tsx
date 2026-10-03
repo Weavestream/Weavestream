@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { type Me } from '../../lib/server-api';
+import { type Me } from '../../lib/server-api/auth';
 import { hasAnyTicketingIntegration } from '../../lib/server-api/tickets';
 import { hasCapability, initialsFromName } from '../../lib/roles';
 import type { Term } from '../../lib/term';

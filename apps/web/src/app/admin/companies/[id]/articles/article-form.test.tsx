@@ -1,7 +1,8 @@
 /** @jest-environment jsdom */
 import '@testing-library/jest-dom';
 import { fireEvent, render, screen } from '@testing-library/react';
-import type { ArticleDetail, FolderNode } from '../../../../../lib/server-api';
+import type { FolderNode } from '@weavestream/shared';
+import type { ArticleDetail } from '../../../../../lib/server-api/articles';
 import { ArticleForm } from './article-form';
 
 jest.mock('next/navigation', () => ({

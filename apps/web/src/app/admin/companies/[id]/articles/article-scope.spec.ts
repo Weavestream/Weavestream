@@ -1,4 +1,4 @@
-import type { ArticleSummary, FolderNode } from '../../../../../lib/server-api';
+import type { ArticleSummary, FolderNode } from '@weavestream/shared';
 import { articleCounts, scopeArticles } from './article-scope';
 
 function article(

@@ -6,7 +6,7 @@ import { ToastProvider } from '../components/ui/toast';
 import { ThemePreferenceWatcher } from '../components/ui/theme-preference-watcher';
 import { ChatPanelProvider } from '../components/chat-panel/chat-panel-provider';
 import { StepUpProvider } from '../components/auth/step-up-provider';
-import { getSettings } from '../lib/server-api';
+import { getSettings } from '../lib/server-api/settings';
 // `buildTerm` comes from the server-safe `./lib/term` module; re-exporting
 // it through `./lib/term-context` ('use client') would tag it as a client
 // function and Turbopack would then refuse the call here.

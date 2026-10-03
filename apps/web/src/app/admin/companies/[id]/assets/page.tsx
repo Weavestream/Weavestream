@@ -1,14 +1,12 @@
 import type { Metadata } from 'next';
 
 export const metadata: Metadata = { title: 'Assets' };
-import {
-  getActiveLayouts,
-  getCompanyDetail,
-  requireMe,
-  getSettings,
-  listAssets,
-  throwUnlessFound,
-} from '../../../../../lib/server-api';
+import { requireMe } from '../../../../../lib/server-api/auth';
+import { getSettings } from '../../../../../lib/server-api/settings';
+import { getCompanyDetail } from '../../../../../lib/server-api/companies';
+import { getActiveLayouts } from '../../../../../lib/server-api/layouts';
+import { listAssets } from '../../../../../lib/server-api/assets';
+import { throwUnlessFound } from '../../../../../lib/server-api/core';
 import {
   getCompanyActivePasswords,
 } from '../../../../../lib/server-api/passwords';

@@ -1,4 +1,4 @@
-import { requireMe } from '../../../lib/server-api';
+import { requireMe } from '../../../lib/server-api/auth';
 import { resolvePortalCompany } from '../../../lib/portal-company';
 import { PageBody, PageHeader } from '../../../components/shell/page-header';
 import { Panel } from '../../../components/ui';

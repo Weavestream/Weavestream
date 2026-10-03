@@ -1,9 +1,9 @@
+import { getSettings } from '../../../../../../lib/server-api/settings';
+import { getCompanyDetail } from '../../../../../../lib/server-api/companies';
 import {
-  getCompanyDetail,
   getCompanyFolderTree,
-  getSettings,
-  throwUnlessFound,
-} from '../../../../../../lib/server-api';
+} from '../../../../../../lib/server-api/articles';
+import { throwUnlessFound } from '../../../../../../lib/server-api/core';
 import { ArticleForm } from '../article-form';
 
 export default async function NewArticlePage({

@@ -1,7 +1,7 @@
 import type { NextRequest } from 'next/server';
 import { INTERNAL_TOKEN_HEADER } from '@weavestream/shared';
-// Import the proxy/edge-safe config module directly rather than the
-// `server-api` re-export, so this module stays free of `next/headers` and
+// Import the proxy/edge-safe config module directly rather than anything
+// under `server-api/`, so this module stays free of `next/headers` and
 // friends (keeps it unit-testable and light).
 import { API_INTERNAL_URL } from './api-config';
 import {

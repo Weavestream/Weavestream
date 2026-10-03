@@ -1,9 +1,7 @@
 import type { Metadata } from 'next';
-import {
-  getCompanyDetail,
-  requireMe,
-  throwUnlessFound,
-} from '../../../../../lib/server-api';
+import { requireMe } from '../../../../../lib/server-api/auth';
+import { getCompanyDetail } from '../../../../../lib/server-api/companies';
+import { throwUnlessFound } from '../../../../../lib/server-api/core';
 import {
   getCompanyActivePasswords,
   getCompanyPasswordFolders,
@@ -14,7 +12,7 @@ import { PageBody, PageHeader } from '../../../../../components/shell/page-heade
 import { LayoutSwatch, Panel, Tag } from '../../../../../components/ui';
 import { companyCrumbs } from '../../../../../lib/company-crumbs';
 import { buildTerm, lower } from '../../../../../lib/term';
-import { getSettings } from '../../../../../lib/server-api';
+import { getSettings } from '../../../../../lib/server-api/settings';
 import { PasswordsBrowser } from './passwords-browser';
 import { NewPasswordAction } from './new-password-action';
 

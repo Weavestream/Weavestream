@@ -5,7 +5,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { Panel, Tag } from '../../components/ui';
 import { FormattedDateTime } from '../../lib/timezone-context';
 import { membershipRoleLabel, roleLabel } from '../../lib/roles';
-import type { Me } from '../../lib/server-api';
+import type { Me } from '../../lib/server-api/auth';
 import { ProfileForm } from './profile-form';
 import { PasswordForm } from './password-form';
 import { SessionsList } from './sessions-list';

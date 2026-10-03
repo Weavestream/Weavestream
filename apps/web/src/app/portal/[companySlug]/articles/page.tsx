@@ -1,11 +1,10 @@
 import Link from 'next/link';
+import type { ArticleSummary, FolderNode } from '@weavestream/shared';
+import { requireMe } from '../../../../lib/server-api/auth';
 import {
-  requireMe,
   listArticles,
   listFolderTree,
-  type ArticleSummary,
-  type FolderNode,
-} from '../../../../lib/server-api';
+} from '../../../../lib/server-api/articles';
 import { resolvePortalCompany } from '../../../../lib/portal-company';
 import { PageBody, PageHeader } from '../../../../components/shell/page-header';
 import { Icon, LayoutSwatch, Panel, Tag } from '../../../../components/ui';

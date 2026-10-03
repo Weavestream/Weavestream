@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback } from 'react';
-import type { AssetSummary } from '../../lib/server-api';
+import type { AssetSummary } from '../../lib/server-api/assets';
 import { assetToMarkdown } from '../../lib/asset-format';
 import { useChatAssetPageContext } from './use-chat-page-context';
 

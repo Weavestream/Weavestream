@@ -24,7 +24,8 @@ import {
   hasCapability,
   membershipRoleLabel,
 } from '../../../../../lib/roles';
-import type { Me, UserDetail } from '../../../../../lib/server-api';
+import type { Me } from '../../../../../lib/server-api/auth';
+import type { UserDetail } from '../../../../../lib/server-api/admin';
 import { lower } from '../../../../../lib/term';
 import { useTerm } from '../../../../../lib/term-context';
 

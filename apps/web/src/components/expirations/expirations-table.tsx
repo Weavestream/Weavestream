@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useMemo } from 'react';
-import type { ExpirationRow } from '../../lib/server-api';
+import type { ExpirationRow } from '../../lib/server-api/admin';
 import {
   DataTable,
   Icon,

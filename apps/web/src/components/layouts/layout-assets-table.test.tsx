@@ -2,10 +2,10 @@
 import '@testing-library/jest-dom';
 import { fireEvent, render, screen } from '@testing-library/react';
 import type {
-  AssetSummary,
   LayoutFieldSummary,
   LayoutSummary,
-} from '../../lib/server-api';
+} from '../../lib/server-api/layouts';
+import type { AssetSummary } from '../../lib/server-api/assets';
 import { LayoutAssetsTable } from './layout-assets-table';
 
 const push = jest.fn();

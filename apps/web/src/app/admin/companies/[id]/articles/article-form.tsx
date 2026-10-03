@@ -14,7 +14,8 @@ import {
 } from '@weavestream/shared';
 import { apiFetch } from '../../../../../lib/api';
 import { useTimezone } from '../../../../../lib/timezone-context';
-import type { ArticleDetail, FolderNode } from '../../../../../lib/server-api';
+import type { FolderNode } from '@weavestream/shared';
+import type { ArticleDetail } from '../../../../../lib/server-api/articles';
 import {
   Btn,
   Dialog,

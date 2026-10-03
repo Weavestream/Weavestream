@@ -1,5 +1,7 @@
 import Link from 'next/link';
-import { requireMe, getSettings, listLayouts } from '../../../../lib/server-api';
+import { requireMe } from '../../../../lib/server-api/auth';
+import { getSettings } from '../../../../lib/server-api/settings';
+import { listLayouts } from '../../../../lib/server-api/layouts';
 import { hasCapability } from '../../../../lib/roles';
 import { PageBody, PageHeader } from '../../../../components/shell/page-header';
 import { Icon, Panel, Tag } from '../../../../components/ui';

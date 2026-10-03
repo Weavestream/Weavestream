@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { UserRole } from '@weavestream/shared';
 import { apiFetch } from '../../lib/api';
 import { initialsFromName, roleLabel } from '../../lib/roles';
-import type { UserListItem, UserPage } from '../../lib/server-api';
+import type { UserListItem, UserPage } from '../../lib/server-api/admin';
 import { Icon } from './icon';
 import { Input } from './form';
 import { Tag } from './tag';

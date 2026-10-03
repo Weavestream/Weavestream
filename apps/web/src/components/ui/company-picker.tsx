@@ -11,7 +11,7 @@ import {
 import type {
   CompanyListItem,
   CompanyParentRef,
-} from '../../lib/server-api';
+} from '../../lib/server-api/companies';
 import { CompanyAvatar } from './company-avatar';
 import { Icon } from './icon';
 import { Input } from './form';

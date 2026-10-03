@@ -28,7 +28,7 @@ import {
   lower,
   type TermPresetId,
 } from '../../../../lib/term';
-import type { Settings } from '../../../../lib/server-api';
+import type { Settings } from '../../../../lib/server-api/settings';
 import { generatePassword } from '@weavestream/shared/browser';
 
 /**

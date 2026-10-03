@@ -1,10 +1,8 @@
 import { redirect } from 'next/navigation';
-import {
-  getCompanyDetail,
-  getMe,
-  getSettings,
-  throwUnlessFound,
-} from '../../../../../lib/server-api';
+import { getMe } from '../../../../../lib/server-api/auth';
+import { getSettings } from '../../../../../lib/server-api/settings';
+import { getCompanyDetail } from '../../../../../lib/server-api/companies';
+import { throwUnlessFound } from '../../../../../lib/server-api/core';
 import { canWriteCompany } from '../../../../../lib/roles';
 import { PageBody, PageHeader } from '../../../../../components/shell/page-header';
 import { buildTerm } from '../../../../../lib/term';

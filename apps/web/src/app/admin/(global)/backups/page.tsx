@@ -1,5 +1,5 @@
 import { redirect } from 'next/navigation';
-import { requireMe } from '../../../../lib/server-api';
+import { requireMe } from '../../../../lib/server-api/auth';
 import {
   listBackupConfigs,
   listBackupRuns,

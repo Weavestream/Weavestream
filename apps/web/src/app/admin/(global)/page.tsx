@@ -2,18 +2,20 @@ import Link from 'next/link';
 import { PageBody, PageHeader } from '../../../components/shell/page-header';
 import { CompanyAvatar, Icon, LayoutSwatch, Panel, StarButton, Stat } from '../../../components/ui';
 import type { EntityType } from '../../../components/ui/star-button';
+import { requireMe } from '../../../lib/server-api/auth';
+import { getSettings } from '../../../lib/server-api/settings';
 import {
-  getAdminStats,
-  getSettings,
-  listRecentActivity,
-  listStarred,
-  requireMe,
-  serverApiFetch,
   type CompanyListItem,
   type CompanyPage,
+} from '../../../lib/server-api/companies';
+import {
+  getAdminStats,
+  listRecentActivity,
+  listStarred,
   type RecentActivityItem,
   type StarredItem,
-} from '../../../lib/server-api';
+} from '../../../lib/server-api/admin';
+import { serverApiFetch } from '../../../lib/server-api/core';
 import { listDomainAlerts } from '../../../lib/server-api/domains';
 import { buildTerm, lower } from '../../../lib/term';
 import { companyAccent } from '../../../lib/company-format';

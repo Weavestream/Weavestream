@@ -1,14 +1,14 @@
 import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
+import { requireMe } from '../../../../../../lib/server-api/auth';
+import { getSettings } from '../../../../../../lib/server-api/settings';
+import { getCompanyDetail } from '../../../../../../lib/server-api/companies';
 import {
   getArticle,
-  getCompanyDetail,
   getCompanyFolderTree,
-  requireMe,
-  getSettings,
   listArticles,
-  throwUnlessFound,
-} from '../../../../../../lib/server-api';
+} from '../../../../../../lib/server-api/articles';
+import { throwUnlessFound } from '../../../../../../lib/server-api/core';
 import { canWriteCompany } from '../../../../../../lib/roles';
 import { TopBar } from '../../../../../../components/shell/top-bar';
 import { Panel, ShowMore, Tag } from '../../../../../../components/ui';

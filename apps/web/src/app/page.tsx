@@ -1,6 +1,6 @@
 import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
-import { getMe } from '../lib/server-api';
+import { getMe } from '../lib/server-api/auth';
 import { canAccessAdminShell, preferredMembership } from '../lib/roles';
 
 /**

@@ -1,7 +1,7 @@
 /** @jest-environment jsdom */
 import '@testing-library/jest-dom';
 import { fireEvent, render, screen } from '@testing-library/react';
-import type { CompanyDetail } from '../../../../lib/server-api';
+import type { CompanyDetail } from '../../../../lib/server-api/companies';
 import { CompanyActions } from './company-actions';
 
 const refresh = jest.fn();

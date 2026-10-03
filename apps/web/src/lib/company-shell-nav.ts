@@ -5,7 +5,7 @@ import {
   membershipRoleLabel,
   type ViewerLike,
 } from './roles';
-import type { Me } from './server-api';
+import type { Me } from './server-api/auth';
 
 export type CompanyShellNav = {
   /** Where the sidebar mark links. `undefined` renders it static. */

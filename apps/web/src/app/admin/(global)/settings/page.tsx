@@ -1,10 +1,10 @@
 import { redirect } from 'next/navigation';
+import { requireMe } from '../../../../lib/server-api/auth';
 import {
   getAiSettings,
   getEmailSettings,
-  requireMe,
   getSettings,
-} from '../../../../lib/server-api';
+} from '../../../../lib/server-api/settings';
 import { hasCapability } from '../../../../lib/roles';
 import { PageBody, PageHeader } from '../../../../components/shell/page-header';
 import { Panel } from '../../../../components/ui';

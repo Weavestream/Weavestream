@@ -35,7 +35,11 @@ import {
   getLayoutTemplate,
   saveAssetFieldsSchema,
 } from '@weavestream/shared';
-import type { LayoutStats, LayoutSummary, LayoutFieldSummary } from '../../../../../../lib/server-api';
+import type {
+  LayoutStats,
+  LayoutSummary,
+  LayoutFieldSummary,
+} from '../../../../../../lib/server-api/layouts';
 import { apiFetch } from '../../../../../../lib/api';
 import {
   Btn,

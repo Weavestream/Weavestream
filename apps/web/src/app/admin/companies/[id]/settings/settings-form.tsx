@@ -14,11 +14,11 @@ import {
   Textarea,
   useToast,
 } from '../../../../../components/ui';
+import type { CompanyType } from '@weavestream/shared';
 import type {
   CompanyDetail,
   CompanyParentRef,
-  CompanyType,
-} from '../../../../../lib/server-api';
+} from '../../../../../lib/server-api/companies';
 import { capitalize } from '../../../../../lib/term';
 import { useTerm } from '../../../../../lib/term-context';
 import {

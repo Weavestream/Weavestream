@@ -1,5 +1,6 @@
 import { notFound, redirect } from 'next/navigation';
-import { getArticle, getMe } from '../../../../../../lib/server-api';
+import { getMe } from '../../../../../../lib/server-api/auth';
+import { getArticle } from '../../../../../../lib/server-api/articles';
 import { resolvePortalCompany } from '../../../../../../lib/portal-company';
 
 /**
