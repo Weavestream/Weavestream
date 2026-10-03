@@ -103,7 +103,12 @@ describe('ArticleTargetWriter', () => {
       ...input,
       markdown: '-----BEGIN PRIVATE KEY-----\nsecret\n-----END PRIVATE KEY-----',
     });
-    expect(out).toMatchObject({ gaps: [{ details: { reasonCode: 'sensitive_input' } }] });
+    // Withheld per record, like the driver-side quarantine; it does not mark
+    // the resource incomplete.
+    expect(out).toMatchObject({
+      change: 'blocked',
+      gaps: [{ kind: 'secret_blocked', details: { reasonCode: 'sensitive_input' } }],
+    });
     expect(writeFromIntegration).not.toHaveBeenCalled();
   });
 

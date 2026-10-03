@@ -70,6 +70,14 @@ export function containsSensitiveMaterial(value: unknown): boolean {
   return scanSensitiveMaterial(value) !== 'safe';
 }
 
+// A canonical UUID is an identifier, not a credential. Weavestream builds
+// slugs and external ids from source UUIDs (`automations-<uuid>`), and with
+// the hyphens joined to a prefix such a run can clear the entropy bar by
+// chance. The Breeze desired-configuration inspection exempts UUIDs the same
+// way. Explicit secret patterns above still apply to the whole value.
+const UUID_SUBSTRING_PATTERN =
+  /\b[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/giu;
+
 function looksHighEntropy(value: string): boolean {
   // Inspect every maximal token-shaped run instead of the whole string. A
   // high-entropy secret concatenated into surrounding text — e.g. through a
@@ -77,7 +85,7 @@ function looksHighEntropy(value: string): boolean {
   // whitespace or punctuation that breaks the run apart. Runs outside the
   // 40–4096 length window are ignored, so large legitimate base64 payloads and
   // short identifiers stay safe exactly as before.
-  const runs = value.match(/[A-Za-z0-9+/_=-]+/g);
+  const runs = value.replace(UUID_SUBSTRING_PATTERN, ' ').match(/[A-Za-z0-9+/_=-]+/g);
   return runs !== null && runs.some(isHighEntropyToken);
 }
 

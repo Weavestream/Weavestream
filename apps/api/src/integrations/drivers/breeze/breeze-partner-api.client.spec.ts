@@ -217,7 +217,7 @@ describe('BreezePartnerApiClient', () => {
     expect(fx.calls).toHaveLength(0);
   });
 
-  it('validates foundational site and device records strictly', async () => {
+  it('returns foundational site and device records', async () => {
     installFetchScript([{ body: envelope([site()]) }, { body: envelope([device()]) }]);
     const client = new BreezePartnerApiClient();
     await expect(
@@ -240,12 +240,10 @@ describe('BreezePartnerApiClient', () => {
 
   it.each([
     envelope([site()], { schemaVersion: '2' }),
-    envelope([{ ...site(), unexpected: true }]),
-    envelope([{ ...site(), id: `${SITE}\0` }]),
-    envelope([{ ...site(), sourceUpdatedAt: '2026-07-14T12:00:00.001Z' }]),
-    envelope([site()], { nextCursor: 'next', hasMore: false }),
+    envelope([site()], { nextCursor: null, hasMore: true }),
     envelope([site()], { snapshotAt: 'not-an-iso-date' }),
-  ])('rejects an invalid strict envelope before returning data', async (body) => {
+    { ...envelope([site()]), data: 'not-a-list' },
+  ])('rejects an invalid envelope before returning data', async (body) => {
     installFetchScript([{ body }]);
     await expect(
       new BreezePartnerApiClient().fetchPage(context(), {
@@ -255,6 +253,30 @@ describe('BreezePartnerApiClient', () => {
         updatedSince: null,
       }),
     ).rejects.toThrow(/invalid response/i);
+  });
+
+  it('tolerates additive envelope keys and leaves records for per-record reading', async () => {
+    installFetchScript([
+      { body: { ...envelope([{ ...site(), addedInLaterBreeze: { nested: true } }]), addedEnvelopeKey: 1 } },
+    ]);
+    const page = await new BreezePartnerApiClient().fetchPage(context(), {
+      resource: 'sites',
+      externalOrgId: ORG,
+      cursor: null,
+      updatedSince: null,
+    });
+    expect(page).not.toHaveProperty('addedEnvelopeKey');
+    expect(page.data).toEqual([expect.objectContaining({ id: SITE })]);
+  });
+
+  it('drops a cursor Breeze echoes on the last page so the page stays terminal', async () => {
+    installFetchScript([{ body: envelope([site()], { nextCursor: 'stale', hasMore: false }) }]);
+    await expect(new BreezePartnerApiClient().fetchPage(context(), {
+      resource: 'sites',
+      externalOrgId: ORG,
+      cursor: null,
+      updatedSince: null,
+    })).resolves.toMatchObject({ hasMore: false, nextCursor: null });
   });
 
   it('rejects an unknown resource before network I/O', async () => {
@@ -279,6 +301,23 @@ describe('BreezePartnerApiClient', () => {
     expect(organizations).toHaveLength(2);
     expect(fx.calls[1]!.url).toContain('cursor=opaque-1');
     expect(fx.calls[1]!.url).toContain('limit=500');
+  });
+
+  it('lists organizations with deep unknown fields and leaves out only unreadable ones', async () => {
+    const nested = (depth: number): unknown => (depth === 0 ? 'leaf' : { next: nested(depth - 1) });
+    installFetchScript([{
+      body: envelope([
+        { ...org(), addedLater: nested(40) },
+        { ...org('44444444-4444-4444-8444-444444444444'), name: { unexpected: true } },
+        org('55555555-5555-4555-8555-555555555555'),
+      ]),
+    }]);
+    const organizations = await new BreezePartnerApiClient().listOrganizations(context());
+    expect(organizations.map((organization) => organization.id)).toEqual([
+      org().id,
+      '55555555-5555-4555-8555-555555555555',
+    ]);
+    expect(organizations[0]).not.toHaveProperty('addedLater');
   });
 
   it('rejects unstable snapshots and repeated cursors', async () => {

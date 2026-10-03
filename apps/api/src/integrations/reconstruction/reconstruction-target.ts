@@ -414,7 +414,11 @@ export function sensitiveInputOutcome(
       ownership: ctx.previousProvenance?.ownership ?? 'breeze',
       state: 'blocked',
     }),
-    gaps: [safeGap('validation', 'Sensitive reconstruction input was rejected.', {
+    // The record is still withheld. `secret_blocked` (not `validation`)
+    // matches the driver-side quarantine: a withheld secret is a per-record
+    // outcome, so it must not mark the whole resource incomplete. The blocked
+    // binding is kept seen by the runner, so the stale sweep leaves it alone.
+    gaps: [safeGap('secret_blocked', 'Sensitive reconstruction input was rejected.', {
       reasonCode: 'sensitive_input',
     })],
   };

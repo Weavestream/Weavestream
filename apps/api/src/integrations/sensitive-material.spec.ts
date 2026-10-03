@@ -67,4 +67,14 @@ describe('scanSensitiveMaterial', () => {
     const bigBlob = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'.repeat(70);
     expect(scanSensitiveMaterial(bigBlob)).toBe('safe');
   });
+
+  it('does not read a UUID-derived slug as a secret but still flags a token next to one', () => {
+    // A real Breeze automation id whose `automations-<uuid>` slug cleared the
+    // entropy bar and withheld the article.
+    const uuid = '060b4c48-6fee-4771-af13-15d6201fb76d';
+    expect(scanSensitiveMaterial({ slug: `automations-${uuid}` })).toBe('safe');
+    expect(scanSensitiveMaterial(`configuration-policies-${uuid}`)).toBe('safe');
+    const secret = 'Kf9mZ2pQ7rL4wXbn6vT8cH3dSjY0aGeU4iO1kPqRtWc';
+    expect(scanSensitiveMaterial(`${uuid}-${secret}`)).toBe('sensitive');
+  });
 });

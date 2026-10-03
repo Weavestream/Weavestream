@@ -8,10 +8,10 @@ import {
 import {
   BREEZE_ENDPOINT_BY_RESOURCE,
   breezeEnvelopeSchema,
-  breezeRecordSchemaByEndpoint,
+  breezeOrganizationSchema,
   breezeResourceKeySchema,
   breezeSourceEndpointSchema,
-  sanitizeBreezeText,
+  readBreezeRecordSafely,
   type BreezeOrganization,
   type BreezePartnerEnvelope,
   type BreezeResourceKey,
@@ -57,12 +57,17 @@ export class BreezePartnerApiClient {
     for (let pageNumber = 1; pageNumber <= 1_000; pageNumber += 1) {
       const query = new URLSearchParams({ limit: '500' });
       if (cursor) query.set('cursor', cursor);
-      const page = await this.request<BreezeOrganization>(ctx, 'organizations', query);
+      const page = await this.request(ctx, 'organizations', query);
       if (snapshotAt && page.snapshotAt !== snapshotAt) {
         throw new Error('Breeze partner API snapshot changed during traversal.');
       }
       snapshotAt ??= page.snapshotAt;
-      for (const organization of page.data) organizations.set(organization.id, organization);
+      for (const raw of page.data) {
+        // An organization Weavestream cannot read is left out of the picker
+        // rather than failing the whole listing.
+        const organization = readBreezeRecordSafely(breezeOrganizationSchema, raw);
+        if (organization.success) organizations.set(organization.data.id, organization.data);
+      }
       if (!page.hasMore) return [...organizations.values()];
       if (!page.nextCursor || seenCursors.has(page.nextCursor)) {
         throw new Error('Breeze partner API cursor did not advance.');
@@ -97,11 +102,11 @@ export class BreezePartnerApiClient {
     return page;
   }
 
-  private async request<T = unknown>(
+  private async request(
     ctx: BreezePartnerApiContext,
     rawEndpoint: BreezeSourceEndpoint,
     query: URLSearchParams,
-  ): Promise<BreezePartnerEnvelope<T>> {
+  ): Promise<BreezePartnerEnvelope<unknown>> {
     const endpoint = breezeSourceEndpointSchema.parse(rawEndpoint);
     const { baseUrl } = configSchema.parse(ctx.config);
     const { apiKey } = secretSchema.parse(ctx.secret);
@@ -148,10 +153,11 @@ export class BreezePartnerApiClient {
     ) {
       throw new Error('Breeze partner API returned invalid response data.');
     }
+    // Only the envelope is validated here. Records are read one at a time by
+    // the transform, so one record Weavestream cannot read never fails the
+    // page that carries it.
     try {
-      const schema = breezeEnvelopeSchema(breezeRecordSchemaByEndpoint[endpoint]);
-      const validated = schema.parse(raw);
-      return schema.parse(sanitizeBreezeText(validated)) as BreezePartnerEnvelope<T>;
+      return breezeEnvelopeSchema.parse(raw) as BreezePartnerEnvelope<unknown>;
     } catch (error) {
       throw new Error('Breeze partner API returned invalid response data.', { cause: error });
     }

@@ -23,7 +23,12 @@ import {
   type BreezePartnerEnvelope,
   type BreezeResourceKey,
 } from './breeze.schemas.js';
-import { BreezeBoundedDefinitionError, BreezeSensitiveDefinitionError, transformBreezeRecord } from './breeze.transforms.js';
+import {
+  BreezeBoundedDefinitionError,
+  BreezeSensitiveDefinitionError,
+  BreezeUnreadableRecordError,
+  transformBreezeRecord,
+} from './breeze.transforms.js';
 
 interface BreezeClientPort {
   testConnection(ctx: IntegrationContext): Promise<void>;
@@ -401,15 +406,6 @@ export class BreezeDriver implements IntegrationDriver {
     if (ctx.snapshotAt && page.snapshotAt !== ctx.snapshotAt) {
       throw new Error('Breeze partner API snapshot changed during traversal.');
     }
-    // Breeze derives its traversal mode from the presence of `updatedSince`
-    // alone. An incremental run whose checkpoint has no high-water mark yet
-    // (first run after a full traversal, or after an empty one) sends none,
-    // so Breeze serves a full-mode page ordered by UUID, not by timestamp.
-    // Treat that page as a bootstrap: validate it with full-mode rules and
-    // emit the page snapshot as the high water so the next run is truly
-    // incremental (Breeze documents `snapshotAt` as the consumer checkpoint).
-    const bootstrap = ctx.mode === 'incremental' && ctx.updatedSince === null;
-    validatePageOrdering(page.data, page.snapshotAt, ctx.mode, ctx.updatedSince);
     for (const blocked of page.blocked ?? []) {
       if (
         blocked.orgId !== ctx.externalOrgId ||
@@ -423,6 +419,7 @@ export class BreezeDriver implements IntegrationDriver {
     const transformed = [] as ReturnType<typeof transformBreezeRecord>;
     const inlineBlocked: Array<{ id: string; orgId: string }> = [];
     const boundedBlocked: Array<{ id: string; orgId: string }> = [];
+    const unreadable: BreezeUnreadableRecordError[] = [];
     for (const record of page.data) {
       if (
         !record ||
@@ -438,18 +435,18 @@ export class BreezeDriver implements IntegrationDriver {
           inlineBlocked.push({ id: error.sourceId, orgId: error.orgId });
         } else if (error instanceof BreezeBoundedDefinitionError) {
           boundedBlocked.push({ id: error.sourceId, orgId: error.orgId });
+        } else if (error instanceof BreezeUnreadableRecordError) {
+          unreadable.push(error);
         } else {
           throw error;
         }
       }
     }
     const records = deduplicateDriverRecords(transformed);
-    const highWater =
-      ctx.mode === 'incremental'
-        ? bootstrap
-          ? page.snapshotAt
-          : maxSourceUpdatedAt(page.data)
-        : null;
+    // Breeze documents `snapshotAt` as the consumer checkpoint: every change
+    // up to it is in this traversal. It is constant across the traversal, so
+    // the checkpoint does not depend on how Breeze orders records in a page.
+    const highWater = ctx.mode === 'incremental' ? page.snapshotAt : null;
 
     return {
       records,
@@ -497,20 +494,27 @@ export class BreezeDriver implements IntegrationDriver {
             sourceId: blocked.id,
           },
         })),
+        // A record Weavestream could not read is skipped and the rest of the
+        // page is written. `validation` keeps the resource non-authoritative,
+        // so the stale sweep never archives data because of a record that was
+        // only unreadable this time.
+        ...unreadable.map((error) => ({
+          kind: 'validation' as const,
+          externalId: error.sourceId ? `${ctx.externalOrgId}:${resource.data}:${error.sourceId}` : null,
+          message: `Weavestream skipped a ${resource.data} record it could not read. The other records in the page were synced.`,
+          details: {
+            reasonCode: 'unreadable_source_record',
+            fieldPaths: error.fieldPaths,
+            sourceResource: resource.data,
+            sourceOrgId: ctx.externalOrgId,
+            ...(error.sourceId ? { sourceId: error.sourceId } : {}),
+          },
+        })),
       ],
       sourceHighWater: highWater,
       terminal: !page.hasMore,
     };
   }
-}
-
-function maxSourceUpdatedAt(records: unknown[]): string | null {
-  let highWater: number | null = null;
-  for (const raw of records) {
-    const updatedAt = Date.parse((raw as { sourceUpdatedAt: string }).sourceUpdatedAt);
-    if (highWater === null || updatedAt > highWater) highWater = updatedAt;
-  }
-  return highWater === null ? null : new Date(highWater).toISOString();
 }
 
 function deduplicateDriverRecords(records: DriverFetchPage['records']): DriverFetchPage['records'] {
@@ -635,35 +639,6 @@ function driverRecordSemantics(record: DriverFetchPage['records'][number]): stri
     displayName: record.displayName,
     fields: record.fields,
   });
-}
-
-function validatePageOrdering(
-  records: unknown[],
-  snapshotAt: string,
-  mode: FetchRecordsContext['mode'],
-  updatedSince: string | null,
-): void {
-  const snapshotMillis = Date.parse(snapshotAt);
-  const updatedSinceMillis = updatedSince === null ? null : Date.parse(updatedSince);
-  // The strict incremental checks only hold when `updatedSince` was actually
-  // sent; without it Breeze answers in full-mode (UUID) order.
-  const incremental = mode === 'incremental' && updatedSinceMillis !== null;
-  let previousMillis: number | null = null;
-  for (const raw of records) {
-    const sourceUpdatedAt = (raw as { sourceUpdatedAt?: unknown }).sourceUpdatedAt;
-    const sourceMillis =
-      typeof sourceUpdatedAt === 'string' ? Date.parse(sourceUpdatedAt) : Number.NaN;
-    if (!Number.isFinite(sourceMillis) || sourceMillis > snapshotMillis) {
-      throw new Error('Breeze sourceUpdatedAt must not exceed the traversal snapshot.');
-    }
-    if (incremental && sourceMillis <= updatedSinceMillis!) {
-      throw new Error('Breeze incremental records must be newer than updatedSince.');
-    }
-    if (incremental && previousMillis !== null && sourceMillis < previousMillis) {
-      throw new Error('Breeze sourceUpdatedAt values must be ordered within each page.');
-    }
-    previousMillis = sourceMillis;
-  }
 }
 
 function field(

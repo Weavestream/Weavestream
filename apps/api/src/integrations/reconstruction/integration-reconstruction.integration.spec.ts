@@ -30,7 +30,7 @@ import {
 } from './integration-provenance.service.js';
 import { BreezePartnerApiClient } from '../drivers/breeze/breeze-partner-api.client.js';
 import { BreezeDriver } from '../drivers/breeze/breeze.driver.js';
-import { transformBreezeRecord } from '../drivers/breeze/breeze.transforms.js';
+import { BreezeUnreadableRecordError, transformBreezeRecord } from '../drivers/breeze/breeze.transforms.js';
 import { DriverAuthError, DriverRateLimitError } from '../drivers/integration-driver.js';
 import type { ReconstructionWriteContext } from './reconstruction-target.js';
 
@@ -236,7 +236,6 @@ describe('Breeze reconstruction deterministic failure injection', () => {
   it.each([
     ['malformed JSON', '{not-json'],
     ['unknown schema', { ...envelope([]), schemaVersion: '2' }],
-    ['invalid record', envelope([{ ...siteRecord(), name: null }])],
   ])('rejects %s before any native write', async (_label, body) => {
     const fx = installFetchScript([{ body }]);
     await expect(new BreezePartnerApiClient().fetchPage(integrationContext(), {
@@ -246,6 +245,18 @@ describe('Breeze reconstruction deterministic failure injection', () => {
       updatedSince: null,
     })).rejects.toThrow(/invalid response data/i);
     expect(fx.calls).toBe(1);
+  });
+
+  it('reports an unreadable record by field path without its values', () => {
+    const read = () => transformBreezeRecord('sites', { ...siteRecord(), name: null, contact: BLOCKED_SECRET });
+    expect(read).toThrow(BreezeUnreadableRecordError);
+    try {
+      read();
+    } catch (error) {
+      expect(error).toMatchObject({ sourceId: SITE, fieldPaths: ['name', 'contact'] });
+      expect(JSON.stringify(error)).not.toContain(BLOCKED_SECRET);
+      expect(String(error)).not.toContain(BLOCKED_SECRET);
+    }
   });
 
   it('rejects a repeated cursor deterministically', async () => {

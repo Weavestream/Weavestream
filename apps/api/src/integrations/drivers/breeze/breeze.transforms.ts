@@ -14,7 +14,8 @@ import {
   BREEZE_ENDPOINT_BY_RESOURCE,
   breezeRecordSchemaByEndpoint,
   breezeResourceKeySchema,
-  sanitizeBreezeText,
+  isSupportedBreezeVariant,
+  readBreezeRecordSafely,
   type BreezeRecordBase,
   type BreezeResourceKey,
   type BreezeSourceEndpoint,
@@ -52,6 +53,21 @@ export class BreezeBoundedDefinitionError extends Error {
   }
 }
 
+/**
+ * A record Weavestream could not read (a field it relies on is missing or
+ * has an unexpected type). Carries only field paths and issue codes, never
+ * values, so nothing from the record reaches logs or the run viewer.
+ */
+export class BreezeUnreadableRecordError extends Error {
+  constructor(
+    readonly sourceId: string | null,
+    readonly fieldPaths: string[],
+  ) {
+    super('Breeze record could not be read.');
+    this.name = 'BreezeUnreadableRecordError';
+  }
+}
+
 
 export function transformBreezeRecord(
   rawResource: BreezeResourceKey,
@@ -60,10 +76,8 @@ export function transformBreezeRecord(
   const resource = breezeResourceKeySchema.safeParse(rawResource);
   if (!resource.success) throw new Error('Unknown Breeze resource.');
   const endpoint = BREEZE_ENDPOINT_BY_RESOURCE[resource.data];
-  const schema = breezeRecordSchemaByEndpoint[endpoint];
-  const validated = schema.parse(rawRecord);
-  const record = schema.parse(sanitizeBreezeText(validated)) as BreezeRecordBase &
-    Record<string, any>;
+  if (!isSupportedBreezeVariant(endpoint, rawRecord)) return [];
+  const record = readBreezeRecord(endpoint, rawRecord) as BreezeRecordBase & Record<string, any>;
   if (isDesiredConfigurationResource(resource.data)) {
     const inspection = inspectDesiredConfiguration(record, labelValueKeysFor(endpoint, record));
     if (inspection === 'sensitive') {
@@ -243,7 +257,7 @@ export function transformBreezeRecord(
       return record.networkEquipment.map((equipment: Record<string, any>) =>
         legacy(
           record,
-          equipment.name || `${equipment.type} ${equipment.id.slice(0, 8)}`,
+          equipment.name || `${equipment.type ?? 'equipment'} ${equipment.id.slice(0, 8)}`,
           {
             breezeId: equipment.id,
             siteId: record.siteSubjectId,
@@ -265,7 +279,7 @@ export function transformBreezeRecord(
       return record.virtualMachines.map((vm: Record<string, any>) =>
         legacy(
           record,
-          vm.name,
+          vm.name || `Virtual machine ${vm.id.slice(0, 8)}`,
           {
             breezeId: vm.id,
             hostDeviceId: record.deviceId,
@@ -321,7 +335,8 @@ export function transformBreezeRecord(
       return relations;
     }
     case 'automation-relations':
-      return [...record.dependencies]
+      return record.dependencies
+        .filter((dependency: Record<string, any>) => dependency.resource === 'scripts')
         .sort((left: Record<string, any>, right: Record<string, any>) => left.id.localeCompare(right.id))
         .map((dependency: Record<string, any>) => typedDependencyRelation(
           record, resource.data, `${record.id}:script:${dependency.id}`, 'automations', record.id,
@@ -335,10 +350,23 @@ export function transformBreezeRecord(
           )]
         : [];
     case 'device-relationships':
-      return record.edges.map((relationship: Record<string, any>) =>
-        typedRelation(record, relationship),
-      );
+      // Edges to endpoint kinds Weavestream does not model are skipped.
+      return record.edges
+        .filter((relationship: Record<string, any>) =>
+          relationshipResourceKey(relationship.from.type) !== null &&
+          relationshipResourceKey(relationship.to.type) !== null)
+        .map((relationship: Record<string, any>) => typedRelation(record, relationship));
   }
+}
+
+function readBreezeRecord(endpoint: BreezeSourceEndpoint, rawRecord: unknown): unknown {
+  const read = readBreezeRecordSafely(breezeRecordSchemaByEndpoint[endpoint], rawRecord);
+  if (read.success) return read.data;
+  const rawId = (rawRecord as { id?: unknown } | null)?.id;
+  throw new BreezeUnreadableRecordError(
+    typeof rawId === 'string' && UUID_PATTERN.test(rawId) ? rawId : null,
+    read.fieldPaths,
+  );
 }
 
 function legacy(
@@ -884,17 +912,23 @@ function relationshipEndpoint(
   orgId: string,
   endpoint: { type: string; id: string },
 ): { resourceKey: string; id: string } {
-  const resourceKey = {
-    organization: 'organizations',
-    site: 'sites',
-    device: 'devices',
-    interface: 'network-interfaces',
-    address: 'network-addresses',
-    virtual_machine: 'virtual-machines',
-    discovered_asset: 'network-equipment',
-  }[endpoint.type];
+  const resourceKey = relationshipResourceKey(endpoint.type);
   if (!resourceKey) throw new Error('Unsupported Breeze relationship endpoint.');
   return { resourceKey, id: endpoint.type === 'organization' ? orgId : endpoint.id };
+}
+
+const RELATIONSHIP_RESOURCE_KEYS: Readonly<Record<string, string>> = {
+  organization: 'organizations',
+  site: 'sites',
+  device: 'devices',
+  interface: 'network-interfaces',
+  address: 'network-addresses',
+  virtual_machine: 'virtual-machines',
+  discovered_asset: 'network-equipment',
+};
+
+function relationshipResourceKey(type: string): string | null {
+  return Object.hasOwn(RELATIONSHIP_RESOURCE_KEYS, type) ? RELATIONSHIP_RESOURCE_KEYS[type]! : null;
 }
 
 function subnetCandidates(
@@ -1248,6 +1282,7 @@ function formatCollections(
   projections: Record<string, StructuredProjection> = {},
 ): string {
   return Object.entries(collections)
+    .filter(([, collection]) => collection !== null && collection !== undefined)
     .sort(([left], [right]) => left.localeCompare(right))
     .map(([name, collection]) =>
       formatCollection(name, collection as Record<string, unknown>, projections[name]),
@@ -1257,9 +1292,10 @@ function formatCollections(
 
 function formatCollection(
   name: string,
-  collection: Record<string, unknown>,
+  collection: Record<string, unknown> | null,
   projection?: StructuredProjection,
 ): string {
+  if (!collection) return '';
   const source = `${name}: ${collection.included}/${collection.total} ${collection.complete ? 'complete' : 'incomplete (collection limit exceeded)'}`;
   return projection && projection.shown < projection.total
     ? `${source}; projection ${projection.shown}/${projection.total} rows shown`

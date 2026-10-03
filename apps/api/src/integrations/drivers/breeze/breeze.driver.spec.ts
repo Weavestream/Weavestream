@@ -583,13 +583,16 @@ describe('Breeze transforms', () => {
     }
   });
 
-  it('strictly rejects unreviewed desired-configuration keys and malicious inline secrets', () => {
+  it('strips unknown desired-configuration keys and rejects malicious inline secrets', () => {
     const safeScript = {
       ...base, siteId: null, sourceScope: 'organization', name: 'Install', description: null,
       category: null, osTypes: ['linux'], language: 'bash', content: 'true', parameters: null,
       timeoutSeconds: 30, runAs: 'system', version: 1, exitCodeSeverityMapping: null,
     };
-    expect(() => transformBreezeRecord('scripts', { ...safeScript, providerConfig: {} })).toThrow();
+    // A key Breeze adds later is dropped before inspection, rendering, and storage.
+    expect(JSON.stringify(transformBreezeRecord('scripts', {
+      ...safeScript, providerConfig: { accessToken: 'added-later' },
+    }))).not.toMatch(/providerConfig|added-later/u);
     expect(() => transformBreezeRecord('scripts', { ...safeScript, content: 'export TOKEN=hunter2' }))
       .toThrow(/blocked|secret|sensitive/i);
     const policy = (settings: Record<string, unknown>) => ({
@@ -1259,18 +1262,15 @@ describe('Breeze transforms', () => {
     expect(informational.toLowerCase()).toContain('link-local');
     expect(transformBreezeRecord('ip-reservations', input)).toHaveLength(1);
 
-    expect(() =>
-      transformBreezeRecord('device-inventory', {
-        ...deviceInventory,
-        openPorts: [22, 3389],
-      }),
-    ).toThrow();
-    expect(() =>
-      transformBreezeRecord('network-equipment', {
-        ...siteInventory,
-        networkEquipment: [{ ...siteInventory.networkEquipment[0], type: 'client' }],
-      }),
-    ).toThrow();
+    expect(JSON.stringify(transformBreezeRecord('device-inventory', {
+      ...deviceInventory,
+      openPorts: [22, 3389],
+    }))).not.toContain('openPorts');
+    // An equipment type added in a later Breeze release syncs as plain text.
+    expect(transformBreezeRecord('network-equipment', {
+      ...siteInventory,
+      networkEquipment: [{ ...siteInventory.networkEquipment[0], type: 'client' }],
+    })).toEqual([expect.objectContaining({ fields: expect.objectContaining({ equipmentType: 'client' }) })]);
   });
 
   it('accepts Breeze v0.111 website/service equipment with a URL and no address', () => {
@@ -1394,21 +1394,32 @@ describe('Breeze transforms', () => {
     );
     expect(JSON.stringify(records)).not.toMatch(/configuration.assignment|backup.procedure/i);
 
-    expect(() =>
-      transformBreezeRecord('device-relationships', {
-        ...relationships,
-        edges: [
-          {
-            key: 'invented-edge',
-            type: 'configuration_assignment',
-            from: { type: 'device', id: DEVICE },
-            to: { type: 'device', id: DEVICE },
-            metadata: {},
-          },
-        ],
-        collection: completeCollection,
+    // A new edge type between known endpoints syncs as plain text; an edge to
+    // an endpoint kind Weavestream does not model is skipped, not fatal.
+    expect(transformBreezeRecord('device-relationships', {
+      ...relationships,
+      edges: [
+        {
+          key: 'invented-edge',
+          type: 'configuration_assignment',
+          from: { type: 'device', id: DEVICE },
+          to: { type: 'device', id: DEVICE },
+          metadata: {},
+        },
+        {
+          key: 'unknown-endpoint-edge',
+          type: 'site_device',
+          from: { type: 'cloud_tenant', id: DEVICE },
+          to: { type: 'device', id: DEVICE },
+          metadata: {},
+        },
+      ],
+      collection: completeCollection,
+    })).toEqual([
+      expect.objectContaining({
+        reconstructionInput: expect.objectContaining({ relationType: 'configuration_assignment' }),
       }),
-    ).toThrow();
+    ]);
   });
 
   it.each([
@@ -2024,7 +2035,7 @@ describe('BreezeDriver transport delegation', () => {
       hasMore: false,
       cursor: null,
       terminal: true,
-      sourceHighWater: UPDATED,
+      sourceHighWater: '2026-07-14T12:00:00.000Z',
       blockedInputs: [
         {
           kind: 'secret_blocked',
@@ -2097,7 +2108,7 @@ describe('BreezeDriver transport delegation', () => {
       updatedSince: '2026-07-14T10:00:00.000Z',
       data: [{ ...device, sourceUpdatedAt: '2026-07-14T11:30:00.000Z' }, device],
     },
-  ])('rejects $name before emitting records', async ({ updatedSince, data }) => {
+  ])('accepts $name and checkpoints at the snapshot', async ({ updatedSince, data }) => {
     const client = {
       testConnection: jest.fn(),
       listOrganizations: jest.fn(),
@@ -2109,9 +2120,11 @@ describe('BreezeDriver transport delegation', () => {
         hasMore: false,
       }),
     };
-    await expect(
-      new BreezeDriver(client).fetchRecords({ ...ctx(), updatedSince }, null),
-    ).rejects.toThrow(/sourceUpdatedAt|incremental|order|snapshot/i);
+    // Ordering and clock skew are Breeze's concern. The checkpoint is the
+    // snapshot, so neither can move it past a change Weavestream has not seen.
+    const page = await new BreezeDriver(client).fetchRecords({ ...ctx(), updatedSince }, null);
+    expect(page.records.length).toBeGreaterThan(0);
+    expect(page).toMatchObject({ sourceHighWater: '2026-07-14T12:00:00.000Z', blockedInputs: [] });
   });
 
   it('accepts full pages ordered by UUID rather than sourceUpdatedAt', async () => {
@@ -2182,7 +2195,7 @@ describe('BreezeDriver transport delegation', () => {
     expect(page).toMatchObject({ sourceHighWater: snapshotAt, terminal: true });
   });
 
-  it('emits per-page incremental high-water without retaining failed traversal state', async () => {
+  it('emits the snapshot as incremental high-water without retaining failed traversal state', async () => {
     const newer = { ...device, sourceUpdatedAt: '2026-07-14T11:30:00.000Z' };
     const client = {
       testConnection: jest.fn(),
@@ -2214,13 +2227,13 @@ describe('BreezeDriver transport delegation', () => {
     };
     const driver = new BreezeDriver(client);
     await expect(driver.fetchRecords(ctx(), null)).resolves.toMatchObject({
-      sourceHighWater: '2026-07-14T11:30:00.000Z',
+      sourceHighWater: '2026-07-14T12:00:00.000Z',
     });
     await expect(
       driver.fetchRecords({ ...ctx(), snapshotAt: '2026-07-14T12:00:00.000Z' }, 'cursor-1'),
     ).rejects.toThrow('failed page');
     await expect(driver.fetchRecords(ctx(), null)).resolves.toMatchObject({
-      sourceHighWater: UPDATED,
+      sourceHighWater: '2026-07-14T12:00:00.000Z',
     });
     await expect(driver.fetchRecords({ ...ctx(), mode: 'full' }, null)).resolves.toMatchObject({
       sourceHighWater: null,
@@ -2380,19 +2393,18 @@ describe('Breeze scalar custom-field value contract', () => {
     ]);
   });
 
-  it('fails closed on unknown scalar keys and blocks secret-semantic scalar values safely', async () => {
-    expect(() =>
-      transformBreezeRecord('custom-field-values', {
-        ...scalarValue,
-        providerConfig: { accessToken: 'must-never-enter-weavestream' },
-      }),
-    ).toThrow();
-    expect(() =>
-      transformBreezeRecord('custom-field-values', {
-        ...scalarValue,
-        target: { type: 'device', id: SITE },
-      }),
-    ).toThrow(/target|device/i);
+  it('strips unknown scalar keys and blocks secret-semantic scalar values safely', async () => {
+    expect(JSON.stringify(transformBreezeRecord('custom-field-values', {
+      ...scalarValue,
+      providerConfig: { accessToken: 'must-never-enter-weavestream' },
+    }))).not.toMatch(/providerConfig|must-never-enter-weavestream/u);
+    // The binding comes from `deviceId` alone; Breeze's `target` echo is not read.
+    expect(transformBreezeRecord('custom-field-values', {
+      ...scalarValue,
+      target: { type: 'device', id: SITE },
+    })).toEqual([expect.objectContaining({
+      bindingRef: { resourceKey: 'devices', externalId: `${ORG}:devices:${DEVICE}` },
+    })]);
 
     const secret = 'must-never-enter-weavestream';
     const client = {
@@ -2420,5 +2432,205 @@ describe('Breeze scalar custom-field value contract', () => {
       }),
     ]);
     expect(JSON.stringify(page)).not.toContain(secret);
+  });
+});
+
+// Breeze adds fields within schemaVersion "1" (Weavestream/Weavestream#47).
+// These payloads mirror Breeze v0.121's partner API contract.
+describe('Breeze upgrade tolerance', () => {
+  const memoryModule = {
+    id: 'cdcdcdcd-cdcd-4dcd-8dcd-cdcdcdcdcdcd', locator: 'DIMM_A1', bankLabel: 'BANK 0',
+    populated: true, capacityMb: 16384, memoryType: 'DDR5', formFactor: 'DIMM',
+    speedMts: 4800, configuredSpeedMts: 4800, manufacturer: 'Samsung',
+    partNumber: 'M323R2GA3BB0', serialNumber: 'S-1',
+  };
+  const v121Inventory = {
+    ...deviceInventory,
+    hardware: {
+      ...deviceInventory.hardware,
+      memory: { totalMb: 32768, slotsTotal: 4, maxCapacityMb: 131072, soldered: false },
+    },
+    memoryModules: [memoryModule],
+    collections: { ...deviceInventory.collections, memoryModules: completeCollection },
+  };
+
+  it('reads v0.118+ device inventory and drops the memory-module fields it does not use', () => {
+    const before = transformBreezeRecord('device-inventory', deviceInventory);
+    const after = transformBreezeRecord('device-inventory', v121Inventory);
+    expect(after).toEqual(before);
+    expect(JSON.stringify(after)).not.toMatch(/memoryModules|slotsTotal|DIMM_A1/u);
+    expect(transformBreezeRecord('virtual-machines', v121Inventory).length)
+      .toBe(transformBreezeRecord('virtual-machines', deviceInventory).length);
+  });
+
+  it('reads v0.111+ configuration policies that carry parentPolicyId', () => {
+    const policy = {
+      ...base, siteId: null, sourceScope: 'organization', name: 'Child policy', description: null,
+      status: 'active', parentPolicyId: SEGMENT,
+      features: [{ id: SOFTWARE, type: 'patching', policyId: null, settings: { window: 'nightly' } }],
+    };
+    const [article] = transformBreezeRecord('configuration-policies', policy) as Array<{
+      reconstructionInput: { markdown: string };
+    }>;
+    expect(article!.reconstructionInput.markdown).toContain('Child policy');
+  });
+
+  it('reads backup configurations that send completenessGaps and no restore block', () => {
+    const records = transformBreezeRecord('backup-configurations', {
+      ...base, siteId: null, kind: 'destination', sourceScope: 'organization', name: 'Offsite',
+      type: 'file', provider: 's3', compression: true, encryption: true, active: true, default: true,
+      schedule: null, retention: null, exclusions: [],
+      completenessGaps: [{ code: 'restore_procedure_unavailable' }],
+    });
+    expect(records).toHaveLength(1);
+  });
+
+  it('skips record variants and relationship endpoints it does not model', () => {
+    expect(transformBreezeRecord('device-inventory', { ...deviceInventory, subjectType: 'cloud_account' }))
+      .toEqual([]);
+    expect(transformBreezeRecord('backup-configurations', { ...base, kind: 'replication_job', name: 'x' }))
+      .toEqual([]);
+  });
+
+  it('accepts new enum values as text and missing optional fields as null', () => {
+    const [record] = transformBreezeRecord('devices', {
+      ...device,
+      type: { os: 'freebsd', role: 'appliance', virtual: true, virtualizationPlatform: 'bhyve' },
+      operatingSystem: undefined,
+      stableIdentifiers: undefined,
+    }) as Array<{ fields: Record<string, unknown> }>;
+    expect(record!.fields).toMatchObject({
+      deviceType: 'freebsd', virtualizationRole: 'bhyve', osEdition: null, assetTag: null,
+    });
+  });
+
+  it('syncs the rest of a page and reports an unreadable record without its values', async () => {
+    const unreadableId = 'efefefef-efef-4fef-8fef-efefefefefef';
+    const client = {
+      testConnection: jest.fn(),
+      listOrganizations: jest.fn(),
+      fetchPage: jest.fn().mockResolvedValue({
+        schemaVersion: '1',
+        snapshotAt: '2026-07-14T12:00:00.000Z',
+        data: [device, { ...device, id: unreadableId, hostname: { value: 'unexpected-shape' } }],
+        nextCursor: null,
+        hasMore: false,
+      }),
+    };
+    const page = await new BreezeDriver(client).fetchRecords(ctx(), null);
+    expect(page.records).toHaveLength(1);
+    expect(page.blockedInputs).toEqual([
+      expect.objectContaining({
+        kind: 'validation',
+        externalId: `${ORG}:devices:${unreadableId}`,
+        details: expect.objectContaining({
+          reasonCode: 'unreadable_source_record',
+          fieldPaths: ['hostname'],
+          sourceId: unreadableId,
+        }),
+      }),
+    ]);
+    expect(JSON.stringify(page.blockedInputs)).not.toContain('unexpected-shape');
+  });
+
+  const automation = {
+    ...base, siteId: null, sourceScope: 'organization', name: 'Nightly', description: null,
+    enabled: true, trigger: { type: 'schedule' }, conditions: null, actions: [{ type: 'run_script' }],
+    onFailure: 'stop', notificationTargets: null, dependencies: [],
+  };
+  const nested = (depth: number): unknown => (depth === 0 ? 'leaf' : { next: nested(depth - 1) });
+  const pageOf = (data: unknown[]) => ({
+    testConnection: jest.fn(),
+    listOrganizations: jest.fn(),
+    fetchPage: jest.fn().mockResolvedValue({
+      schemaVersion: '1', snapshotAt: '2026-07-14T12:00:00.000Z', data, nextCursor: null, hasMore: false,
+    }),
+  });
+
+  it('reports a missing discriminator as unreadable but skips a named unknown variant', async () => {
+    const missingId = 'abcdabcd-abcd-4bcd-8bcd-abcdabcdabcd';
+    const { subjectType: _subjectType, ...withoutSubject } = deviceInventory;
+    const page = await new BreezeDriver(pageOf([
+      deviceInventory,
+      { ...withoutSubject, id: missingId },
+      { ...deviceInventory, id: SEGMENT, subjectType: 'cloud_account' },
+    ])).fetchRecords(ctx('device-inventory'), null);
+    expect(page.records).toHaveLength(1);
+    // The unreadable gap keeps the traversal non-authoritative, so the stale
+    // sweep cannot archive what this record synced before.
+    expect(page.blockedInputs).toEqual([
+      expect.objectContaining({
+        kind: 'validation',
+        externalId: `${ORG}:device-inventory:${missingId}`,
+        details: expect.objectContaining({ reasonCode: 'unreadable_source_record', fieldPaths: ['subjectType'] }),
+      }),
+    ]);
+  });
+
+  it.each([
+    ['blank', ''],
+    ['whitespace', '  '],
+    ['malformed', 'device site'],
+    ['non-text', 7],
+  ])('reports a %s discriminator as unreadable instead of skipping it', async (_label, value) => {
+    const inventoryId = 'abcdabcd-abcd-4bcd-8bcd-abcdabcdabcd';
+    const backupId = 'bcdebcde-bcde-4cde-8cde-bcdebcdebcde';
+    const inventory = await new BreezeDriver(pageOf([{ ...deviceInventory, id: inventoryId, subjectType: value }]))
+      .fetchRecords(ctx('device-inventory'), null);
+    const backups = await new BreezeDriver(pageOf([{ ...base, id: backupId, siteId: null, kind: value, name: 'x' }]))
+      .fetchRecords(ctx('backup-configurations'), null);
+    for (const [page, id, resource] of [
+      [inventory, inventoryId, 'device-inventory'],
+      [backups, backupId, 'backup-configurations'],
+    ] as const) {
+      expect(page.records).toEqual([]);
+      expect(page.blockedInputs).toEqual([
+        expect.objectContaining({
+          kind: 'validation',
+          externalId: `${ORG}:${resource}:${id}`,
+          details: expect.objectContaining({ reasonCode: 'unreadable_source_record' }),
+        }),
+      ]);
+    }
+  });
+
+  it('reports an over-long list instead of truncating it', () => {
+    const actions = Array.from({ length: 1_001 }, (_, index) => ({ type: 'run_script', step: index }));
+    expect(() => transformBreezeRecord('automations', { ...automation, actions }))
+      .toThrow(expect.objectContaining({ name: 'BreezeUnreadableRecordError', fieldPaths: ['actions'] }));
+    expect(transformBreezeRecord('automations', { ...automation, actions: actions.slice(0, 1_000) }))
+      .toHaveLength(1);
+  });
+
+  it('ignores a deeply nested unknown field and isolates a too-deep field it reads', async () => {
+    expect(transformBreezeRecord('automations', { ...automation, addedLater: nested(40) })).toHaveLength(1);
+    const tooDeepId = 'dcbadcba-dcba-4cba-8cba-dcbadcbadcba';
+    const page = await new BreezeDriver(pageOf([
+      automation,
+      { ...automation, id: tooDeepId, trigger: nested(40) },
+    ])).fetchRecords(ctx('automations'), null);
+    expect(page.records).toHaveLength(1);
+    expect(page.blockedInputs).toEqual([
+      expect.objectContaining({
+        kind: 'validation',
+        externalId: `${ORG}:automations:${tooDeepId}`,
+        details: expect.objectContaining({ reasonCode: 'unreadable_source_record', fieldPaths: ['(record)'] }),
+      }),
+    ]);
+  });
+
+  it('still rejects a record for a different organization', async () => {
+    const client = {
+      testConnection: jest.fn(),
+      listOrganizations: jest.fn(),
+      fetchPage: jest.fn().mockResolvedValue({
+        schemaVersion: '1',
+        snapshotAt: '2026-07-14T12:00:00.000Z',
+        data: [{ ...device, orgId: SITE }],
+        nextCursor: null,
+        hasMore: false,
+      }),
+    };
+    await expect(new BreezeDriver(client).fetchRecords(ctx(), null)).rejects.toThrow(/organization/i);
   });
 });

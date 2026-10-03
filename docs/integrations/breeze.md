@@ -68,10 +68,22 @@ Scalar custom fields are opt-in. For each selected definition, configure a `cust
 
 Only an exact Breeze-owned binding for the same integration, organization mapping, resource, company, target kind, and native target may mutate that target. Sync cannot claim a manual or differently owned target. Manual assets, fields, notes, uploads, articles, relations, folders, and password references are not deleted or overwritten. Password values are never requested from Breeze or decrypted for reconstruction.
 
+## Breeze upgrades
+
+Weavestream reads only the Breeze fields it maps to Weavestream fields, so a Breeze upgrade within the same partner API `schemaVersion` does not need a Weavestream release:
+
+- A field Breeze adds is ignored. It is not inspected, rendered, or stored.
+- A new value in a list Weavestream only displays (an OS, role, equipment type, script language, relationship type) syncs as plain text.
+- A new record variant (a subject type or backup kind) or a relationship to an endpoint kind Weavestream does not model is skipped.
+- A field Weavestream reads but Breeze no longer sends becomes empty.
+- A record that Weavestream still cannot read (a field it uses has an unexpected type, a record type is missing, a list it reads holds more than 1,000 items, or nesting is too deep) is skipped with a `validation` gap that names the field paths (never the values). Weavestream never truncates such a list. The other records in the page sync. The resource is reported incomplete, so no stale sweep archives data because of that record.
+
+A new `schemaVersion` still stops the sync. Breeze bumps it for removals, renames, and type changes, and those need a Weavestream update.
+
 ## Run modes and scheduling
 
 - **Dry run** fetches, validates, transforms, and reports outcomes but rolls back native targets, bindings, audits, gaps, and checkpoints.
-- **Incremental** starts from the last committed high-water checkpoint and applies changed source records. The first incremental run after a full or empty traversal has no high-water checkpoint yet; it sends no `updatedSince`, accepts the resulting UUID-ordered Breeze pages, and commits the traversal `snapshotAt` as the high-water mark so the next run is incremental.
+- **Incremental** starts from the last committed high-water checkpoint and applies changed source records. The high-water mark is the traversal `snapshotAt`, which Breeze documents as the consumer checkpoint, so it does not depend on how Breeze orders records within a page. The first incremental run after a full or empty traversal has no checkpoint yet; it sends no `updatedSince` and commits the traversal `snapshotAt` so the next run is incremental.
 - **Full** traverses the complete source snapshot. Only a terminal, authoritative full traversal may mark unseen exact Breeze-owned bindings stale.
 
 A blank integration schedule inherits `INTEGRATION_SYNC_DEFAULT_CRON`, which defaults to `*/15 * * * *` (every 15 minutes). Pick an explicit interval preset in the integration's schedule dropdown for a different cadence (stored as a five-field UTC cron), or set the global default to `off` for manual-only inherited schedules. Manual runs can select incremental or full mode.
