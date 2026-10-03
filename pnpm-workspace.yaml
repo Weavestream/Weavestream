@@ -8,7 +8,7 @@ overrides:
   # next pins postcss to an exact version, so no lockfile refresh can
   # move it — an override is the only lever. The original reason was
   # GHSA-6g55-p6wh-862q (arbitrary file read) and GHSA-r28c-9q8g-f849
-  # (path traversal) in next's old 8.4.31 pin; next 16.3.4 pins 8.5.23,
+  # (path traversal) in next's old 8.4.31 pin; next 16.3.7 pins 8.5.23,
   # which clears both, so the entry is no longer a security force. It
   # stays as a dedupe pin, set to next's own 8.5.23: without it, apps/web
   # keeps a stale 8.5.19 for autoprefixer while apps/mobile and tailwind
@@ -31,11 +31,11 @@ overrides:
   # next carries its own optional sharp for next/image optimization,
   # which this app does not use — every image is a plain <img> served
   # through the API. sharp <0.35.4 trips the libheif advisories bundled
-  # as GHSA-rgj7-g3m4-5g8c, so every copy is forced onto the 0.35.4 the
-  # API and worker depend on. next 16.3.4 declares ^0.35.4 itself, so
+  # as GHSA-rgj7-g3m4-5g8c, so every copy is forced onto the 0.35.5 the
+  # API and worker depend on. next 16.3.7 declares ^0.35.4 itself, so
   # this is now a dedupe pin rather than an out-of-range force: it
   # collapses two full sharp+libvips binary sets down to one.
-  sharp: 0.35.4
+  sharp: 0.35.5
   # Two React apps (`apps/web` on Next, `apps/mobile` on Vite) declaring
   # independent ranges let pnpm resolve two copies of the React types.
   # TypeScript treats those as *unrelated* nominal types, so a `Ref`
@@ -45,8 +45,8 @@ overrides:
   # "cannot be named without a reference to .pnpm/@types+react@..."
   # during `next build`. Forcing one copy is the only fix that holds as
   # both apps' ranges drift; bump both together.
-  "@types/react": 19.2.17
-  "@types/react-dom": 19.2.3
+  "@types/react": 19.3.0
+  "@types/react-dom": 19.3.0
 
 supportedArchitectures:
   os:

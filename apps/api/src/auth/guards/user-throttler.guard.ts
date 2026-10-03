@@ -60,7 +60,7 @@ const THROTTLER_NAME_PROP = Symbol('wsThrottlerName');
  */
 @Injectable()
 export class UserThrottlerGuard extends ThrottlerGuard {
-  private readonly logger = new Logger(UserThrottlerGuard.name);
+  protected override readonly logger = new Logger(UserThrottlerGuard.name);
 
   constructor(
     @InjectThrottlerOptions() options: ThrottlerModuleOptions,
