@@ -13,23 +13,21 @@ import type { Readable } from 'node:stream';
 import type { FileTypeResult } from 'file-type';
 import sharp from 'sharp';
 
-// `file-type` is pure ESM from v17 onward, but this package still emits
-// CommonJS (NestJS default). A plain `await import('file-type')` would be
-// transpiled by `tsc` into `require()`, which crashes at runtime with
-// `ERR_REQUIRE_ESM`. Wrapping the dynamic import in `new Function` hides
-// it from TypeScript's CJS down-leveling so the real ESM dynamic import
-// survives to Node. The result is cached so we don't pay the import cost
-// on every upload confirmation.
-const dynamicImportFileType = new Function(
-  'return import("file-type")',
-) as () => Promise<typeof import('file-type')>;
-
-let fileTypeModulePromise: Promise<typeof import('file-type')> | null = null;
+// `file-type` is pure ESM, and this package emits CommonJS, so `tsc` turns
+// the `import()` below into a lazy `require('file-type')`. That is
+// deliberate: Node >= 22.12 loads ESM through `require()` when the graph
+// has no top-level await, and `file-type` publishes a `module-sync` export
+// for exactly that. It stays lazy so that code which never confirms an
+// upload (most worker paths and their Jest suites) never loads it.
+// Do not go back to hiding the import inside `new Function`: V8 caches
+// `new Function` code by its source text across vm contexts, so under Jest
+// the first test file to load this module owns that `import()` for the
+// rest of the worker, and every later file's magic-byte check fails
+// against a torn-down runtime.
 async function fileTypeFromBuffer(
   buffer: Uint8Array,
 ): Promise<FileTypeResult | undefined> {
-  fileTypeModulePromise ??= dynamicImportFileType();
-  const mod = await fileTypeModulePromise;
+  const mod = await import('file-type');
   return mod.fileTypeFromBuffer(buffer);
 }
 import { MAX_IMAGE_DECODE_PIXELS } from '@weavestream/shared';

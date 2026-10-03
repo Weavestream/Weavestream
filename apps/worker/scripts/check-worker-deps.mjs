@@ -68,12 +68,13 @@
  *
  * ## What this does NOT prove
  *
- *   1. **Static `require()` only.** `apps/api/src/uploads/uploads.service.ts`
- *      reaches `file-type` through `new Function('return import("file-type")')`,
- *      deliberately, to keep a real ESM import alive across the CommonJS
- *      boundary. That is invisible here, as is any other computed specifier.
- *      `c614adb` took a second outage on exactly that file after the
- *      boot-time modules were fixed. Keep dynamic loads few and obvious.
+ *   1. **Static `require()` only.** A computed specifier or an `import()`
+ *      hidden from `tsc` is invisible here. `c614adb` took a second outage
+ *      on exactly that: `apps/api/src/uploads/uploads.service.ts` once
+ *      reached `file-type` through `new Function('return import(...)')`.
+ *      It now uses a plain `await import('file-type')`, which `tsc` emits as
+ *      a lazy `require('file-type')` (require(esm)) that this walk does see.
+ *      Keep dynamic loads few and obvious.
  *   2. **DECLARED, not INSTALLED.** This reads `package.json` and never
  *      `node_modules`. `pnpm install --frozen-lockfile` makes declared imply
  *      installed, which is why declaration is the right thing to assert — but
