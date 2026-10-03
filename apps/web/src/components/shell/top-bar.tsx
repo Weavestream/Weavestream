@@ -222,7 +222,14 @@ export function TopBar({
               flexShrink: 0,
             }}
           >
-            {right}
+            {/* The Fragment keeps `right` an only child. Beside
+                TopBarActions it would be a list item, and on a soft
+                navigation a server page's `right` arrives as a lazy
+                node wrapping another lazy node; React's dev-only
+                `validateChildKeys` unwraps one level, so the inner
+                element trips a bogus missing-key warning (seen on the
+                asset detail page; React canary 19.3, still in main). */}
+            <Fragment>{right}</Fragment>
             {shellScope && <TopBarActions />}
           </div>
         )}
