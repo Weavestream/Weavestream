@@ -1172,13 +1172,7 @@ function Composer({ tab, disabled }: { tab: ChatTab; disabled: boolean }) {
                 (e.currentTarget as HTMLTextAreaElement).selectionStart ?? value.length,
               )
             }
-            placeholder={
-              disabled
-                ? 'Waiting for reply…'
-                : companyId
-                  ? 'Message…  (type @ to attach an article or asset)'
-                  : 'Message…'
-            }
+            placeholder={disabled ? 'Waiting for reply…' : 'Ask Weavestream'}
             disabled={disabled}
             className="chat-composer-textarea"
             style={{
@@ -1196,6 +1190,10 @@ function Composer({ tab, disabled }: { tab: ChatTab; disabled: boolean }) {
               lineHeight: `${LINE_HEIGHT}px`,
               minHeight: MIN_TEXTAREA_HEIGHT,
               maxHeight: MAX_TEXTAREA_HEIGHT,
+              // Text wraps, so never scroll sideways. Without this, the
+              // autosize effect's `overflowY: hidden` computes overflow-x to
+              // `auto`, and always-visible scrollbars draw an empty track.
+              overflowX: 'hidden',
               fontFamily: 'inherit',
               outline: 'none',
             }}
