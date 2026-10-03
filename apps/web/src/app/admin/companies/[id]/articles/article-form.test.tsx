@@ -105,12 +105,15 @@ jest.mock('../../../../../components/ui', () => {
 const folders = [
   {
     id: 'folder-1',
+    companyId: 'company-1',
     name: 'Runbooks',
     slug: 'runbooks',
     icon: null,
     position: 0,
     parentId: null,
     archivedAt: null,
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:00.000Z',
     articleCount: 0,
     children: [],
   },

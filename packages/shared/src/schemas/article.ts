@@ -197,6 +197,12 @@ export const articleSummarySchema = z.object({
   slug: z.string(),
   excerpt: z.string().nullable(),
   visibleToClients: z.boolean(),
+  /**
+   * Monotonic optimistic-concurrency token, bumped on every content-
+   * affecting write including autosave drafts. Attached article
+   * snapshots claim it so AI update proposals can be revision-guarded
+   * at apply time (WS-030).
+   */
   revision: z.number().int(),
   archivedAt: z.string().nullable(),
   createdBy: z.string().uuid().nullable(),
@@ -205,7 +211,14 @@ export const articleSummarySchema = z.object({
   updatedByUser: articleActorRefSchema.nullable(),
   createdAt: z.string(),
   updatedAt: z.string(),
+  /** True if the signed-in user has starred this article. */
   isStarred: z.boolean(),
+  /**
+   * True if there is an in-progress autosave draft for this article.
+   * Drives the editor's Cancel-with-revert path and the "draft in
+   * progress" badge in the history panel. Only meaningful on detail
+   * loads.
+   */
   hasDraft: z.boolean(),
 });
 

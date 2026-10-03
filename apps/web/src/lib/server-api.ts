@@ -4,15 +4,28 @@ import { API_INTERNAL_URL } from './api-config';
 import type {
   AiSettings,
   AlertConfig,
+  ArticleDetail as SharedArticleDetail,
   ArticleEditorMode,
+  ArticleSummary,
+  ArticleVersionDetail,
+  ArticleVersionSummary,
   BackupConfig,
   BackupRunDto,
   CatchAllFamilyGap,
+  CompanyType,
+  DomainCheckDetails,
+  DomainScoreBreakdownItem,
+  DomainScoreTier,
   FieldType,
+  FolderNode,
   GlobalAccess,
   EmailSettings,
+  IntegrationTargetProvenance,
+  IpRule,
+  IpRuleAction,
   MembershipRole,
   PasswordGeneratorDefaults,
+  PasswordSummary,
   PlatformCapability,
   UserRole,
   UserSearchDefaults,
@@ -24,13 +37,24 @@ export type {
   AiSettings,
   AlertConfig,
   ArticleEditorMode,
+  ArticleSummary,
+  ArticleVersionDetail,
+  ArticleVersionSummary,
   BackupConfig,
   BackupRunDto,
+  CompanyType,
+  DomainCheckDetails,
+  DomainScoreBreakdownItem,
+  DomainScoreTier,
   FieldType,
+  FolderNode,
   GlobalAccess,
   EmailSettings,
+  IpRule,
+  IpRuleAction,
   MembershipRole,
   PasswordGeneratorDefaults,
+  PasswordSummary,
   PlatformCapability,
   UserRole,
   UserSearchDefaults,
@@ -361,14 +385,6 @@ export const getCompanyMemberships = cache(
   ): Promise<ServerApiResponse<CompanyMembership[]>> =>
     serverApiFetch<CompanyMembership[]>(`/companies/${companyId}/memberships`),
 );
-
-export type CompanyType =
-  | 'CLIENT'
-  | 'PROSPECT'
-  | 'VENDOR'
-  | 'INTERNAL'
-  | 'PARTNER'
-  | 'OTHER';
 
 type CompanyLogo = {
   uploadId: string;
@@ -768,7 +784,7 @@ export type AssetSummary = {
     resourceKey: string;
     lastSyncedAt: string;
   }>;
-  provenance: import('@weavestream/shared').IntegrationTargetProvenance[];
+  provenance: IntegrationTargetProvenance[];
   archivedAt: string | null;
   createdBy: string | null;
   updatedBy: string | null;
@@ -872,18 +888,6 @@ export const getAsset = cache(
 // Phase 4: folders, articles, uploads
 // ───────────────────────────────────────────────────────────────────
 
-export type FolderNode = {
-  id: string;
-  name: string;
-  slug: string;
-  icon: string | null;
-  position: number;
-  parentId: string | null;
-  archivedAt: string | null;
-  articleCount: number;
-  children: FolderNode[];
-};
-
 export async function listFolderTree(
   companyId: string,
 ): Promise<FolderNode[]> {
@@ -893,50 +897,10 @@ export async function listFolderTree(
   return res.data?.items ?? [];
 }
 
-export type ArticleSummary = {
-  id: string;
-  companyId: string;
-  folderId: string | null;
-  title: string;
-  slug: string;
-  excerpt: string | null;
-  visibleToClients: boolean;
-  /**
-   * Monotonic optimistic-concurrency token, bumped on every content-
-   * affecting write including autosave drafts. Attached article
-   * snapshots claim it so AI update proposals can be revision-guarded
-   * at apply time (WS-030).
-   */
-  revision: number;
-  archivedAt: string | null;
-  createdBy: string | null;
-  updatedBy: string | null;
-  createdByUser: ActorRef | null;
-  updatedByUser: ActorRef | null;
-  createdAt: string;
-  updatedAt: string;
-};
-
-export type ArticleDetail = ArticleSummary & {
-  editorMode: 'tiptap' | 'markdown';
-  /** Tiptap JSON when `editorMode` is `tiptap`, else `null`. */
-  content: unknown | null;
-  /** Raw Markdown when `editorMode` is `markdown`, else `null`. */
-  markdownSource: string | null;
-  contentPlaintext: string;
-  /**
-   * True if the signed-in user has starred this article.
-   */
-  isStarred: boolean;
-  /**
-   * True if there is an in-progress autosave draft for this article.
-   * Drives the editor's Cancel-with-revert path and the "draft in
-   * progress" badge in the history panel. List responses always
-   * report `false` (omitted server-side to avoid an N+1) — this is
-   * only meaningful on detail loads.
-   */
-  hasDraft: boolean;
-  provenance: import('@weavestream/shared').IntegrationTargetProvenance[];
+// The shared detail omits `provenance` on purpose (see `articleDetailSchema`);
+// the web reader renders it, so the web type adds it back.
+export type ArticleDetail = SharedArticleDetail & {
+  provenance: IntegrationTargetProvenance[];
 };
 
 export type ArticlePage = { items: ArticleSummary[]; nextCursor: string | null };
@@ -1030,29 +994,6 @@ export async function getArticleBySlug(
   return res.data;
 }
 
-export type ArticleVersionSummary = {
-  version: number;
-  isDraft: boolean;
-  title: string;
-  slug: string;
-  editorMode: 'tiptap' | 'markdown';
-  changedFields: string[];
-  changedBy: string;
-  changedByName: string | null;
-  changeReason: string | null;
-  createdAt: string;
-  updatedAt: string;
-};
-
-export type ArticleVersionDetail = ArticleVersionSummary & {
-  folderId: string | null;
-  visibleToClients: boolean;
-  content: unknown | null;
-  markdownSource: string | null;
-  contentPlaintext: string;
-  excerpt: string | null;
-};
-
 
 type ArticleLinkState = 'live' | 'versioned' | 'archived' | 'orphan';
 
@@ -1118,118 +1059,6 @@ export type MonitoredDomain = {
   createdBy: string | null;
   createdAt: string;
   updatedAt: string;
-};
-
-export type DomainScoreTier =
-  | 'excellent'
-  | 'good'
-  | 'fair'
-  | 'poor'
-  | 'critical';
-
-export type DomainScoreBreakdownItem = {
-  id: string;
-  label: string;
-  points: number;
-  max: number;
-  status: 'pass' | 'partial' | 'fail' | 'skip';
-  evidence?: string;
-};
-
-export type DomainCheckDetails = {
-  schemaVersion?: number;
-  whois?: {
-    registrar?: string | null;
-    registeredAt?: string | null;
-    expiresAt?: string | null;
-    source?: 'rdap' | 'whois43' | 'none';
-    statusCodes?: string[];
-    locked?: boolean;
-    hold?: boolean;
-    whoisNs?: string[];
-  };
-  dns?: {
-    a?: string[];
-    aaaa?: string[];
-    mx?: Array<{ preference: number; exchange: string }>;
-    ns?: string[];
-    txt?: string[];
-    caa?: Array<{ flag: number; tag: string; value: string }>;
-    dnssec?: {
-      signed: boolean;
-      source: 'rdap' | 'dnskey' | 'none';
-      dsRecordCount?: number;
-    };
-    nsMatch?: {
-      dnsNs: string[];
-      whoisNs: string[];
-      match: 'match' | 'mismatch' | 'unverifiable';
-    };
-  };
-  email?: {
-    hasMx: boolean;
-    spf?: {
-      present: boolean;
-      record?: string | null;
-      mechanisms?: string[];
-      all?: '+all' | '-all' | '~all' | '?all' | null;
-      lookupCount?: number;
-      valid: boolean;
-    };
-    dmarc?: {
-      present: boolean;
-      policy?: 'none' | 'quarantine' | 'reject' | null;
-      subdomainPolicy?: 'none' | 'quarantine' | 'reject' | null;
-      pct?: number | null;
-      rua?: string[];
-      ruf?: string[];
-      raw?: string | null;
-    };
-    dkim?: {
-      selectorsChecked: string[];
-      selectorsFound: string[];
-      provider?: 'google' | 'microsoft' | 'mailgun' | 'sendgrid' | 'unknown';
-    };
-  };
-  tls?: {
-    validFrom?: string | null;
-    validTo?: string | null;
-    issuer?: string | null;
-    subjectAltNames?: string[];
-    chainLength?: number;
-    protocol?: string | null;
-    authorized?: boolean | null;
-    authorizationError?: string | null;
-    cert?: {
-      keyAlgo?: string | null;
-      keyBits?: number | null;
-      sigAlgo?: string | null;
-      mustStaple?: boolean;
-      ocspStapled?: boolean;
-      daysUntilExpiry?: number | null;
-    };
-  };
-  http?: {
-    redirectsToHttps: boolean;
-    finalStatus?: number | null;
-    finalUrl?: string | null;
-    hsts?: {
-      present: boolean;
-      maxAge?: number | null;
-      includeSubDomains?: boolean;
-      preload?: boolean;
-    };
-    error?: string | null;
-  };
-  score?: {
-    version: number;
-    total: number;
-    max: number;
-    percent: number;
-    tier: DomainScoreTier;
-    breakdown: DomainScoreBreakdownItem[];
-    hardOverride?: { kind: 'force_critical' | 'cap_fair'; reason: string } | null;
-  };
 };
 
 export type DomainCheck = {
@@ -1504,32 +1333,6 @@ export async function listRecentActivity(
 // Passwords (Phase 10 — vault)
 // ---------------------------------------------------------------------
 
-export type PasswordSummary = {
-  id: string;
-  companyId: string;
-  folderId: string | null;
-  assetId: string | null;
-  name: string;
-  username: string | null;
-  url: string | null;
-  color: string | null;
-  tags: string[];
-  hasTotp: boolean;
-  passwordStrength: number | null;
-  pwnedCount: number | null;
-  lastRotatedAt: string | null;
-  rotationReminderDays: number | null;
-  expiresAt: string | null;
-  visibleToClients: boolean;
-  requireReasonToView: boolean;
-  restrictedToUserIds: string[];
-  archivedAt: string | null;
-  createdBy: string;
-  updatedBy: string;
-  createdAt: string;
-  updatedAt: string;
-};
-
 export type PasswordDetail = PasswordSummary & {
   notes: unknown | null;
   totpAlgorithm: 'SHA1' | 'SHA256' | 'SHA512';
@@ -1709,7 +1512,7 @@ export type SubnetDetail = {
   occupants: SubnetOccupant[];
   reservations: IpReservationRow[];
   conflicts: Array<{ ip: string; entries: SubnetOccupant[] }>;
-  provenance: import('@weavestream/shared').IntegrationTargetProvenance[];
+  provenance: IntegrationTargetProvenance[];
 };
 
 export async function listSubnets(
@@ -1766,19 +1569,6 @@ export async function listPhotos(
 // ---------------------------------------------------------------------
 // Phase 5: IP allow/deny rules (global, enforced before auth)
 // ---------------------------------------------------------------------
-
-export type IpRuleAction = 'ALLOW' | 'DENY';
-
-export type IpRule = {
-  id: string;
-  cidr: string;
-  action: IpRuleAction;
-  note: string | null;
-  priority: number;
-  enabled: boolean;
-  createdAt: string;
-  updatedAt: string;
-};
 
 export async function listIpRules(): Promise<IpRule[]> {
   const res = await serverApiFetch<{ items: IpRule[] }>('/ip-rules');

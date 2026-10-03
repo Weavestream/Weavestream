@@ -22,6 +22,8 @@ function article(
     updatedByUser: null,
     createdAt: '2026-08-19T00:00:00.000Z',
     updatedAt: '2026-08-19T00:00:00.000Z',
+    isStarred: false,
+    hasDraft: false,
   };
 }
 
@@ -32,12 +34,15 @@ function folder(
 ): FolderNode {
   return {
     id,
+    companyId: 'c-1',
     name: id,
     slug: id,
     icon: null,
     position: 0,
     parentId,
     archivedAt: null,
+    createdAt: '2026-08-19T00:00:00.000Z',
+    updatedAt: '2026-08-19T00:00:00.000Z',
     // Deliberately a lie: the rail must not read this. The server's own
     // count excludes archived and unfiled articles, which is the defect
     // these helpers exist to route around.
