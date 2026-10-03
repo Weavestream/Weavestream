@@ -1,6 +1,6 @@
 /* GENERATED FILE — do not edit by hand.
  *
- * Source: @material-symbols/svg-400@0.45.9, `rounded` variant
+ * Source: @material-symbols/svg-400@0.47.6, `rounded` variant
  * (weight 400, optical size 24, unfilled), Apache-2.0.
  * Regenerate: `pnpm --filter @weavestream/mobile gen:icons`
  *

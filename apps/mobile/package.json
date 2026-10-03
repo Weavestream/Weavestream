@@ -27,7 +27,7 @@
     "remark-gfm": "^4.0.1"
   },
   "devDependencies": {
-    "@material-symbols/svg-400": "0.45.9",
+    "@material-symbols/svg-400": "0.47.6",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.3",
     "@types/jest": "^30.0.0",
