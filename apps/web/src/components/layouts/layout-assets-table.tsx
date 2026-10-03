@@ -412,15 +412,7 @@ function layoutColumns({
           <LayoutSwatch icon={layout.icon} color={layout.color} size={22} />
           <Link
             href={`${basePath}/assets/${r.id}`}
-            style={{
-              fontWeight: 500,
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-              maxWidth: 320,
-              minWidth: 0,
-              color: 'inherit',
-            }}
+            style={{ color: 'inherit', fontWeight: 500 }}
           >
             {r.name}
             {r.archivedAt && (

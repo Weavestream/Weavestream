@@ -779,6 +779,12 @@ export function DataTable<T extends { id: string }>({
                         // other horizontally.
                         zIndex: 1 + (stickyCount - 1 - idx),
                         background: 'var(--panel)',
+                        // A pinned cell is locked to its width, so an
+                        // unbroken token (a long hostname, a name with no
+                        // spaces) would paint over the next column. Let it
+                        // break anywhere; `nowrap` + ellipsis cells are
+                        // unaffected because they never soft-wrap.
+                        overflowWrap: 'anywhere',
                       }
                     : {};
                   const widthStyle: CSSProperties = isSticky
