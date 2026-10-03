@@ -10,9 +10,7 @@ import {
   useTransition,
 } from 'react';
 import type {
-  PasswordFolderRow,
-} from '../../../../../lib/server-api/passwords';
-import type {
+  PasswordFolderSchema,
   PasswordGeneratorDefaults,
   PasswordSummary,
 } from '@weavestream/shared';
@@ -47,7 +45,7 @@ import {
 interface BrowserProps {
   companyId: string;
   rows: PasswordSummary[];
-  folders: PasswordFolderRow[];
+  folders: PasswordFolderSchema[];
   canManage: boolean;
   openNew?: boolean;
   prefillAssetId?: string;
@@ -141,7 +139,7 @@ export function PasswordsBrowser({
     // articles browser so a fresh page load shows the top of the
     // hierarchy without requiring clicks.
     const seed: Record<string, boolean> = {};
-    const byParent = new Map<string | null, PasswordFolderRow[]>();
+    const byParent = new Map<string | null, PasswordFolderSchema[]>();
     for (const f of folders) {
       if (f.archivedAt) continue;
       const list = byParent.get(f.parentId) ?? [];
@@ -1506,8 +1504,8 @@ function FolderSubtree({
   open,
   setOpen,
 }: {
-  folder: PasswordFolderRow;
-  all: PasswordFolderRow[];
+  folder: PasswordFolderSchema;
+  all: PasswordFolderSchema[];
   rows: PasswordSummary[];
   active: string | null | 'ALL';
   setActive: (v: string | null | 'ALL') => void;

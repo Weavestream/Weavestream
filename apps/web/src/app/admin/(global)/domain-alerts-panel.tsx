@@ -10,7 +10,7 @@ import {
   Tag,
   type TagTone,
 } from '../../../components/ui';
-import type { DomainAlert } from '../../../lib/server-api/domains';
+import type { DomainAlertDto } from '@weavestream/shared';
 
 type ScoreFilter = 'all' | 'lt55' | 'lt35';
 
@@ -20,7 +20,7 @@ type ScoreFilter = 'all' | 'lt55' | 'lt35';
  * SUPER_ADMIN sees trouble at a glance. Filter chips let operators
  * narrow the feed to critical/poor score buckets.
  */
-export function DomainAlertsPanel({ alerts }: { alerts: DomainAlert[] }) {
+export function DomainAlertsPanel({ alerts }: { alerts: DomainAlertDto[] }) {
   const [scoreFilter, setScoreFilter] = useState<ScoreFilter>('all');
 
   const filtered = useMemo(() => {
@@ -174,10 +174,10 @@ function ScoreChip({ score }: { score: number | null }) {
   return <Tag tone={scoreToTone(score)}>{score}%</Tag>;
 }
 
-type Row = DomainAlert & { id: string };
+type Row = DomainAlertDto & { id: string };
 
 function alertColumns(): DataColumn<Row>[] {
-  const STATUS_RANK: Partial<Record<DomainAlert['status'], number>> = {
+  const STATUS_RANK: Partial<Record<DomainAlertDto['status'], number>> = {
     EXPIRING: 0,
     EXPIRED: 1,
     FAIL: 2,
@@ -248,7 +248,7 @@ function alertColumns(): DataColumn<Row>[] {
   ];
 }
 
-function AlertStatus({ status }: { status: DomainAlert['status'] }) {
+function AlertStatus({ status }: { status: DomainAlertDto['status'] }) {
   switch (status) {
     case 'EXPIRING':
       return <Tag tone="warn">Expiring</Tag>;

@@ -12,9 +12,7 @@ import {
   Select,
   useToast,
 } from '../../../../../components/ui';
-import type {
-  PasswordFolderRow,
-} from '../../../../../lib/server-api/passwords';
+import type { PasswordFolderSchema } from '@weavestream/shared';
 import {
   buildPasswordFolderOptions,
   formatFolderOptionLabel,
@@ -25,7 +23,7 @@ type Tab = 'rename' | 'move' | 'archive';
 
 /**
  * Mirrors the articles `FolderSettingsDialog` but operates on the flat
- * `PasswordFolderRow[]` shape the passwords browser already uses, and
+ * `PasswordFolderSchema[]` shape the passwords browser already uses, and
  * talks to `/companies/:companyId/password-folders/:id`.
  *
  * Password folder archive on the API always nulls `password.folderId`
@@ -42,8 +40,8 @@ export function PasswordFolderSettingsDialog({
   onArchived,
 }: {
   companyId: string;
-  folder: PasswordFolderRow;
-  allFolders: PasswordFolderRow[];
+  folder: PasswordFolderSchema;
+  allFolders: PasswordFolderSchema[];
   passwordCount: number;
   open: boolean;
   onClose: () => void;

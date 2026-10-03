@@ -428,6 +428,7 @@ export const domainCheckSchema = z.object({
 
 export type DomainCheckDto = z.infer<typeof domainCheckSchema>;
 
+/** One row of `GET /domains/alerts` (the cross-company alerts feed). */
 export const domainAlertSchema = z.object({
   companyId: z.string().uuid(),
   companyName: z.string(),
@@ -435,8 +436,11 @@ export const domainAlertSchema = z.object({
   domainId: z.string().uuid(),
   hostname: z.string(),
   status: domainStatusSchema,
-  daysUntilExpiry: z.number().nullable(),
   visibleToClients: z.boolean(),
+  whoisExpiresAt: z.string().nullable(),
+  tlsExpiresAt: z.string().nullable(),
+  /** v2 — latest hygiene score (percent). NULL when never scored. */
+  latestScore: z.number().int().min(0).max(100).nullable(),
 });
 
 export type DomainAlertDto = z.infer<typeof domainAlertSchema>;

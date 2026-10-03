@@ -1,11 +1,11 @@
 /** @jest-environment jsdom */
 import '@testing-library/jest-dom';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import type { PasswordGeneratorDefaults } from '@weavestream/shared';
 import type {
   PasswordDetail,
-  PasswordVersionRow,
-} from '../../../../../../lib/server-api/passwords';
+  PasswordGeneratorDefaults,
+  PasswordVersionSummary,
+} from '@weavestream/shared';
 import {
   PasswordDetailClient,
   PasswordHeaderActions,
@@ -252,7 +252,7 @@ describe('PasswordDetailClient URL row', () => {
 
 function renderWith(
   overrides: Partial<PasswordDetail>,
-  versions: PasswordVersionRow[] = [],
+  versions: PasswordVersionSummary[] = [],
 ) {
   return render(
     <PasswordDetailClient
@@ -301,7 +301,7 @@ describe('PasswordDetailClient metadata disclosure', () => {
     // `changedByName` is null only when the user row is gone, which the
     // app never causes — the old fallback rendered `changedBy`, a bare
     // uuid, and it read like a name.
-    const orphan: PasswordVersionRow = {
+    const orphan: PasswordVersionSummary = {
       version: 2,
       changedFields: ['password'],
       changedBy: '8f14e45f-ceea-467a-9f8b-1a2b3c4d5e6f',

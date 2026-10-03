@@ -6,7 +6,7 @@ import {
   MobileCardRow,
   Tag,
 } from '../../../../../../components/ui';
-import type { DomainCheck } from '../../../../../../lib/server-api/domains';
+import type { DomainCheckDto } from '@weavestream/shared';
 import {
   percentToTier,
   tierToLabel,
@@ -20,7 +20,7 @@ import { ScoreSparkline } from './score-sparkline';
  * `DataTable` (sortable headers, sticky first column, mobile cards)
  * without forcing the surrounding server page to hydrate everything.
  */
-export function DomainHistory({ checks }: { checks: DomainCheck[] }) {
+export function DomainHistory({ checks }: { checks: DomainCheckDto[] }) {
   // v2 — render a sparkline of the most recent 30 scores at the top
   // of the panel so operators can see the trend before scrolling the
   // history table. Oldest-on-left, newest-on-right matches the table
@@ -32,7 +32,7 @@ export function DomainHistory({ checks }: { checks: DomainCheck[] }) {
     )
     .map((c) => c.score);
 
-  const columns: DataColumn<DomainCheck>[] = [
+  const columns: DataColumn<DomainCheckDto>[] = [
     {
       id: 'checkedAt',
       header: 'Checked',
@@ -204,7 +204,7 @@ function SubLabel({ label }: { label: string }) {
   );
 }
 
-function SubStatus({ status }: { status: DomainCheck['whoisStatus'] }) {
+function SubStatus({ status }: { status: DomainCheckDto['whoisStatus'] }) {
   if (!status) return <Tag tone="outline">—</Tag>;
   switch (status) {
     case 'OK':
@@ -218,7 +218,7 @@ function SubStatus({ status }: { status: DomainCheck['whoisStatus'] }) {
   }
 }
 
-function statusRank(status: DomainCheck['whoisStatus']): number {
+function statusRank(status: DomainCheckDto['whoisStatus']): number {
   switch (status) {
     case 'OK':
       return 0;
@@ -233,7 +233,7 @@ function statusRank(status: DomainCheck['whoisStatus']): number {
   }
 }
 
-function summarize(details: DomainCheck['details']): string {
+function summarize(details: DomainCheckDto['details']): string {
   const parts: string[] = [];
   if (details.whois?.registrar) parts.push(`registrar=${details.whois.registrar}`);
   if (details.tls?.issuer) parts.push(`issuer=${details.tls.issuer}`);

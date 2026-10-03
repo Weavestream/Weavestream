@@ -4,7 +4,7 @@ import { useRouter } from 'next/navigation';
 import { useState, useTransition } from 'react';
 import { apiFetch } from '../../../../../../lib/api';
 import { Icon } from '../../../../../../components/ui';
-import type { MonitoredDomain } from '../../../../../../lib/server-api/domains';
+import type { MonitoredDomainDto } from '@weavestream/shared';
 
 /**
  * Detail-page action bar. Lives in its own client component so the
@@ -16,7 +16,7 @@ export function DomainActions({
   domain,
 }: {
   companyId: string;
-  domain: MonitoredDomain;
+  domain: MonitoredDomainDto;
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();

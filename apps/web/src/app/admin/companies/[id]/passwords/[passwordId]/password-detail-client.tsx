@@ -9,11 +9,11 @@ import {
   type PasswordGeneratorDefaults,
 } from '@weavestream/shared';
 import type {
-  PasswordDetail,
   PasswordAccessUser,
-  PasswordFolderRow,
-  PasswordVersionRow,
-} from '../../../../../../lib/server-api/passwords';
+  PasswordDetail,
+  PasswordFolderSchema,
+  PasswordVersionSummary,
+} from '@weavestream/shared';
 import { apiFetch } from '../../../../../../lib/api';
 import { copyToClipboard } from '@weavestream/shared/browser';
 import {
@@ -67,7 +67,7 @@ import {
 interface Props {
   companyId: string;
   password: PasswordDetail;
-  versions: PasswordVersionRow[];
+  versions: PasswordVersionSummary[];
   canManage: boolean;
   canManageInternalAccess: boolean;
   folderName: string | null;
@@ -101,7 +101,7 @@ export function PasswordHeaderActions({
 }: {
   companyId: string;
   password: PasswordDetail;
-  folders: PasswordFolderRow[];
+  folders: PasswordFolderSchema[];
   canManage: boolean;
   generatorDefaults: PasswordGeneratorDefaults;
 }) {
@@ -937,7 +937,7 @@ function VersionHistoryPanel({
 }: {
   companyId: string;
   passwordId: string;
-  versions: PasswordVersionRow[];
+  versions: PasswordVersionSummary[];
   canManage: boolean;
   requiresReason: boolean;
   expanded: boolean;
@@ -1031,7 +1031,7 @@ function VersionHistoryItem({
 }: {
   companyId: string;
   passwordId: string;
-  version: PasswordVersionRow;
+  version: PasswordVersionSummary;
   canManage: boolean;
   requiresReason: boolean;
   busy: boolean;
@@ -1267,7 +1267,7 @@ function EditPasswordDialog({
 }: {
   companyId: string;
   password: PasswordDetail;
-  folders: PasswordFolderRow[];
+  folders: PasswordFolderSchema[];
   generatorDefaults: PasswordGeneratorDefaults;
   onClose: () => void;
   onSaved: () => void;

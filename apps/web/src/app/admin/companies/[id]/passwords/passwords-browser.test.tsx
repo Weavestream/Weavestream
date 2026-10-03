@@ -2,12 +2,10 @@
 import '@testing-library/jest-dom';
 import { fireEvent, render, screen } from '@testing-library/react';
 import type {
+  PasswordFolderSchema,
   PasswordGeneratorDefaults,
   PasswordSummary,
 } from '@weavestream/shared';
-import type {
-  PasswordFolderRow,
-} from '../../../../../lib/server-api/passwords';
 import { PasswordsBrowser } from './passwords-browser';
 
 jest.mock('next/navigation', () => ({
@@ -61,7 +59,7 @@ const folder = (
   id: string,
   name: string,
   parentId: string | null = null,
-): PasswordFolderRow => ({
+): PasswordFolderSchema => ({
   id,
   companyId: 'c1',
   parentId,

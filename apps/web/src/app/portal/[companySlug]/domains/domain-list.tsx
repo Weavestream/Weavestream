@@ -7,7 +7,7 @@ import {
   Tag,
   type TagTone,
 } from '../../../../components/ui';
-import type { MonitoredDomain } from '../../../../lib/server-api/domains';
+import type { MonitoredDomainDto } from '@weavestream/shared';
 import { spacedRelativePast as fmtRelativePast } from '../../../../lib/relative-time';
 
 /**
@@ -15,7 +15,7 @@ import { spacedRelativePast as fmtRelativePast } from '../../../../lib/relative-
  * non-`visibleToClients` entries for CLIENT_USER, so we just display
  * what we get and let users sort by any column.
  */
-export function DomainList({ items }: { items: MonitoredDomain[] }) {
+export function DomainList({ items }: { items: MonitoredDomainDto[] }) {
   return (
     <DataTable
       fillHeight
@@ -54,8 +54,8 @@ export function DomainList({ items }: { items: MonitoredDomain[] }) {
   );
 }
 
-function domainColumns(): DataColumn<MonitoredDomain>[] {
-  const STATUS_RANK: Record<MonitoredDomain['latestStatus'], number> = {
+function domainColumns(): DataColumn<MonitoredDomainDto>[] {
+  const STATUS_RANK: Record<MonitoredDomainDto['latestStatus'], number> = {
     OK: 0,
     EXPIRING: 1,
     EXPIRED: 2,
@@ -136,7 +136,7 @@ function ScoreChip({ score }: { score: number | null }) {
   return <Tag tone={scoreToTone(score)}>{score}%</Tag>;
 }
 
-function StatusTag({ status }: { status: MonitoredDomain['latestStatus'] }) {
+function StatusTag({ status }: { status: MonitoredDomainDto['latestStatus'] }) {
   switch (status) {
     case 'OK':
       return <Tag tone="ok">OK</Tag>;

@@ -1,4 +1,4 @@
-import type { PasswordFolderRow } from './server-api/passwords';
+import type { PasswordFolderSchema } from '@weavestream/shared';
 
 export type PasswordFolderOption = {
   id: string;
@@ -13,11 +13,11 @@ export type PasswordFolderOption = {
  * folder" picker, where a folder can't become its own ancestor).
  */
 export function buildPasswordFolderOptions(
-  folders: PasswordFolderRow[],
+  folders: PasswordFolderSchema[],
   excludeId?: string,
 ): PasswordFolderOption[] {
   const active = folders.filter((f) => !f.archivedAt);
-  const byParent = new Map<string | null, PasswordFolderRow[]>();
+  const byParent = new Map<string | null, PasswordFolderSchema[]>();
   for (const f of active) {
     const list = byParent.get(f.parentId) ?? [];
     list.push(f);

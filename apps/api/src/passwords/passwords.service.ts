@@ -10,6 +10,7 @@ import type {
   CreatePasswordInput,
   CreatePasswordFolderInput,
   PasswordFilterInput,
+  PasswordNotesValue,
   RevealPasswordInput,
   TotpConfigInput,
   UpdatePasswordFolderInput,
@@ -87,7 +88,7 @@ export interface SerializedPasswordSummary {
 
 /** Detail shape — summary + decrypted notes + TOTP shape metadata. */
 export interface SerializedPasswordDetail extends SerializedPasswordSummary {
-  notes: unknown | null;
+  notes: PasswordNotesValue;
   totpAlgorithm: TotpAlgo;
   totpDigits: number;
   totpPeriod: number;
@@ -1336,7 +1337,7 @@ export class PasswordsService {
     blob: string,
     companyId: string,
     passwordId: string,
-  ): unknown {
+  ): PasswordNotesValue {
     try {
       const plaintext = this.crypto.decrypt(
         blob,

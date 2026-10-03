@@ -3,7 +3,7 @@
 import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { useEffect, useState, useTransition } from 'react';
-import type { MonitoredDomain } from '../../../../../lib/server-api/domains';
+import type { MonitoredDomainDto } from '@weavestream/shared';
 import { apiFetch } from '../../../../../lib/api';
 import {
   Btn,
@@ -32,7 +32,7 @@ export function DomainsBrowser({
   openNew = false,
 }: {
   companyId: string;
-  rows: MonitoredDomain[];
+  rows: MonitoredDomainDto[];
   canManage: boolean;
   openNew?: boolean;
 }) {
@@ -41,7 +41,7 @@ export function DomainsBrowser({
   const [isPending, startTransition] = useTransition();
   const [dialog, setDialog] = useState<
     | { kind: 'add' }
-    | { kind: 'edit'; row: MonitoredDomain }
+    | { kind: 'edit'; row: MonitoredDomainDto }
     | null
   >(openNew && canManage ? { kind: 'add' } : null);
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -81,11 +81,11 @@ export function DomainsBrowser({
     };
     const res =
       mode === 'add'
-        ? await apiFetch<MonitoredDomain>(`/companies/${companyId}/domains`, {
+        ? await apiFetch<MonitoredDomainDto>(`/companies/${companyId}/domains`, {
             method: 'POST',
             body: JSON.stringify(body),
           })
-        : await apiFetch<MonitoredDomain>(
+        : await apiFetch<MonitoredDomainDto>(
             `/companies/${companyId}/domains/${id}`,
             { method: 'PATCH', body: JSON.stringify(body) },
           );
@@ -315,7 +315,7 @@ function DomainDialog({
   onCancel,
   onSubmit,
 }: {
-  initial: MonitoredDomain | null;
+  initial: MonitoredDomainDto | null;
   onCancel: () => void;
   onSubmit: (form: FormState) => Promise<void>;
 }) {
@@ -502,17 +502,17 @@ function domainColumns({
   archive: (id: string) => Promise<void>;
   restore: (id: string) => Promise<void>;
   setDialog: (
-    s: { kind: 'add' } | { kind: 'edit'; row: MonitoredDomain } | null,
+    s: { kind: 'add' } | { kind: 'edit'; row: MonitoredDomainDto } | null,
   ) => void;
-}): DataColumn<MonitoredDomain>[] {
-  const STATUS_RANK: Record<MonitoredDomain['latestStatus'], number> = {
+}): DataColumn<MonitoredDomainDto>[] {
+  const STATUS_RANK: Record<MonitoredDomainDto['latestStatus'], number> = {
     OK: 0,
     EXPIRING: 1,
     EXPIRED: 2,
     FAIL: 3,
     UNKNOWN: 4,
   };
-  const cols: DataColumn<MonitoredDomain>[] = [
+  const cols: DataColumn<MonitoredDomainDto>[] = [
     {
       id: 'hostname',
       header: 'Hostname',
@@ -657,7 +657,7 @@ function domainColumns({
   return cols;
 }
 
-export function StatusPill({ status }: { status: MonitoredDomain['latestStatus'] }) {
+export function StatusPill({ status }: { status: MonitoredDomainDto['latestStatus'] }) {
   const tone = STATUS_TONE[status];
   return <Tag tone={tone.tone}>{tone.label}</Tag>;
 }
@@ -676,7 +676,7 @@ function ScoreChip({ score }: { score: number | null }) {
 }
 
 const STATUS_TONE: Record<
-  MonitoredDomain['latestStatus'],
+  MonitoredDomainDto['latestStatus'],
   { label: string; tone: 'ok' | 'warn' | 'danger' | 'accent' | 'outline' }
 > = {
   OK: { label: 'OK', tone: 'ok' },

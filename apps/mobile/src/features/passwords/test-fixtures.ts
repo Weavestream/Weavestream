@@ -48,6 +48,7 @@ export function makePasswordDetail(
     totpAlgorithm: 'SHA1',
     totpDigits: 6,
     totpPeriod: 30,
+    isStarred: false,
     ...over,
   };
 }

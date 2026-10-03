@@ -2,8 +2,10 @@
 
 import { useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
-import type { PasswordGeneratorDefaults } from '@weavestream/shared';
-import type { PasswordFolderRow } from '../../lib/server-api/passwords';
+import type {
+  PasswordFolderSchema,
+  PasswordGeneratorDefaults,
+} from '@weavestream/shared';
 import { Btn, Icon } from '../ui';
 import { CreatePasswordDialog } from './create-password-dialog';
 
@@ -25,7 +27,7 @@ export function AttachCredentialButton({
 }: {
   companyId: string;
   assetId: string;
-  folders: PasswordFolderRow[];
+  folders: PasswordFolderSchema[];
   generatorDefaults: PasswordGeneratorDefaults;
   label: string;
   variant?: 'text' | 'button';

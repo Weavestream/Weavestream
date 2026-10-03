@@ -15,6 +15,8 @@ import type {
   ChatRequestContext,
   ChatToolCallDto,
   ChatTurnIntent,
+  DomainCheckDto,
+  MonitoredDomainDto,
 } from '@weavestream/shared';
 import { ARTICLE_CREATE_RECOVERY_PENDING_CODE } from '@weavestream/shared';
 import {
@@ -37,10 +39,6 @@ import { assetToMarkdown } from '../../lib/asset-format';
 import { domainToMarkdown } from '../../lib/domain-format';
 import { randomClientId } from '@weavestream/shared/browser';
 import type { ArticleDetail } from '../../lib/server-api/articles';
-import type {
-  DomainCheck,
-  MonitoredDomain,
-} from '../../lib/server-api/domains';
 
 type ChatRole = 'user' | 'assistant';
 
@@ -1686,8 +1684,8 @@ async function fetchDomainAsMarkdown(
   domainId: string,
 ): Promise<{ id: string; hostname: string; markdown: string } | null> {
   const [domainRes, checksRes] = await Promise.all([
-    apiFetch<MonitoredDomain>(`/companies/${companyId}/domains/${domainId}`),
-    apiFetch<DomainCheck[]>(
+    apiFetch<MonitoredDomainDto>(`/companies/${companyId}/domains/${domainId}`),
+    apiFetch<DomainCheckDto[]>(
       `/companies/${companyId}/domains/${domainId}/checks?limit=1`,
     ),
   ]);

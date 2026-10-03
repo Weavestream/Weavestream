@@ -147,17 +147,48 @@ export const passwordSummarySchema = z.object({
 export type PasswordSummary = z.infer<typeof passwordSummarySchema>;
 
 /**
+ * `notes` as the API returns it. Notes are written as a string or a Tiptap
+ * doc (`passwordNotesSchema`), but the API JSON-parses every stored note on
+ * read, so a plain-text note that is also valid JSON (for example `1234`)
+ * arrives as a number, boolean, array, object or `null`. Readers must
+ * handle every JSON value.
+ */
+export const passwordNotesValueSchema = z
+  .union([
+    z.string(),
+    z.number(),
+    z.boolean(),
+    z.array(z.unknown()),
+    z.record(z.unknown()),
+  ])
+  .nullable();
+export type PasswordNotesValue = z.infer<typeof passwordNotesValueSchema>;
+
+/**
  * Detail returned by `GET /passwords/:id` — carries the DECRYPTED
  * notes (authorized readers already have `password.read`). The
  * password itself + TOTP secret still require an explicit reveal call.
  */
 export const passwordDetailSchema = passwordSummarySchema.extend({
-  notes: passwordNotesSchema.nullable(),
+  notes: passwordNotesValueSchema,
   totpAlgorithm: totpAlgoSchema,
   totpDigits: z.number().int(),
   totpPeriod: z.number().int(),
+  /** True if the signed-in user has starred this password. */
+  isStarred: z.boolean(),
 });
 export type PasswordDetail = z.infer<typeof passwordDetailSchema>;
+
+/** One user who can see a password, with the reason they have access. */
+export const passwordAccessUserSchema = z.object({
+  id: z.string().uuid(),
+  name: z.string(),
+  email: z.string(),
+  role: z.enum(['SUPER_ADMIN', 'OPERATOR', 'CONTRACTOR']),
+  accessSource: z.enum(['super_admin', 'membership', 'global']),
+  alwaysIncluded: z.boolean(),
+});
+export type PasswordAccessUser = z.infer<typeof passwordAccessUserSchema>;
 
 /**
  * Reveal response. `totpSecret` is only populated when

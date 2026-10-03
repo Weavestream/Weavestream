@@ -8,10 +8,8 @@ import {
 } from '../../../../lib/server-api/companies';
 import { listAssets } from '../../../../lib/server-api/assets';
 import { throwUnlessFound } from '../../../../lib/server-api/core';
-import {
-  getCompanyDomainsBasic,
-  type MonitoredDomain,
-} from '../../../../lib/server-api/domains';
+import type { MonitoredDomainDto } from '@weavestream/shared';
+import { getCompanyDomainsBasic } from '../../../../lib/server-api/domains';
 import { canWriteCompany } from '../../../../lib/roles';
 import { DetailTitle, PageBody } from '../../../../components/shell/page-header';
 import { TopBar } from '../../../../components/shell/top-bar';
@@ -671,7 +669,7 @@ function externalLink(url: string) {
   );
 }
 
-function alertCount(domains: MonitoredDomain[]): number {
+function alertCount(domains: MonitoredDomainDto[]): number {
   return domains.filter(
     (d) =>
       d.latestStatus === 'EXPIRING' || d.latestStatus === 'EXPIRED' || d.latestStatus === 'FAIL',
@@ -687,7 +685,7 @@ function DomainAlertBanner({
   domains,
   companyId,
 }: {
-  domains: MonitoredDomain[];
+  domains: MonitoredDomainDto[];
   companyId: string;
 }) {
   const counts = domains.reduce(
@@ -695,7 +693,7 @@ function DomainAlertBanner({
       acc[d.latestStatus] = (acc[d.latestStatus] ?? 0) + 1;
       return acc;
     },
-    {} as Record<MonitoredDomain['latestStatus'], number>,
+    {} as Record<MonitoredDomainDto['latestStatus'], number>,
   );
   const total = alertCount(domains);
   return (

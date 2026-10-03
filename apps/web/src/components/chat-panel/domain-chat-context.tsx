@@ -1,10 +1,7 @@
 'use client';
 
 import { useCallback } from 'react';
-import type {
-  DomainCheck,
-  MonitoredDomain,
-} from '../../lib/server-api/domains';
+import type { DomainCheckDto, MonitoredDomainDto } from '@weavestream/shared';
 import { domainToMarkdown } from '../../lib/domain-format';
 import { useChatDomainPageContext } from './use-chat-page-context';
 
@@ -20,8 +17,8 @@ export function DomainChatContext({
   domain,
   latestCheck,
 }: {
-  domain: MonitoredDomain;
-  latestCheck: DomainCheck | null;
+  domain: MonitoredDomainDto;
+  latestCheck: DomainCheckDto | null;
 }) {
   const getMarkdown = useCallback((): string => {
     try {

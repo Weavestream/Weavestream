@@ -1,8 +1,8 @@
-import type { DomainCheck, MonitoredDomain } from './server-api/domains';
+import type { DomainCheckDto, MonitoredDomainDto } from '@weavestream/shared';
 
 /**
- * Project a `MonitoredDomain` (and optionally its most recent
- * `DomainCheck`) to a markdown blob suitable for inlining in the chat
+ * Project a `MonitoredDomainDto` (and optionally its most recent
+ * `DomainCheckDto`) to a markdown blob suitable for inlining in the chat
  * system prompt. Mirrors the fields shown on the admin domain detail
  * page ([page.tsx](apps/web/src/app/admin/companies/[id]/domains/[domainId]/page.tsx))
  * — identity, status / score, enabled checks, WHOIS / DNS / email
@@ -18,8 +18,8 @@ import type { DomainCheck, MonitoredDomain } from './server-api/domains';
  * matches the requester's permissions — no extra masking needed.
  */
 export function domainToMarkdown(
-  domain: MonitoredDomain,
-  latestCheck: DomainCheck | null = null,
+  domain: MonitoredDomainDto,
+  latestCheck: DomainCheckDto | null = null,
 ): { markdown: string; hostname: string } {
   const lines: string[] = [];
 

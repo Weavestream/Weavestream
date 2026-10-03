@@ -1,52 +1,15 @@
 import { cache } from 'react';
-import type { PasswordSummary } from '@weavestream/shared';
+import type {
+  PasswordDetail,
+  PasswordFolderSchema,
+  PasswordSummary,
+  PasswordVersionSummary,
+} from '@weavestream/shared';
 import { serverApiFetch } from './core';
 
 // ---------------------------------------------------------------------
 // Passwords (Phase 10 — vault)
 // ---------------------------------------------------------------------
-
-export type PasswordDetail = PasswordSummary & {
-  notes: unknown | null;
-  totpAlgorithm: 'SHA1' | 'SHA256' | 'SHA512';
-  totpDigits: number;
-  totpPeriod: number;
-  /**
-   * True if the signed-in user has starred this password.
-   */
-  isStarred: boolean;
-};
-
-export type PasswordFolderRow = {
-  id: string;
-  companyId: string;
-  parentId: string | null;
-  name: string;
-  icon: string | null;
-  color: string | null;
-  position: number;
-  archivedAt: string | null;
-  createdAt: string;
-  updatedAt: string;
-};
-
-export type PasswordVersionRow = {
-  version: number;
-  changedFields: string[];
-  changedBy: string;
-  changedByName: string | null;
-  changeReason: string | null;
-  createdAt: string;
-};
-
-export type PasswordAccessUser = {
-  id: string;
-  name: string;
-  email: string;
-  role: 'SUPER_ADMIN' | 'OPERATOR' | 'CONTRACTOR';
-  accessSource: 'super_admin' | 'membership' | 'global';
-  alwaysIncluded: boolean;
-};
 
 export async function listPasswords(
   companyId: string,
@@ -106,8 +69,8 @@ export async function getPasswordDetail(
 
 export async function listPasswordFolders(
   companyId: string,
-): Promise<PasswordFolderRow[]> {
-  const res = await serverApiFetch<{ items: PasswordFolderRow[] }>(
+): Promise<PasswordFolderSchema[]> {
+  const res = await serverApiFetch<{ items: PasswordFolderSchema[] }>(
     `/companies/${companyId}/password-folders`,
   );
   return res.data?.items ?? [];
@@ -116,8 +79,8 @@ export async function listPasswordFolders(
 export async function listPasswordVersions(
   companyId: string,
   id: string,
-): Promise<PasswordVersionRow[]> {
-  const res = await serverApiFetch<{ items: PasswordVersionRow[] }>(
+): Promise<PasswordVersionSummary[]> {
+  const res = await serverApiFetch<{ items: PasswordVersionSummary[] }>(
     `/companies/${companyId}/passwords/${id}/versions`,
   );
   return res.data?.items ?? [];
@@ -136,6 +99,6 @@ export const getCompanyActivePasswords = cache(
 );
 
 export const getCompanyPasswordFolders = cache(
-  async (companyId: string): Promise<PasswordFolderRow[]> =>
+  async (companyId: string): Promise<PasswordFolderSchema[]> =>
     listPasswordFolders(companyId),
 );
