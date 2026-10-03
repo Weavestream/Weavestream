@@ -1,4 +1,4 @@
-import type { TicketDetail } from '../../../../../lib/server-api';
+import type { TicketDetail } from '../../../../../lib/server-api/tickets';
 
 /**
  * Project a `TicketDetailDto` to the markdown block the chat panel

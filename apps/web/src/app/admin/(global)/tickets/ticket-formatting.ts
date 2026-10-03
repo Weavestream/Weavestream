@@ -1,5 +1,8 @@
 import type { TagTone } from '../../../../components/ui';
-import type { TicketDetail, TicketListItem } from '../../../../lib/server-api';
+import type {
+  TicketDetail,
+  TicketListItem,
+} from '../../../../lib/server-api/tickets';
 
 /**
  * Shared display helpers for the global admin ticket list + detail

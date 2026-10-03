@@ -7,8 +7,8 @@ import { ApiUnavailableError, RateLimitedError } from '../api-errors';
 // Server-side transport for RSC pages, layouts, and `generateMetadata`:
 // cookie and client-IP forwarding, the cold-boot retry schedule, response
 // classification, and the error-boundary helpers built on it. Domain
-// clients (`../server-api.ts` for now) build on `serverApiFetch` and never
-// call `fetch` against the API themselves.
+// clients (`domains.ts`, `tickets.ts`, and those still in `../server-api.ts`)
+// build on `serverApiFetch` and never call `fetch` against the API themselves.
 
 /**
  * Recognizes the handful of Node `fetch` / undici errors that indicate the

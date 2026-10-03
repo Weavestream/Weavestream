@@ -1,4 +1,4 @@
-import type { DomainCheck, MonitoredDomain } from './server-api';
+import type { DomainCheck, MonitoredDomain } from './server-api/domains';
 
 /**
  * Project a `MonitoredDomain` (and optionally its most recent

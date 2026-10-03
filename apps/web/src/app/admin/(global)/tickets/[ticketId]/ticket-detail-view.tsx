@@ -4,7 +4,7 @@ import { useMemo, useState } from 'react';
 import type {
   TicketActivity,
   TicketDetail,
-} from '../../../../../lib/server-api';
+} from '../../../../../lib/server-api/tickets';
 import { Icon, Tag } from '../../../../../components/ui';
 import { FormattedDateTime } from '../../../../../lib/timezone-context';
 

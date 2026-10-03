@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback } from 'react';
-import type { TicketDetail } from '../../lib/server-api';
+import type { TicketDetail } from '../../lib/server-api/tickets';
 import { useChatTicketPageContext } from './use-chat-page-context';
 
 /**

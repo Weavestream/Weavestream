@@ -6,7 +6,7 @@ import {
   MobileCardRow,
   Tag,
 } from '../../../../../../components/ui';
-import type { DomainCheck } from '../../../../../../lib/server-api';
+import type { DomainCheck } from '../../../../../../lib/server-api/domains';
 import {
   percentToTier,
   tierToLabel,

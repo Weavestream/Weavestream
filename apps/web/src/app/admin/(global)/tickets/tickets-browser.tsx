@@ -13,7 +13,7 @@ import {
 import type {
   TicketListFilters,
   TicketListItem,
-} from '../../../../lib/server-api';
+} from '../../../../lib/server-api/tickets';
 import {
   formatTicketBoard,
   formatTicketPriority,

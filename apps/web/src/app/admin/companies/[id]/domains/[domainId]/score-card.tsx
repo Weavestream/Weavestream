@@ -9,10 +9,10 @@ import {
   type TagTone,
 } from '../../../../../../components/ui';
 import type {
-  DomainCheck,
   DomainScoreBreakdownItem,
   DomainScoreTier,
-} from '../../../../../../lib/server-api';
+} from '@weavestream/shared';
+import type { DomainCheck } from '../../../../../../lib/server-api/domains';
 
 /**
  * Domain Check v2 — hygiene score card.

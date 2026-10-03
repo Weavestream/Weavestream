@@ -1,10 +1,8 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { notFound, redirect } from 'next/navigation';
-import {
-  requireMe,
-  getTicket,
-} from '../../../../../lib/server-api';
+import { requireMe } from '../../../../../lib/server-api';
+import { getTicket } from '../../../../../lib/server-api/tickets';
 import { hasCapability } from '../../../../../lib/roles';
 import { PageBody, PageHeader } from '../../../../../components/shell/page-header';
 import { Panel, Tag } from '../../../../../components/ui';

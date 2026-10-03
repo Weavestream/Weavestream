@@ -5,12 +5,14 @@ export const metadata: Metadata = { title: 'Domain' };
 
 import {
   getCompanyDetail,
-  getDomain,
   requireMe,
   getSettings,
-  listDomainChecks,
   throwUnlessFound,
 } from '../../../../../../lib/server-api';
+import {
+  getDomain,
+  listDomainChecks,
+} from '../../../../../../lib/server-api/domains';
 import { canWriteCompany } from '../../../../../../lib/roles';
 import { PageBody, PageHeader } from '../../../../../../components/shell/page-header';
 import { Panel, Tag } from '../../../../../../components/ui';

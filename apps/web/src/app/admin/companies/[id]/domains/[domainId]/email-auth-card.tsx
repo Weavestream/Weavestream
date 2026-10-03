@@ -1,7 +1,7 @@
 'use client';
 
 import { Panel, Tag } from '../../../../../../components/ui';
-import type { DomainCheckDetails } from '../../../../../../lib/server-api';
+import type { DomainCheckDetails } from '@weavestream/shared';
 
 /**
  * Email authentication panel for the v2 domain detail page.

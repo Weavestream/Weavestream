@@ -2,14 +2,16 @@ import Link from 'next/link';
 import type { ReactNode } from 'react';
 import {
   getCompanyDetail,
-  getCompanyDomainsBasic,
   requireMe,
   getSettings,
   listAssets,
   throwUnlessFound,
   type CompanyDetail,
-  type MonitoredDomain,
 } from '../../../../lib/server-api';
+import {
+  getCompanyDomainsBasic,
+  type MonitoredDomain,
+} from '../../../../lib/server-api/domains';
 import { canWriteCompany } from '../../../../lib/roles';
 import { DetailTitle, PageBody } from '../../../../components/shell/page-header';
 import { TopBar } from '../../../../components/shell/top-bar';

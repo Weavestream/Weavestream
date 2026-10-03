@@ -7,11 +7,11 @@ import {
   getAssetCountsByLayout,
   getMe,
   getMeForMetadata,
-  listDomains,
   listLayouts,
   listPasswords,
   listSubnets,
 } from '../../../lib/server-api';
+import { listDomains } from '../../../lib/server-api/domains';
 import { resolvePortalCompany } from '../../../lib/portal-company';
 
 export async function generateMetadata({

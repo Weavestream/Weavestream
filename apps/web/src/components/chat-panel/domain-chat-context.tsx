@@ -1,7 +1,10 @@
 'use client';
 
 import { useCallback } from 'react';
-import type { DomainCheck, MonitoredDomain } from '../../lib/server-api';
+import type {
+  DomainCheck,
+  MonitoredDomain,
+} from '../../lib/server-api/domains';
 import { domainToMarkdown } from '../../lib/domain-format';
 import { useChatDomainPageContext } from './use-chat-page-context';
 

@@ -3,7 +3,7 @@
 import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { useEffect, useState, useTransition } from 'react';
-import type { MonitoredDomain } from '../../../../../lib/server-api';
+import type { MonitoredDomain } from '../../../../../lib/server-api/domains';
 import { apiFetch } from '../../../../../lib/api';
 import {
   Btn,

@@ -5,7 +5,6 @@ import type { EntityType } from '../../../components/ui/star-button';
 import {
   getAdminStats,
   getSettings,
-  listDomainAlerts,
   listRecentActivity,
   listStarred,
   requireMe,
@@ -15,6 +14,7 @@ import {
   type RecentActivityItem,
   type StarredItem,
 } from '../../../lib/server-api';
+import { listDomainAlerts } from '../../../lib/server-api/domains';
 import { buildTerm, lower } from '../../../lib/term';
 import { companyAccent } from '../../../lib/company-format';
 import { DomainAlertsPanel } from './domain-alerts-panel';

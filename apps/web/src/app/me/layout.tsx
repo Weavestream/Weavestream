@@ -7,9 +7,9 @@ import {
   getAssetCountsByLayout,
   getMe,
   getSettings,
-  listDomains,
   listLayouts,
 } from '../../lib/server-api';
+import { listDomains } from '../../lib/server-api/domains';
 import {
   canAccessAdminShell,
   preferredMembership,

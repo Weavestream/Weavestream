@@ -10,7 +10,7 @@ import {
   Tag,
   type TagTone,
 } from '../../../components/ui';
-import type { DomainAlert } from '../../../lib/server-api';
+import type { DomainAlert } from '../../../lib/server-api/domains';
 
 type ScoreFilter = 'all' | 'lt55' | 'lt35';
 

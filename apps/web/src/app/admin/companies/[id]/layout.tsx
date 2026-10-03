@@ -7,12 +7,12 @@ import {
   getCompanyActivePasswords,
   getCompanyAssetCounts,
   getCompanyDetail,
-  getCompanyDomainsBasic,
   getCompanySubnetsBasic,
   getMe,
   getSettings,
   throwUnlessFound,
 } from '../../../../lib/server-api';
+import { getCompanyDomainsBasic } from '../../../../lib/server-api/domains';
 
 /**
  * Shell + title-template for every page under `/admin/companies/[id]`.

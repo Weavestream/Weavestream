@@ -1,11 +1,11 @@
 import type { Metadata } from 'next';
 import { redirect } from 'next/navigation';
+import { requireMe } from '../../../../lib/server-api';
 import {
-  requireMe,
   hasAnyTicketingIntegration,
   listTickets,
   type TicketListFilters,
-} from '../../../../lib/server-api';
+} from '../../../../lib/server-api/tickets';
 import { hasCapability } from '../../../../lib/roles';
 import { PageBody, PageHeader } from '../../../../components/shell/page-header';
 import { Panel } from '../../../../components/ui';

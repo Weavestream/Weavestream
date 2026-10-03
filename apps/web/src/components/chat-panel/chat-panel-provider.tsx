@@ -35,12 +35,11 @@ import { tiptapDocToMarkdown } from '@weavestream/shared';
 import { assetToMarkdown } from '../../lib/asset-format';
 import { domainToMarkdown } from '../../lib/domain-format';
 import { randomClientId } from '@weavestream/shared/browser';
+import type { ArticleDetail, AssetSummary } from '../../lib/server-api';
 import type {
-  ArticleDetail,
-  AssetSummary,
   DomainCheck,
   MonitoredDomain,
-} from '../../lib/server-api';
+} from '../../lib/server-api/domains';
 
 type ChatRole = 'user' | 'assistant';
 

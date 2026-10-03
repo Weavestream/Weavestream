@@ -7,7 +7,7 @@ import {
   Tag,
   type TagTone,
 } from '../../../../components/ui';
-import type { MonitoredDomain } from '../../../../lib/server-api';
+import type { MonitoredDomain } from '../../../../lib/server-api/domains';
 import { spacedRelativePast as fmtRelativePast } from '../../../../lib/relative-time';
 
 /**
