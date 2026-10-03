@@ -718,10 +718,13 @@ export class IntegrationsService {
       (resource) => resource.key === resourceKey,
     )!;
     assertResourcePatchCompatible(resourceDescriptor, input, existing.targetKind);
-    const nextTargetConfig = validateResourceTargetConfig(
-      resourceDescriptor,
-      input.targetConfig ?? (existing.targetConfig as Record<string, unknown>),
-    );
+    // Validate only a supplied targetConfig. A row saved before every field
+    // became descriptor-owned can still hold an operator value; it must not
+    // block an unrelated patch such as `enabled`, and it is never written
+    // back here (`reconcileResources` resets it from the descriptor).
+    const nextTargetConfig = input.targetConfig === undefined
+      ? undefined
+      : validateResourceTargetConfig(resourceDescriptor, input.targetConfig);
 
     const nextLayoutId =
       input.assetLayoutId === undefined ? existing.assetLayoutId : input.assetLayoutId;
@@ -773,7 +776,7 @@ export class IntegrationsService {
         assetLayoutId:
           input.assetLayoutId === undefined ? undefined : (input.assetLayoutId ?? null),
         matchKeyFieldIds: input.matchKeyFieldIds === undefined ? undefined : input.matchKeyFieldIds,
-        targetConfig: input.targetConfig === undefined
+        targetConfig: nextTargetConfig === undefined
           ? undefined
           : (nextTargetConfig as Prisma.InputJsonValue),
       },
@@ -1428,43 +1431,29 @@ export function validateResourceTargetConfig(
       })),
     });
   }
-  const mutableKeys = descriptor.targetKind === 'article'
-    ? new Set(['folderSlug', 'visibility', 'template'])
-    : descriptor.targetKind === 'relation'
-      ? new Set(['typeMapping'])
-      : new Set<string>();
+  // Every target configuration field is descriptor-owned. The sync runner
+  // and the drivers read target configuration from the driver descriptor,
+  // never from the saved row (and `reconcileResources` rewrites the row
+  // from the descriptor on every read), so an operator value that differs
+  // would be accepted and then silently ignored. Reject it instead.
   const descriptorTargetConfig = descriptor.targetConfig as Record<string, unknown>;
   const parsedTargetConfig = parsed.data.targetConfig as Record<string, unknown>;
-  for (const [key, parsedValue] of Object.entries(parsedTargetConfig)) {
-    if (!mutableKeys.has(key) && (
+  const keys = new Set([
+    ...Object.keys(descriptorTargetConfig),
+    ...Object.keys(parsedTargetConfig),
+  ]);
+  for (const key of keys) {
+    if (
       !Object.hasOwn(descriptorTargetConfig, key) ||
-      JSON.stringify(parsedValue) !== JSON.stringify(descriptorTargetConfig[key])
-    )) {
+      !Object.hasOwn(parsedTargetConfig, key) ||
+      JSON.stringify(parsedTargetConfig[key]) !== JSON.stringify(descriptorTargetConfig[key])
+    ) {
       throw new BadRequestException(
         `Target configuration field "${key}" is descriptor-owned and cannot be changed.`,
       );
     }
   }
-  for (const [key, descriptorValue] of Object.entries(descriptorTargetConfig)) {
-    if (!mutableKeys.has(key) && !Object.hasOwn(parsedTargetConfig, key)) {
-      throw new BadRequestException(
-        `Target configuration field "${key}" is descriptor-owned and cannot be changed.`,
-      );
-    }
-    if (!mutableKeys.has(key) && JSON.stringify(parsedTargetConfig[key]) !== JSON.stringify(descriptorValue)) {
-      throw new BadRequestException(
-        `Target configuration field "${key}" is descriptor-owned and cannot be changed.`,
-      );
-    }
-  }
-  const validated: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(descriptorTargetConfig)) {
-    if (!mutableKeys.has(key)) validated[key] = value;
-  }
-  for (const [key, value] of Object.entries(parsedTargetConfig)) {
-    if (mutableKeys.has(key)) validated[key] = value;
-  }
-  return validated;
+  return { ...descriptorTargetConfig };
 }
 
 export function assertResourcePatchCompatible(

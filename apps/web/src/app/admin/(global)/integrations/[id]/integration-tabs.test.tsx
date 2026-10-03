@@ -85,10 +85,10 @@ describe('IntegrationTabs', () => {
       mappings={[]} runs={[]} driver={driver}
     />);
     expect(screen.getByRole('tab', { name: 'Scripts articles' })).toHaveAttribute(
-      'title', expect.stringMatching(/folder, visibility, and template/i),
+      'title', expect.stringMatching(/^destination folder and visibility for /i),
     );
     expect(screen.getByRole('tab', { name: 'Relationships dependencies' })).toHaveAttribute(
-      'title', expect.stringMatching(/dependency resources and type mapping/i),
+      'title', expect.stringMatching(/^dependency resources for /i),
     );
     expect(screen.queryByRole('tab', { name: /Scripts fields|Relationships fields/ })).not.toBeInTheDocument();
   });

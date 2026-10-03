@@ -201,13 +201,13 @@ function disabledResourceDescription(resource: DriverResourceDescriptor): string
   const label = resource.label.toLowerCase();
   switch (resource.targetKind) {
     case 'article':
-      return `Enable ${label} to configure the destination folder, visibility, and article template.`;
+      return `Enable ${label} to review the destination folder and visibility.`;
     case 'subnet':
       return `Enable ${label} to review CIDR normalization and native subnet identity matching.`;
     case 'ip_reservation':
       return `Enable ${label} to review IP normalization and native reservation identity matching.`;
     case 'relation':
-      return `Enable ${label} to configure dependency resources and relationship type mapping.`;
+      return `Enable ${label} to review the dependency resources.`;
     case 'asset':
       return `Enable ${label} to pick an asset layout, choose match-key fields, and project upstream columns onto Weavestream fields.`;
   }
@@ -680,44 +680,22 @@ function NativeResourceEditor({
 }) {
   const router = useRouter();
   const toast = useToast();
-  const initial = resourceRow.targetConfig;
+  // Target configuration is driver-defined: the sync runner reads it from
+  // the driver descriptor, never from the saved row. Show it read-only so
+  // no control appears to save a value that has no effect on a sync.
+  const descriptorConfig = resource.targetConfig as Record<string, unknown>;
+  const folderSlug = stringValue(descriptorConfig.folderSlug);
+  const visibility = stringValue(descriptorConfig.visibility);
   const [enabled, setEnabled] = useState(resourceRow.enabled);
-  const [folderSlug, setFolderSlug] = useState(stringValue(initial.folderSlug));
-  const [visibility, setVisibility] = useState(stringValue(initial.visibility) || 'internal');
-  const [template, setTemplate] = useState(stringValue(initial.template));
-  const [typeMapping, setTypeMapping] = useState(() => JSON.stringify(objectValue(initial.typeMapping), null, 2));
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   async function save() {
     setPending(true);
     setError(null);
-    const targetConfig: Record<string, unknown> = { ...resourceRow.targetConfig };
-    if (resource.targetKind === 'article') {
-      if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(folderSlug) || folderSlug.length > 128) {
-        setPending(false);
-        setError('Folder slug must be a lowercase, hyphenated slug of at most 128 characters.');
-        return;
-      }
-      targetConfig.folderSlug = folderSlug;
-      targetConfig.visibility = visibility;
-      if (template) targetConfig.template = template;
-      else delete targetConfig.template;
-    }
-    if (resource.targetKind === 'relation') {
-      try {
-        const parsed = JSON.parse(typeMapping) as unknown;
-        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error();
-        targetConfig.typeMapping = parsed;
-      } catch {
-        setPending(false);
-        setError('Type mapping must be a JSON object.');
-        return;
-      }
-    }
     const response = await apiFetch<IntegrationResourceDto>(
       `/admin/integrations/${integration.id}/resources/${resource.key}`,
-      { method: 'PATCH', body: JSON.stringify({ enabled, targetConfig }) },
+      { method: 'PATCH', body: JSON.stringify({ enabled }) },
     );
     setPending(false);
     if (!response.ok || !response.data) {
@@ -741,10 +719,12 @@ function NativeResourceEditor({
         Sync this resource on every run
       </label>
       {resource.targetKind === 'article' && (
-        <div style={{ display: 'grid', gap: 12, maxWidth: 680 }}>
-          <Field label="Folder slug"><input aria-label="Folder slug" value={folderSlug} maxLength={128} onChange={(event) => setFolderSlug(event.target.value)} style={inputStyle} /></Field>
-          <Field label="Visibility"><Select aria-label="Visibility" value={visibility} onChange={(event) => setVisibility(event.target.value)}><option value="internal">Internal</option><option value="company">Company</option></Select></Field>
-          <Field label="Article template"><textarea aria-label="Article template" value={template} maxLength={32768} rows={8} onChange={(event) => setTemplate(event.target.value)} style={{ ...inputStyle, height: 'auto', padding: 10 }} /></Field>
+        <div style={emptyState}>
+          <strong>Destination</strong>
+          <div style={{ marginTop: 5 }}>
+            Articles are written to the {folderSlug ? <code>{folderSlug}</code> : 'driver-defined'} folder
+            {' '}with {visibility === 'company' ? 'company' : 'internal'} visibility. The driver defines both values.
+          </div>
         </div>
       )}
       {(resource.targetKind === 'subnet' || resource.targetKind === 'ip_reservation') && (
@@ -754,10 +734,7 @@ function NativeResourceEditor({
         </div>
       )}
       {resource.targetKind === 'relation' && (
-        <div style={{ display: 'grid', gap: 12 }}>
-          <div style={emptyState}>Dependencies must resolve first: {resource.dependsOnResourceKeys.join(', ') || 'none'}.</div>
-          <Field label="Type mapping (JSON)"><textarea aria-label="Type mapping (JSON)" value={typeMapping} maxLength={32768} rows={8} onChange={(event) => setTypeMapping(event.target.value)} style={{ ...inputStyle, height: 'auto', padding: 10 }} /></Field>
-        </div>
+        <div style={emptyState}>Dependencies must resolve first: {resource.dependsOnResourceKeys.join(', ') || 'none'}.</div>
       )}
       {error && <div role="alert" style={{ color: 'var(--danger)', fontSize: 12.5 }}>{error}</div>}
       <div style={{ display: 'flex', justifyContent: 'flex-end' }}><Btn kind="primary" onClick={save} loading={pending}>Save changes</Btn></div>
@@ -767,11 +744,6 @@ function NativeResourceEditor({
 
 function stringValue(value: unknown): string {
   return typeof value === 'string' ? value : '';
-}
-
-function objectValue(value: unknown): Record<string, string> {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
-  return Object.fromEntries(Object.entries(value).filter((entry): entry is [string, string] => typeof entry[1] === 'string'));
 }
 
 function FieldMappingRow({

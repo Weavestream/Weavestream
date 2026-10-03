@@ -81,7 +81,7 @@ function resourceTabPresentation(resource: DriverResourceDescriptor): Pick<TabDe
     case 'article':
       return {
         label: `${resource.label} articles`,
-        help: `Folder, visibility, and template configuration for ${resource.label.toLowerCase()}.`,
+        help: `Destination folder and visibility for ${resource.label.toLowerCase()}.`,
       };
     case 'subnet':
       return {
@@ -96,7 +96,7 @@ function resourceTabPresentation(resource: DriverResourceDescriptor): Pick<TabDe
     case 'relation':
       return {
         label: `${resource.label} dependencies`,
-        help: `Dependency resources and type mapping for ${resource.label.toLowerCase()}.`,
+        help: `Dependency resources for ${resource.label.toLowerCase()}.`,
       };
     case 'asset':
       return {

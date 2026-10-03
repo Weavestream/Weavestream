@@ -26,31 +26,34 @@ const resourceRow = (overrides: Record<string, unknown>) => ({
 describe('FieldMappingsTab target-aware configuration', () => {
   beforeEach(() => apiFetch.mockReset());
 
-  it('shows bounded article controls and hides generic asset layout/mapping controls', async () => {
+  it('shows the driver-defined article destination read-only and saves only enabled', async () => {
     apiFetch.mockResolvedValue({ ok: true, status: 200, data: resourceRow({}) });
     render(<FieldMappingsTab
-      integration={{ id: 'integration-1', resources: [resourceRow({})] } as never}
+      integration={{ id: 'integration-1', resources: [resourceRow({
+        // An old row with an operator value: the descriptor still wins.
+        targetConfig: { sourceEndpoint: '/scripts', folderSlug: 'procedures', visibility: 'company' },
+      })] } as never}
       mappings={[]} driver={{} as never}
       resource={{ key: 'scripts', label: 'Scripts', targetKind: 'article', targetConfig: resourceRow({}).targetConfig, dependsOnResourceKeys: [] } as never}
     />);
-    expect(screen.getByLabelText('Folder slug')).toHaveValue('scripts');
-    expect(screen.getByLabelText('Visibility')).toHaveValue('internal');
-    expect(screen.getByLabelText('Article template')).toBeInTheDocument();
+    expect(screen.getByText('scripts')).toBeInTheDocument();
+    expect(screen.getByText(/internal visibility/i)).toBeInTheDocument();
+    expect(screen.queryByText('procedures')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Folder slug')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Visibility')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Article template')).not.toBeInTheDocument();
     expect(screen.queryByText('Target asset layout')).not.toBeInTheDocument();
     expect(screen.queryByText('Field projections')).not.toBeInTheDocument();
 
-    fireEvent.change(screen.getByLabelText('Folder slug'), { target: { value: 'procedures' } });
+    fireEvent.click(screen.getByRole('checkbox'));
     fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
     await waitFor(() => expect(apiFetch).toHaveBeenCalledWith(
       '/admin/integrations/integration-1/resources/scripts',
-      expect.objectContaining({
-        method: 'PATCH',
-        body: expect.stringContaining('procedures'),
-      }),
+      { method: 'PATCH', body: JSON.stringify({ enabled: false }) },
     ));
   });
 
-  it('shows IP normalization/match explanation and relation dependencies/type mapping', () => {
+  it('shows IP normalization/match explanation and relation dependencies without type mapping', () => {
     const { rerender } = render(<FieldMappingsTab
       integration={{ id: 'integration-1', resources: [resourceRow({
         resourceKey: 'subnets', resourceLabel: 'Subnets', targetKind: 'subnet',
@@ -72,7 +75,7 @@ describe('FieldMappingsTab target-aware configuration', () => {
       resource={{ key: 'relations', label: 'Relations', targetKind: 'relation', targetConfig: { typeMapping: { host_vm: 'depends_on' } }, dependsOnResourceKeys: ['devices', 'scripts'] } as never}
     />);
     expect(screen.getByText(/devices, scripts/)).toBeInTheDocument();
-    expect(screen.getByLabelText('Type mapping (JSON)')).toHaveValue('{\n  "host_vm": "depends_on"\n}');
+    expect(screen.queryByLabelText('Type mapping (JSON)')).not.toBeInTheDocument();
   });
 
   it('uses target-aware enable instructions for disabled article and relation resources', () => {
@@ -94,8 +97,8 @@ describe('FieldMappingsTab target-aware configuration', () => {
         } as never}
       />
     </>);
-    expect(screen.getByText(/destination folder, visibility, and article template/i)).toBeInTheDocument();
-    expect(screen.getByText(/dependency resources and relationship type mapping/i)).toBeInTheDocument();
+    expect(screen.getByText(/review the destination folder and visibility/i)).toBeInTheDocument();
+    expect(screen.getByText(/review the dependency resources/i)).toBeInTheDocument();
     expect(screen.queryByText(/asset layout|match-key|project upstream/i)).not.toBeInTheDocument();
   });
 

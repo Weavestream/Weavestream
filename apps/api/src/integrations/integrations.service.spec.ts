@@ -68,15 +68,15 @@ describe('validateResourceRegistry', () => {
 });
 
 describe('validateResourceTargetConfig', () => {
-  it('validates mutable configuration against the immutable descriptor target kind', () => {
+  it('validates configuration against the immutable descriptor target kind', () => {
     const article = {
       key: 'scripts', label: 'Scripts', targetKind: 'article',
       targetConfig: { sourceEndpoint: '/scripts', folderSlug: 'scripts', visibility: 'internal' },
       dependsOnResourceKeys: [],
     } as const;
     expect(validateResourceTargetConfig(article as never, {
-      sourceEndpoint: '/scripts', folderSlug: 'procedures', visibility: 'company', template: '# {{title}}',
-    })).toMatchObject({ folderSlug: 'procedures', visibility: 'company' });
+      sourceEndpoint: '/scripts', folderSlug: 'scripts', visibility: 'internal',
+    })).toEqual({ sourceEndpoint: '/scripts', folderSlug: 'scripts', visibility: 'internal' });
     expect(() => validateResourceTargetConfig(article as never, { normalization: 'cidr' }))
       .toThrow(/target configuration/i);
     expect(() => validateResourceTargetConfig(article as never, {
@@ -99,26 +99,42 @@ describe('validateResourceTargetConfig', () => {
       .toThrow(/descriptor-owned/i);
   });
 
-  it('rejects an injected article source endpoint while preserving approved mutable fields', () => {
+  // The runner reads target configuration only from the driver descriptor,
+  // so these once-editable fields would be saved and then ignored.
+  it.each([
+    ['folderSlug', { folderSlug: 'procedures', visibility: 'internal' }],
+    ['visibility', { folderSlug: 'scripts', visibility: 'company' }],
+    ['template', { folderSlug: 'scripts', visibility: 'internal', template: '# {{title}}' }],
+  ])('rejects a changed article %s the runner would ignore', (_field, targetConfig) => {
     const article = {
       key: 'scripts', label: 'Scripts', targetKind: 'article',
       targetConfig: { folderSlug: 'scripts', visibility: 'internal' },
       dependsOnResourceKeys: [],
     } as const;
-    expect(() => validateResourceTargetConfig(article as never, {
-      sourceEndpoint: '/attacker-controlled-route', folderSlug: 'scripts', visibility: 'internal',
-    })).toThrow(/descriptor-owned/i);
-    expect(validateResourceTargetConfig(article as never, {
-      folderSlug: 'procedures', visibility: 'company', template: '# {{title}}',
-    })).toEqual({ folderSlug: 'procedures', visibility: 'company', template: '# {{title}}' });
+    expect(() => validateResourceTargetConfig(article as never, targetConfig))
+      .toThrow(/descriptor-owned/i);
+  });
 
+  it('rejects a relation typeMapping the runner would ignore', () => {
     const relation = {
       key: 'relationships', label: 'Relationships', targetKind: 'relation',
       targetConfig: { sourceEndpoint: '/relationships' }, dependsOnResourceKeys: ['devices'],
     } as const;
-    expect(validateResourceTargetConfig(relation as never, {
+    expect(() => validateResourceTargetConfig(relation as never, {
       sourceEndpoint: '/relationships', typeMapping: { host_vm: 'depends_on' },
-    })).toEqual({ sourceEndpoint: '/relationships', typeMapping: { host_vm: 'depends_on' } });
+    })).toThrow(/descriptor-owned/i);
+    expect(validateResourceTargetConfig(relation as never, { sourceEndpoint: '/relationships' }))
+      .toEqual({ sourceEndpoint: '/relationships' });
+  });
+
+  it('rejects an omitted descriptor field', () => {
+    const article = {
+      key: 'scripts', label: 'Scripts', targetKind: 'article',
+      targetConfig: { folderSlug: 'scripts', visibility: 'internal' },
+      dependsOnResourceKeys: [],
+    } as const;
+    expect(() => validateResourceTargetConfig(article as never, { folderSlug: 'scripts' }))
+      .toThrow(/descriptor-owned/i);
   });
 });
 
@@ -469,6 +485,84 @@ describe('ensureResourceDestination', () => {
     ).rejects.toThrow(/field creation was incomplete/i);
     expect(state).toEqual({ layout: null, fields: [] });
     expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('updateResource target configuration', () => {
+  const ids = {
+    actor: '00000000-0000-4000-8000-000000000001',
+    integration: '00000000-0000-4000-8000-000000000002',
+    resource: '00000000-0000-4000-8000-000000000003',
+  };
+  const scripts = {
+    key: 'scripts', label: 'Scripts', targetKind: 'article',
+    targetConfig: { folderSlug: 'breeze-scripts', visibility: 'internal' },
+    dependsOnResourceKeys: [],
+  };
+
+  // The row holds an operator value saved while folderSlug, visibility,
+  // template, and typeMapping were editable.
+  function setup() {
+    const row = {
+      id: ids.resource, integrationId: ids.integration, resourceKey: 'scripts',
+      enabled: true, targetKind: 'article',
+      targetConfig: { folderSlug: 'procedures', visibility: 'company', template: '# {{title}}' },
+      dependsOnResourceKeys: [], assetLayoutId: null, assetLayout: null,
+      matchKeyFieldIds: [], _count: { fieldMappings: 0 },
+      createdAt: new Date(0), updatedAt: new Date(0),
+    };
+    const prisma = {
+      integration: {
+        findUnique: jest.fn().mockResolvedValue({ id: ids.integration, driver: 'breeze' }),
+      },
+      integrationResource: {
+        findUnique: jest.fn().mockResolvedValue(row),
+        update: jest.fn().mockResolvedValue(row),
+      },
+      integrationFieldMapping: { count: jest.fn().mockResolvedValue(0) },
+    };
+    const drivers = {
+      get: jest.fn().mockReturnValue({ descriptor: { ...baseDescriptor, resources: [scripts] } }),
+    };
+    const audit = { logChange: jest.fn().mockResolvedValue(undefined) };
+    const service = new IntegrationsService(
+      prisma as never, {} as never, audit as never, drivers as never,
+      {} as never, {} as never, {} as never,
+    );
+    return { prisma, service };
+  }
+  const meta = { ip: '127.0.0.1', userAgent: 'jest' };
+
+  it('lets an old operator value through an enabled-only patch without rewriting it', async () => {
+    const { prisma, service } = setup();
+    await service.updateResource(
+      { id: ids.actor } as never, ids.integration, 'scripts', { enabled: false }, meta,
+    );
+    expect(prisma.integrationResource.update).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ enabled: false, targetConfig: undefined }),
+    }));
+  });
+
+  it('rejects a targetConfig patch that differs from the descriptor', async () => {
+    const { prisma, service } = setup();
+    await expect(service.updateResource(
+      { id: ids.actor } as never, ids.integration, 'scripts',
+      { targetConfig: { folderSlug: 'procedures', visibility: 'internal' } }, meta,
+    )).rejects.toThrow(/descriptor-owned/i);
+    expect(prisma.integrationResource.update).not.toHaveBeenCalled();
+  });
+
+  it('writes the descriptor value for a targetConfig patch that matches it', async () => {
+    const { prisma, service } = setup();
+    await service.updateResource(
+      { id: ids.actor } as never, ids.integration, 'scripts',
+      { targetConfig: { folderSlug: 'breeze-scripts', visibility: 'internal' } }, meta,
+    );
+    expect(prisma.integrationResource.update).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        targetConfig: { folderSlug: 'breeze-scripts', visibility: 'internal' },
+      }),
+    }));
   });
 });
 
