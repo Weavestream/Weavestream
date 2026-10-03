@@ -49,7 +49,7 @@
     "zod": "^3.25.0"
   },
   "devDependencies": {
-    "@nestjs/cli": "^11.0.21",
+    "@nestjs/cli": "^11.0.24",
     "@nestjs/testing": "^11.2.7",
     "@types/compression": "^1.7.5",
     "@types/cookie-parser": "^1.4.7",
@@ -60,12 +60,12 @@
     "@types/prompts": "^2.4.9",
     "@types/qrcode": "^1.5.5",
     "@types/supertest": "^6.0.2",
-    "eslint": "^9.14.0",
-    "jest": "^30.0.0",
-    "supertest": "^7.0.0",
-    "ts-jest": "^29.4.9",
+    "eslint": "^9.39.5",
+    "jest": "^30.5.2",
+    "supertest": "^7.3.1",
+    "ts-jest": "^29.4.14",
     "ts-node": "^10.9.2",
     "typescript": "^5.9.0",
-    "typescript-eslint": "^8.59.0"
+    "typescript-eslint": "^8.71.0"
   }
 }
