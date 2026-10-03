@@ -33,7 +33,7 @@
     "@types/jest": "^30.0.0",
     "@types/node": "^24.0.0",
     "css-tree": "3.2.1",
-    "dompurify": "3.4.12",
+    "dompurify": "3.4.16",
     "jest": "^30.0.0",
     "jest-environment-jsdom": "^30.0.0",
     "ts-jest": "^29.4.9",

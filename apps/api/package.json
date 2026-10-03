@@ -13,9 +13,9 @@
     "test": "NODE_OPTIONS=--experimental-vm-modules jest --passWithNoTests"
   },
   "dependencies": {
-    "@nestjs/common": "^11.1.19",
-    "@nestjs/core": "^11.1.19",
-    "@nestjs/platform-express": "^11.1.19",
+    "@nestjs/common": "^11.2.7",
+    "@nestjs/core": "^11.2.7",
+    "@nestjs/platform-express": "^11.2.7",
     "@nestjs/throttler": "^6.5.0",
     "@prisma/client": "^5.22.0",
     "@weavestream/db": "workspace:*",
@@ -35,7 +35,7 @@
     "ioredis": "^5.4.1",
     "jose": "^5.9.6",
     "nestjs-pino": "^4.1.0",
-    "nodemailer": "^9.1.1",
+    "nodemailer": "^10.0.13",
     "otplib": "^12.0.1",
     "pino": "^10.1.1",
     "pino-http": "^11.0.0",
@@ -45,12 +45,12 @@
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",
     "sharp": "^0.35.4",
-    "undici": "^8.10.0",
+    "undici": "^8.11.2",
     "zod": "^3.25.0"
   },
   "devDependencies": {
     "@nestjs/cli": "^11.0.21",
-    "@nestjs/testing": "^11.1.19",
+    "@nestjs/testing": "^11.2.7",
     "@types/compression": "^1.7.5",
     "@types/cookie-parser": "^1.4.7",
     "@types/express": "^5.0.0",

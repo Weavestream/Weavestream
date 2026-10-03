@@ -5,15 +5,6 @@ packages:
 confirmModulesPurge: false
 
 overrides:
-  # @nestjs/platform-express pins multer to an exact 2.2.0, which carries
-  # GHSA-wc9g-mqfw-jrwm and GHSA-535w-7cp7-47q4 (DoS via crafted multipart
-  # field names / oversized array index) plus GHSA-qfvm-cv95-jqjf, an
-  # advisory filed against 2.2.0 alone with no listed patched version. The
-  # exact pin means no lockfile refresh can move it — an override is the
-  # only lever. 2.3.0 clears all three. Pinned exactly so the resolver
-  # cannot drift onto a release too new to have cleared pnpm's
-  # minimum-release-age supply-chain gate.
-  multer: 2.3.0
   # next pins postcss to an exact version, so no lockfile refresh can
   # move it — an override is the only lever. The original reason was
   # GHSA-6g55-p6wh-862q (arbitrary file read) and GHSA-r28c-9q8g-f849
@@ -35,7 +26,7 @@ overrides:
   # which is a far wider supply-chain delta than one advisory warrants.
   # The override moves nanoid and nothing else. Drop this entry once the
   # postcss pinned above floors nanoid at >=3.3.18 (postcss 8.5.28 does).
-  # Pinned exactly, for the same reason as multer above.
+  # Pinned exactly, for the same reason as postcss above.
   nanoid: 3.3.18
   # next carries its own optional sharp for next/image optimization,
   # which this app does not use — every image is a plain <img> served
