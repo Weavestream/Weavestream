@@ -301,10 +301,20 @@ export function PasswordDetailClient({
       >
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
           <Panel title="Credentials">
+            {/*
+              `minmax(0, 1fr)`, not `1fr`: a bare `1fr` track cannot shrink
+              below its content's min-content, so the reveal row's buttons
+              and the nowrap strength verdict pushed the column past a phone
+              viewport. Each value cell also takes `minWidth: 0` so the
+              grid item itself can shrink with the track. On phones
+              `.password-field-grid` stacks each label above its value
+              (`globals.css`).
+            */}
             <div
+              className="password-field-grid"
               style={{
                 display: 'grid',
-                gridTemplateColumns: '120px 1fr',
+                gridTemplateColumns: '120px minmax(0, 1fr)',
                 rowGap: 12,
                 columnGap: 16,
                 fontSize: 13,
@@ -345,7 +355,7 @@ export function PasswordDetailClient({
               </div>
 
               <Label>Password</Label>
-              <div>
+              <div style={{ minWidth: 0 }}>
                 <PasswordRevealField
                   companyId={companyId}
                   passwordId={password.id}
@@ -373,9 +383,15 @@ export function PasswordDetailClient({
                   alignItems: 'center',
                   gap: 8,
                   flexWrap: 'wrap',
+                  minWidth: 0,
                 }}
               >
-                <PasswordStrengthMeter score={password.passwordStrength} width={220} inline />
+                <PasswordStrengthMeter
+                  score={password.passwordStrength}
+                  width={220}
+                  inline
+                  style={{ minWidth: 0 }}
+                />
                 {(password.pwnedCount ?? 0) > 0 && (
                   <Tag tone="danger">pwned ×{password.pwnedCount}</Tag>
                 )}
@@ -384,7 +400,7 @@ export function PasswordDetailClient({
               {password.hasTotp && (
                 <>
                   <Label>TOTP</Label>
-                  <div>
+                  <div style={{ minWidth: 0 }}>
                     <TotpCode
                       companyId={companyId}
                       passwordId={password.id}
@@ -911,6 +927,7 @@ function InternalAccessDialog({
 function Label({ children }: { children: React.ReactNode }) {
   return (
     <div
+      className="password-field-label"
       style={{
         color: 'var(--muted)',
         fontFamily: 'var(--font-mono)',

@@ -201,12 +201,17 @@
    * above its value on phones. A fixed 180px label column leaves about
    * 100px for the value at 375px, which breaks URLs and file tiles into
    * a narrow strip. The tight row gap keeps a label with its value; the
-   * label's top padding separates one pair from the next. */
-  .asset-field-grid {
-    grid-template-columns: 1fr !important;
+   * label's top padding separates one pair from the next.
+   * The password detail credentials grid (`.password-field-grid`) uses
+   * the same stack: its 120px label column left too little room for
+   * the reveal row and the strength meter. */
+  .asset-field-grid,
+  .password-field-grid {
+    grid-template-columns: minmax(0, 1fr) !important;
     row-gap: 4px !important;
   }
-  .asset-field-grid > .asset-field-label:not(:first-child) {
+  .asset-field-grid > .asset-field-label:not(:first-child),
+  .password-field-grid > .password-field-label:not(:first-child) {
     padding-top: 12px !important;
   }
   .article-read-grid .article-read-body {
