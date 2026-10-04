@@ -1,26 +1,25 @@
 import type { Metadata } from 'next';
-import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { Fragment } from 'react';
 import {
   getMeForMetadata,
   requireMe,
 } from '../../../../../lib/server-api/auth';
-import type { AssetSummary } from '@weavestream/shared';
 import { getAsset } from '../../../../../lib/server-api/assets';
 import { forMetadata } from '../../../../../lib/server-api/core';
 import { resolvePortalCompany } from '../../../../../lib/portal-company';
-import { humanSize } from '@weavestream/shared';
 import {
   PageBody,
   PageHeader,
 } from '../../../../../components/shell/page-header';
-import { Icon, LayoutSwatch, Panel, Tag } from '../../../../../components/ui';
+import { LayoutSwatch, Panel, Tag } from '../../../../../components/ui';
 import { RichTextView } from '../../../../../components/editor/rich-text-view';
 import { AttachmentsPanel } from '../../../../../components/upload/attachments-panel';
 import { CredentialsPanel } from '../../../../../components/passwords/credentials-panel';
-import { vaultLinkLabel, vaultLinkUrl } from '../../../../../lib/vault-link';
-import { ExternalUrlValue } from '../../../../../components/assets/external-url-value';
+import {
+  AssetFieldValue,
+  type AssetFieldContext,
+} from '../../../../../components/assets/asset-field-value';
 import { SidebarActive } from '../../../../../components/shell/sidebar-active';
 import { recentRelative as relative } from '../../../../../lib/relative-time';
 
@@ -75,6 +74,14 @@ export default async function PortalAssetDetailPage({
     ...me.memberships.map((m) => [m.company.id, m.company.slug]),
     [company.id, company.slug],
   ]);
+  const fieldContext: AssetFieldContext = {
+    assetHrefBase: `${portalBase}/assets`,
+    richText: {
+      isAdmin: false,
+      portalSlugByCompanyId,
+      fallbackCompanyId: asset.companyId,
+    },
+  };
 
   const primaryField = asset.fields.find((f) => f.isPrimary);
   const noteField = asset.fields.find(
@@ -158,16 +165,12 @@ export default async function PortalAssetDetailPage({
                           wordBreak: 'break-word',
                         }}
                       >
-                        {renderValue(
-                          f,
-                          asset.fieldValues[f.slug],
-                          asset.references,
-                          portalBase,
-                          {
-                            portalSlugByCompanyId,
-                            companyId: asset.companyId,
-                          },
-                        )}
+                        <AssetFieldValue
+                          field={f}
+                          value={asset.fieldValues[f.slug]}
+                          references={asset.references}
+                          context={fieldContext}
+                        />
                       </div>
                     </Fragment>
                   ))}
@@ -219,301 +222,4 @@ export default async function PortalAssetDetailPage({
       </PageBody>
     </>
   );
-}
-
-/**
- * Renders a single stored field value. Mirrors the admin detail
- * page's switch but routes ASSET_REFERENCE chips through the
- * portal path instead of the admin one — passing `portalBase`
- * (`/portal/<slug>`) keeps that decision at the caller.
- */
-function renderValue(
-  field: AssetSummary['fields'][number],
-  value: unknown,
-  references: AssetSummary['references'],
-  portalBase: string,
-  mentionCtx: {
-    portalSlugByCompanyId: Record<string, string>;
-    companyId: string;
-  },
-): React.ReactNode {
-  if (value === null || value === undefined || value === '') {
-    return <span style={{ color: 'var(--dim)' }}>—</span>;
-  }
-  switch (field.fieldType) {
-    case 'BOOLEAN':
-      return (
-        <Tag tone={value ? 'ok' : 'outline'}>
-          {value ? 'true' : 'false'}
-        </Tag>
-      );
-    case 'DROPDOWN': {
-      const choices = ((field.options as { choices?: Array<{ slug: string; label: string }> })
-        .choices ?? []) as Array<{ slug: string; label: string }>;
-      const match = choices.find((c) => c.slug === value);
-      return match?.label ?? String(value);
-    }
-    case 'MULTISELECT': {
-      if (!Array.isArray(value)) return String(value);
-      const choices = ((field.options as { choices?: Array<{ slug: string; label: string }> })
-        .choices ?? []) as Array<{ slug: string; label: string }>;
-      const byName = new Map(choices.map((c) => [c.slug, c.label]));
-      return (
-        <span style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-          {value.map((v) => (
-            <Tag key={String(v)} tone="outline">
-              {byName.get(String(v)) ?? String(v)}
-            </Tag>
-          ))}
-        </span>
-      );
-    }
-    case 'TAGS': {
-      // Server hydrates TAGS UUIDs into `{ id, name }` snapshots so a
-      // rename in the global catalog reflects on next read. Legacy raw
-      // strings (pre-migration data) fall back to `String(v)` so they
-      // still render until the asset is re-saved.
-      if (!Array.isArray(value)) return String(value);
-      const chips = (value as unknown[])
-        .map((v) => {
-          if (
-            v &&
-            typeof v === 'object' &&
-            typeof (v as { name?: unknown }).name === 'string'
-          ) {
-            const obj = v as { id?: string; name: string };
-            return { key: obj.id ?? obj.name, label: obj.name };
-          }
-          if (typeof v === 'string' && v.length > 0) {
-            return { key: v, label: v };
-          }
-          return null;
-        })
-        .filter((x): x is { key: string; label: string } => x !== null);
-      if (chips.length === 0) return null;
-      return (
-        <span style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-          {chips.map((c) => (
-            <Tag key={c.key} tone="outline">
-              {c.label}
-            </Tag>
-          ))}
-        </span>
-      );
-    }
-    case 'URL':
-      return <ExternalUrlValue url={String(value)} />;
-    case 'VAULTWARDEN_LINK':
-      return (
-        <ExternalUrlValue
-          url={vaultLinkUrl(value)}
-          label={vaultLinkLabel(value) || undefined}
-        />
-      );
-    case 'EMAIL':
-      return (
-        <a
-          href={`mailto:${value}`}
-          style={{ color: 'var(--accent)', fontFamily: 'var(--font-mono)' }}
-        >
-          {String(value)}
-        </a>
-      );
-    case 'IP_ADDRESS':
-      return (
-        <span
-          style={{
-            fontFamily: 'var(--font-mono)',
-            fontSize: 12.5,
-            color: 'var(--text)',
-          }}
-        >
-          {String(value)}
-        </span>
-      );
-    case 'ASSET_REFERENCE': {
-      const ids = Array.isArray(value) ? value : [value];
-      return (
-        <span style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-          {ids.map((v) => {
-            const id = String(v);
-            const hit = references[id];
-            if (!hit) {
-              return (
-                <span
-                  key={id}
-                  title="Referenced asset is no longer available"
-                  style={{ display: 'inline-flex' }}
-                >
-                  <Tag tone="outline">{id.slice(0, 8)}… (missing)</Tag>
-                </span>
-              );
-            }
-            return (
-              <Link
-                key={id}
-                href={`${portalBase}/assets/${id}`}
-                style={{ textDecoration: 'none' }}
-              >
-                <Tag
-                  tone="info"
-                  style={
-                    hit.archivedAt
-                      ? { textDecoration: 'line-through', opacity: 0.75 }
-                      : undefined
-                  }
-                >
-                  {hit.name}
-                </Tag>
-              </Link>
-            );
-          })}
-        </span>
-      );
-    }
-    case 'DATE':
-    case 'DATETIME': {
-      const raw = typeof value === 'string' ? value : String(value);
-      const formatted = formatDateField(raw, field.fieldType);
-      return (
-        <span
-          style={{
-            fontSize: 12.5,
-          }}
-          title={raw}
-        >
-          {formatted ?? raw}
-        </span>
-      );
-    }
-    case 'RICH_TEXT':
-      return (
-        <RichTextView
-          value={value}
-          isAdmin={false}
-          portalSlugByCompanyId={mentionCtx.portalSlugByCompanyId}
-          fallbackCompanyId={mentionCtx.companyId}
-        />
-      );
-    case 'FILE': {
-      const entries = Array.isArray(value) ? (value as FileFieldValue[]) : [];
-      if (entries.length === 0) return <span style={{ color: 'var(--dim)' }}>—</span>;
-      return <FileTileRow entries={entries} />;
-    }
-    default:
-      return <span>{String(value)}</span>;
-  }
-}
-
-type FileFieldValue = {
-  uploadId: string;
-  filename: string;
-  mimeType: string;
-  sizeBytes: number;
-  isImage?: boolean;
-  thumbnailUrl?: string | null;
-  downloadUrl?: string | null;
-};
-
-function FileTileRow({ entries }: { entries: FileFieldValue[] }) {
-  return (
-    <div
-      style={{
-        display: 'grid',
-        gridTemplateColumns: 'repeat(auto-fill, minmax(120px, 1fr))',
-        gap: 8,
-      }}
-    >
-      {entries.map((entry) => {
-        const isImage = entry.isImage ?? entry.mimeType?.startsWith('image/');
-        return (
-          <a
-            key={entry.uploadId}
-            href={entry.downloadUrl ?? '#'}
-            target="_blank"
-            rel="noreferrer"
-            style={{
-              border: '1px solid var(--line)',
-              borderRadius: 5,
-              background: 'var(--panel-2)',
-              overflow: 'hidden',
-              display: 'flex',
-              flexDirection: 'column',
-              textDecoration: 'none',
-              color: 'inherit',
-            }}
-          >
-            <div
-              style={{
-                aspectRatio: '1 / 1',
-                background: 'var(--panel)',
-                display: 'grid',
-                placeItems: 'center',
-                color: 'var(--dim)',
-              }}
-            >
-              {isImage && entry.thumbnailUrl ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img
-                  src={entry.thumbnailUrl}
-                  alt={entry.filename}
-                  style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-                />
-              ) : (
-                <Icon.doc size={22} />
-              )}
-            </div>
-            <div style={{ padding: '6px 8px' }}>
-              <div
-                title={entry.filename}
-                style={{
-                  fontSize: 11.5,
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
-                }}
-              >
-                {entry.filename}
-              </div>
-              <div
-                style={{
-                  fontSize: 10,
-                  color: 'var(--dim)',
-                  fontFamily: 'var(--font-mono)',
-                  marginTop: 2,
-                }}
-              >
-                {humanSize(entry.sizeBytes)}
-              </div>
-            </div>
-          </a>
-        );
-      })}
-    </div>
-  );
-}
-
-
-function formatDateField(
-  raw: string,
-  fieldType: 'DATE' | 'DATETIME',
-): string | null {
-  if (!raw) return null;
-  const ms = Date.parse(raw);
-  if (!Number.isFinite(ms)) return null;
-  const date = new Date(ms);
-  if (fieldType === 'DATE') {
-    return date.toLocaleDateString(undefined, {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-    });
-  }
-  return date.toLocaleString(undefined, {
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  });
 }
