@@ -1,4 +1,4 @@
-import type { CompanyExportData } from '../../../api/src/exports/company-export-data.service.js';
+import type { CompanyExportData } from '../../../api/src/public/exports.js';
 
 export const FIXTURE_BLOCKED_SECRET = 'ghp_pdfBlockedSecretValue1234567890';
 

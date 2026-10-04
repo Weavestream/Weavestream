@@ -5,10 +5,8 @@ import {
   integrationSyncOrchestratorJobSchema,
   type IntegrationSyncOrchestratorJob,
 } from '@weavestream/shared';
-import { EnvService } from '../../../api/src/config/env.service.js';
-import { RedisService } from '../../../api/src/redis/redis.service.js';
-import { PrismaService } from '../../../api/src/prisma/prisma.service.js';
-import { IntegrationSyncService } from '../../../api/src/integrations/integration-sync.service.js';
+import { EnvService, RedisService, PrismaService } from '../../../api/src/public/runtime.js';
+import { IntegrationSyncService } from '../../../api/src/public/integrations.js';
 import {
   createManagedWorker,
   type ManagedWorker,

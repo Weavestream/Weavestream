@@ -7,13 +7,15 @@ import {
   type AlertsJob,
   type AlertsSendJob,
 } from '@weavestream/shared';
-import { EnvService } from '../../../api/src/config/env.service.js';
-import { RedisService } from '../../../api/src/redis/redis.service.js';
-import { PrismaService } from '../../../api/src/prisma/prisma.service.js';
-import { AuditLogService } from '../../../api/src/audit/audit.service.js';
-import { AUDIT_ACTIONS } from '../../../api/src/audit/audit-actions.js';
-import { EmailService } from '../../../api/src/email/email.service.js';
-import { AlertsRunnerService } from '../../../api/src/alerts/alerts-runner.service.js';
+import {
+  EnvService,
+  RedisService,
+  PrismaService,
+  AuditLogService,
+  AUDIT_ACTIONS,
+  EmailService,
+} from '../../../api/src/public/runtime.js';
+import { AlertsRunnerService } from '../../../api/src/public/alerts.js';
 import {
   createManagedWorker,
   type ManagedWorker,

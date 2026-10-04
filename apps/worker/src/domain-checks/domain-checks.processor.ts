@@ -7,19 +7,15 @@ import {
   parseDkimSelectorOverride,
   type DomainCheckJob,
 } from '@weavestream/shared';
-import { EnvService } from '../../../api/src/config/env.service.js';
-import { RedisService } from '../../../api/src/redis/redis.service.js';
-import { PrismaService } from '../../../api/src/prisma/prisma.service.js';
+import { EnvService, RedisService, PrismaService } from '../../../api/src/public/runtime.js';
 import {
   DomainsService,
   type AuditMeta,
-} from '../../../api/src/domains/domains.service.js';
-import {
   createDefaultPorts,
   deriveDomainStatus,
   runDomainCheck,
-} from '../../../api/src/domains/engine/index.js';
-import { runHttpCheck } from '../../../api/src/domains/engine/http-check.js';
+  runHttpCheck,
+} from '../../../api/src/public/domains.js';
 import {
   createManagedWorker,
   type ManagedWorker,

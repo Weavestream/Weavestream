@@ -5,18 +5,20 @@ import {
   integrationSyncMappingJobSchema,
   type IntegrationSyncMappingJob,
 } from '@weavestream/shared';
-import { EnvService } from '../../../api/src/config/env.service.js';
-import { RedisService } from '../../../api/src/redis/redis.service.js';
-import { PrismaService } from '../../../api/src/prisma/prisma.service.js';
-import { IntegrationSyncService } from '../../../api/src/integrations/integration-sync.service.js';
-import { buildResourceExecutionStages } from '../../../api/src/integrations/integration-sync.service.js';
 import {
+  EnvService,
+  RedisService,
+  PrismaService,
+  AUDIT_ACTIONS,
+  AuditLogService,
+} from '../../../api/src/public/runtime.js';
+import {
+  IntegrationSyncService,
+  buildResourceExecutionStages,
   IntegrationSyncRunnerService,
   type MappingRunOutcome,
-} from '../../../api/src/integrations/integration-sync-runner.service.js';
-import { AUDIT_ACTIONS } from '../../../api/src/audit/audit-actions.js';
-import { AuditLogService } from '../../../api/src/audit/audit.service.js';
-import { IntegrationProvenanceService } from '../../../api/src/integrations/reconstruction/integration-provenance.service.js';
+  IntegrationProvenanceService,
+} from '../../../api/src/public/integrations.js';
 import {
   createManagedWorker,
   type ManagedWorker,

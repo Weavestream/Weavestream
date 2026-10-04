@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import './load-env.js';
+import '../../api/src/public/load-env.js';
 import 'reflect-metadata';
 import { NestFactory } from '@nestjs/core';
 import { Logger } from 'nestjs-pino';
@@ -15,10 +15,12 @@ import { CloudflareDriftSweepWorker } from './cloudflare/cloudflare-drift-sweep.
 import { AlertsWorker } from './alerts/alerts.processor.js';
 import { BackupWorker } from './backup/backup.processor.js';
 import { UploadReaperWorker } from './uploads/upload-reaper.processor.js';
-import { configureEgressGuard } from '../../api/src/common/egress/safe-fetch.js';
-import { EnvService } from '../../api/src/config/env.service.js';
-import { AuditLogService } from '../../api/src/audit/audit.service.js';
-import { AUDIT_ACTIONS } from '../../api/src/audit/audit-actions.js';
+import {
+  configureEgressGuard,
+  EnvService,
+  AuditLogService,
+  AUDIT_ACTIONS,
+} from '../../api/src/public/runtime.js';
 
 /**
  * apps/worker bootstrap.

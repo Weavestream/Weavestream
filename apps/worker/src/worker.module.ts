@@ -1,20 +1,22 @@
 import { Module } from '@nestjs/common';
 import { LoggerModule } from 'nestjs-pino';
 import { randomUUID } from 'node:crypto';
-import { ConfigModule } from '../../api/src/config/config.module.js';
-import { EnvService } from '../../api/src/config/env.service.js';
-import { PrismaModule } from '../../api/src/prisma/prisma.module.js';
-import { RedisModule } from '../../api/src/redis/redis.module.js';
-import { AuditModule } from '../../api/src/audit/audit.module.js';
-import { DomainsModule } from '../../api/src/domains/domains.module.js';
-import { StorageModule } from '../../api/src/storage/storage.module.js';
-import { CryptoModule } from '../../api/src/crypto/crypto.module.js';
-import { ExportDataModule } from '../../api/src/exports/export-data.module.js';
-import { IntegrationsCoreModule } from '../../api/src/integrations/integrations-core.module.js';
-import { EmailModule } from '../../api/src/email/email.module.js';
-import { AlertsModule } from '../../api/src/alerts/alerts.module.js';
-import { AiModule } from '../../api/src/ai/ai.module.js';
-import { QueuesProducerModule } from '../../api/src/queues/queues-producer.module.js';
+import {
+  ConfigModule,
+  EnvService,
+  PrismaModule,
+  RedisModule,
+  AuditModule,
+  StorageModule,
+  CryptoModule,
+  EmailModule,
+  QueuesProducerModule,
+} from '../../api/src/public/runtime.js';
+import { DomainsModule } from '../../api/src/public/domains.js';
+import { IntegrationsCoreModule } from '../../api/src/public/integrations.js';
+import { AlertsModule } from '../../api/src/public/alerts.js';
+import { ExportDataModule } from '../../api/src/public/exports.js';
+import { AiModule } from '../../api/src/public/ai.js';
 import { DomainChecksWorker } from './domain-checks/domain-checks.processor.js';
 import { PwnedCheckWorker } from './pwned-check/pwned-check.processor.js';
 import { CompanyPdfExportWorker } from './company-pdf-export/company-pdf-export.processor.js';

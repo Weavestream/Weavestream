@@ -21,7 +21,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { delimiter, resolve } from 'node:path';
-import type { CompanyExportData } from '../../../api/src/exports/company-export-data.service.js';
+import type { CompanyExportData } from '../../../api/src/public/exports.js';
 import {
   companyPdfTestFixture,
   FIXTURE_BLOCKED_SECRET,

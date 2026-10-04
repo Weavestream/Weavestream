@@ -1,5 +1,4 @@
-import { AiCompletionHttpError } from '../../../api/src/ai/ai-completion.service.js';
-import { AiNotConfiguredError } from '../../../api/src/ai/ai-settings.service.js';
+import { AiCompletionHttpError, AiNotConfiguredError } from '../../../api/src/public/ai.js';
 import { articleSummaryJobId } from '@weavestream/shared';
 import { ArticleSummaryWorker } from './article-summary.processor.js';
 
