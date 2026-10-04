@@ -8,6 +8,7 @@ import type {
   SubnetDetail,
   SubnetOccupant,
 } from '@weavestream/shared';
+import { problemMessage } from '@weavestream/shared';
 import { apiFetch } from '../../../../../../lib/api';
 import {
   Btn,
@@ -29,7 +30,6 @@ import {
   ProvenanceBadge,
   provenanceAttention,
 } from '../../../../../../components/integrations/provenance-badge';
-import { extractProblemDetailOrMessage as problemMsg } from '../../../../../../lib/api-errors';
 
 type Tab = 'occupants' | 'reservations' | 'grid';
 
@@ -125,7 +125,7 @@ export function SubnetDetailView({
             { method: 'PATCH', body: JSON.stringify(body) },
           );
     if (!res.ok) {
-      setError(problemMsg(res.problem) ?? 'Save failed');
+      setError(problemMessage(res.problem) ?? 'Save failed');
       return;
     }
     setResDialog(null);
@@ -138,7 +138,7 @@ export function SubnetDetailView({
       `/companies/${companyId}/ipam/subnets/${subnet.id}/reservations/${id}`,
       { method: 'DELETE' },
     );
-    if (!res.ok) setError(problemMsg(res.problem) ?? 'Delete failed');
+    if (!res.ok) setError(problemMessage(res.problem) ?? 'Delete failed');
     startTransition(() => router.refresh());
   }
 

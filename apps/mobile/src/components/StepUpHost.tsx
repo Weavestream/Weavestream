@@ -1,7 +1,7 @@
 import { useLocation } from '@tanstack/react-router';
 import type { StepUpFactor } from '@weavestream/shared';
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
-import { ApiError, apiFetch } from '../lib/api';
+import { ApiError, apiErrorMessage, apiFetch } from '../lib/api';
 import {
   cancelPendingStepUp,
   hasPendingStepUp,
@@ -103,12 +103,7 @@ export function StepUpHost() {
         setError('Too many attempts. Wait a moment and try again.');
         return;
       }
-      const detail =
-        err instanceof ApiError &&
-        typeof (err.problem as { detail?: unknown } | null)?.detail === 'string'
-          ? ((err.problem as { detail: string }).detail)
-          : null;
-      setError(detail ?? 'Verification failed. Try again.');
+      setError(apiErrorMessage(err, 'Verification failed. Try again.'));
     }
   }
 

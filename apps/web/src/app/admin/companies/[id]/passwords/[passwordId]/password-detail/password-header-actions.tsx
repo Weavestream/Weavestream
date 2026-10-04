@@ -7,6 +7,7 @@ import type {
   PasswordFolderSchema,
   PasswordGeneratorDefaults,
 } from '@weavestream/shared';
+import { problemMessage } from '@weavestream/shared';
 import { apiFetch } from '../../../../../../../lib/api';
 import {
   Btn,
@@ -74,7 +75,7 @@ export function PasswordHeaderActions({
       });
       if (!res.ok) {
         toast.push(
-          (res.problem as { message?: string } | undefined)?.message ?? 'Archive failed',
+          problemMessage(res.problem) ?? 'Archive failed',
           'danger',
         );
         return;
@@ -93,7 +94,7 @@ export function PasswordHeaderActions({
     });
     if (!res.ok) {
       toast.push(
-        (res.problem as { message?: string } | undefined)?.message ?? 'Restore failed',
+        problemMessage(res.problem) ?? 'Restore failed',
         'danger',
       );
       return;

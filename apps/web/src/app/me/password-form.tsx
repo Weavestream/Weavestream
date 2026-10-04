@@ -2,7 +2,11 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { isCurrentPasswordInvalidProblem, passwordSchema } from '@weavestream/shared';
+import {
+  isCurrentPasswordInvalidProblem,
+  passwordSchema,
+  problemMessage,
+} from '@weavestream/shared';
 import { apiFetch } from '../../lib/api';
 import { Btn, Field, Input, useToast } from '../../components/ui';
 
@@ -54,17 +58,16 @@ export function PasswordForm() {
       // matters as much as `push()`: without it the cached `/me` RSC payload
       // can re-render behind the navigation. Same pattern as
       // `shell/logout-button.tsx`.
-      const p = res.problem as { detail?: string } | undefined;
       if (res.status === 401) {
         if (isCurrentPasswordInvalidProblem(res.problem)) {
-          setCurrentError(p?.detail ?? 'Current password is incorrect.');
+          setCurrentError(problemMessage(res.problem) ?? 'Current password is incorrect.');
           return;
         }
         router.push('/login');
         router.refresh();
         return;
       }
-      setError(p?.detail ?? 'Password change failed.');
+      setError(problemMessage(res.problem) ?? 'Password change failed.');
       return;
     }
     toast.push('Password updated. Other sessions signed out.', 'ok');

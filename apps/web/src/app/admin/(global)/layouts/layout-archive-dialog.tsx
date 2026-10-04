@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { apiFetch } from '../../../../lib/api';
 import { Btn, Dialog, useToast } from '../../../../components/ui';
 import type { LayoutStats, LayoutSummary } from '@weavestream/shared';
+import { problemMessage } from '@weavestream/shared';
 
 /**
  * Archive / restore confirmation modal used from both the builder and
@@ -45,13 +46,8 @@ export function LayoutArchiveDialog({
     });
     setPending(false);
     if (!res.ok) {
-      const problem = res.problem as
-        | { detail?: string; title?: string; message?: string }
-        | undefined;
       setError(
-        problem?.detail ??
-          problem?.message ??
-          problem?.title ??
+        problemMessage(res.problem) ??
           (archiving ? 'Could not archive layout.' : 'Could not restore layout.'),
       );
       return;

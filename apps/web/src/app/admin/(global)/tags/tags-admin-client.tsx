@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState, type CSSProperties } from 'react';
+import { problemMessage } from '@weavestream/shared';
 import { apiFetch } from '../../../../lib/api';
 import { Btn, Icon, useToast } from '../../../../components/ui';
 
@@ -81,8 +82,7 @@ export function TagsAdminClient() {
     });
     setBusyId(null);
     if (!res.ok || !res.data) {
-      const p = res.problem as { message?: string; detail?: string } | undefined;
-      toast.push(p?.message ?? p?.detail ?? 'Rename failed', 'danger');
+      toast.push(problemMessage(res.problem) ?? 'Rename failed', 'danger');
       return;
     }
     setItems((cur) =>
@@ -104,8 +104,7 @@ export function TagsAdminClient() {
     const res = await apiFetch(`/tags/${row.id}`, { method: 'DELETE' });
     setBusyId(null);
     if (!res.ok) {
-      const p = res.problem as { message?: string; detail?: string } | undefined;
-      toast.push(p?.message ?? p?.detail ?? 'Delete failed', 'danger');
+      toast.push(problemMessage(res.problem) ?? 'Delete failed', 'danger');
       return;
     }
     setItems((cur) => (cur ? cur.filter((t) => t.id !== row.id) : cur));

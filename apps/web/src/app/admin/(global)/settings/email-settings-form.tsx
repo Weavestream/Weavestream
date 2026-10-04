@@ -2,9 +2,9 @@
 
 import { useRef, useState } from 'react';
 import type { EmailSettings, SmtpSecurityMode } from '@weavestream/shared';
+import { problemMessage } from '@weavestream/shared';
 import { apiFetch } from '../../../../lib/api';
 import { Btn, Field, Input, Select, Tag, useToast } from '../../../../components/ui';
-import { extractProblemMessage } from '../../../../lib/api-errors';
 
 export function EmailSettingsForm({
   initial,
@@ -66,7 +66,7 @@ export function EmailSettingsForm({
     });
     setPending(false);
     if (!res.ok || !res.data) {
-      setError(extractProblemMessage(res.problem) ?? 'Could not save email settings.');
+      setError(problemMessage(res.problem) ?? 'Could not save email settings.');
       return;
     }
     baseline.current = res.data;
@@ -84,7 +84,7 @@ export function EmailSettingsForm({
     });
     setTesting(false);
     if (!res.ok) {
-      setError(extractProblemMessage(res.problem) ?? 'Could not send test email.');
+      setError(problemMessage(res.problem) ?? 'Could not send test email.');
       return;
     }
     toast.push('Test email sent.', 'ok');

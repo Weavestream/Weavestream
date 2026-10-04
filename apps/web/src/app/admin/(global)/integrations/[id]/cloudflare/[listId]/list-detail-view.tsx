@@ -8,6 +8,7 @@ import type {
   CloudflarePushResponse,
   IntegrationDto,
 } from '@weavestream/shared';
+import { problemMessage } from '@weavestream/shared';
 import { apiFetch } from '../../../../../../../lib/api';
 import {
   Btn,
@@ -148,8 +149,7 @@ export function ListDetailView({
       return;
     }
     if (!res.ok || !res.data) {
-      const problem = res.problem as { detail?: string; title?: string } | undefined;
-      setDialogError(problem?.detail ?? problem?.title ?? 'Could not add entry.');
+      setDialogError(problemMessage(res.problem) ?? 'Could not add entry.');
       return;
     }
     setDialog({ kind: 'closed' });
@@ -176,8 +176,7 @@ export function ListDetailView({
       return;
     }
     if (!res.ok || !res.data) {
-      const problem = res.problem as { detail?: string; title?: string } | undefined;
-      setDialogError(problem?.detail ?? problem?.title ?? 'Could not save entry.');
+      setDialogError(problemMessage(res.problem) ?? 'Could not save entry.');
       return;
     }
     setDialog({ kind: 'closed' });
@@ -198,8 +197,7 @@ export function ListDetailView({
       return;
     }
     if (!res.ok || !res.data) {
-      const problem = res.problem as { detail?: string; title?: string } | undefined;
-      toast.push(problem?.detail ?? problem?.title ?? 'Could not remove entry.', 'danger');
+      toast.push(problemMessage(res.problem) ?? 'Could not remove entry.', 'danger');
       return;
     }
     applyPushResponse(res.data);
@@ -227,8 +225,7 @@ export function ListDetailView({
       return;
     }
     if (!res.ok || !res.data) {
-      const problem = res.problem as { detail?: string; title?: string } | undefined;
-      toast.push(problem?.detail ?? problem?.title ?? 'Could not push to Cloudflare.', 'danger');
+      toast.push(problemMessage(res.problem) ?? 'Could not push to Cloudflare.', 'danger');
       return;
     }
     applyPushResponse(res.data);
@@ -241,8 +238,7 @@ export function ListDetailView({
     });
     setDriftChecking(false);
     if (!res.ok || !res.data) {
-      const problem = res.problem as { detail?: string; title?: string } | undefined;
-      toast.push(problem?.detail ?? problem?.title ?? 'Drift check failed.', 'danger');
+      toast.push(problemMessage(res.problem) ?? 'Drift check failed.', 'danger');
       return;
     }
     setList(res.data);
@@ -265,8 +261,7 @@ export function ListDetailView({
     const res = await apiFetch<null>(baseUrl, { method: 'DELETE' });
     setUnregistering(false);
     if (!res.ok && res.status !== 204) {
-      const problem = res.problem as { detail?: string; title?: string } | undefined;
-      toast.push(problem?.detail ?? problem?.title ?? 'Could not unregister list.', 'danger');
+      toast.push(problemMessage(res.problem) ?? 'Could not unregister list.', 'danger');
       return;
     }
     toast.push('List unregistered.', 'ok');

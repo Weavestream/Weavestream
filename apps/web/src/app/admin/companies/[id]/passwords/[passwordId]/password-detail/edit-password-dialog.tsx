@@ -4,6 +4,7 @@ import { useCallback, useState } from 'react';
 import {
   optionalHttpUrlError,
   type PasswordGeneratorDefaults,
+  problemMessage,
 } from '@weavestream/shared';
 import type { PasswordDetail, PasswordFolderSchema } from '@weavestream/shared';
 import { apiFetch } from '../../../../../../../lib/api';
@@ -125,7 +126,7 @@ export function EditPasswordDialog({
     });
     setBusy(false);
     if (!res.ok) {
-      setErr((res.problem as { message?: string } | undefined)?.message ?? 'Update failed');
+      setErr(problemMessage(res.problem) ?? 'Update failed');
       return;
     }
     onSaved();

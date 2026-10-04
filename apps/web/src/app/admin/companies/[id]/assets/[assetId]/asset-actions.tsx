@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { problemMessage } from '@weavestream/shared';
 import { apiFetch } from '../../../../../../lib/api';
 import { Btn, Dialog, useToast } from '../../../../../../components/ui';
 
@@ -64,9 +65,8 @@ export function useAssetArchive({ asset }: { asset: AssetLite }) {
     );
     setPending(false);
     if (!res.ok) {
-      const problem = res.problem as { detail?: string; title?: string } | null;
       toast.push(
-        problem?.detail ?? problem?.title ?? 'Permanent delete failed.',
+        problemMessage(res.problem) ?? 'Permanent delete failed.',
         'danger',
       );
       return;

@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { problemMessage } from '@weavestream/shared';
 import { Btn, Dialog, Field, Icon, Input, Tag, useToast } from '../ui';
 import { apiFetch } from '../../lib/api';
 import type { LinkedItem, MentionSearchItem, RelationEndpointKind } from './types';
@@ -112,8 +113,7 @@ export function AddLinkModal({
     });
     setSubmitting(false);
     if (!res.ok) {
-      const problem = (res.problem ?? res.data) as { detail?: string; message?: string } | null;
-      toast.push(problem?.detail ?? problem?.message ?? 'Could not link item.', 'danger');
+      toast.push(problemMessage(res.problem ?? res.data) ?? 'Could not link item.', 'danger');
       return;
     }
     toast.push('Linked.', 'ok');

@@ -1,6 +1,5 @@
 import type { ChatConversationDetail, ChatToolCallDto } from '@weavestream/shared';
-import { problemMessage as sharedProblemMessage } from '@weavestream/shared';
-import { ApiError, apiFetch } from '../../lib/api';
+import { apiFetch } from '../../lib/api';
 
 /**
  * REST wrappers for the chat tool-call actions (Phase 5b) — the SAME
@@ -82,21 +81,4 @@ export function fetchConversation(
   return apiFetch<ChatConversationDetail>(`/chat/conversations/${conversationId}`, {
     signal,
   });
-}
-
-/**
- * Human-readable message off a thrown error, for the toast/inline copy.
- *
- * The `detail → message → title` precedence itself lives in
- * `@weavestream/shared` — desktop extracts identically, and duplicating it
- * here is what CLAUDE.md forbids. This wrapper is the mobile-only part:
- * unwrap `ApiError` to reach the problem body, and word the fallback.
- *
- * `err.problem` is what goes to the shared helper, NOT `err` — both are typed
- * `unknown`, so passing the error itself would typecheck and then silently
- * return `fallback` for every error. `chat-actions.spec.ts` pins that.
- */
-export function problemMessage(err: unknown, fallback: string): string {
-  if (!(err instanceof ApiError)) return fallback;
-  return sharedProblemMessage(err.problem) ?? fallback;
 }

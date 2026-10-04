@@ -97,7 +97,7 @@ export async function applyChatToolCall(args: {
   if (!res.ok || !res.data) {
     return {
       ok: false,
-      error: extractProblemMessage(res.problem),
+      error: problemMessage(res.problem) ?? 'Apply failed.',
       ...(extractProblemCode(res.problem) ? { code: extractProblemCode(res.problem) } : {}),
     };
   }
@@ -108,15 +108,6 @@ function extractProblemCode(problem: unknown): string | undefined {
   if (!problem || typeof problem !== 'object') return undefined;
   const code = (problem as { code?: unknown }).code;
   return typeof code === 'string' && code ? code : undefined;
-}
-
-/**
- * The `detail → message → title` precedence lives in `@weavestream/shared`
- * because `apps/mobile` needs the identical extraction; only the fallback
- * wording is web's.
- */
-function extractProblemMessage(problem: unknown): string {
-  return problemMessage(problem) ?? 'Apply failed.';
 }
 
 export async function rejectChatToolCall(args: {

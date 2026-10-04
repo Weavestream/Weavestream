@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { passwordFolderNameSchema } from '@weavestream/shared';
+import { passwordFolderNameSchema, problemMessage } from '@weavestream/shared';
 import { apiFetch } from '../../../../../lib/api';
 import {
   Btn,
@@ -17,7 +17,6 @@ import {
   buildPasswordFolderOptions,
   formatFolderOptionLabel,
 } from '../../../../../lib/password-folder-tree';
-import { extractProblemMessagePreferMessage as problemMessage } from '../../../../../lib/api-errors';
 
 type Tab = 'rename' | 'move' | 'archive';
 

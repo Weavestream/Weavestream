@@ -7,6 +7,7 @@ import {
   FIELD_TYPE_CATALOG,
   formatDateTime,
   optionalHttpUrlError,
+  problemMessage,
   type FieldType,
   type FieldTypeMeta,
 } from '@weavestream/shared';
@@ -213,12 +214,9 @@ export function AssetForm({
     // top level alongside it.
     const p = problem as
       | {
-          detail?: string;
-          title?: string;
           error?: string;
           issues?: Array<{ path: string; message: string }>;
           slug?: string;
-          message?: string;
         }
       | undefined;
     if (p?.issues && Array.isArray(p.issues)) {
@@ -232,11 +230,11 @@ export function AssetForm({
       return;
     }
     if (p?.error === 'UniqueFieldViolation' && p.slug) {
-      setIssues({ [p.slug]: p.message ?? 'Value already used.' });
-      setError(p.message ?? 'A uniqueness constraint failed.');
+      setIssues({ [p.slug]: problemMessage(p) ?? 'Value already used.' });
+      setError(problemMessage(p) ?? 'A uniqueness constraint failed.');
       return;
     }
-    setError(p?.detail ?? p?.title ?? 'Save failed.');
+    setError(problemMessage(p) ?? 'Save failed.');
   }
 
   return (

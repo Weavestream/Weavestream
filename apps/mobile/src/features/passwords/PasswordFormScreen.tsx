@@ -6,7 +6,7 @@ import { Icon } from '../../components/Icon';
 import { Card, Input } from '../../components/primitives';
 import { ErrorBanner, SkeletonList } from '../../components/states';
 import { useToast } from '../../components/Toast';
-import { ApiError } from '../../lib/api';
+import { apiErrorMessage } from '../../lib/api';
 import { useBackOr } from '../../lib/use-back';
 import { useOrgScope, type Org } from '../../lib/org-scope';
 import { useScopedNavigate } from '../../lib/scoped-nav';
@@ -180,13 +180,10 @@ function PasswordFormFields({
   }
 
   function describeError(err: unknown): string {
-    if (err instanceof ApiError && typeof err.problem === 'object' && err.problem) {
-      const detail = (err.problem as Record<string, unknown>).detail;
-      if (typeof detail === 'string' && detail && detail !== 'ValidationError') {
-        return detail;
-      }
-    }
-    return isEdit ? 'Couldn’t save the changes.' : 'Couldn’t create the password.';
+    return apiErrorMessage(
+      err,
+      isEdit ? 'Couldn’t save the changes.' : 'Couldn’t create the password.',
+    );
   }
 
   function onSave() {

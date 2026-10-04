@@ -47,7 +47,7 @@ export function VersionHistoryPanel({
     setBusy(null);
     if (!res.ok) {
       toast.push(
-        (res.problem as { message?: string } | undefined)?.message ?? 'Restore failed',
+        problemMessage(res.problem) ?? 'Restore failed',
         'danger',
       );
       return;

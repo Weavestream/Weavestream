@@ -6,6 +6,7 @@ import type {
   IntegrationCompanyMappingDto,
   SourceOrgDto,
 } from '@weavestream/shared';
+import { problemMessage } from '@weavestream/shared';
 import { apiFetch } from '../../../../../lib/api';
 import {
   Btn,
@@ -73,12 +74,8 @@ export function CreateMappingDialog({
       if (cancelled) return;
       setOrgsLoading(false);
       if (!res.ok || !res.data) {
-        const problem = res.problem as
-          | { detail?: string; title?: string }
-          | undefined;
         setOrgsError(
-          problem?.detail ??
-            problem?.title ??
+          problemMessage(res.problem) ??
             'Could not list upstream organizations — verify credentials.',
         );
         return;
@@ -118,10 +115,7 @@ export function CreateMappingDialog({
     );
     setPending(false);
     if (!res.ok || !res.data) {
-      const problem = res.problem as
-        | { detail?: string; title?: string }
-        | undefined;
-      const message = problem?.detail ?? problem?.title ?? 'Could not create mapping.';
+      const message = problemMessage(res.problem) ?? 'Could not create mapping.';
       setError(message);
       toast.push(message, 'danger');
       return;

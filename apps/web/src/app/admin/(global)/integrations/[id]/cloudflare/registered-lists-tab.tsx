@@ -7,6 +7,7 @@ import type {
   CloudflareIpListDto,
   IntegrationDto,
 } from '@weavestream/shared';
+import { problemMessage } from '@weavestream/shared';
 import { apiFetch } from '../../../../../../lib/api';
 import {
   Btn,
@@ -184,9 +185,8 @@ function RegisterListDialog({
     );
     setLoading(false);
     if (!res.ok || !res.data) {
-      const problem = res.problem as { detail?: string; title?: string } | undefined;
       toast.push(
-        problem?.detail ?? problem?.title ?? 'Could not list Cloudflare lists.',
+        problemMessage(res.problem) ?? 'Could not list Cloudflare lists.',
         'danger',
       );
       onClose();
@@ -206,8 +206,7 @@ function RegisterListDialog({
     );
     setPending(null);
     if (!res.ok || !res.data) {
-      const problem = res.problem as { detail?: string; title?: string } | undefined;
-      toast.push(problem?.detail ?? problem?.title ?? 'Could not register list.', 'danger');
+      toast.push(problemMessage(res.problem) ?? 'Could not register list.', 'danger');
       return;
     }
     onRegistered(res.data);

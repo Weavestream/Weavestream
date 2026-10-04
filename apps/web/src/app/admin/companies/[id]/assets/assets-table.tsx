@@ -9,6 +9,7 @@ import type {
   LayoutSummary,
   PasswordSummary,
 } from '@weavestream/shared';
+import { problemMessage } from '@weavestream/shared';
 import {
   Btn,
   DataTable,
@@ -316,9 +317,8 @@ export function AssetsTable({
     setBulkPending(false);
 
     if (!res.ok || !res.data) {
-      const problem = res.problem as { detail?: string; title?: string } | null;
       toast.push(
-        problem?.detail ?? problem?.title ?? `Bulk ${action} failed.`,
+        problemMessage(res.problem) ?? `Bulk ${action} failed.`,
         'danger',
       );
       return;

@@ -8,6 +8,7 @@ import type {
   PasswordSummary,
   UpdateAssetInput,
 } from '@weavestream/shared';
+import { problemMessage } from '@weavestream/shared';
 import { ApiError, apiFetch } from '../../lib/api';
 
 /**
@@ -208,7 +209,7 @@ export function extractUniqueViolation(
 ): { slug: string; conflictingAssetName: string | null; message: string | null } | null {
   if (!(err instanceof ApiError) || err.status !== 409) return null;
   const problem = err.problem as
-    | { error?: unknown; slug?: unknown; conflictingAssetName?: unknown; message?: unknown }
+    | { error?: unknown; slug?: unknown; conflictingAssetName?: unknown }
     | undefined;
   if (problem?.error !== 'UniqueFieldViolation' || typeof problem.slug !== 'string') {
     return null;
@@ -219,7 +220,7 @@ export function extractUniqueViolation(
       typeof problem.conflictingAssetName === 'string'
         ? problem.conflictingAssetName
         : null,
-    message: typeof problem.message === 'string' ? problem.message : null,
+    message: problemMessage(problem),
   };
 }
 

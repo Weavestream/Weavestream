@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { createCompanySchema } from '@weavestream/shared';
+import { createCompanySchema, problemMessage } from '@weavestream/shared';
 import { apiFetch } from '../../../../lib/api';
 import {
   Btn,
@@ -66,9 +66,8 @@ export function CreateCompanyButton() {
     });
     setPending(false);
     if (!res.ok || !res.data) {
-      const problem = res.problem as { title?: string; detail?: string } | undefined;
       setError(
-        problem?.detail ?? problem?.title ?? `Could not create ${lower(term.one)}.`,
+        problemMessage(res.problem) ?? `Could not create ${lower(term.one)}.`,
       );
       return;
     }

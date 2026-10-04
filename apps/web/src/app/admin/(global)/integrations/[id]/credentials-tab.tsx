@@ -8,6 +8,7 @@ import type {
   IntegrationDto,
   IntegrationStatusValue,
 } from '@weavestream/shared';
+import { problemMessage } from '@weavestream/shared';
 import { apiFetch } from '../../../../../lib/api';
 import {
   Btn,
@@ -131,11 +132,8 @@ export function CredentialsTab({
     );
     setPending(false);
     if (!res.ok || !res.data) {
-      const problem = res.problem as
-        | { detail?: string; title?: string }
-        | undefined;
       const message = safeIntegrationProblemMessage(
-        problem,
+        res.problem,
         'Could not save changes.',
         rotateSecret ? secret : {},
       );
@@ -157,11 +155,8 @@ export function CredentialsTab({
     );
     setTesting(false);
     if (!res.ok) {
-      const problem = res.problem as
-        | { detail?: string; title?: string }
-        | undefined;
       toast.push(
-        problem?.detail ?? problem?.title ?? 'Connection test failed.',
+        problemMessage(res.problem) ?? 'Connection test failed.',
         'danger',
       );
       return;
@@ -177,11 +172,8 @@ export function CredentialsTab({
     );
     setSyncing(false);
     if (!res.ok || !res.data) {
-      const problem = res.problem as
-        | { detail?: string; title?: string }
-        | undefined;
       toast.push(
-        problem?.detail ?? problem?.title ?? 'Could not enqueue sync.',
+        problemMessage(res.problem) ?? 'Could not enqueue sync.',
         'danger',
       );
       return;
@@ -205,11 +197,8 @@ export function CredentialsTab({
     );
     setDeleting(false);
     if (!res.ok && res.status !== 204) {
-      const problem = res.problem as
-        | { detail?: string; title?: string }
-        | undefined;
       toast.push(
-        problem?.detail ?? problem?.title ?? 'Could not delete integration.',
+        problemMessage(res.problem) ?? 'Could not delete integration.',
         'danger',
       );
       return;

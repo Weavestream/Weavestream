@@ -1,4 +1,4 @@
-import { isStepUpProblem } from '@weavestream/shared';
+import { isStepUpProblem, problemMessage } from '@weavestream/shared';
 import { ensureCsrf } from '@weavestream/shared/browser';
 import { hasStepUpOpener, requestStepUp } from './step-up';
 
@@ -164,4 +164,20 @@ export function isRestrictedError(err: unknown): boolean {
   if (!(err instanceof ApiError) || err.status !== 403) return false;
   if (err instanceof StepUpCancelledError) return false;
   return !isStepUpProblem(err.problem);
+}
+
+/**
+ * Human-readable message off a thrown error, for toast and inline copy.
+ *
+ * The extraction itself is `@weavestream/shared`'s `problemMessage` — the
+ * same one desktop uses. This wrapper is the mobile-only part: unwrap
+ * `ApiError` to reach the problem body, and word the fallback.
+ *
+ * `err.problem` is what goes to the shared helper, NOT `err` — both are
+ * typed `unknown`, so passing the error itself would typecheck and then
+ * silently return `fallback` for every error. `api.spec.ts` pins that.
+ */
+export function apiErrorMessage(err: unknown, fallback: string): string {
+  if (!(err instanceof ApiError)) return fallback;
+  return problemMessage(err.problem) ?? fallback;
 }

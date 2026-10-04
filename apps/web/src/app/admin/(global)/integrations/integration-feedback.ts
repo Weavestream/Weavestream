@@ -1,11 +1,11 @@
-type IntegrationProblem = { detail?: string; title?: string } | undefined;
+import { problemMessage } from '@weavestream/shared';
 
 export function safeIntegrationProblemMessage(
-  problem: IntegrationProblem,
+  problem: unknown,
   fallback: string,
   sensitiveValues: Record<string, unknown> = {},
 ): string {
-  const message = problem?.detail ?? problem?.title ?? fallback;
+  const message = problemMessage(problem) ?? fallback;
   const containsSensitiveValue = Object.values(sensitiveValues).some(
     (value) =>
       typeof value === 'string' &&

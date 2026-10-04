@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { updateAssetLayoutSchema } from '@weavestream/shared';
+import { updateAssetLayoutSchema, problemMessage } from '@weavestream/shared';
 import { apiFetch } from '../../../../lib/api';
 import { Btn, Dialog, useToast } from '../../../../components/ui';
 import type { LayoutSummary } from '@weavestream/shared';
@@ -100,13 +100,8 @@ export function LayoutSettingsDialog({
     setPending(false);
 
     if (!res.ok || !res.data) {
-      const problem = res.problem as
-        | { detail?: string; title?: string; message?: string }
-        | undefined;
       setError(
-        problem?.detail ??
-          problem?.message ??
-          problem?.title ??
+        problemMessage(res.problem) ??
           'Could not update layout.',
       );
       return;

@@ -8,6 +8,7 @@ import {
   type ReactNode,
 } from 'react';
 import type { StepUpFactor } from '@weavestream/shared';
+import { problemMessage } from '@weavestream/shared';
 import { Btn, Dialog, Field, Input } from '../ui';
 import { apiFetch } from '../../lib/api';
 import { registerStepUpOpener } from '../../lib/step-up';
@@ -79,14 +80,10 @@ export function StepUpProvider({ children }: { children: ReactNode }) {
     });
     if (!res.ok) {
       setBusy(false);
-      const problem = res.problem as
-        | { detail?: string; message?: string }
-        | undefined;
       setErr(
         res.status === 429
           ? 'Too many attempts. Wait a moment and try again.'
-          : (problem?.detail ??
-              problem?.message ??
+          : (problemMessage(res.problem) ??
               'Verification failed. Check the code and try again.'),
       );
       return;

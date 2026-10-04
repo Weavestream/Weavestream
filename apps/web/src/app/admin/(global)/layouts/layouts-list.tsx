@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { apiFetch } from '../../../../lib/api';
 import type { LayoutSummary } from '@weavestream/shared';
+import { problemMessage } from '@weavestream/shared';
 import {
   Btn,
   DataTable,
@@ -86,9 +87,8 @@ export function LayoutsList({
         );
         if (!res.ok) {
           setLocalOrder(previous);
-          const problem = res.problem as { message?: string; detail?: string } | undefined;
           toast.push(
-            problem?.message ?? problem?.detail ?? 'Reorder failed',
+            problemMessage(res.problem) ?? 'Reorder failed',
             'danger',
           );
           return;

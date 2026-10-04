@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import type { GlobalAccess, MembershipRole, UserRole } from '@weavestream/shared';
+import { problemMessage } from '@weavestream/shared';
 import { apiFetch } from '../../../../../lib/api';
 import {
   Btn,
@@ -127,8 +128,7 @@ export function UserMembershipsList({
     );
     setPending(false);
     if (!res.ok) {
-      const problem = res.problem as { detail?: string } | undefined;
-      toast.push(problem?.detail ?? `Could not set ${lower(term.one)}-level access.`, 'danger');
+      toast.push(problemMessage(res.problem) ?? `Could not set ${lower(term.one)}-level access.`, 'danger');
       return false;
     }
     toast.push(`${term.one}-level access set.`, 'ok');
@@ -148,8 +148,7 @@ export function UserMembershipsList({
     });
     setPending(false);
     if (!res.ok) {
-      const problem = res.problem as { detail?: string } | undefined;
-      toast.push(problem?.detail ?? 'Update failed.', 'danger');
+      toast.push(problemMessage(res.problem) ?? 'Update failed.', 'danger');
       return false;
     }
     toast.push('Membership updated.', 'ok');
@@ -163,8 +162,7 @@ export function UserMembershipsList({
     const res = await apiFetch(`/memberships/${row.id}`, { method: 'DELETE' });
     setPending(false);
     if (!res.ok) {
-      const problem = res.problem as { detail?: string } | undefined;
-      toast.push(problem?.detail ?? 'Revoke failed.', 'danger');
+      toast.push(problemMessage(res.problem) ?? 'Revoke failed.', 'danger');
       return;
     }
     toast.push('Membership revoked.', 'ok');

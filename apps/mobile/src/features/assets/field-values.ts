@@ -2,6 +2,7 @@ import {
   FieldTypeValues,
   coerceTagChips,
   optionalHttpUrlError,
+  problemMessage,
   toAssetWireTags,
   type CreateAssetInput,
   type FieldType,
@@ -524,7 +525,7 @@ export function mapAssetWriteError(
 
   if (err instanceof ApiError) {
     const problem = err.problem as
-      | { error?: unknown; detail?: unknown; message?: unknown }
+      | { error?: unknown }
       | undefined;
     // ClientVisibilityViolation (403) carries a slug too — defensive:
     // client-invisible fields aren't rendered for client users at all.
@@ -537,13 +538,10 @@ export function mapAssetWriteError(
         };
       }
     }
-    const detail =
-      typeof problem?.detail === 'string' && problem.detail !== 'ValidationError'
-        ? problem.detail
-        : typeof problem?.message === 'string'
-          ? problem.message
-          : null;
-    return { formError: detail ?? "Couldn't save the asset. Try again.", fieldErrors: {} };
+    return {
+      formError: problemMessage(problem) ?? "Couldn't save the asset. Try again.",
+      fieldErrors: {},
+    };
   }
 
   return { formError: "Couldn't save the asset. Try again.", fieldErrors: {} };

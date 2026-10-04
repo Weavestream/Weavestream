@@ -14,6 +14,7 @@ import type {
   PasswordGeneratorDefaults,
   PasswordSummary,
 } from '@weavestream/shared';
+import { problemMessage } from '@weavestream/shared';
 import { apiFetch } from '../../../../../lib/api';
 import {
   Btn,
@@ -340,7 +341,7 @@ export function PasswordsBrowser({
     setFolderBusy(false);
     if (!res.ok) {
       setErr(
-        (res.problem as { message?: string } | undefined)?.message ??
+        problemMessage(res.problem) ??
           'Create folder failed',
       );
       return;

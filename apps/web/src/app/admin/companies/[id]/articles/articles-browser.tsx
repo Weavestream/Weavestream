@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useMemo, useState } from 'react';
 import type { ArticleSummary, FolderNode } from '@weavestream/shared';
+import { problemMessage } from '@weavestream/shared';
 import { apiFetch } from '../../../../../lib/api';
 import { FormattedDate } from '../../../../../lib/timezone-context';
 import {
@@ -998,10 +999,4 @@ function isSlugTaken(problem: unknown): boolean {
   if (!problem || typeof problem !== 'object') return false;
   const error = (problem as { error?: unknown }).error;
   return error === 'SlugTaken';
-}
-
-function problemMessage(problem: unknown): string | null {
-  if (!problem || typeof problem !== 'object') return null;
-  const msg = (problem as { message?: unknown }).message;
-  return typeof msg === 'string' && msg.length > 0 ? msg : null;
 }

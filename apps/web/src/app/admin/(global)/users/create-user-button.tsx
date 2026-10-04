@@ -12,6 +12,7 @@ import {
   GlobalAccessValues,
   MANAGER_PRESET,
   PlatformCapabilityValues,
+  problemMessage,
 } from '@weavestream/shared';
 import { apiFetch } from '../../../../lib/api';
 import { FormattedDateTime } from '../../../../lib/timezone-context';
@@ -199,8 +200,7 @@ export function CreateUserButton({
     });
     setPending(false);
     if (!res.ok || !res.data) {
-      const problem = res.problem as { detail?: string; title?: string } | undefined;
-      setError(problem?.detail ?? problem?.title ?? 'Could not create user.');
+      setError(problemMessage(res.problem) ?? 'Could not create user.');
       return;
     }
     setResult(res.data);

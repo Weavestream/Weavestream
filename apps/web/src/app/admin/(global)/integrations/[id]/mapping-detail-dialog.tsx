@@ -5,6 +5,7 @@ import type {
   IntegrationCompanyMappingDto,
   IntegrationDto,
 } from '@weavestream/shared';
+import { problemMessage } from '@weavestream/shared';
 import { apiFetch } from '../../../../../lib/api';
 import { FormattedDateTime } from '../../../../../lib/timezone-context';
 import {
@@ -54,10 +55,7 @@ export function MappingDetailDialog({
     );
     setPending(false);
     if (!res.ok) {
-      const problem = res.problem as
-        | { detail?: string; title?: string }
-        | undefined;
-      const message = problem?.detail ?? problem?.title ?? 'Could not save mapping.';
+      const message = problemMessage(res.problem) ?? 'Could not save mapping.';
       setError(message);
       toast.push(message, 'danger');
       return;
@@ -81,11 +79,8 @@ export function MappingDetailDialog({
     );
     setPending(false);
     if (!res.ok && res.status !== 204) {
-      const problem = res.problem as
-        | { detail?: string; title?: string }
-        | undefined;
       toast.push(
-        problem?.detail ?? problem?.title ?? 'Could not delete mapping.',
+        problemMessage(res.problem) ?? 'Could not delete mapping.',
         'danger',
       );
       return;

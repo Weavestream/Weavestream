@@ -7,6 +7,7 @@ import {
   createAssetLayoutSchema,
   getLayoutTemplate,
   type LayoutTemplate,
+  problemMessage,
 } from '@weavestream/shared';
 import { apiFetch } from '../../../../lib/api';
 import {
@@ -99,8 +100,7 @@ export function CreateLayoutButton() {
     });
     setPending(false);
     if (!res.ok || !res.data) {
-      const problem = res.problem as { title?: string; detail?: string } | undefined;
-      setError(problem?.detail ?? problem?.title ?? 'Could not create layout.');
+      setError(problemMessage(res.problem) ?? 'Could not create layout.');
       return;
     }
     toast.push(`Created ${parsed.data.name}`, 'ok');

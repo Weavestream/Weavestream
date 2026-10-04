@@ -17,6 +17,7 @@ import type {
 } from '@weavestream/shared';
 import { apiFetch } from '../../../../../lib/api';
 import { randomClientId } from '@weavestream/shared/browser';
+import { problemMessage } from '@weavestream/shared';
 import {
   Btn,
   Field,
@@ -116,12 +117,8 @@ export function FieldMappingsTab({
     );
     setEnablePending(false);
     if (!res.ok || !res.data) {
-      const problem = res.problem as
-        | { detail?: string; title?: string }
-        | undefined;
       setEnableError(
-        problem?.detail ??
-          problem?.title ??
+        problemMessage(res.problem) ??
           `Could not enable ${resourceLabel}.`,
       );
       return;
@@ -347,12 +344,8 @@ function ResourceEditor({
       );
       if (cancelled) return;
       if (!res.ok || !res.data) {
-        const problem = res.problem as
-          | { detail?: string; title?: string }
-          | undefined;
         setSourceFieldsError(
-          problem?.detail ??
-            problem?.title ??
+          problemMessage(res.problem) ??
             'Could not list source fields — credentials may be invalid.',
         );
         return;
@@ -465,13 +458,9 @@ function ResourceEditor({
         },
       );
       if (!resRes.ok || !resRes.data) {
-        const problem = resRes.problem as
-          | { detail?: string; title?: string }
-          | undefined;
         setPending(false);
         setError(
-          problem?.detail ??
-            problem?.title ??
+          problemMessage(resRes.problem) ??
             'Could not save layout / match-key configuration.',
         );
         return;
@@ -488,11 +477,8 @@ function ResourceEditor({
     );
     setPending(false);
     if (!fmRes.ok) {
-      const problem = fmRes.problem as
-        | { detail?: string; title?: string }
-        | undefined;
       setError(
-        problem?.detail ?? problem?.title ?? 'Could not save field mappings.',
+        problemMessage(fmRes.problem) ?? 'Could not save field mappings.',
       );
       return;
     }
@@ -697,8 +683,7 @@ function NativeResourceEditor({
     );
     setPending(false);
     if (!response.ok || !response.data) {
-      const problem = response.problem as { detail?: string; title?: string } | undefined;
-      setError(problem?.detail ?? problem?.title ?? 'Could not save target configuration.');
+      setError(problemMessage(response.problem) ?? 'Could not save target configuration.');
       return;
     }
     onResourceUpdate(response.data);

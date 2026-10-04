@@ -2,9 +2,9 @@
 
 import { useEffect, useRef, useState } from 'react';
 import type { AiSettings } from '@weavestream/shared';
+import { problemMessage } from '@weavestream/shared';
 import { apiFetch } from '../../../../lib/api';
 import { Btn, Field, Input, Select, Tag, useToast } from '../../../../components/ui';
-import { extractProblemMessage } from '../../../../lib/api-errors';
 
 export function AiSettingsForm({ initial }: { initial: AiSettings }) {
   const toast = useToast();
@@ -70,7 +70,7 @@ export function AiSettingsForm({ initial }: { initial: AiSettings }) {
     });
     setPending(false);
     if (!res.ok || !res.data) {
-      setError(extractProblemMessage(res.problem) ?? 'Could not save AI settings.');
+      setError(problemMessage(res.problem) ?? 'Could not save AI settings.');
       return;
     }
     baseline.current = res.data;
@@ -99,7 +99,7 @@ export function AiSettingsForm({ initial }: { initial: AiSettings }) {
     setTesting(false);
     if (!res.ok || !res.data) {
       setModels(null);
-      setError(extractProblemMessage(res.problem) ?? 'Could not reach the LLM endpoint.');
+      setError(problemMessage(res.problem) ?? 'Could not reach the LLM endpoint.');
       return;
     }
     setModels(res.data.models);

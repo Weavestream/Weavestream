@@ -1,7 +1,11 @@
 'use client';
 
 import { useCallback, useId, useState } from 'react';
-import { optionalHttpUrlError, type PasswordGeneratorDefaults } from '@weavestream/shared';
+import {
+  optionalHttpUrlError,
+  type PasswordGeneratorDefaults,
+  problemMessage,
+} from '@weavestream/shared';
 import { Btn, Dialog, Field, Icon, Input, Select, Textarea } from '../ui';
 import { apiFetch } from '../../lib/api';
 import type { PasswordFolderSchema } from '@weavestream/shared';
@@ -131,7 +135,7 @@ export function CreatePasswordDialog({
     });
     setBusy(false);
     if (!res.ok) {
-      setErr((res.problem as { message?: string } | undefined)?.message ?? 'Create failed');
+      setErr(problemMessage(res.problem) ?? 'Create failed');
       return;
     }
     onCreatedAction();

@@ -2,11 +2,10 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { folderNameSchema } from '@weavestream/shared';
+import { folderNameSchema, problemMessage } from '@weavestream/shared';
 import { apiFetch } from '../../../../../lib/api';
 import { Btn, Dialog, Field, Input, Select, useToast } from '../../../../../components/ui';
 import type { FolderNode } from '@weavestream/shared';
-import { extractProblemMessagePreferMessage as problemMessage } from '../../../../../lib/api-errors';
 
 type Cascade = 'unassign' | 'archive';
 type Tab = 'rename' | 'move' | 'archive';

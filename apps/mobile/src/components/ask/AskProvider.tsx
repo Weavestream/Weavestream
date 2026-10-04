@@ -11,7 +11,7 @@ import {
 import { useQueryClient } from '@tanstack/react-query';
 import type { ChatConversationDetail, ChatToolCallDto } from '@weavestream/shared';
 import { randomClientId, streamChatMessage } from '@weavestream/shared/browser';
-import { ApiError, apiFetch } from '../../lib/api';
+import { ApiError, apiErrorMessage, apiFetch } from '../../lib/api';
 import { redirectToLogin } from '../../lib/navigate';
 import { useOrgScope } from '../../lib/org-scope';
 import {
@@ -22,7 +22,6 @@ import {
 import {
   applyChatToolCall,
   fetchConversation,
-  problemMessage,
   rejectChatToolCall,
   type CreateOverrides,
 } from './chat-actions';
@@ -418,7 +417,7 @@ export function AskProvider({ children }: { children: ReactNode }) {
         dispatch({
           type: 'toolActionFailed',
           toolCallId,
-          message: problemMessage(
+          message: apiErrorMessage(
             err,
             kind === 'apply' ? 'Couldn’t apply the change.' : 'Couldn’t reject the change.',
           ),

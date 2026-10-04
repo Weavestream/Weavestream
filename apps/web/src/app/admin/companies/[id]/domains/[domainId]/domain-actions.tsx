@@ -5,6 +5,7 @@ import { useState, useTransition } from 'react';
 import { apiFetch } from '../../../../../../lib/api';
 import { Icon } from '../../../../../../components/ui';
 import type { MonitoredDomainDto } from '@weavestream/shared';
+import { problemMessage } from '@weavestream/shared';
 
 /**
  * Detail-page action bar. Lives in its own client component so the
@@ -29,7 +30,7 @@ export function DomainActions({
     const res = await apiFetch<unknown>(path, { method });
     setBusy(false);
     if (!res.ok) {
-      setError(messageOf(res.problem) ?? `${method} ${path} failed`);
+      setError(problemMessage(res.problem) ?? `${method} ${path} failed`);
       return;
     }
     startTransition(() => router.refresh());
@@ -82,14 +83,6 @@ export function DomainActions({
       )}
     </div>
   );
-}
-
-function messageOf(problem: unknown): string | null {
-  if (!problem || typeof problem !== 'object') return null;
-  const p = problem as Record<string, unknown>;
-  if (typeof p.message === 'string') return p.message;
-  if (typeof p.detail === 'string') return p.detail;
-  return null;
 }
 
 const primaryBtn: React.CSSProperties = {

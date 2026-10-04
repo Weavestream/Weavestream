@@ -106,11 +106,8 @@ export function CreateIntegrationButton({
     });
     setPending(false);
     if (!res.ok || !res.data) {
-      const problem = res.problem as
-        | { detail?: string; title?: string }
-        | undefined;
       const message = safeIntegrationProblemMessage(
-        problem,
+        res.problem,
         'Could not create integration.',
         secret,
       );

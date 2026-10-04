@@ -9,6 +9,7 @@ import {
   type AlertExpirationKind,
   type AlertRecordAction,
   type AlertRecordEntityType,
+  problemMessage,
 } from '@weavestream/shared';
 import { apiFetch } from '../../../../lib/api';
 import {
@@ -71,7 +72,7 @@ export function AlertsAdminClient({
     });
     setBusyId(null);
     if (!res.ok || !res.data) {
-      toast.push(problemText(res.problem, 'Could not update alert.'), 'danger');
+      toast.push(problemMessage(res.problem) ?? 'Could not update alert.', 'danger');
       return;
     }
     await refresh();
@@ -84,7 +85,7 @@ export function AlertsAdminClient({
     const res = await apiFetch(`/alerts/${alert.id}`, { method: 'DELETE' });
     setBusyId(null);
     if (!res.ok) {
-      toast.push(problemText(res.problem, 'Could not archive alert.'), 'danger');
+      toast.push(problemMessage(res.problem) ?? 'Could not archive alert.', 'danger');
       return;
     }
     toast.push('Alert archived.', 'ok');
@@ -99,7 +100,7 @@ export function AlertsAdminClient({
     });
     setBusyId(null);
     if (!res.ok) {
-      toast.push(problemText(res.problem, 'Test email failed.'), 'danger');
+      toast.push(problemMessage(res.problem) ?? 'Test email failed.', 'danger');
       return;
     }
     toast.push(
@@ -302,7 +303,7 @@ function AlertDialog({
     });
     setPending(false);
     if (!res.ok || !res.data) {
-      setError(problemText(res.problem, 'Could not save alert.'));
+      setError(problemMessage(res.problem) ?? 'Could not save alert.');
       return;
     }
     await onSaved();
@@ -784,27 +785,4 @@ function summariseConfig(a: AlertConfig): string {
     default:
       return '';
   }
-}
-
-function problemText(problem: unknown, fallback: string): string {
-  if (problem && typeof problem === 'object') {
-    // RFC 7807 extension members (see ProblemExceptionFilter): the useful
-    // per-field message lives in `issues[]`; `detail` is only the stable
-    // code "ValidationError" for a ZodBody rejection. Prefer the issue
-    // message so e.g. "Too many recipients (max 100)" reaches the user
-    // instead of the opaque code. Mirrors `handleApiError` in asset-form.
-    const p = problem as {
-      title?: unknown;
-      detail?: unknown;
-      issues?: Array<{ message?: unknown }>;
-    };
-    if (Array.isArray(p.issues) && typeof p.issues[0]?.message === 'string') {
-      return p.issues[0].message;
-    }
-    if (typeof p.detail === 'string' && p.detail !== 'ValidationError') {
-      return p.detail;
-    }
-    if (typeof p.title === 'string') return p.title;
-  }
-  return fallback;
 }

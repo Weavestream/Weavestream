@@ -1,5 +1,6 @@
 import { cookies, headers } from 'next/headers';
 import { notFound } from 'next/navigation';
+import { problemMessage } from '@weavestream/shared';
 import { getResolvedClientIp } from '../client-ip';
 import { API_INTERNAL_URL, SESSION_COOKIE_NAME } from '../api-config';
 import { ApiUnavailableError, RateLimitedError } from '../api-errors';
@@ -120,7 +121,7 @@ export function throwUnlessFound<T>(
     throw new ApiUnavailableError(
       path,
       'GET',
-      extractProblemDetail(res.problem) ?? `HTTP ${res.status}`,
+      problemMessage(res.problem) ?? `HTTP ${res.status}`,
     );
   }
   // Anything else — 404, 403, a 2xx with an empty body — is rendered
@@ -133,14 +134,6 @@ function extractProblemTitle(problem: unknown): string | undefined {
   if (problem && typeof problem === 'object' && 'title' in problem) {
     const t = (problem as { title?: unknown }).title;
     if (typeof t === 'string' && t.length > 0) return t;
-  }
-  return undefined;
-}
-
-function extractProblemDetail(problem: unknown): string | undefined {
-  if (problem && typeof problem === 'object' && 'detail' in problem) {
-    const d = (problem as { detail?: unknown }).detail;
-    if (typeof d === 'string' && d.length > 0) return d;
   }
   return undefined;
 }

@@ -2,6 +2,7 @@
 
 import { useState, useTransition, type ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
+import { problemMessage } from '@weavestream/shared';
 import { Btn, Dialog, Icon, useToast } from '../../../../../components/ui';
 import { apiFetch } from '../../../../../lib/api';
 import type { UploadSummary } from '../../../../../lib/server-api/uploads';
@@ -43,8 +44,7 @@ export function PhotoDeleteChip({
     );
     setBusy(false);
     if (!res.ok) {
-      const problem = res.problem as { message?: string } | undefined;
-      toast.push(problem?.message ?? 'Could not delete photo.', 'danger');
+      toast.push(problemMessage(res.problem) ?? 'Could not delete photo.', 'danger');
       return;
     }
     setOpen(false);

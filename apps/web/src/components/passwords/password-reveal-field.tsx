@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { apiFetch } from '../../lib/api';
 import { copyToClipboard, copyWithPromise } from '@weavestream/shared/browser';
+import { problemMessage } from '@weavestream/shared';
 import { Btn, Icon, useToast } from '../ui';
 
 const AUTO_HIDE_MS = 30_000;
@@ -98,12 +99,12 @@ export function PasswordRevealField(props: PasswordRevealFieldProps) {
       );
       setBusy(false);
       if (!res.ok || !res.data) {
-        const problem = res.problem as { error?: string; message?: string } | undefined;
+        const problem = res.problem as { error?: string } | undefined;
         if (problem?.error === 'ReasonRequired') {
           setPromptingReason(true);
           return;
         }
-        setErr(problem?.message ?? 'Failed to reveal password');
+        setErr(problemMessage(problem) ?? 'Failed to reveal password');
         return;
       }
       setPlaintext(res.data.password);
@@ -146,7 +147,7 @@ export function PasswordRevealField(props: PasswordRevealFieldProps) {
         );
         if (!res.ok || !res.data) {
           throw new Error(
-            (res.problem as { message?: string } | undefined)?.message ??
+            problemMessage(res.problem) ??
               'Failed to reveal password',
           );
         }
@@ -199,12 +200,12 @@ export function PasswordRevealField(props: PasswordRevealFieldProps) {
       );
       if (!res.ok || !res.data) {
         const problem = res.problem as
-          | { error?: string; message?: string }
+          | { error?: string }
           | undefined;
         if (problem?.error === 'ReasonRequired') {
           reasonMessage = 'ReasonRequired';
         }
-        throw new Error(problem?.message ?? 'Failed to reveal password');
+        throw new Error(problemMessage(problem) ?? 'Failed to reveal password');
       }
       return res.data.password;
     });

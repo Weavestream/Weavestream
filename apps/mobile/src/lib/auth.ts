@@ -1,3 +1,4 @@
+import { problemMessage } from '@weavestream/shared';
 import { ApiError, apiFetch } from './api';
 
 /**
@@ -73,11 +74,8 @@ export function authError(err: unknown, rejected: string): string {
  * a wall of text in a field-level error is worse than a short default.
  */
 function problemDetail(problem: unknown): string {
-  if (typeof problem !== 'object' || problem === null) return '';
-  const detail = (problem as Record<string, unknown>).detail;
-  if (typeof detail !== 'string') return '';
-  const trimmed = detail.trim();
-  return trimmed.length > 0 && trimmed.length <= 120 ? trimmed : '';
+  const message = problemMessage(problem)?.trim() ?? '';
+  return message.length <= 120 ? message : '';
 }
 
 export async function login(

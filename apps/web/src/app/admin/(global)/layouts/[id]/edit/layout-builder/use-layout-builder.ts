@@ -11,7 +11,7 @@ import {
   type DragStartEvent,
 } from '@dnd-kit/core';
 import { sortableKeyboardCoordinates } from '@dnd-kit/sortable';
-import { getLayoutTemplate, type LayoutSummary } from '@weavestream/shared';
+import { getLayoutTemplate, type LayoutSummary, problemMessage } from '@weavestream/shared';
 import { apiFetch } from '../../../../../../../lib/api';
 import { useToast } from '../../../../../../../components/ui';
 import { slugifyFieldSlug as slugify } from '../../../../../../../lib/slugify';
@@ -173,13 +173,9 @@ export function useLayoutBuilder({
     // `detail` / `title` — see ProblemExceptionFilter.
     const problem = res.problem as
       | {
-          status?: number;
-          detail?: string;
-          title?: string;
           error?: string;
           affectedAssetCount?: number;
           affectedCompanyIds?: string[];
-          message?: string;
         }
       | undefined;
 
@@ -190,7 +186,7 @@ export function useLayoutBuilder({
       });
       return;
     }
-    setError(problem?.message ?? problem?.detail ?? problem?.title ?? 'Save failed.');
+    setError(problemMessage(problem) ?? 'Save failed.');
   }
 
   return {

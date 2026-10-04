@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { apiFetch } from '../../lib/api';
 import { copyToClipboard } from '@weavestream/shared/browser';
+import { problemMessage } from '@weavestream/shared';
 import { Btn, Icon } from '../ui';
 
 export interface TotpCodeProps {
@@ -54,7 +55,7 @@ export function TotpCode({
     setBusy(false);
     if (!res.ok || !res.data) {
       setErr(
-        (res.problem as { message?: string } | undefined)?.message ??
+        problemMessage(res.problem) ??
           'Failed to generate TOTP',
       );
       return;

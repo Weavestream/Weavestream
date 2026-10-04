@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { apiFetch } from '../../lib/api';
 import { copyToClipboard, copyWithPromise } from '@weavestream/shared/browser';
+import { problemMessage } from '@weavestream/shared';
 import { Btn, Icon, useToast } from '../ui';
 
 const AUTO_HIDE_MS = 30_000;
@@ -91,13 +92,13 @@ export function PasswordInlineActions({
     setBusy(false);
     if (!res.ok || !res.data) {
       const problem = res.problem as
-        | { error?: string; message?: string }
+        | { error?: string }
         | undefined;
       if (problem?.error === 'ReasonRequired') {
         setPromptOpen(true);
         return null;
       }
-      toast.push(problem?.message ?? 'Failed to reveal password', 'danger');
+      toast.push(problemMessage(problem) ?? 'Failed to reveal password', 'danger');
       return null;
     }
     return res.data.password;
@@ -147,10 +148,10 @@ export function PasswordInlineActions({
       );
       if (!res.ok || !res.data) {
         const problem = res.problem as
-          | { error?: string; message?: string }
+          | { error?: string }
           | undefined;
         if (problem?.error === 'ReasonRequired') needsReason = true;
-        throw new Error(problem?.message ?? 'Failed to reveal password');
+        throw new Error(problemMessage(problem) ?? 'Failed to reveal password');
       }
       return res.data.password;
     }).then((ok) => {
@@ -173,7 +174,7 @@ export function PasswordInlineActions({
       );
       if (!res.ok || !res.data) {
         throw new Error(
-          (res.problem as { message?: string } | undefined)?.message ??
+          problemMessage(res.problem) ??
             'Failed to generate code',
         );
       }

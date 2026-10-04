@@ -7,6 +7,7 @@ import type {
   BackupRunDto,
   BackupRunStatus,
 } from '@weavestream/shared';
+import { problemMessage } from '@weavestream/shared';
 import { apiFetch } from '../../../../lib/api';
 import { FormattedDateTime } from '../../../../lib/timezone-context';
 import { downloadWithStepUp } from '../../../../lib/step-up';
@@ -132,7 +133,7 @@ export function BackupsAdminClient({
     setBusyId(null);
     if (!res.ok || !res.data) {
       toast.push(
-        problemText(res.problem, 'Could not enqueue a backup run.'),
+        problemMessage(res.problem) ?? 'Could not enqueue a backup run.',
         'danger',
       );
       return;
@@ -157,7 +158,7 @@ export function BackupsAdminClient({
     });
     setBusyId(null);
     if (!res.ok) {
-      toast.push(problemText(res.problem, 'Could not delete schedule.'), 'danger');
+      toast.push(problemMessage(res.problem) ?? 'Could not delete schedule.', 'danger');
       return;
     }
     toast.push('Schedule removed.', 'ok');
@@ -687,7 +688,7 @@ function ScheduleDialog({
     });
     setPending(false);
     if (!res.ok || !res.data) {
-      setError(problemText(res.problem, 'Could not save schedule.'));
+      setError(problemMessage(res.problem) ?? 'Could not save schedule.');
       return;
     }
     await onSaved();
@@ -1009,14 +1010,4 @@ function formatBytes(bytes: number): string {
     i += 1;
   }
   return `${n.toFixed(2)} ${units[i]}`;
-}
-
-function problemText(problem: unknown, fallback: string): string {
-  if (problem && typeof problem === 'object') {
-    const p = problem as { title?: unknown; detail?: unknown; message?: unknown };
-    if (typeof p.detail === 'string') return p.detail;
-    if (typeof p.title === 'string') return p.title;
-    if (typeof p.message === 'string') return p.message;
-  }
-  return fallback;
 }

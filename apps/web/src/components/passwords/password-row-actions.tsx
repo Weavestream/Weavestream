@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { apiFetch } from '../../lib/api';
 import { copyToClipboard, copyWithPromise } from '@weavestream/shared/browser';
+import { problemMessage } from '@weavestream/shared';
 import { Btn, Icon, useToast } from '../ui';
 
 export interface PasswordRowActionsProps {
@@ -85,10 +86,10 @@ export function PasswordRowActions({
       );
       if (!res.ok || !res.data) {
         const problem = res.problem as
-          | { error?: string; message?: string }
+          | { error?: string }
           | undefined;
         if (problem?.error === 'ReasonRequired') needsReason = true;
-        throw new Error(problem?.message ?? 'Failed to reveal password');
+        throw new Error(problemMessage(problem) ?? 'Failed to reveal password');
       }
       return res.data.password;
     }).then((ok) => {

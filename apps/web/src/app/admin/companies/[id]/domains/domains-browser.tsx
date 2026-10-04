@@ -4,6 +4,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { useEffect, useState, useTransition } from 'react';
 import type { MonitoredDomainDto } from '@weavestream/shared';
+import { problemMessage } from '@weavestream/shared';
 import { apiFetch } from '../../../../../lib/api';
 import {
   Btn,
@@ -428,7 +429,6 @@ function DomainDialog({
           </span>
         </label>
 
-
         <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
           <button type="button" onClick={onCancel} style={secondaryBtn}>
             Cancel
@@ -701,14 +701,6 @@ function fmtRelative(iso: string | null): string {
   if (hrs < 24) return `${hrs} h ago`;
   const days = Math.round(hrs / 24);
   return `${days} d ago`;
-}
-
-function problemMessage(problem: unknown): string | null {
-  if (!problem || typeof problem !== 'object') return null;
-  const record = problem as Record<string, unknown>;
-  if (typeof record.message === 'string') return record.message;
-  if (typeof record.detail === 'string') return record.detail;
-  return null;
 }
 
 const fieldStyle: React.CSSProperties = {

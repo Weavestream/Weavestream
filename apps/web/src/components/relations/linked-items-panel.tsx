@@ -2,6 +2,7 @@
 
 import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
+import { problemMessage } from '@weavestream/shared';
 import { Btn, Icon, Panel, Tag, useToast } from '../ui';
 import { apiFetch } from '../../lib/api';
 import { AddLinkModal } from './add-link-modal';
@@ -68,8 +69,7 @@ export function LinkedItemsPanel({ companyId, entityType, entityId, editable }: 
       method: 'DELETE',
     });
     if (!res.ok) {
-      const problem = (res.problem ?? res.data) as { detail?: string; message?: string } | null;
-      toast.push(problem?.detail ?? problem?.message ?? 'Could not unlink.', 'danger');
+      toast.push(problemMessage(res.problem ?? res.data) ?? 'Could not unlink.', 'danger');
       return;
     }
     toast.push('Unlinked.', 'ok');

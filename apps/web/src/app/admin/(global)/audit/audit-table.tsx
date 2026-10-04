@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
+import { problemMessage } from '@weavestream/shared';
 import {
   Btn,
   DataTable,
@@ -562,9 +563,8 @@ function UploadRestorePanel({
         { method: 'POST' },
       );
       if (!res.ok) {
-        const problem = res.problem as { message?: string } | undefined;
         toast.push(
-          problem?.message ?? 'Could not restore the attachment.',
+          problemMessage(res.problem) ?? 'Could not restore the attachment.',
           'danger',
         );
         setPending(false);
@@ -590,9 +590,8 @@ function UploadRestorePanel({
         { method: 'POST' },
       );
       if (!res.ok || !res.data) {
-        const problem = res.problem as { message?: string } | undefined;
         toast.push(
-          problem?.message ?? 'Could not retrieve the file path.',
+          problemMessage(res.problem) ?? 'Could not retrieve the file path.',
           'danger',
         );
         return;

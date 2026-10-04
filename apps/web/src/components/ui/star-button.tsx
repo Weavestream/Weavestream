@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { problemMessage } from '@weavestream/shared';
 import { apiFetch } from '../../lib/api';
 import { Icon } from './icon';
 import { useToast } from './toast';
@@ -91,9 +92,8 @@ export function useStarToggle({
     setPending(false);
     if (!res.ok) {
       setStarred(!next);
-      const problem = res.problem as { detail?: string } | undefined;
       toast.push(
-        problem?.detail ??
+        problemMessage(res.problem) ??
           (next ? 'Could not star.' : 'Could not unstar.'),
         'danger',
       );

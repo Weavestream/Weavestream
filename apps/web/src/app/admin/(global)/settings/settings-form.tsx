@@ -10,6 +10,7 @@ import {
   type PasswordGeneratorDefaults,
   type PasswordGeneratorPreset,
   type PasswordGeneratorSeparator,
+  problemMessage,
 } from '@weavestream/shared';
 import { apiFetch } from '../../../../lib/api';
 import {
@@ -180,8 +181,7 @@ function SettingsForm({
     });
     setPending(false);
     if (!res.ok || !res.data) {
-      const problem = res.problem as { title?: string; detail?: string } | undefined;
-      setError(problem?.detail ?? problem?.title ?? 'Could not save settings.');
+      setError(problemMessage(res.problem) ?? 'Could not save settings.');
       return;
     }
     baseline.current = res.data;

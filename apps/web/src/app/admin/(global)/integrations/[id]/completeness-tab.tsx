@@ -9,6 +9,7 @@ import {
   type IntegrationCompletenessResponse,
   type IntegrationGapRow,
   type IntegrationResourceDto,
+  problemMessage,
 } from '@weavestream/shared';
 import { apiFetch } from '../../../../../lib/api';
 import { Btn, Tag } from '../../../../../components/ui';
@@ -64,7 +65,7 @@ export function CompletenessTab({
         if (scopeRef.current !== scope) return;
         setLoading(false);
         if (!summaryResult.ok || !gapsResult.ok) {
-          setError(problemMessage(summaryResult.problem ?? gapsResult.problem));
+          setError(completenessError(summaryResult.problem ?? gapsResult.problem));
           return;
         }
         const parsedSummary = integrationCompletenessResponseSchema.safeParse(summaryResult.data);
@@ -81,7 +82,7 @@ export function CompletenessTab({
         // stuck on "Loading completeness…" with no error and no way to retry.
         if (scopeRef.current !== scope) return;
         setLoading(false);
-        setError(problemMessage(null));
+        setError(completenessError(null));
       }
     })();
     return () => { scopeRef.current += 1; };
@@ -104,7 +105,7 @@ export function CompletenessTab({
       setLoadingMore(false);
       const parsed = result.ok ? integrationGapsPageSchema.safeParse(result.data) : null;
       if (!parsed?.success) {
-        setError(problemMessage(result.problem));
+        setError(completenessError(result.problem));
         return;
       }
       setGaps((current) => [...current, ...parsed.data.items]);
@@ -114,7 +115,7 @@ export function CompletenessTab({
       // not leave "Load more" spinning and permanently disabled.
       if (scopeRef.current !== scope) return;
       setLoadingMore(false);
-      setError(problemMessage(null));
+      setError(completenessError(null));
     }
   }
 
@@ -224,13 +225,10 @@ function scopeQuery(mappingId: string, resourceId: string): string {
 function appendQuery(existing: string, addition: string): string {
   return `${existing || '?'}${existing ? '&' : ''}${addition}`;
 }
-function problemMessage(problem: unknown): string {
-  if (problem && typeof problem === 'object') {
-    const value = problem as { detail?: unknown; title?: unknown };
-    if (typeof value.detail === 'string' && value.detail.length <= 512) return value.detail;
-    if (typeof value.title === 'string' && value.title.length <= 512) return value.title;
-  }
-  return 'Could not load completeness.';
+/** Upstream sync errors can embed whole payloads; past 512 characters the generic line reads better. */
+function completenessError(problem: unknown): string {
+  const message = problemMessage(problem);
+  return message && message.length <= 512 ? message : 'Could not load completeness.';
 }
 const filterLabel: React.CSSProperties = { display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11.5, color: 'var(--muted)' };
 const selectStyle: React.CSSProperties = { minWidth: 210, height: 32, border: '1px solid var(--line)', borderRadius: 5, background: 'var(--panel-2)', color: 'var(--text)', padding: '0 8px' };

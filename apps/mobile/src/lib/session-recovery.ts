@@ -2,6 +2,7 @@ import {
   MFA_CHALLENGE_REQUIRED_CODE,
   MFA_ENROLLMENT_REQUIRED_CODE,
   STEP_UP_REQUIRED_CODE,
+  problemMessage,
 } from '@weavestream/shared';
 import { ApiError } from './api';
 
@@ -67,10 +68,9 @@ function problemFields(problem: unknown): { code: string; detail: string } {
   if (typeof problem !== 'object' || problem === null) {
     return { code: '', detail: '' };
   }
-  const p = problem as Record<string, unknown>;
-  const detail = p.detail ?? p.title ?? p.message;
+  const code = (problem as { code?: unknown }).code;
   return {
-    code: typeof p.code === 'string' ? p.code : '',
-    detail: typeof detail === 'string' ? detail : '',
+    code: typeof code === 'string' ? code : '',
+    detail: problemMessage(problem) ?? '',
   };
 }

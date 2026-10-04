@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Btn, Icon, Panel, useToast } from '../ui';
 import { apiFetch } from '../../lib/api';
-import { humanSize } from '@weavestream/shared';
+import { humanSize, problemMessage } from '@weavestream/shared';
 import {
   describeUploadError,
   preflightFile,
@@ -146,10 +146,7 @@ export function AttachmentsPanel({ companyId, entityType, entityId, editable }: 
       return copy;
     });
     if (!res.ok) {
-      const problem = (res.problem ?? res.data) as
-        | { detail?: string; message?: string }
-        | null;
-      toast.push(problem?.detail ?? problem?.message ?? 'Could not delete.', 'danger');
+      toast.push(problemMessage(res.problem ?? res.data) ?? 'Could not delete.', 'danger');
       return;
     }
     toast.push('Attachment deleted.', 'ok');

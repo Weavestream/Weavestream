@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import { problemMessage } from '@weavestream/shared';
 
 export const metadata: Metadata = { title: 'Members' };
 import { requireMe } from '../../../../../lib/server-api/auth';
@@ -59,7 +60,7 @@ export default async function CompanyMembersPage({
           <ErrorBanner
             title="Couldn't load memberships."
             detail={
-              (membershipsError.problem as { detail?: string } | undefined)?.detail ??
+              problemMessage(membershipsError.problem) ??
               `The memberships endpoint returned HTTP ${membershipsError.status}.`
             }
           />

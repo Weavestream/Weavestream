@@ -3,6 +3,7 @@
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useEffect, useState, useTransition } from 'react';
 import type { SubnetRow } from '@weavestream/shared';
+import { problemMessage } from '@weavestream/shared';
 import { apiFetch } from '../../../../../lib/api';
 import {
   Btn,
@@ -16,7 +17,6 @@ import {
   Textarea,
   type DataColumn,
 } from '../../../../../components/ui';
-import { extractProblemDetailOrMessage as problemMsg } from '../../../../../lib/api-errors';
 
 export function SubnetsBrowser({
   companyId,
@@ -75,7 +75,7 @@ export function SubnetsBrowser({
             body: JSON.stringify(body),
           });
     if (!res.ok) {
-      setError(problemMsg(res.problem) ?? 'Save failed');
+      setError(problemMessage(res.problem) ?? 'Save failed');
       return;
     }
     closeDialog();
@@ -88,7 +88,7 @@ export function SubnetsBrowser({
     const res = await apiFetch(`/companies/${companyId}/ipam/subnets/${id}`, {
       method: 'DELETE',
     });
-    if (!res.ok) setError(problemMsg(res.problem) ?? 'Archive failed');
+    if (!res.ok) setError(problemMessage(res.problem) ?? 'Archive failed');
     setBusyId(null);
     startTransition(() => router.refresh());
   }
@@ -99,7 +99,7 @@ export function SubnetsBrowser({
     const res = await apiFetch(`/companies/${companyId}/ipam/subnets/${id}/restore`, {
       method: 'POST',
     });
-    if (!res.ok) setError(problemMsg(res.problem) ?? 'Restore failed');
+    if (!res.ok) setError(problemMessage(res.problem) ?? 'Restore failed');
     setBusyId(null);
     startTransition(() => router.refresh());
   }
