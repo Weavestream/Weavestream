@@ -6,7 +6,7 @@ import {
   articleSummaryJobSchema,
   type ArticleSummaryGenerateJob,
 } from '@weavestream/shared';
-import { RedisService, PrismaService, QueuesService } from '../../../api/src/public/runtime.js';
+import { RedisService, PrismaService, QueuesService } from '@weavestream/api/runtime';
 import {
   AiCompletionHttpError,
   AiCompletionService,
@@ -16,7 +16,7 @@ import {
   AiNotConfiguredError,
   AiSettingsService,
   type AiResolvedConfig,
-} from '../../../api/src/public/ai.js';
+} from '@weavestream/api/ai';
 import {
   createManagedWorker,
   type ManagedWorker,

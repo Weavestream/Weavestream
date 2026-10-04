@@ -14,11 +14,11 @@ import {
   exportPdfPasswordAad,
   AuditLogService,
   AUDIT_ACTIONS,
-} from '../../../api/src/public/runtime.js';
+} from '@weavestream/api/runtime';
 import {
   CompanyExportDataService,
   type CompanyExportData,
-} from '../../../api/src/public/exports.js';
+} from '@weavestream/api/exports';
 import { buildCompanyExportPdf, pdfEmbedSizeBlockReason } from './pdf-builder.js';
 import {
   createManagedWorker,

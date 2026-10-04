@@ -7,7 +7,7 @@ import {
   parseDkimSelectorOverride,
   type DomainCheckJob,
 } from '@weavestream/shared';
-import { EnvService, RedisService, PrismaService } from '../../../api/src/public/runtime.js';
+import { EnvService, RedisService, PrismaService } from '@weavestream/api/runtime';
 import {
   DomainsService,
   type AuditMeta,
@@ -15,7 +15,7 @@ import {
   deriveDomainStatus,
   runDomainCheck,
   runHttpCheck,
-} from '../../../api/src/public/domains.js';
+} from '@weavestream/api/domains';
 import {
   createManagedWorker,
   type ManagedWorker,

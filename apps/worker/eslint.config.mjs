@@ -32,17 +32,19 @@ export default tseslint.config(
       ],
       '@typescript-eslint/no-empty-object-type': 'off',
       '@typescript-eslint/no-require-imports': 'off',
-      // The worker may use only the API surface in `apps/api/src/public/`.
-      // Reaching past it couples the worker to API internals that are free
-      // to change, and can pull HTTP-only code onto the worker's graph.
+      // The worker may use only the API's package exports
+      // (`@weavestream/api/<entry>`, built from `apps/api/src/public/`).
+      // A relative path into API source compiles a copy of the API into
+      // this app's dist, where it resolves packages against the worker's
+      // node_modules instead of the API's own.
       'no-restricted-imports': [
         'error',
         {
           patterns: [
             {
-              regex: 'api/src/(?!public/)',
+              regex: 'api/src/',
               message:
-                'Import from apps/api/src/public/ instead. If the worker needs something new, export it there.',
+                'Import from @weavestream/api/<entry> instead. If the worker needs something new, export it from apps/api/src/public/ and apps/api/package.json "exports".',
             },
           ],
         },

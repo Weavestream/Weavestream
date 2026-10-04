@@ -12,7 +12,7 @@ import {
   AuditLogService,
   AUDIT_ACTIONS,
   safeFetch,
-} from '../../../api/src/public/runtime.js';
+} from '@weavestream/api/runtime';
 import {
   createManagedWorker,
   type ManagedWorker,

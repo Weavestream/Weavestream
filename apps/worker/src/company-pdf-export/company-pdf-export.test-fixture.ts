@@ -1,4 +1,4 @@
-import type { CompanyExportData } from '../../../api/src/public/exports.js';
+import type { CompanyExportData } from '@weavestream/api/exports';
 
 export const FIXTURE_BLOCKED_SECRET = 'ghp_pdfBlockedSecretValue1234567890';
 

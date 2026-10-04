@@ -18,7 +18,7 @@ import {
   AUDIT_ACTIONS,
   EmailService,
   EnvService,
-} from '../../../api/src/public/runtime.js';
+} from '@weavestream/api/runtime';
 import {
   createManagedWorker,
   type ManagedWorker,

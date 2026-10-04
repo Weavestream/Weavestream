@@ -11,14 +11,14 @@ import {
   PrismaService,
   AUDIT_ACTIONS,
   AuditLogService,
-} from '../../../api/src/public/runtime.js';
+} from '@weavestream/api/runtime';
 import {
   IntegrationSyncService,
   buildResourceExecutionStages,
   IntegrationSyncRunnerService,
   type MappingRunOutcome,
   IntegrationProvenanceService,
-} from '../../../api/src/public/integrations.js';
+} from '@weavestream/api/integrations';
 import {
   createManagedWorker,
   type ManagedWorker,

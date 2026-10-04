@@ -3,8 +3,42 @@
   "version": "0.0.1",
   "private": true,
   "main": "dist/main.js",
+  "exports": {
+    "./runtime": {
+      "types": "./dist/public/runtime.d.ts",
+      "default": "./dist/public/runtime.js"
+    },
+    "./load-env": {
+      "types": "./dist/public/load-env.d.ts",
+      "default": "./dist/public/load-env.js"
+    },
+    "./domains": {
+      "types": "./dist/public/domains.d.ts",
+      "default": "./dist/public/domains.js"
+    },
+    "./integrations": {
+      "types": "./dist/public/integrations.d.ts",
+      "default": "./dist/public/integrations.js"
+    },
+    "./alerts": {
+      "types": "./dist/public/alerts.d.ts",
+      "default": "./dist/public/alerts.js"
+    },
+    "./exports": {
+      "types": "./dist/public/exports.d.ts",
+      "default": "./dist/public/exports.js"
+    },
+    "./uploads": {
+      "types": "./dist/public/uploads.d.ts",
+      "default": "./dist/public/uploads.js"
+    },
+    "./ai": {
+      "types": "./dist/public/ai.d.ts",
+      "default": "./dist/public/ai.js"
+    }
+  },
   "scripts": {
-    "build": "nest build",
+    "build": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\" && nest build",
     "start": "node dist/main.js",
     "dev": "nest start --watch",
     "cli": "node dist/cli.js",

@@ -36,6 +36,7 @@ COPY apps/worker ./apps/worker
 RUN pnpm --filter @weavestream/db prisma:generate \
  && pnpm --filter @weavestream/shared build \
  && pnpm --filter @weavestream/db build \
+ && pnpm --filter @weavestream/api build \
  && pnpm --filter @weavestream/worker build
 
 # Prune dev deps for the runner. CI=true tells pnpm it may
@@ -69,6 +70,13 @@ COPY --from=build /repo/packages/shared/package.json ./packages/shared/package.j
 COPY --from=build /repo/packages/db/dist ./packages/db/dist
 COPY --from=build /repo/packages/db/package.json ./packages/db/package.json
 COPY --from=build /repo/packages/db/prisma ./packages/db/prisma
+# The worker loads API code through `@weavestream/api/<entry>`, which
+# resolves via the `exports` map in apps/api/package.json to apps/api/dist.
+# That code resolves its own packages from apps/api/node_modules.
+# apps/worker/scripts/check-worker-deps.mjs --wiring asserts these 3 lines.
+COPY --from=build /repo/apps/api/dist ./apps/api/dist
+COPY --from=build /repo/apps/api/package.json ./apps/api/package.json
+COPY --from=build /repo/apps/api/node_modules ./apps/api/node_modules
 COPY --from=build /repo/apps/worker/dist ./apps/worker/dist
 COPY --from=build /repo/apps/worker/package.json ./apps/worker/package.json
 COPY --from=build /repo/apps/worker/node_modules ./apps/worker/node_modules
@@ -85,4 +93,4 @@ WORKDIR /app/apps/worker
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
   CMD node -e "process.exit(0)" || exit 1
 ENTRYPOINT ["/usr/local/bin/worker-entrypoint.sh"]
-CMD ["node", "dist/worker/src/main.js"]
+CMD ["node", "dist/main.js"]

@@ -71,6 +71,8 @@ pnpm dev
 
 This runs `apps/web`, `apps/api`, and `apps/worker` in watch mode.
 
+The worker loads API code from the API's build output (`@weavestream/api/<entry>` → `apps/api/dist/public/`). Under `pnpm dev`, the API's watch build writes that output, and the worker restarts when it changes. The API's watch build overwrites `apps/api/dist` in place instead of deleting it first (`deleteOutDir: false` in `apps/api/nest-cli.json`), so the worker can start from the previous build while the API compiles; only `pnpm --filter @weavestream/api build` starts from an empty `dist`. On a fresh clone, or to run the worker on its own, run that build first.
+
 | Service | Local URL |
 |---|---|
 | Web UI | `http://localhost:3000` |
@@ -98,8 +100,10 @@ pnpm --filter @weavestream/api cli create-admin
 
 ```bash
 pnpm lint               # repo-wide ESLint
-pnpm typecheck          # tsc --noEmit everywhere
-pnpm test               # Jest plus package-level test scripts
+pnpm typecheck          # tsc --noEmit everywhere (builds apps/api first;
+                        # the worker checks against its declarations)
+pnpm test               # Jest plus package-level test scripts (builds
+                        # apps/api first; the worker specs load its output)
                         # PDF inspection specs skip without poppler-utils/
                         # libxml2-utils; set WEAVESTREAM_REQUIRE_PDF_TOOLS=1
                         # to make a missing binary a failure (CI does).

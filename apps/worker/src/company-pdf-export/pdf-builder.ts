@@ -10,7 +10,7 @@ import {
   tiptapDocToMarkdown,
   tiptapToPlaintext,
 } from '@weavestream/shared';
-import type { CompanyExportData } from '../../../api/src/public/exports.js';
+import type { CompanyExportData } from '@weavestream/api/exports';
 
 interface PdfBuildOpts {
   pdfPassword?: string;

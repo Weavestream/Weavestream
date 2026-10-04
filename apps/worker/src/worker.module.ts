@@ -11,12 +11,12 @@ import {
   CryptoModule,
   EmailModule,
   QueuesProducerModule,
-} from '../../api/src/public/runtime.js';
-import { DomainsModule } from '../../api/src/public/domains.js';
-import { IntegrationsCoreModule } from '../../api/src/public/integrations.js';
-import { AlertsModule } from '../../api/src/public/alerts.js';
-import { ExportDataModule } from '../../api/src/public/exports.js';
-import { AiModule } from '../../api/src/public/ai.js';
+} from '@weavestream/api/runtime';
+import { DomainsModule } from '@weavestream/api/domains';
+import { IntegrationsCoreModule } from '@weavestream/api/integrations';
+import { AlertsModule } from '@weavestream/api/alerts';
+import { ExportDataModule } from '@weavestream/api/exports';
+import { AiModule } from '@weavestream/api/ai';
 import { DomainChecksWorker } from './domain-checks/domain-checks.processor.js';
 import { PwnedCheckWorker } from './pwned-check/pwned-check.processor.js';
 import { CompanyPdfExportWorker } from './company-pdf-export/company-pdf-export.processor.js';

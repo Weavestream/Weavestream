@@ -1,6 +1,7 @@
 {
   "extends": "../../packages/config/tsconfig.node.json",
   "compilerOptions": {
+    "rootDir": "./src",
     "outDir": "./dist",
     "baseUrl": ".",
     "types": ["node", "jest"],
@@ -8,18 +9,10 @@
     "experimentalDecorators": true,
     "paths": {
       "@weavestream/shared": ["../../packages/shared/dist/index.d.ts"],
-      "@weavestream/shared/server": ["../../packages/shared/dist/server.d.ts"]
+      "@weavestream/shared/server": ["../../packages/shared/dist/server.d.ts"],
+      "@weavestream/api/*": ["../api/dist/public/*.d.ts"]
     }
   },
-  "include": ["src/**/*.ts", "../api/src/**/*.ts"],
-  "exclude": [
-    "dist",
-    "node_modules",
-    "**/*.spec.ts",
-    "../api/**/*.spec.ts",
-    "../api/src/main.ts",
-    "../api/src/cli.ts",
-    "../api/dist",
-    "../api/node_modules"
-  ]
+  "include": ["src/**/*.ts"],
+  "exclude": ["dist", "node_modules", "**/*.spec.ts"]
 }

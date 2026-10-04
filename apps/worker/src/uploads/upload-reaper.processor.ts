@@ -12,8 +12,8 @@ import {
   AuditLogService,
   AUDIT_ACTIONS,
   LocalStorageService,
-} from '../../../api/src/public/runtime.js';
-import { pendingKey } from '../../../api/src/public/uploads.js';
+} from '@weavestream/api/runtime';
+import { pendingKey } from '@weavestream/api/uploads';
 import {
   createManagedWorker,
   type ManagedWorker,

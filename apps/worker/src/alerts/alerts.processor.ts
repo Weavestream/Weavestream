@@ -14,8 +14,8 @@ import {
   AuditLogService,
   AUDIT_ACTIONS,
   EmailService,
-} from '../../../api/src/public/runtime.js';
-import { AlertsRunnerService } from '../../../api/src/public/alerts.js';
+} from '@weavestream/api/runtime';
+import { AlertsRunnerService } from '@weavestream/api/alerts';
 import {
   createManagedWorker,
   type ManagedWorker,

@@ -4,8 +4,8 @@ import {
   cloudflareDriftSweepJobSchema,
   QueueNames,
 } from '@weavestream/shared';
-import { EnvService, RedisService } from '../../../api/src/public/runtime.js';
-import { CloudflareListsService } from '../../../api/src/public/integrations.js';
+import { EnvService, RedisService } from '@weavestream/api/runtime';
+import { CloudflareListsService } from '@weavestream/api/integrations';
 import {
   createManagedWorker,
   type ManagedWorker,
