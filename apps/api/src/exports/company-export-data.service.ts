@@ -87,7 +87,7 @@ export interface ExportPassword {
   folderPath: string;
   tags: string[];
   password: string | null;
-  notes: unknown | null;
+  notes: string | null;
   totpSecret: string | null;
   lastRotatedAt: Date | null;
   expiresAt: Date | null;
@@ -799,14 +799,12 @@ export class CompanyExportDataService {
         password = '[decryption error]';
       }
 
-      let notes: unknown | null = null;
+      let notes: string | null = null;
       if (p.notesCiphertext) {
         try {
-          notes = parseJsonIfPossible(
-            this.crypto.decrypt(
-              p.notesCiphertext,
-              passwordVaultAad(companyId, p.id, 'notes'),
-            ),
+          notes = this.crypto.decrypt(
+            p.notesCiphertext,
+            passwordVaultAad(companyId, p.id, 'notes'),
           );
         } catch {
           notes = '[decryption error]';
@@ -1357,14 +1355,6 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 function listStrings(value: unknown): string[] {
   const list = Array.isArray(value) ? value : value != null ? [value] : [];
   return list.filter((v): v is string => typeof v === 'string' && v.length > 0);
-}
-
-function parseJsonIfPossible(value: string): unknown {
-  try {
-    return JSON.parse(value) as unknown;
-  } catch {
-    return value;
-  }
 }
 
 function assertWithinExportLimit<T>(rows: readonly T[], limit: number, label: string): void {

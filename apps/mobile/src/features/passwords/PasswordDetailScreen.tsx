@@ -29,7 +29,6 @@ import { deviceTimeZone } from '../../lib/timezone';
 import { AttachmentsSection } from '../attachments/AttachmentsSection';
 import { RelatedSection } from '../relations/RelatedSection';
 import { useRelations } from '../relations/queries';
-import { notesToPlaintext } from './api';
 import { attentionTier } from './attention';
 import { recallListFilter } from './list-filter-memory';
 import {
@@ -141,7 +140,7 @@ export function PasswordDetailScreen({ passwordId }: { passwordId: string }) {
 
   const tz = deviceTimeZone();
   const now = Date.now();
-  const notesText = detail ? notesToPlaintext(detail.notes) : '';
+  const notesText = detail?.notes ?? '';
   const folderName =
     detail?.folderId != null
       ? (foldersQuery.data?.find((f) => f.id === detail.folderId)?.name ?? '—')

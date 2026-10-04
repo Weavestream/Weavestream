@@ -10,7 +10,6 @@ import type {
   CreatePasswordInput,
   CreatePasswordFolderInput,
   PasswordFilterInput,
-  PasswordNotesValue,
   RevealPasswordInput,
   TotpConfigInput,
   UpdatePasswordFolderInput,
@@ -88,7 +87,7 @@ export interface SerializedPasswordSummary {
 
 /** Detail shape — summary + decrypted notes + TOTP shape metadata. */
 export interface SerializedPasswordDetail extends SerializedPasswordSummary {
-  notes: PasswordNotesValue;
+  notes: string | null;
   totpAlgorithm: TotpAlgo;
   totpDigits: number;
   totpPeriod: number;
@@ -841,9 +840,9 @@ export class PasswordsService {
       v.passwordCiphertext,
       passwordVaultAad(companyId, id, 'password'),
     );
-    const notes = (v.notesCiphertext
+    const notes = v.notesCiphertext
       ? this.safeDecryptNotes(v.notesCiphertext, companyId, id)
-      : null) as UpdatePasswordInput['notes'];
+      : null;
     const totpSecret = v.totpSecretCiphertext
       ? this.crypto.decrypt(
           v.totpSecretCiphertext,
@@ -1320,15 +1319,13 @@ export class PasswordsService {
   });
 
   private encodeNotes(
-    notes: unknown,
+    notes: string | null | undefined,
     companyId: string,
     passwordId: string,
   ): string | null {
-    if (notes === null || notes === undefined) return null;
-    const json = typeof notes === 'string' ? notes : JSON.stringify(notes);
-    if (json.length === 0) return null;
+    if (!notes) return null;
     return this.crypto.encrypt(
-      json,
+      notes,
       passwordVaultAad(companyId, passwordId, 'notes'),
     );
   }
@@ -1337,18 +1334,14 @@ export class PasswordsService {
     blob: string,
     companyId: string,
     passwordId: string,
-  ): PasswordNotesValue {
+  ): string | null {
+    // Notes are plain text: return the plaintext verbatim. Never
+    // JSON-parse it — a note such as `1234` or `null` must stay a string.
     try {
-      const plaintext = this.crypto.decrypt(
+      return this.crypto.decrypt(
         blob,
         passwordVaultAad(companyId, passwordId, 'notes'),
       );
-      // Try to decode as JSON (Tiptap doc). If it isn't, treat as string.
-      try {
-        return JSON.parse(plaintext);
-      } catch {
-        return plaintext;
-      }
     } catch (err) {
       this.logger.error(
         `Failed to decrypt notes — unknown kid or mismatched record binding: ${(err as Error).message}`,

@@ -51,3 +51,19 @@ describe('password URL validation', () => {
     expect(updatePasswordSchema.safeParse({ url }).success).toBe(false);
   });
 });
+
+describe('password notes', () => {
+  const base = { name: 'Core router', password: 'hunter2' };
+
+  it('accepts plain text, including JSON-looking text, verbatim', () => {
+    for (const notes of ['Rack 4', '1234', 'null', '{"a":1}']) {
+      expect(createPasswordSchema.parse({ ...base, notes }).notes).toBe(notes);
+    }
+  });
+
+  it('rejects a Tiptap doc — notes are text only', () => {
+    const doc = { type: 'doc', content: [{ type: 'paragraph' }] };
+    expect(createPasswordSchema.safeParse({ ...base, notes: doc }).success).toBe(false);
+    expect(updatePasswordSchema.safeParse({ notes: doc }).success).toBe(false);
+  });
+});

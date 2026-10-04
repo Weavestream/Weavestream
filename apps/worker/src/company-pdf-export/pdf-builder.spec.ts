@@ -1018,7 +1018,7 @@ describe('standalone reconstruction dossier PDF', () => {
     expect(text).toContain('Ogonek [U+0104] probe');
   });
 
-  itWithPdfTools('parses serialized rich-text notes and fields before display encoding', async () => {
+  itWithPdfTools('parses serialized rich-text fields before display encoding', async () => {
     const base = companyPdfTestFixture();
     const serialized = JSON.stringify({
       type: 'doc',
@@ -1029,8 +1029,6 @@ describe('standalone reconstruction dossier PDF', () => {
     });
     const data: CompanyExportData = {
       ...base,
-      includePasswords: true,
-      passwords: [{ ...base.passwords[0]!, notes: serialized }],
       assets: [{
         ...base.assets[0]!,
         fields: [
@@ -1046,8 +1044,30 @@ describe('standalone reconstruction dossier PDF', () => {
     // pass doubled its brackets first, so JSON.parse failed and the raw
     // mangled JSON rendered as prose).
     const compact = text.replace(/\s+/g, '');
-    expect(compact.match(/Rotatequarterly\[\[ops\]\[U\+1F600\]/g) ?? []).toHaveLength(2);
+    expect(compact.match(/Rotatequarterly\[\[ops\]\[U\+1F600\]/g) ?? []).toHaveLength(1);
     expect(text).not.toContain('"type"');
+  });
+
+  itWithPdfTools('prints JSON-looking password notes exactly as typed', async () => {
+    const base = companyPdfTestFixture();
+    const notes = ['null', '"quoted pin"', '{"vlan":40}'];
+    const data: CompanyExportData = {
+      ...base,
+      includePasswords: true,
+      passwords: notes.map((note, index) => ({
+        ...base.passwords[0]!,
+        name: `Note probe ${index}`,
+        notes: note,
+      })),
+    };
+
+    const compact = extractPdfText(await buildCompanyExportPdf(data)).replace(/\s+/g, '');
+
+    // Notes are plain text: never JSON-parsed, so `null` is not dropped,
+    // quotes are kept, and an object is not reformatted.
+    expect(compact).toContain('NOTESnull');
+    expect(compact).toContain('"quotedpin"');
+    expect(compact).toContain('{"vlan":40}');
   });
 
   itWithPdfTools('encrypts password-protected exports with AES-256 and requires the password', async () => {

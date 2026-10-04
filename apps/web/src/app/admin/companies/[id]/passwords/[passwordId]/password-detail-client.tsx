@@ -283,7 +283,6 @@ export function PasswordDetailClient({
     toast.push(ok ? 'URL copied' : 'Clipboard unavailable', ok ? 'ok' : 'danger');
   }
 
-  const notesHtml = useMemo(() => renderNotes(password.notes ?? null), [password.notes]);
   const displayUrl = useMemo(() => formatCredentialUrl(password.url), [password.url]);
   const safeUrl = useMemo(
     () => (password.url?.trim() ? safeExternalHref(password.url) : null),
@@ -455,7 +454,7 @@ export function PasswordDetailClient({
           </Panel>
 
           <Panel title="Notes">
-            {notesHtml ? (
+            {password.notes ? (
               <div
                 style={{
                   fontSize: 13,
@@ -464,7 +463,7 @@ export function PasswordDetailClient({
                   lineHeight: 1.5,
                 }}
               >
-                {notesHtml}
+                {password.notes}
               </div>
             ) : (
               <div style={{ color: 'var(--muted)', fontSize: 13 }}>No notes.</div>
@@ -1280,7 +1279,7 @@ function EditPasswordDialog({
   const [url, setUrl] = useState(password.url ?? '');
   const urlError = optionalHttpUrlError(url);
   const [newPassword, setNewPassword] = useState('');
-  const [notes, setNotes] = useState(typeof password.notes === 'string' ? password.notes : '');
+  const [notes, setNotes] = useState(password.notes ?? '');
   const [folderId, setFolderId] = useState<string | null>(password.folderId);
   const [visibleToClients, setVisibleToClients] = useState(password.visibleToClients);
   const [requireReason, setRequireReason] = useState(password.requireReasonToView);
@@ -1721,33 +1720,5 @@ function accessSourceLabel(source: PasswordAccessUser['accessSource']): string {
       return 'global access';
     case 'membership':
       return 'membership';
-  }
-}
-
-/**
- * Extremely defensive notes renderer. Notes can be either a string
- * (legacy or simple plain-text) or a Tiptap-like JSON document. We
- * flatten text nodes out of the doc for display; rich formatting is a
- * later enhancement. Null/malformed payloads render as empty.
- */
-function renderNotes(value: unknown): string | null {
-  if (value == null) return null;
-  if (typeof value === 'string') return value.length > 0 ? value : null;
-  if (typeof value === 'object') {
-    const parts: string[] = [];
-    walk(value as { content?: unknown[]; text?: string; type?: string }, parts);
-    const joined = parts.join('\n').trim();
-    return joined.length > 0 ? joined : null;
-  }
-  return null;
-}
-
-function walk(node: { content?: unknown[]; text?: string; type?: string }, out: string[]): void {
-  if (!node || typeof node !== 'object') return;
-  if (typeof node.text === 'string') out.push(node.text);
-  const content = node.content;
-  if (Array.isArray(content)) {
-    for (const c of content) walk(c as never, out);
-    if (node.type === 'paragraph' || node.type === 'heading') out.push('');
   }
 }

@@ -33,7 +33,7 @@ export const metadata: Metadata = { title: 'Password' };
  * Server-rendered scaffold: all plaintext (password, TOTP secret,
  * decrypted notes) is fetched by the client components when the user
  * explicitly requests it. The server only receives non-secret fields
- * and the decrypted `notes` JSON, which is returned by `GET /:id`.
+ * and the decrypted `notes` text, which is returned by `GET /:id`.
  */
 export default async function PasswordDetailPage({
   params,

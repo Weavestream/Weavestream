@@ -2,7 +2,6 @@ import {
   buildCreatePayload,
   buildUpdatePayload,
   isReasonRequired,
-  notesToPlaintext,
   validateTotpSecret,
   type PasswordFormValues,
 } from './api';
@@ -89,17 +88,9 @@ describe('buildUpdatePayload — diff-only, omission means keep', () => {
     expect(payload.url).toBe('https://b.example');
   });
 
-  it('leaves an untouched Tiptap-doc note alone (no notes key at all)', () => {
-    // The form is seeded with the doc's plaintext projection; saving
-    // without editing must not rewrite the stored doc as a string.
-    const doc = {
-      type: 'doc' as const,
-      content: [
-        { type: 'paragraph', content: [{ type: 'text', text: 'switch closet B' }] },
-      ],
-    };
-    const original = makePasswordDetail({ notes: doc });
-    const seeded = form({ name: original.name, username: 'admin', notes: notesToPlaintext(doc) });
+  it('leaves an untouched note alone (no notes key at all)', () => {
+    const original = makePasswordDetail({ notes: '1234' });
+    const seeded = form({ name: original.name, username: 'admin', notes: '1234' });
     expect('notes' in buildUpdatePayload(original, seeded)).toBe(false);
   });
 
@@ -125,20 +116,6 @@ describe('buildUpdatePayload — diff-only, omission means keep', () => {
     expect(
       buildUpdatePayload(original, form({ ...base, totp: { kind: 'set', secret: 'JBSWY3DPEHPK3PXP' } })).totp,
     ).toEqual({ secret: 'JBSWY3DPEHPK3PXP', algorithm: 'SHA1', digits: 6, period: 30 });
-  });
-});
-
-describe('notesToPlaintext', () => {
-  it('passes strings through verbatim and flattens docs', () => {
-    expect(notesToPlaintext('line 1\nline 2')).toBe('line 1\nline 2');
-    expect(notesToPlaintext(null)).toBe('');
-    expect(notesToPlaintext(undefined)).toBe('');
-    expect(
-      notesToPlaintext({
-        type: 'doc' as const,
-        content: [{ type: 'paragraph', content: [{ type: 'text', text: 'hello' }] }],
-      }),
-    ).toBe('hello');
   });
 });
 

@@ -1482,12 +1482,12 @@ function drawPasswordCard(
 
   if (includePlaintext) {
     // Byte-exact or explicitly flagged — never silently rewritten
-    // (CR-020). Notes are prose: parse the rich text first, then let
-    // field() apply the display encoding to the extracted plaintext.
+    // (CR-020). Notes are plain-text prose: render them as stored and let
+    // field() apply the display encoding. Never JSON-parse them — a note
+    // such as `1234` or `null` must print exactly as typed.
     credentialField(doc, 'Password', p.password, sectionTitle);
     credentialField(doc, 'TOTP secret', p.totpSecret, sectionTitle);
-    const notes = richTextToPlaintext(p.notes);
-    if (notes) field(doc, 'Notes', notes, sectionTitle);
+    if (p.notes) field(doc, 'Notes', p.notes, sectionTitle);
   }
 
   fieldGrid(

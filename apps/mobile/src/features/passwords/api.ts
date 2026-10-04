@@ -1,5 +1,4 @@
 import {
-  tiptapToPlaintext,
   totpConfigSchema,
   type CreatePasswordInput,
   type PasswordDetail,
@@ -205,17 +204,6 @@ function totpPayload(secret: string) {
   };
 }
 
-/**
- * Notes render and edit as plaintext on mobile. Strings pass through
- * verbatim; Tiptap docs are flattened exactly the way the desktop
- * detail page flattens them (`renderNotes`). Never HTML.
- */
-export function notesToPlaintext(notes: PasswordDetail['notes'] | undefined): string {
-  if (notes == null) return '';
-  if (typeof notes === 'string') return notes;
-  return tiptapToPlaintext(notes);
-}
-
 export function buildCreatePayload(form: PasswordFormValues): CreatePasswordInput {
   const payload: CreatePasswordInput = {
     name: form.name.trim(),
@@ -253,10 +241,7 @@ export function buildUpdatePayload(
   const url = form.url.trim() || null;
   if (url !== (original.url ?? null)) payload.url = url;
 
-  // Compared against the same plaintext projection the form was seeded
-  // with, so an untouched Tiptap-doc note is omitted (and survives)
-  // rather than being rewritten as a string.
-  if (form.notes !== notesToPlaintext(original.notes)) {
+  if (form.notes !== (original.notes ?? '')) {
     payload.notes = form.notes.trim() ? form.notes : null;
   }
 

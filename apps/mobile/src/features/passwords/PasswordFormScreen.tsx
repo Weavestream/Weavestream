@@ -15,7 +15,6 @@ import {
   buildCreatePayload,
   buildUpdatePayload,
   validateTotpSecret,
-  notesToPlaintext,
   type PasswordFormValues,
   type TotpFormState,
 } from './api';
@@ -130,7 +129,7 @@ function PasswordFormFields({
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [url, setUrl] = useState(original?.url ?? '');
-  const [notes, setNotes] = useState(notesToPlaintext(original?.notes));
+  const [notes, setNotes] = useState(original?.notes ?? '');
   // TOTP: with an existing config the choice is keep/replace/remove;
   // without one, a non-empty secret means "set".
   const [totpChoice, setTotpChoice] = useState<'keep' | 'replace' | 'remove'>('keep');

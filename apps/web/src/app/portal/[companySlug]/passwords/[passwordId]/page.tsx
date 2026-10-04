@@ -119,7 +119,7 @@ export default async function PortalPasswordDetailPage({
             </div>
           </Panel>
 
-          {password.notes != null && (
+          {password.notes && (
             <Panel title="Notes">
               <pre
                 style={{
@@ -130,9 +130,7 @@ export default async function PortalPasswordDetailPage({
                   margin: 0,
                 }}
               >
-                {typeof password.notes === 'string'
-                  ? password.notes
-                  : flattenNotes(password.notes)}
+                {password.notes}
               </pre>
             </Panel>
           )}
@@ -157,17 +155,4 @@ function Label({ children }: { children: React.ReactNode }) {
       {children}
     </div>
   );
-}
-
-function flattenNotes(value: unknown): string {
-  const out: string[] = [];
-  const walk = (n: unknown) => {
-    if (!n || typeof n !== 'object') return;
-    const node = n as { text?: string; content?: unknown[]; type?: string };
-    if (typeof node.text === 'string') out.push(node.text);
-    if (Array.isArray(node.content)) node.content.forEach(walk);
-    if (node.type === 'paragraph' || node.type === 'heading') out.push('');
-  };
-  walk(value);
-  return out.join('\n').trim();
 }

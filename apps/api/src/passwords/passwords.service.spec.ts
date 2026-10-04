@@ -269,6 +269,11 @@ function makeStubs(
       async findMany() {
         return versions;
       },
+      async aggregate(args: { where: Prisma.PasswordVersionWhereInput }) {
+        const own = versions.filter((v) => v.passwordId === args.where.passwordId);
+        const max = own.length > 0 ? Math.max(...own.map((v) => v.version)) : null;
+        return { _max: { version: max } };
+      },
     },
     passwordFolder: {
       async findFirst(args: { where: Prisma.PasswordFolderWhereInput }) {
@@ -487,17 +492,73 @@ describe('PasswordsService — detail', () => {
       passwords: [
         passwordRow({
           id: 'pwd-a',
-          notesCiphertext: 'ENC({"type":"doc","text":"hi"})',
+          notesCiphertext: 'ENC(Rack 4, top shelf)',
         }),
       ],
     });
 
     const detail = await svc.getDetail(OPERATOR, 'co-1', 'pwd-a');
-    expect(detail.notes).toEqual({ type: 'doc', text: 'hi' });
+    expect(detail.notes).toBe('Rack 4, top shelf');
     expect(crypto.decrypt).toHaveBeenCalledWith(
-      'ENC({"type":"doc","text":"hi"})',
+      'ENC(Rack 4, top shelf)',
       passwordVaultAad('co-1', 'pwd-a', 'notes'),
     );
+  });
+
+  it('returns any stored JSON-looking note as its text, never parsed', async () => {
+    const stored = '{"type":"doc","content":[{"type":"paragraph"}]}';
+    const { svc } = makeStubs({
+      passwords: [passwordRow({ id: 'pwd-a', notesCiphertext: `ENC(${stored})` })],
+    });
+
+    const detail = await svc.getDetail(OPERATOR, 'co-1', 'pwd-a');
+    expect(detail.notes).toBe(stored);
+  });
+
+  it.each([
+    '1234',
+    'true',
+    'null',
+    '"hello"',
+    '[1,2]',
+    '{"a":1}',
+    'Door code is 4471, alarm panel is behind the server rack.',
+  ])('round-trips the plain-text note %s as the exact original string', async (note) => {
+    const { svc } = makeStubs();
+
+    const created = await svc.create(
+      OPERATOR,
+      'co-1',
+      { name: 'Text note', password: 'super-secret', notes: note },
+      META,
+    );
+
+    const detail = await svc.getDetail(OPERATOR, 'co-1', created.id);
+    expect(detail.notes).toBe(note);
+  });
+
+  it('returns a JSON-shaped plain-text note verbatim in the update response', async () => {
+    const { svc } = makeStubs({ passwords: [passwordRow({ id: 'pwd-a' })] });
+
+    const updated = await svc.update(OPERATOR, 'co-1', 'pwd-a', { notes: '1234' }, META);
+    expect(updated.notes).toBe('1234');
+  });
+
+  it('returns null without logging the note when notes fail to decrypt', async () => {
+    const { svc, crypto } = makeStubs({
+      passwords: [passwordRow({ id: 'pwd-a', notesCiphertext: 'v9:opaque-notes-blob' })],
+    });
+    crypto.decrypt.mockImplementationOnce(() => {
+      throw new Error('unknown key id');
+    });
+    const logError = jest
+      .spyOn((svc as unknown as { logger: { error: (m: string) => void } }).logger, 'error')
+      .mockImplementation(() => undefined);
+
+    const detail = await svc.getDetail(OPERATOR, 'co-1', 'pwd-a');
+    expect(detail.notes).toBeNull();
+    expect(logError).toHaveBeenCalledTimes(1);
+    expect(String(logError.mock.calls[0]?.[0])).not.toContain('opaque-notes-blob');
   });
 
   it('denies internal detail reads outside the allow-list', async () => {
@@ -811,6 +872,30 @@ describe('PasswordsService — revealVersion / generateTotpCode', () => {
     // SUPER_ADMIN bypasses the restriction and gets the historical secret.
     const out = await svc.revealVersion(SUPER, 'co-1', 'pwd-a', 1, {}, META);
     expect(out.password).toBe('old-secret');
+  });
+
+  it('restoreVersion keeps a JSON-shaped plain-text note verbatim', async () => {
+    const { svc, versions, passwords } = makeStubs({
+      passwords: [passwordRow({ id: 'pwd-a', notesCiphertext: 'ENC(current)' })],
+    });
+    versions.push({
+      id: 'pv-1',
+      passwordId: 'pwd-a',
+      companyId: 'co-1',
+      version: 1,
+      changedFields: ['notes'],
+      changedBy: 'user-op',
+      changeReason: null,
+      passwordCiphertext: 'ENC(old-secret)',
+      notesCiphertext: 'ENC("hello")',
+      totpSecretCiphertext: null,
+      createdAt: new Date('2026-01-02T00:00:00Z'),
+    } as unknown as StoredVersion);
+
+    const restored = await svc.restoreVersion(OPERATOR, 'co-1', 'pwd-a', 1, META);
+    expect(restored.notes).toBe('"hello"');
+    // Re-encrypted as the same string — not unquoted to `hello`.
+    expect(passwords[0]?.notesCiphertext).toBe('ENC("hello")');
   });
 
   it('generateTotpCode enforces the allow-list and client visibility', async () => {
