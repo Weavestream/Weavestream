@@ -1,5 +1,9 @@
 import { cache } from 'react';
-import type { CompanyType, MembershipRole } from '@weavestream/shared';
+import type {
+  CompanyLogo,
+  CompanyType,
+  MembershipRole,
+} from '@weavestream/shared';
 import { serverApiFetch, type ServerApiResponse } from './core';
 
 // ───────────────────────────────────────────────────────────────────
@@ -75,15 +79,6 @@ export const getCompanyMemberships = cache(
   ): Promise<ServerApiResponse<CompanyMembership[]>> =>
     serverApiFetch<CompanyMembership[]>(`/companies/${companyId}/memberships`),
 );
-
-export type CompanyLogo = {
-  uploadId: string;
-  url: string | null;
-  thumbnailUrl: string | null;
-  mimeType: string | null;
-  sizeBytes: number | null;
-  uploadedAt: string;
-};
 
 export type CompanyParentRef = {
   id: string;

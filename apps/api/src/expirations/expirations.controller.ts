@@ -5,7 +5,8 @@ import {
   Param,
   ParseUUIDPipe,
 } from '@nestjs/common';
-import { ExpirationsService, type ExpirationRow } from './expirations.service.js';
+import type { ExpirationRow } from '@weavestream/shared';
+import { ExpirationsService } from './expirations.service.js';
 import { CurrentUser, type AuthedUser } from '../common/current-user.decorator.js';
 import { RequirePermission } from '../rbac/require-permission.decorator.js';
 

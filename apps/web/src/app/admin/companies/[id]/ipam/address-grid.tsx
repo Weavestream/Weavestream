@@ -2,10 +2,7 @@
 
 import { useMemo, useState } from 'react';
 import Link from 'next/link';
-import type {
-  SubnetOccupant,
-  IpReservationRow,
-} from '../../../../../lib/server-api/ipam';
+import type { IpReservationDto, SubnetOccupant } from '@weavestream/shared';
 import {
   Btn,
   DataTable,
@@ -25,7 +22,7 @@ interface CellData {
   ip: string;
   state: CellState;
   occupants: SubnetOccupant[];
-  reservation: IpReservationRow | null;
+  reservation: IpReservationDto | null;
   inDhcp: boolean;
 }
 
@@ -44,7 +41,7 @@ export function AddressGrid({
   cidr: string;
   prefix: number;
   occupants: SubnetOccupant[];
-  reservations: IpReservationRow[];
+  reservations: IpReservationDto[];
   dhcpRangeStart: string | null;
   dhcpRangeEnd: string | null;
   companyId: string;
@@ -62,7 +59,7 @@ export function AddressGrid({
   }, [occupants]);
 
   const reservationMap = useMemo(() => {
-    const m = new Map<string, IpReservationRow>();
+    const m = new Map<string, IpReservationDto>();
     for (const r of reservations) m.set(r.ipAddress, r);
     return m;
   }, [reservations]);
@@ -337,7 +334,7 @@ function CompactList({
   companyId,
 }: {
   occupantMap: Map<string, SubnetOccupant[]>;
-  reservationMap: Map<string, IpReservationRow>;
+  reservationMap: Map<string, IpReservationDto>;
   companyId: string;
 }) {
   const allIps = Array.from(
@@ -356,7 +353,7 @@ function CompactList({
     id: string;
     ip: string;
     occupants: SubnetOccupant[];
-    reservation: IpReservationRow | null;
+    reservation: IpReservationDto | null;
   };
   const rows: Row[] = allIps.map((ip) => ({
     id: ip,

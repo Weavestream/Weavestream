@@ -1,11 +1,13 @@
 import type {
+  ExpirationRow,
   GlobalAccess,
   MembershipRole,
   PlatformCapability,
+  RecentActivityItem,
+  StarredItem,
   UserRole,
 } from '@weavestream/shared';
 import { serverApiFetch } from './core';
-import type { CompanyLogo } from './companies';
 
 export type UserListItem = {
   id: string;
@@ -100,66 +102,6 @@ export async function getAdminStats(): Promise<AdminStats | null> {
 // domain (registrar/TLS) expiries. Read-only; no mutating endpoints.
 // ---------------------------------------------------------------------
 
-type ExpirationStatus = 'EXPIRED' | 'WARNING';
-
-type AssetFieldExpiration = {
-  kind: 'asset-field';
-  companyId: string;
-  companyName: string;
-  companySlug: string;
-  assetId: string;
-  assetName: string;
-  layoutId: string;
-  layoutName: string;
-  layoutIcon: string;
-  layoutColor: string;
-  fieldId: string;
-  fieldSlug: string;
-  fieldLabel: string;
-  fieldType: 'DATE' | 'DATETIME';
-  expiresAt: string;
-  daysUntil: number;
-  status: ExpirationStatus;
-  warnWithinDays: number;
-};
-
-type DomainExpiration = {
-  kind: 'domain';
-  companyId: string;
-  companyName: string;
-  companySlug: string;
-  domainId: string;
-  hostname: string;
-  source: 'registrar' | 'tls';
-  expiresAt: string;
-  daysUntil: number;
-  status: ExpirationStatus;
-};
-
-type PasswordExpiration = {
-  kind: 'password';
-  companyId: string;
-  companyName: string;
-  companySlug: string;
-  passwordId: string;
-  passwordName: string;
-  /**
-   * `expiry` = hard `Password.expiresAt` cutoff; `rotation` = soft
-   * "should have been rotated by now" date derived from
-   * `lastRotatedAt + rotationReminderDays`. A single credential can
-   * surface up to one row of each kind.
-   */
-  source: 'expiry' | 'rotation';
-  expiresAt: string;
-  daysUntil: number;
-  status: ExpirationStatus;
-};
-
-export type ExpirationRow =
-  | AssetFieldExpiration
-  | DomainExpiration
-  | PasswordExpiration;
-
 /**
  * Fetch the unified expiring-soon feed. Pass `companyId` for a
  * tenant-scoped list, omit for the global (SUPER_ADMIN) cross-tenant
@@ -176,75 +118,10 @@ export async function listExpirations(
   return res.data?.items ?? [];
 }
 
-/**
- * A single entry in the unified `GET /me/stars` response. Each
- * variant is discriminated by `type` so callers can `switch` on it
- * with full TypeScript narrowing — the dashboard panel uses this to
- * pick the right icon, sub-line, and link target per entity.
- */
-export type StarredItem =
-  | {
-      type: 'company';
-      id: string;
-      name: string;
-      slug: string;
-      archivedAt: string | null;
-      starredAt: string;
-      companyId: string;
-      companyName: string;
-      memberCount: number;
-      logo: CompanyLogo | null;
-    }
-  | {
-      type: 'password';
-      id: string;
-      name: string;
-      archivedAt: string | null;
-      starredAt: string;
-      companyId: string;
-      companyName: string;
-      companyArchivedAt: string | null;
-    }
-  | {
-      type: 'asset';
-      id: string;
-      name: string;
-      archivedAt: string | null;
-      starredAt: string;
-      companyId: string;
-      companyName: string;
-      companyArchivedAt: string | null;
-      layoutName: string | null;
-      layoutIcon: string | null;
-    }
-  | {
-      type: 'article';
-      id: string;
-      name: string;
-      slug: string;
-      archivedAt: string | null;
-      starredAt: string;
-      companyId: string;
-      companyName: string;
-      companyArchivedAt: string | null;
-    };
-
 export async function listStarred(): Promise<StarredItem[]> {
   const res = await serverApiFetch<{ items: StarredItem[] }>('/me/stars');
   return res.data?.items ?? [];
 }
-
-export type RecentActivityItem = {
-  type: 'asset' | 'article';
-  id: string;
-  name: string;
-  companyId: string;
-  companyName: string;
-  companySlug: string;
-  action: 'created' | 'updated';
-  updatedAt: string;
-  updatedByName: string | null;
-};
 
 export async function listRecentActivity(
   limit = 10,

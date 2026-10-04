@@ -2,7 +2,7 @@
 
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useEffect, useState, useTransition } from 'react';
-import type { SubnetRow } from '../../../../../lib/server-api/ipam';
+import type { SubnetRow } from '@weavestream/shared';
 import { apiFetch } from '../../../../../lib/api';
 import {
   Btn,

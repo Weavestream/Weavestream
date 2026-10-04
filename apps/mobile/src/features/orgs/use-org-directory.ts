@@ -1,5 +1,6 @@
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { useEffect, useMemo, useState } from 'react';
+import type { StarredItem } from '@weavestream/shared';
 import { apiFetch } from '../../lib/api';
 import { toOrg, useOrgScope, type Org } from '../../lib/org-scope';
 
@@ -33,15 +34,6 @@ interface CompanyRow {
   city?: string | null;
   region?: string | null;
 }
-
-interface StarredCompany {
-  type: 'company';
-  companyId: string;
-  companyName: string;
-  archivedAt: string | null;
-}
-
-type StarredItem = { type: string } & Record<string, unknown>;
 
 export function useDebounced(value: string, ms: number): string {
   const [debounced, setDebounced] = useState(value);
@@ -98,8 +90,9 @@ export function useOrgDirectory({
       seen.add(currentOrg.id);
     }
     for (const item of stars.data?.items ?? []) {
+      // Skips every non-company star, including kinds a newer API may add.
       if (item.type !== 'company') continue;
-      const co = item as unknown as StarredCompany;
+      const co = item;
       // An archived company is not somewhere to scope the app to, even
       // if the star is still on it.
       if (co.archivedAt !== null) continue;

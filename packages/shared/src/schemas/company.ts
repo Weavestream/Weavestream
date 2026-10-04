@@ -160,3 +160,18 @@ export const updateCompanySchema = z
 
 export type CreateCompanyInput = z.infer<typeof createCompanySchema>;
 export type UpdateCompanyInput = z.infer<typeof updateCompanySchema>;
+
+/**
+ * Logo block the API hydrates onto company rows (`GET /companies`,
+ * `GET /companies/:id`, starred companies). `url` and `thumbnailUrl` are
+ * same-origin API paths; `thumbnailUrl` is null when no thumbnail exists.
+ */
+export const companyLogoSchema = z.object({
+  uploadId: z.string().uuid(),
+  url: z.string().nullable(),
+  thumbnailUrl: z.string().nullable(),
+  mimeType: z.string(),
+  sizeBytes: z.number().int(),
+  uploadedAt: z.string(),
+});
+export type CompanyLogo = z.infer<typeof companyLogoSchema>;

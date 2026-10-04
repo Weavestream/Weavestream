@@ -1,4 +1,5 @@
 import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import type { StarredItem } from '@weavestream/shared';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { AuditLogService } from '../audit/audit.service.js';
 import { allowedCompanyIds } from '../rbac/permission.service.js';
@@ -48,66 +49,6 @@ const STAR_COMPANY_SELECT = {
   },
   _count: { select: { memberships: { where: { revokedAt: null } } } },
 } as const;
-
-/**
- * Shape of an individual item in the unified `GET /me/stars` response.
- * Discriminated by `type` so the frontend can render each with the
- * right icon, link, and sub-line — while keeping a single
- * starredAt-sorted list that reads well as a dashboard panel.
- */
-export type StarredItem =
-  | {
-      type: 'company';
-      id: string;
-      name: string;
-      slug: string;
-      archivedAt: string | null;
-      starredAt: string;
-      companyId: string;
-      companyName: string;
-      memberCount: number;
-      logo: {
-        uploadId: string;
-        url: string | null;
-        thumbnailUrl: string | null;
-        mimeType: string;
-        sizeBytes: number;
-        uploadedAt: string;
-      } | null;
-    }
-  | {
-      type: 'password';
-      id: string;
-      name: string;
-      archivedAt: string | null;
-      starredAt: string;
-      companyId: string;
-      companyName: string;
-      companyArchivedAt: string | null;
-    }
-  | {
-      type: 'asset';
-      id: string;
-      name: string;
-      archivedAt: string | null;
-      starredAt: string;
-      companyId: string;
-      companyName: string;
-      companyArchivedAt: string | null;
-      layoutName: string | null;
-      layoutIcon: string | null;
-    }
-  | {
-      type: 'article';
-      id: string;
-      name: string;
-      slug: string;
-      archivedAt: string | null;
-      starredAt: string;
-      companyId: string;
-      companyName: string;
-      companyArchivedAt: string | null;
-    };
 
 @Injectable()
 export class StarsService {

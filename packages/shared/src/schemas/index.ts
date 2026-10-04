@@ -29,3 +29,7 @@ export * from './ai-tools.js';
 export * from './chat.js';
 export * from './ticket.js';
 export * from './step-up.js';
+export * from './security.js';
+export * from './expiration.js';
+export * from './star.js';
+export * from './activity.js';

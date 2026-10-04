@@ -4,10 +4,10 @@ import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useMemo, useState, useTransition } from 'react';
 import type {
+  IpReservationDto,
   SubnetDetail,
   SubnetOccupant,
-  IpReservationRow,
-} from '../../../../../../lib/server-api/ipam';
+} from '@weavestream/shared';
 import { apiFetch } from '../../../../../../lib/api';
 import {
   Btn,
@@ -46,7 +46,7 @@ type OccupantRow =
       id: string;
       kind: 'reservation';
       ip: string;
-      reservation: IpReservationRow;
+      reservation: IpReservationDto;
     };
 
 export function SubnetDetailView({
@@ -63,7 +63,7 @@ export function SubnetDetailView({
   const [tab, setTab] = useState<Tab>('occupants');
   const [resDialog, setResDialog] = useState<
     | { kind: 'add' }
-    | { kind: 'edit'; row: IpReservationRow }
+    | { kind: 'edit'; row: IpReservationDto }
     | null
   >(null);
   const [error, setError] = useState<string | null>(null);
@@ -269,7 +269,7 @@ export function SubnetDetailView({
     });
   }
 
-  const reservationColumns: DataColumn<IpReservationRow>[] = [
+  const reservationColumns: DataColumn<IpReservationDto>[] = [
     {
       id: 'ip',
       header: 'IP',
@@ -721,7 +721,7 @@ function ReservationDialog({
   subnetCidr: string;
   subnetPrefix: number;
   existingIps: Set<string>;
-  initial: IpReservationRow | null;
+  initial: IpReservationDto | null;
   onSubmit: (f: ResForm) => Promise<void>;
   onClose: () => void;
   error: string | null;

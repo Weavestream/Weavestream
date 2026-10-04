@@ -23,7 +23,7 @@ import type {
   LoginActivity,
   SecuritySessionRow,
   ThrottleBlockEntry,
-} from '../../../../lib/server-api/security';
+} from '@weavestream/shared';
 
 type TabId =
   | 'logins'

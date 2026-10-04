@@ -1,5 +1,16 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import type { Request } from 'express';
+import type {
+  ConnectionDiagnostics,
+  EgressBlockRow,
+  EgressBlocksResponse,
+  LockoutEntry,
+  LockoutsResponse,
+  LoginActivity,
+  LoginActivityBucket,
+  SecuritySessionRow,
+  ThrottleBlockEntry,
+} from '@weavestream/shared';
 import { topologyWarnings } from '@weavestream/shared/server';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { RedisService } from '../redis/redis.service.js';
@@ -107,14 +118,7 @@ export class SecurityService {
    * to 24h; the maximum is 168h (7 days) so a single render can't
    * sweep the entire audit table.
    */
-  async loginActivity(windowHours: number): Promise<{
-    windowHours: number;
-    since: string;
-    counts: { success: number; failure: number; mfaFailure: number };
-    byIp: Array<LoginActivityBucket>;
-    byEmail: Array<LoginActivityBucket>;
-    recent: Array<LoginActivityRow>;
-  }> {
+  async loginActivity(windowHours: number): Promise<LoginActivity> {
     const safeWindow = Math.min(Math.max(windowHours, 1), 24 * 7);
     const since = new Date(Date.now() - safeWindow * 60 * 60 * 1000);
     const rows = await this.prisma.auditLog.findMany({
@@ -192,12 +196,7 @@ export class SecurityService {
   // Active lockouts (Redis)
   // ────────────────────────────────────────────────────────────────
 
-  async activeLockouts(): Promise<{
-    threshold: number;
-    windowMinutes: number;
-    ip: Array<LockoutEntry>;
-    email: Array<LockoutEntry>;
-  }> {
+  async activeLockouts(): Promise<LockoutsResponse> {
     const threshold = this.env.values.LOCKOUT_MAX_FAILURES;
     const windowMinutes = this.env.values.LOCKOUT_WINDOW_MIN;
     const [ip, email] = await Promise.all([
@@ -295,12 +294,7 @@ export class SecurityService {
    * other Security Center read methods: hard-capped row count, formatted
    * for direct rendering by `<DataTable>`.
    */
-  async egressBlocks(windowHours: number): Promise<{
-    windowHours: number;
-    since: string;
-    total: number;
-    recent: Array<EgressBlockRow>;
-  }> {
+  async egressBlocks(windowHours: number): Promise<EgressBlocksResponse> {
     const safeWindow = Math.min(Math.max(windowHours, 1), 24 * 30);
     const since = new Date(Date.now() - safeWindow * 60 * 60 * 1000);
     const [rows, total] = await Promise.all([
@@ -355,7 +349,7 @@ export class SecurityService {
   async listActiveSessions(params: {
     userId?: string;
     limit?: number;
-  }): Promise<Array<ActiveSessionRow>> {
+  }): Promise<Array<SecuritySessionRow>> {
     const limit = Math.min(Math.max(params.limit ?? 200, 1), 500);
     const rows = await this.prisma.session.findMany({
       where: {
@@ -701,93 +695,3 @@ function extractAttemptedEmail(row: {
   }
   return null;
 }
-
-export type LoginActivityBucket = {
-  identifier: string;
-  success: number;
-  failure: number;
-  lastSeen: string;
-};
-
-export type LoginActivityRow = {
-  id: string;
-  action: string;
-  ip: string | null;
-  userAgent: string | null;
-  createdAt: string;
-  actorId: string | null;
-  actor: { id: string; name: string; email: string } | null;
-  attemptedEmail: string | null;
-};
-
-export type LockoutEntry = {
-  identifier: string;
-  failures: number;
-  ttlSeconds: number | null;
-  locked: boolean;
-};
-
-export type ThrottleBlockEntry = {
-  throttler: string;
-  tracker: string;
-  blockedUntil: string | null;
-  remainingMs: number;
-};
-
-export type EgressBlockRow = {
-  id: string;
-  createdAt: string;
-  userAgent: string | null;
-  url: string | null;
-  hostname: string | null;
-  resolvedIps: string[];
-  reason: string | null;
-  matchedCidr: string | null;
-};
-
-export type ConnectionDiagnostics = {
-  /** The IP every per-IP control (lockout, throttle, IP-rules, audit)
-   * attributes this request to. Resolved via `ipOf(req)`. */
-  resolvedIp: string;
-  /** The raw TCP peer the API sees — normally the `web` container. */
-  socketPeer: string;
-  /** Whether the API honored forwarding headers (peer on private
-   * bridge). Reflects only the API↔peer hop; see interpretation. */
-  peerTrusted: boolean;
-  /** `X-Forwarded-For` as the API received it (the single sanitized
-   * entry the web tier emits), or null. */
-  forwardedForReceived: string | null;
-  /** The raw inbound chain the web tier received from its immediate
-   * upstream, forwarded display-only by the web tier for this endpoint.
-   * Never used for attribution. */
-  inboundForwardedFor: string;
-  /** `TRUST_PROXY_HOPS` from this API container's environment. The API
-   * does not apply it; see `webTrustProxyHops` for the value in effect. */
-  trustProxyHops: number;
-  /** The `TRUST_PROXY_HOPS` value the web tier applied when it resolved
-   * this request's client IP, sent display-only for this endpoint. Null
-   * when no valid value arrived from a private-bridge peer: an older web
-   * container, a request that bypassed `web`, or an untrusted peer. */
-  webTrustProxyHops: number | null;
-  /** Plain-English, non-overclaiming notes about this request's
-   * attribution and (config-derived) deployment topology. */
-  interpretation: string[];
-};
-
-export type ActiveSessionRow = {
-  id: string;
-  ip: string;
-  userAgent: string;
-  mfaPending: boolean;
-  createdAt: string;
-  expiresAt: string;
-  user: {
-    id: string;
-    name: string;
-    email: string;
-    role: string;
-    mfaEnabled: boolean;
-    mfaEnrolled: boolean;
-    isActive: boolean;
-  };
-};

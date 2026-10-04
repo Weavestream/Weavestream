@@ -1,25 +1,8 @@
 import { ForbiddenException, Injectable } from '@nestjs/common';
 import { requireTenantContext } from '@weavestream/shared/server';
+import type { RecentActivityItem } from '@weavestream/shared';
 import { PrismaService } from '../prisma/prisma.service.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
-
-export interface RecentActivityItem {
-  type: 'asset' | 'article';
-  id: string;
-  name: string;
-  companyId: string;
-  companyName: string;
-  companySlug: string;
-  /**
-   * Synthetic verb derived from `createdAt` vs `updatedAt` — `created`
-   * when the row hasn't been touched since insertion, `updated`
-   * otherwise. Cheap signal; richer actions (archive/move/etc.) would
-   * require trawling the audit log.
-   */
-  action: 'created' | 'updated';
-  updatedAt: string;
-  updatedByName: string | null;
-}
 
 /**
  * Phase 9b.3 — "Recent activity" feed for the operator home dashboard.

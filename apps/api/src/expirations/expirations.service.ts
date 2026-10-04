@@ -1,4 +1,10 @@
 import { Injectable } from '@nestjs/common';
+import type {
+  AssetFieldExpiration,
+  DomainExpiration,
+  ExpirationRow,
+  PasswordExpiration,
+} from '@weavestream/shared';
 import { PrismaService } from '../prisma/prisma.service.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
 import { canReadPassword } from '../passwords/password-access-policy.js';
@@ -18,70 +24,6 @@ const DEFAULT_WARN_WITHIN_DAYS = 30;
  * they really need the overflow.
  */
 const MAX_RESULTS = 500;
-
-export type ExpirationStatus = 'EXPIRED' | 'WARNING';
-
-export type AssetFieldExpiration = {
-  kind: 'asset-field';
-  companyId: string;
-  companyName: string;
-  companySlug: string;
-  assetId: string;
-  assetName: string;
-  layoutId: string;
-  layoutName: string;
-  layoutIcon: string;
-  layoutColor: string;
-  fieldId: string;
-  fieldSlug: string;
-  fieldLabel: string;
-  fieldType: 'DATE' | 'DATETIME';
-  /** ISO 8601 (date-only for DATE, full timestamp for DATETIME). */
-  expiresAt: string;
-  /** Signed whole days to expiry. Negative values are already expired. */
-  daysUntil: number;
-  status: ExpirationStatus;
-  /** Effective threshold used to keep this row (per-field override or default). */
-  warnWithinDays: number;
-};
-
-export type DomainExpiration = {
-  kind: 'domain';
-  companyId: string;
-  companyName: string;
-  companySlug: string;
-  domainId: string;
-  hostname: string;
-  source: 'registrar' | 'tls';
-  expiresAt: string;
-  daysUntil: number;
-  status: ExpirationStatus;
-};
-
-export type PasswordExpiration = {
-  kind: 'password';
-  companyId: string;
-  companyName: string;
-  companySlug: string;
-  passwordId: string;
-  passwordName: string;
-  /**
-   * Two disjoint sources per password: `expiry` for the hard
-   * `expiresAt` cutoff (the credential should stop being used after
-   * this date) and `rotation` for the soft "should be rotated by now"
-   * date derived from `lastRotatedAt + rotationReminderDays`. A single
-   * credential can yield up to one row of each kind.
-   */
-  source: 'expiry' | 'rotation';
-  expiresAt: string;
-  daysUntil: number;
-  status: ExpirationStatus;
-};
-
-export type ExpirationRow =
-  | AssetFieldExpiration
-  | DomainExpiration
-  | PasswordExpiration;
 
 interface ComputeOptions {
   /** When set, results are limited to a single tenant. */

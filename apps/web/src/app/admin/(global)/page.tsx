@@ -8,12 +8,11 @@ import {
   type CompanyListItem,
   type CompanyPage,
 } from '../../../lib/server-api/companies';
+import type { RecentActivityItem, StarredItem } from '@weavestream/shared';
 import {
   getAdminStats,
   listRecentActivity,
   listStarred,
-  type RecentActivityItem,
-  type StarredItem,
 } from '../../../lib/server-api/admin';
 import { serverApiFetch } from '../../../lib/server-api/core';
 import { listDomainAlerts } from '../../../lib/server-api/domains';

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { integrationTargetProvenanceSchema } from './integration.js';
 
 // ---------------------------------------------------------------------------
 // IPv4 helpers
@@ -192,3 +193,87 @@ export const updateIpReservationSchema = z
     message: 'At least one field must be provided',
   });
 export type UpdateIpReservationInput = z.input<typeof updateIpReservationSchema>;
+
+// ---------------------------------------------------------------------
+// Response contracts — the wire shapes of the IPAM reads. Dates are ISO
+// strings. The API returns Prisma rows (`Date` fields); a contract test
+// there checks that their JSON form matches these.
+// ---------------------------------------------------------------------
+
+/** A subnet row as stored (`GET /companies/:id/ipam/subnets/:id` → `subnet`). */
+export const subnetSchema = z.object({
+  id: z.string().uuid(),
+  companyId: z.string().uuid(),
+  name: z.string(),
+  cidr: z.string(),
+  prefix: z.number().int(),
+  vlanId: z.number().int().nullable(),
+  gateway: z.string().nullable(),
+  dhcpRangeStart: z.string().nullable(),
+  dhcpRangeEnd: z.string().nullable(),
+  description: z.string().nullable(),
+  archivedAt: z.string().nullable(),
+  createdBy: z.string().uuid().nullable(),
+  updatedBy: z.string().uuid().nullable(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+
+export const subnetUtilizationSchema = z.object({
+  totalUsable: z.number().int(),
+  claimed: z.number().int(),
+  free: z.number().int(),
+  conflictCount: z.number().int(),
+});
+
+/** One row of `GET /companies/:id/ipam/subnets` — the subnet plus its usage. */
+export const subnetRowSchema = subnetSchema.extend({
+  utilization: subnetUtilizationSchema,
+  conflictCount: z.number().int(),
+});
+
+export const ipReservationSchema = z.object({
+  id: z.string().uuid(),
+  companyId: z.string().uuid(),
+  subnetId: z.string().uuid(),
+  ipAddress: z.string(),
+  label: z.string(),
+  notes: z.string().nullable(),
+  createdBy: z.string().uuid().nullable(),
+  updatedBy: z.string().uuid().nullable(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+
+/** One IP address that an asset field claims inside a subnet. */
+export const subnetOccupantSchema = z.object({
+  ip: z.string(),
+  assetId: z.string().uuid(),
+  assetName: z.string(),
+  assetLayoutId: z.string().uuid(),
+  assetLayoutName: z.string(),
+  assetLayoutColor: z.string(),
+  assetLayoutIcon: z.string(),
+  assetFieldId: z.string().uuid(),
+  fieldName: z.string(),
+});
+
+/** `GET /companies/:id/ipam/subnets/:id`. */
+export const subnetDetailSchema = z.object({
+  /** The stored row; usage is in `utilization`, not on this object. */
+  subnet: subnetSchema,
+  utilization: subnetUtilizationSchema,
+  occupants: z.array(subnetOccupantSchema),
+  reservations: z.array(ipReservationSchema),
+  conflicts: z.array(
+    z.object({ ip: z.string(), entries: z.array(subnetOccupantSchema) }),
+  ),
+  provenance: z.array(integrationTargetProvenanceSchema),
+});
+
+export type SubnetDto = z.infer<typeof subnetSchema>;
+export type SubnetUtilization = z.infer<typeof subnetUtilizationSchema>;
+export type SubnetRow = z.infer<typeof subnetRowSchema>;
+export type IpReservationDto = z.infer<typeof ipReservationSchema>;
+export type SubnetOccupant = z.infer<typeof subnetOccupantSchema>;
+export type SubnetDetail = z.infer<typeof subnetDetailSchema>;

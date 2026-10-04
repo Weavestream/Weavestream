@@ -7,7 +7,7 @@ import {
   MobileCardRow,
   Tag,
 } from '../../../../components/ui';
-import type { SubnetRow } from '../../../../lib/server-api/ipam';
+import type { SubnetRow } from '@weavestream/shared';
 
 /**
  * Portal-side subnet list. Read-only mirror of the admin browser's

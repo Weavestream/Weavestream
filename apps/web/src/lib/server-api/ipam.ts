@@ -1,72 +1,11 @@
 import { cache } from 'react';
-import type { IntegrationTargetProvenance } from '@weavestream/shared';
+import type { SubnetDetail, SubnetRow } from '@weavestream/shared';
 import { unwrapApiResponse } from '../api-errors';
 import { serverApiFetch } from './core';
 
 // ---------------------------------------------------------------------
 // IPAM — company-scoped subnet registry + reservations
 // ---------------------------------------------------------------------
-
-export type SubnetOccupant = {
-  ip: string;
-  assetId: string;
-  assetName: string;
-  assetLayoutId: string;
-  assetLayoutName: string;
-  assetLayoutColor: string;
-  assetLayoutIcon: string;
-  assetFieldId: string;
-  fieldName: string;
-};
-
-type SubnetUtilization = {
-  totalUsable: number;
-  claimed: number;
-  free: number;
-  conflictCount: number;
-};
-
-export type SubnetRow = {
-  id: string;
-  companyId: string;
-  name: string;
-  cidr: string;
-  prefix: number;
-  vlanId: number | null;
-  gateway: string | null;
-  dhcpRangeStart: string | null;
-  dhcpRangeEnd: string | null;
-  description: string | null;
-  archivedAt: string | null;
-  createdBy: string | null;
-  updatedBy: string | null;
-  createdAt: string;
-  updatedAt: string;
-  utilization: SubnetUtilization;
-  conflictCount: number;
-};
-
-export type IpReservationRow = {
-  id: string;
-  companyId: string;
-  subnetId: string;
-  ipAddress: string;
-  label: string;
-  notes: string | null;
-  createdBy: string | null;
-  updatedBy: string | null;
-  createdAt: string;
-  updatedAt: string;
-};
-
-export type SubnetDetail = {
-  subnet: SubnetRow;
-  utilization: SubnetUtilization;
-  occupants: SubnetOccupant[];
-  reservations: IpReservationRow[];
-  conflicts: Array<{ ip: string; entries: SubnetOccupant[] }>;
-  provenance: IntegrationTargetProvenance[];
-};
 
 export async function listSubnets(
   companyId: string,
