@@ -1,33 +1,32 @@
 import type { Metadata } from 'next';
-import type { ReactNode } from 'react';
-import Link from 'next/link';
 
 export const metadata: Metadata = { title: 'Photos' };
 import { getMe } from '../../../../../lib/server-api/auth';
 import { getSettings } from '../../../../../lib/server-api/settings';
 import { getCompanyDetail } from '../../../../../lib/server-api/companies';
 import { throwUnlessFound } from '../../../../../lib/server-api/core';
-import {
-  listPhotos,
-  type UploadSummary,
-} from '../../../../../lib/server-api/uploads';
+import { listPhotos } from '../../../../../lib/server-api/uploads';
 import { PageBody, PageHeader } from '../../../../../components/shell/page-header';
-import { Icon, LayoutSwatch, Panel, Tag } from '../../../../../components/ui';
-import { buildTerm, lower } from '../../../../../lib/term';
+import { LayoutSwatch, Panel } from '../../../../../components/ui';
+import { buildTerm } from '../../../../../lib/term';
 import { companyCrumbs } from '../../../../../lib/company-crumbs';
+import { readBool, readPhotoQuery } from '../../../../../lib/photo-query';
+import { PhotoFilterBar } from '../../../../../components/photos/photo-filter-bar';
 import {
-  attachmentLabel,
-  buildPhotosHref,
-  readBool,
-  readPhotoQuery,
-} from '../../../../../lib/photo-query';
-import { PhotoDeleteChip } from './photo-delete-chip';
+  PhotoEmptyState,
+  PhotoGrid,
+  PhotoLoadMore,
+} from '../../../../../components/photos/photo-gallery';
+import { AdminPhotoTile } from './admin-photo-tile';
 
 /**
  * Phase 4 per-company photo gallery. `Upload` rows with `isImage=true`
  * light up here, filtered by optional `attachedToType`
  * (asset | article | asset_field) so operators can audit everything
  * uploaded against a single entity from one place.
+ *
+ * Admin-only on top of the shared gallery: the "Show orphaned &
+ * archived" audit toggle and the operator tile (`AdminPhotoTile`).
  */
 export default async function CompanyPhotosPage({
   params,
@@ -69,19 +68,30 @@ export default async function CompanyPhotosPage({
       />
       <PageBody>
         <Panel noPad>
-          <FilterBar
+          <PhotoFilterBar
             basePath={basePath}
             attachedToType={attachedToType}
             attachedToId={attachedToId}
-            includeNonLatest={includeNonLatest}
             count={page.items.length}
+            nonLatest={{ included: includeNonLatest }}
           />
           {page.items.length === 0 ? (
-            <EmptyState />
+            <PhotoEmptyState
+              message="No photos yet for the current filter."
+              hint="Attach an image to any asset or article and it will appear here."
+            />
           ) : (
-            <PhotoGrid items={page.items} companyId={companyId} />
+            <PhotoGrid>
+              {page.items.map((photo) => (
+                <AdminPhotoTile
+                  key={photo.id}
+                  photo={photo}
+                  companyId={companyId}
+                />
+              ))}
+            </PhotoGrid>
           )}
-          <Pagination
+          <PhotoLoadMore
             basePath={basePath}
             nextCursor={page.nextCursor}
             attachedToType={attachedToType}
@@ -91,544 +101,5 @@ export default async function CompanyPhotosPage({
         </Panel>
       </PageBody>
     </>
-  );
-}
-
-function FilterBar({
-  basePath,
-  attachedToType,
-  attachedToId,
-  includeNonLatest,
-  count,
-}: {
-  basePath: string;
-  attachedToType?: string;
-  attachedToId?: string;
-  includeNonLatest: boolean;
-  count: number;
-}) {
-  const kinds: Array<{ value?: string; label: string }> = [
-    { value: undefined, label: 'All' },
-    { value: 'asset', label: 'Attachments' },
-    { value: 'article', label: 'Articles' },
-    { value: 'asset_field', label: 'Assets' },
-  ];
-  return (
-    <div
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        flexWrap: 'wrap',
-        gap: 8,
-        padding: '10px 14px',
-        borderBottom: '1px solid var(--line)',
-        fontSize: 12,
-      }}
-    >
-      <div
-        style={{
-          display: 'flex',
-          flexWrap: 'wrap',
-          gap: 4,
-          minWidth: 0,
-        }}
-      >
-        {kinds.map((k) => {
-          const active = (attachedToType ?? '') === (k.value ?? '');
-          const href = buildPhotosHref(basePath, {
-            attachedToType: k.value,
-            attachedToId,
-            includeNonLatest,
-          });
-          return (
-            <Link
-              key={k.label}
-              href={href}
-              style={{
-                padding: '4px 10px',
-                borderRadius: 4,
-                fontSize: 11.5,
-                fontFamily: 'var(--font-mono)',
-                whiteSpace: 'nowrap',
-                background: active ? 'var(--accent-soft)' : 'transparent',
-                color: active ? 'var(--accent)' : 'var(--muted)',
-                border: `1px solid ${active ? 'var(--accent-line)' : 'var(--line)'}`,
-              }}
-            >
-              {k.label}
-            </Link>
-          );
-        })}
-      </div>
-      <Link
-        href={buildPhotosHref(basePath, {
-          attachedToType,
-          attachedToId,
-          includeNonLatest: !includeNonLatest,
-        })}
-        title={
-          includeNonLatest
-            ? 'Show only images from the current live article body'
-            : 'Reveal images that are orphaned, archived, or only in older versions'
-        }
-        style={{
-          padding: '4px 10px',
-          borderRadius: 4,
-          fontSize: 11.5,
-          fontFamily: 'var(--font-mono)',
-          whiteSpace: 'nowrap',
-          background: includeNonLatest
-            ? 'var(--accent-soft)'
-            : 'transparent',
-          color: includeNonLatest ? 'var(--accent)' : 'var(--muted)',
-          border: `1px solid ${includeNonLatest ? 'var(--accent-line)' : 'var(--line)'}`,
-        }}
-      >
-        Show orphaned &amp; archived
-      </Link>
-      {attachedToId && (
-        <div
-          style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: 6,
-            padding: '3px 8px',
-            borderRadius: 4,
-            background: 'var(--panel-2)',
-            border: '1px solid var(--line)',
-            fontSize: 11,
-            fontFamily: 'var(--font-mono)',
-            color: 'var(--muted)',
-            whiteSpace: 'nowrap',
-          }}
-        >
-          <span>
-            id:{' '}
-            <span style={{ color: 'var(--text-2)' }}>
-              {attachedToId.slice(0, 8)}…
-            </span>
-          </span>
-          <Link
-            href={buildPhotosHref(basePath, {
-              attachedToType,
-              includeNonLatest,
-            })}
-            style={{ color: 'var(--dim)' }}
-            title="Clear id filter"
-          >
-            <Icon.x size={10} />
-          </Link>
-        </div>
-      )}
-      <div style={{ flex: 1, minWidth: 8 }} />
-      <span
-        style={{
-          fontFamily: 'var(--font-mono)',
-          fontSize: 11,
-          color: 'var(--muted)',
-          whiteSpace: 'nowrap',
-          marginLeft: 'auto',
-        }}
-      >
-        {count} photo{count === 1 ? '' : 's'}
-        {includeNonLatest ? ' (incl. non-live)' : ''}
-      </span>
-    </div>
-  );
-}
-
-function PhotoGrid({
-  items,
-  companyId,
-}: {
-  items: UploadSummary[];
-  companyId: string;
-}) {
-  return (
-    <div
-      style={{
-        display: 'grid',
-        gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))',
-        gap: 10,
-        padding: 14,
-      }}
-    >
-      {items.map((photo) => (
-        <PhotoTile key={photo.id} photo={photo} companyId={companyId} />
-      ))}
-    </div>
-  );
-}
-
-function PhotoTile({
-  photo,
-  companyId,
-}: {
-  photo: UploadSummary;
-  companyId: string;
-}) {
-  const kindLabel = photo.attachedToType
-    ? attachmentLabel(photo.attachedToType)
-    : 'detached';
-  const stateBadge = stateBadgeFor(photo);
-  const deletable =
-    photo.articleLinkState === 'orphan' ||
-    photo.articleLinkState === 'archived';
-  return (
-    <div
-      style={{
-        border: '1px solid var(--line)',
-        borderRadius: 6,
-        background: 'var(--panel-2)',
-        overflow: 'hidden',
-        display: 'flex',
-        flexDirection: 'column',
-      }}
-    >
-      <a
-        href={photo.downloadUrl ?? '#'}
-        target="_blank"
-        rel="noreferrer"
-        style={{
-          aspectRatio: '1 / 1',
-          background: 'var(--panel)',
-          display: 'block',
-          overflow: 'hidden',
-        }}
-        title={photo.filename}
-      >
-        {photo.thumbnailUrl ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
-            src={photo.thumbnailUrl}
-            alt={photo.filename}
-            style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-          />
-        ) : (
-          <div
-            style={{
-              width: '100%',
-              height: '100%',
-              display: 'grid',
-              placeItems: 'center',
-              color: 'var(--dim)',
-            }}
-          >
-            <Icon.doc size={22} />
-          </div>
-        )}
-      </a>
-      <div
-        style={{
-          padding: '8px 10px',
-          borderTop: '1px solid var(--line)',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 4,
-        }}
-      >
-        <div
-          title={photo.filename}
-          style={{
-            fontSize: 12,
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            whiteSpace: 'nowrap',
-          }}
-        >
-          {photo.filename}
-        </div>
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 6,
-            fontSize: 10.5,
-            fontFamily: 'var(--font-mono)',
-            color: 'var(--dim)',
-          }}
-        >
-          <Tag tone="outline">{kindLabel}</Tag>
-          {stateBadge && (
-            <Tag tone={stateBadge.tone}>{stateBadge.label}</Tag>
-          )}
-          {photo.width && photo.height && (
-            <span>
-              {photo.width}×{photo.height}
-            </span>
-          )}
-        </div>
-        {(() => {
-          const linkInfo = resolveSourceLink(companyId, photo);
-          if (!linkInfo && !deletable) return null;
-          return (
-            <div
-              style={{
-                display: 'flex',
-                flexWrap: 'wrap',
-                gap: 4,
-              }}
-            >
-              {linkInfo && (
-                <ActionChip
-                  href={linkInfo.sourceHref}
-                  icon={<Icon.ext size={10} />}
-                  label="Open"
-                  tone="accent"
-                  title={
-                    linkInfo.sourceTitle
-                      ? `Open ${linkInfo.label}: ${linkInfo.sourceTitle}`
-                      : `Open source ${linkInfo.label}`
-                  }
-                />
-              )}
-              {linkInfo?.filterHref && (
-                <ActionChip
-                  href={linkInfo.filterHref}
-                  icon={<Icon.grid size={10} />}
-                  label="Related"
-                  tone="muted"
-                  title={`View all photos for this ${linkInfo.label}`}
-                />
-              )}
-              {deletable && (
-                <PhotoDeleteChip
-                  photo={photo}
-                  state={photo.articleLinkState as 'orphan' | 'archived'}
-                />
-              )}
-            </div>
-          );
-        })()}
-      </div>
-    </div>
-  );
-}
-
-/**
- * Visual badge that summarises an article-attached image's link state
- * for the photos grid. `live` images don't get a badge (they're the
- * default state); the other states all warrant a tag so operators can
- * see at a glance why a photo lacks an Open chip or carries a Delete
- * affordance. `null` for non-article uploads and any unknown state.
- */
-function stateBadgeFor(
-  photo: UploadSummary,
-): { tone: 'warn' | 'danger'; label: string } | null {
-  switch (photo.articleLinkState) {
-    case 'archived':
-      return { tone: 'warn', label: 'Archived' };
-    case 'versioned':
-      return { tone: 'warn', label: 'Old version' };
-    case 'orphan':
-      return { tone: 'danger', label: 'Orphan' };
-    default:
-      return null;
-  }
-}
-
-/**
- * Compact chip-style link used inside photo tiles. Renders an icon
- * plus a single short word (e.g. "Open", "Related") so we don't waste
- * a 160px-wide tile on a full sentence. Two tones — `accent` for the
- * primary jump-to-source action, `muted` for the secondary "filter to
- * peers" action — keep the visual hierarchy obvious at tile scale.
- */
-function ActionChip({
-  href,
-  icon,
-  label,
-  tone,
-  title,
-}: {
-  href: string;
-  icon: ReactNode;
-  label: string;
-  tone: 'accent' | 'muted';
-  title: string;
-}) {
-  const styles =
-    tone === 'accent'
-      ? {
-        color: 'var(--accent)',
-        background: 'var(--accent-soft)',
-        border: '1px solid var(--accent-line)',
-      }
-      : {
-        color: 'var(--muted)',
-        background: 'var(--panel)',
-        border: '1px solid var(--line)',
-      };
-  return (
-    <Link
-      href={href}
-      title={title}
-      aria-label={title}
-      style={{
-        display: 'inline-flex',
-        alignItems: 'center',
-        gap: 4,
-        padding: '2px 6px',
-        borderRadius: 4,
-        fontSize: 10.5,
-        fontFamily: 'var(--font-mono)',
-        lineHeight: 1,
-        textDecoration: 'none',
-        whiteSpace: 'nowrap',
-        ...styles,
-      }}
-    >
-      {icon}
-      <span>{label}</span>
-    </Link>
-  );
-}
-
-/**
- * Pick the best "open source X" / "view all for this X" link for a
- * photo tile. Asset and asset_field uploads ship with an
- * `attachedToId` and can deep-link directly. Article uploads never
- * carry an id — the owning article is resolved server-side via
- * `sourceArticle` (a body-scan of active + archived articles and
- * non-draft version snapshots), so we use that here instead.
- *
- * For article images: `live` and `archived` get an Open link to the
- * owning article (the archived detail page still loads and shows the
- * banner). `versioned` skips Open because the history-restore UI
- * lives inside the article detail page and there's no stable URL to
- * a specific version preview. `orphan` has no destination by
- * definition.
- */
-function resolveSourceLink(
-  companyId: string,
-  photo: UploadSummary,
-): {
-  label: string;
-  sourceHref: string;
-  filterHref: string | null;
-  sourceTitle: string | null;
-} | null {
-  if (!photo.attachedToType) return null;
-  const label = attachmentLabel(photo.attachedToType).toLowerCase();
-  if (photo.attachedToType === 'article') {
-    if (!photo.sourceArticle) return null;
-    if (
-      photo.articleLinkState !== 'live' &&
-      photo.articleLinkState !== 'archived'
-    ) {
-      return null;
-    }
-    return {
-      label:
-        photo.articleLinkState === 'archived' ? 'archived article' : label,
-      sourceHref: `/admin/companies/${companyId}/articles/${encodeURIComponent(
-        photo.sourceArticle.id,
-      )}`,
-      filterHref: null,
-      sourceTitle: photo.sourceArticle.title,
-    };
-  }
-  if (!photo.attachedToId) return null;
-  const href = sourceHref(companyId, photo.attachedToType, photo.attachedToId);
-  if (!href) return null;
-  return {
-    label,
-    sourceHref: href,
-    filterHref: buildPhotosHref(`/admin/companies/${companyId}/photos`, {
-      attachedToType: photo.attachedToType,
-      attachedToId: photo.attachedToId,
-    }),
-    sourceTitle: null,
-  };
-}
-
-/**
- * Map an `(attachedToType, attachedToId)` pair back to the page that
- * represents the source entity. `asset_field` uploads (photos captured
- * inline on an asset's FILE field) point back at the parent asset —
- * the attachedToId IS the asset id. Returns null for attachment types
- * that don't yet have a dedicated detail page.
- */
-function sourceHref(
-  companyId: string,
-  attachedToType: string,
-  attachedToId: string,
-): string | null {
-  switch (attachedToType) {
-    case 'asset':
-    case 'asset_field':
-      return `/admin/companies/${companyId}/assets/${encodeURIComponent(attachedToId)}`;
-    case 'article':
-      return `/admin/companies/${companyId}/articles/${encodeURIComponent(attachedToId)}`;
-    default:
-      return null;
-  }
-}
-
-function EmptyState() {
-  return (
-    <div
-      style={{
-        padding: 48,
-        textAlign: 'center',
-        color: 'var(--muted)',
-        fontSize: 13,
-      }}
-    >
-      <div>No photos yet for the current filter.</div>
-      <div
-        style={{
-          marginTop: 6,
-          fontFamily: 'var(--font-mono)',
-          fontSize: 11,
-          color: 'var(--dim)',
-        }}
-      >
-        Attach an image to any asset or article and it will appear here.
-      </div>
-    </div>
-  );
-}
-
-function Pagination({
-  basePath,
-  nextCursor,
-  attachedToType,
-  attachedToId,
-  includeNonLatest,
-}: {
-  basePath: string;
-  nextCursor: string | null;
-  attachedToType?: string;
-  attachedToId?: string;
-  includeNonLatest: boolean;
-}) {
-  if (!nextCursor) return null;
-  const href = buildPhotosHref(basePath, {
-    attachedToType,
-    attachedToId,
-    includeNonLatest,
-    cursor: nextCursor,
-  });
-  return (
-    <div
-      style={{
-        padding: '10px 14px',
-        borderTop: '1px solid var(--line)',
-        display: 'flex',
-        justifyContent: 'flex-end',
-      }}
-    >
-      <Link
-        href={href}
-        style={{
-          fontSize: 11.5,
-          fontFamily: 'var(--font-mono)',
-          color: 'var(--accent)',
-        }}
-      >
-        Load more →
-      </Link>
-    </div>
   );
 }
