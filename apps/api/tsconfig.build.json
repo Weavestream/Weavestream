@@ -1,0 +1,14 @@
+{
+  // `nest build` and `nest start` compile with this file (nest-cli.json
+  // "tsConfigPath"), so specs and test-only helpers stay out of dist/ and out
+  // of the api and worker images. `pnpm typecheck` and Jest keep using
+  // tsconfig.json, which still checks every spec.
+  "extends": "./tsconfig.json",
+  "exclude": [
+    "dist",
+    "node_modules",
+    "**/*.spec.ts",
+    // Creates and drops throwaway Postgres databases for integration specs.
+    "src/integrations/reconstruction/reconstruction-test-database.ts"
+  ]
+}

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 /**
- * ESLint 9 flat config for the NestJS API.
+ * ESLint 9 flat config for the NestJS worker.
  *
  * Rules are intentionally permissive for the v1.0.0 release — our
  * `typecheck` job is the strict gate. Post-1.0 we'll tighten these
