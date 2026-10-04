@@ -6,10 +6,8 @@ import type {
   PasswordGeneratorDefaults,
   PasswordVersionSummary,
 } from '@weavestream/shared';
-import {
-  PasswordDetailClient,
-  PasswordHeaderActions,
-} from './password-detail-client';
+import { PasswordDetailClient } from './password-detail-client';
+import { PasswordHeaderActions } from './password-header-actions';
 
 const apiFetch = jest.fn();
 const toast = { push: jest.fn() };
@@ -34,7 +32,7 @@ jest.mock('next/link', () => ({
     </a>
   ),
 }));
-jest.mock('../../../../../../lib/api', () => ({
+jest.mock('../../../../../../../lib/api', () => ({
   apiFetch: (...a: unknown[]) => apiFetch(...a),
 }));
 // Only the browser entry is mocked — the root `@weavestream/shared` stays
@@ -48,9 +46,9 @@ const toggleStar = jest.fn();
 // The overflow menu and its rows come through real — the header's whole
 // shape is which rows exist under which permission, so stubbing them
 // would test nothing. Everything else stays a stub.
-jest.mock('../../../../../../components/ui', () => {
-  const actual = jest.requireActual<typeof import('../../../../../../components/ui')>(
-    '../../../../../../components/ui',
+jest.mock('../../../../../../../components/ui', () => {
+  const actual = jest.requireActual<typeof import('../../../../../../../components/ui')>(
+    '../../../../../../../components/ui',
   );
   return {
     OverflowMenu: actual.OverflowMenu,
@@ -123,7 +121,7 @@ jest.mock('../../../../../../components/ui', () => {
     useToast: () => toast,
   };
 });
-jest.mock('../../../../../../lib/timezone-context', () => {
+jest.mock('../../../../../../../lib/timezone-context', () => {
   const Stamp = ({ value }: { value: unknown }) => <span>{String(value)}</span>;
   return {
     FormattedCalendarDate: Stamp,
@@ -132,19 +130,19 @@ jest.mock('../../../../../../lib/timezone-context', () => {
     FormattedShortDateTime: Stamp,
   };
 });
-jest.mock('../../../../../../components/passwords/password-reveal-field', () => ({
+jest.mock('../../../../../../../components/passwords/password-reveal-field', () => ({
   PasswordRevealField: () => null,
 }));
-jest.mock('../../../../../../components/passwords/totp-code', () => ({
+jest.mock('../../../../../../../components/passwords/totp-code', () => ({
   TotpCode: () => null,
 }));
-jest.mock('../../../../../../components/passwords/password-strength-meter', () => ({
+jest.mock('../../../../../../../components/passwords/password-strength-meter', () => ({
   PasswordStrengthMeter: () => null,
 }));
-jest.mock('../../../../../../components/passwords/secret-input', () => ({
+jest.mock('../../../../../../../components/passwords/secret-input', () => ({
   SecretInput: () => null,
 }));
-jest.mock('../../../../../../components/passwords/password-form-layout', () => ({
+jest.mock('../../../../../../../components/passwords/password-form-layout', () => ({
   PasswordAdvancedDisclosure: () => null,
   PasswordFieldGrid: () => null,
   PasswordFormSection: () => null,
@@ -152,17 +150,17 @@ jest.mock('../../../../../../components/passwords/password-form-layout', () => (
   PasswordSettingChoice: () => null,
   PasswordTotpCard: () => null,
 }));
-jest.mock('../../../../../../components/tags/tags-input', () => ({
+jest.mock('../../../../../../../components/tags/tags-input', () => ({
   TagsInput: () => null,
   toPlainNameList: () => [],
 }));
-jest.mock('../../../../../../components/relations', () => ({
+jest.mock('../../../../../../../components/relations', () => ({
   LinkedItemsPanel: () => null,
 }));
-jest.mock('../../../../../../components/upload/attachments-panel', () => ({
+jest.mock('../../../../../../../components/upload/attachments-panel', () => ({
   AttachmentsPanel: () => null,
 }));
-jest.mock('../../../../../../lib/password-folder-tree', () => ({
+jest.mock('../../../../../../../lib/password-folder-tree', () => ({
   buildPasswordFolderOptions: () => [],
   formatFolderOptionLabel: () => '',
 }));
@@ -470,5 +468,89 @@ describe('PasswordHeaderActions header shape', () => {
     fireEvent.click(screen.getByRole('menuitem', { name: 'Star' }));
     expect(toggleStar).toHaveBeenCalledTimes(1);
     expect(apiFetch).not.toHaveBeenCalled();
+  });
+});
+
+describe('PasswordDetailClient internal access dialog', () => {
+  const accessUsers = [
+    {
+      id: 'u-admin',
+      name: 'Ada Admin',
+      email: 'ada@example.com',
+      role: 'SUPER_ADMIN',
+      accessSource: 'super_admin',
+      alwaysIncluded: true,
+    },
+    {
+      id: 'u-ben',
+      name: 'Ben Tech',
+      email: 'ben@example.com',
+      role: 'OPERATOR',
+      accessSource: 'membership',
+      alwaysIncluded: false,
+    },
+  ];
+
+  function openAccessDialog(restrictedToUserIds: string[] = []) {
+    render(
+      <PasswordDetailClient
+        companyId="co-1"
+        password={{ ...basePassword, restrictedToUserIds }}
+        versions={[]}
+        canManage
+        canManageInternalAccess
+        folderName={null}
+        assetName={null}
+        me={{ id: 'u-1', role: 'SUPER_ADMIN' }}
+      />,
+    );
+    fireEvent.click(screen.getByText('show more'));
+    const panel = screen.getByText('Internal access').closest('section')!;
+    fireEvent.click(within(panel).getByRole('button', { name: 'Edit' }));
+    return screen.getByRole('dialog', { name: 'Internal access' });
+  }
+
+  it('locks always-included users on and saves them with the selection', async () => {
+    apiFetch
+      .mockResolvedValueOnce({ ok: true, data: { items: accessUsers } })
+      .mockResolvedValueOnce({ ok: true, data: null });
+    const dialog = openAccessDialog();
+
+    fireEvent.click(within(dialog).getByLabelText('Restrict to selected internal users'));
+    const admin = await within(dialog).findByRole('checkbox', { name: /Ada Admin/ });
+    expect(admin).toBeChecked();
+    expect(admin).toBeDisabled();
+    expect(within(dialog).getByText(/super admin · always included/)).toBeInTheDocument();
+
+    fireEvent.click(within(dialog).getByRole('checkbox', { name: /Ben Tech/ }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(toast.push).toHaveBeenCalledWith('Internal access updated', 'ok'));
+    expect(apiFetch).toHaveBeenLastCalledWith('/companies/co-1/passwords/pw-1', {
+      method: 'PATCH',
+      body: JSON.stringify({ restrictedToUserIds: ['u-admin', 'u-ben'] }),
+    });
+  });
+
+  it('offers to remove a saved user who is no longer eligible', async () => {
+    apiFetch.mockResolvedValueOnce({ ok: true, data: { items: accessUsers } });
+    const dialog = openAccessDialog(['u-gone']);
+
+    expect(
+      await within(dialog).findByText(/1 existing user can no longer be selected/),
+    ).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Remove unavailable' }));
+    expect(within(dialog).queryByText(/can no longer be selected/)).not.toBeInTheDocument();
+  });
+
+  it('shows the problem detail when the user list fails to load', async () => {
+    apiFetch.mockResolvedValueOnce({
+      ok: false,
+      problem: { title: 'Forbidden', detail: 'Not allowed here', message: 'denied' },
+    });
+    const dialog = openAccessDialog(['u-ben']);
+
+    // Shared `problemMessage` precedence: detail → message → title.
+    expect(await within(dialog).findByText('Not allowed here')).toBeInTheDocument();
   });
 });

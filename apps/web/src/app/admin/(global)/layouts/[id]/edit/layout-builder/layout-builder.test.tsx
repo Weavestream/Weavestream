@@ -1,7 +1,8 @@
 /** @jest-environment jsdom */
 import '@testing-library/jest-dom';
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { LayoutSummary } from '@weavestream/shared';
+import { apiFetch } from '../../../../../../../lib/api';
 import { LayoutBuilder } from './layout-builder';
 
 const push = jest.fn();
@@ -18,7 +19,7 @@ jest.mock('next/navigation', () => ({
 // slots so the stub stays honest if either is used again. This also
 // intercepts `page-header`'s own import of TopBar, which is the chain
 // the mobile branch would otherwise drag in.
-jest.mock('../../../../../../components/shell/top-bar', () => ({
+jest.mock('../../../../../../../components/shell/top-bar', () => ({
   TopBar: ({ right, sub }: { right: React.ReactNode; sub: React.ReactNode }) => (
     <header>
       {right}
@@ -26,27 +27,27 @@ jest.mock('../../../../../../components/shell/top-bar', () => ({
     </header>
   ),
 }));
-jest.mock('../../../../../../lib/api', () => ({
+jest.mock('../../../../../../../lib/api', () => ({
   apiFetch: jest.fn().mockResolvedValue({ ok: true, data: null }),
 }));
 // `useSyncExternalStore` over `matchMedia`, which jsdom does not
 // implement. Desktop is the branch under test — the mobile branch is a
 // separate read-only notice with no action buttons.
-jest.mock('../../../../../../lib/hooks/use-is-mobile', () => ({
+jest.mock('../../../../../../../lib/hooks/use-is-mobile', () => ({
   useIsMobile: () => false,
 }));
-jest.mock('../../layout-settings-dialog', () => ({
+jest.mock('../../../layout-settings-dialog', () => ({
   LayoutSettingsDialog: ({ open }: { open: boolean }) =>
     open ? <div>settings dialog</div> : null,
 }));
-jest.mock('../../layout-archive-dialog', () => ({
+jest.mock('../../../layout-archive-dialog', () => ({
   LayoutArchiveDialog: ({ open }: { open: boolean }) =>
     open ? <div>archive dialog</div> : null,
 }));
-jest.mock('../../../../../../components/ui', () => {
+jest.mock('../../../../../../../components/ui', () => {
   const actual = jest.requireActual<
-    typeof import('../../../../../../components/ui')
-  >('../../../../../../components/ui');
+    typeof import('../../../../../../../components/ui')
+  >('../../../../../../../components/ui');
   return { ...actual, useToast: () => toast };
 });
 
@@ -173,5 +174,74 @@ describe('LayoutBuilder header actions', () => {
     expect(
       header().queryByRole('button', { name: 'More actions' }),
     ).not.toBeInTheDocument();
+  });
+});
+
+describe('LayoutBuilder field state wiring', () => {
+  const nameField = {
+    id: '00000000-0000-4000-8000-000000000001',
+    name: 'Hostname',
+    slug: 'hostname',
+    fieldType: 'TEXT',
+    position: 0,
+    isRequired: false,
+    isUniquePerCompany: false,
+    visibleToClients: true,
+    isPrimary: true,
+    showInTable: false,
+    options: {},
+    archivedAt: null,
+  };
+  const serialField = {
+    ...nameField,
+    id: '00000000-0000-4000-8000-000000000002',
+    name: 'Serial',
+    slug: 'serial',
+    position: 1,
+    isPrimary: false,
+  };
+
+  function renderWithFields() {
+    return render(
+      <LayoutBuilder
+        layout={{ ...layout, fields: [serialField, nameField] } as unknown as LayoutSummary}
+        stats={null}
+        canEdit
+        allLayouts={[]}
+      />,
+    );
+  }
+
+  it('marks the layout unsaved after an edit and clean again after a save', async () => {
+    const saved = { ...layout, fields: [nameField] };
+    jest.mocked(apiFetch).mockResolvedValueOnce({ ok: true, data: saved } as never);
+    renderWithFields();
+
+    const save = header().getByRole('button', { name: 'Save layout' });
+    expect(save).toBeDisabled();
+    expect(header().queryByText('unsaved')).not.toBeInTheDocument();
+
+    const removeButtons = screen.getAllByTitle('Remove field');
+    // Rows render in position order: Hostname, then Serial.
+    fireEvent.click(removeButtons[1]!);
+    expect(header().getByText('unsaved')).toBeInTheDocument();
+    expect(save).toBeEnabled();
+
+    fireEvent.click(save);
+    await waitFor(() => expect(toast.push).toHaveBeenCalledWith('Layout saved', 'ok'));
+    expect(apiFetch).toHaveBeenCalledWith(
+      '/layouts/layout-1/fields',
+      expect.objectContaining({ method: 'PUT' }),
+    );
+    expect(header().queryByText('unsaved')).not.toBeInTheDocument();
+  });
+
+  it('opens the selected field in the inspector', () => {
+    renderWithFields();
+
+    // The first field is selected on load.
+    expect(screen.getByDisplayValue('Hostname')).toBeInTheDocument();
+    fireEvent.click(screen.getByText('Serial'));
+    expect(screen.getByDisplayValue('Serial')).toBeInTheDocument();
   });
 });

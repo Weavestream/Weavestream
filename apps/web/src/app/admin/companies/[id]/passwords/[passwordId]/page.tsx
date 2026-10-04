@@ -20,10 +20,8 @@ import { TopBar } from '../../../../../../components/shell/top-bar';
 import { ErrorBanner, LayoutSwatch, Tag } from '../../../../../../components/ui';
 import { buildTerm } from '../../../../../../lib/term';
 import { companyCrumbs } from '../../../../../../lib/company-crumbs';
-import {
-  PasswordDetailClient,
-  PasswordHeaderActions,
-} from './password-detail-client';
+import { PasswordDetailClient } from './password-detail/password-detail-client';
+import { PasswordHeaderActions } from './password-detail/password-header-actions';
 
 export const metadata: Metadata = { title: 'Password' };
 
