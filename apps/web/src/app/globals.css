@@ -108,9 +108,15 @@
 @media (max-width: 1239.98px) {
   /* Detail pages that put a sticky right-rail aside next to main
    * content (admin asset detail = `1fr 320px`) stack into a single
-   * column so the aside stops squeezing the field values. */
+   * column so the aside stops squeezing the field values.
+   *
+   * `minmax(0, 1fr)`, not `1fr`: a bare `1fr` track cannot shrink below
+   * its widest item's min-content, so one long nowrap title in the
+   * aside (a linked article, an attachment name) pushed the whole
+   * column past a phone viewport. With a 0 minimum those titles
+   * ellipsize as intended. */
   .detail-grid-main-aside {
-    grid-template-columns: 1fr !important;
+    grid-template-columns: minmax(0, 1fr) !important;
   }
   /* Article read view: hide the folder nav and the TOC, let the body
    * claim the width, and drop the linked-items / attachments rail
@@ -190,6 +196,18 @@
    * we don't clobber unrelated grids. */
   .form-grid-2col {
     grid-template-columns: 1fr !important;
+  }
+  /* Asset detail key/value grid (`AssetDetailView`) stacks each label
+   * above its value on phones. A fixed 180px label column leaves about
+   * 100px for the value at 375px, which breaks URLs and file tiles into
+   * a narrow strip. The tight row gap keeps a label with its value; the
+   * label's top padding separates one pair from the next. */
+  .asset-field-grid {
+    grid-template-columns: 1fr !important;
+    row-gap: 4px !important;
+  }
+  .asset-field-grid > .asset-field-label:not(:first-child) {
+    padding-top: 12px !important;
   }
   .article-read-grid .article-read-body {
     padding: 24px 16px 32px !important;

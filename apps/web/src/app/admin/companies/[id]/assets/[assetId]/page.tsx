@@ -1,7 +1,7 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import React, { Fragment } from 'react';
+import React from 'react';
 import { requireMe } from '../../../../../../lib/server-api/auth';
 import { getSettings } from '../../../../../../lib/server-api/settings';
 import { getCompanyDetail } from '../../../../../../lib/server-api/companies';
@@ -19,14 +19,11 @@ import { TopBar } from '../../../../../../components/shell/top-bar';
 import { Icon, LayoutSwatch, Panel, ShowMore, Tag } from '../../../../../../components/ui';
 import { buildTerm } from '../../../../../../lib/term';
 import { companyCrumbs } from '../../../../../../lib/company-crumbs';
-import { RichTextView } from '../../../../../../components/editor/rich-text-view';
 import { LinkedItemsPanel } from '../../../../../../components/relations';
 import { AttachmentsPanel } from '../../../../../../components/upload/attachments-panel';
 import { CredentialsPanel } from '../../../../../../components/passwords/credentials-panel';
-import {
-  AssetFieldValue,
-  type AssetFieldContext,
-} from '../../../../../../components/assets/asset-field-value';
+import type { AssetFieldContext } from '../../../../../../components/assets/asset-field-value';
+import { AssetDetailView } from '../../../../../../components/assets/asset-detail-view';
 import { AssetChatContext } from '../../../../../../components/chat-panel/asset-chat-context';
 import { SidebarActive } from '../../../../../../components/shell/sidebar-active';
 import { AssetHeaderActions } from './asset-header-actions';
@@ -71,11 +68,6 @@ export default async function AssetDetailPage({
   const createdBy = asset.createdByUser;
   const updatedBy = asset.updatedByUser;
 
-  const primaryField = asset.fields.find((f) => f.isPrimary);
-  const noteFields = asset.fields.filter(
-    (f) => f.fieldType === 'RICH_TEXT' || f.fieldType === 'TEXTAREA',
-  );
-  const noteFieldSlugs = new Set(noteFields.map((f) => f.slug));
   const fieldContext: AssetFieldContext = {
     assetHrefBase: `/admin/companies/${companyId}/assets`,
     richText: { isAdmin: true, fallbackCompanyId: companyId },
@@ -134,82 +126,7 @@ export default async function AssetDetailPage({
             gap: 16,
           }}
         >
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-            <Panel>
-              <div
-                style={{
-                  display: 'grid',
-                  gridTemplateColumns: '180px minmax(0, 1fr)',
-                  gap: '10px 20px',
-                }}
-              >
-                {asset.fields
-                  .filter((f) => !noteFieldSlugs.has(f.slug))
-                  .map((f) => (
-                    <Fragment key={f.id}>
-                      <div
-                        style={{
-                          fontSize: 11.5,
-                          color: 'var(--muted)',
-                          fontFamily: 'var(--font-mono)',
-                          textTransform: 'uppercase',
-                          letterSpacing: 0.3,
-                          paddingTop: 2,
-                        }}
-                      >
-                        {f.name}
-                        {primaryField?.id === f.id && (
-                          <Tag tone="accent" style={{ marginLeft: 6 }}>
-                            primary
-                          </Tag>
-                        )}
-                      </div>
-                      <div
-                        style={{
-                          fontSize: 13,
-                          color: 'var(--text)',
-                          minWidth: 0,
-                          overflowWrap: 'anywhere',
-                          wordBreak: 'break-word',
-                        }}
-                      >
-                        <AssetFieldValue
-                          field={f}
-                          value={asset.fieldValues[f.slug]}
-                          references={asset.references}
-                          context={fieldContext}
-                        />
-                      </div>
-                    </Fragment>
-                  ))}
-              </div>
-            </Panel>
-
-            {noteFields.map((noteField) => {
-              const value = asset.fieldValues[noteField.slug];
-              if (!value) return null;
-              return (
-                <Panel key={noteField.id} title={noteField.name}>
-                  {noteField.fieldType === 'RICH_TEXT' ? (
-                    <RichTextView value={value} isAdmin fallbackCompanyId={companyId} />
-                  ) : (
-                    <div
-                      style={{
-                        fontSize: 13.5,
-                        lineHeight: 1.6,
-                        color: 'var(--text-2)',
-                        whiteSpace: 'pre-wrap',
-                        overflowWrap: 'anywhere',
-                        wordBreak: 'break-word',
-                      }}
-                    >
-                      {String(value ?? '')}
-                    </div>
-                  )}
-                </Panel>
-              );
-            })}
-          </div>
+          <AssetDetailView asset={asset} context={fieldContext} />
 
           <aside style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
             <LinkedItemsPanel

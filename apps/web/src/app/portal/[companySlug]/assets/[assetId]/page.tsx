@@ -1,6 +1,5 @@
 import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
-import { Fragment } from 'react';
 import {
   getMeForMetadata,
   requireMe,
@@ -12,14 +11,11 @@ import {
   PageBody,
   PageHeader,
 } from '../../../../../components/shell/page-header';
-import { LayoutSwatch, Panel, Tag } from '../../../../../components/ui';
-import { RichTextView } from '../../../../../components/editor/rich-text-view';
+import { LayoutSwatch, Tag } from '../../../../../components/ui';
 import { AttachmentsPanel } from '../../../../../components/upload/attachments-panel';
 import { CredentialsPanel } from '../../../../../components/passwords/credentials-panel';
-import {
-  AssetFieldValue,
-  type AssetFieldContext,
-} from '../../../../../components/assets/asset-field-value';
+import type { AssetFieldContext } from '../../../../../components/assets/asset-field-value';
+import { AssetDetailView } from '../../../../../components/assets/asset-detail-view';
 import { SidebarActive } from '../../../../../components/shell/sidebar-active';
 import { recentRelative as relative } from '../../../../../lib/relative-time';
 
@@ -83,11 +79,6 @@ export default async function PortalAssetDetailPage({
     },
   };
 
-  const primaryField = asset.fields.find((f) => f.isPrimary);
-  const noteField = asset.fields.find(
-    (f) => f.fieldType === 'RICH_TEXT' || f.fieldType === 'TEXTAREA',
-  );
-
   return (
     <>
       <SidebarActive id={`layout:${asset.assetLayoutId}`} />
@@ -126,83 +117,7 @@ export default async function PortalAssetDetailPage({
             alignItems: 'start',
           }}
         >
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-          <Panel>
-              <div
-                style={{
-                  display: 'grid',
-                  gridTemplateColumns: '180px minmax(0, 1fr)',
-                  gap: '10px 20px',
-                }}
-              >
-                {asset.fields
-                  .filter((f) => f.slug !== noteField?.slug)
-                  .map((f) => (
-                    <Fragment key={f.id}>
-                      <div
-                        style={{
-                          fontSize: 11.5,
-                          color: 'var(--muted)',
-                          fontFamily: 'var(--font-mono)',
-                          textTransform: 'uppercase',
-                          letterSpacing: 0.3,
-                          paddingTop: 2,
-                        }}
-                      >
-                        {f.name}
-                        {primaryField?.id === f.id && (
-                          <Tag tone="accent" style={{ marginLeft: 6 }}>
-                            primary
-                          </Tag>
-                        )}
-                      </div>
-                      <div
-                        style={{
-                          fontSize: 13,
-                          color: 'var(--text)',
-                          minWidth: 0,
-                          overflowWrap: 'anywhere',
-                          wordBreak: 'break-word',
-                        }}
-                      >
-                        <AssetFieldValue
-                          field={f}
-                          value={asset.fieldValues[f.slug]}
-                          references={asset.references}
-                          context={fieldContext}
-                        />
-                      </div>
-                    </Fragment>
-                  ))}
-              </div>
-            </Panel>
-
-            {noteField && !!asset.fieldValues[noteField.slug] && (
-              <Panel title={noteField.name}>
-                {noteField.fieldType === 'RICH_TEXT' ? (
-                  <RichTextView
-                    value={asset.fieldValues[noteField.slug]}
-                    isAdmin={false}
-                    portalSlugByCompanyId={portalSlugByCompanyId}
-                    fallbackCompanyId={asset.companyId}
-                  />
-                ) : (
-                  <div
-                    style={{
-                      fontSize: 13.5,
-                      lineHeight: 1.6,
-                      color: 'var(--text-2)',
-                      whiteSpace: 'pre-wrap',
-                      overflowWrap: 'anywhere',
-                      wordBreak: 'break-word',
-                    }}
-                  >
-                    {String(asset.fieldValues[noteField.slug] ?? '')}
-                  </div>
-                )}
-              </Panel>
-            )}
-          </div>
+          <AssetDetailView asset={asset} context={fieldContext} />
 
           <aside style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
             <CredentialsPanel
