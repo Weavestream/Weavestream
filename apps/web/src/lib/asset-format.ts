@@ -5,8 +5,9 @@ import type { AssetSummary } from '@weavestream/shared';
  * Project an `AssetSummary` (as returned by `GET
  * /companies/:companyId/assets/:assetId`) to a markdown blob suitable
  * for inlining in the chat system prompt. Mirrors the field-type
- * rendering on the asset detail page ([page.tsx](apps/web/src/app/admin/companies/[id]/assets/[assetId]/page.tsx)
- * `renderValue`) but emits plain markdown instead of React nodes.
+ * rendering on the asset detail pages
+ * ([asset-field-value.tsx](apps/web/src/components/assets/asset-field-value.tsx))
+ * but emits plain markdown instead of React nodes.
  *
  * Non-empty fields only. The server already strips fields by role
  * before returning the row, so client portal users transparently get

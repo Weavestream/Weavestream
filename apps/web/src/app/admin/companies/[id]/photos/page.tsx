@@ -15,6 +15,12 @@ import { PageBody, PageHeader } from '../../../../../components/shell/page-heade
 import { Icon, LayoutSwatch, Panel, Tag } from '../../../../../components/ui';
 import { buildTerm, lower } from '../../../../../lib/term';
 import { companyCrumbs } from '../../../../../lib/company-crumbs';
+import {
+  attachmentLabel,
+  buildPhotosHref,
+  readBool,
+  readPhotoQuery,
+} from '../../../../../lib/photo-query';
 import { PhotoDeleteChip } from './photo-delete-chip';
 
 /**
@@ -38,9 +44,7 @@ export default async function CompanyPhotosPage({
   const companyRes = await getCompanyDetail(companyId);
   const company = throwUnlessFound(companyRes, `/companies/${companyId}`);
 
-  const attachedToType = readString(sp.attachedToType);
-  const attachedToId = readString(sp.attachedToId);
-  const cursor = readString(sp.cursor);
+  const { attachedToType, attachedToId, cursor } = readPhotoQuery(sp);
   const includeNonLatest = readBool(sp.includeNonLatest);
 
   const page = await listPhotos(companyId, {
@@ -88,34 +92,6 @@ export default async function CompanyPhotosPage({
       </PageBody>
     </>
   );
-}
-
-function readString(v: string | string[] | undefined): string | undefined {
-  if (typeof v !== 'string') return undefined;
-  return v.length > 0 ? v : undefined;
-}
-
-function readBool(v: string | string[] | undefined): boolean {
-  if (typeof v !== 'string') return false;
-  return v === '1' || v.toLowerCase() === 'true';
-}
-
-function buildPhotosHref(
-  basePath: string,
-  params: {
-    attachedToType?: string;
-    attachedToId?: string;
-    includeNonLatest?: boolean;
-    cursor?: string;
-  },
-): string {
-  const q = new URLSearchParams();
-  if (params.attachedToType) q.set('attachedToType', params.attachedToType);
-  if (params.attachedToId) q.set('attachedToId', params.attachedToId);
-  if (params.includeNonLatest) q.set('includeNonLatest', '1');
-  if (params.cursor) q.set('cursor', params.cursor);
-  const s = q.toString();
-  return s ? `${basePath}?${s}` : basePath;
 }
 
 function FilterBar({
@@ -508,14 +484,6 @@ function ActionChip({
   );
 }
 
-function filterHref(
-  companyId: string,
-  attachedToType: string,
-  attachedToId: string,
-): string {
-  return `/admin/companies/${companyId}/photos?attachedToType=${encodeURIComponent(attachedToType)}&attachedToId=${encodeURIComponent(attachedToId)}`;
-}
-
 /**
  * Pick the best "open source X" / "view all for this X" link for a
  * photo tile. Asset and asset_field uploads ship with an
@@ -566,31 +534,12 @@ function resolveSourceLink(
   return {
     label,
     sourceHref: href,
-    filterHref: filterHref(companyId, photo.attachedToType, photo.attachedToId),
+    filterHref: buildPhotosHref(`/admin/companies/${companyId}/photos`, {
+      attachedToType: photo.attachedToType,
+      attachedToId: photo.attachedToId,
+    }),
     sourceTitle: null,
   };
-}
-
-/**
- * Human-facing label for an upload's `attachedToType`. The raw DB
- * values (asset / asset_field / article) don't match the vocabulary
- * we show in the filter bar: `asset` is a generic attachment to an
- * asset, while `asset_field` is a photo stored on a FILE field and is
- * what operators think of as "the asset's photo". Keep this mapping
- * in one place so the filter pills, tile badges, and the "open
- * source X" / "view all for this X" links stay consistent.
- */
-function attachmentLabel(attachedToType: string): string {
-  switch (attachedToType) {
-    case 'asset':
-      return 'Attachment';
-    case 'asset_field':
-      return 'Asset';
-    case 'article':
-      return 'Article';
-    default:
-      return attachedToType.replace('_', ' ');
-  }
 }
 
 /**

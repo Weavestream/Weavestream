@@ -6,6 +6,11 @@ import {
   type UploadSummary,
 } from '../../../../lib/server-api/uploads';
 import { resolvePortalCompany } from '../../../../lib/portal-company';
+import {
+  attachmentLabel,
+  buildPhotosHref,
+  readPhotoQuery,
+} from '../../../../lib/photo-query';
 import { PageBody, PageHeader } from '../../../../components/shell/page-header';
 import { Icon, LayoutSwatch, Panel, Tag } from '../../../../components/ui';
 
@@ -28,9 +33,8 @@ export default async function PortalPhotosPage({
   const company = await resolvePortalCompany(me, companySlug);
   const companyId = company.id;
 
-  const attachedToType = readString(sp.attachedToType);
-  const attachedToId = readString(sp.attachedToId);
-  const cursor = readString(sp.cursor);
+  // No `includeNonLatest`: that admin audit toggle is not read here.
+  const { attachedToType, attachedToId, cursor } = readPhotoQuery(sp);
 
   const page = await listPhotos(companyId, {
     attachedToType,
@@ -77,11 +81,6 @@ export default async function PortalPhotosPage({
   );
 }
 
-function readString(v: string | string[] | undefined): string | undefined {
-  if (typeof v !== 'string') return undefined;
-  return v.length > 0 ? v : undefined;
-}
-
 function FilterBar({
   basePath,
   attachedToType,
@@ -121,9 +120,10 @@ function FilterBar({
       >
         {kinds.map((k) => {
           const active = (attachedToType ?? '') === (k.value ?? '');
-          const href = k.value
-            ? `${basePath}?attachedToType=${k.value}${attachedToId ? `&attachedToId=${attachedToId}` : ''}`
-            : basePath;
+          const href = buildPhotosHref(basePath, {
+            attachedToType: k.value,
+            attachedToId,
+          });
           return (
             <Link
               key={k.label}
@@ -167,11 +167,7 @@ function FilterBar({
             </span>
           </span>
           <Link
-            href={
-              attachedToType
-                ? `${basePath}?attachedToType=${attachedToType}`
-                : basePath
-            }
+            href={buildPhotosHref(basePath, { attachedToType })}
             style={{ color: 'var(--dim)' }}
             title="Clear id filter"
           >
@@ -376,24 +372,6 @@ function ActionChip({
   );
 }
 
-/**
- * Human-facing label for an upload's `attachedToType`. Kept in sync
- * with the admin photos page so the filter pills and the tile badge
- * use the same vocabulary.
- */
-function attachmentLabel(attachedToType: string): string {
-  switch (attachedToType) {
-    case 'asset':
-      return 'Attachment';
-    case 'asset_field':
-      return 'Asset';
-    case 'article':
-      return 'Article';
-    default:
-      return attachedToType.replace('_', ' ');
-  }
-}
-
 function EmptyState() {
   return (
     <div
@@ -424,10 +402,11 @@ function Pagination({
   attachedToId?: string;
 }) {
   if (!nextCursor) return null;
-  const params = new URLSearchParams();
-  if (attachedToType) params.set('attachedToType', attachedToType);
-  if (attachedToId) params.set('attachedToId', attachedToId);
-  params.set('cursor', nextCursor);
+  const href = buildPhotosHref(basePath, {
+    attachedToType,
+    attachedToId,
+    cursor: nextCursor,
+  });
   return (
     <div
       style={{
@@ -438,7 +417,7 @@ function Pagination({
       }}
     >
       <Link
-        href={`${basePath}?${params.toString()}`}
+        href={href}
         style={{
           fontSize: 11.5,
           fontFamily: 'var(--font-mono)',
