@@ -1,6 +1,7 @@
 /** @jest-environment jsdom */
 import '@testing-library/jest-dom';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
+import { useEffect, useState } from 'react';
 import { MenuDivider, MenuItem, OverflowMenu } from './overflow-menu';
 
 function Fixture() {
@@ -107,5 +108,35 @@ describe('OverflowMenu', () => {
       <OverflowMenu attention="warn">{() => <MenuItem>Only</MenuItem>}</OverflowMenu>,
     );
     expect(screen.getByRole('img', { name: 'needs attention' })).toBeInTheDocument();
+  });
+
+  it('names a text trigger by its visible words', () => {
+    render(
+      <OverflowMenu label="Child sites" trigger="2 sites" align="start">
+        {() => <MenuItem>Branch</MenuItem>}
+      </OverflowMenu>,
+    );
+    // An aria-label would hide "2 sites" from screen readers.
+    fireEvent.click(screen.getByRole('button', { name: '2 sites' }));
+    expect(screen.getByRole('menu', { name: 'Child sites' })).toBeInTheDocument();
+  });
+
+  it('parks focus on the popover until rows that load after opening arrive', () => {
+    let resolve: () => void = () => {};
+    function LateRows() {
+      const [ready, setReady] = useState(false);
+      useEffect(() => {
+        resolve = () => setReady(true);
+      }, []);
+      return ready ? <MenuItem>Branch</MenuItem> : <div>Loading…</div>;
+    }
+    render(<OverflowMenu>{() => <LateRows />}</OverflowMenu>);
+
+    fireEvent.click(trigger());
+    expect(menu()).toHaveFocus();
+
+    act(() => resolve());
+    fireEvent.keyDown(menu(), { key: 'ArrowDown' });
+    expect(screen.getByRole('menuitem', { name: 'Branch' })).toHaveFocus();
   });
 });

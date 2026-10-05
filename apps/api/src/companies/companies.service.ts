@@ -93,6 +93,9 @@ const COMPANY_LIST_SELECT = {
   _count: { select: { memberships: { where: { revokedAt: null } } } },
 } as const;
 
+/** Upper bound for `listChildren` — see the method. */
+const CHILDREN_LIST_LIMIT = 500;
+
 const COMPANY_DETAIL_SELECT = {
   ...COMPANY_LIST_SELECT,
   createdBy: true,
@@ -288,6 +291,30 @@ export class CompaniesService {
       logoUploadId: company.logoUploadId,
       logo,
     };
+  }
+
+  /**
+   * Direct children of `id`, for the "Children" menu on the company
+   * overview. Deliberately NOT filtered by the caller's access to each
+   * child, and archived children are included: the list has to agree
+   * with `childrenCount` above, and a child's existence (id + name) is
+   * visible by design — the same rule as the unconditional `parent`
+   * ref. Opening a child the caller cannot read still hits that
+   * company's own `company.read` guard. The route guard has already
+   * verified `company.read` on `id` itself.
+   *
+   * Capped at `CHILDREN_LIST_LIMIT` so one request stays bounded; the
+   * client compares `items.length` with the count to say when the list
+   * is truncated.
+   */
+  async listChildren(id: string) {
+    const items = await this.prisma.company.findMany({
+      where: { parentCompanyId: id },
+      select: { id: true, name: true, slug: true, archivedAt: true },
+      orderBy: [{ name: 'asc' }, { id: 'asc' }],
+      take: CHILDREN_LIST_LIMIT,
+    });
+    return { items };
   }
 
   async create(

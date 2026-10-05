@@ -282,6 +282,28 @@ describe('CompaniesService parent hierarchy', () => {
     expect(out.parentCompanyId).toBe('a');
     expect(audit.logChange).toHaveBeenCalledTimes(1);
   });
+
+  it('lists every direct child, bounded, without an access or archive filter', async () => {
+    // The list must agree with `childrenCount`, which counts every
+    // child — so the query filters on the parent edge and nothing else.
+    const prisma = makePrisma();
+    const child = { id: 'b', name: 'Branch', slug: 'branch', archivedAt: null };
+    prisma.company.findMany.mockResolvedValueOnce([child]);
+    const svc = new CompaniesService(
+      prisma as never,
+      makeAudit() as never,
+      makeCache() as never,
+    );
+
+    await expect(svc.listChildren('a')).resolves.toEqual({ items: [child] });
+    expect(prisma.company.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { parentCompanyId: 'a' },
+        select: { id: true, name: true, slug: true, archivedAt: true },
+        take: 500,
+      }),
+    );
+  });
 });
 
 describe('CompaniesService logo guard', () => {

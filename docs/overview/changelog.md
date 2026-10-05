@@ -13,6 +13,18 @@ All notable changes to Weavestream are documented here. The format follows [Keep
 
 ## [Unreleased]
 
+## [1.9.11] - 2026-10-05
+
+### Added
+
+- **Parent companies list their children.** On a parent company's overview, the child count in the Classification panel now opens a menu that lists every child company by name and links to it. Archived children are tagged, and a long list scrolls inside the menu. The list is loaded only when the menu opens, from a new `GET /companies/:id/children` endpoint that requires read access to the parent.
+
+### Fixed
+
+- **The child count used the wrong word.** The Classification panel showed "2 companyies" whatever tenant term was configured. It now uses the configured term, for example "2 sites" or "1 customer".
+- **Menu rows had no hover effect.** Rows in action menus and the profile menu now highlight under the pointer, the same as the recent companies menu in the top bar.
+- **The parent company link did not look like a link.** On a child company, the parent name in the Classification panel now uses the link color.
+
 ## [1.9.10] - 2026-10-04
 
 ### Fixed

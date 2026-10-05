@@ -356,6 +356,15 @@ button.topbar-chip-seg {
 .sidebar-switcher-entry:hover {
   background: var(--panel-2);
 }
+/* Menu rows that are <button>s (actions, beside link rows). Strip the
+ * UA button skin here rather than inline: an inline `background` would
+ * outrank the `:hover` above and freeze the row — the same trap as
+ * `button.topbar-chip-seg`. The `:hover` (0,2,0) still beats this
+ * (0,1,1) rule. */
+button.sidebar-switcher-entry {
+  background: transparent;
+  border: none;
+}
 /* Thin icon-strip tray pinned above the user block, and the same
  * buttons in the top bar and the chat panel. Each shortcut is a
  * 26-30px tappable target, so hover needs a clear-but-quiet state

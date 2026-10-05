@@ -30,16 +30,30 @@ import { Icon, type IconComponent } from './icon';
  * Positioning copies `ScopePill`'s recents popover rather than using
  * `position: absolute`: the breadcrumb row scrolls horizontally, and
  * an absolutely positioned child of it would be clipped.
+ *
+ * `trigger` swaps the "…" square for inline text — a count that opens
+ * the list behind it (the company overview's "2 sites"). The popover,
+ * keyboard model, and scroll cap are unchanged.
  */
 export function OverflowMenu({
   label = 'More actions',
   attention,
+  trigger,
+  align = 'end',
   children,
 }: {
   /** Accessible name + tooltip for the trigger. */
   label?: string;
   /** Tone dot on the trigger when the menu hides something to review. */
   attention?: 'warn' | 'danger';
+  /** Inline text trigger in place of the "…" button. */
+  trigger?: ReactNode;
+  /**
+   * Which trigger edge the popover lines up with. `end` suits the
+   * right-hand action cluster; `start` suits an inline trigger in
+   * left-aligned content.
+   */
+  align?: 'start' | 'end';
   /**
    * Render prop so a row can close the menu after acting. Rows that
    * open a dialog or panel must close it — leaving both open stacks a
@@ -103,9 +117,15 @@ export function OverflowMenu({
   );
 
   // Opening a menu puts you *in* it. Without this the first arrow press
-  // does nothing, because focus never left the trigger.
+  // does nothing, because focus never left the trigger. A menu whose
+  // rows load after opening has nothing to focus yet, so the popover
+  // itself takes focus: its arrow-key handler then reaches the rows
+  // once they arrive, and Tab still dismisses.
   useEffect(() => {
-    if (open) focusItem(0);
+    if (!open) return;
+    const hasItem = popoverRef.current?.querySelector('[role="menuitem"]:not([disabled])');
+    if (hasItem) focusItem(0);
+    else popoverRef.current?.focus();
   }, [open, focusItem]);
 
   const updatePosition = useCallback(() => {
@@ -114,15 +134,16 @@ export function OverflowMenu({
     const gap = 6;
     const viewportPad = 12;
     const width = Math.min(236, window.innerWidth - viewportPad * 2);
-    // Right-aligned with the trigger, clamped into the viewport. The
-    // trigger sits at the right edge of the row, so a left-aligned
-    // popover would hang off the window on every page.
+    // Right-aligned with the trigger by default, clamped into the
+    // viewport. The "…" trigger sits at the right edge of the row, so a
+    // left-aligned popover would hang off the window on every page.
+    const anchor = align === 'start' ? rect.left : rect.right - width;
     const left = Math.max(
       viewportPad,
-      Math.min(rect.right - width, window.innerWidth - width - viewportPad),
+      Math.min(anchor, window.innerWidth - width - viewportPad),
     );
     setPosition({ left, top: rect.bottom + gap, width });
-  }, []);
+  }, [align]);
 
   useEffect(() => {
     if (!open) return;
@@ -164,7 +185,9 @@ export function OverflowMenu({
       <button
         ref={buttonRef}
         type="button"
-        aria-label={label}
+        // A text trigger names itself; an `aria-label` would replace
+        // the visible words ("2 sites") for screen readers.
+        aria-label={trigger ? undefined : label}
         title={label}
         aria-haspopup="menu"
         aria-expanded={open}
@@ -182,22 +205,37 @@ export function OverflowMenu({
             setOpen(true);
           }
         }}
-        style={{
-          position: 'relative',
-          width: 30,
-          height: 30,
-          display: 'inline-flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          borderRadius: 5,
-          border: '1px solid var(--line-2)',
-          background: open ? 'var(--panel-2)' : 'transparent',
-          color: 'var(--text-2)',
-          cursor: 'pointer',
-          flexShrink: 0,
-        }}
+        style={
+          trigger
+            ? {
+                position: 'relative',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 4,
+                padding: 0,
+                border: 'none',
+                background: 'transparent',
+                color: 'var(--accent)',
+                font: 'inherit',
+                cursor: 'pointer',
+              }
+            : {
+                position: 'relative',
+                width: 30,
+                height: 30,
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                borderRadius: 5,
+                border: '1px solid var(--line-2)',
+                background: open ? 'var(--panel-2)' : 'transparent',
+                color: 'var(--text-2)',
+                cursor: 'pointer',
+                flexShrink: 0,
+              }
+        }
       >
-        <Icon.dots size={13} />
+        {trigger ?? <Icon.dots size={13} />}
         {attention && (
           <span
             role="img"
@@ -224,6 +262,7 @@ export function OverflowMenu({
           id={popoverId}
           role="menu"
           aria-label={label}
+          tabIndex={-1}
           onKeyDown={(e) => {
             if (e.key === 'ArrowDown') {
               e.preventDefault();
@@ -258,6 +297,9 @@ export function OverflowMenu({
             borderRadius: 8,
             boxShadow: 'var(--shadow-2)',
             padding: 6,
+            // Focus only lands here while rows are loading; the rows
+            // carry the visible focus state.
+            outline: 'none',
           }}
         >
           {children(close)}
@@ -278,8 +320,9 @@ const rowStyle: CSSProperties = {
   fontWeight: 500,
   textAlign: 'left',
   textDecoration: 'none',
-  background: 'transparent',
-  border: 'none',
+  // No `background`/`border` here: `button.sidebar-switcher-entry` in
+  // globals.css resets them, and an inline background would block the
+  // row's hover.
   cursor: 'pointer',
 };
 

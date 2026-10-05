@@ -29,6 +29,7 @@ import {
   companyTypeTone,
   formatAddressLines,
 } from '../../../../lib/company-format';
+import { ChildrenMenu } from './children-menu';
 import { CompanyActions } from './company-actions';
 
 /**
@@ -381,7 +382,7 @@ function ClassificationPanel({ company, manage }: { company: CompanyDetail; mana
             company.parent ? (
               <Link
                 href={`/admin/companies/${company.parent.id}`}
-                style={{ color: 'var(--text)', textDecoration: 'none' }}
+                style={{ color: 'var(--accent)', textDecoration: 'none' }}
               >
                 {company.parent.name}
               </Link>
@@ -404,12 +405,7 @@ function ClassificationPanel({ company, manage }: { company: CompanyDetail; mana
         {company.childrenCount > 0 && (
           <Row
             label="Children"
-            value={
-              <span>
-                {company.childrenCount} company
-                {company.childrenCount === 1 ? '' : 'ies'}
-              </span>
-            }
+            value={<ChildrenMenu companyId={company.id} count={company.childrenCount} />}
           />
         )}
         <Row

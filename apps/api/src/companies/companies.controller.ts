@@ -79,6 +79,12 @@ export class CompaniesController {
     return this.companies.get(user, id);
   }
 
+  @Get(':id/children')
+  @RequirePermission('company.read', { companyIdFrom: 'params.id' })
+  async listChildren(@Param('id', new ParseUUIDPipe()) id: string) {
+    return this.companies.listChildren(id);
+  }
+
   @Post()
   @RequirePermission('company.manage')
   async create(

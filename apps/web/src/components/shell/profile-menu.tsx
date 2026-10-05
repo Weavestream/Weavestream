@@ -221,8 +221,8 @@ const MENU_ROW_STYLE: CSSProperties = {
   borderRadius: 6,
   fontSize: 13,
   color: 'var(--text)',
-  background: 'transparent',
-  border: 'none',
+  // Background/border reset lives on `button.sidebar-switcher-entry`
+  // (globals.css); inline values would block the row's hover.
   cursor: 'pointer',
   textDecoration: 'none',
   textAlign: 'left',
