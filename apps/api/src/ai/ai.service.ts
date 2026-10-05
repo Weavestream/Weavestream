@@ -1,4 +1,5 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
+import { stripTrailingSlashes } from '@weavestream/shared';
 import type { TestAiSettingsInput } from '@weavestream/shared';
 import {
   AiNotConfiguredError,
@@ -83,7 +84,7 @@ export class AiService {
 
     if (telemetry) telemetry.privateNetworkAllowed = allowPrivateNetwork;
 
-    const url = `${stripTrailingSlash(baseUrl)}/models`;
+    const url = `${stripTrailingSlashes(baseUrl)}/models`;
     // Admin-pasted base URLs can carry userinfo/query secrets; never echo
     // the raw form back in error messages.
     const displayUrl = redactUrl(url);
@@ -187,10 +188,6 @@ export class AiService {
     }
   }
 
-}
-
-function stripTrailingSlash(url: string): string {
-  return url.endsWith('/') ? url.slice(0, -1) : url;
 }
 
 function extractModelIds(payload: unknown): string[] {

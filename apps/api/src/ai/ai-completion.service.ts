@@ -1,6 +1,10 @@
 import { createHash } from 'node:crypto';
 import { Injectable } from '@nestjs/common';
-import { excerptFromPlaintext, markdownToPlaintext } from '@weavestream/shared';
+import {
+  excerptFromPlaintext,
+  markdownToPlaintext,
+  stripTrailingSlashes,
+} from '@weavestream/shared';
 import { safeFetch } from '../common/egress/safe-fetch.js';
 import { redactSecretsInText } from '../common/redact-secrets.js';
 import {
@@ -229,7 +233,7 @@ export class AiCompletionService {
     else opts.signal?.addEventListener('abort', onExternalAbort);
     try {
       const res = await safeFetch(
-        `${config.baseUrl.replace(/\/+$/, '')}/chat/completions`,
+        `${stripTrailingSlashes(config.baseUrl)}/chat/completions`,
         {
           method: 'POST',
           headers: {

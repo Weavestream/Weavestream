@@ -31,6 +31,7 @@ export * from './ipv6.js';
 export * from './tag-chips.js';
 export * from './internal-token.js';
 export * from './strip-nul.js';
+export * from './strip-trailing-slashes.js';
 export * from './problem.js';
 export * from './file-format.js';
 export * from './image-limits.js';

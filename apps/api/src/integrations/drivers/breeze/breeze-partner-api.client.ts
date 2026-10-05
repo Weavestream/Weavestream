@@ -1,3 +1,4 @@
+import { stripTrailingSlashes } from '@weavestream/shared';
 import { z } from 'zod';
 import { fetchWithRetry } from '../driver-utils.js';
 import {
@@ -187,7 +188,7 @@ function buildBreezeUrl(
       'Breeze baseUrl must be an HTTP(S) URL without credentials, query, or fragment.',
     );
   }
-  parsed.pathname = `${parsed.pathname.replace(/\/+$/u, '')}/api/v1/partner-api/${endpoint}`;
+  parsed.pathname = `${stripTrailingSlashes(parsed.pathname)}/api/v1/partner-api/${endpoint}`;
   parsed.search = query.toString();
   return parsed.toString();
 }

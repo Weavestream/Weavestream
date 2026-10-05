@@ -1,3 +1,5 @@
+import { stripTrailingSlashes } from '@weavestream/shared';
+
 /**
  * API paths that are internal-only: the web container polls them
  * server-side, but no browser request may reach them through the
@@ -35,9 +37,8 @@ export function isInternalOnlyUpstreamUrl(url: string): boolean {
   } catch {
     return true;
   }
-  const normalized = pathname
-    .toLowerCase()
-    .replace(/\/{2,}/g, '/')
-    .replace(/\/+$/, '');
+  const normalized = stripTrailingSlashes(
+    pathname.toLowerCase().replace(/\/{2,}/g, '/'),
+  );
   return INTERNAL_ONLY_API_PATHS.includes(normalized);
 }

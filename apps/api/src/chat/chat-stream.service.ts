@@ -14,6 +14,7 @@ import type {
   ChatToolCallErrorCode,
   SendChatMessageInput,
 } from '@weavestream/shared';
+import { stripTrailingSlashes } from '@weavestream/shared';
 import { requireTenantContext } from '@weavestream/shared/server';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { AiSettingsService, aiEgressOptions } from '../ai/ai-settings.service.js';
@@ -609,7 +610,7 @@ export class ChatStreamService {
     const { config, res } = opts;
     const timeLeft = Math.max(1_000, remainingMs(opts.deadline, Date.now()));
     const upstream = await safeFetch(
-      `${stripTrailingSlash(config.baseUrl)}/chat/completions`,
+      `${stripTrailingSlashes(config.baseUrl)}/chat/completions`,
       {
         method: 'POST',
         headers: {
@@ -975,10 +976,6 @@ function writeError(res: Response, err: unknown): void {
   const message =
     err instanceof Error && err.message ? err.message : 'Unknown error';
   writeFrame(res, 'error', { message });
-}
-
-function stripTrailingSlash(s: string): string {
-  return s.endsWith('/') ? s.slice(0, -1) : s;
 }
 
 // OpenAI's GPT-5 family rejects the legacy `max_tokens` field and requires
