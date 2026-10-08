@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import type { BulkAssetResult } from '@weavestream/shared';
+import { problemMessage, type BulkAssetResult } from '@weavestream/shared';
 import { apiFetch } from '../../../../../lib/api';
 import {
   Btn,
@@ -13,6 +13,19 @@ import {
   useToast,
   type CompanyPickerValue,
 } from '../../../../../components/ui';
+
+/**
+ * `problemMessage`, plus the field a validation issue is about
+ * (`tags: Invalid uuid`): a copy's form is not on screen to point at it.
+ */
+function problemText(problem: unknown, fallback: string): string {
+  const message = problemMessage(problem) ?? fallback;
+  const issue = (problem as { issues?: Array<{ path?: unknown; message?: unknown }> } | null)?.issues?.[0];
+  // Prefix only when problemMessage chose the issue's own message.
+  if (issue?.message !== message || typeof issue.path !== 'string') return message;
+  const field = issue.path.split('.')[0];
+  return field ? `${field}: ${message}` : message;
+}
 
 /**
  * Copy (or move) assets into a company. One asset → the single-asset
@@ -33,8 +46,12 @@ export function CopyAssetsDialog({
   onClose: () => void;
   companyId: string;
   assetIds: string[];
-  /** Called after a bulk copy with the ids that failed (to keep selected). */
-  onDone?: (failedIds: string[]) => void;
+  /**
+   * Called after a bulk copy with the ids still to retry (to keep
+   * selected). Also called, with the dialog left open, when a later batch
+   * fails, so a retry submits only the ids that were not yet copied.
+   */
+  onDone?: (retryIds: string[]) => void;
 }) {
   const router = useRouter();
   const toast = useToast();
@@ -57,6 +74,28 @@ export function CopyAssetsDialog({
   async function submit() {
     if (!target) return;
     setPending(true);
+    // Bulk progress, kept outside the try so a thrown request can still
+    // report (and drop from the selection) what earlier batches copied.
+    const ok: string[] = [];
+    const failed: BulkAssetResult['failed'] = [];
+    let next = 0;
+    // A copy that exists (even if its original stayed active) must not be
+    // offered for retry: that would copy it a second time.
+    const retryable = () =>
+      failed
+        .filter((f) => f.code !== 'original_not_archived' && f.code !== 'attachments_incomplete')
+        .map((f) => f.id);
+    const reportPartial = (problem: string) => {
+      const done = ok.length + failed.length;
+      toast.push(
+        `${problem}${ok.length ? ` ${ok.length} were copied before this; retry copies only the rest.` : ''}`,
+        'danger',
+      );
+      if (done > 0) {
+        onDone?.([...retryable(), ...assetIds.slice(next)]);
+        router.refresh();
+      }
+    };
     try {
       const body = { targetCompanyId: target.id, archiveOriginal: isMove };
       if (n === 1) {
@@ -65,8 +104,7 @@ export function CopyAssetsDialog({
           { method: 'POST', body: JSON.stringify(body) },
         );
         if (!res.ok || !res.data) {
-          const p = res.problem as { message?: string; detail?: string; title?: string } | undefined;
-          toast.push(p?.message ?? p?.detail ?? p?.title ?? 'Could not copy the asset.', 'danger');
+          toast.push(problemText(res.problem, 'Could not copy the asset.'), 'danger');
           return;
         }
         const d = res.data as { originalArchived?: boolean; attachmentsIncomplete?: boolean };
@@ -74,7 +112,7 @@ export function CopyAssetsDialog({
         const partial = kept || !!d.attachmentsIncomplete;
         toast.push(
           d.attachmentsIncomplete
-            ? `Copied to ${target.name}, but some attachments did not copy${isMove ? ', so the original was kept' : ''}.`
+            ? `Copied to ${target.name}, but some files did not copy${isMove ? ', so the original was kept' : ''}.`
             : kept
               ? `Copied to ${target.name}, but the original could not be archived.`
               : isMove
@@ -88,21 +126,14 @@ export function CopyAssetsDialog({
         return;
       }
       // The bulk endpoint takes at most 100 ids per call.
-      const ok: string[] = [];
-      const failed: BulkAssetResult['failed'] = [];
-      for (let i = 0; i < assetIds.length; i += 100) {
+      for (; next < assetIds.length; next += 100) {
         const res = await apiFetch<BulkAssetResult>(`/companies/${companyId}/assets/bulk/clone`, {
           method: 'POST',
-          body: JSON.stringify({ ...body, ids: assetIds.slice(i, i + 100) }),
+          body: JSON.stringify({ ...body, ids: assetIds.slice(next, next + 100) }),
         });
         if (!res.ok || !res.data) {
-          const p = res.problem as { detail?: string; title?: string } | undefined;
-          // Earlier batches already copied; report what happened so far.
-          toast.push(
-            `${p?.detail ?? p?.title ?? `Could not copy the ${noun}.`}${ok.length ? ` ${ok.length} were copied before this.` : ''}`,
-            'danger',
-          );
-          if (ok.length) router.refresh();
+          // Earlier batches already copied: keep only the rest selected.
+          reportPartial(problemText(res.problem, `Could not copy the ${noun}.`));
           return;
         }
         ok.push(...res.data.ok);
@@ -117,16 +148,10 @@ export function CopyAssetsDialog({
       }
       setPending(false);
       close();
-      // A copy that exists but whose original stayed active must not be
-      // offered for retry: that would copy it a second time.
-      onDone?.(
-        failed
-          .filter((f) => f.code !== 'original_not_archived' && f.code !== 'attachments_incomplete')
-          .map((f) => f.id),
-      );
+      onDone?.(retryable());
       router.refresh();
     } catch {
-      toast.push(`Could not copy the ${noun}.`, 'danger');
+      reportPartial(`Could not copy the ${noun}.`);
     } finally {
       setPending(false);
     }

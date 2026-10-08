@@ -185,6 +185,17 @@ const MAX_CONCURRENT_THUMBNAILS = 2;
 /** Ceiling for copying a stored thumbnail (generated 300px webp). */
 const THUMB_COPY_MAX_BYTES = 5 * 1024 * 1024;
 
+/**
+ * {@link UploadsService.copyToCompany}: the upload row is live but its stored
+ * bytes are gone. Unlike a plain `NotFoundException` (the file was deleted,
+ * so there is nothing to copy), this means the copy is incomplete.
+ */
+export class UploadContentMissingException extends NotFoundException {
+  constructor() {
+    super('File content is missing');
+  }
+}
+
 @Injectable()
 export class UploadsService {
   private readonly logger = new Logger(UploadsService.name);
@@ -864,25 +875,34 @@ export class UploadsService {
     const newId = randomUUID();
     const storageKey = this.storage.uploadKey(toCompanyId, newId, src.filename);
     const written: string[] = [];
-    const copy = async (fromKey: string, toKey: string, maxBytes: number) => {
+    /** False when the source object is missing. */
+    const copy = async (fromKey: string, toKey: string, maxBytes: number): Promise<boolean> => {
       const obj = await this.storage.getObjectStream(fromCompanyId, fromKey);
-      if (!obj) throw new NotFoundException('File content is missing');
+      if (!obj) return false;
       await this.storage.putObjectStream(toCompanyId, toKey, obj.body, {
         contentType: src.mimeType,
         maxBytes,
       });
       written.push(toKey);
+      return true;
     };
 
     try {
       await this.storage.ensureBucket(toCompanyId);
       // Same bytes as the source, so its size is the ceiling.
-      await copy(src.storageKey, storageKey, src.sizeBytes);
+      if (!(await copy(src.storageKey, storageKey, src.sizeBytes))) {
+        throw new UploadContentMissingException();
+      }
       let thumbnailKey: string | null = null;
       if (src.thumbnailKey) {
         thumbnailKey = this.storage.thumbnailKey(toCompanyId, newId);
         // A generated webp can be larger than a tiny original; own cap.
-        await copy(src.thumbnailKey, thumbnailKey, THUMB_COPY_MAX_BYTES);
+        // A missing thumbnail is derived data, not the file: the copy goes
+        // on without one, as an upload whose generation failed would.
+        if (!(await copy(src.thumbnailKey, thumbnailKey, THUMB_COPY_MAX_BYTES))) {
+          this.logger.warn(`Upload ${src.id}: thumbnail missing, copied ${newId} without one.`);
+          thumbnailKey = null;
+        }
       }
       await this.prisma.upload.create({
         data: {

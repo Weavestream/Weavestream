@@ -1,6 +1,6 @@
 import { NotFoundException } from '@nestjs/common';
 import { Readable } from 'node:stream';
-import { UploadsService } from './uploads.service.js';
+import { UploadContentMissingException, UploadsService } from './uploads.service.js';
 
 const ACTOR = { id: 'u-1' } as never;
 const META = { ip: '198.51.100.7', userAgent: 'jest' };
@@ -75,6 +75,27 @@ describe('UploadsService.copyToCompany', () => {
       data: expect.objectContaining({ id, companyId: 'co-dst', attachedToId: null, sha256: 'abc' }),
     });
     expect(audit.log.mock.calls[0][0]).toMatchObject({ action: 'upload.copy', entityId: id, companyId: 'co-dst' });
+  });
+
+  it('copies the file without a thumbnail when only the thumbnail is missing', async () => {
+    const { svc, prisma, storage } = harness();
+    storage.getObjectStream
+      .mockResolvedValueOnce({ body: Readable.from([Buffer.from('data')]) })
+      .mockResolvedValueOnce(null as never);
+    const id = await svc.copyToCompany(ACTOR, 'co-src', 'a-1', 'up-1', 'co-dst', META);
+    expect(storage.putObjectStream).toHaveBeenCalledTimes(1);
+    expect(prisma.upload.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ id, thumbnailKey: null }),
+    });
+  });
+
+  it('reports a live upload with no stored content as missing, not deleted', async () => {
+    const { svc, prisma, storage } = harness();
+    storage.getObjectStream.mockResolvedValueOnce(null as never);
+    await expect(svc.copyToCompany(ACTOR, 'co-src', 'a-1', 'up-1', 'co-dst', META)).rejects.toBeInstanceOf(
+      UploadContentMissingException,
+    );
+    expect(prisma.upload.create).not.toHaveBeenCalled();
   });
 
   it('will not copy an upload that belongs to a different company than claimed', async () => {

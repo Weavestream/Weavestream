@@ -6,7 +6,7 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import type {
   Prisma,
   Asset,
@@ -30,7 +30,9 @@ import { AUDIT_ACTIONS } from '../audit/audit-actions.js';
 import { AuditLogService } from '../audit/audit.service.js';
 import { FieldTypesRegistry } from '../field-types/field-types.registry.js';
 import { RelationsService } from '../relations/relations.service.js';
-import { UploadsService } from '../uploads/uploads.service.js';
+import { getTenantContext } from '@weavestream/shared/server';
+import { UploadContentMissingException, UploadsService } from '../uploads/uploads.service.js';
+import { describeError } from '../common/describe-error.js';
 import { SearchIndexService } from '../search/search-index.service.js';
 import { PasswordsService } from '../passwords/passwords.service.js';
 import { StarsService } from '../stars/stars.service.js';
@@ -1421,6 +1423,18 @@ export class AssetsService {
       }
     }
 
+    // TAGS: carry what the read side shows. Values from before the global-Tag
+    // migration can still hold raw names ("server") instead of tag ids; reads
+    // drop those (and ids of deleted tags), but create() would reject them.
+    for (const field of layout.fields) {
+      if (field.archivedAt !== null || field.fieldType !== 'TAGS') continue;
+      const raw = values[field.slug];
+      if (!Array.isArray(raw)) continue;
+      const ids = raw.filter((v): v is string => typeof v === 'string');
+      const known = await this.tags.getMany(ids);
+      values[field.slug] = ids.filter((x) => known.has(x));
+    }
+
     const copiedUploads: string[] = [];
     // Every FILE field's uploads, including fields hidden from this actor:
     // the attachments-panel copy below must never pick those up (that would
@@ -1436,6 +1450,9 @@ export class AssetsService {
         if (typeof uploadId === 'string') fieldUploadIds.add(uploadId);
       }
     }
+    // A file whose row is live but whose bytes are gone cannot be copied:
+    // the copy is incomplete, and a move must keep the original.
+    let attachmentsIncomplete = false;
     let created: SerializedAsset;
     try {
       for (const field of layout.fields) {
@@ -1445,7 +1462,12 @@ export class AssetsService {
         for (const entry of values[field.slug] as FileFieldEntry[]) {
           if (!entry?.uploadId) continue;
           const uploadId = await this.copyUploadOrSkip(actor, sourceCompanyId, id, entry.uploadId, targetCompanyId, meta);
-          if (!uploadId) continue; // deleted, or not this asset's file: dropped
+          if (uploadId === 'missing') {
+            attachmentsIncomplete = true;
+            this.logger.warn(`Copy of ${id}: file ${entry.uploadId} in "${field.slug}" has no stored content; not copied.`);
+            continue;
+          }
+          if (uploadId === 'gone') continue; // deleted, or not this asset's file: dropped
           copiedUploads.push(uploadId);
           entries.push({ ...entry, uploadId });
         }
@@ -1481,7 +1503,6 @@ export class AssetsService {
     // Files on the asset's attachments panel (not in a FILE field) come too.
     // The copy already exists, so a failure here never fails it; but it does
     // stop a move from archiving the original, which still holds the file.
-    let attachmentsIncomplete = false;
     try {
       const panel = await this.prisma.upload.findMany({
         where: {
@@ -1496,12 +1517,14 @@ export class AssetsService {
       for (const u of panel) {
         let newId: string | null = null;
         try {
-          newId = await this.copyUploadOrSkip(actor, sourceCompanyId, id, u.id, targetCompanyId, meta);
-          if (!newId) {
+          const copied = await this.copyUploadOrSkip(actor, sourceCompanyId, id, u.id, targetCompanyId, meta);
+          if (copied === 'gone') continue; // deleted since the listing: nothing to copy
+          if (copied === 'missing') {
             // The row exists but its content is gone: the copy is not whole.
             attachmentsIncomplete = true;
             continue;
           }
+          newId = copied;
           // Tenant-scoped write: companyId must be in the filter.
           const { count } = await this.prisma.upload.updateMany({
             where: { id: newId, companyId: targetCompanyId, attachedToId: null },
@@ -1539,7 +1562,7 @@ export class AssetsService {
     // caller would retry and create a second copy.
     let originalArchived = false;
     if (opts.archiveOriginal && attachmentsIncomplete) {
-      this.logger.warn(`Not archiving ${id}: some attachments did not copy to ${created.id}.`);
+      this.logger.warn(`Not archiving ${id}: some files did not copy to ${created.id}.`);
     } else if (opts.archiveOriginal) {
       try {
         await this.archive(actor, sourceCompanyId, id, meta);
@@ -1615,7 +1638,12 @@ export class AssetsService {
     }
   }
 
-  /** Copy one of the source asset's files, or null if it is gone or not the asset's. */
+  /**
+   * Copy one of the source asset's files. Returns the new upload id;
+   * `'gone'` when the file is deleted or not the asset's (nothing to copy);
+   * `'missing'` when the file is live but its stored content is not (the
+   * copy is incomplete).
+   */
   private async copyUploadOrSkip(
     actor: AuthedUser,
     sourceCompanyId: string,
@@ -1623,11 +1651,12 @@ export class AssetsService {
     uploadId: string,
     targetCompanyId: string,
     meta: AuditMeta,
-  ): Promise<string | null> {
+  ): Promise<string | 'gone' | 'missing'> {
     try {
       return await this.uploads.copyToCompany(actor, sourceCompanyId, sourceAssetId, uploadId, targetCompanyId, meta);
     } catch (err) {
-      if (err instanceof NotFoundException) return null;
+      if (err instanceof UploadContentMissingException) return 'missing';
+      if (err instanceof NotFoundException) return 'gone';
       throw err;
     }
   }
@@ -1654,7 +1683,7 @@ export class AssetsService {
         kept.push({
           id,
           code: 'attachments_incomplete',
-          reason: 'Copied, but some attachments did not copy.',
+          reason: 'Copied, but some files did not copy.',
         });
       } else if (opts.archiveOriginal && !copy.originalArchived) {
         kept.push(
@@ -1663,7 +1692,7 @@ export class AssetsService {
                 id,
                 code: 'original_not_archived',
                 reason:
-                  'Copied, but some attachments did not copy, so the original was kept. Copy those files over before archiving it.',
+                  'Copied, but some files did not copy, so the original was kept. Copy those files over before archiving it.',
               }
             : {
                 id,
@@ -1744,7 +1773,19 @@ export class AssetsService {
         await op(id);
         ok.push(id);
       } catch (err) {
-        failed.push({ id, ...classifyBulkError(err) });
+        const known = classifyBulkError(err);
+        if (known) {
+          failed.push({ id, ...known });
+          continue;
+        }
+        // An unexpected error (storage, database) can carry server paths or
+        // hostnames: the client gets a generic reason and a reference, and
+        // the details go to the server log under that reference.
+        // The request id can come from a client header: reuse only a sane one.
+        const ctxRef = getTenantContext()?.requestId;
+        const ref = ctxRef && /^[\w-]{8,64}$/.test(ctxRef) ? ctxRef : randomUUID();
+        this.logger.error(`Bulk asset action failed for ${id} (ref ${ref}): ${describeError(err)}`);
+        failed.push({ id, code: 'error', reason: `Something went wrong. Reference: ${ref}` });
       }
     }
     return { ok, failed };
@@ -2530,9 +2571,10 @@ export class AssetsService {
  * `{ code, reason }` shape. The codes are part of the public contract
  * with the web client (see `BulkAssetFailure` in
  * `packages/shared/src/schemas/asset.ts`); add new codes here rather
- * than letting raw error messages leak through.
+ * than letting raw error messages leak through. Returns null for an
+ * unexpected error, which `runBulk` reports generically.
  */
-function classifyBulkError(err: unknown): { code: string; reason: string } {
+function classifyBulkError(err: unknown): { code: string; reason: string } | null {
   if (err instanceof NotFoundException) {
     return { code: 'not_found', reason: 'Asset not found.' };
   }
@@ -2559,8 +2601,6 @@ function classifyBulkError(err: unknown): { code: string; reason: string } {
   if (err instanceof ConflictException) {
     return { code: 'conflict', reason: err.message };
   }
-  if (err instanceof Error) {
-    return { code: 'error', reason: err.message };
-  }
-  return { code: 'error', reason: 'Unknown error.' };
+  // Anything else is unexpected: never echo its message (see `runBulk`).
+  return null;
 }

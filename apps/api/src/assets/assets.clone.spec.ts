@@ -191,6 +191,56 @@ describe('AssetsService.clone', () => {
     expect((create.mock.calls[0]![2] as { fieldValues: Record<string, unknown> }).fieldValues.receipt).toEqual([]);
   });
 
+  it('a field file with missing content makes the copy incomplete, so a move keeps the original', async () => {
+    // A thumbnail-only gap no longer reaches here (copyToCompany copies
+    // without it); a missing original must not be dropped silently.
+    const { svc, uploads, archive } = harness();
+    const { UploadContentMissingException } = await import('../uploads/uploads.service.js');
+    uploads.copyToCompany.mockRejectedValueOnce(new UploadContentMissingException());
+    const res = await svc.clone(ACTOR, SRC, 'a-1', DST, { archiveOriginal: true }, META);
+    expect(res).toMatchObject({ originalArchived: false, attachmentsIncomplete: true });
+    expect(archive).not.toHaveBeenCalled();
+
+    const h = harness();
+    h.uploads.copyToCompany.mockRejectedValueOnce(new UploadContentMissingException());
+    const bulk = await h.svc.cloneMany(ACTOR, SRC, ['a-1'], DST, { archiveOriginal: false }, META);
+    expect(bulk.failed).toEqual([expect.objectContaining({ id: 'a-1', code: 'attachments_incomplete' })]);
+  });
+
+  it('bulk: an unexpected error is reported with a reference, never its message', async () => {
+    // Storage errors (EACCES, ENOSPC) carry absolute server paths.
+    const { svc, uploads } = harness();
+    uploads.copyToCompany.mockRejectedValueOnce(
+      new Error("EACCES: permission denied, open '/srv/weavestream/storage/co-dst/x'"),
+    );
+    const bulk = await svc.cloneMany(ACTOR, SRC, ['a-1'], DST, { archiveOriginal: false }, META);
+    expect(bulk.ok).toEqual([]);
+    expect(bulk.failed).toEqual([
+      { id: 'a-1', code: 'error', reason: expect.stringMatching(/^Something went wrong\. Reference: [\w-]+$/) },
+    ]);
+    expect(JSON.stringify(bulk)).not.toContain('/srv/');
+  });
+
+  it('carries only the tags the read side shows (legacy names and deleted tags are dropped)', async () => {
+    // Pre-global-Tag rows hold raw names; create() would reject them.
+    const h = harness();
+    const TAG = '11111111-1111-4111-8111-111111111111';
+    const GONE = '22222222-2222-4222-8222-222222222222';
+    h.prisma.asset.findFirst.mockResolvedValueOnce({
+      id: 'a-1', companyId: SRC, name: 'FW13', archivedAt: null,
+      assetLayout: { ...LAYOUT, fields: [...LAYOUT.fields, { id: 'f-tags', slug: 'tags', name: 'Tags', fieldType: 'TAGS', archivedAt: null, isRequired: false }] },
+      fieldValues: [],
+    });
+    jest.spyOn(h.svc as never, 'serialize' as never).mockReturnValueOnce({
+      fieldValues: { hostname: 'fw13.local', tags: ['server', TAG, GONE] },
+    } as never);
+    const getMany = jest.fn(async () => new Map([[TAG, { id: TAG, name: 'web' }]]));
+    (h.svc as unknown as { tags: unknown }).tags = { getMany };
+    await h.svc.clone(ACTOR, SRC, 'a-1', DST, { archiveOriginal: true }, META);
+    expect(getMany).toHaveBeenCalledWith(['server', TAG, GONE]);
+    expect((h.create.mock.calls[0]![2] as { fieldValues: Record<string, unknown> }).fieldValues.tags).toEqual([TAG]);
+  });
+
   it('drops same-company links whose target no longer exists', async () => {
     const { svc, create } = harness({ linkAlive: false });
     await svc.clone(ACTOR, SRC, 'a-1', SRC, { archiveOriginal: false }, META);
