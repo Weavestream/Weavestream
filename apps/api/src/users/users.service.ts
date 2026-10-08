@@ -15,6 +15,7 @@ import { AuditLogService } from '../audit/audit.service.js';
 import { MembershipCacheService } from '../cache/membership-cache.service.js';
 import { SetupTokenService } from './setup-token.service.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
+import { revokeApiKeysForUser } from '../auth/revoke-api-keys.js';
 
 export interface UserListOptions {
   q?: string;
@@ -328,37 +329,56 @@ export class UsersService {
     const clearOperatorAxes =
       isRoleChange && before.role === 'OPERATOR' && nextRole !== 'OPERATOR';
 
-    const updated = await this.prisma.user.update({
-      where: { id },
-      data: {
-        ...(input.name !== undefined ? { name: input.name } : {}),
-        ...(input.role !== undefined ? { role: input.role } : {}),
-        ...(input.timezone !== undefined ? { timezone: input.timezone } : {}),
-        ...(input.isActive !== undefined
-          ? {
-              isActive: input.isActive,
-              deactivatedAt: input.isActive ? null : new Date(),
-            }
-          : {}),
-        ...(clearOperatorAxes
-          ? { globalAccess: null, platformCapabilities: [] }
-          : {
-              ...(input.globalAccess !== undefined
-                ? { globalAccess: input.globalAccess }
-                : {}),
-              ...(input.platformCapabilities !== undefined
-                ? { platformCapabilities: input.platformCapabilities }
-                : {}),
-            }),
-      },
+    // When deactivating, the profile write and both revocations are one unit:
+    // a failure between them would leave the account flagged inactive with its
+    // sessions or keys still live, or revoked against a profile write that
+    // rolled back. Every edit runs in the transaction for simplicity; for a
+    // non-deactivating edit it wraps a single statement.
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const row = await tx.user.update({
+        where: { id },
+        data: {
+          ...(input.name !== undefined ? { name: input.name } : {}),
+          ...(input.role !== undefined ? { role: input.role } : {}),
+          ...(input.timezone !== undefined ? { timezone: input.timezone } : {}),
+          ...(input.isActive !== undefined
+            ? {
+                isActive: input.isActive,
+                deactivatedAt: input.isActive ? null : new Date(),
+              }
+            : {}),
+          ...(clearOperatorAxes
+            ? { globalAccess: null, platformCapabilities: [] }
+            : {
+                ...(input.globalAccess !== undefined
+                  ? { globalAccess: input.globalAccess }
+                  : {}),
+                ...(input.platformCapabilities !== undefined
+                  ? { platformCapabilities: input.platformCapabilities }
+                  : {}),
+              }),
+        },
+      });
+
+      if (isDeactivation) {
+        // Sign the user out everywhere.
+        await tx.session.updateMany({
+          where: { userId: id, revokedAt: null },
+          data: { revokedAt: new Date() },
+        });
+        // Revoke keys rather than leaving them merely inert: AuthGuard rejects
+        // on `!isActive`, so without this a reactivation a week later silently
+        // resurrects every key an attacker minted beforehand, and none of them
+        // appear in the sessions UI to warn anyone.
+        await revokeApiKeysForUser(tx, id);
+      }
+
+      return row;
     });
 
     if (isDeactivation) {
-      // Revoke all sessions so a deactivated user is signed out everywhere.
-      await this.prisma.session.updateMany({
-        where: { userId: id, revokedAt: null },
-        data: { revokedAt: new Date() },
-      });
+      // Outside the transaction: cache invalidation is not part of the atomic
+      // unit and must not be able to roll it back.
       await this.cache.invalidate(id);
     }
     if (isActivation) {
@@ -438,6 +458,12 @@ export class UsersService {
     if (!user) throw new NotFoundException();
     if (!user.isActive) throw new ForbiddenException('User is deactivated');
 
+    // A re-invite answers a lost password or a suspected compromise. Kill the
+    // user's API keys now rather than at acceptance: the link may sit unused
+    // for days, or never be used, and the keys would stay live throughout.
+    // Revoke *before* issuing so a failure in between can only leave the
+    // account more locked down, never with a fresh link and live keys.
+    const apiKeysRevoked = await revokeApiKeysForUser(this.prisma, id);
     const invite = await this.setupTokens.issue(id, actor.id);
 
     await this.audit.log({
@@ -448,7 +474,7 @@ export class UsersService {
       ip: meta.ip,
       userAgent: meta.userAgent,
       before: null,
-      after: { expiresAt: invite.expiresAt.toISOString() },
+      after: { expiresAt: invite.expiresAt.toISOString(), apiKeysRevoked },
     });
 
     return { setupUrl: invite.url, expiresAt: invite.expiresAt };
@@ -483,6 +509,11 @@ export class UsersService {
         where: { userId: id, revokedAt: null },
         data: { revokedAt: new Date() },
       });
+      // And every API key. This route exists to answer a suspected compromise.
+      // MfaEnrollmentGuard would refuse a key while enrollment is incomplete,
+      // but only until the user re-enrolls — at which point every surviving
+      // key silently resumes full access, invisible on the sessions page.
+      await revokeApiKeysForUser(tx, id);
     });
 
     await this.audit.log({

@@ -47,6 +47,9 @@ export const AUDIT_ACTIONS = {
     emailTest: 'settings.email.test',
     aiUpdate: 'settings.ai.update',
     aiTest: 'settings.ai.test',
+    // Instance-wide API key switch (`PUT /settings/api-keys`). `before` and
+    // `after` carry `{ apiKeysEnabled }`.
+    apiKeysToggle: 'settings.api_keys.toggle',
   },
   domain: {
     create: 'domain.create',
@@ -206,6 +209,9 @@ export const AUDIT_ACTIONS = {
   },
   security: {
     sessionRevoke: 'security.session.revoke',
+    // An admin revoking another user's API key from the Security center.
+    // `entityId` is the key id; `after.targetUserId` is its owner.
+    apiKeyRevoke: 'security.api_key.revoke',
     ipRuleCreate: 'security.ip_rule.create',
     ipRuleUpdate: 'security.ip_rule.update',
     ipRuleDelete: 'security.ip_rule.delete',

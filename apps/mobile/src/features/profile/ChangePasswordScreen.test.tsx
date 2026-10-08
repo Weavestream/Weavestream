@@ -301,6 +301,23 @@ describe('ChangePasswordScreen — server errors and success', () => {
     expect(redirectToLogin).not.toHaveBeenCalled();
   });
 
+  it('reports API keys the change revoked', async () => {
+    apiFetch.mockResolvedValue({ ok: true, apiKeysRevoked: 1 });
+    await submit();
+
+    await waitFor(() =>
+      expect(pushToast).toHaveBeenCalledWith(
+        expect.stringContaining('1 API key revoked'),
+        'ok',
+      ),
+    );
+  });
+
+  it('warns before submission that every API key is revoked', () => {
+    render(<ChangePasswordScreen />);
+    expect(screen.getByText(/permanently revokes every API key/)).toBeInTheDocument();
+  });
+
   it('leaves the form exactly the way Cancel does', async () => {
     // Same callback for both, so success and Cancel cannot drift apart.
     render(<ChangePasswordScreen />);

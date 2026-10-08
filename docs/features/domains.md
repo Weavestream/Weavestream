@@ -28,6 +28,18 @@ Each check produces a status:
 - **FAIL** — expired or invalid
 - **SKIP** — check disabled or not applicable
 
+## Statuses
+
+| Status | Meaning |
+|---|---|
+| **OK** (green) | Registration, DNS and TLS are healthy |
+| **Expiring** (amber) | Registration or certificate expires within the alert threshold |
+| **Expired** / **Fail** (red) | Registration or certificate expired, a registry hold, or a failing check |
+| **No site** (grey) | Registration and DNS are fine, but the name has no A/AAAA record, so nothing is served. Typical for parked domains. TLS and HTTP checks are skipped instead of failing. Registration problems still show as Expiring/Expired. |
+| **Unknown** | Not checked yet |
+
+New domains are checked as soon as they are created; after that the nightly sweep keeps them current.
+
 ## Alert Thresholds
 
 Each check has a configurable **days-before-expiry** threshold. When a domain crosses the threshold, its status changes to `WARN`. Set tighter thresholds for critical domains and looser ones for low-priority hostnames.

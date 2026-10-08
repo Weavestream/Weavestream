@@ -36,6 +36,7 @@ const ALLOWED_STATUSES: DomainStatusValue[] = [
   'EXPIRING',
   'EXPIRED',
   'FAIL',
+  'NO_SITE',
   'UNKNOWN',
 ];
 
@@ -111,7 +112,20 @@ export class DomainsController {
     @Body(new ZodBody(createMonitoredDomainSchema)) dto: CreateMonitoredDomainInput,
     @Req() req: Request,
   ) {
-    return this.domains.create(actor, companyId, dto, meta(req));
+    const created = await this.domains.create(actor, companyId, dto, meta(req));
+    // Check it right away instead of leaving it "never checked" until the
+    // nightly sweep. Fire-and-forget: the domain exists either way, and the
+    // nightly run is the fallback if the queue is unavailable. Not awaited:
+    // the BullMQ connection retries forever, so a Redis outage would hang
+    // the response after the domain was already saved.
+    void this.queues
+      .enqueueDomainCheck({ kind: 'single', domainId: created.id, actorId: actor.id })
+      .catch((err: unknown) =>
+        this.logger.warn(
+          `First check for new domain ${created.id} not queued: ${err instanceof Error ? err.message : String(err)}`,
+        ),
+      );
+    return created;
   }
 
   @Patch(':id')

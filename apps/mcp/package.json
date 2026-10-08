@@ -1,0 +1,31 @@
+{
+  "name": "@weavestream/mcp",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Model Context Protocol server for Weavestream. Acts as you through the REST API with an API key.",
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "bin": {
+    "weavestream-mcp": "dist/index.js"
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "tsc -p tsconfig.json && node --test dist/*.test.js",
+    "lint": "eslint 'src/**/*.ts'"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.31.0",
+    "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "eslint": "^9.14.0",
+    "typescript": "^5.9.0",
+    "typescript-eslint": "^8.59.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

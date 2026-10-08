@@ -15,10 +15,15 @@ import { topologyWarnings } from '@weavestream/shared/server';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { RedisService } from '../redis/redis.service.js';
 import { AuditLogService } from '../audit/audit.service.js';
+import { AUDIT_ACTIONS } from '../audit/audit-actions.js';
 import { EnvService } from '../config/env.service.js';
 import { StepUpService } from '../auth/step-up/step-up.service.js';
 import { ipOf, isPrivatePeer, normalizeIp } from '../common/request-meta.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
+import {
+  ADMIN_API_KEY_DEFAULT_PAGE_SIZE,
+  type AdminApiKeyPage,
+} from '@weavestream/shared';
 
 // Wire contract with the web tier: `proxy.ts` stashes the raw inbound
 // `X-Forwarded-For` chain under this header and `api-proxy.ts` forwards
@@ -405,48 +410,146 @@ export class SecurityService {
    * silently no-op on already-revoked or unknown ids — those raise so
    * the admin UI shows a clear error instead of a fake green checkmark.
    */
+  /**
+   * One page of every unrevoked API key on the instance, newest first, with
+   * its owner. Expired keys are included (the UI marks them), because an
+   * admin may still want to see and clean them up. Never selects `tokenHash`.
+   *
+   * Offset pagination with a total, matching the audit log: a fixed cap
+   * would silently hide older live keys from the only screen where an admin
+   * can find and revoke them.
+   */
+  async listApiKeys(params: { page?: number; pageSize?: number }): Promise<AdminApiKeyPage> {
+    const pageSize = Math.min(Math.max(params.pageSize ?? ADMIN_API_KEY_DEFAULT_PAGE_SIZE, 1), 100);
+    const where = { revokedAt: null };
+    const total = await this.prisma.apiKey.count({ where });
+    const totalPages = Math.max(Math.ceil(total / pageSize), 1);
+    const page = Math.min(Math.max(params.page ?? 1, 1), totalPages);
+    const rows = await this.prisma.apiKey.findMany({
+      where,
+      // `id` breaks ties so a page boundary never repeats or skips a row.
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      skip: (page - 1) * pageSize,
+      take: pageSize,
+      select: {
+        id: true,
+        keyId: true,
+        name: true,
+        scopes: true,
+        allowPasswordReveal: true,
+        allowWrite: true,
+        lastUsedAt: true,
+        expiresAt: true,
+        createdAt: true,
+        user: { select: { id: true, name: true, email: true } },
+      },
+    });
+    const items = rows.map((r) => ({
+      id: r.id,
+      keyId: r.keyId,
+      name: r.name,
+      scopes: r.scopes,
+      allowPasswordReveal: r.allowPasswordReveal,
+      allowWrite: r.allowWrite,
+      lastUsedAt: r.lastUsedAt?.toISOString() ?? null,
+      expiresAt: r.expiresAt?.toISOString() ?? null,
+      createdAt: r.createdAt.toISOString(),
+      user: r.user,
+    }));
+    return { items, total, page, pageSize };
+  }
+
+  /**
+   * Revoke another user's API key. Audited with the owner's id so the audit
+   * log shows whose integration was cut off. An unknown or already-revoked id
+   * is a 404: unlike sessions there is nothing to clean up, and a no-op row
+   * would only add noise.
+   *
+   * Revocation and audit row commit in one transaction, so a failed audit
+   * write leaves the key live rather than revoked with no record. The
+   * revoke is a conditional `updateMany` (`revokedAt: null`), so two admins
+   * racing on the same key produce one revocation and one audit row; the
+   * loser gets the 404.
+   */
+  async revokeApiKey(
+    actor: AuthedUser,
+    id: string,
+    meta: { ip: string; userAgent: string },
+  ): Promise<{ revoked: 1 }> {
+    await this.prisma.$transaction(async (tx) => {
+      const key = await tx.apiKey.findFirst({
+        where: { id, revokedAt: null },
+        select: { id: true, userId: true, name: true },
+      });
+      if (!key) throw new NotFoundException('API key not found');
+      const { count } = await tx.apiKey.updateMany({
+        where: { id: key.id, revokedAt: null },
+        data: { revokedAt: new Date() },
+      });
+      if (count === 0) throw new NotFoundException('API key not found');
+      await this.audit.logWithClient(tx, {
+        actorId: actor.id,
+        action: AUDIT_ACTIONS.security.apiKeyRevoke,
+        entityType: 'api_key',
+        entityId: key.id,
+        ip: meta.ip,
+        userAgent: meta.userAgent,
+        before: null,
+        after: { targetUserId: key.userId, name: key.name, sessionId: actor.sessionId },
+      });
+    });
+    return { revoked: 1 };
+  }
+
   async revokeSession(
     actor: AuthedUser,
     sessionId: string,
     meta: { ip: string; userAgent: string },
   ): Promise<{ revoked: 1 }> {
-    const session = await this.prisma.session.findUnique({
-      where: { id: sessionId },
-      select: { id: true, userId: true, revokedAt: true },
-    });
-    if (!session) throw new NotFoundException('Session not found');
-    if (session.revokedAt) {
-      // Already revoked — surface the same response shape so the UI
-      // can refresh without showing an error, and emit the audit
-      // record so we still know the admin pressed the button.
-      await this.audit.log({
+    // Revocation and audit row commit in one transaction, so a failed
+    // audit write leaves the session live rather than revoked with no
+    // record.
+    const revoked = await this.prisma.$transaction(async (tx) => {
+      const session = await tx.session.findUnique({
+        where: { id: sessionId },
+        select: { id: true, userId: true, revokedAt: true },
+      });
+      if (!session) throw new NotFoundException('Session not found');
+      if (session.revokedAt) {
+        // Already revoked — surface the same response shape so the UI
+        // can refresh without showing an error, and emit the audit
+        // record so we still know the admin pressed the button.
+        await this.audit.logWithClient(tx, {
+          actorId: actor.id,
+          action: AUDIT_ACTIONS.security.sessionRevoke,
+          entityType: 'Session',
+          entityId: session.id,
+          ip: meta.ip,
+          userAgent: meta.userAgent,
+          before: { revoked: true },
+          after: { revoked: true, noOp: true, targetUserId: session.userId },
+        });
+        return null;
+      }
+      await tx.session.update({
+        where: { id: session.id },
+        data: { revokedAt: new Date() },
+      });
+      await this.audit.logWithClient(tx, {
         actorId: actor.id,
-        action: 'security.session.revoke',
+        action: AUDIT_ACTIONS.security.sessionRevoke,
         entityType: 'Session',
         entityId: session.id,
         ip: meta.ip,
         userAgent: meta.userAgent,
-        before: { revoked: true },
-        after: { revoked: true, noOp: true, targetUserId: session.userId },
+        before: null,
+        after: { targetUserId: session.userId },
       });
-      return { revoked: 1 };
-    }
-    await this.prisma.session.update({
-      where: { id: session.id },
-      data: { revokedAt: new Date() },
+      return session;
     });
     // Drop any step-up window bound to the revoked session (TTL backstop).
-    await this.stepUp.clear(session.id);
-    await this.audit.log({
-      actorId: actor.id,
-      action: 'security.session.revoke',
-      entityType: 'Session',
-      entityId: session.id,
-      ip: meta.ip,
-      userAgent: meta.userAgent,
-      before: null,
-      after: { targetUserId: session.userId },
-    });
+    // Redis, not the database, so only after the revocation has committed.
+    if (revoked) await this.stepUp.clear(revoked.id);
     return { revoked: 1 };
   }
 

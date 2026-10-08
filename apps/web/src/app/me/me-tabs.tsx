@@ -9,10 +9,12 @@ import type { Me } from '../../lib/server-api/auth';
 import { ProfileForm } from './profile-form';
 import { PasswordForm } from './password-form';
 import { SessionsList } from './sessions-list';
+import { ApiKeysList } from './api-keys-list';
+import type { ApiKeySummary } from '@weavestream/shared';
 import { AppearanceForm } from './appearance-form';
 import { MfaBackupCodes } from './mfa-backup-codes';
 
-type TabId = 'profile' | 'memberships' | 'appearance' | 'security' | 'sessions';
+type TabId = 'profile' | 'memberships' | 'appearance' | 'security' | 'sessions' | 'api-keys';
 
 type Session = {
   id: string;
@@ -49,15 +51,26 @@ const TABS: Array<{ id: TabId; label: string; help: string }> = [
     label: 'Sessions',
     help: 'Active sessions on your account.',
   },
+  {
+    id: 'api-keys',
+    label: 'API keys',
+    help: 'Keys for scripts and AI agents that act as you.',
+  },
 ];
 
 export function MeTabs({
   initialTab,
   me,
   sessions,
+  apiKeys,
+  apiKeysLoadFailed,
+  apiKeysEnabled,
 }: {
   initialTab: TabId;
   me: Me;
+  apiKeys: ApiKeySummary[];
+  apiKeysLoadFailed: boolean;
+  apiKeysEnabled: boolean;
   sessions: Session[];
 }) {
   const router = useRouter();
@@ -271,9 +284,9 @@ export function MeTabs({
 
               <Section
                 title="Change password"
-                description="Update your account password. Other sessions are signed out after a successful change."
+                description="Update your account password. Other sessions are signed out and every API key is revoked after a successful change."
               >
-                <PasswordForm />
+                <PasswordForm apiKeyCount={apiKeysLoadFailed ? null : apiKeys.length} />
               </Section>
             </div>
           </Panel>
@@ -281,7 +294,20 @@ export function MeTabs({
 
         {tab === 'sessions' && (
           <Panel title={`Active sessions (${sessions.length})`} flush noPad>
-            <SessionsList sessions={sessions} />
+            <SessionsList
+              sessions={sessions}
+              apiKeyCount={apiKeysLoadFailed ? null : apiKeys.length}
+            />
+          </Panel>
+        )}
+
+        {tab === 'api-keys' && (
+          <Panel title={apiKeysLoadFailed ? 'API keys' : `API keys (${apiKeys.length})`} flush noPad>
+            <ApiKeysList
+              keys={apiKeys}
+              loadFailed={apiKeysLoadFailed}
+              enabled={apiKeysEnabled}
+            />
           </Panel>
         )}
       </div>

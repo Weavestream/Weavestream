@@ -153,6 +153,7 @@ export const domainStatusSchema = z.enum([
   'EXPIRING',
   'EXPIRED',
   'FAIL',
+  'NO_SITE',
   'UNKNOWN',
 ]);
 export type DomainStatusValue = z.infer<typeof domainStatusSchema>;

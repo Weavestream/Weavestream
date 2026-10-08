@@ -29,6 +29,7 @@ import { RequirePermission } from '../rbac/require-permission.decorator.js';
 import { requestMetaOf } from '../common/request-meta.js';
 import { InternalOnlyGuard } from '../common/internal-only.guard.js';
 import { Public, SkipCsrf } from '../common/public.decorator.js';
+import { InteractiveOnly } from '../auth/interactive-only.decorator.js';
 
 /**
  * Admin IP rules management.
@@ -119,6 +120,7 @@ export class IpRulesController {
   }
 
   @Post()
+  @InteractiveOnly()
   @RequirePermission('ip_rule.manage')
   async create(
     @CurrentUser() actor: AuthedUser,
@@ -129,6 +131,7 @@ export class IpRulesController {
   }
 
   @Patch(':id')
+  @InteractiveOnly()
   @RequirePermission('ip_rule.manage')
   async update(
     @CurrentUser() actor: AuthedUser,
@@ -140,6 +143,7 @@ export class IpRulesController {
   }
 
   @Delete(':id')
+  @InteractiveOnly()
   @RequirePermission('ip_rule.manage')
   async delete(
     @CurrentUser() actor: AuthedUser,

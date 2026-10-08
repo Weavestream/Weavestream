@@ -33,6 +33,7 @@ import { ZodBody } from '../common/zod-validation.pipe.js';
 import { RequirePermission } from '../rbac/require-permission.decorator.js';
 import { PasswordsService } from './passwords.service.js';
 import { requestMetaOf as meta } from '../common/request-meta.js';
+import { VaultReveal } from '../auth/vault-reveal.decorator.js';
 
 /**
  * Phase 10 — Passwords REST controller.
@@ -45,6 +46,7 @@ import { requestMetaOf as meta } from '../common/request-meta.js';
  * we want brute-force of "reveal 10 000 records in a minute" to hit a
  * throttle wall before it becomes a data-exfil tool.
  */
+
 @Controller({ path: 'companies/:companyId/passwords', version: '1' })
 export class PasswordsController {
   constructor(private readonly passwords: PasswordsService) {}
@@ -145,6 +147,9 @@ export class PasswordsController {
    * vault but loose enough for normal "open 5 tabs in a row" workflows.
    */
   @Post(':id/reveal')
+  // Decrypts a stored credential: denied to API keys unless the key was
+  // minted with `allowPasswordReveal`. See VaultReveal.
+  @VaultReveal()
   @HttpCode(HttpStatus.OK)
   @Throttle({ global: { limit: 30, ttl: 60_000 } })
   @RequirePermission('password.reveal', { companyIdFrom: 'params.companyId' })
@@ -159,6 +164,9 @@ export class PasswordsController {
   }
 
   @Post(':id/versions/:version/reveal')
+  // Decrypts a stored credential: denied to API keys unless the key was
+  // minted with `allowPasswordReveal`. See VaultReveal.
+  @VaultReveal()
   @HttpCode(HttpStatus.OK)
   @Throttle({ global: { limit: 15, ttl: 60_000 } })
   @RequirePermission('password.reveal', { companyIdFrom: 'params.companyId' })
@@ -182,6 +190,9 @@ export class PasswordsController {
    * of the underlying secret still go through `/reveal`, which is.
    */
   @Post(':id/totp')
+  // Decrypts a stored credential: denied to API keys unless the key was
+  // minted with `allowPasswordReveal`. See VaultReveal.
+  @VaultReveal()
   @HttpCode(HttpStatus.OK)
   @Throttle({ global: { limit: 60, ttl: 60_000 } })
   @RequirePermission('password.reveal', { companyIdFrom: 'params.companyId' })

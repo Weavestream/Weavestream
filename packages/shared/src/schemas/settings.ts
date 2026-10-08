@@ -32,6 +32,7 @@ export const systemSettingsSchema = z.object({
   passwordGeneratorDefaults: passwordGeneratorDefaultsSchema,
   articleAutosaveEnabled: z.boolean(),
   articleDefaultEditorMode: articleEditorModeSchema,
+  apiKeysEnabled: z.boolean(),
   updatedAt: z.string(),
 });
 
@@ -51,6 +52,14 @@ export const updateSettingsSchema = z
     articleDefaultEditorMode: articleEditorModeSchema.optional(),
   })
   .refine((v) => Object.keys(v).length > 0, 'At least one field must be provided');
+
+/**
+ * The API key switch has its own route (`PUT /settings/api-keys`) rather than
+ * riding on the general settings PATCH: turning programmatic access on is a
+ * security decision, so that route requires step-up and refuses API keys.
+ */
+export const updateApiKeysSettingSchema = z.object({ enabled: z.boolean() }).strict();
+export type UpdateApiKeysSettingInput = z.infer<typeof updateApiKeysSettingSchema>;
 
 export type SystemSettings = z.infer<typeof systemSettingsSchema>;
 export type UpdateSettingsInput = z.infer<typeof updateSettingsSchema>;

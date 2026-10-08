@@ -33,6 +33,7 @@ import { ZodBody } from '../common/zod-validation.pipe.js';
 import { RequirePermission } from '../rbac/require-permission.decorator.js';
 import { RequireStepUp } from '../auth/step-up/require-step-up.decorator.js';
 import { requestMetaOf } from '../common/request-meta.js';
+import { InteractiveOnly } from '../auth/interactive-only.decorator.js';
 
 const listRunsQuerySchema = z
   .object({
@@ -70,6 +71,7 @@ export class BackupsController {
   }
 
   @Post('configs')
+  @InteractiveOnly()
   @RequirePermission('backup.manage')
   @RequireStepUp()
   async createConfig(
@@ -81,6 +83,7 @@ export class BackupsController {
   }
 
   @Patch('configs/:id')
+  @InteractiveOnly()
   @RequirePermission('backup.manage')
   @RequireStepUp()
   async updateConfig(
@@ -93,6 +96,7 @@ export class BackupsController {
   }
 
   @Delete('configs/:id')
+  @InteractiveOnly()
   @RequirePermission('backup.manage')
   @RequireStepUp()
   async deleteConfig(

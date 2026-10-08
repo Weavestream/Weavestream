@@ -58,6 +58,7 @@ export async function runDnsCheck(
     ns: nsRes.value,
     txt,
     caa: caaRes.value,
+    addressLookupFailed: aRes.uncertain || aaaaRes.uncertain,
   };
 
   // Distinguish "resolver itself broken" (every query errored) from

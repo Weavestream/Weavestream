@@ -25,6 +25,7 @@ import { UsersService } from './users.service.js';
 import { CurrentUser, type AuthedUser } from '../common/current-user.decorator.js';
 import { RequirePermission } from '../rbac/require-permission.decorator.js';
 import { RequireStepUp } from '../auth/step-up/require-step-up.decorator.js';
+import { InteractiveOnly } from '../auth/interactive-only.decorator.js';
 import { ZodBody } from '../common/zod-validation.pipe.js';
 import {
   ipOf,
@@ -62,6 +63,7 @@ export class UsersController {
   }
 
   @Post()
+  @InteractiveOnly()
   @RequirePermission('user.manage')
   // Step-up when creating a privileged account (admin/operator, any
   // platform capability, or non-NONE global access). Raw body — guards
@@ -94,6 +96,7 @@ export class UsersController {
   }
 
   @Patch(':id')
+  @InteractiveOnly()
   @RequirePermission('user.manage')
   // Step-up only on a privilege change — a plain name/timezone edit
   // does not challenge. Raw body (guards run before the Zod pipe).
@@ -118,6 +121,7 @@ export class UsersController {
   }
 
   @Delete(':id')
+  @InteractiveOnly()
   @HttpCode(HttpStatus.OK)
   @RequirePermission('user.manage')
   @RequireStepUp()
@@ -130,6 +134,7 @@ export class UsersController {
   }
 
   @Post(':id/invite')
+  @InteractiveOnly()
   @HttpCode(HttpStatus.OK)
   @RequirePermission('user.manage')
   async reissueInvite(
@@ -141,6 +146,7 @@ export class UsersController {
   }
 
   @Post(':id/reset-mfa')
+  @InteractiveOnly()
   @HttpCode(HttpStatus.OK)
   @RequirePermission('user.manage')
   @RequireStepUp()

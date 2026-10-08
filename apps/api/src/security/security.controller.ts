@@ -13,6 +13,7 @@ import type { Request } from 'express';
 import { CurrentUser, type AuthedUser } from '../common/current-user.decorator.js';
 import { RequirePermission } from '../rbac/require-permission.decorator.js';
 import { RequireStepUp } from '../auth/step-up/require-step-up.decorator.js';
+import { InteractiveOnly } from '../auth/interactive-only.decorator.js';
 import { ipOf, userAgentOf as uaOf } from '../common/request-meta.js';
 import { IpRulesService } from '../ip-rules/ip-rules.service.js';
 import { SecurityService } from './security.service.js';
@@ -100,6 +101,43 @@ export class SecurityController {
         limit: Number.isFinite(parsedLimit) ? parsedLimit : undefined,
       }),
     };
+  }
+
+  /**
+   * Every unrevoked API key on the instance, with its owner, one page at a
+   * time (`page` 1-based, `pageSize` ≤ 100). Interactive only: a key must
+   * not be able to enumerate other people's keys.
+   */
+  @Get('api-keys')
+  @RequirePermission('security.read')
+  @InteractiveOnly()
+  async apiKeys(@Query('page') page?: string, @Query('pageSize') pageSize?: string) {
+    const parsedPage = page ? parseInt(page, 10) : undefined;
+    const parsedSize = pageSize ? parseInt(pageSize, 10) : undefined;
+    return this.security.listApiKeys({
+      page: Number.isFinite(parsedPage) ? parsedPage : undefined,
+      pageSize: Number.isFinite(parsedSize) ? parsedSize : undefined,
+    });
+  }
+
+  /**
+   * Revoke any user's API key. Same bar as revoking their session:
+   * `user.manage` plus a recent step-up, and never callable with a key.
+   */
+  @Delete('api-keys/:id')
+  @HttpCode(HttpStatus.OK)
+  @RequirePermission('user.manage')
+  @RequireStepUp()
+  @InteractiveOnly()
+  async revokeApiKey(
+    @CurrentUser() actor: AuthedUser,
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Req() req: Request,
+  ) {
+    return this.security.revokeApiKey(actor, id, {
+      ip: ipOf(req),
+      userAgent: uaOf(req),
+    });
   }
 
   @Delete('sessions/:id')

@@ -7,6 +7,7 @@ import {
   Btn,
   DataTable,
   Icon,
+  Pagination,
   Select,
   Tag,
   useToast,
@@ -15,7 +16,11 @@ import {
 } from '../../../../components/ui';
 import { apiFetch } from '../../../../lib/api';
 import { FormattedDateTime } from '../../../../lib/timezone-context';
+import { ApiKeyAccessTags } from '../../../me/api-keys-list';
+import { ADMIN_API_KEY_PAGE_SIZES } from '@weavestream/shared';
 import type {
+  AdminApiKeyPage,
+  AdminApiKeyRow,
   ConnectionDiagnostics,
   EgressBlockRow,
   EgressBlocksResponse,
@@ -30,6 +35,7 @@ type TabId =
   | 'lockouts'
   | 'blocks'
   | 'sessions'
+  | 'api-keys'
   | 'egress'
   | 'diagnostics';
 
@@ -38,6 +44,7 @@ const TABS: Array<{ id: TabId; label: string; icon: keyof typeof Icon }> = [
   { id: 'lockouts', label: 'Lockouts', icon: 'lock' },
   { id: 'blocks', label: 'Rate-limit blocks', icon: 'clock' },
   { id: 'sessions', label: 'Active sessions', icon: 'users' },
+  { id: 'api-keys', label: 'API keys', icon: 'key' },
   { id: 'egress', label: 'Egress blocks', icon: 'globe' },
   { id: 'diagnostics', label: 'Connection', icon: 'network' },
 ];
@@ -58,6 +65,8 @@ export function SecurityCenterClient({
   blocks,
   sessions,
   egress,
+  apiKeys,
+  apiKeysEnabled,
   canRevoke,
   currentUserId,
 }: {
@@ -68,6 +77,8 @@ export function SecurityCenterClient({
   blocks: ThrottleBlockEntry[] | null;
   sessions: SecuritySessionRow[] | null;
   egress: EgressBlocksResponse | null;
+  apiKeys: AdminApiKeyPage | null;
+  apiKeysEnabled: boolean;
   canRevoke: boolean;
   currentUserId: string;
 }) {
@@ -182,6 +193,14 @@ export function SecurityCenterClient({
             sessions={sessions}
             canRevoke={canRevoke}
             currentUserId={currentUserId}
+            onRefresh={refresh}
+          />
+        )}
+        {tab === 'api-keys' && (
+          <ApiKeysPane
+            apiKeys={apiKeys}
+            enabled={apiKeysEnabled}
+            canRevoke={canRevoke}
             onRefresh={refresh}
           />
         )}
@@ -937,6 +956,194 @@ function SessionsPane({
         </div>
       )}
     />
+  );
+}
+
+// ─── API keys ─────────────────────────────────────────────────────
+
+/**
+ * Every live API key on the instance, with its owner. An admin holding
+ * `user.manage` can revoke any of them — the same bar as revoking a
+ * session. Keys hold their owner's authority without showing up in the
+ * session list, so this is the only place an admin can see them.
+ */
+function ApiKeysPane({
+  apiKeys,
+  enabled,
+  canRevoke,
+  onRefresh,
+}: {
+  apiKeys: AdminApiKeyPage | null;
+  enabled: boolean;
+  canRevoke: boolean;
+  onRefresh: () => void;
+}) {
+  const toast = useToast();
+  const router = useRouter();
+  const sp = useSearchParams();
+
+  // Keeps the tab, window and every other param; page 1 drops `keyPage`.
+  const pageHref = useCallback(
+    (page: number, pageSize: number) => {
+      const q = new URLSearchParams(sp.toString());
+      q.set('tab', 'api-keys');
+      if (page <= 1) q.delete('keyPage');
+      else q.set('keyPage', String(page));
+      q.set('keyPageSize', String(pageSize));
+      return `/admin/security?${q.toString()}`;
+    },
+    [sp],
+  );
+  const [busyId, setBusyId] = useState<string | null>(null);
+
+  const revoke = useCallback(
+    async (k: AdminApiKeyRow) => {
+      if (
+        !confirm(
+          `Revoke the API key "${k.name}" owned by ${k.user.name} (${k.user.email})? Anything using it stops working immediately. This cannot be undone.`,
+        )
+      )
+        return;
+      setBusyId(k.id);
+      const res = await apiFetch(`/security/api-keys/${k.id}`, { method: 'DELETE' });
+      setBusyId(null);
+      if (res.ok) {
+        toast.push('API key revoked.', 'ok');
+        onRefresh();
+      } else if (!res.stepUpCancelled) {
+        toast.push('Failed to revoke the API key.', 'danger');
+      }
+    },
+    [onRefresh, toast],
+  );
+
+  const columns = useMemo<DataColumn<AdminApiKeyRow>[]>(
+    () => [
+      {
+        id: 'owner',
+        header: 'Owner',
+        render: (k) => (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
+            <span style={{ color: 'var(--text)' }}>{k.user.name}</span>
+            <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--dim)' }}>
+              {k.user.email}
+            </span>
+          </div>
+        ),
+      },
+      {
+        id: 'name',
+        header: 'Key',
+        render: (k) => (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
+            <span style={{ color: 'var(--text)' }}>{k.name}</span>
+            <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--dim)' }}>
+              ws_{k.keyId}_…
+            </span>
+          </div>
+        ),
+      },
+      {
+        id: 'access',
+        header: 'Access',
+        width: 190,
+        render: (k) => <ApiKeyAccessTags k={k} />,
+      },
+      {
+        id: 'lastUsed',
+        header: 'Last used',
+        width: 170,
+        mono: true,
+        render: (k) => (
+          <span style={{ color: 'var(--dim)' }}>
+            {k.lastUsedAt ? <FormattedDateTime value={k.lastUsedAt} /> : 'never'}
+          </span>
+        ),
+      },
+      {
+        id: 'expires',
+        header: 'Expires',
+        width: 170,
+        mono: true,
+        render: (k) => (
+          <span style={{ color: 'var(--dim)' }}>
+            {k.expiresAt ? <FormattedDateTime value={k.expiresAt} /> : 'never'}
+          </span>
+        ),
+      },
+      {
+        id: 'actions',
+        header: '',
+        width: 100,
+        render: (k) =>
+          canRevoke ? (
+            <Btn
+              kind="ghost"
+              size="sm"
+              disabled={busyId === k.id}
+              onClick={(e) => {
+                e.stopPropagation();
+                void revoke(k);
+              }}
+              title="Revoke API key"
+            >
+              {busyId === k.id ? '…' : 'Revoke'}
+            </Btn>
+          ) : null,
+      },
+    ],
+    [busyId, canRevoke, revoke],
+  );
+
+  if (!apiKeys) {
+    return <Empty>API key state is unavailable right now.</Empty>;
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      {!enabled && (
+        <div style={{ fontSize: 12.5, color: 'var(--muted)' }}>
+          API keys are turned off in Settings → Security, so every key below is refused until
+          they are turned back on.
+        </div>
+      )}
+      <DataTable
+        columns={columns}
+        rows={apiKeys.items}
+        disableSort
+        empty="No API keys."
+        renderMobileCard={(k) => (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <strong>{k.name}</strong>
+            <span style={{ fontSize: 12, color: 'var(--dim)' }}>
+              {k.user.name} · {k.user.email}
+            </span>
+            <ApiKeyAccessTags k={k} />
+            <span style={{ fontSize: 11, color: 'var(--dim)' }}>
+              Last used {k.lastUsedAt ? <FormattedDateTime value={k.lastUsedAt} /> : 'never'}
+            </span>
+            {canRevoke && (
+              <Btn
+                kind="outline"
+                size="sm"
+                disabled={busyId === k.id}
+                onClick={() => void revoke(k)}
+              >
+                {busyId === k.id ? '…' : 'Revoke'}
+              </Btn>
+            )}
+          </div>
+        )}
+      />
+      <Pagination
+        page={apiKeys.page}
+        pageSize={apiKeys.pageSize}
+        total={apiKeys.total}
+        buildHref={pageHref}
+        onPageSizeChange={(next) => router.replace(pageHref(1, next))}
+        pageSizeOptions={[...ADMIN_API_KEY_PAGE_SIZES]}
+      />
+    </div>
   );
 }
 

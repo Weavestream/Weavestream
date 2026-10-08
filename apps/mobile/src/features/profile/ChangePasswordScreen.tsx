@@ -1,9 +1,11 @@
 import {
+  API_KEY_REVOCATION_WARNING,
+  apiKeysRevokedNotice,
   isCurrentPasswordInvalidProblem,
   passwordSchema,
 } from '@weavestream/shared';
 import { useState } from 'react';
-import { FieldBlock } from '../../components/FieldBlock';
+import { FieldBlock, Hint } from '../../components/FieldBlock';
 import { FormScreenChrome } from '../../components/FormScreenChrome';
 import { useToast } from '../../components/Toast';
 import { Input } from '../../components/primitives';
@@ -95,16 +97,20 @@ export function ChangePasswordScreen() {
 
     setBusy(true);
     void changeMyPassword({ currentPassword: current, newPassword: next })
-      .then(() => {
+      .then((result) => {
         // Clear before navigating: nothing should sit in state once the
         // change has landed.
         setCurrent('');
         setNext('');
         setConfirm('');
-        // The server keeps THIS session and revokes every other one, so the
-        // copy has to say so — the technician's other devices just signed
-        // out and they should not discover that later.
-        toast.push('Password updated. Other sessions signed out.', 'ok');
+        // The server keeps THIS session and revokes every other one, and
+        // every API key, so the copy has to say so — the technician's other
+        // devices and integrations just stopped and they should not discover
+        // that later.
+        toast.push(
+          `Password updated. Other sessions signed out.${apiKeysRevokedNotice(result?.apiKeysRevoked ?? 0)}`,
+          'ok',
+        );
         // `back()`, NOT a replace-navigation to `/profile`. A replace
         // deliberately INHERITS `upIsBack`/`backLabel` from the entry it
         // stands in for (scoped-nav: same stack position), so replacing this
@@ -199,6 +205,11 @@ export function ChangePasswordScreen() {
             onChange={(e) => setConfirm(e.target.value)}
           />
         </FieldBlock>
+
+        {/* Outside the field hints, which an error replaces: the key
+            revocation is permanent and scripts or AI agents break silently,
+            so this must stay visible at the moment of submission. */}
+        <Hint>{API_KEY_REVOCATION_WARNING}</Hint>
       </form>
     </FormScreenChrome>
   );

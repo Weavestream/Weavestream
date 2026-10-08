@@ -178,6 +178,12 @@ export interface DnsSubResult {
   txt: string[];
   /** v2 — CAA records at the apex. */
   caa: CaaRecord[];
+  /**
+   * The A or AAAA lookup did not confirm absence (resolver error, or a
+   * REFUSED/NOTIMP answer), so empty `a`/`aaaa` arrays are unknown rather
+   * than a confirmed "no address". Not persisted.
+   */
+  addressLookupFailed: boolean;
 }
 
 export interface TlsSubResult {
@@ -283,6 +289,8 @@ export interface DomainCheckResult {
   details: DomainCheckDetails;
   /** Aggregated error string surfaced at the row level. `null` if fully OK. */
   aggregateError: string | null;
+  /** DNS answered but the name has no A/AAAA record: a parked domain. */
+  noSite: boolean;
   /**
    * v2 — Denormalised percent score (0-100). NULL means the engine
    * could not score the run (every sub-check FAIL'd / SKIP'd). Mirrors

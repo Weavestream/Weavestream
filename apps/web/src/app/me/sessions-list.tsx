@@ -2,11 +2,17 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
+import {
+  API_KEY_REVOCATION_WARNING,
+  apiKeysRevokedNotice,
+  type RevokeOtherSessionsResult,
+} from '@weavestream/shared';
 import { apiFetch } from '../../lib/api';
 import { FormattedRelative } from '../../lib/timezone-context';
 import {
   Btn,
   DataTable,
+  Dialog,
   Icon,
   MobileCardRow,
   Tag,
@@ -23,10 +29,38 @@ type Session = {
   current: boolean;
 };
 
-export function SessionsList({ sessions }: { sessions: Session[] }) {
+export function SessionsList({
+  sessions,
+  apiKeyCount,
+}: {
+  sessions: Session[];
+  /**
+   * Live API keys the user holds, or null when the list failed to load.
+   * Revoking other sessions also revokes every key, so the confirmation has
+   * to say so before the user commits.
+   */
+  apiKeyCount: number | null;
+}) {
   const router = useRouter();
   const toast = useToast();
   const [pending, setPending] = useState(false);
+  const [confirming, setConfirming] = useState(false);
+
+  async function revokeOthers() {
+    setPending(true);
+    const res = await apiFetch<RevokeOtherSessionsResult>('/me/sessions/revoke-others', {
+      method: 'POST',
+    });
+    setPending(false);
+    if (!res.ok) {
+      toast.push('Could not revoke sessions.', 'danger');
+      return;
+    }
+    // The server's count is the truth: a key minted in another tab after
+    // this page loaded is revoked too, and the user should hear about it.
+    toast.push(`Other sessions revoked.${apiKeysRevokedNotice(res.data?.apiKeysRevoked ?? 0)}`, 'ok');
+    router.refresh();
+  }
 
   const columns: DataColumn<Session>[] = [
     {
@@ -90,21 +124,49 @@ export function SessionsList({ sessions }: { sessions: Session[] }) {
           icon={Icon.shield}
           disabled={others === 0}
           loading={pending}
-          onClick={async () => {
-            setPending(true);
-            const res = await apiFetch('/me/sessions/revoke-others', { method: 'POST' });
-            setPending(false);
-            if (!res.ok) {
-              toast.push('Could not revoke sessions.', 'danger');
-              return;
-            }
-            toast.push('Other sessions revoked.', 'ok');
-            router.refresh();
-          }}
+          onClick={() => setConfirming(true)}
         >
           {others === 0 ? 'No other sessions' : `Revoke ${others} other session${others === 1 ? '' : 's'}`}
         </Btn>
       </div>
+      <Dialog
+        open={confirming}
+        onClose={() => setConfirming(false)}
+        title="Revoke other sessions"
+        width={440}
+        footer={
+          <>
+            <Btn kind="outline" onClick={() => setConfirming(false)}>
+              Cancel
+            </Btn>
+            <Btn
+              kind="danger"
+              onClick={() => {
+                setConfirming(false);
+                void revokeOthers();
+              }}
+            >
+              {apiKeyCount ? 'Revoke sessions and keys' : 'Revoke sessions'}
+            </Btn>
+          </>
+        }
+      >
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, fontSize: 13, color: 'var(--text-2)', lineHeight: 1.5 }}>
+          <p style={{ margin: 0 }}>
+            Sign out {others} other session{others === 1 ? '' : 's'}. This device stays signed in.
+          </p>
+          {apiKeyCount !== 0 && (
+            <p style={{ margin: 0 }}>
+              {apiKeyCount ? (
+                <strong>
+                  You have {apiKeyCount} API key{apiKeyCount === 1 ? '' : 's'}.{' '}
+                </strong>
+              ) : null}
+              {API_KEY_REVOCATION_WARNING}
+            </p>
+          )}
+        </div>
+      </Dialog>
       <DataTable
         columns={columns}
         rows={sessions}

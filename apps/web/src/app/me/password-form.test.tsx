@@ -53,6 +53,7 @@ jest.mock('../../components/ui', () => ({
       {error && <p role="alert">{error}</p>}
     </div>
   ),
+  Icon: { warn: () => null },
   Input: (props: React.InputHTMLAttributes<HTMLInputElement>) => <input {...props} />,
   useToast: () => toast,
 }));
@@ -168,5 +169,35 @@ describe('PasswordForm — 401 discrimination', () => {
     expect(screen.getByLabelText('Current password')).toHaveValue('');
     expect(screen.getByLabelText('New password')).toHaveValue('');
     expect(push).not.toHaveBeenCalled();
+  });
+
+  it('reports API keys the change revoked', async () => {
+    apiFetch.mockResolvedValue({ ok: true, status: 200, data: { ok: true, apiKeysRevoked: 2 } });
+    await submit();
+
+    await waitFor(() =>
+      expect(toast.push).toHaveBeenCalledWith(
+        expect.stringContaining('2 API keys revoked'),
+        'ok',
+      ),
+    );
+  });
+});
+
+describe('PasswordForm API key disclosure', () => {
+  it('warns before submission when the user holds keys', () => {
+    render(<PasswordForm apiKeyCount={3} />);
+    expect(screen.getByText(/You have 3 API keys\./)).toBeInTheDocument();
+    expect(screen.getByText(/permanently revokes every API key/)).toBeInTheDocument();
+  });
+
+  it('still warns when the key count is unknown', () => {
+    render(<PasswordForm apiKeyCount={null} />);
+    expect(screen.getByText(/permanently revokes every API key/)).toBeInTheDocument();
+  });
+
+  it('says nothing about keys when the user holds none', () => {
+    render(<PasswordForm apiKeyCount={0} />);
+    expect(screen.queryByText(/API key/)).not.toBeInTheDocument();
   });
 });
