@@ -22,7 +22,6 @@ import {
 import {
   SyncScheduleSelect,
   syncScheduleHelp,
-  syncScheduleLabel,
 } from '../../../../../components/integrations/sync-schedule';
 import { DriverFieldsEditor } from '../driver-fields-editor';
 import { safeIntegrationProblemMessage } from '../integration-feedback';
@@ -245,9 +244,7 @@ export function CredentialsTab({
           </Field>
         </div>
         <Field
-          label={syncScheduleLabel(
-            driver?.capabilities.kind === 'security' ? 'security' : 'pull',
-          )}
+          label="Sync schedule"
           htmlFor="i-cron"
           help={syncScheduleHelp(
             driver?.capabilities.kind === 'security' ? 'security' : 'pull',

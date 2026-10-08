@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  HttpException,
   Injectable,
   Logger,
   NotFoundException,
@@ -14,14 +15,22 @@ import { AUDIT_ACTIONS } from '../../audit/audit-actions.js';
 import { EnvService } from '../../config/env.service.js';
 import { RedisService } from '../../redis/redis.service.js';
 import { QueuesService } from '../../queues/queues.service.js';
-import { CloudflareDriftSweepJobNames, QueueNames } from '@weavestream/shared';
+import {
+  CloudflareDriftSweepJobNames,
+  QueueNames,
+  type CloudflareDomainSyncResult,
+  type CloudflareDomainSyncRunDto,
+} from '@weavestream/shared';
 import { IntegrationsService } from '../integrations.service.js';
 import { IntegrationDriverRegistry } from '../drivers/integration-driver.registry.js';
 import { cloudflareConfigSchema } from '../drivers/cloudflare/cloudflare.driver.js';
+import { CloudflareApiError } from '../drivers/cloudflare/cloudflare-api.client.js';
+import { DriverAuthError, DriverRateLimitError } from '../drivers/integration-driver.js';
+import { describeError } from '../../common/describe-error.js';
 
 /**
- * Lease covers the listing phase (~one Cloudflare request per domain, which
- * may wait out 429 Retry-After). After listing the lease is renewed to
+ * Lease covers the listing phase (the paginated zone and registration lists,
+ * which may wait out 429 Retry-After). After listing the lease is renewed to
  * WRITE_LEASE_SEC and writes must finish within WRITE_DEADLINE_MS of that.
  */
 const LISTING_LEASE_SEC = 3600;
@@ -36,16 +45,48 @@ const RENEW_IF_OWNER =
 
 const lockKey = (integrationId: string) => `lock:cf-registrar-sync:${integrationId}`;
 
-export interface RegistrarSyncResult {
-  /** False when no domains company is configured (sync off). */
-  enabled: boolean;
-  created: number;
-  updated: number;
-  /** MANUAL rows that matched a Cloudflare domain and were taken over. */
-  adopted: number;
-  /** Rows this integration owns that Cloudflare no longer reports. */
-  missing: number;
+/**
+ * A queued or running run older than both leases cannot still be alive: the
+ * worker died or the job was lost. It is reported, and settled, as failed.
+ */
+const STALE_RUN_MS = (LISTING_LEASE_SEC + WRITE_LEASE_SEC) * 1000;
+const STALE_RUN_ERROR = 'Interrupted: the worker stopped before this run finished.';
+/** Finished runs kept per integration (a 15-minute schedule ≈ one day). */
+const KEEP_RUNS = 100;
+
+const WORKER_META = { ip: 'worker', userAgent: 'worker' };
+
+/** A sync failure whose message was written here for the operator to read. */
+class RegistrarSyncError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'RegistrarSyncError';
+  }
 }
+
+/**
+ * The text stored on a failed run, which the Domains tab shows and the audit
+ * row records. Errors written for the operator (Cloudflare's answer, a
+ * permission or rate-limit failure, this service's own checks) keep their
+ * message: that is how an operator learns the token lacks a permission.
+ * Anything else (a database or programming error) may carry query text or
+ * file paths, so it becomes a fixed message plus the correlation id that
+ * the full error is logged under.
+ */
+export function operatorMessage(err: unknown, correlationId: string): string {
+  const known =
+    err instanceof CloudflareApiError ||
+    err instanceof DriverAuthError ||
+    err instanceof DriverRateLimitError ||
+    err instanceof RegistrarSyncError ||
+    err instanceof HttpException;
+  if (known) return describeError(err);
+  return `The domain sync failed because of an internal error. Reference: ${correlationId}`;
+}
+
+
+/** Counts from one run; see CloudflareDomainSyncResult in @weavestream/shared. */
+export type RegistrarSyncResult = CloudflareDomainSyncResult;
 
 /**
  * Cloudflare registrar → MonitoredDomain sync.
@@ -79,11 +120,11 @@ export class CloudflareRegistrarSyncService {
    * "Sync domains now". Runs in the worker as a system job, like the
    * scheduled sweep, rather than inline in the request: the sync touches
    * domains across companies, which the request's tenant scope (correctly)
-   * would refuse for anyone short of full global access. The fixed job id
-   * collapses repeat clicks while one is queued or running; failed jobs are
-   * removed at once, or BullMQ would silently ignore every later click.
+   * would refuse for anyone short of full global access. A queued run row is
+   * written first, so the outcome (success, counts, or the error) is on
+   * record whatever happens to the job; the Domains tab polls it.
    */
-  async enqueue(integrationId: string, actorId: string): Promise<{ queued: true }> {
+  async enqueue(integrationId: string, actorId: string): Promise<{ queued: true; runId: string }> {
     const integration = await this.prisma.integration.findUnique({
       where: { id: integrationId },
       select: { driver: true, status: true, config: true },
@@ -101,32 +142,94 @@ export class CloudflareRegistrarSyncService {
         'Set "Sync domains into company" under Credentials before syncing domains.',
       );
     }
-    // A queued job that then hits the lock would fail with nobody watching.
-    // Say so now instead. (A sweep could still start in between; that run
-    // does the same work, so the click is not lost in substance.)
-    if (await this.redis.client.exists(lockKey(integrationId))) {
+    await this.settleStaleRuns(integrationId);
+    // A second job would only hit the lock. Say so now instead. (A sweep
+    // could still start in between; its run is recorded the same way.)
+    const active = await this.prisma.integrationSyncRun.findFirst({
+      where: { integrationId, status: { in: ['queued', 'running'] } },
+      select: { id: true },
+    });
+    if (active || (await this.redis.client.exists(lockKey(integrationId)))) {
       throw new ConflictException('A domain sync for this integration is already running.');
     }
-    await this.queues.get(QueueNames.cloudflareDriftSweep).add(
-      CloudflareDriftSweepJobNames.manual,
-      { integrationId, triggeredBy: actorId },
-      { jobId: `manual-domains-${integrationId}`, removeOnComplete: true, removeOnFail: true },
-    );
-    return { queued: true };
+    const run = await this.prisma.integrationSyncRun.create({
+      data: { integrationId, kind: 'manual', status: 'queued', triggeredBy: actorId },
+      select: { id: true },
+    });
+    try {
+      await this.queues.get(QueueNames.cloudflareDriftSweep).add(
+        CloudflareDriftSweepJobNames.manual,
+        { integrationId, triggeredBy: actorId, runId: run.id },
+        // The run row holds the outcome, so the job itself need not linger.
+        { jobId: `manual-domains-${run.id}`, removeOnComplete: true, removeOnFail: true },
+      );
+    } catch (err) {
+      await this.finishRun(run.id, 'failed', { error: 'Could not queue the sync job.' }, ['queued']);
+      throw err;
+    }
+    return { queued: true, runId: run.id };
   }
 
+  /** Latest run for the Domains tab; null before the first one. */
+  async latestRun(integrationId: string): Promise<CloudflareDomainSyncRunDto | null> {
+    const run = await this.prisma.integrationSyncRun.findFirst({
+      where: { integrationId },
+      orderBy: { createdAt: 'desc' },
+      select: {
+        id: true,
+        kind: true,
+        status: true,
+        createdAt: true,
+        startedAt: true,
+        finishedAt: true,
+        totals: true,
+        error: true,
+      },
+    });
+    if (!run) return null;
+    // Report a dead run as failed without waiting for the next sync to settle it.
+    const stale =
+      (run.status === 'queued' || run.status === 'running') &&
+      Date.now() - run.createdAt.getTime() > STALE_RUN_MS;
+    return {
+      id: run.id,
+      kind: run.kind,
+      status: stale ? 'failed' : run.status,
+      createdAt: run.createdAt.toISOString(),
+      startedAt: run.startedAt?.toISOString() ?? null,
+      finishedAt: run.finishedAt?.toISOString() ?? null,
+      result: (run.totals as RegistrarSyncResult | null) ?? null,
+      error: stale ? STALE_RUN_ERROR : run.error,
+    };
+  }
+
+  /**
+   * One registrar sync. `runId` is the queued row of a manual request; a
+   * scheduled sweep passes none and gets a row of its own. Either way the
+   * row ends `succeeded` with the counts or `failed` with the error, and a
+   * failure is audited, so a background failure is never silent.
+   */
   async sync(
     integrationId: string,
     actorId: string | null,
-    meta: { ip: string; userAgent: string } = { ip: 'worker', userAgent: 'worker' },
+    opts: { runId?: string; meta?: { ip: string; userAgent: string } } = {},
   ): Promise<RegistrarSyncResult> {
+    const meta = opts.meta ?? WORKER_META;
+    // A sweep for an integration without domain sync must not leave a run
+    // row every 15 minutes. Manual runs were checked when queued.
+    if (!opts.runId && !(await this.isEnabled(integrationId))) {
+      return { enabled: false, created: 0, updated: 0, adopted: 0, missing: 0, skipped: 0 };
+    }
+
     // One run per integration at a time: a manual sync overlapping the
     // scheduled sweep would otherwise race on the find-then-create below.
     const key = lockKey(integrationId);
     const token = randomUUID();
     const got = await this.redis.client.set(key, token, 'EX', LISTING_LEASE_SEC, 'NX');
     if (got !== 'OK') {
-      throw new ConflictException('A domain sync for this integration is already running.');
+      const err = new ConflictException('A domain sync for this integration is already running.');
+      if (opts.runId) await this.finishRun(opts.runId, 'failed', { error: err.message }, ['queued']);
+      throw err;
     }
     // Called once listing is done: re-arm the lease for the write phase and
     // return the write deadline, or throw if the lease was lost meanwhile.
@@ -139,12 +242,26 @@ export class CloudflareRegistrarSyncService {
         String(WRITE_LEASE_SEC),
       );
       if (renewed !== 1) {
-        throw new Error(`Registrar sync lost its lock while listing (integration=${integrationId})`);
+        throw new RegistrarSyncError('The sync lost its lock while reading Cloudflare. The next run will retry.');
       }
       return Date.now() + WRITE_DEADLINE_MS;
     };
     try {
-      return await this.run(integrationId, actorId, meta, startWrites);
+      await this.settleStaleRuns(integrationId);
+      const runId = await this.startRun(integrationId, opts.runId);
+      // One id for the Cloudflare requests, the server log and, on an
+      // internal failure, the reference the operator sees.
+      const correlationId = randomUUID();
+      let result: RegistrarSyncResult;
+      try {
+        result = await this.run(integrationId, actorId, meta, startWrites, runId, correlationId);
+      } catch (err) {
+        await this.recordFailure(runId, integrationId, actorId, meta, err, correlationId);
+        throw err;
+      }
+      await this.finishRun(runId, 'succeeded', { totals: result });
+      await this.pruneRuns(integrationId);
+      return result;
     } finally {
       // Compare-and-delete in one step so we can only ever release our own
       // lock. A failure here must not mask the run's result; the lease
@@ -159,11 +276,127 @@ export class CloudflareRegistrarSyncService {
     }
   }
 
+  private async isEnabled(integrationId: string): Promise<boolean> {
+    const integration = await this.prisma.integration.findUnique({
+      where: { id: integrationId },
+      select: { config: true },
+    });
+    const config = cloudflareConfigSchema.safeParse(integration?.config);
+    return config.success && !!config.data.domainsCompanyId;
+  }
+
+  /** Claims the queued manual row, or opens a row for a scheduled sweep. */
+  private async startRun(integrationId: string, runId: string | undefined): Promise<string> {
+    const now = new Date();
+    if (!runId) {
+      const run = await this.prisma.integrationSyncRun.create({
+        data: { integrationId, kind: 'scheduled', status: 'running', startedAt: now },
+        select: { id: true },
+      });
+      return run.id;
+    }
+    const claimed = await this.prisma.integrationSyncRun.updateMany({
+      where: { id: runId, integrationId, status: 'queued' },
+      data: { status: 'running', startedAt: now },
+    });
+    if (claimed.count !== 1) {
+      throw new RegistrarSyncError('This sync was no longer queued when the worker picked it up.');
+    }
+    return runId;
+  }
+
+  private async finishRun(
+    runId: string,
+    status: 'succeeded' | 'failed',
+    data: { totals?: RegistrarSyncResult; error?: string },
+    from: Array<'queued' | 'running'> = ['running'],
+  ): Promise<void> {
+    await this.prisma.integrationSyncRun.updateMany({
+      where: { id: runId, status: { in: from } },
+      data: {
+        status,
+        finishedAt: new Date(),
+        ...(data.totals ? { totals: data.totals as unknown as Prisma.InputJsonValue } : {}),
+        ...(data.error ? { error: data.error } : {}),
+      },
+    });
+  }
+
+  /**
+   * Marks the run failed and writes the failure audit row. The full error
+   * goes to the server log only; the run row and the audit row get
+   * {@link operatorMessage}. Both writes are best effort: the original error
+   * is what the caller rethrows, and a database hiccup here must not
+   * replace it.
+   */
+  private async recordFailure(
+    runId: string,
+    integrationId: string,
+    actorId: string | null,
+    meta: { ip: string; userAgent: string },
+    err: unknown,
+    correlationId: string,
+  ): Promise<void> {
+    this.logger.error(
+      `Registrar sync failed (integration=${integrationId} run=${runId} correlationId=${correlationId}): ${describeError(err)}`,
+    );
+    const error = operatorMessage(err, correlationId);
+    await this.finishRun(runId, 'failed', { error }).catch((e: unknown) =>
+      this.logger.error(`Could not record failed registrar sync run ${runId}: ${describeError(e)}`),
+    );
+    await this.audit
+      .log({
+        actorId,
+        action: AUDIT_ACTIONS.integration.cloudflareRegistrarSyncFailed,
+        entityType: 'Integration',
+        entityId: integrationId,
+        ip: meta.ip,
+        userAgent: meta.userAgent,
+        before: null,
+        after: { runId, correlationId, error },
+      })
+      .catch((e: unknown) =>
+        this.logger.error(`Could not audit failed registrar sync run ${runId}: ${describeError(e)}`),
+      );
+  }
+
+  private async settleStaleRuns(integrationId: string): Promise<void> {
+    await this.prisma.integrationSyncRun.updateMany({
+      where: {
+        integrationId,
+        status: { in: ['queued', 'running'] },
+        createdAt: { lt: new Date(Date.now() - STALE_RUN_MS) },
+      },
+      data: { status: 'failed', finishedAt: new Date(), error: STALE_RUN_ERROR },
+    });
+  }
+
+  /** Keeps the newest KEEP_RUNS finished rows; the audit log is the long-term record. */
+  private async pruneRuns(integrationId: string): Promise<void> {
+    try {
+      const old = await this.prisma.integrationSyncRun.findMany({
+        where: { integrationId, status: { in: ['succeeded', 'failed'] } },
+        orderBy: { createdAt: 'desc' },
+        skip: KEEP_RUNS,
+        select: { id: true },
+      });
+      if (old.length > 0) {
+        await this.prisma.integrationSyncRun.deleteMany({
+          where: { id: { in: old.map((r) => r.id) } },
+        });
+      }
+    } catch (err) {
+      this.logger.warn(`Could not prune registrar sync runs (integration=${integrationId}): ${describeError(err)}`);
+    }
+  }
+
   private async run(
     integrationId: string,
     actorId: string | null,
     meta: { ip: string; userAgent: string },
     startWrites: () => Promise<number>,
+    runId: string,
+    correlationId: string,
   ): Promise<RegistrarSyncResult> {
     const integration = await this.prisma.integration.findUnique({
       where: { id: integrationId },
@@ -184,6 +417,7 @@ export class CloudflareRegistrarSyncService {
       updated: 0,
       adopted: 0,
       missing: 0,
+      skipped: 0,
     };
     // The id was resolved and permission-checked when the config was saved
     // (IntegrationsController). A slug without an id predates that check and
@@ -210,7 +444,7 @@ export class CloudflareRegistrarSyncService {
         maxRetries: this.env.values.INTEGRATION_HTTP_MAX_RETRIES,
         backoffMs: this.env.values.INTEGRATION_HTTP_BACKOFF_MS,
       },
-      randomUUID(),
+      correlationId,
     );
     const deadline = await startWrites();
 
@@ -227,7 +461,7 @@ export class CloudflareRegistrarSyncService {
     // `seen` is incomplete.
     const assertBudget = () => {
       if (Date.now() > deadline) {
-        throw new Error(`Registrar sync exceeded its time budget (integration=${integrationId})`);
+        throw new RegistrarSyncError('The sync ran out of time. Domains not reached are updated on the next run.');
       }
     };
 
@@ -255,47 +489,52 @@ export class CloudflareRegistrarSyncService {
         registrarMissingSince: null,
       } satisfies Prisma.MonitoredDomainUncheckedUpdateInput;
 
-      // Archived rows included: an archive is an operator's decision and
-      // must not be undone by recreating the domain next to it.
-      const candidates = await this.prisma.monitoredDomain.findMany({ where: { hostname } });
-      const match = matchRow(candidates, integrationId, config.accountId, company.id);
-
-      if (match.kind === 'update' || match.kind === 'adopt') {
-        assertBudget();
-        await this.prisma.monitoredDomain.update({
-          where: { id: match.row.id },
-          data: registrarData,
-        });
-        if (match.kind === 'adopt') {
-          result.adopted += 1;
-          adoptedNames.push(hostname);
-        } else {
-          result.updated += 1;
-        }
-      } else if (match.kind === 'skip') {
-        skipped[hostname] = match.reason;
-      } else {
-        try {
-          assertBudget();
-          const row = await this.prisma.monitoredDomain.create({
-            data: {
-              ...registrarData,
-              companyId: company.id,
-              hostname,
-              createdBy: actorId,
-            },
-          });
-          result.created += 1;
-          createdNames.push(hostname);
-          createdIds.push(row.id);
-        } catch (err) {
-          // Someone added the same hostname by hand mid-run. Leave it; the
-          // next sweep adopts it through matchRow.
-          if (!(err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002')) {
-            throw err;
+      assertBudget();
+      // Find-then-write runs under a transaction-scoped advisory lock on the
+      // hostname, shared by every Cloudflare integration. Without it two
+      // integrations bound to different companies could both find nothing
+      // and both create the domain: the unique index is per company only.
+      const outcome: WriteOutcome = await this.prisma
+        .$transaction(async (tx): Promise<WriteOutcome> => {
+          await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('weavestream:cf-registrar-hostname'), hashtext(${hostname}))`;
+          // Archived rows included: an archive is an operator's decision and
+          // must not be undone by recreating the domain next to it.
+          const candidates = await tx.monitoredDomain.findMany({ where: { hostname } });
+          const match = matchRow(candidates, integrationId, config.accountId, company.id);
+          if (match.kind === 'update' || match.kind === 'adopt') {
+            await tx.monitoredDomain.update({ where: { id: match.row.id }, data: registrarData });
+            return match.kind === 'adopt' ? { kind: 'adopt' } : { kind: 'update' };
           }
-          this.logger.warn(`Skipping ${hostname}: created concurrently (integration=${integrationId})`);
-        }
+          if (match.kind === 'skip') return match;
+          const row = await tx.monitoredDomain.create({
+            data: { ...registrarData, companyId: company.id, hostname, createdBy: actorId },
+            select: { id: true },
+          });
+          return { kind: 'create', id: row.id };
+        })
+        .catch((err: unknown): WriteOutcome => {
+          // Someone added the same hostname by hand in this company mid-run
+          // (manual adds do not take the lock). Leave it; the next sweep
+          // adopts it through matchRow.
+          if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+            this.logger.warn(`Skipping ${hostname}: created concurrently (integration=${integrationId})`);
+            return { kind: 'skip', reason: 'created concurrently' };
+          }
+          throw err;
+        });
+
+      if (outcome.kind === 'adopt') {
+        result.adopted += 1;
+        adoptedNames.push(hostname);
+      } else if (outcome.kind === 'update') {
+        result.updated += 1;
+      } else if (outcome.kind === 'skip') {
+        result.skipped += 1;
+        skipped[hostname] = outcome.reason;
+      } else {
+        result.created += 1;
+        createdNames.push(hostname);
+        createdIds.push(outcome.id);
       }
     }
 
@@ -337,6 +576,7 @@ export class CloudflareRegistrarSyncService {
       before: null,
       after: {
         ...result,
+        runId,
         seen: seen.size,
         skipped,
         createdHostnames: createdNames,
@@ -348,6 +588,13 @@ export class CloudflareRegistrarSyncService {
     return result;
   }
 }
+
+/** What the per-hostname write did. */
+type WriteOutcome =
+  | { kind: 'update' }
+  | { kind: 'adopt' }
+  | { kind: 'skip'; reason: string }
+  | { kind: 'create'; id: string };
 
 export type RowMatch =
   | { kind: 'update' | 'adopt'; row: MonitoredDomain }

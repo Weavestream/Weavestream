@@ -54,7 +54,8 @@ export class CloudflareListsController {
 
   /**
    * Queue a registrar sync now instead of waiting for the next scheduled
-   * sweep. The worker runs it; the summary audit row names this user.
+   * sweep. The worker runs it; the summary audit row names this user, and
+   * `GET domains/sync` reports how it went.
    */
   @Post('domains/sync')
   @HttpCode(202)
@@ -62,6 +63,13 @@ export class CloudflareListsController {
   @Throttle({ global: { limit: 3, ttl: 60_000 } })
   syncDomains(@CurrentUser() user: AuthedUser, @Param('id', new ParseUUIDPipe()) id: string) {
     return this.registrar.enqueue(id, user.id);
+  }
+
+  /** Latest registrar sync (manual or scheduled): status, counts, or the error. */
+  @Get('domains/sync')
+  @RequirePermission('integration.manage')
+  async latestDomainSync(@Param('id', new ParseUUIDPipe()) id: string) {
+    return { run: await this.registrar.latestRun(id) };
   }
 
   /** Browse Cloudflare-side IP lists so the operator can pick which to register. */

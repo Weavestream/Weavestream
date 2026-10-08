@@ -6,6 +6,7 @@ jest.mock('../driver-utils.js', () => ({
 
 import { CloudflareApiClient } from './cloudflare-api.client.js';
 import { DriverAuthError } from '../integration-driver.js';
+import { CloudflareDriver } from './cloudflare.driver.js';
 
 const CTX = {
   apiToken: 't',
@@ -31,100 +32,188 @@ function stubFetch(routes: Array<[string, () => Response]>) {
 
 const ok = <T>(result: T, result_info?: object) => ({ success: true, errors: [], result, result_info });
 
+const zonesPage = (zones: object[]) =>
+  respond(200, ok(zones, { page: 1, total_pages: 1, total_count: zones.length }));
+
 describe('CloudflareApiClient registrar', () => {
   const api = new CloudflareApiClient();
   afterEach(() => mockFetch.mockReset());
 
-  it('unions zones with the registrar list, which on real accounts drops rows', async () => {
+  it('reads registrations from the supported API, following the cursor to the end', async () => {
     stubFetch([
+      ['/zones?', () => zonesPage([])],
+      // Most specific first: the second page is requested with the cursor.
+      ['registrar/registrations?per_page=50&cursor=c2', () => respond(200, ok([{ domain_name: 'b.com' }], { cursor: '' }))],
+      ['registrar/registrations?per_page=50', () => respond(200, ok([{ domain_name: 'A.com' }], { cursor: 'c2' }))],
+    ]);
+    const out = await api.listRegistrarDomains('acct', CTX);
+    expect(out.map((d) => d.name).sort()).toEqual(['a.com', 'b.com']);
+    // The retired endpoints are never called.
+    for (const [url] of mockFetch.mock.calls) expect(url).not.toMatch(/registrar\/domains/);
+  });
+
+  it('maps a registration and takes nameservers from its zone', async () => {
+    stubFetch([
+      ['/zones?', () => zonesPage([{ name: 'acme.dev', status: 'active', name_servers: ['X.NS.CLOUDFLARE.COM'] }])],
       [
-        '/zones?',
+        'registrar/registrations?',
         () =>
           respond(
             200,
             ok(
               [
-                { name: 'zone-only.com', status: 'active', name_servers: ['a.ns.cloudflare.com'] },
-                { name: 'deleted.com', status: 'deleted' },
+                {
+                  domain_name: 'acme.dev',
+                  status: 'active',
+                  auto_renew: true,
+                  locked: true,
+                  created_at: '2021-03-01T00:00:00Z',
+                  expires_at: '2027-03-01T00:00:00Z',
+                  privacy_mode: 'redaction',
+                },
               ],
-              { page: 1, total_pages: 1 },
+              { cursor: '' },
             ),
           ),
       ],
-      // Page 1 has a row, page 2 is empty: stop there regardless of total_pages.
-      ['registrar/domains?per_page=50&page=1', () => respond(200, ok([{ name: 'reg-only.com' }]))],
-      ['registrar/domains?per_page=50&page=2', () => respond(200, ok([]))],
     ]);
-
-    const out = await api.listRegistrarCandidates('acct', CTX);
-    expect([...out.keys()].sort()).toEqual(['reg-only.com', 'zone-only.com']);
-    expect(out.get('zone-only.com')).toEqual({ hasZone: true, zoneNameservers: ['a.ns.cloudflare.com'] });
-  });
-
-  it('maps a registered domain', async () => {
-    stubFetch([
-      [
-        'registrar/domains/acme.dev',
-        () =>
-          respond(
-            200,
-            ok({
-              name: 'acme.dev',
-              cloudflare_registration: true,
-              current_registrar: 'Cloudflare',
-              auto_renew: true,
-              locked: true,
-              registered_at: '2021-03-01T00:00:00Z',
-              expires_at: '2027-03-01T00:00:00Z',
-              registry_statuses: 'clientTransferProhibited, serverDeleteProhibited',
-            }),
-          ),
-      ],
-    ]);
-    const d = await api.getRegistrarDomain(
-      'acct',
-      'acme.dev',
-      { hasZone: true, zoneNameservers: ['X.NS.CLOUDFLARE.COM'] },
-      CTX,
-    );
-    expect(d).toMatchObject({
+    const [d] = await api.listRegistrarDomains('acct', CTX);
+    expect(d).toEqual({
+      name: 'acme.dev',
       cloudflareRegistration: true,
+      registrar: 'Cloudflare',
       autoRenew: true,
+      locked: true,
+      registeredAt: new Date('2021-03-01T00:00:00Z'),
       expiresAt: new Date('2027-03-01T00:00:00Z'),
-      registryStatuses: ['clientTransferProhibited', 'serverDeleteProhibited'],
+      registryStatuses: ['active'],
       nameservers: ['x.ns.cloudflare.com'],
+      hasZone: true,
     });
   });
 
-  it('returns null for a name that moved to another account (mostly-null record, no zone)', async () => {
+  it('keeps a live zone registered elsewhere, without registrar facts, and drops deleted zones', async () => {
     stubFetch([
-      ['registrar/domains/moved.com', () => respond(200, ok({ name: 'moved.com', current_registrar: null }))],
+      [
+        '/zones?',
+        () =>
+          zonesPage([
+            { name: 'ext.com', status: 'active', name_servers: ['a.ns.cloudflare.com'] },
+            { name: 'deleted.com', status: 'deleted' },
+          ]),
+      ],
+      ['registrar/registrations?', () => respond(200, ok([], { cursor: '' }))],
     ]);
-    await expect(
-      api.getRegistrarDomain('acct', 'moved.com', { hasZone: false, zoneNameservers: [] }, CTX),
-    ).resolves.toBeNull();
+    const out = await api.listRegistrarDomains('acct', CTX);
+    expect(out).toEqual([
+      expect.objectContaining({
+        name: 'ext.com',
+        cloudflareRegistration: false,
+        registrar: null,
+        autoRenew: null,
+        expiresAt: null,
+        hasZone: true,
+      }),
+    ]);
   });
 
-  it('keeps a zone whose registration is elsewhere', async () => {
-    stubFetch([['registrar/domains/ext.com', () => respond(404, { success: false, errors: [] })]]);
-    await expect(
-      api.getRegistrarDomain('acct', 'ext.com', { hasZone: true, zoneNameservers: [] }, CTX),
-    ).resolves.toMatchObject({ name: 'ext.com', cloudflareRegistration: false, expiresAt: null });
+  it.each([
+    ['a 400', 400],
+    ['a 404', 404],
+    ['a 5xx', 502],
+  ])('fails the whole listing on %s instead of returning empty registrar facts', async (_l, status) => {
+    stubFetch([
+      ['/zones?', () => zonesPage([{ name: 'acme.dev', status: 'active' }])],
+      [
+        'registrar/registrations?',
+        () => respond(status, { success: false, errors: [{ code: 10000, message: 'Bad Request' }], result: null }),
+      ],
+    ]);
+    await expect(api.listRegistrarDomains('acct', CTX)).rejects.toThrow(/Bad Request \(code 10000\)/);
   });
 
-  it('aborts on a 5xx instead of treating the domain as gone', async () => {
-    stubFetch([['registrar/domains/flaky.com', () => respond(502, { success: false, errors: [] })]]);
-    await expect(
-      api.getRegistrarDomain('acct', 'flaky.com', { hasZone: false, zoneNameservers: [] }, CTX),
-    ).rejects.toThrow(/failed/);
+  it('fails on a repeated cursor instead of looping', async () => {
+    stubFetch([
+      ['/zones?', () => zonesPage([])],
+      ['registrar/registrations?', () => respond(200, ok([{ domain_name: 'a.com' }], { cursor: 'same' }))],
+    ]);
+    await expect(api.listRegistrarDomains('acct', CTX)).rejects.toThrow(/repeated a page cursor/);
   });
 
-  it('aborts the whole sync on an auth failure, naming the registrar permission', async () => {
-    stubFetch([['registrar/domains/x.com', () => respond(403, { success: false, errors: [] })]]);
-    const p = api.getRegistrarDomain('acct', 'x.com', { hasZone: true, zoneNameservers: [] }, CTX);
+  it("reports Cloudflare's own reason on a 403, with the permission hint", async () => {
+    stubFetch([
+      ['/zones?', () => zonesPage([])],
+      [
+        'registrar/registrations?',
+        () =>
+          respond(403, {
+            success: false,
+            errors: [{ code: 10000, message: 'Authentication error' }],
+            result: null,
+          }),
+      ],
+    ]);
+    const p = api.listRegistrarDomains('acct', CTX);
+    await expect(p).rejects.toBeInstanceOf(DriverAuthError);
+    await expect(api.listRegistrarDomains('acct', CTX)).rejects.toThrow(
+      /returned 403: Authentication error \(code 10000\)\. Registrar sync needs/,
+    );
+  });
+});
+
+describe('CloudflareDriver.testConnection', () => {
+  const driver = new CloudflareDriver(new CloudflareApiClient());
+  const http = CTX.http;
+  const secret = { apiToken: 't' };
+  const CO = '00000000-0000-4000-8000-0000000000aa';
+  afterEach(() => mockFetch.mockReset());
+
+  it('checks only the Gateway lists while domain sync is off', async () => {
+    stubFetch([['/gateway/lists', () => respond(200, ok([]))]]);
+    await expect(driver.testConnection({ accountId: 'acct' }, secret, http, 'c')).resolves.toMatchObject({
+      ok: true,
+    });
+    for (const [url] of mockFetch.mock.calls) expect(url).toMatch(/gateway\/lists/);
+  });
+
+  it('also checks zone and registrar access once domain sync is on', async () => {
+    stubFetch([
+      ['/gateway/lists', () => respond(200, ok([]))],
+      ['/zones?', () => zonesPage([{ name: 'a.com', status: 'active' }])],
+      ['registrar/registrations?', () => respond(200, ok([], { cursor: '' }))],
+    ]);
+    const res = await driver.testConnection({ accountId: 'acct', domainsCompanyId: CO }, secret, http, 'c');
+    expect(res.details).toMatch(/zone and registrar access confirmed/);
+  });
+
+  it('fails when the token lacks registrar access, saying which check failed', async () => {
+    stubFetch([
+      ['/gateway/lists', () => respond(200, ok([]))],
+      ['/zones?', () => zonesPage([])],
+      ['registrar/registrations?', () => respond(403, { success: false, errors: [], result: null })],
+    ]);
+    const p = driver.testConnection({ accountId: 'acct', domainsCompanyId: CO }, secret, http, 'c');
     await expect(p).rejects.toBeInstanceOf(DriverAuthError);
     await expect(
-      api.getRegistrarDomain('acct', 'x.com', { hasZone: true, zoneNameservers: [] }, CTX),
-    ).rejects.toThrow(/Registrar: Domains » Read/);
+      driver.testConnection({ accountId: 'acct', domainsCompanyId: CO }, secret, http, 'c'),
+    ).rejects.toThrow(/^Domain sync check failed: .*403/);
+  });
+
+  it('passes a domains-only token while domain sync is on, and says Gateway lists are not reachable', async () => {
+    stubFetch([
+      ['/gateway/lists', () => respond(403, { success: false, errors: [], result: null })],
+      ['/zones?', () => zonesPage([{ name: 'a.com', status: 'active' }])],
+      ['registrar/registrations?', () => respond(200, ok([], { cursor: '' }))],
+    ]);
+    const res = await driver.testConnection({ accountId: 'acct', domainsCompanyId: CO }, secret, http, 'c');
+    expect(res.details).toMatch(/no Zero Trust access, which only IP lists need/);
+    expect(res.details).toMatch(/zone and registrar access confirmed/);
+  });
+
+  it('still fails a token without Zero Trust access while domain sync is off', async () => {
+    stubFetch([['/gateway/lists', () => respond(403, { success: false, errors: [], result: null })]]);
+    await expect(driver.testConnection({ accountId: 'acct' }, secret, http, 'c')).rejects.toBeInstanceOf(
+      DriverAuthError,
+    );
   });
 });

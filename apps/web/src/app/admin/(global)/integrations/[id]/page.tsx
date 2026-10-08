@@ -1,5 +1,6 @@
 import { redirect } from 'next/navigation';
 import type {
+  CloudflareDomainSyncRunDto,
   CloudflareIpListDto,
   DriverDescriptor,
   IntegrationCompanyMappingDto,
@@ -56,7 +57,7 @@ export default async function IntegrationDetailPage({
   // up-front; security drivers (Cloudflare) instead need the registered
   // lists. Splitting the fetch by kind avoids hitting endpoints that
   // 400 for the wrong driver shape.
-  const [mappingsRes, runsRes, cfListsRes] = await Promise.all([
+  const [mappingsRes, runsRes, cfListsRes, cfDomainSyncRes] = await Promise.all([
     kind === 'pull'
       ? serverApiFetch<IntegrationCompanyMappingDto[]>(
           `/admin/integrations/${id}/mappings`,
@@ -72,11 +73,17 @@ export default async function IntegrationDetailPage({
           `/admin/integrations/${id}/cloudflare/lists`,
         )
       : Promise.resolve({ data: [] as CloudflareIpListDto[] }),
+    kind === 'security'
+      ? serverApiFetch<{ run: CloudflareDomainSyncRunDto | null }>(
+          `/admin/integrations/${id}/cloudflare/domains/sync`,
+        )
+      : Promise.resolve({ data: { run: null } }),
   ]);
 
   const mappings = mappingsRes.data ?? [];
   const runs = runsRes.data ?? [];
   const cloudflareLists = cfListsRes.data ?? [];
+  const domainSyncRun = cfDomainSyncRes.data?.run ?? null;
 
   return (
     <>
@@ -100,6 +107,7 @@ export default async function IntegrationDetailPage({
               integration={integration}
               driver={driver}
               cloudflareLists={cloudflareLists}
+              domainSyncRun={domainSyncRun}
             />
           ) : (
             <IntegrationTabs

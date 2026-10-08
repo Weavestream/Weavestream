@@ -305,3 +305,36 @@ export const cloudflarePushResponseSchema = z.object({
   list: cloudflareIpListDtoSchema,
 });
 export type CloudflarePushResponse = z.infer<typeof cloudflarePushResponseSchema>;
+
+// ---------------------------------------------------------------------
+// Registrar → Domains sync
+// ---------------------------------------------------------------------
+
+/** Counts from one registrar sync run. `enabled` is false when no company is set. */
+export const cloudflareDomainSyncResultSchema = z.object({
+  enabled: z.boolean(),
+  created: z.number().int().nonnegative(),
+  updated: z.number().int().nonnegative(),
+  adopted: z.number().int().nonnegative(),
+  missing: z.number().int().nonnegative(),
+  /** Domains left alone: archived, another company's manual row, another integration's. */
+  skipped: z.number().int().nonnegative().default(0),
+});
+export type CloudflareDomainSyncResult = z.infer<typeof cloudflareDomainSyncResultSchema>;
+
+/**
+ * Latest registrar sync, manual or scheduled
+ * (`GET /admin/integrations/:id/cloudflare/domains/sync` → `{ run }`).
+ * `error` is set only on a failed run.
+ */
+export const cloudflareDomainSyncRunDtoSchema = z.object({
+  id: z.string().uuid(),
+  kind: z.enum(['manual', 'scheduled']),
+  status: z.enum(['queued', 'running', 'succeeded', 'failed', 'cancelled']),
+  createdAt: z.string(),
+  startedAt: z.string().nullable(),
+  finishedAt: z.string().nullable(),
+  result: cloudflareDomainSyncResultSchema.nullable(),
+  error: z.string().nullable(),
+});
+export type CloudflareDomainSyncRunDto = z.infer<typeof cloudflareDomainSyncRunDtoSchema>;

@@ -61,7 +61,7 @@ Cloudflare will automatically pick up changes to the list — no policy update i
 ## Step 4 — Add the integration in Weavestream
 
 1. Navigate to **Admin → Integrations → New Integration**.
-2. Select **Cloudflare Zero Trust Lists** as the provider.
+2. Select **Cloudflare** as the provider.
 3. Fill in the required fields:
 
    | Field | Where to find it |

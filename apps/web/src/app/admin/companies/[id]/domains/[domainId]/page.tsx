@@ -179,7 +179,7 @@ export default async function DomainDetailPage({
                 value={domain.nameservers.length ? domain.nameservers.join(', ') : '—'}
               />
               <Stat
-                label="Registry status"
+                label="Registration status"
                 value={domain.registrarStatuses.length ? domain.registrarStatuses.join(', ') : '—'}
               />
             </div>

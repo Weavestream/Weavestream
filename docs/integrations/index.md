@@ -37,7 +37,7 @@ Select an integration below for provider-specific setup guides, resource capabil
 
 [!card title="Breeze" text="Read-only reconstruction sync for durably importing organization structures, devices, configurations, and topology." icon="plug" layout="compact"](/integrations/breeze/)
 
-[!card title="Cloudflare Zero Trust Lists" text="Manage Cloudflare Zero Trust Gateway IP lists directly from Weavestream with automatic drift detection." icon="plug" layout="compact"](/integrations/cloudflare/)
+[!card title="Cloudflare" text="Manage Zero Trust Gateway IP lists with drift repair, and sync every domain on the account into Domains." icon="plug" layout="compact"](/integrations/cloudflare/)
 
 [!card title="NinjaOne" text="Sync agent-managed workstations, servers, SNMP network gear, and guest VMs with dual-resource mapping." icon="plug" layout="compact"](/integrations/ninjaone/)
 

@@ -161,7 +161,7 @@ describe('searchAppHelpIndex', () => {
     ],
     [
       'Register a Cloudflare Gateway IP list',
-      'integrations/configure-cloudflare-zero-trust-lists',
+      'integrations/configure-the-cloudflare-integration',
     ],
     [
       'Email me about failed sign-ins',

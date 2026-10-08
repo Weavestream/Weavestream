@@ -1,7 +1,16 @@
 'use client';
 
+import { useEffect, useState } from 'react';
 import type { DriverFieldDescriptor } from '@weavestream/shared';
-import { Field, Input, Select } from '../../../../components/ui';
+import {
+  CompanyPicker,
+  Field,
+  Input,
+  Select,
+  type CompanyPickerValue,
+} from '../../../../components/ui';
+import { apiFetch } from '../../../../lib/api';
+import type { CompanyListItem } from '../../../../lib/server-api/companies';
 
 /**
  * Phase 11 — generic editor for the driver-advertised config / secret
@@ -93,6 +102,15 @@ function renderControl(
       </Select>
     );
   }
+  if (f.kind === 'company') {
+    return (
+      <CompanyField
+        id={`df-${f.key}`}
+        slug={typeof value === 'string' && value ? value : null}
+        onChange={(slug) => onChange(slug ?? undefined)}
+      />
+    );
+  }
   if (f.kind === 'boolean') {
     return (
       <Select
@@ -128,6 +146,60 @@ function renderControl(
       value={value === undefined || value === null ? '' : String(value)}
       onChange={(e) => onChange(e.target.value === '' ? undefined : e.target.value)}
       placeholder={f.default !== undefined ? String(f.default) : undefined}
+    />
+  );
+}
+
+/**
+ * `company` field: the shared {@link CompanyPicker}, storing the chosen
+ * company's slug. A saved slug is looked up once so the picker can show the
+ * company's name; the server re-resolves the slug and checks the saver's
+ * access on save, so this lookup is display only.
+ */
+function CompanyField({
+  id,
+  slug,
+  onChange,
+}: {
+  id: string;
+  slug: string | null;
+  onChange: (slug: string | null) => void;
+}) {
+  const [picked, setPicked] = useState<CompanyPickerValue | null>(null);
+  const [resolved, setResolved] = useState<CompanyPickerValue | null>(null);
+  const current = picked?.slug === slug ? picked : resolved?.slug === slug ? resolved : null;
+
+  useEffect(() => {
+    if (!slug || picked?.slug === slug) return undefined;
+    const ctrl = new AbortController();
+    const params = new URLSearchParams({ q: slug, limit: '20' });
+    void apiFetch<{ items: CompanyListItem[] }>(`/companies?${params.toString()}`, {
+      signal: ctrl.signal,
+    }).then((res) => {
+      const hit = res.ok ? res.data?.items.find((c) => c.slug === slug) : undefined;
+      // A company this user cannot list still shows its slug, so the field
+      // never looks empty while a binding exists.
+      setResolved(
+        hit
+          ? { id: hit.id, name: hit.name, slug: hit.slug, archivedAt: hit.archivedAt }
+          : { id: slug, name: slug, slug, archivedAt: null },
+      );
+    }).catch(() => {
+      // Aborted (the slug changed) or offline: the next render retries, and
+      // the picker stays usable either way.
+    });
+    return () => ctrl.abort();
+  }, [slug, picked]);
+
+  return (
+    <CompanyPicker
+      id={id}
+      value={current}
+      onChange={(next) => {
+        setPicked(next);
+        onChange(next?.slug ?? null);
+      }}
+      placeholder="Search for a company… (empty = off)"
     />
   );
 }
