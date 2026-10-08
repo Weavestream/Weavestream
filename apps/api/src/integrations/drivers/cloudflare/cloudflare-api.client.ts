@@ -45,6 +45,11 @@ interface CloudflareEnvelope<T> {
   errors?: Array<{ code?: number; message?: string }>;
   result: T;
   result_info?: {
+    page?: number;
+    total_pages?: number;
+    total_count?: number;
+    /** Registrar registrations: opaque next-page token, '' on the last page. */
+    cursor?: string | null;
     cursors?: {
       before?: string | null;
       after?: string | null;
@@ -80,6 +85,73 @@ interface CloudflareGatewayItemRaw {
  * arrays and applies them synchronously, returning the updated list.
  * Items are addressed by their string value — there's no per-item id.
  */
+
+/**
+ * Registrar view of one domain, normalised. The registrar fields are null for
+ * a zone whose registration lives at another registrar: the registrations API
+ * only knows domains that Cloudflare Registrar holds on this account.
+ */
+export interface CloudflareRegistrarDomain {
+  name: string;
+  /** True only when Cloudflare is the registrar of record on this account. */
+  cloudflareRegistration: boolean;
+  registrar: string | null;
+  autoRenew: boolean | null;
+  locked: boolean | null;
+  registeredAt: Date | null;
+  expiresAt: Date | null;
+  /** Cloudflare's registration status (`active`, `expired`, `redemption_period`, …). */
+  registryStatuses: string[];
+  nameservers: string[];
+  /** Whether a DNS zone for this name exists on the account. */
+  hasZone: boolean;
+}
+
+interface CloudflareZoneRaw {
+  name?: string;
+  status?: string;
+  name_servers?: string[];
+}
+
+/** `GET /accounts/{id}/registrar/registrations` row. Only the fields read here. */
+interface CloudflareRegistrationRaw {
+  domain_name?: string;
+  status?: string | null;
+  created_at?: string | null;
+  expires_at?: string | null;
+  auto_renew?: boolean | null;
+  locked?: boolean | null;
+}
+
+/** Shown on a 401/403 from any registrar call, so the fix named is the right one. */
+const REGISTRAR_AUTH_HINT =
+  'Registrar sync needs the API token to carry Zone » Zone » Read for every zone on the account and read access to Registrar for this account, in addition to the Zero Trust permission the IP-list feature uses. Check also that the token\'s account resources include this account.';
+
+/** Pagination ceiling (50/page → 10,000 domains); hitting it is an error, not a truncation. */
+const MAX_PAGES = 200;
+
+/** Zone states that still represent a domain the account controls. */
+const LIVE_ZONE_STATUSES = new Set(['active', 'pending', 'initializing']);
+
+/**
+ * A failure Cloudflare reported, or a malformed Cloudflare answer. The
+ * message names the request and Cloudflare's own error text, never the
+ * token, so it is fit to show to the operator who configured the
+ * integration (the registrar sync stores it on its run row).
+ */
+export class CloudflareApiError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'CloudflareApiError';
+  }
+}
+
+function parseDate(v: string | null | undefined): Date | null {
+  if (!v) return null;
+  const d = new Date(v);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
 export class CloudflareApiClient {
   /** Verifies the token + account by listing gateway lists with no side effects. */
   async testConnection(
@@ -182,6 +254,140 @@ export class CloudflareApiClient {
   }
 
   // -------------------------------------------------------------------
+  // Registrar
+  // -------------------------------------------------------------------
+
+  /**
+   * Every domain on the account: its live DNS zones unioned with its
+   * Cloudflare Registrar registrations. Both lists are read in full before
+   * anything is returned, and any failure (auth, rate limit, 4xx, 5xx, a
+   * malformed page) throws. A partial answer would erase registrar facts or
+   * stamp live domains as missing, so there is none.
+   */
+  async listRegistrarDomains(
+    accountId: string,
+    ctx: CloudflareCallContext,
+  ): Promise<CloudflareRegistrarDomain[]> {
+    const zones = await this.listZones(accountId, ctx);
+    const registrations = await this.listRegistrations(accountId, ctx);
+    const names = new Set([...zones.keys(), ...registrations.keys()]);
+    return [...names].map((name) => {
+      const zone = zones.get(name);
+      const reg = registrations.get(name);
+      return {
+        name,
+        cloudflareRegistration: reg !== undefined,
+        registrar: reg ? 'Cloudflare' : null,
+        autoRenew: typeof reg?.auto_renew === 'boolean' ? reg.auto_renew : null,
+        locked: typeof reg?.locked === 'boolean' ? reg.locked : null,
+        registeredAt: parseDate(reg?.created_at),
+        expiresAt: parseDate(reg?.expires_at),
+        registryStatuses: reg?.status ? [reg.status] : [],
+        nameservers: (zone ?? []).map((n) => n.toLowerCase()),
+        hasZone: zone !== undefined,
+      };
+    });
+  }
+
+  /**
+   * Cheap permission probe for "Test connection": one page of each list the
+   * registrar sync reads, so a token missing either scope fails here rather
+   * than on the next sweep.
+   */
+  async checkRegistrarAccess(
+    accountId: string,
+    ctx: CloudflareCallContext,
+  ): Promise<{ zones: number; registrations: number }> {
+    const zones = await this.fetchZonePage(accountId, 1, 5, ctx);
+    const regs = await this.fetchRegistrationPage(accountId, '', 1, ctx);
+    return {
+      zones: zones.result_info?.total_count ?? (zones.result ?? []).length,
+      registrations: (regs.result ?? []).length,
+    };
+  }
+
+  /** Live zones by lowercased name → assigned nameservers. */
+  private async listZones(
+    accountId: string,
+    ctx: CloudflareCallContext,
+  ): Promise<Map<string, string[]>> {
+    const out = new Map<string, string[]>();
+    for (let page = 1; page <= MAX_PAGES; page += 1) {
+      const env = await this.fetchZonePage(accountId, page, 50, ctx);
+      const zones = env.result ?? [];
+      for (const z of zones) {
+        const name = (z.name ?? '').toLowerCase();
+        if (!name || !LIVE_ZONE_STATUSES.has((z.status ?? '').toLowerCase())) continue;
+        out.set(name, z.name_servers ?? []);
+      }
+      const totalPages = env.result_info?.total_pages ?? 1;
+      if (zones.length === 0 || page >= totalPages) return out;
+    }
+    throw new CloudflareApiError(`Cloudflare zone list exceeded ${MAX_PAGES} pages`);
+  }
+
+  /**
+   * Registrar registrations by lowercased name. Cursor-paginated: an empty
+   * `result_info.cursor` marks the last page. A cursor that repeats would
+   * loop forever, so it is an error, as is running past MAX_PAGES.
+   */
+  private async listRegistrations(
+    accountId: string,
+    ctx: CloudflareCallContext,
+  ): Promise<Map<string, CloudflareRegistrationRaw>> {
+    const out = new Map<string, CloudflareRegistrationRaw>();
+    const seen = new Set<string>();
+    let cursor = '';
+    for (let page = 1; page <= MAX_PAGES; page += 1) {
+      const env = await this.fetchRegistrationPage(accountId, cursor, 50, ctx);
+      if (!Array.isArray(env.result)) {
+        throw new CloudflareApiError('Cloudflare registrations list returned no result array');
+      }
+      for (const r of env.result) {
+        const name = (r.domain_name ?? '').toLowerCase();
+        if (name) out.set(name, r);
+      }
+      const next = env.result_info?.cursor ?? '';
+      if (!next) return out;
+      if (seen.has(next)) throw new CloudflareApiError('Cloudflare registrations list repeated a page cursor');
+      seen.add(next);
+      cursor = next;
+    }
+    throw new CloudflareApiError(`Cloudflare registrations list exceeded ${MAX_PAGES} pages`);
+  }
+
+  private fetchZonePage(
+    accountId: string,
+    page: number,
+    perPage: number,
+    ctx: CloudflareCallContext,
+  ): Promise<CloudflareEnvelope<CloudflareZoneRaw[]>> {
+    const url = new URL(`${CLOUDFLARE_API_BASE}/zones`);
+    url.searchParams.set('account.id', accountId);
+    url.searchParams.set('per_page', String(perPage));
+    url.searchParams.set('page', String(page));
+    return this.callJsonEnvelope<CloudflareZoneRaw[]>(
+      'GET', url.toString(), ctx, undefined, REGISTRAR_AUTH_HINT,
+    );
+  }
+
+  private fetchRegistrationPage(
+    accountId: string,
+    cursor: string,
+    perPage: number,
+    ctx: CloudflareCallContext,
+  ): Promise<CloudflareEnvelope<CloudflareRegistrationRaw[]>> {
+    const url = new URL(
+      `${CLOUDFLARE_API_BASE}/accounts/${encodeURIComponent(accountId)}/registrar/registrations`,
+    );
+    url.searchParams.set('per_page', String(perPage));
+    if (cursor) url.searchParams.set('cursor', cursor);
+    return this.callJsonEnvelope<CloudflareRegistrationRaw[]>(
+      'GET', url.toString(), ctx, undefined, REGISTRAR_AUTH_HINT,
+    );
+  }
+
+  // -------------------------------------------------------------------
   // Internal HTTP helpers
   // -------------------------------------------------------------------
 
@@ -200,6 +406,7 @@ export class CloudflareApiClient {
     url: string,
     ctx: CloudflareCallContext,
     body?: string,
+    authHint?: string,
   ): Promise<CloudflareEnvelope<T>> {
     const headers: Record<string, string> = {
       Authorization: `Bearer ${ctx.apiToken}`,
@@ -218,9 +425,26 @@ export class CloudflareApiClient {
       serviceName: 'Cloudflare',
     });
 
+    let payload: CloudflareEnvelope<T> | null = null;
+    try {
+      payload = (await res.json()) as CloudflareEnvelope<T>;
+    } catch {
+      payload = null;
+    }
+    // Cloudflare's own error text ("Authentication error", "Unauthorized to
+    // access requested resource", code 10000, …) names the real cause; it
+    // never carries the token, so it goes into the message verbatim.
+    const detail =
+      payload?.errors
+        ?.map((e) => (e.code ? `${e.message ?? 'error'} (code ${e.code})` : e.message))
+        .filter(Boolean)
+        .join('; ') || `HTTP ${res.status}`;
+
     if (res.status === 401 || res.status === 403) {
       throw new DriverAuthError(
-        `Cloudflare ${method} ${url} returned ${res.status}. The API token must have Account » Zero Trust » Edit (Gateway Lists live under Zero Trust — "Account Filter Lists" is the WAF Rules Lists API and will not work for Tunnel access policies). Verify the account id is correct as well.`,
+        authHint
+          ? `Cloudflare ${method} ${url} returned ${res.status}: ${detail}. ${authHint}`
+          : `Cloudflare ${method} ${url} returned ${res.status}: ${detail}. The API token must have Account » Zero Trust » Edit (Gateway Lists live under Zero Trust — "Account Filter Lists" is the WAF Rules Lists API and will not work for Tunnel access policies). Verify the account id is correct as well.`,
       );
     }
     if (res.status === 429) {
@@ -229,19 +453,8 @@ export class CloudflareApiClient {
       );
     }
 
-    let payload: CloudflareEnvelope<T> | null = null;
-    try {
-      payload = (await res.json()) as CloudflareEnvelope<T>;
-    } catch {
-      payload = null;
-    }
     if (!res.ok || !payload || payload.success === false) {
-      const detail =
-        payload?.errors
-          ?.map((e) => e.message ?? `code ${e.code}`)
-          .filter(Boolean)
-          .join('; ') ?? `HTTP ${res.status}`;
-      throw new Error(`Cloudflare ${method} ${url} failed: ${detail}`);
+      throw new CloudflareApiError(`Cloudflare ${method} ${url} failed: ${detail}`);
     }
     return payload;
   }

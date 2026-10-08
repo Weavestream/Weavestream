@@ -8,7 +8,7 @@ Action1, NinjaOne, UniFi, and Breeze are pull integrations. A connection stores 
 
 Match keys claim existing unclaimed assets instead of duplicating them. Once linked, integration sync records preserve identity across runs.
 
-Cloudflare Zero Trust Lists manages Gateway IP lists and pushes entry changes to Cloudflare rather than importing assets.
+Cloudflare does not import assets. It has two independent features: it manages Zero Trust Gateway IP lists and pushes entry changes to Cloudflare, and it can sync every domain on the Cloudflare account into Domains.
 
 ## Create an integration
 <!-- aliases: new integration | add connector | connect rmm | configure integration | integration credentials -->
@@ -74,19 +74,19 @@ Configure **Devices fields** for switches, access points, and gateways (recommen
 
 Use **Completeness** tab to track synchronized current, manually documented, secret blocked, missing, stale, and sync error states. Blank schedules default to every 15 minutes. See `docs/integrations/breeze.md` for details.
 
-## Configure Cloudflare Zero Trust Lists
-<!-- aliases: connect cloudflare | cloudflare gateway list | zero trust ip list | register cloudflare list | register cloudflare gateway ip list -->
+## Configure the Cloudflare integration
+<!-- aliases: connect cloudflare | cloudflare gateway list | zero trust ip list | register cloudflare list | register cloudflare gateway ip list | cloudflare domains | cloudflare registrar sync -->
 <!-- requires: integration.manage -->
 
-Create a **Cloudflare Zero Trust Lists** integration using **Cloudflare Account ID** and an **API Token** scoped to **Account → Zero Trust → Edit**.
+Create a **Cloudflare** integration using the **Cloudflare Account ID** and an **API Token**. Give the token only the permissions of the features you use: **Account → Zero Trust → Edit** for Gateway IP lists, and **Zone → Zone → Read** plus read access to **Registrar** for domain sync.
 
-After **Test connection** succeeds, save and activate. Open **Registered lists**, select **Register list**, and choose an IP list from Cloudflare. Existing entries import upon registration. Open registered list to manage IP/CIDR entries with Weavestream as source of truth.
+After **Test connection** succeeds, save and activate. For IP lists, open the **Lists** tab, select **Register list**, and choose an IP list from Cloudflare. Existing entries import upon registration, and Weavestream is the source of truth from then on. For domain sync, set **Sync domains into company (slug)**; the **Domains** tab shows the latest sync and has **Sync domains now**.
 
 ## Manage a registered Cloudflare Gateway IP list
 <!-- aliases: cloudflare list entries | add IP to Cloudflare list | remove IP from zero trust list | CIDR allow list | cloudflare drift repair -->
 <!-- requires: integration.manage -->
 
-Open **Admin → Integrations**, select Cloudflare integration, and open **Registered lists**. Registering imports current entries and sets Weavestream as source of truth.
+Open **Admin → Integrations**, select the Cloudflare integration, and open the **Lists** tab. Registering imports current entries and sets Weavestream as source of truth.
 
 Open a registered list to add, edit, or remove IP/CIDR entries with descriptive comments. Changes push to Cloudflare; scheduled drift sweeps repair out-of-band Cloudflare changes back to desired state.
 
@@ -117,7 +117,7 @@ Records are created on first run, claimed when match keys identify an eligible a
 2. Pick a **Sync schedule** interval (presets from 5 minutes to 24 hours). Intervals of 1 hour or more fire at fixed UTC times.
 3. Ensure **Status** is active and save changes.
 
-**Inherit global default** follows `INTEGRATION_SYNC_DEFAULT_CRON` (default: 15 minutes; set to `off` to disable). Custom cron expressions remain supported. For Cloudflare, this configures the **Drift sweep schedule**.
+**Inherit global default** follows `INTEGRATION_SYNC_DEFAULT_CRON` (default: 15 minutes; set to `off` to disable). Custom cron expressions remain supported. For Cloudflare, one schedule runs the list drift check and, when it is on, the domain sync.
 
 ## Review run history and failures
 <!-- aliases: run history | sync errors | sync conflicts | failed import | troubleshoot sync | company results -->

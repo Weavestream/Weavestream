@@ -453,11 +453,17 @@ export class CloudflareListsService {
     return this.toDto(updated);
   }
 
-  /** Worker entrypoint: run drift check for every list under one integration. */
+  /**
+   * Worker entrypoint: run drift check for every list under one integration.
+   * `skipped` is true when the integration is not ACTIVE; the caller then
+   * does nothing else for this tick. The caller stamps the "Last run" fields
+   * ({@link stampLastRun}) once the whole job, domain sync included, is done.
+   */
   async runDriftSweep(integrationId: string): Promise<{
     checked: number;
     healed: number;
     errors: number;
+    skipped: boolean;
   }> {
     // BullMQ may move a repeatable's next iteration into "active" right
     // around the moment we remove the schedule on integration delete /
@@ -471,7 +477,7 @@ export class CloudflareListsService {
       this.logger.log(
         `Skipping drift sweep — integration ${integrationId} is not ACTIVE (or was deleted)`,
       );
-      return { checked: 0, healed: 0, errors: 0 };
+      return { checked: 0, healed: 0, errors: 0, skipped: true };
     }
     const lists = await this.prisma.cloudflareIpList.findMany({
       where: { integrationId },
@@ -498,17 +504,26 @@ export class CloudflareListsService {
       }
     }
 
-    // Stamp the parent Integration row so the admin table's "Last run"
-    // column reflects the cron sweep. Pull-drivers update these fields
-    // through `IntegrationSyncRun`; security drivers don't create runs,
-    // so we write directly here.
+    if (lists.length > 0) {
+      this.logger.log(
+        `Cloudflare drift sweep: integration=${integrationId} checked=${lists.length} healed=${healed} errors=${errors}`,
+      );
+    }
+    return { checked: lists.length, healed, errors, skipped: false };
+  }
+
+  /**
+   * Stamps the Integration row's "Last run" so the admin table shows when
+   * the Cloudflare job last ran. Pull drivers get these fields from their
+   * `IntegrationSyncRun` bookkeeping; this driver's job (list drift check
+   * plus domain sync) writes them here, once per job. Best effort: a
+   * failure here must not fail a job whose work is done.
+   */
+  async stampLastRun(integrationId: string, ok: boolean): Promise<void> {
     await this.prisma.integration
       .update({
         where: { id: integrationId },
-        data: {
-          lastRunAt: new Date(),
-          lastRunStatus: errors === 0 ? 'succeeded' : 'failed',
-        },
+        data: { lastRunAt: new Date(), lastRunStatus: ok ? 'succeeded' : 'failed' },
       })
       .catch((e: unknown) => {
         this.logger.warn(
@@ -517,13 +532,6 @@ export class CloudflareListsService {
           }`,
         );
       });
-
-    if (lists.length > 0) {
-      this.logger.log(
-        `Cloudflare drift sweep: integration=${integrationId} checked=${lists.length} healed=${healed} errors=${errors}`,
-      );
-    }
-    return { checked: lists.length, healed, errors };
   }
 
   // -------------------------------------------------------------------

@@ -212,6 +212,12 @@ export function DomainsBrowser({
                 <ScoreChip score={r.latestScore} />
                 <StatusPill status={r.latestStatus} />
               </div>
+              <SourceTags row={r} />
+              {r.source === 'CLOUDFLARE' && (
+                <MobileCardRow label="Renews" mono>
+                  <RenewalCell row={r} />
+                </MobileCardRow>
+              )}
               <MobileCardRow label="WHOIS" mono>
                 {fmtDate(r.whoisExpiresAt)}
               </MobileCardRow>
@@ -358,6 +364,9 @@ function DomainDialog({
             required
             value={form.hostname}
             autoFocus
+            // The registrar sync matches on hostname; the API rejects renames.
+            disabled={initial?.source === 'CLOUDFLARE'}
+            title={initial?.source === 'CLOUDFLARE' ? 'Synced from Cloudflare' : undefined}
             onChange={(e) => setForm({ ...form, hostname: e.target.value })}
             style={inputStyle}
           />
@@ -534,6 +543,7 @@ function domainColumns({
           >
             {r.hostname}
           </Link>
+          <SourceTags row={r} />
           {r.archivedAt && <Tag tone="outline">archived</Tag>}
         </span>
       ),
@@ -571,6 +581,14 @@ function domainColumns({
       render: (r) => (
         <span style={{ color: 'var(--muted)' }}>{fmtDate(r.tlsExpiresAt)}</span>
       ),
+    },
+    {
+      id: 'renewal',
+      header: 'Renews',
+      width: 150,
+      mono: true,
+      sortValue: (r) => (r.registrarExpiresAt ? new Date(r.registrarExpiresAt) : null),
+      render: (r) => <RenewalCell row={r} />,
     },
     {
       id: 'visibility',
@@ -757,3 +775,32 @@ const secondaryBtn: React.CSSProperties = {
   borderRadius: 5,
   cursor: 'pointer',
 };
+
+/**
+ * Orange "Cloudflare" tag on registrar-synced rows, so a synced domain is
+ * never mistaken for a hand-entered one, plus a warning once the sync stops
+ * seeing it on the account.
+ */
+function SourceTags({ row }: { row: MonitoredDomainDto }) {
+  if (row.source !== 'CLOUDFLARE') return null;
+  return (
+    <span style={{ display: 'inline-flex', gap: 6, flexWrap: 'wrap' }}>
+      <Tag tone="cloudflare">Cloudflare</Tag>
+      {row.registrarMissingSince && (
+        <Tag tone="warn">not on account since {fmtDate(row.registrarMissingSince)}</Tag>
+      )}
+    </span>
+  );
+}
+
+/** Registrar expiry plus auto-renew state; an expiry with auto-renew off is the one to act on. */
+function RenewalCell({ row }: { row: MonitoredDomainDto }) {
+  if (!row.registrarExpiresAt) return <span style={{ color: 'var(--muted)' }}>—</span>;
+  const manual = row.registrarAutoRenew === false;
+  return (
+    <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+      <span style={{ color: 'var(--muted)' }}>{fmtDate(row.registrarExpiresAt)}</span>
+      {manual ? <Tag tone="warn">manual</Tag> : row.registrarAutoRenew ? <Tag>auto</Tag> : null}
+    </span>
+  );
+}

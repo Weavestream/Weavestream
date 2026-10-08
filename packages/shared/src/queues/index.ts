@@ -443,6 +443,10 @@ export type BackupJobName =
 
 export const cloudflareDriftSweepJobSchema = z.object({
   integrationId: z.string().uuid(),
+  /** Set on `manual` jobs: the user who pressed "Sync domains now". */
+  triggeredBy: z.string().uuid().optional(),
+  /** Set on `manual` jobs: the queued IntegrationSyncRun that records the outcome. */
+  runId: z.string().uuid().optional(),
 });
 export type CloudflareDriftSweepJob = z.infer<
   typeof cloudflareDriftSweepJobSchema

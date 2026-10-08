@@ -56,10 +56,6 @@ export function syncCronSortMinutes(cron: string | null | undefined): number | n
   return findPreset(cron)?.minutes ?? Number.MAX_SAFE_INTEGER;
 }
 
-export function syncScheduleLabel(kind: 'security' | 'pull'): string {
-  return kind === 'security' ? 'Drift sweep schedule' : 'Sync schedule';
-}
-
 /**
  * Field help matching the current selection. Keeps the exact cron
  * visible once an interval is chosen so operators can correlate with
@@ -72,7 +68,7 @@ export function syncScheduleHelp(kind: 'security' | 'pull', value: string): stri
       ? "Inherits the global default schedule; administrators can set that default to 'off' to disable scheduled runs."
       : `Runs on UTC cron ${trimmed}. Intervals of an hour or more fire at fixed UTC times.`;
   return kind === 'security'
-    ? `Each tick checks Cloudflare-registered lists and auto-heals drift. ${base}`
+    ? `Each run checks registered Cloudflare lists and repairs drift, then syncs domains when domain sync is on. ${base}`
     : base;
 }
 

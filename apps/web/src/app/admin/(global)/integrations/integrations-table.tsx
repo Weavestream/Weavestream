@@ -23,6 +23,10 @@ import { shortRelative as relative } from '../../../../lib/relative-time';
  *
  * Clicking a row drops into the integration detail page where the
  * operator manages credentials, org mappings, and field mappings.
+ *
+ * One table for every driver. Companies and Resources describe asset
+ * import only, so rows of other drivers (Cloudflare) show a dash there
+ * rather than a misleading "not configured".
  */
 export function IntegrationsTable({
   rows,
@@ -34,6 +38,13 @@ export function IntegrationsTable({
   const driverByKey = useMemo(
     () => new Map(drivers.map((d) => [d.key, d])),
     [drivers],
+  );
+
+  // Unknown drivers count as asset import, matching the detail page.
+  const isPull = useMemo(
+    () => (r: IntegrationDto) =>
+      (driverByKey.get(r.driver)?.capabilities.kind ?? 'pull') === 'pull',
+    [driverByKey],
   );
 
   const columns = useMemo<DataColumn<IntegrationDto>[]>(
@@ -77,12 +88,15 @@ export function IntegrationsTable({
         id: 'mappings',
         header: 'Companies',
         width: 100,
-        sortValue: (r) => r.mappingCount,
-        render: (r) => (
-          <span style={{ color: 'var(--text-2)', fontVariantNumeric: 'tabular-nums' }}>
-            {r.mappingCount}
-          </span>
-        ),
+        sortValue: (r) => (isPull(r) ? r.mappingCount : null),
+        render: (r) =>
+          isPull(r) ? (
+            <span style={{ color: 'var(--text-2)', fontVariantNumeric: 'tabular-nums' }}>
+              {r.mappingCount}
+            </span>
+          ) : (
+            <NotApplicable />
+          ),
       },
       {
         id: 'resources',
@@ -94,6 +108,7 @@ export function IntegrationsTable({
             .map((res) => res.resourceLabel.toLowerCase())
             .join(', ') || null,
         render: (r) => {
+          if (!isPull(r)) return <NotApplicable />;
           const configured = r.resources.filter(
             (res) => res.enabled && res.assetLayoutId,
           );
@@ -206,7 +221,7 @@ export function IntegrationsTable({
           ),
       },
     ],
-    [driverByKey],
+    [driverByKey, isPull],
   );
 
   return (
@@ -244,22 +259,24 @@ export function IntegrationsTable({
                 no creds
               </Tag>
             )}
-            <Tag tone="outline">{r.mappingCount} mappings</Tag>
+            {isPull(r) && <Tag tone="outline">{r.mappingCount} mappings</Tag>}
           </div>
-          <MobileCardRow label="Resources">
-            {(() => {
-              const configured = r.resources.filter(
-                (res) => res.enabled && res.assetLayoutId,
-              );
-              if (configured.length === 0) return 'not configured';
-              return configured
-                .map(
-                  (res) =>
-                    `${res.resourceLabel} → ${res.assetLayoutName ?? 'layout'}`,
-                )
-                .join(', ');
-            })()}
-          </MobileCardRow>
+          {isPull(r) && (
+            <MobileCardRow label="Resources">
+              {(() => {
+                const configured = r.resources.filter(
+                  (res) => res.enabled && res.assetLayoutId,
+                );
+                if (configured.length === 0) return 'not configured';
+                return configured
+                  .map(
+                    (res) =>
+                      `${res.resourceLabel} → ${res.assetLayoutName ?? 'layout'}`,
+                  )
+                  .join(', ');
+              })()}
+            </MobileCardRow>
+          )}
           <MobileCardRow label="Last run">
             {r.lastRunAt ? (
               <>
@@ -282,6 +299,10 @@ export function IntegrationsTable({
       )}
     />
   );
+}
+
+function NotApplicable() {
+  return <span style={{ color: 'var(--dim)' }}>—</span>;
 }
 
 function StatusTag({ status }: { status: 'ACTIVE' | 'PAUSED' | 'DISABLED' }) {

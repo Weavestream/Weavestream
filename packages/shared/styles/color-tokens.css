@@ -53,6 +53,9 @@
 
   --warn: oklch(0.82 0.14 75);
   --warn-soft: oklch(0.82 0.14 75 / 0.12);
+  /* Cloudflare brand orange — marks registrar-synced domains. */
+  --cloudflare: oklch(0.74 0.17 50);
+  --cloudflare-soft: oklch(0.74 0.17 50 / 0.14);
   --danger: oklch(0.7 0.2 25);
   --danger-soft: oklch(0.7 0.2 25 / 0.12);
   --ok: oklch(0.78 0.14 160);
@@ -94,6 +97,8 @@
 
   --warn: oklch(0.62 0.16 65);
   --warn-soft: oklch(0.62 0.16 65 / 0.12);
+  --cloudflare: oklch(0.62 0.18 48);
+  --cloudflare-soft: oklch(0.62 0.18 48 / 0.12);
   --danger: oklch(0.55 0.22 25);
   --danger-soft: oklch(0.55 0.22 25 / 0.1);
   --ok: oklch(0.58 0.14 160);
@@ -222,6 +227,8 @@
 
     --warn: oklch(0.62 0.16 65);
     --warn-soft: oklch(0.62 0.16 65 / 0.12);
+    --cloudflare: oklch(0.62 0.18 48);
+    --cloudflare-soft: oklch(0.62 0.18 48 / 0.12);
     --danger: oklch(0.55 0.22 25);
     --danger-soft: oklch(0.55 0.22 25 / 0.1);
     --ok: oklch(0.58 0.14 160);

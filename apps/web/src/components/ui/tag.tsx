@@ -7,6 +7,7 @@ export type TagTone =
   | 'warn'
   | 'danger'
   | 'info'
+  | 'cloudflare'
   | 'outline';
 
 const tones: Record<TagTone, { fg: string; bg: string; bd: string }> = {
@@ -20,6 +21,7 @@ const tones: Record<TagTone, { fg: string; bg: string; bd: string }> = {
   warn: { fg: 'var(--warn)', bg: 'var(--warn-soft)', bd: 'transparent' },
   danger: { fg: 'var(--danger)', bg: 'var(--danger-soft)', bd: 'transparent' },
   info: { fg: 'var(--info)', bg: 'var(--info-soft)', bd: 'transparent' },
+  cloudflare: { fg: 'var(--cloudflare)', bg: 'var(--cloudflare-soft)', bd: 'transparent' },
   outline: { fg: 'var(--muted)', bg: 'transparent', bd: 'var(--line-2)' },
 };
 

@@ -3,14 +3,16 @@
 import { useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import type {
+  CloudflareDomainSyncRunDto,
   CloudflareIpListDto,
   DriverDescriptor,
   IntegrationDto,
 } from '@weavestream/shared';
 import { CredentialsTab } from '../credentials-tab';
 import { RegisteredListsTab } from './registered-lists-tab';
+import { DomainsSyncTab } from './domains-sync-tab';
 
-type TabId = 'creds' | 'lists';
+type TabId = 'creds' | 'lists' | 'domains';
 
 const TABS: { id: TabId; label: string; help: string }[] = [
   {
@@ -22,6 +24,11 @@ const TABS: { id: TabId; label: string; help: string }[] = [
     id: 'lists',
     label: 'Lists',
     help: 'Register Cloudflare IP lists and edit their entries.',
+  },
+  {
+    id: 'domains',
+    label: 'Domains',
+    help: 'Sync registrar data for every domain on the account into Domains.',
   },
 ];
 
@@ -36,11 +43,13 @@ export function SecurityIntegrationTabs({
   integration,
   driver,
   cloudflareLists,
+  domainSyncRun,
 }: {
   initialTab: string;
   integration: IntegrationDto;
   driver: DriverDescriptor | null;
   cloudflareLists: CloudflareIpListDto[];
+  domainSyncRun: CloudflareDomainSyncRunDto | null;
 }) {
   const router = useRouter();
   const sp = useSearchParams();
@@ -63,7 +72,10 @@ export function SecurityIntegrationTabs({
           display: 'flex',
           gap: 2,
           padding: '6px 6px 0',
-          borderBottom: '1px solid var(--line)',
+          // Draw the baseline inside the strip and keep tabs in it. A border plus
+          // `top: 1` on the tabs overflowed the overflow-x scroll box by 1px,
+          // which forced a permanent vertical scrollbar.
+          boxShadow: 'inset 0 -1px 0 var(--line)',
           background: 'var(--panel-2)',
           overflowX: 'auto',
         }}
@@ -87,8 +99,6 @@ export function SecurityIntegrationTabs({
                 borderBottom: active ? '1px solid var(--panel)' : 'none',
                 borderRadius: '6px 6px 0 0',
                 cursor: 'pointer',
-                position: 'relative',
-                top: 1,
                 whiteSpace: 'nowrap',
               }}
               title={t.help}
@@ -107,6 +117,9 @@ export function SecurityIntegrationTabs({
             integration={integration}
             initialLists={cloudflareLists}
           />
+        )}
+        {tab === 'domains' && (
+          <DomainsSyncTab integration={integration} initialRun={domainSyncRun} />
         )}
       </div>
     </div>

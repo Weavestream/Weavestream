@@ -31,6 +31,8 @@ import {
 import { RequirePermission } from '../../rbac/require-permission.decorator.js';
 import { requestMetaOf as meta } from '../../common/request-meta.js';
 import { CloudflareListsService } from './cloudflare-lists.service.js';
+import { CloudflareRegistrarSyncService } from './cloudflare-registrar-sync.service.js';
+import { Throttle } from '@nestjs/throttler';
 
 /**
  * Cloudflare Rules Lists admin REST surface.
@@ -45,7 +47,30 @@ import { CloudflareListsService } from './cloudflare-lists.service.js';
   version: '1',
 })
 export class CloudflareListsController {
-  constructor(private readonly lists: CloudflareListsService) {}
+  constructor(
+    private readonly lists: CloudflareListsService,
+    private readonly registrar: CloudflareRegistrarSyncService,
+  ) {}
+
+  /**
+   * Queue a registrar sync now instead of waiting for the next scheduled
+   * sweep. The worker runs it; the summary audit row names this user, and
+   * `GET domains/sync` reports how it went.
+   */
+  @Post('domains/sync')
+  @HttpCode(202)
+  @RequirePermission('integration.manage')
+  @Throttle({ global: { limit: 3, ttl: 60_000 } })
+  syncDomains(@CurrentUser() user: AuthedUser, @Param('id', new ParseUUIDPipe()) id: string) {
+    return this.registrar.enqueue(id, user.id);
+  }
+
+  /** Latest registrar sync (manual or scheduled): status, counts, or the error. */
+  @Get('domains/sync')
+  @RequirePermission('integration.manage')
+  async latestDomainSync(@Param('id', new ParseUUIDPipe()) id: string) {
+    return { run: await this.registrar.latestRun(id) };
+  }
 
   /** Browse Cloudflare-side IP lists so the operator can pick which to register. */
   @Get('external-lists')

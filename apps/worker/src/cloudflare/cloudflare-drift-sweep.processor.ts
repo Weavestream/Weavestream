@@ -1,11 +1,15 @@
-import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
+import { ConflictException, Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
 import type { Job } from 'bullmq';
 import {
+  CloudflareDriftSweepJobNames,
   cloudflareDriftSweepJobSchema,
   QueueNames,
 } from '@weavestream/shared';
 import { EnvService, RedisService } from '@weavestream/api/runtime';
-import { CloudflareListsService } from '@weavestream/api/integrations';
+import {
+  CloudflareListsService,
+  CloudflareRegistrarSyncService,
+} from '@weavestream/api/integrations';
 import {
   createManagedWorker,
   type ManagedWorker,
@@ -31,6 +35,7 @@ export class CloudflareDriftSweepWorker implements OnModuleDestroy {
     private readonly env: EnvService,
     private readonly redis: RedisService,
     private readonly lists: CloudflareListsService,
+    private readonly registrar: CloudflareRegistrarSyncService,
   ) {}
 
   async start(): Promise<void> {
@@ -59,13 +64,53 @@ export class CloudflareDriftSweepWorker implements OnModuleDestroy {
         `invalid cloudflare-drift-sweep payload: ${parsed.error.message}`,
       );
     }
+    const { integrationId, triggeredBy, runId } = parsed.data;
+
+    // "Sync domains now" only wants the registrar sync. Its run row records
+    // the outcome for the Domains tab; a failure also fails the job. A run
+    // refused because another is in progress is not a result of its own,
+    // so it leaves "Last run" alone.
+    if (job.name === CloudflareDriftSweepJobNames.manual) {
+      let registrar: unknown;
+      try {
+        registrar = await this.registrar.sync(integrationId, triggeredBy ?? null, { runId });
+      } catch (err) {
+        if (!(err instanceof ConflictException)) {
+          await this.lists.stampLastRun(integrationId, false);
+        }
+        throw err;
+      }
+      await this.lists.stampLastRun(integrationId, true);
+      this.logger.log(`Manual registrar sync done (integration=${integrationId})`);
+      return { integrationId, registrar };
+    }
+
     const startedAt = Date.now();
-    const result = await this.lists.runDriftSweep(parsed.data.integrationId);
+    const result = await this.lists.runDriftSweep(integrationId);
+    if (result.skipped) return { integrationId, ...result };
     this.logger.log(
       `Drift sweep job ${job.id ?? '<no-id>'} done in ${Date.now() - startedAt}ms ` +
-        `(integration=${parsed.data.integrationId} checked=${result.checked} ` +
+        `(integration=${integrationId} checked=${result.checked} ` +
         `healed=${result.healed} errors=${result.errors})`,
     );
-    return { integrationId: parsed.data.integrationId, ...result };
+
+    // Registrar sync rides the same schedule. Its failure is recorded on its
+    // run row and audited by the sync itself, but must not fail the drift
+    // sweep that already succeeded (BullMQ would retry both).
+    let registrar: unknown;
+    let registrarOk = true;
+    try {
+      registrar = await this.registrar.sync(integrationId, null);
+    } catch (err) {
+      // A manual sync holding the lock is not a failure of this tick.
+      registrarOk = err instanceof ConflictException;
+      this.logger.error(
+        `Registrar sync failed (integration=${integrationId}): ${err instanceof Error ? err.message : String(err)}`,
+      );
+      registrar = { error: err instanceof Error ? err.message : String(err) };
+    }
+    // One stamp for the whole job: failed if either half failed.
+    await this.lists.stampLastRun(integrationId, result.errors === 0 && registrarOk);
+    return { integrationId, ...result, registrar };
   }
 }

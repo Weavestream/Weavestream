@@ -55,7 +55,9 @@ import { EnvService } from '../config/env.service.js';
 import { AuditLogService } from '../audit/audit.service.js';
 import { AUDIT_ACTIONS } from '../audit/audit-actions.js';
 import { randomUUID } from 'node:crypto';
-import { BadRequestException, Logger } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Logger } from '@nestjs/common';
+import { PrismaService } from '../prisma/prisma.service.js';
+import { PermissionService } from '../rbac/permission.service.js';
 import { describeError } from '../common/describe-error.js';
 
 /**
@@ -102,6 +104,8 @@ export class IntegrationsController {
     private readonly drivers: IntegrationDriverRegistry,
     private readonly env: EnvService,
     private readonly audit: AuditLogService,
+    private readonly prisma: PrismaService,
+    private readonly permissions: PermissionService,
   ) {}
 
   // -------------------------------------------------------------------
@@ -127,12 +131,13 @@ export class IntegrationsController {
   @Post()
   @RequirePermission('integration.manage')
   @RequireStepUp()
-  create(
+  async create(
     @CurrentUser() user: AuthedUser,
     @Body(new ZodBody(createIntegrationSchema)) dto: CreateIntegrationInput,
     @Req() req: Request,
   ) {
-    return this.integrations.create(user, dto, meta(req));
+    const config = await this.bindDomainsCompany(user, dto.driver, dto.config, undefined);
+    return this.integrations.create(user, { ...dto, config: config ?? dto.config }, meta(req));
   }
 
   @Get(':id')
@@ -144,13 +149,64 @@ export class IntegrationsController {
   @Patch(':id')
   @RequirePermission('integration.manage')
   @RequireStepUp()
-  update(
+  async update(
     @CurrentUser() user: AuthedUser,
     @Param('id', new ParseUUIDPipe()) id: string,
     @Body(new ZodBody(updateIntegrationSchema)) dto: UpdateIntegrationInput,
     @Req() req: Request,
   ) {
+    if (dto.config) {
+      const existing = await this.integrations.get(id);
+      dto = {
+        ...dto,
+        config: await this.bindDomainsCompany(user, existing.driver, dto.config, existing.config),
+      };
+    }
     return this.integrations.update(user, id, dto, meta(req));
+  }
+
+  /**
+   * Cloudflare registrar sync writes domains into the company named by
+   * `domainsCompanySlug`, later, from the worker, with no user in context.
+   * So the authorisation happens here, when the setting is saved: the saver
+   * must be able to manage domains in that company. The resolved id is what
+   * the sync uses; any client-supplied `domainsCompanyId` is discarded.
+   */
+  private async bindDomainsCompany(
+    user: AuthedUser,
+    driver: string,
+    config: Record<string, unknown> | undefined,
+    stored: Record<string, unknown> | undefined,
+  ): Promise<Record<string, unknown> | undefined> {
+    if (driver !== 'cloudflare' || !config) return config;
+    const { domainsCompanyId: _ignored, ...rest } = config;
+    const slug = typeof rest.domainsCompanySlug === 'string' ? rest.domainsCompanySlug.trim() : '';
+    if (!slug) return rest;
+    // Unchanged binding: keep the id when it was authorised. Re-resolving the
+    // slug would block unrelated edits for someone without access to that
+    // company, and after a slug rename could silently retarget the sync. The
+    // authorisation covered (Cloudflare account → company): a different
+    // account is a new binding and is re-checked.
+    if (
+      stored &&
+      typeof stored.domainsCompanyId === 'string' &&
+      stored.domainsCompanySlug === slug &&
+      stored.accountId === rest.accountId
+    ) {
+      return { ...rest, domainsCompanySlug: slug, domainsCompanyId: stored.domainsCompanyId };
+    }
+    const company = await this.prisma.company.findUnique({
+      where: { slug },
+      select: { id: true, archivedAt: true },
+    });
+    if (!company || company.archivedAt) {
+      throw new BadRequestException(`No active company with slug "${slug}".`);
+    }
+    const decision = await this.permissions.can(user, 'domain.manage', { companyId: company.id });
+    if (!decision.allowed) {
+      throw new ForbiddenException('You cannot manage domains in that company.');
+    }
+    return { ...rest, domainsCompanySlug: slug, domainsCompanyId: company.id };
   }
 
   @Delete(':id')

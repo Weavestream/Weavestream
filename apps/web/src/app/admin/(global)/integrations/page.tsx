@@ -33,15 +33,6 @@ export default async function IntegrationsPage() {
   const integrations = listRes.data ?? [];
   const drivers = driversRes.data?.drivers ?? [];
 
-  const driverKindByKey = new Map(
-    drivers.map((d) => [d.key, d.capabilities.kind]),
-  );
-  const assetSyncRows = integrations.filter(
-    (r) => (driverKindByKey.get(r.driver) ?? 'pull') === 'pull',
-  );
-  const securityRows = integrations.filter(
-    (r) => driverKindByKey.get(r.driver) === 'security',
-  );
 
   return (
     <>
@@ -51,25 +42,17 @@ export default async function IntegrationsPage() {
           { label: 'Integrations' },
         ]}
         title="Integrations"
-        description="Connect external systems — Action1, RMM tools, identity providers — and fan their data into the right Weavestream companies. Removing an integration releases its assets without deleting them."
+        description="Connect external systems and sync their data with companies in Weavestream. Removing an integration keeps its assets in Weavestream."
         actions={<CreateIntegrationButton drivers={drivers} />}
       />
       <PageBody>
         <Panel
-          title={`Asset sync · ${assetSyncRows.length} ${
-            assetSyncRows.length === 1 ? 'integration' : 'integrations'
+          title={`${integrations.length} ${
+            integrations.length === 1 ? 'integration' : 'integrations'
           }`}
           noPad
         >
-          <IntegrationsTable rows={assetSyncRows} drivers={drivers} />
-        </Panel>
-        <Panel
-          title={`Security · ${securityRows.length} ${
-            securityRows.length === 1 ? 'integration' : 'integrations'
-          }`}
-          noPad
-        >
-          <IntegrationsTable rows={securityRows} drivers={drivers} />
+          <IntegrationsTable rows={integrations} drivers={drivers} />
         </Panel>
         <AvailableIntegrationsGallery drivers={drivers} />
       </PageBody>

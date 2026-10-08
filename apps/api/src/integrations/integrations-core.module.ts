@@ -7,6 +7,7 @@ import { MatchResolverService } from './match-resolver.service.js';
 import { IntegrationDriverRegistry } from './drivers/integration-driver.registry.js';
 import { IntegrationSyncSchedulerService } from './integration-sync-scheduler.service.js';
 import { CloudflareListsService } from './cloudflare/cloudflare-lists.service.js';
+import { CloudflareRegistrarSyncService } from './cloudflare/cloudflare-registrar-sync.service.js';
 import { TicketsService } from './tickets.service.js';
 import { FieldTypesModule } from '../field-types/field-types.module.js';
 import { SearchModule } from '../search/search.module.js';
@@ -115,6 +116,7 @@ import { RelationsService } from '../relations/relations.service.js';
     IntegrationSyncSchedulerService,
     MatchResolverService,
     CloudflareListsService,
+    CloudflareRegistrarSyncService,
     TicketsService,
   ],
   exports: [
@@ -130,6 +132,7 @@ import { RelationsService } from '../relations/relations.service.js';
     IntegrationSyncSchedulerService,
     MatchResolverService,
     CloudflareListsService,
+    CloudflareRegistrarSyncService,
     TicketsService,
   ],
 })

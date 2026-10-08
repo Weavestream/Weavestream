@@ -100,6 +100,8 @@ export const driverFieldKindSchema = z.enum([
   'number',
   'boolean',
   'select',
+  /** A company chosen from a dropdown; the stored value is its slug. */
+  'company',
 ]);
 
 export const driverFieldDescriptorSchema = z.object({
