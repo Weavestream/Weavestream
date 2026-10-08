@@ -426,6 +426,12 @@ describe('no site (parked domain)', () => {
     expect(isNoSite(false, dnsWith([]))).toBe(false);
   });
 
+  it('is not no site when the A/AAAA lookup errored: empty is unknown, not absent', () => {
+    const dns = dnsWith([]);
+    (dns.data as { addressLookupFailed: boolean }).addressLookupFailed = true;
+    expect(isNoSite(true, dns)).toBe(false);
+  });
+
   const base = (overrides: Record<string, unknown>) =>
     ({
       checkedAt: new Date('2026-06-01T00:00:00Z'),
@@ -514,6 +520,66 @@ describe('runDomainCheck: no-site detection', () => {
     const res = await run(makePorts({ a: [], aaaa: [] }));
     expect(res.noSite).toBe(false);
     expect(res.tls.status).not.toBe('SKIP');
+  });
+
+  it('an expired certificate means there is a site, and is kept', async () => {
+    const res = await run(
+      makePorts({
+        a: [],
+        aaaa: [],
+        tls: {
+          validFrom: '2024-01-01T00:00:00.000Z',
+          validTo: '2025-01-01T00:00:00.000Z',
+          issuer: 'CN=Test CA',
+          subjectAltNames: ['example.com'],
+          chainLength: 3,
+          protocol: 'TLSv1.3',
+          authorized: false,
+          authorizationError: 'CERT_HAS_EXPIRED',
+        },
+      }),
+    );
+    expect(res.noSite).toBe(false);
+    expect(res.tls.status).toBe('FAIL');
+    expect(res.tls.data?.validTo).not.toBeNull();
+  });
+
+  it.each(['ESERVFAIL', 'EREFUSED', 'ENOTIMP'])(
+    'an apex A/AAAA lookup answered %s is not no site, even with NS and no www',
+    async (code) => {
+      const ports = makePorts({ a: [], aaaa: [], tlsThrows: 'getaddrinfo ENOTFOUND example.com' });
+      const apexFails = async (name: string) => {
+        if (name.startsWith('www.')) return [];
+        throw Object.assign(new Error(code), { code });
+      };
+      (ports.dns.resolve4 as jest.Mock).mockImplementation(apexFails);
+      (ports.dns.resolve6 as jest.Mock).mockImplementation(apexFails);
+      const res = await run(ports);
+      expect(res.dns.data?.addressLookupFailed).toBe(true);
+      expect(res.noSite).toBe(false);
+      expect(res.tls.status).toBe('FAIL');
+    },
+  );
+
+  it.each(['EREFUSED', 'ENOTIMP'])('a www lookup answered %s does not count as no site', async (code) => {
+    const ports = makePorts({ a: [], aaaa: [], tlsThrows: 'getaddrinfo ENOTFOUND example.com' });
+    (ports.dns.resolve4 as jest.Mock).mockImplementation(async (name: string) => {
+      if (name.startsWith('www.')) throw Object.assign(new Error(code), { code });
+      return [];
+    });
+    const res = await run(ports);
+    expect(res.noSite).toBe(false);
+  });
+
+  it('a confirmed NODATA on apex and www is still no site', async () => {
+    const ports = makePorts({ a: [], aaaa: [], tlsThrows: 'getaddrinfo ENOTFOUND example.com' });
+    const noData = async () => {
+      throw Object.assign(new Error('nodata'), { code: 'ENODATA' });
+    };
+    (ports.dns.resolve4 as jest.Mock).mockImplementation(noData);
+    (ports.dns.resolve6 as jest.Mock).mockImplementation(noData);
+    const res = await run(ports);
+    expect(res.noSite).toBe(true);
   });
 
   it('a bare domain with a working www has a site', async () => {

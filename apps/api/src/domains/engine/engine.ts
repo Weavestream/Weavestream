@@ -23,6 +23,7 @@ import type { DomainCheckDetails } from '@weavestream/shared';
 import { queryRdap } from './rdap.js';
 import { queryWhois43 } from './whois43.js';
 import { runDnsCheck } from './dns-check.js';
+import { safeResolve } from './dns-utils.js';
 import { runTlsCheck } from './tls-check.js';
 import { runEmailAuthCheck } from './email-check.js';
 import { runDnssecCheck } from './dnssec-check.js';
@@ -329,9 +330,9 @@ export async function runDomainCheck(
   const noSite =
     isNoSite(opts.checkDns, dns) &&
     // A probe that reached a server proves there is a site, whatever a
-    // (possibly flaky) A lookup said. Never discard a real certificate.
-    tlsRaw.status !== 'OK' &&
-    tlsRaw.status !== 'WARN' &&
+    // (possibly flaky or cached) A lookup said. Never discard a real
+    // certificate — an expired one is FAIL but still carries data.
+    !tlsRaw.data &&
     // "No website" means no www either: a bare domain with a working www
     // has a site.
     (await wwwAddress(ports.dns, `www.${opts.hostname}`, Math.min(opts.timeoutMs, 8_000))) === 'none';
@@ -451,21 +452,19 @@ export async function runDomainCheck(
  * counts as an address). A DNS failure is not "no site": that is a real
  * problem. Neither is an empty answer with no nameservers: NXDOMAIN and
  * REFUSED come back as empty arrays, and a domain that does not resolve
- * at all must stay red.
+ * at all must stay red. A failed A/AAAA lookup is also empty but proves
+ * nothing, so only a confirmed absence counts.
  */
 export function isNoSite(checkDns: boolean, dns: SubCheckResult<DnsSubResult>): boolean {
   if (!checkDns || dns.status === 'FAIL' || dns.status === 'SKIP' || !dns.data) return false;
-  if (dns.data.ns.length === 0) return false;
+  if (dns.data.ns.length === 0 || dns.data.addressLookupFailed) return false;
   return dns.data.a.length === 0 && dns.data.aaaa.length === 0;
 }
 
-/** DNS answers that confirm a name has no record (as opposed to an error). */
-const NO_RECORD_CODES = new Set(['ENODATA', 'ENOTFOUND', 'NXDOMAIN', 'NODATA']);
-
 /**
  * Whether `name` has an address: 'some', a confirmed 'none', or 'unknown'
- * (resolver error or timeout). Only a confirmed 'none' may mark a domain
- * as having no site; anything uncertain keeps the normal checks.
+ * (resolver error, REFUSED/NOTIMP, or timeout). Only a confirmed 'none' may
+ * mark a domain as having no site; anything uncertain keeps the normal checks.
  */
 async function wwwAddress(
   dnsPort: EnginePorts['dns'],
@@ -473,12 +472,8 @@ async function wwwAddress(
   timeoutMs: number,
 ): Promise<'some' | 'none' | 'unknown'> {
   const lookup = async (fn: (n: string) => Promise<string[]>): Promise<string[] | 'unknown'> => {
-    try {
-      return await fn(name);
-    } catch (err) {
-      const code = (err as { code?: unknown }).code;
-      return typeof code === 'string' && NO_RECORD_CODES.has(code) ? [] : 'unknown';
-    }
+    const res = await safeResolve(() => fn(name), [] as string[]);
+    return res.uncertain ? 'unknown' : res.value;
   };
   let timer: NodeJS.Timeout | undefined;
   const timeout = new Promise<'unknown'>((resolve) => {

@@ -178,6 +178,12 @@ export interface DnsSubResult {
   txt: string[];
   /** v2 — CAA records at the apex. */
   caa: CaaRecord[];
+  /**
+   * The A or AAAA lookup did not confirm absence (resolver error, or a
+   * REFUSED/NOTIMP answer), so empty `a`/`aaaa` arrays are unknown rather
+   * than a confirmed "no address". Not persisted.
+   */
+  addressLookupFailed: boolean;
 }
 
 export interface TlsSubResult {
