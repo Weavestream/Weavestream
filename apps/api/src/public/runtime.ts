@@ -26,6 +26,9 @@ export { AUDIT_ACTIONS } from '../audit/audit-actions.js';
 export { StorageModule } from '../storage/storage.module.js';
 export { LocalStorageService } from '../storage/local-storage.service.js';
 export { CryptoModule } from '../crypto/crypto.module.js';
+// Provides PermissionService, which AssetsController (reached through the
+// integration asset writers) needs even though the worker never serves it.
+export { RbacModule } from '../rbac/rbac.module.js';
 export {
   SecretEncryptionService,
   exportPdfPasswordAad,

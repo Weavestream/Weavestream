@@ -74,6 +74,25 @@ Each **Asset** is a single instance of a layout within a tenant. Assets support:
 - **Embedded passwords** — link credentials directly to an asset; they archive when the asset is archived
 - **Cross-references** — `ASSET_REFERENCE` fields create navigable links between assets
 
+## Copying and Moving Assets
+
+Copy an asset into another company (or duplicate it in the same one) from the asset's **⋯ → Copy to company…** menu, or select several in the asset table and use **Copy to…**. Tick **Move** to archive the originals after copying: they are archived, not deleted, so they can be restored.
+
+Asset layouts are global, so a copy keeps its layout and every field value you can see, handled as follows:
+
+| What | In the copy |
+|---|---|
+| **Files** (fields and the attachments panel) | Copied into the target company's storage as new files; a deleted file is skipped. A file whose stored content is missing is not copied: the copy is reported as incomplete, and a move keeps the original. A missing thumbnail does not block the copy |
+| **Linked assets** | Dropped when the company changes; they point at the source company's records. Same-company copies keep links whose target still exists and omit dead ones. A *required* link field blocks a cross-company copy |
+| **Tags** | Copied. Old tag values the asset page does not show (from before tags became global) are left out |
+| **Linked passwords** | Not copied; they stay with the original |
+| **Hidden fields** you cannot see | Not copied |
+| Integration identity (external id) | Not copied; the copy is a hand-managed asset |
+
+**Move** is refused, with the reason, when it would lose or undo something: the asset is kept in sync by an integration (the next sync would restore the original), it has linked passwords (they would be archived with it), or some of its fields are hidden from you. Copy it instead in those cases.
+
+Copying needs read access to the source company and write access to the target; moving also needs archive access to the source. Read-only users can select several assets in the table to copy them; archive, restore and delete stay hidden. If a bulk run fails part-way, the assets already copied are removed from the selection, so a retry copies only the rest. A field marked *unique per company* that is already taken in the target makes that copy fail with a clear message; the other copies in a bulk run still go through. Each copy is audited (`asset.clone`, plus `upload.copy` per file).
+
 ## Expiration Tracking
 
 `DATE` and `DATETIME` fields with expiry tracking enabled appear in the global **Expirations** dashboard (`/admin/expirations`). Cells are colour-coded:

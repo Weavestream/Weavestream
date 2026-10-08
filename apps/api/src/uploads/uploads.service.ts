@@ -182,6 +182,20 @@ const SIGNATURELESS_DECLARED_MIMES: ReadonlySet<string> = new Set([
  */
 const MAX_CONCURRENT_THUMBNAILS = 2;
 
+/** Ceiling for copying a stored thumbnail (generated 300px webp). */
+const THUMB_COPY_MAX_BYTES = 5 * 1024 * 1024;
+
+/**
+ * {@link UploadsService.copyToCompany}: the upload row is live but its stored
+ * bytes are gone. Unlike a plain `NotFoundException` (the file was deleted,
+ * so there is nothing to copy), this means the copy is incomplete.
+ */
+export class UploadContentMissingException extends NotFoundException {
+  constructor() {
+    super('File content is missing');
+  }
+}
+
 @Injectable()
 export class UploadsService {
   private readonly logger = new Logger(UploadsService.name);
@@ -824,6 +838,123 @@ export class UploadsService {
   //    in storage so an undelete job can be added later; a cleanup job
   //    in Phase 7 will reap tombstones older than 30 days.
   // ------------------------------------------------------------------
+
+  /**
+   * Duplicate a stored file into `toCompanyId` as a new, unattached upload,
+   * for an asset clone. The new row is attached by the asset create that
+   * follows (`linkFileFieldUploadsToAsset`).
+   *
+   * Callers must already have authorised reading the source and writing the
+   * target. This method only enforces that the upload really belongs to
+   * `fromCompanyId` (the source asset's tenant), so a forged upload id in a
+   * field value cannot pull a file out of a third company.
+   */
+  async copyToCompany(
+    actor: AuthedUser,
+    fromCompanyId: string,
+    sourceAssetId: string,
+    uploadId: string,
+    toCompanyId: string,
+    meta: { ip: string; userAgent: string },
+  ): Promise<string> {
+    // Only a file that belongs to the source asset (or an asset-dropzone
+    // upload not yet linked) may be copied. A forged id pointing at a
+    // password attachment or a hidden article image would otherwise be
+    // re-published as a readable asset file (IDOR).
+    const src = await this.prisma.upload.findFirst({
+      where: {
+        id: uploadId,
+        companyId: fromCompanyId,
+        deletedAt: null,
+        attachedToType: 'asset',
+        OR: [{ attachedToId: sourceAssetId }, { attachedToId: null }],
+      },
+    });
+    if (!src) throw new NotFoundException('File not found');
+
+    const newId = randomUUID();
+    const storageKey = this.storage.uploadKey(toCompanyId, newId, src.filename);
+    const written: string[] = [];
+    /** False when the source object is missing. */
+    const copy = async (fromKey: string, toKey: string, maxBytes: number): Promise<boolean> => {
+      const obj = await this.storage.getObjectStream(fromCompanyId, fromKey);
+      if (!obj) return false;
+      await this.storage.putObjectStream(toCompanyId, toKey, obj.body, {
+        contentType: src.mimeType,
+        maxBytes,
+      });
+      written.push(toKey);
+      return true;
+    };
+
+    try {
+      await this.storage.ensureBucket(toCompanyId);
+      // Same bytes as the source, so its size is the ceiling.
+      if (!(await copy(src.storageKey, storageKey, src.sizeBytes))) {
+        throw new UploadContentMissingException();
+      }
+      let thumbnailKey: string | null = null;
+      if (src.thumbnailKey) {
+        thumbnailKey = this.storage.thumbnailKey(toCompanyId, newId);
+        // A generated webp can be larger than a tiny original; own cap.
+        // A missing thumbnail is derived data, not the file: the copy goes
+        // on without one, as an upload whose generation failed would.
+        if (!(await copy(src.thumbnailKey, thumbnailKey, THUMB_COPY_MAX_BYTES))) {
+          this.logger.warn(`Upload ${src.id}: thumbnail missing, copied ${newId} without one.`);
+          thumbnailKey = null;
+        }
+      }
+      await this.prisma.upload.create({
+        data: {
+          id: newId,
+          companyId: toCompanyId,
+          uploaderId: actor.id,
+          filename: src.filename,
+          mimeType: src.mimeType,
+          sizeBytes: src.sizeBytes,
+          storageKey,
+          sha256: src.sha256,
+          isImage: src.isImage,
+          width: src.width,
+          height: src.height,
+          thumbnailKey,
+          attachedToType: 'asset',
+          attachedToId: null,
+        },
+      });
+    } catch (err) {
+      // Leave no orphaned bytes behind for a row that was never written.
+      await Promise.all(
+        written.map((k) => this.storage.deleteObject(toCompanyId, k).catch(() => undefined)),
+      );
+      throw err;
+    }
+
+    try {
+      await this.audit.log({
+        actorId: actor.id,
+        action: AUDIT_ACTIONS.upload.copy,
+        entityType: 'Upload',
+        entityId: newId,
+        companyId: toCompanyId,
+        ip: meta.ip,
+        userAgent: meta.userAgent,
+        before: null,
+        after: { sourceUploadId: src.id, sourceCompanyId: fromCompanyId, sizeBytes: src.sizeBytes },
+      });
+    } catch (err) {
+      // Never leave a copied file with no audit trail: retire it (the reaper
+      // removes the bytes) and surface the audit failure itself.
+      await this.prisma.upload
+        .updateMany({
+          where: { id: newId, companyId: toCompanyId, attachedToId: null, deletedAt: null },
+          data: { deletedAt: new Date() },
+        })
+        .catch(() => undefined);
+      throw err;
+    }
+    return newId;
+  }
 
   async softDelete(
     actor: AuthedUser,

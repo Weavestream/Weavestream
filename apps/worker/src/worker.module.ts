@@ -11,6 +11,7 @@ import {
   CryptoModule,
   EmailModule,
   QueuesProducerModule,
+  RbacModule,
 } from '@weavestream/api/runtime';
 import { DomainsModule } from '@weavestream/api/domains';
 import { IntegrationsCoreModule } from '@weavestream/api/integrations';
@@ -76,6 +77,10 @@ import { ArticleSummaryWorker } from './article-summary/article-summary.processo
     DomainsModule,
     ExportDataModule,
     IntegrationsCoreModule,
+    // AssetsModule (pulled in for the integration asset writers) declares
+    // AssetsController, which needs PermissionService for the copy target
+    // check. The controller is inert here, but Nest still resolves it.
+    RbacModule,
     // Alerts feature: the worker hosts the `alerts:scan` (cron tick)
     // and `alerts:send` consumers. We import `QueuesProducerModule`
     // (not `QueuesModule`) so the alerts:scan handler can enqueue
