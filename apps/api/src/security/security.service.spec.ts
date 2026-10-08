@@ -59,6 +59,8 @@ function makeService(args: {
     APP_URL?: string;
     NODE_ENV?: string;
   };
+  /** Makes `audit.logWithClient` reject, as a failed in-transaction audit write. */
+  auditWithClientError?: Error;
   sessionUpdate?: jest.Mock;
   sessionFindUnique?: jest.Mock;
 }) {
@@ -124,7 +126,7 @@ function makeService(args: {
     },
   };
 
-  const prisma = {
+  const prisma: Record<string, unknown> = {
     auditLog: {
       findMany: jest.fn().mockResolvedValue(args.auditRows ?? []),
     },
@@ -136,6 +138,8 @@ function makeService(args: {
       update: args.sessionUpdate ?? jest.fn().mockResolvedValue(undefined),
     },
   };
+  // Interactive transaction runs against the same mocks.
+  prisma.$transaction = jest.fn(async (fn: (tx: unknown) => unknown) => fn(prisma));
 
   const env = {
     values: {
@@ -151,6 +155,10 @@ function makeService(args: {
     log: async (e: AuditCall) => {
       audit.push(e);
     },
+    logWithClient: jest.fn(async (_tx: unknown, e: AuditCall) => {
+      if (args.auditWithClientError) throw args.auditWithClientError;
+      audit.push(e);
+    }),
   };
 
   // Cast through unknown — these mocks intentionally duck-type the
@@ -164,7 +172,7 @@ function makeService(args: {
     auditService as unknown as ConstructorParameters<typeof SecurityService>[3],
     stepUp as unknown as ConstructorParameters<typeof SecurityService>[4],
   );
-  return { service, prisma, audit };
+  return { service, prisma, audit, auditService, stepUp };
 }
 
 describe('SecurityService.loginActivity', () => {
@@ -340,14 +348,14 @@ describe('SecurityService.revokeSession', () => {
     ).rejects.toBeInstanceOf(NotFoundException);
   });
 
-  it('updates the session and writes an audit row', async () => {
+  it('updates the session and writes an audit row in one transaction', async () => {
     const findUnique = jest.fn().mockResolvedValue({
       id: 's-1',
       userId: 'u-1',
       revokedAt: null,
     });
     const update = jest.fn().mockResolvedValue(undefined);
-    const { service, audit } = makeService({
+    const { service, prisma, audit, auditService, stepUp } = makeService({
       sessionFindUnique: findUnique,
       sessionUpdate: update,
     });
@@ -357,16 +365,72 @@ describe('SecurityService.revokeSession', () => {
       userAgent: 'jest',
     });
 
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
     expect(update).toHaveBeenCalledWith({
       where: { id: 's-1' },
       data: expect.objectContaining({ revokedAt: expect.any(Date) }),
     });
+    // The audit row is written with the transaction client, not after it.
+    expect(auditService.logWithClient).toHaveBeenCalledTimes(1);
+    expect(auditService.logWithClient.mock.calls[0]![0]).toBe(prisma);
     expect(audit).toHaveLength(1);
     expect(audit[0]).toMatchObject({
       action: 'security.session.revoke',
       entityType: 'Session',
       entityId: 's-1',
     });
+    expect(stepUp.clear).toHaveBeenCalledWith('s-1');
+  });
+
+  it('audits a no-op for an already-revoked session and leaves it alone', async () => {
+    const findUnique = jest.fn().mockResolvedValue({
+      id: 's-1',
+      userId: 'u-1',
+      revokedAt: new Date(),
+    });
+    const update = jest.fn();
+    const { service, audit, stepUp } = makeService({
+      sessionFindUnique: findUnique,
+      sessionUpdate: update,
+    });
+
+    await expect(
+      service.revokeSession(ADMIN, 's-1', { ip: '127.0.0.1', userAgent: 'jest' }),
+    ).resolves.toEqual({ revoked: 1 });
+
+    expect(update).not.toHaveBeenCalled();
+    expect(audit).toHaveLength(1);
+    expect(audit[0]).toMatchObject({
+      action: 'security.session.revoke',
+      before: { revoked: true },
+      after: { revoked: true, noOp: true, targetUserId: 'u-1' },
+    });
+    expect(stepUp.clear).not.toHaveBeenCalled();
+  });
+
+  it('fails as a whole when the audit write fails, and keeps the step-up window', async () => {
+    const findUnique = jest.fn().mockResolvedValue({
+      id: 's-1',
+      userId: 'u-1',
+      revokedAt: null,
+    });
+    const update = jest.fn().mockResolvedValue(undefined);
+    const { service, prisma, audit, stepUp } = makeService({
+      sessionFindUnique: findUnique,
+      sessionUpdate: update,
+      auditWithClientError: new Error('audit down'),
+    });
+
+    await expect(
+      service.revokeSession(ADMIN, 's-1', { ip: '127.0.0.1', userAgent: 'jest' }),
+    ).rejects.toThrow('audit down');
+
+    // The update ran inside the transaction, which rolls back (Prisma's
+    // contract). The Redis step-up clear runs only after a commit.
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+    expect(update).toHaveBeenCalledTimes(1);
+    expect(audit).toHaveLength(0);
+    expect(stepUp.clear).not.toHaveBeenCalled();
   });
 });
 
@@ -685,7 +749,7 @@ describe('SecurityService API keys', () => {
     return p;
   }
 
-  /** The stub audit service only has `log`; add a recording `logWithClient`. */
+  /** Replace the stub's `logWithClient` with one that can fail on demand. */
   function withTxAudit(service: unknown, audit: unknown[], fail = false) {
     const svc = service as { audit: Record<string, unknown> };
     svc.audit.logWithClient = jest.fn(async (_tx: unknown, e: unknown) => {

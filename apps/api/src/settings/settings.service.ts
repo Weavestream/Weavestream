@@ -60,12 +60,18 @@ export class SettingsService {
     return value;
   }
 
+  /**
+   * The write and its audit row commit in one transaction, so a settings
+   * change can never exist without its record. The cache is dropped in
+   * `finally`, so a failure cannot leave this replica serving a value the
+   * database no longer holds.
+   */
   async update(
     actor: AuthedUser,
     input: UpdateSettingsInput,
     meta: { ip: string; userAgent: string },
   ): Promise<SystemSettingsDTO> {
-    const before = await this.loadOrSeed();
+    await this.loadOrSeed();
 
     const data: Record<string, unknown> = { updatedBy: actor.id };
     if (input.workspaceName !== undefined) data.workspaceName = input.workspaceName;
@@ -84,27 +90,36 @@ export class SettingsService {
     if (input.articleDefaultEditorMode !== undefined)
       data.articleDefaultEditorMode = input.articleDefaultEditorMode;
 
-    const after = await this.prisma.systemSetting.update({
-      where: { id: SINGLETON_ID },
-      data,
-    });
-
-    await this.audit.log({
-      actorId: actor.id,
-      action: 'settings.update',
-      entityType: 'SystemSetting',
-      entityId: SINGLETON_ID,
-      ip: meta.ip,
-      userAgent: meta.userAgent,
-      before: stripForAudit(before),
-      after: stripForAudit(after),
-    });
-
-    // Invalidate cache on every write so the next GET reflects the new
-    // values immediately in-process; other replicas reconcile within
-    // CACHE_TTL_MS.
-    this.cache = null;
-    return toDto(after);
+    try {
+      const after = await this.prisma.$transaction(async (tx) => {
+        // Read `before` inside the transaction so the audit row describes
+        // exactly the transition that committed.
+        const before = await tx.systemSetting.findUniqueOrThrow({
+          where: { id: SINGLETON_ID },
+        });
+        const row = await tx.systemSetting.update({
+          where: { id: SINGLETON_ID },
+          data,
+        });
+        await this.audit.logWithClient(tx, {
+          actorId: actor.id,
+          action: AUDIT_ACTIONS.settings.update,
+          entityType: 'SystemSetting',
+          entityId: SINGLETON_ID,
+          ip: meta.ip,
+          userAgent: meta.userAgent,
+          before: stripForAudit(before),
+          after: stripForAudit(row),
+        });
+        return row;
+      });
+      return toDto(after);
+    } finally {
+      // Invalidate cache on every write attempt so the next GET reflects
+      // the database immediately in-process; other replicas reconcile
+      // within CACHE_TTL_MS.
+      this.cache = null;
+    }
   }
 
   /**

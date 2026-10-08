@@ -506,43 +506,50 @@ export class SecurityService {
     sessionId: string,
     meta: { ip: string; userAgent: string },
   ): Promise<{ revoked: 1 }> {
-    const session = await this.prisma.session.findUnique({
-      where: { id: sessionId },
-      select: { id: true, userId: true, revokedAt: true },
-    });
-    if (!session) throw new NotFoundException('Session not found');
-    if (session.revokedAt) {
-      // Already revoked — surface the same response shape so the UI
-      // can refresh without showing an error, and emit the audit
-      // record so we still know the admin pressed the button.
-      await this.audit.log({
+    // Revocation and audit row commit in one transaction, so a failed
+    // audit write leaves the session live rather than revoked with no
+    // record.
+    const revoked = await this.prisma.$transaction(async (tx) => {
+      const session = await tx.session.findUnique({
+        where: { id: sessionId },
+        select: { id: true, userId: true, revokedAt: true },
+      });
+      if (!session) throw new NotFoundException('Session not found');
+      if (session.revokedAt) {
+        // Already revoked — surface the same response shape so the UI
+        // can refresh without showing an error, and emit the audit
+        // record so we still know the admin pressed the button.
+        await this.audit.logWithClient(tx, {
+          actorId: actor.id,
+          action: AUDIT_ACTIONS.security.sessionRevoke,
+          entityType: 'Session',
+          entityId: session.id,
+          ip: meta.ip,
+          userAgent: meta.userAgent,
+          before: { revoked: true },
+          after: { revoked: true, noOp: true, targetUserId: session.userId },
+        });
+        return null;
+      }
+      await tx.session.update({
+        where: { id: session.id },
+        data: { revokedAt: new Date() },
+      });
+      await this.audit.logWithClient(tx, {
         actorId: actor.id,
-        action: 'security.session.revoke',
+        action: AUDIT_ACTIONS.security.sessionRevoke,
         entityType: 'Session',
         entityId: session.id,
         ip: meta.ip,
         userAgent: meta.userAgent,
-        before: { revoked: true },
-        after: { revoked: true, noOp: true, targetUserId: session.userId },
+        before: null,
+        after: { targetUserId: session.userId },
       });
-      return { revoked: 1 };
-    }
-    await this.prisma.session.update({
-      where: { id: session.id },
-      data: { revokedAt: new Date() },
+      return session;
     });
     // Drop any step-up window bound to the revoked session (TTL backstop).
-    await this.stepUp.clear(session.id);
-    await this.audit.log({
-      actorId: actor.id,
-      action: 'security.session.revoke',
-      entityType: 'Session',
-      entityId: session.id,
-      ip: meta.ip,
-      userAgent: meta.userAgent,
-      before: null,
-      after: { targetUserId: session.userId },
-    });
+    // Redis, not the database, so only after the revocation has committed.
+    if (revoked) await this.stepUp.clear(revoked.id);
     return { revoked: 1 };
   }
 

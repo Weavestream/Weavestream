@@ -41,18 +41,27 @@ function baseRow(overrides: Partial<Record<string, unknown>> = {}) {
   };
 }
 
+/** Prisma stub whose interactive transaction runs against the same mocks. */
 function makePrisma() {
-  return {
+  const prisma = {
     systemSetting: {
       findUnique: jest.fn(),
+      findUniqueOrThrow: jest.fn(),
       upsert: jest.fn(),
       update: jest.fn(),
     },
+    $transaction: jest.fn(
+      async (fn: (tx: unknown) => unknown): Promise<unknown> => fn(prisma),
+    ),
   };
+  return prisma;
 }
 
 function makeAudit() {
-  return { log: jest.fn().mockResolvedValue(undefined) };
+  return {
+    log: jest.fn().mockResolvedValue(undefined),
+    logWithClient: jest.fn().mockResolvedValue(undefined),
+  };
 }
 
 describe('SettingsService.get', () => {
@@ -113,6 +122,7 @@ describe('SettingsService.update', () => {
   it('applies partial updates, audits before/after, and busts the cache', async () => {
     const prisma = makePrisma();
     prisma.systemSetting.findUnique.mockResolvedValue(baseRow());
+    prisma.systemSetting.findUniqueOrThrow.mockResolvedValue(baseRow());
     prisma.systemSetting.update.mockResolvedValue(
       baseRow({
         tenantTermSingular: 'Client',
@@ -151,8 +161,12 @@ describe('SettingsService.update', () => {
     );
     expect(result.tenantTermSingular).toBe('Client');
 
-    expect(audit.log).toHaveBeenCalledTimes(1);
-    const entry = audit.log.mock.calls[0]![0];
+    // The audit row is written with the transaction client, not after it.
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+    expect(audit.log).not.toHaveBeenCalled();
+    expect(audit.logWithClient).toHaveBeenCalledTimes(1);
+    expect(audit.logWithClient.mock.calls[0]![0]).toBe(prisma);
+    const entry = audit.logWithClient.mock.calls[0]![1];
     expect(entry.action).toBe('settings.update');
     expect(entry.entityType).toBe('SystemSetting');
     expect(entry.entityId).toBe('singleton');
@@ -177,6 +191,9 @@ describe('SettingsService.update', () => {
     prisma.systemSetting.findUnique.mockResolvedValue(
       baseRow({ tenantTermPossessive: "Client's" }),
     );
+    prisma.systemSetting.findUniqueOrThrow.mockResolvedValue(
+      baseRow({ tenantTermPossessive: "Client's" }),
+    );
     prisma.systemSetting.update.mockResolvedValue(
       baseRow({ tenantTermPossessive: null }),
     );
@@ -199,6 +216,7 @@ describe('SettingsService.update', () => {
   it('omits fields that were not provided (partial update)', async () => {
     const prisma = makePrisma();
     prisma.systemSetting.findUnique.mockResolvedValue(baseRow());
+    prisma.systemSetting.findUniqueOrThrow.mockResolvedValue(baseRow());
     prisma.systemSetting.update.mockResolvedValue(
       baseRow({ workspaceName: 'Acme IT' }),
     );
@@ -214,24 +232,34 @@ describe('SettingsService.update', () => {
     expect(dataArg).not.toHaveProperty('tenantTermSingular');
     expect(dataArg).not.toHaveProperty('workspaceSubtitle');
   });
+
+  it('fails as a whole when the audit write fails, and drops the cache', async () => {
+    const prisma = makePrisma();
+    prisma.systemSetting.findUnique.mockResolvedValue(baseRow());
+    prisma.systemSetting.findUniqueOrThrow.mockResolvedValue(baseRow());
+    prisma.systemSetting.update.mockResolvedValue(
+      baseRow({ workspaceName: 'Acme IT' }),
+    );
+    const audit = makeAudit();
+    audit.logWithClient.mockRejectedValueOnce(new Error('audit down'));
+    const svc = new SettingsService(prisma as never, audit as never);
+
+    await svc.get(); // warm the cache
+    await expect(
+      svc.update(ACTOR, { workspaceName: 'Acme IT' }, META),
+    ).rejects.toThrow('audit down');
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+    expect(audit.log).not.toHaveBeenCalled();
+
+    // The transaction rolled back (Prisma's contract). The next read must
+    // come from the database, not a cache that the failure left in place.
+    const reads = prisma.systemSetting.findUnique.mock.calls.length;
+    await svc.get();
+    expect(prisma.systemSetting.findUnique.mock.calls.length).toBe(reads + 1);
+  });
 });
 
 describe('SettingsService API key switch', () => {
-  /** Prisma stub whose interactive transaction runs against the same mocks. */
-  function txPrisma() {
-    const prisma = makePrisma() as ReturnType<typeof makePrisma> & {
-      $transaction: jest.Mock;
-    };
-    Object.assign(prisma.systemSetting, { findUniqueOrThrow: jest.fn() });
-    prisma.$transaction = jest.fn(async (fn: (tx: unknown) => unknown) => fn(prisma));
-    return prisma as typeof prisma & {
-      systemSetting: { findUniqueOrThrow: jest.Mock };
-    };
-  }
-  function txAudit() {
-    return { log: jest.fn(), logWithClient: jest.fn().mockResolvedValue(undefined) };
-  }
-
   it('is off by default', async () => {
     const prisma = makePrisma();
     prisma.systemSetting.findUnique.mockResolvedValue(baseRow());
@@ -240,11 +268,11 @@ describe('SettingsService API key switch', () => {
   });
 
   it('writes and audits in one transaction, then drops the cache', async () => {
-    const prisma = txPrisma();
+    const prisma = makePrisma();
     prisma.systemSetting.findUnique.mockResolvedValue(baseRow());
     prisma.systemSetting.findUniqueOrThrow.mockResolvedValue({ apiKeysEnabled: false });
     prisma.systemSetting.update.mockResolvedValue(baseRow({ apiKeysEnabled: true }));
-    const audit = txAudit();
+    const audit = makeAudit();
     const svc = new SettingsService(prisma as never, audit as never);
 
     await svc.apiKeysEnabled(); // warm the cache with "off"
@@ -269,11 +297,11 @@ describe('SettingsService API key switch', () => {
   });
 
   it('fails as a whole when the audit write fails, and never serves a stale cached gate', async () => {
-    const prisma = txPrisma();
+    const prisma = makePrisma();
     prisma.systemSetting.findUnique.mockResolvedValue(baseRow({ apiKeysEnabled: true }));
     prisma.systemSetting.findUniqueOrThrow.mockResolvedValue({ apiKeysEnabled: true });
     prisma.systemSetting.update.mockResolvedValue(baseRow({ apiKeysEnabled: false }));
-    const audit = txAudit();
+    const audit = makeAudit();
     audit.logWithClient.mockRejectedValueOnce(new Error('audit down'));
     const svc = new SettingsService(prisma as never, audit as never);
 
