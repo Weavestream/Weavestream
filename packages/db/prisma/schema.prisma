@@ -333,6 +333,7 @@ model Company {
   @@index([type])
   @@index([parentCompanyId])
   @@map("companies")
+  expirationDismissals ExpirationDismissal[]
 }
 
 model Membership {
@@ -1873,6 +1874,30 @@ model AlertConfig {
   @@index([type, enabled, archivedAt])
   @@index([archivedAt])
   @@map("alert_config")
+}
+
+/// "I've seen this, stop showing it" for one item on the Expiring-soon feed,
+/// for one specific due date. Keyed on (kind, entity, source, dueAt), so if the
+/// date changes (a renewal that later lapses again) the item resurfaces.
+model ExpirationDismissal {
+  id          String   @id @default(uuid()) @db.Uuid
+  companyId   String   @map("company_id") @db.Uuid
+  /// 'asset-field' | 'domain' | 'password' (ExpirationRow.kind)
+  kind        String
+  /// assetId, domainId or passwordId
+  entityId    String   @map("entity_id") @db.Uuid
+  /// fieldId for asset-field; 'registrar' | 'tls' for domain; 'expiry' | 'rotation' for password
+  source      String
+  dueAt       DateTime @map("due_at")
+  note        String?
+  dismissedBy String?  @map("dismissed_by") @db.Uuid
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@unique([kind, entityId, source, dueAt], map: "expiration_dismissals_item_due_key")
+  @@index([companyId], map: "expiration_dismissals_company_idx")
+  @@map("expiration_dismissals")
 }
 
 model AlertTrigger {

@@ -114,6 +114,11 @@ export const AUDIT_ACTIONS = {
   // Direct (non-integration) record CRUD. The integration sync path
   // continues to use `integration.asset.*` so the two streams stay
   // distinguishable in the audit log.
+  // Expiring-soon feed: hide one item for one due date (and undo).
+  expiration: {
+    dismiss: 'expiration.dismiss',
+    restore: 'expiration.restore',
+  },
   asset: {
     create: 'asset.create',
     update: 'asset.update',
@@ -307,6 +312,7 @@ export const ALL_AUDIT_ACTIONS: string[] = [
   ...Object.values(AUDIT_ACTIONS.export),
   ...Object.values(AUDIT_ACTIONS.alert),
   ...Object.values(AUDIT_ACTIONS.asset),
+  ...Object.values(AUDIT_ACTIONS.expiration),
   ...Object.values(AUDIT_ACTIONS.article),
   ...Object.values(AUDIT_ACTIONS.integration),
   ...Object.values(AUDIT_ACTIONS.subnet),

@@ -110,10 +110,12 @@ export async function getAdminStats(): Promise<AdminStats | null> {
  */
 export async function listExpirations(
   companyId?: string,
+  includeDismissed = false,
 ): Promise<ExpirationRow[]> {
-  const path = companyId
+  const base = companyId
     ? `/companies/${companyId}/expirations`
     : '/expirations';
+  const path = includeDismissed ? `${base}?includeDismissed=1` : base;
   const res = await serverApiFetch<{ items: ExpirationRow[] }>(path);
   return res.data?.items ?? [];
 }

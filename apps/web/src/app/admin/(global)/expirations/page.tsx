@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { requireMe } from '../../../../lib/server-api/auth';
 import { listExpirations } from '../../../../lib/server-api/admin';
@@ -16,13 +17,19 @@ export const metadata: Metadata = { title: 'Expiring soon' };
  * dates is a legitimate SUPER_ADMIN-only affordance (see the matching
  * guard on `/domains/alerts`).
  */
-export default async function GlobalExpirationsPage() {
+export default async function GlobalExpirationsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ dismissed?: string }>;
+}) {
+  const showDismissed = (await searchParams).dismissed === '1';
   const me = await requireMe();
   if (me.role !== 'SUPER_ADMIN') {
     redirect('/admin');
   }
-  const rows = await listExpirations();
-  const expiredCount = rows.filter((r) => r.status === 'EXPIRED').length;
+  const rows = await listExpirations(undefined, showDismissed);
+  const active = rows.filter((r) => !r.dismissal);
+  const expiredCount = active.filter((r) => r.status === 'EXPIRED').length;
 
   return (
     <>
@@ -38,12 +45,9 @@ export default async function GlobalExpirationsPage() {
         <Panel
           title={
             <span style={{ display: 'inline-flex', gap: 8, alignItems: 'center' }}>
-              {rows.length} item{rows.length === 1 ? '' : 's'}
-              {expiredCount > 0 && (
-                <Tag tone="danger">
-                  {expiredCount} expired
-                </Tag>
-              )}
+              {active.length} item{active.length === 1 ? '' : 's'}
+              {expiredCount > 0 && <Tag tone="danger">{expiredCount} expired</Tag>}
+              <DismissedToggle href="/admin/expirations" showing={showDismissed} />
             </span>
           }
           noPad
@@ -52,5 +56,13 @@ export default async function GlobalExpirationsPage() {
         </Panel>
       </PageBody>
     </>
+  );
+}
+
+function DismissedToggle({ href, showing }: { href: string; showing: boolean }) {
+  return (
+    <Link href={showing ? href : `${href}?dismissed=1`} style={{ fontSize: 12, color: 'var(--accent)', fontWeight: 400 }}>
+      {showing ? 'Hide dismissed' : 'Show dismissed'}
+    </Link>
   );
 }

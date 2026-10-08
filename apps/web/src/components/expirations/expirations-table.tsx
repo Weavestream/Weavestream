@@ -1,14 +1,21 @@
 'use client';
 
 import Link from 'next/link';
-import { useMemo } from 'react';
-import type { ExpirationRow } from '@weavestream/shared';
+import { useMemo, useState } from 'react';
+import { useRouter } from 'next/navigation';
+import { expirationRowIdentity, type ExpirationRow } from '@weavestream/shared';
+import { apiFetch } from '../../lib/api';
 import {
+  Btn,
   DataTable,
+  Dialog,
+  Field,
   Icon,
+  Input,
   LayoutSwatch,
   MobileCardRow,
   Tag,
+  useToast,
   type DataColumn,
 } from '../ui';
 import {
@@ -30,6 +37,7 @@ export function ExpirationsTable({
   rows,
   showCompany,
 }: {
+  /** Rows may carry `dismissal` when the page asked for dismissed items too. */
   rows: ExpirationRow[];
   /**
    * Show the "Company" column. Set when rendering the global
@@ -42,6 +50,7 @@ export function ExpirationsTable({
     () => rows.map((r) => ({ ...r, id: rowKey(r) })),
     [rows],
   );
+  const [dismissing, setDismissing] = useState<ExpirationRow | null>(null);
 
   const columns = useMemo<DataColumn<(typeof dataRows)[number]>[]>(() => {
     const base: DataColumn<(typeof dataRows)[number]>[] = [
@@ -100,6 +109,12 @@ export function ExpirationsTable({
         </span>
       ),
     });
+    base.push({
+      id: 'actions',
+      header: '',
+      width: 110,
+      render: (row) => <DismissAction row={row} onDismiss={setDismissing} />,
+    });
     return base;
   }, [showCompany]);
 
@@ -136,6 +151,8 @@ export function ExpirationsTable({
   }
 
   return (
+    <>
+    <DismissDialog row={dismissing} onClose={() => setDismissing(null)} />
     <DataTable
       columns={columns}
       rows={dataRows}
@@ -176,13 +193,160 @@ export function ExpirationsTable({
               {formatDays(row.daysUntil)}
             </span>
           </MobileCardRow>
+          <DismissAction row={row} onDismiss={setDismissing} />
         </div>
       )}
     />
+    </>
   );
 }
 
+/**
+ * Dismiss hides a row for its current due date; a dismissed row (shown only
+ * with "Show dismissed") offers Restore. The server checks permission.
+ */
+function DismissAction({
+  row,
+  onDismiss,
+}: {
+  row: ExpirationRow;
+  onDismiss: (row: ExpirationRow) => void;
+}) {
+  const router = useRouter();
+  const toast = useToast();
+  const [pending, setPending] = useState(false);
+
+  if (row.dismissal) {
+    const dismissalId = row.dismissal.id;
+    return (
+      <Btn
+        kind="ghost"
+        size="sm"
+        loading={pending}
+        aria-label={`Restore ${itemLabel(row)}`}
+        onClick={async () => {
+          setPending(true);
+          try {
+            const res = await apiFetch(
+              `/companies/${row.companyId}/expirations/dismissals/${dismissalId}`,
+              { method: 'DELETE' },
+            );
+            if (!res.ok) {
+              toast.push('Could not restore the item.', 'danger');
+              return;
+            }
+            router.refresh();
+          } catch {
+            toast.push('Could not restore the item.', 'danger');
+          } finally {
+            setPending(false);
+          }
+        }}
+      >
+        Restore
+      </Btn>
+    );
+  }
+  return (
+    <Btn kind="ghost" size="sm" aria-label={`Dismiss ${itemLabel(row)}`} onClick={() => onDismiss(row)}>
+      Dismiss
+    </Btn>
+  );
+}
+
+function DismissDialog({ row, onClose }: { row: ExpirationRow | null; onClose: () => void }) {
+  const router = useRouter();
+  const toast = useToast();
+  const [note, setNote] = useState('');
+  const [pending, setPending] = useState(false);
+
+  function close() {
+    if (pending) return;
+    setNote('');
+    onClose();
+  }
+
+  async function submit() {
+    if (!row) return;
+    const { entityId, source } = expirationRowIdentity(row);
+    setPending(true);
+    try {
+      const res = await apiFetch(`/companies/${row.companyId}/expirations/dismissals`, {
+        method: 'POST',
+        body: JSON.stringify({
+          kind: row.kind,
+          entityId,
+          source,
+          dueAt: row.expiresAt,
+          ...(note.trim() ? { note: note.trim() } : {}),
+        }),
+      });
+      if (!res.ok) {
+        const p = res.problem as { detail?: string; title?: string } | undefined;
+        toast.push(p?.detail ?? p?.title ?? 'Could not dismiss the item.', 'danger');
+        return;
+      }
+      toast.push('Dismissed. It comes back if the date changes.', 'ok');
+      setNote('');
+      onClose();
+      router.refresh();
+    } catch {
+      toast.push('Could not dismiss the item.', 'danger');
+    } finally {
+      setPending(false);
+    }
+  }
+
+  return (
+    <Dialog
+      open={row !== null}
+      onClose={close}
+      title="Dismiss from Expiring soon"
+      width={460}
+      footer={
+        <>
+          <Btn kind="outline" onClick={close} disabled={pending}>
+            Cancel
+          </Btn>
+          <Btn kind="primary" loading={pending} onClick={submit}>
+            Dismiss
+          </Btn>
+        </>
+      }
+    >
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <p style={{ margin: 0, fontSize: 13, color: 'var(--text-2)', lineHeight: 1.5 }}>
+          {row ? <strong>{itemLabel(row)}</strong> : null} stops showing here and stops sending
+          expiry alerts for this date. Nothing else changes. If the date changes later (a renewal
+          that lapses again), it shows up again.
+        </p>
+        <Field label="Note (optional)" htmlFor="dismiss-note" help="For example: client cancelled, letting it lapse.">
+          <Input
+            id="dismiss-note"
+            value={note}
+            maxLength={500}
+            onChange={(e) => setNote(e.target.value)}
+          />
+        </Field>
+      </div>
+    </Dialog>
+  );
+}
+
+function itemLabel(row: ExpirationRow): string {
+  if (row.kind === 'asset-field') return `${row.assetName} (${row.fieldLabel})`;
+  if (row.kind === 'domain') return `${row.hostname} (${row.source === 'tls' ? 'TLS certificate' : 'registration'})`;
+  return `${row.passwordName} (${row.source === 'rotation' ? 'rotation' : 'expiry'})`;
+}
+
 function StatusPill({ row }: { row: ExpirationRow }) {
+  if (row.dismissal) {
+    return (
+      <span title={row.dismissal.note ?? undefined}>
+        <Tag tone="outline">Dismissed</Tag>
+      </span>
+    );
+  }
   if (row.status === 'EXPIRED') {
     return (
       <Tag tone="danger">

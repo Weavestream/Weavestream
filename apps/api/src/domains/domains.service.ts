@@ -28,6 +28,8 @@ import type {
   DnsSubResult,
   TlsSubResult,
 } from './engine/index.js';
+import { expirationDismissalKey } from '@weavestream/shared';
+import { loadDismissalMap } from '../expirations/expiration-dismissals.service.js';
 
 /**
  * Phase 8 — DomainsService.
@@ -227,10 +229,13 @@ export class DomainsService {
     if (opts.minScore !== undefined) {
       where.latestScore = { gte: opts.minScore };
     }
+    // Each dismissal hides at most one row, so over-fetch by that many and
+    // trim after filtering; dismissed rows then never use up the limit.
+    const dismissed = await loadDismissalMap(this.prisma, undefined, 'domain');
     const rows = await this.prisma.monitoredDomain.findMany({
       where,
       orderBy: [{ latestStatus: 'asc' }, { latestScore: 'asc' }, { hostname: 'asc' }],
-      take: safe,
+      take: safe + dismissed.size,
     });
 
     if (rows.length === 0) return [];
@@ -241,7 +246,28 @@ export class DomainsService {
     });
     const byId = new Map(companies.map((c) => [c.id, c] as const));
 
-    return rows.map((r) => ({
+    // Drop rows that are here only because of expiry dates the operator has
+    // dismissed (Expiring-soon "Dismiss"). A row also here for a FAIL status
+    // or a low score stays.
+    const lowScoreCut = opts.maxScore ?? 54;
+    const visible = rows.filter((r) => {
+      if (dismissed.size === 0) return true;
+      if (r.latestStatus !== 'EXPIRING' && r.latestStatus !== 'EXPIRED') return true;
+      if (r.latestScore !== null && r.latestScore <= lowScoreCut) return true;
+      const dueDates: Array<[string, Date]> = [];
+      const now = Date.now();
+      for (const [source, at] of [['registrar', r.whoisExpiresAt], ['tls', r.tlsExpiresAt]] as const) {
+        if (!at) continue;
+        const daysUntil = Math.floor((at.getTime() - now) / 86_400_000);
+        if (daysUntil <= r.alertThresholdDays) dueDates.push([source, at]);
+      }
+      if (dueDates.length === 0) return true;
+      return !dueDates.every(([source, at]) =>
+        dismissed.has(expirationDismissalKey('domain', r.id, source, at)),
+      );
+    });
+
+    return visible.slice(0, safe).map((r) => ({
       companyId: r.companyId,
       companyName: byId.get(r.companyId)?.name ?? 'Unknown',
       companySlug: byId.get(r.companyId)?.slug ?? 'unknown',

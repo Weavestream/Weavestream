@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import Link from 'next/link';
 import { getSettings } from '../../../../../lib/server-api/settings';
 import { getCompanyDetail } from '../../../../../lib/server-api/companies';
 import { listExpirations } from '../../../../../lib/server-api/admin';
@@ -19,17 +20,21 @@ export const metadata: Metadata = { title: 'Expiring soon' };
  */
 export default async function CompanyExpirationsPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ id: string }>;
+  searchParams: Promise<{ dismissed?: string }>;
 }) {
   const { id: companyId } = await params;
+  const showDismissed = (await searchParams).dismissed === '1';
   const term = buildTerm(await getSettings());
 
   const companyRes = await getCompanyDetail(companyId);
   const company = throwUnlessFound(companyRes, `/companies/${companyId}`);
 
-  const rows = await listExpirations(companyId);
-  const expiredCount = rows.filter((r) => r.status === 'EXPIRED').length;
+  const rows = await listExpirations(companyId, showDismissed);
+  const active = rows.filter((r) => !r.dismissal);
+  const expiredCount = active.filter((r) => r.status === 'EXPIRED').length;
 
   return (
     <>
@@ -47,13 +52,13 @@ export default async function CompanyExpirationsPage({
       <PageBody>
         <Panel
           title={
-            <span>
-              {rows.length} item{rows.length === 1 ? '' : 's'}
-              {expiredCount > 0 && (
-                <Tag tone="danger" style={{ marginLeft: 10 }}>
-                  {expiredCount} expired
-                </Tag>
-              )}
+            <span style={{ display: 'inline-flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+              {active.length} item{active.length === 1 ? '' : 's'}
+              {expiredCount > 0 && <Tag tone="danger">{expiredCount} expired</Tag>}
+              <DismissedToggle
+                href={`/admin/companies/${companyId}/expirations`}
+                showing={showDismissed}
+              />
             </span>
           }
           noPad
@@ -62,5 +67,13 @@ export default async function CompanyExpirationsPage({
         </Panel>
       </PageBody>
     </>
+  );
+}
+
+function DismissedToggle({ href, showing }: { href: string; showing: boolean }) {
+  return (
+    <Link href={showing ? href : `${href}?dismissed=1`} style={{ fontSize: 12, color: 'var(--accent)', fontWeight: 400 }}>
+      {showing ? 'Hide dismissed' : 'Show dismissed'}
+    </Link>
   );
 }
