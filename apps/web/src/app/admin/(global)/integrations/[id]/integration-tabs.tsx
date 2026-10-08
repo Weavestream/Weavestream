@@ -206,7 +206,10 @@ export function IntegrationTabs({
           display: 'flex',
           gap: 2,
           padding: '6px 6px 0',
-          borderBottom: '1px solid var(--line)',
+          // Draw the baseline inside the strip and keep tabs in it. A border plus
+          // `top: 1` on the tabs overflowed the overflow-x scroll box by 1px,
+          // which forced a permanent vertical scrollbar.
+          boxShadow: 'inset 0 -1px 0 var(--line)',
           background: 'var(--panel-2)',
           overflowX: 'auto',
         }}
@@ -234,8 +237,6 @@ export function IntegrationTabs({
                 borderBottom: active ? '1px solid var(--panel)' : 'none',
                 borderRadius: '6px 6px 0 0',
                 cursor: 'pointer',
-                position: 'relative',
-                top: 1,
                 whiteSpace: 'nowrap',
               }}
               title={t.help}
