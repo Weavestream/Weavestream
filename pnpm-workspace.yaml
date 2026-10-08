@@ -5,6 +5,17 @@ packages:
 confirmModulesPurge: false
 
 overrides:
+  # 2026-10 advisories, all transitive: pinned exactly to the first patched
+  # release so the resolver cannot drift past the release-age gate.
+  # proxy-addr: GHSA IP spoofing via IPv4-mapped IPv6 in trust subnets
+  # (express `trust proxy`, which feeds req.ip for IP rules). Critical.
+  proxy-addr: 2.0.8
+  # source-map-js: event-loop DoS through indexed source maps (high).
+  source-map-js: 1.2.2
+  # fast-copy: stack exhaustion on deeply nested values (moderate).
+  fast-copy: 4.1.0
+  # katex: prototype pollution can bypass trust restrictions (low).
+  katex: 0.18.2
   # next pins postcss to an exact version, so no lockfile refresh can
   # move it — an override is the only lever. The original reason was
   # GHSA-6g55-p6wh-862q (arbitrary file read) and GHSA-r28c-9q8g-f849

@@ -47,7 +47,7 @@
     "dompurify": "3.4.16",
     "marked": "^18.0.14",
     "mermaid": "11.17.2",
-    "next": "16.3.7",
+    "next": "16.3.8",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
     "react-markdown": "^10.1.0",
