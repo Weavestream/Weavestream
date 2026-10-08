@@ -1,6 +1,6 @@
 {
   "version": "4.6.0",
-  "created": "2026-10-04T15:37:06Z",
+  "created": "2026-10-08T20:00:52Z",
   "files": [
     {
       "path": ".nojekyll"
@@ -518,6 +518,12 @@
       "path": "integrations/index.md"
     },
     {
+      "path": "integrations/mcp.md"
+    },
+    {
+      "path": "integrations/mcp/index.html"
+    },
+    {
       "path": "integrations/ninjaone.md"
     },
     {
@@ -697,6 +703,12 @@
     },
     {
       "path": "screenshots/index.md"
+    },
+    {
+      "path": "security/api-keys.md"
+    },
+    {
+      "path": "security/api-keys/index.html"
     },
     {
       "path": "security/audit-log.md"

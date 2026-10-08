@@ -30,6 +30,40 @@ All notable changes to Weavestream are documented here. The format follows [Keep
 
 - **The domain page fits on phones.** The header tags wrap, and the Security posture panel stacks each label above its value instead of widening the page.
 
+## [1.9.12] - 2026-10-08
+
+### Added
+
+- **API keys for programmatic access.** A new **API keys** tab on the account page lists, creates, and revokes keys. A key authenticates as the user who created it and can only narrow that user's authority, never widen it. Permissions, tenant scoping, and the audit trail apply as for a browser session. Creating a key requires step-up, and the token is shown once in a copy dialog and is never stored in the browser. Keys can have an expiry date, and expired keys are tagged. A key cannot reach password, MFA, session, or key-management routes.
+- **Keys are read-only by default.** A key can change data only if it was created with **Allow changes**. A read-only key is refused on every request other than `GET`, `HEAD`, and `OPTIONS`.
+- **Administrator controls for API keys.** The new **Allow API keys** instance switch in Admin → Settings → Security is off by default. While it is off, no key can be created and every existing key is refused, but keys are not revoked. A new **API keys** tab in the security center lists the keys of all users, and an administrator can revoke any of them. The switch and administrator revoke are audited and need step-up.
+- **MCP server for AI agents.** A new stdio server in `apps/mcp` lets an AI agent act as a user through the REST API with an API key. It has read and write tools for companies, search, layouts, assets, domains, password metadata, and Markdown articles. It has no delete, archive, or purge tools, and no tool that reveals a password. Notes in the password vault are removed from `get_password`, and `create_article` always sets `visibleToClients: false`. A missing tool is not a permission boundary: the server enforces access.
+- **Sync Cloudflare registrar domains into Domains.** Every domain on the Cloudflare account is added to Domains with its registrar, expiry date, auto-renew, lock, statuses, and nameservers. Synced rows get an orange Cloudflare tag, a **Renews** column, and a **Registrar** panel. Domain sync is opt-in per integration and runs on the drift-sweep schedule. **Sync domains now** starts a manual sync as a worker job. Domains that leave the account are flagged and are never deleted. The user who saves the configuration must hold `domain.manage` on the target company, and the company is chosen from a dropdown.
+- **Copy or move assets into another company.** **Copy to…** in the asset bulk bar and the asset menu copies assets, or moves them, to another company. You need read access to the source and write access to the target. A move archives the original and never purges it. A move keeps the original if any attachment fails to copy. Moves are refused for integration-synced assets, assets with linked passwords, and assets with fields hidden from you. The copy carries visible field values, tags the asset page shows, and its own files. It does not carry links to other companies or the external identity of the asset.
+- **New domains are checked right away.** A domain you add, and each domain the registrar sync creates, is queued for one check at once instead of showing "never checked" until the nightly sweep. If the queue is unavailable, the failure is logged and the domain is still created.
+- **Parked domains show a grey "No site" status.**
+
+### Changed
+
+- **One Cloudflare integration.** The driver is now named "Cloudflare", and IP lists and domain sync are equal, independent features. All Cloudflare integrations show in one table, with a dash in the Companies and Resources columns. **Last run** is stamped once per Cloudflare job. **Test connection** checks the features the integration uses, so a token that has only domain access passes when domain sync is on.
+- **Cloudflare domain sync uses the supported registrar API.** Cloudflare ended support for the `/registrar/domains` endpoints on 2026-09-27. Weavestream now reads the Registrar registrations API with cursor pagination. It reads zones and registrations in full before any write, and any Cloudflare error fails the run, so a failed request cannot erase stored registrar facts.
+- **Domain sync runs are recorded.** Each run, manual or scheduled, is stored with counts or a failure reason, and a failed run is audited as `integration.cloudflare.registrar_sync.failed`. The Domains tab shows the latest run and updates until it ends. Each hostname is locked across all Cloudflare integrations, so two integrations cannot import the same domain.
+- **Changing a password, revoking other sessions, or resetting MFA revokes all API keys of the user.** The web and mobile apps warn about this before you submit and report the number of keys revoked.
+- **Asset bulk actions are clearer.** Read-only users can select assets to copy, and archive, restore, and delete need write access. A bulk copy that fails part-way removes the completed assets from the selection, so a retry copies only the rest.
+
+### Fixed
+
+- **A DNS lookup failure no longer marks a domain as having no site.** An uncertain A or AAAA lookup is now treated as unknown, not as proof that the domain has no site.
+- **Tab strips no longer show a vertical scrollbar.** The settings, account, and integration tab strips draw their baseline as an inset shadow, so they do not overflow by 1px.
+- **Asset copy and move errors no longer expose raw messages.** Bulk actions return a generic reason with a reference, and details go to the server log. A file with missing stored content marks the copy incomplete, and a missing thumbnail no longer blocks a copy. The copy dialog names the field that failed.
+- **The worker started without `PermissionService`.** It now boots because `RbacModule` is provided.
+
+### Security
+
+- **Dependency updates clear 10 advisories published after 1.9.11** (1 critical, 2 high, 5 moderate, 2 low). `next` and `eslint-config-next` move from 16.3.7 to 16.3.8, which fixes 6 `next` advisories including the image-optimizer SSRF (GHSA-cjq9-62q9-8jv4). Overrides pin `proxy-addr` 2.0.8 (critical, GHSA-jqcg-44mw-7w3h), `source-map-js` 1.2.2, `fast-copy` 4.1.0, and `katex` 0.18.2.
+- **Removing think tags from AI output is now linear-time.** A backtracking expression is replaced by a linear scan, which removes a ReDoS risk. Output is unchanged.
+- **Migration `0072_api_key_controls`** adds `api_keys.allow_write` and `system_settings.api_keys_enabled`. Both default to false.
+
 ## [1.9.11] - 2026-10-05
 
 ### Added
