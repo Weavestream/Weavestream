@@ -12,7 +12,10 @@ const ENV = {
   },
 } as never;
 
-function makeGuard(rotateResult: unknown) {
+function makeGuard(
+  rotateResult: unknown,
+  { apiKeysEnabled = true, key = null }: { apiKeysEnabled?: boolean; key?: unknown } = {},
+) {
   const reflector = { getAllAndOverride: jest.fn().mockReturnValue(false) } as never;
   // No access cookie is sent, so verifyAccessToken is never reached and the
   // guard falls straight through to the silent-refresh (rotation) path.
@@ -41,7 +44,11 @@ function makeGuard(rotateResult: unknown) {
   } as never;
   // API-key verification is not exercised by these cookie-path specs; the
   // stub returns null so the guard always falls through to the cookie branch.
-  const apiKeys = { verify: jest.fn().mockResolvedValue(null), touch: jest.fn() };
+  const apiKeys = {
+    verify: jest.fn().mockResolvedValue(key),
+    touch: jest.fn().mockResolvedValue(undefined),
+  };
+  const settings = { apiKeysEnabled: jest.fn().mockResolvedValue(apiKeysEnabled) };
   const guard = new AuthGuard(
     reflector,
     tokens,
@@ -49,8 +56,9 @@ function makeGuard(rotateResult: unknown) {
     prisma,
     ENV,
     apiKeys as never,
+    settings as never,
   );
-  return { guard, auth, apiKeys };
+  return { guard, auth, apiKeys, settings };
 }
 
 function makeCtx() {
@@ -138,5 +146,33 @@ describe('AuthGuard bearer handling', () => {
 
     await expect(guard.canActivate(ctx)).rejects.toBeInstanceOf(UnauthorizedException);
     expect(apiKeys.verify).toHaveBeenCalled();
+  });
+
+  const LIVE_KEY = {
+    id: 'k-1',
+    userId: 'u-1',
+    allowPasswordReveal: false,
+    allowWrite: false,
+    lastUsedAt: null,
+  };
+
+  it('refuses every key while API keys are turned off, without looking it up', async () => {
+    const { guard, apiKeys } = makeGuard(ROTATED, { apiKeysEnabled: false, key: LIVE_KEY });
+    const { ctx, req } = makeCtx();
+    req.headers.authorization = 'Bearer ws_0123456789abcdef01_secret';
+
+    await expect(guard.canActivate(ctx)).rejects.toBeInstanceOf(UnauthorizedException);
+    expect(apiKeys.verify).not.toHaveBeenCalled();
+  });
+
+  it('carries the key\'s write permission onto the principal', async () => {
+    const { guard } = makeGuard(ROTATED, { key: LIVE_KEY });
+    const { ctx, req } = makeCtx();
+    req.headers.authorization = 'Bearer ws_0123456789abcdef01_secret';
+
+    await expect(guard.canActivate(ctx)).resolves.toBe(true);
+    const user = (req as unknown as { user: { apiKeyId: string; apiKeyAllowWrite: boolean } }).user;
+    expect(user.apiKeyId).toBe('k-1');
+    expect(user.apiKeyAllowWrite).toBe(false);
   });
 });

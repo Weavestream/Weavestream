@@ -6,9 +6,8 @@
  *   WEAVESTREAM_API_KEY=ws_… \
  *   weavestream-mcp
  *
- * Set WEAVESTREAM_MCP_ALLOW_PASSWORD_REVEAL=1 to expose reveal_password. The
- * key must also have been created with password reveal allowed; the server
- * enforces that regardless of this flag.
+ * There is no password-reveal tool. Decrypted credentials never go to a
+ * model: tool results land in the provider's context and in transcripts.
  */
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
@@ -18,9 +17,7 @@ import { registerTools } from './tools.js';
 async function main(): Promise<void> {
   const config = parseConfig(process.env);
   const server = new McpServer({ name: 'weavestream', version: '0.1.0' });
-  registerTools(server, new WeavestreamClient(config), {
-    allowPasswordReveal: process.env.WEAVESTREAM_MCP_ALLOW_PASSWORD_REVEAL === '1',
-  });
+  registerTools(server, new WeavestreamClient(config));
   await server.connect(new StdioServerTransport());
 }
 

@@ -37,10 +37,17 @@ const EXPIRY_OPTIONS = [
 export function ApiKeysList({
   keys,
   loadFailed = false,
+  enabled = true,
 }: {
   keys: ApiKeySummary[];
   /** The server-side list fetch failed; say so rather than show "No API keys". */
   loadFailed?: boolean;
+  /**
+   * The instance-wide switch. Off: the server refuses every key and every
+   * mint, so the create button is disabled and the page says why. Existing
+   * keys stay listed so the user can still revoke them.
+   */
+  enabled?: boolean;
 }) {
   const router = useRouter();
   const toast = useToast();
@@ -81,11 +88,11 @@ export function ApiKeysList({
       ),
     },
     {
-      id: 'vault',
-      header: 'Passwords',
-      width: 150,
-      sortValue: (k) => (k.allowPasswordReveal ? 1 : 0),
-      render: (k) => <VaultTag allow={k.allowPasswordReveal} />,
+      id: 'access',
+      header: 'Access',
+      width: 190,
+      sortValue: (k) => (k.allowWrite ? 2 : 0) + (k.allowPasswordReveal ? 1 : 0),
+      render: (k) => <ApiKeyAccessTags k={k} />,
     },
     {
       id: 'lastUsed',
@@ -139,14 +146,30 @@ export function ApiKeysList({
         }}
       >
         <span style={{ fontSize: 12.5, color: 'var(--muted)', maxWidth: 560 }}>
-          A key acts as you, with your permissions, for scripts and AI agents. It cannot
-          change your password, MFA, sessions, users or access rules. Changing your password
-          revokes every key.
+          A key acts as you, with your permissions, for scripts and AI agents. It is read-only
+          unless you allow changes. It cannot change your password, MFA, sessions, users or
+          access rules. Changing your password or revoking your other sessions revokes every key.
         </span>
-        <Btn kind="primary" size="sm" icon={Icon.key} onClick={() => setCreateOpen(true)}>
+        <Btn
+          kind="primary"
+          size="sm"
+          icon={Icon.key}
+          disabled={!enabled}
+          onClick={() => setCreateOpen(true)}
+        >
           New API key
         </Btn>
       </div>
+
+      {!enabled && (
+        <div style={{ padding: 10 }}>
+          <ErrorBanner
+            tone="warn"
+            title="API keys are turned off for this workspace."
+            detail="Existing keys are refused and no new key can be created. An administrator can turn API keys on in Admin → Settings → Security."
+          />
+        </div>
+      )}
 
       {loadFailed && (
         <div style={{ padding: 10 }}>
@@ -165,7 +188,7 @@ export function ApiKeysList({
         renderMobileCard={(k) => (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             <div style={{ color: 'var(--text)', fontWeight: 600, fontSize: 14 }}>{k.name}</div>
-            <VaultTag allow={k.allowPasswordReveal} />
+            <ApiKeyAccessTags k={k} />
             <MobileCardRow label="Last used" mono>
               {k.lastUsedAt ? <FormattedRelative value={k.lastUsedAt} /> : 'never'}
             </MobileCardRow>
@@ -240,8 +263,21 @@ function ExpiresCell({ expiresAt }: { expiresAt: string | null }) {
   );
 }
 
-function VaultTag({ allow }: { allow: boolean }) {
-  return allow ? <Tag tone="warn">can reveal</Tag> : <Tag tone="outline">no reveal</Tag>;
+/**
+ * What a key may do beyond reading: change data, reveal passwords. Shared
+ * with the admin Security center list so both say it the same way.
+ */
+export function ApiKeyAccessTags({
+  k,
+}: {
+  k: Pick<ApiKeySummary, 'allowWrite' | 'allowPasswordReveal'>;
+}) {
+  return (
+    <span style={{ display: 'inline-flex', flexWrap: 'wrap', gap: 4 }}>
+      {k.allowWrite ? <Tag tone="warn">can change</Tag> : <Tag tone="outline">read-only</Tag>}
+      {k.allowPasswordReveal && <Tag tone="warn">can reveal</Tag>}
+    </span>
+  );
 }
 
 function CreateKeyDialog({
@@ -257,12 +293,14 @@ function CreateKeyDialog({
   const [name, setName] = useState('');
   const [expiry, setExpiry] = useState<(typeof EXPIRY_OPTIONS)[number]['value']>('365');
   const [allowReveal, setAllowReveal] = useState(false);
+  const [allowWrite, setAllowWrite] = useState(false);
   const [pending, setPending] = useState(false);
 
   function reset() {
     setName('');
     setExpiry('365');
     setAllowReveal(false);
+    setAllowWrite(false);
   }
 
   async function submit() {
@@ -274,6 +312,7 @@ function CreateKeyDialog({
           name: name.trim(),
           expiresInDays: expiry === 'never' ? null : Number(expiry),
           allowPasswordReveal: allowReveal,
+          allowWrite,
         }),
       });
       if (!res.ok || !res.data) {
@@ -345,6 +384,12 @@ function CreateKeyDialog({
             ))}
           </Select>
         </Field>
+        <Checkbox
+          label="Allow this key to make changes"
+          checked={allowWrite}
+          onChange={setAllowWrite}
+          hint="Off by default: the key can only read. Turn on only for a script or agent that must create or update records."
+        />
         <Checkbox
           label="Allow this key to reveal stored passwords"
           checked={allowReveal}

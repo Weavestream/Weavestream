@@ -12,6 +12,7 @@ import { ApiKeyService } from '../api-key.service.js';
 import { AuthService } from '../auth.service.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { EnvService } from '../../config/env.service.js';
+import { SettingsService } from '../../settings/settings.service.js';
 import { cookieNames, setAccessCookie, setSessionCookie } from '../cookies.js';
 import { ipOf, userAgentOf } from '../../common/request-meta.js';
 import type { AuthedUser } from '../../common/current-user.decorator.js';
@@ -25,6 +26,7 @@ export class AuthGuard implements CanActivate {
     private readonly prisma: PrismaService,
     private readonly env: EnvService,
     private readonly apiKeys: ApiKeyService,
+    private readonly settings: SettingsService,
   ) {}
 
   async canActivate(ctx: ExecutionContext): Promise<boolean> {
@@ -124,6 +126,11 @@ export class AuthGuard implements CanActivate {
     req: Request & { user?: AuthedUser },
     presented: string,
   ): Promise<boolean> {
+    // Instance switch first, so a disabled instance never even looks a key
+    // up. Off refuses every key with the same bare 401 as a bad key: the
+    // caller learns nothing about whether its key is otherwise valid.
+    if (!(await this.settings.apiKeysEnabled())) throw new UnauthorizedException();
+
     const key = await this.apiKeys.verify(presented);
     if (!key) throw new UnauthorizedException();
 
@@ -146,6 +153,7 @@ export class AuthGuard implements CanActivate {
       mfaPending: false,
       apiKeyId: key.id,
       apiKeyAllowPasswordReveal: key.allowPasswordReveal,
+      apiKeyAllowWrite: key.allowWrite,
     };
 
     // Bookkeeping only — a failed write must not fail an authenticated

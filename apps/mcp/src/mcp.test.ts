@@ -12,7 +12,7 @@ const ASSET = '22222222-2222-4222-8222-222222222222';
 
 type Call = { url: string; init: RequestInit };
 
-async function connect(opts: { allowPasswordReveal?: boolean; respond?: (c: Call) => Response } = {}) {
+async function connect(opts: { respond?: (c: Call) => Response } = {}) {
   const calls: Call[] = [];
   const fetchImpl = (async (url: URL, init: RequestInit) => {
     const call = { url: String(url), init };
@@ -23,7 +23,6 @@ async function connect(opts: { allowPasswordReveal?: boolean; respond?: (c: Call
   registerTools(
     server,
     new WeavestreamClient({ baseUrl: 'https://ws.example.com', apiKey: KEY, fetchImpl }),
-    { allowPasswordReveal: opts.allowPasswordReveal ?? false },
   );
   const [a, b] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: 'test-client', version: '0' });
@@ -40,12 +39,22 @@ test('config: https only (http just for localhost), and the key must look like a
   assert.equal(parseConfig({ WEAVESTREAM_URL: 'https://ws.example.com/', WEAVESTREAM_API_KEY: KEY }).baseUrl, 'https://ws.example.com');
 });
 
-test('reveal_password exists only when opted in; no destructive tools at all', async () => {
-  const off = (await (await connect()).client.listTools()).tools.map((t) => t.name);
-  assert.ok(!off.includes('reveal_password'));
-  for (const n of off) assert.doesNotMatch(n, /delete|archive|purge|user|member|key/);
-  const on = (await (await connect({ allowPasswordReveal: true })).client.listTools()).tools.map((t) => t.name);
-  assert.ok(on.includes('reveal_password'));
+test('no reveal, destructive or access-changing tools at all', async () => {
+  const names = (await (await connect()).client.listTools()).tools.map((t) => t.name);
+  for (const n of names) assert.doesNotMatch(n, /reveal|totp|delete|archive|purge|user|member|key/);
+});
+
+test('get_password never hands vault notes to the model', async () => {
+  const { client } = await connect({
+    respond: () =>
+      new Response(JSON.stringify({ id: ASSET, name: 'Router', username: 'admin', notes: 'PIN 4711' }), {
+        status: 200,
+      }),
+  });
+  const r = await client.callTool({ name: 'get_password', arguments: { companyId: CO, passwordId: ASSET } });
+  assert.ok(!text(r).includes('PIN 4711'));
+  assert.ok(!text(r).includes('notes'));
+  assert.match(text(r), /Router/);
 });
 
 test('a tool call is one REST call with the bearer key, no redirects followed', async () => {
@@ -74,10 +83,26 @@ test('API errors come back as tool errors without the key', async () => {
   assert.ok(!text(r).includes(KEY));
 });
 
-test('articles are created as Markdown', async () => {
+test('articles are created as Markdown and hidden from clients', async () => {
   const { client, calls } = await connect();
   await client.callTool({ name: 'create_article', arguments: { companyId: CO, title: 'Runbook', markdownSource: '# Hi' } });
-  assert.deepEqual(JSON.parse(String(calls[0]!.init.body)), { title: 'Runbook', markdownSource: '# Hi', editorMode: 'markdown' });
+  assert.deepEqual(JSON.parse(String(calls[0]!.init.body)), {
+    title: 'Runbook',
+    markdownSource: '# Hi',
+    editorMode: 'markdown',
+    visibleToClients: false,
+  });
+});
+
+test('an agent cannot ask for a client-visible article', async () => {
+  const { client, calls } = await connect();
+  await client.callTool({
+    name: 'create_article',
+    arguments: { companyId: CO, title: 'x', markdownSource: '# Hi', visibleToClients: true },
+  });
+  // Unknown arguments are stripped by the schema; the forced false wins.
+  assert.equal(calls.length, 1);
+  assert.equal(JSON.parse(String(calls[0]!.init.body)).visibleToClients, false);
 });
 
 test('network failures become readable tool errors', async () => {

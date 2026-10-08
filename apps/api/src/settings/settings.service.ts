@@ -11,6 +11,7 @@ import {
 } from '@weavestream/shared';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { AuditLogService } from '../audit/audit.service.js';
+import { AUDIT_ACTIONS } from '../audit/audit-actions.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
 
 /**
@@ -27,6 +28,7 @@ export interface SystemSettingsDTO {
   passwordGeneratorDefaults: PasswordGeneratorDefaults;
   articleAutosaveEnabled: boolean;
   articleDefaultEditorMode: ArticleEditorMode;
+  apiKeysEnabled: boolean;
   updatedAt: string;
 }
 
@@ -106,6 +108,61 @@ export class SettingsService {
   }
 
   /**
+   * Whether API key authentication is on. Read on every Bearer request by
+   * `AuthGuard`, so it goes through the same 5 s cache as `get()`: a switch-off
+   * takes effect on this replica at once and on others within the TTL.
+   */
+  async apiKeysEnabled(): Promise<boolean> {
+    return (await this.get()).apiKeysEnabled;
+  }
+
+  /**
+   * Turn API key authentication on or off. Off refuses every key and every
+   * mint; it does not revoke, so turning it back on restores existing keys.
+   *
+   * The write and its audit row commit in one transaction: a change to who
+   * can authenticate must never exist without its record, and a failed audit
+   * must leave the policy as it was. The cache is dropped in `finally`, so
+   * even an unexpected failure cannot leave this replica's `AuthGuard`
+   * serving a value the database no longer holds.
+   */
+  async setApiKeysEnabled(
+    actor: AuthedUser,
+    enabled: boolean,
+    meta: { ip: string; userAgent: string },
+  ): Promise<SystemSettingsDTO> {
+    await this.loadOrSeed();
+    try {
+      const after = await this.prisma.$transaction(async (tx) => {
+        // Read `before` inside the transaction so the audit row describes
+        // exactly the transition that committed.
+        const before = await tx.systemSetting.findUniqueOrThrow({
+          where: { id: SINGLETON_ID },
+          select: { apiKeysEnabled: true },
+        });
+        const row = await tx.systemSetting.update({
+          where: { id: SINGLETON_ID },
+          data: { apiKeysEnabled: enabled, updatedBy: actor.id },
+        });
+        await this.audit.logWithClient(tx, {
+          actorId: actor.id,
+          action: AUDIT_ACTIONS.settings.apiKeysToggle,
+          entityType: 'SystemSetting',
+          entityId: SINGLETON_ID,
+          ip: meta.ip,
+          userAgent: meta.userAgent,
+          before: { apiKeysEnabled: before.apiKeysEnabled },
+          after: { apiKeysEnabled: row.apiKeysEnabled, sessionId: actor.sessionId },
+        });
+        return row;
+      });
+      return toDto(after);
+    } finally {
+      this.cache = null;
+    }
+  }
+
+  /**
    * Defensive: if the singleton row is missing (e.g. someone truncated
    * system_settings in dev), re-seed it with defaults rather than
    * throwing. The migration already seeds it, so this path is only
@@ -133,6 +190,7 @@ type SystemSettingRow = {
   passwordGeneratorDefaults?: unknown;
   articleAutosaveEnabled: boolean;
   articleDefaultEditorMode: string;
+  apiKeysEnabled: boolean;
   updatedAt: Date;
 };
 
@@ -172,6 +230,7 @@ function toDto(row: SystemSettingRow): SystemSettingsDTO {
     ),
     articleAutosaveEnabled: row.articleAutosaveEnabled,
     articleDefaultEditorMode: readDefaultEditorMode(row.articleDefaultEditorMode),
+    apiKeysEnabled: row.apiKeysEnabled,
     updatedAt: row.updatedAt.toISOString(),
   };
 }
@@ -188,5 +247,6 @@ function stripForAudit(row: SystemSettingRow) {
     ),
     articleAutosaveEnabled: row.articleAutosaveEnabled,
     articleDefaultEditorMode: readDefaultEditorMode(row.articleDefaultEditorMode),
+    apiKeysEnabled: row.apiKeysEnabled,
   };
 }

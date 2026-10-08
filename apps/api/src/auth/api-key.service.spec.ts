@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { NotFoundException } from '@nestjs/common';
+import { ForbiddenException, NotFoundException } from '@nestjs/common';
 import { ApiKeyService, DEFAULT_EXPIRY_DAYS } from './api-key.service.js';
 
 /** Everything after the second separator — the secret may itself contain `_`. */
@@ -8,7 +8,7 @@ const secretOf = (token: string) =>
 
 const sha256 = (v: string) => createHash('sha256').update(v, 'utf8').digest('hex');
 
-function makeService() {
+function makeService({ enabled = true }: { enabled?: boolean } = {}) {
   const rows = new Map<string, Record<string, unknown>>();
   const prisma = {
     apiKey: {
@@ -49,7 +49,13 @@ function makeService() {
     log: jest.fn().mockResolvedValue(undefined),
     logWithClient: jest.fn().mockResolvedValue(undefined),
   };
-  return { svc: new ApiKeyService(prisma as never, audit as never), rows, audit, prisma };
+  const settings = { apiKeysEnabled: jest.fn().mockResolvedValue(enabled) };
+  return {
+    svc: new ApiKeyService(prisma as never, audit as never, settings as never),
+    rows,
+    audit,
+    prisma,
+  };
 }
 
 const META = { ip: '198.51.100.7', userAgent: 'jest' };
@@ -136,7 +142,7 @@ describe('ApiKeyService', () => {
 
     it('rejects a token whose secret has been altered', async () => {
       const { svc } = makeService();
-      const { token, record } = await svc.mint({ userId: 'u-1', name: 'k', createdBy: 'u-1' });
+      const { record } = await svc.mint({ userId: 'u-1', name: 'k', createdBy: 'u-1' });
       const forged = `ws_${record.keyId}_${randomBytes(32).toString('base64url')}`;
       await expect(svc.verify(forged)).resolves.toBeNull();
     });
@@ -221,6 +227,23 @@ describe('ApiKeyService', () => {
       expect(JSON.stringify(entry)).not.toContain(secretOf(out.token));
       expect(JSON.stringify(entry)).not.toContain(out.token);
     });
+    it('is read-only unless write access is asked for, and audits the choice', async () => {
+      const { svc, audit } = makeService();
+      const ro = await svc.create(ACTOR, { name: 'agent' }, META);
+      expect(ro.allowWrite).toBe(false);
+      const rw = await svc.create(ACTOR, { name: 'sync', allowWrite: true }, META);
+      expect(rw.allowWrite).toBe(true);
+      expect(audit.logWithClient.mock.calls[1][1].after).toMatchObject({ allowWrite: true });
+    });
+
+    it('refuses to mint while API keys are turned off', async () => {
+      const { svc, rows } = makeService({ enabled: false });
+      await expect(svc.create(ACTOR, { name: 'mcp' }, META)).rejects.toBeInstanceOf(
+        ForbiddenException,
+      );
+      expect(rows.size).toBe(0);
+    });
+
     it('creates no key when the audit write fails', async () => {
       // Key and audit row commit together: an unaudited key must never exist,
       // and the caller must never be left without the token for a live key.

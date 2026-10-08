@@ -6,11 +6,19 @@ function ctxFor(
   apiKeyId?: string,
   interactiveOnly = false,
   allowPasswordReveal = false,
+  method = 'GET',
+  allowWrite = false,
 ) {
   const req = {
     path,
+    method,
     user: apiKeyId
-      ? { id: 'u-1', apiKeyId, apiKeyAllowPasswordReveal: allowPasswordReveal }
+      ? {
+          id: 'u-1',
+          apiKeyId,
+          apiKeyAllowPasswordReveal: allowPasswordReveal,
+          apiKeyAllowWrite: allowWrite,
+        }
       : { id: 'u-1' },
   };
   return {
@@ -143,6 +151,47 @@ describe('ApiKeySurfaceGuard', () => {
       expect(
         guard.canActivate(ctxFor('/api/v1/companies/c-1/passwords/p-1/reveal')),
       ).toBe(true);
+    });
+  });
+
+  describe('read-only keys', () => {
+    const ASSET = '/api/v1/companies/c-1/assets/a-1';
+
+    it('allow safe methods', () => {
+      for (const m of ['GET', 'HEAD', 'OPTIONS']) {
+        expect(guard.canActivate(ctxFor(ASSET, 'k-1', false, false, m))).toBe(true);
+      }
+    });
+
+    it('refuse every state-changing method', () => {
+      for (const m of ['POST', 'PUT', 'PATCH', 'DELETE']) {
+        expect(() => guard.canActivate(ctxFor(ASSET, 'k-1', false, false, m))).toThrow(
+          /read-only/,
+        );
+      }
+    });
+
+    it('apply to lowercase methods too', () => {
+      expect(() => guard.canActivate(ctxFor(ASSET, 'k-1', false, false, 'delete'))).toThrow(
+        ForbiddenException,
+      );
+    });
+
+    it('admit a write when the key was minted with write access', () => {
+      expect(guard.canActivate(ctxFor(ASSET, 'k-1', false, false, 'PATCH', true))).toBe(true);
+    });
+
+    it('admit a reveal POST only for a key that may reveal', () => {
+      currentVaultReveal = true;
+      const reveal = '/api/v1/companies/c-1/passwords/p-1/reveal';
+      expect(guard.canActivate(ctxFor(reveal, 'k-1', false, true, 'POST'))).toBe(true);
+      expect(() => guard.canActivate(ctxFor(reveal, 'k-1', false, false, 'POST'))).toThrow(
+        /reveal/,
+      );
+    });
+
+    it('never touch an interactive principal', () => {
+      expect(guard.canActivate(ctxFor(ASSET, undefined, false, false, 'DELETE'))).toBe(true);
     });
   });
 });

@@ -30,6 +30,11 @@ export interface AuthedUser {
    * are governed by the `password.reveal` permission as before.
    */
   apiKeyAllowPasswordReveal?: boolean;
+  /**
+   * Whether this key may change data. Default false (read-only); opting in is
+   * a deliberate act at mint time. Absent for interactive principals.
+   */
+  apiKeyAllowWrite?: boolean;
 }
 
 export const CurrentUser = createParamDecorator(

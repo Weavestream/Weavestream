@@ -1,5 +1,6 @@
 import { requireMe } from '../../lib/server-api/auth';
 import { serverApiFetch } from '../../lib/server-api/core';
+import { getSettings } from '../../lib/server-api/settings';
 import { PageBody, PageHeader } from '../../components/shell/page-header';
 import { Panel } from '../../components/ui';
 import { MeTabs } from './me-tabs';
@@ -35,6 +36,8 @@ export default async function MePage({
   const sessions = sessionsRes.data ?? [];
   const apiKeysRes = await serverApiFetch<ApiKeySummary[]>('/me/api-keys');
   const apiKeys = apiKeysRes.ok ? (apiKeysRes.data ?? []) : [];
+  // Request-scoped cache: the root layout already loaded settings.
+  const { apiKeysEnabled } = await getSettings();
 
   const initialTab: TabId = VALID_TABS.includes(sp.tab as TabId)
     ? (sp.tab as TabId)
@@ -49,7 +52,14 @@ export default async function MePage({
       />
       <PageBody>
         <Panel noPad>
-          <MeTabs initialTab={initialTab} me={me} sessions={sessions} apiKeys={apiKeys} apiKeysLoadFailed={!apiKeysRes.ok} />
+          <MeTabs
+            initialTab={initialTab}
+            me={me}
+            sessions={sessions}
+            apiKeys={apiKeys}
+            apiKeysLoadFailed={!apiKeysRes.ok}
+            apiKeysEnabled={apiKeysEnabled}
+          />
         </Panel>
       </PageBody>
     </>

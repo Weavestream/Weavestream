@@ -1,7 +1,13 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { AuditLogService } from '../audit/audit.service.js';
+import { SettingsService } from '../settings/settings.service.js';
 import type { ApiKey, Prisma } from '@prisma/client';
 import type { CreateApiKeyInput } from '@weavestream/shared';
 import type { AuthedUser } from '../common/current-user.decorator.js';
@@ -62,6 +68,7 @@ export class ApiKeyService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditLogService,
+    private readonly settings: SettingsService,
   ) {}
 
   /**
@@ -97,6 +104,7 @@ export class ApiKeyService {
     scopes?: string[];
     expiresInDays?: number | null;
     allowPasswordReveal?: boolean;
+    allowWrite?: boolean;
     createdBy: string;
   }, client: Prisma.TransactionClient | PrismaService = this.prisma): Promise<MintedApiKey> {
     // The `scopes` column exists so a later change can narrow a key below its
@@ -125,6 +133,7 @@ export class ApiKeyService {
         name: params.name,
         scopes: params.scopes ?? [],
         allowPasswordReveal: params.allowPasswordReveal ?? false,
+        allowWrite: params.allowWrite ?? false,
         expiresAt:
           days === null ? null : new Date(Date.now() + days * 86_400_000),
         createdBy: params.createdBy,
@@ -195,6 +204,7 @@ export class ApiKeyService {
         name: true,
         scopes: true,
         allowPasswordReveal: true,
+        allowWrite: true,
         lastUsedAt: true,
         expiresAt: true,
         createdAt: true,
@@ -225,6 +235,12 @@ export class ApiKeyService {
    * the secret (CLAUDE.md §2: audit the transition by reference, not value).
    */
   async create(actor: AuthedUser, dto: CreateApiKeyInput, meta: RequestMeta) {
+    // A key minted while the switch is off would be dead on arrival, and the
+    // user would copy a token that cannot work. Refuse up front instead.
+    if (!(await this.settings.apiKeysEnabled())) {
+      throw new ForbiddenException('API keys are turned off for this workspace.');
+    }
+
     // Key row and audit row commit together. If the audit write fails the key
     // never exists: no unaudited credential (CLAUDE.md §2) and no live key the
     // caller never received.
@@ -236,6 +252,7 @@ export class ApiKeyService {
           scopes: dto.scopes,
           expiresInDays: dto.expiresInDays,
           allowPasswordReveal: dto.allowPasswordReveal,
+          allowWrite: dto.allowWrite,
           createdBy: actor.id,
         },
         tx,
@@ -250,6 +267,7 @@ export class ApiKeyService {
           scopes: minted.record.scopes,
           expiresAt: minted.record.expiresAt,
           allowPasswordReveal: minted.record.allowPasswordReveal,
+          allowWrite: minted.record.allowWrite,
           sessionId: actor.sessionId,
         },
         ip: meta.ip,
@@ -264,6 +282,7 @@ export class ApiKeyService {
       name: record.name,
       scopes: record.scopes,
       allowPasswordReveal: record.allowPasswordReveal,
+      allowWrite: record.allowWrite,
       lastUsedAt: record.lastUsedAt,
       expiresAt: record.expiresAt,
       createdAt: record.createdAt,

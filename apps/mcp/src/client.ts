@@ -131,7 +131,7 @@ function describeProblem(status: number, json: unknown): string {
     status === 401
       ? ' The API key is invalid, expired or revoked.'
       : status === 403
-        ? ' The key\'s owner lacks permission, or this action needs an interactive session.'
+        ? ' The key is read-only, its owner lacks permission, or this action needs an interactive session.'
         : '';
   return `Weavestream returned ${status}${detail ? `: ${String(detail)}` : '.'}${issues ? ` Issues: ${issues}.` : ''}${hint}`;
 }

@@ -41,6 +41,12 @@ export const createApiKeySchema = z.object({
    * of credential from one that can read asset documentation.
    */
   allowPasswordReveal: z.boolean().optional(),
+  /**
+   * Permit this key to change data. Defaults to false: a key is read-only
+   * unless minted otherwise, so a leaked key can read but never modify or
+   * delete. Enforced server-side by `ApiKeySurfaceGuard`.
+   */
+  allowWrite: z.boolean().optional(),
 });
 
 export type CreateApiKeyInput = z.infer<typeof createApiKeySchema>;
@@ -57,10 +63,35 @@ export interface ApiKeySummary {
   scopes: string[];
   /** Whether this key may decrypt stored credentials. The thing to audit. */
   allowPasswordReveal: boolean;
+  /** Whether this key may change data. False = read-only. */
+  allowWrite: boolean;
   lastUsedAt: string | null;
   expiresAt: string | null;
   createdAt: string;
 }
+
+/**
+ * One live key in the admin Security center list. Carries the owner so an
+ * admin can see whose integration it is. Never the token or its hash.
+ */
+export interface AdminApiKeyRow extends ApiKeySummary {
+  user: { id: string; name: string; email: string };
+}
+
+/**
+ * One page of the admin key list. Offset pagination with a total, like the
+ * audit log, so no live key is ever beyond the admin's reach.
+ */
+export interface AdminApiKeyPage {
+  items: AdminApiKeyRow[];
+  total: number;
+  /** 1-based, clamped to the last page by the server. */
+  page: number;
+  pageSize: number;
+}
+
+export const ADMIN_API_KEY_PAGE_SIZES = [25, 50, 100] as const;
+export const ADMIN_API_KEY_DEFAULT_PAGE_SIZE = 50;
 
 /**
  * Creation response. `token` is delivered exactly once and is unrecoverable
@@ -70,4 +101,38 @@ export interface ApiKeySummary {
  */
 export interface CreatedApiKey extends ApiKeySummary {
   token: string;
+}
+
+/**
+ * Changing your password and signing out other sessions both revoke every
+ * API key the user holds (see `MeService`). Both routes report how many, so
+ * the UI can tell the user which integrations just stopped.
+ */
+export interface ChangePasswordResult {
+  ok: true;
+  apiKeysRevoked: number;
+}
+
+export interface RevokeOtherSessionsResult {
+  revoked: number;
+  apiKeysRevoked: number;
+}
+
+/**
+ * Shown before a password change or "sign out other sessions" is submitted.
+ * One sentence, shared by web and mobile so the consequence reads the same
+ * everywhere.
+ */
+export const API_KEY_REVOCATION_WARNING =
+  'This also permanently revokes every API key you hold. Scripts and AI agents (MCP) that use them stop working until you create new keys.';
+
+/**
+ * Sentence appended to a success message when keys were revoked as a side
+ * effect. Empty when none were, so callers can concatenate unconditionally.
+ */
+export function apiKeysRevokedNotice(count: number): string {
+  if (!Number.isFinite(count) || count <= 0) return '';
+  return count === 1
+    ? ' 1 API key revoked — create a new one for any script or AI agent that used it.'
+    : ` ${count} API keys revoked — create new ones for any scripts or AI agents that used them.`;
 }

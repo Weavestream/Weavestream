@@ -3,14 +3,26 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
+  API_KEY_REVOCATION_WARNING,
+  apiKeysRevokedNotice,
   isCurrentPasswordInvalidProblem,
+  type ChangePasswordResult,
   passwordSchema,
   problemMessage,
 } from '@weavestream/shared';
 import { apiFetch } from '../../lib/api';
-import { Btn, Field, Input, useToast } from '../../components/ui';
+import { Btn, Field, Icon, Input, useToast } from '../../components/ui';
 
-export function PasswordForm() {
+export function PasswordForm({
+  apiKeyCount = null,
+}: {
+  /**
+   * Live API keys the user holds, or null when unknown. A password change
+   * revokes all of them, so the form says so before submission whenever
+   * there may be any.
+   */
+  apiKeyCount?: number | null;
+} = {}) {
   const toast = useToast();
   const router = useRouter();
   const [current, setCurrent] = useState('');
@@ -42,7 +54,7 @@ export function PasswordForm() {
       return;
     }
     setPending(true);
-    const res = await apiFetch('/me/change-password', {
+    const res = await apiFetch<ChangePasswordResult>('/me/change-password', {
       method: 'POST',
       body: JSON.stringify({ currentPassword: current, newPassword: next }),
     });
@@ -70,7 +82,10 @@ export function PasswordForm() {
       setError(problemMessage(res.problem) ?? 'Password change failed.');
       return;
     }
-    toast.push('Password updated. Other sessions signed out.', 'ok');
+    toast.push(
+      `Password updated. Other sessions signed out.${apiKeysRevokedNotice(res.data?.apiKeysRevoked ?? 0)}`,
+      'ok',
+    );
     setCurrent('');
     setNext('');
     setConfirm('');
@@ -115,7 +130,40 @@ export function PasswordForm() {
           required
         />
       </Field>
-      <div style={{ gridColumn: '1 / -1', display: 'flex', justifyContent: 'flex-end' }}>
+      <div
+        style={{
+          gridColumn: '1 / -1',
+          display: 'flex',
+          flexWrap: 'wrap',
+          alignItems: 'center',
+          justifyContent: 'flex-end',
+          gap: 12,
+        }}
+      >
+        {apiKeyCount !== 0 && (
+          <p
+            style={{
+              margin: 0,
+              marginRight: 'auto',
+              flex: '1 1 260px',
+              maxWidth: 560,
+              fontSize: 12.5,
+              lineHeight: 1.5,
+              color: 'var(--text-2)',
+            }}
+          >
+            <Icon.warn
+              size={13}
+              style={{ color: 'var(--warn)', marginRight: 6, verticalAlign: '-2px' }}
+            />
+            {apiKeyCount ? (
+              <strong>
+                You have {apiKeyCount} API key{apiKeyCount === 1 ? '' : 's'}.{' '}
+              </strong>
+            ) : null}
+            {API_KEY_REVOCATION_WARNING}
+          </p>
+        )}
         <Btn type="submit" kind="primary" loading={pending}>
           Change password
         </Btn>

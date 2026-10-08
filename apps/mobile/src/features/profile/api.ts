@@ -1,4 +1,4 @@
-import type { ChangePasswordInput } from '@weavestream/shared';
+import type { ChangePasswordInput, ChangePasswordResult } from '@weavestream/shared';
 import { apiFetch } from '../../lib/api';
 
 /**
@@ -17,8 +17,8 @@ import { apiFetch } from '../../lib/api';
  * whitespace is part of the secret (`StepUpHost` records the same rule:
  * trim an MFA code, send a password as typed).
  */
-export async function changeMyPassword(input: ChangePasswordInput): Promise<void> {
-  await apiFetch<{ ok: true }>('/me/change-password', {
+export async function changeMyPassword(input: ChangePasswordInput): Promise<ChangePasswordResult> {
+  return apiFetch<ChangePasswordResult>('/me/change-password', {
     method: 'POST',
     body: JSON.stringify(input),
   });

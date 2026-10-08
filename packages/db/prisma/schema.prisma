@@ -476,6 +476,11 @@ model ApiKey {
   /// thing a key could do in a product whose job is holding client secrets, so
   /// it is off unless the operator deliberately turns it on for this key.
   allowPasswordReveal Boolean @default(false) @map("allow_password_reveal")
+  /// Opt-in, default denied. Without it the key is read-only: the server
+  /// refuses every non-GET request except the `@VaultReveal()` routes, which
+  /// have their own gate above. Most programmatic use (reporting, AI agents
+  /// answering questions) only reads.
+  allowWrite Boolean @default(false) @map("allow_write")
   lastUsedAt DateTime? @map("last_used_at")
   /// Null = no expiry. Set by default at creation; see ApiKeyService.
   expiresAt  DateTime? @map("expires_at")
@@ -1008,6 +1013,10 @@ model SystemSetting {
   // value from being saved. Existing articles ignore this and keep
   // their own `editor_mode`.
   articleDefaultEditorMode  String   @default("tiptap") @map("article_default_editor_mode")
+  // Instance-wide switch for API key (Bearer token) authentication. Default
+  // off. While off, AuthGuard refuses every key and no key can be created;
+  // keys are not revoked, so turning it back on restores them.
+  apiKeysEnabled            Boolean  @default(false) @map("api_keys_enabled")
   updatedAt                 DateTime @updatedAt @map("updated_at")
   updatedBy                 String?  @map("updated_by") @db.Uuid
 

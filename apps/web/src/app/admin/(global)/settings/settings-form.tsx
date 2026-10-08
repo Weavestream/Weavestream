@@ -467,7 +467,7 @@ function SettingsForm({
   );
 }
 
-function SectionHeader({ label, help }: { label: string; help?: string }) {
+export function SectionHeader({ label, help }: { label: string; help?: string }) {
   return (
     <header style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
       <h3

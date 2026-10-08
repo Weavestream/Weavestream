@@ -53,6 +53,9 @@ const DENIED_PREFIXES = [
  */
 const ALLOWED_EXACT = new Set(['/auth/me']);
 
+/** Methods that must not change state (RFC 9110 §9.2.1). */
+const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
+
 const DENIED_MESSAGE =
   'API keys cannot be used on account-management endpoints. Sign in interactively.';
 
@@ -104,6 +107,21 @@ export class ApiKeySurfaceGuard implements CanActivate {
     if (vaultReveal && !req.user.apiKeyAllowPasswordReveal) {
       throw new ForbiddenException(
         'This API key is not permitted to reveal stored credentials.',
+      );
+    }
+
+    // Read-only keys: refuse anything that is not a safe method. Keyed off the
+    // HTTP method, not a route list, so a new write endpoint is covered the
+    // day it is added (fail-closed, unlike the prefix list below). The one
+    // exception is the `@VaultReveal()` routes: they are POSTs that change
+    // nothing, and they already passed their own, stricter gate above.
+    if (
+      !req.user.apiKeyAllowWrite &&
+      !SAFE_METHODS.has(req.method.toUpperCase()) &&
+      !vaultReveal
+    ) {
+      throw new ForbiddenException(
+        'This API key is read-only. Create a key with "Allow changes" to modify data.',
       );
     }
 
