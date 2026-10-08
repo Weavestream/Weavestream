@@ -29,6 +29,8 @@ export type Settings = {
    * piped into `ArticleForm` via the create-page server component.
    */
   articleDefaultEditorMode: ArticleEditorMode;
+  /** Instance-wide API key switch. Changed only via `PUT /settings/api-keys`. */
+  apiKeysEnabled: boolean;
   updatedAt: string;
 };
 
@@ -47,6 +49,7 @@ const DEFAULT_SETTINGS: Settings = {
   passwordGeneratorDefaults: DEFAULT_PASSWORD_GENERATOR_DEFAULTS,
   articleAutosaveEnabled: false,
   articleDefaultEditorMode: 'tiptap',
+  apiKeysEnabled: false,
   updatedAt: new Date(0).toISOString(),
 };
 

@@ -1,7 +1,9 @@
 import { Module } from '@nestjs/common';
 import { AuthController } from './auth.controller.js';
+import { ApiKeysController } from './api-keys.controller.js';
 import { AuthService } from './auth.service.js';
 import { TokenService } from './token.service.js';
+import { ApiKeyService } from './api-key.service.js';
 import { MfaService } from './mfa.service.js';
 import { MfaBackupCodeService } from './mfa-backup-code.service.js';
 import { LockoutService } from './lockout.service.js';
@@ -10,13 +12,17 @@ import { CsrfService } from './csrf.service.js';
 import { StepUpService } from './step-up/step-up.service.js';
 import { StepUpController } from './step-up/step-up.controller.js';
 import { UsersModule } from '../users/users.module.js';
+import { SettingsModule } from '../settings/settings.module.js';
 
 @Module({
-  imports: [UsersModule],
-  controllers: [AuthController, StepUpController],
+  // SettingsModule: ApiKeyService refuses to mint while the instance switch
+  // is off. SettingsModule imports nothing, so this adds no cycle.
+  imports: [UsersModule, SettingsModule],
+  controllers: [AuthController, ApiKeysController, StepUpController],
   providers: [
     AuthService,
     TokenService,
+    ApiKeyService,
     MfaService,
     MfaBackupCodeService,
     LockoutService,
@@ -31,6 +37,9 @@ import { UsersModule } from '../users/users.module.js';
     MfaBackupCodeService,
     PasswordService,
     CsrfService,
+    // Exported so the globally-registered AuthGuard (app.module) can inject it
+    // to authenticate bearer-token principals.
+    ApiKeyService,
     // Exported so the globally-registered StepUpGuard (app.module) and
     // SecurityService (revoke cleanup) can inject it.
     StepUpService,

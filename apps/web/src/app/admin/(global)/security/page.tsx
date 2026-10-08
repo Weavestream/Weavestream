@@ -1,8 +1,13 @@
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
-import { describeCatchAllFamilyGap } from '@weavestream/shared';
+import {
+  ADMIN_API_KEY_DEFAULT_PAGE_SIZE,
+  ADMIN_API_KEY_PAGE_SIZES,
+  describeCatchAllFamilyGap,
+} from '@weavestream/shared';
 import { requireMe } from '../../../../lib/server-api/auth';
 import {
+  getSecurityApiKeys,
   getSecurityEgressBlocks,
   getSecurityIpRuleCoverage,
   getSecurityLockouts,
@@ -10,6 +15,7 @@ import {
   getSecuritySessions,
   getSecurityThrottleBlocks,
 } from '../../../../lib/server-api/security';
+import { getSettings } from '../../../../lib/server-api/settings';
 import { hasCapability } from '../../../../lib/roles';
 import { PageBody, PageHeader } from '../../../../components/shell/page-header';
 import { ErrorBanner, Panel, Stat } from '../../../../components/ui';
@@ -28,7 +34,12 @@ import { SecurityCenterClient } from './security-client';
 export default async function SecurityCenterPage({
   searchParams,
 }: {
-  searchParams: Promise<{ tab?: string; window?: string }>;
+  searchParams: Promise<{
+    tab?: string;
+    window?: string;
+    keyPage?: string;
+    keyPageSize?: string;
+  }>;
 }) {
   const me = await requireMe();
   if (!hasCapability(me, 'SECURITY_READ')) redirect('/admin');
@@ -36,7 +47,7 @@ export default async function SecurityCenterPage({
   const sp = await searchParams;
   const requestedWindow = parseWindow(sp.window);
 
-  const [activity, lockouts, blocks, sessions, egress, ipRuleCoverage] =
+  const [activity, lockouts, blocks, sessions, egress, ipRuleCoverage, apiKeys, settings] =
     await Promise.all([
       getSecurityLoginActivity(requestedWindow),
       getSecurityLockouts(),
@@ -44,6 +55,8 @@ export default async function SecurityCenterPage({
       getSecuritySessions(),
       getSecurityEgressBlocks(168),
       getSecurityIpRuleCoverage(),
+      getSecurityApiKeys(parseKeyPage(sp.keyPage), parseKeyPageSize(sp.keyPageSize)),
+      getSettings(),
     ]);
 
   const lockedIp = (lockouts?.ip ?? []).filter((r) => r.locked).length;
@@ -165,12 +178,26 @@ export default async function SecurityCenterPage({
           blocks={blocks}
           sessions={sessions}
           egress={egress}
+          apiKeys={apiKeys}
+          apiKeysEnabled={settings.apiKeysEnabled}
           canRevoke={canRevoke}
           currentUserId={me.id}
         />
       </PageBody>
     </>
   );
+}
+
+function parseKeyPage(raw: string | undefined): number {
+  const n = raw ? parseInt(raw, 10) : 1;
+  return Number.isFinite(n) && n >= 1 ? n : 1;
+}
+
+function parseKeyPageSize(raw: string | undefined): number {
+  const n = raw ? parseInt(raw, 10) : ADMIN_API_KEY_DEFAULT_PAGE_SIZE;
+  return (ADMIN_API_KEY_PAGE_SIZES as readonly number[]).includes(n)
+    ? n
+    : ADMIN_API_KEY_DEFAULT_PAGE_SIZE;
 }
 
 function parseWindow(raw: string | undefined): number {
@@ -184,6 +211,7 @@ const VALID_TABS = [
   'lockouts',
   'blocks',
   'sessions',
+  'api-keys',
   'egress',
   'diagnostics',
 ] as const;

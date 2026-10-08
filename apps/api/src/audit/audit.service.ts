@@ -1,6 +1,7 @@
 import { ForbiddenException, Injectable, Logger } from '@nestjs/common';
 import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service.js';
+import { getTenantContext } from '@weavestream/shared/server';
 
 export interface AuditEntry {
   actorId: string | null;
@@ -12,6 +13,11 @@ export interface AuditEntry {
   userAgent?: string | null;
   before?: unknown;
   after?: unknown;
+  /**
+   * API key that performed the action. Normally omitted: filled from the
+   * request's tenant context, so ordinary call sites need not thread it.
+   */
+  apiKeyId?: string | null;
 }
 
 /**
@@ -95,6 +101,7 @@ export class AuditLogService {
         userAgent: entry.userAgent ?? null,
         before: (entry.before ?? null) as never,
         after: (entry.after ?? null) as never,
+        apiKeyId: entry.apiKeyId ?? getTenantContext()?.apiKeyId ?? null,
       },
       select: {
         id: true,
@@ -158,6 +165,7 @@ export class AuditLogService {
         userAgent: entry.userAgent ?? null,
         before: (entry.before ?? null) as never,
         after: (entry.after ?? null) as never,
+        apiKeyId: entry.apiKeyId ?? getTenantContext()?.apiKeyId ?? null,
       },
     });
   }
@@ -178,6 +186,7 @@ export class AuditLogService {
           userAgent: entry.userAgent ?? null,
           before: (entry.before ?? null) as never,
           after: (entry.after ?? null) as never,
+          apiKeyId: entry.apiKeyId ?? getTenantContext()?.apiKeyId ?? null,
         })),
       });
     }

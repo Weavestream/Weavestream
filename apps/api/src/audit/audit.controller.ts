@@ -58,6 +58,7 @@ export class AuditController {
       actorId: true,
       ip: true,
       userAgent: true,
+      apiKeyId: true,
       createdAt: true,
       before: true,
       after: true,

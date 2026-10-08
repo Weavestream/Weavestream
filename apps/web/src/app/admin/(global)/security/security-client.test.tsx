@@ -1,6 +1,7 @@
 /** @jest-environment jsdom */
 import '@testing-library/jest-dom';
-import { render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
+import { ToastProvider } from '../../../../components/ui';
 import type { ConnectionDiagnostics } from '@weavestream/shared';
 import { SecurityCenterClient } from './security-client';
 
@@ -41,6 +42,8 @@ function renderConnectionTab(data: ConnectionDiagnostics) {
       blocks={null}
       sessions={null}
       egress={null}
+      apiKeys={null}
+      apiKeysEnabled={false}
       canRevoke={false}
       currentUserId="u-1"
     />,
@@ -84,5 +87,87 @@ describe('SecurityCenterClient — Connection tab', () => {
     renderConnectionTab(diagnostics());
     const label = await screen.findByText('Inbound chain (as received by web)');
     expect(label.parentElement).toHaveTextContent('198.51.100.7, 172.18.0.4');
+  });
+});
+
+describe('API keys tab', () => {
+  const KEY = {
+    id: 'k-1',
+    keyId: '0123456789abcdef01',
+    name: 'MCP on laptop',
+    scopes: [],
+    allowPasswordReveal: false,
+    allowWrite: true,
+    lastUsedAt: null,
+    expiresAt: null,
+    createdAt: '2026-10-01T00:00:00Z',
+    user: { id: 'u-9', name: 'Pat Doe', email: 'pat@example.com' },
+  };
+
+  function renderKeys(
+    props: { enabled?: boolean; canRevoke?: boolean; total?: number; page?: number } = {},
+  ) {
+    render(
+      <ToastProvider>
+        <SecurityCenterClient
+          initialTab="api-keys"
+          initialWindow={24}
+          activity={null}
+          lockouts={null}
+          blocks={null}
+          sessions={null}
+          egress={null}
+          apiKeys={{
+            items: [KEY],
+            total: props.total ?? 1,
+            page: props.page ?? 1,
+            pageSize: 50,
+          }}
+          apiKeysEnabled={props.enabled ?? true}
+          canRevoke={props.canRevoke ?? true}
+          currentUserId="u-1"
+        />
+      </ToastProvider>,
+    );
+  }
+
+  beforeEach(() => {
+    apiFetch.mockReset();
+    jest.spyOn(window, 'confirm').mockReturnValue(true);
+  });
+
+  it('shows every key with its owner and what it may do', () => {
+    renderKeys();
+    expect(screen.getAllByText('MCP on laptop').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('pat@example.com').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('can change').length).toBeGreaterThan(0);
+  });
+
+  it('revokes through the admin route after confirmation', async () => {
+    apiFetch.mockResolvedValue({ ok: true, status: 200, data: { revoked: 1 } });
+    renderKeys();
+    await act(async () => {
+      fireEvent.click(screen.getAllByRole('button', { name: 'Revoke' })[0]!);
+    });
+    expect(window.confirm).toHaveBeenCalled();
+    expect(apiFetch).toHaveBeenCalledWith('/security/api-keys/k-1', { method: 'DELETE' });
+  });
+
+  it('hides revoke from admins without user.manage', () => {
+    renderKeys({ canRevoke: false });
+    expect(screen.queryByRole('button', { name: 'Revoke' })).not.toBeInTheDocument();
+  });
+
+  it('pages instead of hiding keys beyond the first page', () => {
+    renderKeys({ total: 120, page: 2 });
+    expect(screen.getByText(/120/)).toBeInTheDocument();
+    const page3 = screen.getByRole('link', { name: 'Page 3' });
+    expect(page3.getAttribute('href')).toContain('keyPage=3');
+    expect(page3.getAttribute('href')).toContain('tab=api-keys');
+  });
+
+  it('says when keys are switched off instance-wide', () => {
+    renderKeys({ enabled: false });
+    expect(screen.getByText(/API keys are turned off/)).toBeInTheDocument();
   });
 });

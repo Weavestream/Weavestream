@@ -518,6 +518,7 @@ function makeInviteService(
     user: { findUnique: jest.Mock; update: jest.Mock };
     userSetupToken: { updateMany: jest.Mock };
     userMfaBackupCode: { deleteMany: jest.Mock };
+    apiKey: { updateMany: jest.Mock };
     session: { create: jest.Mock };
     $transaction: jest.Mock;
   } = {
@@ -529,6 +530,7 @@ function makeInviteService(
       updateMany: jest.fn().mockResolvedValue({ count: opts.consumeCount ?? 1 }),
     },
     userMfaBackupCode: { deleteMany: jest.fn().mockResolvedValue({ count: 0 }) },
+    apiKey: { updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
     session: { create: jest.fn().mockResolvedValue({ id: 's-new' }) },
     // Pass the same mock object as the transaction client so the guarded
     // tx.userSetupToken.updateMany above is the one asserted below.

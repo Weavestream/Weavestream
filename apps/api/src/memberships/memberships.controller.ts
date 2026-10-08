@@ -26,6 +26,7 @@ import { PermissionService } from '../rbac/permission.service.js';
 import { ipOf, userAgentOf as uaOf } from '../common/request-meta.js';
 import { ForbiddenException, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service.js';
+import { InteractiveOnly } from '../auth/interactive-only.decorator.js';
 
 /**
  * Consolidated membership endpoints. The membership id alone doesn't
@@ -79,6 +80,7 @@ export class MembershipsController {
   }
 
   @Patch(':id')
+  @InteractiveOnly()
   @AuthedOnly()
   async update(
     @CurrentUser() user: AuthedUser,
@@ -94,6 +96,7 @@ export class MembershipsController {
   }
 
   @Delete(':id')
+  @InteractiveOnly()
   @AuthedOnly()
   @HttpCode(HttpStatus.OK)
   async revoke(

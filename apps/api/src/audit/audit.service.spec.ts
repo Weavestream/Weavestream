@@ -1,3 +1,4 @@
+import { runWithTenantContext } from '@weavestream/shared/server';
 import { AuditLogService } from './audit.service.js';
 
 function makePrisma() {
@@ -234,5 +235,40 @@ describe('AuditLogService.logChange (Phase 9a)', () => {
     });
 
     expect(prisma.auditLog.create).not.toHaveBeenCalled();
+  });
+});
+
+describe('AuditLogService API-key attribution', () => {
+  const tenant = (apiKeyId?: string) => ({
+    userId: 'u-1',
+    role: 'SUPER_ADMIN' as const,
+    email: 'u@example.com',
+    allowedCompanyIds: [],
+    isSuperAdmin: true,
+    globalAccess: null,
+    requestId: 'r-1',
+    apiKeyId,
+    ip: '198.51.100.7',
+    userAgent: 'jest',
+  });
+
+  it('stamps the request\'s API key on rows written while serving it', async () => {
+    const prisma = makePrisma();
+    prisma.auditLog.create.mockResolvedValue({ id: 'a-1', createdAt: new Date() });
+    const svc = new AuditLogService(prisma as never);
+    await runWithTenantContext(tenant('k-1') as never, () =>
+      svc.log({ actorId: 'u-1', action: 'password.revealed', entityType: 'Password', entityId: 'p-1' }),
+    );
+    expect(prisma.auditLog.create.mock.calls[0][0].data.apiKeyId).toBe('k-1');
+  });
+
+  it('leaves it null for an interactive session', async () => {
+    const prisma = makePrisma();
+    prisma.auditLog.create.mockResolvedValue({ id: 'a-1', createdAt: new Date() });
+    const svc = new AuditLogService(prisma as never);
+    await runWithTenantContext(tenant() as never, () =>
+      svc.log({ actorId: 'u-1', action: 'password.revealed', entityType: 'Password', entityId: 'p-1' }),
+    );
+    expect(prisma.auditLog.create.mock.calls[0][0].data.apiKeyId).toBeNull();
   });
 });

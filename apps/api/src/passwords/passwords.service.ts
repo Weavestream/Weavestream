@@ -214,9 +214,10 @@ export class PasswordsService {
     id: string,
   ): Promise<SerializedPasswordDetail> {
     const row = await this.loadForRead(actor, companyId, id);
-    const notes = row.notesCiphertext
-      ? this.safeDecryptNotes(row.notesCiphertext, companyId, id)
-      : null;
+    const notes =
+      row.notesCiphertext && mayReadVaultNotes(actor)
+        ? this.safeDecryptNotes(row.notesCiphertext, companyId, id)
+        : null;
     const isStarred = await this.stars.isStarred(actor.id, 'password', id);
     return {
       ...this.toSummary(row, actor),
@@ -596,9 +597,10 @@ export class PasswordsService {
     const isStarred = await this.stars.isStarred(actor.id, 'password', id);
     return {
       ...this.toSummary(updated, actor),
-      notes: updated.notesCiphertext
-        ? this.safeDecryptNotes(updated.notesCiphertext, companyId, id)
-        : null,
+      notes:
+        updated.notesCiphertext && mayReadVaultNotes(actor)
+          ? this.safeDecryptNotes(updated.notesCiphertext, companyId, id)
+          : null,
       totpAlgorithm: updated.totpAlgorithm,
       totpDigits: updated.totpDigits,
       totpPeriod: updated.totpPeriod,
@@ -1452,3 +1454,14 @@ function algorithmNameFor(algo: TotpAlgo): 'sha1' | 'sha256' | 'sha512' {
 
 /** Exposed for tests and the `cli reencrypt-passwords` command. */
 export type { Password, PasswordVersion };
+
+/**
+ * Notes are encrypted with the vault key because they hold vault-grade
+ * material (recovery codes, PINs, secondary logins). A key that was not
+ * minted with `allowPasswordReveal` gets them as null, the same as the
+ * password itself; otherwise the default-deny reveal gate would be a
+ * GET away from being bypassed. Interactive sessions are unaffected.
+ */
+function mayReadVaultNotes(actor: AuthedUser): boolean {
+  return !actor.apiKeyId || actor.apiKeyAllowPasswordReveal === true;
+}

@@ -505,6 +505,23 @@ describe('PasswordsService — detail', () => {
     );
   });
 
+  it('withholds notes from an API key not minted with allowPasswordReveal', async () => {
+    // Notes are vault-encrypted (recovery codes, PINs). Returning them to a
+    // default key would make the reveal gate a GET away from bypassed.
+    const rows = () => [
+      passwordRow({ id: 'pwd-a', notesCiphertext: 'ENC(door code 4471)' }),
+    ];
+    const plain = makeStubs({ passwords: rows() });
+    const keyed = { ...OPERATOR, apiKeyId: 'k-1', apiKeyAllowPasswordReveal: false };
+    expect((await plain.svc.getDetail(keyed, 'co-1', 'pwd-a')).notes).toBeNull();
+    expect(plain.crypto.decrypt).not.toHaveBeenCalled();
+
+    const opted = makeStubs({ passwords: rows() });
+    const revealKey = { ...OPERATOR, apiKeyId: 'k-2', apiKeyAllowPasswordReveal: true };
+    // Notes are returned as stored plain text.
+    expect((await opted.svc.getDetail(revealKey, 'co-1', 'pwd-a')).notes).toBe('door code 4471');
+  });
+
   it('returns any stored JSON-looking note as its text, never parsed', async () => {
     const stored = '{"type":"doc","content":[{"type":"paragraph"}]}';
     const { svc } = makeStubs({

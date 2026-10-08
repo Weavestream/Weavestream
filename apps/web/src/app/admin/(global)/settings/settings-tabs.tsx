@@ -11,6 +11,7 @@ import {
 } from './settings-form';
 import { EmailSettingsForm } from './email-settings-form';
 import { AiSettingsForm } from './ai-settings-form';
+import { ApiKeysSwitch } from './api-keys-switch';
 
 type TabId = 'general' | 'security' | 'articles' | 'email' | 'ai';
 
@@ -112,7 +113,12 @@ export function SettingsTabs({
       </div>
       <div style={{ padding: 18 }}>
         {tab === 'general' && <GeneralSettingsForm initial={settings} />}
-        {tab === 'security' && <SecuritySettingsForm initial={settings} />}
+        {tab === 'security' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
+            <ApiKeysSwitch enabled={settings.apiKeysEnabled} />
+            <SecuritySettingsForm initial={settings} />
+          </div>
+        )}
         {tab === 'articles' && <ArticleSettingsForm initial={settings} />}
         {tab === 'email' && (
           <EmailSettingsForm

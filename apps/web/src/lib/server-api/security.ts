@@ -6,6 +6,7 @@ import type {
   LoginActivity,
   SecuritySessionRow,
   ThrottleBlockEntry,
+  AdminApiKeyPage,
 } from '@weavestream/shared';
 import { serverApiFetch } from './core';
 
@@ -63,6 +64,16 @@ export async function getSecuritySessions(): Promise<
     '/security/sessions?limit=200',
   );
   return res.ok ? (res.data?.items ?? []) : null;
+}
+
+/** One page of every unrevoked API key with its owner, or null when the read failed. */
+export async function getSecurityApiKeys(
+  page: number,
+  pageSize: number,
+): Promise<AdminApiKeyPage | null> {
+  const q = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
+  const res = await serverApiFetch<AdminApiKeyPage>(`/security/api-keys?${q.toString()}`);
+  return res.ok ? res.data : null;
 }
 
 export async function getSecurityEgressBlocks(

@@ -17,6 +17,24 @@ export interface AuthedUser {
   sessionId: string;
   mfaEnforcementCompletedAt: Date | null;
   mfaPending: boolean;
+  /**
+   * Set when the principal authenticated with an API key rather than a
+   * browser session. Presence — not absence — is the signal: guards that
+   * must treat programmatic callers differently check this, so a new cookie
+   * field can never accidentally opt a token into an interactive-only path.
+   */
+  apiKeyId?: string;
+  /**
+   * Whether this key may decrypt stored credentials. Default false; opting in
+   * is a deliberate act at mint time. Absent for interactive principals, who
+   * are governed by the `password.reveal` permission as before.
+   */
+  apiKeyAllowPasswordReveal?: boolean;
+  /**
+   * Whether this key may change data. Default false (read-only); opting in is
+   * a deliberate act at mint time. Absent for interactive principals.
+   */
+  apiKeyAllowWrite?: boolean;
 }
 
 export const CurrentUser = createParamDecorator(

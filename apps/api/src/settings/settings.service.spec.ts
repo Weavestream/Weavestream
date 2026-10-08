@@ -34,6 +34,7 @@ function baseRow(overrides: Partial<Record<string, unknown>> = {}) {
     tenantTermPossessive: null as string | null,
     articleAutosaveEnabled: false,
     articleDefaultEditorMode: 'tiptap',
+    apiKeysEnabled: false,
     updatedAt: NOW,
     updatedBy: null as string | null,
     ...overrides,
@@ -71,6 +72,7 @@ describe('SettingsService.get', () => {
       passwordGeneratorDefaults: DEFAULT_PASSWORD_GENERATOR_DEFAULTS,
       articleAutosaveEnabled: false,
       articleDefaultEditorMode: 'tiptap',
+      apiKeysEnabled: false,
       updatedAt: NOW.toISOString(),
     });
     expect(prisma.systemSetting.findUnique).toHaveBeenCalledTimes(1);
@@ -211,5 +213,78 @@ describe('SettingsService.update', () => {
     });
     expect(dataArg).not.toHaveProperty('tenantTermSingular');
     expect(dataArg).not.toHaveProperty('workspaceSubtitle');
+  });
+});
+
+describe('SettingsService API key switch', () => {
+  /** Prisma stub whose interactive transaction runs against the same mocks. */
+  function txPrisma() {
+    const prisma = makePrisma() as ReturnType<typeof makePrisma> & {
+      $transaction: jest.Mock;
+    };
+    Object.assign(prisma.systemSetting, { findUniqueOrThrow: jest.fn() });
+    prisma.$transaction = jest.fn(async (fn: (tx: unknown) => unknown) => fn(prisma));
+    return prisma as typeof prisma & {
+      systemSetting: { findUniqueOrThrow: jest.Mock };
+    };
+  }
+  function txAudit() {
+    return { log: jest.fn(), logWithClient: jest.fn().mockResolvedValue(undefined) };
+  }
+
+  it('is off by default', async () => {
+    const prisma = makePrisma();
+    prisma.systemSetting.findUnique.mockResolvedValue(baseRow());
+    const svc = new SettingsService(prisma as never, makeAudit() as never);
+    await expect(svc.apiKeysEnabled()).resolves.toBe(false);
+  });
+
+  it('writes and audits in one transaction, then drops the cache', async () => {
+    const prisma = txPrisma();
+    prisma.systemSetting.findUnique.mockResolvedValue(baseRow());
+    prisma.systemSetting.findUniqueOrThrow.mockResolvedValue({ apiKeysEnabled: false });
+    prisma.systemSetting.update.mockResolvedValue(baseRow({ apiKeysEnabled: true }));
+    const audit = txAudit();
+    const svc = new SettingsService(prisma as never, audit as never);
+
+    await svc.apiKeysEnabled(); // warm the cache with "off"
+    const out = await svc.setApiKeysEnabled(ACTOR, true, META);
+    prisma.systemSetting.findUnique.mockResolvedValue(baseRow({ apiKeysEnabled: true }));
+
+    expect(out.apiKeysEnabled).toBe(true);
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+    expect(prisma.systemSetting.update).toHaveBeenCalledWith({
+      where: { id: 'singleton' },
+      data: { apiKeysEnabled: true, updatedBy: 'actor-1' },
+    });
+    // The audit row is written with the transaction client, not after it.
+    expect(audit.log).not.toHaveBeenCalled();
+    expect(audit.logWithClient.mock.calls[0][0]).toBe(prisma);
+    expect(audit.logWithClient.mock.calls[0][1]).toMatchObject({
+      action: 'settings.api_keys.toggle',
+      before: { apiKeysEnabled: false },
+      after: { apiKeysEnabled: true },
+    });
+    await expect(svc.apiKeysEnabled()).resolves.toBe(true);
+  });
+
+  it('fails as a whole when the audit write fails, and never serves a stale cached gate', async () => {
+    const prisma = txPrisma();
+    prisma.systemSetting.findUnique.mockResolvedValue(baseRow({ apiKeysEnabled: true }));
+    prisma.systemSetting.findUniqueOrThrow.mockResolvedValue({ apiKeysEnabled: true });
+    prisma.systemSetting.update.mockResolvedValue(baseRow({ apiKeysEnabled: false }));
+    const audit = txAudit();
+    audit.logWithClient.mockRejectedValueOnce(new Error('audit down'));
+    const svc = new SettingsService(prisma as never, audit as never);
+
+    await expect(svc.apiKeysEnabled()).resolves.toBe(true); // cached "on"
+    await expect(svc.setApiKeysEnabled(ACTOR, false, META)).rejects.toThrow('audit down');
+
+    // The transaction rolled back (Prisma's contract), so the row still
+    // says "on". The next read must come from the database, not a cache
+    // that was skipped by the failure.
+    const reads = prisma.systemSetting.findUnique.mock.calls.length;
+    await svc.apiKeysEnabled();
+    expect(prisma.systemSetting.findUnique.mock.calls.length).toBe(reads + 1);
   });
 });

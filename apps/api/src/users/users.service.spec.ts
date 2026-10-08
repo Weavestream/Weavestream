@@ -26,6 +26,7 @@ function makePrisma() {
     membership: { create: jest.Mock };
     session: { updateMany: jest.Mock };
     userMfaBackupCode: { deleteMany: jest.Mock };
+    apiKey: { updateMany: jest.Mock };
     $transaction: jest.Mock;
   } = {
     user: {
@@ -37,6 +38,7 @@ function makePrisma() {
     membership: { create: jest.fn() },
     session: { updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
     userMfaBackupCode: { deleteMany: jest.fn().mockResolvedValue({ count: 0 }) },
+    apiKey: { updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
     $transaction: jest.fn(async (fn: (tx: unknown) => unknown) => fn(prisma)),
   };
   return prisma;
@@ -361,6 +363,33 @@ describe('UsersService deactivation consequences', () => {
 });
 
 describe('UsersService.resetMfa', () => {
+  it('revokes the user\u2019s API keys too', async () => {
+    const prisma = makePrisma();
+    prisma.user.findUnique.mockResolvedValueOnce({
+      id: 'u-1',
+      mfaEnabled: true,
+      mfaEnforcementCompletedAt: new Date(),
+    });
+    prisma.user.update.mockResolvedValue({ id: 'u-1' });
+    const svc = new UsersService(
+      prisma as never,
+      makeAudit() as never,
+      makeCache() as never,
+      makeSetupTokens() as never,
+    );
+    await svc.resetMfa(
+      { id: 'admin', role: 'SUPER_ADMIN' } as never,
+      'u-1',
+      { ip: '203.0.113.9', userAgent: 'jest' },
+    );
+    // Resetting MFA is a compromise response; a surviving key would keep full
+    // access precisely when the admin believes they just cut it off.
+    expect(prisma.apiKey.updateMany).toHaveBeenCalledWith({
+      where: { userId: 'u-1', revokedAt: null },
+      data: { revokedAt: expect.any(Date) },
+    });
+  });
+
   it('clears MFA, revokes sessions, audits', async () => {
     const prisma = makePrisma();
     const audit = makeAudit();

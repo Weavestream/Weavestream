@@ -11,6 +11,7 @@
  * Type-only re-exports (e.g. `TenantContext`) are safe here because they
  * are erased by TypeScript before any bundler sees them.
  */
+export * from './schemas/api-key.js';
 export * from './roles.js';
 export * from './password-strength.js';
 export * from './safe-external-href.js';
