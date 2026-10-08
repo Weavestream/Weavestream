@@ -113,7 +113,8 @@ function harness(opts: {
     },
   };
   const add = jest.fn().mockResolvedValue(undefined);
-  const queues = { get: jest.fn(() => ({ add })) };
+  const enqueueDomainCheck = jest.fn().mockResolvedValue('job-1');
+  const queues = { get: jest.fn(() => ({ add })), enqueueDomainCheck };
   const svc = new CloudflareRegistrarSyncService(
     prisma as never,
     integrations as never,
@@ -123,7 +124,7 @@ function harness(opts: {
     redis as never,
     queues as never,
   );
-  return { svc, rows, audit, driver, kv, add };
+  return { svc, rows, audit, driver, kv, add, enqueueDomainCheck };
 }
 
 describe('matchRow', () => {
@@ -197,6 +198,15 @@ describe('CloudflareRegistrarSyncService.sync', () => {
     expect(manual).toMatchObject({ source: 'CLOUDFLARE', integrationId: INT, registrarAutoRenew: true });
     const created = rows.find((r) => r.hostname === 'new.example.org');
     expect(created).toMatchObject({ companyId: HODY, source: 'CLOUDFLARE', createdBy: 'u-1' });
+  });
+
+  it('queues a first check for each newly created domain, and only those', async () => {
+    const existing = row({ id: 'old', hostname: 'old.com', source: 'CLOUDFLARE', integrationId: INT });
+    const { svc, rows, enqueueDomainCheck } = harness({ rows: [existing], cfDomains: [cf('old.com'), cf('new.com')] });
+    await svc.sync(INT, 'u-1');
+    const created = rows.find((r) => r.hostname === 'new.com')!;
+    expect(enqueueDomainCheck).toHaveBeenCalledTimes(1);
+    expect(enqueueDomainCheck).toHaveBeenCalledWith({ kind: 'single', domainId: created.id, actorId: 'u-1' });
   });
 
   it('stamps missing once and never deletes', async () => {

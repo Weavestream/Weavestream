@@ -218,6 +218,7 @@ export class CloudflareRegistrarSyncService {
     const seen = new Set<string>();
     const createdNames: string[] = [];
     const adoptedNames: string[] = [];
+    const createdIds: string[] = [];
     const skipped: Record<string, string> = {};
 
     // Checked immediately before every write: past the deadline the lock may
@@ -276,7 +277,7 @@ export class CloudflareRegistrarSyncService {
       } else {
         try {
           assertBudget();
-          await this.prisma.monitoredDomain.create({
+          const row = await this.prisma.monitoredDomain.create({
             data: {
               ...registrarData,
               companyId: company.id,
@@ -286,6 +287,7 @@ export class CloudflareRegistrarSyncService {
           });
           result.created += 1;
           createdNames.push(hostname);
+          createdIds.push(row.id);
         } catch (err) {
           // Someone added the same hostname by hand mid-run. Leave it; the
           // next sweep adopts it through matchRow.
@@ -311,6 +313,18 @@ export class CloudflareRegistrarSyncService {
         data: { registrarMissingSince: now },
       });
       result.missing = gone.length;
+    }
+
+    // New domains get their first WHOIS/DNS/TLS check now, not at the
+    // nightly sweep. Best effort: a queue hiccup must not fail the sync.
+    for (const domainId of createdIds) {
+      await this.queues
+        .enqueueDomainCheck({ kind: 'single', domainId, actorId })
+        .catch((err: unknown) =>
+          this.logger.warn(
+            `First check for synced domain ${domainId} not queued: ${err instanceof Error ? err.message : String(err)}`,
+          ),
+        );
     }
 
     await this.audit.log({
