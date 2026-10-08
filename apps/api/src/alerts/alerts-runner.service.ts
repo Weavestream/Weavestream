@@ -8,6 +8,8 @@ import {
 } from '@weavestream/shared';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { QueuesService } from '../queues/queues.service.js';
+import { expirationDismissalKey } from '@weavestream/shared';
+import { loadDismissalMap } from '../expirations/expiration-dismissals.service.js';
 
 /**
  * Pure evaluators for the three time/state-based alert types.
@@ -358,8 +360,11 @@ export class AlertsRunnerService {
       }
     }
 
-    items.sort((a, b) => a.daysUntil - b.daysUntil);
-    return items;
+    // Items the operator dismissed for this due date never alert again.
+    const dismissed = await loadDismissalMap(this.prisma, config.companyId ?? undefined);
+    const live = dismissed.size === 0 ? items : items.filter((it) => !dismissed.has(dismissalKeyOf(it)));
+    live.sort((a, b) => a.daysUntil - b.daysUntil);
+    return live;
   }
 
   // ------------------------------------------------------------------
@@ -410,7 +415,7 @@ export class AlertsRunnerService {
 type AlertConfigRow =
   import('@prisma/client').AlertConfig;
 
-interface ExpirationItem {
+export interface ExpirationItem {
   id: string;
   kind: AlertExpirationKind;
   /**
@@ -499,3 +504,13 @@ function renderExpirationListText(
   );
   return lines.join('\n');
 }
+
+/** The Expiring-soon dismissal key for an alert item (same identity as the feed row). */
+export function dismissalKeyOf(item: ExpirationItem): string {
+  const [entityId, part] = item.id.split(':') as [string, string];
+  if (item.kind === 'asset') return expirationDismissalKey('asset-field', entityId, part, item.expiresAt);
+  if (item.kind === 'domain_registrar') return expirationDismissalKey('domain', entityId, 'registrar', item.expiresAt);
+  if (item.kind === 'domain_tls') return expirationDismissalKey('domain', entityId, 'tls', item.expiresAt);
+  return expirationDismissalKey('password', entityId, item.source ?? 'expiry', item.expiresAt);
+}
+

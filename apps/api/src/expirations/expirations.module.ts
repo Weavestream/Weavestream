@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { ExpirationsService } from './expirations.service.js';
+import { ExpirationDismissalsService } from './expiration-dismissals.service.js';
 import {
   CompanyExpirationsController,
   GlobalExpirationsController,
@@ -15,7 +16,7 @@ import {
  */
 @Module({
   controllers: [CompanyExpirationsController, GlobalExpirationsController],
-  providers: [ExpirationsService],
-  exports: [ExpirationsService],
+  providers: [ExpirationsService, ExpirationDismissalsService],
+  exports: [ExpirationsService, ExpirationDismissalsService],
 })
 export class ExpirationsModule {}

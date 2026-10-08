@@ -58,6 +58,8 @@ export const TENANT_SCOPED_MODELS = new Set<string>([
   // IPAM: company-scoped subnet registry and manual IP reservations.
   'Subnet',
   'IpReservation',
+  // Expiring-soon dismissals (per item, per due date).
+  'ExpirationDismissal',
   // Phase 1: AuditLog can be cross-tenant (`companyId` is nullable for
   // system events), so it is excluded by design.
   //
