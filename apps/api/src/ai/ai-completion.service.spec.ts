@@ -76,6 +76,32 @@ describe('outputTokenParam / stripThinkTags (moved from chat-stream)', () => {
   it('strips multiple think blocks case-insensitively', () => {
     expect(stripThinkTags('<THINK>a</THINK>x<think>b</think>y')).toBe('xy');
   });
+
+  // The pre-CodeQL-#38 implementation, kept as the behavioral oracle.
+  const regexStrip = (raw: string) =>
+    raw.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+
+  it.each([
+    'plain answer',
+    '<think>a</think>',
+    '  <think>a</think>  answer  ',
+    '<think>unclosed answer',
+    'stray </think> close',
+    '</think><think>a</think>b',
+    '<think>a<think>b</think>c</think>d',
+    'a<think>b</think>c<think>d',
+    '<think></think><Think>x</tHiNk>y',
+    '<thinker>not a tag</thinker>',
+  ])('matches the old regex on %j', (raw) => {
+    expect(stripThinkTags(raw)).toBe(regexStrip(raw));
+  });
+
+  it('stays linear on many unclosed <think> tags', () => {
+    const raw = '<think>'.repeat(200_000) + 'tail';
+    const start = Date.now();
+    expect(stripThinkTags(raw)).toBe(raw);
+    expect(Date.now() - start).toBeLessThan(1_000);
+  });
 });
 
 describe('isContextLengthError', () => {

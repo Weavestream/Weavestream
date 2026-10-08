@@ -40,6 +40,12 @@ The rule is based on the HTTP method, so it also covers endpoints added later. T
 
 Give write access only to a script or agent that must create or update records. An AI agent that only answers questions needs a read-only key.
 
+## No per-key scopes yet
+
+A key cannot yet be narrowed to some companies, some record types or some routes. Apart from the two options above, it reaches everything its owner can reach. The API refuses a create request that sends `scopes` with `400` rather than accept a limit it would not enforce.
+
+To give a script less access than you have, create the key from a separate user account with only the permissions the script needs.
+
 ## What a key cannot do
 
 A key is contained so that a leaked key is a revocable loss, not an account takeover. Requests made with a key are refused on:

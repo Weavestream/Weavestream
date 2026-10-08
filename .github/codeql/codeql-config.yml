@@ -57,3 +57,17 @@ queries:
 #   and neither ships in a bundle. Not refactorable — passing the diagram
 #   source to a browser IS the design, since Mermaid measures text with
 #   `getBBox` and cannot render without one.
+#
+# - `js/user-controlled-bypass` (CWE-807 / CWE-290) on
+#   `apps/api/src/auth/guards/auth.guard.ts` at `if (bearer) return
+#   this.authenticateApiKey(...)` (alert #40). The `Authorization` header
+#   only SELECTS which authenticator runs; it never skips authentication.
+#   The API-key path fails closed on every branch: instance switch off,
+#   malformed token, unknown/revoked/expired key, hash mismatch
+#   (`timingSafeEqual` in `ApiKeyService.verify`), inactive owner — each is
+#   a bare 401, and a dead `ws_` token never falls back to the cookie path.
+#   `apiKeyId` (which relaxes CSRF and gates surfaces) is set only after
+#   verification succeeds. Covered by the "AuthGuard bearer handling" specs
+#   in `auth.guard.spec.ts`. Contrast alert #13 on the same file, a true
+#   positive (fallback to an unsigned `req.cookies` access token), fixed in
+#   66e2fd8 — the cookie path still reads only `req.signedCookies`.

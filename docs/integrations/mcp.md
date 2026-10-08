@@ -46,7 +46,7 @@ Keep the key in a secret manager and inject it rather than pasting it into share
 There are deliberately **no** password-reveal, delete, archive or purge tools, and none for users, memberships, IP rules or API keys.
 
 !!!danger Leaving out a tool is not a permission
-The tool list decides what an agent is *offered*, not what the key *can do*. The key carries its owner's permissions on the whole REST API, and an agent with shell access can read the key from its MCP config and call any route directly. Limit the key itself: a read-only key cannot change or delete anything, whatever the agent tries.
+The tool list decides what an agent is *offered*, not what the key *can do*. The key carries its owner's permissions on the whole REST API, and an agent with shell access can read the key from its MCP config and call any route directly. Limit the key itself: a read-only key cannot change or delete anything, whatever the agent tries. Keys have no per-company or per-route scopes yet, so to narrow an agent further, mint its key from a user with fewer permissions.
 !!!
 
 ### Why there is no password reveal
