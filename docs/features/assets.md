@@ -103,6 +103,16 @@ Copying needs read access to the source company and write access to the target; 
 
 This lets you surface warranty expirations, license renewals, and certificate deadlines across all tenants at a glance.
 
+### Dismissing items
+
+Every row on **Expiring soon** (global and per company) has a **Dismiss** button, with an optional note such as "client cancelled, letting it lapse". A dismissed item:
+
+- disappears from Expiring soon, stops sending expiry alert emails, and stops counting on the dashboard's domain alerts (unless the domain is also listed there for a low score);
+- applies to **that due date only**. If the date changes, for example a renewal that later lapses again, the item shows up again;
+- changes nothing about the asset, domain or password itself.
+
+Use **Show dismissed** to see dismissed items with their note, and **Restore** to bring one back. Dismissing needs the same permission as managing the item (`domain.manage`, `asset.write`, or `password.write` plus access to that password), and every dismiss and restore is in the audit log.
+
 ## Search
 
 All asset field values are indexed in the `SearchIndex` table for full-text search via the [command palette](/features/search/) and the `/api/search` endpoint. Results are scoped to the requesting user's accessible tenants.
