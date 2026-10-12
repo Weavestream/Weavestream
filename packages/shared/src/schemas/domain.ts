@@ -401,8 +401,11 @@ export const monitoredDomainSchema = z.object({
   latestScore: z.number().int().min(0).max(100).nullable(),
   /** v2 — comma-separated DKIM selectors to probe in addition to defaults. */
   dkimSelectorOverride: z.string().nullable(),
-  /** MANUAL = typed in; CLOUDFLARE = owned by the registrar sync. */
-  source: z.enum(['MANUAL', 'CLOUDFLARE']),
+  /**
+   * MANUAL = typed in; CLOUDFLARE = owned by the registrar sync;
+   * GOOGLE_WORKSPACE = created by the Google Workspace domain sync.
+   */
+  source: z.enum(['MANUAL', 'CLOUDFLARE', 'GOOGLE_WORKSPACE']),
   registrar: z.string().nullable(),
   registrarAutoRenew: z.boolean().nullable(),
   registrarLocked: z.boolean().nullable(),
@@ -412,6 +415,15 @@ export const monitoredDomainSchema = z.object({
   nameservers: z.array(z.string()),
   registrarSyncedAt: z.string().nullable(),
   registrarMissingSince: z.string().nullable(),
+  /** Google Workspace facts; null role = not (or no longer) in Workspace. */
+  workspaceIntegrationId: z.string().uuid().nullable(),
+  workspaceRole: z.enum(['PRIMARY', 'SECONDARY', 'ALIAS']).nullable(),
+  /** Parent domain when the role is ALIAS. */
+  workspaceAliasOf: z.string().nullable(),
+  workspaceSyncedAt: z.string().nullable(),
+  workspaceMissingSince: z.string().nullable(),
+  /** Detail view only; never sent to client users. */
+  workspaceIntegrationName: z.string().nullable().optional(),
   archivedAt: z.string().nullable(),
   createdBy: z.string().uuid().nullable(),
   createdAt: z.string(),

@@ -43,15 +43,15 @@ describe('IntegrationMatchFieldService', () => {
   });
 
   it('reuses an existing field with the same slug and type without saving', async () => {
-    const { service, layouts } = setup('level', [field({}), field({ id: 'f-serial', name: 'Serial number', slug: 'serial_number', fieldType: 'TEXT', isPrimary: false })]);
-    await expect(service.ensureMatchField(ADMIN, 'i-1', 'devices', LAYOUT_ID, META)).resolves.toEqual({ fieldId: 'f-serial', created: false });
+    const { service, layouts } = setup('google-workspace', [field({}), field({ id: 'f-email', name: 'Email', slug: 'email', fieldType: 'EMAIL', isPrimary: false })]);
+    await expect(service.ensureMatchField(ADMIN, 'i-1', 'users', LAYOUT_ID, META)).resolves.toEqual({ fieldId: 'f-email', created: false });
   });
 
   it('refuses when a field with that slug has another type, and never alters it', async () => {
-    const { service, layouts } = setup('level', [field({}), field({ id: 'f-serial', name: 'Serial number', slug: 'serial_number', fieldType: 'NUMBER', isPrimary: false })]);
-    const error = await service.ensureMatchField(ADMIN, 'i-1', 'devices', LAYOUT_ID, META).catch((e: unknown) => e);
+    const { service, layouts } = setup('google-workspace', [field({}), field({ id: 'f-email', name: 'Email', slug: 'email', fieldType: 'TEXT', isPrimary: false })]);
+    const error = await service.ensureMatchField(ADMIN, 'i-1', 'users', LAYOUT_ID, META).catch((e: unknown) => e);
     expect(error).toBeInstanceOf(BadRequestException);
-    expect((error as Error).message).toMatch(/already has a field "Serial number" \(serial_number\) of type NUMBER/);
+    expect((error as Error).message).toMatch(/already has a field "Email" \(email\) of type TEXT/);
     expect(layouts.saveFields).not.toHaveBeenCalled();
   });
 

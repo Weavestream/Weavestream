@@ -4,8 +4,8 @@ import { driverResourceDescriptorSchema } from './integration.js';
 const row = { label: 'Status', kind: 'text', value: 'Active' };
 function section(overrides: Record<string, unknown> = {}) {
   return {
-    title: 'Level',
-    groups: [{ key: 'account', title: 'Account', icon: 'level', rows: [row] }],
+    title: 'Workspace',
+    groups: [{ key: 'account', title: 'Account', icon: 'gmail', rows: [row] }],
     ...overrides,
   };
 }

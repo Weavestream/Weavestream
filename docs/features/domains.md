@@ -57,9 +57,17 @@ Domain expirations (both WHOIS and TLS) roll up into the **Expirations** view at
 
 The dashboard also includes asset expiry dates and password expiry dates for a unified view of upcoming renewals.
 
+## Where Domains Come From
+
+- **Manual**: added with **New domain**.
+- **Cloudflare**: the [Cloudflare integration](/integrations/cloudflare/) can sync every domain on the account into one company, with registrar details (expiry, auto-renew, lock, nameservers) in a **Registrar** panel and an orange **Cloudflare** tag.
+- **Google Workspace**: each mapped [Google Workspace](/integrations/google-workspace/) tenant adds its verified domains and domain aliases to its company. Existing domains are matched by name, never duplicated; a matched domain only gains a **Google Workspace** tag (with its role: primary domain, secondary domain or domain alias) and a **Google Workspace** card. Cloudflare wins on anything both provide.
+
+A synced domain's hostname cannot be renamed, since the syncs match on it. A domain that disappears from its source is flagged, never deleted.
+
 ## Client Portal Visibility
 
-Domains can be marked `visibleToClients`. When enabled, the domain and its check history appear in the [client portal](/features/client-portal/) for that tenant's client users.
+Domains can be marked `visibleToClients`. When enabled, the domain and its check history appear in the [client portal](/features/client-portal/) for that tenant's client users, together with its registrar and Google Workspace details. The name of the integration is never shown to client users.
 
 ## Background Processing
 

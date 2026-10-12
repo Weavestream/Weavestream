@@ -13,9 +13,37 @@ jest.mock('./orgs-tab', () => ({ OrgsTab: () => <div>organizations panel</div> }
 jest.mock('./runs-tab', () => ({ RunsTab: () => <div>runs panel</div> }));
 jest.mock('./field-mappings-tab', () => ({ FieldMappingsTab: ({ resource }: { resource: { key: string } }) => <div>{resource.key} panel</div> }));
 jest.mock('./completeness-tab', () => ({ CompletenessTab: () => <div>completeness panel</div> }));
+jest.mock('./oauth-app-tab', () => ({ OAuthAppTab: ({ provider }: { provider: string }) => <div>{provider} app panel</div> }));
+jest.mock('./connections-tab', () => ({ ConnectionsTab: () => <div>connections panel</div> }));
 
 describe('IntegrationTabs', () => {
   beforeEach(() => mockReplace.mockReset());
+
+  it('gives OAuth drivers App and Connections tabs and opens Connections by default', () => {
+    const driver = {
+      oauth: { provider: 'google', scopes: [] },
+      resources: [{ key: 'users', label: 'Users', targetKind: 'asset', targetConfig: {}, dependsOnResourceKeys: [] }],
+    } as never;
+    render(<IntegrationTabs
+      initialTab=""
+      integration={{ id: 'integration-1' } as never}
+      mappings={[]}
+      runs={[]}
+      driver={driver}
+    />);
+    expect(screen.getAllByRole('tab').map((tab) => tab.textContent)).toEqual([
+      'App', 'Connections', 'Credentials & schedule', 'Organizations', 'Users fields', 'Run history',
+    ]);
+    expect(screen.getByText('connections panel')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('tab', { name: 'App' }));
+    expect(screen.getByText('google app panel')).toBeInTheDocument();
+  });
+
+  it('keeps other drivers without the OAuth tabs, opening credentials by default', () => {
+    render(<IntegrationTabs initialTab="" integration={{ id: 'integration-1' } as never} mappings={[]} runs={[]} driver={null} />);
+    expect(screen.queryByRole('tab', { name: 'App' })).not.toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Credentials & schedule' })).toHaveAttribute('aria-selected', 'true');
+  });
 
   it('renders credentials, organizations, then Breeze site/device resource tabs in descriptor order', () => {
     const driver = {

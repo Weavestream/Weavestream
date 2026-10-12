@@ -114,6 +114,11 @@ function makeStubs(initial: { domains?: DomainRow[]; checks?: DomainCheckRow[] }
           nameservers: [],
           registrarSyncedAt: null,
           registrarMissingSince: null,
+          workspaceIntegrationId: null,
+          workspaceRole: null,
+          workspaceAliasOf: null,
+          workspaceSyncedAt: null,
+          workspaceMissingSince: null,
           archivedAt: null,
           createdBy: d.createdBy ?? null,
           createdAt: new Date(),
@@ -346,5 +351,14 @@ describe('DomainsService — update', () => {
         META,
       ),
     ).rejects.toThrow(BadRequestException);
+  });
+
+  it('refuses to rename a manual domain that Google Workspace also lists', async () => {
+    const { svc, domains } = makeStubs();
+    const created = await svc.create(OPERATOR, 'co-1', { hostname: 'example.com' }, META);
+    domains[0]!.workspaceRole = 'PRIMARY';
+    await expect(
+      svc.update(OPERATOR, 'co-1', created.id, { hostname: 'renamed.com' }, META),
+    ).rejects.toThrow('synced from Google Workspace');
   });
 });

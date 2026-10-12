@@ -93,7 +93,9 @@ export function CredentialsTab({
     !hasSyncableResource ||
     enabledMappingCount === 0;
   const syncBlockedReason: string | null = !integration.hasSecret
-    ? 'Add credentials below before running a sync.'
+    ? driver?.oauth
+      ? 'Connect a client tenant on the Connections tab before running a sync.'
+      : 'Add credentials below before running a sync.'
     : !hasSyncableResource
       ? 'No resource is fully configured — open a resource tab to pick a layout and field mappings.'
       : enabledMappingCount === 0
@@ -269,7 +271,7 @@ export function CredentialsTab({
         />
       )}
 
-      {driver && driver.setupGuide && driver.setupGuide.length > 0 && (
+      {driver && !driver.oauth && driver.setupGuide && driver.setupGuide.length > 0 && (
         <ApiKeySetupGuide integrationId={integration.id} steps={driver.setupGuide} hasSecret={integration.hasSecret} />
       )}
 

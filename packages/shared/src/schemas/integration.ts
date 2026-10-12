@@ -342,11 +342,43 @@ export const driverResourceDescriptorSchema = z
 
 export type DriverResourceDescriptor = z.infer<typeof driverResourceDescriptorSchema>;
 
+// ---------------------------------------------------------------------
+// OAuth (authorization-code) drivers
+// ---------------------------------------------------------------------
+
+/** Providers an instance-wide OAuth app can be configured for. */
+export const integrationOAuthProviderSchema = z.enum(['google']);
+export type IntegrationOAuthProvider = z.infer<typeof integrationOAuthProviderSchema>;
+
+/** Display names for OAuth providers (UI copy). */
+export const INTEGRATION_OAUTH_PROVIDER_LABELS: Record<IntegrationOAuthProvider, string> = {
+  google: 'Google',
+};
+
 const httpsUrlSchema = z
   .string()
   .url()
   .max(2048)
   .refine((value) => value.startsWith('https://'), 'OAuth endpoints must use https://');
+
+/**
+ * A driver that connects through the OAuth authorization-code flow (with
+ * PKCE) declares its provider endpoints and scopes here. The framework
+ * owns the flow; the reserved authorize parameters (client_id,
+ * redirect_uri, response_type, scope, state, code_challenge*) always win
+ * over `extraAuthorizeParams`.
+ */
+export const driverOAuthDescriptorSchema = z
+  .object({
+    provider: integrationOAuthProviderSchema,
+    authorizeUrl: httpsUrlSchema,
+    tokenUrl: httpsUrlSchema,
+    revokeUrl: httpsUrlSchema.optional(),
+    scopes: z.array(z.string().min(1).max(256)).min(1).max(50),
+    extraAuthorizeParams: z.record(z.string().max(256)).optional(),
+  })
+  .strict();
+export type DriverOAuthDescriptor = z.infer<typeof driverOAuthDescriptorSchema>;
 
 // ---------------------------------------------------------------------
 // Setup guide (step-by-step provider setup shown in the UI)
@@ -425,6 +457,8 @@ export const driverDescriptorSchema = z
    * Assets, so per-resource layouts and field mappings don't apply.
    */
   resources: z.array(driverResourceDescriptorSchema).default([]),
+  /** Present when the driver connects with the OAuth authorization-code flow. */
+  oauth: driverOAuthDescriptorSchema.optional(),
   /** Optional step-by-step provider setup guide rendered in the UI. */
   setupGuide: setupGuideSchema.optional(),
   /** Driver capabilities surfaced to the UI. */
@@ -1244,6 +1278,94 @@ export const integrationTargetProvenanceSchema = z
   .strict();
 export type IntegrationTargetProvenance = z.infer<typeof integrationTargetProvenanceSchema>;
 
+/**
+ * Admin view of an OAuth integration's app (App tab). The client secret is
+ * write-only: only `secretMask` (its last four characters) is returned.
+ */
+export const integrationOAuthAppSchema = z.object({
+  provider: integrationOAuthProviderSchema,
+  configured: z.boolean(),
+  clientId: z.string().nullable(),
+  secretMask: z.string().nullable(),
+  /** Callback URL to register with the provider (computed from `API_URL`). */
+  redirectUri: z.string(),
+  /**
+   * Fixed warning when `API_URL` and `APP_URL` are on different hosts: the
+   * host-only session cookie is not sent to the callback. Null when fine.
+   */
+  callbackHostWarning: z.string().nullable(),
+  /** Union of the scopes every registered driver of this provider requests. */
+  scopes: z.array(z.string()),
+  /**
+   * The same scopes grouped by driver, in registry order: the first group is
+   * what the first driver needs, later groups only list scopes an earlier
+   * group does not already cover.
+   */
+  scopeGroups: z.array(z.object({ label: z.string(), scopes: z.array(z.string()) })),
+  updatedAt: z.string().nullable(),
+  /** Setup guide of the first registered driver of this provider, if any. */
+  setupGuide: z.array(setupGuideStepSchema).optional(),
+});
+export type IntegrationOAuthApp = z.infer<typeof integrationOAuthAppSchema>;
+
+export const updateIntegrationOAuthAppSchema = z
+  .object({
+    clientId: z.string().trim().min(1).max(512),
+    /**
+     * Required on first save. Omit it to keep the stored secret (e.g. to
+     * correct the client ID); the API rejects an omitted secret when none
+     * is stored yet.
+     */
+    clientSecret: z.string().trim().min(1).max(512).optional(),
+  })
+  .strict();
+export type UpdateIntegrationOAuthAppInput = z.infer<typeof updateIntegrationOAuthAppSchema>;
+
+/** Status of one client-tenant connection (never carries tokens). */
+export const integrationConnectionStatusSchema = z.enum(['ok', 'needs_reconnect']);
+export type IntegrationConnectionStatus = z.infer<typeof integrationConnectionStatusSchema>;
+
+/** One client tenant connected to an OAuth integration. */
+export const integrationConnectionSchema = z.object({
+  id: z.string().uuid(),
+  /** Google customer id. */
+  externalOrgId: z.string(),
+  /** Primary domain (Google), when known. */
+  displayName: z.string().nullable(),
+  /** Google: the admin account that approved. */
+  connectedAs: z.string().nullable(),
+  connectedAt: z.string(),
+  /** Granted scopes (Google). */
+  grantedScopes: z.array(z.string()),
+  /** `needs_reconnect` also when the stored grant cannot be read. */
+  status: integrationConnectionStatusSchema,
+  lastErrorAt: z.string().nullable(),
+  /** Latest finished sync of a company mapping of this tenant, if any. */
+  lastSyncAt: z.string().nullable(),
+});
+export type IntegrationConnection = z.infer<typeof integrationConnectionSchema>;
+
+/** Connections tab of an OAuth integration. */
+export const integrationConnectionsSchema = z.object({
+  provider: integrationOAuthProviderSchema,
+  appConfigured: z.boolean(),
+  /** Callback URL registered with the provider. */
+  redirectUri: z.string(),
+  connections: z.array(integrationConnectionSchema),
+});
+export type IntegrationConnections = z.infer<typeof integrationConnectionsSchema>;
+
+/** Start a connect flow: a new client tenant, or Reconnect of one connection. */
+export const startIntegrationConnectionSchema = z
+  .object({ connectionId: z.string().uuid().optional() })
+  .strict();
+export type StartIntegrationConnectionInput = z.infer<typeof startIntegrationConnectionSchema>;
+
+export const integrationOAuthStartResponseSchema = z.object({
+  authorizeUrl: z.string().url(),
+});
+export type IntegrationOAuthStartResponse = z.infer<typeof integrationOAuthStartResponseSchema>;
+
 // ---------------------------------------------------------------------
 // Integration differences (standard fields a person changed)
 // ---------------------------------------------------------------------
@@ -1359,6 +1481,7 @@ export const DEFAULT_INTEGRATION_PRIORITY: readonly string[] = [
   'ninjaone',
   'action1',
   'breeze',
+  'google-workspace',
   'unifi',
   'cloudflare',
 ];

@@ -8,9 +8,9 @@ const source = (integrationName: string, driver: string) => ({
 describe('assetSourcesLabel', () => {
   it('names every integration bound to a co-bound asset, not only the owner', () => {
     expect(assetSourcesLabel({
-      externalSource: 'level',
-      syncSources: [source('Example Level', 'level'), source('Example NinjaOne', 'ninjaone')],
-    })).toBe('Example Level + Example NinjaOne');
+      externalSource: 'google-workspace',
+      syncSources: [source('Example Google', 'google-workspace'), source('Example Level', 'level')],
+    })).toBe('Example Google + Example Level');
   });
 
   it('falls back to the external source, and to null for a manual asset', () => {

@@ -81,6 +81,14 @@ These defaults are used when the generator is opened without user-specific prefe
 
 **Admin > Settings > Integrations** holds the integration priority order: which integration's values win when several sync the same asset. See [Several integrations on one asset](/integrations/#several-integrations-on-one-asset).
 
+### OAuth integrations
+
+Google Workspace connects with a provider sign-in instead of an API key. There is one such integration per install: its **App** tab holds the OAuth app, and each customer tenant is a row on its **Connections** tab. See [Google Workspace](/integrations/google-workspace/).
+
+`API_URL` and `APP_URL` must share a host (for example `APP_URL=https://ws.example.com` and `API_URL=https://ws.example.com/api`). Session cookies are host-only, so on a different API host the browser arrives at the callback signed out and the connect fails. When the hosts differ, the App tab and **Check setup** show "API_URL and APP_URL must share a host for Connect with Google to keep you signed in."
+
+The client secret is write-only: it is stored AES-256-GCM encrypted under `INTEGRATION_SECRET_KEY` and never shown again; only its last four characters are shown. Saving the app needs the integration management permission and a fresh step-up confirmation, and is recorded as `integration.oauth_app.update`; its Check setup as `integration.oauth_app.check` (outcome and step ids only). Connecting, reconnecting and disconnecting a client tenant are recorded as `integration.oauth.connect`, `integration.oauth.connect.failed` (with a reason category, never the provider's error text) and `integration.oauth.disconnect`, each with the connection id.
+
 ## What Settings Don't Change
 
 Workspace settings are **cosmetic only**. The following always remain as-is regardless of configuration:

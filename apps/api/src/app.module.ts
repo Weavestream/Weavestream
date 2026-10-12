@@ -74,12 +74,14 @@ import { TenantContextInterceptor } from './auth/interceptors/tenant-context.int
 import { AuditInterceptor } from './audit/audit.interceptor.js';
 import { ProblemExceptionFilter } from './common/problem-exception.filter.js';
 import { RedisThrottlerStorage } from './redis/redis-throttler.storage.js';
+import { pathOnly } from './common/redact-url.js';
 
 /** Compact access logs: avoid logging full req/res headers on every line. */
 const httpSerializers = {
   req: (req: IncomingMessage) => {
     const id = (req as IncomingMessage & { id?: string }).id;
-    return { id, method: req.method, url: req.url };
+    // Never the query string: /oauth/callback carries the code and state in it.
+    return { id, method: req.method, url: pathOnly(req.url) };
   },
   res: (res: ServerResponse) => ({ statusCode: res.statusCode }),
 };

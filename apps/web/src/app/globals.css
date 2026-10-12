@@ -206,12 +206,14 @@
    * the same stack: its 120px label column left too little room for
    * the reveal row and the strength meter. */
   .asset-field-grid,
-  .password-field-grid {
+  .password-field-grid,
+  .security-field-grid {
     grid-template-columns: minmax(0, 1fr) !important;
     row-gap: 4px !important;
   }
   .asset-field-grid > .asset-field-label:not(:first-child),
-  .password-field-grid > .password-field-label:not(:first-child) {
+  .password-field-grid > .password-field-label:not(:first-child),
+  .security-field-grid > .security-field-label:not(:first-child) {
     padding-top: 12px !important;
   }
   .article-read-grid .article-read-body {

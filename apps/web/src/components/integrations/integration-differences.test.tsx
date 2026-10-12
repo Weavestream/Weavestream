@@ -79,26 +79,26 @@ describe('IntegrationSections differences', () => {
   });
 
   it('a co-bound asset shows one panel per integration, each with its own differences', () => {
-    const ninja: AssetIntegrationSection = {
-      ...entry, integrationId: '00000000-0000-4000-8000-000000000002', driver: 'ninjaone',
-      integrationName: 'Example NinjaOne', section: { ...entry.section, title: 'NinjaOne' },
+    const google: AssetIntegrationSection = {
+      ...entry, integrationId: '00000000-0000-4000-8000-000000000002', driver: 'google-workspace',
+      integrationName: 'Example Google', section: { ...entry.section, title: 'Google Workspace' },
       syncRecordId: '00000000-0000-4000-8000-0000000000e2', differences: [],
     };
-    const action1: AssetIntegrationSection = {
-      ...entry, integrationId: '00000000-0000-4000-8000-000000000003', driver: 'action1',
-      integrationName: 'Example Action1', section: { ...entry.section, title: 'Action1' },
+    const level: AssetIntegrationSection = {
+      ...entry, integrationId: '00000000-0000-4000-8000-000000000003', driver: 'level',
+      integrationName: 'Example Level', section: { ...entry.section, title: 'Level RMM' },
       syncRecordId: '00000000-0000-4000-8000-0000000000e3',
       differences: [{ ...entry.differences![0]!, syncRecordId: '00000000-0000-4000-8000-0000000000e3', fieldLabel: 'Title', localValue: 'Engineer', sourceValue: 'Senior Engineer' }],
     };
-    const { container } = render(<ToastProvider><IntegrationSections sections={[ninja, action1]} companyId={COMPANY} assetId={ASSET} canResolve /></ToastProvider>);
+    const { container } = render(<ToastProvider><IntegrationSections sections={[google, level]} companyId={COMPANY} assetId={ASSET} canResolve /></ToastProvider>);
     const titles = [...container.querySelectorAll('details > summary')].map((s) => s.textContent);
     expect(titles).toHaveLength(2);
-    expect(titles[0]).toContain('NinjaOne');
-    expect(titles[1]).toContain('Action1');
+    expect(titles[0]).toContain('Google Workspace');
+    expect(titles[1]).toContain('Level RMM');
     // Only the lower-priority source that differs carries a Differences group.
     expect(screen.getAllByRole('group', { name: 'Differences' })).toHaveLength(1);
-    expect(screen.getByRole('button', { name: 'Use Action1 value' })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Use NinjaOne value' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Use Level RMM value' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Use Google Workspace value' })).not.toBeInTheDocument();
   });
 
   it('shows no Differences group without differences', () => {

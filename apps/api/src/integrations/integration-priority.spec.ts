@@ -24,7 +24,7 @@ function setup(stored: unknown = null) {
   const audit = { logWithClient: jest.fn().mockResolvedValue(undefined) };
   const drivers = {
     list: () => [
-      { key: 'action1', label: 'Action1' },
+      { key: 'google-workspace', label: 'Google Workspace' },
       { key: 'ninjaone', label: 'NinjaOne' },
       { key: 'level', label: 'Level RMM' },
       { key: 'zz-new', label: 'New driver' },
@@ -55,30 +55,30 @@ describe('IntegrationPriorityService', () => {
       order: [
         { key: 'level', label: 'Level RMM' },
         { key: 'ninjaone', label: 'NinjaOne' },
-        { key: 'action1', label: 'Action1' },
+        { key: 'google-workspace', label: 'Google Workspace' },
         { key: 'zz-new', label: 'New driver' },
       ],
     });
   });
 
   it('keeps a stored order and appends drivers registered since', async () => {
-    const { service } = setup(['action1', 'removed-driver', 'level']);
+    const { service } = setup(['google-workspace', 'removed-driver', 'level']);
     const { order } = await service.get();
-    expect(order.map((o) => o.key)).toEqual(['action1', 'level', 'ninjaone', 'zz-new']);
+    expect(order.map((o) => o.key)).toEqual(['google-workspace', 'level', 'ninjaone', 'zz-new']);
   });
 
   it('saves the order and audits before and after in the same transaction', async () => {
     const { service, tx, audit } = setup();
-    await service.update(actor, { order: ['action1', 'ninjaone', 'level', 'zz-new'] }, reqMeta);
+    await service.update(actor, { order: ['google-workspace', 'ninjaone', 'level', 'zz-new'] }, reqMeta);
     expect(tx.systemSetting.update).toHaveBeenCalledWith({
       where: { id: 'singleton' },
-      data: { integrationPriority: ['action1', 'ninjaone', 'level', 'zz-new'], updatedBy: expect.any(String) },
+      data: { integrationPriority: ['google-workspace', 'ninjaone', 'level', 'zz-new'], updatedBy: expect.any(String) },
     });
     expect(audit.logWithClient).toHaveBeenCalledWith(tx, expect.objectContaining({
       action: 'settings.integration_priority.update',
       entityType: 'SystemSetting',
-      before: { order: ['level', 'ninjaone', 'action1', 'zz-new'] },
-      after: { order: ['action1', 'ninjaone', 'level', 'zz-new'] },
+      before: { order: ['level', 'ninjaone', 'google-workspace', 'zz-new'] },
+      after: { order: ['google-workspace', 'ninjaone', 'level', 'zz-new'] },
     }));
   });
 

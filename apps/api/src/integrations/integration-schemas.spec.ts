@@ -2,6 +2,7 @@ import {
   createIntegrationCompanyMappingSchema,
   createIntegrationSchema,
   driverDescriptorSchema,
+  driverOAuthDescriptorSchema,
   driverResourceDescriptorSchema,
   fieldMappingDraftSchema,
   integrationProvenanceSchema,
@@ -23,6 +24,7 @@ import {
   triggerSyncSchema,
   updateIntegrationCompanyMappingSchema,
   updateIntegrationSchema,
+  updateIntegrationOAuthAppSchema,
 } from '@weavestream/shared';
 
 /**
@@ -741,5 +743,44 @@ describe('integration zod schemas', () => {
         }),
       ).toThrow();
     });
+  });
+});
+
+describe('driver oauth descriptor', () => {
+  const oauth = {
+    provider: 'google',
+    authorizeUrl: 'https://auth.example.test/authorize',
+    tokenUrl: 'https://auth.example.test/token',
+    scopes: ['scope.read'],
+  };
+
+  it('accepts an https OAuth block, also inside a descriptor', () => {
+    expect(driverOAuthDescriptorSchema.safeParse(oauth).success).toBe(true);
+    const parsed = driverDescriptorSchema.parse({
+      key: 'fake-oauth',
+      label: 'Fake',
+      description: null,
+      iconKey: null,
+      configFields: [],
+      secretFields: [],
+      oauth,
+      capabilities: { listSourceOrgs: true, dryRun: false },
+    });
+    expect(parsed.oauth?.provider).toBe('google');
+  });
+
+  it.each([
+    ['plain-http endpoints', { ...oauth, tokenUrl: 'http://auth.example.test/token' }],
+    ['an unknown provider', { ...oauth, provider: 'other' }],
+    ['no scopes', { ...oauth, scopes: [] }],
+    ['unknown keys', { ...oauth, clientSecret: 'x' }],
+  ])('rejects %s', (_label, value) => {
+    expect(driverOAuthDescriptorSchema.safeParse(value).success).toBe(false);
+  });
+
+  it('rejects an OAuth app update with a blank secret', () => {
+    expect(
+      updateIntegrationOAuthAppSchema.safeParse({ clientId: 'c', clientSecret: '  ' }).success,
+    ).toBe(false);
   });
 });

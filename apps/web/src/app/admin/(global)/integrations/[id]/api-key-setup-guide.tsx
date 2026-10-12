@@ -8,8 +8,9 @@ import { useToast } from '../../../../../components/ui';
 import { SetupGuide } from '../../../../../components/integrations/setup-guide';
 
 /**
- * Setup guide with Check setup for drivers that use a pasted API key.
- * Check setup only runs once a key is saved.
+ * Setup guide with Check setup for drivers that use a pasted API key
+ * (OAuth drivers show theirs on the Connections tab). Check setup only
+ * runs once a key is saved.
  */
 export function ApiKeySetupGuide({
   integrationId,

@@ -496,7 +496,7 @@ export class CloudflareRegistrarSyncService {
       // and both create the domain: the unique index is per company only.
       const outcome: WriteOutcome = await this.prisma
         .$transaction(async (tx): Promise<WriteOutcome> => {
-          await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('weavestream:cf-registrar-hostname'), hashtext(${hostname}))`;
+          await lockDomainHostname(tx, hostname);
           // Archived rows included: an archive is an operator's decision and
           // must not be undone by recreating the domain next to it.
           const candidates = await tx.monitoredDomain.findMany({ where: { hostname } });
@@ -589,6 +589,15 @@ export class CloudflareRegistrarSyncService {
   }
 }
 
+/**
+ * Transaction-scoped advisory lock on a hostname, taken by every sync that
+ * may create a MonitoredDomain (Cloudflare registrar, Google Workspace) so
+ * their find-then-create steps never race each other into a duplicate.
+ */
+export async function lockDomainHostname(tx: Prisma.TransactionClient, hostname: string): Promise<void> {
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('weavestream:cf-registrar-hostname'), hashtext(${hostname}))`;
+}
+
 /** What the per-hostname write did. */
 type WriteOutcome =
   | { kind: 'update' }
@@ -609,7 +618,8 @@ export type RowMatch =
  *    archived, leave it: the operator stopped tracking it.
  *  - A synced row orphaned by a deleted integration (integrationId null) for
  *    the *same Cloudflare account*, in the configured company → reclaim it.
- *  - An active MANUAL row in the configured company → adopt it. Manual rows
+ *  - An active MANUAL (or Google Workspace-created) row in the configured
+ *    company → adopt it. Manual rows
  *    in other companies are never touched: the config was only authorised
  *    for the configured company.
  *  - Any other existing row (another integration's, an archived one, one in
@@ -636,8 +646,13 @@ export function matchRow(
       !r.archivedAt,
   );
   if (orphan) return { kind: 'update', row: orphan };
+  // Google Workspace-created rows are adopted like manual ones: Cloudflare
+  // wins on registrar facts, and the workspace columns are left untouched.
   const manual = rows.find(
-    (r) => r.source === 'MANUAL' && r.companyId === companyId && !r.archivedAt,
+    (r) =>
+      (r.source === 'MANUAL' || r.source === 'GOOGLE_WORKSPACE') &&
+      r.companyId === companyId &&
+      !r.archivedAt,
   );
   if (manual) return { kind: 'adopt', row: manual };
   if (rows.length === 0) return { kind: 'create' };

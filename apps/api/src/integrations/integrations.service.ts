@@ -4,6 +4,7 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import type {
   CreateIntegrationInput,
@@ -32,6 +33,7 @@ import {
 import { PrismaService } from '../prisma/prisma.service.js';
 import {
   IntegrationSecretEncryptionService,
+  integrationConnectionSecretAad,
   integrationSecretAad,
 } from '../crypto/integration-secret-encryption.service.js';
 import { AuditLogService } from '../audit/audit.service.js';
@@ -40,13 +42,16 @@ import { EnvService } from '../config/env.service.js';
 import { IntegrationDriverRegistry } from './drivers/integration-driver.registry.js';
 import { IntegrationSyncSchedulerService } from './integration-sync-scheduler.service.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
-import { Prisma } from '@prisma/client';
+import { Prisma, type IntegrationConnection } from '@prisma/client';
 import { assertStringIdList } from '../common/safe-id-list.js';
+import { maskSecretTail } from '../common/redact-secrets.js';
 import { ReconstructionWriterRegistry } from './reconstruction/reconstruction-writer.registry.js';
 import type { RecommendedDestination } from './drivers/integration-driver.js';
 import { integrationAssetExternalSource } from './integration-asset-source.js';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { scanSensitiveMaterial } from './sensitive-material.js';
+import { IntegrationOAuthAppService } from './oauth/integration-oauth-app.service.js';
+import type { OAuthClientCredentials } from './oauth/oauth-token.js';
 import {
   getTenantContext,
   runWithTenantContext,
@@ -220,6 +225,9 @@ export function minimalRecommendation(
  * service exposes the per-resource read/write methods consumed by the
  * controller and the sync runner.
  */
+/** Which connection of an OAuth integration `loadDriverContext` loads; ignored by other drivers. */
+export type ConnectionScope = { externalOrgId?: string; connectionId?: string; onlyConnection?: boolean };
+
 @Injectable()
 export class IntegrationsService {
   private readonly logger = new Logger(IntegrationsService.name);
@@ -232,6 +240,8 @@ export class IntegrationsService {
     private readonly env: EnvService,
     private readonly scheduler: IntegrationSyncSchedulerService,
     private readonly writers: ReconstructionWriterRegistry,
+    // Optional so specs that never touch an OAuth driver need not supply it.
+    @Optional() private readonly oauthApps?: IntegrationOAuthAppService,
   ) {}
 
   // -------------------------------------------------------------------
@@ -252,7 +262,7 @@ export class IntegrationsService {
       include: {
         secret: { select: { ciphertext: true } },
         resources: this.resourceInclude(),
-        _count: { select: { companyMappings: true } },
+        _count: { select: { companyMappings: true, connections: true } },
       },
     });
     return rows.map((r) => this.toDto(r));
@@ -264,7 +274,7 @@ export class IntegrationsService {
       include: {
         secret: { select: { ciphertext: true } },
         resources: this.resourceInclude(),
-        _count: { select: { companyMappings: true } },
+        _count: { select: { companyMappings: true, connections: true } },
       },
     });
     if (!row) throw new NotFoundException(`Integration ${id} not found`);
@@ -277,10 +287,17 @@ export class IntegrationsService {
     meta: AuditMeta,
   ): Promise<IntegrationDto> {
     const descriptor = this.drivers.describe(input.driver);
+    this.assertNoSecretForOAuth(descriptor, input.secret, false);
     this.validateDriverPayload(descriptor, input.config, input.secret);
     this.validateDriverConfiguration(input.driver, input.config, input.secret);
 
     const created = await this.prisma.$transaction(async (tx) => {
+      if (descriptor.oauth) {
+        // Serialize concurrent creates of the same provider so the check below sees
+        // the other insert. $executeRaw: the lock returns void, which $queryRaw cannot read.
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`oauth-provider:${descriptor.oauth.provider}`}, 0))`;
+        await this.assertNoOtherOAuthIntegration(descriptor, tx);
+      }
       const row = await tx.integration.create({
         data: {
           driver: input.driver,
@@ -368,6 +385,7 @@ export class IntegrationsService {
     });
     if (!existing) throw new NotFoundException(`Integration ${id} not found`);
     const descriptor = this.drivers.describe(existing.driver);
+    this.assertNoSecretForOAuth(descriptor, input.secret, input.clearSecret === true);
 
     if (input.config) {
       this.validateDriverPayload(descriptor, input.config, input.secret);
@@ -565,33 +583,46 @@ export class IntegrationsService {
 
   /**
    * Returns the decoded credential bundle for a given Integration, plus
-   * the active config. Throws 400 if no secret is configured. Callers
-   * that don't need the secret (e.g. the orgs lister with a stale
-   * connection) should still go through here so the decrypt failure
-   * mode is consistent.
+   * the active config. Throws 400 if no secret is configured.
+   *
+   * OAuth drivers (Google Workspace) have one connection per
+   * client tenant: `scope` picks it by the mapping's `externalOrgId` (the
+   * only lookup the sync paths use, so a mapping can only ever receive the
+   * grant of its own tenant) or by connection id (Connections tab).
+   * `onlyConnection` (Test connection, Check setup without a pick) takes the
+   * integration's single connection and refuses when there are several.
+   * The driver still re-verifies the tenant against the provider.
    */
-  async loadDriverContext(id: string): Promise<{
+  async loadDriverContext(
+    id: string,
+    scope: ConnectionScope = {},
+  ): Promise<{
     integrationId: string;
     driver: string;
     config: Record<string, unknown>;
     secret: Record<string, unknown>;
+    /** OAuth app credentials; set only for OAuth drivers with an app configured. */
+    oauthClient?: OAuthClientCredentials;
+    /** OAuth drivers: the connection whose grant is in `secret`. */
+    connectionId?: string;
+    /** OAuth drivers: the connection's tenant (Google customer id). */
+    externalOrgId?: string;
+    /** Non-secret marker of the secret row and OAuth app; see `IntegrationContext.credentialVersion`. */
+    credentialVersion: string;
   }> {
     const row = await this.prisma.integration.findUnique({
       where: { id },
       include: { secret: true },
     });
     if (!row) throw new NotFoundException(`Integration ${id} not found`);
+    const oauth = this.drivers.has(row.driver) ? this.drivers.describe(row.driver).oauth : undefined;
+    if (oauth) return this.loadConnectionContext(row, scope);
     if (!row.secret) {
       throw new BadRequestException('Integration has no credential bundle configured.');
     }
     let secret: Record<string, unknown>;
     try {
-      const json = this.crypto.decrypt(row.secret.ciphertext, integrationSecretAad(row.id));
-      const parsed = JSON.parse(json);
-      if (!parsed || typeof parsed !== 'object') {
-        throw new Error('decrypted secret is not a JSON object');
-      }
-      secret = parsed as Record<string, unknown>;
+      secret = this.decryptJsonObject(row.secret.ciphertext, integrationSecretAad(row.id));
     } catch (e) {
       this.logger.error(
         { err: (e as Error).message, integrationId: id },
@@ -607,7 +638,88 @@ export class IntegrationsService {
       driver: row.driver,
       config: (row.config ?? {}) as Record<string, unknown>,
       secret,
+      credentialVersion: `${row.secret.id}@${row.secret.updatedAt.toISOString()}|no-app`,
     };
+  }
+
+  /**
+   * OAuth drivers: the connected client tenants as source organizations
+   * (no provider call). Null for every other driver, which lists its own.
+   */
+  async listConnectedOrgs(id: string): Promise<Array<{ externalId: string; name: string; hint: string | null }> | null> {
+    const row = await this.requireIntegration(id);
+    if (!this.drivers.has(row.driver) || !this.drivers.describe(row.driver).oauth) return null;
+    const connections = await this.prisma.integrationConnection.findMany({
+      where: { integrationId: id },
+      orderBy: [{ displayName: 'asc' }, { externalOrgId: 'asc' }],
+      select: { externalOrgId: true, displayName: true },
+    });
+    return connections.map((c) => ({ externalId: c.externalOrgId, name: c.displayName ?? c.externalOrgId, hint: null }));
+  }
+
+  private async loadConnectionContext(
+    row: { id: string; driver: string; config: unknown },
+    scope: ConnectionScope,
+  ) {
+    let connection: IntegrationConnection | null;
+    if (!scope.externalOrgId && !scope.connectionId) {
+      const only = scope.onlyConnection
+        ? await this.prisma.integrationConnection.findMany({ where: { integrationId: row.id }, take: 2 })
+        : [];
+      if (only.length !== 1) {
+        throw new BadRequestException('Pick a connection: this integration connects one client tenant at a time.');
+      }
+      connection = only[0]!;
+    } else {
+      connection = await this.prisma.integrationConnection.findFirst({
+        where: {
+          integrationId: row.id,
+          ...(scope.connectionId ? { id: scope.connectionId } : {}),
+          ...(scope.externalOrgId ? { externalOrgId: scope.externalOrgId } : {}),
+        },
+      });
+    }
+    if (!connection) {
+      throw new BadRequestException(
+        scope.connectionId
+          ? 'Connection not found.'
+          : 'This client tenant is not connected. Connect it on the Connections tab.',
+      );
+    }
+    let secret: Record<string, unknown>;
+    try {
+      secret = this.decryptJsonObject(
+        connection.secretCiphertext,
+        integrationConnectionSecretAad(row.id, connection.id),
+      );
+    } catch (e) {
+      this.logger.error(
+        { err: (e as Error).message, integrationId: row.id, connectionId: connection.id },
+        'failed to decrypt integration connection secret',
+      );
+      throw new ConflictException(
+        'The stored connection could not be decrypted. Reconnect it on the Connections tab.',
+      );
+    }
+    const oauthClient = await this.oauthApps?.getClient(row.id);
+    return {
+      integrationId: row.id,
+      driver: row.driver,
+      config: (row.config ?? {}) as Record<string, unknown>,
+      secret,
+      ...(oauthClient ? { oauthClient } : {}),
+      connectionId: connection.id,
+      externalOrgId: connection.externalOrgId,
+      credentialVersion: `${connection.id}@${connection.updatedAt.toISOString()}|${oauthClient?.version ?? 'no-app'}`,
+    };
+  }
+
+  private decryptJsonObject(ciphertext: string, aad: string): Record<string, unknown> {
+    const parsed: unknown = JSON.parse(this.crypto.decrypt(ciphertext, aad));
+    if (!parsed || typeof parsed !== 'object') {
+      throw new Error('decrypted secret is not a JSON object');
+    }
+    return parsed as Record<string, unknown>;
   }
 
   // -------------------------------------------------------------------
@@ -1356,6 +1468,40 @@ export class IntegrationsService {
     }
   }
 
+  /** OAuth drivers: the OAuth service is the only writer of the stored grant. */
+  /**
+   * One integration per OAuth provider: every client tenant is a connection
+   * of it. Checked again by the unique app row, which allows one per provider.
+   */
+  private async assertNoOtherOAuthIntegration(
+    descriptor: DriverDescriptor,
+    tx: Prisma.TransactionClient,
+  ): Promise<void> {
+    const provider = descriptor.oauth!.provider;
+    const sameProvider = this.drivers.list().filter((d) => d.oauth?.provider === provider);
+    const existing = await tx.integration.findFirst({
+      where: { driver: { in: sameProvider.map((d) => d.key) } },
+      select: { name: true },
+    });
+    if (existing) {
+      throw new ConflictException(
+        `A ${descriptor.label} integration already exists ("${existing.name}"). Connect more client tenants on its Connections tab instead.`,
+      );
+    }
+  }
+
+  private assertNoSecretForOAuth(
+    descriptor: DriverDescriptor,
+    secret: Record<string, unknown> | null | undefined,
+    clearSecret: boolean,
+  ): void {
+    if (descriptor.oauth && (secret != null || clearSecret)) {
+      throw new BadRequestException(
+        `Driver "${descriptor.key}" connects with OAuth; use Connect or Disconnect instead of setting credentials.`,
+      );
+    }
+  }
+
   private validateDriverPayload(
     descriptor: DriverDescriptor,
     config: Record<string, unknown> | null | undefined,
@@ -1450,14 +1596,16 @@ export class IntegrationsService {
     };
 
     let secretMask: Record<string, string> | null = null;
-    if (row.secret) {
+    // OAuth bundles hold tokens and the connected account, not operator
+    // fields: never expose their tails.
+    if (row.secret && !descriptor?.oauth) {
       try {
         const json = this.crypto.decrypt(row.secret.ciphertext, integrationSecretAad(row.id));
         const parsed = JSON.parse(json) as Record<string, unknown>;
         secretMask = {};
         for (const [k, v] of Object.entries(parsed ?? {})) {
           if (typeof v === 'string' && v.length > 0) {
-            secretMask[k] = v.length <= 4 ? '••••' : `••••${v.slice(-4)}`;
+            secretMask[k] = maskSecretTail(v);
           }
         }
       } catch {
@@ -1480,7 +1628,8 @@ export class IntegrationsService {
       config: (row.config ?? {}) as Record<string, unknown>,
       syncCron: row.syncCron,
       effectiveSyncCron: row.syncCron ?? defaultCron,
-      hasSecret: Boolean(row.secret),
+      // OAuth drivers: "has credentials" means at least one client tenant is connected.
+      hasSecret: descriptor?.oauth ? (row._count?.connections ?? 0) > 0 : Boolean(row.secret),
       secretMask,
       resources,
       lastRunAt: row.lastRunAt ? row.lastRunAt.toISOString() : null,
@@ -1837,5 +1986,5 @@ interface IntegrationRowWithIncludes {
   updatedAt: Date;
   secret?: { ciphertext: string } | null;
   resources?: ResourceRowWithIncludes[];
-  _count?: { companyMappings?: number };
+  _count?: { companyMappings?: number; connections?: number };
 }

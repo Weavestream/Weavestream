@@ -116,7 +116,7 @@ export default async function IntegrationDetailPage({
             />
           ) : (
             <IntegrationTabs
-              initialTab={sp.tab ?? 'creds'}
+              initialTab={sp.tab ?? ''}
               integration={integration}
               mappings={mappings}
               runs={runs}

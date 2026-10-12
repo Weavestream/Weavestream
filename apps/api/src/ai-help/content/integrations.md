@@ -4,7 +4,7 @@
 <!-- aliases: integration overview | rmm sync | import devices | external inventory | connectors -->
 <!-- requires: integration.manage -->
 
-Action1, NinjaOne, UniFi, Level RMM, and Breeze are pull integrations. A connection stores provider credentials and configuration. Upstream organizations map to Weavestream companies. Enabled resources select target asset layouts, match keys, and field projections to create, claim, or update assets during sync runs.
+Action1, NinjaOne, UniFi, Google Workspace, Level RMM, and Breeze are pull integrations. A connection stores provider credentials and configuration. Upstream organizations map to Weavestream companies. Enabled resources select target asset layouts, match keys, and field projections to create, claim, or update assets during sync runs.
 
 Match keys claim existing unclaimed assets instead of duplicating them. Once linked, integration sync records preserve identity across runs.
 
@@ -60,6 +60,18 @@ Override default US API URL for EU, CA, or OC tenants if needed. Test connection
 Create a **UniFi Site Manager** integration with a Site Manager **API Key**. Test connection, then map UniFi hosts/consoles to Weavestream companies.
 
 Configure **Devices fields** for switches, access points, and gateways (recommended match: `mac`). Configure **Clients fields** separately for connected clients (recommended match: `name`).
+
+## Configure Google Workspace
+<!-- aliases: connect google workspace | google oauth app | connect with google | g suite | gsuite | google admin | check setup | google client id | google redirect uri | unverified app -->
+<!-- requires: settings.manage | integration.manage -->
+
+Google Workspace is read-only and connects with OAuth. There is one Google Workspace integration per Weavestream install; each customer tenant is a connection on its **Connections** tab.
+
+Once per Weavestream install, an administrator creates a Google Cloud project, enables the Admin SDK API and Enterprise License Manager API, sets up the consent screen (Branding, then Audience **External** and **Publish app** so it is **In production**), adds the scopes under **Data Access**, and creates a **Web application** OAuth client with the redirect URI shown in Weavestream. Create the Google Workspace integration once (**New integration → Google Workspace**; a second one is refused), open its **App** tab, paste the Client ID and Client secret, select **Save OAuth app**, then **Check setup**. The App tab shows a numbered setup guide with copy buttons; passed steps turn green and a failed step shows what to fix.
+
+Per customer: open the Google Workspace integration, go to **Connections**, select **Connect a client** and sign in with the customer's super admin (or a delegated admin with read access). On "Google hasn't verified this app", select **Advanced**, then **Go to Weavestream (unsafe)**: expected for a self-hosted app. If the customer blocks third-party apps, they mark the Client ID **Trusted** under **Security → Access and data control → API controls**. Then map the tenant under **Organizations**, choose layouts and match fields under **Map layouts**, and run a dry run. Below the match picker, **Map layouts** lists each resource's standard facts: job title, department and phone for users; model, operating system, MAC and IP address for Chrome devices; model, manufacturer, operating system, IMEI and Wi-Fi MAC for phones; description for groups; primary domain for the tenant. Domains are not a resource: the tenant's verified domains and aliases go to the company's **Domains** monitoring on every real sync, matched to existing domains by name (never duplicated; Cloudflare details are kept), with Google's default `test-google-a.com` domains skipped. Each is set to a fitting layout field, **Create field** or **Don't sync**. Those facts fill the layout fields; the **Google Workspace** section keeps the rest: org unit, account status, licences, mailbox and Drive storage, admin role, 2-step verification, device status, last sync and last user (shown only, never assigned). A mapped field someone changed in Weavestream is never overwritten: it shows under **Differences** on the asset and on the integration's **Differences** tab, with **Use Google Workspace value** or **Keep ours**.
+
+Do not leave the app in **Testing**: connections expire after 7 days. A connection shows **needs reconnect** when access was revoked or unused for 6 months; **Reconnect** on its row only accepts the same tenant. **Disconnect** removes one tenant. Google gives no invoices, purchased seats or renewal dates for direct customers, and usage figures lag 1 to 3 days.
 
 ## Configure Level RMM
 <!-- aliases: connect level | level rmm | level.io | level api key | level devices | level groups -->

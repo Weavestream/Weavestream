@@ -50,6 +50,12 @@ export const AUDIT_ACTIONS = {
     // Instance-wide API key switch (`PUT /settings/api-keys`). `before` and
     // `after` carry `{ apiKeysEnabled }`.
     apiKeysToggle: 'settings.api_keys.toggle',
+    // Pre-connections instance OAuth app (`PUT /settings/integration-oauth-apps/:provider`,
+    // removed). Kept so older audit rows still resolve; new rows use
+    // `integration.oauthAppUpdate`.
+    integrationOAuthAppUpdate: 'settings.integration_oauth_app.update',
+    // Pre-connections Check setup on the instance OAuth app (removed route).
+    integrationOAuthAppCheck: 'settings.integration_oauth_app.check',
     // Integration priority order (`PUT /settings/integration-priority`).
     // `before` and `after` carry `{ order }` (driver keys only).
     integrationPriorityUpdate: 'settings.integration_priority.update',
@@ -161,6 +167,16 @@ export const AUDIT_ACTIONS = {
     syncMappingStarted: 'integration.sync.mapping.started',
     syncMappingFinished: 'integration.sync.mapping.finished',
     syncMappingFailed: 'integration.sync.mapping.failed',
+    // OAuth connect / disconnect. Rows carry the provider, scope list and a
+    // reason category on failure; never tokens or provider error text.
+    oauthConnect: 'integration.oauth.connect',
+    oauthConnectFailed: 'integration.oauth.connect.failed',
+    oauthDisconnect: 'integration.oauth.disconnect',
+    // The integration's OAuth app (App tab, `PUT /admin/integrations/:id/oauth-app`).
+    // `after` carries the provider, client id and the secret's last-four mask only.
+    oauthAppUpdate: 'integration.oauth_app.update',
+    // Check setup on the integration's OAuth app: outcome and failed step ids only.
+    oauthAppCheck: 'integration.oauth_app.check',
     assetCreated: 'integration.asset.created',
     assetUpdated: 'integration.asset.updated',
     assetClaimed: 'integration.asset.claimed',
@@ -194,6 +210,8 @@ export const AUDIT_ACTIONS = {
     // `.failed` row instead, carrying `{ runId, error }`.
     cloudflareRegistrarSync: 'integration.cloudflare.registrar_sync',
     cloudflareRegistrarSyncFailed: 'integration.cloudflare.registrar_sync.failed',
+    // Google Workspace domains → Domains monitoring, once per mapping sync.
+    googleWorkspaceDomainSync: 'integration.google_workspace.domain_sync',
   },
   subnet: {
     create: 'subnet.create',

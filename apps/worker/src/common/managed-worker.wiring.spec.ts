@@ -99,7 +99,7 @@ const CASES: readonly Case[] = [
     queue: QueueNames.integrationSyncMapping,
     concurrency: 6,
     make: () =>
-      new IntegrationSyncMappingWorker(env, redis, stub, stub, stub, stub, stub),
+      new IntegrationSyncMappingWorker(env, redis, stub, stub, stub, stub, stub, stub),
   },
   {
     name: 'CloudflareDriftSweepWorker',

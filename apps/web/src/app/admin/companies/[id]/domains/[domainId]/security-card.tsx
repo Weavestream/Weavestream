@@ -18,9 +18,10 @@ export function SecurityCard({
   return (
     <Panel title="Security posture">
       <div
+        className="security-field-grid"
         style={{
           display: 'grid',
-          gridTemplateColumns: '160px 1fr',
+          gridTemplateColumns: '160px minmax(0, 1fr)',
           rowGap: 12,
           columnGap: 16,
           fontSize: 13,
@@ -56,7 +57,7 @@ function DnssecRow({ details }: { details: DomainCheckDetails }) {
   const dnssec = details.dns?.dnssec;
   if (!dnssec) return <Muted>No DNSSEC data</Muted>;
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
       <Tag tone={dnssec.signed ? 'ok' : 'warn'}>
         {dnssec.signed ? 'Signed' : 'Not signed'}
       </Tag>
@@ -110,7 +111,7 @@ function RedirectRow({ details }: { details: DomainCheckDetails }) {
   if (!http) return <Muted>No HTTP data</Muted>;
   if (http.redirectsToHttps) {
     return (
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
         <Tag tone="ok">Redirects to HTTPS</Tag>
         {http.finalStatus !== null && http.finalStatus !== undefined && (
           <span
@@ -123,7 +124,7 @@ function RedirectRow({ details }: { details: DomainCheckDetails }) {
     );
   }
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
       <Tag tone="warn">No redirect</Tag>
       <span style={{ color: 'var(--muted)' }}>
         Plain HTTP returns content without upgrading.
@@ -136,7 +137,7 @@ function HstsRow({ details }: { details: DomainCheckDetails }) {
   const hsts = details.http?.hsts;
   if (!hsts || !hsts.present) {
     return (
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
         <Tag tone="warn">Not set</Tag>
         <span style={{ color: 'var(--muted)' }}>
           No <code>Strict-Transport-Security</code> header.
@@ -195,7 +196,7 @@ function LockRow({ details }: { details: DomainCheckDetails }) {
   if (!whois) return <Muted>No registry data</Muted>;
   if (whois.hold) {
     return (
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
         <Tag tone="danger">On hold</Tag>
         <span style={{ color: 'var(--muted)' }}>
           {(whois.statusCodes ?? []).join(', ') || 'registry-level suspension'}
@@ -205,16 +206,16 @@ function LockRow({ details }: { details: DomainCheckDetails }) {
   }
   if (whois.locked) {
     return (
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
         <Tag tone="ok">Transfer locked</Tag>
-        <span style={{ color: 'var(--muted)', fontSize: 11.5, fontFamily: 'var(--font-mono)' }}>
+        <span style={{ color: 'var(--muted)', fontSize: 11.5, fontFamily: 'var(--font-mono)', overflowWrap: 'anywhere' }}>
           {(whois.statusCodes ?? []).join(', ') || 'clientTransferProhibited'}
         </span>
       </div>
     );
   }
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
       <Tag tone="warn">Not locked</Tag>
       <span style={{ color: 'var(--muted)' }}>
         Enable transfer lock in your registrar.
@@ -231,7 +232,7 @@ function NsMatchRow({ details }: { details: DomainCheckDetails }) {
   }
   if (ns.match === 'unverifiable') {
     return (
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
         <Tag tone="outline">Unverifiable</Tag>
         <span style={{ color: 'var(--muted)' }}>
           Registry did not return NS records.
@@ -247,6 +248,7 @@ function NsMatchRow({ details }: { details: DomainCheckDetails }) {
           color: 'var(--muted)',
           fontSize: 11.5,
           fontFamily: 'var(--font-mono)',
+          overflowWrap: 'anywhere',
         }}
       >
         DNS: {ns.dnsNs.join(', ') || '—'}
@@ -268,6 +270,7 @@ function Label({ children }: { children: React.ReactNode }) {
         letterSpacing: 0.3,
         paddingTop: 4,
       }}
+      className="security-field-label"
     >
       {children}
     </span>

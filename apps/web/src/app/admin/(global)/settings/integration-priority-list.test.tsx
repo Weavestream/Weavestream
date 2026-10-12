@@ -13,7 +13,7 @@ jest.mock('next/navigation', () => ({ useRouter: () => ({ refresh }) }));
 const initial = [
   { key: 'level', label: 'Level RMM' },
   { key: 'ninjaone', label: 'NinjaOne' },
-  { key: 'action1', label: 'Action1' },
+  { key: 'google-workspace', label: 'Google Workspace' },
 ];
 
 function renderList() {
@@ -37,16 +37,16 @@ describe('IntegrationPriorityList', () => {
     const rows = renderList();
     expect(screen.getByRole('button', { name: 'Save order' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Move Level RMM up' })).toBeDisabled();
-    fireEvent.click(screen.getByRole('button', { name: 'Move Action1 up' }));
-    expect(rows()[1]).toContain('Action1');
+    fireEvent.click(screen.getByRole('button', { name: 'Move Google Workspace up' }));
+    expect(rows()[1]).toContain('Google Workspace');
     fireEvent.click(screen.getByRole('button', { name: 'Move Level RMM down' }));
-    expect(rows()[0]).toContain('Action1');
+    expect(rows()[0]).toContain('Google Workspace');
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Save order' }));
     });
     expect(apiFetch).toHaveBeenCalledWith('/settings/integration-priority', {
       method: 'PUT',
-      body: JSON.stringify({ order: ['action1', 'level', 'ninjaone'] }),
+      body: JSON.stringify({ order: ['google-workspace', 'level', 'ninjaone'] }),
     });
     expect(refresh).toHaveBeenCalled();
     expect(screen.getByRole('button', { name: 'Save order' })).toBeDisabled();
@@ -58,7 +58,7 @@ describe('IntegrationPriorityList', () => {
     fireEvent.dragStart(items[2]!);
     fireEvent.dragOver(items[0]!);
     fireEvent.drop(items[0]!);
-    expect(rows()[0]).toContain('Action1');
+    expect(rows()[0]).toContain('Google Workspace');
   });
 
   it('keeps the edit when the step-up is cancelled', async () => {

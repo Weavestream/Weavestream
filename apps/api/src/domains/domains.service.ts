@@ -67,7 +67,7 @@ export interface SerializedMonitoredDomain {
   /** v2 — operator-supplied extra DKIM selectors to probe. */
   dkimSelectorOverride: string | null;
   /** Where the row came from. CLOUDFLARE rows are owned by the registrar sync. */
-  source: 'MANUAL' | 'CLOUDFLARE';
+  source: 'MANUAL' | 'CLOUDFLARE' | 'GOOGLE_WORKSPACE';
   /** Registrar facts as last seen by the sync. All null on MANUAL rows. */
   registrar: string | null;
   registrarAutoRenew: boolean | null;
@@ -79,6 +79,17 @@ export interface SerializedMonitoredDomain {
   registrarSyncedAt: Date | null;
   /** Set when a sync stopped finding the domain on the account. */
   registrarMissingSince: Date | null;
+  /**
+   * Google Workspace facts, written by the Workspace domain sync on rows it
+   * created or matched. Null role = not (or no longer) in Workspace.
+   */
+  workspaceIntegrationId: string | null;
+  workspaceRole: 'PRIMARY' | 'SECONDARY' | 'ALIAS' | null;
+  workspaceAliasOf: string | null;
+  workspaceSyncedAt: Date | null;
+  workspaceMissingSince: Date | null;
+  /** Detail view only, and never for client users: the integration's name. */
+  workspaceIntegrationName?: string | null;
   archivedAt: Date | null;
   createdBy: string | null;
   createdAt: Date;
@@ -155,12 +166,20 @@ export class DomainsService {
   ): Promise<SerializedMonitoredDomain> {
     const row = await this.prisma.monitoredDomain.findFirst({
       where: { id, companyId },
+      include: { workspaceIntegration: { select: { name: true } } },
     });
     if (!row) throw new NotFoundException();
     if (actor.role === 'CLIENT_USER' && !row.visibleToClients) {
       throw new NotFoundException();
     }
-    return this.serialize(row);
+    // Workspace facts follow the registrar rule (visible with the row); the
+    // integration's name is MSP configuration, so client users never get it.
+    const { workspaceIntegration, ...domain } = row;
+    return {
+      ...this.serialize(domain),
+      workspaceIntegrationName:
+        actor.role === 'CLIENT_USER' ? null : (workspaceIntegration?.name ?? null),
+    };
   }
 
   async listChecks(
@@ -343,11 +362,13 @@ export class DomainsService {
     const data: Prisma.MonitoredDomainUncheckedUpdateManyInput = {};
     if (input.hostname !== undefined) {
       const normalised = domainHostnameSchema.parse(input.hostname);
-      if (normalised !== existing.hostname && existing.source === 'CLOUDFLARE') {
-        // The sync matches on hostname; a rename would orphan this row and
+      // A manual domain Google Workspace also lists is synced too.
+      if (normalised !== existing.hostname && (existing.source !== 'MANUAL' || existing.workspaceRole !== null)) {
+        // The syncs match on hostname; a rename would orphan this row and
         // the next sweep would recreate the original beside it.
+        const from = existing.source === 'CLOUDFLARE' ? 'Cloudflare' : 'Google Workspace';
         throw new BadRequestException(
-          'This domain is synced from Cloudflare; its hostname cannot be changed here.',
+          `This domain is synced from ${from}; its hostname cannot be changed here.`,
         );
       }
       if (normalised !== existing.hostname) {
@@ -645,6 +666,11 @@ export class DomainsService {
       nameservers: row.nameservers,
       registrarSyncedAt: row.registrarSyncedAt,
       registrarMissingSince: row.registrarMissingSince,
+      workspaceIntegrationId: row.workspaceIntegrationId,
+      workspaceRole: row.workspaceRole,
+      workspaceAliasOf: row.workspaceAliasOf,
+      workspaceSyncedAt: row.workspaceSyncedAt,
+      workspaceMissingSince: row.workspaceMissingSince,
       archivedAt: row.archivedAt,
       createdBy: row.createdBy,
       createdAt: row.createdAt,

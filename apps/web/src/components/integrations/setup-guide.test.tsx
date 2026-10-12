@@ -92,14 +92,14 @@ describe('SetupGuide', () => {
         passedStepIds: ['client'],
         failures: [
           { stepId: 'apis', message: 'The Admin SDK API is not enabled.' },
-          { stepId: null, message: 'Level is rate limiting requests right now.' },
+          { stepId: null, message: 'Google is rate limiting requests right now.' },
         ],
       },
     });
     const items = screen.getAllByRole('listitem').filter((li) => li.hasAttribute('data-state'));
     expect(items.map((li) => li.getAttribute('data-state'))).toEqual(['failed', 'passed']);
     expect(screen.getByText('The Admin SDK API is not enabled.')).toBeInTheDocument();
-    expect(screen.getByText('Level is rate limiting requests right now.')).toBeInTheDocument();
+    expect(screen.getByText('Google is rate limiting requests right now.')).toBeInTheDocument();
   });
 
   it('leaves an unverified step neither passed nor failed and shows its note', () => {

@@ -4,6 +4,8 @@ import { IntegrationsCoreModule } from './integrations-core.module.js';
 import { IntegrationSyncQueueRegistrar } from './integration-sync-queue.registrar.js';
 import { CloudflareListsController } from './cloudflare/cloudflare-lists.controller.js';
 import { TicketsGlobalController } from './tickets-global.controller.js';
+import { IntegrationOAuthController } from './oauth/integration-oauth.controller.js';
+import { IntegrationOAuthService } from './oauth/integration-oauth.service.js';
 import { AssetLayoutsModule } from '../asset-layouts/asset-layouts.module.js';
 import { IntegrationMatchFieldController } from './integration-match-field.controller.js';
 import { IntegrationMatchFieldService } from './integration-match-field.service.js';
@@ -32,6 +34,7 @@ import { IntegrationPriorityService } from './integration-priority.service.js';
     IntegrationsController,
     CloudflareListsController,
     TicketsGlobalController,
+    IntegrationOAuthController,
     IntegrationMatchFieldController,
     IntegrationDifferencesController,
     AssetIntegrationDifferencesController,
@@ -39,6 +42,7 @@ import { IntegrationPriorityService } from './integration-priority.service.js';
   ],
   providers: [
     IntegrationSyncQueueRegistrar,
+    IntegrationOAuthService,
     IntegrationMatchFieldService,
     IntegrationDifferencesService,
     IntegrationPriorityService,

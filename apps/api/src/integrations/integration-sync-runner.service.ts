@@ -26,6 +26,7 @@ import { EnvService } from '../config/env.service.js';
 import { IntegrationsService } from './integrations.service.js';
 import { IntegrationDriverRegistry } from './drivers/integration-driver.registry.js';
 import {
+  DriverAuthError,
   DriverResourceUnavailableError,
   type DriverFetchPage,
   type DriverBlockedInput,
@@ -318,11 +319,17 @@ export class IntegrationSyncRunnerService {
     const integrationPriority = recordFieldDiffs
       ? { driver: mapping.integration.driver, order: await loadIntegrationPriority(this.prisma, this.drivers) }
       : undefined;
-    const loaded = await this.integrations.loadDriverContext(mapping.integrationId);
+    // OAuth drivers: only the connection of this mapping's own tenant.
+    const loaded = await this.integrations.loadDriverContext(mapping.integrationId, {
+      externalOrgId: mapping.externalOrgId,
+    });
     const traversalStartedAt = new Date().toISOString();
     const fetchCtx: FetchRecordsContext = {
       config: loaded.config,
       secret: loaded.secret,
+      oauthClient: loaded.oauthClient,
+      connectionId: loaded.connectionId,
+      credentialVersion: loaded.credentialVersion,
       integrationId: loaded.integrationId,
       http: {
         timeoutMs: this.env.values.INTEGRATION_HTTP_TIMEOUT_MS,
@@ -829,12 +836,31 @@ export class IntegrationSyncRunnerService {
         }
         cursor = page.cursor;
       }
+      await this.markConnection(loaded.connectionId, 'ok');
       return { status: 'succeeded', totals, conflicts, error: null, companyId: mapping.companyId, resourceKey: resource.resourceKey };
     } catch (error) {
+      if (error instanceof DriverAuthError) await this.markConnection(loaded.connectionId, 'needs_reconnect');
       const message = describeError(error);
       totals.errors += 1;
       conflicts.push({ kind: 'driver_error', externalId: '', message: message.slice(0, 500) });
       return { status: 'failed', totals, conflicts, error: message.slice(0, 4_000), companyId: mapping.companyId, resourceKey: resource.resourceKey };
+    }
+  }
+
+  /**
+   * Connection status for the Connections tab: a refused grant marks the
+   * tenant's connection `needs_reconnect`; a later clean fetch clears it.
+   * Best effort: a status write never fails the run.
+   */
+  private async markConnection(connectionId: string | undefined, status: 'ok' | 'needs_reconnect'): Promise<void> {
+    if (!connectionId) return;
+    try {
+      await this.prisma.integrationConnection.updateMany({
+        where: { id: connectionId, ...(status === 'ok' ? { status: 'needs_reconnect' } : {}) },
+        data: status === 'ok' ? { status } : { status, lastErrorAt: new Date() },
+      });
+    } catch (e) {
+      this.logger.warn({ err: (e as Error).message, connectionId }, 'could not update the connection status');
     }
   }
 

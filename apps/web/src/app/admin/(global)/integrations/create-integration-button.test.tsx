@@ -63,6 +63,15 @@ describe('CreateIntegrationButton', () => {
     expect(push).toHaveBeenCalledWith('/admin/integrations/integration-1');
   });
 
+  it('offers an OAuth provider only once: an existing Google integration disables Google', () => {
+    const google = { ...(breeze as object), key: 'google-workspace', label: 'Google Workspace', configFields: [], secretFields: [], oauth: { provider: 'google', scopes: [] } } as never;
+    render(<CreateIntegrationButton drivers={[google, breeze]} existing={[{ driver: 'google-workspace' }]} />);
+    fireEvent.click(screen.getByRole('button', { name: 'New integration' }));
+    expect(screen.getByRole('option', { name: /Google Workspace \(already added/ })).toBeDisabled();
+    expect(screen.getByRole('option', { name: 'Breeze RMM' })).toBeEnabled();
+    expect(screen.getByLabelText('Driver')).toHaveValue('breeze');
+  });
+
   it('defaults the schedule to inheriting the global default and explains the off switch', () => {
     render(<CreateIntegrationButton drivers={[breeze]} />);
     fireEvent.click(screen.getByRole('button', { name: 'New integration' }));

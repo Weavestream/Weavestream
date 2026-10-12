@@ -556,7 +556,7 @@ describe('AssetsService.get integration sections', () => {
   const assetId = '00000000-0000-4000-8000-0000000000a1';
   const integrationId = '00000000-0000-4000-8000-0000000000b1';
   const section = {
-    title: 'Level',
+    title: 'Workspace',
     groups: [{ key: 'account', title: 'Account', rows: [{ label: 'Admin', kind: 'boolean', value: true }] }],
   };
 
@@ -571,7 +571,7 @@ describe('AssetsService.get integration sections', () => {
           'f-gone': { sourceValue: 'x', sourceFingerprint: 's', localFingerprint: 'l', detectedAt: '2026-10-01T00:00:00.000Z' },
         },
         state: 'active',
-        companyMapping: { integration: { id: integrationId, driver: 'level', name: 'Acme Level' } },
+        companyMapping: { integration: { id: integrationId, driver: 'google-workspace', name: 'Acme Workspace' } },
       },
       {
         // The record left the source: kept as history, flagged inactive.
@@ -579,13 +579,13 @@ describe('AssetsService.get integration sections', () => {
         lastSyncedAt: new Date('2026-09-15T00:00:00.000Z'),
         sectionData: section,
         state: 'stale',
-        companyMapping: { integration: { id: integrationId, driver: 'level', name: 'Acme Level' } },
+        companyMapping: { integration: { id: integrationId, driver: 'google-workspace', name: 'Acme Workspace' } },
       },
       {
         // Never rendered: fails the schema on read.
         lastSyncedAt: new Date('2026-09-01T00:00:00.000Z'),
         sectionData: { title: '<b>x</b>', groups: [] },
-        companyMapping: { integration: { id: integrationId, driver: 'level', name: 'Acme Level' } },
+        companyMapping: { integration: { id: integrationId, driver: 'google-workspace', name: 'Acme Workspace' } },
       },
     ];
     const findMany = jest.fn(({ where }: { where: Record<string, unknown> }) =>
@@ -621,7 +621,7 @@ describe('AssetsService.get integration sections', () => {
     const { service, findMany } = makeService();
     const asset = await service.get({ id: 'u1', role: 'SUPER_ADMIN' } as never, companyId, assetId);
     expect(asset.integrationSections).toEqual([{
-      integrationId, driver: 'level', integrationName: 'Acme Level',
+      integrationId, driver: 'google-workspace', integrationName: 'Acme Workspace',
       lastSyncedAt: new Date('2026-10-01T00:00:00.000Z'), active: true, section,
       syncRecordId: 'rec-1',
       differences: [{
@@ -629,7 +629,7 @@ describe('AssetsService.get integration sections', () => {
         localValue: 'Senior engineer', sourceValue: 'Engineer', detectedAt: '2026-10-01T00:00:00.000Z',
       }],
     }, {
-      integrationId, driver: 'level', integrationName: 'Acme Level',
+      integrationId, driver: 'google-workspace', integrationName: 'Acme Workspace',
       lastSyncedAt: new Date('2026-09-15T00:00:00.000Z'), active: false, section,
       syncRecordId: 'rec-2', differences: [],
     }]);

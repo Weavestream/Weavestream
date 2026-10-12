@@ -7,12 +7,12 @@ import { IntegrationSections, meterState } from './integration-sections';
 function entry(rows: AssetIntegrationSection['section']['groups'][number]['rows']): AssetIntegrationSection {
   return {
     integrationId: '00000000-0000-4000-8000-000000000001',
-    driver: 'level',
-    integrationName: 'Example Level',
+    driver: 'google-workspace',
+    integrationName: 'Example Workspace',
     lastSyncedAt: new Date().toISOString(),
     section: {
-      title: 'Level',
-      groups: [{ key: 'storage', title: 'Storage', icon: 'level', rows }],
+      title: 'Google Workspace',
+      groups: [{ key: 'storage', title: 'Storage', icon: 'google-drive', rows }],
     },
   };
 }
@@ -39,10 +39,10 @@ describe('IntegrationSections', () => {
         ]}
       />,
     );
-    expect(screen.getByText('Level')).toBeInTheDocument();
+    expect(screen.getByText('Google Workspace')).toBeInTheDocument();
     expect(screen.getByText(/^synced /)).toBeInTheDocument();
-    expect(container.querySelector('img[src="/integrations/drivers/level.svg"]')).not.toBeNull();
-    expect(container.querySelector('img[src="/integrations/icons/level.svg"]')).not.toBeNull();
+    expect(container.querySelector('img[src="/integrations/drivers/google-workspace.svg"]')).not.toBeNull();
+    expect(container.querySelector('img[src="/integrations/icons/google-drive.svg"]')).not.toBeNull();
     expect(screen.getByText('Active')).toBeInTheDocument();
     expect(screen.getByText('no')).toBeInTheDocument();
     expect(screen.getByText('1.5 KB')).toBeInTheDocument();
@@ -99,7 +99,7 @@ describe('IntegrationSections', () => {
 
   it('tags a section whose binding is no longer active', () => {
     render(<IntegrationSections sections={[{ ...entry([{ label: 'Plan', kind: 'text', value: 'x' }]), active: false }]} />);
-    expect(screen.getByText('No longer in Example Level')).toBeInTheDocument();
+    expect(screen.getByText('No longer in Example Workspace')).toBeInTheDocument();
   });
 
   it('shows no tag on an active binding', () => {

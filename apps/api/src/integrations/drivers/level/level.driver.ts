@@ -294,6 +294,9 @@ export class LevelDriver implements IntegrationDriver {
   };
 
   diagnose(input: DriverDiagnoseInput): Promise<IntegrationSetupCheck> {
+    if (input.mode !== 'connection') {
+      return Promise.resolve({ ok: false, passedStepIds: [], failures: [{ stepId: null, message: 'Level has no OAuth app to check.' }] });
+    }
     return diagnoseLevel(async () => (await rootGroups(input.ctx)).length);
   }
 

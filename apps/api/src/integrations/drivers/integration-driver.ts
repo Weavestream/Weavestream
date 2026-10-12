@@ -12,6 +12,7 @@ import type {
 } from '../reconstruction/reconstruction-target.js';
 import type { IntegrationSetupCheck, ReconstructionGapKind } from '@weavestream/shared';
 import type { FieldType } from '@prisma/client';
+import type { OAuthClientCredentials } from '../oauth/oauth-token.js';
 
 /**
  * Phase 11 — universal integration driver port.
@@ -62,6 +63,24 @@ export interface IntegrationContext {
    * resolves that from `IntegrationCompanyMapping`.
    */
   readonly integrationId?: string;
+  /**
+   * Instance OAuth app credentials, set by the framework only for drivers
+   * whose descriptor declares `oauth`. Drivers never read it directly:
+   * `getOAuthAccessToken` / `oauthFetch` (oauth/oauth-token.ts) do.
+   */
+  readonly oauthClient?: OAuthClientCredentials;
+  /**
+   * OAuth drivers: the connection (client tenant) whose grant is in
+   * `secret`. Keys the access-token cache; never a tenant scope.
+   */
+  readonly connectionId?: string;
+  /**
+   * Non-secret marker of the stored credential row and instance OAuth app
+   * (row ids + updatedAt). Changes on every reconnect or app save, so the
+   * OAuth access-token cache keys on it instead of hashing a secret. When
+   * absent, access tokens are not cached.
+   */
+  readonly credentialVersion?: string;
 }
 
 export interface FetchRecordsContext extends IntegrationContext {
@@ -287,7 +306,8 @@ export interface IntegrationDriver {
   getTicket?(ctx: TicketContext, ticketId: string): Promise<TicketDetailDto>;
 
   /**
-   * Optional "Check setup" for drivers that ship a `setupGuide`. `connection`
+   * Optional "Check setup" for drivers that ship a `setupGuide`. `client`
+   * verifies the instance OAuth app without a customer token; `connection`
    * probes a connected integration. Read-only, and failures carry fixed
    * messages naming a guide step (never provider error text).
    */
@@ -295,6 +315,13 @@ export interface IntegrationDriver {
 }
 
 export type DriverDiagnoseInput =
+  | {
+      mode: 'client';
+      oauthClient: OAuthClientCredentials;
+      redirectUri: string;
+      http: IntegrationContext['http'];
+      correlationId: string;
+    }
   | { mode: 'connection'; ctx: IntegrationContext };
 
 /**

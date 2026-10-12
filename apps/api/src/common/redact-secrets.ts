@@ -26,6 +26,15 @@ const SK_STYLE_KEY = /\bsk-[A-Za-z0-9_-]{8,}/g;
 const PARAM_SECRET =
   /\b(api[_-]?key|apikey|token|secret|password|key)=[^&\s"']+/gi;
 
+/**
+ * Admin-UI mask of a stored secret: its last four characters, or dots
+ * only when it is too short to reveal any. Used instead of a hash so no
+ * secret ever feeds a fast digest.
+ */
+export function maskSecretTail(value: string): string {
+  return value.length <= 4 ? '••••' : `••••${value.slice(-4)}`;
+}
+
 export function redactSecretsInText(text: string): string {
   return redactUrlsInText(
     text

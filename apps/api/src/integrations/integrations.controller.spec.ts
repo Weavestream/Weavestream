@@ -1,5 +1,6 @@
 import { IntegrationsController } from './integrations.controller.js';
 import { IntegrationsService } from './integrations.service.js';
+import { OAUTH_CALLBACK_HOST_WARNING } from './oauth/integration-oauth-app.service.js';
 import { REQUIRE_PERMISSION_KEY } from '../rbac/require-permission.decorator.js';
 import { REQUIRE_STEP_UP_KEY } from '../auth/step-up/require-step-up.decorator.js';
 import { integrationSecretAad } from '../crypto/integration-secret-encryption.service.js';
@@ -49,7 +50,7 @@ describe('IntegrationsController security contract', () => {
       { externalId: 'org-unmapped', name: 'Unmapped' },
     ];
     const controller = new IntegrationsController(
-      { loadDriverContext: jest.fn().mockResolvedValue({ driver: 'breeze', config: {}, secret: {} }) } as never,
+      { listConnectedOrgs: jest.fn().mockResolvedValue(null), loadDriverContext: jest.fn().mockResolvedValue({ driver: 'breeze', config: {}, secret: {} }) } as never,
       {} as never,
       {} as never,
       { get: jest.fn().mockReturnValue({ listSourceOrgs: jest.fn().mockResolvedValue(orgs) }) } as never,
@@ -62,29 +63,55 @@ describe('IntegrationsController security contract', () => {
     await expect(controller.listSourceOrgs('00000000-0000-4000-8000-000000000001')).resolves.toEqual({ orgs });
   });
 
+  it('lists OAuth organizations from connections without calling the provider', async () => {
+    const connected = [{ externalId: 'C-a', name: 'tenant-a.example', hint: null }];
+    const loadDriverContext = jest.fn();
+    const controller = new IntegrationsController(
+      { listConnectedOrgs: jest.fn().mockResolvedValue(connected), loadDriverContext } as never,
+      {} as never, {} as never, {} as never, {} as never, {} as never, {} as never, {} as never,
+    );
+    await expect(controller.listSourceOrgs('00000000-0000-4000-8000-000000000001')).resolves.toEqual({ orgs: connected });
+    expect(loadDriverContext).not.toHaveBeenCalled();
+  });
+
   function checkSetupController(env: { API_URL: string; APP_URL: string }) {
     const diagnose = jest.fn().mockResolvedValue({
       ok: false, passedStepIds: ['project'], failures: [{ stepId: 'apis', message: 'Enable it.' }],
     });
     const audit = { log: jest.fn().mockResolvedValue(undefined) };
-    const loadDriverContext = jest.fn().mockResolvedValue({ integrationId: 'i-1', driver: 'level', config: {}, secret: { apiKey: 'test-key' } });
+    const loadDriverContext = jest.fn().mockResolvedValue({ integrationId: 'i-1', driver: 'google-workspace', config: {}, secret: { refreshToken: 'r' } });
     const testConnection = jest.fn().mockResolvedValue({ ok: true });
     const controller = new IntegrationsController(
       { loadDriverContext } as never,
       {} as never,
       {} as never,
-      { get: jest.fn().mockReturnValue({ diagnose, testConnection }), kindOf: () => 'sync' } as never,
+      { get: jest.fn().mockReturnValue({ diagnose, testConnection }), kindOf: () => 'sync', describe: () => ({ oauth: { provider: 'google' } }) } as never,
       { values: { ...env, INTEGRATION_HTTP_TIMEOUT_MS: 1, INTEGRATION_HTTP_MAX_RETRIES: 0, INTEGRATION_HTTP_BACKOFF_MS: 1 } } as never,
       audit as never,
       {} as never,
       {} as never,
     );
-    const run = () =>
-      controller.checkSetup({ id: 'actor' } as never, '00000000-0000-4000-8000-000000000001', { ip: '127.0.0.1', headers: {} } as never);
-    const test = () =>
-      controller.testConnection({ id: 'actor' } as never, '00000000-0000-4000-8000-000000000001', { ip: '127.0.0.1', headers: {} } as never);
+    const run = (connectionId?: string) =>
+      controller.checkSetup({ id: 'actor' } as never, '00000000-0000-4000-8000-000000000001', { ip: '127.0.0.1', headers: {} } as never, connectionId);
+    const test = (connectionId?: string) =>
+      controller.testConnection({ id: 'actor' } as never, '00000000-0000-4000-8000-000000000001', { ip: '127.0.0.1', headers: {} } as never, connectionId);
     return { diagnose, audit, run, test, loadDriverContext, testConnection };
   }
+
+  it.each(['run', 'test'] as const)('%s scopes an OAuth integration to the picked connection, else to its only one', async (which) => {
+    const ctl = checkSetupController({ API_URL: 'https://ws.example.test/api', APP_URL: 'https://ws.example.test' });
+    await ctl[which]('00000000-0000-4000-8000-0000000000c1');
+    expect(ctl.loadDriverContext).toHaveBeenLastCalledWith('00000000-0000-4000-8000-000000000001', { connectionId: '00000000-0000-4000-8000-0000000000c1' });
+    await ctl[which]();
+    expect(ctl.loadDriverContext).toHaveBeenLastCalledWith('00000000-0000-4000-8000-000000000001', { onlyConnection: true });
+  });
+
+  it('passes the loaded connection to the driver test', async () => {
+    const ctl = checkSetupController({ API_URL: 'https://ws.example.test/api', APP_URL: 'https://ws.example.test' });
+    ctl.loadDriverContext.mockResolvedValueOnce({ integrationId: 'i-1', driver: 'google-workspace', config: {}, secret: {}, connectionId: 'conn-1' });
+    await ctl.test();
+    expect(ctl.testConnection).toHaveBeenCalledWith(expect.objectContaining({ connectionId: 'conn-1' }));
+  });
 
   it('runs the driver connection check and audits only the outcome and step ids', async () => {
     const { diagnose, audit, run } = checkSetupController({ API_URL: 'https://ws.example.test/api', APP_URL: 'https://ws.example.test' });
@@ -93,6 +120,15 @@ describe('IntegrationsController security contract', () => {
     expect(diagnose).toHaveBeenCalledWith(expect.objectContaining({ mode: 'connection', ctx: expect.objectContaining({ integrationId: 'i-1' }) }));
     expect(audit.log).toHaveBeenCalledWith(expect.objectContaining({
       action: 'integration.setup_check', after: { ok: false, failedStepIds: ['apis'] },
+    }));
+  });
+
+  it('adds the fixed host warning to an OAuth check when API_URL and APP_URL hosts differ', async () => {
+    const { audit, run } = checkSetupController({ API_URL: 'https://api.example.test', APP_URL: 'https://ws.example.test' });
+    const result = await run();
+    expect(result.failures).toContainEqual({ stepId: null, message: OAUTH_CALLBACK_HOST_WARNING });
+    expect(audit.log).toHaveBeenCalledWith(expect.objectContaining({
+      after: { ok: false, failedStepIds: ['apis', null] },
     }));
   });
 

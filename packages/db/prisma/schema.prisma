@@ -1102,6 +1102,14 @@ model AiSetting {
 enum DomainSource {
   MANUAL
   CLOUDFLARE
+  GOOGLE_WORKSPACE
+}
+
+/// How a domain is configured in a Google Workspace tenant.
+enum WorkspaceDomainRole {
+  PRIMARY
+  SECONDARY
+  ALIAS
 }
 
 model MonitoredDomain {
@@ -1154,6 +1162,19 @@ model MonitoredDomain {
   /// account, transferred out, expired). Never auto-deleted: the operator
   /// decides whether it is gone or merely relocated.
   registrarMissingSince DateTime?    @map("registrar_missing_since")
+  // Google Workspace sync. Written only by the Google Workspace domain sync,
+  // on rows it created or matched by hostname in the mapped company. Kept
+  // apart from the registrar columns (and from `integrationId`, which a
+  // Cloudflare sync may take over) so the two syncs never overwrite each
+  // other. Only verified domains are synced, so a non-null role means
+  // "verified in Workspace"; a domain that drops out has its role cleared
+  // and `workspaceMissingSince` stamped.
+  workspaceIntegrationId String?              @map("workspace_integration_id") @db.Uuid
+  workspaceRole          WorkspaceDomainRole? @map("workspace_role")
+  /// Parent domain of an ALIAS (Google's parentDomainName).
+  workspaceAliasOf       String?              @map("workspace_alias_of")
+  workspaceSyncedAt      DateTime?            @map("workspace_synced_at")
+  workspaceMissingSince  DateTime?            @map("workspace_missing_since")
   archivedAt           DateTime?    @map("archived_at")
   createdBy            String?      @map("created_by") @db.Uuid
   createdAt            DateTime     @default(now()) @map("created_at")
@@ -1163,9 +1184,11 @@ model MonitoredDomain {
 
   company     Company      @relation(fields: [companyId], references: [id], onDelete: Cascade)
   integration Integration? @relation(fields: [integrationId], references: [id], onDelete: SetNull)
+  workspaceIntegration Integration? @relation("MonitoredDomainWorkspace", fields: [workspaceIntegrationId], references: [id], onDelete: SetNull)
 
   @@index([companyId, archivedAt], map: "monitored_domains_company_archived_idx")
   @@index([integrationId], map: "monitored_domains_integration_idx")
+  @@index([workspaceIntegrationId], map: "monitored_domains_workspace_integration_idx")
   @@index([companyId, latestStatus], map: "monitored_domains_company_status_idx")
   @@map("monitored_domains")
 }
@@ -1393,11 +1416,14 @@ model Integration {
   updatedAt     DateTime          @updatedAt @map("updated_at")
 
   secret            IntegrationSecret?
+  oauthApp          IntegrationOAuthApp?
+  connections       IntegrationConnection[]
   companyMappings   IntegrationCompanyMapping[]
   resources         IntegrationResource[]
   syncRuns          IntegrationSyncRun[]
   cloudflareIpLists CloudflareIpList[]
   monitoredDomains  MonitoredDomain[]
+  workspaceDomains  MonitoredDomain[] @relation("MonitoredDomainWorkspace")
 
   @@unique([driver, name])
   @@index([driver])
@@ -1464,6 +1490,52 @@ model IntegrationSecret {
   integration Integration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
 
   @@map("integration_secrets")
+}
+
+/// The OAuth app (client) of one OAuth-connected integration (Google
+/// Workspace), owned by that integration: at most one
+/// integration exists per provider. The client secret is an AES-256-GCM blob
+/// (embedded `kid`) under `INTEGRATION_SECRET_KEY`, AAD bound to the owning
+/// integration. GLOBAL: no tenant.
+model IntegrationOAuthApp {
+  id               String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  provider         String    @unique
+  integrationId    String?   @unique @map("integration_id") @db.Uuid
+  clientId         String    @map("client_id")
+  secretCiphertext String    @map("secret_ciphertext")
+  updatedBy        String?   @map("updated_by") @db.Uuid
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
+
+  integration Integration? @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+
+  @@map("integration_oauth_apps")
+}
+
+/// One client tenant connected to an OAuth integration: a Google customer
+/// (refresh token). `externalOrgId`
+/// is the Google customer id; a company mapping can
+/// only use the connection whose `externalOrgId` equals its own. The secret
+/// is an AES-256-GCM blob under `INTEGRATION_SECRET_KEY`, AAD bound to the
+/// connection id and the integration id. GLOBAL: no tenant.
+model IntegrationConnection {
+  id               String    @id @db.Uuid
+  integrationId    String    @map("integration_id") @db.Uuid
+  externalOrgId    String    @map("external_org_id")
+  displayName      String?   @map("display_name")
+  secretCiphertext String    @map("secret_ciphertext")
+  /// 'ok' | 'needs_reconnect'
+  status           String    @default("ok")
+  connectedBy      String?   @map("connected_by") @db.Uuid
+  connectedAt      DateTime  @default(now()) @map("connected_at")
+  lastErrorAt      DateTime? @map("last_error_at")
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
+
+  integration Integration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+
+  @@unique([integrationId, externalOrgId])
+  @@map("integration_connections")
 }
 
 // Phase 11 — tenant-scoped row that ties a single external organisation

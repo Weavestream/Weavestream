@@ -10,7 +10,7 @@ import type {
 import { AssetTargetWriter } from './reconstruction/asset-target.writer.js';
 import { hasEligibleNativeBinding } from './reconstruction/native-binding-ownership.js';
 import { BreezeDriver } from './drivers/breeze/breeze.driver.js';
-import { DriverResourceUnavailableError } from './drivers/integration-driver.js';
+import { DriverAuthError, DriverResourceUnavailableError } from './drivers/integration-driver.js';
 import { buildResourceExecutionStages } from './integration-sync.service.js';
 import type { AssetReconstructionInput } from './reconstruction/reconstruction-target.js';
 import { z } from 'zod';
@@ -134,7 +134,7 @@ describe('IntegrationSyncRunnerService writer dispatch', () => {
         id: 'mapping', integrationId: 'integration', companyId: 'company', externalOrgId: 'org-1',
         filter: {}, integration: { id: 'integration', driver: 'typed' },
       }) },
-      systemSetting: { findUnique: jest.fn().mockResolvedValue({ integrationPriority: ['level', 'typed'] }) },
+      systemSetting: { findUnique: jest.fn().mockResolvedValue({ integrationPriority: ['google-workspace', 'typed'] }) },
       integrationResource: { findFirst: jest.fn().mockResolvedValue({
         id: 'resource', integrationId: 'integration', resourceKey: 'subnets', enabled: true,
         targetKind: 'subnet', targetConfig: { normalization: 'cidr' }, dependsOnResourceKeys: [],
@@ -231,6 +231,24 @@ describe('IntegrationSyncRunnerService writer dispatch', () => {
     );
     return { service, writer, writerRegistry, tx, order, driver, audit, prisma, provenance, completeness, integrations };
   }
+
+  it('loads only the connection of the mapping tenant and marks it on an auth failure', async () => {
+    const { service, driver, prisma, integrations } = setup();
+    const updateMany = jest.fn().mockResolvedValue({ count: 1 });
+    (prisma as unknown as Record<string, unknown>).integrationConnection = { updateMany };
+    integrations.loadDriverContext.mockResolvedValueOnce({ config: {}, secret: {}, connectionId: 'conn-1' });
+    driver.fetchRecords.mockRejectedValueOnce(new DriverAuthError('Reconnect it.'));
+    await expect(service.runMapping({
+      syncRunId: 'auth-run', integrationCompanyMappingId: 'mapping', resourceId: 'resource',
+      dryRun: false, actorId: 'actor', mode: 'incremental',
+    })).resolves.toMatchObject({ status: 'failed' });
+    expect(integrations.loadDriverContext).toHaveBeenCalledWith('integration', { externalOrgId: 'org-1' });
+    expect(driver.fetchRecords).toHaveBeenCalledWith(expect.objectContaining({ connectionId: 'conn-1', externalOrgId: 'org-1' }), null);
+    expect(updateMany).toHaveBeenCalledWith({
+      where: { id: 'conn-1' },
+      data: { status: 'needs_reconnect', lastErrorAt: expect.any(Date) },
+    });
+  });
 
   it('maps one scalar definition to only its configured target field and skips unmapped rows', () => {
     const { service } = setup();
@@ -574,9 +592,9 @@ describe('IntegrationSyncRunnerService writer dispatch', () => {
   describe('integration sections on legacy records', () => {
     const fieldId = '00000000-0000-4000-8000-000000000601';
     const validSection = {
-      title: 'Level',
+      title: 'Workspace',
       groups: [{
-        key: 'account', title: 'Account', icon: 'level',
+        key: 'account', title: 'Account', icon: 'gmail',
         rows: [
           { label: 'Status', kind: 'badge', value: 'Active', tone: 'success' },
           { label: 'Mailbox', kind: 'meter', used: 12, total: 30, unit: 'mb' },
@@ -738,7 +756,7 @@ describe('IntegrationSyncRunnerService writer dispatch', () => {
   it('skips a resource the source cannot provide with a warning and leaves its bindings alone', async () => {
     const { service, writer, driver, provenance, tx, prisma } = setup();
     driver.fetchRecords.mockRejectedValueOnce(
-      new DriverResourceUnavailableError('This resource is not licensed for this account.'),
+      new DriverResourceUnavailableError('The connected Google account cannot read Chrome devices (needs the device management admin privilege), so Chrome devices are skipped.'),
     );
     await expect(service.runMapping({
       syncRunId: 'run', integrationCompanyMappingId: 'mapping', resourceId: 'resource',
@@ -746,7 +764,7 @@ describe('IntegrationSyncRunnerService writer dispatch', () => {
     })).resolves.toMatchObject({
       status: 'succeeded',
       error: null,
-      conflicts: [{ kind: 'validation_error', message: 'Skipped resource "subnets": This resource is not licensed for this account.' }],
+      conflicts: [{ kind: 'validation_error', message: 'Skipped resource "subnets": The connected Google account cannot read Chrome devices (needs the device management admin privilege), so Chrome devices are skipped.' }],
     });
     expect(writer.write).not.toHaveBeenCalled();
     expect(prisma.$transaction).not.toHaveBeenCalled();

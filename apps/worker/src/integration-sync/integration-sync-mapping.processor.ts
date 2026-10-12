@@ -18,6 +18,9 @@ import {
   IntegrationSyncRunnerService,
   type MappingRunOutcome,
   IntegrationProvenanceService,
+  IntegrationDomainSyncService,
+  domainSyncWarning,
+  hasDomainFeed,
 } from '@weavestream/api/integrations';
 import {
   createManagedWorker,
@@ -53,6 +56,7 @@ export class IntegrationSyncMappingWorker implements OnModuleDestroy {
     private readonly runner: IntegrationSyncRunnerService,
     private readonly provenance: IntegrationProvenanceService,
     private readonly audit: AuditLogService,
+    private readonly providerDomains: IntegrationDomainSyncService,
   ) {}
 
   async start(): Promise<void> {
@@ -167,7 +171,7 @@ export class IntegrationSyncMappingWorker implements OnModuleDestroy {
         id: true,
         triggeredBy: true,
         integrationId: true,
-        integration: { select: { createdBy: true } },
+        integration: { select: { createdBy: true, driver: true } },
       },
     });
     if (!run) return null;
@@ -267,6 +271,21 @@ export class IntegrationSyncMappingWorker implements OnModuleDestroy {
     );
     if (retryable && !isFinalAttempt(job)) {
       throw new Error(retryable.error ?? `Resource ${retryable.resourceKey} failed.`);
+    }
+    // Google Workspace domains feed Domains monitoring
+    // (not an asset resource): once per mapping run, after the resources. A
+    // failure is a run warning on the last resource, never a failed mapping.
+    // Legacy per-resource jobs would run it once per resource, so they skip it.
+    if (hasDomainFeed(run.integration.driver) && !legacy && !payload.dryRun) {
+      try {
+        await this.providerDomains.syncMapping(mapping.id, auditActorId);
+      } catch (err) {
+        const message = domainSyncWarning(err, run.integration.driver);
+        this.logger.warn(
+          `${message} (mapping=${mapping.id}): ${err instanceof Error ? err.message : String(err)}`,
+        );
+        outcomes.at(-1)?.conflicts.push({ kind: 'validation_error', externalId: '', message });
+      }
     }
     // Legacy siblings each merge one resource into the shared mapping row;
     // the row may only reach a terminal state once every sibling reports.
