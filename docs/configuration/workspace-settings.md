@@ -77,6 +77,10 @@ Workspace-wide defaults for the [password generator](/features/passwords/#passwo
 
 These defaults are used when the generator is opened without user-specific preferences. Users can override them per-session.
 
+## Integrations
+
+**Admin > Settings > Integrations** holds the integration priority order: which integration's values win when several sync the same asset. See [Several integrations on one asset](/integrations/#several-integrations-on-one-asset).
+
 ## What Settings Don't Change
 
 Workspace settings are **cosmetic only**. The following always remain as-is regardless of configuration:

@@ -550,3 +550,100 @@ describe('AssetsService purge (archive-first, WS-015)', () => {
     });
   });
 });
+
+describe('AssetsService.get integration sections', () => {
+  const companyId = '00000000-0000-4000-8000-0000000000c1';
+  const assetId = '00000000-0000-4000-8000-0000000000a1';
+  const integrationId = '00000000-0000-4000-8000-0000000000b1';
+  const section = {
+    title: 'Level',
+    groups: [{ key: 'account', title: 'Account', rows: [{ label: 'Admin', kind: 'boolean', value: true }] }],
+  };
+
+  function makeService() {
+    const sectionRows = [
+      {
+        id: 'rec-1',
+        lastSyncedAt: new Date('2026-10-01T00:00:00.000Z'),
+        sectionData: section,
+        fieldDiffs: {
+          'f-title': { sourceValue: 'Engineer', sourceFingerprint: 's', localFingerprint: 'l', detectedAt: '2026-10-01T00:00:00.000Z' },
+          'f-gone': { sourceValue: 'x', sourceFingerprint: 's', localFingerprint: 'l', detectedAt: '2026-10-01T00:00:00.000Z' },
+        },
+        state: 'active',
+        companyMapping: { integration: { id: integrationId, driver: 'level', name: 'Acme Level' } },
+      },
+      {
+        // The record left the source: kept as history, flagged inactive.
+        id: 'rec-2',
+        lastSyncedAt: new Date('2026-09-15T00:00:00.000Z'),
+        sectionData: section,
+        state: 'stale',
+        companyMapping: { integration: { id: integrationId, driver: 'level', name: 'Acme Level' } },
+      },
+      {
+        // Never rendered: fails the schema on read.
+        lastSyncedAt: new Date('2026-09-01T00:00:00.000Z'),
+        sectionData: { title: '<b>x</b>', groups: [] },
+        companyMapping: { integration: { id: integrationId, driver: 'level', name: 'Acme Level' } },
+      },
+    ];
+    const findMany = jest.fn(({ where }: { where: Record<string, unknown> }) =>
+      Promise.resolve('sectionData' in where ? sectionRows : []),
+    );
+    const prisma = {
+      asset: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: assetId, companyId, assetLayoutId: 'layout-1', name: 'User One',
+          externalId: null, externalSource: null, archivedAt: null,
+          createdBy: null, updatedBy: null, createdAt: new Date(), updatedAt: new Date(),
+          assetLayout: { id: 'layout-1', name: 'People', slug: 'people', icon: 'user', color: '#000', fields: [] },
+          fieldValues: [],
+        }),
+      },
+      integrationSyncRecord: { findMany },
+      // f-gone was archived: its difference is not shown.
+      assetField: { findMany: jest.fn().mockResolvedValue([{ id: 'f-title', name: 'Job title' }]) },
+      assetFieldValue: { findMany: jest.fn().mockResolvedValue([{ assetFieldId: 'f-title', value: 'Senior engineer' }]) },
+    };
+    const stars = { isStarred: jest.fn().mockResolvedValue(false) };
+    const service = new AssetsService(
+      prisma as never, {} as never, {} as never, {} as never, {} as never,
+      {} as never, {} as never, stars as never, {} as never,
+    );
+    for (const name of ['hydrateFileFields', 'hydrateAssetReferences', 'hydrateTagFields', 'hydrateActors']) {
+      jest.spyOn(service as never, name as never).mockResolvedValue(undefined as never);
+    }
+    return { service, findMany };
+  }
+
+  it('returns validated sections per sync source to staff', async () => {
+    const { service, findMany } = makeService();
+    const asset = await service.get({ id: 'u1', role: 'SUPER_ADMIN' } as never, companyId, assetId);
+    expect(asset.integrationSections).toEqual([{
+      integrationId, driver: 'level', integrationName: 'Acme Level',
+      lastSyncedAt: new Date('2026-10-01T00:00:00.000Z'), active: true, section,
+      syncRecordId: 'rec-1',
+      differences: [{
+        syncRecordId: 'rec-1', assetFieldId: 'f-title', fieldLabel: 'Job title',
+        localValue: 'Senior engineer', sourceValue: 'Engineer', detectedAt: '2026-10-01T00:00:00.000Z',
+      }],
+    }, {
+      integrationId, driver: 'level', integrationName: 'Acme Level',
+      lastSyncedAt: new Date('2026-09-15T00:00:00.000Z'), active: false, section,
+      syncRecordId: 'rec-2', differences: [],
+    }]);
+    expect(findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ companyId, assetId }),
+    }));
+  });
+
+  it('never returns sections to a client user, even on a readable asset', async () => {
+    const { service, findMany } = makeService();
+    const asset = await service.get({ id: 'u2', role: 'CLIENT_USER' } as never, companyId, assetId);
+    expect(asset.integrationSections).toEqual([]);
+    expect(findMany).not.toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ sectionData: expect.anything() }),
+    }));
+  });
+});

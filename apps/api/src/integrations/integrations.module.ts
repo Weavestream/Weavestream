@@ -4,6 +4,17 @@ import { IntegrationsCoreModule } from './integrations-core.module.js';
 import { IntegrationSyncQueueRegistrar } from './integration-sync-queue.registrar.js';
 import { CloudflareListsController } from './cloudflare/cloudflare-lists.controller.js';
 import { TicketsGlobalController } from './tickets-global.controller.js';
+import { AssetLayoutsModule } from '../asset-layouts/asset-layouts.module.js';
+import { IntegrationMatchFieldController } from './integration-match-field.controller.js';
+import { IntegrationMatchFieldService } from './integration-match-field.service.js';
+import { AssetsModule } from '../assets/assets.module.js';
+import {
+  AssetIntegrationDifferencesController,
+  IntegrationDifferencesController,
+} from './integration-differences.controller.js';
+import { IntegrationDifferencesService } from './integration-differences.service.js';
+import { IntegrationPriorityController } from './integration-priority.controller.js';
+import { IntegrationPriorityService } from './integration-priority.service.js';
 
 /**
  * Phase 11 — universal integration framework module (API side).
@@ -16,13 +27,22 @@ import { TicketsGlobalController } from './tickets-global.controller.js';
  * registration inside the worker.
  */
 @Module({
-  imports: [IntegrationsCoreModule],
+  imports: [IntegrationsCoreModule, AssetLayoutsModule, AssetsModule],
   controllers: [
     IntegrationsController,
     CloudflareListsController,
     TicketsGlobalController,
+    IntegrationMatchFieldController,
+    IntegrationDifferencesController,
+    AssetIntegrationDifferencesController,
+    IntegrationPriorityController,
   ],
-  providers: [IntegrationSyncQueueRegistrar],
+  providers: [
+    IntegrationSyncQueueRegistrar,
+    IntegrationMatchFieldService,
+    IntegrationDifferencesService,
+    IntegrationPriorityService,
+  ],
   exports: [IntegrationsCoreModule],
 })
 export class IntegrationsModule {}

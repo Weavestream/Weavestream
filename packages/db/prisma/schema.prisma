@@ -1019,6 +1019,10 @@ model SystemSetting {
   // off. While off, AuthGuard refuses every key and no key can be created;
   // keys are not revoked, so turning it back on restores them.
   apiKeysEnabled            Boolean  @default(false) @map("api_keys_enabled")
+  // Which integration's values win when several are bound to one asset:
+  // driver keys, highest priority first. NULL = the shared default order
+  // (DEFAULT_INTEGRATION_PRIORITY); read through resolveIntegrationPriority.
+  integrationPriority       Json?    @map("integration_priority")
   updatedAt                 DateTime @updatedAt @map("updated_at")
   updatedBy                 String?  @map("updated_by") @db.Uuid
 
@@ -1652,6 +1656,22 @@ model IntegrationSyncRecord {
   /// Per-field SHA-256 checksums — keyed by `AssetField.id`. Drives
   /// `preserve_manual` conflict detection.
   lastSyncedFieldChecksums    Json                  @default("{}") @map("last_synced_field_checksums")
+  /// Driver-supplied integration section (shared `integrationSectionSchema`)
+  /// rendered on the asset page. Validated plain data, replaced on every
+  /// sync; deleted with the binding.
+  sectionData                 Json?                 @map("section_data")
+  /// The binding adopted an operator-created asset (match-first) instead of
+  /// creating one, so later syncs keep the operator's asset name. Sticky.
+  adopted                     Boolean               @default(false)
+  /// Standard fields a person changed that now differ from the source,
+  /// keyed by `AssetField.id`: { sourceValue, sourceFingerprint,
+  /// localFingerprint, detectedAt }. Recomputed on every sync of a
+  /// resource that declares `standardFields`; empty otherwise.
+  fieldDiffs                  Json                  @default("{}") @map("field_diffs")
+  /// "Keep ours" choices keyed by `AssetField.id`: { choice: 'local',
+  /// sourceFingerprint }. Suppresses the difference until the source
+  /// value changes.
+  fieldResolutions            Json                  @default("{}") @map("field_resolutions")
   createdAt                   DateTime              @default(now()) @map("created_at")
   updatedAt                   DateTime              @updatedAt @map("updated_at")
 

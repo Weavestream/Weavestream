@@ -50,6 +50,9 @@ export const AUDIT_ACTIONS = {
     // Instance-wide API key switch (`PUT /settings/api-keys`). `before` and
     // `after` carry `{ apiKeysEnabled }`.
     apiKeysToggle: 'settings.api_keys.toggle',
+    // Integration priority order (`PUT /settings/integration-priority`).
+    // `before` and `after` carry `{ order }` (driver keys only).
+    integrationPriorityUpdate: 'settings.integration_priority.update',
   },
   domain: {
     create: 'domain.create',
@@ -145,6 +148,7 @@ export const AUDIT_ACTIONS = {
     delete: 'integration.delete',
     secretUpdate: 'integration.secret.update',
     testConnection: 'integration.test_connection',
+    setupCheck: 'integration.setup_check',
     companyMappingCreate: 'integration.company_mapping.create',
     companyMappingUpdate: 'integration.company_mapping.update',
     companyMappingDelete: 'integration.company_mapping.delete',
@@ -160,6 +164,12 @@ export const AUDIT_ACTIONS = {
     assetCreated: 'integration.asset.created',
     assetUpdated: 'integration.asset.updated',
     assetClaimed: 'integration.asset.claimed',
+    // A person chose the source value or kept theirs for a standard-field
+    // difference. Rows carry ids and the choice, never field values.
+    differenceResolve: 'integration.difference.resolve',
+    // Summary of a Differences tab bulk action (counts only); each item
+    // also writes its own differenceResolve row.
+    differenceResolveBulk: 'integration.difference.resolve_bulk',
     assetArchived: 'integration.asset.archived',
     assetReleased: 'integration.asset.released',
     matchAmbiguous: 'integration.match.ambiguous',

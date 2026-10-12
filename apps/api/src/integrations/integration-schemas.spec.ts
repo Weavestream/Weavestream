@@ -17,6 +17,7 @@ import {
   integrationSyncOrchestratorJobSchema,
   integrationSyncDirectionSchema,
   replaceFieldMappingsSchema,
+  standardFieldTargetCompatible,
   syncRunConflictSchema,
   syncRunTotalsSchema,
   triggerSyncSchema,
@@ -345,6 +346,29 @@ describe('integration zod schemas', () => {
           resourceIds: ['00000000-0000-0000-0000-000000000004'],
         }),
       ).toThrow(/resourceId/);
+    });
+  });
+
+  describe('standardFields', () => {
+    const resource = (fieldType: string, extra: unknown[] = []) => ({
+      key: 'devices', label: 'Devices',
+      standardFields: [{ sourceField: 'hostname', label: 'Hostname', fieldType, fieldHints: ['hostname'] }, ...extra],
+    });
+    it('accepts plain fact types and refuses files, asset references and dropdowns', () => {
+      expect(driverResourceDescriptorSchema.parse(resource('IP_ADDRESS')).standardFields).toHaveLength(1);
+      for (const type of ['FILE', 'ASSET_REFERENCE', 'DROPDOWN']) {
+        expect(() => driverResourceDescriptorSchema.parse(resource(type))).toThrow();
+      }
+    });
+    it('refuses duplicate source keys', () => {
+      expect(() => driverResourceDescriptorSchema.parse(resource('TEXT', [{ sourceField: 'hostname', label: 'Other', fieldType: 'TEXT', fieldHints: [] }])))
+        .toThrow(/unique/);
+    });
+    it('treats the same type or plain text as compatible, nothing operator-owned', () => {
+      expect(standardFieldTargetCompatible('IP_ADDRESS', 'IP_ADDRESS')).toBe(true);
+      expect(standardFieldTargetCompatible('IP_ADDRESS', 'TEXT')).toBe(true);
+      expect(standardFieldTargetCompatible('TEXT', 'IP_ADDRESS')).toBe(false);
+      expect(standardFieldTargetCompatible('TEXT', 'DROPDOWN')).toBe(false);
     });
   });
 

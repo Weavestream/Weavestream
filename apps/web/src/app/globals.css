@@ -722,3 +722,15 @@ tr:hover .row-actions,
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
+
+/* Integration section panels (asset page): a native <details> with its own
+ * chevron, since the flex summary drops the default disclosure marker. */
+.integration-section > summary::-webkit-details-marker {
+  display: none;
+}
+.integration-section > summary .integration-section-chevron {
+  transition: transform 120ms ease;
+}
+.integration-section[open] > summary .integration-section-chevron {
+  transform: rotate(90deg);
+}

@@ -4,6 +4,7 @@ import { REQUIRE_PERMISSION_KEY } from '../rbac/require-permission.decorator.js'
 import { REQUIRE_STEP_UP_KEY } from '../auth/step-up/require-step-up.decorator.js';
 import { integrationSecretAad } from '../crypto/integration-secret-encryption.service.js';
 import { Logger } from '@nestjs/common';
+import { DriverAuthError, DriverRateLimitError } from './drivers/integration-driver.js';
 
 describe('IntegrationsController security contract', () => {
   const metadata = (key: string, handler: keyof IntegrationsController) =>
@@ -24,6 +25,7 @@ describe('IntegrationsController security contract', () => {
     ['list', 'integration.manage'],
     ['get', 'integration.manage'],
     ['testConnection', 'integration.manage'],
+    ['checkSetup', 'integration.manage'],
     ['listSourceOrgs', 'integration.manage'],
     ['listMappings', 'integration.manage'],
     ['createMapping', 'integration.manage'],
@@ -32,6 +34,7 @@ describe('IntegrationsController security contract', () => {
     ['deleteMapping', 'integration.manage'],
     ['getCompleteness', 'integration.manage'],
     ['listGaps', 'integration.manage'],
+    ['createResourceDestination', 'integration.manage'],
     ['triggerSync', 'sync.trigger'],
   ] as const)('%s retains the %s permission contract', (handler, action) => {
     expect(metadata(REQUIRE_PERMISSION_KEY, handler)).toEqual({
@@ -57,6 +60,60 @@ describe('IntegrationsController security contract', () => {
     );
 
     await expect(controller.listSourceOrgs('00000000-0000-4000-8000-000000000001')).resolves.toEqual({ orgs });
+  });
+
+  function checkSetupController(env: { API_URL: string; APP_URL: string }) {
+    const diagnose = jest.fn().mockResolvedValue({
+      ok: false, passedStepIds: ['project'], failures: [{ stepId: 'apis', message: 'Enable it.' }],
+    });
+    const audit = { log: jest.fn().mockResolvedValue(undefined) };
+    const loadDriverContext = jest.fn().mockResolvedValue({ integrationId: 'i-1', driver: 'level', config: {}, secret: { apiKey: 'test-key' } });
+    const testConnection = jest.fn().mockResolvedValue({ ok: true });
+    const controller = new IntegrationsController(
+      { loadDriverContext } as never,
+      {} as never,
+      {} as never,
+      { get: jest.fn().mockReturnValue({ diagnose, testConnection }), kindOf: () => 'sync' } as never,
+      { values: { ...env, INTEGRATION_HTTP_TIMEOUT_MS: 1, INTEGRATION_HTTP_MAX_RETRIES: 0, INTEGRATION_HTTP_BACKOFF_MS: 1 } } as never,
+      audit as never,
+      {} as never,
+      {} as never,
+    );
+    const run = () =>
+      controller.checkSetup({ id: 'actor' } as never, '00000000-0000-4000-8000-000000000001', { ip: '127.0.0.1', headers: {} } as never);
+    const test = () =>
+      controller.testConnection({ id: 'actor' } as never, '00000000-0000-4000-8000-000000000001', { ip: '127.0.0.1', headers: {} } as never);
+    return { diagnose, audit, run, test, loadDriverContext, testConnection };
+  }
+
+  it('runs the driver connection check and audits only the outcome and step ids', async () => {
+    const { diagnose, audit, run } = checkSetupController({ API_URL: 'https://ws.example.test/api', APP_URL: 'https://ws.example.test' });
+    const result = await run();
+    expect(result.failures).toEqual([{ stepId: 'apis', message: 'Enable it.' }]);
+    expect(diagnose).toHaveBeenCalledWith(expect.objectContaining({ mode: 'connection', ctx: expect.objectContaining({ integrationId: 'i-1' }) }));
+    expect(audit.log).toHaveBeenCalledWith(expect.objectContaining({
+      action: 'integration.setup_check', after: { ok: false, failedStepIds: ['apis'] },
+    }));
+  });
+
+  it.each([
+    ['auth', new DriverAuthError('refused'), 'The provider refused the connection. Reconnect the integration and try again.'],
+    ['rate limit', new DriverRateLimitError('slow down'), 'The provider is rate limiting requests. Try again in a minute.'],
+  ])('turns a driver %s error from diagnose into an audited failed check', async (_kind, error, message) => {
+    const { diagnose, audit, run } = checkSetupController({ API_URL: 'https://ws.example.test/api', APP_URL: 'https://ws.example.test' });
+    diagnose.mockRejectedValueOnce(error);
+    const result = await run();
+    expect(result).toEqual({ ok: false, passedStepIds: [], failures: [{ stepId: null, message }] });
+    expect(audit.log).toHaveBeenCalledWith(expect.objectContaining({
+      action: 'integration.setup_check', after: { ok: false, failedStepIds: [null] },
+    }));
+  });
+
+  it('lets an unexpected diagnose error surface as a server error', async () => {
+    const { diagnose, audit, run } = checkSetupController({ API_URL: 'https://ws.example.test/api', APP_URL: 'https://ws.example.test' });
+    diagnose.mockRejectedValueOnce(new Error('boom'));
+    await expect(run()).rejects.toThrow('boom');
+    expect(audit.log).not.toHaveBeenCalled();
   });
 
   it.each([true, false])('propagates dryRun=%s through the existing sync route', async (dryRun) => {
@@ -438,5 +495,41 @@ describe('IntegrationsController Cloudflare domains company binding', () => {
       req,
     );
     expect(create.mock.calls[0]![1].config).toEqual({ accountId: 'a' });
+  });
+});
+
+describe('IntegrationsController Create new layout permission', () => {
+  const ACTOR = { id: 'u-1', role: 'OPERATOR' } as never;
+  const req = { headers: {}, ip: '198.51.100.7' } as never;
+
+  function make(allowed: boolean) {
+    const createResourceDestination = jest.fn().mockResolvedValue({ key: 'devices' });
+    const can = jest.fn().mockResolvedValue({ allowed });
+    const controller = new IntegrationsController(
+      { createResourceDestination } as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      { can } as never,
+    );
+    return { controller, createResourceDestination, can };
+  }
+
+  it('refuses with 403 when the operator cannot manage layouts', async () => {
+    const { controller, createResourceDestination, can } = make(false);
+    await expect(controller.createResourceDestination(ACTOR, 'i-1', 'devices', req)).rejects.toThrow(
+      /manage asset layouts/,
+    );
+    expect(can).toHaveBeenCalledWith(ACTOR, 'layout.manage.global');
+    expect(createResourceDestination).not.toHaveBeenCalled();
+  });
+
+  it('creates the layout when the operator may manage layouts', async () => {
+    const { controller, createResourceDestination } = make(true);
+    await expect(controller.createResourceDestination(ACTOR, 'i-1', 'devices', req)).resolves.toEqual({ key: 'devices' });
+    expect(createResourceDestination).toHaveBeenCalled();
   });
 });

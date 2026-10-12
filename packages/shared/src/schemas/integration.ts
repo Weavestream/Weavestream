@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { FieldTypeValues, type FieldType } from './field-types.js';
 
 /**
  * Phase 11 — universal integration framework schemas.
@@ -135,6 +136,44 @@ const driverResourceKeySchema = z
 const sourceEndpointSchema = z.string().min(1).max(256).startsWith('/');
 const boundedTargetStringSchema = z.string().min(1).max(128);
 
+/**
+ * Field types an integration never writes as a standard field: files,
+ * asset references and dropdowns hold operator-owned choices, not source
+ * facts. Both the descriptor schema and the field-mapping save refuse them.
+ */
+export const UNMAPPABLE_STANDARD_FIELD_TYPES = ['FILE', 'ASSET_REFERENCE', 'DROPDOWN'] as const satisfies readonly FieldType[];
+
+function isUnmappableStandardType(type: string): boolean {
+  return (UNMAPPABLE_STANDARD_FIELD_TYPES as readonly string[]).includes(type);
+}
+
+/**
+ * Whether a layout field of `targetType` can hold a standard field of
+ * `sourceType`: the same type, or plain text (which takes any value).
+ */
+export function standardFieldTargetCompatible(sourceType: FieldType, targetType: string): boolean {
+  if (isUnmappableStandardType(targetType)) return false;
+  return targetType === sourceType || targetType === 'TEXT' || targetType === 'TEXTAREA';
+}
+
+/**
+ * A standard fact a resource fills into the layout's own fields
+ * (hostname, OS, RAM, ...), as opposed to the extras its section shows.
+ * `fieldHints` are lower-case slug/name hints Map layouts uses to
+ * pre-select an existing layout field.
+ */
+export const driverStandardFieldSchema = z
+  .object({
+    sourceField: z.string().min(1).max(60).regex(/^[a-z][a-z0-9]*(_[a-z0-9]+)*$/),
+    label: z.string().min(1).max(80),
+    fieldType: z.enum(FieldTypeValues).refine((type) => !isUnmappableStandardType(type), {
+      message: 'Standard fields cannot be files, asset references or dropdowns',
+    }),
+    fieldHints: z.array(z.string().min(1).max(64)).max(16),
+  })
+  .strict();
+export type DriverStandardField = z.infer<typeof driverStandardFieldSchema>;
+
 const resourceDescriptorBaseShape = {
   key: driverResourceKeySchema,
   label: z.string().min(1),
@@ -155,6 +194,37 @@ const resourceDescriptorBaseShape = {
    */
   defaultEnabled: z.boolean().optional(),
   dependsOnResourceKeys: z.array(driverResourceKeySchema).max(64).default([]),
+  /**
+   * Guided layout matching ("Map layouts"). `sourceField` is the driver
+   * field records are matched on; `layoutHints` / `fieldHints` are
+   * lower-case layout and field slug/name hints used to pre-select an
+   * existing layout and its match-key field. Declaring this also opts the
+   * resource into match-first: on a sync, an unbound asset with no
+   * external identity whose match-key value equals the record's is
+   * adopted instead of creating a duplicate.
+   */
+  matchSuggestions: z
+    .object({
+      sourceField: z.string().min(1).max(128),
+      layoutHints: z.array(z.string().min(1).max(64)).max(16),
+      fieldHints: z.array(z.string().min(1).max(64)).max(16),
+      /** Name of the match field Map layouts offers to create on an existing layout that lacks it. */
+      fieldLabel: z.string().min(1).max(80).optional(),
+    })
+    .strict()
+    .optional(),
+  /**
+   * Source fields the driver writes into layout fields (normally the name
+   * and the match key). Everything else a record carries goes into its
+   * integration `section`. "Create new layout" only creates these fields.
+   */
+  minimalFields: z.array(z.string().min(1).max(128)).max(8).optional(),
+  /**
+   * Standard facts this resource fills into layout fields (opt-in). Map
+   * layouts offers one row per entry; a sync writes them under the
+   * difference-tracking write policy (see AssetsService.writeFromIntegration).
+   */
+  standardFields: z.array(driverStandardFieldSchema).max(32).optional(),
 } as const;
 
 const assetTargetConfigSchema = z
@@ -260,9 +330,81 @@ export const driverResourceDescriptorSchema = z
         message: 'Dependency keys must be unique',
       });
     }
+    const standard = resource.standardFields?.map((field) => field.sourceField) ?? [];
+    if (new Set(standard).size !== standard.length) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['standardFields'],
+        message: 'Standard field source keys must be unique',
+      });
+    }
   });
 
 export type DriverResourceDescriptor = z.infer<typeof driverResourceDescriptorSchema>;
+
+const httpsUrlSchema = z
+  .string()
+  .url()
+  .max(2048)
+  .refine((value) => value.startsWith('https://'), 'OAuth endpoints must use https://');
+
+// ---------------------------------------------------------------------
+// Setup guide (step-by-step provider setup shown in the UI)
+// ---------------------------------------------------------------------
+
+/** Values the UI fills in at render time (they depend on the install). */
+export const setupGuideComputedValueSchema = z.enum(['redirectUri', 'scopes', 'authorizedOrigin']);
+export type SetupGuideComputedValue = z.infer<typeof setupGuideComputedValueSchema>;
+
+const setupGuideLabelSchema = z.string().min(1).max(80);
+
+/**
+ * One numbered setup step. `body` is plain text with a tiny markdown
+ * subset (blank-line paragraphs, `- ` bullets, `**bold**`) that the UI
+ * renders as React elements, never as HTML. Links are https only.
+ */
+export const setupGuideStepSchema = z
+  .object({
+    id: z.string().regex(/^[a-z0-9-]{1,48}$/),
+    title: z.string().min(1).max(120),
+    body: z.string().min(1).max(3000),
+    copyValues: z
+      .array(
+        z.union([
+          z.object({ label: setupGuideLabelSchema, value: z.string().min(1).max(2048) }).strict(),
+          z.object({ label: setupGuideLabelSchema, computed: setupGuideComputedValueSchema }).strict(),
+        ]),
+      )
+      .max(6)
+      .optional(),
+    links: z
+      .array(z.object({ label: setupGuideLabelSchema, href: httpsUrlSchema }).strict())
+      .max(6)
+      .optional(),
+  })
+  .strict();
+export type SetupGuideStep = z.infer<typeof setupGuideStepSchema>;
+
+export const setupGuideSchema = z
+  .array(setupGuideStepSchema)
+  .min(1)
+  .max(20)
+  .refine((steps) => new Set(steps.map((s) => s.id)).size === steps.length, 'Setup guide step ids must be unique');
+
+/**
+ * Result of a "Check setup" run. `passedStepIds` turn green in the guide;
+ * each failure names the step to revisit with a fixed message (provider
+ * error text is never passed through).
+ */
+export const integrationSetupCheckSchema = z.object({
+  ok: z.boolean(),
+  passedStepIds: z.array(z.string()),
+  /** `stepId` null: a problem not tied to one step (e.g. rate limited, try again). */
+  failures: z.array(z.object({ stepId: z.string().nullable(), message: z.string() })),
+  /** A step the check could not verify: neither passed nor failed, with a fixed note. */
+  notes: z.array(z.object({ stepId: z.string(), message: z.string() })).optional(),
+});
+export type IntegrationSetupCheck = z.infer<typeof integrationSetupCheckSchema>;
 
 export const driverDescriptorSchema = z
   .object({
@@ -283,6 +425,8 @@ export const driverDescriptorSchema = z
    * Assets, so per-resource layouts and field mappings don't apply.
    */
   resources: z.array(driverResourceDescriptorSchema).default([]),
+  /** Optional step-by-step provider setup guide rendered in the UI. */
+  setupGuide: setupGuideSchema.optional(),
   /** Driver capabilities surfaced to the UI. */
   capabilities: z.object({
     /**
@@ -453,6 +597,26 @@ export const updateIntegrationResourceSchema = z
 
 export type CreateIntegrationResourceInput = z.infer<typeof createIntegrationResourceSchema>;
 export type UpdateIntegrationResourceInput = z.infer<typeof updateIntegrationResourceSchema>;
+
+/**
+ * "Map layouts" on an existing layout: make sure it has the field the
+ * resource matches on (the driver's recommended match-key field), creating
+ * it when missing. Only that one minimal field is ever created.
+ */
+export const ensureResourceMatchFieldSchema = z
+  .object({
+    assetLayoutId: z.string().uuid(),
+    /** A standard field to create instead of the match field. */
+    sourceField: z.string().min(1).max(60).optional(),
+  })
+  .strict();
+export type EnsureResourceMatchFieldInput = z.infer<typeof ensureResourceMatchFieldSchema>;
+
+export interface EnsureResourceMatchFieldResult {
+  fieldId: string;
+  /** False when the layout already had a compatible field with that slug. */
+  created: boolean;
+}
 
 export const integrationDtoSchema = z.object({
   id: z.string().uuid(),
@@ -1079,3 +1243,155 @@ export const integrationTargetProvenanceSchema = z
   })
   .strict();
 export type IntegrationTargetProvenance = z.infer<typeof integrationTargetProvenanceSchema>;
+
+// ---------------------------------------------------------------------
+// Integration differences (standard fields a person changed)
+// ---------------------------------------------------------------------
+
+export const integrationDifferenceChoiceSchema = z.enum(['source', 'local']);
+export type IntegrationDifferenceChoice = z.infer<typeof integrationDifferenceChoiceSchema>;
+
+export const resolveIntegrationDifferenceSchema = z
+  .object({
+    syncRecordId: z.string().uuid(),
+    assetFieldId: z.string().uuid(),
+    choice: integrationDifferenceChoiceSchema,
+  })
+  .strict();
+export type ResolveIntegrationDifferenceInput = z.infer<typeof resolveIntegrationDifferenceSchema>;
+
+/**
+ * Most differences one bulk request resolves; the UI loops for more. A
+ * filter batch keeps whole sync records, so one record holding more
+ * differences than this is resolved in a single, larger batch.
+ */
+export const INTEGRATION_DIFFERENCES_BULK_MAX = 500;
+
+/**
+ * Differences tab bulk resolve: either the ticked rows (`items`) or every
+ * open difference matching the tab's company filter (`filter`, walked in
+ * batches through `cursor`). Exactly one of the two. A filter batch never
+ * splits a sync record, so it can exceed INTEGRATION_DIFFERENCES_BULK_MAX
+ * when a single record has more differences than the cap.
+ */
+export const resolveIntegrationDifferencesBulkSchema = z
+  .object({
+    choice: integrationDifferenceChoiceSchema,
+    items: z
+      .array(z.object({ syncRecordId: z.string().uuid(), assetFieldId: z.string().uuid() }).strict())
+      .min(1)
+      .max(INTEGRATION_DIFFERENCES_BULK_MAX)
+      .optional(),
+    filter: z
+      .object({
+        companyId: z.string().uuid().optional(),
+        /** Last sync record id of the previous batch (from `nextCursor`). */
+        cursor: z.string().uuid().optional(),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict()
+  .refine((input) => (input.items === undefined) !== (input.filter === undefined), {
+    message: 'Send either items or filter',
+  });
+export type ResolveIntegrationDifferencesBulkInput = z.infer<typeof resolveIntegrationDifferencesBulkSchema>;
+
+/** A difference the bulk request did not resolve, with a fixed reason. */
+export interface IntegrationDifferenceBulkMiss {
+  syncRecordId: string;
+  assetFieldId: string;
+  assetName: string | null;
+  reason: string;
+}
+
+export interface IntegrationDifferencesBulkResult {
+  applied: number;
+  /** Not attempted: no permission on that company, or no longer open. */
+  skipped: IntegrationDifferenceBulkMiss[];
+  /** Attempted and refused (a sync just ran, or the value does not fit the field). */
+  failed: IntegrationDifferenceBulkMiss[];
+  /** Filter mode: where the next batch starts, or null when the filter is done. */
+  nextCursor: string | null;
+}
+
+export const integrationDifferencesQuerySchema = z
+  .object({
+    companyId: z.string().uuid().optional(),
+    limit: z.coerce.number().int().min(1).max(100).default(50),
+    /** Last sync record id of the previous page. */
+    cursor: z.string().uuid().optional(),
+  })
+  .strict();
+export type IntegrationDifferencesQuery = z.infer<typeof integrationDifferencesQuerySchema>;
+
+/** One open difference: the value in Weavestream and the source value, as display text. */
+export interface IntegrationDifferenceDto {
+  syncRecordId: string;
+  assetFieldId: string;
+  fieldLabel: string;
+  localValue: string | null;
+  sourceValue: string | null;
+  detectedAt: string;
+}
+
+export interface IntegrationDifferenceRowDto extends IntegrationDifferenceDto {
+  companyId: string;
+  companyName: string;
+  assetId: string;
+  assetName: string;
+}
+
+export interface IntegrationDifferencesPage {
+  items: IntegrationDifferenceRowDto[];
+  /** Open differences across the whole filter (first page only). */
+  total: number | null;
+  nextCursor: string | null;
+}
+
+/**
+ * Default "whose values win" order when several integrations are bound to
+ * one asset (driver keys, highest priority first). Drivers missing here
+ * follow in alphabetical order.
+ */
+export const DEFAULT_INTEGRATION_PRIORITY: readonly string[] = [
+  'level',
+  'ninjaone',
+  'action1',
+  'breeze',
+  'unifi',
+  'cloudflare',
+];
+
+/** `PUT /settings/integration-priority`: the full order, driver keys only. */
+export const updateIntegrationPrioritySchema = z
+  .object({
+    order: z
+      .array(z.string().regex(/^[a-z0-9][a-z0-9-]{0,39}$/))
+      .min(1)
+      .max(50)
+      .refine((keys) => new Set(keys).size === keys.length, 'Each integration may appear once.'),
+  })
+  .strict();
+export type UpdateIntegrationPriorityInput = z.infer<typeof updateIntegrationPrioritySchema>;
+
+export interface IntegrationPriorityDto {
+  order: Array<{ key: string; label: string }>;
+}
+
+/**
+ * The effective priority order: the stored keys that are still registered,
+ * then the defaults, then any other registered driver alphabetically. A
+ * malformed stored value falls back to the defaults.
+ */
+export function resolveIntegrationPriority(stored: unknown, registered: readonly string[]): string[] {
+  const known = new Set(registered);
+  const out: string[] = [];
+  const add = (key: unknown): void => {
+    if (typeof key === 'string' && known.has(key) && !out.includes(key)) out.push(key);
+  };
+  if (Array.isArray(stored)) stored.forEach(add);
+  DEFAULT_INTEGRATION_PRIORITY.forEach(add);
+  [...registered].sort().forEach(add);
+  return out;
+}

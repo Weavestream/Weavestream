@@ -1,3 +1,4 @@
+import { Logger } from '@nestjs/common';
 import {
   MAX_RECONSTRUCTION_INPUT_BYTES,
   articleReconstructionInputSchema,
@@ -5,6 +6,7 @@ import {
   buildProvenance,
   contextGap,
   invalidInputOutcome,
+  nativeWriteErrorOutcome,
   reconstructionInputByteLength,
   type ArticleReconstructionInput,
   type AssetReconstructionInput,
@@ -166,5 +168,64 @@ describe('reconstruction input byte bounds', () => {
     expect(candidate.markdown.length).toBeLessThan(MAX_RECONSTRUCTION_INPUT_BYTES);
     expect(reconstructionInputByteLength(candidate)).toBe(MAX_RECONSTRUCTION_INPUT_BYTES + 1);
     expect(articleReconstructionInputSchema.safeParse(candidate).success).toBe(false);
+  });
+});
+
+describe('native write failure logging', () => {
+  afterEach(() => jest.restoreAllMocks());
+
+  it('logs a non-HTTP failure by name, code, and constraint without message text, keeping the gap generic', () => {
+    const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    const error = Object.assign(
+      new Error([
+        '',
+        'Invalid `tx.asset.update()` invocation:',
+        '{ data: { serial: "SECRET-FIELD-VALUE", token: "tok_live_123" } }',
+        'Unique constraint failed for owner jane.doe@example.com token=tok_live_456',
+      ].join('\n')),
+      {
+        name: 'PrismaClientKnownRequestError',
+        code: 'P2002',
+        meta: { target: ['companyId', 'serial'], field_name: 'Asset_companyId_fkey' },
+      },
+    );
+    const outcome = nativeWriteErrorOutcome(context(), input, error);
+    expect(outcome.gaps).toEqual([expect.objectContaining({ kind: 'synchronization_error', message: 'The native target write failed.' })]);
+    expect(warn).toHaveBeenCalledTimes(1);
+    const line = String(warn.mock.calls[0]![0]);
+    expect(line).toContain(
+      'Native target write failed: PrismaClientKnownRequestError P2002 target=companyId,serial field=Asset_companyId_fkey (',
+    );
+    expect(line).toContain(`integration=${ids.integration}`);
+    expect(line).toContain(`company=${ids.company}`);
+    expect(line).toContain(`resource=${ids.resource}/devices`);
+    expect(line).not.toMatch(/SECRET-FIELD-VALUE|tok_live|jane\.doe|example\.com|Unique constraint|org-1:devices:device-1/);
+  });
+
+  it('logs only the name of a plain error, never its message', () => {
+    const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    nativeWriteErrorOutcome(context(), input, new TypeError('user jane.doe@example.com token=tok_live_123'));
+    const line = String(warn.mock.calls[0]![0]);
+    expect(line).toContain('Native target write failed: TypeError (');
+    expect(line).not.toMatch(/jane|example\.com|tok_live/);
+  });
+
+  it('drops meta values that are not identifier-shaped', () => {
+    const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    const error = Object.assign(new Error('x'), {
+      name: 'PrismaClientKnownRequestError',
+      code: 'P2002',
+      meta: { target: 'jane.doe@example.com', field_name: 'a b=c' },
+    });
+    nativeWriteErrorOutcome(context(), input, error);
+    const line = String(warn.mock.calls[0]![0]);
+    expect(line).toContain('PrismaClientKnownRequestError P2002 (');
+    expect(line).not.toMatch(/jane|a b=c/);
+  });
+
+  it('does not log mapped HTTP failures', () => {
+    const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    nativeWriteErrorOutcome(context(), input, { getStatus: () => 409 });
+    expect(warn).not.toHaveBeenCalled();
   });
 });

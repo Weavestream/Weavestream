@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { FieldTypeValues } from './field-types.js';
 import { integrationTargetProvenanceSchema } from './integration.js';
+import { assetIntegrationSectionSchema } from './integration-section.js';
 import { actorRefSchema } from './user.js';
 
 /**
@@ -182,6 +183,11 @@ export const assetSummarySchema = z.object({
   syncSources: z.array(assetSyncSourceSchema),
   /** Always `[]` on list rows; populated on detail. */
   provenance: z.array(integrationTargetProvenanceSchema),
+  /**
+   * Driver-supplied integration sections. Always `[]` on list rows and
+   * for client users; populated on detail for staff.
+   */
+  integrationSections: z.array(assetIntegrationSectionSchema).optional(),
   archivedAt: z.string().nullable(),
   createdBy: z.string().uuid().nullable(),
   updatedBy: z.string().uuid().nullable(),

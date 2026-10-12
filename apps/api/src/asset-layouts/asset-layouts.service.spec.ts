@@ -167,3 +167,101 @@ describe('AssetLayoutsService read-path field visibility', () => {
     });
   });
 });
+
+describe('AssetLayoutsService.addField', () => {
+  const META = { ip: '203.0.113.1', userAgent: 'jest' };
+  const NEW = {
+    name: 'Serial number',
+    slug: 'serial_number',
+    fieldType: 'TEXT' as const,
+    isRequired: false,
+    isUniquePerCompany: false,
+    visibleToClients: true,
+    isPrimary: false,
+    showInTable: false,
+    options: {},
+  };
+
+  /**
+   * In-memory layout row. `onRead` runs after each transactional read so a
+   * test can play a concurrent writer committing between our read and write.
+   */
+  function harness(onRead: (state: { version: number; fields: MockFieldRow[] }, read: number) => void = () => {}) {
+    const state = { version: 1, fields: [makeField()] };
+    let reads = 0;
+    const created: Array<Record<string, unknown>> = [];
+    const tx = {
+      assetLayout: {
+        findUnique: jest.fn(async () => {
+          const snapshot = { ...makeLayoutRow(state.fields.map((f) => ({ ...f }))), version: state.version };
+          onRead(state, ++reads);
+          return snapshot;
+        }),
+        updateMany: jest.fn(async ({ where }: { where: { version: number } }) => {
+          if (where.version !== state.version) return { count: 0 };
+          state.version += 1;
+          return { count: 1 };
+        }),
+      },
+      assetField: {
+        create: jest.fn(async ({ data }: { data: Record<string, unknown> }) => {
+          const row = { ...makeField(), ...data, id: 'f-new', archivedAt: null } as MockFieldRow;
+          state.fields.push(row);
+          created.push(data);
+          return row;
+        }),
+        updateMany: jest.fn(),
+      },
+    };
+    const prisma = { $transaction: jest.fn(async (fn: (t: typeof tx) => unknown) => fn(tx)) };
+    const audit = { log: jest.fn() };
+    // Applies a default, like a strategy schema may: the parsed value is what gets stored.
+    const registry = {
+      get: () => ({ optionsSchema: { safeParse: (v: object) => ({ success: true, data: { maxLength: 255, ...v } }) } }),
+    };
+    const service = new AssetLayoutsService(prisma as never, audit as never, registry as never, {} as never);
+    return { service, state, tx, audit, created };
+  }
+
+  it('keeps a field another request added after our read, and retries on fresh state', async () => {
+    const { service, state, tx, audit, created } = harness((s, read) => {
+      if (read === 1) {
+        s.fields.push(makeField({ id: 'f-other', slug: 'other', name: 'Other', position: 1, isPrimary: false }));
+        s.version += 1;
+      }
+    });
+    const result = await service.addField(OPERATOR, 'l-1', NEW, META);
+    expect(result).toMatchObject({ created: true, field: { id: 'f-new', slug: 'serial_number', isPrimary: false } });
+    expect(state.fields.map((f) => f.slug)).toEqual(['hostname', 'other', 'serial_number']);
+    expect(tx.assetField.updateMany).not.toHaveBeenCalled();
+    expect(created).toEqual([
+      expect.objectContaining({ slug: 'serial_number', position: 2, isPrimary: false, options: { maxLength: 255 } }),
+    ]);
+    expect(tx.assetLayout.findUnique).toHaveBeenCalledTimes(2);
+    expect(audit.log).toHaveBeenCalledTimes(1);
+    expect(audit.log).toHaveBeenCalledWith(expect.objectContaining({ action: 'layout.field.added', entityId: 'f-new' }));
+  });
+
+  it('returns a live field with the same slug untouched instead of adding one', async () => {
+    const { service, tx, audit } = harness();
+    const result = await service.addField(OPERATOR, 'l-1', { ...NEW, slug: 'hostname' }, META);
+    expect(result).toMatchObject({ created: false, field: { id: 'f-1' } });
+    expect(tx.assetField.create).not.toHaveBeenCalled();
+    expect(tx.assetLayout.updateMany).not.toHaveBeenCalled();
+    expect(audit.log).not.toHaveBeenCalled();
+  });
+
+  it('gives up with a conflict when the layout keeps changing', async () => {
+    const { service, tx } = harness((s) => {
+      s.version += 1;
+    });
+    await expect(service.addField(OPERATOR, 'l-1', NEW, META)).rejects.toThrow(/layout changed/);
+    expect(tx.assetField.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects an invalid slug before touching the database', async () => {
+    const { service, tx } = harness();
+    await expect(service.addField(OPERATOR, 'l-1', { ...NEW, slug: 'Bad Slug!' }, META)).rejects.toThrow();
+    expect(tx.assetLayout.findUnique).not.toHaveBeenCalled();
+  });
+});

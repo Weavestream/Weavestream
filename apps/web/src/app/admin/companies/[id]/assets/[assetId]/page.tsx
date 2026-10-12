@@ -32,6 +32,8 @@ import {
   provenanceAttention,
 } from '../../../../../../components/integrations/provenance-badge';
 import { recentRelative as relative } from '../../../../../../lib/relative-time';
+import { IntegrationSections } from '../../../../../../components/integrations/integration-sections';
+import { assetSourcesLabel } from '../../../../../../lib/asset-sources';
 
 export async function generateMetadata({
   params,
@@ -99,7 +101,7 @@ export default async function AssetDetailPage({
               name: asset.name,
               archivedAt: asset.archivedAt,
               assetLayoutId: asset.assetLayoutId,
-              externalSource: asset.externalSource,
+              externalSource: assetSourcesLabel(asset),
               isStarred: asset.isStarred,
             }}
             manage={manage}
@@ -126,7 +128,15 @@ export default async function AssetDetailPage({
             gap: 16,
           }}
         >
-          <AssetDetailView asset={asset} context={fieldContext} />
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 16, minWidth: 0 }}>
+            <AssetDetailView asset={asset} context={fieldContext} />
+            <IntegrationSections
+              sections={asset.integrationSections ?? []}
+              companyId={companyId}
+              assetId={asset.id}
+              canResolve={manage && !asset.archivedAt}
+            />
+          </div>
 
           <aside style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
             <LinkedItemsPanel

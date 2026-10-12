@@ -33,7 +33,10 @@ import {
   type UpdateIntegrationResourceInput,
   type IntegrationCompletenessQuery,
   type IntegrationGapsQuery,
+  type IntegrationSetupCheck,
 } from '@weavestream/shared';
+import { Throttle } from '@nestjs/throttler';
+import { InteractiveOnly } from '../auth/interactive-only.decorator.js';
 import { ZodBody } from '../common/zod-validation.pipe.js';
 import {
   CurrentUser,
@@ -58,6 +61,7 @@ import { randomUUID } from 'node:crypto';
 import { BadRequestException, ForbiddenException, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { PermissionService } from '../rbac/permission.service.js';
+import { assertCanManageLayouts } from './integration-match-field.controller.js';
 import { describeError } from '../common/describe-error.js';
 
 /**
@@ -244,6 +248,7 @@ export class IntegrationsController {
           : await this.drivers.get(ctx.driver).testConnection({
               config: ctx.config,
               secret: ctx.secret,
+              integrationId: ctx.integrationId,
               http,
               correlationId,
             } satisfies IntegrationContext);
@@ -284,6 +289,71 @@ export class IntegrationsController {
     }
   }
 
+  /**
+   * Check setup for a connected integration: the driver probes each
+   * provider API once (read-only) and maps failures to setup guide steps.
+   * Audited like Test connection; only step ids and the outcome are kept.
+   */
+  @Post(':id/check')
+  @RequirePermission('integration.manage')
+  @InteractiveOnly()
+  @Throttle({ global: { limit: 10, ttl: 60_000 } })
+  @HttpCode(200)
+  async checkSetup(
+    @CurrentUser() user: AuthedUser,
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Req() req: Request,
+  ): Promise<IntegrationSetupCheck> {
+    const ctx = await this.integrations.loadDriverContext(id);
+    const driver = this.drivers.get(ctx.driver);
+    if (!driver.diagnose) throw new BadRequestException('This integration has no setup check.');
+    let diagnosed: IntegrationSetupCheck;
+    try {
+      diagnosed = await driver.diagnose({
+        mode: 'connection',
+        ctx: {
+          config: ctx.config,
+          secret: ctx.secret,
+          integrationId: ctx.integrationId,
+          http: this.httpDefaults(),
+          correlationId: randomUUID(),
+        },
+      });
+    } catch (e) {
+      // Same split as testConnection: known driver failures become a failed
+      // check (and are audited below); anything else stays a server error.
+      if (!(e instanceof DriverAuthError || e instanceof DriverRateLimitError)) throw e;
+      diagnosed = {
+        ok: false,
+        passedStepIds: [],
+        failures: [
+          {
+            stepId: null,
+            message:
+              e instanceof DriverRateLimitError
+                ? 'The provider is rate limiting requests. Try again in a minute.'
+                : 'The provider refused the connection. Reconnect the integration and try again.',
+          },
+        ],
+      };
+    }
+    const result = diagnosed;
+    await this.audit.log({
+      actorId: user.id,
+      action: AUDIT_ACTIONS.integration.setupCheck,
+      entityType: 'Integration',
+      entityId: id,
+      ip: meta(req).ip,
+      userAgent: meta(req).userAgent,
+      before: null,
+      after: {
+        ok: result.ok,
+        failedStepIds: result.failures.map((f) => f.stepId),
+      },
+    });
+    return result;
+  }
+
   @Get(':id/source-orgs')
   @RequirePermission('integration.manage')
   async listSourceOrgs(@Param('id', new ParseUUIDPipe()) id: string) {
@@ -292,6 +362,7 @@ export class IntegrationsController {
     const integrationCtx: IntegrationContext = {
       config: ctx.config,
       secret: ctx.secret,
+      integrationId: ctx.integrationId,
       http: this.httpDefaults(),
       correlationId: randomUUID(),
     };
@@ -398,6 +469,19 @@ export class IntegrationsController {
     return this.integrations.updateResource(user, id, resourceKey, dto, meta(req));
   }
 
+  @Post(':id/resources/:resourceKey/destination')
+  @RequirePermission('integration.manage')
+  async createResourceDestination(
+    @CurrentUser() user: AuthedUser,
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Param('resourceKey') resourceKey: string,
+    @Req() req: Request,
+  ) {
+    // Creates a global layout and its fields: also needs the layouts create permission.
+    await assertCanManageLayouts(this.permissions, user);
+    return this.integrations.createResourceDestination(user, id, resourceKey, meta(req));
+  }
+
   @Get(':id/resources/:resourceKey/source-fields')
   @RequirePermission('integration.manage')
   async listResourceSourceFields(
@@ -427,6 +511,7 @@ export class IntegrationsController {
     } = {
       config: ctx.config,
       secret: ctx.secret,
+      integrationId: ctx.integrationId,
       http: this.httpDefaults(),
       correlationId: randomUUID(),
       externalOrgId: resolvedOrgId,

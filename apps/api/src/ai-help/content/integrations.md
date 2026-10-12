@@ -4,7 +4,7 @@
 <!-- aliases: integration overview | rmm sync | import devices | external inventory | connectors -->
 <!-- requires: integration.manage -->
 
-Action1, NinjaOne, UniFi, and Breeze are pull integrations. A connection stores provider credentials and configuration. Upstream organizations map to Weavestream companies. Enabled resources select target asset layouts, match keys, and field projections to create, claim, or update assets during sync runs.
+Action1, NinjaOne, UniFi, Level RMM, and Breeze are pull integrations. A connection stores provider credentials and configuration. Upstream organizations map to Weavestream companies. Enabled resources select target asset layouts, match keys, and field projections to create, claim, or update assets during sync runs.
 
 Match keys claim existing unclaimed assets instead of duplicating them. Once linked, integration sync records preserve identity across runs.
 
@@ -60,6 +60,14 @@ Override default US API URL for EU, CA, or OC tenants if needed. Test connection
 Create a **UniFi Site Manager** integration with a Site Manager **API Key**. Test connection, then map UniFi hosts/consoles to Weavestream companies.
 
 Configure **Devices fields** for switches, access points, and gateways (recommended match: `mac`). Configure **Clients fields** separately for connected clients (recommended match: `name`).
+
+## Configure Level RMM
+<!-- aliases: connect level | level rmm | level.io | level api key | level devices | level groups -->
+<!-- requires: integration.manage -->
+
+Level is read-only and connects with an API key. One integration is one Level account. In Level, open **Settings → API keys**, select **Create API key**, and choose **Read-only** access. In Weavestream, select **New integration → Level RMM**, paste the key into **API key** on **Credentials & schedule**, save, then select **Test connection** and **Check setup**.
+
+Under **Organizations**, each top-level Level group maps to one company; devices in nested groups sync with their top-level group, and devices in no group are not synced. Under **Map layouts**, pick the device layout and match on **Serial number**. Devices without a serial number (often virtual machines) are created and stay linked by their Level id. Below the match picker, **Map layouts** lists the standard facts (hostname, manufacturer, model, operating system, CPU, RAM, storage, MAC address, IP address, role): each is set to a fitting layout field, **Create field** or **Don't sync**. Those facts fill the layout fields; the **Level RMM** section on the asset keeps the rest: status, storage per partition, network, security with OS end of life, available patches, active alerts and memory and disk detail. A mapped field someone changed in Weavestream is never overwritten: it shows under **Differences** at the bottom of the Level RMM section and on the integration's **Differences** tab, with **Use Level RMM value** (write it now and follow Level again) or **Keep ours** (stop flagging it until the Level value changes). Resolving needs permission to edit assets in that company. If the key or plan cannot read alerts or patches, those groups say **Not available** and devices still sync. Level does not provide installed software, agent version or warranty dates.
 
 ## Configure Breeze reconstruction sync
 <!-- aliases: configure Breeze reconstruction | Breeze RMM setup | Breeze Partner API | Breeze disaster recovery sync | Breeze documentation sync -->

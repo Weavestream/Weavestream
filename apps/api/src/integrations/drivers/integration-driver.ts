@@ -10,7 +10,7 @@ import type {
   ReconstructionGapDetails,
   ReconstructionInput,
 } from '../reconstruction/reconstruction-target.js';
-import type { ReconstructionGapKind } from '@weavestream/shared';
+import type { IntegrationSetupCheck, ReconstructionGapKind } from '@weavestream/shared';
 import type { FieldType } from '@prisma/client';
 
 /**
@@ -92,8 +92,20 @@ export interface LegacyDriverRecord {
   externalId: string;
   /** Driver-side display name; used as the asset's primary name fallback. */
   displayName: string | null;
-  /** Flat map of source-field key → raw value. */
+  /**
+   * Flat map of source-field key → raw value. Drivers whose resources
+   * declare `minimalFields` put ONLY those fields here (normally the name
+   * and the match key) so a sync never writes anything else into the
+   * operator's layout fields; every other detail goes into `section`.
+   */
   fields: Record<string, unknown>;
+  /**
+   * Optional read-only detail card for the asset page, validated by the
+   * runner against `integrationSectionSchema` (shared). Plain data only,
+   * never HTML. Replaced on every sync (omit it to clear); an invalid
+   * section is dropped with a run warning and never fails the record.
+   */
+  section?: unknown;
   /**
    * Optional immutable source definition key used to select exactly one
    * configured field mapping. Records without a matching mapping are skipped.
@@ -181,6 +193,20 @@ export class DriverAuthError extends Error {
   }
 }
 
+/**
+ * A whole resource whose source data this tenant cannot provide (a product
+ * not licensed, an optional permission not granted). Thrown from the first
+ * page of `fetchRecords`: the runner skips the resource with a run warning
+ * and leaves its bindings untouched (no reconciliation, no stale sweep).
+ */
+export class DriverResourceUnavailableError extends Error {
+  readonly code = 'DriverResourceUnavailableError' as const;
+  constructor(message: string) {
+    super(message);
+    this.name = 'DriverResourceUnavailableError';
+  }
+}
+
 export class DriverRateLimitError extends Error {
   readonly code = 'DriverRateLimitError' as const;
   readonly retryAfterMs: number;
@@ -259,7 +285,17 @@ export interface IntegrationDriver {
   ): Promise<TicketListResponse>;
 
   getTicket?(ctx: TicketContext, ticketId: string): Promise<TicketDetailDto>;
+
+  /**
+   * Optional "Check setup" for drivers that ship a `setupGuide`. `connection`
+   * probes a connected integration. Read-only, and failures carry fixed
+   * messages naming a guide step (never provider error text).
+   */
+  diagnose?(input: DriverDiagnoseInput): Promise<IntegrationSetupCheck>;
 }
+
+export type DriverDiagnoseInput =
+  | { mode: 'connection'; ctx: IntegrationContext };
 
 /**
  * Type guard for drivers that advertise the optional ticket surface.

@@ -25,6 +25,7 @@ import {
 } from '../../../../../components/integrations/sync-schedule';
 import { DriverFieldsEditor } from '../driver-fields-editor';
 import { safeIntegrationProblemMessage } from '../integration-feedback';
+import { ApiKeySetupGuide } from './api-key-setup-guide';
 
 const STATUSES: Array<{ value: IntegrationStatusValue; label: string }> = [
   { value: 'ACTIVE', label: 'Active — scheduled syncs run, manual sync allowed' },
@@ -266,6 +267,10 @@ export function CredentialsTab({
           values={config}
           onChange={setConfig}
         />
+      )}
+
+      {driver && driver.setupGuide && driver.setupGuide.length > 0 && (
+        <ApiKeySetupGuide integrationId={integration.id} steps={driver.setupGuide} hasSecret={integration.hasSecret} />
       )}
 
       {driver && driver.secretFields.length > 0 && (
