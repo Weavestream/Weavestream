@@ -177,6 +177,12 @@ export const AUDIT_ACTIONS = {
     oauthAppUpdate: 'integration.oauth_app.update',
     // Check setup on the integration's OAuth app: outcome and failed step ids only.
     oauthAppCheck: 'integration.oauth_app.check',
+    // Microsoft 365: the admin's explicit choice about the tenant's report
+    // concealment setting ("Conceal user, group, and site names in all
+    // reports", Graph adminReportSettings.displayConcealedNames). Rows carry
+    // the choice, the value before and after; `.failed` carries a reason.
+    microsoftReportNames: 'integration.microsoft.report_names',
+    microsoftReportNamesFailed: 'integration.microsoft.report_names.failed',
     assetCreated: 'integration.asset.created',
     assetUpdated: 'integration.asset.updated',
     assetClaimed: 'integration.asset.claimed',
@@ -212,6 +218,8 @@ export const AUDIT_ACTIONS = {
     cloudflareRegistrarSyncFailed: 'integration.cloudflare.registrar_sync.failed',
     // Google Workspace domains → Domains monitoring, once per mapping sync.
     googleWorkspaceDomainSync: 'integration.google_workspace.domain_sync',
+    // Microsoft 365 domains → Domains monitoring, once per mapping sync.
+    microsoft365DomainSync: 'integration.microsoft_365.domain_sync',
   },
   subnet: {
     create: 'subnet.create',

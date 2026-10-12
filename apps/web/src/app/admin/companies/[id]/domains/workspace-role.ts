@@ -16,3 +16,9 @@ export function workspaceRoleLabel(
       return null;
   }
 }
+
+/** "Default domain" / "Verified domain" for a Microsoft 365 domain, null when not in the tenant. */
+export function microsoftDomainLabel(row: Pick<MonitoredDomainDto, 'microsoftDefault'>): string | null {
+  if (row.microsoftDefault === null) return null;
+  return row.microsoftDefault ? 'Default domain' : 'Verified domain';
+}

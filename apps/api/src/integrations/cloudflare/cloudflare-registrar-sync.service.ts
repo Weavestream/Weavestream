@@ -591,7 +591,8 @@ export class CloudflareRegistrarSyncService {
 
 /**
  * Transaction-scoped advisory lock on a hostname, taken by every sync that
- * may create a MonitoredDomain (Cloudflare registrar, Google Workspace) so
+ * may create a MonitoredDomain (Cloudflare registrar, Google Workspace,
+ * Microsoft 365) so
  * their find-then-create steps never race each other into a duplicate.
  */
 export async function lockDomainHostname(tx: Prisma.TransactionClient, hostname: string): Promise<void> {
@@ -618,7 +619,7 @@ export type RowMatch =
  *    archived, leave it: the operator stopped tracking it.
  *  - A synced row orphaned by a deleted integration (integrationId null) for
  *    the *same Cloudflare account*, in the configured company → reclaim it.
- *  - An active MANUAL (or Google Workspace-created) row in the configured
+ *  - An active MANUAL (or Google Workspace / Microsoft 365-created) row in the configured
  *    company → adopt it. Manual rows
  *    in other companies are never touched: the config was only authorised
  *    for the configured company.
@@ -646,11 +647,11 @@ export function matchRow(
       !r.archivedAt,
   );
   if (orphan) return { kind: 'update', row: orphan };
-  // Google Workspace-created rows are adopted like manual ones: Cloudflare
-  // wins on registrar facts, and the workspace columns are left untouched.
+  // Google Workspace- and Microsoft 365-created rows are adopted like manual
+  // ones: Cloudflare wins on registrar facts, and their columns are left untouched.
   const manual = rows.find(
     (r) =>
-      (r.source === 'MANUAL' || r.source === 'GOOGLE_WORKSPACE') &&
+      (r.source === 'MANUAL' || r.source === 'GOOGLE_WORKSPACE' || r.source === 'MICROSOFT_365') &&
       r.companyId === companyId &&
       !r.archivedAt,
   );

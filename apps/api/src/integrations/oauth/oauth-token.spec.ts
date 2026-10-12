@@ -163,6 +163,24 @@ describe('getOAuthAccessToken', () => {
   });
 });
 
+describe('getOAuthAccessToken (admin consent)', () => {
+  const ADMIN: DriverOAuthDescriptor = { ...OAUTH, provider: 'microsoft', consentFlow: 'admin_consent' };
+  const adminCtx = () =>
+    ctx({ secret: { tenantId: '11111111-1111-1111-1111-111111111111', grantedRoles: [], consentedAt: '2026-01-01T00:00:00.000Z' } });
+
+  it('maps a known credential or consent AADSTS code to DriverAuthError', async () => {
+    script([{ status: 400, body: { error: 'invalid_grant', error_codes: [65001] } }]);
+    await expect(getOAuthAccessToken(adminCtx(), ADMIN)).rejects.toBeInstanceOf(DriverAuthError);
+  });
+
+  it('rethrows an unknown 400 as a retryable OAuthTokenError, not DriverAuthError', async () => {
+    script([{ status: 400, body: { error: 'invalid_request', error_codes: [90014] } }]);
+    const err = await getOAuthAccessToken(adminCtx(), ADMIN).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(OAuthTokenError);
+    expect(err).not.toBeInstanceOf(DriverAuthError);
+  });
+});
+
 describe('oauthFetch', () => {
   it('refreshes the token once and retries after a 401', async () => {
     const calls = script([

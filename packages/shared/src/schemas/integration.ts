@@ -347,13 +347,89 @@ export type DriverResourceDescriptor = z.infer<typeof driverResourceDescriptorSc
 // ---------------------------------------------------------------------
 
 /** Providers an instance-wide OAuth app can be configured for. */
-export const integrationOAuthProviderSchema = z.enum(['google']);
+export const integrationOAuthProviderSchema = z.enum(['google', 'microsoft']);
 export type IntegrationOAuthProvider = z.infer<typeof integrationOAuthProviderSchema>;
 
 /** Display names for OAuth providers (UI copy). */
 export const INTEGRATION_OAUTH_PROVIDER_LABELS: Record<IntegrationOAuthProvider, string> = {
   google: 'Google',
+  microsoft: 'Microsoft',
 };
+
+/**
+ * The one Microsoft 365 tenant setting Weavestream may change, and only on
+ * an admin's explicit choice. Wording from Microsoft Learn ("Show user,
+ * group, or site details in usage reports", Microsoft 365 admin center
+ * usage reports overview). The checkbox ON means names are concealed; Graph
+ * exposes it as adminReportSettings.displayConcealedNames.
+ */
+export const MICROSOFT_REPORT_SETTING = {
+  path: 'Microsoft 365 admin center > Settings > Org settings > Services > Reports',
+  label: 'Conceal user, group, and site names in all reports',
+  graph: 'PATCH https://graph.microsoft.com/v1.0/admin/reportSettings (displayConcealedNames)',
+} as const;
+
+/**
+ * The same change by hand, for a tenant that did not grant the optional
+ * ReportSettings.ReadWrite.All (learn.microsoft.com, "reports show
+ * anonymous user names").
+ */
+export const MICROSOFT_REPORT_SETTING_MANUAL_STEPS: readonly string[] = [
+  'Sign in to the Microsoft 365 admin center (admin.microsoft.com) as a Global Administrator of this tenant.',
+  'Go to Settings > Org settings, and on the Services tab select Reports.',
+  `To show real names, clear "${MICROSOFT_REPORT_SETTING.label}". To hide them again, select it.`,
+  'Select Save. Microsoft applies the change within a few minutes; the next sync uses it.',
+];
+
+/** Report-names state of one Microsoft 365 integration (never carries tokens). */
+export const microsoftReportNamesSchema = z.object({
+  /** True: the tenant conceals names. Null: Weavestream could not read it. */
+  concealed: z.boolean().nullable(),
+  /** The admin's stored choice; null until chosen. */
+  choice: z.enum(['shown', 'hidden']).nullable(),
+  /** Fixed text when the setting could not be read, else null. */
+  readError: z.string().nullable(),
+  /**
+   * True when the tenant granted the optional ReportSettings.ReadWrite.All,
+   * so Weavestream can change the setting; false: the page shows the manual
+   * steps instead of the buttons.
+   */
+  canChange: z.boolean(),
+  /** Fixed result text after an action, else absent. */
+  message: z.string().optional(),
+});
+export type MicrosoftReportNames = z.infer<typeof microsoftReportNamesSchema>;
+
+/**
+ * `show` turns concealment off (real names), `conceal` turns it back on,
+ * `keep` records "leave the tenant alone" and changes nothing.
+ */
+export const microsoftReportNamesActionSchema = z.object({ action: z.enum(['show', 'conceal', 'keep']) }).strict();
+export type MicrosoftReportNamesAction = z.infer<typeof microsoftReportNamesActionSchema>;
+
+/** Days before an OAuth app's client secret expires that Weavestream starts warning. */
+export const OAUTH_SECRET_EXPIRY_WARNING_DAYS = 30;
+
+/**
+ * Fixed warning for an OAuth app client secret that expires within
+ * `OAUTH_SECRET_EXPIRY_WARNING_DAYS` (or already expired), else null.
+ * `expiresAt` is the date the operator entered (YYYY-MM-DD, end of day UTC).
+ */
+export function oauthSecretExpiryWarning(expiresAt: string | null | undefined, nowMs: number = Date.now()): string | null {
+  if (!expiresAt) return null;
+  const day = expiresAt.slice(0, 10);
+  const end = Date.parse(`${day}T00:00:00.000Z`);
+  if (!Number.isFinite(end)) return null;
+  // Calendar days in UTC: the secret stops working at the end of its expiry date.
+  const today = Date.parse(`${new Date(nowMs).toISOString().slice(0, 10)}T00:00:00.000Z`);
+  const days = Math.round((end - today) / 86_400_000);
+  if (days < 0) {
+    return `The client secret expired on ${day}. Create a new secret and save it on the integration's App tab, or connections stop working.`;
+  }
+  if (days > OAUTH_SECRET_EXPIRY_WARNING_DAYS) return null;
+  const when = days === 0 ? 'today' : `in ${days} day${days === 1 ? '' : 's'}`;
+  return `The client secret expires on ${day} (${when}). Create a new secret and save it on the integration's App tab before then.`;
+}
 
 const httpsUrlSchema = z
   .string()
@@ -362,22 +438,41 @@ const httpsUrlSchema = z
   .refine((value) => value.startsWith('https://'), 'OAuth endpoints must use https://');
 
 /**
- * A driver that connects through the OAuth authorization-code flow (with
- * PKCE) declares its provider endpoints and scopes here. The framework
- * owns the flow; the reserved authorize parameters (client_id,
- * redirect_uri, response_type, scope, state, code_challenge*) always win
- * over `extraAuthorizeParams`.
+ * A driver that connects through OAuth declares its provider endpoints and
+ * scopes here. The framework owns the flow; the reserved authorize
+ * parameters (client_id, redirect_uri, response_type, scope, state,
+ * code_challenge*) always win over `extraAuthorizeParams`.
+ *
+ * `consentFlow`:
+ *   - `authorization_code` (default): authorization code with PKCE; the
+ *     refresh token is stored.
+ *   - `admin_consent`: a tenant admin grants the app's application
+ *     permissions (Microsoft); no user token is ever stored. Access tokens
+ *     are minted per tenant with client credentials, `tokenUrl` carries a
+ *     `{tenant}` placeholder, `clientCredentialsScope` is the requested
+ *     scope, and `scopes` lists the application permissions (token roles).
  */
 export const driverOAuthDescriptorSchema = z
   .object({
     provider: integrationOAuthProviderSchema,
+    consentFlow: z.enum(['authorization_code', 'admin_consent']).optional(),
     authorizeUrl: httpsUrlSchema,
     tokenUrl: httpsUrlSchema,
     revokeUrl: httpsUrlSchema.optional(),
     scopes: z.array(z.string().min(1).max(256)).min(1).max(50),
+    /** Scope of the client-credentials token (admin consent only). */
+    clientCredentialsScope: httpsUrlSchema.optional(),
+    /** Optional grouping of `scopes` for the settings card (e.g. by purpose). */
+    scopeGroups: z
+      .array(z.object({ label: z.string().min(1).max(80), scopes: z.array(z.string().min(1).max(256)).min(1).max(50) }).strict())
+      .max(10)
+      .optional(),
     extraAuthorizeParams: z.record(z.string().max(256)).optional(),
   })
-  .strict();
+  .strict()
+  .refine((d) => d.consentFlow !== 'admin_consent' || (d.clientCredentialsScope !== undefined && d.tokenUrl.includes('{tenant}')), {
+    message: 'Admin-consent descriptors need clientCredentialsScope and a {tenant} token URL',
+  });
 export type DriverOAuthDescriptor = z.infer<typeof driverOAuthDescriptorSchema>;
 
 // ---------------------------------------------------------------------
@@ -1305,6 +1400,12 @@ export const integrationOAuthAppSchema = z.object({
   updatedAt: z.string().nullable(),
   /** Setup guide of the first registered driver of this provider, if any. */
   setupGuide: z.array(setupGuideStepSchema).optional(),
+  /** Date the client secret expires (YYYY-MM-DD), as entered by the operator. */
+  secretExpiresAt: z.string().nullable(),
+  /** Fixed warning from 30 days before `secretExpiresAt`, else null. */
+  secretExpiryWarning: z.string().nullable(),
+  /** The operator's own directory (tenant) ID, used only by Check setup (Microsoft). */
+  tenantId: z.string().nullable(),
 });
 export type IntegrationOAuthApp = z.infer<typeof integrationOAuthAppSchema>;
 
@@ -1317,6 +1418,15 @@ export const updateIntegrationOAuthAppSchema = z
      * is stored yet.
      */
     clientSecret: z.string().trim().min(1).max(512).optional(),
+    /** Client secret expiry date (YYYY-MM-DD); null clears it, omitted keeps it. */
+    secretExpiresAt: z
+      .string()
+      .regex(/^\d{4}-\d{2}-\d{2}$/, 'Use a YYYY-MM-DD date')
+      .refine((v) => Number.isFinite(Date.parse(`${v}T00:00:00Z`)), 'Not a valid date')
+      .nullable()
+      .optional(),
+    /** The operator's own directory (tenant) ID (GUID); null clears it, omitted keeps it. */
+    tenantId: z.string().trim().uuid('Use the Directory (tenant) ID, a GUID').nullable().optional(),
   })
   .strict();
 export type UpdateIntegrationOAuthAppInput = z.infer<typeof updateIntegrationOAuthAppSchema>;
@@ -1328,20 +1438,22 @@ export type IntegrationConnectionStatus = z.infer<typeof integrationConnectionSt
 /** One client tenant connected to an OAuth integration. */
 export const integrationConnectionSchema = z.object({
   id: z.string().uuid(),
-  /** Google customer id. */
+  /** Google customer id / Microsoft tenant id. */
   externalOrgId: z.string(),
-  /** Primary domain (Google), when known. */
+  /** Primary domain (Google) or tenant name (Microsoft), when known. */
   displayName: z.string().nullable(),
-  /** Google: the admin account that approved. */
+  /** Google: the admin account that approved. Microsoft: null. */
   connectedAs: z.string().nullable(),
   connectedAt: z.string(),
-  /** Granted scopes (Google). */
+  /** Granted scopes (Google) or application permissions (Microsoft). */
   grantedScopes: z.array(z.string()),
   /** `needs_reconnect` also when the stored grant cannot be read. */
   status: integrationConnectionStatusSchema,
   lastErrorAt: z.string().nullable(),
   /** Latest finished sync of a company mapping of this tenant, if any. */
   lastSyncAt: z.string().nullable(),
+  /** Microsoft only: the admin's choice about real names in usage reports. */
+  reportNames: z.enum(['shown', 'hidden']).nullable(),
 });
 export type IntegrationConnection = z.infer<typeof integrationConnectionSchema>;
 
@@ -1351,6 +1463,10 @@ export const integrationConnectionsSchema = z.object({
   appConfigured: z.boolean(),
   /** Callback URL registered with the provider. */
   redirectUri: z.string(),
+  /** Fixed warning when the app's client secret expires within 30 days, else null. */
+  appSecretExpiryWarning: z.string().nullable(),
+  /** True once the app's client secret expiry date has passed. */
+  appSecretExpired: z.boolean(),
   connections: z.array(integrationConnectionSchema),
 });
 export type IntegrationConnections = z.infer<typeof integrationConnectionsSchema>;
@@ -1481,6 +1597,7 @@ export const DEFAULT_INTEGRATION_PRIORITY: readonly string[] = [
   'ninjaone',
   'action1',
   'breeze',
+  'microsoft-365',
   'google-workspace',
   'unifi',
   'cloudflare',

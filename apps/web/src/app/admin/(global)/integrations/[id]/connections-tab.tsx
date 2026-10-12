@@ -16,14 +16,21 @@ import { apiFetch } from '../../../../../lib/api';
 import { FormattedDate } from '../../../../../lib/timezone-context';
 import { Btn, DataTable, Icon, MobileCardRow, Tag, useToast, type DataColumn } from '../../../../../components/ui';
 import { SetupGuide } from '../../../../../components/integrations/setup-guide';
+import { ReportNamesChoice } from './report-names-choice';
 
 /**
  * Fixed text for the `reason` the API callback may add to `?oauth=failed`.
  * Anything else falls back to the generic failure toast.
  */
 export const OAUTH_FAILURE_REASONS: Record<string, string> = {
+  consent_declined: 'Microsoft did not grant consent. Connect again and press Accept on the Microsoft page.',
+  admin_required:
+    'A Global Administrator or Privileged Role Administrator of the customer tenant must approve. Sign in with one of those roles and connect again.',
   tenant_unverified: 'Weavestream could not verify the tenant the provider returned, so nothing was saved. Connect again.',
+  excess_permissions:
+    'The app has more permissions than Weavestream uses. Remove the extra permissions from the app registration, then connect again.',
   app_not_configured: 'The app of this integration is not set up yet. Set it up on the App tab first.',
+  token_failed: 'Microsoft did not issue a token for the tenant. Run Check setup on the App tab, then connect again.',
   already_connected: 'That client tenant is already connected. Use Reconnect on its row instead.',
   wrong_tenant:
     'You signed in to a different tenant than the one this connection belongs to, so nothing was changed. Reconnect with an admin of that tenant, or use Connect a client for a new one.',
@@ -32,13 +39,15 @@ export const OAUTH_FAILURE_REASONS: Record<string, string> = {
 
 type Status = { label: string; tone: 'ok' | 'warn' | 'danger' };
 
-function statusOf(row: IntegrationConnection): Status {
+function statusOf(row: IntegrationConnection, appSecretExpired: boolean): Status {
+  if (appSecretExpired) return { label: 'app secret expired', tone: 'danger' };
   return row.status === 'ok' ? { label: 'ok', tone: 'ok' } : { label: 'needs reconnect', tone: 'danger' };
 }
 
 /**
  * Connections tab of an OAuth integration: one row per client tenant.
- * Connect sends the browser to the provider (Google sign-in); the API callback brings it back here with a generic
+ * Connect sends the browser to the provider (Google sign-in, Microsoft
+ * admin consent); the API callback brings it back here with a generic
  * `?oauth=connected|failed` flag, which becomes a toast and is then
  * stripped from the URL. Reconnect is bound to its row's tenant.
  */
@@ -62,6 +71,7 @@ export function ConnectionsTab({
   const [check, setCheck] = useState<IntegrationSetupCheck | null>(null);
   const [checking, setChecking] = useState(false);
   const label = INTEGRATION_OAUTH_PROVIDER_LABELS[oauth.provider];
+  const adminConsent = oauth.consentFlow === 'admin_consent';
 
   const load = useCallback(async () => {
     try {
@@ -127,7 +137,9 @@ export function ConnectionsTab({
 
   async function disconnect(row: IntegrationConnection) {
     const name = row.displayName ?? row.externalOrgId;
-    const consequence = 'Weavestream revokes its access to this tenant and forgets it.';
+    const consequence = adminConsent
+      ? 'Weavestream forgets this tenant. To remove its access in the tenant too, delete the Weavestream enterprise application there.'
+      : 'Weavestream revokes its access to this tenant and forgets it.';
     if (!window.confirm(`Disconnect ${name}?\n\n${consequence} Syncs of this tenant stop until you connect it again.`)) {
       return;
     }
@@ -179,6 +191,7 @@ export function ConnectionsTab({
     setCheck(null);
   }
 
+  const appSecretExpired = data?.appSecretExpired ?? false;
   const actions = (row: IntegrationConnection) => (
     // Row clicks open the details; the buttons must not.
     <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }} onClick={(e) => e.stopPropagation()}>
@@ -221,10 +234,10 @@ export function ConnectionsTab({
     },
     {
       id: 'connectedAs',
-      header: 'Connected as',
+      header: adminConsent ? 'Permissions' : 'Connected as',
       width: 200,
-      sortValue: (r) => r.connectedAs,
-      render: (r) => r.connectedAs ?? 'Not recorded',
+      sortValue: (r) => (adminConsent ? r.grantedScopes.length : r.connectedAs),
+      render: (r) => (adminConsent ? `${r.grantedScopes.length} granted` : (r.connectedAs ?? 'Not recorded')),
     },
     {
       id: 'connectedAt',
@@ -244,9 +257,9 @@ export function ConnectionsTab({
       id: 'status',
       header: 'Status',
       width: 140,
-      sortValue: (r) => statusOf(r).label,
+      sortValue: (r) => statusOf(r, appSecretExpired).label,
       render: (r) => {
-        const s = statusOf(r);
+        const s = statusOf(r, appSecretExpired);
         return <Tag tone={s.tone}>{s.label}</Tag>;
       },
     },
@@ -262,7 +275,9 @@ export function ConnectionsTab({
           <h3 style={headerStyle}>Connections</h3>
           <p style={mutedStyle}>
             One row per client tenant. Map each tenant to a company on the Organizations tab.{' '}
-            Sign in with an administrator account of the customer to connect.
+            {adminConsent
+              ? 'A Global Administrator or Privileged Role Administrator of the customer tenant approves the app.'
+              : 'Sign in with an administrator account of the customer to connect.'}
           </p>
         </div>
         <Btn
@@ -283,6 +298,11 @@ export function ConnectionsTab({
         <p style={mutedStyle}>Loading connections…</p>
       ) : (
         <>
+          {data.appSecretExpiryWarning && (
+            <p role="alert" style={{ margin: 0, fontSize: 12.5, color: 'var(--danger)', fontWeight: 600 }}>
+              {data.appSecretExpiryWarning}
+            </p>
+          )}
           {!data.appConfigured && (
             <p style={mutedStyle}>
               The {label} app of this integration is not set up yet.{' '}
@@ -299,12 +319,14 @@ export function ConnectionsTab({
             defaultSort={{ columnId: 'tenant' }}
             empty={`No client tenants yet. Press Connect a client to add the first one.`}
             renderMobileCard={(r) => {
-              const s = statusOf(r);
+              const s = statusOf(r, appSecretExpired);
               return (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                   <strong style={{ fontSize: 13 }}>{r.displayName ?? r.externalOrgId}</strong>
                   <MobileCardRow label="Tenant" mono>{r.externalOrgId}</MobileCardRow>
-                  <MobileCardRow label="Connected as">{r.connectedAs ?? 'Not recorded'}</MobileCardRow>
+                  <MobileCardRow label={adminConsent ? 'Permissions' : 'Connected as'}>
+                    {adminConsent ? `${r.grantedScopes.length} granted` : (r.connectedAs ?? 'Not recorded')}
+                  </MobileCardRow>
                   <MobileCardRow label="Connected"><FormattedDate value={r.connectedAt} /></MobileCardRow>
                   <MobileCardRow label="Last sync">{r.lastSyncAt ? <FormattedDate value={r.lastSyncAt} /> : 'Never'}</MobileCardRow>
                   <MobileCardRow label="Status"><Tag tone={s.tone}>{s.label}</Tag></MobileCardRow>
@@ -316,11 +338,14 @@ export function ConnectionsTab({
           {selected && (
             <section aria-label={`Details of ${selected.displayName ?? selected.externalOrgId}`} style={detailStyle}>
               <h4 style={{ ...headerStyle, fontSize: 13 }}>{selected.displayName ?? selected.externalOrgId}</h4>
+              {adminConsent && oauth.provider === 'microsoft' && (
+                <ReportNamesChoice key={selected.id} integrationId={integrationId} connectionId={selected.id} choice={selected.reportNames} />
+              )}
               {setupGuide && setupGuide.length > 0 && (
                 <SetupGuide
                   steps={setupGuide}
                   redirectUri={data.redirectUri}
-                  scopeGroups={[{ scopes: oauth.scopes }]}
+                  scopeGroups={oauth.scopeGroups ?? [{ scopes: oauth.scopes }]}
                   check={check}
                   onCheck={() => void runCheck(selected.id)}
                   checking={checking}

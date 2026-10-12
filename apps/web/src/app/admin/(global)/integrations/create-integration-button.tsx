@@ -38,7 +38,7 @@ export function CreateIntegrationButton({
   existing = [],
 }: {
   drivers: DriverDescriptor[];
-  /** Existing integrations: an OAuth provider (Google) is added once; the API refuses a second. */
+  /** Existing integrations: an OAuth provider (Google, Microsoft) is added once; the API refuses a second. */
   existing?: Array<Pick<IntegrationDto, 'driver'>>;
 }) {
   const router = useRouter();

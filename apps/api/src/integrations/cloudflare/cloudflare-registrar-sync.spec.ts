@@ -266,6 +266,12 @@ describe('matchRow', () => {
     expect(m([row({ source: 'GOOGLE_WORKSPACE', companyId: 'co-client' })]).kind).toBe('skip');
   });
 
+  it('adopts a Microsoft 365-created row in the configured company (Cloudflare wins)', () => {
+    const microsoft = row({ id: 'ms', source: 'MICROSOFT_365', integrationId: 'int-microsoft' });
+    expect(m([microsoft])).toEqual({ kind: 'adopt', row: microsoft });
+    expect(m([row({ source: 'MICROSOFT_365', companyId: 'co-client' })]).kind).toBe('skip');
+  });
+
   it('never takes another integration\'s row, and creates only when nothing exists', () => {
     expect(m([row({ source: 'CLOUDFLARE', integrationId: 'int-2' })]).kind).toBe('skip');
     expect(m([])).toEqual({ kind: 'create' });

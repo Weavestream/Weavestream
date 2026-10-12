@@ -105,7 +105,7 @@ function setup(
       ),
     },
     integrationOAuthApp: {
-      findUnique: jest.fn(async () => (opts.client === null ? null : { id: 'app-1' })),
+      findUnique: jest.fn(async () => (opts.client === null ? null : { id: 'app-1', secretExpiresAt: null })),
     },
     integrationConnection: {
       findMany: jest.fn(async ({ where }: { where: Record<string, unknown> }) => connections.filter((r) => match(r, where))),
@@ -464,6 +464,8 @@ describe('IntegrationOAuthService.disconnect and listConnections', () => {
       provider: 'google',
       appConfigured: true,
       redirectUri: 'https://ws.example.test/api/v1/admin/integrations/oauth/callback',
+      appSecretExpiryWarning: null,
+      appSecretExpired: false,
       connections: [
         {
           id: CONN_A,
@@ -475,6 +477,7 @@ describe('IntegrationOAuthService.disconnect and listConnections', () => {
           status: 'ok',
           lastErrorAt: null,
           lastSyncAt: null,
+          reportNames: null,
         },
       ],
     });

@@ -272,7 +272,7 @@ export class IntegrationSyncMappingWorker implements OnModuleDestroy {
     if (retryable && !isFinalAttempt(job)) {
       throw new Error(retryable.error ?? `Resource ${retryable.resourceKey} failed.`);
     }
-    // Google Workspace domains feed Domains monitoring
+    // Google Workspace and Microsoft 365 domains feed Domains monitoring
     // (not an asset resource): once per mapping run, after the resources. A
     // failure is a run warning on the last resource, never a failed mapping.
     // Legacy per-resource jobs would run it once per resource, so they skip it.

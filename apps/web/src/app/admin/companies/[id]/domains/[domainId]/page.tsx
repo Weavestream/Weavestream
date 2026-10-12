@@ -24,6 +24,7 @@ import { SecurityCard } from './security-card';
 import { StatusPill } from '../domains-browser';
 import { Stat } from './stat';
 import { GoogleWorkspaceCard } from './google-workspace-card';
+import { Microsoft365Card } from './microsoft-365-card';
 import { DomainChatContext } from '../../../../../../components/chat-panel/domain-chat-context';
 import { spacedRelativePast as fmtRelativePast } from '../../../../../../lib/relative-time';
 
@@ -75,6 +76,7 @@ export default async function DomainDetailPage({
             )}
             {domain.source === 'CLOUDFLARE' && <Tag tone="cloudflare">Cloudflare</Tag>}
             {domain.workspaceRole && <Tag tone="info">Google Workspace</Tag>}
+            {domain.microsoftDefault !== null && <Tag tone="info">Microsoft 365</Tag>}
             {domain.archivedAt && <Tag tone="warn">archived</Tag>}
           </span>
         }
@@ -190,6 +192,7 @@ export default async function DomainDetailPage({
         )}
 
         {domain.workspaceSyncedAt && <GoogleWorkspaceCard domain={domain} />}
+        {domain.microsoftSyncedAt && <Microsoft365Card domain={domain} />}
 
         <Panel title="Check history" noPad>
           {checks.length === 0 ? (

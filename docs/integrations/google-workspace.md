@@ -167,7 +167,7 @@ Below the match picker, a table lists the resource's standard facts (for users: 
 
 On sync, a Google record whose match value equals **exactly one** unlinked asset you created yourself adopts that asset instead of creating a duplicate. Text matching ignores upper and lower case. If two or more assets match, the run reports it and links nothing, so you can clean up the duplicates first.
 
-When none of your own assets match, a record also links to **exactly one** asset another integration already syncs (for example a Chromebook from an RMM). Google then fills that asset's fields according to the integration priority order, and a value that differs from a higher integration's is listed under **Differences** in the Google Workspace section. See [Several integrations on one asset](/integrations/#several-integrations-on-one-asset).
+When none of your own assets match, a record also links to **exactly one** asset another integration already syncs (for example the same person from Microsoft 365, or a Chromebook from an RMM). Google then fills that asset's fields according to the integration priority order, and a value that differs from a higher integration's is listed under **Differences** in the Google Workspace section. See [Several integrations on one asset](/integrations/#several-integrations-on-one-asset).
 
 An adopted asset keeps the name you gave it. Assets that Google created follow the Google name (for example when a user is renamed).
 

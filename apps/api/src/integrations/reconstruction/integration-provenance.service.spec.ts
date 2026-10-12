@@ -555,7 +555,7 @@ describe('IntegrationProvenanceService', () => {
   );
 
   it('keeps an asset co-bound by another integration when this integration stops seeing it', async () => {
-    const disappearing = binding('google-binding', 'asset', 'asset-shared');
+    const disappearing = binding('microsoft-binding', 'asset', 'asset-shared');
     const findMany = jest.fn()
       .mockResolvedValueOnce([disappearing])
       // The other integration's live binding on the same asset.

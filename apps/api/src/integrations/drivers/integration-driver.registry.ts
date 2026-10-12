@@ -9,6 +9,7 @@ import { CloudflareApiClient } from './cloudflare/cloudflare-api.client.js';
 import { BreezeDriver } from './breeze/breeze.driver.js';
 import { GoogleWorkspaceDriver } from './google-workspace/google-workspace.driver.js';
 import { LevelDriver } from './level/level.driver.js';
+import { Microsoft365Driver } from './microsoft-365/microsoft-365.driver.js';
 
 /**
  * Phase 11 — global registry of every available integration driver.
@@ -41,6 +42,7 @@ export class IntegrationDriverRegistry {
       new UniFiSiteManagerDriver(),
       new GoogleWorkspaceDriver(),
       new LevelDriver(),
+      new Microsoft365Driver(),
     ];
     const securityDrivers: CloudflareDriver[] = [new CloudflareDriver(new CloudflareApiClient())];
 

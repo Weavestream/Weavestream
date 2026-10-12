@@ -312,6 +312,19 @@ export interface IntegrationDriver {
    * messages naming a guide step (never provider error text).
    */
   diagnose?(input: DriverDiagnoseInput): Promise<IntegrationSetupCheck>;
+
+  /**
+   * Admin-consent drivers: confirm, with a freshly minted app-only token,
+   * that the token's tenant is `tenantId` (never trusting the callback's
+   * tenant parameter) and return its display name. Throws on a mismatch.
+   * Read-only.
+   */
+  verifyConsentedTenant?(input: {
+    accessToken: string;
+    tenantId: string;
+    http: IntegrationContext['http'];
+    correlationId: string;
+  }): Promise<{ tenantName: string | null }>;
 }
 
 export type DriverDiagnoseInput =
@@ -319,6 +332,8 @@ export type DriverDiagnoseInput =
       mode: 'client';
       oauthClient: OAuthClientCredentials;
       redirectUri: string;
+      /** The operator's own directory (tenant) id, when saved (Microsoft). */
+      homeTenantId?: string | null;
       http: IntegrationContext['http'];
       correlationId: string;
     }

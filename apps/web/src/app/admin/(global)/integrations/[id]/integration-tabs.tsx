@@ -58,7 +58,7 @@ const STATIC_TABS_HEAD: TabDescriptor[] = [
   },
 ];
 
-/** OAuth drivers (Google Workspace): the app, then one connection per client tenant. */
+/** OAuth drivers (Google Workspace, Microsoft 365): the app, then one connection per client tenant. */
 const OAUTH_TABS: TabDescriptor[] = [
   {
     id: 'app',

@@ -7,6 +7,7 @@ import {
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import {
+  oauthSecretExpiryWarning,
   type DriverOAuthDescriptor,
   type IntegrationConnection,
   type IntegrationConnections,
@@ -28,11 +29,18 @@ import type { AuthedUser } from '../../common/current-user.decorator.js';
 import type { RequestMeta } from '../../common/request-meta.js';
 import { IntegrationOAuthAppService } from './integration-oauth-app.service.js';
 import {
+  OAuthTokenError,
+  TENANT_ID_RE,
+  appTokenClaims,
   connectedAsFromIdToken,
   exchangeAuthorizationCode,
+  isAdminConsent,
+  mintClientCredentialsToken,
+  parseStoredAdminConsent,
   parseStoredOAuthSecret,
   revokeOAuthToken,
   type OAuthClientCredentials,
+  type StoredAdminConsent,
   type StoredOAuthSecret,
 } from './oauth-token.js';
 
@@ -53,17 +61,29 @@ export function oauthStateKey(state: string): string {
  * connects a new client tenant, a connection id reconnects exactly that
  * connection (and only with the same tenant).
  */
-const pendingStateSchema = z.object({
-  integrationId: z.string().uuid(),
-  userId: z.string().min(1),
-  connectionId: z.string().uuid().nullable(),
-  codeVerifier: z.string().min(43).max(128),
-});
+const pendingStateSchema = z.union([
+  z.object({
+    integrationId: z.string().uuid(),
+    userId: z.string().min(1),
+    connectionId: z.string().uuid().nullable(),
+    codeVerifier: z.string().min(43).max(128),
+  }),
+  z.object({
+    integrationId: z.string().uuid(),
+    userId: z.string().min(1),
+    connectionId: z.string().uuid().nullable(),
+    flow: z.literal('admin_consent'),
+  }),
+]);
 
 export interface OAuthCallbackQuery {
   code?: unknown;
   state?: unknown;
   error?: unknown;
+  /** Admin consent (Microsoft): the tenant that consented. Never trusted; verified by token. */
+  tenant?: unknown;
+  admin_consent?: unknown;
+  error_description?: unknown;
 }
 
 /**
@@ -71,11 +91,54 @@ export interface OAuthCallbackQuery {
  * the web app maps each to fixed text. Provider error text never travels.
  */
 export type LandingReason =
+  | 'consent_declined'
+  | 'admin_required'
   | 'tenant_unverified'
+  | 'excess_permissions'
   | 'app_not_configured'
+  | 'token_failed'
   | 'already_connected'
   | 'wrong_tenant'
   | 'connection_missing';
+
+/** Provider `error` values recorded in the audit row; anything else is 'other'. */
+const KNOWN_PROVIDER_ERRORS = new Set([
+  'access_denied',
+  'invalid_request',
+  'invalid_scope',
+  'unauthorized_client',
+  'consent_required',
+  'interaction_required',
+  'server_error',
+  'temporarily_unavailable',
+]);
+
+/** AADSTS codes meaning "an admin who can grant application permissions must approve". */
+const ADMIN_REQUIRED_AADSTS = new Set([90094, 90099, 65001]);
+
+/**
+ * Classify an admin-consent error callback into fixed values. The
+ * description is only scanned for an AADSTS number; it is never stored,
+ * logged or echoed.
+ */
+export function classifyConsentError(query: OAuthCallbackQuery): {
+  providerError: string;
+  aadsts: number | null;
+  landing: LandingReason;
+} {
+  const raw = typeof query.error === 'string' ? query.error.slice(0, 64) : '';
+  const providerError = KNOWN_PROVIDER_ERRORS.has(raw) ? raw : 'other';
+  const desc = typeof query.error_description === 'string' ? query.error_description.slice(0, 2048) : '';
+  const match = /AADSTS(\d{5,7})/.exec(desc);
+  const aadsts = match ? Number(match[1]) : null;
+  const landing: LandingReason =
+    aadsts !== null && ADMIN_REQUIRED_AADSTS.has(aadsts) ? 'admin_required' : 'consent_declined';
+  return { providerError, aadsts, landing };
+}
+
+/** Attempts and spacing while a fresh consent propagates (the service principal can lag). */
+export const CONSENT_PROPAGATION_ATTEMPTS = 3;
+export const CONSENT_PROPAGATION_DELAY_MS = 2_000;
 
 type FailureReason =
   | 'state_invalid'
@@ -87,6 +150,7 @@ type FailureReason =
   | 'no_refresh_token'
   | 'excess_scopes'
   | 'tenant_invalid'
+  | 'tenant_mismatch'
   | 'already_connected'
   | 'reconnect_wrong_tenant'
   | 'connection_missing';
@@ -118,13 +182,14 @@ interface VerifiedGrant {
   provider: string;
   externalOrgId: string;
   displayName: string | null;
-  secret: StoredOAuthSecret;
+  /** Builds the stored secret; `previous` is the reconnected connection's own secret, if readable. */
+  secret: (previous: Record<string, unknown> | null) => StoredOAuthSecret | StoredAdminConsent;
   auditAfter: Record<string, unknown>;
 }
 
 /**
  * Connections of OAuth integrations: one per client tenant. Google uses the
- * authorization-code flow (with PKCE S256).
+ * authorization-code flow (with PKCE S256), Microsoft admin consent.
  *
  * The state is 32 random bytes, single use (Redis GETDEL), valid for ten
  * minutes, and bound to the user who started the flow, the integration and
@@ -154,33 +219,39 @@ export class IntegrationOAuthService {
     const { oauth } = await this.requireOAuthIntegration(integrationId);
     const app = await this.prisma.integrationOAuthApp.findUnique({
       where: { integrationId },
-      select: { id: true },
+      select: { id: true, secretExpiresAt: true },
     });
+    const expiry = app?.secretExpiresAt?.toISOString().slice(0, 10) ?? null;
     const rows = await this.prisma.integrationConnection.findMany({
       where: { integrationId },
       orderBy: [{ displayName: 'asc' }, { externalOrgId: 'asc' }],
     });
     const lastSync = await this.lastSyncByTenant(integrationId);
+    const consent = isAdminConsent(oauth);
     const connections: IntegrationConnection[] = rows.map((row) => {
       const raw = this.readSecret(integrationId, row.id, row.secretCiphertext);
-      const grant = parseStoredOAuthSecret(raw);
-      const readable = Boolean(grant);
+      const stored = consent ? parseStoredAdminConsent(raw) : null;
+      const grant = consent ? null : parseStoredOAuthSecret(raw);
+      const readable = consent ? Boolean(stored) : Boolean(grant);
       return {
         id: row.id,
         externalOrgId: row.externalOrgId,
         displayName: row.displayName,
         connectedAs: grant?.connectedAs ?? null,
         connectedAt: row.connectedAt.toISOString(),
-        grantedScopes: grant?.grantedScopes ?? [],
+        grantedScopes: stored?.grantedRoles ?? grant?.grantedScopes ?? [],
         status: readable && row.status === 'ok' ? 'ok' : 'needs_reconnect',
         lastErrorAt: row.lastErrorAt ? row.lastErrorAt.toISOString() : null,
         lastSyncAt: lastSync.get(row.externalOrgId) ?? null,
+        reportNames: stored?.reportNames ?? null,
       };
     });
     return {
       provider: oauth.provider,
       appConfigured: Boolean(app),
       redirectUri: this.apps.redirectUri(),
+      appSecretExpiryWarning: oauthSecretExpiryWarning(expiry),
+      appSecretExpired: expiry !== null && expiry < new Date().toISOString().slice(0, 10),
       connections,
     };
   }
@@ -206,6 +277,22 @@ export class IntegrationOAuthService {
       );
     }
     const state = randomBytes(32).toString('base64url');
+    if (isAdminConsent(oauth)) {
+      // Admin consent has no code and no PKCE: the state alone binds the
+      // round trip to this user, integration and connection intent.
+      await this.redis.client.set(
+        oauthStateKey(state),
+        JSON.stringify({ integrationId, userId: actor.id, connectionId, flow: 'admin_consent' }),
+        'EX',
+        OAUTH_STATE_TTL_SEC,
+      );
+      const url = new URL(oauth.authorizeUrl);
+      url.searchParams.set('client_id', client.clientId);
+      url.searchParams.set('scope', oauth.clientCredentialsScope ?? '');
+      url.searchParams.set('redirect_uri', this.apps.redirectUri());
+      url.searchParams.set('state', state);
+      return { authorizeUrl: url.toString() };
+    }
     const codeVerifier = randomBytes(32).toString('base64url');
     const codeChallenge = createHash('sha256').update(codeVerifier).digest('base64url');
     await this.redis.client.set(
@@ -267,7 +354,9 @@ export class IntegrationOAuthService {
     };
 
     if (pending.userId !== actor.id) return fail('user_mismatch', null);
-    const verified = await this.authorizationCodeCallback(integrationId, pending.codeVerifier, query, fail);
+    const verified = 'flow' in pending
+      ? await this.adminConsentCallback(integrationId, query, fail)
+      : await this.authorizationCodeCallback(integrationId, pending.codeVerifier, query, fail);
     if (typeof verified === 'string') return verified;
     return this.storeConnection(actor, integrationId, connectionId, verified, meta, fail);
   }
@@ -291,6 +380,7 @@ export class IntegrationOAuthService {
       // Deleted mid-flow, or its driver no longer uses OAuth.
       return fail('not_oauth', null);
     }
+    if (isAdminConsent(oauth)) return fail('state_invalid', oauth.provider);
     const client = await this.clientOrNull(integrationId);
     if (!client) return fail('app_not_configured', oauth.provider, {}, 'app_not_configured');
 
@@ -353,8 +443,118 @@ export class IntegrationOAuthService {
       provider: oauth.provider,
       externalOrgId: org.externalId,
       displayName: org.name ? org.name.slice(0, 256) : null,
-      secret,
+      secret: () => secret,
       auditAfter: { provider: oauth.provider, tenantId: org.externalId, grantedScopes },
+    };
+  }
+
+  /**
+   * Admin consent (Microsoft). The callback's `tenant` is only a claim: a
+   * client-credentials token is minted for it, the token's `tid` must equal
+   * it, and the driver re-reads the tenant through the provider API. The
+   * granted application permissions come from the token's `roles`. No user
+   * or refresh token is stored.
+   */
+  private async adminConsentCallback(
+    integrationId: string,
+    query: OAuthCallbackQuery,
+    fail: Fail,
+  ): Promise<VerifiedGrant | string> {
+    let row;
+    let oauth: DriverOAuthDescriptor;
+    try {
+      ({ row, oauth } = await this.requireOAuthIntegration(integrationId));
+    } catch {
+      return fail('not_oauth', null);
+    }
+    if (!isAdminConsent(oauth)) return fail('not_oauth', oauth.provider);
+    if (query.error !== undefined) {
+      const { providerError, aadsts, landing } = classifyConsentError(query);
+      return fail('provider_denied', oauth.provider, { providerError, aadsts }, landing);
+    }
+    const tenantId =
+      typeof query.tenant === 'string' && TENANT_ID_RE.test(query.tenant) ? query.tenant.toLowerCase() : null;
+    if (!tenantId || String(query.admin_consent).toLowerCase() !== 'true') {
+      return fail('tenant_invalid', oauth.provider, {}, 'tenant_unverified');
+    }
+    const client = await this.clientOrNull(integrationId);
+    if (!client) return fail('app_not_configured', oauth.provider, {}, 'app_not_configured');
+
+    const correlationId = randomUUID();
+    const driver = this.drivers.kindOf(row.driver) === 'pull' ? this.drivers.get(row.driver) : null;
+    let accessToken: string | null = null;
+    let roles: string[] = [];
+    let tokenTid: string | null = null;
+    let lastAadsts: number | null = null;
+    // A fresh consent can take a few seconds to reach the token service:
+    // retry an unknown-app answer or an empty role list a couple of times.
+    for (let attempt = 1; attempt <= CONSENT_PROPAGATION_ATTEMPTS; attempt += 1) {
+      try {
+        const tokens = await mintClientCredentialsToken(oauth, client, tenantId, this.httpDefaults(), correlationId);
+        const claims = appTokenClaims(tokens.access_token);
+        accessToken = tokens.access_token;
+        roles = claims?.roles ?? [];
+        tokenTid = claims?.tid?.toLowerCase() ?? null;
+        if (claims?.appId && claims.appId.toLowerCase() !== client.clientId.toLowerCase()) {
+          return fail('tenant_mismatch', oauth.provider, { tenantId, check: 'app_id' }, 'tenant_unverified');
+        }
+        if (roles.length > 0 || !claims || attempt === CONSENT_PROPAGATION_ATTEMPTS) break;
+      } catch (e) {
+        lastAadsts = e instanceof OAuthTokenError ? e.aadsts : null;
+        this.logger.warn(
+          { err: (e as Error).message, integrationId, correlationId, attempt },
+          'Admin consent token request failed',
+        );
+        const propagating = lastAadsts === 700016 || lastAadsts === 65001;
+        if (!propagating || attempt === CONSENT_PROPAGATION_ATTEMPTS) break;
+      }
+      await this.sleep(CONSENT_PROPAGATION_DELAY_MS);
+    }
+    if (!accessToken) {
+      return fail('token_exchange', oauth.provider, { tenantId, aadsts: lastAadsts }, 'token_failed');
+    }
+    if (tokenTid !== null && tokenTid !== tenantId) {
+      return fail('tenant_mismatch', oauth.provider, { tenantId, check: 'tid' }, 'tenant_unverified');
+    }
+    let tenantName: string | null = null;
+    if (driver?.verifyConsentedTenant) {
+      try {
+        ({ tenantName } = await driver.verifyConsentedTenant({
+          accessToken,
+          tenantId,
+          http: this.httpDefaults(),
+          correlationId,
+        }));
+      } catch (e) {
+        this.logger.warn({ err: (e as Error).message, integrationId, correlationId }, 'Consented tenant check failed');
+        return fail('tenant_mismatch', oauth.provider, { tenantId, check: 'provider' }, 'tenant_unverified');
+      }
+    } else if (tokenTid === null) {
+      // Neither the token nor the driver can prove the tenant: never store it.
+      return fail('tenant_mismatch', oauth.provider, { tenantId, check: 'unverifiable' }, 'tenant_unverified');
+    }
+    const excess = excessScopes(roles, oauth.scopes);
+    if (excess.length > 0) {
+      return fail('excess_scopes', oauth.provider, { tenantId, excessScopes: excess.slice(0, 20) }, 'excess_permissions');
+    }
+    const missing = oauth.scopes.filter((s) => !roles.includes(s));
+    const name = tenantName ? tenantName.slice(0, 256) : null;
+    return {
+      provider: oauth.provider,
+      externalOrgId: tenantId,
+      displayName: name,
+      // Keep the report-names choice across a reconnect of the same connection.
+      secret: (previous) => {
+        const before = parseStoredAdminConsent(previous);
+        return {
+          tenantId,
+          grantedRoles: roles,
+          consentedAt: new Date().toISOString(),
+          ...(name ? { tenantName: name } : {}),
+          ...(before?.tenantId === tenantId && before.reportNames ? { reportNames: before.reportNames } : {}),
+        };
+      },
+      auditAfter: { provider: oauth.provider, tenantId, grantedScopes: roles, missingScopes: missing },
     };
   }
 
@@ -378,7 +578,8 @@ export class IntegrationOAuthService {
         where: { id: connectionId, integrationId },
       });
       if (!existing) return fail('connection_missing', grant.provider, {}, 'connection_missing');
-      if (existing.externalOrgId !== grant.externalOrgId) {
+      // Tenant ids are compared without case: connections migrated by an earlier build kept their mapping's spelling.
+      if (existing.externalOrgId.toLowerCase() !== grant.externalOrgId.toLowerCase()) {
         return fail(
           'reconnect_wrong_tenant',
           grant.provider,
@@ -386,8 +587,9 @@ export class IntegrationOAuthService {
           'wrong_tenant',
         );
       }
+      const previous = this.readSecret(integrationId, existing.id, existing.secretCiphertext);
       const secretCiphertext = this.crypto.encrypt(
-        JSON.stringify(grant.secret),
+        JSON.stringify(grant.secret(previous)),
         integrationConnectionSecretAad(integrationId, existing.id),
       );
       await this.prisma.integrationConnection.update({
@@ -407,12 +609,12 @@ export class IntegrationOAuthService {
         where: { integrationId },
         select: { externalOrgId: true },
       });
-      if (connected.some((c) => c.externalOrgId === grant.externalOrgId)) {
+      if (connected.some((c) => c.externalOrgId.toLowerCase() === grant.externalOrgId.toLowerCase())) {
         return fail('already_connected', grant.provider, { tenantId: grant.externalOrgId }, 'already_connected');
       }
       id = randomUUID();
       const secretCiphertext = this.crypto.encrypt(
-        JSON.stringify(grant.secret),
+        JSON.stringify(grant.secret(null)),
         integrationConnectionSecretAad(integrationId, id),
       );
       try {
@@ -452,10 +654,11 @@ export class IntegrationOAuthService {
     const row = await this.prisma.integrationConnection.findFirst({ where: { id: connectionId, integrationId } });
     if (!row) throw new NotFoundException('Connection not found.');
     // An unreadable secret is still wiped: revocation is skipped (no token
-    // to send), and the audit row says why.
+    // to send), and the audit row says why. Admin consent has no token to
+    // revoke: the customer removes the enterprise app in their tenant.
     const raw = this.readSecret(integrationId, row.id, row.secretCiphertext);
-    const stored = parseStoredOAuthSecret(raw);
-    const unreadable = !stored;
+    const unreadable = isAdminConsent(oauth) ? !parseStoredAdminConsent(raw) : !parseStoredOAuthSecret(raw);
+    const stored = isAdminConsent(oauth) ? null : parseStoredOAuthSecret(raw);
     let revoked = false;
     if (stored && oauth.revokeUrl) {
       const correlationId = randomUUID();
@@ -544,6 +747,11 @@ export class IntegrationOAuthService {
       if (!current || at > current) out.set(tenant, at);
     }
     return out;
+  }
+
+  /** Separate so specs can skip the propagation wait. */
+  protected sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
   private landing(integrationId: string | null, ok: boolean, reason?: LandingReason): string {

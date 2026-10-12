@@ -67,7 +67,7 @@ export interface SerializedMonitoredDomain {
   /** v2 — operator-supplied extra DKIM selectors to probe. */
   dkimSelectorOverride: string | null;
   /** Where the row came from. CLOUDFLARE rows are owned by the registrar sync. */
-  source: 'MANUAL' | 'CLOUDFLARE' | 'GOOGLE_WORKSPACE';
+  source: 'MANUAL' | 'CLOUDFLARE' | 'GOOGLE_WORKSPACE' | 'MICROSOFT_365';
   /** Registrar facts as last seen by the sync. All null on MANUAL rows. */
   registrar: string | null;
   registrarAutoRenew: boolean | null;
@@ -90,6 +90,18 @@ export interface SerializedMonitoredDomain {
   workspaceMissingSince: Date | null;
   /** Detail view only, and never for client users: the integration's name. */
   workspaceIntegrationName?: string | null;
+  /**
+   * Microsoft 365 facts, written by the Microsoft domain sync on rows it
+   * created or matched. Null `microsoftDefault` = not (or no longer) in the tenant.
+   */
+  microsoftIntegrationId: string | null;
+  microsoftDefault: boolean | null;
+  microsoftAuthType: 'MANAGED' | 'FEDERATED' | null;
+  microsoftServices: string[];
+  microsoftSyncedAt: Date | null;
+  microsoftMissingSince: Date | null;
+  /** Detail view only, and never for client users: the integration's name. */
+  microsoftIntegrationName?: string | null;
   archivedAt: Date | null;
   createdBy: string | null;
   createdAt: Date;
@@ -166,7 +178,7 @@ export class DomainsService {
   ): Promise<SerializedMonitoredDomain> {
     const row = await this.prisma.monitoredDomain.findFirst({
       where: { id, companyId },
-      include: { workspaceIntegration: { select: { name: true } } },
+      include: { workspaceIntegration: { select: { name: true } }, microsoftIntegration: { select: { name: true } } },
     });
     if (!row) throw new NotFoundException();
     if (actor.role === 'CLIENT_USER' && !row.visibleToClients) {
@@ -174,11 +186,13 @@ export class DomainsService {
     }
     // Workspace facts follow the registrar rule (visible with the row); the
     // integration's name is MSP configuration, so client users never get it.
-    const { workspaceIntegration, ...domain } = row;
+    const { workspaceIntegration, microsoftIntegration, ...domain } = row;
     return {
       ...this.serialize(domain),
       workspaceIntegrationName:
         actor.role === 'CLIENT_USER' ? null : (workspaceIntegration?.name ?? null),
+      microsoftIntegrationName:
+        actor.role === 'CLIENT_USER' ? null : (microsoftIntegration?.name ?? null),
     };
   }
 
@@ -362,11 +376,19 @@ export class DomainsService {
     const data: Prisma.MonitoredDomainUncheckedUpdateManyInput = {};
     if (input.hostname !== undefined) {
       const normalised = domainHostnameSchema.parse(input.hostname);
-      // A manual domain Google Workspace also lists is synced too.
-      if (normalised !== existing.hostname && (existing.source !== 'MANUAL' || existing.workspaceRole !== null)) {
+      // A manual domain Google Workspace or Microsoft 365 also lists is synced too.
+      if (
+        normalised !== existing.hostname &&
+        (existing.source !== 'MANUAL' || existing.workspaceRole !== null || existing.microsoftDefault !== null)
+      ) {
         // The syncs match on hostname; a rename would orphan this row and
         // the next sweep would recreate the original beside it.
-        const from = existing.source === 'CLOUDFLARE' ? 'Cloudflare' : 'Google Workspace';
+        const from =
+          existing.source === 'CLOUDFLARE'
+            ? 'Cloudflare'
+            : existing.source === 'MICROSOFT_365' || (existing.source === 'MANUAL' && existing.workspaceRole === null)
+              ? 'Microsoft 365'
+              : 'Google Workspace';
         throw new BadRequestException(
           `This domain is synced from ${from}; its hostname cannot be changed here.`,
         );
@@ -671,6 +693,12 @@ export class DomainsService {
       workspaceAliasOf: row.workspaceAliasOf,
       workspaceSyncedAt: row.workspaceSyncedAt,
       workspaceMissingSince: row.workspaceMissingSince,
+      microsoftIntegrationId: row.microsoftIntegrationId,
+      microsoftDefault: row.microsoftDefault,
+      microsoftAuthType: row.microsoftAuthType,
+      microsoftServices: row.microsoftServices,
+      microsoftSyncedAt: row.microsoftSyncedAt,
+      microsoftMissingSince: row.microsoftMissingSince,
       archivedAt: row.archivedAt,
       createdBy: row.createdBy,
       createdAt: row.createdAt,

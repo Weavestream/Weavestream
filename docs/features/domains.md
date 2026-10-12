@@ -62,6 +62,7 @@ The dashboard also includes asset expiry dates and password expiry dates for a u
 - **Manual**: added with **New domain**.
 - **Cloudflare**: the [Cloudflare integration](/integrations/cloudflare/) can sync every domain on the account into one company, with registrar details (expiry, auto-renew, lock, nameservers) in a **Registrar** panel and an orange **Cloudflare** tag.
 - **Google Workspace**: each mapped [Google Workspace](/integrations/google-workspace/) tenant adds its verified domains and domain aliases to its company. Existing domains are matched by name, never duplicated; a matched domain only gains a **Google Workspace** tag (with its role: primary domain, secondary domain or domain alias) and a **Google Workspace** card. Cloudflare wins on anything both provide.
+- **Microsoft 365**: each mapped [Microsoft 365](/integrations/microsoft-365/) tenant adds its verified custom domains (never `*.onmicrosoft.com`) the same way; a matched domain gains the Microsoft icon and a **Microsoft 365** card (default or verified domain, managed or federated, supported services). In the Domains list the source icons are shown Cloudflare first, then Google, then Microsoft.
 
 A synced domain's hostname cannot be renamed, since the syncs match on it. A domain that disappears from its source is flagged, never deleted.
 

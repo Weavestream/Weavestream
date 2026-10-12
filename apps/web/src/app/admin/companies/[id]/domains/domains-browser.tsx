@@ -3,7 +3,7 @@
 import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { useEffect, useState, useTransition } from 'react';
-import { workspaceRoleLabel } from './workspace-role';
+import { microsoftDomainLabel, workspaceRoleLabel } from './workspace-role';
 import type { MonitoredDomainDto } from '@weavestream/shared';
 import { problemMessage } from '@weavestream/shared';
 import { apiFetch } from '../../../../../lib/api';
@@ -366,13 +366,15 @@ function DomainDialog({
             value={form.hostname}
             autoFocus
             // The syncs match on hostname; the API rejects renames.
-            disabled={!!initial && (initial.source !== 'MANUAL' || initial.workspaceRole !== null)}
+            disabled={!!initial && (initial.source !== 'MANUAL' || initial.workspaceRole !== null || initial.microsoftDefault !== null)}
             title={
               initial?.source === 'CLOUDFLARE'
                 ? 'Synced from Cloudflare'
                 : initial?.source === 'GOOGLE_WORKSPACE' || initial?.workspaceRole != null
                   ? 'Synced from Google Workspace'
-                  : undefined
+                  : initial?.source === 'MICROSOFT_365' || initial?.microsoftDefault != null
+                    ? 'Synced from Microsoft 365'
+                    : undefined
             }
             onChange={(e) => setForm({ ...form, hostname: e.target.value })}
             style={inputStyle}
@@ -796,8 +798,10 @@ export function SourceTags({ row }: { row: MonitoredDomainDto }) {
   const cloudflare = row.source === 'CLOUDFLARE';
   const role = workspaceRoleLabel(row);
   const workspaceGone = !role && row.workspaceMissingSince !== null;
-  if (!cloudflare && !role && !workspaceGone) return null;
-  // Cloudflare (the registrar) always comes first, then every other source.
+  const microsoft = microsoftDomainLabel(row);
+  const microsoftGone = !microsoft && row.microsoftMissingSince !== null;
+  if (!cloudflare && !role && !workspaceGone && !microsoft && !microsoftGone) return null;
+  // Cloudflare (the registrar) always comes first, then Google, then Microsoft.
   return (
     <span style={{ display: 'inline-flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
       {cloudflare && <SourceIcon src="/integrations/icons/cloudflare.svg" label="Synced from Cloudflare" />}
@@ -807,6 +811,10 @@ export function SourceTags({ row }: { row: MonitoredDomainDto }) {
       {role && <SourceIcon src="/integrations/icons/google.svg" label={`Google Workspace: ${role}`} />}
       {workspaceGone && (
         <Tag tone="warn">not in Google Workspace since {fmtDate(row.workspaceMissingSince)}</Tag>
+      )}
+      {microsoft && <SourceIcon src="/integrations/icons/microsoft.svg" label={`Microsoft 365: ${microsoft}`} />}
+      {microsoftGone && (
+        <Tag tone="warn">not in Microsoft 365 since {fmtDate(row.microsoftMissingSince)}</Tag>
       )}
     </span>
   );

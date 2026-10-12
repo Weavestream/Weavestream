@@ -12,7 +12,7 @@ jest.mock('next/navigation', () => ({ useRouter: () => ({ refresh }) }));
 
 const initial = [
   { key: 'level', label: 'Level RMM' },
-  { key: 'ninjaone', label: 'NinjaOne' },
+  { key: 'microsoft-365', label: 'Microsoft 365' },
   { key: 'google-workspace', label: 'Google Workspace' },
 ];
 
@@ -46,7 +46,7 @@ describe('IntegrationPriorityList', () => {
     });
     expect(apiFetch).toHaveBeenCalledWith('/settings/integration-priority', {
       method: 'PUT',
-      body: JSON.stringify({ order: ['google-workspace', 'level', 'ninjaone'] }),
+      body: JSON.stringify({ order: ['google-workspace', 'level', 'microsoft-365'] }),
     });
     expect(refresh).toHaveBeenCalled();
     expect(screen.getByRole('button', { name: 'Save order' })).toBeDisabled();
@@ -64,7 +64,7 @@ describe('IntegrationPriorityList', () => {
   it('keeps the edit when the step-up is cancelled', async () => {
     apiFetch.mockResolvedValue({ ok: false, status: 403, stepUpCancelled: true, problem: null });
     renderList();
-    fireEvent.click(screen.getByRole('button', { name: 'Move NinjaOne up' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Move Microsoft 365 up' }));
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Save order' }));
     });

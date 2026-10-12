@@ -3,6 +3,7 @@ import {
   createIntegrationSchema,
   driverDescriptorSchema,
   driverOAuthDescriptorSchema,
+  oauthSecretExpiryWarning,
   driverResourceDescriptorSchema,
   fieldMappingDraftSchema,
   integrationProvenanceSchema,
@@ -776,6 +777,37 @@ describe('driver oauth descriptor', () => {
     ['unknown keys', { ...oauth, clientSecret: 'x' }],
   ])('rejects %s', (_label, value) => {
     expect(driverOAuthDescriptorSchema.safeParse(value).success).toBe(false);
+  });
+
+  it('requires a {tenant} token URL and a client-credentials scope for admin consent', () => {
+    const consent = {
+      provider: 'microsoft',
+      consentFlow: 'admin_consent',
+      authorizeUrl: 'https://login.microsoftonline.com/organizations/v2.0/adminconsent',
+      tokenUrl: 'https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token',
+      clientCredentialsScope: 'https://graph.microsoft.com/.default',
+      scopes: ['User.Read.All'],
+    };
+    expect(driverOAuthDescriptorSchema.safeParse(consent).success).toBe(true);
+    expect(driverOAuthDescriptorSchema.safeParse({ ...consent, clientCredentialsScope: undefined }).success).toBe(false);
+    expect(driverOAuthDescriptorSchema.safeParse({ ...consent, tokenUrl: 'https://login.microsoftonline.com/common/oauth2/v2.0/token' }).success).toBe(false);
+  });
+
+  it('validates the Microsoft app expiry date and tenant id', () => {
+    expect(updateIntegrationOAuthAppSchema.safeParse({ clientId: 'c', secretExpiresAt: '2027-02-30x' }).success).toBe(false);
+    expect(updateIntegrationOAuthAppSchema.safeParse({ clientId: 'c', tenantId: 'contoso.example' }).success).toBe(false);
+    expect(updateIntegrationOAuthAppSchema.safeParse({ clientId: 'c', secretExpiresAt: null, tenantId: null }).success).toBe(true);
+  });
+
+  it('warns about the client secret from 30 days before it expires', () => {
+    const now = Date.parse('2026-10-09T12:00:00Z');
+    expect(oauthSecretExpiryWarning(null, now)).toBeNull();
+    expect(oauthSecretExpiryWarning('2026-11-30', now)).toBeNull();
+    expect(oauthSecretExpiryWarning('2026-11-08', now)).toContain('expires on 2026-11-08 (in 30 days)');
+    expect(oauthSecretExpiryWarning('2026-10-10', now)).toContain('(in 1 day)');
+    expect(oauthSecretExpiryWarning('2026-10-09', now)).toContain('(today)');
+    expect(oauthSecretExpiryWarning('2026-11-09', now)).toBeNull();
+    expect(oauthSecretExpiryWarning('2026-10-01', now)).toContain('expired on 2026-10-01');
   });
 
   it('rejects an OAuth app update with a blank secret', () => {

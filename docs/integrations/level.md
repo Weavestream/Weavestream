@@ -111,7 +111,7 @@ Below the match picker, a table lists the standard facts (Hostname, Operating sy
 
 On sync, a device whose serial number equals **exactly one** unlinked asset you created yourself adopts that asset instead of creating a duplicate. Text matching ignores upper and lower case. If two or more assets match, the run reports it and links nothing.
 
-When none of your own assets match, a device also links to **exactly one** asset another integration already syncs with the same serial number (for example the laptop from NinjaOne). Level RMM is first in the default priority order, so its values fill that asset's standard fields; the other integration lists any value that differs under **Differences**. See [Several integrations on one asset](/integrations/#several-integrations-on-one-asset).
+When none of your own assets match, a device also links to **exactly one** asset another integration already syncs with the same serial number (for example the laptop from Microsoft Intune). Level RMM is first in the default priority order, so its values fill that asset's standard fields; the other integration lists any value that differs under **Differences**. See [Several integrations on one asset](/integrations/#several-integrations-on-one-asset).
 
 An adopted asset keeps the name you gave it. Assets that Level created follow the Level name.
 

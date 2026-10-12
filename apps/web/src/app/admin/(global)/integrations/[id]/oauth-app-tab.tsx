@@ -12,7 +12,7 @@ import { SectionHeader } from '../../settings/settings-form';
 /**
  * App tab of an OAuth integration: loads the integration's app, then shows
  * the card below. One integration exists per provider, so this is the
- * Google app of the install.
+ * Google or Microsoft app of the install.
  */
 export function OAuthAppTab({
   integrationId,
@@ -47,6 +47,8 @@ export function OAuthAppTab({
  * Shows the redirect URI and scopes to register with the provider, and
  * saves the client ID + secret through a step-up gated route. The secret
  * is write-only: once saved, only its last four characters are shown.
+ * Microsoft also takes the secret's expiry date (warned 30 days ahead) and,
+ * optionally, the operator's own directory (tenant) ID for Check setup.
  */
 export function IntegrationOAuthAppCard({
   integrationId,
@@ -61,11 +63,14 @@ export function IntegrationOAuthAppCard({
   const [app, setApp] = useState(initial);
   const [clientId, setClientId] = useState(initial?.clientId ?? '');
   const [clientSecret, setClientSecret] = useState('');
+  const [expiresAt, setExpiresAt] = useState(initial?.secretExpiresAt ?? '');
+  const [tenantId, setTenantId] = useState(initial?.tenantId ?? '');
   const [pending, setPending] = useState(false);
   const [check, setCheck] = useState<IntegrationSetupCheck | null>(null);
   const [checking, setChecking] = useState(false);
   const label = INTEGRATION_OAUTH_PROVIDER_LABELS[provider];
-  const title = `${label} OAuth app`;
+  const isMicrosoft = provider === 'microsoft';
+  const title = isMicrosoft ? 'Microsoft app' : `${label} OAuth app`;
 
   if (!app) {
     return (
@@ -78,9 +83,11 @@ export function IntegrationOAuthAppCard({
 
   // A stored secret may be kept: leaving the field blank changes only the client ID.
   const secret = clientSecret.trim();
+  const msChanged =
+    isMicrosoft && (expiresAt !== (app.secretExpiresAt ?? '') || tenantId.trim() !== (app.tenantId ?? ''));
   const canSave =
     clientId.trim().length > 0 &&
-    (secret.length > 0 || (app.configured && clientId.trim() !== (app.clientId ?? ''))) &&
+    (secret.length > 0 || (app.configured && (clientId.trim() !== (app.clientId ?? '') || msChanged))) &&
     !pending;
 
   async function save() {
@@ -93,6 +100,7 @@ export function IntegrationOAuthAppCard({
         body: JSON.stringify({
           clientId: clientId.trim(),
           ...(secret ? { clientSecret: secret } : {}),
+          ...(isMicrosoft ? { secretExpiresAt: expiresAt || null, tenantId: tenantId.trim() || null } : {}),
         }),
       });
     } catch {
@@ -110,6 +118,8 @@ export function IntegrationOAuthAppCard({
     setApp(res.data);
     setClientId(res.data.clientId ?? '');
     setClientSecret('');
+    setExpiresAt(res.data.secretExpiresAt ?? '');
+    setTenantId(res.data.tenantId ?? '');
     setCheck(null);
     toast.push(`${title} saved.`, 'ok');
   }
@@ -145,23 +155,40 @@ export function IntegrationOAuthAppCard({
       <div style={headerRowStyle}>
         <SectionHeader
           label={title}
-          help={`One ${label} Cloud OAuth client for this Weavestream install. Every client tenant on the Connections tab connects through it.`}
+          help={
+            isMicrosoft
+              ? 'One multi-tenant Entra app registration for this Weavestream install. Every client tenant on the Connections tab connects through it by admin consent.'
+              : `One ${label} Cloud OAuth client for this Weavestream install. Every client tenant on the Connections tab connects through it.`
+          }
         />
         <Tag tone={app.configured ? 'ok' : 'warn'}>{app.configured ? 'configured' : 'not configured'}</Tag>
       </div>
 
       {app.callbackHostWarning && <Tag tone="danger">{app.callbackHostWarning}</Tag>}
+      {app.secretExpiryWarning && (
+        <p role="alert" style={warningStyle}>
+          {app.secretExpiryWarning}
+        </p>
+      )}
 
       <CopyRow
-        label="Authorized redirect URI"
-        help={`Add this exact URL to the OAuth client in the ${label} Cloud console.`}
+        label={isMicrosoft ? 'Redirect URI (Web)' : 'Authorized redirect URI'}
+        help={
+          isMicrosoft
+            ? 'Add this exact URL as a Web redirect URI on the app registration.'
+            : `Add this exact URL to the OAuth client in the ${label} Cloud console.`
+        }
         value={app.redirectUri}
         onCopy={() => void copy(app.redirectUri, 'Redirect URI')}
       />
       {app.scopeGroups.length > 0 ? (
         <Field
-          label="Scopes"
-          help="Add each scope to the consent screen (Data Access > Manually add scopes)."
+          label={isMicrosoft ? 'Application permissions' : 'Scopes'}
+          help={
+            isMicrosoft
+              ? 'Add each under API permissions > Add a permission > Microsoft Graph > Application permissions.'
+              : 'Add each scope to the consent screen (Data Access > Manually add scopes).'
+          }
         >
           <ScopeList groups={app.scopeGroups} />
         </Field>
@@ -170,7 +197,7 @@ export function IntegrationOAuthAppCard({
       )}
 
       <div style={gridStyle}>
-        <Field label="Client ID" htmlFor={`oauth-client-id-${provider}`}>
+        <Field label={isMicrosoft ? 'Application (client) ID' : 'Client ID'} htmlFor={`oauth-client-id-${provider}`}>
           <Input
             id={`oauth-client-id-${provider}`}
             value={clientId}
@@ -181,7 +208,7 @@ export function IntegrationOAuthAppCard({
           />
         </Field>
         <Field
-          label="Client secret"
+          label={isMicrosoft ? 'Client secret value' : 'Client secret'}
           htmlFor={`oauth-client-secret-${provider}`}
           help={
             app.configured
@@ -199,11 +226,41 @@ export function IntegrationOAuthAppCard({
             placeholder={app.configured ? 'Saved (write-only)' : ''}
           />
         </Field>
+        {isMicrosoft && (
+          <>
+            <Field
+              label="Secret expires"
+              htmlFor="oauth-secret-expires-microsoft"
+              help="The Expires date Entra showed for this secret. Weavestream warns 30 days before it."
+            >
+              <Input
+                id="oauth-secret-expires-microsoft"
+                type="date"
+                value={expiresAt}
+                onChange={(e) => setExpiresAt(e.target.value)}
+              />
+            </Field>
+            <Field
+              label="Directory (tenant) ID (optional)"
+              htmlFor="oauth-tenant-id-microsoft"
+              help="Your own tenant, from the app's overview page. Check setup uses it to verify the secret."
+            >
+              <Input
+                id="oauth-tenant-id-microsoft"
+                value={tenantId}
+                onChange={(e) => setTenantId(e.target.value)}
+                maxLength={36}
+                autoComplete="off"
+                spellCheck={false}
+              />
+            </Field>
+          </>
+        )}
       </div>
 
       <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
         <Btn kind="primary" onClick={() => void save()} loading={pending} disabled={!canSave}>
-          Save OAuth app
+          {isMicrosoft ? 'Save Microsoft app' : 'Save OAuth app'}
         </Btn>
       </div>
 
@@ -275,5 +332,7 @@ const codeStyle: React.CSSProperties = {
   color: 'var(--text)',
   overflowWrap: 'anywhere',
 };
+
+const warningStyle: React.CSSProperties = { margin: 0, fontSize: 12.5, color: 'var(--danger)', fontWeight: 600 };
 
 const mutedStyle: React.CSSProperties = { margin: 0, fontSize: 12, color: 'var(--muted)' };

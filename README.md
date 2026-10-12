@@ -70,7 +70,7 @@ The result is documentation that behaves like a connected system instead of a co
   and record lifecycle events with flexible scheduling.
 - **Security Center.** Admin dashboard for login activity, active sessions,
   lockouts, rate-limit blocks, and egress attempt monitoring.
-- **Integrations.** Sync inventory from external platforms (Action1, NinjaOne, UniFi, Breeze, Google Workspace, Level)
+- **Integrations.** Sync inventory from external platforms (Action1, NinjaOne, UniFi, Breeze, Google Workspace, Microsoft 365, Level)
   into tenant asset records on demand or on a schedule.
 - **Invite-only user management** with per-user setup tokens, forced
   TOTP MFA, IP-based access rules, and append-only audit logging.

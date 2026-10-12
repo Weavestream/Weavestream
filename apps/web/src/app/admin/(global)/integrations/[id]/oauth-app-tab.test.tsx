@@ -30,6 +30,9 @@ function app(over: Partial<IntegrationOAuthApp> = {}): IntegrationOAuthApp {
       { label: 'Only if you use Example Tool', scopes: ['scope.extra'] },
     ],
     updatedAt: null,
+    secretExpiresAt: null,
+    secretExpiryWarning: null,
+    tenantId: null,
     ...over,
   };
 }
@@ -41,6 +44,72 @@ function renderCard(initial: IntegrationOAuthApp | null, provider: IntegrationOA
     </ToastProvider>,
   );
 }
+
+const msApp = (over: Partial<IntegrationOAuthApp> = {}) =>
+  app({
+    provider: 'microsoft',
+    scopes: ['User.Read.All', 'AuditLog.Read.All', 'ReportSettings.ReadWrite.All'],
+    scopeGroups: [
+      { label: 'Directory, licences and domains', scopes: ['User.Read.All'] },
+      { label: 'Sign-ins, MFA and usage reports', scopes: ['AuditLog.Read.All'] },
+      { label: 'Report names setting (changed only if an admin chooses to)', scopes: ['ReportSettings.ReadWrite.All'] },
+    ],
+    ...over,
+  });
+
+describe('IntegrationOAuthAppCard (Microsoft app)', () => {
+  it('titles the card, groups the application permissions and gives each its own copy button', async () => {
+    renderCard(msApp(), 'microsoft');
+    expect(screen.getByText('Microsoft app')).toBeInTheDocument();
+    expect(screen.getByText('Application permissions')).toBeInTheDocument();
+    expect(screen.getByText('Report names setting (changed only if an admin chooses to)')).toBeInTheDocument();
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Copy scope AuditLog.Read.All' }));
+    });
+    expect(copyToClipboard).toHaveBeenLastCalledWith('AuditLog.Read.All');
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Copy redirect uri (web)' }));
+    });
+    expect(copyToClipboard).toHaveBeenLastCalledWith(REDIRECT);
+  });
+
+  it('saves the client, write-only secret, expiry date and directory tenant id', async () => {
+    apiFetch.mockResolvedValue({ ok: true, status: 200, data: msApp({ configured: true, clientId: 'client-1', secretMask: '••••f456', secretExpiresAt: '2027-04-01' }) });
+    renderCard(msApp(), 'microsoft');
+    fireEvent.change(screen.getByLabelText('Application (client) ID'), { target: { value: 'client-1' } });
+    fireEvent.change(screen.getByLabelText('Client secret value'), { target: { value: 'typed-secret' } });
+    fireEvent.change(screen.getByLabelText('Secret expires'), { target: { value: '2027-04-01' } });
+    fireEvent.change(screen.getByLabelText('Directory (tenant) ID (optional)'), { target: { value: '11111111-2222-4333-8444-555555555555' } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Save Microsoft app' }));
+    });
+    expect(apiFetch).toHaveBeenCalledWith(`/admin/integrations/${ID}/oauth-app`, {
+      method: 'PUT',
+      body: JSON.stringify({
+        clientId: 'client-1',
+        clientSecret: 'typed-secret',
+        secretExpiresAt: '2027-04-01',
+        tenantId: '11111111-2222-4333-8444-555555555555',
+      }),
+    });
+    expect(screen.getByLabelText('Client secret value')).toHaveValue('');
+  });
+
+  it('lets a configured app save only a new expiry date', async () => {
+    const configured = msApp({ configured: true, clientId: 'client-1', secretMask: '••••f456', secretExpiresAt: '2026-10-20' });
+    apiFetch.mockResolvedValue({ ok: true, status: 200, data: configured });
+    renderCard(configured, 'microsoft');
+    const save = screen.getByRole('button', { name: 'Save Microsoft app' });
+    expect(save).toBeDisabled();
+    fireEvent.change(screen.getByLabelText('Secret expires'), { target: { value: '2028-10-20' } });
+    expect(save).toBeEnabled();
+  });
+
+  it('shows the secret expiry warning', () => {
+    renderCard(msApp({ secretExpiryWarning: 'The client secret expires on 2026-10-20 (in 11 days).' }), 'microsoft');
+    expect(screen.getByRole('alert')).toHaveTextContent('expires on 2026-10-20');
+  });
+});
 
 beforeEach(() => {
   apiFetch.mockReset();

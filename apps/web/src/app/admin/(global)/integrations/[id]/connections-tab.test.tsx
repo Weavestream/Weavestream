@@ -39,6 +39,7 @@ function conn(over: Partial<IntegrationConnection> = {}): IntegrationConnection 
     status: 'ok',
     lastErrorAt: null,
     lastSyncAt: null,
+    reportNames: null,
     ...over,
   };
 }
@@ -51,6 +52,8 @@ function list(over: Record<string, unknown> = {}) {
       provider: 'google',
       appConfigured: true,
       redirectUri: 'https://ws.example.test/cb',
+      appSecretExpiryWarning: null,
+      appSecretExpired: false,
       connections: [],
       ...over,
     },
@@ -106,6 +109,13 @@ describe('ConnectionsTab', () => {
       method: 'POST',
       body: JSON.stringify({ connectionId: CONN_A }),
     });
+  });
+
+  it('shows app secret expired as the status of every connection', async () => {
+    apiFetch.mockResolvedValueOnce(list({ connections: [conn()], appSecretExpired: true, appSecretExpiryWarning: 'The client secret expired on 2026-10-01.' }));
+    await renderIt();
+    expect(screen.getByText('app secret expired')).toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent('expired on 2026-10-01');
   });
 
   it('disables connecting and links to the App tab when the app is missing', async () => {
@@ -237,5 +247,39 @@ describe('ConnectionsTab', () => {
     apiFetch.mockResolvedValueOnce(list());
     await renderIt();
     expect(replace).not.toHaveBeenCalled();
+  });
+});
+
+describe('ConnectionsTab (Microsoft admin consent)', () => {
+  const msOauth: DriverOAuthDescriptor = {
+    provider: 'microsoft',
+    consentFlow: 'admin_consent',
+    authorizeUrl: 'https://login.microsoftonline.com/organizations/v2.0/adminconsent',
+    tokenUrl: 'https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token',
+    clientCredentialsScope: 'https://graph.microsoft.com/.default',
+    scopes: ['User.Read.All'],
+  };
+  const reportNames = { ok: true, status: 200, data: { concealed: true, choice: null, readError: null, canChange: true } };
+
+  it('says who must approve, shows granted permissions, and asks the report-names choice per connection', async () => {
+    apiFetch.mockImplementation(async (url: string) =>
+      url.endsWith('/microsoft/report-names')
+        ? reportNames
+        : list({ provider: 'microsoft', connections: [conn({ externalOrgId: '11111111-2222-4333-8444-555555555555', displayName: 'Example Tenant', connectedAs: null, grantedScopes: ['User.Read.All'] })] }),
+    );
+    await renderIt({ oauth: msOauth });
+    expect(screen.getByText(/Global Administrator or Privileged Role Administrator/)).toBeInTheDocument();
+    expect(screen.getByText('1 granted')).toBeInTheDocument();
+    fireEvent.click(screen.getByText('Example Tenant'));
+    await waitFor(() => expect(screen.getByLabelText('Usage report names')).toBeInTheDocument());
+    expect(apiFetch).toHaveBeenCalledWith(`/admin/integrations/int-1/connections/${CONN_A}/microsoft/report-names`);
+  });
+
+  it('turns a failure reason into fixed text and strips it from the URL', async () => {
+    search = new URLSearchParams('oauth=failed&reason=admin_required');
+    apiFetch.mockResolvedValueOnce(list({ provider: 'microsoft' }));
+    await renderIt({ oauth: msOauth });
+    expect(screen.getByText(/must approve\. Sign in/)).toBeInTheDocument();
+    expect(replace).toHaveBeenCalledWith('/admin/integrations/int-1');
   });
 });

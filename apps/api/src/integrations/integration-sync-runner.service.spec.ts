@@ -756,7 +756,7 @@ describe('IntegrationSyncRunnerService writer dispatch', () => {
   it('skips a resource the source cannot provide with a warning and leaves its bindings alone', async () => {
     const { service, writer, driver, provenance, tx, prisma } = setup();
     driver.fetchRecords.mockRejectedValueOnce(
-      new DriverResourceUnavailableError('The connected Google account cannot read Chrome devices (needs the device management admin privilege), so Chrome devices are skipped.'),
+      new DriverResourceUnavailableError('Intune is not licensed in this tenant, so computers and mobile devices are skipped.'),
     );
     await expect(service.runMapping({
       syncRunId: 'run', integrationCompanyMappingId: 'mapping', resourceId: 'resource',
@@ -764,7 +764,7 @@ describe('IntegrationSyncRunnerService writer dispatch', () => {
     })).resolves.toMatchObject({
       status: 'succeeded',
       error: null,
-      conflicts: [{ kind: 'validation_error', message: 'Skipped resource "subnets": The connected Google account cannot read Chrome devices (needs the device management admin privilege), so Chrome devices are skipped.' }],
+      conflicts: [{ kind: 'validation_error', message: 'Skipped resource "subnets": Intune is not licensed in this tenant, so computers and mobile devices are skipped.' }],
     });
     expect(writer.write).not.toHaveBeenCalled();
     expect(prisma.$transaction).not.toHaveBeenCalled();

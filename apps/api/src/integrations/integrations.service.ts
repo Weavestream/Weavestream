@@ -10,6 +10,7 @@ import type {
   CreateIntegrationInput,
   CreateIntegrationResourceInput,
   DriverDescriptor,
+  DriverOAuthDescriptor,
   DriverResourceDescriptor,
   IntegrationDto,
   IntegrationFieldMappingDto,
@@ -51,7 +52,7 @@ import { integrationAssetExternalSource } from './integration-asset-source.js';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { scanSensitiveMaterial } from './sensitive-material.js';
 import { IntegrationOAuthAppService } from './oauth/integration-oauth-app.service.js';
-import type { OAuthClientCredentials } from './oauth/oauth-token.js';
+import { isAdminConsent, type OAuthClientCredentials } from './oauth/oauth-token.js';
 import {
   getTenantContext,
   runWithTenantContext,
@@ -585,7 +586,7 @@ export class IntegrationsService {
    * Returns the decoded credential bundle for a given Integration, plus
    * the active config. Throws 400 if no secret is configured.
    *
-   * OAuth drivers (Google Workspace) have one connection per
+   * OAuth drivers (Google Workspace, Microsoft 365) have one connection per
    * client tenant: `scope` picks it by the mapping's `externalOrgId` (the
    * only lookup the sync paths use, so a mapping can only ever receive the
    * grant of its own tenant) or by connection id (Connections tab).
@@ -605,7 +606,7 @@ export class IntegrationsService {
     oauthClient?: OAuthClientCredentials;
     /** OAuth drivers: the connection whose grant is in `secret`. */
     connectionId?: string;
-    /** OAuth drivers: the connection's tenant (Google customer id). */
+    /** OAuth drivers: the connection's tenant (Google customer id / Microsoft tenant id). */
     externalOrgId?: string;
     /** Non-secret marker of the secret row and OAuth app; see `IntegrationContext.credentialVersion`. */
     credentialVersion: string;
@@ -616,7 +617,7 @@ export class IntegrationsService {
     });
     if (!row) throw new NotFoundException(`Integration ${id} not found`);
     const oauth = this.drivers.has(row.driver) ? this.drivers.describe(row.driver).oauth : undefined;
-    if (oauth) return this.loadConnectionContext(row, scope);
+    if (oauth) return this.loadConnectionContext(row, oauth, scope);
     if (!row.secret) {
       throw new BadRequestException('Integration has no credential bundle configured.');
     }
@@ -659,6 +660,7 @@ export class IntegrationsService {
 
   private async loadConnectionContext(
     row: { id: string; driver: string; config: unknown },
+    oauth: DriverOAuthDescriptor,
     scope: ConnectionScope,
   ) {
     let connection: IntegrationConnection | null;
@@ -675,7 +677,14 @@ export class IntegrationsService {
         where: {
           integrationId: row.id,
           ...(scope.connectionId ? { id: scope.connectionId } : {}),
-          ...(scope.externalOrgId ? { externalOrgId: scope.externalOrgId } : {}),
+          ...(scope.externalOrgId
+            ? {
+                // Microsoft tenant ids are GUIDs (any case); Google customer ids are exact.
+                externalOrgId: isAdminConsent(oauth)
+                  ? { equals: scope.externalOrgId, mode: 'insensitive' as const }
+                  : scope.externalOrgId,
+              }
+            : {}),
         },
       });
     }

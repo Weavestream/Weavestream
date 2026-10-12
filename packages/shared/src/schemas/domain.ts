@@ -403,9 +403,9 @@ export const monitoredDomainSchema = z.object({
   dkimSelectorOverride: z.string().nullable(),
   /**
    * MANUAL = typed in; CLOUDFLARE = owned by the registrar sync;
-   * GOOGLE_WORKSPACE = created by the Google Workspace domain sync.
+   * GOOGLE_WORKSPACE / MICROSOFT_365 = created by that domain sync.
    */
-  source: z.enum(['MANUAL', 'CLOUDFLARE', 'GOOGLE_WORKSPACE']),
+  source: z.enum(['MANUAL', 'CLOUDFLARE', 'GOOGLE_WORKSPACE', 'MICROSOFT_365']),
   registrar: z.string().nullable(),
   registrarAutoRenew: z.boolean().nullable(),
   registrarLocked: z.boolean().nullable(),
@@ -424,6 +424,17 @@ export const monitoredDomainSchema = z.object({
   workspaceMissingSince: z.string().nullable(),
   /** Detail view only; never sent to client users. */
   workspaceIntegrationName: z.string().nullable().optional(),
+  /** Microsoft 365 facts; null `microsoftDefault` = not (or no longer) in the tenant. */
+  microsoftIntegrationId: z.string().uuid().nullable(),
+  /** True for the tenant's default domain. */
+  microsoftDefault: z.boolean().nullable(),
+  microsoftAuthType: z.enum(['MANAGED', 'FEDERATED']).nullable(),
+  /** Microsoft's supportedServices (Email, OfficeCommunicationsOnline, ...). */
+  microsoftServices: z.array(z.string()),
+  microsoftSyncedAt: z.string().nullable(),
+  microsoftMissingSince: z.string().nullable(),
+  /** Detail view only; never sent to client users. */
+  microsoftIntegrationName: z.string().nullable().optional(),
   archivedAt: z.string().nullable(),
   createdBy: z.string().uuid().nullable(),
   createdAt: z.string(),

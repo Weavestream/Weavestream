@@ -1208,6 +1208,16 @@ describe('IntegrationsService OAuth drivers', () => {
     await expect(setup(null).service.loadDriverContext(id, { externalOrgId: 'c-A' })).rejects.toThrow(/not connected/);
   });
 
+  it('finds a Microsoft tenant connection whatever the mapping spelling (migrated upper case, reconnected lower case)', async () => {
+    const TENANT = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
+    // Reconnect after Disconnect stores the tenant in lower case; the migrated mapping kept upper case.
+    const { service } = setup(null, {
+      descriptor: { ...oauthDescriptor, oauth: { provider: 'microsoft', scopes: ['s'], consentFlow: 'admin_consent' } } as unknown as DriverDescriptor,
+      connections: [{ id: CONN_A, externalOrgId: TENANT, secretCiphertext: crypto.encrypt(grant('a'), `integration:${id}:connection:${CONN_A}:secret`), updatedAt: new Date(0) }],
+    });
+    await expect(service.loadDriverContext(id, { externalOrgId: TENANT.toUpperCase() })).resolves.toMatchObject({ connectionId: CONN_A, externalOrgId: TENANT });
+  });
+
   it('loads by connection id within the integration only', async () => {
     const { service, prisma } = setup(null);
     await expect(service.loadDriverContext(id, { connectionId: CONN_B })).resolves.toMatchObject({ externalOrgId: 'C-b' });

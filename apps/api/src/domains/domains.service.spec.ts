@@ -119,6 +119,12 @@ function makeStubs(initial: { domains?: DomainRow[]; checks?: DomainCheckRow[] }
           workspaceAliasOf: null,
           workspaceSyncedAt: null,
           workspaceMissingSince: null,
+          microsoftIntegrationId: null,
+          microsoftDefault: null,
+          microsoftAuthType: null,
+          microsoftServices: [],
+          microsoftSyncedAt: null,
+          microsoftMissingSince: null,
           archivedAt: null,
           createdBy: d.createdBy ?? null,
           createdAt: new Date(),
@@ -360,5 +366,14 @@ describe('DomainsService — update', () => {
     await expect(
       svc.update(OPERATOR, 'co-1', created.id, { hostname: 'renamed.com' }, META),
     ).rejects.toThrow('synced from Google Workspace');
+  });
+
+  it('refuses to rename a manual domain that Microsoft 365 also lists', async () => {
+    const { svc, domains } = makeStubs();
+    const created = await svc.create(OPERATOR, 'co-1', { hostname: 'example.com' }, META);
+    domains[0]!.microsoftDefault = false;
+    await expect(
+      svc.update(OPERATOR, 'co-1', created.id, { hostname: 'renamed.com' }, META),
+    ).rejects.toThrow('synced from Microsoft 365');
   });
 });

@@ -84,20 +84,20 @@ describe('IntegrationSections differences', () => {
       integrationName: 'Example Google', section: { ...entry.section, title: 'Google Workspace' },
       syncRecordId: '00000000-0000-4000-8000-0000000000e2', differences: [],
     };
-    const level: AssetIntegrationSection = {
-      ...entry, integrationId: '00000000-0000-4000-8000-000000000003', driver: 'level',
-      integrationName: 'Example Level', section: { ...entry.section, title: 'Level RMM' },
+    const microsoft: AssetIntegrationSection = {
+      ...entry, integrationId: '00000000-0000-4000-8000-000000000003', driver: 'microsoft-365',
+      integrationName: 'Example Microsoft', section: { ...entry.section, title: 'Microsoft 365' },
       syncRecordId: '00000000-0000-4000-8000-0000000000e3',
       differences: [{ ...entry.differences![0]!, syncRecordId: '00000000-0000-4000-8000-0000000000e3', fieldLabel: 'Title', localValue: 'Engineer', sourceValue: 'Senior Engineer' }],
     };
-    const { container } = render(<ToastProvider><IntegrationSections sections={[google, level]} companyId={COMPANY} assetId={ASSET} canResolve /></ToastProvider>);
+    const { container } = render(<ToastProvider><IntegrationSections sections={[google, microsoft]} companyId={COMPANY} assetId={ASSET} canResolve /></ToastProvider>);
     const titles = [...container.querySelectorAll('details > summary')].map((s) => s.textContent);
     expect(titles).toHaveLength(2);
     expect(titles[0]).toContain('Google Workspace');
-    expect(titles[1]).toContain('Level RMM');
+    expect(titles[1]).toContain('Microsoft 365');
     // Only the lower-priority source that differs carries a Differences group.
     expect(screen.getAllByRole('group', { name: 'Differences' })).toHaveLength(1);
-    expect(screen.getByRole('button', { name: 'Use Level RMM value' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Use Microsoft 365 value' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Use Google Workspace value' })).not.toBeInTheDocument();
   });
 

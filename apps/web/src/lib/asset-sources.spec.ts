@@ -9,8 +9,8 @@ describe('assetSourcesLabel', () => {
   it('names every integration bound to a co-bound asset, not only the owner', () => {
     expect(assetSourcesLabel({
       externalSource: 'google-workspace',
-      syncSources: [source('Example Google', 'google-workspace'), source('Example Level', 'level')],
-    })).toBe('Example Google + Example Level');
+      syncSources: [source('Example Google', 'google-workspace'), source('Example Microsoft', 'microsoft-365')],
+    })).toBe('Example Google + Example Microsoft');
   });
 
   it('falls back to the external source, and to null for a manual asset', () => {

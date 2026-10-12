@@ -45,7 +45,7 @@ const TABS: Array<{ id: TabId; label: string; help: string }> = [
   {
     id: 'integrations',
     label: 'Integrations',
-    help: 'Which integration wins when several fill one asset. The Google app is set up on its integration.',
+    help: 'Which integration wins when several fill one asset. Google and Microsoft apps are set up on their integration.',
   },
 ];
 

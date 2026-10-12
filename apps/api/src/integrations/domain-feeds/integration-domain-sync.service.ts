@@ -10,6 +10,7 @@ import { QueuesService } from '../../queues/queues.service.js';
 import { IntegrationsService } from '../integrations.service.js';
 import { lockDomainHostname } from '../cloudflare/cloudflare-registrar-sync.service.js';
 import { listWorkspaceDomains } from '../drivers/google-workspace/google-workspace.driver.js';
+import { listMicrosoftDomains } from '../drivers/microsoft-365/microsoft-365.driver.js';
 import { DriverAuthError, DriverRateLimitError, type IntegrationContext } from '../drivers/integration-driver.js';
 
 export interface DomainSyncResult {
@@ -28,10 +29,10 @@ const WORKER_META = { ip: '0.0.0.0', userAgent: 'weavestream-worker/integration-
  */
 interface DomainFeed {
   label: string;
-  source: 'GOOGLE_WORKSPACE';
+  source: 'GOOGLE_WORKSPACE' | 'MICROSOFT_365';
   auditAction: string;
-  link: 'workspaceIntegrationId';
-  missing: 'workspaceMissingSince';
+  link: 'workspaceIntegrationId' | 'microsoftIntegrationId';
+  missing: 'workspaceMissingSince' | 'microsoftMissingSince';
   list(ctx: IntegrationContext, externalOrgId: string): Promise<Array<{ hostname: string } & Record<string, unknown>>>;
   /** Columns written on a row the domain is (still) in the provider. */
   present(integrationId: string, domain: never, now: Date): Prisma.MonitoredDomainUncheckedUpdateInput;
@@ -56,6 +57,23 @@ const FEEDS: Readonly<Record<string, DomainFeed>> = {
     }),
     gone: { workspaceRole: null, workspaceAliasOf: null },
   },
+  'microsoft-365': {
+    label: 'Microsoft 365',
+    source: 'MICROSOFT_365',
+    auditAction: AUDIT_ACTIONS.integration.microsoft365DomainSync,
+    link: 'microsoftIntegrationId',
+    missing: 'microsoftMissingSince',
+    list: (ctx, org) => listMicrosoftDomains(ctx, org) as never,
+    present: (integrationId, d: { isDefault: boolean; authType: 'MANAGED' | 'FEDERATED'; services: string[] }, now) => ({
+      microsoftIntegrationId: integrationId,
+      microsoftDefault: d.isDefault,
+      microsoftAuthType: d.authType,
+      microsoftServices: d.services,
+      microsoftSyncedAt: now,
+      microsoftMissingSince: null,
+    }),
+    gone: { microsoftDefault: null, microsoftAuthType: null, microsoftServices: [] },
+  },
 };
 
 /** Drivers whose domains feed Domains monitoring. */
@@ -64,7 +82,7 @@ export function hasDomainFeed(driver: string): boolean {
 }
 
 /**
- * Provider domains (Google Workspace) → Domains monitoring
+ * Provider domains (Google Workspace, Microsoft 365) → Domains monitoring
  * (MonitoredDomain).
  *
  * Runs once per mapping sync, scoped to the mapping's company only. A

@@ -1215,7 +1215,7 @@ describe('AssetsService integration system writes', () => {
       it('binds this record to the single matching asset without taking its identity or name', async () => {
         const { service, tx } = setup({ match: [owned()] });
         await expect(service.writeFromIntegration({
-          ...input, ...coBind, tx: tx as never, externalSource: 'level', externalId: 'l-user-1', name: 'Other name',
+          ...input, ...coBind, tx: tx as never, externalSource: 'microsoft-365', externalId: 'm-user-1', name: 'Other name',
           matchKeyFieldIds: [ids.field],
           fieldValues: [{ targetFieldId: ids.field, value: 'edge-02', syncDirection: 'source_wins' }],
         })).resolves.toMatchObject({ targetId: ids.manual, adopted: true, change: 'updated' });
@@ -1230,7 +1230,7 @@ describe('AssetsService integration system writes', () => {
       it('serializes the co-bind check per integration and asset inside the page transaction', async () => {
         const { service, tx } = setup({ match: [owned()] });
         await expect(service.writeFromIntegration({
-          ...input, ...coBind, tx: tx as never, externalSource: 'level', externalId: 'l-user-1', matchKeyFieldIds: [ids.field],
+          ...input, ...coBind, tx: tx as never, externalSource: 'microsoft-365', externalId: 'm-user-1', matchKeyFieldIds: [ids.field],
         })).resolves.toMatchObject({ targetId: ids.manual, adopted: true });
         const isLock = (call: unknown[]) => Array.isArray(call[0]) && String(call[0][0]).includes('pg_advisory_xact_lock');
         // The lock returns void, which only $executeRaw accepts through Prisma.
@@ -1244,7 +1244,7 @@ describe('AssetsService integration system writes', () => {
       it('refuses to co-bind without a caller transaction to serialize the check', async () => {
         const { service, tx } = setup({ match: [owned()] });
         await expect(service.writeFromIntegration({
-          ...input, ...coBind, externalSource: 'level', externalId: 'l-user-1', matchKeyFieldIds: [ids.field],
+          ...input, ...coBind, externalSource: 'microsoft-365', externalId: 'm-user-1', matchKeyFieldIds: [ids.field],
         })).resolves.toMatchObject({ targetId: ids.asset, change: 'created' });
         expect(tx.asset.updateMany).not.toHaveBeenCalled();
         const locked = [...tx.$queryRaw.mock.calls, ...tx.$executeRaw.mock.calls]
@@ -1256,7 +1256,7 @@ describe('AssetsService integration system writes', () => {
         const rmm = owned({ externalSource: 'level', externalId: 'lvl-1' });
         const { service, tx } = setup({ match: [rmm] });
         await expect(service.writeFromIntegration({
-          ...input, ...coBind, tx: tx as never, externalSource: 'google-workspace', externalId: 'g-device-1', matchKeyFieldIds: [ids.field],
+          ...input, ...coBind, tx: tx as never, externalSource: 'microsoft-365', externalId: 'intune-1', matchKeyFieldIds: [ids.field],
         })).resolves.toMatchObject({ targetId: ids.manual, adopted: true });
         expect(tx.asset.create).not.toHaveBeenCalled();
       });
@@ -1265,7 +1265,7 @@ describe('AssetsService integration system writes', () => {
         const { service, tx } = setup({ match: [owned()] });
         tx.integrationSyncRecord.findFirst.mockResolvedValue({ id: 'own-binding' });
         await expect(service.writeFromIntegration({
-          ...input, ...coBind, tx: tx as never, externalSource: 'level', externalId: 'l-user-2', matchKeyFieldIds: [ids.field],
+          ...input, ...coBind, tx: tx as never, externalSource: 'microsoft-365', externalId: 'm-user-2', matchKeyFieldIds: [ids.field],
         })).resolves.toMatchObject({ targetId: ids.asset, change: 'created' });
         expect(tx.asset.updateMany).not.toHaveBeenCalled();
         expect(tx.integrationSyncRecord.findFirst).toHaveBeenCalledWith(expect.objectContaining({
@@ -1277,7 +1277,7 @@ describe('AssetsService integration system writes', () => {
         const legacy = owned({ externalSource: 'action1', externalId: 'a1-1' });
         const { service, tx } = setup({ match: [legacy] });
         await expect(service.writeFromIntegration({
-          ...input, ...coBind, externalSource: 'level', externalId: 'l-user-1', matchKeyFieldIds: [ids.field],
+          ...input, ...coBind, externalSource: 'microsoft-365', externalId: 'm-user-1', matchKeyFieldIds: [ids.field],
         })).resolves.toMatchObject({ change: 'created' });
         expect(tx.asset.updateMany).not.toHaveBeenCalled();
       });
@@ -1286,7 +1286,7 @@ describe('AssetsService integration system writes', () => {
         const second = owned({ id: '00000000-0000-0000-0000-000000000099', externalId: 'g-user-2' });
         const { service, tx } = setup({ match: [owned(), second] });
         await expect(service.writeFromIntegration({
-          ...input, ...coBind, externalSource: 'level', externalId: 'l-user-1', matchKeyFieldIds: [ids.field],
+          ...input, ...coBind, externalSource: 'microsoft-365', externalId: 'm-user-1', matchKeyFieldIds: [ids.field],
         })).resolves.toMatchObject({ change: 'blocked', gap: { kind: 'ambiguous', details: { reasonCode: 'ambiguous_match' } } });
         expect(tx.asset.create).not.toHaveBeenCalled();
       });
@@ -1304,7 +1304,7 @@ describe('AssetsService integration system writes', () => {
           client.asset.findUnique.mockResolvedValue(google);
         }
         await expect(service.writeFromIntegration({
-          ...input, ...coBind, tx: tx as never, externalSource: 'level', externalId: 'l-user-1', name: 'alice@example.com',
+          ...input, ...coBind, tx: tx as never, externalSource: 'microsoft-365', externalId: 'm-user-1', name: 'alice@example.com',
           matchKeyFieldIds: [ids.field],
           fieldValues: [{ targetFieldId: ids.field, value: 'alice@example.com', syncDirection: 'preserve_manual' }],
         })).resolves.toMatchObject({ targetId: ids.manual, adopted: true });
@@ -1594,10 +1594,10 @@ describe('AssetsService standard-field write policy (recordFieldDiffs)', () => {
     });
     const shared = (value: string, order: string[], previous: Record<string, string> = {}) => ({
       ...standard(value, previous),
-      priority: { driver: 'ninjaone', order },
+      priority: { driver: 'microsoft-365', order },
     });
-    const LOWER = ['google-workspace', 'ninjaone'];
-    const OWNER = ['ninjaone', 'google-workspace'];
+    const LOWER = ['google-workspace', 'microsoft-365'];
+    const OWNER = ['microsoft-365', 'google-workspace'];
 
     it('a lower-priority source records a difference instead of overwriting the owner', async () => {
       const { service, prisma, tx } = setup({ target: withValue('Engineer'), binding: binding() });
@@ -1646,7 +1646,7 @@ describe('AssetsService standard-field write policy (recordFieldDiffs)', () => {
       // 60 lower-priority bindings, then the owner last: a 50-row cap would omit it.
       const many = Array.from({ length: 60 }, () => other('level', 'Engineer'));
       prisma.integrationSyncRecord.findMany.mockResolvedValue([...many, other('google-workspace', 'Engineer')]);
-      await expect(service.writeFromIntegration(shared('Senior Engineer', ['google-workspace', 'ninjaone', 'level'])))
+      await expect(service.writeFromIntegration(shared('Senior Engineer', ['google-workspace', 'microsoft-365', 'level'])))
         .resolves.toMatchObject({ fieldDiffs: { [ids.field]: { sourceValue: 'Senior Engineer' } } });
       expect(tx.assetFieldValue.upsert).not.toHaveBeenCalled();
       expect(prisma.integrationSyncRecord.findMany.mock.calls[0][0]).not.toHaveProperty('take');
