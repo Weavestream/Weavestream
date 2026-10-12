@@ -165,6 +165,16 @@ describe('AuthGuard bearer handling', () => {
     expect(apiKeys.verify).not.toHaveBeenCalled();
   });
 
+  it('refuses a live key whose owner is deactivated, without falling back to cookies', async () => {
+    const { guard } = makeGuard(ROTATED, { key: LIVE_KEY });
+    const { ctx, req } = makeCtx();
+    req.headers.authorization = 'Bearer ws_0123456789abcdef01_secret';
+    const prisma = (guard as unknown as { prisma: { user: { findUnique: jest.Mock } } }).prisma;
+    prisma.user.findUnique.mockResolvedValueOnce({ id: 'u-1', isActive: false });
+
+    await expect(guard.canActivate(ctx)).rejects.toBeInstanceOf(UnauthorizedException);
+  });
+
   it('carries the key\'s write permission onto the principal', async () => {
     const { guard } = makeGuard(ROTATED, { key: LIVE_KEY });
     const { ctx, req } = makeCtx();

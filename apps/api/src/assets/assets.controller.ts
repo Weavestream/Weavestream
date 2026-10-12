@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Delete,
+  ForbiddenException,
   Get,
   HttpCode,
   HttpStatus,
@@ -15,10 +16,14 @@ import {
 import type { Request } from 'express';
 import {
   bulkAssetIdsSchema,
+  bulkCloneAssetsSchema,
+  cloneAssetSchema,
   createAssetSchema,
   fieldSlugSchema,
   updateAssetSchema,
   type BulkAssetIdsInput,
+  type BulkCloneAssetsInput,
+  type CloneAssetInput,
   type CreateAssetInput,
   type UpdateAssetInput,
 } from '@weavestream/shared';
@@ -28,6 +33,7 @@ import { RequirePermission } from '../rbac/require-permission.decorator.js';
 import { RequireStepUp } from '../auth/step-up/require-step-up.decorator.js';
 import { ZodBody } from '../common/zod-validation.pipe.js';
 import { requestMetaOf as meta } from '../common/request-meta.js';
+import { PermissionService } from '../rbac/permission.service.js';
 
 /**
  * Company-scoped asset endpoints. Path carries `:companyId` so the
@@ -45,7 +51,37 @@ import { requestMetaOf as meta } from '../common/request-meta.js';
  */
 @Controller({ path: 'companies/:companyId/assets', version: '1' })
 export class AssetsController {
-  constructor(private readonly assets: AssetsService) {}
+  constructor(
+    private readonly assets: AssetsService,
+    private readonly permissions: PermissionService,
+  ) {}
+
+  /**
+   * The route decorator covers the *source* company (from the URL). The
+   * target arrives in the body, so it is authorised here, explicitly, on
+   * every call (CLAUDE.md §1): `asset.write` on the target, plus
+   * `asset.archive` on the source when the copy is a move.
+   */
+  private async assertCanClone(
+    actor: AuthedUser,
+    sourceCompanyId: string,
+    dto: CloneAssetInput,
+  ): Promise<void> {
+    const write = await this.permissions.can(actor, 'asset.write', {
+      companyId: dto.targetCompanyId,
+    });
+    if (!write.allowed) {
+      throw new ForbiddenException('You cannot create assets in the target company.');
+    }
+    if (dto.archiveOriginal) {
+      const archive = await this.permissions.can(actor, 'asset.archive', {
+        companyId: sourceCompanyId,
+      });
+      if (!archive.allowed) {
+        throw new ForbiddenException('You cannot archive assets in this company.');
+      }
+    }
+  }
 
   @Get()
   @RequirePermission('asset.read', { companyIdFrom: 'params.companyId' })
@@ -113,6 +149,27 @@ export class AssetsController {
     return this.assets.archiveMany(actor, companyId, dto.ids, meta(req));
   }
 
+  /** Copy (or, with `archiveOriginal`, move) several assets into a company. */
+  @Post('bulk/clone')
+  @HttpCode(HttpStatus.OK)
+  @RequirePermission('asset.read', { companyIdFrom: 'params.companyId' })
+  async bulkClone(
+    @CurrentUser() actor: AuthedUser,
+    @Param('companyId', new ParseUUIDPipe()) companyId: string,
+    @Body(new ZodBody(bulkCloneAssetsSchema)) dto: BulkCloneAssetsInput,
+    @Req() req: Request,
+  ) {
+    await this.assertCanClone(actor, companyId, dto);
+    return this.assets.cloneMany(
+      actor,
+      companyId,
+      dto.ids,
+      dto.targetCompanyId,
+      { archiveOriginal: dto.archiveOriginal },
+      meta(req),
+    );
+  }
+
   @Post('bulk/restore')
   @HttpCode(HttpStatus.OK)
   @RequirePermission('asset.archive', { companyIdFrom: 'params.companyId' })
@@ -153,6 +210,27 @@ export class AssetsController {
     @Param('id', new ParseUUIDPipe()) id: string,
   ) {
     return this.assets.get(actor, companyId, id);
+  }
+
+  /** Copy (or, with `archiveOriginal`, move) one asset into a company. */
+  @Post(':id/clone')
+  @RequirePermission('asset.read', { companyIdFrom: 'params.companyId' })
+  async clone(
+    @CurrentUser() actor: AuthedUser,
+    @Param('companyId', new ParseUUIDPipe()) companyId: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body(new ZodBody(cloneAssetSchema)) dto: CloneAssetInput,
+    @Req() req: Request,
+  ) {
+    await this.assertCanClone(actor, companyId, dto);
+    return this.assets.clone(
+      actor,
+      companyId,
+      id,
+      dto.targetCompanyId,
+      { archiveOriginal: dto.archiveOriginal },
+      meta(req),
+    );
   }
 
   @Post()

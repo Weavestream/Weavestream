@@ -28,6 +28,28 @@ overrides:
   # postcss pinned above floors nanoid at >=3.3.18 (postcss 8.5.28 does).
   # Pinned exactly, for the same reason as postcss above.
   nanoid: 3.3.18
+  # 2026-10 transitive advisories. The first three are scope limiters
+  # like nanoid above: each parent's range already admits the fix, and
+  # the override moves that one package and nothing else. Drop each one
+  # once its parent's lockfile entry resolves the patched version on its
+  # own. Pinned exactly, for the same reason as postcss above.
+  # GHSA-jqcg-44mw-7w3h (critical): IPv4-mapped IPv6 addresses bypass
+  # trust-subnet matching. apps/api/src/main.ts sets `trust proxy` to the
+  # loopback/linklocal/uniquelocal subnets, so this reaches req.ip directly.
+  proxy-addr: 2.0.8
+  # GHSA-68fv-2mgg-jv7q (high): event-loop DoS via indexed source maps.
+  # Via postcss and css-tree, build-time only.
+  source-map-js: 1.2.2
+  # GHSA-jggr-w7fw-pc2j (moderate): stack exhaustion on deep nesting.
+  # Via pino-pretty in the api and worker.
+  fast-copy: 4.1.0
+  # GHSA-238p-pmpm-9mq7 (low): prototype pollution bypasses `trust`.
+  # This one is an out-of-range force: mermaid (11.17.2, and 12.1.0 too)
+  # declares katex ^0.16.47, and no 0.16.x carries the fix. The 0.17 and
+  # 0.18 breaks are an internal defineFunction API and prefixed CSS class
+  # names; mermaid only calls renderToString and renders MathML, so
+  # neither reaches us. Drop once mermaid declares a katex range >=0.18.2.
+  katex: 0.18.2
   # next carries its own optional sharp for next/image optimization,
   # which this app does not use — every image is a plain <img> served
   # through the API. sharp <0.35.4 trips the libheif advisories bundled

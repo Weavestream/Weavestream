@@ -49,9 +49,27 @@ export function outputTokenParam(
 /**
  * Drop a reasoning model's `<think>…</think>` scratchpad. Some servers
  * leak it into `content` even with every suppression flag set.
+ *
+ * Same result as `replace(/<think>[\s\S]*?<\/think>/gi, '')` — each
+ * `<think>` pairs with the first `</think>` after it, an unclosed
+ * `<think>` is kept — but in one linear pass over the tags. That regex
+ * is quadratic on model output holding many `<think>` and no close
+ * (CodeQL js/polynomial-redos): every `<think>` start rescans to the end.
  */
 export function stripThinkTags(raw: string): string {
-  return raw.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+  let out = '';
+  let kept = 0; // start of the text not yet copied to `out`
+  let open = -1; // index of the pending `<think>`, -1 when none
+  for (const tag of raw.matchAll(/<(\/?)think>/gi)) {
+    if (!tag[1]) {
+      if (open < 0) open = tag.index;
+    } else if (open >= 0) {
+      out += raw.slice(kept, open);
+      kept = tag.index + tag[0].length;
+      open = -1;
+    }
+  }
+  return (out + raw.slice(kept)).trim();
 }
 
 /**

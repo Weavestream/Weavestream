@@ -3,9 +3,10 @@ import {
   ConflictException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import type {
   Prisma,
   Asset,
@@ -25,10 +26,13 @@ import { FILTERABLE_FIELD_TYPES } from '@weavestream/shared';
 import type { FileFieldEntry } from '@weavestream/shared';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { isUniqueConstraintError } from '../prisma/prisma-errors.js';
+import { AUDIT_ACTIONS } from '../audit/audit-actions.js';
 import { AuditLogService } from '../audit/audit.service.js';
 import { FieldTypesRegistry } from '../field-types/field-types.registry.js';
 import { RelationsService } from '../relations/relations.service.js';
-import { UploadsService } from '../uploads/uploads.service.js';
+import { getTenantContext } from '@weavestream/shared/server';
+import { UploadContentMissingException, UploadsService } from '../uploads/uploads.service.js';
+import { describeError } from '../common/describe-error.js';
 import { SearchIndexService } from '../search/search-index.service.js';
 import { PasswordsService } from '../passwords/passwords.service.js';
 import { StarsService } from '../stars/stars.service.js';
@@ -276,6 +280,8 @@ type LayoutWithFields = AssetLayout & { fields: AssetField[] };
 
 @Injectable()
 export class AssetsService {
+  private readonly logger = new Logger(AssetsService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditLogService,
@@ -1342,6 +1348,364 @@ export class AssetsService {
   // --------------------------------------------------------------------
 
   /**
+   * Copy an asset into `targetCompanyId` (the same company, or another).
+   *
+   * The caller must already hold `asset.read` on the source company and
+   * `asset.write` on the target (and `asset.archive` on the source when
+   * `archiveOriginal`). The copy goes through `create()`, so the target gets
+   * the same validation, per-company uniqueness, relations, search index and
+   * audit as a hand-made asset.
+   *
+   * What is carried:
+   *  - only field values the actor can see (`serialize` applies the role's
+   *    field visibility), so a copy never discloses hidden fields;
+   *  - FILE values as fresh copies of the blobs in the target company
+   *    (an upload belongs to exactly one asset);
+   *  - not ASSET_REFERENCE values when the company changes: they point at the
+   *    source company's records;
+   *  - not the external (integration) identity, which belongs to the source.
+   */
+  async clone(
+    actor: AuthedUser,
+    sourceCompanyId: string,
+    id: string,
+    targetCompanyId: string,
+    opts: { archiveOriginal: boolean },
+    meta: AuditMeta,
+  ): Promise<SerializedAsset & { originalArchived: boolean; attachmentsIncomplete: boolean }> {
+    const crossCompany = sourceCompanyId !== targetCompanyId;
+    if (opts.archiveOriginal && !crossCompany) {
+      throw new BadRequestException('Moving an asset requires a different target company.');
+    }
+    const asset = await this.prisma.asset.findFirst({
+      where: { id, companyId: sourceCompanyId },
+      include: {
+        assetLayout: { include: { fields: { orderBy: { position: 'asc' } } } },
+        fieldValues: true,
+      },
+    });
+    if (!asset) throw new NotFoundException();
+    if (asset.archivedAt) throw new BadRequestException('Restore the asset before copying it.');
+
+    const layout = asset.assetLayout;
+    const visible = this.serialize(asset, layout, asset.fieldValues, actor.role).fieldValues;
+    const values: Record<string, unknown> = { ...visible };
+
+    if (opts.archiveOriginal) await this.assertMovable(asset, layout, visible, sourceCompanyId);
+
+    for (const field of layout.fields) {
+      if (field.archivedAt !== null || field.fieldType !== 'ASSET_REFERENCE') continue;
+      if (!(field.slug in values) || values[field.slug] == null) continue;
+      if (crossCompany) {
+        // Links point at the source company's records and cannot travel.
+        if (field.isRequired) {
+          throw new BadRequestException(
+            `"${field.name}" is a required link to another asset, so this asset cannot be copied to another company.`,
+          );
+        }
+        delete values[field.slug];
+      } else {
+        // Same company: keep only links whose target still exists (a purged
+        // target leaves its id behind in field values, which reads hide but
+        // create() would reject).
+        const raw = values[field.slug];
+        const ids = (Array.isArray(raw) ? raw : [raw]).filter((v): v is string => typeof v === 'string');
+        const alive = new Set(
+          (
+            await this.prisma.asset.findMany({
+              where: { id: { in: ids }, companyId: sourceCompanyId },
+              select: { id: true },
+            })
+          ).map((r) => r.id),
+        );
+        const kept = ids.filter((x) => alive.has(x));
+        values[field.slug] = Array.isArray(raw) ? kept : (kept[0] ?? null);
+      }
+    }
+
+    // TAGS: carry what the read side shows. Values from before the global-Tag
+    // migration can still hold raw names ("server") instead of tag ids; reads
+    // drop those (and ids of deleted tags), but create() would reject them.
+    for (const field of layout.fields) {
+      if (field.archivedAt !== null || field.fieldType !== 'TAGS') continue;
+      const raw = values[field.slug];
+      if (!Array.isArray(raw)) continue;
+      const ids = raw.filter((v): v is string => typeof v === 'string');
+      const known = await this.tags.getMany(ids);
+      values[field.slug] = ids.filter((x) => known.has(x));
+    }
+
+    const copiedUploads: string[] = [];
+    // Every FILE field's uploads, including fields hidden from this actor:
+    // the attachments-panel copy below must never pick those up (that would
+    // hand a client user files from fields they cannot see).
+    const fieldUploadIds = new Set<string>();
+    const fileFieldIds = new Set(
+      layout.fields.filter((f) => f.fieldType === 'FILE').map((f) => f.id),
+    );
+    for (const v of asset.fieldValues) {
+      if (!fileFieldIds.has(v.assetFieldId) || !Array.isArray(v.value)) continue;
+      for (const e of v.value as unknown[]) {
+        const uploadId = (e as { uploadId?: unknown } | null)?.uploadId;
+        if (typeof uploadId === 'string') fieldUploadIds.add(uploadId);
+      }
+    }
+    // A file whose row is live but whose bytes are gone cannot be copied:
+    // the copy is incomplete, and a move must keep the original.
+    let attachmentsIncomplete = false;
+    let created: SerializedAsset;
+    try {
+      for (const field of layout.fields) {
+        if (field.archivedAt !== null || field.fieldType !== 'FILE') continue;
+        if (!Array.isArray(values[field.slug])) continue;
+        const entries: FileFieldEntry[] = [];
+        for (const entry of values[field.slug] as FileFieldEntry[]) {
+          if (!entry?.uploadId) continue;
+          const uploadId = await this.copyUploadOrSkip(actor, sourceCompanyId, id, entry.uploadId, targetCompanyId, meta);
+          if (uploadId === 'missing') {
+            attachmentsIncomplete = true;
+            this.logger.warn(`Copy of ${id}: file ${entry.uploadId} in "${field.slug}" has no stored content; not copied.`);
+            continue;
+          }
+          if (uploadId === 'gone') continue; // deleted, or not this asset's file: dropped
+          copiedUploads.push(uploadId);
+          entries.push({ ...entry, uploadId });
+        }
+        values[field.slug] = entries;
+      }
+      // ponytail: create() commits before its own audit row and final read;
+      // if one of those throws, the copy exists but is reported as failed.
+      // Rare (audit/DB blip); a create-with-idempotency-key would close it.
+      created = await this.create(
+        actor,
+        targetCompanyId,
+        { assetLayoutId: layout.id, name: asset.name, fieldValues: values },
+        meta,
+      );
+    } catch (err) {
+      // The copy failed (e.g. a unique field clashes in the target): retire
+      // the duplicated files so the reaper removes them.
+      if (copiedUploads.length > 0) {
+        await this.prisma.upload
+          .updateMany({
+            where: { id: { in: copiedUploads }, companyId: targetCompanyId, attachedToId: null },
+            data: { deletedAt: new Date() },
+          })
+          .catch((cleanupErr: unknown) =>
+            this.logger.error(
+              `Could not retire ${copiedUploads.length} copied upload(s) after a failed clone of ${id}: ${cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr)}`,
+            ),
+          );
+      }
+      throw err;
+    }
+
+    // Files on the asset's attachments panel (not in a FILE field) come too.
+    // The copy already exists, so a failure here never fails it; but it does
+    // stop a move from archiving the original, which still holds the file.
+    try {
+      const panel = await this.prisma.upload.findMany({
+        where: {
+          companyId: sourceCompanyId,
+          attachedToType: 'asset',
+          attachedToId: id,
+          deletedAt: null,
+          id: { notIn: Array.from(fieldUploadIds) },
+        },
+        select: { id: true },
+      });
+      for (const u of panel) {
+        let newId: string | null = null;
+        try {
+          const copied = await this.copyUploadOrSkip(actor, sourceCompanyId, id, u.id, targetCompanyId, meta);
+          if (copied === 'gone') continue; // deleted since the listing: nothing to copy
+          if (copied === 'missing') {
+            // The row exists but its content is gone: the copy is not whole.
+            attachmentsIncomplete = true;
+            continue;
+          }
+          newId = copied;
+          // Tenant-scoped write: companyId must be in the filter.
+          const { count } = await this.prisma.upload.updateMany({
+            where: { id: newId, companyId: targetCompanyId, attachedToId: null },
+            data: { attachedToId: created.id },
+          });
+          if (count !== 1) throw new Error(`copied upload ${newId} could not be attached`);
+          copiedUploads.push(newId);
+        } catch (err) {
+          attachmentsIncomplete = true;
+          if (newId) {
+            // Copied but not attached: retire it so the reaper removes it.
+            await this.prisma.upload
+              .updateMany({
+                where: { id: newId, companyId: targetCompanyId, attachedToId: null },
+                data: { deletedAt: new Date() },
+              })
+              .catch((e: unknown) =>
+                this.logger.error(`Could not retire unattached copy ${newId}: ${e instanceof Error ? e.message : String(e)}`),
+              );
+          }
+          this.logger.warn(
+            `Copy ${created.id} of ${id}: attachment ${u.id} not copied: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+      }
+    } catch (err) {
+      attachmentsIncomplete = true;
+      this.logger.warn(
+        `Copy ${created.id} of ${id}: some attachments were not copied: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+
+    // The copy is committed from here on. Neither a failed archive nor a
+    // failed provenance row may report the whole operation as failed: the
+    // caller would retry and create a second copy.
+    let originalArchived = false;
+    if (opts.archiveOriginal && attachmentsIncomplete) {
+      this.logger.warn(`Not archiving ${id}: some files did not copy to ${created.id}.`);
+    } else if (opts.archiveOriginal) {
+      try {
+        await this.archive(actor, sourceCompanyId, id, meta);
+        originalArchived = true;
+      } catch (err) {
+        this.logger.warn(
+          `Asset ${id} copied to ${created.id} but the original could not be archived: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+
+    await this.audit
+      .log({
+        actorId: actor.id,
+        action: AUDIT_ACTIONS.asset.clone,
+        entityType: 'Asset',
+        entityId: created.id,
+        companyId: targetCompanyId,
+        ip: meta.ip,
+        userAgent: meta.userAgent,
+        before: null,
+        after: {
+          sourceAssetId: id,
+          sourceCompanyId,
+          moveRequested: opts.archiveOriginal,
+          archivedOriginal: originalArchived,
+          filesCopied: copiedUploads.length,
+        },
+      })
+      .catch((err: unknown) => {
+        // The copy's own `asset.create` row (with full values) is already
+        // written; this row adds provenance. Logged loudly, not rethrown.
+        this.logger.error(
+          `asset.clone audit row failed for copy ${created.id} of ${id}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      });
+    return { ...created, originalArchived, attachmentsIncomplete };
+  }
+
+  /**
+   * A move archives the original, so refuse the cases where that would lose
+   * or undo something rather than report a clean "moved".
+   */
+  private async assertMovable(
+    asset: { id: string; fieldValues: AssetFieldValue[] },
+    layout: LayoutWithFields,
+    visible: Record<string, unknown>,
+    companyId: string,
+  ): Promise<void> {
+    const hidden = asset.fieldValues.some((v) => {
+      const f = layout.fields.find((x) => x.id === v.assetFieldId);
+      return f && f.archivedAt === null && !(f.slug in visible) && v.value !== null;
+    });
+    if (hidden) {
+      throw new ForbiddenException(
+        'Some fields on this asset are hidden from you, so it can only be copied, not moved.',
+      );
+    }
+    const [synced, passwords] = await Promise.all([
+      // companyId is required by the tenant-scope guard (and is the asset's).
+      this.prisma.integrationSyncRecord.count({ where: { companyId, assetId: asset.id } }),
+      this.prisma.password.count({ where: { companyId, assetId: asset.id, archivedAt: null } }),
+    ]);
+    if (synced > 0) {
+      throw new BadRequestException(
+        'This asset is kept in sync by an integration, which would restore the original after a move. Copy it instead.',
+      );
+    }
+    if (passwords > 0) {
+      throw new BadRequestException(
+        `This asset has ${passwords} linked password${passwords === 1 ? '' : 's'}, which are not copied and would be archived with the original. Copy it instead, or move the passwords first.`,
+      );
+    }
+  }
+
+  /**
+   * Copy one of the source asset's files. Returns the new upload id;
+   * `'gone'` when the file is deleted or not the asset's (nothing to copy);
+   * `'missing'` when the file is live but its stored content is not (the
+   * copy is incomplete).
+   */
+  private async copyUploadOrSkip(
+    actor: AuthedUser,
+    sourceCompanyId: string,
+    sourceAssetId: string,
+    uploadId: string,
+    targetCompanyId: string,
+    meta: AuditMeta,
+  ): Promise<string | 'gone' | 'missing'> {
+    try {
+      return await this.uploads.copyToCompany(actor, sourceCompanyId, sourceAssetId, uploadId, targetCompanyId, meta);
+    } catch (err) {
+      if (err instanceof UploadContentMissingException) return 'missing';
+      if (err instanceof NotFoundException) return 'gone';
+      throw err;
+    }
+  }
+
+  /**
+   * Bulk {@link clone}; per-item failures are reported, not thrown. A copy
+   * whose original could not be archived counts as copied (it exists) and is
+   * also listed in `failed` with code `original_not_archived` (or
+   * `attachments_incomplete` for a plain copy), so the UI can say so without
+   * offering a retry that would copy it again.
+   */
+  async cloneMany(
+    actor: AuthedUser,
+    sourceCompanyId: string,
+    ids: string[],
+    targetCompanyId: string,
+    opts: { archiveOriginal: boolean },
+    meta: AuditMeta,
+  ): Promise<BulkAssetResult> {
+    const kept: BulkAssetResult['failed'] = [];
+    const result = await this.runBulk(ids, async (id) => {
+      const copy = await this.clone(actor, sourceCompanyId, id, targetCompanyId, opts, meta);
+      if (!opts.archiveOriginal && copy.attachmentsIncomplete) {
+        kept.push({
+          id,
+          code: 'attachments_incomplete',
+          reason: 'Copied, but some files did not copy.',
+        });
+      } else if (opts.archiveOriginal && !copy.originalArchived) {
+        kept.push(
+          copy.attachmentsIncomplete
+            ? {
+                id,
+                code: 'original_not_archived',
+                reason:
+                  'Copied, but some files did not copy, so the original was kept. Copy those files over before archiving it.',
+              }
+            : {
+                id,
+                code: 'original_not_archived',
+                reason: 'Copied, but the original could not be archived. Archive it by hand.',
+              },
+        );
+      }
+    });
+    return { ok: result.ok, failed: [...result.failed, ...kept] };
+  }
+
+  /**
    * Bulk-archive assets. Iterates the input ids and reuses the per-item
    * `archive` path so that side-effects (search index, password cascade,
    * audit log) stay identical to single-item operations. Each id succeeds
@@ -1409,7 +1773,19 @@ export class AssetsService {
         await op(id);
         ok.push(id);
       } catch (err) {
-        failed.push({ id, ...classifyBulkError(err) });
+        const known = classifyBulkError(err);
+        if (known) {
+          failed.push({ id, ...known });
+          continue;
+        }
+        // An unexpected error (storage, database) can carry server paths or
+        // hostnames: the client gets a generic reason and a reference, and
+        // the details go to the server log under that reference.
+        // The request id can come from a client header: reuse only a sane one.
+        const ctxRef = getTenantContext()?.requestId;
+        const ref = ctxRef && /^[\w-]{8,64}$/.test(ctxRef) ? ctxRef : randomUUID();
+        this.logger.error(`Bulk asset action failed for ${id} (ref ${ref}): ${describeError(err)}`);
+        failed.push({ id, code: 'error', reason: `Something went wrong. Reference: ${ref}` });
       }
     }
     return { ok, failed };
@@ -2195,9 +2571,10 @@ export class AssetsService {
  * `{ code, reason }` shape. The codes are part of the public contract
  * with the web client (see `BulkAssetFailure` in
  * `packages/shared/src/schemas/asset.ts`); add new codes here rather
- * than letting raw error messages leak through.
+ * than letting raw error messages leak through. Returns null for an
+ * unexpected error, which `runBulk` reports generically.
  */
-function classifyBulkError(err: unknown): { code: string; reason: string } {
+function classifyBulkError(err: unknown): { code: string; reason: string } | null {
   if (err instanceof NotFoundException) {
     return { code: 'not_found', reason: 'Asset not found.' };
   }
@@ -2224,8 +2601,6 @@ function classifyBulkError(err: unknown): { code: string; reason: string } {
   if (err instanceof ConflictException) {
     return { code: 'conflict', reason: err.message };
   }
-  if (err instanceof Error) {
-    return { code: 'error', reason: err.message };
-  }
-  return { code: 'error', reason: 'Unknown error.' };
+  // Anything else is unexpected: never echo its message (see `runBulk`).
+  return null;
 }

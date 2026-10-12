@@ -69,6 +69,26 @@ export const bulkAssetIdsSchema = z.object({
 export type BulkAssetIdsInput = z.infer<typeof bulkAssetIdsSchema>;
 
 /**
+ * Copy an asset into a company (the same one, or another). Layouts are
+ * global, so the copy keeps its layout. `archiveOriginal` turns the copy
+ * into a move: the source is archived (recoverable), never purged.
+ */
+export const cloneAssetSchema = z
+  .object({
+    targetCompanyId: z.string().uuid(),
+    archiveOriginal: z.boolean().default(false),
+  })
+  .strict();
+
+export type CloneAssetInput = z.infer<typeof cloneAssetSchema>;
+
+export const bulkCloneAssetsSchema = cloneAssetSchema.extend({
+  ids: z.array(z.string().uuid()).min(1).max(100),
+});
+
+export type BulkCloneAssetsInput = z.infer<typeof bulkCloneAssetsSchema>;
+
+/**
  * Per-item failure descriptor returned from a bulk asset action. `code` is a
  * machine-readable tag the UI can branch on (e.g. `not_archived`, `not_found`,
  * `forbidden`); `reason` is the user-facing message.

@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState, useTransition } from 'react';
 import Link from 'next/link';
+import { CopyAssetsDialog } from './copy-assets-dialog';
 import { useRouter } from 'next/navigation';
 import type {
   AssetSummary,
@@ -72,6 +73,7 @@ export function AssetsTable({
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkPending, setBulkPending] = useState(false);
   const [purgeOpen, setPurgeOpen] = useState(false);
+  const [copyOpen, setCopyOpen] = useState(false);
   const [purgeText, setPurgeText] = useState('');
 
   const activeLayout = useMemo(
@@ -446,29 +448,28 @@ export function AssetsTable({
           {includeArchived ? 'Hide archived' : 'Show archived'}
         </button>
 
-        {canManage && (
-          <button
-            type="button"
-            onClick={toggleSelectionMode}
-            title={selectionMode ? 'Exit selection mode' : 'Select multiple'}
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: 6,
-              height: 28,
-              padding: '0 10px',
-              background: selectionMode ? 'var(--accent-soft)' : 'transparent',
-              border: `1px solid ${selectionMode ? 'var(--accent-line)' : 'var(--line-2)'}`,
-              borderRadius: 5,
-              fontSize: 12,
-              color: selectionMode ? 'var(--accent)' : 'var(--text-2)',
-              cursor: 'pointer',
-            }}
-          >
-            <Icon.checkSquare size={12} />
-            {selectionMode ? 'Exit select' : 'Select'}
-          </button>
-        )}
+        {/* Readers can select to copy; the bulk bar gates the rest. */}
+        <button
+          type="button"
+          onClick={toggleSelectionMode}
+          title={selectionMode ? 'Exit selection mode' : 'Select multiple'}
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 6,
+            height: 28,
+            padding: '0 10px',
+            background: selectionMode ? 'var(--accent-soft)' : 'transparent',
+            border: `1px solid ${selectionMode ? 'var(--accent-line)' : 'var(--line-2)'}`,
+            borderRadius: 5,
+            fontSize: 12,
+            color: selectionMode ? 'var(--accent)' : 'var(--text-2)',
+            cursor: 'pointer',
+          }}
+        >
+          <Icon.checkSquare size={12} />
+          {selectionMode ? 'Exit select' : 'Select'}
+        </button>
       </div>
 
       {/* Bulk action bar */}
@@ -479,13 +480,26 @@ export function AssetsTable({
           archivedSelected={archivedSelectedCount}
           unknownSelected={unknownSelectedCount}
           pending={bulkPending}
+          canManage={canManage}
           onArchive={() => runBulk('archive')}
           onRestore={() => runBulk('restore')}
+          onCopy={() => setCopyOpen(true)}
           onPurge={() => {
             setPurgeText('');
             setPurgeOpen(true);
           }}
           onClear={clearSelection}
+        />
+      )}
+      {copyOpen && (
+        <CopyAssetsDialog
+          open
+          onClose={() => setCopyOpen(false)}
+          companyId={companyId}
+          assetIds={Array.from(selectedIds)}
+          onDone={(failedIds) =>
+            failedIds.length ? setSelectedIds(new Set(failedIds)) : clearSelection()
+          }
         />
       )}
 
@@ -733,8 +747,10 @@ function BulkActionBar({
   archivedSelected,
   unknownSelected,
   pending,
+  canManage,
   onArchive,
   onRestore,
+  onCopy,
   onPurge,
   onClear,
 }: {
@@ -743,8 +759,11 @@ function BulkActionBar({
   archivedSelected: number;
   unknownSelected: number;
   pending: boolean;
+  /** Write access to this company; copy needs only read (target checked server-side). */
+  canManage: boolean;
   onArchive: () => void;
   onRestore: () => void;
+  onCopy: () => void;
   onPurge: () => void;
   onClear: () => void;
 }) {
@@ -799,31 +818,46 @@ function BulkActionBar({
       <Btn
         kind="outline"
         size="sm"
-        icon={Icon.archive}
-        disabled={!canArchive || pending}
-        onClick={onArchive}
+        icon={Icon.copy}
+        // Archived assets cannot be copied; selections hidden by a filter
+        // may still be active, so let the server report per-item results.
+        disabled={(activeSelected === 0 && unknownSelected === 0) || pending}
+        onClick={onCopy}
       >
-        Archive
+        Copy to…
       </Btn>
-      <Btn
-        kind="outline"
-        size="sm"
-        icon={Icon.check}
-        disabled={!canRestore || pending}
-        onClick={onRestore}
-      >
-        Restore
-      </Btn>
-      <Btn
-        kind="danger"
-        size="sm"
-        icon={Icon.trash}
-        disabled={!canPurge || pending}
-        title={canPurge ? undefined : 'Archive assets before deleting them'}
-        onClick={onPurge}
-      >
-        Delete forever
-      </Btn>
+      {canManage && (
+        <>
+          <Btn
+            kind="outline"
+            size="sm"
+            icon={Icon.archive}
+            disabled={!canArchive || pending}
+            onClick={onArchive}
+          >
+            Archive
+          </Btn>
+          <Btn
+            kind="outline"
+            size="sm"
+            icon={Icon.check}
+            disabled={!canRestore || pending}
+            onClick={onRestore}
+          >
+            Restore
+          </Btn>
+          <Btn
+            kind="danger"
+            size="sm"
+            icon={Icon.trash}
+            disabled={!canPurge || pending}
+            title={canPurge ? undefined : 'Archive assets before deleting them'}
+            onClick={onPurge}
+          >
+            Delete forever
+          </Btn>
+        </>
+      )}
       <Btn kind="ghost" size="sm" disabled={pending} onClick={onClear}>
         Clear
       </Btn>
