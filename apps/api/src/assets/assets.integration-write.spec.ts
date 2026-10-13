@@ -1390,6 +1390,64 @@ describe('AssetsService integration system writes', () => {
       expect(tx.asset.updateMany).not.toHaveBeenCalled();
     });
 
+    describe('mixed-case duplicates of an exact match', () => {
+      const textField = { ...field, fieldType: 'TEXT', slug: 'serial_number' };
+      const withSerial = (id: string, value: string, overrides: Record<string, unknown> = {}) => asset({
+        id, externalSource: null, externalId: null,
+        fieldValues: [{ id: `fv-${id}`, companyId: ids.company, assetId: id, assetFieldId: ids.field, value }],
+        ...overrides,
+      });
+      const upper = withSerial('00000000-0000-4000-8000-000000000021', 'SN-001');
+      const mixed = withSerial('00000000-0000-4000-8000-000000000022', 'Sn-001');
+      /** Exact-variant query → `exact`; manual index → `manual`; co-bind index → `shared`. */
+      function harness(exact: unknown[], manual: unknown[], shared: unknown[] = []) {
+        const ctx = setup({ layout: { ...layout, fields: [textField] } });
+        for (const client of [ctx.prisma, ctx.tx]) {
+          client.asset.findMany.mockReset();
+          client.asset.findMany.mockImplementation(async (args: { select?: unknown; where: { externalSource?: unknown } }) => {
+            if (!args.select) return exact;
+            return args.where.externalSource === null ? manual : shared;
+          });
+        }
+        return ctx;
+      }
+      const write = { ...input, matchKeyFieldIds: [ids.field], claimUnboundMatch: true,
+        fieldValues: [{ targetFieldId: ids.field, value: 'sn-001', syncDirection: 'source_wins' as const }] };
+
+      it('reports ambiguity instead of adopting the exact-variant hit (SN-001 and Sn-001, incoming sn-001)', async () => {
+        const { service, tx } = harness([upper], [upper, mixed]);
+        await expect(service.writeFromIntegration(write)).resolves.toMatchObject({
+          change: 'blocked', gap: { kind: 'ambiguous', details: { reasonCode: 'ambiguous_match' } },
+        });
+        expect(tx.asset.create).not.toHaveBeenCalled();
+        expect(tx.asset.updateMany).not.toHaveBeenCalled();
+      });
+
+      it('still adopts the exact-variant hit when it is the only case-insensitive match', async () => {
+        const { service, tx } = harness([upper], [upper]);
+        await expect(service.writeFromIntegration(write)).resolves.toMatchObject({ targetId: upper.id, adopted: true });
+        expect(tx.asset.create).not.toHaveBeenCalled();
+      });
+
+      it('reports ambiguity when a co-bind hit has a mixed-case manual twin', async () => {
+        const owned = withSerial(upper.id, 'SN-001', { externalSource: 'ninjaone', externalId: 'n-1' });
+        const { service, tx } = harness([owned], [mixed], [owned]);
+        await expect(service.writeFromIntegration({
+          ...write, tx: tx as never, coBindSources: ['ninjaone'], externalSource: 'level', externalId: 'lvl-1',
+        })).resolves.toMatchObject({ change: 'blocked', gap: { kind: 'ambiguous' } });
+        expect(tx.asset.updateMany).not.toHaveBeenCalled();
+      });
+
+      it('counts manual and co-bindable fallback matches together', async () => {
+        const owned = withSerial(upper.id, 'SN-001', { externalSource: 'ninjaone', externalId: 'n-1' });
+        const { service, tx } = harness([], [mixed], [owned]);
+        await expect(service.writeFromIntegration({
+          ...write, tx: tx as never, coBindSources: ['ninjaone'], externalSource: 'level', externalId: 'lvl-1',
+        })).resolves.toMatchObject({ change: 'blocked', gap: { kind: 'ambiguous' } });
+        expect(tx.asset.updateMany).not.toHaveBeenCalled();
+      });
+    });
+
     it('does not adopt an indexed asset that an earlier record of the run already adopted', async () => {
       const textField = { ...field, fieldType: 'TEXT', slug: 'email' };
       const stored = asset({

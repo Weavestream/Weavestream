@@ -817,28 +817,28 @@ export class AssetLayoutsService {
           options: f.options as Prisma.InputJsonValue,
         },
       });
-      return { layout, field, created: true };
-    });
-
-    if (result.created) {
-      await this.audit.log({
+      // Same transaction: a failed audit write rolls the field back, so a
+      // retry never finds an unaudited field and returns it as existing.
+      await this.audit.logWithClient(tx, {
         actorId: actor.id,
         action: 'layout.field.added',
         entityType: 'AssetField',
-        entityId: result.field.id,
+        entityId: field.id,
         ip: meta.ip,
         userAgent: meta.userAgent,
         before: null,
         after: {
           layoutId,
-          layoutName: result.layout.name,
-          fieldId: result.field.id,
-          fieldName: result.field.name,
-          slug: result.field.slug,
-          fieldType: result.field.fieldType,
+          layoutName: layout.name,
+          fieldId: field.id,
+          fieldName: field.name,
+          slug: field.slug,
+          fieldType: field.fieldType,
         },
       });
-    }
+      return { layout, field, created: true };
+    });
+
     const field = this.serialize(result.layout, [result.field]).fields[0]!;
     return { field, created: result.created };
   }

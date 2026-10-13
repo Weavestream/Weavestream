@@ -2180,46 +2180,57 @@ export class AssetsService {
     );
     if (candidates.length > 1) return { target: null, ambiguous: true };
     if (compatible.length === 1) return { target: compatible[0]!, ambiguous: false };
+    if (input.claimUnboundMatch !== true) return { target: null, ambiguous: false };
     // Match-first: a single candidate nobody owns (no external identity,
     // no binding from this mapping/resource per the query above) is
-    // adopted. Assets carrying another source's identity are never taken.
+    // adopted. Co-binding: the single match belongs to another integration
+    // that fills standard fields (the same person or device seen twice);
+    // its binding stays and this integration's record joins it. Assets
+    // carrying any other source's identity are never taken.
     const only = candidates[0];
-    if (input.claimUnboundMatch === true && only && only.externalSource === null && only.externalId === null) {
-      return { target: only, ambiguous: false, claimed: true };
+    if (only) {
+      const kind = only.externalSource === null && only.externalId === null
+        ? 'manual'
+        : (await this.isCoBindable(input, only, client)) ? 'cobind' : null;
+      if (kind === null) return { target: null, ambiguous: false };
+      // Text-like keys: the variant OR above only tries as-is / lower /
+      // upper, so `sn-001` finds `SN-001` but never `Sn-001`. Adopt only
+      // when the complete case-insensitive set holds this asset alone.
+      const folded = await this.caseInsensitiveMatches(input, layout, values, client);
+      if (folded === 'overflow') return { target: null, ambiguous: false, overflow: true };
+      if (folded && [...folded.manual, ...folded.shared].some((id) => id !== only.id)) {
+        return { target: null, ambiguous: true };
+      }
+      return { target: only, ambiguous: false, claimed: true, ...(kind === 'cobind' ? { coBound: true } : {}) };
     }
-    // Co-binding: the single match belongs to another integration that
-    // fills standard fields (the same person or device seen twice). Its
-    // binding stays; this integration's record joins it.
-    if (input.claimUnboundMatch === true && only && candidates.length === 1 && (await this.isCoBindable(input, only, client))) {
-      return { target: only, ambiguous: false, claimed: true, coBound: true };
-    }
-    if (input.claimUnboundMatch === true && candidates.length === 0) {
-      return this.findCaseInsensitiveUnboundMatch(input, layout, values, client);
-    }
-    return { target: null, ambiguous: false };
+    const folded = await this.caseInsensitiveMatches(input, layout, values, client);
+    if (folded === 'overflow') return { target: null, ambiguous: false, overflow: true };
+    return folded ? this.adoptCaseInsensitiveMatch(input, folded, client) : { target: null, ambiguous: false };
   }
 
   /**
-   * Match-first fallback for text-like keys stored in mixed case (an
-   * operator typed `Alice@Example.COM` into a TEXT field). Prisma has no
-   * case-insensitive filter on Json columns, and the variant OR above only
-   * covers as-is / lower / upper, so the unbound, identity-free assets of
-   * the layout are indexed in memory by lowercased key, once per sync run
-   * (see `matchFirstIndexes`), and every record of the run looks up there.
+   * Match-first for text-like keys stored in mixed case (an operator typed
+   * `Alice@Example.COM` into a TEXT field). Prisma has no case-insensitive
+   * filter on Json columns, so the unbound, identity-free assets of the
+   * layout (and, with `coBindSources`, the co-bindable ones) are indexed in
+   * memory by lowercased key, once per sync run (see `matchFirstIndexes`),
+   * and every record of the run looks up there. Null when a key is not
+   * text-like (strict keys are compared exactly by the variant query);
+   * `'overflow'` when an index source exceeded its cap, which can prove
+   * neither uniqueness nor absence.
    */
-  private async findCaseInsensitiveUnboundMatch(
+  private async caseInsensitiveMatches(
     input: IntegrationAssetWriteInput,
     layout: LayoutWithFields,
     values: Record<string, unknown>,
-    client: Pick<Prisma.TransactionClient, 'asset' | 'integrationSyncRecord'> | PrismaService,
-  ): Promise<{ target: (Asset & { fieldValues: AssetFieldValue[] }) | null; ambiguous: boolean; claimed?: boolean; coBound?: boolean; overflow?: boolean }> {
+    client: Pick<Prisma.TransactionClient, 'asset'> | PrismaService,
+  ): Promise<{ manual: string[]; shared: string[] } | 'overflow' | null> {
     const wanted: string[] = [];
     for (const fieldId of input.matchKeyFieldIds) {
       const field = layout.fields.find((candidate) => candidate.id === fieldId);
-      // Strict keys were already compared exactly by the query above.
-      if (!field || !['TEXT', 'EMAIL', 'URL'].includes(field.fieldType)) return { target: null, ambiguous: false };
+      if (!field || !['TEXT', 'EMAIL', 'URL'].includes(field.fieldType)) return null;
       const value = values[field.slug];
-      if (typeof value !== 'string') return { target: null, ambiguous: false };
+      if (typeof value !== 'string') return null;
       wanted.push(foldMatchValue(value));
     }
     const lookup = async (mode: 'manual' | 'cobind'): Promise<string[] | 'overflow'> => {
@@ -2232,28 +2243,36 @@ export class AssetsService {
       }
       return index === 'overflow' ? 'overflow' : index.get(JSON.stringify(wanted)) ?? [];
     };
-    // The index source exceeded its cap: it can prove neither uniqueness
-    // nor absence, so report instead of adopting the wrong asset or
-    // creating a duplicate.
-    const ids = await lookup('manual');
-    if (ids === 'overflow') return { target: null, ambiguous: false, overflow: true };
-    if (ids.length > 1) return { target: null, ambiguous: true };
-    if (ids.length === 1) {
-      // Re-read with every field value, and re-check ownership: an earlier
-      // record of this run may already have adopted the asset.
-      const target = await client.asset.findUnique({ where: { id: ids[0]! }, include: { fieldValues: true } });
-      return target && target.archivedAt === null && target.externalSource === null && target.externalId === null
+    const manual = await lookup('manual');
+    if (manual === 'overflow') return 'overflow';
+    if ((input.coBindSources?.length ?? 0) === 0) return { manual, shared: [] };
+    const shared = await lookup('cobind');
+    return shared === 'overflow' ? 'overflow' : { manual, shared };
+  }
+
+  /**
+   * Adopt the one asset of a case-insensitive match set. Manual and
+   * co-bindable assets count together: two of any kind are ambiguous.
+   */
+  private async adoptCaseInsensitiveMatch(
+    input: IntegrationAssetWriteInput,
+    folded: { manual: string[]; shared: string[] },
+    client: Pick<Prisma.TransactionClient, 'asset' | 'integrationSyncRecord'> | PrismaService,
+  ): Promise<{ target: (Asset & { fieldValues: AssetFieldValue[] }) | null; ambiguous: boolean; claimed?: boolean; coBound?: boolean }> {
+    const ids = new Set([...folded.manual, ...folded.shared]);
+    if (ids.size > 1) return { target: null, ambiguous: true };
+    const [id] = ids;
+    if (id === undefined) return { target: null, ambiguous: false };
+    // Re-read with every field value, and re-check ownership: an earlier
+    // record of this run may already have adopted or co-bound the asset.
+    const target = await client.asset.findUnique({ where: { id }, include: { fieldValues: true } });
+    if (!target) return { target: null, ambiguous: false };
+    if (folded.manual.includes(id)) {
+      return target.archivedAt === null && target.externalSource === null && target.externalId === null
         ? { target, ambiguous: false, claimed: true }
         : { target: null, ambiguous: false };
     }
-    if ((input.coBindSources?.length ?? 0) === 0) return { target: null, ambiguous: false };
-    const shared = await lookup('cobind');
-    if (shared === 'overflow') return { target: null, ambiguous: false, overflow: true };
-    if (shared.length > 1) return { target: null, ambiguous: true };
-    if (shared.length !== 1) return { target: null, ambiguous: false };
-    // Re-check: an earlier record of this run may already have co-bound it.
-    const target = await client.asset.findUnique({ where: { id: shared[0]! }, include: { fieldValues: true } });
-    return target && (await this.isCoBindable(input, target, client))
+    return (await this.isCoBindable(input, target, client))
       ? { target, ambiguous: false, claimed: true, coBound: true }
       : { target: null, ambiguous: false };
   }

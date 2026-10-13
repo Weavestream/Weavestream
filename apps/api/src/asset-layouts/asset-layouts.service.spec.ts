@@ -214,7 +214,7 @@ describe('AssetLayoutsService.addField', () => {
       },
     };
     const prisma = { $transaction: jest.fn(async (fn: (t: typeof tx) => unknown) => fn(tx)) };
-    const audit = { log: jest.fn() };
+    const audit = { log: jest.fn(), logWithClient: jest.fn() };
     // Applies a default, like a strategy schema may: the parsed value is what gets stored.
     const registry = {
       get: () => ({ optionsSchema: { safeParse: (v: object) => ({ success: true, data: { maxLength: 255, ...v } }) } }),
@@ -238,8 +238,17 @@ describe('AssetLayoutsService.addField', () => {
       expect.objectContaining({ slug: 'serial_number', position: 2, isPrimary: false, options: { maxLength: 255 } }),
     ]);
     expect(tx.assetLayout.findUnique).toHaveBeenCalledTimes(2);
-    expect(audit.log).toHaveBeenCalledTimes(1);
-    expect(audit.log).toHaveBeenCalledWith(expect.objectContaining({ action: 'layout.field.added', entityId: 'f-new' }));
+    expect(audit.log).not.toHaveBeenCalled();
+    expect(audit.logWithClient).toHaveBeenCalledTimes(1);
+    expect(audit.logWithClient).toHaveBeenCalledWith(tx, expect.objectContaining({ action: 'layout.field.added', entityId: 'f-new' }));
+  });
+
+  it('writes the audit row in the field transaction, so a failed audit fails the add', async () => {
+    const { service, tx, audit } = harness();
+    audit.logWithClient.mockRejectedValueOnce(new Error('audit down'));
+    await expect(service.addField(OPERATOR, 'l-1', NEW, META)).rejects.toThrow('audit down');
+    expect(tx.assetField.create).toHaveBeenCalledTimes(1);
+    expect(audit.logWithClient).toHaveBeenCalledWith(tx, expect.objectContaining({ action: 'layout.field.added' }));
   });
 
   it('returns a live field with the same slug untouched instead of adding one', async () => {
@@ -249,6 +258,7 @@ describe('AssetLayoutsService.addField', () => {
     expect(tx.assetField.create).not.toHaveBeenCalled();
     expect(tx.assetLayout.updateMany).not.toHaveBeenCalled();
     expect(audit.log).not.toHaveBeenCalled();
+    expect(audit.logWithClient).not.toHaveBeenCalled();
   });
 
   it('gives up with a conflict when the layout keeps changing', async () => {

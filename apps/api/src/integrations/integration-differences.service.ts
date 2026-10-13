@@ -18,6 +18,7 @@ import { AUDIT_ACTIONS } from '../audit/audit-actions.js';
 import { AssetsService } from '../assets/assets.service.js';
 import type { AuditMeta } from './integrations.service.js';
 import { IntegrationProvenanceService } from './reconstruction/integration-provenance.service.js';
+import { safeErrorSummary } from './reconstruction/reconstruction-target.js';
 import { PermissionService } from '../rbac/permission.service.js';
 import { differenceDisplayValue, parseFieldDiffs, parseFieldResolutions } from './field-diffs.js';
 
@@ -210,7 +211,8 @@ export class IntegrationDifferencesService {
           failed.push({ ...miss, reason: 'The source value does not fit this field.' });
         } else {
           // One bad item must not stop the batch; the reason stays generic.
-          this.log.error(`Bulk difference resolve failed for sync record ${target.syncRecordId}`, error instanceof Error ? error.stack : undefined);
+          // Never the message or stack: Prisma errors can carry field values.
+          this.log.error(`Bulk difference resolve failed for sync record ${target.syncRecordId}: ${safeErrorSummary(error)}`);
           failed.push({ ...miss, reason: 'Could not resolve this difference.' });
         }
       }
