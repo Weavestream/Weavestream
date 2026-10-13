@@ -7,12 +7,14 @@ import type {
   CloudflareIpListDto,
   DriverDescriptor,
   IntegrationDto,
+  IntegrationSyncRunDto,
 } from '@weavestream/shared';
 import { CredentialsTab } from '../credentials-tab';
+import { RunsTab } from '../runs-tab';
 import { RegisteredListsTab } from './registered-lists-tab';
 import { DomainsSyncTab } from './domains-sync-tab';
 
-type TabId = 'creds' | 'lists' | 'domains';
+type TabId = 'creds' | 'lists' | 'domains' | 'runs';
 
 const TABS: { id: TabId; label: string; help: string }[] = [
   {
@@ -30,13 +32,19 @@ const TABS: { id: TabId; label: string; help: string }[] = [
     label: 'Domains',
     help: 'Sync registrar data for every domain on the account into Domains.',
   },
+  {
+    id: 'runs',
+    label: 'Run history',
+    help: 'Inspect the outcome and any error of every domain sync run.',
+  },
 ];
 
 /**
  * Tabs shell for security-kind integrations (Cloudflare). Replaces the
- * asset-import tabs (Mappings, Field Mappings, Run history) with the
- * single "Lists" tab; reuses `CredentialsTab` since credentials,
- * status, and cron configuration work identically across kinds.
+ * asset-import tabs (Mappings, Field Mappings) with "Lists" and
+ * "Domains"; reuses `CredentialsTab` since credentials, status, and
+ * cron configuration work identically across kinds, and `RunsTab`
+ * since domain syncs are recorded as ordinary sync runs.
  */
 export function SecurityIntegrationTabs({
   initialTab,
@@ -44,12 +52,14 @@ export function SecurityIntegrationTabs({
   driver,
   cloudflareLists,
   domainSyncRun,
+  runs,
 }: {
   initialTab: string;
   integration: IntegrationDto;
   driver: DriverDescriptor | null;
   cloudflareLists: CloudflareIpListDto[];
   domainSyncRun: CloudflareDomainSyncRunDto | null;
+  runs: IntegrationSyncRunDto[];
 }) {
   const router = useRouter();
   const sp = useSearchParams();
@@ -120,6 +130,9 @@ export function SecurityIntegrationTabs({
         )}
         {tab === 'domains' && (
           <DomainsSyncTab integration={integration} initialRun={domainSyncRun} />
+        )}
+        {tab === 'runs' && (
+          <RunsTab integration={integration} runs={runs} mappings={[]} variant="domains" />
         )}
       </div>
     </div>

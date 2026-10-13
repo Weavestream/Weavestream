@@ -10,8 +10,8 @@ export interface FetchWithRetryOpts {
   body?: string;
   /**
    * Default `'error'`: a 3xx comes back as a non-OK response and is never
-   * followed. Integration APIs do not redirect, and safeFetch re-sends
-   * every header (API keys, bearer tokens) to the redirect target.
+   * followed. Integration APIs do not redirect, and safeFetch keeps every
+   * header (API keys, bearer tokens) on a same-origin redirect.
    */
   redirect?: 'follow' | 'manual' | 'error';
   timeoutMs: number;

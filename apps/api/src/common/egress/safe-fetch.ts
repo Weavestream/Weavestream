@@ -21,7 +21,15 @@
  *   4. Follows 3xx redirects in-process (up to 5 hops) and re-runs the
  *      resolve-and-validate path on every hop, so a public host can't
  *      redirect to a private one. Callers that need raw hop visibility
- *      can opt into `redirect: 'manual'`.
+ *      can opt into `redirect: 'manual'`. Each hop also applies the
+ *      Fetch-standard redirect rules plus two stricter ones (see
+ *      `buildRedirectOptions`): 303 (and 301/302 for POST) rewrite to a
+ *      bodyless GET; an https → http downgrade is refused; a
+ *      cross-origin hop drops `Authorization` / `Proxy-Authorization` /
+ *      `Cookie`, and is refused outright when it would still carry a
+ *      request body or any header outside `CROSS_ORIGIN_SAFE_HEADERS`
+ *      (custom API-key headers like `X-API-Key` can't be recognised by
+ *      name, so anything unknown is treated as a credential).
  *   5. Wraps the response stream so we can refuse to keep reading once
  *      `maxResponseBytes` is exceeded — protects worker memory from a
  *      hostile origin streaming a multi-GB payload.
@@ -399,11 +407,11 @@ async function safeFetchInternal(
         await ownedAgent?.close().catch(() => {});
         const visited = internal.visitedUrls ?? [url];
         if (visited.includes(nextUrl)) {
-          throw new Error(`safeFetch redirect loop detected at ${nextUrl}`);
+          throw new Error(`safeFetch redirect loop detected at ${redactUrl(nextUrl)}`);
         }
         return safeFetchInternal(
           nextUrl,
-          { ...options, redirect: 'follow' },
+          buildRedirectOptions(url, nextUrl, res.status, options),
           {
             redirectHopsRemaining: hopsRemaining - 1,
             visitedUrls: [...visited, nextUrl],
@@ -427,6 +435,101 @@ async function safeFetchInternal(
 
 function isRedirectStatus(status: number): boolean {
   return status === 301 || status === 302 || status === 303 || status === 307 || status === 308;
+}
+
+// Stripped on every cross-origin hop, as the Fetch standard does for
+// `Authorization` (and browsers do for cookies).
+const CREDENTIAL_HEADERS = ['authorization', 'proxy-authorization', 'cookie'];
+
+// Dropped together with the body when a redirect rewrites to GET.
+const REQUEST_BODY_HEADERS = [
+  'content-type',
+  'content-length',
+  'content-encoding',
+  'content-language',
+  'content-location',
+];
+
+// The only headers allowed to follow a cross-origin redirect: the
+// CORS-safelisted request headers plus a few transport headers. None can
+// carry a credential. Anything else (e.g. `X-API-Key`, `Add-Padding`)
+// makes the hop refuse, because a custom API-key header can't be told
+// apart from a harmless custom header by name.
+const CROSS_ORIGIN_SAFE_HEADERS = new Set([
+  'accept',
+  'accept-encoding',
+  'accept-language',
+  'cache-control',
+  'content-language',
+  'content-type',
+  'pragma',
+  'user-agent',
+]);
+
+/**
+ * Options for the next hop of a followed redirect. Throws when the hop
+ * must not be followed: an https → http downgrade, or a cross-origin hop
+ * that would still forward a request body or a non-allowlisted header.
+ * Same-origin hops keep every header (Fetch-standard behaviour).
+ */
+function buildRedirectOptions(
+  fromUrl: string,
+  toUrl: string,
+  status: number,
+  options: SafeFetchOptions,
+): SafeFetchOptions {
+  const from = new URL(fromUrl);
+  let to: URL;
+  try {
+    to = new URL(toUrl);
+  } catch {
+    // Unparseable Location: the next hop rejects it as `invalid_url`
+    // before any request is made, so nothing is forwarded.
+    return { ...options, redirect: 'follow' };
+  }
+  if (from.protocol === 'https:' && to.protocol !== 'https:') {
+    throw new Error(
+      `safeFetch refused an https → http redirect downgrade to ${redactUrl(toUrl)}`,
+    );
+  }
+
+  const headers: Record<string, string> = {};
+  new Headers(options.headers).forEach((value, name) => {
+    headers[name] = value;
+  });
+  let method = options.method;
+  let body = options.body;
+
+  const upper = (method ?? 'GET').toUpperCase();
+  const rewriteToGet =
+    (status === 303 && upper !== 'GET' && upper !== 'HEAD') ||
+    ((status === 301 || status === 302) && upper === 'POST');
+  if (rewriteToGet) {
+    method = 'GET';
+    body = undefined;
+    for (const name of REQUEST_BODY_HEADERS) delete headers[name];
+  }
+
+  if (from.origin !== to.origin) {
+    for (const name of CREDENTIAL_HEADERS) delete headers[name];
+    if (body != null) {
+      throw new Error(
+        `safeFetch refused to forward a request body across origins to ${redactUrl(toUrl)}`,
+      );
+    }
+    const unsafe = Object.keys(headers).filter(
+      (name) => !CROSS_ORIGIN_SAFE_HEADERS.has(name),
+    );
+    if (unsafe.length > 0) {
+      // Header names only — never values.
+      throw new Error(
+        `safeFetch refused a cross-origin redirect to ${redactUrl(toUrl)} ` +
+          `carrying non-allowlisted headers: ${unsafe.join(', ')}`,
+      );
+    }
+  }
+
+  return { ...options, method, body, headers, redirect: 'follow' };
 }
 
 function resolveLocation(base: string, location: string): string {

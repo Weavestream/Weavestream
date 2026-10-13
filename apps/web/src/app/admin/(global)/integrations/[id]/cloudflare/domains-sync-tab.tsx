@@ -15,7 +15,8 @@ const POLL_MS = 4000;
 /** Failed status reads in a row before the page says it cannot refresh. */
 const SHOW_REFRESH_PROBLEM_AFTER = 2;
 
-function summary(r: CloudflareDomainSyncResult): string {
+/** One-line counts of a domain sync, shared with the Run history tab. */
+export function domainSyncSummary(r: CloudflareDomainSyncResult): string {
   const base = `${r.created} new, ${r.updated} updated, ${r.adopted} taken over, ${r.missing} no longer on the account`;
   // Older runs predate the count. The audit row names each skipped domain and why.
   return r.skipped ? `${base}, ${r.skipped} skipped (see the audit log)` : base;
@@ -71,7 +72,7 @@ export function DomainsSyncTab({
     if (latest && watching.current === latest.id && !ACTIVE.has(latest.status)) {
       watching.current = null;
       if (latest.status === 'succeeded') {
-        toast.push(`Domain sync finished: ${latest.result ? summary(latest.result) : 'done'}.`, 'ok');
+        toast.push(`Domain sync finished: ${latest.result ? domainSyncSummary(latest.result) : 'done'}.`, 'ok');
       } else {
         toast.push('Domain sync failed. See the Domains tab for the reason.', 'danger');
       }
@@ -178,7 +179,7 @@ function LatestRun({ run }: { run: DomainSyncRun }) {
         </span>
       </div>
       {run.status === 'succeeded' && run.result && (
-        <span style={{ color: 'var(--muted)' }}>{summary(run.result)}.</span>
+        <span style={{ color: 'var(--muted)' }}>{domainSyncSummary(run.result)}.</span>
       )}
       {run.status === 'failed' && run.error && (
         <span

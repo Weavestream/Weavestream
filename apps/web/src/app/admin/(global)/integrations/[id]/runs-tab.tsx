@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import type {
+  CloudflareDomainSyncResult,
   IntegrationCompanyMappingDto,
   IntegrationDto,
   IntegrationSyncRunCompanyResultDto,
@@ -10,26 +11,47 @@ import type {
   SyncRunTotals,
 } from '@weavestream/shared';
 import { apiFetch } from '../../../../../lib/api';
-import { Btn, Dialog, Icon, Tag } from '../../../../../components/ui';
+import {
+  Btn,
+  DataTable,
+  Dialog,
+  Icon,
+  MobileCardRow,
+  Tag,
+  type DataColumn,
+} from '../../../../../components/ui';
 import { FormattedDateTime } from '../../../../../lib/timezone-context';
+import { domainSyncSummary } from './cloudflare/domains-sync-tab';
+
+/**
+ * What the runs record. `records`: asset-import syncs, whose totals are
+ * {@link SyncRunTotals} with a per-mapping breakdown. `domains`: Cloudflare
+ * registrar syncs, whose totals are a {@link CloudflareDomainSyncResult} and
+ * which have no mode and no per-company results.
+ */
+export type RunsTabVariant = 'records' | 'domains';
 
 /**
  * Phase 11 — sync run history.
  *
  * Lists recent runs for the integration with totals, status, and a
  * "view details" affordance that opens a per-run drawer with the
- * per-mapping breakdown + conflict log. Read-only.
+ * per-mapping breakdown + conflict log. Read-only. Uses the global
+ * table standard, so phones get one card per run.
  */
 export function RunsTab({
   integration,
   runs,
   mappings,
+  variant = 'records',
 }: {
   integration: IntegrationDto;
   runs: IntegrationSyncRunDto[];
   mappings: IntegrationCompanyMappingDto[];
+  variant?: RunsTabVariant;
 }) {
   const [openRunId, setOpenRunId] = useState<string | null>(null);
+  const domains = variant === 'domains';
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       <header
@@ -41,56 +63,40 @@ export function RunsTab({
       >
         <h3 style={sectionHeader}>Run history</h3>
         <p style={{ margin: 0, fontSize: 12.5, color: 'var(--muted)' }}>
-          Latest sync runs across every mapping in this integration. The 50
-          most recent runs are kept.
+          {domains
+            ? 'Manual and scheduled domain syncs, newest first. The 50 most recent runs are shown.'
+            : 'Latest sync runs across every mapping in this integration. The 50 most recent runs are kept.'}
         </p>
       </header>
 
-      {runs.length === 0 ? (
-        <div style={emptyState}>
-          No syncs yet. Trigger a manual run from the Credentials &amp; schedule
-          tab to populate this history.
-        </div>
-      ) : (
-        <div
-          style={{
-            border: '1px solid var(--line)',
-            borderRadius: 8,
-            overflow: 'hidden',
-          }}
-        >
-          {runs.map((r, idx) => (
-            <button
-              key={r.id}
-              type="button"
-              onClick={() => setOpenRunId(r.id)}
-              style={{
-                display: 'grid',
-                gridTemplateColumns: '120px 100px 100px 90px 1fr 16px',
-                gap: 12,
-                width: '100%',
-                padding: '10px 14px',
-                background: 'transparent',
-                border: 'none',
-                borderTop: idx === 0 ? 'none' : '1px solid var(--line)',
-                cursor: 'pointer',
-                textAlign: 'left',
-                alignItems: 'center',
-                color: 'var(--text)',
-              }}
-            >
-              <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>
-                <FormattedDateTime value={r.startedAt ?? r.createdAt} />
-              </span>
+      <DataTable
+        columns={runColumns(variant, setOpenRunId)}
+        rows={runs}
+        onRowClick={(r) => setOpenRunId(r.id)}
+        defaultSort={{ columnId: 'started', direction: 'desc' }}
+        layout="fixed"
+        empty={
+          domains
+            ? 'No domain syncs yet. Select “Sync domains now” on the Domains tab, or wait for the schedule.'
+            : 'No syncs yet. Trigger a manual run from the Credentials & schedule tab to populate this history.'
+        }
+        renderMobileCard={(r) => (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
               <RunStatusTag status={r.status} />
               <Tag tone="default">{r.kind}</Tag>
-              <Tag tone={r.mode === 'full' ? 'accent' : 'default'}>{r.mode}</Tag>
-              <RunTotalsSummary totals={r.totals as SyncRunTotals | null} dryRun={r.dryRun} />
-              <Icon.chevron size={11} style={{ color: 'var(--dim)' }} />
-            </button>
-          ))}
-        </div>
-      )}
+              {!domains && <RunModeTag mode={r.mode} />}
+              {r.dryRun && <Tag tone="info">dry run</Tag>}
+            </div>
+            <MobileCardRow label="Started" mono>
+              <FormattedDateTime value={r.startedAt ?? r.createdAt} />
+            </MobileCardRow>
+            <MobileCardRow label="Result">
+              <RunRowSummary run={r} variant={variant} wrap />
+            </MobileCardRow>
+          </div>
+        )}
+      />
 
       {openRunId && (
         <RunDetailDialog
@@ -98,11 +104,82 @@ export function RunsTab({
           runId={openRunId}
           mappings={mappings}
           resourceLabelByKey={resourceLabelByKey(integration)}
+          variant={variant}
           onClose={() => setOpenRunId(null)}
         />
       )}
     </div>
   );
+}
+
+/**
+ * Desktop columns. The result column declares no width so it takes the
+ * slack under `layout="fixed"`; the last column is a real button, so the
+ * run details stay reachable from the keyboard (a row click is mouse-only).
+ */
+function runColumns(
+  variant: RunsTabVariant,
+  open: (runId: string) => void,
+): DataColumn<IntegrationSyncRunDto>[] {
+  const cols: DataColumn<IntegrationSyncRunDto>[] = [
+    {
+      id: 'started',
+      header: 'Started',
+      width: 130,
+      mono: true,
+      render: (r) => <FormattedDateTime value={r.startedAt ?? r.createdAt} />,
+      sortValue: (r) => r.startedAt ?? r.createdAt,
+    },
+    {
+      id: 'status',
+      header: 'Status',
+      width: 104,
+      render: (r) => <RunStatusTag status={r.status} />,
+      sortValue: (r) => r.status,
+    },
+    {
+      // Mode shares this column so the result keeps its width when a
+      // side panel narrows the page.
+      id: 'kind',
+      header: 'Kind',
+      width: 116,
+      render: (r) => (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+          <Tag tone="default">{r.kind}</Tag>
+          {variant === 'records' && <RunModeTag mode={r.mode} />}
+        </div>
+      ),
+      sortValue: (r) => r.kind,
+    },
+  ];
+  cols.push(
+    {
+      id: 'result',
+      header: 'Result',
+      render: (r) => <RunRowSummary run={r} variant={variant} />,
+    },
+    {
+      id: 'open',
+      header: '',
+      width: 44,
+      align: 'right',
+      render: (r) => (
+        <button
+          type="button"
+          aria-label="View run details"
+          onClick={() => open(r.id)}
+          style={openButton}
+        >
+          <Icon.chevron size={11} />
+        </button>
+      ),
+    },
+  );
+  return cols;
+}
+
+function RunModeTag({ mode }: { mode: IntegrationSyncRunDto['mode'] }) {
+  return <Tag tone={mode === 'full' ? 'accent' : 'default'}>{mode}</Tag>;
 }
 
 function resourceLabelByKey(integration: IntegrationDto): Map<string, string> {
@@ -116,12 +193,14 @@ function RunDetailDialog({
   runId,
   mappings,
   resourceLabelByKey,
+  variant,
   onClose,
 }: {
   integrationId: string;
   runId: string;
   mappings: IntegrationCompanyMappingDto[];
   resourceLabelByKey: Map<string, string>;
+  variant: RunsTabVariant;
   onClose: () => void;
 }) {
   const [detail, setDetail] = useState<{
@@ -175,7 +254,7 @@ function RunDetailDialog({
             <div
               style={{
                 display: 'grid',
-                gridTemplateColumns: 'repeat(2, 1fr)',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
                 gap: 6,
                 fontSize: 12.5,
                 fontFamily: 'var(--font-mono)',
@@ -193,82 +272,94 @@ function RunDetailDialog({
                     : 'system'}
               </span>
             </div>
-            <div style={{ marginTop: 10 }}>
-              <RunTotalsBreakdown totals={run.totals as SyncRunTotals | null} />
-            </div>
-            <ResourceTotalsBreakdown
-              totals={run.totals as SyncRunTotals | null}
-              resourceLabelByKey={resourceLabelByKey}
-            />
+            {variant === 'domains' ? (
+              run.totals && (
+                <p style={{ margin: '10px 0 0', fontSize: 13, color: 'var(--muted)' }}>
+                  {domainSyncSummary(run.totals as CloudflareDomainSyncResult)}.
+                </p>
+              )
+            ) : (
+              <>
+                <div style={{ marginTop: 10 }}>
+                  <RunTotalsBreakdown totals={run.totals as SyncRunTotals | null} />
+                </div>
+                <ResourceTotalsBreakdown
+                  totals={run.totals as SyncRunTotals | null}
+                  resourceLabelByKey={resourceLabelByKey}
+                />
+              </>
+            )}
             {run.error && (
-              <Tag tone="danger" style={{ marginTop: 8 }}>
-                {run.error}
-              </Tag>
+              // Wraps, unlike a Tag: a run error can be a sentence or two.
+              <p style={runErrorText}>{run.error}</p>
             )}
           </section>
 
-          <section>
-            <h4 style={subHeader}>Per-company results</h4>
-            {companyResults.length === 0 ? (
-              <Tag tone="default">No company results recorded.</Tag>
-            ) : (
-              <div
-                style={{
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: 8,
-                }}
-              >
-                {companyResults.map((r) => {
-                  const m = mappings.find(
-                    (x) => x.id === r.integrationCompanyMappingId,
-                  );
-                  return (
-                    <div
-                      key={r.id}
-                      style={{
-                        border: '1px solid var(--line)',
-                        borderRadius: 6,
-                        padding: 10,
-                      }}
-                    >
+          {variant === 'records' && (
+            <section>
+              <h4 style={subHeader}>Per-company results</h4>
+              {companyResults.length === 0 ? (
+                <Tag tone="default">No company results recorded.</Tag>
+              ) : (
+                <div
+                  style={{
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 8,
+                  }}
+                >
+                  {companyResults.map((r) => {
+                    const m = mappings.find(
+                      (x) => x.id === r.integrationCompanyMappingId,
+                    );
+                    return (
                       <div
+                        key={r.id}
                         style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: 8,
-                          marginBottom: 6,
+                          border: '1px solid var(--line)',
+                          borderRadius: 6,
+                          padding: 10,
                         }}
                       >
-                        <strong style={{ fontSize: 13 }}>
-                          {r.companyName ?? r.companyId.slice(0, 8)}
-                        </strong>
-                        {m && (
-                          <Tag tone="default">
-                            {m.externalOrgName ?? m.externalOrgId}
+                        <div
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            flexWrap: 'wrap',
+                            gap: 8,
+                            marginBottom: 6,
+                          }}
+                        >
+                          <strong style={{ fontSize: 13 }}>
+                            {r.companyName ?? r.companyId.slice(0, 8)}
+                          </strong>
+                          {m && (
+                            <Tag tone="default">
+                              {m.externalOrgName ?? m.externalOrgId}
+                            </Tag>
+                          )}
+                          <RunStatusTag status={r.status} />
+                        </div>
+                        <RunTotalsBreakdown totals={r.totals as SyncRunTotals | null} />
+                        <ResourceTotalsBreakdown
+                          totals={r.totals as SyncRunTotals | null}
+                          resourceLabelByKey={resourceLabelByKey}
+                        />
+                        {r.error && (
+                          <Tag tone="danger" style={{ marginTop: 6 }}>
+                            {r.error}
                           </Tag>
                         )}
-                        <RunStatusTag status={r.status} />
+                        {Array.isArray(r.conflicts) && r.conflicts.length > 0 && (
+                          <ConflictList conflicts={r.conflicts as SyncRunConflict[]} />
+                        )}
                       </div>
-                      <RunTotalsBreakdown totals={r.totals as SyncRunTotals | null} />
-                      <ResourceTotalsBreakdown
-                        totals={r.totals as SyncRunTotals | null}
-                        resourceLabelByKey={resourceLabelByKey}
-                      />
-                      {r.error && (
-                        <Tag tone="danger" style={{ marginTop: 6 }}>
-                          {r.error}
-                        </Tag>
-                      )}
-                      {Array.isArray(r.conflicts) && r.conflicts.length > 0 && (
-                        <ConflictList conflicts={r.conflicts as SyncRunConflict[]} />
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </section>
+                    );
+                  })}
+                </div>
+              )}
+            </section>
+          )}
         </div>
       )}
     </Dialog>
@@ -344,6 +435,38 @@ function RunStatusTag({ status }: { status: string }) {
       {status}
     </Tag>
   );
+}
+
+/**
+ * The row's one-line outcome. A run that failed before recording any totals
+ * shows its error here, so the reason is visible without opening the run.
+ */
+function RunRowSummary({
+  run,
+  variant,
+  wrap = false,
+}: {
+  run: IntegrationSyncRunDto;
+  variant: RunsTabVariant;
+  /** Wrap to a few lines instead of one, for the mobile card. */
+  wrap?: boolean;
+}) {
+  const text = wrap ? wrappedSummaryText : rowSummaryText;
+  if (run.status === 'failed' && run.error && !run.totals) {
+    return (
+      <span title={run.error} style={{ ...text, color: 'var(--danger)' }}>
+        {run.error}
+      </span>
+    );
+  }
+  if (variant === 'domains') {
+    return (
+      <span style={{ ...text, color: run.totals ? 'var(--muted)' : 'var(--dim)' }}>
+        {run.totals ? domainSyncSummary(run.totals as CloudflareDomainSyncResult) : 'no totals'}
+      </span>
+    );
+  }
+  return <RunTotalsSummary totals={run.totals as SyncRunTotals | null} dryRun={run.dryRun} />;
 }
 
 function RunTotalsSummary({
@@ -524,11 +647,45 @@ const subHeader: React.CSSProperties = {
   letterSpacing: 0.6,
 };
 
-const emptyState: React.CSSProperties = {
-  padding: 32,
-  border: '1px dashed var(--line-2)',
-  borderRadius: 8,
-  color: 'var(--muted)',
-  textAlign: 'center',
-  fontSize: 13,
+const rowSummaryText: React.CSSProperties = {
+  display: 'block',
+  fontSize: 11.5,
+  minWidth: 0,
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+};
+
+/** Three lines at most: a card is a preview, the run details hold the rest. */
+const wrappedSummaryText: React.CSSProperties = {
+  display: '-webkit-box',
+  WebkitLineClamp: 3,
+  WebkitBoxOrient: 'vertical',
+  overflow: 'hidden',
+  fontSize: 12,
+  overflowWrap: 'anywhere',
+  lineHeight: 1.45,
+};
+
+const openButton: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  width: 28,
+  height: 28,
+  padding: 0,
+  background: 'transparent',
+  border: 'none',
+  borderRadius: 6,
+  color: 'var(--dim)',
+  cursor: 'pointer',
+};
+
+const runErrorText: React.CSSProperties = {
+  margin: '8px 0 0',
+  fontSize: 12.5,
+  color: 'var(--danger)',
+  whiteSpace: 'pre-wrap',
+  overflowWrap: 'anywhere',
+  lineHeight: 1.5,
 };

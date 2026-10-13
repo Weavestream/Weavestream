@@ -114,7 +114,7 @@ Use **Completeness** tab to track synchronized current, manually documented, sec
 
 Create a **Cloudflare** integration using the **Cloudflare Account ID** and an **API Token**. Give the token only the permissions of the features you use: **Account → Zero Trust → Edit** for Gateway IP lists, and **Zone → Zone → Read** plus read access to **Registrar** for domain sync.
 
-After **Test connection** succeeds, save and activate. For IP lists, open the **Lists** tab, select **Register list**, and choose an IP list from Cloudflare. Existing entries import upon registration, and Weavestream is the source of truth from then on. For domain sync, set **Sync domains into company (slug)**; the **Domains** tab shows the latest sync and has **Sync domains now**.
+After **Test connection** succeeds, save and activate. For IP lists, open the **Lists** tab, select **Register list**, and choose an IP list from Cloudflare. Existing entries import upon registration, and Weavestream is the source of truth from then on. For domain sync, set **Sync domains into company (slug)**; the **Domains** tab shows the latest sync and has **Sync domains now**, and **Run history** lists every manual and scheduled domain sync with its counts or error.
 
 ## Manage a registered Cloudflare Gateway IP list
 <!-- aliases: cloudflare list entries | add IP to Cloudflare list | remove IP from zero trust list | CIDR allow list | cloudflare drift repair -->

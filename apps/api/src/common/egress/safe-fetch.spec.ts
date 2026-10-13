@@ -353,7 +353,7 @@ describe('safeFetch — egress guard', () => {
     });
 
     it('blocks a redirect that points at a private IP', async () => {
-      // First hop returns a 302 → http://internal.example/. The resolve
+      // First hop returns a 302 → https://internal.example/. The resolve
       // stub returns a public IP for the first lookup and a private IP
       // for the destination, so the second safeFetch entry must reject
       // with EgressBlockedError instead of performing the request.
@@ -362,7 +362,7 @@ describe('safeFetch — egress guard', () => {
         Promise.resolve(
           new Response(null, {
             status: 302,
-            headers: { location: 'http://internal.example/admin' },
+            headers: { location: 'https://internal.example/admin' },
           }),
         )) as unknown as typeof fetch;
       const resolve = async () => {
@@ -415,6 +415,203 @@ describe('safeFetch — egress guard', () => {
       });
       expect(res.status).toBe(302);
       expect(res.headers.get('location')).toBe('https://elsewhere.example/');
+    });
+  });
+
+  describe('redirect header, body and method rules', () => {
+    type Sent = { url: string; method: string; headers: Headers; body: unknown };
+
+    // Replies with a single redirect, then 200, and records every request.
+    const redirectOnce = (status: number, location: string) => {
+      const sent: Sent[] = [];
+      const fetchImpl = ((url: string, init?: RequestInit) => {
+        sent.push({
+          url,
+          method: init?.method ?? 'GET',
+          headers: new Headers(init?.headers),
+          body: init?.body,
+        });
+        return Promise.resolve(
+          sent.length === 1
+            ? new Response(null, { status, headers: { location } })
+            : new Response('ok', { status: 200 }),
+        );
+      }) as unknown as typeof fetch;
+      return { sent, fetchImpl };
+    };
+    const base = { timeoutMs: 1000, resolve: resolveTo(['8.8.8.8']) };
+
+    it('strips Authorization, Proxy-Authorization and Cookie on a cross-origin hop', async () => {
+      const { sent, fetchImpl } = redirectOnce(302, 'https://other.example/x');
+      const res = await safeFetch('https://start.example/go', {
+        ...base,
+        fetchImpl,
+        headers: {
+          AUTHORIZATION: 'Bearer secret',
+          'proxy-Authorization': 'Basic secret',
+          Cookie: 'sid=secret',
+          Accept: 'application/json',
+          'User-Agent': 'weavestream-test',
+        },
+      });
+      expect(res.status).toBe(200);
+      expect(sent).toHaveLength(2);
+      expect(sent[0]!.headers.get('authorization')).toBe('Bearer secret');
+      const hop = sent[1]!.headers;
+      expect(hop.get('authorization')).toBeNull();
+      expect(hop.get('proxy-authorization')).toBeNull();
+      expect(hop.get('cookie')).toBeNull();
+      expect(hop.get('accept')).toBe('application/json');
+      expect(hop.get('user-agent')).toBe('weavestream-test');
+    });
+
+    it('keeps credentials on a same-origin hop', async () => {
+      const { sent, fetchImpl } = redirectOnce(302, '/moved');
+      await safeFetch('https://start.example/go', {
+        ...base,
+        fetchImpl,
+        headers: { Authorization: 'Bearer secret', 'X-API-Key': 'k' },
+      });
+      expect(sent[1]!.url).toBe('https://start.example/moved');
+      expect(sent[1]!.headers.get('authorization')).toBe('Bearer secret');
+      expect(sent[1]!.headers.get('x-api-key')).toBe('k');
+    });
+
+    it('treats a port change as cross-origin', async () => {
+      const { sent, fetchImpl } = redirectOnce(302, 'https://start.example:8443/go');
+      await safeFetch('https://start.example/go', {
+        ...base,
+        fetchImpl,
+        headers: { Authorization: 'Bearer secret' },
+      });
+      expect(sent[1]!.headers.get('authorization')).toBeNull();
+    });
+
+    it('refuses a cross-origin hop that carries a non-allowlisted header', async () => {
+      const { sent, fetchImpl } = redirectOnce(302, 'https://other.example/x');
+      await expect(
+        safeFetch('https://start.example/go', {
+          ...base,
+          fetchImpl,
+          headers: { Accept: 'application/json', 'X-API-KEY': 'secret-key' },
+        }),
+      ).rejects.toThrow(/non-allowlisted headers: x-api-key/);
+      expect(sent).toHaveLength(1);
+    });
+
+    it('never puts a header value in the refusal message', async () => {
+      const { fetchImpl } = redirectOnce(302, 'https://other.example/x');
+      const err = await safeFetch('https://start.example/go', {
+        ...base,
+        fetchImpl,
+        headers: { 'X-API-Key': 'secret-key' },
+      }).catch((e: unknown) => e);
+      expect(String(err)).not.toContain('secret-key');
+    });
+
+    it('refuses a cross-origin 307 that would re-send the body', async () => {
+      const { sent, fetchImpl } = redirectOnce(307, 'https://other.example/x');
+      await expect(
+        safeFetch('https://start.example/go', {
+          ...base,
+          fetchImpl,
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: '{"prompt":"customer data"}',
+        }),
+      ).rejects.toThrow(/request body across origins/);
+      expect(sent).toHaveLength(1);
+    });
+
+    it.each([303, 301, 302])('rewrites POST to a bodyless GET on %i', async (status) => {
+      const { sent, fetchImpl } = redirectOnce(status, '/result');
+      await safeFetch('https://start.example/go', {
+        ...base,
+        fetchImpl,
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer s' },
+        body: '{"a":1}',
+      });
+      expect(sent[1]!.method).toBe('GET');
+      expect(sent[1]!.body).toBeUndefined();
+      expect(sent[1]!.headers.get('content-type')).toBeNull();
+      // Same origin: credentials survive the rewrite.
+      expect(sent[1]!.headers.get('authorization')).toBe('Bearer s');
+    });
+
+    it('rewrites PUT to GET on 303 but keeps PUT on 301/302', async () => {
+      const see = redirectOnce(303, '/r');
+      await safeFetch('https://start.example/go', {
+        ...base,
+        fetchImpl: see.fetchImpl,
+        method: 'PUT',
+        body: 'x',
+      });
+      expect(see.sent[1]!.method).toBe('GET');
+      expect(see.sent[1]!.body).toBeUndefined();
+
+      const moved = redirectOnce(301, '/r');
+      await safeFetch('https://start.example/go', {
+        ...base,
+        fetchImpl: moved.fetchImpl,
+        method: 'PUT',
+        body: 'x',
+      });
+      expect(moved.sent[1]!.method).toBe('PUT');
+      expect(moved.sent[1]!.body).toBe('x');
+    });
+
+    it('keeps HEAD on 303', async () => {
+      const { sent, fetchImpl } = redirectOnce(303, '/r');
+      await safeFetch('https://start.example/go', { ...base, fetchImpl, method: 'HEAD' });
+      expect(sent[1]!.method).toBe('HEAD');
+    });
+
+    it.each([307, 308])('keeps method and body on a same-origin %i', async (status) => {
+      const { sent, fetchImpl } = redirectOnce(status, '/r');
+      await safeFetch('https://start.example/go', {
+        ...base,
+        fetchImpl,
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{"a":1}',
+      });
+      expect(sent[1]!.method).toBe('POST');
+      expect(sent[1]!.body).toBe('{"a":1}');
+      expect(sent[1]!.headers.get('content-type')).toBe('application/json');
+    });
+
+    it('follows a cross-origin 303 from a POST once the body is dropped', async () => {
+      const { sent, fetchImpl } = redirectOnce(303, 'https://other.example/r');
+      const res = await safeFetch('https://start.example/go', {
+        ...base,
+        fetchImpl,
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer s' },
+        body: '{"a":1}',
+      });
+      expect(res.status).toBe(200);
+      expect(sent[1]!.method).toBe('GET');
+      expect(sent[1]!.headers.get('authorization')).toBeNull();
+    });
+
+    it('refuses an https → http downgrade, even same-host', async () => {
+      const { sent, fetchImpl } = redirectOnce(301, 'http://start.example/go');
+      await expect(
+        safeFetch('https://start.example/go', { ...base, fetchImpl }),
+      ).rejects.toThrow(/https → http redirect downgrade/);
+      expect(sent).toHaveLength(1);
+    });
+
+    it('still allows an http → https upgrade', async () => {
+      const { sent, fetchImpl } = redirectOnce(301, 'https://start.example/go');
+      const res = await safeFetch('http://start.example/go', {
+        ...base,
+        fetchImpl,
+        headers: { Accept: 'text/html' },
+      });
+      expect(res.status).toBe(200);
+      expect(sent[1]!.url).toBe('https://start.example/go');
     });
   });
 

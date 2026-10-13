@@ -54,21 +54,18 @@ export default async function IntegrationDetailPage({
   const driver = drivers.find((d) => d.key === integration.driver) ?? null;
   const kind = driver?.capabilities.kind ?? 'pull';
 
-  // Asset-import drivers fetch the per-tenant mappings and run history
-  // up-front; security drivers (Cloudflare) instead need the registered
-  // lists. Splitting the fetch by kind avoids hitting endpoints that
-  // 400 for the wrong driver shape.
+  // Every driver has a run history (Cloudflare's runs are its domain
+  // syncs). Asset-import drivers also fetch the per-tenant mappings;
+  // security drivers (Cloudflare) instead need the registered lists.
+  // Splitting the rest by kind avoids hitting endpoints that 400 for
+  // the wrong driver shape.
   const [mappingsRes, runsRes, cfListsRes, cfDomainSyncRes] = await Promise.all([
     kind === 'pull'
       ? serverApiFetch<IntegrationCompanyMappingDto[]>(
           `/admin/integrations/${id}/mappings`,
         )
       : Promise.resolve({ data: [] as IntegrationCompanyMappingDto[] }),
-    kind === 'pull'
-      ? serverApiFetch<IntegrationSyncRunDto[]>(
-          `/admin/integrations/${id}/runs`,
-        )
-      : Promise.resolve({ data: [] as IntegrationSyncRunDto[] }),
+    serverApiFetch<IntegrationSyncRunDto[]>(`/admin/integrations/${id}/runs`),
     kind === 'security'
       ? serverApiFetch<CloudflareIpListDto[]>(
           `/admin/integrations/${id}/cloudflare/lists`,
@@ -113,6 +110,7 @@ export default async function IntegrationDetailPage({
               driver={driver}
               cloudflareLists={cloudflareLists}
               domainSyncRun={domainSyncRun}
+              runs={runs}
             />
           ) : (
             <IntegrationTabs
