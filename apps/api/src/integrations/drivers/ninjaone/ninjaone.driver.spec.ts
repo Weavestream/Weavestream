@@ -1,4 +1,10 @@
 import {
+  driverDescriptorSchema,
+  integrationSetupCheckSchema,
+  setupGuideSchema,
+  type IntegrationSetupCheck,
+} from '@weavestream/shared';
+import {
   DriverAuthError,
   DriverRateLimitError,
   type FetchRecordsContext,
@@ -8,6 +14,7 @@ import {
   NinjaOneDriver,
   __resetNinjaOneTokenCacheForTests,
 } from './ninjaone.driver.js';
+import { NINJAONE_SETUP_GUIDE } from './ninjaone.setup-guide.js';
 import {
   setDefaultFetchForTests,
   setDefaultResolveForTests,
@@ -1271,5 +1278,229 @@ describe('NinjaOneDriver.fetchRecords', () => {
     } finally {
       fx.restore();
     }
+  });
+});
+
+describe('NinjaOneDriver descriptor', () => {
+  it('validates against the shared schema with a setup guide', () => {
+    const parsed = driverDescriptorSchema.parse(new NinjaOneDriver().descriptor);
+    expect(parsed.setupGuide?.map((s) => s.id)).toEqual([
+      'api-client',
+      'region',
+      'credentials',
+      'organizations',
+      'fields',
+      'sync',
+      'tickets',
+    ]);
+    expect(setupGuideSchema.safeParse(NINJAONE_SETUP_GUIDE).success).toBe(true);
+    // The Client ID / Client Secret pair and the base URL stay as they were.
+    expect(parsed.secretFields.map((f) => [f.key, f.kind])).toEqual([
+      ['apiKey', 'text'],
+      ['apiSecret', 'password'],
+    ]);
+    expect(parsed.configFields.map((f) => f.key)).toEqual(['baseUrl']);
+  });
+});
+
+describe('NinjaOneDriver Check setup', () => {
+  /** Provider error text that must never reach a Check setup message. */
+  const PROVIDER_TEXT = 'PROVIDER-ERROR-TEXT-do-not-echo';
+  const TOKEN_OK: ScriptedResponse = { kind: 'json', body: { access_token: 'tok-1' } };
+  const ORGS: ScriptedResponse = { kind: 'json', body: [{ id: 1, name: 'Acme' }] };
+  const fail = (status: number): ScriptedResponse => ({
+    kind: 'text',
+    status,
+    body: PROVIDER_TEXT,
+  });
+  const invalidScope: ScriptedResponse = {
+    kind: 'json',
+    status: 400,
+    body: { error: 'invalid_scope', error_description: PROVIDER_TEXT },
+  };
+
+  async function check(
+    script: ScriptedResponse[],
+    ctx: IntegrationContext = makeCtx(),
+  ): Promise<{ result: IntegrationSetupCheck; calls: RecordedCall[] }> {
+    const fx = installFetchScript(script);
+    try {
+      const result = await new NinjaOneDriver().diagnose({ mode: 'connection', ctx });
+      expect(integrationSetupCheckSchema.parse(result)).toEqual(result);
+      expect(JSON.stringify(result)).not.toContain(PROVIDER_TEXT);
+      return { result, calls: fx.calls };
+    } finally {
+      fx.restore();
+    }
+  }
+
+  it('passes every step it can verify with one token exchange and a read-only GET', async () => {
+    const { result, calls } = await check([TOKEN_OK, ORGS]);
+    expect(result).toEqual({
+      ok: true,
+      passedStepIds: ['api-client', 'region', 'credentials', 'organizations'],
+      failures: [],
+    });
+    expect(calls.map((c) => [c.method, new URL(c.url).pathname])).toEqual([
+      ['POST', '/ws/oauth/token'],
+      ['GET', '/v2/organizations'],
+    ]);
+  });
+
+  it('exchanges a fresh token even when one is cached', async () => {
+    const fx = installFetchScript([TOKEN_OK, ORGS]);
+    try {
+      await new NinjaOneDriver().testConnection(makeCtx());
+    } finally {
+      fx.restore();
+    }
+    const { result, calls } = await check([fail(401)]);
+    expect(calls.map((c) => new URL(c.url).pathname)).toEqual(['/ws/oauth/token']);
+    expect(result.failures).toEqual([
+      { stepId: 'api-client', message: expect.stringMatching(/does not accept this Client ID/) },
+    ]);
+  });
+
+  it('passes without the ticketing scope (monitoring-only fallback)', async () => {
+    const { result, calls } = await check([invalidScope, TOKEN_OK, ORGS]);
+    expect(result.ok).toBe(true);
+    expect(calls.map((c) => c.body ?? '')).toEqual([
+      expect.stringContaining('scope=monitoring+ticketing'),
+      expect.stringContaining('scope=monitoring'),
+      '',
+    ]);
+  });
+
+  it('points a refused Monitoring scope at the client app in step 1', async () => {
+    const { result } = await check([invalidScope, invalidScope]);
+    expect(result).toEqual({
+      ok: false,
+      passedStepIds: [],
+      failures: [{ stepId: 'api-client', message: expect.stringMatching(/does not have the Monitoring scope/) }],
+    });
+  });
+
+  it('points zero organizations at the Organizations step', async () => {
+    const { result } = await check([TOKEN_OK, { kind: 'json', body: [] }]);
+    expect(result).toEqual({
+      ok: false,
+      passedStepIds: ['api-client', 'region', 'credentials'],
+      failures: [{ stepId: 'organizations', message: expect.stringMatching(/returned no organizations/) }],
+    });
+  });
+
+  it.each([
+    ['a token 401', [fail(401)]],
+    ['a token 403', [fail(403)]],
+    ['a token 400 without invalid_scope', [fail(400)]],
+    ['a monitoring-only token 400 without invalid_scope', [invalidScope, fail(400)]],
+    ['an organization list 401', [TOKEN_OK, fail(401)]],
+  ] as Array<[string, ScriptedResponse[]]>)('points %s at the credentials', async (_name, script) => {
+    const { result } = await check(script);
+    expect(result.failures).toEqual([
+      { stepId: 'api-client', message: expect.stringMatching(/does not accept this Client ID/) },
+    ]);
+    expect(result.failures[0]!.message).toMatch(/step 3/);
+  });
+
+  it('points an unknown Client ID (token 404) at the region and the Client ID', async () => {
+    const { result } = await check([fail(404)]);
+    expect(result.failures).toEqual([
+      { stepId: 'region', message: expect.stringMatching(/does not know this Client ID/) },
+    ]);
+  });
+
+  it('points a 403 on the organization list at the Monitoring scope', async () => {
+    const { result } = await check([TOKEN_OK, fail(403)]);
+    expect(result).toEqual({
+      ok: false,
+      passedStepIds: ['region', 'credentials'],
+      failures: [{ stepId: 'api-client', message: expect.stringMatching(/does not have the Monitoring scope/) }],
+    });
+  });
+
+  it.each([
+    ['an organization list 404', [TOKEN_OK, fail(404)]],
+    ['an HTML token page', [{ kind: 'text', status: 200, body: `<html>${PROVIDER_TEXT}</html>` }]],
+    ['a token response without access_token', [{ kind: 'json', body: { error: PROVIDER_TEXT } }]],
+  ] as Array<[string, ScriptedResponse[]]>)('points %s at the API base URL', async (_name, script) => {
+    const { result } = await check(script);
+    expect(result.failures).toEqual([
+      { stepId: 'region', message: expect.stringMatching(/does not point to the NinjaOne API/) },
+    ]);
+  });
+
+  it.each([
+    ['does not resolve', async (): Promise<string[]> => { throw new Error(`getaddrinfo ENOTFOUND ${PROVIDER_TEXT}`); }],
+    ['resolves to a private address', async (): Promise<string[]> => ['10.0.0.5']],
+  ])('points a host that %s at the API base URL', async (_name, resolve) => {
+    const fx = installFetchScript([]);
+    setDefaultResolveForTests(resolve);
+    try {
+      const result = await new NinjaOneDriver().diagnose({ mode: 'connection', ctx: makeCtx() });
+      expect(result.failures).toEqual([
+        { stepId: 'region', message: expect.stringMatching(/cannot connect to the saved API base URL/) },
+      ]);
+      expect(JSON.stringify(result)).not.toContain(PROVIDER_TEXT);
+      expect(fx.calls).toEqual([]);
+    } finally {
+      fx.restore();
+    }
+  });
+
+  it('asks to retry on a rate limit', async () => {
+    const limited: ScriptedResponse = { kind: 'text', status: 429, body: PROVIDER_TEXT, headers: { 'Retry-After': '0' } };
+    const { result } = await check([TOKEN_OK, limited, limited, limited]);
+    expect(result.failures).toEqual([{ stepId: null, message: expect.stringMatching(/rate limiting/) }]);
+  });
+
+  it.each([
+    ['the token exchange', [fail(500), fail(500), fail(500)]],
+    ['the organization list', [TOKEN_OK, fail(500), fail(500), fail(500)]],
+  ] as Array<[string, ScriptedResponse[]]>)('reports a server error on %s as a general failure', async (_name, script) => {
+    const { result } = await check(script);
+    expect(result.failures).toEqual([{ stepId: null, message: expect.stringMatching(/did not answer as expected/) }]);
+  });
+
+  it('reports a network failure as unreachable without the error text', async () => {
+    setDefaultFetchForTests((async () => {
+      throw new TypeError(`fetch failed: ${PROVIDER_TEXT}`);
+    }) as typeof fetch);
+    setDefaultResolveForTests(async () => ['1.2.3.4']);
+    try {
+      const result = await new NinjaOneDriver().diagnose({ mode: 'connection', ctx: makeCtx() });
+      expect(result.failures).toEqual([{ stepId: null, message: expect.stringMatching(/could not reach NinjaOne/) }]);
+      expect(JSON.stringify(result)).not.toContain(PROVIDER_TEXT);
+    } finally {
+      setDefaultFetchForTests(null);
+      setDefaultResolveForTests(null);
+    }
+  });
+
+  it('asks for the credentials before any request when none are saved', async () => {
+    const { result, calls } = await check([], { ...makeCtx(), secret: {} });
+    expect(result.failures).toEqual([{ stepId: 'credentials', message: expect.stringMatching(/No Client ID and Client Secret/) }]);
+    expect(calls).toEqual([]);
+  });
+
+  it('flags an invalid API base URL before any request', async () => {
+    const { result, calls } = await check([], { ...makeCtx(), config: { baseUrl: 'not a url' } });
+    expect(result.failures).toEqual([{ stepId: 'region', message: expect.stringMatching(/not a valid URL/) }]);
+    expect(calls).toEqual([]);
+  });
+
+  it('has no OAuth app to check', async () => {
+    const result = await new NinjaOneDriver().diagnose({
+      mode: 'client',
+      oauthClient: {} as never,
+      redirectUri: 'https://weavestream.test/cb',
+      http: HTTP,
+      correlationId: 'test-corr',
+    });
+    expect(result).toEqual({
+      ok: false,
+      passedStepIds: [],
+      failures: [{ stepId: null, message: 'NinjaOne has no OAuth app to check.' }],
+    });
   });
 });

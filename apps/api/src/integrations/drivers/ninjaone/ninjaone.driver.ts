@@ -2,6 +2,7 @@ import { Logger } from '@nestjs/common';
 import { z } from 'zod';
 import type {
   DriverDescriptor,
+  IntegrationSetupCheck,
   SourceFieldDto,
   SourceOrgDto,
   TicketActivityDto,
@@ -15,6 +16,7 @@ import type {
 } from '@weavestream/shared';
 import {
   DriverAuthError,
+  type DriverDiagnoseInput,
   type LegacyDriverFetchPage,
   type LegacyDriverRecord,
   type FetchRecordsContext,
@@ -28,6 +30,12 @@ import {
   inferHintType,
   sortByLabel,
 } from '../driver-utils.js';
+import {
+  NinjaOneAuthError,
+  NinjaOneRequestError,
+  diagnoseNinjaOne,
+} from './ninjaone.diagnose.js';
+import { NINJAONE_SETUP_GUIDE } from './ninjaone.setup-guide.js';
 
 /**
  * Phase 11 — NinjaOne RMM driver.
@@ -305,6 +313,7 @@ export class NinjaOneDriver implements IntegrationDriver {
           'NinjaOne OAuth2 Client Secret. Stored AES-256-GCM encrypted; never returned to the UI.',
       },
     ],
+    setupGuide: NINJAONE_SETUP_GUIDE,
     resources: [
       // Primary resource — agented endpoints (workstations / servers
       // running the NinjaOne agent). Default match key suggestion is
@@ -350,6 +359,26 @@ export class NinjaOneDriver implements IntegrationDriver {
       reconstructionCompleteness: false,
     },
   };
+
+  diagnose(input: DriverDiagnoseInput): Promise<IntegrationSetupCheck> {
+    if (input.mode !== 'connection') {
+      return Promise.resolve({
+        ok: false,
+        passedStepIds: [],
+        failures: [{ stepId: null, message: 'NinjaOne has no OAuth app to check.' }],
+      });
+    }
+    const { ctx } = input;
+    return diagnoseNinjaOne({
+      secretSaved: ninjaoneSecretSchema.safeParse(ctx.secret ?? {}).success,
+      baseUrlValid: ninjaoneConfigSchema.safeParse(ctx.config ?? {}).success,
+      probe: async () => {
+        // Exchange afresh so a cached token cannot hide a revoked client app or a removed scope.
+        this.invalidateToken(ctx);
+        return (await this.fetchAllOrgs(ctx)).length;
+      },
+    });
+  }
 
   async testConnection(
     ctx: IntegrationContext,
@@ -754,8 +783,10 @@ export class NinjaOneDriver implements IntegrationDriver {
 
     if (res.status === 401 || res.status === 403) {
       ninjaoneTokenCache.delete(cacheKey);
-      throw new DriverAuthError(
+      throw new NinjaOneAuthError(
         `NinjaOne token exchange failed (${res.status}). Check the Client ID, Client Secret, and that the API client has the "monitoring" scope.`,
+        'token',
+        res.status,
       );
     }
     if (res.status === 400 && opts.failOnInvalidScope) {
@@ -768,10 +799,12 @@ export class NinjaOneDriver implements IntegrationDriver {
         return null;
       }
       ninjaoneTokenCache.delete(cacheKey);
-      throw new DriverAuthError(
+      throw new NinjaOneAuthError(
         `NinjaOne token exchange returned HTTP 400${
           bodyText ? `: ${bodyText.slice(0, 200)}` : ''
         }`,
+        'token',
+        400,
       );
     }
     if (!res.ok) {
@@ -779,17 +812,23 @@ export class NinjaOneDriver implements IntegrationDriver {
         .text()
         .catch(() => '')
         .then((t) => t.slice(0, 500));
-      throw new Error(
+      throw new NinjaOneRequestError(
         `NinjaOne token exchange returned HTTP ${res.status}${
           bodyText ? `: ${bodyText.slice(0, 200)}` : ''
         }`,
+        'token',
+        res.status,
+        // Monitoring-only fallback refused: the client app lacks the scope.
+        res.status === 400 && /invalid_scope/i.test(bodyText),
       );
     }
 
     const json = (await res.json()) as { access_token?: string };
     if (!json.access_token) {
-      throw new DriverAuthError(
+      throw new NinjaOneAuthError(
         'NinjaOne token exchange did not return access_token.',
+        'token',
+        res.status,
       );
     }
     return json.access_token;
@@ -822,12 +861,18 @@ export class NinjaOneDriver implements IntegrationDriver {
       // Token may have been revoked or expired sooner than our TTL.
       // Drop the cached entry so the next call mints fresh credentials.
       this.invalidateToken(opts.ctx);
-      throw new DriverAuthError(
+      throw new NinjaOneAuthError(
         `NinjaOne GET ${url} returned ${res.status}. Token rejected.`,
+        'api',
+        res.status,
       );
     }
     if (!res.ok) {
-      throw new Error(`NinjaOne GET ${url} returned HTTP ${res.status}`);
+      throw new NinjaOneRequestError(
+        `NinjaOne GET ${url} returned HTTP ${res.status}`,
+        'api',
+        res.status,
+      );
     }
     return (await res.json()) as T;
   }
