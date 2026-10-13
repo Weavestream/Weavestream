@@ -219,10 +219,13 @@ const toggleStyle: React.CSSProperties = {
   fontFamily: 'var(--font-display)', fontSize: 14, fontWeight: 600, color: 'var(--text)',
 };
 const listStyle: React.CSSProperties = { listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: 16 };
-const stepStyle: React.CSSProperties = { display: 'flex', gap: 12, alignItems: 'flex-start' };
+// Relative: anchors the step's visually hidden label. Without it the label
+// positions against <body> and stretches the document past the scroll area.
+const stepStyle: React.CSSProperties = { position: 'relative', display: 'flex', gap: 12, alignItems: 'flex-start' };
 const titleStyle: React.CSSProperties = { margin: 0, fontSize: 13.5, fontWeight: 600, color: 'var(--text)' };
 const bodyStyle: React.CSSProperties = { margin: 0, fontSize: 13, lineHeight: 1.5, color: 'var(--text)' };
-const bodyListStyle: React.CSSProperties = { ...bodyStyle, paddingLeft: 18, display: 'flex', flexDirection: 'column', gap: 2 };
+// The global reset strips list markers; `- ` bullets must still read as a list.
+const bodyListStyle: React.CSSProperties = { ...bodyStyle, listStyle: 'disc', paddingLeft: 18, display: 'flex', flexDirection: 'column', gap: 2 };
 const labelStyle: React.CSSProperties = { fontSize: 12, fontWeight: 600, color: 'var(--muted)' };
 const mutedStyle: React.CSSProperties = { margin: 0, fontSize: 12.5, color: 'var(--muted)' };
 const dangerStyle: React.CSSProperties = { margin: 0, fontSize: 12.5, color: 'var(--danger)', fontWeight: 500 };

@@ -99,6 +99,7 @@ function setup(
   const match = (row: ConnRow, where: Record<string, unknown>) =>
     Object.entries(where).every(([k, v]) => (row as unknown as Record<string, unknown>)[k] === v);
   const prisma = {
+    $transaction: jest.fn(async (fn: (tx: unknown) => Promise<unknown>): Promise<unknown> => fn(prisma)),
     integration: {
       findUnique: jest.fn(async ({ where }: { where: { id: string } }) =>
         where.id === INTEGRATION_ID ? { id: INTEGRATION_ID, driver: (opts.driver ?? FAKE_DRIVER).key, config: {} } : null,
@@ -142,7 +143,11 @@ function setup(
     kindOf: () => 'pull',
     get: () => ({ listSourceOrgs }),
   };
-  const audit = { log: jest.fn(async () => undefined) };
+  const audit = {
+    log: jest.fn(async (_entry: unknown) => undefined),
+    // Same row, written with the transaction client.
+    logWithClient: jest.fn(async (_tx: unknown, entry: unknown): Promise<undefined> => audit.log(entry)),
+  };
   const apps = {
     getClient: jest.fn(async () => (opts.client === undefined ? CLIENT : opts.client)),
     redirectUri: () => 'https://ws.example.test/api/v1/admin/integrations/oauth/callback',
@@ -202,6 +207,19 @@ const TOKENS = { body: { access_token: 'a', expires_in: 3600, refresh_token: 'te
 
 function idToken(claims: object): string {
   return `e30.${Buffer.from(JSON.stringify(claims)).toString('base64url')}.sig`;
+}
+
+/** Restores the in-memory rows when the callback throws, like a database rollback. */
+function rollbackOnThrow(ctx: ReturnType<typeof setup>) {
+  ctx.prisma.$transaction.mockImplementation(async (fn: (tx: unknown) => Promise<unknown>) => {
+    const snapshot = ctx.connections.map((row) => ({ ...row }));
+    try {
+      return await fn(ctx.prisma);
+    } catch (e) {
+      ctx.connections.splice(0, ctx.connections.length, ...snapshot);
+      throw e;
+    }
+  });
 }
 
 describe('IntegrationOAuthService.start', () => {
@@ -294,6 +312,27 @@ describe('IntegrationOAuthService.callback', () => {
     );
     // Audit rows never carry the token.
     expect(JSON.stringify(ctx.audit.log.mock.calls)).not.toContain('test-refresh-1');
+  });
+
+  it('stores no connection when its audit row cannot be written', async () => {
+    const ctx = setup();
+    rollbackOnThrow(ctx);
+    ctx.audit.logWithClient.mockRejectedValueOnce(new Error('audit down'));
+    const url = await startFlow(ctx);
+    scriptFetch([TOKENS]);
+    await expect(ctx.service.callback(USER, { code: 'c', state: url.searchParams.get('state') }, META)).rejects.toThrow('audit down');
+    expect(ctx.connections).toHaveLength(0);
+    expect(ctx.audit.logWithClient).toHaveBeenCalledWith(ctx.prisma, expect.objectContaining({ action: 'integration.oauth.connect' }));
+  });
+
+  it('keeps the old grant on a reconnect whose audit row cannot be written', async () => {
+    const ctx = setup({ connections: [connRow({ secret: { refreshToken: 'old', grantedScopes: [], connectedAt: 'x' } })] });
+    rollbackOnThrow(ctx);
+    ctx.audit.logWithClient.mockRejectedValueOnce(new Error('audit down'));
+    const url = await startFlow(ctx, CONN_A);
+    scriptFetch([TOKENS]);
+    await expect(ctx.service.callback(USER, { code: 'c', state: url.searchParams.get('state') }, META)).rejects.toThrow('audit down');
+    expect(crypto.decrypt(ctx.connections[0]!.secretCiphertext, integrationConnectionSecretAad(INTEGRATION_ID, CONN_A))).toContain('old');
   });
 
   it('refuses a new connection for a tenant that is already connected', async () => {
@@ -508,6 +547,15 @@ describe('IntegrationOAuthService.disconnect and listConnections', () => {
         after: { provider: 'google', revoked: true },
       }),
     );
+  });
+
+  it('keeps the connection when the disconnect audit row cannot be written', async () => {
+    const ctx = setup({ connections: [connRow({ secret: stored })] });
+    rollbackOnThrow(ctx);
+    ctx.audit.logWithClient.mockRejectedValueOnce(new Error('audit down'));
+    scriptFetch([{ body: {} }]);
+    await expect(ctx.service.disconnect(USER, INTEGRATION_ID, CONN_A, META)).rejects.toThrow('audit down');
+    expect(ctx.connections.map((r) => r.id)).toEqual([CONN_A]);
   });
 
   it('refuses to disconnect a connection of another integration', async () => {

@@ -56,6 +56,11 @@ export function parseFieldResolutions(value: unknown): Record<string, StoredFiel
   return out;
 }
 
+/** "Keep ours" choices as AssetField.id -> the source fingerprint each was made against. */
+export function keptLocalFingerprints(value: unknown): Record<string, string> {
+  return Object.fromEntries(Object.entries(parseFieldResolutions(value)).map(([fieldId, kept]) => [fieldId, kept.sourceFingerprint]));
+}
+
 /**
  * The binding's next diffs and resolutions from this sync's fresh diffs.
  * A "Keep ours" choice hides its field while the source value is the one

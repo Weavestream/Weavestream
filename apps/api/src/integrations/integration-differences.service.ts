@@ -106,16 +106,42 @@ export class IntegrationDifferencesService {
       resolutions[input.assetFieldId] = { choice: 'local', sourceFingerprint: diff.sourceFingerprint };
     }
 
-    // One transaction under the sync runner's per-scope lock: a sync page
+    // Choosing a source value is an explicit choice for the field: every
+    // other integration bound to the asset keeps it ("Keep ours" against its
+    // own source value) instead of writing over it on its next sync, the
+    // owner included. The owner writes again once its source value changes.
+    const otherBindings = input.choice === 'source'
+      ? await this.prisma.integrationSyncRecord.findMany({
+          where: {
+            companyId,
+            assetId,
+            targetKind: 'asset',
+            id: { not: record.id },
+            state: { in: ['active', 'blocked'] },
+            companyMapping: { integrationId: { not: record.companyMapping.integrationId } },
+          },
+          select: { id: true, integrationCompanyMappingId: true, resourceId: true },
+        })
+      : [];
+
+    // One transaction under the sync runner's per-scope locks: a sync page
     // either finished before (the updatedAt guard then refuses, nothing is
-    // written) or waits until the record and the asset are both updated.
+    // written) or waits until the records and the asset are all updated.
+    // Locks are taken in one sorted order so two resolves never deadlock.
+    const scopes = new Map<string, { integrationCompanyMappingId: string; resourceId: string }>();
+    for (const scope of [record, ...otherBindings]) {
+      scopes.set(`${scope.integrationCompanyMappingId}\0${scope.resourceId}`, scope);
+    }
     await this.prisma.$transaction(async (tx) => {
-      await this.provenance.lockScope(tx, {
-        companyId,
-        integrationCompanyMappingId: record.integrationCompanyMappingId,
-        resourceId: record.resourceId,
-        observedAt: new Date(),
-      });
+      for (const key of [...scopes.keys()].sort()) {
+        const scope = scopes.get(key)!;
+        await this.provenance.lockScope(tx, {
+          companyId,
+          integrationCompanyMappingId: scope.integrationCompanyMappingId,
+          resourceId: scope.resourceId,
+          observedAt: new Date(),
+        });
+      }
       const updated = await tx.integrationSyncRecord.updateMany({
         where: { id: record.id, companyId, updatedAt: record.updatedAt },
         data: {
@@ -132,6 +158,7 @@ export class IntegrationDifferencesService {
         // edit; a failure rolls the record change back with it.
         await this.assets.update(actor, companyId, assetId, { fieldValues: { [slug]: diff.sourceValue } }, meta, tx);
       }
+      const keptBy = await this.keepChosenValue(tx, companyId, otherBindings.map((b) => b.id), input.assetFieldId, diff.sourceFingerprint);
       // Same transaction: a failed audit write rolls the resolution back,
       // so no resolution commits without its row.
       await this.audit.logWithClient(tx, {
@@ -148,10 +175,60 @@ export class IntegrationDifferencesService {
           syncRecordId: record.id,
           assetFieldId: input.assetFieldId,
           choice: input.choice,
+          ...(keptBy.length > 0 ? { keptBySyncRecordIds: keptBy } : {}),
         },
       });
     });
     return { ok: true };
+  }
+
+  /**
+   * Record "Keep ours" on each other binding whose source value differs
+   * from the chosen one, against that binding's current source value (its
+   * open difference, else its earlier "Keep ours", else what it last
+   * wrote), and drop its open
+   * difference for the field. Re-read under the scope locks. Returns the
+   * ids of the bindings changed.
+   */
+  private async keepChosenValue(
+    tx: Prisma.TransactionClient,
+    companyId: string,
+    bindingIds: string[],
+    assetFieldId: string,
+    chosenFingerprint: string,
+  ): Promise<string[]> {
+    if (bindingIds.length === 0) return [];
+    const rows = await tx.integrationSyncRecord.findMany({
+      where: { id: { in: bindingIds }, companyId },
+      select: { id: true, fieldDiffs: true, fieldResolutions: true, lastSyncedFieldChecksums: true },
+    });
+    const kept: string[] = [];
+    for (const row of rows) {
+      const diffs = parseFieldDiffs(row.fieldDiffs);
+      const resolutions = parseFieldResolutions(row.fieldResolutions);
+      const checksums = (row.lastSyncedFieldChecksums ?? {}) as Record<string, string>;
+      // Its current source value: an open difference, else an earlier "Keep
+      // ours" (whose hidden difference holds the newer value), else what it
+      // last wrote. Falling back to the last write first would expire the
+      // earlier choice and let the next sync overwrite the chosen value.
+      const theirSource =
+        diffs[assetFieldId]?.sourceFingerprint ??
+        resolutions[assetFieldId]?.sourceFingerprint ??
+        checksums[assetFieldId];
+      // Never provided this field, or already agrees with the choice.
+      if (theirSource === undefined || theirSource === chosenFingerprint) continue;
+      delete diffs[assetFieldId];
+      resolutions[assetFieldId] = { choice: 'local', sourceFingerprint: theirSource };
+      await tx.integrationSyncRecord.update({
+        where: { id: row.id },
+        data: {
+          fieldDiffs: diffs as unknown as Prisma.InputJsonValue,
+          fieldResolutions: resolutions as unknown as Prisma.InputJsonValue,
+        },
+      });
+      kept.push(row.id);
+    }
+    return kept;
   }
 
   /**

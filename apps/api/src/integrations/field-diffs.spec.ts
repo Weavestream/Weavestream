@@ -1,4 +1,4 @@
-import { differenceDisplayValue, mergeFieldDiffs, parseFieldDiffs } from './field-diffs.js';
+import { differenceDisplayValue, keptLocalFingerprints, mergeFieldDiffs, parseFieldDiffs } from './field-diffs.js';
 
 const NOW = new Date('2026-10-09T12:00:00.000Z');
 const diff = (source: string, local = 'l1') => ({ sourceValue: source, sourceFingerprint: `s:${source}`, localFingerprint: local });
@@ -32,5 +32,10 @@ describe('mergeFieldDiffs', () => {
     expect(differenceDisplayValue('')).toBeNull();
     expect(differenceDisplayValue(16)).toBe('16');
     expect(differenceDisplayValue(['a', 'b'])).toBe('a, b');
+  });
+
+  it('reads "Keep ours" choices as field id -> source fingerprint, dropping malformed rows', () => {
+    expect(keptLocalFingerprints({ f1: { choice: 'local', sourceFingerprint: 'abc' }, f2: { choice: 'source' }, f3: 'x' })).toEqual({ f1: 'abc' });
+    expect(keptLocalFingerprints(null)).toEqual({});
   });
 });

@@ -7,6 +7,8 @@ import {
   IntegrationDifferencesController,
 } from './integration-differences.controller.js';
 
+import { keptLocalFingerprints, mergeFieldDiffs } from './field-diffs.js';
+
 jest.mock('../uploads/uploads.service.js', () => ({ UploadsService: class UploadsService {} }));
 
 let IntegrationDifferencesService: typeof import('./integration-differences.service.js').IntegrationDifferencesService;
@@ -44,7 +46,8 @@ function setup(found: unknown = record()) {
     integrationSyncRecord: {
       findFirst: jest.fn().mockResolvedValue(found),
       updateMany: jest.fn().mockResolvedValue({ count: 1 }),
-      findMany: jest.fn(),
+      findMany: jest.fn().mockResolvedValue([]),
+      update: jest.fn().mockResolvedValue({}),
     },
     assetField: { findFirst: jest.fn().mockResolvedValue({ slug: 'hostname' }), findMany: jest.fn() },
     assetFieldValue: { findFirst: jest.fn().mockResolvedValue({ value: 'host-b' }), findMany: jest.fn() },
@@ -68,6 +71,93 @@ function setup(found: unknown = record()) {
 const input = (choice: 'source' | 'local') => ({ syncRecordId: RECORD, assetFieldId: FIELD, choice });
 
 describe('IntegrationDifferencesService.resolve', () => {
+  describe('an explicit source choice on an asset other integrations share', () => {
+    const OWNER = '00000000-0000-4000-8000-0000000000e2';
+    const AGREES = '00000000-0000-4000-8000-0000000000e3';
+    const scope = (id: string, mapping: string) => ({ id, integrationCompanyMappingId: mapping, resourceId: 'res-9' });
+    const row = (id: string, values: Record<string, unknown>) => ({ id, fieldDiffs: {}, fieldResolutions: {}, lastSyncedFieldChecksums: {}, ...values });
+
+    function shared() {
+      const ctx = setup();
+      ctx.prisma.integrationSyncRecord.findMany
+        // Bindings of other integrations on the asset (before the locks).
+        .mockResolvedValueOnce([scope(OWNER, 'map-0'), scope(AGREES, 'map-2')])
+        // The same rows re-read under the locks.
+        .mockResolvedValueOnce([
+          row(OWNER, {
+            lastSyncedFieldChecksums: { [FIELD]: checksum('mine') },
+            fieldDiffs: { other: { sourceValue: 'x', sourceFingerprint: 'fx', localFingerprint: 'lx', detectedAt: '2026-10-01T00:00:00.000Z' } },
+          }),
+          row(AGREES, { lastSyncedFieldChecksums: { [FIELD]: checksum('host-b') } }),
+        ]);
+      return ctx;
+    }
+
+    it('makes every other provider keep the chosen value against its own source value', async () => {
+      const { service, prisma, audit } = shared();
+      await expect(service.resolve(ADMIN, COMPANY, ASSET, input('source'), META)).resolves.toEqual({ ok: true });
+      expect(prisma.integrationSyncRecord.findMany.mock.calls[0][0]).toMatchObject({
+        where: {
+          companyId: COMPANY, assetId: ASSET, targetKind: 'asset', id: { not: RECORD },
+          companyMapping: { integrationId: { not: 'int-1' } },
+        },
+      });
+      // The owner keeps the chosen value until its own source value changes.
+      expect(prisma.integrationSyncRecord.update).toHaveBeenCalledTimes(1);
+      expect(prisma.integrationSyncRecord.update).toHaveBeenCalledWith({
+        where: { id: OWNER },
+        data: {
+          fieldDiffs: { other: expect.objectContaining({ sourceFingerprint: 'fx' }) },
+          fieldResolutions: { [FIELD]: { choice: 'local', sourceFingerprint: checksum('mine') } },
+        },
+      });
+      expect(audit.logWithClient).toHaveBeenCalledWith(prisma, expect.objectContaining({
+        after: expect.objectContaining({ choice: 'source', keptBySyncRecordIds: [OWNER] }),
+      }));
+    });
+
+    it('keeps an earlier Keep ours fingerprint instead of falling back to the older last write', async () => {
+      // Microsoft last wrote A, then reported B; a person kept ours against B (difference hidden).
+      const ctx = setup();
+      ctx.prisma.integrationSyncRecord.findMany
+        .mockResolvedValueOnce([scope(OWNER, 'map-0')])
+        .mockResolvedValueOnce([
+          row(OWNER, {
+            lastSyncedFieldChecksums: { [FIELD]: checksum('A') },
+            fieldResolutions: { [FIELD]: { choice: 'local', sourceFingerprint: checksum('B') } },
+          }),
+        ]);
+      // Now the person picks Google's value (host-b) on Google's difference.
+      await ctx.service.resolve(ADMIN, COMPANY, ASSET, input('source'), META);
+      const data = ctx.prisma.integrationSyncRecord.update.mock.calls[0][0].data;
+      expect(data.fieldResolutions).toEqual({ [FIELD]: { choice: 'local', sourceFingerprint: checksum('B') } });
+      // Microsoft's next sync still reports B: the choice holds, so it does not overwrite.
+      expect(mergeFieldDiffs(
+        { [FIELD]: { sourceValue: 'B', sourceFingerprint: checksum('B'), localFingerprint: checksum('host-b') } },
+        data.fieldDiffs,
+        data.fieldResolutions,
+        new Date(),
+      )).toEqual({ fieldDiffs: {}, fieldResolutions: { [FIELD]: { choice: 'local', sourceFingerprint: checksum('B') } } });
+      expect(keptLocalFingerprints(data.fieldResolutions)[FIELD]).toBe(checksum('B'));
+    });
+
+    it('takes every scope lock, in one sorted order, before writing', async () => {
+      const { service, prisma, provenance } = shared();
+      await service.resolve(ADMIN, COMPANY, ASSET, input('source'), META);
+      expect(provenance.lockScope.mock.calls.map((call) => call[1].integrationCompanyMappingId)).toEqual(['map-0', 'map-1', 'map-2']);
+      const lastLock = Math.max(...provenance.lockScope.mock.invocationCallOrder);
+      expect(lastLock).toBeLessThan(prisma.integrationSyncRecord.updateMany.mock.invocationCallOrder[0]!);
+      expect(lastLock).toBeLessThan(prisma.integrationSyncRecord.findMany.mock.invocationCallOrder[1]!);
+    });
+
+    it('a Keep ours choice touches no other binding', async () => {
+      const { service, prisma } = setup();
+      await service.resolve(ADMIN, COMPANY, ASSET, input('local'), META);
+      expect(prisma.integrationSyncRecord.findMany).not.toHaveBeenCalled();
+      expect(prisma.integrationSyncRecord.update).not.toHaveBeenCalled();
+    });
+  });
+
   it('Use source writes through the operator path, follows the source again and clears the difference', async () => {
     const { service, prisma, audit, assets, provenance } = setup();
     await expect(service.resolve(ADMIN, COMPANY, ASSET, input('source'), META)).resolves.toEqual({ ok: true });

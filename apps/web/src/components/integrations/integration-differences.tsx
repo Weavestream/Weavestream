@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { problemMessage, type IntegrationDifferenceChoice, type IntegrationDifferenceDto } from '@weavestream/shared';
 import { apiFetch } from '../../lib/api';
-import { Btn, useToast } from '../ui';
+import { Btn, Panel, useToast } from '../ui';
 
 /** POST one resolution; returns an error message, or null when it worked. */
 export async function resolveDifference(
@@ -94,24 +94,12 @@ export function IntegrationDifferences({
 }) {
   if (differences.length === 0) return null;
   return (
-    <div
-      aria-label="Differences"
-      role="group"
-      style={{
-        gridColumn: '1 / -1',
-        border: '1px solid var(--line)',
-        borderRadius: 'var(--radius-card)',
-        background: 'var(--panel-2)',
-        minWidth: 0,
-      }}
-    >
-      <div style={{ ...muted, fontSize: 11, padding: '6px 10px', borderBottom: '1px solid var(--line)', letterSpacing: 0.6 }}>
-        Differences
-      </div>
-      <p style={{ margin: 0, padding: '6px 10px 0', fontSize: 12, color: 'var(--muted)' }}>
-        These fields were changed in Weavestream and now differ from {sourceLabel}. Syncs leave them alone until you choose.
-      </p>
-      <div style={{ padding: '2px 10px' }}>
+    // Full grid row; the group role names the card for assistive tech.
+    <div aria-label="Differences" role="group" style={{ gridColumn: '1 / -1', minWidth: 0 }}>
+      <Panel title="Differences">
+        <p style={{ margin: '0 0 4px', fontSize: 12, color: 'var(--muted)' }}>
+          These fields were changed in Weavestream and now differ from {sourceLabel}. Syncs leave them alone until you choose.
+        </p>
         {differences.map((difference, index) => (
           <div
             key={difference.assetFieldId}
@@ -139,7 +127,7 @@ export function IntegrationDifferences({
             )}
           </div>
         ))}
-      </div>
+      </Panel>
     </div>
   );
 }

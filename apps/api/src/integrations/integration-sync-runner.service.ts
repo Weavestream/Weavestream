@@ -51,7 +51,7 @@ import { loadIntegrationPriority } from './integration-priority.service.js';
 import { IntegrationProvenanceService } from './reconstruction/integration-provenance.service.js';
 import { IntegrationCompletenessService } from './reconstruction/integration-completeness.service.js';
 import { scanSensitiveMaterial } from './sensitive-material.js';
-import { mergeFieldDiffs } from './field-diffs.js';
+import { keptLocalFingerprints, mergeFieldDiffs } from './field-diffs.js';
 import {
   integrationTargetAuditAction,
   integrationTargetAuditAfter,
@@ -310,10 +310,11 @@ export class IntegrationSyncRunnerService {
     // Several integrations on one asset: match-first may co-bind to assets
     // owned by drivers that also fill standard fields (legacy drivers keep
     // their own assets), and the priority order, read once per run, decides
-    // who owns each field.
+    // who owns each field. A driver key is the external source of that
+    // driver's assets (see integrationAssetExternalSource).
     const coBindSources = claimUnboundMatches && recordFieldDiffs
       ? this.drivers.list()
-        .filter((d) => d.key !== 'breeze' && d.resources.some((r) => (r.standardFields?.length ?? 0) > 0))
+        .filter((d) => d.resources.some((r) => (r.standardFields?.length ?? 0) > 0))
         .map((d) => d.key)
       : [];
     const integrationPriority = recordFieldDiffs
@@ -607,7 +608,7 @@ export class IntegrationSyncRunnerService {
               claimUnboundMatches: claimUnboundMatches,
               previousAdopted: existing?.adopted === true,
               matchFirstIndexes,
-              ...(recordFieldDiffs ? { recordFieldDiffs: true } : {}),
+              ...(recordFieldDiffs ? { recordFieldDiffs: true, keptLocal: keptLocalFingerprints(existing?.fieldResolutions) } : {}),
               ...(coBindSources.length > 0 ? { coBindSources } : {}),
               ...(integrationPriority ? { integrationPriority } : {}),
               resolveBinding: (ref) => this.resolveBinding(tx, mapping.id, mapping.companyId, mapping.integrationId, ref),

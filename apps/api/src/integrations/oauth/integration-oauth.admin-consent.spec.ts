@@ -85,6 +85,7 @@ function setup(opts: { secret?: object | null } = {}) {
     : [];
   const match = (r: Row, where: Record<string, unknown>) => Object.entries(where).every(([k, v]) => (r as unknown as Record<string, unknown>)[k] === v);
   const prisma = {
+    $transaction: jest.fn(async (fn: (tx: unknown) => Promise<unknown>): Promise<unknown> => fn(prisma)),
     integration: {
       findUnique: jest.fn(async () => ({ id: INTEGRATION_ID, driver: 'microsoft-365', config: {} })),
     },
@@ -113,7 +114,11 @@ function setup(opts: { secret?: object | null } = {}) {
     kindOf: () => 'pull',
     get: () => driver,
   };
-  const audit = { log: jest.fn(async () => undefined) };
+  const audit = {
+    log: jest.fn(async (_entry: unknown) => undefined),
+    // Same row, written with the transaction client.
+    logWithClient: jest.fn(async (_tx: unknown, entry: unknown): Promise<undefined> => audit.log(entry)),
+  };
   const apps = {
     getClient: jest.fn(async () => CLIENT),
     redirectUri: () => 'https://ws.example.test/api/v1/admin/integrations/oauth/callback',

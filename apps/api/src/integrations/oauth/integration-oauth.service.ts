@@ -14,6 +14,7 @@ import {
   type IntegrationOAuthStartResponse,
   type StartIntegrationConnectionInput,
 } from '@weavestream/shared';
+import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { RedisService } from '../../redis/redis.service.js';
 import { EnvService } from '../../config/env.service.js';
@@ -573,6 +574,7 @@ export class IntegrationOAuthService {
   ): Promise<string> {
     const now = new Date();
     let id: string;
+    let write: (tx: Prisma.TransactionClient) => Promise<unknown>;
     if (connectionId) {
       const existing = await this.prisma.integrationConnection.findFirst({
         where: { id: connectionId, integrationId },
@@ -592,7 +594,8 @@ export class IntegrationOAuthService {
         JSON.stringify(grant.secret(previous)),
         integrationConnectionSecretAad(integrationId, existing.id),
       );
-      await this.prisma.integrationConnection.update({
+      id = existing.id;
+      write = (tx) => tx.integrationConnection.update({
         where: { id: existing.id },
         data: {
           secretCiphertext,
@@ -603,7 +606,6 @@ export class IntegrationOAuthService {
           ...(grant.displayName ? { displayName: grant.displayName } : {}),
         },
       });
-      id = existing.id;
     } else {
       const connected = await this.prisma.integrationConnection.findMany({
         where: { integrationId },
@@ -612,40 +614,48 @@ export class IntegrationOAuthService {
       if (connected.some((c) => c.externalOrgId.toLowerCase() === grant.externalOrgId.toLowerCase())) {
         return fail('already_connected', grant.provider, { tenantId: grant.externalOrgId }, 'already_connected');
       }
-      id = randomUUID();
+      const newId = randomUUID();
       const secretCiphertext = this.crypto.encrypt(
         JSON.stringify(grant.secret(null)),
-        integrationConnectionSecretAad(integrationId, id),
+        integrationConnectionSecretAad(integrationId, newId),
       );
-      try {
-        await this.prisma.integrationConnection.create({
-          data: {
-            id,
-            integrationId,
-            externalOrgId: grant.externalOrgId,
-            displayName: grant.displayName,
-            secretCiphertext,
-            status: 'ok',
-            connectedAt: now,
-            connectedBy: actor.id,
-          },
+      id = newId;
+      write = (tx) => tx.integrationConnection.create({
+        data: {
+          id: newId,
+          integrationId,
+          externalOrgId: grant.externalOrgId,
+          displayName: grant.displayName,
+          secretCiphertext,
+          status: 'ok',
+          connectedAt: now,
+          connectedBy: actor.id,
+        },
+      });
+    }
+    // The stored grant and its audit row commit together: a failed audit
+    // write rolls the connection back instead of leaving it unaudited.
+    try {
+      await this.prisma.$transaction(async (tx) => {
+        await write(tx);
+        await this.audit.logWithClient(tx, {
+          actorId: actor.id,
+          action: AUDIT_ACTIONS.integration.oauthConnect,
+          entityType: 'Integration',
+          entityId: integrationId,
+          ip: meta.ip,
+          userAgent: meta.userAgent,
+          before: null,
+          after: { ...grant.auditAfter, connectionId: id, reconnect: connectionId !== null },
         });
-      } catch (e) {
-        if (!isUniqueConstraintError(e)) throw e;
-        // One tenant is connected once per integration: use Reconnect on its row.
+      });
+    } catch (e) {
+      // One tenant is connected once per integration: use Reconnect on its row.
+      if (!connectionId && isUniqueConstraintError(e)) {
         return fail('already_connected', grant.provider, { tenantId: grant.externalOrgId }, 'already_connected');
       }
+      throw e;
     }
-    await this.audit.log({
-      actorId: actor.id,
-      action: AUDIT_ACTIONS.integration.oauthConnect,
-      entityType: 'Integration',
-      entityId: integrationId,
-      ip: meta.ip,
-      userAgent: meta.userAgent,
-      before: null,
-      after: { ...grant.auditAfter, connectionId: id, reconnect: connectionId !== null },
-    });
     return this.landing(integrationId, true);
   }
 
@@ -673,20 +683,23 @@ export class IntegrationOAuthService {
         );
       }
     }
-    await this.prisma.integrationConnection.deleteMany({ where: { id: row.id, integrationId } });
-    await this.audit.log({
-      actorId: actor.id,
-      action: AUDIT_ACTIONS.integration.oauthDisconnect,
-      entityType: 'Integration',
-      entityId: integrationId,
-      ip: meta.ip,
-      userAgent: meta.userAgent,
-      before: { connectionId: row.id, tenantId: row.externalOrgId },
-      after: {
-        provider: oauth.provider,
-        revoked,
-        ...(unreadable ? { reason: 'secret_unreadable' } : {}),
-      },
+    // The wipe and its audit row commit together.
+    await this.prisma.$transaction(async (tx) => {
+      await tx.integrationConnection.deleteMany({ where: { id: row.id, integrationId } });
+      await this.audit.logWithClient(tx, {
+        actorId: actor.id,
+        action: AUDIT_ACTIONS.integration.oauthDisconnect,
+        entityType: 'Integration',
+        entityId: integrationId,
+        ip: meta.ip,
+        userAgent: meta.userAgent,
+        before: { connectionId: row.id, tenantId: row.externalOrgId },
+        after: {
+          provider: oauth.provider,
+          revoked,
+          ...(unreadable ? { reason: 'secret_unreadable' } : {}),
+        },
+      });
     });
   }
 

@@ -148,6 +148,12 @@ export interface IntegrationAssetWriteInput {
    * equals the source makes the field follow the source again.
    */
   recordFieldDiffs?: boolean;
+  /**
+   * With `recordFieldDiffs`: this binding's "Keep ours" choices, keyed by
+   * AssetField.id, each with the source fingerprint it was made against.
+   * While the source still sends that value, the field is never written.
+   */
+  keptLocal?: Readonly<Record<string, string>>;
 }
 
 /** A standard field a person changed that now differs from the source value. */
@@ -1076,15 +1082,19 @@ export class AssetsService {
           reportDifference();
           continue;
         }
-        // Owner. A value another bound integration wrote while this one had
-        // none is integration-authored and is replaced; anything else this
-        // integration did not write is a person's edit (preserve_manual).
+        // Owner. A value another bound integration last wrote is
+        // integration-authored and is replaced, even when this integration
+        // has a baseline of its own (it was promoted in the priority order).
+        // A value no integration wrote is a person's edit (preserve_manual),
+        // and so is a value kept with "Keep ours" against this source value.
         const ownBaseline = providesValue(previousChecksum) ? previousChecksum : undefined;
         const writtenByOther = others.some((other) => other.checksums[fieldId] === storedChecksum);
+        const personsEdit = ownBaseline !== storedChecksum && !writtenByOther;
+        const keptLocal = input.keptLocal?.[fieldId] === sourceFingerprint;
         if (
           entry.syncDirection === 'preserve_manual' &&
           !storedEmpty &&
-          (ownBaseline !== undefined ? ownBaseline !== storedChecksum : !writtenByOther)
+          (personsEdit || keptLocal)
         ) {
           keepBaseline();
           reportDifference();

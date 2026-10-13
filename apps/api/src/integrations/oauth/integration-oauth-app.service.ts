@@ -187,62 +187,58 @@ export class IntegrationOAuthAppService {
         : {}),
       ...(input.tenantId !== undefined ? { tenantId: input.tenantId === null ? null : input.tenantId.toLowerCase() } : {}),
     };
-    if (input.clientSecret === undefined) {
-      if (!before) {
-        throw new BadRequestException('Enter the client secret.');
-      }
-      // Keep the stored secret; only the client ID (and the plain fields) change.
-      await this.prisma.integrationOAuthApp.update({
-        where: { integrationId },
-        data: { clientId: input.clientId, ...extra, updatedBy: actor.id },
-      });
-    } else {
-      const secretCiphertext = this.crypto.encrypt(
-        input.clientSecret,
-        integrationOAuthAppSecretAad(integrationId),
-      );
-      if (before) {
-        await this.prisma.integrationOAuthApp.update({
-          where: { integrationId },
-          data: { clientId: input.clientId, secretCiphertext, ...extra, updatedBy: actor.id },
-        });
-      } else {
-        try {
-          await this.prisma.integrationOAuthApp.create({
-            data: { provider, integrationId, clientId: input.clientId, secretCiphertext, ...extra, updatedBy: actor.id },
-          });
-        } catch (e) {
-          // `provider` is unique: another integration of this provider holds it.
-          if (isUniqueConstraintError(e)) {
-            throw new ConflictException(
-              'Another integration of this provider already has an OAuth app. Delete that integration first.',
-            );
-          }
-          throw e;
-        }
-      }
+    if (input.clientSecret === undefined && !before) {
+      throw new BadRequestException('Enter the client secret.');
     }
+    const secretCiphertext = input.clientSecret === undefined
+      ? undefined
+      : this.crypto.encrypt(input.clientSecret, integrationOAuthAppSecretAad(integrationId));
     const day = (d: Date | null | undefined) => (d ? d.toISOString().slice(0, 10) : null);
-    await this.audit.log({
-      actorId: actor.id,
-      action: AUDIT_ACTIONS.integration.oauthAppUpdate,
-      entityType: 'Integration',
-      entityId: integrationId,
-      ip: meta.ip,
-      userAgent: meta.userAgent,
-      before: before
-        ? { provider, clientId: before.clientId, secretExpiresAt: day(before.secretExpiresAt), tenantId: before.tenantId }
-        : null,
-      after: {
-        provider,
-        clientId: input.clientId,
-        ...(expiry !== undefined ? { secretExpiresAt: expiry } : {}),
-        ...(input.tenantId !== undefined ? { tenantId: input.tenantId } : {}),
-        ...(input.clientSecret === undefined
-          ? { secretKept: true }
-          : { secretMask: maskSecretTail(input.clientSecret) }),
-      },
-    });
+    // The credential write and its audit row commit together: a failed
+    // audit write rolls the change back instead of leaving it unaudited.
+    try {
+      await this.prisma.$transaction(async (tx) => {
+        if (before) {
+          // No new secret: keep the stored one; only the client ID (and the plain fields) change.
+          await tx.integrationOAuthApp.update({
+            where: { integrationId },
+            data: { clientId: input.clientId, ...(secretCiphertext ? { secretCiphertext } : {}), ...extra, updatedBy: actor.id },
+          });
+        } else {
+          await tx.integrationOAuthApp.create({
+            data: { provider, integrationId, clientId: input.clientId, secretCiphertext: secretCiphertext!, ...extra, updatedBy: actor.id },
+          });
+        }
+        await this.audit.logWithClient(tx, {
+          actorId: actor.id,
+          action: AUDIT_ACTIONS.integration.oauthAppUpdate,
+          entityType: 'Integration',
+          entityId: integrationId,
+          ip: meta.ip,
+          userAgent: meta.userAgent,
+          before: before
+            ? { provider, clientId: before.clientId, secretExpiresAt: day(before.secretExpiresAt), tenantId: before.tenantId }
+            : null,
+          after: {
+            provider,
+            clientId: input.clientId,
+            ...(expiry !== undefined ? { secretExpiresAt: expiry } : {}),
+            ...(input.tenantId !== undefined ? { tenantId: input.tenantId } : {}),
+            ...(input.clientSecret === undefined
+              ? { secretKept: true }
+              : { secretMask: maskSecretTail(input.clientSecret) }),
+          },
+        });
+      });
+    } catch (e) {
+      // `provider` is unique: another integration of this provider holds it.
+      if (!before && isUniqueConstraintError(e)) {
+        throw new ConflictException(
+          'Another integration of this provider already has an OAuth app. Delete that integration first.',
+        );
+      }
+      throw e;
+    }
     return this.get(integrationId);
   }
 

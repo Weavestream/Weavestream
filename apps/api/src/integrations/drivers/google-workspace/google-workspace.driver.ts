@@ -2,7 +2,6 @@ import { z } from 'zod';
 import type {
   DriverDescriptor,
   DriverOAuthDescriptor,
-  DriverStandardField,
   SourceFieldDto,
   SourceOrgDto,
 } from '@weavestream/shared';
@@ -15,10 +14,18 @@ import {
   type IntegrationDriver,
   type LegacyDriverFetchPage,
   type LegacyDriverRecord,
-  type RecommendedDestination,
-  type RecommendedDestinationField,
 } from '../integration-driver.js';
-import { assertRecommendedDestinations, parseRetryAfter } from '../driver-utils.js';
+import { parseRetryAfter } from '../driver-utils.js';
+import {
+  LAYOUT_HINTS,
+  MATCH_KEYS,
+  STANDARD_FIELDS,
+  STANDARD_LAYOUTS,
+  standardRecommendedDestinations,
+  standardResources,
+  standardSourceFields,
+  type StandardResourceSpec,
+} from '../standard-resources.js';
 import { oauthFetch } from '../../oauth/oauth-token.js';
 import {
   __resetRunCacheForTests,
@@ -134,113 +141,55 @@ export const LOOKUP_ITEM_CAP = 50_000;
 
 type ResourceKey = 'tenant' | 'users' | 'groups' | 'chrome_devices' | 'mobile_devices';
 
-interface ResourceSpec {
-  label: string;
-  description: string;
-  matchField: string;
-  matchLabel: string;
-  matchType: 'TEXT' | 'EMAIL';
-  layoutHints: string[];
-  fieldHints: string[];
-  layout: RecommendedDestination['layout'];
-  /** Facts Map layouts offers as layout fields (the name and match key are minimal fields). */
-  standardFields?: DriverStandardField[];
-}
+const { model: MODEL, operating_system: OS, mac_address: MAC } = STANDARD_FIELDS;
 
-const MODEL: DriverStandardField = { sourceField: 'model', label: 'Model', fieldType: 'TEXT', fieldHints: ['model'] };
-const OS: DriverStandardField = { sourceField: 'operating_system', label: 'Operating system', fieldType: 'TEXT', fieldHints: ['operating_system', 'os'] };
-const MAC: DriverStandardField = { sourceField: 'mac_address', label: 'MAC address', fieldType: 'TEXT', fieldHints: ['mac_address', 'mac'] };
-
-const RESOURCES: Readonly<Record<ResourceKey, ResourceSpec>> = {
+const RESOURCES: Readonly<Record<ResourceKey, StandardResourceSpec>> = {
   tenant: {
     label: 'Tenant',
     description: 'The Workspace tenant: licences per edition, pooled storage and security posture.',
-    matchField: 'customerId', matchLabel: 'Customer ID', matchType: 'TEXT',
+    match: { field: 'customerId', label: 'Customer ID', type: 'TEXT', fieldHints: ['customer_id', 'customerid', 'tenant_id'] },
     layoutHints: ['google_workspace', 'workspace', 'tenant', 'tenants'],
-    fieldHints: ['customer_id', 'customerid', 'tenant_id'],
     layout: { name: 'Google Workspace Tenants', slug: 'google_workspace_tenants', icon: 'building', color: 'blue' },
-    standardFields: [
-      { sourceField: 'primary_domain', label: 'Primary domain', fieldType: 'TEXT', fieldHints: ['primary_domain', 'domain'] },
-    ],
+    standardFields: [STANDARD_FIELDS.primary_domain],
   },
   users: {
     label: 'Users',
     description: 'Users with licences, mailbox and Drive storage, admin role and 2-step verification.',
-    matchField: 'primaryEmail', matchLabel: 'Email', matchType: 'EMAIL',
-    layoutHints: ['people', 'contacts', 'users', 'staff', 'employees'],
-    fieldHints: ['email', 'primary_email', 'e_mail', 'mail'],
-    layout: { name: 'People', slug: 'people', icon: 'person', color: 'blue' },
-    standardFields: [
-      { sourceField: 'job_title', label: 'Job title', fieldType: 'TEXT', fieldHints: ['job_title', 'title'] },
-      { sourceField: 'department', label: 'Department', fieldType: 'TEXT', fieldHints: ['department'] },
-      { sourceField: 'phone', label: 'Phone', fieldType: 'PHONE', fieldHints: ['phone', 'phone_number', 'work_phone'] },
-    ],
+    match: { ...MATCH_KEYS.email, field: 'primaryEmail' },
+    layoutHints: LAYOUT_HINTS.people,
+    layout: STANDARD_LAYOUTS.people,
+    standardFields: [STANDARD_FIELDS.job_title, STANDARD_FIELDS.department, STANDARD_FIELDS.phone],
   },
   groups: {
     label: 'Groups',
     description: 'Groups and distribution lists with their members.',
-    matchField: 'email', matchLabel: 'Email', matchType: 'EMAIL',
-    layoutHints: ['distribution_lists', 'distribution', 'groups', 'mailing_lists'],
-    fieldHints: ['email', 'group_email', 'address'],
-    layout: { name: 'Distribution Lists', slug: 'distribution_lists', icon: 'users', color: 'teal' },
-    standardFields: [
-      { sourceField: 'description', label: 'Description', fieldType: 'TEXTAREA', fieldHints: ['description'] },
-    ],
+    match: MATCH_KEYS.groupEmail,
+    layoutHints: LAYOUT_HINTS.distributionLists,
+    layout: STANDARD_LAYOUTS.distributionLists,
+    standardFields: [STANDARD_FIELDS.description],
   },
   chrome_devices: {
     label: 'Chrome devices',
     description: 'ChromeOS devices with OS version, user and auto-update expiration.',
-    matchField: 'serialNumber', matchLabel: 'Serial number', matchType: 'TEXT',
-    layoutHints: ['laptops', 'chromebooks', 'workstations', 'computers', 'devices'],
-    fieldHints: ['serial_number', 'serial', 'serialnumber', 'service_tag'],
+    match: MATCH_KEYS.serialNumber,
+    layoutHints: ['chromebooks', ...LAYOUT_HINTS.computers],
     layout: { name: 'Chromebooks', slug: 'chromebooks', icon: 'laptop', color: 'amber' },
-    standardFields: [
-      MODEL,
-      OS,
-      MAC,
-      { sourceField: 'ip_address', label: 'IP address', fieldType: 'IP_ADDRESS', fieldHints: ['ip_address', 'ip', 'private_ip'] },
-    ],
+    standardFields: [MODEL, OS, MAC, STANDARD_FIELDS.ip_address],
   },
   mobile_devices: {
     label: 'Mobile devices',
     description: 'Phones and tablets managed by Google endpoint management.',
-    matchField: 'serialNumber', matchLabel: 'Serial number', matchType: 'TEXT',
-    layoutHints: ['phones', 'mobile', 'mobile_devices', 'tablets'],
-    fieldHints: ['serial_number', 'serial', 'serialnumber', 'imei'],
-    layout: { name: 'Phones', slug: 'phones', icon: 'box', color: 'violet' },
-    standardFields: [
-      MODEL,
-      { sourceField: 'manufacturer', label: 'Manufacturer', fieldType: 'TEXT', fieldHints: ['manufacturer', 'make', 'vendor', 'brand'] },
-      OS,
-      { sourceField: 'imei', label: 'IMEI', fieldType: 'TEXT', fieldHints: ['imei'] },
-      MAC,
-    ],
+    match: MATCH_KEYS.serialNumber,
+    layoutHints: LAYOUT_HINTS.phones,
+    layout: STANDARD_LAYOUTS.phones,
+    standardFields: [MODEL, STANDARD_FIELDS.manufacturer, OS, STANDARD_FIELDS.imei, MAC],
   },
 };
 
-const RESOURCE_KEYS = Object.keys(RESOURCES) as ResourceKey[];
 const AUTO_UPDATE_FIELD = 'autoUpdateExpiration';
 
-function destinationField(
-  sourceField: string, name: string, fieldType: RecommendedDestinationField['fieldType'], isPrimary: boolean,
-): RecommendedDestinationField {
-  const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
-  return { sourceField, name, slug, fieldType, syncDirection: 'source_wins', isPrimary, showInTable: true, options: {} };
-}
-
 /** "Create a new layout" for each resource: the name and the match key only. */
-export const GOOGLE_WORKSPACE_RECOMMENDED_DESTINATIONS = assertRecommendedDestinations(
-  'google-workspace',
-  Object.fromEntries(
-    RESOURCE_KEYS.map((key) => {
-      const spec = RESOURCES[key];
-      const fields = spec.matchField === 'name'
-        ? [destinationField('name', spec.matchLabel, 'TEXT', true)]
-        : [destinationField('name', 'Name', 'TEXT', true), destinationField(spec.matchField, spec.matchLabel, spec.matchType, false)];
-      return [key, { layout: spec.layout, fields }];
-    }),
-  ),
-);
+export const GOOGLE_WORKSPACE_RECOMMENDED_DESTINATIONS = standardRecommendedDestinations('google-workspace', RESOURCES);
 
 /** Google pageToken walker state, opaque to the runner (UniFi pattern). */
 const cursorSchema = z.object({ pageToken: z.string().min(1).max(4_096) }).strict();
@@ -558,7 +507,7 @@ function usersUrl(pageToken: string | undefined): string {
 }
 
 function record(key: ResourceKey, externalId: string, name: string, matchValue: string | undefined, section: unknown, extra: Record<string, unknown> = {}): LegacyDriverRecord {
-  const matchField = RESOURCES[key].matchField;
+  const matchField = RESOURCES[key].match.field;
   return {
     externalId,
     displayName: name,
@@ -647,21 +596,7 @@ export class GoogleWorkspaceDriver implements IntegrationDriver {
     secretFields: [],
     oauth: GOOGLE_WORKSPACE_OAUTH,
     setupGuide: GOOGLE_WORKSPACE_SETUP_GUIDE,
-    resources: RESOURCE_KEYS.map((key) => {
-      const spec = RESOURCES[key];
-      return {
-        key,
-        label: spec.label,
-        description: spec.description,
-        defaultMatchKeyHint: spec.matchField,
-        targetKind: 'asset' as const,
-        targetConfig: {},
-        dependsOnResourceKeys: [],
-        matchSuggestions: { sourceField: spec.matchField, layoutHints: spec.layoutHints, fieldHints: spec.fieldHints, fieldLabel: spec.matchLabel },
-        minimalFields: spec.matchField === 'name' ? ['name'] : ['name', spec.matchField],
-        ...(spec.standardFields ? { standardFields: spec.standardFields } : {}),
-      };
-    }),
+    resources: standardResources(RESOURCES),
     capabilities: {
       kind: 'pull',
       listSourceOrgs: true,
@@ -690,29 +625,20 @@ export class GoogleWorkspaceDriver implements IntegrationDriver {
   ): Promise<SourceFieldDto[]> {
     const spec = RESOURCES[ctx.resourceKey as ResourceKey];
     if (!spec) return [];
-    const fields: SourceFieldDto[] = [{ key: 'name', label: spec.matchField === 'name' ? spec.matchLabel : 'Name', hintType: 'TEXT', alwaysPresent: true }];
-    if (spec.matchField !== 'name') {
-      fields.push({ key: spec.matchField, label: spec.matchLabel, hintType: spec.matchType, alwaysPresent: ctx.resourceKey !== 'chrome_devices' && ctx.resourceKey !== 'mobile_devices' });
-    }
-    if (ctx.resourceKey === 'chrome_devices') {
-      // Opt-in: map it to a DATE field flagged isExpiry to see it in Expiring soon.
-      fields.push({
-        key: AUTO_UPDATE_FIELD,
-        label: 'Auto-update expiration',
-        hintType: 'DATE',
-        alwaysPresent: false,
-        description: 'Date the device stops receiving ChromeOS updates.',
-      });
-    }
-    for (const field of spec.standardFields ?? []) {
-      fields.push({
-        key: field.sourceField,
-        label: field.label,
-        hintType: field.fieldType === 'IP_ADDRESS' || field.fieldType === 'TEXTAREA' ? field.fieldType : 'TEXT',
-        alwaysPresent: false,
-      });
-    }
-    return fields;
+    const devices = ctx.resourceKey === 'chrome_devices' || ctx.resourceKey === 'mobile_devices';
+    return standardSourceFields(spec, {
+      matchAlwaysPresent: !devices,
+      extras: ctx.resourceKey === 'chrome_devices'
+        ? [{
+            // Opt-in: map it to a DATE field flagged isExpiry to see it in Expiring soon.
+            key: AUTO_UPDATE_FIELD,
+            label: 'Auto-update expiration',
+            hintType: 'DATE',
+            alwaysPresent: false,
+            description: 'Date the device stops receiving ChromeOS updates.',
+          }]
+        : [],
+    });
   }
 
   async fetchRecords(ctx: FetchRecordsContext, cursor: string | null): Promise<LegacyDriverFetchPage> {

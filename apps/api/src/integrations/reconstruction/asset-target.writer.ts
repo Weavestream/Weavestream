@@ -47,6 +47,7 @@ export interface AssetIntegrationWriteInput {
   }>;
   previousFieldChecksums: Readonly<Record<string, string>>;
   recordFieldDiffs?: boolean;
+  keptLocal?: Readonly<Record<string, string>>;
 }
 
 export interface AssetIntegrationWritePort {
@@ -155,6 +156,7 @@ export class AssetTargetWriter implements ReconstructionWriter<AssetReconstructi
         ...(ctx.previousAdopted === true ? { keepTargetName: true } : {}),
         ...(ctx.matchFirstIndexes ? { matchFirstIndexes: ctx.matchFirstIndexes } : {}),
         ...(ctx.recordFieldDiffs === true ? { recordFieldDiffs: true } : {}),
+        ...(ctx.recordFieldDiffs === true && ctx.keptLocal ? { keptLocal: ctx.keptLocal } : {}),
         ...(ctx.claimUnboundMatches === true && ctx.coBindSources?.length ? { coBindSources: ctx.coBindSources } : {}),
         ...(ctx.integrationPriority ? { priority: ctx.integrationPriority } : {}),
         fieldValues: input.fieldValues.map((field) => ({

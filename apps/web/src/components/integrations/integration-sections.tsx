@@ -5,7 +5,7 @@ import {
   type AssetIntegrationSection,
   type IntegrationSectionRow,
 } from '@weavestream/shared';
-import { Icon, Tag, type TagTone } from '../ui';
+import { Icon, Panel, Tag, type TagTone } from '../ui';
 import { ExternalUrlValue } from '../assets/external-url-value';
 import { FormattedDateTime } from '../../lib/timezone-context';
 import { recentRelative } from '../../lib/relative-time';
@@ -109,43 +109,25 @@ function IntegrationSectionPanel({ entry, differences }: { entry: AssetIntegrati
             borderTop: '1px solid var(--line)',
             padding: 12,
             display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 240px), 1fr))',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 360px), 1fr))',
             gap: 12,
           }}
         >
           {section.groups.map((group) => (
-            <div
+            <Panel
               key={group.key}
-              style={{
-                border: '1px solid var(--line)',
-                borderRadius: 'var(--radius-card)',
-                background: 'var(--panel-2)',
-                minWidth: 0,
-              }}
+              style={{ minWidth: 0 }}
+              title={
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                  <IconImg src={group.icon ? `/integrations/icons/${group.icon}.svg` : null} size={14} />
+                  {group.title}
+                </span>
+              }
             >
-              <div
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 6,
-                  padding: '6px 10px',
-                  borderBottom: '1px solid var(--line)',
-                  fontSize: 11,
-                  fontFamily: 'var(--font-mono)',
-                  color: 'var(--muted)',
-                  textTransform: 'uppercase',
-                  letterSpacing: 0.6,
-                }}
-              >
-                <IconImg src={group.icon ? `/integrations/icons/${group.icon}.svg` : null} size={14} />
-                <span>{group.title}</span>
-              </div>
-              <div style={{ padding: '2px 10px' }}>
-                {group.rows.map((row, index) => (
-                  <SectionRow key={index} row={row} last={index === group.rows.length - 1} />
-                ))}
-              </div>
-            </div>
+              {group.rows.map((row, index) => (
+                <SectionRow key={index} row={row} last={index === group.rows.length - 1} />
+              ))}
+            </Panel>
           ))}
           {differences}
         </div>

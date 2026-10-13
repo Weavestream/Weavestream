@@ -10,8 +10,18 @@ import {
   type LegacyDriverFetchPage,
   type LegacyDriverRecord,
 } from '../integration-driver.js';
-import { assertRecommendedDestinations, fetchWithRetry } from '../driver-utils.js';
+import { fetchWithRetry } from '../driver-utils.js';
+import {
+  LAYOUT_HINTS,
+  MATCH_KEYS,
+  STANDARD_FIELDS,
+  standardRecommendedDestinations,
+  standardResources,
+  standardSourceFields,
+  type StandardResourceSpec,
+} from '../standard-resources.js';
 import type { Lookup } from '../section-rows.js';
+import { evictRun, runCached } from '../run-cache.js';
 import { LevelKeyError, diagnoseLevel } from './level.diagnose.js';
 import { LEVEL_SETUP_GUIDE } from './level.setup-guide.js';
 import {
@@ -27,7 +37,7 @@ import {
  * top-level group is a source org, and its devices (nested groups
  * included) sync into one company. Every call is a GET with the raw API
  * key in `Authorization` (Level uses no Bearer prefix). Records carry the
- * name, the serial number and the standard facts (LEVEL_STANDARD_FIELDS)
+ * name, the serial number and the standard facts (RESOURCES below)
  * that fill layout fields; the extras go into the section.
  *
  * Active alerts and available updates are listed once per org and run,
@@ -40,7 +50,7 @@ const PAGE_LIMIT = 100;
 const MAX_PAGES = 1_000;
 /** Most alerts or updates held per lookup in one run. */
 export const LOOKUP_ITEM_CAP = 50_000;
-const RESOURCE = 'devices';
+const RESOURCE = 'devices' as const;
 
 /** Opt-in device details; verified to work on the list call. */
 const DEVICE_INCLUDES = [
@@ -56,29 +66,30 @@ const DEVICE_INCLUDES = [
 
 const secretSchema = z.object({ apiKey: z.string().trim().min(1).max(1_024) });
 
-export const LEVEL_RECOMMENDED_DESTINATIONS = assertRecommendedDestinations('level', {
+const RESOURCES: Readonly<Record<typeof RESOURCE, StandardResourceSpec>> = {
   [RESOURCE]: {
+    label: 'Devices',
+    description: 'Level devices per top-level group, with hardware, storage, OS, network, security, patches and alerts.',
+    match: MATCH_KEYS.serialNumber,
+    layoutHints: LAYOUT_HINTS.computers,
     layout: { name: 'Devices', slug: 'devices', icon: 'laptop', color: 'teal' },
-    fields: [
-      { sourceField: 'name', name: 'Name', slug: 'name', fieldType: 'TEXT', syncDirection: 'source_wins', isPrimary: true, showInTable: true, options: {} },
-      { sourceField: 'serialNumber', name: 'Serial number', slug: 'serial_number', fieldType: 'TEXT', syncDirection: 'source_wins', isPrimary: false, showInTable: true, options: {} },
+    // The facts Map layouts offers as layout fields (see level.sections.ts).
+    standardFields: [
+      STANDARD_FIELDS.hostname,
+      STANDARD_FIELDS.manufacturer,
+      STANDARD_FIELDS.model,
+      STANDARD_FIELDS.operating_system,
+      STANDARD_FIELDS.cpu,
+      STANDARD_FIELDS.ram,
+      STANDARD_FIELDS.storage,
+      STANDARD_FIELDS.mac_address,
+      STANDARD_FIELDS.ip_address,
+      STANDARD_FIELDS.role,
     ],
   },
-});
+};
 
-/** Standard facts Map layouts offers as layout fields (serial is the match key). */
-export const LEVEL_STANDARD_FIELDS: NonNullable<DriverDescriptor['resources'][number]['standardFields']> = [
-  { sourceField: 'hostname', label: 'Hostname', fieldType: 'TEXT', fieldHints: ['hostname', 'host_name', 'computer_name'] },
-  { sourceField: 'manufacturer', label: 'Manufacturer', fieldType: 'TEXT', fieldHints: ['manufacturer', 'make', 'vendor'] },
-  { sourceField: 'model', label: 'Model', fieldType: 'TEXT', fieldHints: ['model'] },
-  { sourceField: 'operating_system', label: 'Operating system', fieldType: 'TEXT', fieldHints: ['operating_system', 'os'] },
-  { sourceField: 'cpu', label: 'CPU', fieldType: 'TEXT', fieldHints: ['cpu', 'processor'] },
-  { sourceField: 'ram', label: 'RAM', fieldType: 'TEXT', fieldHints: ['ram', 'memory'] },
-  { sourceField: 'storage', label: 'Storage', fieldType: 'TEXT', fieldHints: ['storage', 'disk', 'disks'] },
-  { sourceField: 'mac_address', label: 'MAC address', fieldType: 'TEXT', fieldHints: ['mac_address', 'mac'] },
-  { sourceField: 'ip_address', label: 'IP address', fieldType: 'IP_ADDRESS', fieldHints: ['ip_address', 'ip', 'private_ip'] },
-  { sourceField: 'role', label: 'Role', fieldType: 'TEXT', fieldHints: ['role'] },
-];
+export const LEVEL_RECOMMENDED_DESTINATIONS = standardRecommendedDestinations('level', RESOURCES);
 
 /** `starting_after` walker state, opaque to the runner. */
 const cursorSchema = z.object({ startingAfter: z.string().min(1).max(256) }).strict();
@@ -187,37 +198,8 @@ async function rootGroups(ctx: IntegrationContext): Promise<SourceOrgDto[]> {
     .map((g) => ({ externalId: g.id!, name: g.name || g.id!, hint: null }));
 }
 
-// ponytail: single process, per run. Keyed by integration + snapshot + org so
-// every page of one org shares one fetch; evicted when the org finishes.
-const RUN_CACHE_TTL_MS = 15 * 60_000;
-const runCache = new Map<string, { expiresAt: number; value: Promise<unknown> }>();
-
-/** @internal only `*.spec.ts` should call this. */
-export function __resetLevelRunCacheForTests(): void {
-  runCache.clear();
-}
-
-function runKey(ctx: FetchRecordsContext, snapshotAt: string): string {
-  return `${ctx.integrationId ?? ctx.correlationId}\0${snapshotAt}\0${ctx.externalOrgId}\0`;
-}
-
-function runCached<T>(ctx: FetchRecordsContext, snapshotAt: string, name: string, load: () => Promise<T>): Promise<T> {
-  const now = Date.now();
-  for (const [key, entry] of runCache) if (entry.expiresAt <= now) runCache.delete(key);
-  const key = runKey(ctx, snapshotAt) + name;
-  const hit = runCache.get(key);
-  if (hit) return hit.value as Promise<T>;
-  const value = load();
-  runCache.set(key, { expiresAt: now + RUN_CACHE_TTL_MS, value });
-  // A failed load is not cached; the next page retries it.
-  value.catch(() => runCache.delete(key));
-  return value;
-}
-
-function evictRun(ctx: FetchRecordsContext, snapshotAt: string): void {
-  const prefix = runKey(ctx, snapshotAt);
-  for (const key of runCache.keys()) if (key.startsWith(prefix)) runCache.delete(key);
-}
+// Per-run lookup cache: see ../run-cache.ts. Roots, alerts and updates are
+// account-wide, so every org of one run may share them.
 
 /** Optional data: any failure becomes a note; only a rate limit propagates. */
 async function optional<T>(load: () => Promise<T>): Promise<Lookup<T>> {
@@ -265,25 +247,7 @@ export class LevelDriver implements IntegrationDriver {
       },
     ],
     setupGuide: LEVEL_SETUP_GUIDE,
-    resources: [
-      {
-        key: RESOURCE,
-        label: 'Devices',
-        description: 'Level devices per top-level group, with hardware, storage, OS, network, security, patches and alerts.',
-        defaultMatchKeyHint: 'serialNumber',
-        targetKind: 'asset',
-        targetConfig: {},
-        dependsOnResourceKeys: [],
-        matchSuggestions: {
-          sourceField: 'serialNumber',
-          layoutHints: ['workstations', 'computers', 'servers', 'devices', 'configurations', 'laptops'],
-          fieldHints: ['serial', 'serial_number', 'serial_no'],
-          fieldLabel: 'Serial number',
-        },
-        minimalFields: ['name', 'serialNumber'],
-        standardFields: LEVEL_STANDARD_FIELDS,
-      },
-    ],
+    resources: standardResources(RESOURCES),
     capabilities: {
       kind: 'pull',
       listSourceOrgs: true,
@@ -310,16 +274,8 @@ export class LevelDriver implements IntegrationDriver {
   }
 
   async listSourceFields(): Promise<SourceFieldDto[]> {
-    return [
-      { key: 'name', label: 'Name', hintType: 'TEXT', alwaysPresent: true },
-      { key: 'serialNumber', label: 'Serial number', hintType: 'TEXT', alwaysPresent: false },
-      ...LEVEL_STANDARD_FIELDS.map((field) => ({
-        key: field.sourceField,
-        label: field.label,
-        hintType: field.fieldType === 'IP_ADDRESS' ? ('IP_ADDRESS' as const) : ('TEXT' as const),
-        alwaysPresent: false,
-      })),
-    ];
+    // No serial is common on VMs.
+    return standardSourceFields(RESOURCES[RESOURCE], { matchAlwaysPresent: false });
   }
 
   async fetchRecords(ctx: FetchRecordsContext, cursor: string | null): Promise<LegacyDriverFetchPage> {

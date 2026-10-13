@@ -1699,6 +1699,38 @@ describe('AssetsService standard-field write policy (recordFieldDiffs)', () => {
       expect(tx.assetFieldValue.upsert).not.toHaveBeenCalled();
     });
 
+    it('a promoted owner with its own baseline replaces the value the previous owner wrote', async () => {
+      // Google owned the field and wrote "Senior Engineer"; Microsoft last wrote "Engineer" and is now first.
+      const { service, prisma, tx } = setup({ target: withValue('Senior Engineer'), binding: binding() });
+      prisma.integrationSyncRecord.findMany.mockResolvedValue([other('google-workspace', 'Senior Engineer')]);
+      await expect(service.writeFromIntegration(shared('Engineer', OWNER, { [ids.field]: checksum('Engineer') })))
+        .resolves.toMatchObject({ fieldDiffs: {}, fieldChecksums: { [ids.field]: checksum('Engineer') } });
+      expect(tx.assetFieldValue.upsert).toHaveBeenCalled();
+    });
+
+    it('a promoted owner keeps a value kept with "Keep ours" against this source value', async () => {
+      const { service, prisma, tx } = setup({ target: withValue('Senior Engineer'), binding: binding() });
+      prisma.integrationSyncRecord.findMany.mockResolvedValue([other('google-workspace', 'Senior Engineer')]);
+      const result = await service.writeFromIntegration({
+        ...shared('Engineer', OWNER, { [ids.field]: checksum('Engineer') }),
+        keptLocal: { [ids.field]: checksum('Engineer') },
+      });
+      // Reported (the runner's merge hides it under the kept choice), never written.
+      expect(result).toMatchObject({ fieldDiffs: { [ids.field]: { sourceValue: 'Engineer' } } });
+      expect(result.fieldChecksums?.[ids.field]).toBe(checksum('Engineer'));
+      expect(tx.assetFieldValue.upsert).not.toHaveBeenCalled();
+    });
+
+    it('a "Keep ours" choice stops holding once the source value changes', async () => {
+      const { service, prisma, tx } = setup({ target: withValue('Senior Engineer'), binding: binding() });
+      prisma.integrationSyncRecord.findMany.mockResolvedValue([other('google-workspace', 'Senior Engineer')]);
+      await expect(service.writeFromIntegration({
+        ...shared('Lead Engineer', OWNER, { [ids.field]: checksum('Engineer') }),
+        keptLocal: { [ids.field]: checksum('Engineer') },
+      })).resolves.toMatchObject({ fieldDiffs: {}, fieldChecksums: { [ids.field]: checksum('Lead Engineer') } });
+      expect(tx.assetFieldValue.upsert).toHaveBeenCalled();
+    });
+
     it('loads every live binding on the asset so the highest-priority provider is never dropped', async () => {
       const { service, prisma, tx } = setup({ target: withValue('Engineer'), binding: binding() });
       // 60 lower-priority bindings, then the owner last: a 50-row cap would omit it.

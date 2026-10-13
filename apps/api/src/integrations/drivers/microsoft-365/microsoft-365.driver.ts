@@ -2,7 +2,6 @@ import { Logger } from '@nestjs/common';
 import { z } from 'zod';
 import type {
   DriverDescriptor,
-  DriverStandardField,
   IntegrationSetupCheck,
   SourceFieldDto,
   SourceOrgDto,
@@ -16,10 +15,18 @@ import {
   type IntegrationDriver,
   type LegacyDriverFetchPage,
   type LegacyDriverRecord,
-  type RecommendedDestination,
-  type RecommendedDestinationField,
 } from '../integration-driver.js';
-import { assertRecommendedDestinations, fetchWithRetry } from '../driver-utils.js';
+import { fetchWithRetry } from '../driver-utils.js';
+import {
+  LAYOUT_HINTS,
+  MATCH_KEYS,
+  STANDARD_FIELDS,
+  STANDARD_LAYOUTS,
+  standardRecommendedDestinations,
+  standardResources,
+  standardSourceFields,
+  type StandardResourceSpec,
+} from '../standard-resources.js';
 import { evictRun, optional as optionalLookup, runCached } from '../run-cache.js';
 import type { Lookup } from '../section-rows.js';
 import { requireAdminConsent } from '../../oauth/oauth-token.js';
@@ -79,111 +86,61 @@ import { diagnoseMicrosoftClient, diagnoseMicrosoftConnection } from './microsof
 
 type ResourceKey = 'tenant' | 'users' | 'groups' | 'computers' | 'mobile_devices';
 
-interface ResourceSpec {
-  label: string;
-  description: string;
-  matchField: string;
-  matchLabel: string;
-  matchType: 'TEXT' | 'EMAIL';
-  layoutHints: string[];
-  fieldHints: string[];
-  layout: RecommendedDestination['layout'];
-  standardFields?: DriverStandardField[];
-}
-
 const logger = new Logger('Microsoft365Driver');
 
-const MODEL: DriverStandardField = { sourceField: 'model', label: 'Model', fieldType: 'TEXT', fieldHints: ['model'] };
-const MANUFACTURER: DriverStandardField = { sourceField: 'manufacturer', label: 'Manufacturer', fieldType: 'TEXT', fieldHints: ['manufacturer', 'make', 'vendor', 'brand'] };
-const OS: DriverStandardField = { sourceField: 'operating_system', label: 'Operating system', fieldType: 'TEXT', fieldHints: ['operating_system', 'os'] };
+const { model: MODEL, manufacturer: MANUFACTURER, operating_system: OS } = STANDARD_FIELDS;
 
-const RESOURCES: Readonly<Record<ResourceKey, ResourceSpec>> = {
+const RESOURCES: Readonly<Record<ResourceKey, StandardResourceSpec>> = {
   tenant: {
     label: 'Tenant',
     description: 'The Microsoft 365 tenant: licences purchased vs assigned, subscriptions, Secure Score, MFA coverage and recent alerts.',
-    matchField: 'tenantId', matchLabel: 'Tenant ID', matchType: 'TEXT',
+    match: { field: 'tenantId', label: 'Tenant ID', type: 'TEXT', fieldHints: ['tenant_id', 'tenantid', 'directory_id'] },
     layoutHints: ['microsoft_365', 'm365', 'office_365', 'tenant', 'tenants'],
-    fieldHints: ['tenant_id', 'tenantid', 'directory_id'],
     layout: { name: 'Microsoft 365 Tenants', slug: 'microsoft_365_tenants', icon: 'building', color: 'blue' },
-    standardFields: [
-      { sourceField: 'primary_domain', label: 'Primary domain', fieldType: 'TEXT', fieldHints: ['primary_domain', 'domain'] },
-    ],
+    standardFields: [STANDARD_FIELDS.primary_domain],
   },
   users: {
     label: 'Users',
     description: 'Members with licences, mailbox and OneDrive storage, sign-in, MFA and admin roles.',
-    matchField: 'email', matchLabel: 'Email', matchType: 'EMAIL',
-    layoutHints: ['people', 'contacts', 'users', 'staff', 'employees'],
-    fieldHints: ['email', 'primary_email', 'e_mail', 'mail', 'upn'],
-    layout: { name: 'People', slug: 'people', icon: 'person', color: 'blue' },
-    standardFields: [
-      { sourceField: 'job_title', label: 'Job title', fieldType: 'TEXT', fieldHints: ['job_title', 'title'] },
-      { sourceField: 'department', label: 'Department', fieldType: 'TEXT', fieldHints: ['department'] },
-      { sourceField: 'phone', label: 'Phone', fieldType: 'PHONE', fieldHints: ['phone', 'phone_number', 'work_phone'] },
-    ],
+    match: MATCH_KEYS.email,
+    layoutHints: LAYOUT_HINTS.people,
+    layout: STANDARD_LAYOUTS.people,
+    standardFields: [STANDARD_FIELDS.job_title, STANDARD_FIELDS.department, STANDARD_FIELDS.phone],
   },
   groups: {
     label: 'Groups',
     description: 'Mail-enabled groups (Microsoft 365, distribution and mail-enabled security) with their members.',
-    matchField: 'email', matchLabel: 'Email', matchType: 'EMAIL',
-    layoutHints: ['distribution_lists', 'distribution', 'groups', 'mailing_lists'],
-    fieldHints: ['email', 'group_email', 'address'],
-    layout: { name: 'Distribution Lists', slug: 'distribution_lists', icon: 'users', color: 'teal' },
-    standardFields: [
-      { sourceField: 'description', label: 'Description', fieldType: 'TEXTAREA', fieldHints: ['description'] },
-    ],
+    match: MATCH_KEYS.groupEmail,
+    layoutHints: LAYOUT_HINTS.distributionLists,
+    layout: STANDARD_LAYOUTS.distributionLists,
+    standardFields: [STANDARD_FIELDS.description],
   },
   computers: {
     label: 'Computers',
     description: 'Windows, macOS and Linux devices managed by Intune.',
-    matchField: 'serialNumber', matchLabel: 'Serial number', matchType: 'TEXT',
-    layoutHints: ['workstations', 'laptops', 'computers', 'desktops', 'devices'],
-    fieldHints: ['serial_number', 'serial', 'serialnumber', 'service_tag'],
+    match: MATCH_KEYS.serialNumber,
+    layoutHints: LAYOUT_HINTS.computers,
     layout: { name: 'Workstations', slug: 'workstations', icon: 'laptop', color: 'amber' },
     standardFields: [
-      { sourceField: 'hostname', label: 'Hostname', fieldType: 'TEXT', fieldHints: ['hostname', 'host_name', 'computer_name', 'device_name'] },
+      STANDARD_FIELDS.hostname,
       MANUFACTURER,
       MODEL,
       OS,
-      { sourceField: 'mac_address', label: 'MAC address (Wi-Fi)', fieldType: 'TEXT', fieldHints: ['mac_address', 'mac'] },
+      { ...STANDARD_FIELDS.mac_address, label: 'MAC address (Wi-Fi)' },
     ],
   },
   mobile_devices: {
     label: 'Mobile devices',
     description: 'iOS, iPadOS and Android devices managed by Intune.',
-    matchField: 'serialNumber', matchLabel: 'Serial number', matchType: 'TEXT',
-    layoutHints: ['phones', 'mobile', 'mobile_devices', 'tablets'],
-    fieldHints: ['serial_number', 'serial', 'serialnumber', 'imei'],
-    layout: { name: 'Phones', slug: 'phones', icon: 'box', color: 'violet' },
-    standardFields: [
-      MODEL,
-      MANUFACTURER,
-      OS,
-      { sourceField: 'imei', label: 'IMEI', fieldType: 'TEXT', fieldHints: ['imei'] },
-      { sourceField: 'phone_number', label: 'Phone number', fieldType: 'PHONE', fieldHints: ['phone_number', 'phone', 'mobile_number'] },
-    ],
+    match: MATCH_KEYS.serialNumber,
+    layoutHints: LAYOUT_HINTS.phones,
+    layout: STANDARD_LAYOUTS.phones,
+    standardFields: [MODEL, MANUFACTURER, OS, STANDARD_FIELDS.imei, STANDARD_FIELDS.phone_number],
   },
 };
 
-const RESOURCE_KEYS = Object.keys(RESOURCES) as ResourceKey[];
-
-function destinationField(
-  sourceField: string, name: string, fieldType: RecommendedDestinationField['fieldType'], isPrimary: boolean,
-): RecommendedDestinationField {
-  const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
-  return { sourceField, name, slug, fieldType, syncDirection: 'source_wins', isPrimary, showInTable: true, options: {} };
-}
-
 /** "Create a new layout" for each resource: the name and the match key only. */
-export const MICROSOFT_365_RECOMMENDED_DESTINATIONS = assertRecommendedDestinations(
-  'microsoft-365',
-  Object.fromEntries(
-    RESOURCE_KEYS.map((key) => {
-      const spec = RESOURCES[key];
-      return [key, { layout: spec.layout, fields: [destinationField('name', 'Name', 'TEXT', true), destinationField(spec.matchField, spec.matchLabel, spec.matchType, false)] }];
-    }),
-  ),
-);
+export const MICROSOFT_365_RECOMMENDED_DESTINATIONS = standardRecommendedDestinations('microsoft-365', RESOURCES);
 
 // ---------------------------------------------------------------------
 // Cursor: the Graph @odata.nextLink, opaque to the runner
@@ -416,7 +373,7 @@ function record(key: ResourceKey, externalId: string, name: string, matchValue: 
   return {
     externalId,
     displayName: name,
-    fields: { name, [RESOURCES[key].matchField]: matchValue ?? null, ...extra },
+    fields: { name, [RESOURCES[key].match.field]: matchValue ?? null, ...extra },
     section,
     updatedAt: null,
   };
@@ -437,21 +394,7 @@ export class Microsoft365Driver implements IntegrationDriver {
     secretFields: [],
     oauth: MICROSOFT_365_OAUTH,
     setupGuide: MICROSOFT_365_SETUP_GUIDE,
-    resources: RESOURCE_KEYS.map((key) => {
-      const spec = RESOURCES[key];
-      return {
-        key,
-        label: spec.label,
-        description: spec.description,
-        defaultMatchKeyHint: spec.matchField,
-        targetKind: 'asset' as const,
-        targetConfig: {},
-        dependsOnResourceKeys: [],
-        matchSuggestions: { sourceField: spec.matchField, layoutHints: spec.layoutHints, fieldHints: spec.fieldHints, fieldLabel: spec.matchLabel },
-        minimalFields: ['name', spec.matchField],
-        ...(spec.standardFields ? { standardFields: spec.standardFields } : {}),
-      };
-    }),
+    resources: standardResources(RESOURCES),
     capabilities: {
       kind: 'pull',
       listSourceOrgs: true,
@@ -502,19 +445,7 @@ export class Microsoft365Driver implements IntegrationDriver {
   async listSourceFields(ctx: IntegrationContext & { externalOrgId: string; resourceKey: string }): Promise<SourceFieldDto[]> {
     const spec = RESOURCES[ctx.resourceKey as ResourceKey];
     if (!spec) return [];
-    const fields: SourceFieldDto[] = [
-      { key: 'name', label: 'Name', hintType: 'TEXT', alwaysPresent: true },
-      { key: spec.matchField, label: spec.matchLabel, hintType: spec.matchType, alwaysPresent: ctx.resourceKey !== 'computers' && ctx.resourceKey !== 'mobile_devices' },
-    ];
-    for (const field of spec.standardFields ?? []) {
-      fields.push({
-        key: field.sourceField,
-        label: field.label,
-        hintType: field.fieldType === 'TEXTAREA' ? field.fieldType : 'TEXT',
-        alwaysPresent: false,
-      });
-    }
-    return fields;
+    return standardSourceFields(spec, { matchAlwaysPresent: ctx.resourceKey !== 'computers' && ctx.resourceKey !== 'mobile_devices' });
   }
 
   async fetchRecords(ctx: FetchRecordsContext, cursor: string | null): Promise<LegacyDriverFetchPage> {

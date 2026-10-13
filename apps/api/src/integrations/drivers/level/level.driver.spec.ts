@@ -10,9 +10,10 @@ import {
   LEVEL_RECOMMENDED_DESTINATIONS,
   byDevice,
   LevelDriver,
-  __resetLevelRunCacheForTests,
 } from './level.driver.js';
 import { LEVEL_SETUP_GUIDE } from './level.setup-guide.js';
+import { __resetRunCacheForTests } from '../run-cache.js';
+import { MATCH_KEYS } from '../standard-resources.js';
 import { deviceStandardFields, formatDiskSize, formatRam, privateIpv4 } from './level.sections.js';
 import { setDefaultFetchForTests, setDefaultResolveForTests } from '../../../common/egress/safe-fetch.js';
 
@@ -146,7 +147,7 @@ function row(section: IntegrationSection, group: string, label: string) {
   return g.rows.find((r) => r.label === label);
 }
 
-beforeEach(() => __resetLevelRunCacheForTests());
+beforeEach(() => __resetRunCacheForTests());
 afterEach(() => {
   setDefaultFetchForTests(null);
   setDefaultResolveForTests(null);
@@ -161,7 +162,7 @@ describe('LevelDriver descriptor', () => {
     expect(parsed.setupGuide?.map((s) => s.id)).toEqual(LEVEL_SETUP_GUIDE.map((s) => s.id));
     const [devices] = parsed.resources;
     expect(devices).toMatchObject({ key: 'devices', targetKind: 'asset', minimalFields: ['name', 'serialNumber'] });
-    expect(devices!.matchSuggestions).toMatchObject({ sourceField: 'serialNumber', fieldHints: ['serial', 'serial_number', 'serial_no'] });
+    expect(devices!.matchSuggestions).toMatchObject({ sourceField: 'serialNumber', fieldHints: [...MATCH_KEYS.serialNumber.fieldHints] });
   });
 
   it('recommends a new layout with the minimal fields only', () => {

@@ -23,6 +23,7 @@ const MS = '00000000-0000-4000-8000-0000000000b1';
 function setup(row: { id?: string; clientId: string; secretCiphertext: string; updatedAt: Date } | null = null) {
   let stored = row;
   const prisma = {
+    $transaction: jest.fn(async (fn: (tx: unknown) => Promise<unknown>): Promise<unknown> => fn(prisma)),
     integration: {
       // GW is a Google integration (driver 'a'), MS a Microsoft one.
       findUnique: jest.fn(async ({ where }: { where: { id: string } }) =>
@@ -40,7 +41,11 @@ function setup(row: { id?: string; clientId: string; secretCiphertext: string; u
       }),
     },
   };
-  const audit = { log: jest.fn(async () => undefined) };
+  const audit = {
+    log: jest.fn(async (_entry: unknown) => undefined),
+    // Same row, written with the transaction client.
+    logWithClient: jest.fn(async (_tx: unknown, entry: unknown): Promise<undefined> => audit.log(entry)),
+  };
   const drivers: Record<string, unknown> & { list: () => Array<Record<string, unknown>> } = {
     list: () => [
       { key: 'a', label: 'Driver A', oauth: { provider: 'google', scopes: ['openid', 'scope.a'] } },
@@ -86,6 +91,34 @@ describe('IntegrationOAuthAppService', () => {
       secretExpiryWarning: null,
       tenantId: null,
     });
+  });
+
+  it('writes the app and its audit row in one transaction, so a failed audit fails the save', async () => {
+    const { service, prisma, audit } = setup();
+    let inTx = false;
+    prisma.$transaction.mockImplementation(async (fn: (tx: unknown) => Promise<unknown>) => {
+      inTx = true;
+      try {
+        return await fn(prisma);
+      } finally {
+        inTx = false;
+      }
+    });
+    const writesInTx: boolean[] = [];
+    const create = prisma.integrationOAuthApp.create.getMockImplementation()!;
+    prisma.integrationOAuthApp.create.mockImplementation(async (args) => {
+      writesInTx.push(inTx);
+      return create(args);
+    });
+    audit.logWithClient.mockRejectedValueOnce(new Error('audit down'));
+    await expect(service.update(
+      { id: 'user-1' } as never,
+      GW,
+      { clientId: 'client-1', clientSecret: 'test-client-secret' },
+      { ip: '127.0.0.1', userAgent: 'jest' },
+    )).rejects.toThrow('audit down');
+    expect(writesInTx).toEqual([true]);
+    expect(audit.logWithClient).toHaveBeenCalledWith(prisma, expect.objectContaining({ action: 'integration.oauth_app.update' }));
   });
 
   it('saves the secret encrypted with an integration-bound AAD and never returns it', async () => {
