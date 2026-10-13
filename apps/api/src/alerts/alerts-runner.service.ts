@@ -513,4 +513,3 @@ export function dismissalKeyOf(item: ExpirationItem): string {
   if (item.kind === 'domain_tls') return expirationDismissalKey('domain', entityId, 'tls', item.expiresAt);
   return expirationDismissalKey('password', entityId, item.source ?? 'expiry', item.expiresAt);
 }
-

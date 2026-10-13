@@ -63,7 +63,12 @@ export function ExpirationsTable({
       {
         id: 'item',
         header: 'Item',
-        render: (row) => <ItemCell row={row} />,
+        render: (row) => (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 }}>
+            <ItemCell row={row} />
+            <DismissalNote row={row} />
+          </div>
+        ),
       },
       {
         id: 'source',
@@ -193,6 +198,7 @@ export function ExpirationsTable({
               {formatDays(row.daysUntil)}
             </span>
           </MobileCardRow>
+          <DismissalNote row={row} />
           <DismissAction row={row} onDismiss={setDismissing} />
         </div>
       )}
@@ -341,11 +347,7 @@ function itemLabel(row: ExpirationRow): string {
 
 function StatusPill({ row }: { row: ExpirationRow }) {
   if (row.dismissal) {
-    return (
-      <span title={row.dismissal.note ?? undefined}>
-        <Tag tone="outline">Dismissed</Tag>
-      </span>
-    );
+    return <Tag tone="outline">Dismissed</Tag>;
   }
   if (row.status === 'EXPIRED') {
     return (
@@ -359,6 +361,28 @@ function StatusPill({ row }: { row: ExpirationRow }) {
     <Tag tone={urgent ? 'warn' : 'outline'}>
       {row.daysUntil === 0 ? 'Today' : `${row.daysUntil}d`}
     </Tag>
+  );
+}
+
+/**
+ * The reason a row was dismissed, as visible text (not a hover tooltip) so it
+ * is readable on touch devices and by screen readers.
+ */
+function DismissalNote({ row }: { row: ExpirationRow }) {
+  const note = row.dismissal?.note;
+  if (!note) return null;
+  return (
+    <div
+      style={{
+        fontSize: 12,
+        color: 'var(--text-2)',
+        lineHeight: 1.4,
+        overflowWrap: 'anywhere',
+      }}
+    >
+      <span style={{ color: 'var(--muted)' }}>Dismissal note: </span>
+      {note}
+    </div>
   );
 }
 
