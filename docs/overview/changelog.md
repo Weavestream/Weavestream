@@ -13,6 +13,8 @@ All notable changes to Weavestream are documented here. The format follows [Keep
 
 ## [Unreleased]
 
+## [1.10.0] - 2026-10-13
+
 ### Added
 
 - **Level RMM integration.** Read-only sync of Level RMM devices with a pasted Read-only API key. Each top-level Level group maps to a company; devices match existing assets by serial number. Hostname, manufacturer, model, operating system, CPU, RAM, storage, MAC address, IP address and role fill the layout's own fields; a **Level RMM** section on each asset shows status, storage per partition, network, security, available patches, active alerts and memory and disk detail. The setup guide and **Check setup** are shown on the integration. See [Level RMM](/integrations/level/).
@@ -26,9 +28,28 @@ All notable changes to Weavestream are documented here. The format follows [Keep
 - **Domains list shows source icons.** Synced domains show the Cloudflare and Google icons (Cloudflare first) instead of words, and hostnames stay on one line.
 - **Microsoft 365 integration.** Read-only sync of customer tenants, connected by admin consent: one Microsoft 365 integration per install, whose **App** tab holds one multi-tenant Entra app (client secret encrypted and write-only, with its expiry date and a warning from 30 days before), and whose **Connections** tab lists one connection per customer, each approved by a Global Administrator or Privileged Role Administrator. Weavestream verifies the tenant through the token and Microsoft Graph, stores no user or refresh token, and mints app-only tokens per tenant. Syncs users (licences, mailbox and OneDrive storage, last sign-in and MFA with Entra ID P1, admin roles, shared mailbox, on-premises sync, wasted licence), mail-enabled groups, Intune computers and mobile devices (skipped with a warning when Intune is not licensed or not permitted), and the tenant (licences purchased vs assigned, subscriptions, Secure Score, MFA coverage, admins, storage, recent security alerts); verified domains feed Domains monitoring with a Microsoft icon and a **Microsoft 365** card. Check setup maps Entra AADSTS errors to fixed steps and lists permissions a tenant has not granted. The only write is optional and explicit: per connection, an admin can turn the tenant's "Conceal user, group, and site names in all reports" setting off (and back on) so storage can be matched to people; every choice is audited. See [Microsoft 365](/integrations/microsoft-365/).
 
+- **Setup guides and connection checks for Action1, NinjaOne, and UniFi.** Each integration now includes provider-specific credential instructions and **Check setup**, with fixed messages identifying missing credentials, a wrong API base URL, refused access, rate limits, or an unreachable provider. See [Action1](/integrations/action1/), [NinjaOne](/integrations/ninjaone/), and [UniFi](/integrations/unifi/).
+- **Dismiss items on Expiring soon.** Dismiss a domain, asset date, or password expiry for its current due date, with an optional note. Dismissed items stop sending expiry emails; dismissed domain expiries also leave dashboard alerts unless the domain has a low security score. **Show dismissed** lets you review and restore items. A changed due date makes the item appear again, and the underlying record is unchanged. Dismiss and restore require the item's manage permission and are audited; dismissal notes are visible to staff only.
+
+### Changed
+
+- **Integration run history is easier to inspect.** Run details show totals by resource and company, the trigger, timestamps, warnings, and failures. Cloudflare domain syncs use the same run-history view with domain-specific totals.
+- **Available integrations are easier to find.** The integration administration page shows the available-provider gallery first. Integration detail cards and Differences use consistent panels, and setup-guide bullets and step labels display correctly.
+- **A shared standard for integration drivers.** Level RMM, Google Workspace, and Microsoft 365 share standard field definitions, match keys, and layout suggestions, with conformance checks for new drivers. See [Integration driver development](/development/integration-drivers/).
+
 ### Fixed
 
 - **The domain page fits on phones.** The header tags wrap, and the Security posture panel stacks each label above its value instead of widening the page.
+- **Setup checks no longer mark company mappings as complete.** Action1, NinjaOne, Level RMM, and UniFi confirm that credentials can see organizations, groups, or consoles, but leave the mapping step unverified with a reminder to check **Organizations**.
+- **Ambiguous asset matches no longer adopt the wrong asset.** Match-first considers all case-insensitive matches together, including manually created assets and assets from other integrations. An exact-case match does not bypass an ambiguous result.
+- **Integration priority changes apply correctly.** Promoting an integration lets its values replace the previous provider's values on the next sync while preserving manual edits and **Keep ours** choices. **Use source value** also records the choice against other providers so they do not immediately overwrite it.
+- **Phone matching no longer suggests IMEI as the serial-number field.** Serial matching and IMEI facts keep separate destinations.
+
+### Security
+
+- **Integration requests refuse redirects by default.** API keys and bearer tokens are not forwarded to unexpected redirect targets. Requests that explicitly follow redirects strip sensitive headers across origins and apply the correct method and body handling for each redirect status.
+- **OAuth changes and their audit records commit together.** Saving an OAuth app and connecting, reconnecting, or disconnecting a tenant roll back if the audit write fails. Creating a layout field through integration mapping also commits with its audit record.
+- **Integration errors expose less upstream data.** NinjaOne token and ticket-list failures no longer include provider response bodies in errors or logs, and ticket-enrichment parse failures use a fixed category. Bulk difference-resolution failures log a sanitized summary instead of raw database errors that may contain field values.
 
 ## [1.9.12] - 2026-10-08
 
@@ -885,7 +906,8 @@ Initial public release.
 
 ---
 
-[Unreleased]: https://github.com/Weavestream/Weavestream/compare/v1.9.10...HEAD
+[Unreleased]: https://github.com/Weavestream/Weavestream/compare/v1.10.0...HEAD
+[1.10.0]: https://github.com/Weavestream/Weavestream/releases/tag/v1.10.0
 [1.9.10]: https://github.com/Weavestream/Weavestream/releases/tag/v1.9.10
 [1.9.9]: https://github.com/Weavestream/Weavestream/releases/tag/v1.9.9
 [1.9.8]: https://github.com/Weavestream/Weavestream/releases/tag/v1.9.8
