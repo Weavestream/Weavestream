@@ -574,6 +574,68 @@ describe('IntegrationSyncRunnerService writer dispatch', () => {
     }));
   });
 
+  it('explains a native validation block from the mappings and source keys, never from values', async () => {
+    const { service, driver, prisma, provenance, writer } = setup();
+    const field = (id: string, slug: string, fieldType: string) => ({
+      id: `00000000-0000-4000-8000-00000000060${id}`, slug, fieldType, options: {}, archivedAt: null,
+    });
+    prisma.integrationResource.findFirst.mockResolvedValueOnce({
+      id: 'resource', integrationId: 'integration', resourceKey: 'records', enabled: true,
+      targetKind: 'asset', targetConfig: {}, dependsOnResourceKeys: [],
+      assetLayoutId: '00000000-0000-4000-8000-000000000007',
+      assetLayout: { fields: [] }, matchKeyFieldIds: [],
+      fieldMappings: [
+        { sourceField: 'displayName', targetField: field('1', 'hostname', 'TEXT'), transform: null, syncDirection: 'source_wins' },
+        { sourceField: 'systemSerialNumber', targetField: field('2', 'serial_tag', 'TEXT'), transform: null, syncDirection: 'source_wins' },
+        { sourceField: 'cpuCores', targetField: field('3', 'cores', 'NUMBER'), transform: null, syncDirection: 'source_wins' },
+      ],
+    });
+    driver.fetchRecords.mockResolvedValueOnce({
+      records: [{
+        externalId: 'device-1', displayName: 'PRFM-HQ-01',
+        fields: { systemName: 'PRFM-HQ-01', systemSerialNumber: '', cpuCores: 'SECRET-NOT-A-NUMBER' },
+        updatedAt: null,
+      }],
+      hasMore: false, cursor: null, terminal: true,
+      snapshotAt: '2026-07-14T10:00:00.000Z',
+    });
+    writer.write.mockImplementation(async (_ctx, record) => ({
+      targetKind: 'asset', targetId: '', checksum: 'c'.repeat(64), change: 'blocked',
+      provenance: {
+        integrationId: 'integration', externalOrgId: 'org-1', resourceKey: 'records',
+        externalId: record.externalId, sourceRevision: null, sourceFingerprint: null,
+        firstSeenAt: '2026-07-14T10:00:00.000Z', lastSeenAt: '2026-07-14T10:00:00.000Z',
+        lastSyncedAt: null, ownership: 'breeze', state: 'blocked',
+      },
+      gaps: [{
+        kind: 'validation',
+        message: 'Native target validation blocked the write (fields: hostname, serial_tag, cores, owner).',
+        details: { reasonCode: 'native_validation', fieldPaths: ['hostname', 'serial_tag', 'cores', 'owner'] },
+      }],
+    }));
+
+    const result = await service.runMapping({
+      syncRunId: 'explain-run', integrationCompanyMappingId: 'mapping', resourceId: 'resource',
+      dryRun: false, actorId: 'actor', mode: 'incremental',
+    });
+
+    const expected = [
+      'Required asset field "hostname" has no value: source field "displayName" is not present on this record.',
+      'Required asset field "serial_tag" has no value: source field "systemSerialNumber" is empty on this record.',
+      'Required asset field "cores" has no value: the value of source field "cpuCores" could not be converted to this field type.',
+      'Required asset field "owner" has no value because no source field is mapped to it.',
+    ].join(' ');
+    expect(result.conflicts).toContainEqual(expect.objectContaining({ message: expected }));
+    expect(provenance.persistGaps).toHaveBeenCalledWith(expect.anything(), expect.anything(), [
+      expect.objectContaining({
+        kind: 'validation',
+        message: expected,
+        details: { reasonCode: 'native_validation', fieldPaths: ['hostname', 'serial_tag', 'cores', 'owner'] },
+      }),
+    ]);
+    expect(JSON.stringify(result.conflicts)).not.toContain('SECRET-NOT-A-NUMBER');
+  });
+
   it('skips a resource the driver no longer declares with a run warning, without fetching', async () => {
     const { service, driver } = setup();
     // The setup resource is `subnets`; the driver now declares only `devices`.

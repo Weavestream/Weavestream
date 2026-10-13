@@ -1,4 +1,4 @@
-import { Logger } from '@nestjs/common';
+import { BadRequestException, Logger } from '@nestjs/common';
 import {
   MAX_RECONSTRUCTION_INPUT_BYTES,
   articleReconstructionInputSchema,
@@ -221,6 +221,34 @@ describe('native write failure logging', () => {
     const line = String(warn.mock.calls[0]![0]);
     expect(line).toContain('PrismaClientKnownRequestError P2002 (');
     expect(line).not.toMatch(/jane|a b=c/);
+  });
+
+  it('names the failing field slugs of a native validation failure, never the issue messages', () => {
+    const error = new BadRequestException({
+      error: 'ValidationError',
+      issues: [
+        { path: 'hostname', message: 'Hostname is required' },
+        { path: 'site.label', message: 'Invalid enum value, received "SECRET-VALUE"' },
+        { path: 'a b=c', message: 'x' },
+        { path: '', message: 'Unrecognized key(s) in object' },
+      ],
+    });
+    const outcome = nativeWriteErrorOutcome(context(), input, error);
+    expect(outcome.gaps).toEqual([{
+      kind: 'validation',
+      message: 'Native target validation blocked the write (fields: hostname, site).',
+      details: { reasonCode: 'native_validation', fieldPaths: ['hostname', 'site'] },
+    }]);
+    expect(JSON.stringify(outcome)).not.toMatch(/SECRET-VALUE|required|a b=c/);
+  });
+
+  it('keeps the generic native validation gap when the failure names no fields', () => {
+    const outcome = nativeWriteErrorOutcome(context(), input, new BadRequestException('Bad input'));
+    expect(outcome.gaps).toEqual([{
+      kind: 'validation',
+      message: 'Native target validation blocked the write.',
+      details: { reasonCode: 'native_validation' },
+    }]);
   });
 
   it('does not log mapped HTTP failures', () => {

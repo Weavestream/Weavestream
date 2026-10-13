@@ -1,6 +1,6 @@
 {
   "version": "4.6.0",
-  "created": "2026-10-08T20:00:52Z",
+  "created": "2026-10-13T17:33:13Z",
   "files": [
     {
       "path": ".nojekyll"
@@ -258,6 +258,12 @@
       "path": "development/index.md"
     },
     {
+      "path": "development/integration-drivers.md"
+    },
+    {
+      "path": "development/integration-drivers/index.html"
+    },
+    {
       "path": "development/releasing.md"
     },
     {
@@ -512,16 +518,34 @@
       "path": "integrations/cloudflare/index.html"
     },
     {
+      "path": "integrations/google-workspace.md"
+    },
+    {
+      "path": "integrations/google-workspace/index.html"
+    },
+    {
       "path": "integrations/index.html"
     },
     {
       "path": "integrations/index.md"
     },
     {
+      "path": "integrations/level.md"
+    },
+    {
+      "path": "integrations/level/index.html"
+    },
+    {
       "path": "integrations/mcp.md"
     },
     {
       "path": "integrations/mcp/index.html"
+    },
+    {
+      "path": "integrations/microsoft-365.md"
+    },
+    {
+      "path": "integrations/microsoft-365/index.html"
     },
     {
       "path": "integrations/ninjaone.md"

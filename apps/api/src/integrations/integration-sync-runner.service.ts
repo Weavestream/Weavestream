@@ -614,7 +614,12 @@ export class IntegrationSyncRunnerService {
               resolveBinding: (ref) => this.resolveBinding(tx, mapping.id, mapping.companyId, mapping.integrationId, ref),
             };
             const writer = this.writers.get(reconstruction.targetKind) as ReconstructionWriter<ReconstructionInput>;
-            const outcome = await writer.write(writeContext, reconstruction);
+            const outcome = explainLegacyValidationGaps(
+              await writer.write(writeContext, reconstruction),
+              safeRecord,
+              resource,
+              reconstruction,
+            );
             const retryableGap = outcome.gaps.find(
               (gap) => gap.kind === 'synchronization_error',
             );
@@ -1327,6 +1332,75 @@ function isNonAuthoritativeGap(kind: DriverBlockedInput['kind']): boolean {
 interface LegacyFieldDrop {
   sourceField: string;
   targetSlug: string;
+}
+
+/**
+ * Rewrites a `native_validation` gap on a legacy record so it names what
+ * the operator can fix: for each failing target field, the mapped source
+ * field and why it supplied nothing on this record (key absent, empty,
+ * not convertible, or no mapping at all). Built only from the mapping
+ * configuration and key presence on the record — never from a value.
+ */
+function explainLegacyValidationGaps(
+  outcome: ReconstructionWriteOutcome,
+  record: DriverRecord,
+  resource: ResourceForReconstruction,
+  input: ReconstructionInput,
+): ReconstructionWriteOutcome {
+  if (record.reconstructionInput !== undefined || input.targetKind !== 'asset') return outcome;
+  let changed = false;
+  const gaps = outcome.gaps.map((gap) => {
+    const slugs = gap.details?.reasonCode === 'native_validation'
+      ? gap.details.fieldPaths ?? []
+      : [];
+    if (slugs.length === 0) return gap;
+    changed = true;
+    const supplied = new Set(
+      input.fieldValues
+        .filter((field) => field.value !== null && field.syncDirection !== 'manual_only')
+        .map((field) => field.targetFieldId),
+    );
+    const message = slugs
+      .map((slug) => explainLegacyFieldFailure(slug, record.fields, resource, supplied))
+      .join(' ');
+    return { ...gap, message: message.slice(0, 512) };
+  });
+  return changed ? { ...outcome, gaps } : outcome;
+}
+
+function explainLegacyFieldFailure(
+  slug: string,
+  fields: Record<string, unknown>,
+  resource: ResourceForReconstruction,
+  supplied: ReadonlySet<string>,
+): string {
+  const mappings = resource.fieldMappings.filter(
+    (field) => field.targetField?.slug === slug && field.targetField.archivedAt === null,
+  );
+  if (mappings.length === 0) {
+    return `Required asset field "${slug}" has no value because no source field is mapped to it.`;
+  }
+  if (mappings.some((field) => supplied.has(field.targetField!.id))) {
+    const sources = mappings.map((field) => `"${field.sourceField.slice(0, 128)}"`).join(', ');
+    return `Asset field "${slug}" rejected the value from source field ${sources}.`;
+  }
+  const reasons = mappings.map((field) => {
+    const source = `"${field.sourceField.slice(0, 128)}"`;
+    if (field.syncDirection === 'manual_only') {
+      return `the mapping from source field ${source} is manual only`;
+    }
+    if (!Object.prototype.hasOwnProperty.call(fields, field.sourceField)) {
+      return `source field ${source} is not present on this record`;
+    }
+    const raw = fields[field.sourceField];
+    if (raw === null || raw === undefined || raw === '') {
+      return `source field ${source} is empty on this record`;
+    }
+    return field.transform
+      ? `the value of source field ${source} was cleared by its transform or could not be converted to this field type`
+      : `the value of source field ${source} could not be converted to this field type`;
+  });
+  return `Required asset field "${slug}" has no value: ${reasons.join('; ')}.`;
 }
 
 /**

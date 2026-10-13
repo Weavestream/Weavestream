@@ -352,6 +352,30 @@ export function safeErrorSummary(error: unknown): string {
   return parts.join(' ');
 }
 
+/**
+ * Field slugs a native validation failure names in `issues[].path` (the
+ * shape `AssetsService.validateValues` throws). Only the top-level path
+ * segment is kept, and only when identifier-shaped; issue messages are
+ * never read, because they can echo the rejected value.
+ */
+function validationFieldPaths(error: unknown): string[] {
+  const getResponse = (error as { getResponse?: unknown } | null)?.getResponse;
+  if (typeof getResponse !== 'function') return [];
+  const response: unknown = getResponse.call(error);
+  const issues = response && typeof response === 'object'
+    ? (response as { issues?: unknown }).issues
+    : undefined;
+  if (!Array.isArray(issues)) return [];
+  const slugs = new Set<string>();
+  for (const issue of issues) {
+    const path = issue && typeof issue === 'object' ? (issue as { path?: unknown }).path : undefined;
+    const slug = typeof path === 'string' ? path.split('.')[0] : undefined;
+    if (slug && SAFE_IDENTIFIER.test(slug)) slugs.add(slug);
+    if (slugs.size >= 64) break;
+  }
+  return [...slugs];
+}
+
 export function nativeWriteErrorOutcome(
   ctx: ReconstructionWriteContext,
   input: ReconstructionInput,
@@ -383,12 +407,20 @@ export function nativeWriteErrorOutcome(
     );
   }
   if (status === 400 || status === 422) {
+    const fieldPaths = validationFieldPaths(error);
     return blockedOutcome(
       ctx,
       input,
-      safeGap('validation', 'Native target validation blocked the write.', {
-        reasonCode: 'native_validation',
-      }),
+      safeGap(
+        'validation',
+        fieldPaths.length > 0
+          ? `Native target validation blocked the write (fields: ${fieldPaths.join(', ')}).`
+          : 'Native target validation blocked the write.',
+        {
+          reasonCode: 'native_validation',
+          ...(fieldPaths.length > 0 ? { fieldPaths } : {}),
+        },
+      ),
     );
   }
   // The gap stays generic for the client; the cause goes to the server log
