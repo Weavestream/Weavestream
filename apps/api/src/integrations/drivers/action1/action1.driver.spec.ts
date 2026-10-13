@@ -1,10 +1,17 @@
 import {
+  driverDescriptorSchema,
+  integrationSetupCheckSchema,
+  setupGuideSchema,
+  type IntegrationSetupCheck,
+} from '@weavestream/shared';
+import {
   DriverAuthError,
   DriverRateLimitError,
   type FetchRecordsContext,
   type IntegrationContext,
 } from '../integration-driver.js';
 import { Action1Driver } from './action1.driver.js';
+import { ACTION1_SETUP_GUIDE } from './action1.setup-guide.js';
 import {
   setDefaultFetchForTests,
   setDefaultResolveForTests,
@@ -521,5 +528,185 @@ describe('Action1Driver.fetchRecords', () => {
     } finally {
       fx.restore();
     }
+  });
+});
+
+describe('Action1Driver descriptor', () => {
+  it('validates against the shared schema with a setup guide', () => {
+    const driver = new Action1Driver();
+    const parsed = driverDescriptorSchema.parse(driver.descriptor);
+    expect(parsed.setupGuide?.map((s) => s.id)).toEqual([
+      'api-credential',
+      'region',
+      'credentials',
+      'organizations',
+      'fields',
+      'sync',
+    ]);
+    expect(setupGuideSchema.safeParse(ACTION1_SETUP_GUIDE).success).toBe(true);
+    // The Client ID / Client Secret pair stays as it was.
+    expect(parsed.secretFields.map((f) => [f.key, f.kind])).toEqual([
+      ['apiKey', 'text'],
+      ['apiSecret', 'password'],
+    ]);
+  });
+});
+
+describe('Action1Driver Check setup', () => {
+  /** Provider error text that must never reach a Check setup message. */
+  const PROVIDER_TEXT = 'PROVIDER-ERROR-TEXT-do-not-echo';
+  const TOKEN_OK: ScriptedResponse = { kind: 'json', body: { access_token: 'tok-1' } };
+  const ORGS: ScriptedResponse = {
+    kind: 'json',
+    body: { items: [{ id: 'o-1', name: 'Acme' }], total_items: '1' },
+  };
+  const fail = (status: number): ScriptedResponse => ({
+    kind: 'text',
+    status,
+    body: PROVIDER_TEXT,
+  });
+
+  async function check(
+    script: ScriptedResponse[],
+    ctx: IntegrationContext = makeCtx(),
+  ): Promise<{ result: IntegrationSetupCheck; calls: RecordedCall[] }> {
+    const fx = installFetchScript(script);
+    try {
+      const result = await new Action1Driver().diagnose({ mode: 'connection', ctx });
+      expect(integrationSetupCheckSchema.parse(result)).toEqual(result);
+      expect(JSON.stringify(result)).not.toContain(PROVIDER_TEXT);
+      return { result, calls: fx.calls };
+    } finally {
+      fx.restore();
+    }
+  }
+
+  it('passes every step it can verify with one token exchange and read-only GETs', async () => {
+    const { result, calls } = await check([TOKEN_OK, ORGS]);
+    expect(result).toEqual({
+      ok: true,
+      passedStepIds: ['api-credential', 'region', 'credentials', 'organizations'],
+      failures: [],
+    });
+    expect(calls.map((c) => [c.method, new URL(c.url).pathname])).toEqual([
+      ['POST', '/api/3.0/oauth2/token'],
+      ['GET', '/api/3.0/organizations'],
+    ]);
+  });
+
+  it('points zero organizations at the role in step 1', async () => {
+    const { result } = await check([TOKEN_OK, { kind: 'json', body: { items: [], total_items: '0' } }]);
+    expect(result).toEqual({
+      ok: false,
+      passedStepIds: ['region', 'credentials'],
+      failures: [{ stepId: 'api-credential', message: expect.stringMatching(/no organizations/) }],
+    });
+  });
+
+  it.each([400, 401, 403])('points a token HTTP %s at the credentials and region', async (status) => {
+    const { result } = await check([fail(status)]);
+    expect(result.failures).toEqual([
+      { stepId: 'api-credential', message: expect.stringMatching(/does not accept this Client ID/) },
+    ]);
+    expect(result.failures[0]!.message).toMatch(/region/);
+  });
+
+  it('points a 403 on the organization list at a missing permission', async () => {
+    const { result } = await check([TOKEN_OK, fail(403)]);
+    expect(result).toEqual({
+      ok: false,
+      passedStepIds: ['region', 'credentials'],
+      failures: [{ stepId: 'api-credential', message: expect.stringMatching(/role cannot list organizations/) }],
+    });
+  });
+
+  it('points a 401 on the organization list at the credentials', async () => {
+    const { result } = await check([TOKEN_OK, fail(401)]);
+    expect(result.failures).toEqual([
+      { stepId: 'api-credential', message: expect.stringMatching(/does not accept/) },
+    ]);
+  });
+
+  it.each([
+    ['a token 404', [fail(404)]],
+    ['an organization list 404', [TOKEN_OK, fail(404)]],
+    ['an HTML token page', [{ kind: 'text', status: 200, body: `<html>${PROVIDER_TEXT}</html>` }]],
+    ['a token response without access_token', [{ kind: 'json', body: { error: PROVIDER_TEXT } }]],
+  ] as Array<[string, ScriptedResponse[]]>)('points %s at the API base URL', async (_name, script) => {
+    const { result } = await check(script);
+    expect(result.failures).toEqual([
+      { stepId: 'region', message: expect.stringMatching(/does not point to the Action1 API/) },
+    ]);
+  });
+
+  it.each([
+    ['does not resolve', async (): Promise<string[]> => { throw new Error(`getaddrinfo ENOTFOUND ${PROVIDER_TEXT}`); }],
+    ['resolves to a private address', async (): Promise<string[]> => ['10.0.0.5']],
+  ])('points a host that %s at the API base URL', async (_name, resolve) => {
+    const fx = installFetchScript([]);
+    setDefaultResolveForTests(resolve);
+    try {
+      const result = await new Action1Driver().diagnose({ mode: 'connection', ctx: makeCtx() });
+      expect(result.failures).toEqual([
+        { stepId: 'region', message: expect.stringMatching(/cannot connect to the saved API base URL/) },
+      ]);
+      expect(JSON.stringify(result)).not.toContain(PROVIDER_TEXT);
+      expect(fx.calls).toEqual([]);
+    } finally {
+      fx.restore();
+    }
+  });
+
+  it('asks to retry on a rate limit', async () => {
+    const limited: ScriptedResponse = { kind: 'text', status: 429, body: PROVIDER_TEXT, headers: { 'Retry-After': '0' } };
+    const { result } = await check([TOKEN_OK, limited, limited, limited]);
+    expect(result.failures).toEqual([{ stepId: null, message: expect.stringMatching(/rate limiting/) }]);
+  });
+
+  it('reports a server error as a general failure', async () => {
+    const { result } = await check([TOKEN_OK, fail(500), fail(500), fail(500)]);
+    expect(result.failures).toEqual([{ stepId: null, message: expect.stringMatching(/did not answer as expected/) }]);
+  });
+
+  it('reports a network failure as unreachable without the error text', async () => {
+    setDefaultFetchForTests((async () => {
+      throw new TypeError(`fetch failed: ${PROVIDER_TEXT}`);
+    }) as typeof fetch);
+    setDefaultResolveForTests(async () => ['1.2.3.4']);
+    try {
+      const result = await new Action1Driver().diagnose({ mode: 'connection', ctx: makeCtx() });
+      expect(result.failures).toEqual([{ stepId: null, message: expect.stringMatching(/could not reach Action1/) }]);
+      expect(JSON.stringify(result)).not.toContain(PROVIDER_TEXT);
+    } finally {
+      setDefaultFetchForTests(null);
+      setDefaultResolveForTests(null);
+    }
+  });
+
+  it('asks for the credentials before any request when none are saved', async () => {
+    const { result, calls } = await check([], { ...makeCtx(), secret: {} });
+    expect(result.failures).toEqual([{ stepId: 'credentials', message: expect.stringMatching(/No Client ID and Client Secret/) }]);
+    expect(calls).toEqual([]);
+  });
+
+  it('flags an invalid API base URL before any request', async () => {
+    const { result, calls } = await check([], { ...makeCtx(), config: { baseUrl: 'not a url' } });
+    expect(result.failures).toEqual([{ stepId: 'region', message: expect.stringMatching(/not a valid URL/) }]);
+    expect(calls).toEqual([]);
+  });
+
+  it('has no OAuth app to check', async () => {
+    const result = await new Action1Driver().diagnose({
+      mode: 'client',
+      oauthClient: {} as never,
+      redirectUri: 'https://weavestream.test/cb',
+      http: HTTP,
+      correlationId: 'test-corr',
+    });
+    expect(result).toEqual({
+      ok: false,
+      passedStepIds: [],
+      failures: [{ stepId: null, message: 'Action1 has no OAuth app to check.' }],
+    });
   });
 });

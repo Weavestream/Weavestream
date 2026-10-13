@@ -31,30 +31,71 @@ The Action1 driver maps third-party endpoint telemetry onto fields in your chose
 
 ## Setup Instructions
 
+The **Credentials & schedule** tab shows the same steps as a setup guide. Press **Check setup** there to verify steps 1 to 4.
+
 ### Prerequisites
 
-- An active Action1 account with administrative privileges.
-- An Action1 OAuth2 **Client ID** and **Client Secret**.
+- An Action1 account with permission to create API credentials.
+- The region of your Action1 account.
 
-### Step 1: Generate Action1 API Credentials
+### Step 1: Create read-only API credentials in Action1
 
-1. Log into your **Action1 Console**.
-2. Navigate to **Settings → API & Integrations**.
-3. Create OAuth2 API credentials with access to endpoint inventory.
-4. Securely record the generated **Client ID** and **Client Secret**.
+1. In the Action1 console, open **Configuration | Users & API Credentials**.
+2. Press **+ New API Credentials**.
+3. Enter a name, for example `Weavestream`.
+4. Select the **Enterprise Viewer** role. It is a built-in read-only role that can see endpoints in every organization. Weavestream only reads from Action1.
+5. Copy the **Client ID** and the **Client Secret**. Action1 shows the secret only until you close the pop-up.
 
-### Step 2: Configure the Integration in Weavestream
+See Action1's [API credentials](https://www.action1.com/api-documentation/api-credentials/) and [Users and Roles](https://www.action1.com/documentation/users-and-roles/) pages.
 
-1. In Weavestream, navigate to **Admin → Integrations → New Integration**.
-2. Select **Action1 RMM** as the integration provider.
-3. Enter a descriptive label (e.g. `Action1 Production RMM`).
-4. Enter the OAuth2 **Client ID** and **Client Secret**. Leave **API Base URL** at its default unless Action1 supplied a custom region.
+### Step 2: Pick the API base URL for your region
+
+Each Action1 account lives in one region, and its credentials work only there. Use the API base URL of that region:
+
+| Region | API base URL |
+|---|---|
+| North America (default) | `https://app.action1.com/api/3.0` |
+| North America 2 | `https://app.na-2.action1.com/api/3.0` |
+| Europe | `https://app.eu.action1.com/api/3.0` |
+| United Kingdom | `https://app.uk.action1.com/api/3.0` |
+| Australia | `https://app.au.action1.com/api/3.0` |
+
+Source: the host table in Action1's [PSAction1 module](https://github.com/Action1Corp/PSAction1/blob/main/Private/Configuration/Action1.Hosts.ps1). Action1 lists its regions on [Migrating Between Regions](https://www.action1.com/documentation/migrating-between-regions/).
+
+### Step 3: Paste the credentials into Weavestream
+
+1. In Weavestream, open **Admin → Integrations → New Integration**.
+2. Select **Action1 RMM** and enter a label (for example `Action1 Production RMM`).
+3. Enter the **Client ID** and the **Client Secret**.
+4. Set **API Base URL** to the URL from step 2. For North America, leave the default.
 5. Select **Create**. New integrations start paused.
-6. On **Credentials & schedule**, select **Test connection**.
-7. Open **Organizations** and map each Action1 organization to its target Weavestream company.
-8. Configure **Endpoints fields** with a target asset layout, match keys (recommended upstream value: `MAC`), and field projections.
-9. Change **Status** to active and select **Save changes**.
-10. Run a **Dry run**, review its result in **Run history**, then select **Run sync now** for the initial import.
+6. On **Credentials & schedule**, press **Test connection**, then **Check setup**.
+
+### Step 4: Map each Action1 organization to a company
+
+Open **Organizations** and map each Action1 organization to its Weavestream company. If an organization is missing, check that the role from step 1 covers it.
+
+### Step 5: Map endpoint fields
+
+Open **Endpoints fields**. Pick the asset layout, the match key (`MAC` is suggested), and the field mappings. Weavestream reads the field list from a few endpoints in the organization. If the organization has no endpoints yet, it shows a standard list.
+
+### Step 6: Dry run, then sync
+
+1. On **Credentials & schedule**, set **Status** to active and select **Save changes**.
+2. Press **Dry run** and review the result in **Run history**.
+3. Press **Run sync now** for the initial import.
+
+### Check setup results
+
+| Result | Step to revisit |
+|---|---|
+| No Client ID and Client Secret are saved | Step 3 |
+| Action1 does not accept the Client ID and Client Secret (token HTTP 400, 401 or 403) | Steps 1, 2 and 3 |
+| The role cannot list organizations (HTTP 403), or the credentials see no organizations | Step 1 |
+| The API base URL is not valid, does not resolve, points to a private address, or is not the Action1 API (HTTP 404) | Step 2 |
+| Action1 is rate limiting, returns a server error, or cannot be reached | Try again later |
+
+Check setup never shows Action1's own error text.
 
 ## Operational & Sync Details
 

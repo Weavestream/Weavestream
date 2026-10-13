@@ -2,11 +2,12 @@ import { Logger } from '@nestjs/common';
 import { z } from 'zod';
 import type {
   DriverDescriptor,
+  IntegrationSetupCheck,
   SourceFieldDto,
   SourceOrgDto,
 } from '@weavestream/shared';
 import {
-  DriverAuthError,
+  type DriverDiagnoseInput,
   type LegacyDriverFetchPage,
   type LegacyDriverRecord,
   type FetchRecordsContext,
@@ -19,6 +20,12 @@ import {
   inferHintType,
   sortByLabel,
 } from '../driver-utils.js';
+import {
+  Action1AuthError,
+  Action1RequestError,
+  diagnoseAction1,
+} from './action1.diagnose.js';
+import { ACTION1_SETUP_GUIDE } from './action1.setup-guide.js';
 
 /**
  * Phase 11 — Action1 RMM driver.
@@ -124,7 +131,8 @@ export class Action1Driver implements IntegrationDriver {
         label: 'API Base URL',
         kind: 'url',
         required: false,
-        description: 'Override only if Action1 has provisioned a custom region.',
+        description:
+          'The API base URL for the region of your Action1 account. Leave the default for North America; the setup guide lists the other regions.',
         default: ACTION1_DEFAULT_BASE_URL,
       },
     ],
@@ -135,7 +143,7 @@ export class Action1Driver implements IntegrationDriver {
         kind: 'text',
         required: true,
         description:
-          'Action1 OAuth2 Client ID. Generate it under Settings → API & Integrations.',
+          'Action1 OAuth2 Client ID. Create it under Configuration → Users & API Credentials.',
       },
       {
         key: 'apiSecret',
@@ -146,6 +154,7 @@ export class Action1Driver implements IntegrationDriver {
           'Action1 OAuth2 Client Secret. Stored AES-256-GCM encrypted; never returned to the UI.',
       },
     ],
+    setupGuide: ACTION1_SETUP_GUIDE,
     resources: [
       {
         key: 'records',
@@ -166,6 +175,22 @@ export class Action1Driver implements IntegrationDriver {
       reconstructionCompleteness: false,
     },
   };
+
+  diagnose(input: DriverDiagnoseInput): Promise<IntegrationSetupCheck> {
+    if (input.mode !== 'connection') {
+      return Promise.resolve({
+        ok: false,
+        passedStepIds: [],
+        failures: [{ stepId: null, message: 'Action1 has no OAuth app to check.' }],
+      });
+    }
+    const { ctx } = input;
+    return diagnoseAction1({
+      secretSaved: action1SecretSchema.safeParse(ctx.secret ?? {}).success,
+      baseUrlValid: action1ConfigSchema.safeParse(ctx.config ?? {}).success,
+      probe: async () => (await this.fetchAllOrgs(ctx)).length,
+    });
+  }
 
   async testConnection(
     ctx: IntegrationContext,
@@ -437,18 +462,26 @@ export class Action1Driver implements IntegrationDriver {
     });
 
     if (res.status === 401 || res.status === 403) {
-      throw new DriverAuthError(
+      throw new Action1AuthError(
         `Action1 token exchange failed (${res.status}). Check the Client ID and Client Secret.`,
+        'token',
+        res.status,
       );
     }
     if (!res.ok) {
-      throw new Error(`Action1 token exchange returned HTTP ${res.status}`);
+      throw new Action1RequestError(
+        `Action1 token exchange returned HTTP ${res.status}`,
+        'token',
+        res.status,
+      );
     }
 
     const json = (await res.json()) as { access_token?: string };
     if (!json.access_token) {
-      throw new DriverAuthError(
+      throw new Action1AuthError(
         'Action1 token exchange did not return access_token.',
+        'token',
+        res.status,
       );
     }
     return json.access_token;
@@ -472,12 +505,18 @@ export class Action1Driver implements IntegrationDriver {
     });
 
     if (res.status === 401 || res.status === 403) {
-      throw new DriverAuthError(
+      throw new Action1AuthError(
         `Action1 GET ${url} returned ${res.status}. Token rejected.`,
+        'api',
+        res.status,
       );
     }
     if (!res.ok) {
-      throw new Error(`Action1 GET ${url} returned HTTP ${res.status}`);
+      throw new Action1RequestError(
+        `Action1 GET ${url} returned HTTP ${res.status}`,
+        'api',
+        res.status,
+      );
     }
     return (await res.json()) as T;
   }
