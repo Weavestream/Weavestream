@@ -60,7 +60,7 @@ When configuring resource mappings, choose a **Match Key** that uniquely identif
 
 ## Setup Instructions
 
-The **Credentials & schedule** tab shows the same steps as a setup guide. Press **Check setup** there to verify steps 1 to 4.
+The **Credentials & schedule** tab shows the same steps as a setup guide. Press **Check setup** there to verify steps 1 to 3. Check setup also confirms that the credentials see your NinjaOne organizations, but it does not check your company mappings (step 4).
 
 ### Prerequisites
 

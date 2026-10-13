@@ -38,6 +38,8 @@ const fail = (stepId: string | null, message: string, passedStepIds: string[] = 
 /** By name: `res.json()` can throw a SyntaxError from another realm, which fails `instanceof`. */
 const errorName = (e: unknown): string => (typeof e === 'object' && e !== null && 'name' in e ? String(e.name) : '');
 
+export const ORGANIZATIONS_UNVERIFIED_NOTE = 'The credentials see your Action1 organizations. Check setup does not check mappings: map each organization to a company on Organizations.';
+
 const BAD_CREDENTIALS = 'Action1 does not accept this Client ID and Client Secret. Check that both are pasted in full (step 3) and that the API base URL is for the region of your Action1 account (step 2). If they are still refused, create new credentials (step 1).';
 const WRONG_BASE_URL = 'The API base URL does not point to the Action1 API. Use the URL for your region (step 2) and save.';
 
@@ -62,7 +64,12 @@ export async function diagnoseAction1(input: Action1DiagnoseInput): Promise<Inte
         [S.region, S.credentials],
       );
     }
-    return { ok: true, passedStepIds: [S.apiCredential, S.region, S.credentials, S.organizations], failures: [] };
+    return {
+      ok: true,
+      passedStepIds: [S.apiCredential, S.region, S.credentials],
+      failures: [],
+      notes: [{ stepId: S.organizations, message: ORGANIZATIONS_UNVERIFIED_NOTE }],
+    };
   } catch (e) {
     if (e instanceof DriverRateLimitError) {
       return fail(null, 'Action1 is rate limiting requests right now. Wait a minute and press Check setup again.');

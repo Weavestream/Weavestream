@@ -96,7 +96,7 @@ In Level, open **Settings > API keys** and press **Create API key**. Name it, fo
 
 ### Step 3: Map each top-level group to a company
 
-Open **Organizations**. Every top-level group in Level is listed. Map each one to its Weavestream company.
+Open **Organizations**. Every top-level group in Level is listed. Map each one to its Weavestream company. **Check setup** confirms that the key sees your top-level groups, but it does not check these mappings.
 
 ### Step 4: Map layouts and run the first sync
 

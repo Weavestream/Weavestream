@@ -31,7 +31,7 @@ The Action1 driver maps third-party endpoint telemetry onto fields in your chose
 
 ## Setup Instructions
 
-The **Credentials & schedule** tab shows the same steps as a setup guide. Press **Check setup** there to verify steps 1 to 4.
+The **Credentials & schedule** tab shows the same steps as a setup guide. Press **Check setup** there to verify steps 1 to 3. It does not check company mappings (step 4).
 
 ### Prerequisites
 

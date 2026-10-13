@@ -11,6 +11,7 @@ import {
   type IntegrationContext,
 } from '../integration-driver.js';
 import { Action1Driver } from './action1.driver.js';
+import { ORGANIZATIONS_UNVERIFIED_NOTE } from './action1.diagnose.js';
 import { ACTION1_SETUP_GUIDE } from './action1.setup-guide.js';
 import {
   setDefaultFetchForTests,
@@ -581,12 +582,14 @@ describe('Action1Driver Check setup', () => {
     }
   }
 
-  it('passes every step it can verify with one token exchange and read-only GETs', async () => {
+  it('passes the steps it can verify with one token exchange and read-only GETs, and leaves mapping unverified', async () => {
     const { result, calls } = await check([TOKEN_OK, ORGS]);
     expect(result).toEqual({
       ok: true,
-      passedStepIds: ['api-credential', 'region', 'credentials', 'organizations'],
+      passedStepIds: ['api-credential', 'region', 'credentials'],
       failures: [],
+      // Seeing organizations is not mapping them: the step stays unverified.
+      notes: [{ stepId: 'organizations', message: ORGANIZATIONS_UNVERIFIED_NOTE }],
     });
     expect(calls.map((c) => [c.method, new URL(c.url).pathname])).toEqual([
       ['POST', '/api/3.0/oauth2/token'],

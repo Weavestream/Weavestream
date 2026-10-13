@@ -1,10 +1,18 @@
 import {
+  driverDescriptorSchema,
+  integrationSetupCheckSchema,
+  setupGuideSchema,
+  type IntegrationSetupCheck,
+} from '@weavestream/shared';
+import {
   DriverAuthError,
   DriverRateLimitError,
   type FetchRecordsContext,
   type IntegrationContext,
 } from '../integration-driver.js';
 import { UniFiSiteManagerDriver } from './unifi.driver.js';
+import { HOSTS_UNVERIFIED_NOTE } from './unifi.diagnose.js';
+import { UNIFI_SETUP_GUIDE } from './unifi.setup-guide.js';
 import {
   setDefaultFetchForTests,
   setDefaultResolveForTests,
@@ -797,5 +805,204 @@ describe('UniFiSiteManagerDriver.fetchRecords (clients)', () => {
     } finally {
       fx.restore();
     }
+  });
+});
+
+describe('UniFiSiteManagerDriver descriptor', () => {
+  it('validates against the shared schema with a setup guide', () => {
+    const parsed = driverDescriptorSchema.parse(
+      new UniFiSiteManagerDriver().descriptor,
+    );
+    expect(parsed.setupGuide?.map((s) => s.id)).toEqual([
+      'api-key',
+      'credentials',
+      'hosts',
+      'fields',
+      'sync',
+    ]);
+    expect(setupGuideSchema.safeParse(UNIFI_SETUP_GUIDE).success).toBe(true);
+    for (const step of UNIFI_SETUP_GUIDE) {
+      for (const link of step.links ?? []) {
+        expect(link.href).toMatch(/^https:\/\//);
+      }
+    }
+    // The secret and the resources stay as they were.
+    expect(parsed.secretFields.map((f) => [f.key, f.kind])).toEqual([
+      ['apiKey', 'password'],
+    ]);
+    expect(parsed.resources.map((r) => r.key)).toEqual(['devices', 'clients']);
+  });
+});
+
+describe('UniFiSiteManagerDriver Check setup', () => {
+  /** Provider error text that must never reach a Check setup message. */
+  const PROVIDER_TEXT = 'PROVIDER-ERROR-TEXT-do-not-echo';
+  const HOSTS: ScriptedResponse = {
+    kind: 'json',
+    body: {
+      data: [{ hostId: HOST_A, hostName: 'Main office', devices: [] }],
+      httpStatusCode: 200,
+      traceId: 't-1',
+      nextToken: 'next',
+    },
+  };
+  const fail = (
+    status: number,
+    headers?: Record<string, string>,
+  ): ScriptedResponse => ({
+    kind: 'json',
+    status,
+    body: { code: 'X', httpStatusCode: status, message: PROVIDER_TEXT, traceId: 't-1' },
+    headers,
+  });
+
+  async function check(
+    script: ScriptedResponse[],
+    ctx: IntegrationContext = makeCtx(),
+  ): Promise<{ result: IntegrationSetupCheck; calls: RecordedCall[] }> {
+    const fx = installFetchScript(script);
+    try {
+      const result = await new UniFiSiteManagerDriver().diagnose({
+        mode: 'connection',
+        ctx,
+      });
+      expect(integrationSetupCheckSchema.parse(result)).toEqual(result);
+      expect(JSON.stringify(result)).not.toContain(PROVIDER_TEXT);
+      expect(JSON.stringify(result)).not.toContain('unifi-key');
+      return { result, calls: fx.calls };
+    } finally {
+      fx.restore();
+    }
+  }
+
+  it('passes every step it can verify with one read-only GET', async () => {
+    const { result, calls } = await check([HOSTS]);
+    // Visible consoles do not prove a mapping, so the hosts step stays unverified.
+    expect(result).toEqual({
+      ok: true,
+      passedStepIds: ['api-key', 'credentials'],
+      failures: [],
+      notes: [{ stepId: 'hosts', message: HOSTS_UNVERIFIED_NOTE }],
+    });
+    expect(calls.map((c) => [c.method, c.url])).toEqual([
+      ['GET', 'https://api.ui.com/v1/devices?pageSize=1'],
+    ]);
+    expect(calls[0]!.headers).toMatchObject({ 'X-API-Key': 'unifi-key' });
+  });
+
+  it('points zero consoles at the account in step 1', async () => {
+    const { result } = await check([
+      { kind: 'json', body: { data: [], httpStatusCode: 200, nextToken: null } },
+    ]);
+    expect(result).toEqual({
+      ok: false,
+      passedStepIds: ['credentials'],
+      failures: [
+        { stepId: 'api-key', message: expect.stringMatching(/no consoles/) },
+      ],
+    });
+  });
+
+  it('points HTTP 401 at a bad or revoked key', async () => {
+    const { result } = await check([fail(401)]);
+    expect(result.failures).toEqual([
+      { stepId: 'api-key', message: expect.stringMatching(/does not accept this API key/) },
+    ]);
+  });
+
+  it('points HTTP 403 at the account permission', async () => {
+    const { result } = await check([fail(403)]);
+    expect(result.failures).toEqual([
+      { stepId: 'api-key', message: expect.stringMatching(/no permission/) },
+    ]);
+  });
+
+  it('asks to retry on a rate limit', async () => {
+    const limited = fail(429, { 'Retry-After': '0' });
+    const { result, calls } = await check([limited, limited, limited]);
+    expect(calls).toHaveLength(3);
+    expect(result).toEqual({
+      ok: false,
+      passedStepIds: [],
+      failures: [{ stepId: null, message: expect.stringMatching(/rate limiting/) }],
+    });
+  });
+
+  it('asks to retry on a server error', async () => {
+    const { result } = await check([fail(502), fail(502), fail(502)]);
+    expect(result.failures).toEqual([
+      { stepId: null, message: expect.stringMatching(/did not answer as expected/) },
+    ]);
+  });
+
+  it.each([
+    ['HTTP 404', [fail(404)]],
+    ['a non-JSON body', [{ kind: 'text', status: 200, body: '<html>' } as ScriptedResponse]],
+  ])('points %s at the API Base URL', async (_label, script) => {
+    const { result } = await check(script);
+    expect(result.failures).toEqual([
+      { stepId: 'credentials', message: expect.stringMatching(/does not point to the UniFi Site Manager API/) },
+    ]);
+  });
+
+  it('reports an unreachable host without the network error text', async () => {
+    const fx = installFetchScript([]);
+    setDefaultFetchForTests((async () => {
+      throw new Error(`connect ECONNREFUSED ${PROVIDER_TEXT}`);
+    }) as typeof fetch);
+    try {
+      const result = await new UniFiSiteManagerDriver().diagnose({
+        mode: 'connection',
+        ctx: makeCtx(),
+      });
+      expect(result.failures).toEqual([
+        { stepId: null, message: expect.stringMatching(/could not reach UniFi Site Manager/) },
+      ]);
+      expect(JSON.stringify(result)).not.toContain(PROVIDER_TEXT);
+    } finally {
+      fx.restore();
+    }
+  });
+
+  it('points a blocked base URL at step 2', async () => {
+    const fx = installFetchScript([]);
+    setDefaultResolveForTests(async () => ['10.0.0.5']);
+    try {
+      const result = await new UniFiSiteManagerDriver().diagnose({
+        mode: 'connection',
+        ctx: { ...makeCtx(), config: { baseUrl: 'https://unifi.internal.example' } },
+      });
+      expect(result.failures).toEqual([
+        { stepId: 'credentials', message: expect.stringMatching(/cannot connect to the saved API Base URL/) },
+      ]);
+      expect(fx.calls).toEqual([]);
+    } finally {
+      fx.restore();
+    }
+  });
+
+  it('checks the saved key and base URL before any request', async () => {
+    const noKey = await check([], { ...makeCtx(), secret: {} });
+    expect(noKey.result.failures).toEqual([
+      { stepId: 'credentials', message: expect.stringMatching(/No API key is saved/) },
+    ]);
+    expect(noKey.calls).toEqual([]);
+
+    const badUrl = await check([], { ...makeCtx(), config: { baseUrl: 'not a url' } });
+    expect(badUrl.result.failures).toEqual([
+      { stepId: 'credentials', message: expect.stringMatching(/not a valid URL/) },
+    ]);
+    expect(badUrl.calls).toEqual([]);
+  });
+
+  it('has no OAuth app to check', async () => {
+    const result = await new UniFiSiteManagerDriver().diagnose({
+      mode: 'client',
+    } as Parameters<UniFiSiteManagerDriver['diagnose']>[0]);
+    expect(result).toEqual({
+      ok: false,
+      passedStepIds: [],
+      failures: [{ stepId: null, message: 'UniFi has no OAuth app to check.' }],
+    });
   });
 });

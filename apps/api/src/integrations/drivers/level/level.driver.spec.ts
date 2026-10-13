@@ -12,6 +12,7 @@ import {
   LevelDriver,
 } from './level.driver.js';
 import { LEVEL_SETUP_GUIDE } from './level.setup-guide.js';
+import { ORGANIZATIONS_UNVERIFIED_NOTE } from './level.diagnose.js';
 import { __resetRunCacheForTests } from '../run-cache.js';
 import { MATCH_KEYS } from '../standard-resources.js';
 import { deviceStandardFields, formatDiskSize, formatRam, privateIpv4 } from './level.sections.js';
@@ -339,7 +340,10 @@ describe('LevelDriver Check setup', () => {
   it('passes every step it can verify', async () => {
     installFetchTable(GROUPS);
     await expect(new LevelDriver().diagnose({ mode: 'connection', ctx: makeCtx() })).resolves.toEqual({
-      ok: true, passedStepIds: ['api-key', 'credentials', 'organizations'], failures: [],
+      ok: true,
+      passedStepIds: ['api-key', 'credentials'],
+      failures: [],
+      notes: [{ stepId: 'organizations', message: ORGANIZATIONS_UNVERIFIED_NOTE }],
     });
   });
 

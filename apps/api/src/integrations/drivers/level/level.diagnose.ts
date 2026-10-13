@@ -2,6 +2,9 @@ import type { IntegrationSetupCheck } from '@weavestream/shared';
 import { DriverAuthError, DriverRateLimitError } from '../integration-driver.js';
 import { LEVEL_SETUP_STEP as S } from './level.setup-guide.js';
 
+/** The probe sees Level's top-level groups, not this integration's company mappings. */
+export const ORGANIZATIONS_UNVERIFIED_NOTE = 'The key sees your Level groups. Check setup does not check mappings: map each top-level group to a company on Organizations.';
+
 /**
  * Check setup for Level: one read-only probe (the top-level groups). Every
  * outcome is a fixed message naming a guide step; Level's own error text
@@ -17,7 +20,12 @@ export async function diagnoseLevel(probe: () => Promise<number>): Promise<Integ
         failures: [{ stepId: S.organizations, message: 'The key works, but Level has no top-level groups. Put devices in a group in Level, then check again.' }],
       };
     }
-    return { ok: true, passedStepIds: [S.apiKey, S.credentials, S.organizations], failures: [] };
+    return {
+      ok: true,
+      passedStepIds: [S.apiKey, S.credentials],
+      failures: [],
+      notes: [{ stepId: S.organizations, message: ORGANIZATIONS_UNVERIFIED_NOTE }],
+    };
   } catch (e) {
     if (e instanceof DriverRateLimitError) {
       return { ok: false, passedStepIds: [], failures: [{ stepId: null, message: 'Level is rate limiting requests right now. Wait a minute and press Check setup again.' }] };

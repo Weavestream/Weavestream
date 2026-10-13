@@ -2,11 +2,12 @@ import { Logger } from '@nestjs/common';
 import { z } from 'zod';
 import type {
   DriverDescriptor,
+  IntegrationSetupCheck,
   SourceFieldDto,
   SourceOrgDto,
 } from '@weavestream/shared';
 import {
-  DriverAuthError,
+  type DriverDiagnoseInput,
   type LegacyDriverFetchPage,
   type LegacyDriverRecord,
   type FetchRecordsContext,
@@ -19,6 +20,15 @@ import {
   inferHintType,
   sortByLabel,
 } from '../driver-utils.js';
+import {
+  UniFiAuthError,
+  UniFiRequestError,
+  diagnoseUniFi,
+} from './unifi.diagnose.js';
+import {
+  UNIFI_DEFAULT_BASE_URL,
+  UNIFI_SETUP_GUIDE,
+} from './unifi.setup-guide.js';
 
 /**
  * UniFi Site Manager driver — multi-resource (devices + clients).
@@ -59,7 +69,6 @@ import {
  *       { offset, limit, count, totalCount, data: [...] }
  */
 
-const UNIFI_DEFAULT_BASE_URL = 'https://api.ui.com';
 const UNIFI_PAGE_SIZE = 200;
 const UNIFI_CLIENT_PAGE_SIZE = 200;
 
@@ -178,9 +187,10 @@ export class UniFiSiteManagerDriver implements IntegrationDriver {
         kind: 'password',
         required: true,
         description:
-          'UniFi Site Manager API key. Stored AES-256-GCM encrypted; never returned to the UI.',
+          'UniFi Site Manager API key (unifi.ui.com, Settings > API Keys). Stored AES-256-GCM encrypted; never returned to the UI.',
       },
     ],
+    setupGuide: UNIFI_SETUP_GUIDE,
     resources: [
       {
         key: UNIFI_RESOURCE_DEVICES,
@@ -211,6 +221,28 @@ export class UniFiSiteManagerDriver implements IntegrationDriver {
       reconstructionCompleteness: false,
     },
   };
+
+  diagnose(input: DriverDiagnoseInput): Promise<IntegrationSetupCheck> {
+    if (input.mode !== 'connection') {
+      return Promise.resolve({
+        ok: false,
+        passedStepIds: [],
+        failures: [{ stepId: null, message: 'UniFi has no OAuth app to check.' }],
+      });
+    }
+    const { ctx } = input;
+    return diagnoseUniFi({
+      secretSaved: unifiSecretSchema.safeParse(ctx.secret ?? {}).success,
+      baseUrlValid: unifiConfigSchema.safeParse(ctx.config ?? {}).success,
+      probe: async () => {
+        // Consoles the key sees, counted as listSourceOrgs counts them.
+        const body = await this.fetchDevicesPage(ctx, [], 1, null);
+        return pageItems(body).filter((group) =>
+          readString(group, ['hostId', 'host_id']),
+        ).length;
+      },
+    });
+  }
 
   async testConnection(
     ctx: IntegrationContext,
@@ -659,12 +691,16 @@ export class UniFiSiteManagerDriver implements IntegrationDriver {
     });
 
     if (res.status === 401 || res.status === 403) {
-      throw new DriverAuthError(
+      throw new UniFiAuthError(
         `UniFi GET ${url} returned ${res.status}. Check the API key.`,
+        res.status,
       );
     }
     if (!res.ok) {
-      throw new Error(`UniFi GET ${url} returned HTTP ${res.status}`);
+      throw new UniFiRequestError(
+        `UniFi GET ${url} returned HTTP ${res.status}`,
+        res.status,
+      );
     }
     return (await res.json()) as T;
   }

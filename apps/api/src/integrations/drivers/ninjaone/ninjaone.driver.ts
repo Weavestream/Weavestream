@@ -709,7 +709,7 @@ export class NinjaOneDriver implements IntegrationDriver {
 
     // Try the full scope set first; on `invalid_scope` fall back to
     // monitoring-only. Two attempts max — if both fail we surface a
-    // single DriverAuthError with the upstream body.
+    // single DriverAuthError with the HTTP status (never the body).
     let token = await this.exchangeForToken(
       tokenUrl,
       apiKey,
@@ -789,37 +789,30 @@ export class NinjaOneDriver implements IntegrationDriver {
         res.status,
       );
     }
+    // The body is inspected only to detect `invalid_scope`; it is never
+    // put into an error or a log line (provider text is not ours to echo).
     if (res.status === 400 && opts.failOnInvalidScope) {
-      // Body is JSON: { "error": "invalid_scope", "error_description": "..." }
-      const bodyText = await res
-        .text()
-        .catch(() => '')
-        .then((t) => t.slice(0, 500));
-      if (/invalid_scope/i.test(bodyText)) {
+      if (await isInvalidScopeResponse(res)) {
         return null;
       }
       ninjaoneTokenCache.delete(cacheKey);
       throw new NinjaOneAuthError(
-        `NinjaOne token exchange returned HTTP 400${
-          bodyText ? `: ${bodyText.slice(0, 200)}` : ''
-        }`,
+        'NinjaOne token exchange returned HTTP 400. Check the Client ID and Client Secret, and that the API client allows the Client Credentials grant.',
         'token',
         400,
       );
     }
     if (!res.ok) {
-      const bodyText = await res
-        .text()
-        .catch(() => '')
-        .then((t) => t.slice(0, 500));
+      // Monitoring-only fallback refused: the client app lacks the scope.
+      const invalidScope =
+        res.status === 400 && (await isInvalidScopeResponse(res));
       throw new NinjaOneRequestError(
-        `NinjaOne token exchange returned HTTP ${res.status}${
-          bodyText ? `: ${bodyText.slice(0, 200)}` : ''
-        }`,
+        invalidScope
+          ? 'NinjaOne token exchange returned HTTP 400 (invalid_scope). Enable the "monitoring" scope on the NinjaOne API client.'
+          : `NinjaOne token exchange returned HTTP ${res.status}. Check the instance URL, or try again later if NinjaOne is unavailable.`,
         'token',
         res.status,
-        // Monitoring-only fallback refused: the client app lacks the scope.
-        res.status === 400 && /invalid_scope/i.test(bodyText),
+        invalidScope,
       );
     }
 
@@ -1066,18 +1059,10 @@ export class NinjaOneDriver implements IntegrationDriver {
       return { records: [], lastCursorId: null, exhausted: true };
     }
     if (!res.ok) {
-      const bodyText = await res
-        .text()
-        .catch(() => '')
-        .then((t) => t.slice(0, 500));
       this.logger.warn(
-        `NinjaOne ticketing list returned HTTP ${res.status} for board ${board.id} (corr=${ctx.correlationId}): ${bodyText}`,
+        `NinjaOne ticketing list returned HTTP ${res.status} for board ${board.id} (corr=${ctx.correlationId}).`,
       );
-      throw new Error(
-        `NinjaOne ticketing list returned HTTP ${res.status}${
-          bodyText ? `: ${bodyText.slice(0, 200)}` : ''
-        }`,
-      );
+      throw new Error(`NinjaOne ticketing list returned HTTP ${res.status}.`);
     }
 
     const payload = (await res.json()) as {
@@ -1242,7 +1227,12 @@ export class NinjaOneDriver implements IntegrationDriver {
           undefined,
       };
     } catch (e) {
-      return { failure: e instanceof Error ? e.message.slice(0, 80) : 'unknown' };
+      // The error class name, never `e.message`: a JSON SyntaxError quotes
+      // the start of the response body. Matched by name, not instanceof,
+      // because the parse error can come from another realm.
+      const name = (e as { name?: unknown } | null)?.name;
+      if (name === 'SyntaxError') return { failure: 'invalid_json' };
+      return { failure: typeof name === 'string' ? name.slice(0, 40) : 'unknown' };
     }
   }
 
@@ -1378,6 +1368,19 @@ export class NinjaOneDriver implements IntegrationDriver {
 
 function parseConfig(raw: Record<string, unknown>): { baseUrl: string } {
   return ninjaoneConfigSchema.parse(raw ?? {});
+}
+
+/**
+ * True when a token-endpoint 400 names `invalid_scope`. Reads the body
+ * for that one test only; the text never leaves this function.
+ */
+async function isInvalidScopeResponse(res: Response): Promise<boolean> {
+  // Body is JSON: { "error": "invalid_scope", "error_description": "..." }
+  const bodyText = await res
+    .text()
+    .catch(() => '')
+    .then((t) => t.slice(0, 500));
+  return /invalid_scope/i.test(bodyText);
 }
 
 function assertExpectedResourceKey(resourceKey: string): void {

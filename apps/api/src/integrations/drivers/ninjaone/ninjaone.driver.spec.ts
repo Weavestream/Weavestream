@@ -1,3 +1,4 @@
+import { Logger } from '@nestjs/common';
 import {
   driverDescriptorSchema,
   integrationSetupCheckSchema,
@@ -14,7 +15,9 @@ import {
   NinjaOneDriver,
   __resetNinjaOneTokenCacheForTests,
 } from './ninjaone.driver.js';
+import { NinjaOneRequestError } from './ninjaone.diagnose.js';
 import { NINJAONE_SETUP_GUIDE } from './ninjaone.setup-guide.js';
+import { ORGANIZATIONS_UNVERIFIED_NOTE } from './ninjaone.diagnose.js';
 import {
   setDefaultFetchForTests,
   setDefaultResolveForTests,
@@ -1336,10 +1339,12 @@ describe('NinjaOneDriver Check setup', () => {
 
   it('passes every step it can verify with one token exchange and a read-only GET', async () => {
     const { result, calls } = await check([TOKEN_OK, ORGS]);
+    // Mappings are not checked, so the Organizations step stays unverified.
     expect(result).toEqual({
       ok: true,
-      passedStepIds: ['api-client', 'region', 'credentials', 'organizations'],
+      passedStepIds: ['api-client', 'region', 'credentials'],
       failures: [],
+      notes: [{ stepId: 'organizations', message: ORGANIZATIONS_UNVERIFIED_NOTE }],
     });
     expect(calls.map((c) => [c.method, new URL(c.url).pathname])).toEqual([
       ['POST', '/ws/oauth/token'],
@@ -1364,6 +1369,7 @@ describe('NinjaOneDriver Check setup', () => {
   it('passes without the ticketing scope (monitoring-only fallback)', async () => {
     const { result, calls } = await check([invalidScope, TOKEN_OK, ORGS]);
     expect(result.ok).toBe(true);
+    expect(result.passedStepIds).not.toContain('organizations');
     expect(calls.map((c) => c.body ?? '')).toEqual([
       expect.stringContaining('scope=monitoring+ticketing'),
       expect.stringContaining('scope=monitoring'),
@@ -1502,5 +1508,129 @@ describe('NinjaOneDriver Check setup', () => {
       passedStepIds: [],
       failures: [{ stepId: null, message: 'NinjaOne has no OAuth app to check.' }],
     });
+  });
+});
+
+describe('NinjaOneDriver never echoes provider response text', () => {
+  /** Provider body text that must never reach an error message or a log line. */
+  const MARKER = 'PROVIDER-BODY-MARKER-do-not-echo';
+  const TOKEN_OK: ScriptedResponse = { kind: 'json', body: { access_token: 'tok-1' } };
+  const fail = (status: number): ScriptedResponse => ({
+    kind: 'text',
+    status,
+    body: `{"error":"${MARKER}","echo":"${MARKER}"}`,
+  });
+  /** fetchWithRetry retries 5xx, so a terminal 5xx needs maxRetries + 1 frames. */
+  const fail5xx = (status: number): ScriptedResponse[] =>
+    Array.from({ length: HTTP.maxRetries + 1 }, () => fail(status));
+  const invalidScope: ScriptedResponse = {
+    kind: 'json',
+    status: 400,
+    body: { error: 'invalid_scope', error_description: MARKER },
+  };
+
+  let spies: jest.SpyInstance[] = [];
+  beforeEach(() => {
+    spies = (['log', 'warn', 'error', 'debug', 'verbose'] as const).map((m) =>
+      jest.spyOn(Logger.prototype, m).mockImplementation(() => undefined),
+    );
+  });
+  afterEach(() => {
+    for (const s of spies) s.mockRestore();
+  });
+
+  function expectNoMarkerLogged(): void {
+    for (const s of spies) {
+      expect(JSON.stringify(s.mock.calls)).not.toContain(MARKER);
+    }
+  }
+
+  async function rejection(
+    script: ScriptedResponse[],
+    run: (d: NinjaOneDriver) => Promise<unknown>,
+  ): Promise<Error> {
+    const fx = installFetchScript(script);
+    try {
+      const err = await run(new NinjaOneDriver()).then(
+        () => {
+          throw new Error('expected a rejection');
+        },
+        (e: unknown) => e as Error,
+      );
+      expect(err.message).not.toContain(MARKER);
+      expectNoMarkerLogged();
+      return err;
+    } finally {
+      fx.restore();
+    }
+  }
+
+  it('keeps a token 400 body out of the DriverAuthError', async () => {
+    const err = await rejection([fail(400)], (d) => d.testConnection(makeCtx()));
+    expect(err).toBeInstanceOf(DriverAuthError);
+    expect(err.message).toContain('HTTP 400');
+  });
+
+  it('keeps a token 500 body out of the error', async () => {
+    const err = await rejection(fail5xx(500), (d) => d.testConnection(makeCtx()));
+    expect(err).toBeInstanceOf(NinjaOneRequestError);
+    expect(err.message).toContain('HTTP 500');
+  });
+
+  it('still detects invalid_scope, without echoing error_description', async () => {
+    const err = await rejection([invalidScope, invalidScope], (d) =>
+      d.testConnection(makeCtx()),
+    );
+    expect(err).toBeInstanceOf(NinjaOneRequestError);
+    expect((err as NinjaOneRequestError).invalidScope).toBe(true);
+    expect(err.message).toContain('invalid_scope');
+  });
+
+  it('falls back to monitoring-only on invalid_scope and logs no body text', async () => {
+    const fx = installFetchScript([
+      invalidScope,
+      TOKEN_OK,
+      { kind: 'json', body: [{ id: 1, name: 'Acme' }] },
+    ]);
+    try {
+      await expect(new NinjaOneDriver().testConnection(makeCtx())).resolves.toEqual({
+        ok: true,
+        details: 'Reached NinjaOne (1 organisations).',
+      });
+      expect(fx.calls[1]?.body).toContain('scope=monitoring');
+      expect(fx.calls[1]?.body).not.toContain('ticketing');
+      expectNoMarkerLogged();
+    } finally {
+      fx.restore();
+    }
+  });
+
+  it('keeps a ticketing list 500 body out of the error and the log', async () => {
+    const err = await rejection(
+      [TOKEN_OK, { kind: 'json', body: [{ id: 3, name: 'Board' }] }, ...fail5xx(500)],
+      (d) => d.listTickets({ ...makeCtx(), externalOrgId: null }, {}, null),
+    );
+    expect(err.message).toBe('NinjaOne ticketing list returned HTTP 500.');
+    expect(spies[1]).toHaveBeenCalledWith(
+      'NinjaOne ticketing list returned HTTP 500 for board 3 (corr=test-corr).',
+    );
+  });
+
+  it('logs a fixed failure category when ticket enrichment returns non-JSON', async () => {
+    const fx = installFetchScript([
+      TOKEN_OK,
+      { kind: 'json', body: [{ id: 3, name: 'Board' }] },
+      { kind: 'json', body: { data: [{ id: 42 }] } },
+      { kind: 'text', status: 200, body: `<html>${MARKER}</html>` },
+    ]);
+    try {
+      await new NinjaOneDriver().listTickets({ ...makeCtx(), externalOrgId: null }, {}, null);
+      expect(spies[1]).toHaveBeenCalledWith(
+        expect.stringContaining('enrichment failures: invalid_json=1'),
+      );
+      expectNoMarkerLogged();
+    } finally {
+      fx.restore();
+    }
   });
 });

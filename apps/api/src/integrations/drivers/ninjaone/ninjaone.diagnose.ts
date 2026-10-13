@@ -51,6 +51,8 @@ const BAD_CREDENTIALS = 'NinjaOne does not accept this Client ID and Client Secr
 const UNKNOWN_CLIENT = 'NinjaOne does not know this Client ID at the saved API base URL. Use the URL for the region you sign in to (step 2), and check that the Client ID is pasted in full (step 3).';
 const NO_MONITORING_SCOPE = 'The client app does not have the Monitoring scope. Edit the client app in NinjaOne, select Monitoring (step 1), then check again.';
 const WRONG_BASE_URL = 'The API base URL does not point to the NinjaOne API. Use the URL for your region (step 2) and save.';
+/** The probe sees NinjaOne's organizations, not this integration's company mappings. */
+export const ORGANIZATIONS_UNVERIFIED_NOTE = 'The credentials see your NinjaOne organizations. Check setup does not check mappings: map each organization to a company on Organizations.';
 
 /**
  * Check setup for NinjaOne: one read-only probe (token exchange, then the
@@ -73,7 +75,12 @@ export async function diagnoseNinjaOne(input: NinjaOneDiagnoseInput): Promise<In
         [S.apiClient, S.region, S.credentials],
       );
     }
-    return { ok: true, passedStepIds: [S.apiClient, S.region, S.credentials, S.organizations], failures: [] };
+    return {
+      ok: true,
+      passedStepIds: [S.apiClient, S.region, S.credentials],
+      failures: [],
+      notes: [{ stepId: S.organizations, message: ORGANIZATIONS_UNVERIFIED_NOTE }],
+    };
   } catch (e) {
     if (e instanceof DriverRateLimitError) {
       return fail(null, 'NinjaOne is rate limiting requests right now. Wait a minute and press Check setup again.');
