@@ -6,6 +6,7 @@ import { getLayout } from '../../../../../../../lib/server-api/layouts';
 import { getAsset } from '../../../../../../../lib/server-api/assets';
 import { throwUnlessFound } from '../../../../../../../lib/server-api/core';
 import { AssetForm } from '../../asset-form';
+import { assetSourcesLabel } from '../../../../../../../lib/asset-sources';
 
 export default async function EditAssetPage({
   params,
@@ -31,7 +32,7 @@ export default async function EditAssetPage({
       assetId={asset.id}
       initialName={asset.name}
       initialValues={asset.fieldValues}
-      externalSource={asset.externalSource}
+      externalSource={assetSourcesLabel(asset)}
       syncedFieldIds={asset.syncedFieldIds}
       lastSyncedAt={asset.lastSyncedAt}
     />

@@ -43,9 +43,10 @@ export default async function IntegrationsPage() {
         ]}
         title="Integrations"
         description="Connect external systems and sync their data with companies in Weavestream. Removing an integration keeps its assets in Weavestream."
-        actions={<CreateIntegrationButton drivers={drivers} />}
+        actions={<CreateIntegrationButton drivers={drivers} existing={integrations} />}
       />
       <PageBody>
+        <AvailableIntegrationsGallery drivers={drivers} />
         <Panel
           title={`${integrations.length} ${
             integrations.length === 1 ? 'integration' : 'integrations'
@@ -54,7 +55,6 @@ export default async function IntegrationsPage() {
         >
           <IntegrationsTable rows={integrations} drivers={drivers} />
         </Panel>
-        <AvailableIntegrationsGallery drivers={drivers} />
       </PageBody>
     </>
   );

@@ -14,8 +14,17 @@ import { FieldMappingsTab } from './field-mappings-tab';
 import { OrgsTab } from './orgs-tab';
 import { RunsTab } from './runs-tab';
 import { CompletenessTab } from './completeness-tab';
+import { MapLayoutsTab, matchableResources } from './map-layouts-tab';
+import { DifferencesTab } from './differences-tab';
+import { OAuthAppTab } from './oauth-app-tab';
+import { ConnectionsTab } from './connections-tab';
 
-type StaticTabId = 'creds' | 'orgs' | 'completeness' | 'runs';
+/** Drivers whose resources fill standard layout fields get a Differences tab. */
+export function hasStandardFields(driver: DriverDescriptor | null): boolean {
+  return (driver?.resources ?? []).some((resource) => (resource.standardFields?.length ?? 0) > 0);
+}
+
+type StaticTabId = 'app' | 'connections' | 'creds' | 'orgs' | 'layouts' | 'differences' | 'completeness' | 'runs';
 type ResourceTabId = `fields:${string}`;
 type TabId = StaticTabId | ResourceTabId;
 
@@ -48,6 +57,36 @@ const STATIC_TABS_HEAD: TabDescriptor[] = [
     kind: 'static',
   },
 ];
+
+/** OAuth drivers (Google Workspace, Microsoft 365): the app, then one connection per client tenant. */
+const OAUTH_TABS: TabDescriptor[] = [
+  {
+    id: 'app',
+    label: 'App',
+    help: 'The OAuth app every client tenant connects through: client ID, secret, permissions and setup guide.',
+    kind: 'static',
+  },
+  {
+    id: 'connections',
+    label: 'Connections',
+    help: 'Connect, reconnect or disconnect client tenants.',
+    kind: 'static',
+  },
+];
+
+const MAP_LAYOUTS_TAB: TabDescriptor = {
+  id: 'layouts',
+  label: 'Map layouts',
+  help: 'Choose the layout and match field for each kind of record.',
+  kind: 'static',
+};
+
+const DIFFERENCES_TAB: TabDescriptor = {
+  id: 'differences',
+  label: 'Differences',
+  help: 'Fields changed in Weavestream that now differ from the source.',
+  kind: 'static',
+};
 
 const STATIC_TABS_TAIL: TabDescriptor[] = [
   {
@@ -120,12 +159,17 @@ export function IntegrationTabs({
   mappings,
   runs,
   driver,
+  canManageLayouts = true,
+  differenceCount = null,
 }: {
   initialTab: string;
   integration: IntegrationDto;
   mappings: IntegrationCompanyMappingDto[];
   runs: IntegrationSyncRunDto[];
   driver: DriverDescriptor | null;
+  canManageLayouts?: boolean;
+  /** Open differences, for the tab badge; null when unknown. */
+  differenceCount?: number | null;
 }) {
   const router = useRouter();
   const sp = useSearchParams();
@@ -159,8 +203,14 @@ export function IntegrationTabs({
     const tail = driver?.capabilities?.reconstructionCompleteness
       ? STATIC_TABS_TAIL
       : STATIC_TABS_TAIL.filter((t) => t.id !== 'completeness');
-    return [...STATIC_TABS_HEAD, ...resourceTabs, ...tail];
-  }, [driver]);
+    // Guided matcher only for drivers whose resources declare match suggestions.
+    const base = driver?.oauth ? [...OAUTH_TABS, ...STATIC_TABS_HEAD] : STATIC_TABS_HEAD;
+    const head = matchableResources(driver).length > 0 ? [...base, MAP_LAYOUTS_TAB] : base;
+    const differences = hasStandardFields(driver)
+      ? [{ ...DIFFERENCES_TAB, label: differenceCount ? `Differences (${differenceCount})` : 'Differences' }]
+      : [];
+    return [...head, ...resourceTabs, ...differences, ...tail];
+  }, [driver, differenceCount]);
 
   // Resolve the initial tab against the descriptor list. Legacy `fields`
   // (singular) routes default to the first resource tab so saved bookmarks
@@ -171,8 +221,8 @@ export function IntegrationTabs({
       const first = tabs.find((t) => t.kind === 'resource');
       if (first) return first.id;
     }
-    return 'creds';
-  }, [initialTab, tabs]);
+    return driver?.oauth ? 'connections' : 'creds';
+  }, [initialTab, tabs, driver]);
 
   const [tab, setTab] = useState<TabId>(resolvedInitialTab);
 
@@ -253,6 +303,12 @@ export function IntegrationTabs({
         tabIndex={0}
         style={{ padding: 18 }}
       >
+        {tab === 'app' && driver?.oauth && (
+          <OAuthAppTab integrationId={integration.id} provider={driver.oauth.provider} />
+        )}
+        {tab === 'connections' && driver?.oauth && (
+          <ConnectionsTab integrationId={integration.id} oauth={driver.oauth} setupGuide={driver.setupGuide} />
+        )}
         {tab === 'creds' && (
           <CredentialsTab
             integration={integration}
@@ -266,6 +322,10 @@ export function IntegrationTabs({
             mappings={mappings}
             driver={driver}
           />
+        )}
+        {tab === 'layouts' && <MapLayoutsTab integration={integration} driver={driver} canManageLayouts={canManageLayouts} />}
+        {tab === 'differences' && (
+          <DifferencesTab integrationId={integration.id} mappings={mappings} sourceLabel={driver?.label ?? integration.name} />
         )}
         {tab === 'runs' && (
           <RunsTab integration={integration} runs={runs} mappings={mappings} />

@@ -554,6 +554,35 @@ describe('IntegrationProvenanceService', () => {
     },
   );
 
+  it('keeps an asset co-bound by another integration when this integration stops seeing it', async () => {
+    const disappearing = binding('microsoft-binding', 'asset', 'asset-shared');
+    const findMany = jest.fn()
+      .mockResolvedValueOnce([disappearing])
+      // The other integration's live binding on the same asset.
+      .mockResolvedValueOnce([{ assetId: 'asset-shared' }]);
+    const tx = {
+      integrationSyncRecord: { findMany, update: jest.fn() },
+      asset: { updateMany: jest.fn() }, article: { updateMany: jest.fn() },
+      subnet: { updateMany: jest.fn() }, searchIndex: { updateMany: jest.fn() },
+      $queryRaw: jest.fn()
+        .mockResolvedValueOnce([{ id: 'watermark-row' }])
+        .mockResolvedValue([disappearing]),
+    };
+    const service = new IntegrationProvenanceService({} as never, {} as never);
+    await expect(service.staleUnseen(tx as never, {
+      integrationId: ids.integration, companyId: ids.company,
+      integrationCompanyMappingId: ids.mapping, resourceId: ids.resource,
+      targetKind: 'asset', snapshotAt: new Date('2026-07-14T12:00:00.000Z'),
+      auditActorId: '00000000-0000-0000-0000-000000000005',
+    })).resolves.toEqual({ stale: 1, archived: 0 });
+    expect(tx.asset.updateMany).not.toHaveBeenCalled();
+    // The shield query spans every integration in the company, not just this mapping.
+    const where = findMany.mock.calls[1]![0].where;
+    expect(where).toMatchObject({ companyId: ids.company, assetId: { in: ['asset-shared'] } });
+    expect(where).not.toHaveProperty('integrationCompanyMappingId');
+    expect(where).not.toHaveProperty('resourceId');
+  });
+
   it('never archives a target whose binding was refreshed between the scan and the guarded transition', async () => {
     const staleAt = new Date('2026-07-14T12:00:00.000Z');
     const genuinelyStale = binding('genuinely-stale', 'asset', 'asset-stale');

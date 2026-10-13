@@ -22,6 +22,9 @@ import { ScoreCard } from './score-card';
 import { EmailAuthCard } from './email-auth-card';
 import { SecurityCard } from './security-card';
 import { StatusPill } from '../domains-browser';
+import { Stat } from './stat';
+import { GoogleWorkspaceCard } from './google-workspace-card';
+import { Microsoft365Card } from './microsoft-365-card';
 import { DomainChatContext } from '../../../../../../components/chat-panel/domain-chat-context';
 import { spacedRelativePast as fmtRelativePast } from '../../../../../../lib/relative-time';
 
@@ -63,8 +66,8 @@ export default async function DomainDetailPage({
           { label: domain.hostname },
         )}
         title={
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 10 }}>
-            {domain.hostname}
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', minWidth: 0 }}>
+            <span style={{ overflowWrap: 'anywhere' }}>{domain.hostname}</span>
             <StatusPill status={domain.latestStatus} />
             {domain.visibleToClients ? (
               <Tag tone="accent">client-visible</Tag>
@@ -72,6 +75,8 @@ export default async function DomainDetailPage({
               <Tag tone="outline">internal</Tag>
             )}
             {domain.source === 'CLOUDFLARE' && <Tag tone="cloudflare">Cloudflare</Tag>}
+            {domain.workspaceRole && <Tag tone="info">Google Workspace</Tag>}
+            {domain.microsoftDefault !== null && <Tag tone="info">Microsoft 365</Tag>}
             {domain.archivedAt && <Tag tone="warn">archived</Tag>}
           </span>
         }
@@ -186,6 +191,9 @@ export default async function DomainDetailPage({
           </Panel>
         )}
 
+        {domain.workspaceSyncedAt && <GoogleWorkspaceCard domain={domain} />}
+        {domain.microsoftSyncedAt && <Microsoft365Card domain={domain} />}
+
         <Panel title="Check history" noPad>
           {checks.length === 0 ? (
             <div
@@ -204,40 +212,6 @@ export default async function DomainDetailPage({
         </Panel>
       </PageBody>
     </>
-  );
-}
-
-function Stat({
-  label,
-  value,
-  sub,
-}: {
-  label: string;
-  value: string;
-  sub?: string;
-}) {
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-      <span
-        style={{
-          fontSize: 11,
-          fontFamily: 'var(--font-mono)',
-          textTransform: 'uppercase',
-          letterSpacing: 0.3,
-          color: 'var(--dim)',
-        }}
-      >
-        {label}
-      </span>
-      <span style={{ fontSize: 15, color: 'var(--text)' }}>{value}</span>
-      {sub && (
-        <span
-          style={{ fontSize: 11.5, fontFamily: 'var(--font-mono)', color: 'var(--muted)' }}
-        >
-          {sub}
-        </span>
-      )}
-    </div>
   );
 }
 

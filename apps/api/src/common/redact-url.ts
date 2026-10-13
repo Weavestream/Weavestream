@@ -46,3 +46,11 @@ export function redactUrlsInText(text: string): string {
     return redactUrl(core) + trailing;
   });
 }
+
+/**
+ * A request target (`/path?query`) without its query string, for access
+ * logs: OAuth callbacks carry the authorization code and state there.
+ */
+export function pathOnly(requestTarget: string | undefined): string | undefined {
+  return requestTarget?.split('?', 1)[0];
+}

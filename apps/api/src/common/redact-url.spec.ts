@@ -1,4 +1,4 @@
-import { redactUrl, UNPARSABLE_URL } from './redact-url.js';
+import { pathOnly, redactUrl, UNPARSABLE_URL } from './redact-url.js';
 
 describe('redactUrl', () => {
   it('drops a query string carrying a token, keeping scheme/host/path', () => {
@@ -57,5 +57,16 @@ describe('redactUrl', () => {
     const out = redactUrl('https://user:pass@%zz/path');
     expect(out).toBe(UNPARSABLE_URL);
     expect(out).not.toContain('user:pass');
+  });
+});
+
+describe('pathOnly (access log URL)', () => {
+  it('drops the OAuth callback code and state', () => {
+    expect(pathOnly('/v1/admin/integrations/oauth/callback?code=test-code&state=test-state')).toBe('/v1/admin/integrations/oauth/callback');
+  });
+
+  it('keeps a path without a query and passes undefined through', () => {
+    expect(pathOnly('/v1/health')).toBe('/v1/health');
+    expect(pathOnly(undefined)).toBeUndefined();
   });
 });

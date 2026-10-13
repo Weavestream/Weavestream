@@ -50,6 +50,15 @@ export const AUDIT_ACTIONS = {
     // Instance-wide API key switch (`PUT /settings/api-keys`). `before` and
     // `after` carry `{ apiKeysEnabled }`.
     apiKeysToggle: 'settings.api_keys.toggle',
+    // Pre-connections instance OAuth app (`PUT /settings/integration-oauth-apps/:provider`,
+    // removed). Kept so older audit rows still resolve; new rows use
+    // `integration.oauthAppUpdate`.
+    integrationOAuthAppUpdate: 'settings.integration_oauth_app.update',
+    // Pre-connections Check setup on the instance OAuth app (removed route).
+    integrationOAuthAppCheck: 'settings.integration_oauth_app.check',
+    // Integration priority order (`PUT /settings/integration-priority`).
+    // `before` and `after` carry `{ order }` (driver keys only).
+    integrationPriorityUpdate: 'settings.integration_priority.update',
   },
   domain: {
     create: 'domain.create',
@@ -150,6 +159,7 @@ export const AUDIT_ACTIONS = {
     delete: 'integration.delete',
     secretUpdate: 'integration.secret.update',
     testConnection: 'integration.test_connection',
+    setupCheck: 'integration.setup_check',
     companyMappingCreate: 'integration.company_mapping.create',
     companyMappingUpdate: 'integration.company_mapping.update',
     companyMappingDelete: 'integration.company_mapping.delete',
@@ -162,9 +172,31 @@ export const AUDIT_ACTIONS = {
     syncMappingStarted: 'integration.sync.mapping.started',
     syncMappingFinished: 'integration.sync.mapping.finished',
     syncMappingFailed: 'integration.sync.mapping.failed',
+    // OAuth connect / disconnect. Rows carry the provider, scope list and a
+    // reason category on failure; never tokens or provider error text.
+    oauthConnect: 'integration.oauth.connect',
+    oauthConnectFailed: 'integration.oauth.connect.failed',
+    oauthDisconnect: 'integration.oauth.disconnect',
+    // The integration's OAuth app (App tab, `PUT /admin/integrations/:id/oauth-app`).
+    // `after` carries the provider, client id and the secret's last-four mask only.
+    oauthAppUpdate: 'integration.oauth_app.update',
+    // Check setup on the integration's OAuth app: outcome and failed step ids only.
+    oauthAppCheck: 'integration.oauth_app.check',
+    // Microsoft 365: the admin's explicit choice about the tenant's report
+    // concealment setting ("Conceal user, group, and site names in all
+    // reports", Graph adminReportSettings.displayConcealedNames). Rows carry
+    // the choice, the value before and after; `.failed` carries a reason.
+    microsoftReportNames: 'integration.microsoft.report_names',
+    microsoftReportNamesFailed: 'integration.microsoft.report_names.failed',
     assetCreated: 'integration.asset.created',
     assetUpdated: 'integration.asset.updated',
     assetClaimed: 'integration.asset.claimed',
+    // A person chose the source value or kept theirs for a standard-field
+    // difference. Rows carry ids and the choice, never field values.
+    differenceResolve: 'integration.difference.resolve',
+    // Summary of a Differences tab bulk action (counts only); each item
+    // also writes its own differenceResolve row.
+    differenceResolveBulk: 'integration.difference.resolve_bulk',
     assetArchived: 'integration.asset.archived',
     assetReleased: 'integration.asset.released',
     matchAmbiguous: 'integration.match.ambiguous',
@@ -189,6 +221,10 @@ export const AUDIT_ACTIONS = {
     // `.failed` row instead, carrying `{ runId, error }`.
     cloudflareRegistrarSync: 'integration.cloudflare.registrar_sync',
     cloudflareRegistrarSyncFailed: 'integration.cloudflare.registrar_sync.failed',
+    // Google Workspace domains → Domains monitoring, once per mapping sync.
+    googleWorkspaceDomainSync: 'integration.google_workspace.domain_sync',
+    // Microsoft 365 domains → Domains monitoring, once per mapping sync.
+    microsoft365DomainSync: 'integration.microsoft_365.domain_sync',
   },
   subnet: {
     create: 'subnet.create',

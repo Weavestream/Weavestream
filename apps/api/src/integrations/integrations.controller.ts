@@ -33,7 +33,10 @@ import {
   type UpdateIntegrationResourceInput,
   type IntegrationCompletenessQuery,
   type IntegrationGapsQuery,
+  type IntegrationSetupCheck,
 } from '@weavestream/shared';
+import { Throttle } from '@nestjs/throttler';
+import { InteractiveOnly } from '../auth/interactive-only.decorator.js';
 import { ZodBody } from '../common/zod-validation.pipe.js';
 import {
   CurrentUser,
@@ -58,7 +61,9 @@ import { randomUUID } from 'node:crypto';
 import { BadRequestException, ForbiddenException, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { PermissionService } from '../rbac/permission.service.js';
+import { assertCanManageLayouts } from './integration-match-field.controller.js';
 import { describeError } from '../common/describe-error.js';
+import { withCallbackHostWarning } from './oauth/integration-oauth-app.service.js';
 
 /**
  * Phase 11 — admin integrations API.
@@ -231,8 +236,10 @@ export class IntegrationsController {
     @CurrentUser() user: AuthedUser,
     @Param('id', new ParseUUIDPipe()) id: string,
     @Req() req: Request,
+    @Query('connectionId', new ParseUUIDPipe({ optional: true })) connectionId?: string,
   ) {
-    const ctx = await this.integrations.loadDriverContext(id);
+    // OAuth drivers test one client tenant: the picked connection, else the only one.
+    const ctx = await this.integrations.loadDriverContext(id, connectionId ? { connectionId } : { onlyConnection: true });
     const correlationId = randomUUID();
     const http = this.httpDefaults();
     try {
@@ -244,6 +251,10 @@ export class IntegrationsController {
           : await this.drivers.get(ctx.driver).testConnection({
               config: ctx.config,
               secret: ctx.secret,
+              integrationId: ctx.integrationId,
+              oauthClient: ctx.oauthClient,
+              connectionId: ctx.connectionId,
+              credentialVersion: ctx.credentialVersion,
               http,
               correlationId,
             } satisfies IntegrationContext);
@@ -284,14 +295,94 @@ export class IntegrationsController {
     }
   }
 
+  /**
+   * Check setup for a connected OAuth integration: the driver probes each
+   * provider API once (read-only) and maps failures to setup guide steps.
+   * Audited like Test connection; only step ids and the outcome are kept.
+   */
+  @Post(':id/check')
+  @RequirePermission('integration.manage')
+  @InteractiveOnly()
+  @Throttle({ global: { limit: 10, ttl: 60_000 } })
+  @HttpCode(200)
+  async checkSetup(
+    @CurrentUser() user: AuthedUser,
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Req() req: Request,
+    @Query('connectionId', new ParseUUIDPipe({ optional: true })) connectionId?: string,
+  ): Promise<IntegrationSetupCheck> {
+    // OAuth drivers probe one client tenant: the connection picked on the Connections tab, else the only one.
+    const ctx = await this.integrations.loadDriverContext(id, connectionId ? { connectionId } : { onlyConnection: true });
+    const driver = this.drivers.get(ctx.driver);
+    if (!driver.diagnose) throw new BadRequestException('This integration has no setup check.');
+    let diagnosed: IntegrationSetupCheck;
+    try {
+      diagnosed = await driver.diagnose({
+        mode: 'connection',
+        ctx: {
+          config: ctx.config,
+          secret: ctx.secret,
+          integrationId: ctx.integrationId,
+          oauthClient: ctx.oauthClient,
+          connectionId: ctx.connectionId,
+          credentialVersion: ctx.credentialVersion,
+          http: this.httpDefaults(),
+          correlationId: randomUUID(),
+        },
+      });
+    } catch (e) {
+      // Same split as testConnection: known driver failures become a failed
+      // check (and are audited below); anything else stays a server error.
+      if (!(e instanceof DriverAuthError || e instanceof DriverRateLimitError)) throw e;
+      diagnosed = {
+        ok: false,
+        passedStepIds: [],
+        failures: [
+          {
+            stepId: null,
+            message:
+              e instanceof DriverRateLimitError
+                ? 'The provider is rate limiting requests. Try again in a minute.'
+                : 'The provider refused the connection. Reconnect the integration and try again.',
+          },
+        ],
+      };
+    }
+    // OAuth drivers connect through the callback, which needs the session cookie.
+    const result = this.drivers.describe(ctx.driver).oauth
+      ? withCallbackHostWarning(this.env.values, diagnosed)
+      : diagnosed;
+    await this.audit.log({
+      actorId: user.id,
+      action: AUDIT_ACTIONS.integration.setupCheck,
+      entityType: 'Integration',
+      entityId: id,
+      ip: meta(req).ip,
+      userAgent: meta(req).userAgent,
+      before: null,
+      after: {
+        ok: result.ok,
+        failedStepIds: result.failures.map((f) => f.stepId),
+        ...(ctx.connectionId ? { connectionId: ctx.connectionId } : {}),
+      },
+    });
+    return result;
+  }
+
   @Get(':id/source-orgs')
   @RequirePermission('integration.manage')
   async listSourceOrgs(@Param('id', new ParseUUIDPipe()) id: string) {
+    // OAuth drivers: the organizations are the connected client tenants (no provider call).
+    const connected = await this.integrations.listConnectedOrgs(id);
+    if (connected) return { orgs: connected };
     const ctx = await this.integrations.loadDriverContext(id);
     const driver = this.drivers.get(ctx.driver);
     const integrationCtx: IntegrationContext = {
       config: ctx.config,
       secret: ctx.secret,
+      integrationId: ctx.integrationId,
+      oauthClient: ctx.oauthClient,
+      credentialVersion: ctx.credentialVersion,
       http: this.httpDefaults(),
       correlationId: randomUUID(),
     };
@@ -398,6 +489,19 @@ export class IntegrationsController {
     return this.integrations.updateResource(user, id, resourceKey, dto, meta(req));
   }
 
+  @Post(':id/resources/:resourceKey/destination')
+  @RequirePermission('integration.manage')
+  async createResourceDestination(
+    @CurrentUser() user: AuthedUser,
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Param('resourceKey') resourceKey: string,
+    @Req() req: Request,
+  ) {
+    // Creates a global layout and its fields: also needs the layouts create permission.
+    await assertCanManageLayouts(this.permissions, user);
+    return this.integrations.createResourceDestination(user, id, resourceKey, meta(req));
+  }
+
   @Get(':id/resources/:resourceKey/source-fields')
   @RequirePermission('integration.manage')
   async listResourceSourceFields(
@@ -405,8 +509,6 @@ export class IntegrationsController {
     @Param('resourceKey') resourceKey: string,
     @Query('externalOrgId') externalOrgId?: string,
   ) {
-    const ctx = await this.integrations.loadDriverContext(id);
-    const driver = this.drivers.get(ctx.driver);
     // Multi-resource drivers branch on `resourceKey`, but most still
     // need an `externalOrgId` to probe a real tenant. Fall back to the
     // first existing per-company mapping so the UI doesn't have to
@@ -421,12 +523,18 @@ export class IntegrationsController {
         'No organization mappings exist yet. Map at least one upstream organization to load its source fields.',
       );
     }
+    const ctx = await this.integrations.loadDriverContext(id, { externalOrgId: resolvedOrgId });
+    const driver = this.drivers.get(ctx.driver);
     const integrationCtx: IntegrationContext & {
       externalOrgId: string;
       resourceKey: string;
     } = {
       config: ctx.config,
       secret: ctx.secret,
+      integrationId: ctx.integrationId,
+      oauthClient: ctx.oauthClient,
+      connectionId: ctx.connectionId,
+      credentialVersion: ctx.credentialVersion,
       http: this.httpDefaults(),
       correlationId: randomUUID(),
       externalOrgId: resolvedOrgId,

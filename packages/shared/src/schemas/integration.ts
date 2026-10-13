@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { FieldTypeValues, type FieldType } from './field-types.js';
 
 /**
  * Phase 11 — universal integration framework schemas.
@@ -135,6 +136,44 @@ const driverResourceKeySchema = z
 const sourceEndpointSchema = z.string().min(1).max(256).startsWith('/');
 const boundedTargetStringSchema = z.string().min(1).max(128);
 
+/**
+ * Field types an integration never writes as a standard field: files,
+ * asset references and dropdowns hold operator-owned choices, not source
+ * facts. Both the descriptor schema and the field-mapping save refuse them.
+ */
+export const UNMAPPABLE_STANDARD_FIELD_TYPES = ['FILE', 'ASSET_REFERENCE', 'DROPDOWN'] as const satisfies readonly FieldType[];
+
+function isUnmappableStandardType(type: string): boolean {
+  return (UNMAPPABLE_STANDARD_FIELD_TYPES as readonly string[]).includes(type);
+}
+
+/**
+ * Whether a layout field of `targetType` can hold a standard field of
+ * `sourceType`: the same type, or plain text (which takes any value).
+ */
+export function standardFieldTargetCompatible(sourceType: FieldType, targetType: string): boolean {
+  if (isUnmappableStandardType(targetType)) return false;
+  return targetType === sourceType || targetType === 'TEXT' || targetType === 'TEXTAREA';
+}
+
+/**
+ * A standard fact a resource fills into the layout's own fields
+ * (hostname, OS, RAM, ...), as opposed to the extras its section shows.
+ * `fieldHints` are lower-case slug/name hints Map layouts uses to
+ * pre-select an existing layout field.
+ */
+export const driverStandardFieldSchema = z
+  .object({
+    sourceField: z.string().min(1).max(60).regex(/^[a-z][a-z0-9]*(_[a-z0-9]+)*$/),
+    label: z.string().min(1).max(80),
+    fieldType: z.enum(FieldTypeValues).refine((type) => !isUnmappableStandardType(type), {
+      message: 'Standard fields cannot be files, asset references or dropdowns',
+    }),
+    fieldHints: z.array(z.string().min(1).max(64)).max(16),
+  })
+  .strict();
+export type DriverStandardField = z.infer<typeof driverStandardFieldSchema>;
+
 const resourceDescriptorBaseShape = {
   key: driverResourceKeySchema,
   label: z.string().min(1),
@@ -155,6 +194,37 @@ const resourceDescriptorBaseShape = {
    */
   defaultEnabled: z.boolean().optional(),
   dependsOnResourceKeys: z.array(driverResourceKeySchema).max(64).default([]),
+  /**
+   * Guided layout matching ("Map layouts"). `sourceField` is the driver
+   * field records are matched on; `layoutHints` / `fieldHints` are
+   * lower-case layout and field slug/name hints used to pre-select an
+   * existing layout and its match-key field. Declaring this also opts the
+   * resource into match-first: on a sync, an unbound asset with no
+   * external identity whose match-key value equals the record's is
+   * adopted instead of creating a duplicate.
+   */
+  matchSuggestions: z
+    .object({
+      sourceField: z.string().min(1).max(128),
+      layoutHints: z.array(z.string().min(1).max(64)).max(16),
+      fieldHints: z.array(z.string().min(1).max(64)).max(16),
+      /** Name of the match field Map layouts offers to create on an existing layout that lacks it. */
+      fieldLabel: z.string().min(1).max(80).optional(),
+    })
+    .strict()
+    .optional(),
+  /**
+   * Source fields the driver writes into layout fields (normally the name
+   * and the match key). Everything else a record carries goes into its
+   * integration `section`. "Create new layout" only creates these fields.
+   */
+  minimalFields: z.array(z.string().min(1).max(128)).max(8).optional(),
+  /**
+   * Standard facts this resource fills into layout fields (opt-in). Map
+   * layouts offers one row per entry; a sync writes them under the
+   * difference-tracking write policy (see AssetsService.writeFromIntegration).
+   */
+  standardFields: z.array(driverStandardFieldSchema).max(32).optional(),
 } as const;
 
 const assetTargetConfigSchema = z
@@ -260,9 +330,208 @@ export const driverResourceDescriptorSchema = z
         message: 'Dependency keys must be unique',
       });
     }
+    const standard = resource.standardFields?.map((field) => field.sourceField) ?? [];
+    if (new Set(standard).size !== standard.length) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['standardFields'],
+        message: 'Standard field source keys must be unique',
+      });
+    }
   });
 
 export type DriverResourceDescriptor = z.infer<typeof driverResourceDescriptorSchema>;
+
+// ---------------------------------------------------------------------
+// OAuth (authorization-code) drivers
+// ---------------------------------------------------------------------
+
+/** Providers an instance-wide OAuth app can be configured for. */
+export const integrationOAuthProviderSchema = z.enum(['google', 'microsoft']);
+export type IntegrationOAuthProvider = z.infer<typeof integrationOAuthProviderSchema>;
+
+/** Display names for OAuth providers (UI copy). */
+export const INTEGRATION_OAUTH_PROVIDER_LABELS: Record<IntegrationOAuthProvider, string> = {
+  google: 'Google',
+  microsoft: 'Microsoft',
+};
+
+/**
+ * The one Microsoft 365 tenant setting Weavestream may change, and only on
+ * an admin's explicit choice. Wording from Microsoft Learn ("Show user,
+ * group, or site details in usage reports", Microsoft 365 admin center
+ * usage reports overview). The checkbox ON means names are concealed; Graph
+ * exposes it as adminReportSettings.displayConcealedNames.
+ */
+export const MICROSOFT_REPORT_SETTING = {
+  path: 'Microsoft 365 admin center > Settings > Org settings > Services > Reports',
+  label: 'Conceal user, group, and site names in all reports',
+  graph: 'PATCH https://graph.microsoft.com/v1.0/admin/reportSettings (displayConcealedNames)',
+} as const;
+
+/**
+ * The same change by hand, for a tenant that did not grant the optional
+ * ReportSettings.ReadWrite.All (learn.microsoft.com, "reports show
+ * anonymous user names").
+ */
+export const MICROSOFT_REPORT_SETTING_MANUAL_STEPS: readonly string[] = [
+  'Sign in to the Microsoft 365 admin center (admin.microsoft.com) as a Global Administrator of this tenant.',
+  'Go to Settings > Org settings, and on the Services tab select Reports.',
+  `To show real names, clear "${MICROSOFT_REPORT_SETTING.label}". To hide them again, select it.`,
+  'Select Save. Microsoft applies the change within a few minutes; the next sync uses it.',
+];
+
+/** Report-names state of one Microsoft 365 integration (never carries tokens). */
+export const microsoftReportNamesSchema = z.object({
+  /** True: the tenant conceals names. Null: Weavestream could not read it. */
+  concealed: z.boolean().nullable(),
+  /** The admin's stored choice; null until chosen. */
+  choice: z.enum(['shown', 'hidden']).nullable(),
+  /** Fixed text when the setting could not be read, else null. */
+  readError: z.string().nullable(),
+  /**
+   * True when the tenant granted the optional ReportSettings.ReadWrite.All,
+   * so Weavestream can change the setting; false: the page shows the manual
+   * steps instead of the buttons.
+   */
+  canChange: z.boolean(),
+  /** Fixed result text after an action, else absent. */
+  message: z.string().optional(),
+});
+export type MicrosoftReportNames = z.infer<typeof microsoftReportNamesSchema>;
+
+/**
+ * `show` turns concealment off (real names), `conceal` turns it back on,
+ * `keep` records "leave the tenant alone" and changes nothing.
+ */
+export const microsoftReportNamesActionSchema = z.object({ action: z.enum(['show', 'conceal', 'keep']) }).strict();
+export type MicrosoftReportNamesAction = z.infer<typeof microsoftReportNamesActionSchema>;
+
+/** Days before an OAuth app's client secret expires that Weavestream starts warning. */
+export const OAUTH_SECRET_EXPIRY_WARNING_DAYS = 30;
+
+/**
+ * Fixed warning for an OAuth app client secret that expires within
+ * `OAUTH_SECRET_EXPIRY_WARNING_DAYS` (or already expired), else null.
+ * `expiresAt` is the date the operator entered (YYYY-MM-DD, end of day UTC).
+ */
+export function oauthSecretExpiryWarning(expiresAt: string | null | undefined, nowMs: number = Date.now()): string | null {
+  if (!expiresAt) return null;
+  const day = expiresAt.slice(0, 10);
+  const end = Date.parse(`${day}T00:00:00.000Z`);
+  if (!Number.isFinite(end)) return null;
+  // Calendar days in UTC: the secret stops working at the end of its expiry date.
+  const today = Date.parse(`${new Date(nowMs).toISOString().slice(0, 10)}T00:00:00.000Z`);
+  const days = Math.round((end - today) / 86_400_000);
+  if (days < 0) {
+    return `The client secret expired on ${day}. Create a new secret and save it on the integration's App tab, or connections stop working.`;
+  }
+  if (days > OAUTH_SECRET_EXPIRY_WARNING_DAYS) return null;
+  const when = days === 0 ? 'today' : `in ${days} day${days === 1 ? '' : 's'}`;
+  return `The client secret expires on ${day} (${when}). Create a new secret and save it on the integration's App tab before then.`;
+}
+
+const httpsUrlSchema = z
+  .string()
+  .url()
+  .max(2048)
+  .refine((value) => value.startsWith('https://'), 'OAuth endpoints must use https://');
+
+/**
+ * A driver that connects through OAuth declares its provider endpoints and
+ * scopes here. The framework owns the flow; the reserved authorize
+ * parameters (client_id, redirect_uri, response_type, scope, state,
+ * code_challenge*) always win over `extraAuthorizeParams`.
+ *
+ * `consentFlow`:
+ *   - `authorization_code` (default): authorization code with PKCE; the
+ *     refresh token is stored.
+ *   - `admin_consent`: a tenant admin grants the app's application
+ *     permissions (Microsoft); no user token is ever stored. Access tokens
+ *     are minted per tenant with client credentials, `tokenUrl` carries a
+ *     `{tenant}` placeholder, `clientCredentialsScope` is the requested
+ *     scope, and `scopes` lists the application permissions (token roles).
+ */
+export const driverOAuthDescriptorSchema = z
+  .object({
+    provider: integrationOAuthProviderSchema,
+    consentFlow: z.enum(['authorization_code', 'admin_consent']).optional(),
+    authorizeUrl: httpsUrlSchema,
+    tokenUrl: httpsUrlSchema,
+    revokeUrl: httpsUrlSchema.optional(),
+    scopes: z.array(z.string().min(1).max(256)).min(1).max(50),
+    /** Scope of the client-credentials token (admin consent only). */
+    clientCredentialsScope: httpsUrlSchema.optional(),
+    /** Optional grouping of `scopes` for the settings card (e.g. by purpose). */
+    scopeGroups: z
+      .array(z.object({ label: z.string().min(1).max(80), scopes: z.array(z.string().min(1).max(256)).min(1).max(50) }).strict())
+      .max(10)
+      .optional(),
+    extraAuthorizeParams: z.record(z.string().max(256)).optional(),
+  })
+  .strict()
+  .refine((d) => d.consentFlow !== 'admin_consent' || (d.clientCredentialsScope !== undefined && d.tokenUrl.includes('{tenant}')), {
+    message: 'Admin-consent descriptors need clientCredentialsScope and a {tenant} token URL',
+  });
+export type DriverOAuthDescriptor = z.infer<typeof driverOAuthDescriptorSchema>;
+
+// ---------------------------------------------------------------------
+// Setup guide (step-by-step provider setup shown in the UI)
+// ---------------------------------------------------------------------
+
+/** Values the UI fills in at render time (they depend on the install). */
+export const setupGuideComputedValueSchema = z.enum(['redirectUri', 'scopes', 'authorizedOrigin']);
+export type SetupGuideComputedValue = z.infer<typeof setupGuideComputedValueSchema>;
+
+const setupGuideLabelSchema = z.string().min(1).max(80);
+
+/**
+ * One numbered setup step. `body` is plain text with a tiny markdown
+ * subset (blank-line paragraphs, `- ` bullets, `**bold**`) that the UI
+ * renders as React elements, never as HTML. Links are https only.
+ */
+export const setupGuideStepSchema = z
+  .object({
+    id: z.string().regex(/^[a-z0-9-]{1,48}$/),
+    title: z.string().min(1).max(120),
+    body: z.string().min(1).max(3000),
+    copyValues: z
+      .array(
+        z.union([
+          z.object({ label: setupGuideLabelSchema, value: z.string().min(1).max(2048) }).strict(),
+          z.object({ label: setupGuideLabelSchema, computed: setupGuideComputedValueSchema }).strict(),
+        ]),
+      )
+      .max(6)
+      .optional(),
+    links: z
+      .array(z.object({ label: setupGuideLabelSchema, href: httpsUrlSchema }).strict())
+      .max(6)
+      .optional(),
+  })
+  .strict();
+export type SetupGuideStep = z.infer<typeof setupGuideStepSchema>;
+
+export const setupGuideSchema = z
+  .array(setupGuideStepSchema)
+  .min(1)
+  .max(20)
+  .refine((steps) => new Set(steps.map((s) => s.id)).size === steps.length, 'Setup guide step ids must be unique');
+
+/**
+ * Result of a "Check setup" run. `passedStepIds` turn green in the guide;
+ * each failure names the step to revisit with a fixed message (provider
+ * error text is never passed through).
+ */
+export const integrationSetupCheckSchema = z.object({
+  ok: z.boolean(),
+  passedStepIds: z.array(z.string()),
+  /** `stepId` null: a problem not tied to one step (e.g. rate limited, try again). */
+  failures: z.array(z.object({ stepId: z.string().nullable(), message: z.string() })),
+  /** A step the check could not verify: neither passed nor failed, with a fixed note. */
+  notes: z.array(z.object({ stepId: z.string(), message: z.string() })).optional(),
+});
+export type IntegrationSetupCheck = z.infer<typeof integrationSetupCheckSchema>;
 
 export const driverDescriptorSchema = z
   .object({
@@ -283,6 +552,10 @@ export const driverDescriptorSchema = z
    * Assets, so per-resource layouts and field mappings don't apply.
    */
   resources: z.array(driverResourceDescriptorSchema).default([]),
+  /** Present when the driver connects with the OAuth authorization-code flow. */
+  oauth: driverOAuthDescriptorSchema.optional(),
+  /** Optional step-by-step provider setup guide rendered in the UI. */
+  setupGuide: setupGuideSchema.optional(),
   /** Driver capabilities surfaced to the UI. */
   capabilities: z.object({
     /**
@@ -453,6 +726,26 @@ export const updateIntegrationResourceSchema = z
 
 export type CreateIntegrationResourceInput = z.infer<typeof createIntegrationResourceSchema>;
 export type UpdateIntegrationResourceInput = z.infer<typeof updateIntegrationResourceSchema>;
+
+/**
+ * "Map layouts" on an existing layout: make sure it has the field the
+ * resource matches on (the driver's recommended match-key field), creating
+ * it when missing. Only that one minimal field is ever created.
+ */
+export const ensureResourceMatchFieldSchema = z
+  .object({
+    assetLayoutId: z.string().uuid(),
+    /** A standard field to create instead of the match field. */
+    sourceField: z.string().min(1).max(60).optional(),
+  })
+  .strict();
+export type EnsureResourceMatchFieldInput = z.infer<typeof ensureResourceMatchFieldSchema>;
+
+export interface EnsureResourceMatchFieldResult {
+  fieldId: string;
+  /** False when the layout already had a compatible field with that slug. */
+  created: boolean;
+}
 
 export const integrationDtoSchema = z.object({
   id: z.string().uuid(),
@@ -1079,3 +1372,266 @@ export const integrationTargetProvenanceSchema = z
   })
   .strict();
 export type IntegrationTargetProvenance = z.infer<typeof integrationTargetProvenanceSchema>;
+
+/**
+ * Admin view of an OAuth integration's app (App tab). The client secret is
+ * write-only: only `secretMask` (its last four characters) is returned.
+ */
+export const integrationOAuthAppSchema = z.object({
+  provider: integrationOAuthProviderSchema,
+  configured: z.boolean(),
+  clientId: z.string().nullable(),
+  secretMask: z.string().nullable(),
+  /** Callback URL to register with the provider (computed from `API_URL`). */
+  redirectUri: z.string(),
+  /**
+   * Fixed warning when `API_URL` and `APP_URL` are on different hosts: the
+   * host-only session cookie is not sent to the callback. Null when fine.
+   */
+  callbackHostWarning: z.string().nullable(),
+  /** Union of the scopes every registered driver of this provider requests. */
+  scopes: z.array(z.string()),
+  /**
+   * The same scopes grouped by driver, in registry order: the first group is
+   * what the first driver needs, later groups only list scopes an earlier
+   * group does not already cover.
+   */
+  scopeGroups: z.array(z.object({ label: z.string(), scopes: z.array(z.string()) })),
+  updatedAt: z.string().nullable(),
+  /** Setup guide of the first registered driver of this provider, if any. */
+  setupGuide: z.array(setupGuideStepSchema).optional(),
+  /** Date the client secret expires (YYYY-MM-DD), as entered by the operator. */
+  secretExpiresAt: z.string().nullable(),
+  /** Fixed warning from 30 days before `secretExpiresAt`, else null. */
+  secretExpiryWarning: z.string().nullable(),
+  /** The operator's own directory (tenant) ID, used only by Check setup (Microsoft). */
+  tenantId: z.string().nullable(),
+});
+export type IntegrationOAuthApp = z.infer<typeof integrationOAuthAppSchema>;
+
+export const updateIntegrationOAuthAppSchema = z
+  .object({
+    clientId: z.string().trim().min(1).max(512),
+    /**
+     * Required on first save. Omit it to keep the stored secret (e.g. to
+     * correct the client ID); the API rejects an omitted secret when none
+     * is stored yet.
+     */
+    clientSecret: z.string().trim().min(1).max(512).optional(),
+    /** Client secret expiry date (YYYY-MM-DD); null clears it, omitted keeps it. */
+    secretExpiresAt: z
+      .string()
+      .regex(/^\d{4}-\d{2}-\d{2}$/, 'Use a YYYY-MM-DD date')
+      .refine((v) => Number.isFinite(Date.parse(`${v}T00:00:00Z`)), 'Not a valid date')
+      .nullable()
+      .optional(),
+    /** The operator's own directory (tenant) ID (GUID); null clears it, omitted keeps it. */
+    tenantId: z.string().trim().uuid('Use the Directory (tenant) ID, a GUID').nullable().optional(),
+  })
+  .strict();
+export type UpdateIntegrationOAuthAppInput = z.infer<typeof updateIntegrationOAuthAppSchema>;
+
+/** Status of one client-tenant connection (never carries tokens). */
+export const integrationConnectionStatusSchema = z.enum(['ok', 'needs_reconnect']);
+export type IntegrationConnectionStatus = z.infer<typeof integrationConnectionStatusSchema>;
+
+/** One client tenant connected to an OAuth integration. */
+export const integrationConnectionSchema = z.object({
+  id: z.string().uuid(),
+  /** Google customer id / Microsoft tenant id. */
+  externalOrgId: z.string(),
+  /** Primary domain (Google) or tenant name (Microsoft), when known. */
+  displayName: z.string().nullable(),
+  /** Google: the admin account that approved. Microsoft: null. */
+  connectedAs: z.string().nullable(),
+  connectedAt: z.string(),
+  /** Granted scopes (Google) or application permissions (Microsoft). */
+  grantedScopes: z.array(z.string()),
+  /** `needs_reconnect` also when the stored grant cannot be read. */
+  status: integrationConnectionStatusSchema,
+  lastErrorAt: z.string().nullable(),
+  /** Latest finished sync of a company mapping of this tenant, if any. */
+  lastSyncAt: z.string().nullable(),
+  /** Microsoft only: the admin's choice about real names in usage reports. */
+  reportNames: z.enum(['shown', 'hidden']).nullable(),
+});
+export type IntegrationConnection = z.infer<typeof integrationConnectionSchema>;
+
+/** Connections tab of an OAuth integration. */
+export const integrationConnectionsSchema = z.object({
+  provider: integrationOAuthProviderSchema,
+  appConfigured: z.boolean(),
+  /** Callback URL registered with the provider. */
+  redirectUri: z.string(),
+  /** Fixed warning when the app's client secret expires within 30 days, else null. */
+  appSecretExpiryWarning: z.string().nullable(),
+  /** True once the app's client secret expiry date has passed. */
+  appSecretExpired: z.boolean(),
+  connections: z.array(integrationConnectionSchema),
+});
+export type IntegrationConnections = z.infer<typeof integrationConnectionsSchema>;
+
+/** Start a connect flow: a new client tenant, or Reconnect of one connection. */
+export const startIntegrationConnectionSchema = z
+  .object({ connectionId: z.string().uuid().optional() })
+  .strict();
+export type StartIntegrationConnectionInput = z.infer<typeof startIntegrationConnectionSchema>;
+
+export const integrationOAuthStartResponseSchema = z.object({
+  authorizeUrl: z.string().url(),
+});
+export type IntegrationOAuthStartResponse = z.infer<typeof integrationOAuthStartResponseSchema>;
+
+// ---------------------------------------------------------------------
+// Integration differences (standard fields a person changed)
+// ---------------------------------------------------------------------
+
+export const integrationDifferenceChoiceSchema = z.enum(['source', 'local']);
+export type IntegrationDifferenceChoice = z.infer<typeof integrationDifferenceChoiceSchema>;
+
+export const resolveIntegrationDifferenceSchema = z
+  .object({
+    syncRecordId: z.string().uuid(),
+    assetFieldId: z.string().uuid(),
+    choice: integrationDifferenceChoiceSchema,
+  })
+  .strict();
+export type ResolveIntegrationDifferenceInput = z.infer<typeof resolveIntegrationDifferenceSchema>;
+
+/**
+ * Most differences one bulk request resolves; the UI loops for more. A
+ * filter batch keeps whole sync records, so one record holding more
+ * differences than this is resolved in a single, larger batch.
+ */
+export const INTEGRATION_DIFFERENCES_BULK_MAX = 500;
+
+/**
+ * Differences tab bulk resolve: either the ticked rows (`items`) or every
+ * open difference matching the tab's company filter (`filter`, walked in
+ * batches through `cursor`). Exactly one of the two. A filter batch never
+ * splits a sync record, so it can exceed INTEGRATION_DIFFERENCES_BULK_MAX
+ * when a single record has more differences than the cap.
+ */
+export const resolveIntegrationDifferencesBulkSchema = z
+  .object({
+    choice: integrationDifferenceChoiceSchema,
+    items: z
+      .array(z.object({ syncRecordId: z.string().uuid(), assetFieldId: z.string().uuid() }).strict())
+      .min(1)
+      .max(INTEGRATION_DIFFERENCES_BULK_MAX)
+      .optional(),
+    filter: z
+      .object({
+        companyId: z.string().uuid().optional(),
+        /** Last sync record id of the previous batch (from `nextCursor`). */
+        cursor: z.string().uuid().optional(),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict()
+  .refine((input) => (input.items === undefined) !== (input.filter === undefined), {
+    message: 'Send either items or filter',
+  });
+export type ResolveIntegrationDifferencesBulkInput = z.infer<typeof resolveIntegrationDifferencesBulkSchema>;
+
+/** A difference the bulk request did not resolve, with a fixed reason. */
+export interface IntegrationDifferenceBulkMiss {
+  syncRecordId: string;
+  assetFieldId: string;
+  assetName: string | null;
+  reason: string;
+}
+
+export interface IntegrationDifferencesBulkResult {
+  applied: number;
+  /** Not attempted: no permission on that company, or no longer open. */
+  skipped: IntegrationDifferenceBulkMiss[];
+  /** Attempted and refused (a sync just ran, or the value does not fit the field). */
+  failed: IntegrationDifferenceBulkMiss[];
+  /** Filter mode: where the next batch starts, or null when the filter is done. */
+  nextCursor: string | null;
+}
+
+export const integrationDifferencesQuerySchema = z
+  .object({
+    companyId: z.string().uuid().optional(),
+    limit: z.coerce.number().int().min(1).max(100).default(50),
+    /** Last sync record id of the previous page. */
+    cursor: z.string().uuid().optional(),
+  })
+  .strict();
+export type IntegrationDifferencesQuery = z.infer<typeof integrationDifferencesQuerySchema>;
+
+/** One open difference: the value in Weavestream and the source value, as display text. */
+export interface IntegrationDifferenceDto {
+  syncRecordId: string;
+  assetFieldId: string;
+  fieldLabel: string;
+  localValue: string | null;
+  sourceValue: string | null;
+  detectedAt: string;
+}
+
+export interface IntegrationDifferenceRowDto extends IntegrationDifferenceDto {
+  companyId: string;
+  companyName: string;
+  assetId: string;
+  assetName: string;
+}
+
+export interface IntegrationDifferencesPage {
+  items: IntegrationDifferenceRowDto[];
+  /** Open differences across the whole filter (first page only). */
+  total: number | null;
+  nextCursor: string | null;
+}
+
+/**
+ * Default "whose values win" order when several integrations are bound to
+ * one asset (driver keys, highest priority first). Drivers missing here
+ * follow in alphabetical order.
+ */
+export const DEFAULT_INTEGRATION_PRIORITY: readonly string[] = [
+  'level',
+  'ninjaone',
+  'action1',
+  'breeze',
+  'microsoft-365',
+  'google-workspace',
+  'unifi',
+  'cloudflare',
+];
+
+/** `PUT /settings/integration-priority`: the full order, driver keys only. */
+export const updateIntegrationPrioritySchema = z
+  .object({
+    order: z
+      .array(z.string().regex(/^[a-z0-9][a-z0-9-]{0,39}$/))
+      .min(1)
+      .max(50)
+      .refine((keys) => new Set(keys).size === keys.length, 'Each integration may appear once.'),
+  })
+  .strict();
+export type UpdateIntegrationPriorityInput = z.infer<typeof updateIntegrationPrioritySchema>;
+
+export interface IntegrationPriorityDto {
+  order: Array<{ key: string; label: string }>;
+}
+
+/**
+ * The effective priority order: the stored keys that are still registered,
+ * then the defaults, then any other registered driver alphabetically. A
+ * malformed stored value falls back to the defaults.
+ */
+export function resolveIntegrationPriority(stored: unknown, registered: readonly string[]): string[] {
+  const known = new Set(registered);
+  const out: string[] = [];
+  const add = (key: unknown): void => {
+    if (typeof key === 'string' && known.has(key) && !out.includes(key)) out.push(key);
+  };
+  if (Array.isArray(stored)) stored.forEach(add);
+  DEFAULT_INTEGRATION_PRIORITY.forEach(add);
+  [...registered].sort().forEach(add);
+  return out;
+}

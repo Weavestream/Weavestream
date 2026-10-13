@@ -37,6 +37,7 @@ export function AvailableIntegrationsGallery({
         style={{
           display: 'flex',
           flexWrap: 'wrap',
+          justifyContent: 'center',
           gap: 28,
           listStyle: 'none',
           margin: 0,

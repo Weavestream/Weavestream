@@ -4,7 +4,7 @@
 <!-- aliases: integration overview | rmm sync | import devices | external inventory | connectors -->
 <!-- requires: integration.manage -->
 
-Action1, NinjaOne, UniFi, and Breeze are pull integrations. A connection stores provider credentials and configuration. Upstream organizations map to Weavestream companies. Enabled resources select target asset layouts, match keys, and field projections to create, claim, or update assets during sync runs.
+Action1, NinjaOne, UniFi, Google Workspace, Microsoft 365, Level RMM, and Breeze are pull integrations. A connection stores provider credentials and configuration. Upstream organizations map to Weavestream companies. Enabled resources select target asset layouts, match keys, and field projections to create, claim, or update assets during sync runs.
 
 Match keys claim existing unclaimed assets instead of duplicating them. Once linked, integration sync records preserve identity across runs.
 
@@ -60,6 +60,40 @@ Override default US API URL for EU, CA, or OC tenants if needed. Test connection
 Create a **UniFi Site Manager** integration with a Site Manager **API Key**. Test connection, then map UniFi hosts/consoles to Weavestream companies.
 
 Configure **Devices fields** for switches, access points, and gateways (recommended match: `mac`). Configure **Clients fields** separately for connected clients (recommended match: `name`).
+
+## Configure Google Workspace
+<!-- aliases: connect google workspace | google oauth app | connect with google | g suite | gsuite | google admin | check setup | google client id | google redirect uri | unverified app -->
+<!-- requires: settings.manage | integration.manage -->
+
+Google Workspace is read-only and connects with OAuth. There is one Google Workspace integration per Weavestream install; each customer tenant is a connection on its **Connections** tab.
+
+Once per Weavestream install, an administrator creates a Google Cloud project, enables the Admin SDK API and Enterprise License Manager API, sets up the consent screen (Branding, then Audience **External** and **Publish app** so it is **In production**), adds the scopes under **Data Access**, and creates a **Web application** OAuth client with the redirect URI shown in Weavestream. Create the Google Workspace integration once (**New integration → Google Workspace**; a second one is refused), open its **App** tab, paste the Client ID and Client secret, select **Save OAuth app**, then **Check setup**. The App tab shows a numbered setup guide with copy buttons; passed steps turn green and a failed step shows what to fix.
+
+Per customer: open the Google Workspace integration, go to **Connections**, select **Connect a client** and sign in with the customer's super admin (or a delegated admin with read access). On "Google hasn't verified this app", select **Advanced**, then **Go to Weavestream (unsafe)**: expected for a self-hosted app. If the customer blocks third-party apps, they mark the Client ID **Trusted** under **Security → Access and data control → API controls**. Then map the tenant under **Organizations**, choose layouts and match fields under **Map layouts**, and run a dry run. Below the match picker, **Map layouts** lists each resource's standard facts: job title, department and phone for users; model, operating system, MAC and IP address for Chrome devices; model, manufacturer, operating system, IMEI and Wi-Fi MAC for phones; description for groups; primary domain for the tenant. Domains are not a resource: the tenant's verified domains and aliases go to the company's **Domains** monitoring on every real sync, matched to existing domains by name (never duplicated; Cloudflare details are kept), with Google's default `test-google-a.com` domains skipped. Each is set to a fitting layout field, **Create field** or **Don't sync**. Those facts fill the layout fields; the **Google Workspace** section keeps the rest: org unit, account status, licences, mailbox and Drive storage, admin role, 2-step verification, device status, last sync and last user (shown only, never assigned). A mapped field someone changed in Weavestream is never overwritten: it shows under **Differences** on the asset and on the integration's **Differences** tab, with **Use Google Workspace value** or **Keep ours**.
+
+Do not leave the app in **Testing**: connections expire after 7 days. A connection shows **needs reconnect** when access was revoked or unused for 6 months; **Reconnect** on its row only accepts the same tenant. **Disconnect** removes one tenant. Google gives no invoices, purchased seats or renewal dates for direct customers, and usage figures lag 1 to 3 days.
+
+## Configure Microsoft 365
+<!-- aliases: connect microsoft 365 | office 365 | m365 | o365 | entra | azure ad | admin consent | connect with microsoft | microsoft app | intune | client secret expiry | concealed names | report names -->
+<!-- requires: settings.manage | integration.manage -->
+
+Microsoft 365 is read-only and connects by admin consent. There is one Microsoft 365 integration per Weavestream install; each customer tenant is a connection on its **Connections** tab.
+
+Once per Weavestream install, an administrator registers one app in their own Microsoft Entra tenant (**Entra ID → App registrations → New registration**), with **Accounts in any organizational directory (Multitenant)** and the **Web** redirect URI shown in Weavestream. Under **API permissions → Microsoft Graph → Application permissions** they add exactly the listed permissions (each has a copy button), then create a client secret under **Certificates & secrets** and note its **Expires** date. Paste the **Application (client) ID**, the secret **Value**, the expiry date and optionally the **Directory (tenant) ID** into the **App** tab of the Microsoft 365 integration (create it once with **New integration → Microsoft 365**), select **Save Microsoft app**, then **Check setup**. Weavestream warns from 30 days before the secret expires.
+
+Per customer: open the Microsoft 365 integration, go to **Connections** and select **Connect a client**. A **Global Administrator** or **Privileged Role Administrator** of the customer tenant must approve (a Cloud Application Administrator cannot grant Graph application permissions); the app shows as unverified, which is expected. Weavestream then adds the tenant as a row. If permissions are missing, **Check setup** lists them and a Global Administrator presses **Reconnect**.
+
+Selecting a tenant's row on **Connections** reads that tenant's setting **Microsoft 365 admin center → Settings → Org settings → Services → Reports → "Conceal user, group, and site names in all reports"** and asks whether to show real names so mailbox and OneDrive storage can be matched to people. **Yes** turns that tenant-wide setting off once (every usage report of the tenant then shows names to anyone who can read reports, and to Weavestream); **No** changes nothing; **Turn concealment back on** reverses it. Each choice needs a step-up and is audited. This is the only change Weavestream can make in a tenant.
+
+Map the tenant under **Organizations** and pick layouts under **Map layouts**: Users to People (match on email: mail, else user principal name), Groups to Distribution Lists, Computers (Intune Windows/macOS/Linux) to Workstations, Mobile devices (Intune iOS/Android) to Phones, and the Tenant. Last sign-in and MFA need Entra ID P1, devices need Intune, alerts need a Defender licence; without them the rows say **Not available**. Verified domains (not `*.onmicrosoft.com`) go to **Domains** monitoring, matched by name like Google's. Microsoft gives no invoices, and usage reports lag 24 to 72 hours.
+
+## Configure Level RMM
+<!-- aliases: connect level | level rmm | level.io | level api key | level devices | level groups -->
+<!-- requires: integration.manage -->
+
+Level is read-only and connects with an API key. One integration is one Level account. In Level, open **Settings → API keys**, select **Create API key**, and choose **Read-only** access. In Weavestream, select **New integration → Level RMM**, paste the key into **API key** on **Credentials & schedule**, save, then select **Test connection** and **Check setup**.
+
+Under **Organizations**, each top-level Level group maps to one company; devices in nested groups sync with their top-level group, and devices in no group are not synced. Under **Map layouts**, pick the device layout and match on **Serial number**. Devices without a serial number (often virtual machines) are created and stay linked by their Level id. Below the match picker, **Map layouts** lists the standard facts (hostname, manufacturer, model, operating system, CPU, RAM, storage, MAC address, IP address, role): each is set to a fitting layout field, **Create field** or **Don't sync**. Those facts fill the layout fields; the **Level RMM** section on the asset keeps the rest: status, storage per partition, network, security with OS end of life, available patches, active alerts and memory and disk detail. A mapped field someone changed in Weavestream is never overwritten: it shows under **Differences** at the bottom of the Level RMM section and on the integration's **Differences** tab, with **Use Level RMM value** (write it now and follow Level again) or **Keep ours** (stop flagging it until the Level value changes). Resolving needs permission to edit assets in that company. If the key or plan cannot read alerts or patches, those groups say **Not available** and devices still sync. Level does not provide installed software, agent version or warranty dates.
 
 ## Configure Breeze reconstruction sync
 <!-- aliases: configure Breeze reconstruction | Breeze RMM setup | Breeze Partner API | Breeze disaster recovery sync | Breeze documentation sync -->

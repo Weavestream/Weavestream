@@ -67,6 +67,7 @@ export function OrgsTab({
             Organizations
           </h3>
           <p style={{ margin: 0, fontSize: 12.5, color: 'var(--muted)' }}>
+            {driver?.oauth ? 'Every connected client tenant is listed here. ' : ''}
             Map each upstream organization to a Weavestream company.
             Mappings drive every enabled resource —{' '}
             {integration.resources.map((r) => r.resourceLabel).join(', ') ||
@@ -88,7 +89,9 @@ export function OrgsTab({
 
       {!integration.hasSecret && (
         <Tag tone="warn">
-          Add credentials in the “Credentials &amp; schedule” tab before mapping organizations.
+          {driver?.oauth
+            ? 'Connect a client tenant on the Connections tab before mapping organizations.'
+            : <>Add credentials in the “Credentials &amp; schedule” tab before mapping organizations.</>}
         </Tag>
       )}
       {integration.hasSecret && !hasConfiguredResource && (

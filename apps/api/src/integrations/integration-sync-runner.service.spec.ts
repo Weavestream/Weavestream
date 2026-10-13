@@ -10,9 +10,11 @@ import type {
 import { AssetTargetWriter } from './reconstruction/asset-target.writer.js';
 import { hasEligibleNativeBinding } from './reconstruction/native-binding-ownership.js';
 import { BreezeDriver } from './drivers/breeze/breeze.driver.js';
+import { DriverAuthError, DriverResourceUnavailableError } from './drivers/integration-driver.js';
 import { buildResourceExecutionStages } from './integration-sync.service.js';
 import type { AssetReconstructionInput } from './reconstruction/reconstruction-target.js';
 import { z } from 'zod';
+import { Prisma } from '@prisma/client';
 import { integrationReconstructionGapInputSchema } from '@weavestream/shared';
 import { integrationAssetExternalSource } from './integration-asset-source.js';
 import { FieldTypesRegistry } from '../field-types/field-types.registry.js';
@@ -132,6 +134,7 @@ describe('IntegrationSyncRunnerService writer dispatch', () => {
         id: 'mapping', integrationId: 'integration', companyId: 'company', externalOrgId: 'org-1',
         filter: {}, integration: { id: 'integration', driver: 'typed' },
       }) },
+      systemSetting: { findUnique: jest.fn().mockResolvedValue({ integrationPriority: ['google-workspace', 'typed'] }) },
       integrationResource: { findFirst: jest.fn().mockResolvedValue({
         id: 'resource', integrationId: 'integration', resourceKey: 'subnets', enabled: true,
         targetKind: 'subnet', targetConfig: { normalization: 'cidr' }, dependsOnResourceKeys: [],
@@ -210,20 +213,42 @@ describe('IntegrationSyncRunnerService writer dispatch', () => {
       recalculate: jest.fn(async () => { pending.push('completeness'); }),
       clearNonParticipant: jest.fn(async () => { pending.push('completeness-clear'); }),
     };
+    const integrations = { loadDriverContext: jest.fn().mockResolvedValue({ config: {}, secret: {} }) };
     const service = new IntegrationSyncRunnerService(
       prisma as never,
       { values: { INTEGRATION_HTTP_TIMEOUT_MS: 1, INTEGRATION_HTTP_MAX_RETRIES: 0, INTEGRATION_HTTP_BACKOFF_MS: 1 } } as never,
       audit as never,
-      { loadDriverContext: jest.fn().mockResolvedValue({ config: {}, secret: {} }) } as never,
-      { get: jest.fn().mockReturnValue(driver) } as never,
+      integrations as never,
+      {
+        get: jest.fn().mockReturnValue(driver),
+        list: () => [{ key: 'typed', resources: [], ...driver.descriptor }, { key: 'legacy-rmm', resources: [{ key: 'devices' }] }],
+      } as never,
       {} as never,
       writerRegistry as never,
       provenance as never,
       completeness as never,
       new FieldTypesRegistry(),
     );
-    return { service, writer, writerRegistry, tx, order, driver, audit, prisma, provenance, completeness };
+    return { service, writer, writerRegistry, tx, order, driver, audit, prisma, provenance, completeness, integrations };
   }
+
+  it('loads only the connection of the mapping tenant and marks it on an auth failure', async () => {
+    const { service, driver, prisma, integrations } = setup();
+    const updateMany = jest.fn().mockResolvedValue({ count: 1 });
+    (prisma as unknown as Record<string, unknown>).integrationConnection = { updateMany };
+    integrations.loadDriverContext.mockResolvedValueOnce({ config: {}, secret: {}, connectionId: 'conn-1' });
+    driver.fetchRecords.mockRejectedValueOnce(new DriverAuthError('Reconnect it.'));
+    await expect(service.runMapping({
+      syncRunId: 'auth-run', integrationCompanyMappingId: 'mapping', resourceId: 'resource',
+      dryRun: false, actorId: 'actor', mode: 'incremental',
+    })).resolves.toMatchObject({ status: 'failed' });
+    expect(integrations.loadDriverContext).toHaveBeenCalledWith('integration', { externalOrgId: 'org-1' });
+    expect(driver.fetchRecords).toHaveBeenCalledWith(expect.objectContaining({ connectionId: 'conn-1', externalOrgId: 'org-1' }), null);
+    expect(updateMany).toHaveBeenCalledWith({
+      where: { id: 'conn-1' },
+      data: { status: 'needs_reconnect', lastErrorAt: expect.any(Date) },
+    });
+  });
 
   it('maps one scalar definition to only its configured target field and skips unmapped rows', () => {
     const { service } = setup();
@@ -547,6 +572,215 @@ describe('IntegrationSyncRunnerService writer dispatch', () => {
       create: expect.objectContaining({ authoritative: true }),
       update: expect.objectContaining({ authoritative: true }),
     }));
+  });
+
+  it('skips a resource the driver no longer declares with a run warning, without fetching', async () => {
+    const { service, driver } = setup();
+    // The setup resource is `subnets`; the driver now declares only `devices`.
+    (driver.descriptor as Record<string, unknown>).resources = [{ key: 'devices' }];
+    const outcome = await service.runMapping({
+      syncRunId: 'run', integrationCompanyMappingId: 'mapping', resourceId: 'resource',
+      dryRun: false, actorId: 'actor', mode: 'incremental',
+    });
+    expect(outcome).toMatchObject({ status: 'succeeded', error: null, resourceKey: 'subnets' });
+    expect(outcome.conflicts).toEqual([
+      expect.objectContaining({ kind: 'validation_error', message: expect.stringContaining('no longer provides it') }),
+    ]);
+    expect(driver.fetchRecords).not.toHaveBeenCalled();
+  });
+
+  describe('integration sections on legacy records', () => {
+    const fieldId = '00000000-0000-4000-8000-000000000601';
+    const validSection = {
+      title: 'Workspace',
+      groups: [{
+        key: 'account', title: 'Account', icon: 'gmail',
+        rows: [
+          { label: 'Status', kind: 'badge', value: 'Active', tone: 'success' },
+          { label: 'Mailbox', kind: 'meter', used: 12, total: 30, unit: 'mb' },
+        ],
+      }],
+    };
+
+    function arrange(section: unknown, matchSuggestions = false, standardFields = false) {
+      const ctx = setup();
+      ctx.prisma.integrationResource.findFirst.mockResolvedValueOnce({
+        id: 'resource', integrationId: 'integration', resourceKey: 'users', enabled: true,
+        targetKind: 'asset', targetConfig: {}, dependsOnResourceKeys: [],
+        assetLayoutId: '00000000-0000-4000-8000-000000000007',
+        assetLayout: { fields: [] }, matchKeyFieldIds: [fieldId],
+        fieldMappings: [{
+          sourceField: 'email',
+          targetField: { id: fieldId, slug: 'email', fieldType: 'EMAIL', options: {}, archivedAt: null },
+          transform: null, syncDirection: 'source_wins',
+        }],
+      });
+      (ctx.driver.descriptor as Record<string, unknown>).resources = [
+        {
+          key: 'users',
+          ...(matchSuggestions ? { matchSuggestions: { sourceField: 'email', layoutHints: ['people'], fieldHints: ['email'] } } : {}),
+          ...(standardFields ? { standardFields: [{ sourceField: 'title', label: 'Title', fieldType: 'TEXT', fieldHints: ['title'] }] } : {}),
+        },
+      ];
+      ctx.driver.fetchRecords.mockResolvedValueOnce({
+        records: [{
+          externalId: 'user-1', displayName: 'User One', fields: { email: 'user1@example.com' },
+          updatedAt: null, ...(section === undefined ? {} : { section }),
+        }],
+        hasMore: false, cursor: null, terminal: true, snapshotAt: '2026-07-14T10:00:00.000Z',
+      });
+      ctx.writer.write.mockImplementation(async (_ctx, record) => ({
+        targetKind: 'asset', targetId: 'asset-id', checksum: 'c'.repeat(64), change: 'created',
+        provenance: {
+          integrationId: 'integration', externalOrgId: 'org-1', resourceKey: 'users',
+          externalId: record.externalId, sourceRevision: null, sourceFingerprint: null,
+          firstSeenAt: '2026-07-14T10:00:00.000Z', lastSeenAt: '2026-07-14T10:00:00.000Z',
+          lastSyncedAt: '2026-07-14T10:00:00.000Z', ownership: 'breeze', state: 'active',
+        },
+        gaps: [],
+      }));
+      return ctx;
+    }
+
+    const run = (service: IntegrationSyncRunnerService) => service.runMapping({
+      syncRunId: 'section-run', integrationCompanyMappingId: 'mapping', resourceId: 'resource',
+      dryRun: false, actorId: 'actor', mode: 'incremental',
+    });
+
+    function upsertData(tx: ReturnType<typeof setup>['tx']) {
+      const call = (tx.integrationSyncRecord.upsert.mock.calls as unknown as Array<[{ create: Record<string, unknown>; update: Record<string, unknown> }]>)[0]![0];
+      return call;
+    }
+
+    it('stores a valid section on the binding (create and replace on update)', async () => {
+      const { service, tx } = arrange(validSection);
+      await expect(run(service)).resolves.toMatchObject({ status: 'succeeded', conflicts: [] });
+      const call = upsertData(tx);
+      expect(call.create.sectionData).toEqual(validSection);
+      expect(call.update.sectionData).toEqual(validSection);
+    });
+
+    it('clears the stored section when the record no longer carries one', async () => {
+      const { service, tx } = arrange(undefined);
+      await run(service);
+      expect(upsertData(tx).update.sectionData).toBe(Prisma.DbNull);
+    });
+
+    it.each([
+      ['markup', { ...validSection, title: '<img src=x onerror=alert(1)>' }],
+      ['unknown kind', { ...validSection, groups: [{ key: 'a', title: 'A', rows: [{ label: 'x', kind: 'html', value: 'y' }] }] }],
+      ['credential-shaped value', { ...validSection, groups: [{ key: 'a', title: 'A', rows: [{ label: 'x', kind: 'text', value: 'Bearer abcdefghijklmnop' }] }] }],
+    ])('drops an invalid section (%s) with a warning and still writes the record', async (_label, section) => {
+      const { service, tx, writer } = arrange(section);
+      const outcome = await run(service);
+      expect(outcome.status).toBe('succeeded');
+      expect(outcome.totals).toMatchObject({ created: 1, errors: 0 });
+      expect(outcome.conflicts).toEqual([expect.objectContaining({
+        kind: 'validation_error', message: 'Integration section failed validation and was dropped.',
+      })]);
+      expect(writer.write).toHaveBeenCalledTimes(1);
+      expect(upsertData(tx).update.sectionData).toBe(Prisma.DbNull);
+    });
+
+    it('opts resources declaring matchSuggestions into match-first, and only those', async () => {
+      const withHints = arrange(validSection, true);
+      await run(withHints.service);
+      expect(withHints.writer.write.mock.calls[0]![0].claimUnboundMatches).toBe(true);
+      const without = arrange(validSection, false);
+      await run(without.service);
+      expect(without.writer.write.mock.calls[0]![0].claimUnboundMatches).toBe(false);
+    });
+
+    it('marks the binding adopted when the writer adopted an operator asset', async () => {
+      const { service, tx, writer } = arrange(validSection, true);
+      const base = writer.write.getMockImplementation()!;
+      writer.write.mockImplementation(async (c, r) => ({ ...(await base(c, r)), change: 'updated', adopted: true }));
+      await run(service);
+      expect(upsertData(tx).create.adopted).toBe(true);
+      expect(upsertData(tx).update.adopted).toBe(true);
+      expect(writer.write.mock.calls[0]![0].matchFirstIndexes).toBeInstanceOf(Map);
+    });
+
+    it('tracks differences only for resources declaring standardFields, honouring Keep ours', async () => {
+      const plain = arrange(validSection, true);
+      await run(plain.service);
+      expect(plain.writer.write.mock.calls[0]![0].recordFieldDiffs).toBeUndefined();
+      expect(upsertData(plain.tx).update).not.toHaveProperty('fieldDiffs');
+
+      const { service, tx, writer } = arrange(validSection, true, true);
+      tx.integrationSyncRecord.findUnique.mockResolvedValue({
+        id: 'binding', state: 'active', assetId: 'asset-id', targetKind: 'asset', lastSyncedFieldChecksums: {},
+        fieldDiffs: {},
+        fieldResolutions: { kept: { choice: 'local', sourceFingerprint: 'src-k' } },
+      });
+      const base = writer.write.getMockImplementation()!;
+      writer.write.mockImplementation(async (c, r) => ({
+        ...(await base(c, r)),
+        change: 'unchanged',
+        fieldDiffs: {
+          open: { sourceValue: 'Engineer', sourceFingerprint: 'src-o', localFingerprint: 'loc-o' },
+          kept: { sourceValue: 'Lead', sourceFingerprint: 'src-k', localFingerprint: 'loc-k' },
+        },
+      }));
+      await run(service);
+      expect(writer.write.mock.calls[0]![0].recordFieldDiffs).toBe(true);
+      const data = upsertData(tx).update;
+      expect(Object.keys(data.fieldDiffs as object)).toEqual(['open']);
+      expect(data.fieldDiffs).toMatchObject({ open: { sourceValue: 'Engineer', detectedAt: expect.any(String) } });
+      expect(data.fieldResolutions).toEqual({ kept: { choice: 'local', sourceFingerprint: 'src-k' } });
+    });
+
+    it('passes co-bind sources and the priority order only to standard-field match-first resources', async () => {
+      const plain = arrange(validSection, true);
+      await run(plain.service);
+      expect(plain.writer.write.mock.calls[0]![0].coBindSources).toBeUndefined();
+      expect(plain.writer.write.mock.calls[0]![0].integrationPriority).toBeUndefined();
+
+      const { service, writer } = arrange(validSection, true, true);
+      await run(service);
+      const ctx = writer.write.mock.calls[0]![0];
+      // Drivers without standardFields (legacy) are never co-bound.
+      expect(ctx.coBindSources).toEqual(['typed']);
+      expect(ctx.integrationPriority).toEqual({ driver: 'typed', order: ['typed', 'legacy-rmm'] });
+    });
+
+    it('never clears adopted and passes it back to the writer on later syncs', async () => {
+      const { service, tx, writer } = arrange(validSection, true);
+      tx.integrationSyncRecord.findUnique.mockResolvedValue({ id: 'binding', adopted: true, state: 'active', assetId: 'asset-id', targetKind: 'asset', lastSyncedFieldChecksums: {} });
+      await run(service);
+      expect(writer.write.mock.calls[0]![0].previousAdopted).toBe(true);
+      expect(upsertData(tx).update).not.toHaveProperty('adopted');
+    });
+  });
+
+  it('skips a resource the source cannot provide with a warning and leaves its bindings alone', async () => {
+    const { service, writer, driver, provenance, tx, prisma } = setup();
+    driver.fetchRecords.mockRejectedValueOnce(
+      new DriverResourceUnavailableError('Intune is not licensed in this tenant, so computers and mobile devices are skipped.'),
+    );
+    await expect(service.runMapping({
+      syncRunId: 'run', integrationCompanyMappingId: 'mapping', resourceId: 'resource',
+      dryRun: false, actorId: 'actor', mode: 'full',
+    })).resolves.toMatchObject({
+      status: 'succeeded',
+      error: null,
+      conflicts: [{ kind: 'validation_error', message: 'Skipped resource "subnets": Intune is not licensed in this tenant, so computers and mobile devices are skipped.' }],
+    });
+    expect(writer.write).not.toHaveBeenCalled();
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+    expect(provenance.staleUnseen).not.toHaveBeenCalled();
+    expect(tx.integrationSyncCheckpoint.upsert).not.toHaveBeenCalled();
+  });
+
+  it('still fails when a resource becomes unavailable after its first page', async () => {
+    const { service, driver } = setup();
+    driver.fetchRecords
+      .mockResolvedValueOnce({ records: [], hasMore: true, cursor: 'c2', terminal: false, snapshotAt: '2026-07-14T10:00:00.000Z' })
+      .mockRejectedValueOnce(new DriverResourceUnavailableError('gone'));
+    await expect(service.runMapping({
+      syncRunId: 'run', integrationCompanyMappingId: 'mapping', resourceId: 'resource',
+      dryRun: false, actorId: 'actor', mode: 'full',
+    })).resolves.toMatchObject({ status: 'failed' });
   });
 
   it('dispatches typed input and commits its binding before the page checkpoint', async () => {

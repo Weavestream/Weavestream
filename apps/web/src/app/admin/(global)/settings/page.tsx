@@ -3,12 +3,13 @@ import { requireMe } from '../../../../lib/server-api/auth';
 import {
   getAiSettings,
   getEmailSettings,
+  getIntegrationPriority,
   getSettings,
 } from '../../../../lib/server-api/settings';
 import { hasCapability } from '../../../../lib/roles';
 import { PageBody, PageHeader } from '../../../../components/shell/page-header';
 import { Panel } from '../../../../components/ui';
-import { SettingsTabs } from './settings-tabs';
+import { SettingsTabs, type TabId } from './settings-tabs';
 
 /**
  * Workspace + tenant-term configuration. The fields here are cosmetic —
@@ -25,10 +26,11 @@ export default async function SettingsPage({
   const me = await requireMe();
   if (!hasCapability(me, 'SETTINGS_MANAGE')) redirect('/admin');
 
-  const [settings, emailSettings, aiSettings] = await Promise.all([
+  const [settings, emailSettings, aiSettings, integrationPriority] = await Promise.all([
     getSettings(),
     getEmailSettings(),
     getAiSettings(),
+    getIntegrationPriority(),
   ]);
 
   return (
@@ -39,22 +41,16 @@ export default async function SettingsPage({
           { label: 'Settings' },
         ]}
         title="Workspace settings"
-        description="Manage workspace defaults, security options, and SMTP email delivery."
+        description="Manage workspace defaults, security options, SMTP email delivery, and integration priority."
       />
       <PageBody>
         <Panel noPad>
           <SettingsTabs
-            initialTab={
-              (sp.tab as
-                | 'general'
-                | 'security'
-                | 'articles'
-                | 'email'
-                | 'ai') ?? 'general'
-            }
+            initialTab={(sp.tab as TabId | undefined) ?? 'general'}
             settings={settings}
             emailSettings={emailSettings}
             aiSettings={aiSettings}
+            integrationPriority={integrationPriority}
             currentUserEmail={me.email}
           />
         </Panel>

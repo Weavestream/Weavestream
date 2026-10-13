@@ -4,6 +4,7 @@ import type {
   AlertConfig,
   ArticleEditorMode,
   EmailSettings,
+  IntegrationPriorityDto,
   PasswordGeneratorDefaults,
 } from '@weavestream/shared';
 import { DEFAULT_PASSWORD_GENERATOR_DEFAULTS } from '@weavestream/shared';
@@ -102,6 +103,12 @@ export const getAiSettings = cache(async (): Promise<AiSettings> => {
   const res = await serverApiFetch<AiSettings>('/settings/ai');
   if (!res.ok || !res.data) return DEFAULT_AI_SETTINGS;
   return res.data;
+});
+
+/** Integration priority order; null when the API refused (the card then hides). */
+export const getIntegrationPriority = cache(async (): Promise<IntegrationPriorityDto | null> => {
+  const res = await serverApiFetch<IntegrationPriorityDto>('/settings/integration-priority');
+  return res.ok && res.data ? res.data : null;
 });
 
 /**

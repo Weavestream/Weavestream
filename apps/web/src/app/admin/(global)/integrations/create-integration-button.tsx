@@ -35,16 +35,25 @@ import { safeIntegrationProblemMessage } from './integration-feedback';
  */
 export function CreateIntegrationButton({
   drivers,
+  existing = [],
 }: {
   drivers: DriverDescriptor[];
+  /** Existing integrations: an OAuth provider (Google, Microsoft) is added once; the API refuses a second. */
+  existing?: Array<Pick<IntegrationDto, 'driver'>>;
 }) {
   const router = useRouter();
+  const takenProviders = useMemo(
+    () => new Set(existing.map((i) => drivers.find((d) => d.key === i.driver)?.oauth?.provider).filter(Boolean)),
+    [existing, drivers],
+  );
+  const isTaken = (d: DriverDescriptor) => Boolean(d.oauth && takenProviders.has(d.oauth.provider));
+  const firstFree = drivers.find((d) => !isTaken(d))?.key ?? '';
   const toast = useToast();
   const [open, setOpen] = useState(false);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const [driverKey, setDriverKey] = useState<string>(drivers[0]?.key ?? '');
+  const [driverKey, setDriverKey] = useState<string>(firstFree);
   const [name, setName] = useState('');
   const [config, setConfig] = useState<Record<string, unknown>>({});
   const [secret, setSecret] = useState<Record<string, unknown>>({});
@@ -56,7 +65,7 @@ export function CreateIntegrationButton({
   );
 
   function reset() {
-    setDriverKey(drivers[0]?.key ?? '');
+    setDriverKey(firstFree);
     setName('');
     setConfig({});
     setSecret({});
@@ -165,8 +174,8 @@ export function CreateIntegrationButton({
               }}
             >
               {drivers.map((d) => (
-                <option key={d.key} value={d.key}>
-                  {d.label}
+                <option key={d.key} value={d.key} disabled={isTaken(d)}>
+                  {isTaken(d) ? `${d.label} (already added: connect more clients on it)` : d.label}
                 </option>
               ))}
             </Select>

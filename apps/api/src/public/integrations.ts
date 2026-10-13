@@ -11,3 +11,8 @@ export {
 export { IntegrationProvenanceService } from '../integrations/reconstruction/integration-provenance.service.js';
 export { CloudflareListsService } from '../integrations/cloudflare/cloudflare-lists.service.js';
 export { CloudflareRegistrarSyncService } from '../integrations/cloudflare/cloudflare-registrar-sync.service.js';
+export {
+  IntegrationDomainSyncService,
+  domainSyncWarning,
+  hasDomainFeed,
+} from '../integrations/domain-feeds/integration-domain-sync.service.js';

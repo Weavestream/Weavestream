@@ -9,20 +9,25 @@ import { createHash, randomUUID } from 'node:crypto';
 import {
   integrationProvenanceSchema,
   integrationReconstructionGapInputSchema,
+  integrationSectionSchema,
   integrationTransformSchema,
   stripNul,
 } from '@weavestream/shared';
 import type {
+  IntegrationSection,
   SafeIntegrationProvenance,
   SyncRunConflict,
   SyncRunTotals,
 } from '@weavestream/shared';
+import type { MatchFirstIndexCache } from '../assets/assets.service.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { AuditLogService, type AuditEntry } from '../audit/audit.service.js';
 import { EnvService } from '../config/env.service.js';
 import { IntegrationsService } from './integrations.service.js';
 import { IntegrationDriverRegistry } from './drivers/integration-driver.registry.js';
 import {
+  DriverAuthError,
+  DriverResourceUnavailableError,
   type DriverFetchPage,
   type DriverBlockedInput,
   type DriverRecord,
@@ -42,9 +47,11 @@ import {
   type ReconstructionWriter,
 } from './reconstruction/reconstruction-target.js';
 import { integrationAssetExternalSource } from './integration-asset-source.js';
+import { loadIntegrationPriority } from './integration-priority.service.js';
 import { IntegrationProvenanceService } from './reconstruction/integration-provenance.service.js';
 import { IntegrationCompletenessService } from './reconstruction/integration-completeness.service.js';
 import { scanSensitiveMaterial } from './sensitive-material.js';
+import { keptLocalFingerprints, mergeFieldDiffs } from './field-diffs.js';
 import {
   integrationTargetAuditAction,
   integrationTargetAuditAfter,
@@ -231,6 +238,21 @@ export class IntegrationSyncRunnerService {
     if (!resource.enabled) {
       return { status: 'succeeded', totals, conflicts, error: null, companyId: mapping.companyId, resourceKey: resource.resourceKey };
     }
+    // A resource row the driver no longer declares (a removed resource, still
+    // enabled in the database) is skipped with a run warning: the driver
+    // cannot fetch it, and failing would fail every run of the mapping.
+    const declared = this.drivers.get(mapping.integration.driver).descriptor?.resources;
+    if (declared && !declared.some((candidate) => candidate.key === resource.resourceKey)) {
+      this.logger.warn(
+        `Skipping resource ${resource.resourceKey}: driver ${mapping.integration.driver} no longer declares it (integration=${mapping.integrationId})`,
+      );
+      conflicts.push({
+        kind: 'validation_error',
+        externalId: '',
+        message: `Skipped resource "${resource.resourceKey}": the ${mapping.integration.driver} driver no longer provides it. Disable or remove it in the integration settings.`,
+      });
+      return { status: 'succeeded', totals, conflicts, error: null, companyId: mapping.companyId, resourceKey: resource.resourceKey };
+    }
     if (
       resource.targetKind === 'asset' &&
       (!resource.assetLayoutId || !resource.assetLayout || resource.fieldMappings.length === 0)
@@ -274,11 +296,42 @@ export class IntegrationSyncRunnerService {
       },
     });
     const driver = this.drivers.get(mapping.integration.driver);
-    const loaded = await this.integrations.loadDriverContext(mapping.integrationId);
+    const claimUnboundMatches = driver.descriptor?.resources?.some(
+      (candidate) =>
+        candidate.key === resource.resourceKey && candidate.matchSuggestions !== undefined,
+    ) ?? false;
+    // Opt-in difference tracking: resources that fill standard layout fields.
+    const recordFieldDiffs = driver.descriptor?.resources?.some(
+      (candidate) =>
+        candidate.key === resource.resourceKey && (candidate.standardFields?.length ?? 0) > 0,
+    ) ?? false;
+    // One lowercased match-first index per run, shared by every record.
+    const matchFirstIndexes: MatchFirstIndexCache = new Map();
+    // Several integrations on one asset: match-first may co-bind to assets
+    // owned by drivers that also fill standard fields (legacy drivers keep
+    // their own assets), and the priority order, read once per run, decides
+    // who owns each field. A driver key is the external source of that
+    // driver's assets (see integrationAssetExternalSource).
+    const coBindSources = claimUnboundMatches && recordFieldDiffs
+      ? this.drivers.list()
+        .filter((d) => d.resources.some((r) => (r.standardFields?.length ?? 0) > 0))
+        .map((d) => d.key)
+      : [];
+    const integrationPriority = recordFieldDiffs
+      ? { driver: mapping.integration.driver, order: await loadIntegrationPriority(this.prisma, this.drivers) }
+      : undefined;
+    // OAuth drivers: only the connection of this mapping's own tenant.
+    const loaded = await this.integrations.loadDriverContext(mapping.integrationId, {
+      externalOrgId: mapping.externalOrgId,
+    });
     const traversalStartedAt = new Date().toISOString();
     const fetchCtx: FetchRecordsContext = {
       config: loaded.config,
       secret: loaded.secret,
+      oauthClient: loaded.oauthClient,
+      connectionId: loaded.connectionId,
+      credentialVersion: loaded.credentialVersion,
+      integrationId: loaded.integrationId,
       http: {
         timeoutMs: this.env.values.INTEGRATION_HTTP_TIMEOUT_MS,
         maxRetries: this.env.values.INTEGRATION_HTTP_MAX_RETRIES,
@@ -332,10 +385,24 @@ export class IntegrationSyncRunnerService {
     };
     try {
       while (true) {
-        const rawPage = await driver.fetchRecords(
-          { ...fetchCtx, snapshotAt },
-          cursor,
-        );
+        let rawPage: Awaited<ReturnType<typeof driver.fetchRecords>>;
+        try {
+          rawPage = await driver.fetchRecords({ ...fetchCtx, snapshotAt }, cursor);
+        } catch (error) {
+          // The tenant cannot provide this resource at all (not licensed, an
+          // optional permission not granted): skip it with a run warning,
+          // like a resource the driver no longer declares. Nothing is
+          // reconciled, so existing bindings are neither staled nor archived.
+          if (error instanceof DriverResourceUnavailableError && pages === 0) {
+            conflicts.push({
+              kind: 'validation_error',
+              externalId: '',
+              message: `Skipped resource "${resource.resourceKey}": ${error.message}`.slice(0, 500),
+            });
+            return { status: 'succeeded', totals, conflicts, error: null, companyId: mapping.companyId, resourceKey: resource.resourceKey };
+          }
+          throw error;
+        }
         const page = validateDriverFetchPage(rawPage, {
           traversalStartedAt,
           previousCursor: cursor,
@@ -467,6 +534,19 @@ export class IntegrationSyncRunnerService {
             const legacyRawId = safeRecord.reconstructionInput === undefined
               ? safeRecord.externalId
               : null;
+            // Typed inputs carry no section; legacy records replace theirs on
+            // every sync (absent clears it). An invalid section is dropped
+            // with a run warning and never fails the record.
+            const section = safeRecord.reconstructionInput === undefined
+              ? parseRecordSection(safeRecord.section)
+              : undefined;
+            if (section === 'invalid') {
+              pageConflicts.push({
+                kind: 'validation_error',
+                externalId: reconstruction.externalId,
+                message: 'Integration section failed validation and was dropped.',
+              });
+            }
             const writeNow = new Date();
             const existing = await this.findAndMigrateBinding(
               tx,
@@ -525,6 +605,12 @@ export class IntegrationSyncRunnerService {
               previousChecksum: existing?.checksum ?? null,
               previousFieldChecksums: (existing?.lastSyncedFieldChecksums ?? {}) as Record<string, string>,
               previousProvenance: parseProvenance(existing?.provenance),
+              claimUnboundMatches: claimUnboundMatches,
+              previousAdopted: existing?.adopted === true,
+              matchFirstIndexes,
+              ...(recordFieldDiffs ? { recordFieldDiffs: true, keptLocal: keptLocalFingerprints(existing?.fieldResolutions) } : {}),
+              ...(coBindSources.length > 0 ? { coBindSources } : {}),
+              ...(integrationPriority ? { integrationPriority } : {}),
               resolveBinding: (ref) => this.resolveBinding(tx, mapping.id, mapping.companyId, mapping.integrationId, ref),
             };
             const writer = this.writers.get(reconstruction.targetKind) as ReconstructionWriter<ReconstructionInput>;
@@ -599,6 +685,9 @@ export class IntegrationSyncRunnerService {
               });
               continue;
             }
+            const diffs = recordFieldDiffs && outcome.targetKind === 'asset'
+              ? mergeFieldDiffs(outcome.fieldDiffs ?? {}, existing?.fieldDiffs, existing?.fieldResolutions, writeNow)
+              : undefined;
             const binding = await tx.integrationSyncRecord.upsert({
               where: {
                 integrationCompanyMappingId_resourceId_externalId: {
@@ -607,8 +696,8 @@ export class IntegrationSyncRunnerService {
                   externalId: reconstruction.externalId,
                 },
               },
-              create: bindingData(mapping.id, resource.id, mapping.companyId, input.syncRunId, reconstruction, outcome, activeProvenance, observedAt, writeNow),
-              update: bindingData(mapping.id, resource.id, mapping.companyId, input.syncRunId, reconstruction, outcome, activeProvenance, observedAt, writeNow),
+              create: bindingData(mapping.id, resource.id, mapping.companyId, input.syncRunId, reconstruction, outcome, activeProvenance, observedAt, writeNow, section, diffs),
+              update: bindingData(mapping.id, resource.id, mapping.companyId, input.syncRunId, reconstruction, outcome, activeProvenance, observedAt, writeNow, section, diffs),
             });
             for (const gap of outcome.gaps) observeGap({
               externalId: reconstruction.externalId,
@@ -748,12 +837,31 @@ export class IntegrationSyncRunnerService {
         }
         cursor = page.cursor;
       }
+      await this.markConnection(loaded.connectionId, 'ok');
       return { status: 'succeeded', totals, conflicts, error: null, companyId: mapping.companyId, resourceKey: resource.resourceKey };
     } catch (error) {
+      if (error instanceof DriverAuthError) await this.markConnection(loaded.connectionId, 'needs_reconnect');
       const message = describeError(error);
       totals.errors += 1;
       conflicts.push({ kind: 'driver_error', externalId: '', message: message.slice(0, 500) });
       return { status: 'failed', totals, conflicts, error: message.slice(0, 4_000), companyId: mapping.companyId, resourceKey: resource.resourceKey };
+    }
+  }
+
+  /**
+   * Connection status for the Connections tab: a refused grant marks the
+   * tenant's connection `needs_reconnect`; a later clean fetch clears it.
+   * Best effort: a status write never fails the run.
+   */
+  private async markConnection(connectionId: string | undefined, status: 'ok' | 'needs_reconnect'): Promise<void> {
+    if (!connectionId) return;
+    try {
+      await this.prisma.integrationConnection.updateMany({
+        where: { id: connectionId, ...(status === 'ok' ? { status: 'needs_reconnect' } : {}) },
+        data: status === 'ok' ? { status } : { status, lastErrorAt: new Date() },
+      });
+    } catch (e) {
+      this.logger.warn({ err: (e as Error).message, connectionId }, 'could not update the connection status');
     }
   }
 
@@ -1132,8 +1240,23 @@ function bindingData(
   provenance: SafeIntegrationProvenance,
   observedAt: Date,
   syncedAt: Date,
+  section?: IntegrationSection | 'invalid' | null,
+  diffs?: ReturnType<typeof mergeFieldDiffs>,
 ) {
   return {
+    ...(diffs
+      ? {
+          fieldDiffs: diffs.fieldDiffs as unknown as Prisma.InputJsonValue,
+          fieldResolutions: diffs.fieldResolutions as unknown as Prisma.InputJsonValue,
+        }
+      : {}),
+    ...(section === undefined || outcome.targetKind !== 'asset'
+      ? {}
+      : {
+          sectionData: section === null || section === 'invalid'
+            ? Prisma.DbNull
+            : (section as unknown as Prisma.InputJsonValue),
+        }),
     integrationCompanyMappingId: mappingId,
     resourceId,
     syncRunId,
@@ -1153,7 +1276,25 @@ function bindingData(
     provenance: provenance as unknown as Prisma.InputJsonValue,
     checksum: outcome.checksum,
     lastSyncedFieldChecksums: (outcome.fieldChecksums ?? {}) as Prisma.InputJsonValue,
+    // Sticky: set once when the binding adopts an operator asset, never cleared.
+    ...(outcome.adopted ? { adopted: true } : {}),
   };
+}
+
+/**
+ * Validate a legacy record's optional `section`. Returns null when absent,
+ * 'invalid' when it fails the shared schema or carries credential-shaped
+ * material (scanned per row so a full-size section stays within the
+ * scanner's entry budget).
+ */
+export function parseRecordSection(raw: unknown): IntegrationSection | 'invalid' | null {
+  if (raw === undefined || raw === null) return null;
+  const parsed = integrationSectionSchema.safeParse(raw);
+  if (!parsed.success) return 'invalid';
+  const { groups, ...head } = parsed.data;
+  const parts: unknown[] = [head];
+  for (const { rows, ...group } of groups) parts.push(group, ...rows);
+  return parts.every((part) => scanSensitiveMaterial(part) === 'safe') ? parsed.data : 'invalid';
 }
 
 function deriveLegacyHighWater(records: DriverRecord[]): string | null {

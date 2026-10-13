@@ -114,6 +114,17 @@ function makeStubs(initial: { domains?: DomainRow[]; checks?: DomainCheckRow[] }
           nameservers: [],
           registrarSyncedAt: null,
           registrarMissingSince: null,
+          workspaceIntegrationId: null,
+          workspaceRole: null,
+          workspaceAliasOf: null,
+          workspaceSyncedAt: null,
+          workspaceMissingSince: null,
+          microsoftIntegrationId: null,
+          microsoftDefault: null,
+          microsoftAuthType: null,
+          microsoftServices: [],
+          microsoftSyncedAt: null,
+          microsoftMissingSince: null,
           archivedAt: null,
           createdBy: d.createdBy ?? null,
           createdAt: new Date(),
@@ -346,5 +357,23 @@ describe('DomainsService — update', () => {
         META,
       ),
     ).rejects.toThrow(BadRequestException);
+  });
+
+  it('refuses to rename a manual domain that Google Workspace also lists', async () => {
+    const { svc, domains } = makeStubs();
+    const created = await svc.create(OPERATOR, 'co-1', { hostname: 'example.com' }, META);
+    domains[0]!.workspaceRole = 'PRIMARY';
+    await expect(
+      svc.update(OPERATOR, 'co-1', created.id, { hostname: 'renamed.com' }, META),
+    ).rejects.toThrow('synced from Google Workspace');
+  });
+
+  it('refuses to rename a manual domain that Microsoft 365 also lists', async () => {
+    const { svc, domains } = makeStubs();
+    const created = await svc.create(OPERATOR, 'co-1', { hostname: 'example.com' }, META);
+    domains[0]!.microsoftDefault = false;
+    await expect(
+      svc.update(OPERATOR, 'co-1', created.id, { hostname: 'renamed.com' }, META),
+    ).rejects.toThrow('synced from Microsoft 365');
   });
 });

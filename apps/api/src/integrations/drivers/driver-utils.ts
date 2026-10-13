@@ -8,6 +8,11 @@ export interface FetchWithRetryOpts {
   method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
   headers?: Record<string, string>;
   body?: string;
+  /**
+   * Default `'error'`: a 3xx comes back as a non-OK response and is never
+   * followed. Integration APIs do not redirect, and safeFetch re-sends
+   * every header (API keys, bearer tokens) to the redirect target.
+   */
   redirect?: 'follow' | 'manual' | 'error';
   timeoutMs: number;
   maxRetries: number;
@@ -36,7 +41,7 @@ export async function fetchWithRetry(
         method: opts.method,
         headers: opts.headers,
         body: opts.body,
-        redirect: opts.redirect,
+        redirect: opts.redirect ?? 'error',
         timeoutMs: opts.timeoutMs,
       });
       if (res.status === 429) {

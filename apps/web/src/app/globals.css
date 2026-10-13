@@ -206,12 +206,14 @@
    * the same stack: its 120px label column left too little room for
    * the reveal row and the strength meter. */
   .asset-field-grid,
-  .password-field-grid {
+  .password-field-grid,
+  .security-field-grid {
     grid-template-columns: minmax(0, 1fr) !important;
     row-gap: 4px !important;
   }
   .asset-field-grid > .asset-field-label:not(:first-child),
-  .password-field-grid > .password-field-label:not(:first-child) {
+  .password-field-grid > .password-field-label:not(:first-child),
+  .security-field-grid > .security-field-label:not(:first-child) {
     padding-top: 12px !important;
   }
   .article-read-grid .article-read-body {
@@ -721,4 +723,16 @@ tr:hover .row-actions,
 .article-property-switch:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
+}
+
+/* Integration section panels (asset page): a native <details> with its own
+ * chevron, since the flex summary drops the default disclosure marker. */
+.integration-section > summary::-webkit-details-marker {
+  display: none;
+}
+.integration-section > summary .integration-section-chevron {
+  transition: transform 120ms ease;
+}
+.integration-section[open] > summary .integration-section-chevron {
+  transform: rotate(90deg);
 }

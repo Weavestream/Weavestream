@@ -27,7 +27,7 @@ type AssetLite = {
   name: string;
   archivedAt: string | null;
   assetLayoutId: string;
-  /** Integration that owns this asset, if any. Warns on the purge confirm. */
+  /** Every integration bound to this asset (display label), if any. Warns on the purge confirm. */
   externalSource: string | null;
 };
 

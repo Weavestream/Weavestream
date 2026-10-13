@@ -4,6 +4,7 @@ import type {
   CloudflareIpListDto,
   DriverDescriptor,
   IntegrationCompanyMappingDto,
+  IntegrationDifferencesPage,
   IntegrationDto,
   IntegrationSyncRunDto,
 } from '@weavestream/shared';
@@ -80,6 +81,10 @@ export default async function IntegrationDetailPage({
       : Promise.resolve({ data: { run: null } }),
   ]);
 
+  // Badge count for the Differences tab: the first page carries the total.
+  const differencesRes = (driver?.resources ?? []).some((r) => (r.standardFields?.length ?? 0) > 0)
+    ? await serverApiFetch<IntegrationDifferencesPage>(`/admin/integrations/${id}/differences?limit=1`)
+    : null;
   const mappings = mappingsRes.data ?? [];
   const runs = runsRes.data ?? [];
   const cloudflareLists = cfListsRes.data ?? [];
@@ -111,11 +116,13 @@ export default async function IntegrationDetailPage({
             />
           ) : (
             <IntegrationTabs
-              initialTab={sp.tab ?? 'creds'}
+              initialTab={sp.tab ?? ''}
               integration={integration}
               mappings={mappings}
               runs={runs}
               driver={driver}
+              canManageLayouts={hasCapability(me, 'LAYOUT_MANAGE')}
+              differenceCount={differencesRes?.data?.total ?? null}
             />
           )}
         </Panel>
