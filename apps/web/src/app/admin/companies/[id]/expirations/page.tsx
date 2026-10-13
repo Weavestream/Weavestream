@@ -1,5 +1,4 @@
 import type { Metadata } from 'next';
-import Link from 'next/link';
 import { getSettings } from '../../../../../lib/server-api/settings';
 import { getCompanyDetail } from '../../../../../lib/server-api/companies';
 import { listExpirations } from '../../../../../lib/server-api/admin';
@@ -9,6 +8,7 @@ import { Panel, Tag } from '../../../../../components/ui';
 import { buildTerm, lower } from '../../../../../lib/term';
 import { companyCrumbs } from '../../../../../lib/company-crumbs';
 import { ExpirationsTable } from '../../../../../components/expirations/expirations-table';
+import { DismissedToggle } from '../../../../../components/expirations/dismissed-toggle';
 
 export const metadata: Metadata = { title: 'Expiring soon' };
 
@@ -67,13 +67,5 @@ export default async function CompanyExpirationsPage({
         </Panel>
       </PageBody>
     </>
-  );
-}
-
-function DismissedToggle({ href, showing }: { href: string; showing: boolean }) {
-  return (
-    <Link href={showing ? href : `${href}?dismissed=1`} style={{ fontSize: 12, color: 'var(--accent)', fontWeight: 400 }}>
-      {showing ? 'Hide dismissed' : 'Show dismissed'}
-    </Link>
   );
 }

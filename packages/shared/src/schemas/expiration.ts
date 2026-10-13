@@ -123,4 +123,3 @@ export function expirationRowIdentity(row: ExpirationRow): { entityId: string; s
   if (row.kind === 'domain') return { entityId: row.domainId, source: row.source };
   return { entityId: row.passwordId, source: row.source };
 }
-
