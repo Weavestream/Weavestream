@@ -1,5 +1,5 @@
 import {
-  registerRepeatableCron,
+  registerCronScheduler,
   removeJobSchedulers,
   removeRepeatables,
 } from './repeatable-registration.js';
@@ -18,20 +18,23 @@ const repeatable = (over: Partial<RepeatableJob>): RepeatableJob => ({
 /**
  * BullMQ 5.76 lists Job Schedulers with `key` set and `id` often absent, so
  * both fields are optional here on purpose — that asymmetry is what
- * `removeJobSchedulers` exists to absorb.
+ * `removeJobSchedulers` exists to absorb. `iterationCount` is set on real
+ * schedulers only; legacy entries in the shared zset are listed without it.
  */
-type SchedulerEntry = { id?: string; key?: string };
+type SchedulerEntry = { id?: string; key?: string; iterationCount?: number };
 
 function makeQueue(
   entries: RepeatableJob[] = [],
-  schedulers: SchedulerEntry[] = [],
+  // `undefined` is what BullMQ lists for an entry removed between its zset
+  // read and its hash read (another API replica booting at the same time).
+  schedulers: (SchedulerEntry | undefined)[] = [],
 ) {
   const queue = {
     getRepeatableJobs: jest.fn().mockResolvedValue(entries),
     removeRepeatableByKey: jest.fn().mockResolvedValue(undefined),
     getJobSchedulers: jest.fn().mockResolvedValue(schedulers),
     removeJobScheduler: jest.fn().mockResolvedValue(undefined),
-    add: jest.fn().mockResolvedValue(undefined),
+    upsertJobScheduler: jest.fn().mockResolvedValue(undefined),
   };
   return queue as unknown as Queue & typeof queue;
 }
@@ -39,7 +42,7 @@ function makeQueue(
 const makeLogger = () => ({ log: jest.fn(), warn: jest.fn() });
 
 describe('removeRepeatables', () => {
-  it('removes every entry when no match is given', async () => {
+  it('removes every legacy entry', async () => {
     const queue = makeQueue([
       repeatable({ key: 'a' }),
       repeatable({ key: 'b' }),
@@ -53,22 +56,42 @@ describe('removeRepeatables', () => {
     ]);
   });
 
-  it('matches on either the job id or the job name', async () => {
-    const queue = makeQueue([
-      repeatable({ key: 'by-id', id: 'alerts:scan', name: 'other' }),
-      repeatable({ key: 'by-name', id: null, name: 'scan' }),
-      repeatable({ key: 'unrelated', id: 'something-else', name: 'other' }),
-    ]);
+  it('leaves Job Schedulers alone, whether listed under `id` or `key`', async () => {
+    // Schedulers and legacy entries share 1 zset, so `getRepeatableJobs()`
+    // lists both. Removing a scheduler here would drop a live schedule.
+    const queue = makeQueue(
+      [
+        repeatable({ key: 'alerts:scan', name: 'scan' }),
+        repeatable({ key: 'backup-config-a', name: 'run' }),
+        repeatable({ key: '3f2a9c81d4be5f6a7c8d9e0f3f2a9c81', name: 'scan' }),
+      ],
+      [
+        { key: 'alerts:scan', iterationCount: 4 },
+        { id: 'backup-config-a', key: 'backup-config-a', iterationCount: 1 },
+        // The legacy md5 entry, as `getJobSchedulers()` lists it: no `ic`.
+        { key: '3f2a9c81d4be5f6a7c8d9e0f3f2a9c81' },
+      ],
+    );
 
-    await removeRepeatables(queue, {
-      onError: 'skip',
-      onSkipped: jest.fn(),
-      match: (r) => r.id === 'alerts:scan' || r.name === 'scan',
-    });
+    await removeRepeatables(queue, { onError: 'throw' });
 
     expect(queue.removeRepeatableByKey.mock.calls.map((c) => c[0])).toEqual([
-      'by-id',
-      'by-name',
+      '3f2a9c81d4be5f6a7c8d9e0f3f2a9c81',
+    ]);
+  });
+
+  it('skips an entry another replica removed mid-listing', async () => {
+    const queue = makeQueue(
+      [repeatable({ key: 'alerts:scan' }), repeatable({ key: 'legacy-md5' })],
+      [{ key: 'alerts:scan', iterationCount: 3 }, undefined],
+    );
+
+    await expect(
+      removeRepeatables(queue, { onError: 'throw' }),
+    ).resolves.toBeUndefined();
+
+    expect(queue.removeRepeatableByKey.mock.calls.map((c) => c[0])).toEqual([
+      'legacy-md5',
     ]);
   });
 
@@ -106,11 +129,14 @@ describe('removeRepeatables', () => {
       { onError: 'skip', onSkipped: jest.fn() },
       { onError: 'throw' },
     ] as const) {
-      const queue = makeQueue();
-      queue.getRepeatableJobs.mockRejectedValue(new Error('listing failed'));
-      await expect(removeRepeatables(queue, opts)).rejects.toThrow(
-        'listing failed',
-      );
+      for (const listing of ['getRepeatableJobs', 'getJobSchedulers'] as const) {
+        const queue = makeQueue([repeatable({ key: 'a' })]);
+        queue[listing].mockRejectedValue(new Error('listing failed'));
+        await expect(removeRepeatables(queue, opts)).rejects.toThrow(
+          'listing failed',
+        );
+        expect(queue.removeRepeatableByKey).not.toHaveBeenCalled();
+      }
     }
   });
 });
@@ -148,6 +174,8 @@ describe('removeJobSchedulers', () => {
         // A legacy-shaped zset member — an opaque md5, not ours.
         { key: '3f2a9c81d4be5f6a7c8d9e0f3f2a9c81' },
         {},
+        // Removed by another replica between BullMQ's zset and hash reads.
+        undefined,
         { key: 'backup-config-b' },
       ],
     );
@@ -206,7 +234,7 @@ describe('removeJobSchedulers', () => {
   });
 });
 
-describe('registerRepeatableCron', () => {
+describe('registerCronScheduler', () => {
   const base = {
     jobId: 'domain-checks:scheduled',
     jobName: 'scheduled',
@@ -215,70 +243,74 @@ describe('registerRepeatableCron', () => {
     disabledMessage: 'DOMAIN_CHECK_CRON=off — scheduled domain checks disabled.',
   };
 
-  it('clears stale entries for this lane, then registers the current cron', async () => {
-    const queue = makeQueue([
-      repeatable({ key: 'stale', id: 'domain-checks:scheduled' }),
-      repeatable({ key: 'other-lane', id: 'alerts:scan', name: 'scan' }),
-    ]);
+  it('clears legacy entries, then upserts the current cron as a Job Scheduler', async () => {
+    const queue = makeQueue(
+      [
+        repeatable({ key: 'legacy-md5', name: 'scheduled' }),
+        repeatable({ key: base.jobId, name: 'scheduled' }),
+      ],
+      [{ key: base.jobId, iterationCount: 2 }, { key: 'legacy-md5' }],
+    );
     const logger = makeLogger();
 
-    await registerRepeatableCron({ ...base, queue, logger, cron: '17 3 * * *' });
+    await registerCronScheduler({ ...base, queue, logger, cron: '17 3 * * *' });
 
     expect(queue.removeRepeatableByKey.mock.calls.map((c) => c[0])).toEqual([
-      'stale',
+      'legacy-md5',
     ]);
-    expect(queue.add).toHaveBeenCalledWith(
-      'scheduled',
-      { kind: 'scheduled' },
-      { repeat: { pattern: '17 3 * * *' }, jobId: 'domain-checks:scheduled' },
+    expect(queue.upsertJobScheduler).toHaveBeenCalledWith(
+      'domain-checks:scheduled',
+      { pattern: '17 3 * * *' },
+      { name: 'scheduled', data: { kind: 'scheduled' } },
     );
+    expect(queue.removeJobScheduler).not.toHaveBeenCalled();
     expect(logger.log).toHaveBeenCalledWith(
       'Registered scheduled domain-checks job with cron "17 3 * * *"',
     );
   });
 
-  it('sweeps before it adds', async () => {
-    const queue = makeQueue([repeatable({ key: 'stale', id: base.jobId })]);
+  it('sweeps before it upserts', async () => {
+    const queue = makeQueue([repeatable({ key: 'legacy-md5' })]);
 
-    await registerRepeatableCron({
+    await registerCronScheduler({
       ...base,
       queue,
       logger: makeLogger(),
       cron: '17 3 * * *',
     });
 
-    // Schedulers and legacy repeatables share one Redis zset, so an add that
-    // landed first would be swept away by its own registrar.
+    // A legacy entry left beside the fresh scheduler would double-fire.
     expect(
       Math.max(...queue.removeRepeatableByKey.mock.invocationCallOrder),
-    ).toBeLessThan(Math.min(...queue.add.mock.invocationCallOrder));
+    ).toBeLessThan(Math.min(...queue.upsertJobScheduler.mock.invocationCallOrder));
   });
 
-  it("warns and registers nothing when the cron is 'off'", async () => {
-    const queue = makeQueue([repeatable({ key: 'stale', id: base.jobId })]);
+  it("removes the lane's scheduler and warns when the cron is 'off'", async () => {
+    const queue = makeQueue([repeatable({ key: 'legacy-md5' })]);
     const logger = makeLogger();
 
-    await registerRepeatableCron({ ...base, queue, logger, cron: 'off' });
+    await registerCronScheduler({ ...base, queue, logger, cron: 'off' });
 
     // The sweep still runs, so toggling a lane off also clears its leftovers.
-    expect(queue.removeRepeatableByKey).toHaveBeenCalledWith('stale');
-    expect(queue.add).not.toHaveBeenCalled();
+    expect(queue.removeRepeatableByKey).toHaveBeenCalledWith('legacy-md5');
+    expect(queue.removeJobScheduler).toHaveBeenCalledWith(base.jobId);
+    expect(queue.upsertJobScheduler).not.toHaveBeenCalled();
     expect(logger.warn).toHaveBeenCalledWith(base.disabledMessage);
     expect(logger.log).not.toHaveBeenCalled();
   });
 
-  it('warns about a stuck key and still registers', async () => {
-    const queue = makeQueue([repeatable({ key: 'stale', id: base.jobId })]);
+  it('warns about a stuck legacy key and still registers', async () => {
+    const queue = makeQueue([repeatable({ key: 'legacy-md5' })]);
     queue.removeRepeatableByKey.mockRejectedValueOnce(new Error('redis gone'));
     const logger = makeLogger();
 
-    await registerRepeatableCron({ ...base, queue, logger, cron: '17 3 * * *' });
+    await registerCronScheduler({ ...base, queue, logger, cron: '17 3 * * *' });
 
-    expect(queue.add).toHaveBeenCalledTimes(1);
+    expect(queue.upsertJobScheduler).toHaveBeenCalledTimes(1);
     // The leftover will double-fire until the next restart, so it must not be
     // discarded the way the pre-helper `.catch(() => undefined)` discarded it.
     expect(logger.warn).toHaveBeenCalledWith(
-      expect.stringContaining('Could not remove a stale domain-checks repeatable'),
+      expect.stringContaining('Could not remove a legacy domain-checks repeatable'),
     );
     expect(logger.warn).toHaveBeenCalledWith(
       expect.stringContaining('redis gone'),

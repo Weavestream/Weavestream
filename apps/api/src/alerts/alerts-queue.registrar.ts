@@ -6,19 +6,19 @@ import {
 import { AlertsJobNames, QueueNames } from '@weavestream/shared';
 import { EnvService } from '../config/env.service.js';
 import { QueuesService } from '../queues/queues.service.js';
-import { registerRepeatableCron } from '../queues/repeatable-registration.js';
+import { registerCronScheduler } from '../queues/repeatable-registration.js';
 
 /**
- * Registers the repeatable `alerts:scan` BullMQ job on API boot.
+ * Registers the `alerts:scan` BullMQ Job Scheduler on API boot.
  * Mirrors `DomainChecksQueueRegistrar` so flipping `ALERTS_SCAN_CRON`
  * in `.env` and redeploying the API is the only operator knob — no
  * "register schedule" endpoint to remember.
  *
  * Setting the env var to the literal string `off` skips registration
- * AND removes any prior repeatable entry, so a local-dev environment
+ * AND removes any prior scheduler, so a local-dev environment
  * isn't surprised by leftover work after toggling the feature off.
  *
- * The repeatable job is registered API-side (not on the worker) so
+ * The scheduler is registered API-side (not on the worker) so
  * a single API restart re-asserts the cron idempotently. The worker
  * simply consumes whatever shows up on the queue.
  */
@@ -36,7 +36,7 @@ export class AlertsQueueRegistrar implements OnApplicationBootstrap {
     const cron = this.env.values.ALERTS_SCAN_CRON;
     const jobId = 'alerts:scan';
 
-    await registerRepeatableCron({
+    await registerCronScheduler({
       queue,
       logger: this.logger,
       jobId,

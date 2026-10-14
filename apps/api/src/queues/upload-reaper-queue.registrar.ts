@@ -6,16 +6,16 @@ import {
 import { QueueNames, UploadReaperJobNames } from '@weavestream/shared';
 import { EnvService } from '../config/env.service.js';
 import { QueuesService } from './queues.service.js';
-import { registerRepeatableCron } from './repeatable-registration.js';
+import { registerCronScheduler } from './repeatable-registration.js';
 
 /**
- * Phase 7 — registers the repeatable `upload-reaper:scheduled` job on
+ * Phase 7 — registers the `upload-reaper:scheduled` Job Scheduler on
  * API boot. Same idempotency model as `DomainChecksQueueRegistrar`:
  *
- *   - Always clears any prior repeatable for this jobId so changing
+ *   - Always re-asserts the scheduler for this jobId so changing
  *     `UPLOAD_REAPER_CRON` and redeploying the API is the only knob
  *     an operator needs.
- *   - `UPLOAD_REAPER_CRON=off` short-circuits registration and leaves
+ *   - `UPLOAD_REAPER_CRON=off` removes the scheduler and leaves
  *     the queue empty — useful for local dev, tests, and migrations
  *     where mass-undelete might still be desired.
  *
@@ -38,7 +38,7 @@ export class UploadReaperQueueRegistrar implements OnApplicationBootstrap {
     const cron = this.env.values.UPLOAD_REAPER_CRON;
     const jobId = 'upload-reaper:scheduled';
 
-    await registerRepeatableCron({
+    await registerCronScheduler({
       queue,
       logger: this.logger,
       jobId,

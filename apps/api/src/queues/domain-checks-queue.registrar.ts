@@ -6,10 +6,10 @@ import {
 import { DomainCheckJobNames, QueueNames } from '@weavestream/shared';
 import { EnvService } from '../config/env.service.js';
 import { QueuesService } from './queues.service.js';
-import { registerRepeatableCron } from './repeatable-registration.js';
+import { registerCronScheduler } from './repeatable-registration.js';
 
 /**
- * Registers the repeatable `domain-checks:scheduled` job on API boot.
+ * Registers the `domain-checks:scheduled` Job Scheduler on API boot.
  *
  * Uses `OnApplicationBootstrap` (not `OnModuleInit`) so this hook is
  * guaranteed to run AFTER `QueuesService.onModuleInit` has populated
@@ -17,13 +17,13 @@ import { registerRepeatableCron } from './repeatable-registration.js';
  * lazy producer registration in the same module.
  *
  * Runs on the API side rather than the worker so:
- *   - Repeatable registrations are idempotent by `jobId`. Every API
+ *   - Job Schedulers are idempotent by `jobId`. Every API
  *     restart re-asserts the cron, which means flipping
  *     `DOMAIN_CHECK_CRON` in `.env` and redeploying the API is the
  *     sole knob an operator needs. The worker never has to know about
  *     the schedule.
  *   - `DOMAIN_CHECK_CRON=off` short-circuits registration and
- *     simultaneously removes any prior repeatable entry so a local
+ *     simultaneously removes any prior scheduler so a local
  *     dev environment isn't surprised by leftover work.
  */
 @Injectable()
@@ -40,9 +40,9 @@ export class DomainChecksQueueRegistrar implements OnApplicationBootstrap {
     const cron = this.env.values.DOMAIN_CHECK_CRON;
     const jobId = 'domain-checks:scheduled';
 
-    // Always clear stale repeatable registrations for this jobId — we
-    // treat the API's boot as the authoritative configuration moment.
-    await registerRepeatableCron({
+    // Re-assert the schedule on every boot — we treat the API's boot as
+    // the authoritative configuration moment.
+    await registerCronScheduler({
       queue,
       logger: this.logger,
       jobId,

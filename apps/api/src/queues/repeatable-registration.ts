@@ -1,5 +1,5 @@
 import type { Logger } from '@nestjs/common';
-import type { Queue, RepeatableJob } from 'bullmq';
+import type { Queue } from 'bullmq';
 
 /**
  * Structural rather than the Nest `Logger` class, so a spec can pass a plain
@@ -30,17 +30,12 @@ export type RemoveErrorPolicy =
       readonly onSkipped: (id: string, err: unknown) => void;
     };
 
-export type RemoveRepeatablesOptions = RemoveErrorPolicy & {
-  /** Omit to remove every legacy entry on the queue. */
-  readonly match?: (r: RepeatableJob) => boolean;
-};
-
 export type RemoveJobSchedulersOptions = RemoveErrorPolicy & {
   /**
-   * REQUIRED, unlike `RemoveRepeatablesOptions.match`. "Remove every legacy
-   * repeatable" is safe on these queues because they only ever held our own
-   * `add({ repeat })` entries; "remove every Job Scheduler" has no such
-   * guarantee, so there is no defensible default.
+   * REQUIRED, unlike `removeRepeatables`, which takes no filter. "Remove every
+   * legacy repeatable" is safe because nothing creates them any more, so every
+   * one left is stale; "remove every Job Scheduler" has no such guarantee, so
+   * there is no defensible default.
    *
    * Receives the RESOLVED id — see `resolveSchedulerId`.
    */
@@ -70,32 +65,46 @@ async function removeOne(
  * here now so a BullMQ upgrade revisits 1 line rather than 2.
  */
 function resolveSchedulerId(entry: unknown): string | null {
+  // `getJobSchedulers()` lists the zset, then reads each `repeat:<id>` hash
+  // separately. When another API replica removes an entry in between, BullMQ
+  // returns `undefined` for it. It is gone already, so it is skipped.
+  if (entry === null || typeof entry !== 'object') return null;
   const { id, key } = entry as { id?: string; key?: string };
   const resolved = id ?? key;
   return typeof resolved === 'string' ? resolved : null;
 }
 
 /**
- * Removes legacy `add({ repeat })` registrations from a queue.
+ * Removes every legacy `add({ repeat })` registration from a queue, and
+ * leaves its Job Schedulers alone.
  *
- * `getRepeatableJobs` and `removeRepeatableByKey` are BullMQ v5's LEGACY
- * repeatable API, superseded by Job Schedulers. Both remaining users of the
- * old API — this file's `registerRepeatableCron`, and the 2 scheduler-based
- * registrars that sweep it — route through here, so retiring it is 1 change
- * rather than 6.
+ * BullMQ v6 removes the legacy repeatable API, and raises an error when it
+ * finds legacy entries in Redis. Weavestream no longer creates them, so this
+ * boot sweep clears what older releases left behind while the install still
+ * runs v5. It is the only caller of `getRepeatableJobs` and
+ * `removeRepeatableByKey`; the BullMQ v6 upgrade deletes it.
  *
- * The `getRepeatableJobs()` read itself always throws on failure, under both
- * policies. Only the per-key removals honour `onError`. That matches what
- * every call site did before this helper existed.
+ * Legacy entries and Job Schedulers share 1 Redis zset, so
+ * `getRepeatableJobs()` lists both. A Job Scheduler is the entry with an
+ * `iterationCount`: only `storeJobScheduler` writes that `ic` hash field, and
+ * BullMQ v6 tells the 2 apart by the same field.
+ *
+ * Both listings always throw on failure, under both policies. Only the
+ * per-key removals honour `onError`.
  */
 export async function removeRepeatables(
   queue: Queue,
-  opts: RemoveRepeatablesOptions,
+  policy: RemoveErrorPolicy,
 ): Promise<void> {
+  const schedulerIds = new Set<string>();
+  for (const s of await queue.getJobSchedulers()) {
+    const id = resolveSchedulerId(s);
+    if (id !== null && s.iterationCount !== undefined) schedulerIds.add(id);
+  }
   const repeatables = await queue.getRepeatableJobs();
   for (const r of repeatables) {
-    if (opts.match && !opts.match(r)) continue;
-    await removeOne(opts, r.key, () => queue.removeRepeatableByKey(r.key));
+    if (schedulerIds.has(r.key)) continue;
+    await removeOne(policy, r.key, () => queue.removeRepeatableByKey(r.key));
   }
 }
 
@@ -127,10 +136,10 @@ export async function removeJobSchedulers(
   }
 }
 
-export interface RepeatableCronRegistration {
+export interface CronSchedulerRegistration {
   readonly queue: Queue;
   readonly logger: RegistrarLogger;
-  /** Stable BullMQ job id for this lane, e.g. `domain-checks:scheduled`. */
+  /** Stable Job Scheduler id for this lane, e.g. `domain-checks:scheduled`. */
   readonly jobId: string;
   /** BullMQ job name, e.g. `AlertsJobNames.scan`. */
   readonly jobName: string;
@@ -149,36 +158,37 @@ export interface RepeatableCronRegistration {
 }
 
 /**
- * Converges 1 repeatable cron job on API boot.
+ * Converges 1 cron Job Scheduler on API boot.
  *
- * Boot is treated as the authoritative configuration moment: stale repeatable
- * entries for this lane are cleared first, then the current schedule is
- * re-asserted. A single API restart is therefore the only operator action
- * that exists for changing a schedule.
+ * Boot is treated as the authoritative configuration moment: legacy
+ * repeatable entries on the queue are cleared first, then the current
+ * schedule is upserted under `jobId` (or removed when `off`). A single API
+ * restart is therefore the only operator action that exists for changing a
+ * schedule.
  */
-export async function registerRepeatableCron(
-  reg: RepeatableCronRegistration,
+export async function registerCronScheduler(
+  reg: CronSchedulerRegistration,
 ): Promise<void> {
   const { queue, logger, jobId, jobName, cron, data, label } = reg;
 
   await removeRepeatables(queue, {
     onError: 'skip',
-    // A stale entry we could not remove will keep firing beside the one we
+    // A legacy entry we could not remove keeps firing beside the scheduler we
     // are about to register. That is worth a look, so it is not discarded.
     onSkipped: (key, err) =>
       logger.warn(
-        `Could not remove a stale ${label} repeatable (key ${key}); it may double-fire until the next API restart: ${
+        `Could not remove a legacy ${label} repeatable (key ${key}); it may double-fire until the next API restart: ${
           err instanceof Error ? err.message : String(err)
         }`,
       ),
-    match: (r) => r.id === jobId || r.name === jobName,
   });
 
   if (cron === 'off') {
+    await queue.removeJobScheduler(jobId);
     logger.warn(reg.disabledMessage);
     return;
   }
 
-  await queue.add(jobName, data, { repeat: { pattern: cron }, jobId });
+  await queue.upsertJobScheduler(jobId, { pattern: cron }, { name: jobName, data });
   logger.log(`Registered scheduled ${label} job with cron "${cron}"`);
 }

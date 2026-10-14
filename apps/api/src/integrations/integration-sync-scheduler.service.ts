@@ -107,12 +107,10 @@ export class IntegrationSyncSchedulerService {
         onSkipped: (id, err) => this.warnSweepFailure('scheduler', id, err),
         match: (id) => id.startsWith('scheduled-') || id.startsWith('scheduled:'),
       });
-      // 2. Sweep up legacy `add({ repeat })` entries, which are stored
-      //    under hashed keys and not visible as Job Schedulers. The id
-      //    field on these is reliably undefined in BullMQ 5.76 (a known
-      //    quirk in `getRepeatableData`), so we can't filter — but these
-      //    integration queues only ever held our `scheduled-*` entries,
-      //    so removing every legacy entry is safe.
+      // 2. Sweep up legacy `add({ repeat })` entries left by older
+      //    releases. `removeRepeatables` removes every legacy entry and
+      //    never a Job Scheduler; nothing creates legacy entries any
+      //    more, so every one left is stale.
       await removeRepeatables(queue, {
         onError: 'skip',
         onSkipped: (key, err) => this.warnSweepFailure('legacy repeatable', key, err),

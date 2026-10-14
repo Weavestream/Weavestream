@@ -76,10 +76,9 @@ export class BackupQueueRegistrar implements OnApplicationBootstrap {
         onError: 'throw',
         match: (id) => id.startsWith(SCHEDULER_ID_PREFIX),
       });
-      // 2. Legacy `add({ repeat })` entries. Their id is reliably
-      //    undefined in BullMQ 5.76, so no filter is possible — but
-      //    the backup queue only ever held our own registrations, so
-      //    removing every remaining entry is safe.
+      // 2. Legacy `add({ repeat })` entries left by older releases.
+      //    `removeRepeatables` removes every legacy entry and never a
+      //    Job Scheduler; nothing creates legacy entries any more.
       await removeRepeatables(queue, { onError: 'throw' });
     } catch (err) {
       this.logger.error(

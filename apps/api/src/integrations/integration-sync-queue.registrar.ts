@@ -5,14 +5,13 @@ import { IntegrationSyncSchedulerService } from './integration-sync-scheduler.se
  * Phase 11 — boot-time entry point for Integration sync schedules.
  *
  * Delegates to `IntegrationSyncSchedulerService.refreshAll()` which
- * clears every `scheduled-*` repeatable across the orchestrator and
+ * clears every `scheduled-*` Job Scheduler across the orchestrator and
  * cloudflare drift-sweep queues and re-registers one per ACTIVE
  * integration.
  *
  * Why on API boot rather than the worker:
- *   - Repeatable registrations are managed via `add(... { repeat: …,
- *     jobId })`, which is idempotent only when the same `jobId` is
- *     reused. Concentrating that ownership on the API side gives the
+ *   - Job Schedulers are keyed by a stable scheduler id, so
+ *     re-registering is idempotent. Concentrating that ownership on the API side gives the
  *     operator a single deploy target to flip the schedule.
  *   - The worker doesn't watch Postgres for new Integrations — the
  *     API is the only place creates/updates flow through.

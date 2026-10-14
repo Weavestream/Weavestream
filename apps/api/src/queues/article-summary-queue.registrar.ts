@@ -9,13 +9,13 @@ import {
   QueueNames,
 } from '@weavestream/shared';
 import { QueuesService } from './queues.service.js';
-import { registerRepeatableCron } from './repeatable-registration.js';
+import { registerCronScheduler } from './repeatable-registration.js';
 
 /**
- * Registers the repeatable article-summary `sweep` tick on API boot
+ * Registers the article-summary `sweep` Job Scheduler on API boot
  * (Mobile Phase 4). Mirrors `AlertsQueueRegistrar`'s converge-on-boot
- * idempotency: stale repeatable entries for this lane are removed and
- * the current one re-asserted, so a single API restart is the only
+ * idempotency: legacy repeatable entries are removed and the current
+ * scheduler re-asserted, so a single API restart is the only
  * operator action that exists.
  *
  * Deliberately NO env knob: the sweep is a no-op unless the admin has
@@ -38,7 +38,7 @@ export class ArticleSummaryQueueRegistrar implements OnApplicationBootstrap {
   async onApplicationBootstrap(): Promise<void> {
     const queue = this.queues.get(QueueNames.articleSummary);
 
-    await registerRepeatableCron({
+    await registerCronScheduler({
       queue,
       logger: this.logger,
       jobId: ARTICLE_SUMMARY_SWEEP_JOB_ID,
