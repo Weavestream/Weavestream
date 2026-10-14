@@ -26,6 +26,7 @@ import {
 } from '../integration-driver.js';
 import {
   fetchWithRetry,
+  httpsBaseUrlSchema,
   humanizeKey,
   type RequestPace,
   inferHintType,
@@ -172,7 +173,7 @@ function sectionLookup(load: () => Promise<ByDevice>): Promise<Lookup<ByDevice>>
 const NINJAONE_AGENT_DEVICE_TYPE = 'AgentDevice';
 
 const ninjaoneConfigSchema = z.object({
-  baseUrl: z.string().url().default(NINJAONE_DEFAULT_BASE_URL),
+  baseUrl: httpsBaseUrlSchema.default(NINJAONE_DEFAULT_BASE_URL),
 });
 
 const ninjaoneSecretSchema = z.object({

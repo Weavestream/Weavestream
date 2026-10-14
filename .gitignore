@@ -9,6 +9,7 @@ coverage/
 CHANGELOG-SECURITY.md
 CHANGELOG-SECURITY-OLD.md
 apps/web/.next.stale-backup/
+strix_runs/
 
 .env
 .env.local

@@ -52,6 +52,7 @@ import { integrationAssetExternalSource } from './integration-asset-source.js';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { scanSensitiveMaterial } from './sensitive-material.js';
 import { IntegrationOAuthAppService } from './oauth/integration-oauth-app.service.js';
+import { IntegrationOAuthService } from './oauth/integration-oauth.service.js';
 import { isAdminConsent, type OAuthClientCredentials } from './oauth/oauth-token.js';
 import {
   getTenantContext,
@@ -241,6 +242,10 @@ export class IntegrationsService {
     private readonly env: EnvService,
     private readonly scheduler: IntegrationSyncSchedulerService,
     private readonly writers: ReconstructionWriterRegistry,
+    // Required, not @Optional: a missing provider must fail at boot. An
+    // optional one resolved to undefined in production and silently skipped
+    // grant revocation on delete.
+    private readonly oauth: IntegrationOAuthService,
     // Optional so specs that never touch an OAuth driver need not supply it.
     @Optional() private readonly oauthApps?: IntegrationOAuthAppService,
   ) {}
@@ -497,6 +502,10 @@ export class IntegrationsService {
     // distinct set of affected company ids and pass them as `in: [...]`.
     const affectedCompanyIds = Array.from(new Set(records.map((r) => r.companyId)));
 
+    // The cascade below drops the OAuth connection rows, so read their
+    // refresh tokens now and revoke them once the delete has committed.
+    const grants = await this.oauth.readRevocableGrants(id);
+
     await this.prisma.$transaction(async (tx) => {
       if (releasedAssetIds.length > 0) {
         const safeAssetIds = assertStringIdList(releasedAssetIds, 'releasedAssetIds');
@@ -544,6 +553,8 @@ export class IntegrationsService {
 
     await this.scheduler.refreshFor(id);
 
+    const revokedOAuthGrants = grants ? await this.oauth.revokeGrants(grants) : 0;
+
     await this.audit.log({
       actorId: actor.id,
       action: AUDIT_ACTIONS.integration.delete,
@@ -554,6 +565,7 @@ export class IntegrationsService {
       before: { driver: existing.driver, name: existing.name },
       after: {
         releasedAssetCount: releasedAssetIds.length,
+        ...(grants ? { oauthGrants: grants.tokens.length, revokedOAuthGrants } : {}),
       },
     });
     for (const r of records) {

@@ -1,5 +1,6 @@
 import type { SourceFieldDto } from '@weavestream/shared';
 import { fieldSlugSchema, layoutSlugSchema } from '@weavestream/shared';
+import { z } from 'zod';
 import { DriverRateLimitError } from './integration-driver.js';
 import type { RecommendedDestination } from './integration-driver.js';
 import { safeFetch } from '../../common/egress/safe-fetch.js';
@@ -72,6 +73,16 @@ function holdRequestSlots(pace: RequestPace, waitMs: number): void {
 }
 
 /**
+ * Base URL for a cloud vendor API. https only: the driver sends its API
+ * credential on every request, and a plain-http URL would put it on the wire
+ * in cleartext.
+ */
+export const httpsBaseUrlSchema = z
+  .string()
+  .url()
+  .refine((value) => /^https:\/\//i.test(value), 'Base URL must start with https://');
+
+/**
  * Fetch with exponential-backoff retry on 429 + 5xx, honouring the
  * `Retry-After` header on rate-limit responses.
  */
@@ -137,12 +148,24 @@ export async function fetchWithRetry(
     : new Error(`${opts.serviceName} request failed: ${String(lastErr)}`);
 }
 
+/**
+ * Upper bound on any upstream-supplied `Retry-After`. The value is the
+ * vendor's (or a hostile endpoint's) to choose, and it is slept in-process
+ * and holds every paced caller of the key, so an unbounded one could park a
+ * worker for days.
+ */
+export const MAX_RETRY_AFTER_MS = 5 * 60_000;
+
 export function parseRetryAfter(raw: string | null, fallbackMs: number): number {
+  return Math.min(MAX_RETRY_AFTER_MS, Math.max(0, parseRetryAfterUncapped(raw, fallbackMs)));
+}
+
+function parseRetryAfterUncapped(raw: string | null, fallbackMs: number): number {
   if (!raw) return fallbackMs;
   const seconds = Number.parseInt(raw, 10);
   if (Number.isFinite(seconds)) return seconds * 1_000;
   const date = new Date(raw).getTime();
-  if (Number.isFinite(date)) return Math.max(0, date - Date.now());
+  if (Number.isFinite(date)) return date - Date.now();
   return fallbackMs;
 }
 

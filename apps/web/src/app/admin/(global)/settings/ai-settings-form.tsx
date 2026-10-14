@@ -83,8 +83,9 @@ export function AiSettingsForm({ initial }: { initial: AiSettings }) {
     setError(null);
     setTesting(true);
     // Test against the in-flight form values when the user has unsaved
-    // changes, so they can verify before committing. The endpoint falls
-    // back to the saved (decrypted) API key when none is typed.
+    // changes, so they can verify before committing. When no key is typed,
+    // the endpoint falls back to the saved key only if the base URL still
+    // matches the saved one; a changed URL must bring its own key.
     const payload: Record<string, unknown> = {};
     const url = clean(baseUrl);
     if (url) payload.baseUrl = url;

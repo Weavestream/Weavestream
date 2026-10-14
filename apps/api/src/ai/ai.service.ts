@@ -44,6 +44,9 @@ export class AiService {
     let baseUrl: string;
     let apiKey: string | null = null;
     let allowPrivateNetwork: boolean;
+    // Set when a saved key exists but was not sent because the test
+    // targets a different endpoint; drives the 401/403 hint below.
+    let savedKeyWithheld = false;
 
     // Test path: never enforce `enabled` — the user is verifying a
     // candidate config. Prefer override values; for any field the
@@ -67,7 +70,16 @@ export class AiService {
         // No saved baseUrl — fine, override has to carry it.
       }
       baseUrl = override.baseUrl ?? savedBaseUrl ?? '';
-      apiKey = override.apiKey ?? savedApiKey;
+      // The saved key is bound to the saved endpoint. Pairing it with a
+      // caller-supplied base URL would let anyone who can call this route
+      // send the decrypted secret to a host of their choice, so a different
+      // URL must bring its own key or go without one.
+      const sameEndpoint =
+        override.baseUrl === undefined ||
+        (savedBaseUrl !== null &&
+          stripTrailingSlashes(override.baseUrl) === stripTrailingSlashes(savedBaseUrl));
+      apiKey = override.apiKey ?? (sameEndpoint ? savedApiKey : null);
+      savedKeyWithheld = !override.apiKey && !sameEndpoint && savedApiKey !== null;
       allowPrivateNetwork = override.allowPrivateNetwork ?? savedAllowPrivate;
       if (!baseUrl) {
         throw new BadRequestException('Enter a base URL to test the connection.');
@@ -120,8 +132,12 @@ export class AiService {
 
     if (!res.ok) {
       const body = await readUpstreamSnippet(res);
+      const hint =
+        savedKeyWithheld && (res.status === 401 || res.status === 403)
+          ? '. The saved API key is only sent to the saved base URL; enter the API key to test a different URL.'
+          : '';
       throw new BadRequestException(
-        `${displayUrl} returned ${res.status}${body ? ` — ${body}` : ''}`,
+        `${displayUrl} returned ${res.status}${body ? ` — ${body}` : ''}${hint}`,
       );
     }
 

@@ -41,6 +41,7 @@
  */
 
 import { lookup as dnsLookup } from 'node:dns/promises';
+import { isIP } from 'node:net';
 import { Agent, fetch as undiciFetch } from 'undici';
 import {
   defaultBlockedCidrs,
@@ -222,6 +223,118 @@ export async function safeFetch(
   return safeFetchInternal(url, options, {});
 }
 
+/**
+ * Egress guard for raw `net`/`tls` sockets, which cannot go through
+ * {@link safeFetch}. Resolves `hostname`, applies the same private-range
+ * policy (operator `EGRESS_*` settings included), and returns ONE validated
+ * address. The caller must connect to that address, not to the hostname —
+ * a second lookup at connect time could return a different, unvalidated
+ * answer (DNS rebinding). For TLS, keep the hostname as `servername` so SNI
+ * and certificate identity checks are unchanged.
+ *
+ * `target` is a label for the block telemetry, e.g. `tls://host:443`.
+ */
+export async function resolveEgressAddress(
+  hostname: string,
+  target: string,
+  options: { resolve?: ResolveFn } = {},
+): Promise<string> {
+  const bare = hostname.replace(/^\[/, '').replace(/\]$/, '');
+  if (!bare) {
+    throw block(target, bare, [], 'invalid_hostname', 'empty hostname', null);
+  }
+  const resolvedIps = await resolveAndCheck(target, bare, {
+    resolve: options.resolve ?? defaultResolveImpl,
+    allowPrivate: config.allowAllPrivate,
+    extraAllowed: [],
+  });
+  const address = pickPinnableIp(resolvedIps);
+  if (!address) {
+    throw block(target, bare, resolvedIps, 'dns_resolution_failed', 'no usable address', null);
+  }
+  return address;
+}
+
+/**
+ * Resolve `hostname` (IP literals skip DNS) and refuse the whole answer if
+ * ANY address is in a blocked range — a mixed public/private answer must not
+ * let the connect land on the private one.
+ */
+async function resolveAndCheck(
+  url: string,
+  hostname: string,
+  opts: { resolve: ResolveFn; allowPrivate: boolean; extraAllowed: readonly Cidr[] },
+): Promise<string[]> {
+  // Skip DNS when the operator already supplied a literal IP — both
+  // `new URL('http://10.0.0.1')` and `http://[::1]` parse the address
+  // straight onto `hostname`.
+  let resolvedIps: string[];
+  if (isIpLiteral(hostname)) {
+    resolvedIps = [hostname];
+  } else {
+    try {
+      const out = await opts.resolve(hostname);
+      resolvedIps = [...out];
+    } catch (err) {
+      throw block(
+        url,
+        hostname,
+        [],
+        'dns_resolution_failed',
+        err instanceof Error ? err.message : String(err),
+        null,
+      );
+    }
+    if (resolvedIps.length === 0) {
+      throw block(
+        url,
+        hostname,
+        [],
+        'dns_resolution_failed',
+        'no addresses returned',
+        null,
+      );
+    }
+  }
+
+  // Fail closed on anything that is not a canonical address: the range
+  // check below cannot classify it, and a caller that connects to it would
+  // hand it to the system resolver unchecked.
+  const nonCanonical = resolvedIps.find((ip) => isIP(ip) === 0);
+  if (nonCanonical !== undefined) {
+    throw block(
+      url,
+      hostname,
+      resolvedIps,
+      'dns_resolution_failed',
+      `${nonCanonical} is not a canonical IP address`,
+      null,
+    );
+  }
+
+  if (!opts.allowPrivate) {
+    const blockList = defaultBlockedCidrs();
+    for (const ip of resolvedIps) {
+      const matched = ipMatchesAny(ip, blockList);
+      if (
+        matched &&
+        !ipMatchesAny(ip, config.allowedPrivateCidrs) &&
+        !ipMatchesAny(ip, opts.extraAllowed)
+      ) {
+        throw block(
+          url,
+          hostname,
+          resolvedIps,
+          'private_ip_blocked',
+          `${ip} is in blocked range ${matched.raw}`,
+          matched.raw,
+        );
+      }
+    }
+  }
+  return resolvedIps;
+}
+
 async function safeFetchInternal(
   url: string,
   options: SafeFetchOptions,
@@ -259,60 +372,12 @@ async function safeFetchInternal(
     throw block(url, hostname, [], 'invalid_hostname', 'empty hostname', null);
   }
 
-  // Skip DNS when the operator already supplied a literal IP — both
-  // `new URL('http://10.0.0.1')` and `http://[::1]` parse the address
-  // straight onto `hostname`.
-  let resolvedIps: string[];
-  if (isIpLiteral(hostname)) {
-    resolvedIps = [hostname];
-  } else {
-    try {
-      const out = await resolveImpl(hostname);
-      resolvedIps = [...out];
-    } catch (err) {
-      throw block(
-        url,
-        hostname,
-        [],
-        'dns_resolution_failed',
-        err instanceof Error ? err.message : String(err),
-        null,
-      );
-    }
-    if (resolvedIps.length === 0) {
-      throw block(
-        url,
-        hostname,
-        [],
-        'dns_resolution_failed',
-        'no addresses returned',
-        null,
-      );
-    }
-  }
-
   const allowPrivate = options.allowPrivateNetworks || config.allowAllPrivate;
-  if (!allowPrivate) {
-    const blockList = defaultBlockedCidrs();
-    const extraAllowed = options.extraAllowedPrivateCidrs ?? [];
-    for (const ip of resolvedIps) {
-      const matched = ipMatchesAny(ip, blockList);
-      if (
-        matched &&
-        !ipMatchesAny(ip, config.allowedPrivateCidrs) &&
-        !ipMatchesAny(ip, extraAllowed)
-      ) {
-        throw block(
-          url,
-          hostname,
-          resolvedIps,
-          'private_ip_blocked',
-          `${ip} is in blocked range ${matched.raw}`,
-          matched.raw,
-        );
-      }
-    }
-  }
+  const resolvedIps = await resolveAndCheck(url, hostname, {
+    resolve: resolveImpl,
+    allowPrivate,
+    extraAllowed: options.extraAllowedPrivateCidrs ?? [],
+  });
 
   // Caller asked us to follow redirects (or didn't say — that's the
   // fetch default). We force the underlying fetch into 'manual' so we
@@ -636,8 +701,15 @@ function block(
   });
 }
 
+/**
+ * Canonical IP literals only. A digits-and-dots test also matched shorthand
+ * such as `127.1`, which the CIDR matcher cannot parse (so it was never
+ * blocked) while Node's connect resolves it to 127.0.0.1. Shorthand, hex
+ * and octal forms now go through the resolver, which returns canonical
+ * addresses for the check.
+ */
 function isIpLiteral(hostname: string): boolean {
-  return /^[\d.]+$/.test(hostname) || hostname.includes(':');
+  return isIP(hostname) !== 0;
 }
 
 async function defaultResolve(hostname: string): Promise<readonly string[]> {

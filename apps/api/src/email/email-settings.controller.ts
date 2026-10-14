@@ -12,9 +12,16 @@ import { CurrentUser, type AuthedUser } from '../common/current-user.decorator.j
 import { ZodBody } from '../common/zod-validation.pipe.js';
 import { RequirePermission } from '../rbac/require-permission.decorator.js';
 import { RequireStepUp } from '../auth/step-up/require-step-up.decorator.js';
+import { InteractiveOnly } from '../auth/interactive-only.decorator.js';
 import { requestMetaOf } from '../common/request-meta.js';
 
+/**
+ * Instance-wide SMTP configuration. Interactive-only as a whole: it holds
+ * the SMTP credential and the test route sends mail to a caller-chosen
+ * address, and no API key or AI connection needs either.
+ */
 @Controller({ path: 'settings/email', version: '1' })
+@InteractiveOnly()
 export class EmailSettingsController {
   constructor(
     private readonly settings: EmailSettingsService,

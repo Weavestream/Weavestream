@@ -2,7 +2,9 @@ import {
   configureEgressGuard,
   EgressBlockedError,
   resetEgressGuardForTests,
+  resolveEgressAddress,
   safeFetch,
+  setDefaultResolveForTests,
   type EgressBlockedInfo,
 } from './safe-fetch.js';
 import {
@@ -637,6 +639,127 @@ describe('safeFetch — egress guard', () => {
         }),
       ).rejects.toBeInstanceOf(EgressBlockedError);
     });
+  });
+});
+
+describe('resolveEgressAddress — raw socket guard', () => {
+  const resolveTo = (ips: readonly string[]) => async () => ips;
+  const target = 'tls://monitored.example:443';
+
+  afterEach(() => resetEgressGuardForTests());
+
+  it('returns a validated public address, preferring IPv4', async () => {
+    await expect(
+      resolveEgressAddress('monitored.example', target, {
+        resolve: resolveTo(['2606:4700::1111', '93.184.216.34']),
+      }),
+    ).resolves.toBe('93.184.216.34');
+  });
+
+  it('returns a public IPv6 address when that is all there is', async () => {
+    await expect(
+      resolveEgressAddress('monitored.example', target, {
+        resolve: resolveTo(['2606:4700::6810:84e5']),
+      }),
+    ).resolves.toBe('2606:4700::6810:84e5');
+  });
+
+  it.each([
+    ['loopback', '127.0.0.1'],
+    ['RFC1918', '10.0.0.1'],
+    ['cloud metadata', '169.254.169.254'],
+    ['IPv6 loopback', '::1'],
+    ['IPv4-mapped loopback', '::ffff:127.0.0.1'],
+  ])('blocks a %s answer', async (_label, ip) => {
+    await expect(
+      resolveEgressAddress('monitored.example', target, { resolve: resolveTo([ip]) }),
+    ).rejects.toBeInstanceOf(EgressBlockedError);
+  });
+
+  it('blocks a mixed public + private answer', async () => {
+    await expect(
+      resolveEgressAddress('monitored.example', target, {
+        resolve: resolveTo(['93.184.216.34', '127.0.0.1']),
+      }),
+    ).rejects.toBeInstanceOf(EgressBlockedError);
+  });
+
+  it('blocks a private IP literal without resolving it', async () => {
+    const resolve = jest.fn(resolveTo(['93.184.216.34']));
+    await expect(
+      resolveEgressAddress('10.1.2.3', target, { resolve }),
+    ).rejects.toBeInstanceOf(EgressBlockedError);
+    expect(resolve).not.toHaveBeenCalled();
+  });
+
+  it.each(['127.1', '10.1', '0x7f.1', '2130706433', '0177.0.0.1'])(
+    'resolves shorthand IPv4 %s instead of trusting it as a literal',
+    async (shorthand) => {
+      // The system resolver canonicalises shorthand to the real address.
+      const resolve = jest.fn(resolveTo(['127.0.0.1']));
+      await expect(
+        resolveEgressAddress(shorthand, target, { resolve }),
+      ).rejects.toBeInstanceOf(EgressBlockedError);
+      expect(resolve).toHaveBeenCalledWith(shorthand);
+    },
+  );
+
+  it('blocks shorthand IPv4 through the real system resolver', async () => {
+    await expect(resolveEgressAddress('127.1', target)).rejects.toThrow(/127\.0\.0\.1 is in blocked range/);
+  });
+
+  it('fails closed when the resolver returns a non-canonical address', async () => {
+    await expect(
+      resolveEgressAddress('monitored.example', target, { resolve: resolveTo(['127.1']) }),
+    ).rejects.toThrow(/not a canonical IP address/);
+    // Even with private networks allowed, a non-address is never handed on.
+    configureEgressGuard({ allowPrivateNetworks: true, allowedPrivateCidrs: '' });
+    await expect(
+      resolveEgressAddress('monitored.example', target, { resolve: resolveTo(['127.1']) }),
+    ).rejects.toBeInstanceOf(EgressBlockedError);
+  });
+
+  it('blocks when DNS returns nothing', async () => {
+    await expect(
+      resolveEgressAddress('monitored.example', target, { resolve: resolveTo([]) }),
+    ).rejects.toBeInstanceOf(EgressBlockedError);
+  });
+
+  it('uses the process default resolver when none is passed', async () => {
+    setDefaultResolveForTests(resolveTo(['127.0.0.1']));
+    await expect(resolveEgressAddress('monitored.example', target)).rejects.toBeInstanceOf(
+      EgressBlockedError,
+    );
+  });
+
+  it('honours the operator allow-list and allow-all settings', async () => {
+    configureEgressGuard({ allowPrivateNetworks: false, allowedPrivateCidrs: '10.42.0.0/16' });
+    await expect(
+      resolveEgressAddress('whois.lan', target, { resolve: resolveTo(['10.42.5.7']) }),
+    ).resolves.toBe('10.42.5.7');
+    await expect(
+      resolveEgressAddress('whois.lan', target, { resolve: resolveTo(['10.99.0.5']) }),
+    ).rejects.toBeInstanceOf(EgressBlockedError);
+
+    configureEgressGuard({ allowPrivateNetworks: true, allowedPrivateCidrs: '' });
+    await expect(
+      resolveEgressAddress('whois.lan', target, { resolve: resolveTo(['127.0.0.1']) }),
+    ).resolves.toBe('127.0.0.1');
+  });
+
+  it('reports blocks through the telemetry hook', async () => {
+    const seen: EgressBlockedInfo[] = [];
+    configureEgressGuard({
+      allowPrivateNetworks: false,
+      allowedPrivateCidrs: '',
+      onBlocked: (info) => seen.push(info),
+    });
+    await expect(
+      resolveEgressAddress('monitored.example', target, { resolve: resolveTo(['127.0.0.1']) }),
+    ).rejects.toBeInstanceOf(EgressBlockedError);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.reason).toBe('private_ip_blocked');
+    expect(seen[0]!.hostname).toBe('monitored.example');
   });
 });
 

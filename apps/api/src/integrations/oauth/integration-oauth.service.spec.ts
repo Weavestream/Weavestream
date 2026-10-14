@@ -604,3 +604,62 @@ describe('IntegrationOAuthService.disconnect and listConnections', () => {
     );
   });
 });
+
+describe('IntegrationOAuthService grant revocation on integration delete', () => {
+  const stored = {
+    refreshToken: 'test-refresh-1',
+    grantedScopes: ['scope.read'],
+    connectedAs: 'admin@example.test',
+    connectedAt: '2026-01-01T00:00:00.000Z',
+  };
+  const CONN_B = '00000000-0000-4000-8000-0000000000b2';
+  const undecryptable = crypto.encrypt(
+    JSON.stringify(stored),
+    integrationConnectionSecretAad(INTEGRATION_ID, '00000000-0000-4000-8000-000000000099'),
+  );
+
+  it('reads every readable refresh token and revokes each at the provider', async () => {
+    const ctx = setup({
+      connections: [
+        connRow({ secret: stored }),
+        connRow({ id: CONN_B, externalOrgId: 'C-tenant-b', secret: { ...stored, refreshToken: 'test-refresh-2' } }),
+        connRow({ id: '00000000-0000-4000-8000-0000000000c3', externalOrgId: 'C-tenant-c', secretCiphertext: undecryptable }),
+      ],
+    });
+    const grants = await ctx.service.readRevocableGrants(INTEGRATION_ID);
+    expect(grants?.tokens.map((t) => t.refreshToken)).toEqual(['test-refresh-1', 'test-refresh-2']);
+
+    const calls = scriptFetch([{ body: {} }, { status: 400, body: { error: 'invalid_token' } }]);
+    await expect(ctx.service.revokeGrants(grants!)).resolves.toBe(1);
+    expect(calls).toHaveLength(2);
+    expect(calls[0]!.body).toBe('token=test-refresh-1');
+    expect(calls[1]!.body).toBe('token=test-refresh-2');
+  });
+
+  it('keeps going when one revocation throws', async () => {
+    const ctx = setup({
+      connections: [
+        connRow({ secret: stored }),
+        connRow({ id: CONN_B, externalOrgId: 'C-tenant-b', secret: { ...stored, refreshToken: 'test-refresh-2' } }),
+      ],
+    });
+    const grants = await ctx.service.readRevocableGrants(INTEGRATION_ID);
+    setDefaultResolveForTests(async () => ['1.2.3.4']);
+    let n = 0;
+    setDefaultFetchForTests((async () => {
+      n += 1;
+      if (n === 1) throw new Error('network down');
+      return new Response('{}', { status: 200 });
+    }) as typeof fetch);
+    await expect(ctx.service.revokeGrants(grants!)).resolves.toBe(1);
+    expect(n).toBe(2);
+  });
+
+  it('returns null when there is nothing to revoke', async () => {
+    await expect(setup().service.readRevocableGrants(INTEGRATION_ID)).resolves.toBeNull();
+    await expect(
+      setup({ connections: [connRow({ secretCiphertext: undecryptable })] }).service.readRevocableGrants(INTEGRATION_ID),
+    ).resolves.toBeNull();
+    await expect(setup().service.readRevocableGrants('00000000-0000-4000-8000-00000000ffff')).resolves.toBeNull();
+  });
+});

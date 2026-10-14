@@ -1,4 +1,11 @@
-import { __resetRequestPaceForTests, awaitRequestSlot, fetchWithRetry } from './driver-utils.js';
+import {
+  __resetRequestPaceForTests,
+  awaitRequestSlot,
+  fetchWithRetry,
+  httpsBaseUrlSchema,
+  MAX_RETRY_AFTER_MS,
+  parseRetryAfter,
+} from './driver-utils.js';
 import { DriverRateLimitError } from './integration-driver.js';
 import { setDefaultFetchForTests, setDefaultResolveForTests } from '../../common/egress/safe-fetch.js';
 
@@ -113,5 +120,44 @@ describe('request pace', () => {
     expect((await b).status).toBe(200);
     const bSentAt = sentAt.find(([url]) => url.endsWith('/b'))![1];
     expect(bSentAt).toBeGreaterThanOrEqual(950);
+  });
+});
+
+describe('parseRetryAfter', () => {
+  it('reads delta-seconds and HTTP dates', () => {
+    expect(parseRetryAfter('7', 1_000)).toBe(7_000);
+    const inTenSeconds = new Date(Date.now() + 10_000).toUTCString();
+    const ms = parseRetryAfter(inTenSeconds, 1_000);
+    expect(ms).toBeGreaterThan(8_000);
+    expect(ms).toBeLessThanOrEqual(10_000);
+  });
+
+  it('falls back when the header is missing or unparseable', () => {
+    expect(parseRetryAfter(null, 1_234)).toBe(1_234);
+    expect(parseRetryAfter('soon', 1_234)).toBe(1_234);
+  });
+
+  it('caps a huge value from the upstream', () => {
+    expect(parseRetryAfter('99999999', 1_000)).toBe(MAX_RETRY_AFTER_MS);
+    expect(parseRetryAfter(new Date(Date.now() + 86_400_000).toUTCString(), 1_000)).toBe(
+      MAX_RETRY_AFTER_MS,
+    );
+  });
+
+  it('never returns a negative wait', () => {
+    expect(parseRetryAfter('-30', 1_000)).toBe(0);
+    expect(parseRetryAfter(new Date(Date.now() - 60_000).toUTCString(), 1_000)).toBe(0);
+  });
+});
+
+describe('httpsBaseUrlSchema', () => {
+  it('accepts https URLs', () => {
+    expect(httpsBaseUrlSchema.safeParse('https://app.ninjarmm.com').success).toBe(true);
+    expect(httpsBaseUrlSchema.safeParse('HTTPS://api.ui.com').success).toBe(true);
+  });
+
+  it('refuses plain http and non-URLs', () => {
+    expect(httpsBaseUrlSchema.safeParse('http://app.action1.com/api/3.0').success).toBe(false);
+    expect(httpsBaseUrlSchema.safeParse('not a url').success).toBe(false);
   });
 });

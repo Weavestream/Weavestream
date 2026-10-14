@@ -202,6 +202,13 @@ interface VerifiedGrant {
  * Provider error text is never echoed: the browser lands on the
  * integration's Connections tab with `?oauth=connected` or `?oauth=failed`.
  */
+/** Refresh tokens held in memory between an integration delete and its revocation. */
+export interface RevocableGrants {
+  integrationId: string;
+  oauth: DriverOAuthDescriptor;
+  tokens: Array<{ connectionId: string; refreshToken: string }>;
+}
+
 @Injectable()
 export class IntegrationOAuthService {
   private readonly logger = new Logger(IntegrationOAuthService.name);
@@ -701,6 +708,54 @@ export class IntegrationOAuthService {
         },
       });
     });
+  }
+
+  /**
+   * Read the refresh tokens of every delegated-OAuth connection on an
+   * integration that is about to be deleted. The delete cascades the
+   * connection rows, so the tokens must be read first; revoke them with
+   * {@link revokeGrants} only after the delete commits, so a failed delete
+   * never leaves a live integration with dead grants. Null when the
+   * integration has nothing revocable (not OAuth, admin consent, no revoke
+   * endpoint, or no connections).
+   */
+  async readRevocableGrants(integrationId: string): Promise<RevocableGrants | null> {
+    const row = await this.prisma.integration.findUnique({
+      where: { id: integrationId },
+      select: { driver: true },
+    });
+    if (!row || !this.drivers.has(row.driver)) return null;
+    const oauth = this.drivers.describe(row.driver).oauth;
+    if (!oauth || isAdminConsent(oauth) || !oauth.revokeUrl) return null;
+    const rows = await this.prisma.integrationConnection.findMany({
+      where: { integrationId },
+      select: { id: true, secretCiphertext: true },
+    });
+    const tokens: RevocableGrants['tokens'] = [];
+    for (const conn of rows) {
+      const stored = parseStoredOAuthSecret(this.readSecret(integrationId, conn.id, conn.secretCiphertext));
+      if (stored) tokens.push({ connectionId: conn.id, refreshToken: stored.refreshToken });
+    }
+    return tokens.length > 0 ? { integrationId, oauth, tokens } : null;
+  }
+
+  /** Best-effort revocation of grants read by {@link readRevocableGrants}. Returns how many the provider accepted. */
+  async revokeGrants(grants: RevocableGrants): Promise<number> {
+    let revoked = 0;
+    for (const { connectionId, refreshToken } of grants.tokens) {
+      const correlationId = randomUUID();
+      try {
+        if (await revokeOAuthToken(grants.oauth, refreshToken, this.httpDefaults(), correlationId)) revoked += 1;
+      } catch (e) {
+        // Best effort, as in `disconnect`: the rows are already gone, and
+        // the provider drops unused grants on its own.
+        this.logger.warn(
+          { err: (e as Error).message, integrationId: grants.integrationId, connectionId, correlationId },
+          'OAuth token revocation failed',
+        );
+      }
+    }
+    return revoked;
   }
 
   private async requireOAuthIntegration(integrationId: string) {

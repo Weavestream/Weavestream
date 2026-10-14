@@ -11,6 +11,7 @@ import { CloudflareRegistrarSyncService } from './cloudflare/cloudflare-registra
 import { IntegrationDomainSyncService } from './domain-feeds/integration-domain-sync.service.js';
 import { TicketsService } from './tickets.service.js';
 import { IntegrationOAuthAppService } from './oauth/integration-oauth-app.service.js';
+import { IntegrationOAuthService } from './oauth/integration-oauth.service.js';
 import { FieldTypesModule } from '../field-types/field-types.module.js';
 import { SearchModule } from '../search/search.module.js';
 import { QueuesProducerModule } from '../queues/queues-producer.module.js';
@@ -122,6 +123,9 @@ import { RelationsService } from '../relations/relations.service.js';
     IntegrationDomainSyncService,
     TicketsService,
     IntegrationOAuthAppService,
+    // Here, not in IntegrationsModule: IntegrationsService revokes OAuth
+    // grants on delete and can only inject providers this module sees.
+    IntegrationOAuthService,
   ],
   exports: [
     IntegrationDriverRegistry,
@@ -140,6 +144,7 @@ import { RelationsService } from '../relations/relations.service.js';
     IntegrationDomainSyncService,
     TicketsService,
     IntegrationOAuthAppService,
+    IntegrationOAuthService,
   ],
 })
 export class IntegrationsCoreModule {}

@@ -1,5 +1,5 @@
 import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
-import type { Job } from 'bullmq';
+import { Queue, type Job } from 'bullmq';
 import {
   DomainCheckJobNames,
   QueueNames,
@@ -51,6 +51,10 @@ export class DomainChecksWorker implements OnModuleDestroy {
   // Assigned in `start()`, never in a field initializer: class fields run
   // before the constructor body assigns `this.redis`.
   private managed: ManagedWorker | null = null;
+  // One long-lived producer for the scheduled fan-out. A Queue built per
+  // sweep leaked its Redis connection: BullMQ never closes a connection it
+  // was handed, and `RedisService` only quits them at shutdown.
+  private fanOut: Queue | null = null;
   private readonly ports = createDefaultPorts();
 
   constructor(
@@ -62,6 +66,9 @@ export class DomainChecksWorker implements OnModuleDestroy {
 
   async start(): Promise<void> {
     if (this.managed) return;
+    this.fanOut = new Queue(QueueNames.domainChecks, {
+      connection: this.redis.bullmqConnection(),
+    });
     this.managed = createManagedWorker({
       queue: QueueNames.domainChecks,
       logger: this.logger,
@@ -70,6 +77,8 @@ export class DomainChecksWorker implements OnModuleDestroy {
         connection: this.redis.bullmqConnection(),
         concurrency: this.env.values.DOMAIN_CHECK_CONCURRENCY,
       },
+      // Closed after the worker drains, so an in-flight sweep can finish.
+      producers: [this.fanOut],
     });
     await this.managed.ready();
   }
@@ -77,6 +86,7 @@ export class DomainChecksWorker implements OnModuleDestroy {
   async onModuleDestroy(): Promise<void> {
     await this.managed?.close();
     this.managed = null;
+    this.fanOut = null;
   }
 
   private async handle(job: Job<unknown, unknown, string>): Promise<unknown> {
@@ -106,41 +116,34 @@ export class DomainChecksWorker implements OnModuleDestroy {
     if (active.length === 0) return { enqueued: 0 };
 
     // Queue access via the singleton `QueuesService` would force us to
-    // inject another module; since we already own the Redis connection
-    // we create a scoped Queue on the fly. Callers never observe this.
-    const { Queue } = await import('bullmq');
-    const queue = new Queue(QueueNames.domainChecks, {
-      connection: this.redis.bullmqConnection(),
-    });
-    try {
-      let enqueued = 0;
-      for (const row of active) {
-        const jobId = `single:${row.id}:${Date.now()}`;
-        await queue.add(
-          DomainCheckJobNames.single,
-          {
-            kind: 'single',
-            domainId: row.id,
-            actorId: null,
+    // inject another module, so the worker owns its own producer.
+    const queue = this.fanOut;
+    if (!queue) throw new Error('domain-checks fan-out queue is not started');
+    let enqueued = 0;
+    for (const row of active) {
+      const jobId = `single:${row.id}:${Date.now()}`;
+      await queue.add(
+        DomainCheckJobNames.single,
+        {
+          kind: 'single',
+          domainId: row.id,
+          actorId: null,
+        },
+        {
+          jobId,
+          attempts: this.env.values.DOMAIN_CHECK_ATTEMPTS,
+          backoff: {
+            type: 'exponential',
+            delay: this.env.values.DOMAIN_CHECK_BACKOFF_MS,
           },
-          {
-            jobId,
-            attempts: this.env.values.DOMAIN_CHECK_ATTEMPTS,
-            backoff: {
-              type: 'exponential',
-              delay: this.env.values.DOMAIN_CHECK_BACKOFF_MS,
-            },
-            removeOnComplete: { age: 24 * 60 * 60, count: 500 },
-            removeOnFail: { age: 7 * 24 * 60 * 60 },
-          },
-        );
-        enqueued += 1;
-      }
-      this.logger.log(`Scheduled sweep fanned out ${enqueued} domain(s)`);
-      return { enqueued };
-    } finally {
-      await queue.close().catch(() => undefined);
+          removeOnComplete: { age: 24 * 60 * 60, count: 500 },
+          removeOnFail: { age: 7 * 24 * 60 * 60 },
+        },
+      );
+      enqueued += 1;
     }
+    this.logger.log(`Scheduled sweep fanned out ${enqueued} domain(s)`);
+    return { enqueued };
   }
 
   private async handleSingle(

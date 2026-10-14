@@ -12,9 +12,16 @@ import { CurrentUser, type AuthedUser } from '../common/current-user.decorator.j
 import { ZodBody } from '../common/zod-validation.pipe.js';
 import { RequirePermission } from '../rbac/require-permission.decorator.js';
 import { RequireStepUp } from '../auth/step-up/require-step-up.decorator.js';
+import { InteractiveOnly } from '../auth/interactive-only.decorator.js';
 import { requestMetaOf } from '../common/request-meta.js';
 
+/**
+ * Instance-wide AI provider configuration. Interactive-only as a whole: the
+ * saved provider key is an instance credential, and no API key or AI
+ * connection has a reason to read, change, or exercise it.
+ */
 @Controller({ path: 'settings/ai', version: '1' })
+@InteractiveOnly()
 export class AiSettingsController {
   constructor(
     private readonly settings: AiSettingsService,

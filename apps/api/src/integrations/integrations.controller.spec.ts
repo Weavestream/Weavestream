@@ -284,6 +284,7 @@ describe('IntegrationsService secret boundary', () => {
       { values: { INTEGRATION_SYNC_DEFAULT_CRON: '*/15 * * * *' } } as never,
       { refreshFor: jest.fn() } as never,
       {} as never,
+      {} as never,
     );
     return { service, id, crypto, audit, tx };
   }
@@ -383,6 +384,7 @@ describe('IntegrationsService resource seeding', () => {
       drivers as never,
       { values: { INTEGRATION_SYNC_DEFAULT_CRON: '*/15 * * * *' } } as never,
       { refreshFor: jest.fn() } as never,
+      {} as never,
       {} as never,
     );
 

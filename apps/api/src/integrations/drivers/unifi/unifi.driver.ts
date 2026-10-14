@@ -16,6 +16,7 @@ import {
 } from '../integration-driver.js';
 import {
   fetchWithRetry,
+  httpsBaseUrlSchema,
   humanizeKey,
   inferHintType,
   sortByLabel,
@@ -76,7 +77,7 @@ const UNIFI_RESOURCE_DEVICES = 'devices' as const;
 const UNIFI_RESOURCE_CLIENTS = 'clients' as const;
 
 const unifiConfigSchema = z.object({
-  baseUrl: z.string().url().default(UNIFI_DEFAULT_BASE_URL),
+  baseUrl: httpsBaseUrlSchema.default(UNIFI_DEFAULT_BASE_URL),
 });
 
 const unifiSecretSchema = z.object({

@@ -15,7 +15,7 @@ import { redactUrlsInText } from './redact-url.js';
  */
 
 const JSON_SECRET_FIELDS =
-  /"(api[_-]?key|authorization|access[_-]?token|refresh[_-]?token|secret|password|token|key)"\s*:\s*"[^"]*"/gi;
+  /"(api[_-]?key|authorization|access[_-]?token|refresh[_-]?token|id[_-]?token|client[_-]?secret|code[_-]?verifier|secret|password|token|key)"\s*:\s*"[^"]*"/gi;
 
 const BEARER_CREDENTIAL = /\bBearer\s+[A-Za-z0-9._~+/=-]{8,}/gi;
 
@@ -23,8 +23,14 @@ const BEARER_CREDENTIAL = /\bBearer\s+[A-Za-z0-9._~+/=-]{8,}/gi;
 const SK_STYLE_KEY = /\bsk-[A-Za-z0-9_-]{8,}/g;
 
 // `?api_key=…`, `&token=…`, `password=…` in query strings or form bodies.
+// The OAuth names are listed explicitly: `\b` does not fire after `_`, so
+// the bare `token`/`secret` alternatives miss `refresh_token=`/`client_secret=`.
 const PARAM_SECRET =
-  /\b(api[_-]?key|apikey|token|secret|password|key)=[^&\s"']+/gi;
+  /\b(api[_-]?key|apikey|access[_-]?token|refresh[_-]?token|id[_-]?token|client[_-]?secret|code[_-]?verifier|token|secret|password|key)=[^&\s"']+/gi;
+
+// An OAuth authorization `code` — only as a query/form parameter, so prose
+// such as "exit code=1" keeps its diagnostic value.
+const OAUTH_CODE_PARAM = /([?&])code=[^&\s"']+/gi;
 
 /**
  * Admin-UI mask of a stored secret: its last four characters, or dots
@@ -41,7 +47,8 @@ export function redactSecretsInText(text: string): string {
       .replace(JSON_SECRET_FIELDS, '"$1":"[redacted]"')
       .replace(BEARER_CREDENTIAL, 'Bearer [redacted]')
       .replace(SK_STYLE_KEY, 'sk-[redacted]')
-      .replace(PARAM_SECRET, '$1=[redacted]'),
+      .replace(PARAM_SECRET, '$1=[redacted]')
+      .replace(OAUTH_CODE_PARAM, '$1code=[redacted]'),
   );
 }
 

@@ -16,6 +16,7 @@ import {
 } from '../integration-driver.js';
 import {
   fetchWithRetry,
+  httpsBaseUrlSchema,
   humanizeKey,
   inferHintType,
   sortByLabel,
@@ -59,7 +60,7 @@ const ACTION1_DEFAULT_BASE_URL = 'https://app.action1.com/api/3.0';
 const ACTION1_OAUTH_PATH = '/oauth2/token';
 
 const action1ConfigSchema = z.object({
-  baseUrl: z.string().url().default(ACTION1_DEFAULT_BASE_URL),
+  baseUrl: httpsBaseUrlSchema.default(ACTION1_DEFAULT_BASE_URL),
 });
 
 const action1SecretSchema = z.object({

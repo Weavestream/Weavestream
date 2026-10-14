@@ -182,3 +182,70 @@ describe('AiService — private-network opt-in (WS-017)', () => {
     });
   });
 });
+
+describe('AiService — saved key is bound to the saved endpoint', () => {
+  const SAVED_KEY = 'sk-SAVED-PROVIDER-SECRET';
+  let seen: Array<{ url: string; auth: string | null }>;
+
+  beforeEach(() => {
+    seen = [];
+    setDefaultResolveForTests(async () => ['93.184.216.34']);
+    setDefaultFetchForTests(((url: string, init?: RequestInit) => {
+      const headers = (init?.headers ?? {}) as Record<string, string>;
+      seen.push({ url: String(url), auth: headers.Authorization ?? null });
+      return Promise.resolve(new Response(MODELS_BODY, { status: 200 }));
+    }) as unknown as typeof fetch);
+  });
+
+  afterEach(() => resetEgressGuardForTests());
+
+  const saved = () =>
+    resolvedConfig({ baseUrl: 'https://api.openai.com/v1', apiKey: SAVED_KEY });
+
+  it('never sends the saved key to a different base URL', async () => {
+    const { svc } = makeService(saved());
+    await svc.runTest(ACTOR, META, { baseUrl: 'https://attacker.example/v1' });
+    expect(seen).toEqual([{ url: 'https://attacker.example/v1/models', auth: null }]);
+  });
+
+  it.each([
+    ['a different path', 'https://api.openai.com/v2'],
+    ['a different scheme', 'http://api.openai.com/v1'],
+    ['a different port', 'https://api.openai.com:8443/v1'],
+  ])('treats %s as a different endpoint', async (_label, baseUrl) => {
+    const { svc } = makeService(saved());
+    await svc.listModels({ baseUrl });
+    expect(seen[0]!.auth).toBeNull();
+  });
+
+  it('reuses the saved key when the override equals the saved URL (trailing slash ignored)', async () => {
+    const { svc } = makeService(saved());
+    await svc.listModels({ baseUrl: 'https://api.openai.com/v1/' });
+    expect(seen[0]!.auth).toBe(`Bearer ${SAVED_KEY}`);
+  });
+
+  it('reuses the saved key when only the private-network flag is overridden', async () => {
+    const { svc } = makeService(saved());
+    await svc.listModels({ allowPrivateNetwork: false });
+    expect(seen[0]).toEqual({
+      url: 'https://api.openai.com/v1/models',
+      auth: `Bearer ${SAVED_KEY}`,
+    });
+  });
+
+  it('sends a typed key to a new base URL', async () => {
+    const { svc } = makeService(saved());
+    await svc.listModels({ baseUrl: 'https://other.example/v1', apiKey: 'sk-typed' });
+    expect(seen[0]!.auth).toBe('Bearer sk-typed');
+  });
+
+  it('explains a 401 from a new URL when the saved key was withheld', async () => {
+    setDefaultFetchForTests(
+      (() => Promise.resolve(new Response('unauthorized', { status: 401 }))) as unknown as typeof fetch,
+    );
+    const { svc } = makeService(saved());
+    await expect(svc.listModels({ baseUrl: 'https://other.example/v1' })).rejects.toThrow(
+      /only sent to the saved base URL/,
+    );
+  });
+});

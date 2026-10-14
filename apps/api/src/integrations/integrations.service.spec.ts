@@ -527,7 +527,7 @@ describe('updateResource target configuration', () => {
     const audit = { logChange: jest.fn().mockResolvedValue(undefined) };
     const service = new IntegrationsService(
       prisma as never, {} as never, audit as never, drivers as never,
-      {} as never, {} as never, {} as never,
+      {} as never, {} as never, {} as never, {} as never,
     );
     return { prisma, service };
   }
@@ -583,6 +583,7 @@ describe('replaceFieldMappings standard-field types', () => {
     const drivers = { get: jest.fn().mockReturnValue({ descriptor: { ...baseDescriptor, resources: [resource] } }) };
     const service = new IntegrationsService(
       prisma as never, {} as never, {} as never, drivers as never, {} as never, {} as never, {} as never,
+      {} as never,
     );
     return { prisma, service };
   }
@@ -624,6 +625,7 @@ describe('listFieldMappings received flag', () => {
     const drivers = { get: jest.fn().mockReturnValue({ descriptor: { ...baseDescriptor, resources: [resource] } }) };
     const service = new IntegrationsService(
       prisma as never, {} as never, {} as never, drivers as never, {} as never, {} as never, {} as never,
+      {} as never,
     );
     return { prisma, service };
   }
@@ -672,7 +674,10 @@ describe('integration deletion', () => {
     asset: '00000000-0000-4000-8000-000000000004',
   };
 
-  function setup(records: Array<{ assetId: string | null; companyId: string }>) {
+  function setup(
+    records: Array<{ assetId: string | null; companyId: string }>,
+    oauth = { readRevocableGrants: jest.fn().mockResolvedValue(null), revokeGrants: jest.fn() },
+  ) {
     const tx = {
       integrationSyncRecord: {
         deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
@@ -697,9 +702,9 @@ describe('integration deletion', () => {
     const scheduler = { refreshFor: jest.fn().mockResolvedValue(undefined) };
     const service = new IntegrationsService(
       prisma as never, {} as never, audit as never, {} as never,
-      {} as never, scheduler as never, {} as never,
+      {} as never, scheduler as never, {} as never, oauth as never,
     );
-    return { service, tx, audit, scheduler };
+    return { service, tx, audit, scheduler, prisma };
   }
 
   it('releases and audits only asset targets from mixed sync records', async () => {
@@ -759,6 +764,74 @@ describe('integration deletion', () => {
   });
 });
 
+describe('integration deletion — OAuth grant revocation', () => {
+  const integrationId = '00000000-0000-4000-8000-000000000002';
+  const grants = {
+    integrationId,
+    oauth: { provider: 'google' },
+    tokens: [
+      { connectionId: 'c-1', refreshToken: 'rt-1' },
+      { connectionId: 'c-2', refreshToken: 'rt-2' },
+    ],
+  };
+
+  function setup(opts: { txFails?: boolean } = {}) {
+    const order: string[] = [];
+    const tx = {
+      integrationSyncRecord: { deleteMany: jest.fn(), findMany: jest.fn() },
+      asset: { updateMany: jest.fn() },
+      integration: {
+        delete: jest.fn(async () => {
+          order.push('delete');
+          if (opts.txFails) throw new Error('db gone');
+          return { id: integrationId };
+        }),
+      },
+    };
+    const prisma = {
+      integration: {
+        findUnique: jest.fn().mockResolvedValue({ id: integrationId, driver: 'google-workspace', name: 'Google' }),
+      },
+      integrationSyncRecord: { findMany: jest.fn().mockResolvedValue([]) },
+      $transaction: jest.fn(async (callback: (client: typeof tx) => Promise<void>) => callback(tx)),
+    };
+    const oauth = {
+      readRevocableGrants: jest.fn(async () => {
+        order.push('read');
+        return grants;
+      }),
+      revokeGrants: jest.fn(async () => {
+        order.push('revoke');
+        return 1;
+      }),
+    };
+    const audit = { log: jest.fn().mockResolvedValue(undefined) };
+    const scheduler = { refreshFor: jest.fn().mockResolvedValue(undefined) };
+    const service = new IntegrationsService(
+      prisma as never, {} as never, audit as never, {} as never,
+      {} as never, scheduler as never, {} as never, oauth as never,
+    );
+    return { service, oauth, audit, order };
+  }
+  const meta = { ip: '127.0.0.1', userAgent: 'jest' };
+
+  it('reads the grants before the cascade and revokes them after it commits', async () => {
+    const { service, oauth, audit, order } = setup();
+    await service.delete({ id: 'actor' } as never, integrationId, meta);
+    expect(order).toEqual(['read', 'delete', 'revoke']);
+    expect(oauth.revokeGrants).toHaveBeenCalledWith(grants);
+    const entry = audit.log.mock.calls[0]![0];
+    expect(entry.after).toEqual({ releasedAssetCount: 0, oauthGrants: 2, revokedOAuthGrants: 1 });
+    expect(JSON.stringify(entry)).not.toContain('rt-1');
+  });
+
+  it('revokes nothing when the delete fails', async () => {
+    const { service, oauth } = setup({ txFails: true });
+    await expect(service.delete({ id: 'actor' } as never, integrationId, meta)).rejects.toThrow('db gone');
+    expect(oauth.revokeGrants).not.toHaveBeenCalled();
+  });
+});
+
 describe('reconstruction administration reads', () => {
   const ids = {
     integration: '00000000-0000-4000-8000-000000000001',
@@ -793,7 +866,7 @@ describe('reconstruction administration reads', () => {
       prisma as never, {} as never, {} as never,
       { get: jest.fn(), has: jest.fn().mockReturnValue(false) } as never,
       { integrationActiveKey: Buffer.alloc(32, 7), values: { INTEGRATION_SYNC_DEFAULT_CRON: 'off' } } as never,
-      {} as never, {} as never,
+      {} as never, {} as never, {} as never,
     );
     return { prisma, service };
   }
@@ -1228,7 +1301,7 @@ describe('IntegrationsService OAuth drivers', () => {
     const service = new IntegrationsService(
       prisma as never, crypto as never, {} as never, drivers as never,
       { values: { INTEGRATION_SYNC_DEFAULT_CRON: 'off' } } as never, {} as never, {} as never,
-      oauthApps as never,
+      {} as never, oauthApps as never,
     );
     return { service, oauthApps, prisma };
   }
@@ -1430,7 +1503,7 @@ describe('Map layouts: recommended destinations for match-first resources', () =
     const audit = { logChange: jest.fn().mockResolvedValue(undefined) };
     const service = new IntegrationsService(
       prisma as never, {} as never, audit as never, drivers as never,
-      {} as never, {} as never, { has: () => true } as never,
+      {} as never, {} as never, { has: () => true } as never, {} as never,
     );
     return { prisma, service, audit, createdFields };
   }

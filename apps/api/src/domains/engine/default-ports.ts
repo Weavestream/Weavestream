@@ -12,7 +12,7 @@ import {
   type PeerCertificate,
 } from 'node:tls';
 import { Socket } from 'node:net';
-import { safeFetch } from '../../common/egress/safe-fetch.js';
+import { resolveEgressAddress, safeFetch } from '../../common/egress/safe-fetch.js';
 import type {
   CaaRecord,
   Clock,
@@ -159,10 +159,15 @@ function normaliseKeyAlgo(
 }
 
 const defaultTls: TlsPort = {
-  probe(hostname, port, timeoutMs) {
+  async probe(hostname, port, timeoutMs) {
+    // Monitored hostnames can come from synced provider feeds (Google
+    // Workspace, Microsoft 365), so their DNS is outside our control. Apply
+    // the egress guard and connect to the validated address; `servername`
+    // keeps SNI and the identity check on the real hostname.
+    const address = await resolveEgressAddress(hostname, `tls://${hostname}:${port}`);
     return new Promise<TlsCertificateInfo>((resolve, reject) => {
       const socket = tlsConnect({
-        host: hostname,
+        host: address,
         port,
         servername: hostname,
         timeout: timeoutMs,
@@ -271,7 +276,10 @@ const defaultTls: TlsPort = {
 };
 
 const defaultWhois43: Whois43Port = {
-  query(server, hostname, timeoutMs) {
+  async query(server, hostname, timeoutMs) {
+    // `server` can be a referral taken from a previous WHOIS response, so it
+    // gets the same egress guard as every other outbound connection.
+    const address = await resolveEgressAddress(server, `whois://${server}:${WHOIS_PORT}`);
     return new Promise<string>((resolve, reject) => {
       const socket = new Socket();
       socket.setEncoding('utf8');
@@ -285,7 +293,7 @@ const defaultWhois43: Whois43Port = {
       });
       socket.on('error', reject);
 
-      socket.connect(WHOIS_PORT, server, () => {
+      socket.connect(WHOIS_PORT, address, () => {
         socket.write(`${hostname}\r\n`);
       });
     });

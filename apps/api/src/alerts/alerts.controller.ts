@@ -22,9 +22,16 @@ import { AlertsService } from './alerts.service.js';
 import { CurrentUser, type AuthedUser } from '../common/current-user.decorator.js';
 import { ZodBody } from '../common/zod-validation.pipe.js';
 import { RequirePermission } from '../rbac/require-permission.decorator.js';
+import { InteractiveOnly } from '../auth/interactive-only.decorator.js';
 import { requestMetaOf } from '../common/request-meta.js';
 
+/**
+ * Alert rules decide who is emailed about monitoring events. Interactive-only
+ * as a whole: a leaked API key or AI connection must not be able to add its
+ * own recipient and turn alerts into an outbound data channel.
+ */
 @Controller({ path: 'alerts', version: '1' })
+@InteractiveOnly()
 export class AlertsController {
   constructor(private readonly alerts: AlertsService) {}
 

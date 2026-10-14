@@ -43,6 +43,23 @@ describe('redactSecretsInText', () => {
     expect(out).not.toContain('zzz-topsecret');
   });
 
+  it('redacts OAuth token-endpoint form and JSON fields', () => {
+    const out = redactSecretsInText(
+      'grant_type=refresh_token&refresh_token=1//rt-secret&client_id=abc&client_secret=cs-secret&code=4/auth-code&code_verifier=pkce-secret ' +
+        '{"id_token":"eyJ.id.secret","client_secret":"cs-json-secret"}',
+    );
+    for (const leaked of ['rt-secret', 'cs-secret', 'auth-code', 'pkce-secret', 'id.secret', 'cs-json-secret']) {
+      expect(out).not.toContain(leaked);
+    }
+    // Non-secret parameters keep their diagnostic value.
+    expect(out).toContain('grant_type=refresh_token');
+    expect(out).toContain('client_id=abc');
+  });
+
+  it('leaves a prose "code=" alone', () => {
+    expect(redactSecretsInText('process exited with code=1')).toBe('process exited with code=1');
+  });
+
   it('redacts embedded URLs (userinfo + query)', () => {
     const out = redactSecretsInText(
       'connect failed for https://user:pass@llm.example/v1?sig=abc123',
