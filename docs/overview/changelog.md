@@ -13,6 +13,8 @@ All notable changes to Weavestream are documented here. The format follows [Keep
 
 ## [Unreleased]
 
+## [1.10.2] - 2026-10-14
+
 ### Changed
 
 - **Smaller MCP tool results.** Every tool now returns compact JSON, and `list_layouts` returns each layout's id, name, slug, status and field count instead of every field definition (about 2 KB instead of about 100 KB on a stock install). Use `get_layout` for a layout's fields. `list_layouts` also accepts an optional `q` filter.
