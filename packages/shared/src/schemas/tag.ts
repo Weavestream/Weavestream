@@ -34,7 +34,7 @@ export const listTagsQuerySchema = z.object({
 });
 
 export const tagSchema = z.object({
-  id: z.string().uuid(),
+  id: z.guid(),
   name: z.string(),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),
@@ -50,7 +50,7 @@ export const tagSchema = z.object({
 export const tagsFieldInputSchema = z
   .array(
     z.union([
-      z.string().uuid(),
+      z.guid(),
       z.object({ name: tagNameSchema }).strict(),
     ]),
   )

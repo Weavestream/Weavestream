@@ -60,7 +60,7 @@ export const datetimeOptionsSchema = dateOptionsSchema;
 export const assetReferenceOptionsSchema = z
   .object({
     /** UUID of the target AssetLayout — writes upsert Relation rows. */
-    targetLayoutId: z.string().uuid(),
+    targetLayoutId: z.guid(),
     /**
      * Relation verb persisted on `Relation.relationType` (e.g.
      * `primary_user`). Defaults to the field's own slug.
@@ -167,7 +167,7 @@ export const createAssetFieldSchema = z.object({
   visibleToClients: z.boolean().default(true),
   isPrimary: z.boolean().default(false),
   showInTable: z.boolean().default(false),
-  options: z.record(z.unknown()).default({}),
+  options: z.record(z.string(), z.unknown()).default({}),
 });
 
 export type CreateAssetFieldInput = z.infer<typeof createAssetFieldSchema>;
@@ -189,7 +189,7 @@ export const updateAssetFieldSchema = z
     visibleToClients: z.boolean().optional(),
     isPrimary: z.boolean().optional(),
     showInTable: z.boolean().optional(),
-    options: z.record(z.unknown()).optional(),
+    options: z.record(z.string(), z.unknown()).optional(),
   })
   .refine((v) => Object.keys(v).length > 0, 'At least one field must be provided');
 
@@ -207,7 +207,7 @@ export const saveAssetFieldsSchema = z.object({
   fields: z
     .array(
       z.object({
-        id: z.string().uuid().optional(),
+        id: z.guid().optional(),
         name: fieldLabelSchema,
         slug: fieldSlugSchema,
         fieldType: z.enum(FieldTypeValues),
@@ -217,7 +217,7 @@ export const saveAssetFieldsSchema = z.object({
         visibleToClients: z.boolean().default(true),
         isPrimary: z.boolean().default(false),
         showInTable: z.boolean().default(false),
-        options: z.record(z.unknown()).default({}),
+        options: z.record(z.string(), z.unknown()).default({}),
       }),
     )
     .min(1, 'A layout needs at least one field')

@@ -88,7 +88,7 @@ async function primed(rows: ConfigRow[]) {
 }
 
 // Real UUIDs — the enqueue payload is validated against
-// `alertsSendJobSchema`, whose `alertConfigId` is `z.string().uuid()`.
+// `alertsSendJobSchema`, whose `alertConfigId` is `z.guid()`.
 const SIGNIN_ID = '00000000-0000-4000-8000-000000000001';
 const IPBLOCK_ID = '00000000-0000-4000-8000-000000000002';
 const SUSPICIOUS_ID = '00000000-0000-4000-8000-000000000003';

@@ -467,7 +467,7 @@ export const driverOAuthDescriptorSchema = z
       .array(z.object({ label: z.string().min(1).max(80), scopes: z.array(z.string().min(1).max(256)).min(1).max(50) }).strict())
       .max(10)
       .optional(),
-    extraAuthorizeParams: z.record(z.string().max(256)).optional(),
+    extraAuthorizeParams: z.record(z.string(), z.string().max(256)).optional(),
   })
   .strict()
   .refine((d) => d.consentFlow !== 'admin_consent' || (d.clientCredentialsScope !== undefined && d.tokenUrl.includes('{tenant}')), {
@@ -651,9 +651,9 @@ export const createIntegrationSchema = z.object({
   driver: z.string().min(1),
   name: z.string().min(1).max(100),
   /** Driver-validated config blob (no secrets). */
-  config: z.record(z.unknown()).default({}),
+  config: z.record(z.string(), z.unknown()).default({}),
   /** Driver-validated secret blob — encrypted before persisting. */
-  secret: z.record(z.unknown()).optional(),
+  secret: z.record(z.string(), z.unknown()).optional(),
   /** Optional 5-field cron expression. NULL disables scheduled syncs. */
   syncCron: z.string().nullable().optional(),
   status: integrationStatusSchema.default('PAUSED'),
@@ -662,9 +662,9 @@ export const createIntegrationSchema = z.object({
 export const updateIntegrationSchema = z
   .object({
     name: z.string().min(1).max(100).optional(),
-    config: z.record(z.unknown()).optional(),
+    config: z.record(z.string(), z.unknown()).optional(),
     /** Replace secret bundle. Omit to leave the existing ciphertext alone. */
-    secret: z.record(z.unknown()).optional(),
+    secret: z.record(z.string(), z.unknown()).optional(),
     /** Set to `null` to wipe the stored secret. */
     clearSecret: z.boolean().optional(),
     syncCron: z.string().nullable().optional(),
@@ -686,18 +686,18 @@ export type UpdateIntegrationInput = z.infer<typeof updateIntegrationSchema>;
  * resource tabs without a second round-trip.
  */
 export const integrationResourceDtoSchema = z.object({
-  id: z.string().uuid(),
-  integrationId: z.string().uuid(),
+  id: z.guid(),
+  integrationId: z.guid(),
   resourceKey: z.string(),
   /** Driver-declared label (snapshotted from the descriptor). */
   resourceLabel: z.string(),
   enabled: z.boolean(),
   targetKind: integrationTargetKindSchema,
-  targetConfig: z.record(z.unknown()),
+  targetConfig: z.record(z.string(), z.unknown()),
   dependsOnResourceKeys: z.array(driverResourceKeySchema),
-  assetLayoutId: z.string().uuid().nullable(),
+  assetLayoutId: z.guid().nullable(),
   assetLayoutName: z.string().nullable(),
-  matchKeyFieldIds: z.array(z.string().uuid()),
+  matchKeyFieldIds: z.array(z.guid()),
   /** Snapshot of total field mappings configured for this resource. */
   fieldMappingCount: z.number().int(),
   createdAt: z.string(),
@@ -714,11 +714,11 @@ export const updateIntegrationResourceSchema = z
   .object({
     enabled: z.boolean().optional(),
     /** Set to a UUID to attach a layout, or `null` to detach. Detaching while field mappings exist is rejected. */
-    assetLayoutId: z.string().uuid().nullable().optional(),
+    assetLayoutId: z.guid().nullable().optional(),
     /** Replace-all set of match-key AssetField ids on the chosen layout. */
-    matchKeyFieldIds: z.array(z.string().uuid()).optional(),
+    matchKeyFieldIds: z.array(z.guid()).optional(),
     /** Target-kind-specific operator configuration. The API re-validates this against the immutable driver descriptor. */
-    targetConfig: z.record(z.unknown()).optional(),
+    targetConfig: z.record(z.string(), z.unknown()).optional(),
   })
   .refine((v) => Object.keys(v).length > 0, {
     message: 'At least one field must be provided',
@@ -734,7 +734,7 @@ export type UpdateIntegrationResourceInput = z.infer<typeof updateIntegrationRes
  */
 export const ensureResourceMatchFieldSchema = z
   .object({
-    assetLayoutId: z.string().uuid(),
+    assetLayoutId: z.guid(),
     /** A standard field to create instead of the match field. */
     sourceField: z.string().min(1).max(60).optional(),
   })
@@ -748,11 +748,11 @@ export interface EnsureResourceMatchFieldResult {
 }
 
 export const integrationDtoSchema = z.object({
-  id: z.string().uuid(),
+  id: z.guid(),
   driver: z.string(),
   name: z.string(),
   status: integrationStatusSchema,
-  config: z.record(z.unknown()),
+  config: z.record(z.string(), z.unknown()),
   syncCron: z.string().nullable(),
   /**
    * Cron actually in effect for this integration: the row's own
@@ -762,7 +762,7 @@ export const integrationDtoSchema = z.object({
   effectiveSyncCron: z.string().nullable(),
   hasSecret: z.boolean(),
   /** Last 4 chars of every secret value, by key — used for masked display. */
-  secretMask: z.record(z.string()).nullable(),
+  secretMask: z.record(z.string(), z.string()).nullable(),
   /**
    * Per-resource config snapshots. Always non-empty (the seed migration
    * + create flow guarantee at least one resource row exists per
@@ -772,7 +772,7 @@ export const integrationDtoSchema = z.object({
   resources: z.array(integrationResourceDtoSchema),
   lastRunAt: z.string().nullable(),
   lastRunStatus: z.string().nullable(),
-  createdBy: z.string().uuid().nullable(),
+  createdBy: z.guid().nullable(),
   createdAt: z.string(),
   updatedAt: z.string(),
   /** Snapshot of total enabled mappings (cheap counter for the list). */
@@ -833,19 +833,19 @@ export type SourceFieldDto = z.infer<typeof sourceFieldSchema>;
 // shared across every per-company mapping for that integration.
 
 export const createIntegrationCompanyMappingSchema = z.object({
-  companyId: z.string().uuid(),
+  companyId: z.guid(),
   externalOrgId: z.string().min(1),
   externalOrgName: z.string().nullable().optional(),
   enabled: z.boolean().default(true),
-  filter: z.record(z.unknown()).default({}),
+  filter: z.record(z.string(), z.unknown()).default({}),
 });
 
 export const updateIntegrationCompanyMappingSchema = z
   .object({
-    companyId: z.string().uuid().optional(),
+    companyId: z.guid().optional(),
     externalOrgName: z.string().nullable().optional(),
     enabled: z.boolean().optional(),
-    filter: z.record(z.unknown()).optional(),
+    filter: z.record(z.string(), z.unknown()).optional(),
   })
   .refine((v) => Object.keys(v).length > 0, {
     message: 'At least one field must be provided',
@@ -859,14 +859,14 @@ export type UpdateIntegrationCompanyMappingInput = z.infer<
 >;
 
 export const integrationCompanyMappingDtoSchema = z.object({
-  id: z.string().uuid(),
-  integrationId: z.string().uuid(),
-  companyId: z.string().uuid(),
+  id: z.guid(),
+  integrationId: z.guid(),
+  companyId: z.guid(),
   companyName: z.string().nullable(),
   externalOrgId: z.string(),
   externalOrgName: z.string().nullable(),
   enabled: z.boolean(),
-  filter: z.record(z.unknown()),
+  filter: z.record(z.string(), z.unknown()),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -968,7 +968,7 @@ export type IntegrationTransform = z.infer<typeof integrationTransformSchema>;
 export const fieldMappingDraftSchema = z
   .object({
   sourceField: z.string().min(1),
-    targetFieldId: z.string().uuid().nullable().optional(),
+    targetFieldId: z.guid().nullable().optional(),
     targetPath: z.string().min(1).max(4096).nullable().optional(),
   syncDirection: integrationSyncDirectionSchema.default('source_wins'),
     transform: integrationTransformSchema.nullable().optional(),
@@ -986,12 +986,12 @@ export type FieldMappingDraft = z.infer<typeof fieldMappingDraftSchema>;
 export type ReplaceFieldMappingsInput = z.infer<typeof replaceFieldMappingsSchema>;
 
 export const integrationFieldMappingDtoSchema = z.object({
-  id: z.string().uuid(),
+  id: z.guid(),
   /** Phase 11.1 — scoped per resource (devices vs clients vs records). */
-  resourceId: z.string().uuid(),
+  resourceId: z.guid(),
   resourceKey: z.string(),
   sourceField: z.string(),
-  targetFieldId: z.string().uuid().nullable(),
+  targetFieldId: z.guid().nullable(),
   targetPath: z.string().nullable(),
   targetFieldSlug: z.string().nullable(),
   targetFieldName: z.string().nullable(),
@@ -1016,13 +1016,13 @@ export const triggerSyncSchema = z.object({
 export type TriggerSyncInput = z.infer<typeof triggerSyncSchema>;
 
 export const integrationSyncRunDtoSchema = z.object({
-  id: z.string().uuid(),
-  integrationId: z.string().uuid(),
+  id: z.guid(),
+  integrationId: z.guid(),
   kind: integrationRunKindSchema,
   mode: integrationSyncModeSchema,
   status: integrationRunStatusSchema,
   dryRun: z.boolean(),
-  triggeredBy: z.string().uuid().nullable(),
+  triggeredBy: z.guid().nullable(),
   /**
    * Resolved actor for the run. NULL when `triggeredBy` is null
    * (scheduled / system runs) or the user has been removed since
@@ -1030,14 +1030,14 @@ export const integrationSyncRunDtoSchema = z.object({
    */
   triggeredByUser: z
     .object({
-      id: z.string().uuid(),
+      id: z.guid(),
       name: z.string(),
       email: z.string(),
     })
     .nullable(),
   startedAt: z.string().nullable(),
   finishedAt: z.string().nullable(),
-  totals: z.record(z.unknown()).nullable(),
+  totals: z.record(z.string(), z.unknown()).nullable(),
   error: z.string().nullable(),
   createdAt: z.string(),
 });
@@ -1045,15 +1045,15 @@ export const integrationSyncRunDtoSchema = z.object({
 export type IntegrationSyncRunDto = z.infer<typeof integrationSyncRunDtoSchema>;
 
 export const integrationSyncRunCompanyResultDtoSchema = z.object({
-  id: z.string().uuid(),
-  syncRunId: z.string().uuid(),
-  integrationCompanyMappingId: z.string().uuid(),
-  companyId: z.string().uuid(),
+  id: z.guid(),
+  syncRunId: z.guid(),
+  integrationCompanyMappingId: z.guid(),
+  companyId: z.guid(),
   companyName: z.string().nullable(),
   status: integrationRunStatusSchema,
   startedAt: z.string().nullable(),
   finishedAt: z.string().nullable(),
-  totals: z.record(z.unknown()).nullable(),
+  totals: z.record(z.string(), z.unknown()).nullable(),
   conflicts: z.array(z.unknown()).nullable(),
   error: z.string().nullable(),
   createdAt: z.string(),
@@ -1109,7 +1109,7 @@ export const syncRunTotalsSchema = z.object({
    * mapping ran. Optional so legacy single-resource rows pre-migration
    * still parse.
    */
-  byResource: z.record(syncRunResourceTotalsSchema).optional(),
+  byResource: z.record(z.string(), syncRunResourceTotalsSchema).optional(),
 });
 
 export type SyncRunTotals = z.infer<typeof syncRunTotalsSchema>;
@@ -1120,14 +1120,14 @@ export const syncRunConflictSchema = z.object({
   /** Free-form summary line for the run viewer. */
   message: z.string(),
   /** Up to ~5 conflicting asset ids surfaced for the operator to triage. */
-  candidateAssetIds: z.array(z.string().uuid()).optional(),
+  candidateAssetIds: z.array(z.guid()).optional(),
 });
 
 export type SyncRunConflict = z.infer<typeof syncRunConflictSchema>;
 
 export const integrationProvenanceSchema = z
   .object({
-    integrationId: z.string().uuid(),
+    integrationId: z.guid(),
     externalOrgId: z.string().min(1).max(256),
     resourceKey: z.string().min(1).max(256),
     externalId: z.string().min(1).max(1024),
@@ -1228,9 +1228,9 @@ const boundedGapDetailsSchema = z
   .pipe(allowlistedGapDetailsSchema);
 
 const reconstructionGapShape = {
-  companyId: z.string().uuid(),
-  integrationCompanyMappingId: z.string().uuid(),
-  resourceId: z.string().uuid(),
+  companyId: z.guid(),
+  integrationCompanyMappingId: z.guid(),
+  resourceId: z.guid(),
   externalId: z.string().max(512).nullable(),
   kind: reconstructionGapKindSchema,
   message: z.string().min(1).max(512),
@@ -1246,7 +1246,7 @@ export type IntegrationReconstructionGapInput = z.infer<
 >;
 
 export const integrationReconstructionGapDtoSchema = z
-  .object({ id: z.string().uuid(), ...reconstructionGapShape })
+  .object({ id: z.guid(), ...reconstructionGapShape })
   .strict();
 export type IntegrationReconstructionGapDto = z.infer<typeof integrationReconstructionGapDtoSchema>;
 
@@ -1272,19 +1272,19 @@ export type ReconstructionCompletenessCounts = z.infer<
 
 export const integrationCompletenessQuerySchema = z
   .object({
-    mappingId: z.string().uuid().optional(),
-    resourceId: z.string().uuid().optional(),
+    mappingId: z.guid().optional(),
+    resourceId: z.guid().optional(),
   })
   .strict();
 export type IntegrationCompletenessQuery = z.infer<typeof integrationCompletenessQuerySchema>;
 
 export const integrationCompletenessRowSchema = z
   .object({
-    id: z.string().uuid(),
-    companyId: z.string().uuid(),
+    id: z.guid(),
+    companyId: z.guid(),
     companyName: z.string().min(1).max(256),
-    integrationCompanyMappingId: z.string().uuid(),
-    resourceId: z.string().uuid(),
+    integrationCompanyMappingId: z.guid(),
+    resourceId: z.guid(),
     resourceKey: driverResourceKeySchema,
     resourceLabel: z.string().min(1).max(256),
     counts: reconstructionCompletenessCountsSchema,
@@ -1307,8 +1307,8 @@ export type IntegrationCompletenessResponse = z.infer<
 const reconstructionResolutionSchema = z.enum(['active', 'resolved', 'all']);
 export const integrationGapsQuerySchema = z
   .object({
-    mappingId: z.string().uuid().optional(),
-    resourceId: z.string().uuid().optional(),
+    mappingId: z.guid().optional(),
+    resourceId: z.guid().optional(),
     kind: reconstructionGapKindSchema.optional(),
     resolution: reconstructionResolutionSchema.default('active'),
     limit: z.coerce.number().int().min(1).max(100).default(50),
@@ -1320,7 +1320,7 @@ export type IntegrationGapsQuery = z.infer<typeof integrationGapsQuerySchema>;
 export const integrationNativeTargetSchema = z
   .object({
     targetKind: integrationTargetKindSchema,
-    targetId: z.string().uuid(),
+    targetId: z.guid(),
     targetLabel: z.string().min(1).max(256),
     targetHref: z.string().startsWith('/admin/companies/').max(1024).nullable(),
   })
@@ -1329,11 +1329,11 @@ export type IntegrationNativeTarget = z.infer<typeof integrationNativeTargetSche
 
 export const integrationGapRowSchema = z
   .object({
-    id: z.string().uuid(),
-    companyId: z.string().uuid(),
+    id: z.guid(),
+    companyId: z.guid(),
     companyName: z.string().min(1).max(256),
-    integrationCompanyMappingId: z.string().uuid(),
-    resourceId: z.string().uuid(),
+    integrationCompanyMappingId: z.guid(),
+    resourceId: z.guid(),
     resourceKey: driverResourceKeySchema,
     resourceLabel: z.string().min(1).max(256),
     kind: reconstructionGapKindSchema,
@@ -1356,10 +1356,10 @@ export type IntegrationGapsPage = z.infer<typeof integrationGapsPageSchema>;
 
 export const integrationTargetProvenanceSchema = z
   .object({
-    integrationId: z.string().uuid(),
+    integrationId: z.guid(),
     integrationName: z.string().min(1).max(256),
-    integrationCompanyMappingId: z.string().uuid(),
-    resourceId: z.string().uuid(),
+    integrationCompanyMappingId: z.guid(),
+    resourceId: z.guid(),
     sourceLabel: z.string().min(1).max(256),
     sourceResource: driverResourceKeySchema,
     ownership: z.enum(['breeze', 'weavestream']),
@@ -1385,8 +1385,10 @@ export const integrationOAuthAppSchema = z.object({
   /** Callback URL to register with the provider (computed from `API_URL`). */
   redirectUri: z.string(),
   /**
-   * Fixed warning when `API_URL` and `APP_URL` are on different hosts: the
-   * host-only session cookie is not sent to the callback. Null when fine.
+   * Fixed warning when `API_URL` and `APP_URL` are on different hosts (the
+   * host-only session cookie is not sent to the callback), or when `API_URL`
+   * is plain http on a non-loopback host (providers reject that redirect URI).
+   * Null when fine.
    */
   callbackHostWarning: z.string().nullable(),
   /** Union of the scopes every registered driver of this provider requests. */
@@ -1426,7 +1428,12 @@ export const updateIntegrationOAuthAppSchema = z
       .nullable()
       .optional(),
     /** The operator's own directory (tenant) ID (GUID); null clears it, omitted keeps it. */
-    tenantId: z.string().trim().uuid('Use the Directory (tenant) ID, a GUID').nullable().optional(),
+    tenantId: z
+      .string()
+      .trim()
+      .pipe(z.guid('Use the Directory (tenant) ID, a GUID'))
+      .nullable()
+      .optional(),
   })
   .strict();
 export type UpdateIntegrationOAuthAppInput = z.infer<typeof updateIntegrationOAuthAppSchema>;
@@ -1437,7 +1444,7 @@ export type IntegrationConnectionStatus = z.infer<typeof integrationConnectionSt
 
 /** One client tenant connected to an OAuth integration. */
 export const integrationConnectionSchema = z.object({
-  id: z.string().uuid(),
+  id: z.guid(),
   /** Google customer id / Microsoft tenant id. */
   externalOrgId: z.string(),
   /** Primary domain (Google) or tenant name (Microsoft), when known. */
@@ -1473,7 +1480,7 @@ export type IntegrationConnections = z.infer<typeof integrationConnectionsSchema
 
 /** Start a connect flow: a new client tenant, or Reconnect of one connection. */
 export const startIntegrationConnectionSchema = z
-  .object({ connectionId: z.string().uuid().optional() })
+  .object({ connectionId: z.guid().optional() })
   .strict();
 export type StartIntegrationConnectionInput = z.infer<typeof startIntegrationConnectionSchema>;
 
@@ -1491,8 +1498,8 @@ export type IntegrationDifferenceChoice = z.infer<typeof integrationDifferenceCh
 
 export const resolveIntegrationDifferenceSchema = z
   .object({
-    syncRecordId: z.string().uuid(),
-    assetFieldId: z.string().uuid(),
+    syncRecordId: z.guid(),
+    assetFieldId: z.guid(),
     choice: integrationDifferenceChoiceSchema,
   })
   .strict();
@@ -1516,15 +1523,15 @@ export const resolveIntegrationDifferencesBulkSchema = z
   .object({
     choice: integrationDifferenceChoiceSchema,
     items: z
-      .array(z.object({ syncRecordId: z.string().uuid(), assetFieldId: z.string().uuid() }).strict())
+      .array(z.object({ syncRecordId: z.guid(), assetFieldId: z.guid() }).strict())
       .min(1)
       .max(INTEGRATION_DIFFERENCES_BULK_MAX)
       .optional(),
     filter: z
       .object({
-        companyId: z.string().uuid().optional(),
+        companyId: z.guid().optional(),
         /** Last sync record id of the previous batch (from `nextCursor`). */
-        cursor: z.string().uuid().optional(),
+        cursor: z.guid().optional(),
       })
       .strict()
       .optional(),
@@ -1555,10 +1562,10 @@ export interface IntegrationDifferencesBulkResult {
 
 export const integrationDifferencesQuerySchema = z
   .object({
-    companyId: z.string().uuid().optional(),
+    companyId: z.guid().optional(),
     limit: z.coerce.number().int().min(1).max(100).default(50),
     /** Last sync record id of the previous page. */
-    cursor: z.string().uuid().optional(),
+    cursor: z.guid().optional(),
   })
   .strict();
 export type IntegrationDifferencesQuery = z.infer<typeof integrationDifferencesQuerySchema>;

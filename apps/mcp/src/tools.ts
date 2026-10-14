@@ -15,12 +15,12 @@ import { WeavestreamApiError, type WeavestreamClient } from './client.js';
  * unless minted with that too.
  */
 
-const id = z.string().uuid();
+const id = z.guid();
 const companyId = id.describe('Company (tenant) id, from list_companies.');
 const cursor = z.string().max(500).optional().describe('Opaque cursor from a previous page.');
 const limit = z.number().int().min(1).max(100).optional();
 const fieldValues = z
-  .record(z.unknown())
+  .record(z.string(), z.unknown())
   .describe(
     'Map of layout field SLUG → value (not the field id). Slugs and types come from get_layout; unknown slugs are rejected.',
   );
@@ -44,13 +44,13 @@ export function registerTools(server: McpServer, api: WeavestreamClient): string
     description: string,
     inputSchema: S,
     annotations: typeof read | typeof write,
-    run: (args: z.objectOutputType<S, z.ZodTypeAny>) => Promise<unknown>,
+    run: (args: z.output<z.ZodObject<S>>) => Promise<unknown>,
   ) => {
     names.push(name);
     server.registerTool(
       name,
       { description: description + DATA_NOTE, inputSchema, annotations },
-      (async (args: z.objectOutputType<S, z.ZodTypeAny>) => result(() => run(args))) as never,
+      (async (args: z.output<z.ZodObject<S>>) => result(() => run(args))) as never,
     );
   };
 

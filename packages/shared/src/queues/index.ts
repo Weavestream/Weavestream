@@ -75,14 +75,14 @@ export const scheduledDomainCheckJobSchema = z.object({
 
 export const singleDomainCheckJobSchema = z.object({
   kind: z.literal('single'),
-  domainId: z.string().uuid(),
-  actorId: z.string().uuid().nullable(),
+  domainId: z.guid(),
+  actorId: z.guid().nullable(),
   /**
    * Opaque trace id — populated by the api when an HTTP caller enqueues
    * a manual check so logs on both sides can be correlated. Optional
    * so the repeatable job's fan-out children don't have to invent one.
    */
-  correlationId: z.string().uuid().optional(),
+  correlationId: z.guid().optional(),
 });
 
 export const domainCheckJobSchema = z.discriminatedUnion('kind', [
@@ -127,8 +127,8 @@ export type DomainCheckJobName =
 
 export const pwnedCheckJobSchema = z.object({
   kind: z.literal('password'),
-  passwordId: z.string().uuid(),
-  companyId: z.string().uuid(),
+  passwordId: z.guid(),
+  companyId: z.guid(),
   /**
    * Uppercase hex SHA-1 (40 chars) of the plaintext, computed in the
    * API at enqueue time. The worker splits this into prefix[0..5]
@@ -169,8 +169,8 @@ export type PwnedCheckJobName =
 export const companyExportJobSchema = z.discriminatedUnion('kind', [
   z.object({
     kind: z.literal('export'),
-    exportId: z.string().uuid(),
-    companyId: z.string().uuid(),
+    exportId: z.guid(),
+    companyId: z.guid(),
     includePasswords: z.boolean(),
     /**
      * Opaque ciphertext (base64) produced by `SecretEncryptionService.encrypt`.
@@ -184,7 +184,7 @@ export const companyExportJobSchema = z.discriminatedUnion('kind', [
     kind: z.literal('cleanup'),
     /** Storage key to delete after the TTL window. */
     storageKey: z.string(),
-    companyId: z.string().uuid(),
+    companyId: z.guid(),
   }),
 ]);
 
@@ -227,12 +227,12 @@ export interface ExportJobResult {
 export const integrationSyncOrchestratorJobSchema = z.discriminatedUnion('kind', [
   z.object({
     kind: z.literal('scheduled'),
-    integrationId: z.string().uuid(),
+    integrationId: z.guid(),
     mode: z.enum(['incremental', 'full']).optional(),
   }),
   z.object({
     kind: z.literal('manual'),
-    integrationId: z.string().uuid(),
+    integrationId: z.guid(),
     /**
      * Rolling-upgrade compatibility: jobs enqueued by a pre-DAG API
      * (≤ the release before reconstruction sync) carry no `syncRunId`.
@@ -241,8 +241,8 @@ export const integrationSyncOrchestratorJobSchema = z.discriminatedUnion('kind',
      * the worker falls back to the legacy most-recent-queued-run lookup
      * when it is absent. New producers always set it.
      */
-    syncRunId: z.string().uuid().optional(),
-    triggeredBy: z.string().uuid(),
+    syncRunId: z.guid().optional(),
+    triggeredBy: z.guid(),
     mode: z.enum(['incremental', 'full']).default('incremental'),
     /**
      * When true the worker computes every resolution but writes nothing
@@ -273,8 +273,8 @@ export type IntegrationSyncOrchestratorJobName =
 // and writes a row into `integration_sync_run_company_results`.
 
 export const integrationSyncMappingJobSchema = z.object({
-  syncRunId: z.string().uuid(),
-  integrationCompanyMappingId: z.string().uuid(),
+  syncRunId: z.guid(),
+  integrationCompanyMappingId: z.guid(),
   /**
    * Phase 11.1 — every per-mapping job is scoped to a single
    * `IntegrationResource` so the orchestrator fans out
@@ -283,7 +283,7 @@ export const integrationSyncMappingJobSchema = z.object({
    * field mappings; per-resource totals roll up into the
    * mapping's `IntegrationSyncRunCompanyResult.totals.byResource`.
    */
-  resourceId: z.string().uuid(),
+  resourceId: z.guid(),
   mode: z.enum(['incremental', 'full']).default('incremental'),
   stageIndex: z.number().int().nonnegative().optional(),
   /**
@@ -297,8 +297,8 @@ export const integrationSyncMappingJobSchema = z.object({
    * must stay optional until every supported upgrade path has drained
    * pre-DAG queues. Do not make it required.
    */
-  resourceIds: z.array(z.string().uuid()).max(64).optional(),
-  auditActorId: z.string().uuid().nullable().optional(),
+  resourceIds: z.array(z.guid()).max(64).optional(),
+  auditActorId: z.guid().nullable().optional(),
   dryRun: z.boolean().default(false),
 }).superRefine((job, ctx) => {
   if (job.resourceIds && new Set(job.resourceIds).size !== job.resourceIds.length) {
@@ -354,7 +354,7 @@ export type AlertsScanJob = z.infer<typeof alertsScanJobSchema>;
 
 export const alertsSendJobSchema = z.object({
   kind: z.literal('send'),
-  alertConfigId: z.string().uuid(),
+  alertConfigId: z.guid(),
   triggerKey: z.string().min(1).max(500),
   // One-or-more recipient addresses. Snapshotted at enqueue time so a
   // later edit to the AlertConfig recipient list doesn't redirect an
@@ -400,7 +400,7 @@ export type AlertsJobName =
 
 export const backupRunJobSchema = z.object({
   kind: z.literal('run'),
-  configId: z.string().uuid(),
+  configId: z.guid(),
   /**
    * Pre-allocated `BackupRun` row id. The "Run now" admin action
    * mints a `MANUAL` row up-front and passes its id so the UI can
@@ -408,13 +408,13 @@ export const backupRunJobSchema = z.object({
    * the consumer creates a `SCHEDULED` row inline — its absence is
    * also what lets the worker skip ticks for disabled configs.
    */
-  backupRunId: z.string().uuid().optional(),
+  backupRunId: z.guid().optional(),
 });
 export type BackupRunJob = z.infer<typeof backupRunJobSchema>;
 
 export const backupPruneJobSchema = z.object({
   kind: z.literal('prune'),
-  configId: z.string().uuid(),
+  configId: z.guid(),
 });
 export type BackupPruneJob = z.infer<typeof backupPruneJobSchema>;
 
@@ -442,11 +442,11 @@ export type BackupJobName =
 // synchronous Gateway PATCH endpoint, so there's no async finalize lane.
 
 export const cloudflareDriftSweepJobSchema = z.object({
-  integrationId: z.string().uuid(),
+  integrationId: z.guid(),
   /** Set on `manual` jobs: the user who pressed "Sync domains now". */
-  triggeredBy: z.string().uuid().optional(),
+  triggeredBy: z.guid().optional(),
   /** Set on `manual` jobs: the queued IntegrationSyncRun that records the outcome. */
-  runId: z.string().uuid().optional(),
+  runId: z.guid().optional(),
 });
 export type CloudflareDriftSweepJob = z.infer<
   typeof cloudflareDriftSweepJobSchema
@@ -517,8 +517,8 @@ export type UploadReaperJobName =
 
 export const articleSummaryGenerateJobSchema = z.object({
   kind: z.literal('generate'),
-  articleId: z.string().uuid(),
-  companyId: z.string().uuid(),
+  articleId: z.guid(),
+  companyId: z.guid(),
   /**
    * The article revision this job was enqueued FOR. The worker skips
    * before any egress when the row's current revision differs, and the
@@ -526,7 +526,7 @@ export const articleSummaryGenerateJobSchema = z.object({
    * edit burst spends at most one completion (the last revision's).
    */
   revision: z.number().int().min(1),
-  correlationId: z.string().uuid().optional(),
+  correlationId: z.guid().optional(),
 });
 export type ArticleSummaryGenerateJob = z.infer<
   typeof articleSummaryGenerateJobSchema

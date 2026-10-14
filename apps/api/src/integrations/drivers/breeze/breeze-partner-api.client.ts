@@ -21,7 +21,7 @@ import {
 
 const configSchema = z.object({ baseUrl: z.string().min(1).max(2_048) }).strict();
 const secretSchema = z.object({ apiKey: z.string().min(1).max(8_192) }).strict();
-const uuidSchema = z.string().uuid();
+const uuidSchema = z.guid();
 const timestampSchema = z.string().datetime({ offset: true });
 const FAN_OUT_RESOURCES = new Set<BreezeResourceKey>([
   'network-equipment',

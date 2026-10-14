@@ -39,7 +39,7 @@ export interface AiToolDefSource {
   name: string;
   description: string;
   /** Must be a Zod object schema — verified at conversion time. */
-  inputSchema: z.ZodTypeAny;
+  inputSchema: z.ZodType;
 }
 
 export function toOpenAiToolDef(spec: AiToolDefSource): OpenAiFunctionTool {
@@ -59,20 +59,20 @@ export function toOpenAiToolDef(spec: AiToolDefSource): OpenAiFunctionTool {
  * keys land in `required`; `.optional()` / `.nullable()` / `.default()`
  * wrappers become the `["T","null"]` type union instead.
  */
-export function zodObjectToStrictJsonSchema(schema: z.ZodTypeAny): StrictJsonSchema {
-  if (typeNameOf(schema) !== z.ZodFirstPartyTypeKind.ZodObject) {
+export function zodObjectToStrictJsonSchema(schema: z.ZodType): StrictJsonSchema {
+  if (!(schema instanceof z.ZodObject)) {
     throw new Error(
       'zod-openai: a tool inputSchema must be a Zod object schema at the top level.',
     );
   }
-  return convertObject(schema as z.ZodObject<z.ZodRawShape>, '$');
+  return convertObject(schema, '$');
 }
 
-function convertObject(schema: z.ZodObject<z.ZodRawShape>, path: string): StrictJsonSchema {
+function convertObject(schema: z.ZodObject, path: string): StrictJsonSchema {
   const properties: Record<string, StrictJsonSchema> = {};
   const required: string[] = [];
   for (const [key, value] of Object.entries(schema.shape)) {
-    properties[key] = convert(value, `${path}.${key}`);
+    properties[key] = convert(value as z.ZodType, `${path}.${key}`);
     required.push(key);
   }
   return {
@@ -83,30 +83,25 @@ function convertObject(schema: z.ZodObject<z.ZodRawShape>, path: string): Strict
   };
 }
 
-function convert(schema: z.ZodTypeAny, path: string): StrictJsonSchema {
+function convert(schema: z.ZodType, path: string): StrictJsonSchema {
   // Unwrap Optional/Nullable/Default, remembering (a) that the field is
   // nullable in the emitted union and (b) the outermost description —
   // `.describe()` is usually called after `.optional()`, putting the
   // text on the wrapper rather than the inner type.
-  let current: z.ZodTypeAny = schema;
+  let current: z.ZodType = schema;
   let nullable = false;
   let description: string | undefined;
   for (;;) {
     if (description === undefined && current.description !== undefined) {
       description = current.description;
     }
-    const typeName = typeNameOf(current);
     if (
-      typeName === z.ZodFirstPartyTypeKind.ZodOptional ||
-      typeName === z.ZodFirstPartyTypeKind.ZodNullable
+      current instanceof z.ZodOptional ||
+      current instanceof z.ZodNullable ||
+      current instanceof z.ZodDefault
     ) {
       nullable = true;
-      current = (current as z.ZodOptional<z.ZodTypeAny>).unwrap();
-      continue;
-    }
-    if (typeName === z.ZodFirstPartyTypeKind.ZodDefault) {
-      nullable = true;
-      current = (current as z.ZodDefault<z.ZodTypeAny>).removeDefault();
+      current = current.unwrap() as z.ZodType;
       continue;
     }
     break;
@@ -121,42 +116,48 @@ function convert(schema: z.ZodTypeAny, path: string): StrictJsonSchema {
     : withNull;
 }
 
-function convertBase(schema: z.ZodTypeAny, path: string): StrictJsonSchema {
-  const typeName = typeNameOf(schema);
-  switch (typeName) {
-    case z.ZodFirstPartyTypeKind.ZodString:
+function convertBase(schema: z.ZodType, path: string): StrictJsonSchema {
+  // Dispatch on `def.type`, not `instanceof`: Zod 4 string formats such as
+  // `z.guid()` have `def.type === 'string'` but are not `ZodString` instances.
+  switch (schema.def.type) {
+    case 'string':
       return { type: 'string' };
-    case z.ZodFirstPartyTypeKind.ZodBoolean:
+    case 'boolean':
       return { type: 'boolean' };
-    case z.ZodFirstPartyTypeKind.ZodNumber: {
-      const isInt = (schema as z.ZodNumber)._def.checks.some(
-        (c) => c.kind === 'int',
-      );
-      return { type: isInt ? 'integer' : 'number' };
-    }
-    case z.ZodFirstPartyTypeKind.ZodEnum:
-      return {
-        type: 'string',
-        enum: [...(schema as z.ZodEnum<[string, ...string[]]>)._def.values],
-      };
-    case z.ZodFirstPartyTypeKind.ZodArray: {
-      const def = (schema as z.ZodArray<z.ZodTypeAny>)._def;
-      const items = convert(def.type, `${path}[]`);
-      return def.maxLength !== null
-        ? { type: 'array', items, maxItems: def.maxLength.value }
+    case 'number':
+      return { type: (schema as z.ZodNumber).isInt ? 'integer' : 'number' };
+    case 'enum':
+      return { type: 'string', enum: [...(schema as z.ZodEnum).options] };
+    case 'array': {
+      const array = schema as z.ZodArray;
+      const items = convert(array.element as z.ZodType, `${path}[]`);
+      const maxItems = arrayMaxItems(array);
+      return maxItems !== undefined
+        ? { type: 'array', items, maxItems }
         : { type: 'array', items };
     }
-    case z.ZodFirstPartyTypeKind.ZodObject:
-      return convertObject(schema as z.ZodObject<z.ZodRawShape>, path);
+    case 'object':
+      return convertObject(schema as z.ZodObject, path);
     default:
       throw new Error(
-        `zod-openai: unsupported Zod type "${String(typeName)}" at ${path}. ` +
+        `zod-openai: unsupported Zod type "${schema.def.type}" at ${path}. ` +
           'Tool input schemas may only use object/string/number/boolean/enum/array ' +
           'plus optional/nullable/default wrappers and .describe().',
       );
   }
 }
 
-function typeNameOf(schema: z.ZodTypeAny): z.ZodFirstPartyTypeKind {
-  return (schema._def as { typeName: z.ZodFirstPartyTypeKind }).typeName;
+/**
+ * The tightest `.max(n)` on an array. Zod 4 has no public getter for it: the
+ * bound lives on the `max_length` check in `def.checks`.
+ */
+function arrayMaxItems(schema: z.ZodArray): number | undefined {
+  let max: number | undefined;
+  for (const check of schema.def.checks ?? []) {
+    const def = check._zod.def as { check: string; maximum?: number };
+    if (def.check === 'max_length' && def.maximum !== undefined) {
+      max = max === undefined ? def.maximum : Math.min(max, def.maximum);
+    }
+  }
+  return max;
 }

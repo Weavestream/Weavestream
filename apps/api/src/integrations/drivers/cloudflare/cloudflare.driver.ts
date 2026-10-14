@@ -27,7 +27,7 @@ export const cloudflareConfigSchema = z.object({
    * sync uses this id, never the slug: slugs are editable, and a client
    * cannot supply it (the controller always overwrites or strips it).
    */
-  domainsCompanyId: z.string().uuid().optional(),
+  domainsCompanyId: z.guid().optional(),
 });
 export type CloudflareConfig = z.infer<typeof cloudflareConfigSchema>;
 

@@ -22,7 +22,7 @@ export const searchEntityKindSchema = z.enum(searchEntityKinds);
 
 export const searchQuerySchema = z.object({
   q: z.string().min(1).max(200),
-  companyId: z.string().uuid().optional(),
+  companyId: z.guid().optional(),
   types: z.array(searchEntityKindSchema).min(1).optional(),
   /**
    * Hudu's "Comprehensive Search" toggle. When on, appends a

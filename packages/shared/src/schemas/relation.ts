@@ -25,9 +25,9 @@ export const relationTypeSchema = z
 export const createRelationSchema = z
   .object({
     sourceType: relationEndpointKindSchema,
-    sourceId: z.string().uuid(),
+    sourceId: z.guid(),
     targetType: relationEndpointKindSchema,
-    targetId: z.string().uuid(),
+    targetId: z.guid(),
     relationType: relationTypeSchema.optional(),
   })
   .refine(

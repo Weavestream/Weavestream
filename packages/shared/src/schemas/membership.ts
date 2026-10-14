@@ -7,7 +7,7 @@ const isoFutureDate = z
   .refine((v) => new Date(v).getTime() > Date.now(), 'expiresAt must be in the future');
 
 export const createMembershipSchema = z.object({
-  userId: z.string().uuid(),
+  userId: z.guid(),
   role: z.enum(MembershipRoleValues),
   expiresAt: isoFutureDate.nullable().optional(),
 });

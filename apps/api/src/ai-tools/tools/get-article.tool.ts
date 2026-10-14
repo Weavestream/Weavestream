@@ -21,7 +21,7 @@ const CHUNK_CHARS = 20_000;
  * document the actor already fully authorized on THIS call.
  */
 const cursorPayloadSchema = z.object({
-  articleId: z.string().uuid(),
+  articleId: z.guid(),
   offset: z.number().int().min(0),
   revision: z.number().int().positive(),
 });

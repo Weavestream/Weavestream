@@ -4,7 +4,7 @@ export const passwordFolderNameSchema = z.string().min(1).max(120);
 
 export const createPasswordFolderSchema = z.object({
   name: passwordFolderNameSchema,
-  parentId: z.string().uuid().nullable().optional(),
+  parentId: z.guid().nullable().optional(),
   icon: z.string().min(1).max(40).nullable().optional(),
   color: z
     .string()
@@ -18,7 +18,7 @@ export type CreatePasswordFolderInput = z.infer<typeof createPasswordFolderSchem
 export const updatePasswordFolderSchema = z
   .object({
     name: passwordFolderNameSchema.optional(),
-    parentId: z.string().uuid().nullable().optional(),
+    parentId: z.guid().nullable().optional(),
     icon: z.string().min(1).max(40).nullable().optional(),
     color: z
       .string()
@@ -31,9 +31,9 @@ export const updatePasswordFolderSchema = z
 export type UpdatePasswordFolderInput = z.infer<typeof updatePasswordFolderSchema>;
 
 export const passwordFolderSchema = z.object({
-  id: z.string().uuid(),
-  companyId: z.string().uuid(),
-  parentId: z.string().uuid().nullable(),
+  id: z.guid(),
+  companyId: z.guid(),
+  parentId: z.guid().nullable(),
   name: passwordFolderNameSchema,
   icon: z.string().nullable(),
   color: z.string().nullable(),

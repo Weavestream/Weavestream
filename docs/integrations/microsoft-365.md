@@ -185,6 +185,7 @@ Check setup reads only the AADSTS number and the Graph error code Microsoft retu
 | The integration page lists admin center steps instead of buttons | The optional `ReportSettings.ReadWrite.All` is not granted in this tenant | Follow the steps, or add the permission to the app and **Reconnect**. |
 | Run rate limited | Microsoft Graph throttling (429); usage reports allow about 14 requests per 10 minutes per tenant | Weavestream waits for the time Microsoft asks and retries; each report is fetched once per run. |
 | After Microsoft sign-in you land on the login page | `API_URL` is on a different host from `APP_URL` | Serve the API under the web app's host and update the redirect URI on the app registration. |
+| The redirect URI starts with `http://`, or Check setup says "API_URL must start with https://" | `API_URL` uses `http://` on a host that is not `localhost`, and Microsoft rejects that redirect URI | Set `API_URL` (and `APP_URL`) to the `https://` origin, run `docker compose up -d`, and update the redirect URI on the app registration. |
 
 ## Security Model
 

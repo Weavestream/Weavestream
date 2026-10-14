@@ -381,8 +381,8 @@ export const domainCheckDetailsSchema = z.object({
 export type DomainCheckDetails = z.infer<typeof domainCheckDetailsSchema>;
 
 export const monitoredDomainSchema = z.object({
-  id: z.string().uuid(),
-  companyId: z.string().uuid(),
+  id: z.guid(),
+  companyId: z.guid(),
   hostname: z.string(),
   checkWhois: z.boolean(),
   checkDns: z.boolean(),
@@ -416,7 +416,7 @@ export const monitoredDomainSchema = z.object({
   registrarSyncedAt: z.string().nullable(),
   registrarMissingSince: z.string().nullable(),
   /** Google Workspace facts; null role = not (or no longer) in Workspace. */
-  workspaceIntegrationId: z.string().uuid().nullable(),
+  workspaceIntegrationId: z.guid().nullable(),
   workspaceRole: z.enum(['PRIMARY', 'SECONDARY', 'ALIAS']).nullable(),
   /** Parent domain when the role is ALIAS. */
   workspaceAliasOf: z.string().nullable(),
@@ -425,7 +425,7 @@ export const monitoredDomainSchema = z.object({
   /** Detail view only; never sent to client users. */
   workspaceIntegrationName: z.string().nullable().optional(),
   /** Microsoft 365 facts; null `microsoftDefault` = not (or no longer) in the tenant. */
-  microsoftIntegrationId: z.string().uuid().nullable(),
+  microsoftIntegrationId: z.guid().nullable(),
   /** True for the tenant's default domain. */
   microsoftDefault: z.boolean().nullable(),
   microsoftAuthType: z.enum(['MANAGED', 'FEDERATED']).nullable(),
@@ -436,7 +436,7 @@ export const monitoredDomainSchema = z.object({
   /** Detail view only; never sent to client users. */
   microsoftIntegrationName: z.string().nullable().optional(),
   archivedAt: z.string().nullable(),
-  createdBy: z.string().uuid().nullable(),
+  createdBy: z.guid().nullable(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -444,9 +444,9 @@ export const monitoredDomainSchema = z.object({
 export type MonitoredDomainDto = z.infer<typeof monitoredDomainSchema>;
 
 export const domainCheckSchema = z.object({
-  id: z.string().uuid(),
-  monitoredDomainId: z.string().uuid(),
-  companyId: z.string().uuid(),
+  id: z.guid(),
+  monitoredDomainId: z.guid(),
+  companyId: z.guid(),
   checkedAt: z.string(),
   whoisStatus: checkResultSchema.nullable(),
   dnsStatus: checkResultSchema.nullable(),
@@ -465,10 +465,10 @@ export type DomainCheckDto = z.infer<typeof domainCheckSchema>;
 
 /** One row of `GET /domains/alerts` (the cross-company alerts feed). */
 export const domainAlertSchema = z.object({
-  companyId: z.string().uuid(),
+  companyId: z.guid(),
   companyName: z.string(),
   companySlug: z.string(),
-  domainId: z.string().uuid(),
+  domainId: z.guid(),
   hostname: z.string(),
   status: domainStatusSchema,
   visibleToClients: z.boolean(),

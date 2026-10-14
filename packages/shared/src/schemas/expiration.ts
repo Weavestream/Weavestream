@@ -13,24 +13,24 @@ export const expirationStatusSchema = z.enum(['EXPIRED', 'WARNING']);
 
 /** Set on a row when it was dismissed for this due date (only returned with `includeDismissed`). */
 export const expirationDismissalInfoSchema = z.object({
-  id: z.string().uuid(),
+  id: z.guid(),
   note: z.string().nullable(),
   dismissedAt: z.string(),
-  dismissedBy: z.string().uuid().nullable(),
+  dismissedBy: z.guid().nullable(),
 });
 
 export const assetFieldExpirationSchema = z.object({
   kind: z.literal('asset-field'),
-  companyId: z.string().uuid(),
+  companyId: z.guid(),
   companyName: z.string(),
   companySlug: z.string(),
-  assetId: z.string().uuid(),
+  assetId: z.guid(),
   assetName: z.string(),
-  layoutId: z.string().uuid(),
+  layoutId: z.guid(),
   layoutName: z.string(),
   layoutIcon: z.string(),
   layoutColor: z.string(),
-  fieldId: z.string().uuid(),
+  fieldId: z.guid(),
   fieldSlug: z.string(),
   fieldLabel: z.string(),
   fieldType: z.enum(['DATE', 'DATETIME']),
@@ -46,10 +46,10 @@ export const assetFieldExpirationSchema = z.object({
 
 export const domainExpirationSchema = z.object({
   kind: z.literal('domain'),
-  companyId: z.string().uuid(),
+  companyId: z.guid(),
   companyName: z.string(),
   companySlug: z.string(),
-  domainId: z.string().uuid(),
+  domainId: z.guid(),
   hostname: z.string(),
   source: z.enum(['registrar', 'tls']),
   expiresAt: z.string(),
@@ -60,10 +60,10 @@ export const domainExpirationSchema = z.object({
 
 export const passwordExpirationSchema = z.object({
   kind: z.literal('password'),
-  companyId: z.string().uuid(),
+  companyId: z.guid(),
   companyName: z.string(),
   companySlug: z.string(),
-  passwordId: z.string().uuid(),
+  passwordId: z.guid(),
   passwordName: z.string(),
   /**
    * Two disjoint sources per password: `expiry` for the hard
@@ -99,7 +99,7 @@ export type ExpirationRow = z.infer<typeof expirationRowSchema>;
 export const dismissExpirationSchema = z
   .object({
     kind: z.enum(['asset-field', 'domain', 'password']),
-    entityId: z.string().uuid(),
+    entityId: z.guid(),
     source: z.string().min(1).max(64),
     dueAt: z.string().min(1).max(40),
     note: z.string().trim().max(500).optional(),

@@ -82,7 +82,7 @@ export type ChatToolCallErrorCode = z.infer<typeof chatToolCallErrorCodeSchema>;
 export const chatToolCallSchema = z.object({
   id: z.string(),
   name: chatToolCallNameSchema,
-  arguments: z.record(z.unknown()),
+  arguments: z.record(z.string(), z.unknown()),
   status: chatToolCallStatusSchema,
   result: z.string().nullable().optional(),
   error: z.string().nullable().optional(),
@@ -116,7 +116,7 @@ export const chatToolCallSchema = z.object({
    * article row and re-checks `article.write`; the client fetch it feeds
    * is itself re-authorized server-side.
    */
-  targetCompanyId: z.string().uuid().nullable().optional(),
+  targetCompanyId: z.guid().nullable().optional(),
   /**
    * SERVER-MANAGED create-idempotency record. Stamped (and committed)
    * by the apply path for `create_article` / update-promotion proposals
@@ -133,10 +133,10 @@ export const chatToolCallSchema = z.object({
    */
   pendingCreate: z
     .object({
-      articleId: z.string().uuid(),
-      companyId: z.string().uuid(),
+      articleId: z.guid(),
+      companyId: z.guid(),
       title: z.string().min(1).max(200),
-      folderId: z.string().uuid().nullable(),
+      folderId: z.guid().nullable(),
       visibleToClients: z.boolean(),
     })
     .optional(),
@@ -165,7 +165,7 @@ export function isCreateRecoveryPendingProblem(problem: unknown): boolean {
 }
 
 export const chatMessageSchema = z.object({
-  id: z.string().uuid(),
+  id: z.guid(),
   role: chatRoleSchema,
   content: z.string(),
   createdAt: z.string(),
@@ -180,7 +180,7 @@ export const chatMessageSchema = z.object({
    * global (or legacy) turn, where the actor's confirmed destination
    * IS the scope. Descriptive only — never an authorization source.
    */
-  scopeCompanyId: z.string().uuid().nullable().optional(),
+  scopeCompanyId: z.guid().nullable().optional(),
 });
 export type ChatMessageDto = z.infer<typeof chatMessageSchema>;
 
@@ -198,11 +198,11 @@ export type ChatMessageDto = z.infer<typeof chatMessageSchema>;
  * `article.write`).
  */
 export const chatTurnContextSchema = z.object({
-  companyId: z.string().uuid().optional(),
-  currentArticleId: z.string().uuid().optional(),
+  companyId: z.guid().optional(),
+  currentArticleId: z.guid().optional(),
   currentTicketId: z.string().min(1).max(200).optional(),
   /** Ids of articles attached as read-only context on the turn. */
-  articleIds: z.array(z.string().uuid()).max(10).optional(),
+  articleIds: z.array(z.guid()).max(10).optional(),
 });
 export type ChatTurnContext = z.infer<typeof chatTurnContextSchema>;
 
@@ -211,7 +211,7 @@ export type ChatTurnContext = z.infer<typeof chatTurnContextSchema>;
  * history popover and the `GET /chat/conversations` listing.
  */
 export const chatConversationSummarySchema = z.object({
-  id: z.string().uuid(),
+  id: z.guid(),
   title: z.string(),
   updatedAt: z.string(),
   createdAt: z.string(),
@@ -237,7 +237,7 @@ export type ChatConversationDetail = z.infer<
  * most models); the server-side request limiter still applies on top.
  */
 export const chatContextArticleSchema = z.object({
-  id: z.string().uuid(),
+  id: z.guid(),
   title: z.string().max(300),
   markdown: z.string().max(60_000),
   /**
@@ -265,7 +265,7 @@ export type ChatContextArticle = z.infer<typeof chatContextArticleSchema>;
  * disambiguate "Server" / "Workstation" / etc. without re-querying.
  */
 export const chatContextAssetSchema = z.object({
-  id: z.string().uuid(),
+  id: z.guid(),
   name: z.string().max(300),
   layoutName: z.string().max(120),
   markdown: z.string().max(60_000),
@@ -282,7 +282,7 @@ export type ChatContextAsset = z.infer<typeof chatContextAssetSchema>;
  * querying.
  */
 export const chatContextDomainSchema = z.object({
-  id: z.string().uuid(),
+  id: z.guid(),
   hostname: z.string().max(253),
   markdown: z.string().max(60_000),
 });
@@ -300,7 +300,7 @@ export type ChatContextDomain = z.infer<typeof chatContextDomainSchema>;
  * the API request limiter is the outer backstop.
  *
  * `id` is the provider-side ticket id (not a Weavestream UUID — this
- * field is intentionally NOT typed as `z.string().uuid()`).
+ * field is intentionally NOT typed as `z.guid()`).
  */
 export const chatContextTicketSchema = z.object({
   id: z.string().min(1).max(200),
@@ -321,21 +321,21 @@ export type ChatContextTicket = z.infer<typeof chatContextTicketSchema>;
  * as tool-call targets.
  */
 export const chatRequestContextSchema = z.object({
-  companyId: z.string().uuid().optional(),
-  currentArticleId: z.string().uuid().optional(),
+  companyId: z.guid().optional(),
+  currentArticleId: z.guid().optional(),
   /**
    * The asset the user is currently viewing, when applicable. Used by
    * the system prompt to resolve deictic references like "this asset"
    * even when other assets are @-mentioned in the same turn.
    */
-  currentAssetId: z.string().uuid().optional(),
+  currentAssetId: z.guid().optional(),
   /**
    * The domain the user is currently viewing, when applicable. Same
    * role as `currentAssetId` — purely for deictic disambiguation;
    * domains are read-only context and never travel as tool-call
    * targets.
    */
-  currentDomainId: z.string().uuid().optional(),
+  currentDomainId: z.guid().optional(),
   /**
    * The ticket the user is currently viewing, when applicable. Same
    * role as `currentAssetId` — used by the system prompt to resolve
@@ -402,11 +402,11 @@ export type SendChatMessageInput = z.infer<typeof sendChatMessageSchema>;
  * into).
  */
 export const applyChatToolCallSchema = z.object({
-  companyId: z.string().uuid().optional(),
+  companyId: z.guid().optional(),
   createOverrides: z
     .object({
       title: z.string().min(1).max(200),
-      folderId: z.string().uuid().nullable(),
+      folderId: z.guid().nullable(),
       visibleToClients: z.boolean(),
     })
     .optional(),

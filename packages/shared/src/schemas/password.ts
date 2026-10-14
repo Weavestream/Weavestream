@@ -46,16 +46,21 @@ export type TotpConfigInput = z.infer<typeof totpConfigSchema>;
  */
 export const passwordNotesSchema = z.string().max(50_000);
 
+/**
+ * No `.default([])`: both call sites wrap this in `.optional()`, and Zod 4
+ * applies an inner default even when the key is omitted. A default here made
+ * every PATCH without `tags` clear them. Create falls back to `[]` in
+ * `PasswordsService`.
+ */
 export const passwordTagsSchema = z
   .array(z.string().min(1).max(40))
   .max(32)
-  .default([])
   .transform((tags) => Array.from(new Set(tags.map((t) => t.trim()))).filter(Boolean));
 
 export const createPasswordSchema = z.object({
   name: passwordNameSchema,
-  folderId: z.string().uuid().nullable().optional(),
-  assetId: z.string().uuid().nullable().optional(),
+  folderId: z.guid().nullable().optional(),
+  assetId: z.guid().nullable().optional(),
   username: z.string().max(200).nullable().optional(),
   url: optionalHttpUrlSchema.nullable().optional(),
   password: z.string().min(1).max(1024),
@@ -69,7 +74,7 @@ export const createPasswordSchema = z.object({
   tags: passwordTagsSchema.optional(),
   visibleToClients: z.boolean().optional(),
   requireReasonToView: z.boolean().optional(),
-  restrictedToUserIds: z.array(z.string().uuid()).max(64).optional(),
+  restrictedToUserIds: z.array(z.guid()).max(64).optional(),
   rotationReminderDays: z.number().int().min(1).max(3650).nullable().optional(),
   expiresAt: z.string().datetime({ offset: true }).nullable().optional(),
 });
@@ -78,8 +83,8 @@ export type CreatePasswordInput = z.infer<typeof createPasswordSchema>;
 export const updatePasswordSchema = z
   .object({
     name: passwordNameSchema.optional(),
-    folderId: z.string().uuid().nullable().optional(),
-    assetId: z.string().uuid().nullable().optional(),
+    folderId: z.guid().nullable().optional(),
+    assetId: z.guid().nullable().optional(),
     username: z.string().max(200).nullable().optional(),
     url: optionalHttpUrlSchema.nullable().optional(),
     password: z.string().min(1).max(1024).optional(),
@@ -93,7 +98,7 @@ export const updatePasswordSchema = z
     tags: passwordTagsSchema.optional(),
     visibleToClients: z.boolean().optional(),
     requireReasonToView: z.boolean().optional(),
-    restrictedToUserIds: z.array(z.string().uuid()).max(64).optional(),
+    restrictedToUserIds: z.array(z.guid()).max(64).optional(),
     rotationReminderDays: z.number().int().min(1).max(3650).nullable().optional(),
     expiresAt: z.string().datetime({ offset: true }).nullable().optional(),
     changeReason: z.string().max(500).optional(),
@@ -117,10 +122,10 @@ export type RevealPasswordInput = z.infer<typeof revealPasswordSchema>;
  * length-in-bytes side channels.
  */
 export const passwordSummarySchema = z.object({
-  id: z.string().uuid(),
-  companyId: z.string().uuid(),
-  folderId: z.string().uuid().nullable(),
-  assetId: z.string().uuid().nullable(),
+  id: z.guid(),
+  companyId: z.guid(),
+  folderId: z.guid().nullable(),
+  assetId: z.guid().nullable(),
   name: passwordNameSchema,
   username: z.string().nullable(),
   url: z.string().nullable(),
@@ -134,10 +139,10 @@ export const passwordSummarySchema = z.object({
   expiresAt: z.string().datetime({ offset: true }).nullable(),
   visibleToClients: z.boolean(),
   requireReasonToView: z.boolean(),
-  restrictedToUserIds: z.array(z.string().uuid()),
+  restrictedToUserIds: z.array(z.guid()),
   archivedAt: z.string().datetime({ offset: true }).nullable(),
-  createdBy: z.string().uuid(),
-  updatedBy: z.string().uuid(),
+  createdBy: z.guid(),
+  updatedBy: z.guid(),
   createdAt: z.string().datetime({ offset: true }),
   updatedAt: z.string().datetime({ offset: true }),
 });
@@ -160,7 +165,7 @@ export type PasswordDetail = z.infer<typeof passwordDetailSchema>;
 
 /** One user who can see a password, with the reason they have access. */
 export const passwordAccessUserSchema = z.object({
-  id: z.string().uuid(),
+  id: z.guid(),
   name: z.string(),
   email: z.string(),
   role: z.enum(['SUPER_ADMIN', 'OPERATOR', 'CONTRACTOR']),
@@ -195,7 +200,7 @@ export type PasswordTotpResponse = z.infer<typeof passwordTotpResponseSchema>;
 export const passwordVersionSummarySchema = z.object({
   version: z.number().int().min(1),
   changedFields: z.array(z.string()),
-  changedBy: z.string().uuid(),
+  changedBy: z.guid(),
   changedByName: z.string().nullable(),
   changeReason: z.string().nullable(),
   createdAt: z.string().datetime({ offset: true }),
@@ -204,8 +209,8 @@ export type PasswordVersionSummary = z.infer<typeof passwordVersionSummarySchema
 
 export const passwordFilterSchema = z.object({
   q: z.string().trim().max(200).optional(),
-  folderId: z.string().uuid().optional(),
-  assetId: z.string().uuid().optional(),
+  folderId: z.guid().optional(),
+  assetId: z.guid().optional(),
   tag: z.string().max(40).optional(),
   archived: z
     .union([z.boolean(), z.enum(['true', 'false'])])

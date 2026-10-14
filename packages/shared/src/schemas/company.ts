@@ -94,7 +94,7 @@ const longText = (max = 500) => nullableTrimmedText(z.string().max(max));
 /** UUID or null — used for parent & logo foreign keys. */
 const nullableUuid = z.preprocess(
   (v) => (v === '' ? null : v),
-  z.string().uuid().nullable(),
+  z.guid().nullable(),
 );
 
 // ───────────────────────────────────────────────────────────────────
@@ -167,7 +167,7 @@ export type UpdateCompanyInput = z.infer<typeof updateCompanySchema>;
  * same-origin API paths; `thumbnailUrl` is null when no thumbnail exists.
  */
 export const companyLogoSchema = z.object({
-  uploadId: z.string().uuid(),
+  uploadId: z.guid(),
   url: z.string().nullable(),
   thumbnailUrl: z.string().nullable(),
   mimeType: z.string(),

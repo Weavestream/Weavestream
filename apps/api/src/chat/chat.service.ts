@@ -24,7 +24,7 @@ import { PrismaService } from '../prisma/prisma.service.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
 
 /** Local validator for the preview-hint uuid (kept out of the hot loop). */
-const uuidSchema = z.string().uuid();
+const uuidSchema = z.guid();
 
 /**
  * Per-user chat conversation CRUD. Streaming-driven message creation

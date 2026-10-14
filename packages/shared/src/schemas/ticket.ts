@@ -87,7 +87,7 @@ export const ticketListDtoSchema = z.object({
    * matching `IntegrationCompanyMapping` (and the UI renders an
    * "unmapped client" label instead of a link).
    */
-  companyId: z.string().uuid().nullable().default(null),
+  companyId: z.guid().nullable().default(null),
   /** Display name for the resolved Weavestream company. */
   companyName: z.string().nullable().default(null),
   /**
@@ -163,7 +163,7 @@ export const ticketDetailDtoSchema = ticketListDtoSchema.extend({
    * detail page so operators can still see custom NinjaOne fields,
    * board-specific properties, etc. without us hard-coding them.
    */
-  raw: z.record(z.unknown()).default({}),
+  raw: z.record(z.string(), z.unknown()).default({}),
 });
 export type TicketDetailDto = z.infer<typeof ticketDetailDtoSchema>;
 

@@ -122,8 +122,8 @@ function optionalSection<T extends z.ZodRawShape>(shape: T) {
 }
 
 export const breezeRecordBaseSchema = z.object({
-  id: z.string().uuid(),
-  orgId: z.string().uuid(),
+  id: z.guid(),
+  orgId: z.guid(),
   siteId: optionalText,
   sourceUpdatedAt: timestamp,
   revision: z.string().min(1).max(256),
@@ -312,7 +312,7 @@ export const breezeDeviceSoftwareSchema = record({
 
 type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
 const json: z.ZodType<JsonValue> = z.lazy(() => z.union([
-  z.null(), z.boolean(), z.number().finite(), z.string(), z.array(json), z.record(json),
+  z.null(), z.boolean(), z.number().finite(), z.string(), z.array(json), z.record(z.string(), json),
 ]));
 const optionalJson = json.optional().transform((value) => value ?? null);
 
@@ -518,7 +518,7 @@ const SAFE_FIELD_PATH = /^[A-Za-z0-9_$.[\]-]{1,256}$/u;
 export const breezeBlockedRecordSchema = z.object({
   resource: text,
   id: sourceId,
-  orgId: z.string().uuid(),
+  orgId: z.guid(),
   reason: z.string().transform((value) => value.slice(0, 64)),
   fieldPaths: z
     .array(z.string())

@@ -22,9 +22,9 @@ export class AssetReferenceStrategy implements FieldTypeStrategy {
   readonly optionsSchema = assetReferenceOptionsSchema;
 
   valueSchema(options: Record<string, unknown>): z.ZodTypeAny {
-    const arr = z.array(z.string().uuid()).max(100);
+    const arr = z.array(z.guid()).max(100);
     // Accept null, a single uuid, or an array. Normalize widens to array.
-    return z.union([z.null(), z.string().uuid(), arr]).superRefine((v, ctx) => {
+    return z.union([z.null(), z.guid(), arr]).superRefine((v, ctx) => {
       if ((options as { multiple?: boolean }).multiple !== true) {
         if (Array.isArray(v) && v.length > 1) {
           ctx.addIssue({

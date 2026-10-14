@@ -234,8 +234,8 @@ export type CloudflareDriftDetailsDto = z.infer<
 >;
 
 export const cloudflareIpListDtoSchema = z.object({
-  id: z.string().uuid(),
-  integrationId: z.string().uuid(),
+  id: z.guid(),
+  integrationId: z.guid(),
   externalAccountId: z.string(),
   externalListId: z.string(),
   name: z.string(),
@@ -328,7 +328,7 @@ export type CloudflareDomainSyncResult = z.infer<typeof cloudflareDomainSyncResu
  * `error` is set only on a failed run.
  */
 export const cloudflareDomainSyncRunDtoSchema = z.object({
-  id: z.string().uuid(),
+  id: z.guid(),
   kind: z.enum(['manual', 'scheduled']),
   status: z.enum(['queued', 'running', 'succeeded', 'failed', 'cancelled']),
   createdAt: z.string(),

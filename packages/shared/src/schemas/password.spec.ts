@@ -67,3 +67,34 @@ describe('password notes', () => {
     expect(updatePasswordSchema.safeParse({ notes: doc }).success).toBe(false);
   });
 });
+
+describe('password tags', () => {
+  const base = { name: 'Core router', password: 'hunter2' };
+
+  it('leaves tags out of a PATCH that does not send them', () => {
+    // Zod 4 applies inner defaults inside `.optional()`; a default on the tags
+    // schema would turn this rename into "clear every tag".
+    const parsed = updatePasswordSchema.parse({ name: 'Renamed' });
+    expect(parsed).toEqual({ name: 'Renamed' });
+    expect('tags' in parsed).toBe(false);
+  });
+
+  it('rejects an empty PATCH', () => {
+    expect(updatePasswordSchema.safeParse({}).success).toBe(false);
+  });
+
+  it('still clears tags when a PATCH sends an empty array', () => {
+    expect(updatePasswordSchema.parse({ tags: [] }).tags).toEqual([]);
+  });
+
+  it('trims and de-duplicates tags on create and update', () => {
+    expect(
+      createPasswordSchema.parse({ ...base, tags: [' vpn ', 'vpn', 'edge'] }).tags,
+    ).toEqual(['vpn', 'edge']);
+    expect(updatePasswordSchema.parse({ tags: ['a', ' a '] }).tags).toEqual(['a']);
+  });
+
+  it('leaves tags undefined on create when omitted', () => {
+    expect(createPasswordSchema.parse(base).tags).toBeUndefined();
+  });
+});

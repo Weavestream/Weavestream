@@ -43,7 +43,7 @@ const baseShape = {
 
 const assetFieldValueSchema = z
   .object({
-    targetFieldId: z.string().uuid(),
+    targetFieldId: z.guid(),
     value: z.unknown(),
     syncDirection: z.enum(['source_wins', 'preserve_manual', 'manual_only']),
   })
@@ -54,9 +54,9 @@ export const assetReconstructionInputSchema = z
     ...baseShape,
     targetKind: z.literal('asset'),
     name: z.string().trim().min(1).max(200),
-    assetLayoutId: z.string().uuid(),
+    assetLayoutId: z.guid(),
     externalSource: z.string().trim().min(1).max(80).optional(),
-    matchKeyFieldIds: z.array(z.string().uuid()).max(128),
+    matchKeyFieldIds: z.array(z.guid()).max(128),
     fieldValues: z.array(assetFieldValueSchema).max(1024),
     bindingResourceKey: z.string().min(1).max(256).optional(),
     bindingRef: dependencyRefSchema.optional(),
@@ -101,7 +101,7 @@ export const articleReconstructionInputSchema = z
       .min(1)
       .max(80)
       .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
-    folderId: z.string().uuid().nullable(),
+    folderId: z.guid().nullable(),
     folderSlug: z.string().min(1).max(80).regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/).optional(),
     folderName: z.string().trim().min(1).max(200).optional(),
     markdown: z.string().min(1),

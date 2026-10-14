@@ -29,14 +29,22 @@ export const OAUTH_CALLBACK_PATH = '/v1/admin/integrations/oauth/callback';
 export const OAUTH_CALLBACK_HOST_WARNING =
   'API_URL and APP_URL must share a host for Connect with Google or Microsoft to keep you signed in.';
 
+export const OAUTH_CALLBACK_HTTPS_WARNING =
+  'API_URL must start with https://. Google and Microsoft accept an http:// redirect URI only for localhost.';
+
+const LOOPBACK_HOSTNAMES = new Set(['localhost', '127.0.0.1', '[::1]']);
+
 /**
  * Session cookies are host-only, so the browser sends them to the callback
  * (built from `API_URL`) only when it is on the same hostname as the web
- * app (`APP_URL`). Ports do not matter to cookies.
+ * app (`APP_URL`). Ports do not matter to cookies. Both providers also
+ * reject a plain-http redirect URI on any host but loopback.
  */
 export function callbackHostWarning(apiUrl: string, appUrl: string): string | null {
   try {
-    return new URL(apiUrl).hostname === new URL(appUrl).hostname ? null : OAUTH_CALLBACK_HOST_WARNING;
+    const api = new URL(apiUrl);
+    if (api.hostname !== new URL(appUrl).hostname) return OAUTH_CALLBACK_HOST_WARNING;
+    return api.protocol === 'http:' && !LOOPBACK_HOSTNAMES.has(api.hostname) ? OAUTH_CALLBACK_HTTPS_WARNING : null;
   } catch {
     return OAUTH_CALLBACK_HOST_WARNING;
   }
@@ -81,7 +89,7 @@ export class IntegrationOAuthAppService {
     return `${this.env.values.API_URL.replace(/\/+$/, '')}${OAUTH_CALLBACK_PATH}`;
   }
 
-  /** Fixed warning when the callback host cannot see the session cookie, else null. */
+  /** Fixed warning when the provider or the session cookie cannot use the callback, else null. */
   callbackHostWarning(): string | null {
     return callbackHostWarning(this.env.values.API_URL, this.env.values.APP_URL);
   }

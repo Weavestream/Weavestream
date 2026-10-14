@@ -116,7 +116,7 @@ curl http://localhost:3000/api/health
 # Run CLI commands
 docker compose exec api node dist/cli.js --help
 
-# Restart a single service
+# Restart a single service (keeps its old environment; see below)
 docker compose restart api
 
 # Stop everything
@@ -142,8 +142,10 @@ Environment variables in `.env` are loaded by Docker Compose and injected into e
 
 ```bash
 # Edit .env
-docker compose up -d   # containers restart with new env
+docker compose up -d   # recreates containers whose env changed
 ```
+
+`docker compose restart` does **not** apply `.env` changes. It restarts the existing container, which keeps the environment it was created with. Use `docker compose up -d`, which recreates every container whose configuration changed.
 
 Some changes (like `DATA_DIR`) require the stack to be stopped first to avoid data loss.
 

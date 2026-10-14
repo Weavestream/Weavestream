@@ -15,7 +15,7 @@ export const folderNameSchema = z.string().min(1).max(120);
 export const createFolderSchema = z.object({
   name: folderNameSchema,
   slug: folderSlugSchema.optional(),
-  parentId: z.string().uuid().nullable().optional(),
+  parentId: z.guid().nullable().optional(),
   icon: z.string().min(1).max(40).optional(),
   position: z.number().int().min(0).max(100_000).optional(),
 });
@@ -24,7 +24,7 @@ export const updateFolderSchema = z
   .object({
     name: folderNameSchema.optional(),
     slug: folderSlugSchema.optional(),
-    parentId: z.string().uuid().nullable().optional(),
+    parentId: z.guid().nullable().optional(),
     icon: z.string().min(1).max(40).nullable().optional(),
     position: z.number().int().min(0).max(100_000).optional(),
   })
@@ -72,9 +72,9 @@ export interface FolderNode {
 
 export const folderNodeSchema: z.ZodType<FolderNode> = z.lazy(() =>
   z.object({
-    id: z.string().uuid(),
-    companyId: z.string().uuid(),
-    parentId: z.string().uuid().nullable(),
+    id: z.guid(),
+    companyId: z.guid(),
+    parentId: z.guid().nullable(),
     name: z.string(),
     slug: z.string(),
     icon: z.string().nullable(),

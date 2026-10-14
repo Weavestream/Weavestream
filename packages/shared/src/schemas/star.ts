@@ -10,11 +10,11 @@ import { companyLogoSchema } from './company.js';
  */
 
 const starredBase = {
-  id: z.string().uuid(),
+  id: z.guid(),
   name: z.string(),
   archivedAt: z.string().nullable(),
   starredAt: z.string(),
-  companyId: z.string().uuid(),
+  companyId: z.guid(),
   companyName: z.string(),
 };
 

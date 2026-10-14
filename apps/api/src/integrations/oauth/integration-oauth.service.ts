@@ -64,15 +64,15 @@ export function oauthStateKey(state: string): string {
  */
 const pendingStateSchema = z.union([
   z.object({
-    integrationId: z.string().uuid(),
+    integrationId: z.guid(),
     userId: z.string().min(1),
-    connectionId: z.string().uuid().nullable(),
+    connectionId: z.guid().nullable(),
     codeVerifier: z.string().min(43).max(128),
   }),
   z.object({
-    integrationId: z.string().uuid(),
+    integrationId: z.guid(),
     userId: z.string().min(1),
-    connectionId: z.string().uuid().nullable(),
+    connectionId: z.guid().nullable(),
     flow: z.literal('admin_consent'),
   }),
 ]);

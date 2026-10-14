@@ -13,7 +13,7 @@ import { userSearchDefaultsSchema } from './search.js';
  * when that user no longer resolves.
  */
 export const actorRefSchema = z.object({
-  id: z.string().uuid(),
+  id: z.guid(),
   name: z.string(),
 });
 export type ActorRef = z.infer<typeof actorRefSchema>;
@@ -53,7 +53,7 @@ export const timezoneSchema = z.string().max(64);
  * standalone membership schema to keep the rules in one place.
  */
 export const createUserMembershipSchema = z.object({
-  companyId: z.string().uuid(),
+  companyId: z.guid(),
   role: z.enum(MembershipRoleValues),
   expiresAt: z
     .string()

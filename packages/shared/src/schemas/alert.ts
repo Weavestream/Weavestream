@@ -205,7 +205,7 @@ const trimmedName = z
   .transform((v) => v.trim())
   .pipe(z.string().min(1, 'Name is required').max(120, 'Name is too long'));
 
-const optionalCompanyId = z.string().uuid().nullable();
+const optionalCompanyId = z.guid().nullable();
 
 // 1 .. 365 days. Matches the upper bound used by the existing
 // `MonitoredDomain.alertThresholdDays` UI so the two surfaces feel
@@ -220,7 +220,7 @@ const triggerDaysSchema = z.number().int().min(1).max(365);
  * value can be hydrated directly.
  */
 export const alertConfigCompanyRefSchema = z.object({
-  id: z.string().uuid(),
+  id: z.guid(),
   name: z.string(),
   slug: z.string(),
   archivedAt: z.string().nullable(),
@@ -233,12 +233,12 @@ export type AlertConfigCompanyRef = z.infer<typeof alertConfigCompanyRefSchema>;
  * but we keep `enabled` so the list view can render the toggle.
  */
 export const alertConfigSchema = z.object({
-  id: z.string().uuid(),
+  id: z.guid(),
   name: z.string(),
   type: alertTypeSchema,
   enabled: z.boolean(),
   recipientEmails: z.array(z.string()),
-  companyId: z.string().uuid().nullable(),
+  companyId: z.guid().nullable(),
   // Resolved company display fields — populated server-side when
   // `companyId` is set. `null` when the alert is unscoped (or, very
   // rarely, when the referenced company has been hard-deleted).

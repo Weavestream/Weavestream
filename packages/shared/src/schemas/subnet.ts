@@ -202,8 +202,8 @@ export type UpdateIpReservationInput = z.input<typeof updateIpReservationSchema>
 
 /** A subnet row as stored (`GET /companies/:id/ipam/subnets/:id` → `subnet`). */
 export const subnetSchema = z.object({
-  id: z.string().uuid(),
-  companyId: z.string().uuid(),
+  id: z.guid(),
+  companyId: z.guid(),
   name: z.string(),
   cidr: z.string(),
   prefix: z.number().int(),
@@ -213,8 +213,8 @@ export const subnetSchema = z.object({
   dhcpRangeEnd: z.string().nullable(),
   description: z.string().nullable(),
   archivedAt: z.string().nullable(),
-  createdBy: z.string().uuid().nullable(),
-  updatedBy: z.string().uuid().nullable(),
+  createdBy: z.guid().nullable(),
+  updatedBy: z.guid().nullable(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -233,14 +233,14 @@ export const subnetRowSchema = subnetSchema.extend({
 });
 
 export const ipReservationSchema = z.object({
-  id: z.string().uuid(),
-  companyId: z.string().uuid(),
-  subnetId: z.string().uuid(),
+  id: z.guid(),
+  companyId: z.guid(),
+  subnetId: z.guid(),
   ipAddress: z.string(),
   label: z.string(),
   notes: z.string().nullable(),
-  createdBy: z.string().uuid().nullable(),
-  updatedBy: z.string().uuid().nullable(),
+  createdBy: z.guid().nullable(),
+  updatedBy: z.guid().nullable(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -248,13 +248,13 @@ export const ipReservationSchema = z.object({
 /** One IP address that an asset field claims inside a subnet. */
 export const subnetOccupantSchema = z.object({
   ip: z.string(),
-  assetId: z.string().uuid(),
+  assetId: z.guid(),
   assetName: z.string(),
-  assetLayoutId: z.string().uuid(),
+  assetLayoutId: z.guid(),
   assetLayoutName: z.string(),
   assetLayoutColor: z.string(),
   assetLayoutIcon: z.string(),
-  assetFieldId: z.string().uuid(),
+  assetFieldId: z.guid(),
   fieldName: z.string(),
 });
 

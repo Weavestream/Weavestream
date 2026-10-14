@@ -34,8 +34,8 @@ export function buildAssetZodSchema(
   fields: AssetField[],
   registry: FieldTypesRegistry,
   opts: BuildAssetSchemaOptions,
-): z.ZodObject<z.ZodRawShape> {
-  const shape: z.ZodRawShape = {};
+): z.ZodObject {
+  const shape: Record<string, z.ZodType> = {};
 
   for (const field of fields) {
     if (field.archivedAt !== null) continue;

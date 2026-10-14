@@ -138,7 +138,7 @@ export type IntegrationSection = z.infer<typeof integrationSectionSchema>;
 
 /** One section as returned on an asset: which binding it came from, plus the data. */
 export const assetIntegrationSectionSchema = z.object({
-  integrationId: z.string().uuid(),
+  integrationId: z.guid(),
   driver: z.string(),
   integrationName: z.string(),
   lastSyncedAt: z.string(),
@@ -146,13 +146,13 @@ export const assetIntegrationSectionSchema = z.object({
   active: z.boolean().optional(),
   section: integrationSectionSchema,
   /** The binding row, for resolving differences. */
-  syncRecordId: z.string().uuid().optional(),
+  syncRecordId: z.guid().optional(),
   /** Standard fields a person changed that now differ from the source (named after `section.title`). */
   differences: z
     .array(
       z.object({
-        syncRecordId: z.string().uuid(),
-        assetFieldId: z.string().uuid(),
+        syncRecordId: z.guid(),
+        assetFieldId: z.guid(),
         fieldLabel: z.string(),
         localValue: z.string().nullable(),
         sourceValue: z.string().nullable(),

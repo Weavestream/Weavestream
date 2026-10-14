@@ -5,6 +5,7 @@ import {
 import {
   IntegrationOAuthAppService,
   OAUTH_CALLBACK_HOST_WARNING,
+  OAUTH_CALLBACK_HTTPS_WARNING,
   callbackHostWarning,
 } from './integration-oauth-app.service.js';
 
@@ -359,5 +360,18 @@ describe('callbackHostWarning', () => {
   it('warns when the hosts differ or a URL is unparseable', () => {
     expect(callbackHostWarning('https://api.example.test', 'https://ws.example.test')).toBe(OAUTH_CALLBACK_HOST_WARNING);
     expect(callbackHostWarning('not a url', 'https://ws.example.test')).toBe(OAUTH_CALLBACK_HOST_WARNING);
+  });
+
+  it('warns when API_URL is plain http on a non-loopback host', () => {
+    expect(callbackHostWarning('http://ws.example.test/api', 'http://ws.example.test')).toBe(OAUTH_CALLBACK_HTTPS_WARNING);
+  });
+
+  it('allows plain http on loopback hosts', () => {
+    expect(callbackHostWarning('http://127.0.0.1:3000/api', 'http://127.0.0.1:3000')).toBeNull();
+    expect(callbackHostWarning('http://[::1]:3000/api', 'http://[::1]:3000')).toBeNull();
+  });
+
+  it('reports the host mismatch first when both checks fail', () => {
+    expect(callbackHostWarning('http://api.example.test', 'https://ws.example.test')).toBe(OAUTH_CALLBACK_HOST_WARNING);
   });
 });

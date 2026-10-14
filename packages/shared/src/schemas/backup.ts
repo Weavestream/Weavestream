@@ -108,7 +108,7 @@ const notifyEmailsSchema = z
   });
 
 export const backupConfigSchema = z.object({
-  id: z.string().uuid(),
+  id: z.guid(),
   name: z.string(),
   enabled: z.boolean(),
   cron: z.string(),
@@ -155,8 +155,8 @@ export const backupConfigPatchSchema = z
 export type BackupConfigPatch = z.infer<typeof backupConfigPatchSchema>;
 
 export const backupRunDtoSchema = z.object({
-  id: z.string().uuid(),
-  configId: z.string().uuid().nullable(),
+  id: z.guid(),
+  configId: z.guid().nullable(),
   configName: z.string().nullable(),
   kind: backupRunKindSchema,
   status: backupRunStatusSchema,

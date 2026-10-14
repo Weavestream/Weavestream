@@ -506,7 +506,7 @@ describe('UniFiSiteManagerDriver.fetchRecords', () => {
           } as unknown as FetchRecordsContext,
           null,
         ),
-      ).rejects.toThrow(/Expected array/);
+      ).rejects.toThrow(/expected array/i);
       expect(fx.calls).toHaveLength(0);
     } finally {
       fx.restore();

@@ -170,6 +170,18 @@ describe('zodObjectToStrictJsonSchema', () => {
     });
   });
 
+  it('converts string formats such as z.guid() to plain strings', () => {
+    // Zod 4 string formats are not `ZodString` instances, so the converter
+    // must dispatch on `def.type`.
+    const schema = zodObjectToStrictJsonSchema(
+      z.object({ id: z.guid().describe('Id.'), email: z.email().optional() }),
+    );
+    expect(schema['properties']).toEqual({
+      id: { type: 'string', description: 'Id.' },
+      email: { type: ['string', 'null'] },
+    });
+  });
+
   it('converts optional arrays to a ["array","null"] union with items and maxItems', () => {
     const schema = zodObjectToStrictJsonSchema(
       z.object({
@@ -218,7 +230,7 @@ describe('zodObjectToStrictJsonSchema', () => {
   });
 
   it('throws on Zod types outside the supported subset', () => {
-    expect(() => zodObjectToStrictJsonSchema(z.object({ v: z.record(z.string()) }))).toThrow(
+    expect(() => zodObjectToStrictJsonSchema(z.object({ v: z.record(z.string(), z.string()) }))).toThrow(
       /unsupported Zod type/,
     );
     expect(() =>

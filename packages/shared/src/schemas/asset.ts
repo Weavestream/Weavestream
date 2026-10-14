@@ -23,15 +23,15 @@ export const fieldValuePrimitiveSchema: z.ZodTypeAny = z.lazy(() =>
     z.boolean(),
     z.null(),
     z.array(fieldValuePrimitiveSchema),
-    z.record(fieldValuePrimitiveSchema),
+    z.record(z.string(), fieldValuePrimitiveSchema),
   ]),
 );
 
-export const fieldValuesSchema = z.record(fieldValuePrimitiveSchema);
+export const fieldValuesSchema = z.record(z.string(), fieldValuePrimitiveSchema);
 export type FieldValues = z.infer<typeof fieldValuesSchema>;
 
 export const createAssetSchema = z.object({
-  assetLayoutId: z.string().uuid(),
+  assetLayoutId: z.guid(),
   /**
    * Optional override for `Asset.name`. If absent the service derives it
    * from the layout's primary field value — matching the "primary · will
@@ -64,7 +64,7 @@ export type UpdateAssetInput = z.infer<typeof updateAssetSchema>;
  * onto a single request. UI-side limits should mirror this.
  */
 export const bulkAssetIdsSchema = z.object({
-  ids: z.array(z.string().uuid()).min(1).max(500),
+  ids: z.array(z.guid()).min(1).max(500),
 });
 
 export type BulkAssetIdsInput = z.infer<typeof bulkAssetIdsSchema>;
@@ -76,7 +76,7 @@ export type BulkAssetIdsInput = z.infer<typeof bulkAssetIdsSchema>;
  */
 export const cloneAssetSchema = z
   .object({
-    targetCompanyId: z.string().uuid(),
+    targetCompanyId: z.guid(),
     archiveOriginal: z.boolean().default(false),
   })
   .strict();
@@ -84,7 +84,7 @@ export const cloneAssetSchema = z
 export type CloneAssetInput = z.infer<typeof cloneAssetSchema>;
 
 export const bulkCloneAssetsSchema = cloneAssetSchema.extend({
-  ids: z.array(z.string().uuid()).min(1).max(100),
+  ids: z.array(z.guid()).min(1).max(100),
 });
 
 export type BulkCloneAssetsInput = z.infer<typeof bulkCloneAssetsSchema>;
@@ -95,7 +95,7 @@ export type BulkCloneAssetsInput = z.infer<typeof bulkCloneAssetsSchema>;
  * `forbidden`); `reason` is the user-facing message.
  */
 export const bulkAssetFailureSchema = z.object({
-  id: z.string().uuid(),
+  id: z.guid(),
   reason: z.string(),
   code: z.string().optional(),
 });
@@ -108,7 +108,7 @@ export type BulkAssetFailure = z.infer<typeof bulkAssetFailureSchema>;
  * (e.g. "Archived 8 of 10. 2 failed.").
  */
 export const bulkAssetResultSchema = z.object({
-  ok: z.array(z.string().uuid()),
+  ok: z.array(z.guid()),
   failed: z.array(bulkAssetFailureSchema),
 });
 
@@ -124,13 +124,13 @@ export type BulkAssetResult = z.infer<typeof bulkAssetResultSchema>;
 
 /** One layout field as embedded on an asset, for rendering its values. */
 export const assetFieldMetaSchema = z.object({
-  id: z.string().uuid(),
+  id: z.guid(),
   slug: z.string(),
   name: z.string(),
   fieldType: z.enum(FieldTypeValues),
   isPrimary: z.boolean(),
   visibleToClients: z.boolean(),
-  options: z.record(z.unknown()),
+  options: z.record(z.string(), z.unknown()),
 });
 
 /**
@@ -140,7 +140,7 @@ export const assetFieldMetaSchema = z.object({
  * of them rather than only the "primary" one on `externalSource`.
  */
 export const assetSyncSourceSchema = z.object({
-  integrationId: z.string().uuid(),
+  integrationId: z.guid(),
   integrationName: z.string(),
   driver: z.string(),
   resourceKey: z.string(),
@@ -149,15 +149,15 @@ export const assetSyncSourceSchema = z.object({
 
 /** Server-resolved label for one ASSET_REFERENCE target. */
 export const assetReferenceEntrySchema = z.object({
-  id: z.string().uuid(),
+  id: z.guid(),
   name: z.string(),
   archivedAt: z.string().nullable(),
 });
 
 export const assetSummarySchema = z.object({
-  id: z.string().uuid(),
-  companyId: z.string().uuid(),
-  assetLayoutId: z.string().uuid(),
+  id: z.guid(),
+  companyId: z.guid(),
+  assetLayoutId: z.guid(),
   layoutName: z.string(),
   layoutSlug: z.string(),
   layoutIcon: z.string(),
@@ -189,14 +189,14 @@ export const assetSummarySchema = z.object({
    */
   integrationSections: z.array(assetIntegrationSectionSchema).optional(),
   archivedAt: z.string().nullable(),
-  createdBy: z.string().uuid().nullable(),
-  updatedBy: z.string().uuid().nullable(),
+  createdBy: z.guid().nullable(),
+  updatedBy: z.guid().nullable(),
   createdByUser: actorRefSchema.nullable(),
   updatedByUser: actorRefSchema.nullable(),
   createdAt: z.string(),
   updatedAt: z.string(),
   /** Keyed by field slug; visibility-filtered per role server-side. */
-  fieldValues: z.record(z.unknown()),
+  fieldValues: z.record(z.string(), z.unknown()),
   fields: z.array(assetFieldMetaSchema),
   /**
    * Server-resolved labels for ASSET_REFERENCE values, keyed by the
@@ -205,7 +205,7 @@ export const assetSummarySchema = z.object({
    * target asset's name instead of a bare uuid. Missing entries = the
    * referent was hard-deleted or is out of scope.
    */
-  references: z.record(assetReferenceEntrySchema),
+  references: z.record(z.string(), assetReferenceEntrySchema),
   /** True if the signed-in user has starred this asset (detail only). */
   isStarred: z.boolean(),
 });

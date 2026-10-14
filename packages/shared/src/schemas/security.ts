@@ -15,14 +15,14 @@ export const loginActivityBucketSchema = z.object({
 });
 
 export const loginActivityRowSchema = z.object({
-  id: z.string().uuid(),
+  id: z.guid(),
   action: z.string(),
   ip: z.string().nullable(),
   userAgent: z.string().nullable(),
   createdAt: z.string(),
-  actorId: z.string().uuid().nullable(),
+  actorId: z.guid().nullable(),
   actor: z
-    .object({ id: z.string().uuid(), name: z.string(), email: z.string() })
+    .object({ id: z.guid(), name: z.string(), email: z.string() })
     .nullable(),
   attemptedEmail: z.string().nullable(),
 });
@@ -65,7 +65,7 @@ export const throttleBlockEntrySchema = z.object({
 });
 
 export const egressBlockRowSchema = z.object({
-  id: z.string().uuid(),
+  id: z.guid(),
   createdAt: z.string(),
   userAgent: z.string().nullable(),
   url: z.string().nullable(),
@@ -116,14 +116,14 @@ export const connectionDiagnosticsSchema = z.object({
 /** One row of `GET /security/sessions` — an active, unrevoked session. */
 export const securitySessionRowSchema = z.object({
   /** The opaque `Session.id` row id — never a bearer credential. */
-  id: z.string().uuid(),
+  id: z.guid(),
   ip: z.string(),
   userAgent: z.string(),
   mfaPending: z.boolean(),
   createdAt: z.string(),
   expiresAt: z.string(),
   user: z.object({
-    id: z.string().uuid(),
+    id: z.guid(),
     name: z.string(),
     email: z.string(),
     role: z.enum(UserRoleValues),

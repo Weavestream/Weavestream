@@ -845,7 +845,7 @@ function replaceCall(calls: ChatToolCallDto[], next: ChatToolCallDto): ChatToolC
 
 function messageOf(err: unknown): string {
   if (err instanceof z.ZodError) {
-    return err.errors.map((e) => `${e.path.join('.') || '<root>'}: ${e.message}`).join('; ');
+    return err.issues.map((e) => `${e.path.join('.') || '<root>'}: ${e.message}`).join('; ');
   }
   return err instanceof Error && err.message ? err.message : 'Unknown error';
 }

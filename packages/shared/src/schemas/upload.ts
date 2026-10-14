@@ -24,19 +24,19 @@ export const initUploadSchema = z.object({
   mimeType: z.string().min(1).max(200),
   sizeBytes: z.number().int().min(1).max(1024 * 1024 * 1024),
   attachedToType: uploadAttachmentTypeSchema.optional(),
-  attachedToId: z.string().uuid().optional(),
+  attachedToId: z.guid().optional(),
 });
 
 export const confirmUploadSchema = z.object({
-  uploadId: z.string().uuid(),
+  uploadId: z.guid(),
   attachedToType: uploadAttachmentTypeSchema.optional(),
-  attachedToId: z.string().uuid().optional(),
+  attachedToId: z.guid().optional(),
 });
 
 export const attachUploadSchema = z
   .object({
     attachedToType: uploadAttachmentTypeSchema.nullable().optional(),
-    attachedToId: z.string().uuid().nullable().optional(),
+    attachedToId: z.guid().nullable().optional(),
   })
   .refine((v) => Object.keys(v).length > 0, 'At least one field must be provided');
 
@@ -46,7 +46,7 @@ export type AttachUploadInput = z.infer<typeof attachUploadSchema>;
 
 /** Shape a FILE field value carries inside AssetFieldValue.value. */
 export const fileFieldEntrySchema = z.object({
-  uploadId: z.string().uuid(),
+  uploadId: z.guid(),
   filename: z.string().min(1).max(255),
   mimeType: z.string().min(1).max(200),
   sizeBytes: z.number().int().min(1),

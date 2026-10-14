@@ -38,7 +38,7 @@ import { InteractiveOnly } from '../auth/interactive-only.decorator.js';
 const listRunsQuerySchema = z
   .object({
     limit: z.coerce.number().int().min(1).max(200).default(50),
-    configId: z.string().uuid().optional(),
+    configId: z.guid().optional(),
   })
   .strict();
 

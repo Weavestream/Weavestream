@@ -91,7 +91,7 @@ export const ipRuleCidrSchema = z
 const prioritySchema = z.number().int().min(0).max(9999);
 
 export const ipRuleSchema = z.object({
-  id: z.string().uuid(),
+  id: z.guid(),
   cidr: z.string(),
   action: ipRuleActionSchema,
   note: z.string().nullable(),

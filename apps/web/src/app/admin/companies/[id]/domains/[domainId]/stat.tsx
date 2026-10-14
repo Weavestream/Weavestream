@@ -21,7 +21,7 @@ export function Stat({
       >
         {label}
       </span>
-      <span style={{ fontSize: 15, color: 'var(--text)' }}>{value}</span>
+      <span style={{ fontSize: 13, color: 'var(--text)' }}>{value}</span>
       {sub && (
         <span
           style={{ fontSize: 11.5, fontFamily: 'var(--font-mono)', color: 'var(--muted)' }}

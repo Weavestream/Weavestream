@@ -80,8 +80,7 @@ const articleTextEditSchema = z.object({
 /** `patch_article` — focused exact-match article edits. */
 export const patchArticleToolInputSchema = z.object({
   article_id: z
-    .string()
-    .uuid()
+    .guid()
     .describe(
       'UUID of the article to edit. Must match an article id shown in the system context or returned by get_article.',
     ),
@@ -108,8 +107,7 @@ export type PatchArticleToolInput = z.infer<typeof patchArticleToolInputSchema>;
 /** `update_article` — deliberate full-document rewrite proposal. */
 export const updateArticleToolInputSchema = z.object({
   article_id: z
-    .string()
-    .uuid()
+    .guid()
     .describe(
       'UUID of the article to update. Must match one of the article ids shown in the system context.',
     ),
@@ -142,8 +140,7 @@ export const createArticleToolInputSchema = z.object({
   title: z.string().min(1).max(200),
   markdown: z.string().min(1).max(100_000).describe('Article body as markdown.'),
   folder_id: z
-    .string()
-    .uuid()
+    .guid()
     .optional()
     .describe('UUID of the parent folder. Use null to create the article at the root.'),
   visible_to_clients: z
@@ -200,7 +197,7 @@ export type FindRelatedItemsToolInput = z.infer<typeof findRelatedItemsToolInput
 
 /** `get_article` — read. */
 export const getArticleToolInputSchema = z.object({
-  article_id: z.string().uuid().describe('UUID of the article to read.'),
+  article_id: z.guid().describe('UUID of the article to read.'),
   cursor: z
     .string()
     .min(1)
@@ -221,7 +218,7 @@ export const getRelatedItemsToolInputSchema = z.object({
   entity_type: relatedItemsSourceKindSchema.describe(
     'Kind of the entity to look up relations for.',
   ),
-  entity_id: z.string().uuid().describe('UUID of the entity.'),
+  entity_id: z.guid().describe('UUID of the entity.'),
   entity_name: z
     .string()
     .trim()
@@ -270,7 +267,7 @@ export type GetAppHelpToolInput = z.infer<typeof getAppHelpToolInputSchema>;
 
 export const aiSearchResultSchema = z.object({
   kind: searchEntityKindSchema,
-  id: z.string().uuid(),
+  id: z.guid(),
   title: z.string(),
   snippet: z.string(),
   companyName: z.string(),
@@ -285,7 +282,7 @@ export const searchToolOutputSchema = z.object({
 export type SearchToolOutput = z.infer<typeof searchToolOutputSchema>;
 
 export const getArticleToolOutputSchema = z.object({
-  id: z.string().uuid(),
+  id: z.guid(),
   title: z.string(),
   /** One chunk of the article body as markdown (never more than a chunk). */
   markdown: z.string().max(60_000),
@@ -303,7 +300,7 @@ export type GetArticleToolOutput = z.infer<typeof getArticleToolOutputSchema>;
 
 export const aiRelatedItemSchema = z.object({
   kind: relatedItemsSourceKindSchema,
-  id: z.string().uuid(),
+  id: z.guid(),
   title: z.string(),
   href: z.string(),
   /** 'manual' for user-created links, otherwise the managing field relation. */
@@ -329,7 +326,7 @@ export type FindRelatedItemsToolOutput = z.infer<typeof findRelatedItemsToolOutp
  * so the response shape cannot become a presence side channel.
  */
 export const getCompanySummaryToolOutputSchema = z.object({
-  companyId: z.string().uuid(),
+  companyId: z.guid(),
   companyName: z.string(),
   href: z.string(),
   assets: z.number().int().min(0).optional(),

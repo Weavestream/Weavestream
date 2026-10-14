@@ -3,9 +3,9 @@ import { z } from 'zod';
 /** One row of `GET /activity/recent` — the operator home "Recent activity" feed. */
 export const recentActivityItemSchema = z.object({
   type: z.enum(['asset', 'article']),
-  id: z.string().uuid(),
+  id: z.guid(),
   name: z.string(),
-  companyId: z.string().uuid(),
+  companyId: z.guid(),
   companyName: z.string(),
   companySlug: z.string(),
   /**

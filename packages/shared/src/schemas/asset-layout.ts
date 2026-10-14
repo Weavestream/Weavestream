@@ -67,7 +67,7 @@ export const updateAssetLayoutSchema = z
  */
 export const reorderAssetLayoutsSchema = z.object({
   orderedIds: z
-    .array(z.string().uuid())
+    .array(z.guid())
     .min(1, 'orderedIds must contain at least one id')
     .max(500, 'orderedIds has an implausible length')
     .refine(
@@ -88,7 +88,7 @@ export type ReorderAssetLayoutsInput = z.infer<typeof reorderAssetLayoutsSchema>
 // ---------------------------------------------------------------------
 
 export const layoutFieldSummarySchema = z.object({
-  id: z.string().uuid(),
+  id: z.guid(),
   name: z.string(),
   slug: z.string(),
   fieldType: z.enum(FieldTypeValues),
@@ -98,12 +98,12 @@ export const layoutFieldSummarySchema = z.object({
   visibleToClients: z.boolean(),
   isPrimary: z.boolean(),
   showInTable: z.boolean(),
-  options: z.record(z.unknown()),
+  options: z.record(z.string(), z.unknown()),
   archivedAt: z.string().nullable(),
 });
 
 export const layoutSummarySchema = z.object({
-  id: z.string().uuid(),
+  id: z.guid(),
   name: z.string(),
   slug: z.string(),
   icon: z.string(),
@@ -112,7 +112,7 @@ export const layoutSummarySchema = z.object({
   version: z.number().int(),
   position: z.number().int(),
   archivedAt: z.string().nullable(),
-  createdBy: z.string().uuid().nullable(),
+  createdBy: z.guid().nullable(),
   createdAt: z.string(),
   updatedAt: z.string(),
   fields: z.array(layoutFieldSummarySchema),
