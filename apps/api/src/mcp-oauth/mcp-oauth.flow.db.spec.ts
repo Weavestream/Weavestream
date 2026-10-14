@@ -116,7 +116,9 @@ describeIfDb('remote MCP OAuth flow (DB integration)', () => {
       return json(200, await consent.approve(actor, m[1]!, allowWrite, req, res, meta));
     } catch (err) {
       if (err instanceof HttpException) return json(err.getStatus(), { message: err.message });
-      return json(500, { message: err instanceof Error ? err.message : String(err) });
+      // Unexpected errors go to the test log, not the response, as in production.
+      console.error(err);
+      return json(500, { message: 'Internal server error' });
     }
   }
 
@@ -450,7 +452,7 @@ describeIfDb('remote MCP OAuth flow (DB integration)', () => {
   it('refuses a client_id off the allowlist without fetching it', async () => {
     const flow = await authorize(new Browser(), 'https://evil.example/client.json', 'https://evil.example/cb');
     expect(flow.res.status).toBe(400);
-    expect(fetched.some((u) => u.startsWith('https://evil.example'))).toBe(false);
+    expect(fetched.some((u) => new URL(u).hostname === 'evil.example')).toBe(false);
   });
 
   it('refuses a consent from another browser (session swap)', async () => {

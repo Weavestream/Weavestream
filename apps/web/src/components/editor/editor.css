@@ -935,6 +935,12 @@
   line-height: 1.8;
   font-family: var(--font-sans);
 }
+/* Field-value notes (asset detail panels) match the plain TEXTAREA note
+ * body rather than the article reading size. */
+.sd-richtext-field .sd-editor.sd-richtext-view {
+  font-size: 13.5px;
+  line-height: 1.6;
+}
 .sd-richtext-view > :first-child {
   margin-top: 0 !important;
 }

@@ -6,6 +6,11 @@
 
 export const MAX_MARKDOWN_SOURCE = 500_000;
 
+/** Private-use marker around a parked code slot; stripped from input first. */
+const CODE_SLOT = '';
+const CODE_SLOT_STRIP = //g;
+const CODE_SLOT_REF = /(\d+)/g;
+
 export interface MarkdownPlaintextOptions {
   /**
    * Drop `![alt](url)` image references entirely instead of preserving
@@ -27,11 +32,16 @@ export function markdownToPlaintext(
   options: MarkdownPlaintextOptions = {},
 ): string {
   if (!src || typeof src !== 'string') return '';
-  let s = src.replace(/\r\n?/g, '\n');
+  let s = src.replace(/\r\n?/g, '\n').replace(CODE_SLOT_STRIP, '');
 
-  // Fenced code blocks (non-greedy, multiline)
-  s = s.replace(/^```[\w-]*\n[\s\S]*?^```/gm, '\n');
-  s = s.replace(/```[^`]*```/g, ' ');
+  // Code is searchable text (commands, paths, error codes), so keep its
+  // contents verbatim: park each block or span in a slot the syntax
+  // stripping below cannot touch, then restore it at the end.
+  const code: string[] = [];
+  const park = (text: string) => `${CODE_SLOT}${code.push(text) - 1}${CODE_SLOT}`;
+  s = s.replace(/^```[^\n]*\n([\s\S]*?)^```[ \t]*$/gm, (_m, body: string) => `\n${park(body)}\n`);
+  s = s.replace(/```([^`]*)```/g, (_m, body: string) => ` ${park(body)} `);
+  s = s.replace(/`([^`\n]+)`/g, (_m, body: string) => park(body));
 
   // Footnote / reference link definitions: [^id]: url
   s = s.replace(/^\[[^\]]+\]:\s*.+$/gm, ' ');
@@ -72,20 +82,21 @@ export function markdownToPlaintext(
   s = s.replace(/\|\s*$/gm, '');
   s = s.replace(/\|/g, ' ');
 
-  // Emphasis / strikethrough (repeat for nested patterns)
+  // Emphasis / strikethrough (repeat for nested patterns). Emphasis never
+  // spans lines, and `_` never opens or closes inside a word (CommonMark),
+  // so `create_article` and `my_file_name` keep their underscores.
   for (let i = 0; i < 3; i++) {
-    s = s.replace(/~~([^~]+)~~/g, '$1');
-    s = s.replace(/\*\*([^*]+)\*\*/g, '$1');
-    s = s.replace(/\*([^*]+)\*/g, '$1');
-    s = s.replace(/__([^_]+)__/g, '$1');
-    s = s.replace(/_([^_]+)_/g, '$1');
+    s = s.replace(/~~([^~\n]+)~~/g, '$1');
+    s = s.replace(/\*\*([^*\n]+)\*\*/g, '$1');
+    s = s.replace(/\*([^*\n]+)\*/g, '$1');
+    s = s.replace(/(^|[^\p{L}\p{N}_])__([^_\n]+)__(?![\p{L}\p{N}_])/gu, '$1$2');
+    s = s.replace(/(^|[^\p{L}\p{N}_])_([^_\n]+)_(?![\p{L}\p{N}_])/gu, '$1$2');
   }
-
-  // Inline code
-  s = s.replace(/`([^`]+)`/g, '$1');
 
   // HTML tags
   s = s.replace(/<[^>]+>/g, ' ');
+
+  s = s.replace(CODE_SLOT_REF, (_m, i: string) => code[Number(i)] ?? '');
 
   s = s
     .split('\n')

@@ -2117,7 +2117,11 @@ export class ArticlesService {
           ? Prisma.DbNull
           : (v.content as Prisma.InputJsonValue),
       markdownSource: v.markdownSource,
-      contentPlaintext: v.contentPlaintext,
+      // Re-derived from the snapshot body, not copied: a snapshot keeps
+      // the plaintext of the extractor that wrote it, so copying it back
+      // would undo a later fix to the extractor (see
+      // `SearchIndexService.refreshMarkdownPlaintext`).
+      contentPlaintext: this.versionPlaintext(v),
       excerpt: v.excerpt,
       // Recomputed, never left in place: the live row's value was
       // maintained by `projectArticleBody` on every content write —
@@ -2129,6 +2133,16 @@ export class ArticlesService {
       derivedExcerpt: this.versionDerivedExcerpt(v),
       updatedBy,
     };
+  }
+
+  /** `projectArticleBody`'s plaintext rule, applied to a version row. */
+  private versionPlaintext(v: ArticleVersion): string {
+    if (v.editorMode === 'markdown') {
+      return typeof v.markdownSource === 'string'
+        ? markdownToPlaintext(v.markdownSource)
+        : v.contentPlaintext;
+    }
+    return v.content != null ? tiptapToPlaintext(v.content) : v.contentPlaintext;
   }
 
   /** `projectArticleBody`'s derived-excerpt rule, applied to a version row. */

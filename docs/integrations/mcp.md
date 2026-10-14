@@ -24,6 +24,7 @@ Weavestream speaks the [Model Context Protocol](https://modelcontextprotocol.io)
 - Weavestream must be reachable on the internet over HTTPS, and `APP_URL` must be that public address (for example `https://docs.example.com`). The MCP address is always `APP_URL` followed by `/mcp`. See [TLS & Reverse Proxy](../deployment/tls.md).
 - An administrator turns on **Admin → Settings → API & MCP → Allow remote AI connections** once. This asks for MFA again (step-up). Remote connections are **off** on a new instance.
 - If you restrict access with [IP rules](../configuration/security.md#admin-security-controls), allow the address ranges the AI app connects from: Claude uses `160.79.104.0/21`; ChatGPT publishes its ranges at `https://openai.com/chatgpt-connectors.json`.
+- If a firewall, WAF or CDN with bot protection sits in front of Weavestream, add the narrow exception in [Bot protection, challenges and WAF rules](../deployment/tls.md#bot-protection-challenges-and-waf-rules). ChatGPT and Claude call `/mcp` from their servers and cannot pass a challenge page.
 
 ### Connect Claude
 

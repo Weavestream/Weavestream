@@ -358,7 +358,7 @@ async function reindexSearch(
   });
   // eslint-disable-next-line no-console
   console.log(
-    `Reindexed ${counts.assets} assets, ${counts.articles} articles, ${counts.uploads} uploads, ${counts.domains} domains, ${counts.passwords} passwords in ${ms}ms.`,
+    `Reindexed ${counts.assets} assets, ${counts.articles} articles (${counts.markdownRefreshed} Markdown plaintexts refreshed), ${counts.uploads} uploads, ${counts.domains} domains, ${counts.passwords} passwords in ${ms}ms.`,
   );
 }
 

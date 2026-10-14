@@ -28,16 +28,39 @@ export const fieldLabelSchema = z.string().min(1).max(80);
  * `fieldOptionsSchemaFor(type)` rather than a single union so Zod issues
  * point at the right subfield.
  */
+/**
+ * A stored value is a choice slug, so two choices sharing one slug make
+ * that value ambiguous (it renders as whichever label comes first).
+ * Labels may repeat; slugs may not.
+ */
+const fieldChoicesSchema = z
+  .array(fieldOptionChoiceSchema)
+  .min(1)
+  .max(500)
+  .superRefine((choices, ctx) => {
+    const seen = new Set<string>();
+    choices.forEach((c, i) => {
+      if (seen.has(c.slug)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: [i, 'slug'],
+          message: `Option slug "${c.slug}" is used by more than one option`,
+        });
+      }
+      seen.add(c.slug);
+    });
+  });
+
 export const dropdownOptionsSchema = z
   .object({
-    choices: z.array(fieldOptionChoiceSchema).min(1).max(500),
+    choices: fieldChoicesSchema,
     allowOther: z.boolean().default(false),
   })
   .strict();
 
 export const multiselectOptionsSchema = z
   .object({
-    choices: z.array(fieldOptionChoiceSchema).min(1).max(500),
+    choices: fieldChoicesSchema,
     maxSelections: z.number().int().positive().max(500).optional(),
   })
   .strict();

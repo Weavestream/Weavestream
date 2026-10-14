@@ -1,3 +1,4 @@
+import { markdownExcerpt, markdownToPlaintext } from '@weavestream/shared';
 import {
   BadRequestException,
   ConflictException,
@@ -1614,6 +1615,21 @@ describe('ArticlesService', () => {
           after: { discardedVersion: 2 },
         }),
       );
+    });
+
+    it('discardDraft re-derives Markdown plaintext from the snapshot instead of copying it back', async () => {
+      const md = 'Run `create_article` and:\n\n```\nGet-Service\n```';
+      // A snapshot keeps whatever plaintext the extractor of its day
+      // produced; reverting must not bring that stale text back.
+      const published = v1Row({ editorMode: 'markdown', content: null, markdownSource: md, contentPlaintext: 'stale' });
+      const draft = v1Row({ id: 'av-draft', version: 2, isDraft: true, changeReason: 'autosave draft' });
+      const { svc, articles } = mkSvc({
+        articles: [publishedRow({ contentPlaintext: 'draft text' })],
+        versions: [published, draft],
+      });
+      await svc.discardDraft(actor(), 'c-1', 'art-1', meta());
+      expect(articles[0]!.contentPlaintext).toBe(markdownToPlaintext(md));
+      expect(articles[0]!.derivedExcerpt).toBe(markdownExcerpt(md));
     });
 
     it('discardDraft is a no-op (and not an error) when no draft exists', async () => {

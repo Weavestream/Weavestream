@@ -92,6 +92,7 @@ export function AssetDetailView({
             {noteField.fieldType === 'RICH_TEXT' ? (
               <RichTextView
                 value={value}
+                className="sd-richtext-field"
                 isAdmin={context.richText.isAdmin}
                 portalSlugByCompanyId={context.richText.portalSlugByCompanyId}
                 fallbackCompanyId={context.richText.fallbackCompanyId}

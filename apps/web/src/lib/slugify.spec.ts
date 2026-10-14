@@ -1,4 +1,4 @@
-import { slugifyFieldSlug, slugifyLayoutSlug } from './slugify';
+import { slugifyFieldSlug, slugifyLayoutSlug, uniqueSlug } from './slugify';
 
 describe('slugify', () => {
   it('lowercases, strips punctuation, and collapses whitespace to underscores', () => {
@@ -31,5 +31,22 @@ describe('slugify', () => {
     for (const s of ['Short', 'A B C', 'Mixed_Case Thing 42']) {
       expect(slugifyLayoutSlug(s)).toBe(slugifyFieldSlug(s));
     }
+  });
+});
+
+describe('uniqueSlug', () => {
+  it('returns the slug when it is free', () => {
+    expect(uniqueSlug('2025', new Set(['2019', '2022']))).toBe('2025');
+  });
+
+  it('adds the first free numeric suffix', () => {
+    expect(uniqueSlug('2025', new Set(['2025', '2025_2']))).toBe('2025_3');
+  });
+
+  it('keeps the result within the cap and never leaves a double underscore', () => {
+    const long = `${'a'.repeat(57)}_b`;
+    const out = uniqueSlug(long, new Set([long]));
+    expect(out.length).toBeLessThanOrEqual(60);
+    expect(out).toBe(`${'a'.repeat(57)}_2`);
   });
 });

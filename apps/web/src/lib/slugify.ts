@@ -31,3 +31,16 @@ export function slugifyLayoutSlug(s: string): string {
 export function slugifyFieldSlug(s: string): string {
   return baseSlug(s).slice(0, 60);
 }
+
+/**
+ * `slug`, or the first of `slug_2`, `slug_3`, … not in `taken`, trimmed so
+ * the suffix still fits in `max` characters.
+ */
+export function uniqueSlug(slug: string, taken: ReadonlySet<string>, max = 60): string {
+  if (!taken.has(slug)) return slug;
+  for (let n = 2; ; n++) {
+    const suffix = `_${n}`;
+    const candidate = `${slug.slice(0, max - suffix.length).replace(/_+$/, '')}${suffix}`;
+    if (!taken.has(candidate)) return candidate;
+  }
+}

@@ -231,14 +231,19 @@ const limit = z.number().int().min(1).max(100).optional();
 const fieldValues = z
   .record(z.string(), z.unknown())
   .describe(
-    'Map of layout field SLUG → value (not the field id). Slugs and types come from get_layout; unknown slugs are rejected.',
+    'Map of layout field SLUG → value (not the field id). Slugs, types and choices come from get_layout; unknown slugs are rejected. ' +
+      'Value by fieldType: TEXT/TEXTAREA string; NUMBER number; BOOLEAN true/false; DATE "YYYY-MM-DD"; ' +
+      'DATETIME ISO 8601; EMAIL address; URL http(s) URL; PHONE E.164 with no spaces or punctuation ("+15555550100"); ' +
+      'IP_ADDRESS IPv4/IPv6; DROPDOWN one choice slug; MULTISELECT array of choice slugs; ' +
+      'ASSET_REFERENCE asset id (array when multiple); TAGS array of tag ids or {"name": "..."}; ' +
+      'RICH_TEXT plain text, one paragraph per line (Markdown is not rendered). FILE cannot be set here. null clears a value.',
   );
 const markdown = z.string().min(1).max(500_000);
 
 export const MCP_TOOLS: readonly McpToolDefinition[] = [
   defineTool({
     name: 'whoami',
-    description: 'Who this key acts as: user, role and permissions.',
+    description: 'The user this connection acts as: user, role and permissions.',
     access: 'read',
     inputSchema: {},
     run: (api) => api.request('GET', '/auth/me'),
@@ -246,7 +251,7 @@ export const MCP_TOOLS: readonly McpToolDefinition[] = [
 
   defineTool({
     name: 'list_companies',
-    description: 'List the companies (tenants) the key owner can see.',
+    description: 'List the companies (tenants) the connected user can see.',
     access: 'read',
     inputSchema: { q: z.string().max(200).optional(), limit, cursor },
     run: (api, a) => api.request('GET', '/companies', { query: a }),
@@ -267,10 +272,11 @@ export const MCP_TOOLS: readonly McpToolDefinition[] = [
 
   defineTool({
     name: 'list_layouts',
-    description: 'List asset layouts (asset types).',
+    description:
+      'List asset layouts (asset types): id, name, slug and field count. Use get_layout for one layout’s fields.',
     access: 'read',
-    inputSchema: {},
-    run: (api) => api.request('GET', '/layouts'),
+    inputSchema: { q: z.string().max(200).optional() },
+    run: async (api, a) => summarizeLayouts(await api.request('GET', '/layouts', { query: a })),
   }),
 
   defineTool({
@@ -450,11 +456,37 @@ export function withoutVaultNotes(data: unknown): unknown {
   return data;
 }
 
-/** API errors become tool errors the model can read; anything else rethrows. */
+/**
+ * The layouts list carries every field definition of every layout, which
+ * is far more than a model needs to pick one (tens of KB on a stock
+ * install). Keep what identifies a layout; `get_layout` serves the fields.
+ */
+export function summarizeLayouts(data: unknown): unknown {
+  const items = (data as { items?: unknown } | null)?.items;
+  if (!Array.isArray(items)) return data;
+  return {
+    items: items.map((raw) => {
+      const l = raw as Record<string, unknown>;
+      const fields = Array.isArray(l.fields) ? (l.fields as { archivedAt?: unknown }[]) : [];
+      return {
+        id: l.id,
+        name: l.name,
+        slug: l.slug,
+        isActive: l.isActive,
+        fieldCount: fields.filter((f) => !f?.archivedAt).length,
+      };
+    }),
+  };
+}
+
+/**
+ * API errors become tool errors the model can read; anything else rethrows.
+ * Compact JSON: indentation costs the model's context and carries nothing.
+ */
 async function toolResult(run: () => Promise<unknown>): Promise<ToolTextResult> {
   try {
     const data = await run();
-    return { content: [{ type: 'text', text: JSON.stringify(data ?? { ok: true }, null, 2) }] };
+    return { content: [{ type: 'text', text: JSON.stringify(data ?? { ok: true }) }] };
   } catch (err) {
     if (err instanceof WeavestreamApiError) {
       return { isError: true, content: [{ type: 'text', text: err.message }] };

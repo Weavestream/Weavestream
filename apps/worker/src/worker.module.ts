@@ -12,6 +12,7 @@ import {
   EmailModule,
   QueuesProducerModule,
   RbacModule,
+  MarkdownPlaintextRefreshModule,
 } from '@weavestream/api/runtime';
 import { DomainsModule } from '@weavestream/api/domains';
 import { IntegrationsCoreModule } from '@weavestream/api/integrations';
@@ -98,6 +99,11 @@ import { ArticleSummaryWorker } from './article-summary/article-summary.processo
     // AlertsModule precedent). CryptoModule above already provides
     // the key decryptor.
     AiModule,
+    // Final pass of a queued Markdown plaintext refresh (migration 0085).
+    // Compose starts this worker only after the new api is healthy and
+    // after stopping the old worker, so no process with the old
+    // extractor is left; only this pass may clear the marker.
+    MarkdownPlaintextRefreshModule.forProcess('worker'),
   ],
   providers: [
     DomainChecksWorker,

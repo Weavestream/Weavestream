@@ -13,6 +13,19 @@ All notable changes to Weavestream are documented here. The format follows [Keep
 
 ## [Unreleased]
 
+### Changed
+
+- **Smaller MCP tool results.** Every tool now returns compact JSON, and `list_layouts` returns each layout's id, name, slug, status and field count instead of every field definition (about 2 KB instead of about 100 KB on a stock install). Use `get_layout` for a layout's fields. `list_layouts` also accepts an optional `q` filter.
+- **Field formats in the MCP tool descriptions.** `create_asset` and `update_asset` now tell the AI app the value format for each field type, for example E.164 for phone numbers and plain text for rich-text fields.
+
+### Fixed
+
+- **Worker fails to start after upgrading to 1.10.1.** The `worker` container restarted in a loop with `Nest can't resolve dependencies of the PermissionService`. It now starts normally. If you kept the 1.10.0 worker as a workaround, upgrade it with the other containers.
+- **Search in Markdown articles.** Words with underscores (`my_script.ps1`, `update_article`) lost their underscores in search text and excerpts, and code blocks were left out of search. Both are now indexed as written, as they already were for rich-text articles. **After you upgrade, existing Markdown articles are refreshed automatically** in the background: the `api` container runs a first pass when it starts, and the `worker` container runs the final pass when it starts (its log shows `Markdown article search text refreshed (final pass)`). Nothing to run by hand.
+- **Discarding a draft or archiving an article** no longer restores the search text the published version had when it was saved; it is derived again from that version's body.
+- **Duplicate dropdown option slugs.** A dropdown or multiselect field could end up with two options sharing one slug, which made a stored value show the wrong label. The layout editor now gives a new option a free slug and marks a duplicate in red, and saving a layout with one is refused. If an existing field has duplicates, change the slug of the newer option before you next save that layout, then re-select the value on affected assets.
+- **Remote MCP behind a firewall.** [TLS & Reverse Proxy](/deployment/tls/#bot-protection-challenges-and-waf-rules) now explains how bot protection, challenges and WAF rules block ChatGPT and Claude, and which paths to exempt.
+
 ## [1.10.1] - 2026-10-14
 
 ### Added

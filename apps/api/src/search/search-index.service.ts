@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { FieldTypesRegistry } from '../field-types/field-types.registry.js';
+import { refreshMarkdownPlaintext } from './markdown-plaintext-refresh.service.js';
 
 /**
  * Phase 6 search-index writer. Responsible for keeping `search_index`
@@ -159,6 +160,7 @@ export class SearchIndexService {
     uploads: number;
     domains: number;
     passwords: number;
+    markdownRefreshed: number;
   }> {
     const counts = {
       assets: 0,
@@ -166,6 +168,7 @@ export class SearchIndexService {
       uploads: 0,
       domains: 0,
       passwords: 0,
+      markdownRefreshed: 0,
     };
 
     const assetIds = await this.prisma.asset.findMany({
@@ -176,6 +179,8 @@ export class SearchIndexService {
       await this.upsertAsset(this.prisma, id);
       counts.assets += 1;
     }
+
+    counts.markdownRefreshed = await refreshMarkdownPlaintext(this.prisma);
 
     // Articles + uploads: touch each row so the trigger re-fires. A
     // `WHERE id = id` update is a Postgres no-op for the row itself
@@ -205,7 +210,7 @@ export class SearchIndexService {
     counts.passwords = Number(passwordCount ?? 0);
 
     this.logger.log(
-      `reindex-search: ${counts.assets} assets, ${counts.articles} articles, ${counts.uploads} uploads, ${counts.domains} domains, ${counts.passwords} passwords`,
+      `reindex-search: ${counts.assets} assets, ${counts.articles} articles (${counts.markdownRefreshed} Markdown plaintexts refreshed), ${counts.uploads} uploads, ${counts.domains} domains, ${counts.passwords} passwords`,
     );
     return counts;
   }

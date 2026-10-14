@@ -22,7 +22,7 @@ import {
 import { CSS } from '@dnd-kit/utilities';
 import { randomClientId } from '@weavestream/shared/browser';
 import { Icon } from '../../../../../../../components/ui';
-import { slugifyFieldSlug as slugify } from '../../../../../../../lib/slugify';
+import { slugifyFieldSlug as slugify, uniqueSlug } from '../../../../../../../lib/slugify';
 import { InspectorField, InspectorInput, ToggleRow } from './inspector-controls';
 
 export function ChoicesEditor({
@@ -97,6 +97,7 @@ export function ChoicesEditor({
                 key={c.id}
                 choice={c}
                 index={i}
+                takenSlugs={new Set(choicesWithIds.filter((_, j) => j !== i).map((o) => o.slug))}
                 readOnly={readOnly}
                 onChange={(updated) => {
                   const next = [...choicesWithIds];
@@ -174,12 +175,15 @@ export function ChoicesEditor({
 function SortableChoiceRow({
   choice,
   index,
+  takenSlugs,
   readOnly,
   onChange,
   onRemove,
 }: {
   choice: { label: string; slug: string; id: string };
   index: number;
+  /** Slugs of the other options: a stored value is a slug, so they must differ. */
+  takenSlugs: ReadonlySet<string>;
   readOnly: boolean;
   onChange: (c: { label: string; slug: string; id: string }) => void;
   onRemove: () => void;
@@ -231,8 +235,9 @@ function SortableChoiceRow({
         placeholder={`Option ${index + 1}`}
         onChange={(e) => onChange({ ...choice, label: e.target.value })}
         onBlur={(e) => {
-          if (!choice.slug) {
-            onChange({ ...choice, label: e.target.value, slug: slugify(e.target.value) });
+          const slug = slugify(e.target.value);
+          if (!choice.slug && slug) {
+            onChange({ ...choice, label: e.target.value, slug: uniqueSlug(slug, takenSlugs) });
           }
         }}
         style={{
@@ -251,6 +256,8 @@ function SortableChoiceRow({
         value={choice.slug}
         readOnly={readOnly}
         placeholder={`option_${index + 1}`}
+        aria-invalid={takenSlugs.has(choice.slug) || undefined}
+        title={takenSlugs.has(choice.slug) ? 'Another option already uses this slug' : undefined}
         onChange={(e) => onChange({ ...choice, slug: slugify(e.target.value) })}
         style={{
           width: 80,
@@ -259,7 +266,7 @@ function SortableChoiceRow({
           background: 'transparent',
           border: 'none',
           outline: 'none',
-          color: 'var(--dim)',
+          color: takenSlugs.has(choice.slug) ? 'var(--danger)' : 'var(--dim)',
           fontSize: 11,
           fontFamily: 'var(--font-mono)',
           textAlign: 'right',
