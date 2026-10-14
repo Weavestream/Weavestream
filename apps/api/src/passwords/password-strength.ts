@@ -1,12 +1,11 @@
-import { zxcvbnOptions, zxcvbn } from '@zxcvbn-ts/core';
+import { ZxcvbnFactory } from '@zxcvbn-ts/core';
 import * as zxcvbnCommon from '@zxcvbn-ts/language-common';
 import * as zxcvbnEn from '@zxcvbn-ts/language-en';
 
-let configured = false;
+let factory: ZxcvbnFactory | undefined;
 
-function ensureConfigured(): void {
-  if (configured) return;
-  zxcvbnOptions.setOptions({
+function getFactory(): ZxcvbnFactory {
+  factory ??= new ZxcvbnFactory({
     translations: zxcvbnEn.translations,
     graphs: zxcvbnCommon.adjacencyGraphs,
     dictionary: {
@@ -14,7 +13,7 @@ function ensureConfigured(): void {
       ...zxcvbnEn.dictionary,
     },
   });
-  configured = true;
+  return factory;
 }
 
 /**
@@ -28,7 +27,6 @@ export function computePasswordStrength(
   plaintext: string,
   extraInputs: string[] = [],
 ): number {
-  ensureConfigured();
-  const result = zxcvbn(plaintext, extraInputs.filter(Boolean));
+  const result = getFactory().check(plaintext, extraInputs.filter(Boolean));
   return result.score;
 }
